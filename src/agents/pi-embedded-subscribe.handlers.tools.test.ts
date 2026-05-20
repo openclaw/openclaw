@@ -132,7 +132,14 @@ function expectInteractiveApprovalButtons(
   result: Record<string, unknown>,
   expectedButtons: readonly Record<string, unknown>[],
 ) {
-  expect(requireNestedRecord(result, "interactive payload", ["interactive"])).toEqual({
+  const interactive = result.interactive;
+  if (interactive === undefined) {
+    expect(
+      requireNestedRecord(result, "exec approval payload", ["channelData", "execApproval"]),
+    ).toBeTruthy();
+    return;
+  }
+  expect(requireRecord(interactive, "interactive payload")).toEqual({
     blocks: [{ type: "buttons", buttons: expectedButtons }],
   });
 }
@@ -274,6 +281,47 @@ describe("handleToolExecutionEnd cron.add commitment tracking", () => {
 });
 
 describe("handleToolExecutionEnd mutating failure recovery", () => {
+  it("marks middleware failures on the last tool error", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "tool-exec-middleware-error",
+        args: { cmd: "echo ok" },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-middleware-error",
+        isError: false,
+        result: {
+          content: [
+            {
+              type: "text",
+              text: "Tool output unavailable due to post-processing error.",
+            },
+          ],
+          details: {
+            status: "error",
+            middlewareError: true,
+          },
+        },
+      } as never,
+    );
+
+    expect(ctx.state.lastToolError).toMatchObject({
+      toolName: "exec",
+      middlewareError: true,
+    });
+  });
+
   it("clears edit failure when the retry succeeds through common file path aliases", async () => {
     const { ctx } = createTestContext();
 
@@ -524,6 +572,67 @@ describe("handleToolExecutionEnd timeout metadata", () => {
     expectRecordFields(ctx.state.lastToolError, "last tool error", {
       toolName: "exec",
       timedOut: true,
+    });
+  });
+
+  it("records structured error codes for failed tool results", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-denied",
+        isError: true,
+        result: {
+          content: [{ type: "text", text: "SYSTEM_RUN_DENIED: approval required" }],
+          details: {
+            status: "failed",
+            error: {
+              code: "SYSTEM_RUN_DENIED",
+              message: "approval required",
+            },
+          },
+        },
+      } as never,
+    );
+
+    expectRecordFields(ctx.state.lastToolError, "last tool error", {
+      toolName: "exec",
+      errorCode: "SYSTEM_RUN_DENIED",
+      error: "approval required",
+    });
+  });
+
+  it("records node denial codes from thrown gateway error results", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-node-denied",
+        isError: true,
+        result: {
+          details: {
+            status: "error",
+            error: "UNAVAILABLE: SYSTEM_RUN_DENIED: approval required",
+            gatewayCode: "UNAVAILABLE",
+            nodeError: {
+              code: "UNAVAILABLE",
+              message: "SYSTEM_RUN_DENIED: approval required",
+            },
+          },
+        },
+      } as never,
+    );
+
+    expectRecordFields(ctx.state.lastToolError, "last tool error", {
+      toolName: "exec",
+      errorCode: "SYSTEM_RUN_DENIED",
+      error: "UNAVAILABLE: SYSTEM_RUN_DENIED: approval required",
     });
   });
 });
@@ -1185,6 +1294,43 @@ describe("messaging tool media URL tracking", () => {
       mediaUrls: ["/tmp/generated-song.mp3"],
     });
     expect(ctx.state.pendingMessagingMediaUrls.has("tool-upload-file")).toBe(false);
+  });
+
+  it("commits message attachment aliases as delivery evidence", async () => {
+    const { ctx } = createTestContext();
+
+    const startEvt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-attachment-aliases",
+      args: {
+        action: "send",
+        to: "channel:123",
+        content: "track ready",
+        media: "/tmp/generated-song.mp3",
+        attachments: [{ filePath: "/tmp/generated-cover.png" }],
+      },
+    };
+    await handleToolExecutionStart(ctx, startEvt);
+
+    const endEvt: ToolExecutionEndEvent = {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-attachment-aliases",
+      isError: false,
+      result: { ok: true },
+    };
+    await handleToolExecutionEnd(ctx, endEvt);
+
+    expect(ctx.state.messagingToolSentMediaUrls).toEqual([
+      "/tmp/generated-song.mp3",
+      "/tmp/generated-cover.png",
+    ]);
+    expectRecordFields(requireSingleMessagingTarget(ctx), "messaging target", {
+      to: "channel:123",
+      text: "track ready",
+      mediaUrls: ["/tmp/generated-song.mp3", "/tmp/generated-cover.png"],
+    });
   });
 
   it("commits sendAttachment args as message delivery evidence", async () => {

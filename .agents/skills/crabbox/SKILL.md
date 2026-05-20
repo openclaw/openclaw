@@ -1,17 +1,32 @@
 ---
 name: crabbox
-description: Use Crabbox for OpenClaw remote validation across Linux, macOS, Windows, and WSL2. Default to Blacksmith Testbox for broad Linux proof; includes direct Blacksmith and owned AWS/Hetzner fallback notes when Crabbox fails.
+description: Use the Crabbox wrapper for OpenClaw remote validation across Linux, macOS, Windows, and WSL2, including delegated Blacksmith Testbox proof. Report the actual provider and id.
 ---
 
 # Crabbox
 
-Use Crabbox when OpenClaw needs remote Linux proof for broad tests, CI-parity
-checks, secrets, hosted services, Docker/E2E/package lanes, warmed reusable
-boxes, sync timing, logs/results, cache inspection, or lease cleanup.
+Use the Crabbox wrapper when OpenClaw needs remote Linux proof for broad tests,
+CI-parity checks, secrets, hosted services, Docker/E2E/package lanes, warmed
+reusable boxes, sync timing, logs/results, cache inspection, or lease cleanup.
 
-Default backend: `blacksmith-testbox`. The separate `blacksmith-testbox` skill
-has been removed; this skill owns both the normal Crabbox path and the direct
-Blacksmith fallback playbook.
+Crabbox is the transport/orchestration surface. The actual backend can be:
+
+- brokered AWS Crabbox: direct provider, `provider=aws`, lease ids like
+  `cbx_...`, `syncDelegated=false`
+- Blacksmith Testbox through Crabbox: delegated provider,
+  `provider=blacksmith-testbox`, ids like `tbx_...`, `syncDelegated=true`
+
+For OpenClaw maintainer broad `pnpm` gates, Blacksmith Testbox through the
+Crabbox wrapper is acceptable and often preferred when the standing Testbox
+rules apply. Do not describe those runs as "AWS Crabbox"; report them as
+Testbox-through-Crabbox with the `tbx_...` id and Actions run.
+
+Use the repo `.crabbox.yaml` brokered AWS path when the task specifically needs
+direct AWS Crabbox behavior, persistent direct-provider leases, `--fresh-pr`,
+`--full-resync`, environment forwarding, capture/download support, or provider
+comparison. Use `--provider blacksmith-testbox` when the task needs OpenClaw
+maintainer Testbox proof, prepared CI environment, broad/heavy pnpm gates, or
+the user asks for Testbox/Blacksmith.
 
 ## First Checks
 
@@ -28,9 +43,19 @@ pnpm crabbox:run -- --help | sed -n '1,120p'
 
 - OpenClaw scripts prefer `../crabbox/bin/crabbox` when present. The user PATH
   shim can be stale.
-- Check `.crabbox.yaml` for repo defaults, but override provider explicitly.
-  Even if config still says AWS, maintainer validation should normally pass
-  `--provider blacksmith-testbox`.
+- Check `.crabbox.yaml` for direct-provider defaults. Omitting `--provider`
+  means brokered AWS today.
+- For broad OpenClaw maintainer `pnpm` gates, prefer the repo wrapper with
+  `--provider blacksmith-testbox` or the repo Testbox helpers when the standing
+  Testbox policy applies.
+- Always report the actual provider and id. `cbx_...` means AWS Crabbox;
+  `tbx_...` means Blacksmith Testbox through Crabbox. If the output only says
+  `blacksmith testbox list`, use `blacksmith testbox list --all` before
+  concluding no box exists.
+- If a warm direct-provider lease smells stale, retry with `--full-resync`
+  (alias `--fresh-sync`) before replacing the lease. This resets the remote
+  workdir, skips the fingerprint fast path, reseeds Git when possible, and
+  uploads the checkout from scratch.
 - For live/provider bugs, use the configured secret workflow before downgrading
   to mocks. Copy only the exact needed key into the remote process environment
   for that one command. Do not print it, do not sync it as a repo file, and do
@@ -50,7 +75,24 @@ pnpm crabbox:run -- --help | sed -n '1,120p'
 ## macOS And Windows Targets
 
 Use these only when the task needs an existing non-Linux host. OpenClaw broad
-validation still defaults to `blacksmith-testbox`.
+Linux validation uses the repo Crabbox config unless a provider is explicitly
+requested.
+
+When the user explicitly asks for brokered macOS runners, use Crabbox AWS
+macOS only after confirming the deployed coordinator supports EC2 Mac host
+lifecycle/image routes and the operator has AWS EC2 Mac Dedicated Host quota
+and IAM. Prefer `CRABBOX_HOST_ID` for a known Crabbox-managed Dedicated Host,
+or run the no-spend preflight first:
+
+```sh
+crabbox admin hosts quota --provider aws --target macos --region eu-west-1 --type mac2.metal --json
+crabbox admin hosts allocate --provider aws --target macos --region eu-west-1 --type mac2.metal --dry-run --json
+CRABBOX_MACOS_TYPES=all scripts/macos-host-region-preflight.sh
+```
+
+Do not silently substitute AWS macOS for normal OpenClaw Linux proof. Report
+paid-host blockers as quota, IAM, coordinator deployment, or host availability
+instead of falling back to local macOS.
 
 Crabbox supports static SSH targets:
 
@@ -71,20 +113,15 @@ Crabbox supports static SSH targets:
   with `../crabbox/bin/crabbox run --help`, config/flag tests, and the Crabbox
   Go test suite.
 
-## Default Blacksmith Backend
+## Direct Brokered AWS Backend
 
-Use this for `pnpm check`, `pnpm check:changed`, `pnpm test`,
-`pnpm test:changed`, Docker/E2E/live/package gates, or anything likely to fan
-out across many Vitest projects.
+Use this when the task needs direct AWS Crabbox semantics rather than the
+prepared Blacksmith Testbox CI environment.
 
 Changed gate:
 
 ```sh
-pnpm crabbox:run -- --provider blacksmith-testbox \
-  --blacksmith-org openclaw \
-  --blacksmith-workflow .github/workflows/ci-check-testbox.yml \
-  --blacksmith-job check \
-  --blacksmith-ref main \
+pnpm crabbox:run -- \
   --idle-timeout 90m \
   --ttl 240m \
   --timing-json \
@@ -95,11 +132,7 @@ pnpm crabbox:run -- --provider blacksmith-testbox \
 Full suite:
 
 ```sh
-pnpm crabbox:run -- --provider blacksmith-testbox \
-  --blacksmith-org openclaw \
-  --blacksmith-workflow .github/workflows/ci-check-testbox.yml \
-  --blacksmith-job check \
-  --blacksmith-ref main \
+pnpm crabbox:run -- \
   --idle-timeout 90m \
   --ttl 240m \
   --timing-json \
@@ -110,11 +143,7 @@ pnpm crabbox:run -- --provider blacksmith-testbox \
 Focused rerun:
 
 ```sh
-pnpm crabbox:run -- --provider blacksmith-testbox \
-  --blacksmith-org openclaw \
-  --blacksmith-workflow .github/workflows/ci-check-testbox.yml \
-  --blacksmith-job check \
-  --blacksmith-ref main \
+pnpm crabbox:run -- \
   --idle-timeout 90m \
   --ttl 240m \
   --timing-json \
@@ -124,19 +153,53 @@ pnpm crabbox:run -- --provider blacksmith-testbox \
 
 Read the JSON summary. Useful fields:
 
-- `provider`: should be `blacksmith-testbox`
-- `leaseId`: `tbx_...`
-- `syncDelegated`: should be `true`
+- `provider`: `aws`
+- `leaseId`: `cbx_...`
+- `syncDelegated`: `false`
 - `commandPhases`: populated when the command prints `CRABBOX_PHASE:<name>`
 - `commandMs` / `totalMs`
 - `exitCode`
 
-Crabbox should stop one-shot Blacksmith Testboxes automatically after the run.
-Verify cleanup when a run fails, is interrupted, or the command output is
-unclear:
+Crabbox should stop one-shot AWS leases automatically after the run. Verify
+cleanup when a run fails, is interrupted, or the command output is unclear:
 
 ```sh
-blacksmith testbox list
+../crabbox/bin/crabbox list --provider aws
+```
+
+## Blacksmith Testbox Through Crabbox
+
+Use this for OpenClaw maintainer broad/heavy `pnpm` gates when the prepared CI
+environment is the right proof surface:
+
+```sh
+node scripts/crabbox-wrapper.mjs run \
+  --provider blacksmith-testbox \
+  --blacksmith-org openclaw \
+  --blacksmith-workflow .github/workflows/ci-check-testbox.yml \
+  --blacksmith-job check \
+  --blacksmith-ref main \
+  --idle-timeout 90m \
+  --ttl 240m \
+  --timing-json \
+  -- \
+  CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000 OPENCLAW_TESTBOX=1 OPENCLAW_TESTBOX_REMOTE_RUN=1 pnpm check:changed
+```
+
+Read the JSON summary and the Testbox line. Useful fields:
+
+- `provider`: `blacksmith-testbox`
+- `leaseId`: `tbx_...`
+- `syncDelegated`: `true`
+- `syncPhases`: delegated/skipped because Blacksmith owns checkout/sync
+- Actions run URL/id from the Testbox output
+- `exitCode`
+
+`blacksmith testbox list` may hide hydrating or ready boxes. Use:
+
+```sh
+blacksmith testbox list --all
+blacksmith testbox status <tbx_id>
 ```
 
 ## Observability Flags
@@ -163,7 +226,13 @@ Use these on debugging runs before inventing ad hoc logging:
   executing it, then forwards only allowlisted names. `--allow-env` is
   repeatable and comma-separated. Profile values override ambient allowlisted
   env values for that run. Direct POSIX, WSL2, and native Windows runs are
-  supported; delegated providers are not.
+  supported; delegated providers are not. Crabbox probes the uploaded profile
+  remotely and prints redacted presence/length metadata before the command.
+- `--env-helper <name>`: with `--env-from-profile` on POSIX SSH targets,
+  persists `.crabbox/env/<name>` and `.crabbox/env/<name>.env` so follow-up
+  commands on the same lease can run through `./.crabbox/env/<name> <command>`.
+  Use only on leases you control; the profile stays until cleanup, lease reset,
+  or `--full-resync`.
 - `--script <file>` / `--script-stdin`: upload a local script into
   `.crabbox/scripts/` and execute it on the remote box. Shebang scripts execute
   directly on POSIX; scripts without a shebang run through `bash`. Native
@@ -173,12 +242,19 @@ Use these on debugging runs before inventing ad hoc logging:
   fresh remote checkout of the GitHub PR. Bare numbers use the current repo's
   GitHub origin. Add `--apply-local-patch` only when the current local
   `git diff --binary HEAD` should be applied on top of that PR checkout.
+- `--full-resync` / `--fresh-sync`: reset a stale direct-provider workdir
+  before syncing. Use after sync fingerprints look wrong, SSH times out before
+  sync, or rsync watchdog output suggests it. It is redundant with
+  `--fresh-pr`, incompatible with `--no-sync`, and unsupported by delegated
+  providers.
 - `--capture-stdout <path>` / `--capture-stderr <path>`: write remote streams to
   local files and keep binary/noisy output out of retained logs. Parent
   directories must already exist. These are direct-provider only.
 - `--capture-on-fail`: on non-zero direct-provider exits, downloads
   `.crabbox/captures/*.tar.gz` with `test-results`, `playwright-report`,
   `coverage`, JUnit XML, and nearby logs. Treat as secret-bearing until reviewed.
+- `--keep-on-failure`: leave a failed one-shot lease alive for live debugging
+  until idle/TTL expiry. Useful on direct providers and delegated one-shots.
 - `--timing-json`: final machine-readable timing. Add
   `echo CRABBOX_PHASE:install`, `CRABBOX_PHASE:test`, etc. in long shell
   commands; direct providers and Blacksmith Testbox both report them as
@@ -200,15 +276,23 @@ pnpm crabbox:run -- --provider aws \
 ```
 
 Do not pass `--capture-*`, `--download`, `--checksum`, `--force-sync-large`, or
-`--sync-only` to delegated providers. Also do not pass `--script*` or
-`--fresh-pr` there. Crabbox rejects these because the provider owns sync or
-command transport.
+`--sync-only` to delegated providers. Also do not pass `--script*`,
+`--fresh-pr`, `--full-resync`, or `--env-helper` there. Crabbox rejects these
+because the provider owns sync or command transport. `--keep-on-failure` is OK
+for delegated one-shots when you need to inspect a failed lease.
 
 ## Efficient Bug E2E Verification
 
 Use the smallest Crabbox lane that proves the reported user path, not just the
 touched code. Aim for one after-fix E2E proof before commenting, closing, or
 opening a PR for a user-visible bug.
+
+When the user says "test in Crabbox", do not simply copy tests to the remote
+box and run them there. Crabbox is for remote real-scenario proof: copy or
+install OpenClaw as the user would, run the same setup/update/CLI/Gateway/API
+call that failed, and capture behavior from that entrypoint. For regressions or
+bug reports, prove the broken state first when feasible, then run the same
+scenario after the fix.
 
 Pick the lane by symptom:
 
@@ -231,8 +315,9 @@ Pick the lane by symptom:
 
 Efficient flow:
 
-1. Reproduce or prove the pre-fix symptom when feasible. If the issue cannot be
-   reproduced, capture the exact command and observed behavior instead.
+1. Reproduce or prove the pre-fix symptom from the real user-facing entrypoint
+   when feasible. If the issue cannot be reproduced, capture the exact command
+   and observed behavior instead.
 2. Patch locally and run narrow local tests for edit speed.
 3. Run one Crabbox E2E command that starts from the user-facing entrypoint:
    package install, Docker setup, onboarding, channel add, gateway start, or
@@ -250,6 +335,8 @@ Keep it efficient:
 - Use `--fresh-pr <pr>` when validating an upstream PR in isolation from the
   local dirty tree. Add `--apply-local-patch` only when testing a local fixup on
   top of that PR.
+- Use `--full-resync` before replacing a warmed direct-provider lease when the
+  remote workdir or sync fingerprint appears stale.
 - Use one-shot Crabbox for a single proof; use a reusable Testbox only when
   several commands must share built images, installed packages, or live state.
 - Prefer `OPENCLAW_CURRENT_PACKAGE_TGZ` with Docker/package lanes when testing a
@@ -311,13 +398,13 @@ Interactive CLI/onboarding:
 
 ## Reuse And Keepalive
 
-For most Blacksmith-backed Crabbox calls, one-shot is enough. Use reuse only
-when you need multiple manual commands on the same hydrated box.
+For most Crabbox calls, one-shot is enough. Use reuse only when you need
+multiple manual commands on the same hydrated box.
 
 If Crabbox returns a reusable id or you intentionally keep a lease:
 
 ```sh
-pnpm crabbox:run -- --provider blacksmith-testbox --id <tbx_id> --no-sync --timing-json --shell -- "pnpm test <path>"
+pnpm crabbox:run -- --id <cbx_id-or-slug> --no-sync --timing-json --shell -- "pnpm test <path>"
 ```
 
 Stop boxes you created before handoff:
@@ -338,35 +425,70 @@ Common desktop flow:
 
 ```sh
 ../crabbox/bin/crabbox warmup --provider hetzner --desktop --browser --class standard --idle-timeout 60m --ttl 240m
-../crabbox/bin/crabbox desktop launch --provider hetzner --id <cbx_id-or-slug> --browser --url https://example.com --webvnc --open
+../crabbox/bin/crabbox desktop launch --provider hetzner --id <cbx_id-or-slug> --browser --url https://example.com --webvnc --open --take-control
 ```
 
 Useful WebVNC commands:
 
 ```sh
-../crabbox/bin/crabbox webvnc --provider hetzner --id <cbx_id-or-slug> --open
-../crabbox/bin/crabbox webvnc --provider hetzner --id <cbx_id-or-slug> --daemon --open
-../crabbox/bin/crabbox webvnc --provider hetzner --id <cbx_id-or-slug> --status
-../crabbox/bin/crabbox webvnc --provider hetzner --id <cbx_id-or-slug> --stop
-../crabbox/bin/crabbox screenshot --provider hetzner --id <cbx_id-or-slug> --output desktop.png
+../crabbox/bin/crabbox webvnc --provider hetzner --id <cbx_id-or-slug> --open --take-control
+../crabbox/bin/crabbox webvnc daemon start --provider hetzner --id <cbx_id-or-slug> --open --take-control
+../crabbox/bin/crabbox webvnc daemon status --provider hetzner --id <cbx_id-or-slug>
+../crabbox/bin/crabbox webvnc daemon stop --provider hetzner --id <cbx_id-or-slug>
+../crabbox/bin/crabbox webvnc status --provider hetzner --id <cbx_id-or-slug>
+../crabbox/bin/crabbox webvnc reset --provider hetzner --id <cbx_id-or-slug> --open --take-control
+../crabbox/bin/crabbox desktop doctor --provider hetzner --id <cbx_id-or-slug>
+../crabbox/bin/crabbox desktop click --provider hetzner --id <cbx_id-or-slug> --x 640 --y 420
+../crabbox/bin/crabbox desktop paste --provider hetzner --id <cbx_id-or-slug> --text "user@example.com"
+../crabbox/bin/crabbox desktop key --provider hetzner --id <cbx_id-or-slug> ctrl+l
+../crabbox/bin/crabbox artifacts collect --id <cbx_id-or-slug> --all --output artifacts/<slug>
+../crabbox/bin/crabbox artifacts publish --dir artifacts/<slug> --pr <number>
 ```
 
 `desktop launch --webvnc --open` is usually the nicest one-shot: it starts the
 browser/app inside the visible session, bridges the lease into the authenticated
 WebVNC portal, and opens the portal. Keep browsers windowed for human QA; use
 `--fullscreen` only for capture/video workflows.
+For human handoff, include `--take-control` so the opened portal viewer gets
+keyboard/mouse control automatically instead of landing as an observer.
+
+Human handoff preflight:
+
+- Do not assume a visible desktop or launched browser means the repo CLI/app is
+  installed, built, or on the interactive terminal's `PATH`.
+- Before handing WebVNC to a human tester, prove the expected command from the
+  same kept lease and from a neutral directory such as `~`.
+- If the handoff needs repo-local code, sync/build/link it explicitly on that
+  lease. Source-tree CLIs often need build output before a symlink works.
+- Prefer a real `command -v <expected-command> && <expected-command> --version`
+  check over a repo-root-only `pnpm ...` command.
+
+Generic handoff repair pattern:
+
+```sh
+../crabbox/bin/crabbox run --id <cbx_id-or-slug> --full-resync --shell -- \
+  "set -euo pipefail
+   pnpm install --frozen-lockfile
+   pnpm build
+   sudo ln -sf \"\$PWD/<cli-entry>\" /usr/local/bin/<expected-command>
+   cd ~
+   command -v <expected-command>
+   <expected-command> --version"
+```
 
 ## If Crabbox Fails
 
 Keep the fallback narrow. First decide whether the failure is Crabbox itself,
-Blacksmith/Testbox, repo hydration, sync, or the test command.
+the brokered AWS lease, Blacksmith/Testbox, repo hydration, sync, or the test
+command.
 
 Fast checks:
 
 ```sh
 command -v crabbox
 ../crabbox/bin/crabbox --version
-crabbox run --provider blacksmith-testbox --help | sed -n '1,140p'
+pnpm crabbox:run -- --help | sed -n '1,140p'
+../crabbox/bin/crabbox doctor
 command -v blacksmith
 blacksmith --version
 blacksmith testbox list
@@ -376,34 +498,36 @@ Common Crabbox-only failures:
 
 - Provider missing or old CLI: use `../crabbox/bin/crabbox` from the sibling
   repo, or update/install Crabbox before retrying.
-- Bad local config: pass `--provider blacksmith-testbox` plus explicit
-  `--blacksmith-*` flags instead of relying on `.crabbox.yaml`.
-- Slug/claim confusion: use the raw `tbx_...` id, or run one-shot without
-  `--id`.
+- Bad local config: inspect `.crabbox.yaml`, `crabbox config show`, and
+  `crabbox whoami`; normal OpenClaw proof should use brokered AWS without
+  asking for cloud keys.
+- Slug/claim confusion: use the raw `cbx_...` / `tbx_...` id, or run one-shot
+  without `--id`.
 - Sync/timing bug: add `--debug --timing-json`; capture the final JSON and the
   printed Actions URL. Large sync warnings now include top source directories
   by file count and a hint to update `.crabboxignore` / `sync.exclude`; inspect
-  those before reaching for `--force-sync-large`.
-- Cleanup uncertainty: run `blacksmith testbox list` and stop only boxes you
+  those before reaching for `--force-sync-large`. Quiet rsync watchdogs and SSH
+  timeouts now print `next_action=` hints; follow them, usually `--full-resync`
+  first and a fresh lease second.
+- Cleanup uncertainty: run `crabbox list --provider aws`; for explicit
+  Blacksmith runs, use `blacksmith testbox list` and stop only boxes you
   created.
-- Testbox queued/capacity pressure: do not convert a broad changed gate or full
-  suite into local `OPENCLAW_LOCAL_CHECK_MODE=throttled pnpm ...`. Leave the
-  remote lane queued, switch to a narrower targeted local check, or stop and
-  report the capacity blocker.
+- Testbox queued/capacity pressure: do not retry Blacksmith repeatedly. Rerun
+  once without `--provider` so `.crabbox.yaml` routes to brokered AWS, or report
+  the Blacksmith blocker if Testbox itself is the requested proof.
 
-If Crabbox cannot dispatch, sync, attach, or stop but Blacksmith itself works,
-first try the same command through the repo wrapper with `--debug` and
-`--timing-json`:
+If brokered AWS cannot dispatch, sync, attach, or stop, retry once with
+`--debug` and `--timing-json`:
 
 ```sh
-pnpm crabbox:run -- --provider blacksmith-testbox --debug --timing-json -- \
+pnpm crabbox:run -- --debug --timing-json -- \
   CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000 pnpm test:changed
 ```
 
 Full suite:
 
 ```sh
-pnpm crabbox:run -- --provider blacksmith-testbox --debug --timing-json -- \
+pnpm crabbox:run -- --debug --timing-json -- \
   CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000 pnpm test
 ```
 
@@ -422,9 +546,10 @@ Raw Blacksmith footguns:
 - Treat `blacksmith testbox list` as cleanup diagnostics, not a shared reusable
   queue.
 
-Escalate to owned AWS/Hetzner only when Blacksmith is down, quota-limited,
-missing the needed environment, or owned capacity is the explicit goal. Use the
-Owned Cloud Fallback section below.
+Use Blacksmith only when the task is specifically about Testbox, brokered AWS
+is unavailable, or an explicit comparison is needed. If Blacksmith is down or
+quota-limited, do not keep probing it; stay on brokered AWS and note the
+delegated-provider outage.
 
 ## Blacksmith Backend Notes
 
@@ -460,13 +585,14 @@ Important Blacksmith footguns:
 blacksmith auth login --non-interactive --organization openclaw
 ```
 
-## Owned Cloud Fallback
+## Brokered AWS
 
-Use AWS/Hetzner only when Blacksmith is down, quota-limited, missing the needed
-environment, or owned capacity is explicitly the goal.
+Use AWS for normal OpenClaw remote proof. The repo `.crabbox.yaml` already
+selects brokered AWS, so omit `--provider` unless you are testing a different
+provider deliberately.
 
 ```sh
-pnpm crabbox:warmup -- --provider aws --class beast --market on-demand --idle-timeout 90m
+pnpm crabbox:warmup -- --class beast --market on-demand --idle-timeout 90m
 pnpm crabbox:hydrate -- --id <cbx_id-or-slug>
 pnpm crabbox:run -- --id <cbx_id-or-slug> --timing-json --shell -- "env NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000 pnpm test:changed"
 pnpm crabbox:stop -- <cbx_id-or-slug>
@@ -490,8 +616,8 @@ crabbox whoami
 - If broker auth is missing, run `crabbox login --url https://crabbox.openclaw.ai --provider aws`.
 - If the CLI asks for `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, or AWS
   profile setup during normal OpenClaw validation, assume the agent selected
-  the wrong path. Use brokered `crabbox login`, `--provider blacksmith-testbox`,
-  or an existing brokered lease before asking the user for cloud credentials.
+  the wrong path. Use brokered `crabbox login` or an existing brokered lease
+  before asking the user for cloud credentials.
 - Ask for AWS keys only for explicit direct-provider/account administration,
   not for normal brokered OpenClaw proof.
 - Trusted automation may still use
@@ -504,8 +630,7 @@ macOS config lives at:
 ```
 
 It should include `broker.url`, `broker.token`, and usually `provider: aws`
-for owned-cloud lanes. Do not let that config override the OpenClaw default
-when Blacksmith proof is requested; pass `--provider blacksmith-testbox`.
+for OpenClaw lanes. Let that config drive normal validation.
 
 ### Interactive Desktop / WebVNC
 
@@ -525,7 +650,10 @@ crabbox run --id <lease> --shell -- 'DISPLAY=:99 xdotool search --onlyvisible --
 crabbox status --id <id-or-slug> --wait
 crabbox inspect --id <id-or-slug> --json
 crabbox sync-plan
+crabbox history --limit 20
 crabbox history --lease <id-or-slug>
+crabbox attach <run_id>
+crabbox events <run_id> --json
 crabbox logs <run_id>
 crabbox results <run_id>
 crabbox cache stats --id <id-or-slug>
@@ -540,14 +668,15 @@ Use `--market spot|on-demand` only on AWS warmup/one-shot runs.
 ## Failure Triage
 
 - Crabbox cannot find provider: verify `../crabbox/bin/crabbox --help` lists
-  `blacksmith-testbox`; update Crabbox before falling back.
+  the provider selected by `.crabbox.yaml`; update Crabbox before falling back.
 - Hydration stuck or failed: open the printed GitHub Actions run URL and inspect
   the hydration step.
 - Sync failed: rerun with `--debug`; check changed-file count and whether the
   checkout is dirty.
 - Command failed: rerun only the failing shard/file first. Do not rerun a full
   suite until the focused failure is understood.
-- Cleanup uncertain: `blacksmith testbox list`; stop owned `tbx_...` leases you
+- Cleanup uncertain: `crabbox list --provider aws`; for explicit Blacksmith
+  runs, use `blacksmith testbox list` and stop owned `tbx_...` leases you
   created.
 - Crabbox broken but Blacksmith works: use the direct Blacksmith fallback above,
   then file/fix the Crabbox issue.

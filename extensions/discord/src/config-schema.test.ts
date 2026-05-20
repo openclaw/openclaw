@@ -76,6 +76,32 @@ describe("discord config schema", () => {
     expect(cfg.historyLimit).toBe(3);
   });
 
+  it("accepts suppressEmbeds at top-level and account scope", () => {
+    const cfg = expectValidDiscordConfig({
+      suppressEmbeds: true,
+      accounts: {
+        noisy: {
+          suppressEmbeds: false,
+        },
+      },
+    });
+
+    expect(cfg.suppressEmbeds).toBe(true);
+    expect(cfg.accounts?.noisy?.suppressEmbeds).toBe(false);
+  });
+
+  it("rejects Telegram-only native tool-progress draft config", () => {
+    const issues = expectInvalidDiscordConfig({
+      streaming: {
+        preview: {
+          nativeToolProgress: true,
+        },
+      },
+    });
+
+    expect(issues[0]?.path.join(".")).toBe("streaming.preview");
+  });
+
   it("accepts Discord application IDs at top-level and account scope", () => {
     const cfg = expectValidDiscordConfig({
       applicationId: "123456789012345678",
@@ -282,6 +308,15 @@ describe("discord config schema", () => {
     expect(cfg.guilds?.["123"]?.channels?.general?.users).toEqual(["333"]);
     expect(cfg.guilds?.["123"]?.channels?.general?.roles).toEqual(["444"]);
     expect(cfg.execApprovals?.approvers).toEqual(["555"]);
+  });
+
+  it.each([true, false, "auto"] as const)("accepts execApprovals.enabled=%s", (enabled) => {
+    const cfg = expectValidDiscordConfig({ execApprovals: { enabled } });
+    expect(cfg.execApprovals?.enabled).toBe(enabled);
+  });
+
+  it("rejects execApprovals.enabled with other string values", () => {
+    expectInvalidDiscordConfig({ execApprovals: { enabled: "on" } });
   });
 
   it("rejects numeric IDs that are not valid non-negative safe integers", () => {

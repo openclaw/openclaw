@@ -415,6 +415,7 @@ export type PluginManifestContracts = {
   webFetchProviders?: string[];
   webSearchProviders?: string[];
   migrationProviders?: string[];
+  gatewayMethodDispatch?: string[];
   tools?: string[];
 };
 
@@ -458,6 +459,7 @@ export type PluginManifestCapabilityProviderMetadata = {
   authProviders?: string[];
   authSignals?: PluginManifestCapabilityProviderAuthSignal[];
   configSignals?: PluginManifestCapabilityProviderConfigSignal[];
+  referenceAudioInputs?: boolean;
 };
 
 export type PluginManifestToolMetadata = PluginManifestCapabilityProviderMetadata & {
@@ -501,7 +503,10 @@ export type PluginManifestProviderAuthChoice = {
   onboardingScopes?: PluginManifestOnboardingScope[];
 };
 
-export type PluginManifestOnboardingScope = "text-inference" | "image-generation";
+export type PluginManifestOnboardingScope =
+  | "text-inference"
+  | "image-generation"
+  | "music-generation";
 
 export type PluginManifestLoadResult =
   | { ok: true; manifest: PluginManifest; manifestPath: string }
@@ -731,11 +736,13 @@ function normalizeCapabilityProviderMetadataEntry(
   const authProviders = normalizeTrimmedStringList(rawMetadata.authProviders);
   const authSignals = normalizeCapabilityProviderAuthSignals(rawMetadata.authSignals);
   const configSignals = normalizeCapabilityProviderConfigSignals(rawMetadata.configSignals);
+  const referenceAudioInputs = rawMetadata.referenceAudioInputs === true ? true : undefined;
   const metadata = {
     ...(aliases.length > 0 ? { aliases } : {}),
     ...(authProviders.length > 0 ? { authProviders } : {}),
     ...(authSignals ? { authSignals } : {}),
     ...(configSignals ? { configSignals } : {}),
+    ...(referenceAudioInputs ? { referenceAudioInputs } : {}),
   } satisfies PluginManifestCapabilityProviderMetadata;
   return Object.keys(metadata).length > 0 ? metadata : undefined;
 }
@@ -807,6 +814,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
   const webFetchProviders = normalizeTrimmedStringList(value.webFetchProviders);
   const webSearchProviders = normalizeTrimmedStringList(value.webSearchProviders);
   const migrationProviders = normalizeTrimmedStringList(value.migrationProviders);
+  const gatewayMethodDispatch = normalizeTrimmedStringList(value.gatewayMethodDispatch);
   const tools = normalizeTrimmedStringList(value.tools);
   const contracts = {
     ...(embeddedExtensionFactories.length > 0 ? { embeddedExtensionFactories } : {}),
@@ -825,6 +833,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
     ...(webFetchProviders.length > 0 ? { webFetchProviders } : {}),
     ...(webSearchProviders.length > 0 ? { webSearchProviders } : {}),
     ...(migrationProviders.length > 0 ? { migrationProviders } : {}),
+    ...(gatewayMethodDispatch.length > 0 ? { gatewayMethodDispatch } : {}),
     ...(tools.length > 0 ? { tools } : {}),
   } satisfies PluginManifestContracts;
 
@@ -1165,7 +1174,7 @@ function normalizeManifestProviderRequest(
   return Object.keys(providers).length > 0 ? { providers } : undefined;
 }
 
-function normalizeManifestActivation(value: unknown): PluginManifestActivation | undefined {
+export function normalizeManifestActivation(value: unknown): PluginManifestActivation | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
@@ -1362,7 +1371,7 @@ function normalizeProviderAuthChoices(
     const cliDescription = normalizeOptionalString(entry.cliDescription) ?? "";
     const onboardingScopes = normalizeTrimmedStringList(entry.onboardingScopes).filter(
       (scope): scope is PluginManifestOnboardingScope =>
-        scope === "text-inference" || scope === "image-generation",
+        scope === "text-inference" || scope === "image-generation" || scope === "music-generation",
     );
     normalized.push({
       provider,
@@ -1805,7 +1814,8 @@ export const DEFAULT_PLUGIN_ENTRY_CANDIDATES = [
 export type PackageExtensionResolution =
   | { status: "ok"; entries: string[] }
   | { status: "missing"; entries: [] }
-  | { status: "empty"; entries: [] };
+  | { status: "empty"; entries: [] }
+  | { status: "invalid"; entries: []; error: string };
 
 export type ManifestKey = typeof MANIFEST_KEY;
 
@@ -1829,11 +1839,40 @@ export function getPackageManifestMetadata(
 export function resolvePackageExtensionEntries(
   manifest: PackageManifest | undefined,
 ): PackageExtensionResolution {
-  const raw = getPackageManifestMetadata(manifest)?.extensions;
-  if (!Array.isArray(raw)) {
+  const rawOpenClaw = manifest?.[MANIFEST_KEY] as unknown;
+  if (rawOpenClaw === undefined || rawOpenClaw === null) {
     return { status: "missing", entries: [] };
   }
-  const entries = raw.map((entry) => normalizeOptionalString(entry) ?? "").filter(Boolean);
+  if (!isRecord(rawOpenClaw)) {
+    return {
+      status: "invalid",
+      entries: [],
+      error: "package.json openclaw must be an object",
+    };
+  }
+  const raw = rawOpenClaw.extensions;
+  if (raw === undefined || raw === null) {
+    return { status: "missing", entries: [] };
+  }
+  if (!Array.isArray(raw)) {
+    return {
+      status: "invalid",
+      entries: [],
+      error: "package.json openclaw.extensions must be an array",
+    };
+  }
+  const entries: string[] = [];
+  for (const [index, entry] of raw.entries()) {
+    const normalized = normalizeOptionalString(entry);
+    if (!normalized) {
+      return {
+        status: "invalid",
+        entries: [],
+        error: `package.json openclaw.extensions[${index}] must be a non-empty string`,
+      };
+    }
+    entries.push(normalized);
+  }
   if (entries.length === 0) {
     return { status: "empty", entries: [] };
   }

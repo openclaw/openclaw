@@ -350,6 +350,12 @@ export const nl: TranslationMap = {
     eventLogSubtitle: "Nieuwste gateway-gebeurtenissen.",
     noEvents: "Nog geen gebeurtenissen.",
   },
+  quickSettings: {
+    security: {
+      browserEnabled: "Browser enabled",
+      toolProfile: "Tool profile",
+    },
+  },
   execApproval: {
     expiresIn: "verloopt over {time}",
     expired: "verlopen",
@@ -696,9 +702,6 @@ export const nl: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle: "Zie waar tokens naartoe gaan, wanneer sessies pieken en wat de kosten bepaalt.",
-    },
     common: {
       emptyValue: "—",
       unknown: "onbekend",
@@ -1046,6 +1049,10 @@ export const nl: TranslationMap = {
     settings: "Chatinstellingen",
     thinkingToggle: "Denken-/werken-output van assistent schakelen",
     toolCallsToggle: "Tool-aanroepen en toolresultaten schakelen",
+    autoScrollMode: "Automatisch scrollen",
+    autoScrollAlways: "Altijd",
+    autoScrollNearBottom: "Bijna onderaan",
+    autoScrollOff: "Uit",
     focusToggle: "Focusmodus schakelen (zijbalk + paginakop verbergen)",
     hideCronSessions: "Cron-sessies verbergen",
     showCronSessions: "Cron-sessies weergeven",
@@ -1205,6 +1212,9 @@ export const nl: TranslationMap = {
       ascending: "Oplopend",
       descending: "Aflopend",
       reset: "Resetten",
+      emptyTitle: "No scheduled jobs yet.",
+      emptyHint: "Create one from a plain-language prompt; advanced fields can wait.",
+      emptyFilteredHint: "Clear or change filters to see scheduled jobs.",
       noMatching: "Geen overeenkomende taken.",
       loading: "Laden...",
       loadMore: "Meer taken laden",
@@ -1240,6 +1250,7 @@ export const nl: TranslationMap = {
     form: {
       editJob: "Taak bewerken",
       newJob: "Nieuwe taak",
+      advancedJob: "Advanced job",
       updateSubtitle: "Werk de geselecteerde geplande taak bij.",
       createSubtitle: "Maak een geplande wakeup of agent-run.",
       required: "Vereist",

@@ -1,8 +1,10 @@
 import type { CronConfig } from "../../config/types.cron.js";
 import type { HeartbeatRunResult, HeartbeatWakeRequest } from "../../infra/heartbeat-wake.js";
+import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type {
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
+  CronFailureNotificationDelivery,
   CronDeliveryStatus,
   CronDeliveryTrace,
   CronJob,
@@ -30,6 +32,7 @@ export type CronEvent = {
   delivered?: boolean;
   deliveryStatus?: CronDeliveryStatus;
   deliveryError?: string;
+  failureNotificationDelivery?: CronFailureNotificationDelivery;
   delivery?: CronDeliveryTrace;
   sessionId?: string;
   sessionKey?: string;
@@ -76,7 +79,13 @@ export type CronServiceDeps = {
   startupDeferredMissedAgentJobDelayMs?: number;
   enqueueSystemEvent: (
     text: string,
-    opts?: { agentId?: string; sessionKey?: string; contextKey?: string; trusted?: boolean },
+    opts?: {
+      agentId?: string;
+      sessionKey?: string;
+      contextKey?: string;
+      deliveryContext?: DeliveryContext;
+      forceSenderIsOwnerFalse?: boolean;
+    },
   ) => void;
   requestHeartbeat: (opts: HeartbeatWakeRequest) => void;
   runHeartbeatOnce?: (opts?: {
@@ -155,6 +164,11 @@ export type CronServiceState = {
    * single broken job does not spam the log on every scheduler cycle.
    */
   warnedMissingSessionTargetJobIds: Set<string>;
+  /**
+   * Persisted job rows with non-canonical storage shape are skipped in memory
+   * until doctor/fix or an explicit config write repairs the store.
+   */
+  warnedInvalidPersistedJobKeys: Set<string>;
   storeLoadedAtMs: number | null;
   storeFileMtimeMs: number | null;
 };
@@ -168,6 +182,7 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     op: Promise.resolve(),
     warnedDisabled: false,
     warnedMissingSessionTargetJobIds: new Set<string>(),
+    warnedInvalidPersistedJobKeys: new Set<string>(),
     storeLoadedAtMs: null,
     storeFileMtimeMs: null,
   };

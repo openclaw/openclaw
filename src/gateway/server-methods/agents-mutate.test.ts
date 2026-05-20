@@ -81,6 +81,7 @@ vi.mock("../../config/config.js", async () => {
       return {
         path: "/tmp/openclaw/config.json",
         previousHash: "test-hash",
+        persistedHash: "persisted-hash",
         snapshot: { path: "/tmp/openclaw/config.json" },
         nextConfig: draft,
         result,
@@ -189,7 +190,7 @@ vi.mock("node:fs/promises", async () => {
 /* Import after mocks are set up                                      */
 /* ------------------------------------------------------------------ */
 
-const { __testing: agentsTesting, agentsHandlers } = await import("./agents.js");
+const { testing: agentsTesting, agentsHandlers } = await import("./agents.js");
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                            */

@@ -474,6 +474,7 @@ describe("scripts/changed-lanes", () => {
       "plugin-sdk wildcard re-exports",
       "duplicate scan target coverage",
       "dependency pin guard",
+      "package patch guard",
       "typecheck core tests",
       "lint core",
       "lint scripts",
@@ -755,6 +756,7 @@ describe("scripts/changed-lanes", () => {
       "lint:extensions:no-plugin-sdk-wildcard-reexports",
       "dup:check:coverage",
       "deps:pins:check",
+      "deps:patches:check",
       "release-metadata:check",
       "ios:version:check",
       "config:schema:check",
@@ -863,6 +865,41 @@ describe("scripts/changed-lanes", () => {
     expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:all");
   });
 
+  it("keeps app lint explicit when Linux Testbox lacks SwiftLint", () => {
+    const result = detectChangedLanes([
+      "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
+    ]);
+    const plan = createChangedCheckPlan(result, {
+      env: { OPENCLAW_TESTBOX_REMOTE_RUN: "1", PATH: "/usr/bin" },
+      platform: "linux",
+      swiftlintAvailable: false,
+    });
+
+    expectLanes(result.lanes, {
+      apps: true,
+    });
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("lint:apps");
+    expect(plan.commands).toContainEqual(
+      expect.objectContaining({
+        name: "lint apps (swiftlint unavailable in Testbox)",
+        bin: "node",
+      }),
+    );
+  });
+
+  it("runs app lint when SwiftLint is available in Testbox", () => {
+    const result = detectChangedLanes([
+      "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
+    ]);
+    const plan = createChangedCheckPlan(result, {
+      env: { OPENCLAW_TESTBOX_REMOTE_RUN: "1", PATH: "/usr/bin" },
+      platform: "linux",
+      swiftlintAvailable: true,
+    });
+
+    expect(plan.commands.map((command) => command.args[0])).toContain("lint:apps");
+  });
+
   it("routes legacy root asset deletions as tooling during root cleanup", () => {
     const result = detectChangedLanes([
       "assets/avatar-placeholder.svg",
@@ -956,6 +993,7 @@ describe("scripts/changed-lanes", () => {
       },
       { name: "duplicate scan target coverage", args: ["dup:check:coverage"] },
       { name: "dependency pin guard", args: ["deps:pins:check"] },
+      { name: "package patch guard", args: ["deps:patches:check"] },
     ]);
   });
 
@@ -977,6 +1015,7 @@ describe("scripts/changed-lanes", () => {
       },
       { name: "duplicate scan target coverage", args: ["dup:check:coverage"] },
       { name: "dependency pin guard", args: ["deps:pins:check"] },
+      { name: "package patch guard", args: ["deps:patches:check"] },
     ]);
   });
 });

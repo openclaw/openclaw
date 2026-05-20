@@ -23,6 +23,7 @@ import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
 import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
 import { createReplyDispatcherWithTyping } from "openclaw/plugin-sdk/reply-runtime";
 import { settleReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
+import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, logVerbose, shouldLogVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -65,6 +66,7 @@ import {
   resolveIMessageInboundDecision,
 } from "./inbound-processing.js";
 import { createLoopRateLimiter } from "./loop-rate-limiter.js";
+import { stageIMessageAttachments } from "./media-staging.js";
 import { parseIMessageNotification } from "./parse-notification.js";
 import { enqueueIMessageReactionSystemEvent } from "./reaction-system-event.js";
 import { normalizeAllowList, resolveRuntime } from "./runtime.js";
@@ -371,13 +373,14 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       logVerbose(`imessage: dropping inbound attachment outside allowed roots: ${attachmentPath}`);
       return false;
     });
-    const firstAttachment = validAttachments[0];
-    const mediaPath = firstAttachment?.original_path ?? undefined;
-    const mediaType = firstAttachment?.mime_type ?? undefined;
-    // Build arrays for all attachments (for multi-image support)
-    const mediaPaths = validAttachments.map((a) => a.original_path).filter(Boolean) as string[];
-    const mediaTypes = validAttachments.map((a) => a.mime_type ?? undefined);
-    const kind = kindFromMime(mediaType ?? undefined);
+    const rawMediaAttachments = validAttachments.flatMap((a) => {
+      const attachmentPath = a.original_path?.trim();
+      return attachmentPath
+        ? [{ path: attachmentPath, contentType: a.mime_type ?? undefined }]
+        : [];
+    });
+    const placeholderMediaType = rawMediaAttachments[0]?.contentType;
+    const kind = kindFromMime(placeholderMediaType ?? undefined);
     const placeholder = kind
       ? `<media:${kind}>`
       : validAttachments.length
@@ -501,6 +504,20 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     const storePath = resolveStorePath(cfg.session?.store, {
       agentId: decision.route.agentId,
     });
+    const stagedAttachments = remoteHost
+      ? []
+      : await stageIMessageAttachments(validAttachments, {
+          maxBytes: mediaMaxBytes,
+          allowedRoots: effectiveAttachmentRoots,
+          deps: { logVerbose },
+        });
+    const mediaAttachments = remoteHost ? rawMediaAttachments : stagedAttachments;
+    const firstAttachment = mediaAttachments[0];
+    const mediaPath = firstAttachment?.path ?? undefined;
+    const mediaType = firstAttachment?.contentType ?? undefined;
+    // Build arrays for all attachments (for multi-image support)
+    const mediaPaths = mediaAttachments.map((a) => a.path).filter(Boolean);
+    const mediaTypes = mediaAttachments.map((a) => a.contentType ?? undefined);
     const previousTimestamp = readSessionUpdatedAt({
       storePath,
       sessionKey: decision.route.sessionKey,
@@ -659,6 +676,10 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         runtime.error?.(danger(`imessage ${info.kind} reply failed: ${String(err)}`));
       },
     });
+    const inboundLastRouteSessionKey = resolveInboundLastRouteSessionKey({
+      route: decision.route,
+      sessionKey: decision.route.sessionKey,
+    });
 
     await runInboundReplyTurn({
       channel: "imessage",
@@ -684,12 +705,14 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
             updateLastRoute:
               !decision.isGroup && updateTarget
                 ? {
-                    sessionKey: decision.route.mainSessionKey,
+                    sessionKey: inboundLastRouteSessionKey,
                     channel: "imessage",
                     to: updateTarget,
                     accountId: decision.route.accountId,
                     mainDmOwnerPin:
-                      pinnedMainDmOwner && decision.senderNormalized
+                      inboundLastRouteSessionKey === decision.route.mainSessionKey &&
+                      pinnedMainDmOwner &&
+                      decision.senderNormalized
                         ? {
                             ownerRecipient: pinnedMainDmOwner,
                             senderRecipient: decision.senderNormalized,

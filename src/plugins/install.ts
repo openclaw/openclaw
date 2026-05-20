@@ -6,6 +6,7 @@ import { packageNameMatchesId } from "../infra/install-safe-path.js";
 import {
   resolveNpmPackArchiveMetadata,
   resolveNpmSpecMetadata,
+  createNpmMetadataEnv,
   type NpmIntegrityDrift,
   type NpmSpecResolution,
 } from "../infra/install-source-utils.js";
@@ -171,6 +172,13 @@ function ensureOpenClawExtensions(params: { manifest: PackageManifest }):
       code: PLUGIN_INSTALL_ERROR_CODE.EMPTY_OPENCLAW_EXTENSIONS,
     };
   }
+  if (resolved.status === "invalid") {
+    return {
+      ok: false,
+      error: resolved.error,
+      code: PLUGIN_INSTALL_ERROR_CODE.INVALID_OPENCLAW_EXTENSIONS,
+    };
+  }
   return {
     ok: true,
     entries: resolved.entries,
@@ -211,10 +219,7 @@ async function resolveTrustedOfficialPrereleaseResolution(params: {
     ["npm", "view", params.spec.name, "versions", "--json"],
     {
       timeoutMs: Math.max(params.timeoutMs, 60_000),
-      env: {
-        COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
-        NPM_CONFIG_IGNORE_SCRIPTS: "true",
-      },
+      env: createNpmMetadataEnv(),
     },
   );
   if (versions.code !== 0) {
@@ -350,6 +355,7 @@ async function rollbackManagedNpmPluginInstall(params: {
         timeoutMs: Math.max(params.timeoutMs, 300_000),
         env: createSafeNpmInstallEnv(process.env, {
           legacyPeerDeps: true,
+          npmConfigCwd: params.npmRoot,
           packageLock: true,
           quiet: true,
         }),
@@ -410,6 +416,7 @@ async function rollbackManagedNpmPluginInstall(params: {
           timeoutMs: Math.max(params.timeoutMs, 300_000),
           env: createSafeNpmInstallEnv(process.env, {
             legacyPeerDeps: true,
+            npmConfigCwd: params.npmRoot,
             packageLock: true,
             quiet: true,
           }),
@@ -635,13 +642,47 @@ async function installPluginFromManagedNpmRoot(
   const rollbackPeerDependencySnapshot = await readManagedNpmRootPeerDependencySnapshot({
     npmRoot,
   });
+  const rollbackFailedManagedNpmInstall = async (error: string): Promise<InstallPluginResult> => {
+    await rollbackManagedNpmPluginInstall({
+      npmRoot,
+      packageName: params.packageName,
+      targetDir: installRoot,
+      timeoutMs,
+      logger,
+      peerDependencySnapshot: rollbackPeerDependencySnapshot,
+    });
+    return { ok: false, error };
+  };
+  const syncManagedPeerDependenciesForInstall = async (options?: {
+    omitUnsupportedManagedOverrides?: boolean;
+  }): Promise<{ ok: true; changed: boolean } | { ok: false; error: string }> => {
+    try {
+      return {
+        ok: true,
+        changed: await syncManagedNpmRootPeerDependencies({
+          npmRoot,
+          managedOverrides,
+          omitUnsupportedManagedOverrides: options?.omitUnsupportedManagedOverrides,
+          timeoutMs,
+        }),
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        error: `npm peer dependency planning failed: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+  };
   await upsertManagedNpmRootDependency({
     npmRoot,
     packageName: params.packageName,
     dependencySpec: params.dependencySpec,
     managedOverrides,
   });
-  await syncManagedNpmRootPeerDependencies({ npmRoot, managedOverrides });
+  const initialPeerSync = await syncManagedPeerDependenciesForInstall();
+  if (!initialPeerSync.ok) {
+    return await rollbackFailedManagedNpmInstall(initialPeerSync.error);
+  }
   const npmInstallArgs = [
     "npm",
     ...createSafeNpmInstallArgs({
@@ -658,6 +699,7 @@ async function installPluginFromManagedNpmRoot(
     timeoutMs: Math.max(timeoutMs, 300_000),
     env: createSafeNpmInstallEnv(process.env, {
       legacyPeerDeps: true,
+      npmConfigCwd: npmRoot,
       packageLock: true,
       quiet: true,
     }),
@@ -676,6 +718,12 @@ async function installPluginFromManagedNpmRoot(
       managedOverrides,
       omitUnsupportedManagedOverrides: true,
     });
+    const aliasRetryPeerSync = await syncManagedPeerDependenciesForInstall({
+      omitUnsupportedManagedOverrides: true,
+    });
+    if (!aliasRetryPeerSync.ok) {
+      return await rollbackFailedManagedNpmInstall(aliasRetryPeerSync.error);
+    }
     install = await runCommandWithTimeout(npmInstallArgs, npmInstallOptions);
   }
   if (install.code !== 0) {
@@ -694,11 +742,13 @@ async function installPluginFromManagedNpmRoot(
   }
   let settledManagedPeerDependencies = false;
   for (let peerSyncPass = 0; peerSyncPass < 10; peerSyncPass += 1) {
-    const syncedPeerDependencies = await syncManagedNpmRootPeerDependencies({
-      npmRoot,
-      managedOverrides,
+    const peerSync = await syncManagedPeerDependenciesForInstall({
       omitUnsupportedManagedOverrides,
     });
+    if (!peerSync.ok) {
+      return await rollbackFailedManagedNpmInstall(peerSync.error);
+    }
+    const syncedPeerDependencies = peerSync.changed;
     if (!syncedPeerDependencies) {
       settledManagedPeerDependencies = true;
       break;
@@ -720,12 +770,13 @@ async function installPluginFromManagedNpmRoot(
     }
   }
   if (!settledManagedPeerDependencies) {
-    const syncedPeerDependencies = await syncManagedNpmRootPeerDependencies({
-      npmRoot,
-      managedOverrides,
+    const peerSync = await syncManagedPeerDependenciesForInstall({
       omitUnsupportedManagedOverrides,
     });
-    settledManagedPeerDependencies = !syncedPeerDependencies;
+    if (!peerSync.ok) {
+      return await rollbackFailedManagedNpmInstall(peerSync.error);
+    }
+    settledManagedPeerDependencies = !peerSync.changed;
   }
   if (!settledManagedPeerDependencies) {
     await rollbackManagedNpmPluginInstall({

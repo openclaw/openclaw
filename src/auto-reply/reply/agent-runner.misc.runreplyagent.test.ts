@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  __testing as embeddedRunTesting,
+  testing as embeddedRunTesting,
   abortEmbeddedPiRun,
   isEmbeddedPiRunActive,
 } from "../../agents/pi-embedded-runner/runs.js";
@@ -25,7 +25,7 @@ import {
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { scheduleFollowupDrain } from "./queue.js";
-import { __testing as replyRunRegistryTesting, replyRunRegistry } from "./reply-run-registry.js";
+import { testing as replyRunRegistryTesting, replyRunRegistry } from "./reply-run-registry.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 function createCliBackendTestConfig() {
@@ -1121,6 +1121,22 @@ describe("runReplyAgent Active Memory inline debug", () => {
       "utf-8",
     );
 
+    runWithModelFallbackMock.mockImplementationOnce(
+      async ({ run }: RunWithModelFallbackParams) => ({
+        result: await run("anthropic", "claude"),
+        provider: "anthropic",
+        model: "claude",
+        attempts: [
+          {
+            provider: "openai",
+            model: "gpt-5.5",
+            error: "LLM request timed out.",
+            reason: "timeout",
+            status: 408,
+          },
+        ],
+      }),
+    );
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "Visible reply" }],
       meta: {
@@ -1132,16 +1148,8 @@ describe("runReplyAgent Active Memory inline debug", () => {
           winnerProvider: "anthropic",
           winnerModel: "claude",
           runner: "embedded",
-          fallbackUsed: true,
+          fallbackUsed: false,
           attempts: [
-            {
-              provider: "minimax-portal",
-              model: "MiniMax-M2.5",
-              result: "timeout",
-              reason: "timeout",
-              stage: "assistant",
-              elapsedMs: 15000,
-            },
             {
               provider: "anthropic",
               model: "claude",
@@ -1250,9 +1258,9 @@ describe("runReplyAgent Active Memory inline debug", () => {
     expect(traceText).toContain("attempts=2");
     expect(traceText).toContain("runner=embedded");
     expect(traceText).toContain("🔎 Fallback Chain:");
-    expect(traceText).toContain("1. minimax-portal/MiniMax-M2.5");
+    expect(traceText).toContain("1. openai/gpt-5.5");
     expect(traceText).toContain("result=timeout");
-    expect(traceText).toContain("elapsed=15.0s");
+    expect(traceText).toContain("status=408");
     expect(traceText).toContain("2. anthropic/claude");
     expect(traceText).toContain("result=success");
     expect(traceText).toContain("🔎 Request Shaping:");
@@ -1787,6 +1795,20 @@ describe("runReplyAgent claude-cli routing", () => {
           provider: "claude-cli",
           model: "opus-4.5",
         },
+        executionTrace: {
+          winnerProvider: "claude-cli",
+          winnerModel: "opus-4.5",
+          attempts: [
+            {
+              provider: "claude-cli",
+              model: "opus-4.5",
+              result: "error",
+              reason: "before_agent_run blocked the run",
+            },
+          ],
+          fallbackUsed: false,
+          runner: "cli",
+        },
       },
     });
 
@@ -1892,6 +1914,7 @@ describe("runReplyAgent claude-cli routing", () => {
     expect(texts).toContain(
       "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
     );
+    expect(texts).toContain("fallbackUsed=no");
     expect(texts).not.toContain("secret hitl prompt");
   });
 

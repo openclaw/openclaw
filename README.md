@@ -2,8 +2,10 @@
 
 **Enterprise robot runtime** — event-driven, ontology-native, playbook-powered, A2A-connected.
 
-> ClaWorks is built on the [OpenClaw](https://github.com/openclaw/openclaw) foundation.  
+> ClaWorks is built on the [OpenClaw](https://github.com/openclaw/openclaw) foundation (currently synced to upstream `main`).  
 > OpenClaw users can connect to ClaWorks via [@claworks/openclaw-extension](https://github.com/claworks/openclaw-claworks-extension).
+
+Runtime: **Node 24 (recommended) or Node 22.19+** (same as upstream OpenClaw).
 
 ---
 
@@ -37,30 +39,28 @@ OT Device → Alarm Event → EventKernel → PlaybookEngine → WorkOrder Creat
 ## Quick Start
 
 ```bash
-# Install
-npm install -g claworks
-
-# Initialize a robot
-claworks init my-robot
-claworks packs install process-industry
-
-# Start
-claworks start
+cd /path/to/claworks
+pnpm install
+pnpm claworks:init
+pnpm claworks:gateway
 ```
+
+Standalone CLI (isolated from a co-installed OpenClaw on port 18789):
+
+```bash
+node claworks.mjs gateway run --port 18800 --bind loopback
+# default state: ~/.claworks/claworks.json
+```
+
+See `docs/design/STANDALONE-RUN.md` and `docs/design/UPSTREAM-SYNC.md`.
 
 ## Architecture
 
 ```
-claworks/                    ← This repo (OpenClaw fork + ClaWorks core)
-  src/kernel/                ← EventKernel (event bus + playbook matcher)
-  src/planes/data/           ← ObjectStore + OntologyEngine + KB
-  src/planes/orch/           ← PlaybookEngine + HITLGate
-  src/interfaces/a2a/        ← A2A Server (robot-to-robot)
-  src/interfaces/mcp/        ← MCP Server (tool exposure)
-  extensions/claworks-robot/ ← Main ClaWorks plugin
-
-openclaw-claworks-extension/ ← Separate repo: OpenClaw bridge plugin
-claworks-packs/              ← Separate repo: industry extension packs
+packages/claworks-runtime/   ← @claworks/runtime (EventKernel, planes, interfaces)
+extensions/claworks-robot/   ← OpenClaw thin plugin (api.* glue only)
+claworks.mjs                 ← Product CLI entry (~/.claworks isolation)
+src/**                       ← OpenClaw core (track upstream; minimal ClaWorks deltas)
 ```
 
 ## Repos
@@ -73,8 +73,14 @@ claworks-packs/              ← Separate repo: industry extension packs
 
 ## Upstream
 
-ClaWorks tracks OpenClaw upstream: `git fetch upstream && git merge upstream/main`  
-Internal TypeScript identifiers are kept as-is to minimize merge conflicts.
+```bash
+git fetch upstream main
+git merge upstream/main
+# Resolve conflicts per docs/design/UPSTREAM-SYNC.md
+pnpm install && pnpm build && pnpm claworks:smoke
+```
+
+Internal TypeScript identifiers stay OpenClaw-compatible to minimize merge conflicts.
 
 ## License
 

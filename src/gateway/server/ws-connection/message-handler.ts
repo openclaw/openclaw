@@ -3,6 +3,7 @@ import os from "node:os";
 import type { RawData, WebSocket } from "ws";
 import { getRuntimeConfig } from "../../../config/io.js";
 import {
+  getBoundDeviceBootstrapProfile,
   getDeviceBootstrapTokenProfile,
   redeemDeviceBootstrapTokenProfile,
   revokeDeviceBootstrapToken,
@@ -14,6 +15,7 @@ import {
   normalizeDevicePublicKeyBase64Url,
 } from "../../../infra/device-identity.js";
 import {
+  approveBootstrapDevicePairing,
   approveDevicePairing,
   ensureDeviceToken,
   getPairedDevice,
@@ -41,6 +43,12 @@ import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
 import { rawDataToString } from "../../../infra/ws.js";
 import { logRejectedLargePayload } from "../../../logging/diagnostic-payload.js";
 import type { createSubsystemLogger } from "../../../logging/subsystem.js";
+import {
+  BOOTSTRAP_HANDOFF_OPERATOR_SCOPES,
+  PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  resolveBootstrapProfileScopesForRole,
+  type DeviceBootstrapProfile,
+} from "../../../shared/device-bootstrap-profile.js";
 import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import {
   isBrowserOperatorUiClient,
@@ -53,7 +61,8 @@ import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { GatewayAuthResult, ResolvedGatewayAuth } from "../../auth.js";
 import { hasForwardedRequestHeaders, isLocalDirectRequest } from "../../auth.js";
 import { normalizeDeviceMetadataForAuth } from "../../device-auth.js";
-import { ADMIN_SCOPE } from "../../method-scopes.js";
+import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../../method-scopes.js";
+import type { GatewayMethodRegistry } from "../../methods/registry.js";
 import {
   isLocalishHost,
   isLoopbackAddress,
@@ -65,6 +74,7 @@ import {
   resolveNodePairingClientIpSource,
   shouldAutoApproveNodePairingFromTrustedCidrs,
 } from "../../node-pairing-auto-approve.js";
+import { isOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
 import { checkBrowserOrigin } from "../../origin-check.js";
 import {
   buildPluginNodeCapabilityScopedHostUrl,
@@ -97,6 +107,9 @@ import {
 } from "../../protocol/index.js";
 import {
   gatewayStartupUnavailableDetails,
+  GATEWAY_STARTUP_CLOSE_CODE,
+  GATEWAY_STARTUP_CLOSE_REASON,
+  GATEWAY_STARTUP_PENDING_CLOSE_CAUSE,
   GATEWAY_STARTUP_RETRY_AFTER_MS,
 } from "../../protocol/startup-unavailable.js";
 import { parseGatewayRole } from "../../role-policy.js";
@@ -141,6 +154,19 @@ type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
 const DEVICE_SIGNATURE_SKEW_MS = 2 * 60 * 1000;
 
+function sameBootstrapProfile(
+  left: DeviceBootstrapProfile,
+  right: DeviceBootstrapProfile,
+): boolean {
+  if (left.roles.length !== right.roles.length || left.scopes.length !== right.scopes.length) {
+    return false;
+  }
+  return (
+    left.roles.every((role, index) => role === right.roles[index]) &&
+    left.scopes.every((scope, index) => scope === right.scopes[index])
+  );
+}
+
 export type WsOriginCheckMetrics = {
   hostHeaderFallbackAccepted: number;
 };
@@ -170,6 +196,8 @@ function resolveTrustedProxyControlUiScopes(params: {
 }
 
 function resolvePinnedClientMetadata(params: {
+  clientId?: string;
+  clientMode?: string;
   claimedPlatform?: string;
   claimedDeviceFamily?: string;
   pairedPlatform?: string;
@@ -179,20 +207,70 @@ function resolvePinnedClientMetadata(params: {
   deviceFamilyMismatch: boolean;
   pinnedPlatform?: string;
   pinnedDeviceFamily?: string;
+  refreshPairedPlatform?: string;
 } {
+  function normalizeLegacyNodeHostPlatformPin(value: string): string {
+    switch (value) {
+      case "darwin":
+      case "macos":
+        return "macos";
+      case "win32":
+      case "windows":
+        return "windows";
+      default:
+        return value;
+    }
+  }
+
+  function normalizeMobileAppPlatformPin(clientId: string | undefined, value: string): string {
+    if (clientId === GATEWAY_CLIENT_IDS.IOS_APP && /^(?:ios|ipados)(?:\s|$)/.test(value)) {
+      return "ios-family";
+    }
+    if (clientId === GATEWAY_CLIENT_IDS.ANDROID_APP && /^android(?:\s|$)/.test(value)) {
+      return "android";
+    }
+    return value;
+  }
+
   const claimedPlatform = normalizeDeviceMetadataForAuth(params.claimedPlatform);
   const claimedDeviceFamily = normalizeDeviceMetadataForAuth(params.claimedDeviceFamily);
   const pairedPlatform = normalizeDeviceMetadataForAuth(params.pairedPlatform);
   const pairedDeviceFamily = normalizeDeviceMetadataForAuth(params.pairedDeviceFamily);
   const hasPinnedPlatform = pairedPlatform !== "";
   const hasPinnedDeviceFamily = pairedDeviceFamily !== "";
-  const platformMismatch = hasPinnedPlatform && claimedPlatform !== pairedPlatform;
+  const isLegacyNodeHostPlatformPin =
+    params.clientId === GATEWAY_CLIENT_IDS.NODE_HOST &&
+    params.clientMode === GATEWAY_CLIENT_MODES.NODE &&
+    hasPinnedPlatform &&
+    claimedPlatform !== "" &&
+    normalizeLegacyNodeHostPlatformPin(claimedPlatform) ===
+      normalizeLegacyNodeHostPlatformPin(pairedPlatform);
+  const isMobileAppPlatformVersionRefresh =
+    hasPinnedPlatform &&
+    claimedPlatform !== "" &&
+    claimedPlatform !== pairedPlatform &&
+    normalizeMobileAppPlatformPin(params.clientId, claimedPlatform) ===
+      normalizeMobileAppPlatformPin(params.clientId, pairedPlatform);
+  const platformMismatch =
+    hasPinnedPlatform &&
+    claimedPlatform !== pairedPlatform &&
+    !isLegacyNodeHostPlatformPin &&
+    !isMobileAppPlatformVersionRefresh;
   const deviceFamilyMismatch = hasPinnedDeviceFamily && claimedDeviceFamily !== pairedDeviceFamily;
+  const pinnedPlatform =
+    claimedPlatform === pairedPlatform
+      ? params.pairedPlatform
+      : isLegacyNodeHostPlatformPin
+        ? normalizeLegacyNodeHostPlatformPin(pairedPlatform)
+        : isMobileAppPlatformVersionRefresh
+          ? params.claimedPlatform
+          : undefined;
   return {
     platformMismatch,
     deviceFamilyMismatch,
-    pinnedPlatform: hasPinnedPlatform ? params.pairedPlatform : undefined,
+    pinnedPlatform: hasPinnedPlatform ? pinnedPlatform : undefined,
     pinnedDeviceFamily: hasPinnedDeviceFamily ? params.pairedDeviceFamily : undefined,
+    ...(isMobileAppPlatformVersionRefresh ? { refreshPairedPlatform: params.claimedPlatform } : {}),
   };
 }
 
@@ -223,6 +301,7 @@ export type GatewayWsMessageHandlerParams = {
   gatewayMethods: string[];
   events: string[];
   extraHandlers: GatewayRequestHandlers;
+  getMethodRegistry?: () => GatewayMethodRegistry;
   buildRequestContext: () => GatewayRequestContext;
   refreshHealthSnapshot: GatewayRequestContext["refreshHealthSnapshot"];
   send: (obj: unknown) => void;
@@ -266,6 +345,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     gatewayMethods,
     events,
     extraHandlers,
+    getMethodRegistry,
     buildRequestContext,
     refreshHealthSnapshot,
     send,
@@ -481,7 +561,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         };
 
         if (isStartupPending?.()) {
-          markHandshakeFailure("startup-sidecars-pending");
+          markHandshakeFailure(GATEWAY_STARTUP_PENDING_CLOSE_CAUSE);
           await sendFrame({
             type: "res",
             id: frame.id,
@@ -492,7 +572,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
               details: gatewayStartupUnavailableDetails(),
             }),
           }).catch(() => {});
-          queueMicrotask(() => close(1013, "gateway starting"));
+          queueMicrotask(() => close(GATEWAY_STARTUP_CLOSE_CODE, GATEWAY_STARTUP_CLOSE_REASON));
           return;
         }
 
@@ -512,10 +592,13 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             minimumProbeProtocol: MIN_PROBE_PROTOCOL_VERSION,
           });
           logWsControl.warn(
-            `protocol mismatch conn=${connId} remote=${remoteAddr ?? "?"} client=${clientLabel} ${connectParams.client.mode} v${connectParams.client.version}`,
+            `protocol mismatch conn=${connId} peer=${formatForLog(peerLabel)} remote=${remoteAddr ?? "?"} remotePort=${remotePort ?? "?"} client=${formatForLog(clientLabel)} ${connectParams.client.mode} v${formatForLog(connectParams.client.version)} min=${minProtocol} max=${maxProtocol} expected=${PROTOCOL_VERSION} probeMin=${MIN_PROBE_PROTOCOL_VERSION} instance=${formatForLog(connectParams.client.instanceId ?? "n/a")}`,
           );
           sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, "protocol mismatch", {
             details: {
+              code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
+              clientMinProtocol: minProtocol,
+              clientMaxProtocol: maxProtocol,
               expectedProtocol: PROTOCOL_VERSION,
               minimumProbeProtocol: MIN_PROBE_PROTOCOL_VERSION,
             },
@@ -895,6 +978,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           authMethod === "bootstrap-token" && bootstrapTokenCandidate
             ? await getDeviceBootstrapTokenProfile({ token: bootstrapTokenCandidate })
             : null;
+        let handoffBootstrapProfile: DeviceBootstrapProfile | null = null;
         const trustedProxyAuthOk = isTrustedProxyControlUiOperatorAuth({
           isControlUi,
           role,
@@ -955,8 +1039,6 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           };
           const clientAccessMetadata = {
             displayName: connectParams.client.displayName,
-            clientId: connectParams.client.id,
-            clientMode: connectParams.client.mode,
             remoteIp: reportedClientIp,
           };
           const requirePairing = async (
@@ -1016,14 +1098,50 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                 autoApproveCidrs: configSnapshot.gateway?.nodes?.pairing?.autoApproveCidrs,
               },
             );
+            const boundBootstrapProfile =
+              authMethod === "bootstrap-token" &&
+              bootstrapTokenCandidate &&
+              reason === "not-paired" &&
+              role === "node" &&
+              scopes.length === 0 &&
+              !existingPairedDevice &&
+              !isControlUi &&
+              !isBrowserOperatorUi &&
+              !isWebchat &&
+              connectParams.client.mode === GATEWAY_CLIENT_MODES.NODE
+                ? await getBoundDeviceBootstrapProfile({
+                    token: bootstrapTokenCandidate,
+                    deviceId: device.id,
+                    publicKey: devicePublicKey,
+                  })
+                : null;
+            const allowSilentBootstrapPairing =
+              boundBootstrapProfile !== null &&
+              sameBootstrapProfile(boundBootstrapProfile, PAIRING_SETUP_BOOTSTRAP_PROFILE);
+            // This is the native QR/setup-code onboarding seam. Mobile clients
+            // connect as node with bootstrap auth, then clear bootstrap auth and
+            // start their operator loop only if hello-ok includes the bounded
+            // operator token below. Keep this limited to the exact fresh baseline
+            // profile; admin/pairing scopes still require an explicit owner flow.
+            const bootstrapPairingRoles = allowSilentBootstrapPairing
+              ? Array.from(new Set([role, ...boundBootstrapProfile.roles]))
+              : undefined;
             const pairing = await requestDevicePairing({
               deviceId: device.id,
               publicKey: devicePublicKey,
               ...clientPairingMetadata,
+              ...(bootstrapPairingRoles
+                ? {
+                    roles: bootstrapPairingRoles,
+                    scopes: [...BOOTSTRAP_HANDOFF_OPERATOR_SCOPES],
+                  }
+                : {}),
               silent:
                 reason === "scope-upgrade"
                   ? false
-                  : allowSilentLocalPairing || allowSilentTrustedCidrsNodePairing,
+                  : allowSilentLocalPairing ||
+                    allowSilentTrustedCidrsNodePairing ||
+                    allowSilentBootstrapPairing,
             });
             const context = buildRequestContext();
             let approved: Awaited<ReturnType<typeof approveDevicePairing>> | undefined;
@@ -1044,10 +1162,19 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
               return replacementPending?.requestId;
             };
             if (pairing.request.silent === true) {
-              approved = await approveDevicePairing(pairing.request.requestId, {
-                callerScopes: scopes,
-              });
+              approved =
+                allowSilentBootstrapPairing && boundBootstrapProfile
+                  ? await approveBootstrapDevicePairing(
+                      pairing.request.requestId,
+                      boundBootstrapProfile,
+                    )
+                  : await approveDevicePairing(pairing.request.requestId, {
+                      callerScopes: scopes,
+                    });
               if (approved?.status === "approved") {
+                if (allowSilentBootstrapPairing && boundBootstrapProfile) {
+                  handoffBootstrapProfile = boundBootstrapProfile;
+                }
                 logGateway.info(
                   `device pairing auto-approved device=${approved.device.deviceId} role=${approved.device.role ?? "unknown"}`,
                 );
@@ -1169,6 +1296,8 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             const claimedDeviceFamily = connectParams.client.deviceFamily;
             const pairedDeviceFamily = paired.deviceFamily;
             const metadataPinning = resolvePinnedClientMetadata({
+              clientId: connectParams.client.id,
+              clientMode: connectParams.client.mode,
               claimedPlatform,
               claimedDeviceFamily,
               pairedPlatform,
@@ -1245,9 +1374,46 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
               }
             }
 
-            // Metadata pinning is approval-bound. Reconnects can update access metadata,
-            // but platform/device family must stay on the approved pairing record.
-            await updatePairedDeviceMetadata(device.id, clientAccessMetadata);
+            const retryBootstrapHandoffProfile =
+              authMethod === "bootstrap-token" &&
+              bootstrapTokenCandidate &&
+              role === "node" &&
+              scopes.length === 0 &&
+              !isControlUi &&
+              !isBrowserOperatorUi &&
+              !isWebchat &&
+              connectParams.client.mode === GATEWAY_CLIENT_MODES.NODE &&
+              pairedRoles.includes("operator") &&
+              roleScopesAllow({
+                role: "operator",
+                requestedScopes: BOOTSTRAP_HANDOFF_OPERATOR_SCOPES,
+                allowedScopes: pairedScopes,
+              })
+                ? await getBoundDeviceBootstrapProfile({
+                    token: bootstrapTokenCandidate,
+                    deviceId: device.id,
+                    publicKey: devicePublicKey,
+                  })
+                : null;
+            if (
+              retryBootstrapHandoffProfile &&
+              sameBootstrapProfile(retryBootstrapHandoffProfile, PAIRING_SETUP_BOOTSTRAP_PROFILE)
+            ) {
+              // If the first QR bootstrap hello-ok failed to reach mobile, the
+              // bootstrap token is restored while the paired device already has
+              // node+operator grants. Preserve the same bounded handoff on retry.
+              handoffBootstrapProfile = retryBootstrapHandoffProfile;
+            }
+
+            // Metadata pinning is approval-bound. Reconnects can update access metadata
+            // and same-family mobile OS version labels, but real platform/device-family
+            // changes must stay on the approved pairing record.
+            await updatePairedDeviceMetadata(device.id, {
+              ...clientAccessMetadata,
+              ...(metadataPinning.refreshPairedPlatform
+                ? { platform: metadataPinning.refreshPairedPlatform }
+                : {}),
+            });
           }
         }
 
@@ -1256,6 +1422,52 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           shouldIssueDeviceToken && device && hasServerApprovedDeviceTokenBaseline
             ? await ensureDeviceToken({ deviceId: device.id, role, scopes })
             : null;
+        const bootstrapDeviceTokens: Array<{
+          deviceToken: string;
+          role: string;
+          scopes: string[];
+          issuedAtMs: number;
+        }> = [];
+        if (deviceToken) {
+          bootstrapDeviceTokens.push({
+            deviceToken: deviceToken.token,
+            role: deviceToken.role,
+            scopes: deviceToken.scopes,
+            issuedAtMs: deviceToken.rotatedAtMs ?? deviceToken.createdAtMs,
+          });
+        }
+        const approvedHandoffBootstrapProfile = handoffBootstrapProfile;
+        if (device && approvedHandoffBootstrapProfile) {
+          for (const bootstrapRole of approvedHandoffBootstrapProfile.roles) {
+            if (bootstrapDeviceTokens.some((entry) => entry.role === bootstrapRole)) {
+              continue;
+            }
+            // Extra hello-ok handoff tokens are only emitted for the approved
+            // setup-code profile. Operator scopes are filtered through the
+            // documented allowlist so QR bootstrap cannot grant admin/pairing.
+            const bootstrapRoleScopes =
+              bootstrapRole === "operator"
+                ? resolveBootstrapProfileScopesForRole(
+                    bootstrapRole,
+                    approvedHandoffBootstrapProfile.scopes,
+                  )
+                : [];
+            const extraToken = await ensureDeviceToken({
+              deviceId: device.id,
+              role: bootstrapRole,
+              scopes: bootstrapRoleScopes,
+            });
+            if (!extraToken) {
+              continue;
+            }
+            bootstrapDeviceTokens.push({
+              deviceToken: extraToken.token,
+              role: extraToken.role,
+              scopes: extraToken.scopes,
+              issuedAtMs: extraToken.rotatedAtMs ?? extraToken.createdAtMs,
+            });
+          }
+        }
         if (role === "node") {
           const reconciliation = await reconcileNodePairingOnConnect({
             cfg: getRuntimeConfig(),
@@ -1338,6 +1550,11 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         const sharedGatewaySessionGeneration = usesSharedGatewayAuth
           ? resolveSharedGatewaySessionGeneration(resolvedAuth, trustedProxies)
           : undefined;
+        const isTrustedApprovalRuntime =
+          scopes.includes(APPROVALS_SCOPE) &&
+          connectParams.client.id === GATEWAY_CLIENT_IDS.GATEWAY_CLIENT &&
+          connectParams.client.mode === GATEWAY_CLIENT_MODES.BACKEND &&
+          isOperatorApprovalRuntimeToken(connectParams.auth?.approvalRuntimeToken);
         clearHandshakeTimer();
         const nextClient: GatewayWsClient = {
           socket,
@@ -1348,6 +1565,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           sharedGatewaySessionGeneration,
           presenceKey,
           clientIp: reportedClientIp,
+          ...(isTrustedApprovalRuntime ? { internal: { approvalRuntime: true } } : {}),
           ...(Object.keys(pluginSurfaceUrls).length > 0 ? { pluginSurfaceUrls } : {}),
           ...(Object.keys(pluginNodeCapabilitySurfaces).length > 0
             ? { pluginNodeCapabilitySurfaces }
@@ -1491,6 +1709,9 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
               ? {
                   deviceToken: deviceToken.token,
                   issuedAtMs: deviceToken.rotatedAtMs ?? deviceToken.createdAtMs,
+                  ...(bootstrapDeviceTokens.length > 1
+                    ? { deviceTokens: bootstrapDeviceTokens.slice(1) }
+                    : {}),
                 }
               : {}),
           },
@@ -1506,13 +1727,13 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           | undefined;
         if (authMethod === "bootstrap-token" && bootstrapTokenCandidate && device) {
           try {
-            if (issuedBootstrapProfile) {
+            if (handoffBootstrapProfile || issuedBootstrapProfile) {
               const redemption = await redeemDeviceBootstrapTokenProfile({
                 token: bootstrapTokenCandidate,
                 role,
                 scopes,
               });
-              if (redemption.fullyRedeemed) {
+              if (handoffBootstrapProfile || redemption.fullyRedeemed) {
                 const revoked = await revokeDeviceBootstrapToken({
                   token: bootstrapTokenCandidate,
                 });
@@ -1643,6 +1864,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           client,
           isWebchatConnect,
           extraHandlers,
+          methodRegistry: getMethodRegistry?.(),
           context: buildRequestContext(),
         });
       })().catch((err) => {
@@ -1677,8 +1899,13 @@ function getRawDataByteLength(data: unknown): number {
 }
 
 function setSocketMaxPayload(socket: WebSocket, maxPayload: number): void {
-  const receiver = (socket as { _receiver?: { _maxPayload?: number } })._receiver;
+  const receiver = (socket as { _receiver?: { _maxPayload?: number } })["_receiver"];
   if (receiver) {
-    receiver._maxPayload = maxPayload;
+    receiver["_maxPayload"] = maxPayload;
   }
 }
+
+export const testing = {
+  resolvePinnedClientMetadata,
+};
+export { testing as __testing };

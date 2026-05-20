@@ -28,6 +28,8 @@ export const FIELD_HELP: Record<string, string> = {
     'Wizard execution mode recorded as "local" or "remote" for the most recent setup flow. Use this to understand whether setup targeted direct local runtime or remote gateway topology.',
   diagnostics:
     "Diagnostics controls for targeted tracing, telemetry export, and cache inspection during debugging. Keep baseline diagnostics minimal in production and enable deeper signals only when investigating issues.",
+  "diagnostics.memoryPressureSnapshot":
+    "Whether critical memory pressure automatically captures a redacted stability snapshot. Default: false. Enable only when this host can tolerate the extra file-system scan and snapshot write during critical memory pressure.",
   "diagnostics.otel":
     "OpenTelemetry export settings for traces, metrics, and logs emitted by gateway components. Use this when integrating with centralized observability backends and distributed tracing pipelines.",
   "diagnostics.cacheTrace":
@@ -185,6 +187,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Independent dispatch gate for ACP session turns (default: true). Set false to keep ACP commands available while blocking ACP turn execution.",
   "acp.backend":
     "Default ACP runtime backend id (for example: acpx). Must match a registered ACP runtime plugin backend.",
+  "acp.fallbacks":
+    "Ordered list of fallback ACP backend ids tried when the primary backend fails with UNAVAILABLE (for example: rate-limit / quota exhausted). Each entry must match a registered ACP runtime plugin backend.",
   "acp.defaultAgent":
     "Fallback ACP target agent id used when ACP spawns do not specify an explicit target.",
   "acp.allowedAgents":
@@ -233,6 +237,16 @@ export const FIELD_HELP: Record<string, string> = {
     'Prompt-only sub-agent delegation strength. "suggest" keeps the default guidance; "prefer" strongly instructs the main agent to delegate anything more involved than a direct reply via sessions_spawn.',
   "agents.list[].subagents.delegationMode":
     "Per-agent override for sub-agent delegation strength. Use this for coordinator agents that should stay responsive and push non-trivial work into spawned sub-agents.",
+  "agents.list[].contextInjection":
+    "Per-agent override for when workspace bootstrap files are injected into this agent's system prompt. Omit to inherit agents.defaults.contextInjection.",
+  "agents.list[].bootstrapMaxChars":
+    "Per-agent override for max characters of each workspace bootstrap file injected into this agent's system prompt. Omit to inherit agents.defaults.bootstrapMaxChars.",
+  "agents.list[].bootstrapTotalMaxChars":
+    "Per-agent override for max total characters across all workspace bootstrap files injected into this agent's system prompt. Omit to inherit agents.defaults.bootstrapTotalMaxChars.",
+  "agents.list[].experimental":
+    "Per-agent experimental flags. Omitted fields inherit agents.defaults.experimental.",
+  "agents.list[].experimental.localModelLean":
+    "Per-agent override for lean local-model mode. Enable it for one smaller local-model agent without trimming tools from every agent.",
   "agents.defaults.contextLimits":
     "Focused per-agent-context budget defaults for selected high-volume excerpts and injected prompt blocks. Use this to tune bounded read/injection sizes without reopening any unbounded call paths.",
   "agents.defaults.contextLimits.memoryGetMaxChars":
@@ -421,6 +435,28 @@ export const FIELD_HELP: Record<string, string> = {
     "Default number of Tool Search results returned when the model omits a limit. Runtime clamps this to `maxSearchLimit`.",
   "tools.toolSearch.maxSearchLimit":
     "Maximum number of Tool Search results a model can request. Runtime clamps values to the supported 1..50 range.",
+  "tools.codeMode":
+    "Generic OpenClaw code mode. When enabled, agent runs expose only `exec` and `wait` to the model and hide normal tools behind a QuickJS-WASI catalog bridge.",
+  "tools.codeMode.enabled":
+    "Enables generic code mode. Default is off. When explicitly enabled, OpenClaw fails closed if the runtime is unavailable instead of exposing the full tool list.",
+  "tools.codeMode.runtime": 'Guest JavaScript runtime. Only "quickjs-wasi" is supported.',
+  "tools.codeMode.mode":
+    'Model-facing surface. Only "only" is supported: expose code-mode `exec` and `wait` and hide normal tools.',
+  "tools.codeMode.languages":
+    'Accepted source languages for `exec`. Supported values are "javascript" and "typescript".',
+  "tools.codeMode.timeoutMs": "Maximum milliseconds for one code-mode `exec` or `wait` call.",
+  "tools.codeMode.memoryLimitBytes": "QuickJS heap limit for one code-mode VM.",
+  "tools.codeMode.maxOutputBytes": "Maximum serialized bytes returned through code-mode output.",
+  "tools.codeMode.maxSnapshotBytes":
+    "Maximum serialized bytes retained for one suspended QuickJS snapshot.",
+  "tools.codeMode.maxPendingToolCalls":
+    "Maximum concurrent nested tool calls a code-mode VM can start before it must resume later.",
+  "tools.codeMode.snapshotTtlSeconds":
+    "How long suspended code-mode snapshots can be resumed with `wait` before they expire.",
+  "tools.codeMode.searchDefaultLimit":
+    "Default number of hidden catalog search results returned by `tools.search` inside code mode.",
+  "tools.codeMode.maxSearchLimit":
+    "Maximum number of hidden catalog search results a code-mode program can request.",
   "tools.elevated":
     "Elevated tool access controls for privileged command surfaces that should only be reachable from trusted senders. Keep disabled unless operator workflows explicitly require elevated actions.",
   "tools.elevated.enabled":
@@ -716,6 +752,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Per-agent override for tool profile selection when one agent needs a different capability baseline. Use this sparingly so policy differences across agents stay intentional and reviewable.",
   "agents.list[].tools.alsoAllow":
     "Per-agent additive allowlist for tools on top of global and profile policy. Keep narrow to avoid accidental privilege expansion on specialized agents.",
+  "agents.list[].tools.codeMode":
+    "Per-agent code mode override. Use this to test or roll out exec/wait tool-surface mode for one agent without enabling it fleet-wide.",
   "agents.list[].tools.byProvider":
     "Per-agent provider-specific tool policy overrides for channel-scoped capability control. Use this when a single agent needs tighter restrictions on one provider than others.",
   "agents.list[].tools.message.crossContext.allowWithinProvider":
@@ -914,7 +952,7 @@ export const FIELD_HELP: Record<string, string> = {
   "models.providers.*.maxTokens":
     "Default maximum output token budget applied to models under this provider when a model entry does not set maxTokens.",
   "models.providers.*.timeoutSeconds":
-    "Optional per-provider model request timeout in seconds. Applies to provider HTTP fetches, including connect, headers, body, and total request abort handling. Use this for slow local or self-hosted model servers instead of changing global agent timeouts.",
+    "Optional per-provider model request timeout in seconds. Applies to provider HTTP fetches, including connect, headers, body, and total request abort handling, and also raises the LLM idle/stream watchdog ceiling for this provider above the implicit ~120s default. Use this for slow local or self-hosted model servers, or for cloud providers that buffer reasoning tokens silently on the wire (Gemini preview, large-tool-payload Claude/Opus), instead of changing global agent timeouts.",
   "models.providers.*.injectNumCtxForOpenAICompat":
     "Controls whether OpenClaw injects `options.num_ctx` for Ollama providers configured with the OpenAI-compatible adapter (`openai-completions`). Default is true. Set false only if your proxy/upstream rejects unknown `options` payload fields.",
   "models.providers.*.params":
@@ -978,6 +1016,18 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional SNI/server-name override used when establishing TLS to the proxy.",
   "models.providers.*.request.proxy.tls.insecureSkipVerify":
     "Skips proxy TLS certificate verification. Use only for controlled development environments.",
+  proxy:
+    "Operator-managed forward proxy routing for OpenClaw runtime HTTP, HTTPS, WebSocket, and supported raw-egress paths. Use this when central egress control is part of the deployment boundary.",
+  "proxy.enabled":
+    "Enables operator-managed proxy routing. When enabled, OpenClaw fails startup if no managed proxy URL is configured.",
+  "proxy.proxyUrl":
+    "Managed forward proxy URL. Use http:// for a plain CONNECT proxy or https:// when the connection to the proxy endpoint itself must use TLS.",
+  "proxy.tls":
+    "TLS settings used when connecting to the managed proxy endpoint. These settings apply to proxy TLS, not destination TLS after CONNECT.",
+  "proxy.tls.caFile":
+    "Filesystem path to a custom CA bundle used to verify an HTTPS managed proxy endpoint certificate.",
+  "proxy.loopbackMode":
+    'Controls Gateway loopback control-plane routing while managed proxy mode is active: "gateway-only", "proxy", or "block".',
   "models.providers.*.request.tls":
     "Optional TLS settings used when connecting directly to the upstream model endpoint.",
   "models.providers.*.request.tls.ca":
@@ -993,7 +1043,7 @@ export const FIELD_HELP: Record<string, string> = {
   "models.providers.*.request.tls.insecureSkipVerify":
     "Skips upstream TLS certificate verification. Use only for controlled development environments.",
   "models.providers.*.request.allowPrivateNetwork":
-    "When true, allow HTTPS to the model base URL when DNS resolves to private, CGNAT, or similar ranges, via the provider HTTP fetch guard (fetchWithSsrFGuard). OpenAI Responses WebSocket reuses request for headers/TLS but does not use that fetch SSRF path. Use only for operator-controlled self-hosted OpenAI-compatible endpoints (LAN, overlay, split DNS). Default is false.",
+    "When true, allow model-provider HTTP requests to private, CGNAT, or similar ranges through the provider HTTP fetch guard (fetchWithSsrFGuard). Custom/local provider base URLs already trust the exact configured origin, except metadata/link-local origins; set this to false to opt out of that trust. OpenAI Responses WebSocket reuses request for headers/TLS but does not use that fetch SSRF path. Use true only for operator-controlled self-hosted endpoints that must reach private origins outside the configured baseUrl origin.",
   "models.providers.*.models":
     "Declared model list for a provider including identifiers, metadata, provider-specific params, and optional compatibility/cost hints. Keep IDs exact to provider catalog values so selection and fallback resolve correctly.",
   "models.providers.*.models[].agentRuntime":
@@ -1047,7 +1097,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.experimental.localModelLean":
     "Experimental local-model prompt trim. When enabled, OpenClaw drops heavyweight default tools like browser, cron, and message for weaker or smaller local-model backends.",
   "agents.defaults.bootstrapPromptTruncationWarning":
-    'Inject agent-visible warning text when bootstrap files are truncated: "off", "once" (default), or "always".',
+    'Inject agent-visible warning text when bootstrap files are truncated: "off", "once", or "always" (default).',
   "agents.defaults.startupContext":
     'Runtime-owned first-turn prelude for bare "/new" and "/reset". Use this to control whether recent daily memory files are preloaded into the first prompt instead of asking the model to decide what to read.',
   "agents.defaults.startupContext.enabled":
@@ -1497,6 +1547,14 @@ export const FIELD_HELP: Record<string, string> = {
   mcp: "Global MCP server definitions managed by OpenClaw. Embedded Pi and other runtime adapters can consume these servers without storing them inside Pi-owned project settings.",
   "mcp.servers":
     "Named MCP server definitions. OpenClaw stores them in its own config and runtime adapters decide which transports are supported at execution time.",
+  "mcp.servers.*.codex":
+    "OpenClaw projection metadata for Codex app-server threads only. It does not affect ACP sessions or generic Codex harness config. Omit this block to keep the server available to every Codex app-server agent with Codex's default MCP approval behavior.",
+  "mcp.servers.*.codex.agents":
+    "Optional non-empty OpenClaw agent ids that should receive this MCP server in Codex app-server thread config. Empty, blank, or invalid lists fail closed; when omitted, the server is projected for all Codex app-server agents.",
+  "mcp.servers.*.codex.defaultToolsApprovalMode":
+    'Optional Codex MCP tool approval mode for this server: "auto", "prompt", or "approve". Use only for MCP servers you intentionally trust.',
+  "mcp.servers.*.codex.default_tools_approval_mode":
+    "Codex-native spelling for the same per-server MCP tool approval mode. Prefer defaultToolsApprovalMode in OpenClaw config.",
   "mcp.sessionIdleTtlMs":
     "Idle TTL in milliseconds for session-scoped bundled MCP runtimes. Defaults to 10 minutes; set 0 to disable idle eviction.",
   session:
@@ -1558,9 +1616,13 @@ export const FIELD_HELP: Record<string, string> = {
   "session.sendPolicy.rules[].match.rawKeyPrefix":
     "Matches the raw, unnormalized session-key prefix for exact full-key policy targeting. Use this when normalized keyPrefix is too broad and you need agent-prefixed or transport-specific precision.",
   "session.writeLock":
-    "Groups session transcript write-lock acquisition controls. Tune only when legitimate transcript prep, cleanup, compaction, or mirror work contends longer than the default wait.",
+    "Groups session transcript write-lock controls. Tune only when legitimate transcript prep, cleanup, compaction, or mirror work contends longer than the default policies.",
   "session.writeLock.acquireTimeoutMs":
-    "Milliseconds to wait while acquiring a session transcript write lock before reporting the session as busy. Default: 60000; raise for slow disks or long prep/cleanup, lower only when quick failure is preferred.",
+    "Milliseconds to wait while acquiring a session transcript write lock before reporting the session as busy. Default: 60000; env override: OPENCLAW_SESSION_WRITE_LOCK_ACQUIRE_TIMEOUT_MS.",
+  "session.writeLock.staleMs":
+    "Milliseconds before an existing session transcript lock can be treated as stale and reclaimed. Default: 1800000; env override: OPENCLAW_SESSION_WRITE_LOCK_STALE_MS.",
+  "session.writeLock.maxHoldMs":
+    "Milliseconds a held in-process session transcript lock may remain held before the watchdog releases it. Default: 300000; env override: OPENCLAW_SESSION_WRITE_LOCK_MAX_HOLD_MS.",
   "session.agentToAgent":
     "Groups controls for inter-agent session exchanges, including loop prevention limits on reply chaining. Keep defaults unless you run advanced agent-to-agent automation with strict turn caps.",
   "session.agentToAgent.maxPingPongTurns":
@@ -1747,7 +1809,7 @@ export const FIELD_HELP: Record<string, string> = {
   "messages.messagePrefix":
     "Prefix text prepended to inbound user messages before they are handed to the agent runtime. Use this sparingly for channel context markers and keep it stable across sessions.",
   "messages.visibleReplies":
-    'Controls visible source replies across direct, group, and channel conversations. "message_tool" keeps normal final replies private and requires message(action=send) for visible output; "automatic" posts normal replies as before.',
+    'Controls visible source replies across direct, group, and channel conversations. "message_tool" requires message(action=send) for visible output and keeps normal final text private. "automatic" posts normal replies as before.',
   "messages.responsePrefix":
     "Prefix text prepended to outbound assistant replies before sending to channels. Use for lightweight branding/context tags and avoid long prefixes that reduce content density.",
   "messages.groupChat":
@@ -1756,8 +1818,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Safe case-insensitive regex patterns used to detect explicit mentions/trigger phrases in group chats. Use precise patterns to reduce false positives in high-volume channels; invalid or unsafe nested-repetition patterns are ignored.",
   "messages.groupChat.historyLimit":
     "Maximum number of prior group messages loaded as context per turn for group sessions. Use higher values for richer continuity, or lower values for faster and cheaper responses.",
+  "messages.groupChat.unmentionedInbound":
+    'Controls how unmentioned always-on group chatter is submitted. "user_request" treats it as a user request; "room_event" submits it as quiet context where visible output requires the message tool.',
   "messages.groupChat.visibleReplies":
-    'Overrides visible source replies for group/channel conversations. Defaults to "message_tool" when no global visible reply policy is set. "message_tool" keeps normal final replies private and requires message(action=send) for room output; "automatic" posts normal replies as before.',
+    'Overrides visible source replies for group/channel conversations. Defaults to "automatic" when no global visible reply policy is set. "message_tool" requires message(action=send) for room output and keeps normal final text private. "automatic" posts normal replies as before.',
   "messages.queue":
     "Queue strategy for inbound messages that arrive while a session run is active. Use this to tune steering, deferred followups, batching, or interruption.",
   "messages.queue.mode":
@@ -1846,9 +1910,9 @@ export const FIELD_HELP: Record<string, string> = {
   "messages.statusReactions":
     "Lifecycle status reactions that update the emoji on the trigger message as the agent progresses (queued → thinking → tool → done/error).",
   "messages.statusReactions.enabled":
-    "Enable lifecycle status reactions on supported channels. Slack and Discord treat unset as enabled when ack reactions are active; Telegram requires this to be true before lifecycle reactions are used.",
+    "Enable lifecycle status reactions on supported channels. Slack and Discord treat unset as enabled when ack reactions are active; Telegram and WhatsApp require this to be true before lifecycle reactions are used.",
   "messages.statusReactions.emojis":
-    "Override default status reaction emojis. Keys: thinking, compacting, tool, coding, web, done, error, stallSoft, stallHard. Must be valid Telegram reaction emojis.",
+    "Override default status reaction emojis. Keys: queued, thinking, compacting, tool, coding, web, deploy, build, concierge, done, error, stallSoft, stallHard. Telegram chooses the first supported fallback when a configured emoji is not available in the chat.",
   "messages.statusReactions.timing":
     "Override default timing. Keys: debounceMs (700), stallSoftMs (25000), stallHardMs (60000), doneHoldMs (1500), errorHoldMs (2500).",
   "messages.inbound.debounceMs":

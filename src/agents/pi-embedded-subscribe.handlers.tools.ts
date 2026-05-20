@@ -34,6 +34,7 @@ import type {
 import { isPromiseLike } from "./pi-embedded-subscribe.promise.js";
 import {
   extractToolResultMediaArtifact,
+  extractToolErrorCode,
   extractMessagingToolSend,
   extractToolErrorMessage,
   extractToolResultText,
@@ -66,6 +67,19 @@ const beforeToolCallModuleLoader = createLazyImportLoader<BeforeToolCallModule>(
 );
 const LIVE_EXEC_OUTPUT_MAX_CHARS = 8000;
 const LIVE_EXEC_UPDATE_MIN_INTERVAL_MS = 250;
+
+function isMiddlewareToolResultError(result: unknown): boolean {
+  if (!result || typeof result !== "object") {
+    return false;
+  }
+  const details = (result as { details?: unknown }).details;
+  return Boolean(
+    details &&
+    typeof details === "object" &&
+    !Array.isArray(details) &&
+    (details as { middlewareError?: unknown }).middlewareError === true,
+  );
+}
 
 function loadExecApprovalReply(): Promise<ExecApprovalReplyModule> {
   return execApprovalReplyModuleLoader.load();
@@ -341,16 +355,35 @@ function pushUniqueMediaUrl(urls: string[], seen: Set<string>, value: unknown): 
 function collectMessagingMediaUrlsFromRecord(record: Record<string, unknown>): string[] {
   const urls: string[] = [];
   const seen = new Set<string>();
+  const pushAttachment = (value: unknown) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return;
+    }
+    const attachment = value as Record<string, unknown>;
+    pushUniqueMediaUrl(urls, seen, attachment.media);
+    pushUniqueMediaUrl(urls, seen, attachment.mediaUrl);
+    pushUniqueMediaUrl(urls, seen, attachment.path);
+    pushUniqueMediaUrl(urls, seen, attachment.filePath);
+    pushUniqueMediaUrl(urls, seen, attachment.fileUrl);
+    pushUniqueMediaUrl(urls, seen, attachment.url);
+  };
 
   pushUniqueMediaUrl(urls, seen, record.media);
   pushUniqueMediaUrl(urls, seen, record.mediaUrl);
   pushUniqueMediaUrl(urls, seen, record.path);
   pushUniqueMediaUrl(urls, seen, record.filePath);
+  pushUniqueMediaUrl(urls, seen, record.fileUrl);
 
   const mediaUrls = record.mediaUrls;
   if (Array.isArray(mediaUrls)) {
     for (const mediaUrl of mediaUrls) {
       pushUniqueMediaUrl(urls, seen, mediaUrl);
+    }
+  }
+  const attachments = record.attachments;
+  if (Array.isArray(attachments)) {
+    for (const attachment of attachments) {
+      pushAttachment(attachment);
     }
   }
 
@@ -915,11 +948,14 @@ export async function handleToolExecutionEnd(
   ctx.state.toolSummaryById.delete(toolCallId);
   if (isToolError) {
     const errorMessage = extractToolErrorMessage(sanitizedResult);
+    const errorCode = extractToolErrorCode(sanitizedResult);
     ctx.state.lastToolError = {
       toolName,
       meta,
+      ...(errorCode ? { errorCode } : {}),
       error: errorMessage,
       timedOut: isToolResultTimedOut(sanitizedResult) || undefined,
+      middlewareError: isMiddlewareToolResultError(sanitizedResult) || undefined,
       mutatingAction: callSummary?.mutatingAction,
       actionFingerprint: callSummary?.actionFingerprint,
       fileTarget: callSummary?.fileTarget,

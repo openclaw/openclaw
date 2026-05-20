@@ -298,6 +298,41 @@ describe("runMessageAction media behavior", () => {
     expect(sendArgs.asVoice).toBe(true);
   });
 
+  it("sends structured attachments as media urls", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "workspace",
+          source: "test",
+          plugin: workspacePlugin,
+        },
+      ]),
+    );
+
+    await withSandbox(async (sandboxDir) => {
+      const result = await runDrySend({
+        cfg: workspaceConfig,
+        actionParams: {
+          channel: "workspace",
+          target: "12345678",
+          message: "track ready",
+          attachments: [{ path: "./song.mp3" }, { filePath: "/workspace/cover.png" }],
+        },
+        sandboxRoot: sandboxDir,
+      });
+
+      expect(result.kind).toBe("send");
+      if (result.kind !== "send") {
+        throw new Error("expected send result");
+      }
+      expect(result.sendResult?.mediaUrl).toBe(path.join(sandboxDir, "song.mp3"));
+      expect(result.sendResult?.mediaUrls).toEqual([
+        path.join(sandboxDir, "song.mp3"),
+        path.join(sandboxDir, "cover.png"),
+      ]);
+    });
+  });
+
   describe("sendAttachment hydration", () => {
     const cfg = {
       channels: {
@@ -478,6 +513,22 @@ describe("runMessageAction media behavior", () => {
       const result = await runAttachmentRemoteMediaAction({ cfg, action: "upload-file" });
 
       expectAttachmentRemoteMediaPayload(result);
+    });
+
+    it("keeps original upload-file bytes when forced to send as a document", async () => {
+      await runMessageAction({
+        cfg,
+        action: "upload-file",
+        params: {
+          channel: "attachmentchat",
+          target: "+15551234567",
+          media: "https://example.com/pic.png",
+          message: "caption",
+          forceDocument: true,
+        },
+      });
+
+      expect(requireLoadWebMediaOptions().optimizeImages).toBe(false);
     });
 
     it("enforces sandboxed attachment paths for attachment actions", async () => {

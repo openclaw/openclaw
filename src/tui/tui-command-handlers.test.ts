@@ -334,6 +334,17 @@ describe("tui command handlers", () => {
     });
   });
 
+  it("handles /exit without sending through the gateway", async () => {
+    const { handleCommand, requestExit, sendChat, addUser, addSystem } = createHarness();
+
+    await handleCommand("/exit");
+
+    expect(requestExit).toHaveBeenCalledTimes(1);
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(addUser).not.toHaveBeenCalled();
+    expect(addSystem).not.toHaveBeenCalled();
+  });
+
   it("leaves a Crestodian breadcrumb after switching agents", async () => {
     const { handleCommand, addSystem, setSession, state } = createHarness();
 
@@ -478,6 +489,22 @@ describe("tui command handlers", () => {
     expect(addUser).not.toHaveBeenCalled();
     expect(addSystem).toHaveBeenCalledWith("not connected to gateway — message not sent");
     expect(setActivityStatus).toHaveBeenLastCalledWith("disconnected");
+  });
+
+  it("rejects normal sends while a run is active", async () => {
+    const { handleCommand, sendChat, addUser, addSystem, requestRender, state } = createHarness({
+      activeChatRunId: "run-active",
+    });
+
+    await handleCommand("/context detail");
+
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(addUser).not.toHaveBeenCalled();
+    expect(addSystem).toHaveBeenCalledWith(
+      "agent is busy — press Esc to abort before sending a new message",
+    );
+    expect(requestRender).toHaveBeenCalled();
+    expect(state.activeChatRunId).toBe("run-active");
   });
 
   it("runs /auth through the local auth flow and refreshes session info", async () => {
