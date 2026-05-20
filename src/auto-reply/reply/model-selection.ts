@@ -34,8 +34,9 @@ import {
 } from "./stored-model-override.js";
 
 type ModelCatalog = ModelCatalogEntry[];
+type ThinkingCatalogSource = "configured" | "runtime";
 type ThinkingCatalogEntryWithSource = ModelCatalogEntry & {
-  source?: "configured" | "runtime";
+  source?: ThinkingCatalogSource;
 };
 
 type ModelSelectionState = {
@@ -352,21 +353,36 @@ export async function createModelSelectionState(params: {
   }
 
   let thinkingCatalog: ThinkingCatalogEntryWithSource[] | undefined;
+  const configuredThinkingEntriesByKey = new Map(
+    configuredModelCatalog.map((entry) => [modelKey(entry.provider, entry.id), entry]),
+  );
   const withThinkingCatalogSource = (
     catalog: ModelCatalog,
-    source: "configured" | "runtime",
+    source: ThinkingCatalogSource,
   ): ThinkingCatalogEntryWithSource[] =>
-    catalog.map((entry) => ({
-      ...entry,
-      source,
-    }));
+    catalog.map((entry) => {
+      const configuredEntry = configuredThinkingEntriesByKey.get(modelKey(entry.provider, entry.id));
+      if (configuredEntry) {
+        return {
+          ...entry,
+          ...Object.fromEntries(
+            Object.entries(configuredEntry).filter(([, value]) => value !== undefined),
+          ),
+          source: "configured",
+        };
+      }
+      return {
+        ...entry,
+        source: (entry as ThinkingCatalogEntryWithSource).source ?? source,
+      };
+    });
   const resolveThinkingCatalog = async () => {
     if (thinkingCatalog) {
       return thinkingCatalog;
     }
     let catalogForThinking =
       modelCatalog && modelCatalog.length > 0 ? modelCatalog : allowedModelCatalog;
-    let catalogSource: "configured" | "runtime" =
+    let catalogSource: ThinkingCatalogSource =
       modelCatalog && modelCatalog.length > 0 ? "runtime" : "configured";
     const selectedCatalogEntry = catalogForThinking?.find(
       (entry) => entry.provider === provider && entry.id === model,
