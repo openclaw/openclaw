@@ -229,8 +229,13 @@ describe("channel registry pinning", () => {
     expect(adapter).toBe(outboundAdapter);
   });
 
-  it("loadChannelOutboundAdapter falls back to active registry when pinned setup entry cannot send", async () => {
-    const outboundAdapter = { sendText: async () => ({ messageId: "1" }) };
+  it("loadChannelOutboundAdapter does not fall back to active registry when pinned entry has no outbound", async () => {
+    // Regression test for #84568: the unstable active registry was used as a
+    // fallback for outbound resolution. After a post-boot registry replacement
+    // (config-schema load, plugin status query, cron job, health-monitor, etc.)
+    // the active registry may no longer contain the outbound adapter, causing
+    // "Outbound not configured for channel: discord". The pinned registry is
+    // the only safe source for outbound adapter resolution.
     const startup = createEmptyPluginRegistry();
     startup.channels = [
       {
@@ -243,7 +248,11 @@ describe("channel registry pinning", () => {
     replacement.channels = [
       {
         pluginId: "discord",
-        plugin: { id: "discord", meta: {}, outbound: outboundAdapter },
+        plugin: {
+          id: "discord",
+          meta: {},
+          outbound: { sendText: async () => ({ messageId: "1" }) },
+        },
         source: "runtime",
       },
     ] as never;
@@ -252,8 +261,10 @@ describe("channel registry pinning", () => {
     pinActivePluginChannelRegistry(startup);
     setActivePluginRegistry(replacement);
 
+    // Must NOT fall back to the unstable active registry.
+    // The pinned registry entry has no outbound → return undefined.
     const adapter = await loadChannelOutboundAdapter("discord");
-    expect(adapter).toBe(outboundAdapter);
+    expect(adapter).toBeUndefined();
   });
 
   it("keeps pinned channel registry agent-event subscriptions live after active registry replacement", () => {
