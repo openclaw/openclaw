@@ -397,4 +397,23 @@ describe("secrets CLI", () => {
       allowExec: true,
     });
   });
+
+  it("includes the plan file path in the error message when the plan JSON is malformed", async () => {
+    const badPath = path.join(
+      os.tmpdir(),
+      `openclaw-secrets-cli-test-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
+    );
+    await fs.writeFile(badPath, "{not valid json", "utf8");
+    try {
+      await expect(
+        createProgram().parseAsync(["secrets", "apply", "--from", badPath], { from: "user" }),
+      ).rejects.toThrow("__exit__:1");
+      const lastError = runtimeErrors.at(-1) ?? "";
+      expect(lastError).toContain(badPath);
+      expect(lastError).toContain("Failed to parse secrets plan file");
+      expect(runSecretsApply).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(badPath, { force: true });
+    }
+  });
 });
