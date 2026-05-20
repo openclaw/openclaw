@@ -78,12 +78,18 @@ export async function removeClientManager(accountId: string): Promise<void> {
     return;
   }
 
-  // Disconnect the client manager
-  await entry.manager.disconnectAll();
-
-  // Remove from registry
-  registry.delete(accountId);
-  entry.logger.info(`Unregistered client manager for account: ${accountId}`);
+  try {
+    // Disconnect the client manager. May reject if a `quit()` call fails on a
+    // broken socket, etc.
+    await entry.manager.disconnectAll();
+  } finally {
+    // Always evict the entry, even if disconnectAll threw. Without this, a
+    // subsequent getOrCreateClientManager(accountId, ...) hits the cache
+    // branch and returns the broken/partially-disconnected manager instead
+    // of constructing a fresh one. See #83886.
+    registry.delete(accountId);
+    entry.logger.info(`Unregistered client manager for account: ${accountId}`);
+  }
 }
 
 /**
