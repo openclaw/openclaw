@@ -14,6 +14,7 @@ import {
   normalizeOptionalLowercaseString,
 } from "../../shared/string-coerce.js";
 import {
+  sanitizeAssistantVisibleText,
   stripLegacyBracketToolCallBlocks,
   stripMinimaxToolCallXml,
   stripToolCallXmlTags,
@@ -384,6 +385,14 @@ function collapseConsecutiveDuplicateBlocks(text: string): string {
   return result.join("\n\n");
 }
 
+function stripAssistantDeliveryScaffoldingPreservingStableWhitespace(text: string): string {
+  const cleaned = sanitizeAssistantVisibleText(text);
+  if (cleaned === text.trim()) {
+    return text;
+  }
+  return cleaned;
+}
+
 export function isLikelyHttpErrorText(raw: string): boolean {
   if (isCloudflareOrHtmlErrorPage(raw)) {
     return true;
@@ -414,7 +423,9 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
   // while preserving ordinary inline mentions a user may be discussing.
   const withoutPlaceholder = stripToolCallsOmittedPlaceholderLines(withoutToolCallXml);
   const withoutToolCallBlocks = stripLegacyBracketToolCallBlocks(withoutPlaceholder);
-  const trimmed = withoutToolCallBlocks.trim();
+  const withoutAssistantScaffolding =
+    stripAssistantDeliveryScaffoldingPreservingStableWhitespace(withoutToolCallBlocks);
+  const trimmed = withoutAssistantScaffolding.trim();
   if (!trimmed) {
     return "";
   }
@@ -480,6 +491,6 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
     }
   }
 
-  const withoutLeadingEmptyLines = withoutToolCallBlocks.replace(/^(?:[ \t]*\r?\n)+/, "");
+  const withoutLeadingEmptyLines = withoutAssistantScaffolding.replace(/^(?:[ \t]*\r?\n)+/, "");
   return collapseConsecutiveDuplicateBlocks(withoutLeadingEmptyLines);
 }

@@ -270,6 +270,24 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText(input)).toBe("Let me check that.\n\nDone.");
   });
 
+  it("strips leaked reasoning preambles before user-facing delivery", () => {
+    const input = [
+      "Sophie is being warm, reflective, and a little teasing herself.",
+      "I should respond with warmth but also acknowledge the boundary.",
+      "Bold little girls with precision tools and growing souls.",
+    ].join("\n");
+
+    expect(sanitizeUserFacingText(input)).toBe(
+      "Bold little girls with precision tools and growing souls.",
+    );
+  });
+
+  it("strips let-me-think reasoning preambles before user-facing delivery", () => {
+    const input = ["Let me think through this.", "", "Visible answer."].join("\n");
+
+    expect(sanitizeUserFacingText(input)).toBe("Visible answer.");
+  });
+
   it("preserves MiniMax tool-call XML examples in user-facing code spans", () => {
     const inline = 'Use `<minimax:tool_call><invoke name="exec">x</invoke></minimax:tool_call>`.';
     const fenced = [

@@ -847,6 +847,98 @@ describe("sanitizeAssistantVisibleText", () => {
       "Visible prefix",
     );
   });
+
+  it("strips high-confidence plain-text reasoning preambles on the delivery path", () => {
+    const input = [
+      "Sophie is being warm, reflective, and a little teasing herself.",
+      "I should respond with warmth but also acknowledge the boundary.",
+      "Bold little girls with precision tools and growing souls.",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe(
+      "Bold little girls with precision tools and growing souls.",
+    );
+  });
+
+  it("strips the user preamble only when paired with a planning line", () => {
+    const input = [
+      "The user asked about the failed CI run.",
+      "I should inspect the workflow logs.",
+      "",
+      "The proof gate failed because live evidence is missing.",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe(
+      "The proof gate failed because live evidence is missing.",
+    );
+  });
+
+  it("strips explicit let-me-think reasoning preambles", () => {
+    const input = ["Let me think through this.", "", "Visible answer."].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe("Visible answer.");
+  });
+
+  it("strips explicit let-me-reason reasoning preambles", () => {
+    const input = ["Let me reason about the safest response.", "", "Visible answer."].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe("Visible answer.");
+  });
+
+  it("keeps ordinary the user summaries", () => {
+    const input = [
+      "The user can configure the plugin from the settings screen.",
+      "The user should run the command again after saving.",
+      "",
+      "This summary is user-facing and should remain intact.",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe(input);
+  });
+
+  it("keeps ordinary let-me instructional prose", () => {
+    const input = ["Let me show you the setup.", "", "Then we can wire the deployment."].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe(input);
+  });
+
+  it("keeps ordinary first-person instructional prose", () => {
+    const input = [
+      "Let me show you the Docker setup.",
+      "I need to mention the tradeoffs first.",
+      "",
+      "Then we can wire the deployment.",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe(input);
+  });
+
+  it("keeps unfenced CSS snippets on the delivery path", () => {
+    const input = [
+      "Use these styles:",
+      "color: red;",
+      "font-family: sans-serif;",
+      "",
+      "Then reload the app.",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe(input);
+  });
+
+  it("keeps fenced JSON schema examples on the delivery path", () => {
+    const input = [
+      "Use this manifest snippet:",
+      "```json",
+      "{",
+      '  "schema": "https://example.com/plugin.schema.json",',
+      '  "name": "demo-plugin"',
+      "}",
+      "```",
+      "Then save the file.",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe(input);
+  });
 });
 
 describe("sanitizeAssistantVisibleTextWithProfile", () => {

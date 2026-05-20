@@ -760,6 +760,155 @@ function stripRelevantMemoriesTags(text: string): string {
   return result;
 }
 
+// ---------------------------------------------------------------------------
+// Leaked reasoning preamble detector
+// ---------------------------------------------------------------------------
+
+const CJK_RE = /[\u3400-\u9fff\uf900-\ufaff]/u;
+const SUSPICIOUS_PREAMBLE_QUICK_RE =
+  /<\s*final\b|<\s*think\b|\b(?:i should|i'm going to|i am going to|supporting evidence|root cause|sophie[, :]? is|cybera[, :]? is|shodan[, :]? is|the user (?:asked|said|requested|wants|needs|is asking)|let me|i need to|need to)\b|[\u3400-\u9fff\uf900-\ufaff]/iu;
+const EXPLICIT_LEAKAGE_LINE_RE =
+  /^\s*(?:[-*]\s+)?(?:i should\b|i'm going to\b|i am going to\b|supporting evidence\b|root cause\b)/iu;
+const STRONG_LET_ME_REASONING_LINE_RE =
+  /^\s*(?:[-*]\s+)?let me\s+(?:think|reason|analy[sz]e|work through)\b/iu;
+const WEAK_PREAMBLE_LINE_RE =
+  /^\s*(?:[-*]\s+)?(?:let me\b|i need to\b|need to\b|sophie[, :]? is\b|cybera[, :]? is\b|shodan[, :]? is\b|the user (?:asked|said|requested|wants|needs|is asking)\b)/iu;
+
+function stripCodeForScoring(text: string): string {
+  const codeRegions = findCodeRegions(text);
+  if (codeRegions.length === 0) {
+    return text;
+  }
+
+  let result = "";
+  let lastIndex = 0;
+  for (const region of codeRegions) {
+    result += text.slice(lastIndex, region.start);
+    lastIndex = region.end;
+  }
+  result += text.slice(lastIndex);
+  return result;
+}
+
+function scoreSuspiciousPreamble(text: string): number {
+  const scorableText = stripCodeForScoring(text);
+  if (!scorableText.trim()) {
+    return 0;
+  }
+
+  let score = 0;
+  if (/<\s*think\b|<\s*final\b|chain[- ]of[- ]thought|internal reasoning/iu.test(scorableText)) {
+    score += 3;
+  }
+
+  const lines = scorableText
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 8);
+  let explicitLeakageLineCount = 0;
+  let weakPreambleLineCount = 0;
+  for (const line of lines) {
+    if (STRONG_LET_ME_REASONING_LINE_RE.test(line)) {
+      explicitLeakageLineCount += 1;
+      score += 3;
+    } else if (EXPLICIT_LEAKAGE_LINE_RE.test(line)) {
+      explicitLeakageLineCount += 1;
+      score += 1;
+    } else if (WEAK_PREAMBLE_LINE_RE.test(line)) {
+      weakPreambleLineCount += 1;
+    }
+  }
+
+  if (explicitLeakageLineCount > 0 && weakPreambleLineCount > 0) {
+    score += 2;
+  }
+  if (explicitLeakageLineCount >= 2) {
+    score += 1;
+  }
+  if (CJK_RE.test(scorableText) && explicitLeakageLineCount > 0) {
+    score += 1;
+  }
+  return score;
+}
+
+function looksUserFacingStart(text: string): boolean {
+  const trimmed = text.trimStart();
+  if (!trimmed) {
+    return false;
+  }
+  if (
+    trimmed.startsWith("```") ||
+    trimmed.startsWith("~~~") ||
+    /^<\s*(think|final)\b/i.test(trimmed)
+  ) {
+    return false;
+  }
+  const firstLine = trimmed.split("\n", 1)[0] ?? "";
+  return (
+    !STRONG_LET_ME_REASONING_LINE_RE.test(firstLine) &&
+    !EXPLICIT_LEAKAGE_LINE_RE.test(firstLine) &&
+    !WEAK_PREAMBLE_LINE_RE.test(firstLine)
+  );
+}
+
+function hasFencedCode(text: string): boolean {
+  return /^\s*(?:```|~~~)/m.test(text);
+}
+
+function stripLeakedReasoningPreamble(text: string): string {
+  if (!text || !SUSPICIOUS_PREAMBLE_QUICK_RE.test(text)) {
+    return text;
+  }
+
+  const codeRegions = findCodeRegions(text);
+  const paragraphBreakRe = /\n{2,}/g;
+  let paragraphMatch: RegExpExecArray | null;
+  let paragraphCount = 0;
+  while ((paragraphMatch = paragraphBreakRe.exec(text)) !== null && paragraphCount < 4) {
+    const splitIndex = paragraphMatch.index + paragraphMatch[0].length;
+    if (isInsideCode(splitIndex, codeRegions)) {
+      continue;
+    }
+    const prefix = text.slice(0, paragraphMatch.index).trim();
+    const suffix = text.slice(splitIndex).trimStart();
+    if (!prefix || !suffix) {
+      continue;
+    }
+    paragraphCount += 1;
+    if (hasFencedCode(prefix)) {
+      continue;
+    }
+    if (scoreSuspiciousPreamble(prefix) >= 3 && looksUserFacingStart(suffix)) {
+      return suffix;
+    }
+  }
+
+  const lineBreakRe = /\n/g;
+  let lineMatch: RegExpExecArray | null;
+  let lineCount = 0;
+  while ((lineMatch = lineBreakRe.exec(text)) !== null && lineCount < 6) {
+    const splitIndex = lineMatch.index + lineMatch[0].length;
+    if (isInsideCode(splitIndex, codeRegions)) {
+      continue;
+    }
+    const prefix = text.slice(0, lineMatch.index);
+    const suffix = text.slice(splitIndex).trimStart();
+    if (!prefix.trim() || !suffix) {
+      continue;
+    }
+    lineCount += 1;
+    if (hasFencedCode(prefix)) {
+      continue;
+    }
+    if (scoreSuspiciousPreamble(prefix) >= 3 && looksUserFacingStart(suffix)) {
+      return suffix;
+    }
+  }
+
+  return text;
+}
+
 export type AssistantVisibleTextSanitizerProfile = "delivery" | "history" | "internal-scaffolding";
 
 type AssistantVisibleTextPipelineOptions = {
@@ -771,6 +920,7 @@ type AssistantVisibleTextPipelineOptions = {
   reasoningMode: ReasoningTagMode;
   reasoningTrim: ReasoningTagTrim;
   stageOrder: "reasoning-first" | "reasoning-last";
+  stripLeakedPreamble?: boolean;
 };
 
 const ASSISTANT_VISIBLE_TEXT_PIPELINE_OPTIONS: Record<
@@ -783,6 +933,7 @@ const ASSISTANT_VISIBLE_TEXT_PIPELINE_OPTIONS: Record<
     reasoningMode: "strict",
     reasoningTrim: "both",
     stageOrder: "reasoning-last",
+    stripLeakedPreamble: true,
   },
   history: {
     finalTrim: "none",
@@ -813,6 +964,8 @@ function applyAssistantVisibleTextStagePipeline(
       mode: options.reasoningMode,
       trim: options.reasoningTrim,
     });
+  const stripPreamble = (value: string) =>
+    options.stripLeakedPreamble ? stripLeakedReasoningPreamble(value) : value;
   const applyFinalTrim = (value: string) => {
     if (options.finalTrim === "none") {
       return value;
@@ -842,10 +995,10 @@ function applyAssistantVisibleTextStagePipeline(
   };
 
   if (options.stageOrder === "reasoning-first") {
-    return applyFinalTrim(stripNonReasoningStages(stripReasoning(text)));
+    return applyFinalTrim(stripPreamble(stripNonReasoningStages(stripReasoning(text))));
   }
 
-  return applyFinalTrim(stripReasoning(stripNonReasoningStages(text)));
+  return applyFinalTrim(stripPreamble(stripReasoning(stripNonReasoningStages(text))));
 }
 
 export function sanitizeAssistantVisibleTextWithProfile(
