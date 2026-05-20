@@ -32,8 +32,9 @@ async function checkUnauthorizedWorkDmSender() {
   });
 }
 
-function expectSilentlyBlocked(result: { allowed: boolean }) {
+function expectSilentlyBlocked(result: { allowed: boolean; shouldMarkRead: boolean }) {
   expect(result.allowed).toBe(false);
+  expect(result.shouldMarkRead).toBe(false);
   expect(upsertPairingRequestMock).not.toHaveBeenCalled();
   expect(sendMessageMock).not.toHaveBeenCalled();
 }
