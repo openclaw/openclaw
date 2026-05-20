@@ -1,4 +1,5 @@
 import { promises as fs } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SkillStatusEntry } from "../agents/skills-status.js";
@@ -295,11 +296,7 @@ describe("registerCoreHealthChecks", () => {
         rule.target.filter((target) => target.startsWith("core/doctor/")),
       ),
     );
-    const plannedOnlyTargets = [
-      "core/doctor/auth-profiles/keychain",
-      "core/doctor/session-locks",
-      "core/doctor/gateway-daemon",
-    ];
+    const plannedOnlyTargets = ["core/doctor/auth-profiles/keychain", "core/doctor/gateway-daemon"];
 
     for (const id of CORE_HEALTH_CHECKS.map((check) => check.id)) {
       if (id === "core/doctor/browser-clawd-profile-residue") {
@@ -1435,6 +1432,298 @@ describe("registerCoreHealthChecks", () => {
     expect(result.checksRepaired).toBe(1);
     expect(result.checksValidated).toBe(1);
     expect(result.remainingFindings).toEqual([]);
+  });
+
+  it("validates session lock repairs with detect-after", async () => {
+    tmp = await fs.mkdtemp(join(tmpdir(), "openclaw-health-session-locks-"));
+    const sessionsDir = join(tmp, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const staleLock = join(sessionsDir, "stale.jsonl.lock");
+    await fs.writeFile(
+      staleLock,
+      JSON.stringify({ pid: -1, createdAt: new Date(Date.now() - 120_000).toISOString() }),
+    );
+    const check = CORE_HEALTH_CHECKS.find((entry) => entry.id === "core/doctor/session-locks");
+
+    const result = await runDoctorHealthRepairs(
+      {
+        mode: "fix",
+        runtime: { log() {}, error() {}, exit() {} },
+        cfg: {},
+        env: {
+          ...process.env,
+          OPENCLAW_STATE_DIR: tmp,
+        },
+      },
+      { checks: [check!] },
+    );
+
+    expect(result.effects).toContainEqual(
+      expect.objectContaining({
+        kind: "file",
+        action: "remove-stale-session-lock",
+        target: staleLock,
+      }),
+    );
+    expect(result.checksRepaired).toBe(1);
+    expect(result.checksValidated).toBe(1);
+    expect(result.remainingFindings).toEqual([]);
+    await expect(fs.access(staleLock)).rejects.toThrow();
+  });
+
+  it("previews session lock repairs without removing files", async () => {
+    tmp = await fs.mkdtemp(join(tmpdir(), "openclaw-health-session-locks-dry-"));
+    const sessionsDir = join(tmp, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const staleLock = join(sessionsDir, "stale.jsonl.lock");
+    await fs.writeFile(
+      staleLock,
+      JSON.stringify({ pid: -1, createdAt: new Date(Date.now() - 120_000).toISOString() }),
+    );
+    const check = CORE_HEALTH_CHECKS.find((entry) => entry.id === "core/doctor/session-locks");
+
+    const result = await runDoctorHealthRepairs(
+      {
+        mode: "fix",
+        runtime: { log() {}, error() {}, exit() {} },
+        cfg: {},
+        env: {
+          ...process.env,
+          OPENCLAW_STATE_DIR: tmp,
+        },
+      },
+      { checks: [check!], dryRun: true },
+    );
+
+    expect(result.effects).toContainEqual(
+      expect.objectContaining({
+        kind: "file",
+        action: "would-remove-stale-session-lock",
+        target: staleLock,
+      }),
+    );
+    expect(result.checksRepaired).toBe(1);
+    expect(result.checksValidated).toBe(0);
+    await expect(fs.access(staleLock)).resolves.toBeUndefined();
+  });
+
+  it("repairs only session locks represented by findings", async () => {
+    tmp = await fs.mkdtemp(join(tmpdir(), "openclaw-health-session-locks-scoped-"));
+    const sessionsDir = join(tmp, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const selectedLock = join(sessionsDir, "selected.jsonl.lock");
+    const otherLock = join(sessionsDir, "other.jsonl.lock");
+    const payload = JSON.stringify({
+      pid: -1,
+      createdAt: new Date(Date.now() - 120_000).toISOString(),
+    });
+    await fs.writeFile(selectedLock, payload);
+    await fs.writeFile(otherLock, payload);
+    const check = CORE_HEALTH_CHECKS.find((entry) => entry.id === "core/doctor/session-locks");
+
+    const result = await check?.repair?.(
+      {
+        mode: "fix",
+        runtime: { log() {}, error() {}, exit() {} },
+        cfg: {},
+        env: {
+          ...process.env,
+          OPENCLAW_STATE_DIR: tmp,
+        },
+      },
+      [
+        {
+          checkId: "core/doctor/session-locks",
+          severity: "warning",
+          message: "selected",
+          path: selectedLock,
+        },
+      ],
+    );
+
+    expect(result?.effects).toEqual([
+      expect.objectContaining({
+        kind: "file",
+        action: "remove-stale-session-lock",
+        target: selectedLock,
+      }),
+    ]);
+    await expect(fs.access(selectedLock)).rejects.toThrow();
+    await expect(fs.access(otherLock)).resolves.toBeUndefined();
+  });
+
+  it("validates session transcript repairs with detect-after", async () => {
+    tmp = await fs.mkdtemp(join(tmpdir(), "openclaw-health-transcripts-"));
+    const sessionsDir = join(tmp, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const filePath = join(sessionsDir, "session.jsonl");
+    const entries = [
+      { type: "session", version: 3, id: "session-1", timestamp: "2026-04-25T00:00:00Z" },
+      {
+        type: "message",
+        id: "runtime-user",
+        parentId: null,
+        message: {
+          role: "user",
+          content:
+            "visible ask\n\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nsecret\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+        },
+      },
+      {
+        type: "message",
+        id: "plain-user",
+        parentId: null,
+        message: { role: "user", content: "visible ask" },
+      },
+    ];
+    await fs.writeFile(filePath, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+    const check = CORE_HEALTH_CHECKS.find(
+      (entry) => entry.id === "core/doctor/session-transcripts",
+    );
+
+    const result = await runDoctorHealthRepairs(
+      {
+        mode: "fix",
+        runtime: { log() {}, error() {}, exit() {} },
+        cfg: {},
+        env: {
+          ...process.env,
+          OPENCLAW_STATE_DIR: tmp,
+        },
+      },
+      { checks: [check!] },
+    );
+
+    expect(result.effects).toContainEqual(
+      expect.objectContaining({
+        kind: "file",
+        action: "rewrite-session-transcript-active-branch",
+        target: filePath,
+      }),
+    );
+    expect(result.checksRepaired).toBe(1);
+    expect(result.checksValidated).toBe(1);
+    expect(result.remainingFindings).toEqual([]);
+    const repairedLines = (await fs.readFile(filePath, "utf-8")).trim().split(/\r?\n/);
+    expect(repairedLines).toHaveLength(2);
+  });
+
+  it("previews session transcript repairs without rewriting files", async () => {
+    tmp = await fs.mkdtemp(join(tmpdir(), "openclaw-health-transcripts-dry-"));
+    const sessionsDir = join(tmp, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const filePath = join(sessionsDir, "session.jsonl");
+    const entries = [
+      { type: "session", version: 3, id: "session-1", timestamp: "2026-04-25T00:00:00Z" },
+      {
+        type: "message",
+        id: "runtime-user",
+        parentId: null,
+        message: {
+          role: "user",
+          content:
+            "visible ask\n\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nsecret\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+        },
+      },
+      {
+        type: "message",
+        id: "plain-user",
+        parentId: null,
+        message: { role: "user", content: "visible ask" },
+      },
+    ];
+    await fs.writeFile(filePath, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+    const check = CORE_HEALTH_CHECKS.find(
+      (entry) => entry.id === "core/doctor/session-transcripts",
+    );
+
+    const result = await runDoctorHealthRepairs(
+      {
+        mode: "fix",
+        runtime: { log() {}, error() {}, exit() {} },
+        cfg: {},
+        env: {
+          ...process.env,
+          OPENCLAW_STATE_DIR: tmp,
+        },
+      },
+      { checks: [check!], dryRun: true },
+    );
+
+    expect(result.effects).toContainEqual(
+      expect.objectContaining({
+        kind: "file",
+        action: "would-rewrite-session-transcript-active-branch",
+        target: filePath,
+      }),
+    );
+    expect(result.checksRepaired).toBe(1);
+    expect(result.checksValidated).toBe(0);
+    const originalLines = (await fs.readFile(filePath, "utf-8")).trim().split(/\r?\n/);
+    expect(originalLines).toHaveLength(3);
+  });
+
+  it("repairs only session transcripts represented by findings", async () => {
+    tmp = await fs.mkdtemp(join(tmpdir(), "openclaw-health-transcripts-scoped-"));
+    const sessionsDir = join(tmp, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const selectedFile = join(sessionsDir, "selected.jsonl");
+    const otherFile = join(sessionsDir, "other.jsonl");
+    const entries = [
+      { type: "session", version: 3, id: "session-1", timestamp: "2026-04-25T00:00:00Z" },
+      {
+        type: "message",
+        id: "runtime-user",
+        parentId: null,
+        message: {
+          role: "user",
+          content:
+            "visible ask\n\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nsecret\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+        },
+      },
+      {
+        type: "message",
+        id: "plain-user",
+        parentId: null,
+        message: { role: "user", content: "visible ask" },
+      },
+    ];
+    const raw = `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`;
+    await fs.writeFile(selectedFile, raw);
+    await fs.writeFile(otherFile, raw);
+    const check = CORE_HEALTH_CHECKS.find(
+      (entry) => entry.id === "core/doctor/session-transcripts",
+    );
+
+    const result = await check?.repair?.(
+      {
+        mode: "fix",
+        runtime: { log() {}, error() {}, exit() {} },
+        cfg: {},
+        env: {
+          ...process.env,
+          OPENCLAW_STATE_DIR: tmp,
+        },
+      },
+      [
+        {
+          checkId: "core/doctor/session-transcripts",
+          severity: "warning",
+          message: "selected",
+          path: selectedFile,
+        },
+      ],
+    );
+
+    expect(result?.effects).toEqual([
+      expect.objectContaining({
+        kind: "file",
+        action: "rewrite-session-transcript-active-branch",
+        target: selectedFile,
+      }),
+    ]);
+    expect((await fs.readFile(selectedFile, "utf-8")).trim().split(/\r?\n/)).toHaveLength(2);
+    expect((await fs.readFile(otherFile, "utf-8")).trim().split(/\r?\n/)).toHaveLength(3);
   });
 
   it("validates configured plugin install repairs against repaired config metadata", async () => {
