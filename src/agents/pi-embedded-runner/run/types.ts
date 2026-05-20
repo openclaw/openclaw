@@ -70,6 +70,12 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
 
 export type EmbeddedRunAttemptResult = {
   aborted: boolean;
+  /**
+   * When the run was aborted externally, the string reason passed to
+   * `handle.abort(reason)` if one was provided (e.g. "stuck_recovery").
+   * Undefined when the abort had no string reason or the run was not aborted.
+   */
+  abortReason?: string;
   /** True when the abort originated from the caller-provided abortSignal. */
   externalAbort: boolean;
   timedOut: boolean;

@@ -2423,9 +2423,14 @@ export async function runAgentTurnWithFallback(params: {
   // the error to the user instead of silently returning an empty response.
   // See #26905: Slack DM sessions silently swallowed messages when context
   // overflow errors were returned as embedded error payloads.
+  // NOTE: The `!hasPayloadText` guard was intentionally removed. When run.ts
+  // reaches the terminal overflow path it always includes an error payload;
+  // that `!hasPayloadText` guard made this branch dead code in the common
+  // case and silently allowed overflow errors to bypass this user-visible
+  // notification when the payload was delivered through the "success" path
+  // but the user never saw a useful message (e.g. stuck/aborted sessions).
   const finalEmbeddedError = runResult?.meta?.error;
-  const hasPayloadText = runResult?.payloads?.some((p) => normalizeOptionalString(p.text));
-  if (finalEmbeddedError && !hasPayloadText) {
+  if (finalEmbeddedError) {
     const errorMsg = finalEmbeddedError.message ?? "";
     if (isContextOverflowError(errorMsg)) {
       params.replyOperation?.fail("run_failed", finalEmbeddedError);

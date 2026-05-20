@@ -4757,11 +4757,18 @@ export async function runEmbeddedAttempt(
       });
       trajectoryEndRecorded = true;
 
+      const abortReason: string | undefined = aborted
+        ? typeof runAbortController.signal.reason === "string"
+          ? runAbortController.signal.reason
+          : undefined
+        : undefined;
+
       return {
         replayMetadata,
         itemLifecycle: getItemLifecycle(),
         setTerminalLifecycleMeta,
         aborted,
+        abortReason,
         externalAbort,
         timedOut,
         idleTimedOut,

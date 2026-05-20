@@ -508,7 +508,28 @@ export async function abortAndDrainEmbeddedPiRun(params: {
   reason?: string;
 }): Promise<AbortAndDrainEmbeddedPiRunResult> {
   const settleMs = params.settleMs ?? 15_000;
-  const aborted = abortEmbeddedPiRun(params.sessionId);
+  // If a reason is provided (e.g. "stuck_recovery"), abort the handle
+  // directly so the reason flows through to the abort signal. This allows
+  // downstream code (run.ts) to detect why the session was aborted and
+  // synthesize a user-visible error message.
+  let aborted: boolean;
+  if (params.reason) {
+    const handle = ACTIVE_EMBEDDED_RUNS.get(params.sessionId);
+    if (handle) {
+      diag.debug(`aborting run with reason: sessionId=${params.sessionId} reason=${params.reason}`);
+      try {
+        handle.abort(params.reason);
+        aborted = true;
+      } catch (err) {
+        diag.warn(`abort failed: sessionId=${params.sessionId} err=${String(err)}`);
+        aborted = false;
+      }
+    } else {
+      aborted = abortEmbeddedPiRun(params.sessionId);
+    }
+  } else {
+    aborted = abortEmbeddedPiRun(params.sessionId);
+  }
   const drained = aborted ? await waitForEmbeddedPiRunEnd(params.sessionId, settleMs) : false;
   const forceCleared =
     params.forceClear === true && (!aborted || !drained)

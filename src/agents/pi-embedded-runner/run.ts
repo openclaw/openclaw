@@ -3157,12 +3157,29 @@ export async function runEmbeddedPiAgent(
             : attempt.yieldDetected
               ? "end_turn"
               : (sessionLastAssistant?.stopReason as string | undefined);
+          // When a stuck-session recovery forcibly aborts the run, synthesize
+          // a user-visible error payload so the user knows to retry instead of
+          // seeing a silent empty response after hours of waiting.
+          // See #84536: preemptive context overflow silently kills embedded sessions.
+          const isStuckRecoveryAbort = aborted && attempt.abortReason === "stuck_recovery";
+          const stuckRecoveryPayload =
+            isStuckRecoveryAbort && !payloadsForTerminalPath?.length
+              ? {
+                  text: "⚠️ Your session was stuck and has been automatically recovered. Please try again.",
+                  isError: true as const,
+                }
+              : undefined;
           const terminalPayloads = emptyAssistantReplyIsSilent
             ? [{ text: SILENT_REPLY_TOKEN }]
-            : payloadsForTerminalPath;
+            : stuckRecoveryPayload
+              ? [stuckRecoveryPayload]
+              : payloadsForTerminalPath;
+          const terminalLivenessState: EmbeddedRunLivenessState = stuckRecoveryPayload
+            ? "blocked"
+            : livenessState;
           attempt.setTerminalLifecycleMeta?.({
             replayInvalid,
-            livenessState,
+            livenessState: terminalLivenessState,
             stopReason,
             yielded: attempt.yieldDetected === true,
           });
@@ -3180,7 +3197,7 @@ export async function runEmbeddedPiAgent(
               finalAssistantVisibleText,
               finalAssistantRawText,
               replayInvalid,
-              livenessState,
+              livenessState: terminalLivenessState,
               agentHarnessResultClassification: attempt.agentHarnessResultClassification,
               ...(attempt.yieldDetected ? { yielded: true } : {}),
               ...(emptyAssistantReplyIsSilent
