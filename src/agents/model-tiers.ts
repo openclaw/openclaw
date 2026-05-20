@@ -18,14 +18,22 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
+import {
+  normalizeBrainTierConfigParts,
+  resolveBrainProfileForMode,
+  type BrainProfile,
+} from "./brain-profiles.js";
 
 export type ModelTierMode = "economy" | "baller" | "einstein";
 
 export type ModelTierConfig = {
   globalMode: ModelTierMode;
   agentOverrides: Record<string, ModelTierMode>;
+  tierRouting: Required<Record<ModelTierMode, string>>;
+  brainProfiles: Record<string, BrainProfile>;
 };
 
+/** Legacy fallback map used when model-tiers.json has no tierRouting. */
 export const MODEL_TIER_MAP: Record<ModelTierMode, string> = {
   economy: "claude-haiku-4-5-20251001",
   baller: "claude-sonnet-4-6",
@@ -76,7 +84,7 @@ export function loadModelTierConfig(): ModelTierConfig {
   try {
     const filePath = tierFilePath();
     if (!fs.existsSync(filePath)) {
-      return { globalMode: "economy", agentOverrides: {} };
+      return normalizeBrainTierConfigParts({});
     }
     const raw = JSON.parse(fs.readFileSync(filePath, "utf-8")) as Record<string, unknown>;
     const globalMode = isValidModelTierMode(raw.globalMode) ? raw.globalMode : "economy";
@@ -90,9 +98,20 @@ export function loadModelTierConfig(): ModelTierConfig {
         agentOverrides[agentId] = mode;
       }
     }
-    return { globalMode, agentOverrides };
+    return normalizeBrainTierConfigParts({
+      globalMode,
+      agentOverrides,
+      tierRouting:
+        raw.tierRouting && typeof raw.tierRouting === "object"
+          ? (raw.tierRouting as Record<string, unknown>)
+          : undefined,
+      brainProfiles:
+        raw.brainProfiles && typeof raw.brainProfiles === "object"
+          ? (raw.brainProfiles as Record<string, unknown>)
+          : undefined,
+    });
   } catch {
-    return { globalMode: "economy", agentOverrides: {} };
+    return normalizeBrainTierConfigParts({});
   }
 }
 
@@ -111,6 +130,9 @@ export function saveModelTierConfig(config: ModelTierConfig): void {
 /**
  * Get the full provider/model string for a tier mode.
  */
-export function getProviderModelForTier(mode: ModelTierMode): string {
-  return `anthropic/${MODEL_TIER_MAP[mode]}`;
+export function getProviderModelForTier(
+  mode: ModelTierMode,
+  config = loadModelTierConfig(),
+): string {
+  return resolveBrainProfileForMode(config, mode).modelRef;
 }
