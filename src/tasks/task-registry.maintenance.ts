@@ -1003,6 +1003,7 @@ function explainActiveTaskRetention(params: {
 export function getTaskRegistryMaintenanceDiagnostics(): TaskRegistryMaintenanceDiagnostics {
   taskRegistryMaintenanceRuntime.ensureTaskRegistryReady();
   const now = Date.now();
+  const cronRecoveryContext = createCronRecoveryContext();
   const backingSessionContext = createBackingSessionLookupContext();
   const staleRunningTasks: TaskRegistryMaintenanceTaskDiagnostic[] = [];
   for (const task of taskRegistryMaintenanceRuntime.listTaskRecords()) {
@@ -1011,6 +1012,9 @@ export function getTaskRegistryMaintenanceDiagnostics(): TaskRegistryMaintenance
     }
     const ageMs = Math.max(0, now - taskReferenceAt(task));
     if (ageMs < TASK_STALE_RUNNING_MS) {
+      continue;
+    }
+    if (resolveDurableCronTaskRecovery(task, cronRecoveryContext)) {
       continue;
     }
     const decision = explainActiveTaskRetention({ task, now, context: backingSessionContext });

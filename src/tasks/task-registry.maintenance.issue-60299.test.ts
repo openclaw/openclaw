@@ -11,6 +11,7 @@ import {
 } from "./detached-task-runtime.js";
 import {
   getInspectableActiveTaskRestartBlockers,
+  getTaskRegistryMaintenanceDiagnostics,
   previewTaskRegistryMaintenance,
   reconcileInspectableTasks,
   resetTaskRegistryMaintenanceRuntimeForTests,
@@ -366,7 +367,7 @@ describe("task-registry maintenance issue #60299", () => {
   });
 
   it("recovers finished cron tasks from durable run logs before marking them lost", async () => {
-    const startedAt = Date.now() - GRACE_EXPIRED_MS;
+    const startedAt = Date.now() - 60 * 60_000;
     const task = makeStaleTask({
       runtime: "cron",
       sourceId: "cron-job-run-log-ok",
@@ -399,6 +400,7 @@ describe("task-registry maintenance issue #60299", () => {
     expect(reconciledTasks[0]?.endedAt).toBe(startedAt + 1250);
     expect(reconciledTasks[0]?.terminalSummary).toBe("done");
     expectMaintenanceCounts(previewTaskRegistryMaintenance(), { reconciled: 0, recovered: 1 });
+    expect(getTaskRegistryMaintenanceDiagnostics().staleRunningTasks).toHaveLength(0);
     expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 0, recovered: 1 });
     const storedTask = requireTaskRecord(currentTasks, task.taskId);
     expect(storedTask.status).toBe("succeeded");
