@@ -2198,6 +2198,15 @@ export const dispatchTelegramMessage = async ({
       progressDraftGate.cancel();
       await draftLaneEventQueue;
       nativeToolProgressDraft?.stop();
+      // Belt-and-braces: when interleavedOutput has content but onReasoningEnd
+      // never fired (turn aborted mid-stream, error mid-reasoning, etc.), the
+      // lane.finalized check below would clear the still-visible interleaved
+      // message. If we have any interleaved content AND the lane has a streamed
+      // message, force finalized=true so the lane.stop() branch runs instead
+      // of stream.clear().
+      if (interleavedOutput && reasoningLane.hasStreamedMessage) {
+        reasoningLane.finalized = true;
+      }
       const lanesToCleanup: Array<{ laneName: LaneName; lane: DraftLaneState }> = [
         { laneName: "answer", lane: answerLane },
         { laneName: "reasoning", lane: reasoningLane },
