@@ -74,10 +74,18 @@ Scan OpenClaw state for:
 - precedence drift (`auth-profiles.json` credentials shadowing `openclaw.json` refs)
 - generated `agents/*/agent/models.json` residues (provider `apiKey` values and sensitive provider headers)
 - legacy residues (legacy auth store entries, OAuth reminders)
+- adjacent `openclaw.json` backup/snapshot residues (`.bak`, `.pre-update`, `.rejected.*`, and `.clobbered.*`)
 
 Header residue note:
 
 - Sensitive provider header detection is name-heuristic based (common auth/credential header names and fragments such as `authorization`, `x-api-key`, `token`, `secret`, `password`, and `credential`).
+
+Adjacent backup note:
+
+- Config backups and snapshots live next to the configured `openclaw.json` path and can contain the same plaintext provider keys or channel tokens as the active config.
+- `audit` scans matching adjacent backup/snapshot files with config-compatible JSON5 parsing. It reports plaintext secret targets as `PLAINTEXT_FOUND`.
+- Matching backup/snapshot paths that cannot be audited because they are non-regular files, oversized, malformed, or unreadable are reported as `CONFIG_BACKUP_UNREADABLE`.
+- `audit --check` treats backup findings like other findings and exits non-zero until the stale artifact is cleaned, removed, or made readable.
 
 ```bash
 openclaw secrets audit
@@ -101,6 +109,7 @@ Report shape highlights:
   - `REF_UNRESOLVED`
   - `REF_SHADOWED`
   - `LEGACY_RESIDUE`
+  - `CONFIG_BACKUP_UNREADABLE`
 
 ## Configure (interactive helper)
 
