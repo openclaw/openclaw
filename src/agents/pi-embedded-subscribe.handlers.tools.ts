@@ -1412,7 +1412,7 @@ export async function handleToolExecutionEnd(
       runId,
       toolCallId,
       result: sanitizedResult,
-      error: isToolError ? extractToolErrorMessage(sanitizedResult) : undefined,
+      error: errorMessage,
       durationMs,
     };
     void hookRunnerAfter
