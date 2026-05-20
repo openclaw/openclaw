@@ -193,9 +193,11 @@ duplicate those files in its prompt text. The remaining workspace files follow
 
 `HEARTBEAT.md` content is not injected in either mode; heartbeat turns get a
 collaboration-mode note pointing to the file when it exists and is non-empty.
-When `SOUL.md` is present, the default Codex `personalityMode:
-"soul_when_present"` disables Codex's named native personality overlay so the
-workspace soul can be the active personality source.
+When non-empty `SOUL.md` content is delivered through either Codex workspace
+prompt surface, the default Codex `personalityMode: "soul_when_present"`
+disables Codex's named native personality overlay so the workspace soul can be
+the active personality source. Empty placeholder files keep Codex's native
+personality behavior.
 
 On non-Codex harnesses, bootstrap files continue to be composed into the
 OpenClaw prompt according to their existing gates. `HEARTBEAT.md` is omitted on

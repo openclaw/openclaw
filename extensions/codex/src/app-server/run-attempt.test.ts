@@ -4829,6 +4829,30 @@ describe("runCodexAppServerAttempt", () => {
     });
   });
 
+  it("does not disable native Codex personality for empty SOUL.md", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "\n  \n");
+    const harness = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const threadStart = harness.requests.find((request) => request.method === "thread/start");
+    const threadStartParams = threadStart?.params as {
+      developerInstructions?: string;
+      personality?: string;
+    };
+
+    expect(threadStartParams.personality).toBeUndefined();
+    expect(threadStartParams.developerInstructions).not.toContain(
+      "use SOUL.md as the positive source for personality",
+    );
+  });
+
   it("can opt into thread-level Codex developer instructions for stable workspace files", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -4947,6 +4971,36 @@ describe("runCodexAppServerAttempt", () => {
     expect(firstBinding?.workspacePromptFingerprint).toMatch(/^[a-f0-9]{64}$/);
 
     await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "Follow AGENTS v2.");
+    const secondHarness = createStartedThreadHarness();
+    const secondRun = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    await secondHarness.waitForMethod("turn/start");
+    await secondHarness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await secondRun;
+
+    expect(secondHarness.requests.some((request) => request.method === "thread/resume")).toBe(
+      false,
+    );
+    const secondBinding = await readCodexAppServerBinding(sessionFile);
+    expect(secondBinding?.workspacePromptFingerprint).not.toBe(
+      firstBinding?.workspacePromptFingerprint,
+    );
+  });
+
+  it("rotates Codex bindings when native AGENTS.override.md content changes", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.override.md"), "Override v1.");
+    const firstHarness = createStartedThreadHarness();
+
+    const firstRun = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    await firstHarness.waitForMethod("turn/start");
+    await firstHarness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await firstRun;
+    const firstBinding = await readCodexAppServerBinding(sessionFile);
+    expect(firstBinding?.workspacePromptFingerprint).toMatch(/^[a-f0-9]{64}$/);
+
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.override.md"), "Override v2.");
     const secondHarness = createStartedThreadHarness();
     const secondRun = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
     await secondHarness.waitForMethod("turn/start");

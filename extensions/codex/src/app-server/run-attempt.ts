@@ -199,7 +199,10 @@ const CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS = 5 * 60_000;
 const CODEX_NATIVE_HOOK_RELAY_RENEW_INTERVAL_MS = 60_000;
 const CODEX_STEER_ALL_DEBOUNCE_MS = 500;
 const LOG_FIELD_MAX_LENGTH = 160;
-const CODEX_NATIVE_PROJECT_DOC_BASENAMES = new Set(["agents.md", "agents.override.md"]);
+const CODEX_NATIVE_PROJECT_DOC_FILENAMES = ["AGENTS.md", "AGENTS.override.md"] as const;
+const CODEX_NATIVE_PROJECT_DOC_BASENAMES = new Set(
+  CODEX_NATIVE_PROJECT_DOC_FILENAMES.map((fileName) => fileName.toLowerCase()),
+);
 const CODEX_WORKSPACE_DEVELOPER_CONTEXT_BASENAMES = new Set([
   "identity.md",
   "soul.md",
@@ -230,6 +233,7 @@ type CodexBootstrapFile = CodexBootstrapContext["bootstrapFiles"][number];
 type CodexSystemPromptReport = NonNullable<EmbeddedRunAttemptResult["systemPromptReport"]>;
 type CodexToolReportEntry = CodexSystemPromptReport["tools"]["entries"][number];
 type CodexWorkspaceBootstrapContext = CodexBootstrapContext & {
+  nativeProjectDocFiles?: EmbeddedContextFile[];
   promptContextFiles?: EmbeddedContextFile[];
   developerInstructionFiles?: EmbeddedContextFile[];
   heartbeatReferenceFiles?: EmbeddedContextFile[];
@@ -4326,6 +4330,10 @@ async function buildCodexWorkspaceBootstrapContext(params: {
         targetWorkspaceDir: params.effectiveWorkspace,
       }),
     );
+    const nativeProjectDocFiles = await loadCodexNativeProjectDocFiles({
+      resolvedWorkspace: params.resolvedWorkspace,
+      effectiveWorkspace: params.effectiveWorkspace,
+    });
     const promptContextFiles = selectCodexWorkspacePromptContextFiles(
       contextFiles,
       params.workspacePromptSurface,
@@ -4335,13 +4343,14 @@ async function buildCodexWorkspaceBootstrapContext(params: {
       : [];
     const heartbeatReferenceFiles = selectCodexWorkspaceHeartbeatReferenceFiles(contextFiles);
     const workspacePromptFingerprint = fingerprintCodexWorkspacePromptContext({
-      contextFiles,
       developerInstructionFiles,
+      nativeProjectDocFiles,
       workspacePromptSurface: params.workspacePromptSurface,
     });
     return {
       ...bootstrapContext,
       contextFiles,
+      nativeProjectDocFiles,
       promptContextFiles,
       developerInstructionFiles,
       heartbeatReferenceFiles,
@@ -4671,31 +4680,37 @@ function hasDeliveredCodexSoulContext(
   return [
     ...(shouldInjectOpenClawPromptContext ? (context.promptContextFiles ?? []) : []),
     ...(context.developerInstructionFiles ?? []),
-  ].some((file) => getCodexContextFileBasename(file.path) === "soul.md");
+  ].some(
+    (file) =>
+      getCodexContextFileBasename(file.path) === "soul.md" &&
+      !isMissingCodexBootstrapContextFile(file) &&
+      file.content.trim().length > 0,
+  );
 }
 
 function fingerprintCodexWorkspacePromptContext(params: {
-  contextFiles: EmbeddedContextFile[];
   developerInstructionFiles: EmbeddedContextFile[];
+  nativeProjectDocFiles?: EmbeddedContextFile[];
   workspacePromptSurface: CodexWorkspacePromptSurface;
 }): string | undefined {
-  const trackedFiles = params.contextFiles
-    .filter((file) => {
-      const baseName = getCodexContextFileBasename(file.path);
-      return (
-        baseName &&
-        !isMissingCodexBootstrapContextFile(file) &&
-        (CODEX_NATIVE_PROJECT_DOC_BASENAMES.has(baseName) ||
-          params.developerInstructionFiles.some(
-            (developerFile) => developerFile.path === file.path,
-          ))
-      );
-    })
+  const trackedFiles = [
+    ...(params.nativeProjectDocFiles ?? []),
+    ...params.developerInstructionFiles,
+  ]
+    .filter((file) => !isMissingCodexBootstrapContextFile(file))
     .map((file) => ({
       path: file.path,
       content: file.content,
       missing: isMissingCodexBootstrapContextFile(file),
     }))
+    .filter(
+      (file, index, files) =>
+        files.findIndex(
+          (candidate) =>
+            normalizeCodexContextFilePath(candidate.path) ===
+            normalizeCodexContextFilePath(file.path),
+        ) === index,
+    )
     .toSorted((left, right) => left.path.localeCompare(right.path));
   if (trackedFiles.length === 0 && params.workspacePromptSurface === "per_turn_context") {
     return undefined;
@@ -4703,6 +4718,42 @@ function fingerprintCodexWorkspacePromptContext(params: {
   return createHash("sha256")
     .update(JSON.stringify({ surface: params.workspacePromptSurface, files: trackedFiles }))
     .digest("hex");
+}
+
+async function loadCodexNativeProjectDocFiles(params: {
+  resolvedWorkspace: string;
+  effectiveWorkspace: string;
+}): Promise<EmbeddedContextFile[]> {
+  const files: EmbeddedContextFile[] = [];
+  for (const fileName of CODEX_NATIVE_PROJECT_DOC_FILENAMES) {
+    const sourcePath = path.join(params.resolvedWorkspace, fileName);
+    let content: string;
+    try {
+      content = await fs.readFile(sourcePath, "utf8");
+    } catch (error) {
+      if (
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        error.code === "ENOENT"
+      ) {
+        continue;
+      }
+      embeddedAgentLog.warn("failed to read codex native project doc for fingerprint", {
+        path: sourcePath,
+        error,
+      });
+      continue;
+    }
+    files.push(
+      remapCodexContextFilePath({
+        file: { path: sourcePath, content },
+        sourceWorkspaceDir: params.resolvedWorkspace,
+        targetWorkspaceDir: params.effectiveWorkspace,
+      }),
+    );
+  }
+  return files.toSorted(compareCodexContextFiles);
 }
 
 function selectCodexWorkspaceHeartbeatReferenceFiles(

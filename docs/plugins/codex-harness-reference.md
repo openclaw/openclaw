@@ -45,7 +45,7 @@ Supported top-level fields:
 | `codexDynamicToolsLoading` | `"searchable"`           | Use `"direct"` to put OpenClaw dynamic tools directly in the initial Codex tool context.                                                  |
 | `codexDynamicToolsExclude` | `[]`                     | Additional OpenClaw dynamic tool names to omit from Codex app-server turns.                                                               |
 | `workspacePromptSurface`   | `"per_turn_context"`     | Controls whether OpenClaw workspace profile files stay in fresh per-turn context or move to Codex thread developer instructions.          |
-| `personalityMode`          | `"soul_when_present"`    | Controls Codex's native personality overlay: keep Codex, disable it when `SOUL.md` is present, or always disable it.                      |
+| `personalityMode`          | `"soul_when_present"`    | Controls Codex's native personality overlay: keep Codex, disable it when non-empty `SOUL.md` is delivered, or always disable it.          |
 | `codexPlugins`             | disabled                 | Native Codex plugin/app support for migrated source-installed curated plugins. See [Native Codex plugins](/plugins/codex-native-plugins). |
 | `computerUse`              | disabled                 | Codex Computer Use setup. See [Codex Computer Use](/plugins/codex-computer-use).                                                          |
 
@@ -58,11 +58,11 @@ Supported top-level fields:
 
 `personalityMode` accepts:
 
-| Value                 | Effect                                                                                                                       |
-| --------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `"soul_when_present"` | Default. If `SOUL.md` is present in either workspace prompt surface, send Codex `personality: "none"` for the native thread. |
-| `"codex"`             | Keep Codex's native friendly/pragmatic personality behavior even when `SOUL.md` is present.                                  |
-| `"none"`              | Always send Codex `personality: "none"` for Codex app-server threads.                                                        |
+| Value                 | Effect                                                                                                                                        |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `"soul_when_present"` | Default. If non-empty `SOUL.md` is delivered through either workspace prompt surface, send Codex `personality: "none"` for the native thread. |
+| `"codex"`             | Keep Codex's native friendly/pragmatic personality behavior even when `SOUL.md` is present.                                                   |
+| `"none"`              | Always send Codex `personality: "none"` for Codex app-server threads.                                                                         |
 
 ## App-server transport
 

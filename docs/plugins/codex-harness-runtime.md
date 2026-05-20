@@ -51,10 +51,10 @@ flowchart TD
 `per_turn_context` is the quality-first default. It preserves the legacy
 behavior where edits to `SOUL.md`, `IDENTITY.md`, `TOOLS.md`, `USER.md`,
 `MEMORY.md`, and active `BOOTSTRAP.md` are visible on the next turn without
-requiring native Codex thread rotation. If `SOUL.md` is present and
-`personalityMode` is left at the default `soul_when_present`, OpenClaw disables
-Codex's named native personality overlay and the bridge points personality,
-tone, and agent voice at `SOUL.md`.
+requiring native Codex thread rotation. If non-empty `SOUL.md` content is
+delivered and `personalityMode` is left at the default `soul_when_present`,
+OpenClaw disables Codex's named native personality overlay and the bridge points
+personality, tone, and agent voice at `SOUL.md`.
 
 `thread_developer` is the token-efficient/high-priority mode. It moves only
 `SOUL.md`, `IDENTITY.md`, `TOOLS.md`, and `USER.md` into Codex thread
@@ -65,7 +65,7 @@ workspace prompt surface and starts a fresh native Codex thread when the mode or
 tracked file contents change.
 
 `AGENTS.md` and `AGENTS.override.md` stay native Codex project docs rather than
-OpenClaw prompt text. OpenClaw also fingerprints loaded native project-doc
+OpenClaw prompt text. OpenClaw also fingerprints their root workspace file
 content and rotates the native Codex binding when that content changes, so
 already-running OpenClaw sessions do not depend on Codex live-reloading project
 docs. Lightweight cron turns still preserve the exact user command by skipping
