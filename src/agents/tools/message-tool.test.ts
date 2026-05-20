@@ -458,6 +458,57 @@ describe("message tool secret scoping", () => {
     expect(second?.params?.idempotencyKey).toBe("run-message-tool:message-tool:message_222_1");
   });
 
+  it("surfaces internal UI source replies without reporting a webchat delivery channel", async () => {
+    const replyPayload = {
+      status: "ok",
+      deliveryStatus: "sent",
+      channel: "internal-ui",
+      target: "current-run",
+      sourceReplyDeliveryMode: "message_tool_only",
+      sourceReplySink: "internal-ui",
+      sourceReply: {
+        text: "visible reply",
+      },
+      message: "visible reply",
+      dryRun: false,
+    };
+    mocks.runMessageAction.mockResolvedValue({
+      kind: "send",
+      action: "send",
+      channel: "webchat",
+      to: "current-run",
+      handledBy: "internal-source",
+      payload: replyPayload,
+      dryRun: false,
+    } satisfies MessageActionRunResult);
+
+    const tool = createMessageTool({
+      config: {} as never,
+      runMessageAction: mocks.runMessageAction as never,
+      sourceReplyDeliveryMode: "message_tool_only",
+      currentChannelProvider: "webchat",
+      agentSessionKey: "agent:main",
+    });
+    const result = await tool.execute("1", {
+      action: "send",
+      message: "visible reply",
+    });
+    const firstBlock = result.content[0];
+    if (!firstBlock || firstBlock.type !== "text") {
+      throw new Error("expected text tool result");
+    }
+
+    expect(firstBlock.text).not.toContain("webchat");
+    const toolOutput = JSON.parse(firstBlock.text) as Record<string, unknown>;
+    expect(toolOutput).toMatchObject({
+      channel: "internal-ui",
+      sourceReplySink: "internal-ui",
+      sourceReply: {
+        text: "visible reply",
+      },
+    });
+  });
+
   it("uses a non-webchat session key when ambient current channel drifted to webchat", async () => {
     mockSendResult();
 
