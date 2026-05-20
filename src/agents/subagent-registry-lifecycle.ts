@@ -147,6 +147,21 @@ export function createSubagentRegistryLifecycleController(params: {
       : `delivery path ${delivery.path} did not complete`;
   };
 
+  const recordAnnounceDeliveryResult = (
+    entry: SubagentRunRecord,
+    delivery: SubagentAnnounceDeliveryResult,
+  ) => {
+    if (typeof delivery.enqueuedAt === "number") {
+      entry.completionEnqueuedAt ??= delivery.enqueuedAt;
+    }
+    if (delivery.delivered) {
+      const deliveredAt =
+        typeof delivery.deliveredAt === "number" ? delivery.deliveredAt : Date.now();
+      entry.completionDeliveredAt = deliveredAt;
+      entry.lastAnnounceDropReason = undefined;
+    }
+  };
+
   const safeSetSubagentTaskDeliveryStatus = (args: {
     runId: string;
     childSessionKey: string;
@@ -373,11 +388,54 @@ export function createSubagentRegistryLifecycleController(params: {
     args.entry.pendingFinalDeliveryPayload = payload;
   };
 
+  const suspendPendingFinalDelivery = (args: {
+    runId: string;
+    entry: SubagentRunRecord;
+    reason: "retry-limit" | "expiry";
+    error?: string;
+  }) => {
+    markPendingFinalDelivery({
+      entry: args.entry,
+      error: args.error ?? args.entry.lastAnnounceDeliveryError ?? args.reason,
+    });
+    const now = Date.now();
+    args.entry.deliverySuspendedAt ??= now;
+    args.entry.deliverySuspendedReason = args.reason;
+    args.entry.cleanupHandled = false;
+    args.entry.wakeOnDescendantSettle = undefined;
+    args.entry.fallbackFrozenResultText = undefined;
+    args.entry.fallbackFrozenResultCapturedAt = undefined;
+    params.resumedRuns.delete(args.runId);
+    safeSetSubagentTaskDeliveryStatus({
+      runId: args.runId,
+      childSessionKey: args.entry.childSessionKey,
+      deliveryStatus: "failed",
+      deliveryError: args.entry.lastAnnounceDeliveryError ?? args.reason,
+    });
+    logAnnounceGiveUp(args.entry, args.reason);
+    params.persist();
+  };
+
+  const shouldSuspendPendingFinalDelivery = (entry: SubagentRunRecord) =>
+    entry.expectsCompletionMessage === true &&
+    entry.cleanup === "keep" &&
+    entry.endedReason === SUBAGENT_ENDED_REASON_COMPLETE &&
+    entry.outcome?.status === "ok";
+
   const finalizeResumedAnnounceGiveUp = async (giveUpParams: {
     runId: string;
     entry: SubagentRunRecord;
     reason: "retry-limit" | "expiry";
   }) => {
+    if (shouldSuspendPendingFinalDelivery(giveUpParams.entry)) {
+      suspendPendingFinalDelivery({
+        runId: giveUpParams.runId,
+        entry: giveUpParams.entry,
+        reason: giveUpParams.reason,
+        error: giveUpParams.entry.lastAnnounceDeliveryError,
+      });
+      return;
+    }
     clearPendingFinalDelivery(giveUpParams.entry);
     safeSetSubagentTaskDeliveryStatus({
       runId: giveUpParams.runId,
@@ -429,6 +487,9 @@ export function createSubagentRegistryLifecycleController(params: {
         continue;
       }
       if (entry.cleanupCompletedAt || entry.cleanupHandled) {
+        continue;
+      }
+      if (entry.pendingFinalDelivery === true && typeof entry.deliverySuspendedAt === "number") {
         continue;
       }
       if (params.suppressAnnounceForSteerRestart(entry)) {
@@ -542,10 +603,14 @@ export function createSubagentRegistryLifecycleController(params: {
     }
     if (didAnnounce) {
       if (!options?.skipAnnounce) {
-        entry.completionAnnouncedAt = Date.now();
+        const deliveredAt = entry.completionDeliveredAt ?? Date.now();
+        entry.completionDeliveredAt = deliveredAt;
+        entry.completionAnnouncedAt = deliveredAt;
         params.persist();
       }
       clearPendingFinalDelivery(entry);
+      entry.deliverySuspendedAt = undefined;
+      entry.deliverySuspendedReason = undefined;
       if (!options?.skipDeliveryStatus) {
         safeSetSubagentTaskDeliveryStatus({
           runId,
@@ -554,6 +619,7 @@ export function createSubagentRegistryLifecycleController(params: {
         });
       }
       entry.lastAnnounceDeliveryError = undefined;
+      entry.lastAnnounceDropReason = undefined;
       entry.wakeOnDescendantSettle = undefined;
       entry.fallbackFrozenResultText = undefined;
       entry.fallbackFrozenResultCapturedAt = undefined;
@@ -604,6 +670,15 @@ export function createSubagentRegistryLifecycleController(params: {
     }
 
     if (deferredDecision.kind === "give-up") {
+      if (shouldSuspendPendingFinalDelivery(entry)) {
+        suspendPendingFinalDelivery({
+          runId,
+          entry,
+          reason: deferredDecision.reason,
+          error: entry.lastAnnounceDeliveryError,
+        });
+        return;
+      }
       clearPendingFinalDelivery(entry);
       safeSetSubagentTaskDeliveryStatus({
         runId,
@@ -735,6 +810,7 @@ export function createSubagentRegistryLifecycleController(params: {
         expectsCompletionMessage: pendingPayload.expectsCompletionMessage,
         wakeOnDescendantSettle: pendingPayload.wakeOnDescendantSettle === true,
         onDeliveryResult: (delivery) => {
+          recordAnnounceDeliveryResult(entry, delivery);
           if (delivery.delivered) {
             if (entry.lastAnnounceDeliveryError !== undefined) {
               entry.lastAnnounceDeliveryError = undefined;
@@ -742,6 +818,9 @@ export function createSubagentRegistryLifecycleController(params: {
             }
             latestDeliveryError = undefined;
             return;
+          }
+          if (delivery.path === "none") {
+            entry.lastAnnounceDropReason = "sink_unavailable";
           }
           latestDeliveryError = formatAnnounceDeliveryError(delivery);
           if (entry.lastAnnounceDeliveryError !== latestDeliveryError) {

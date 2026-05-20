@@ -21,10 +21,11 @@ Do not configure `openai-codex/gpt-*` model refs. Put OpenAI agent auth order
 under `auth.order.openai`; older `openai-codex:*` profiles and
 `auth.order.openai-codex` entries remain supported for existing installs.
 
-OpenClaw starts Codex app-server threads with Codex native code mode and
-code-mode-only enabled. That keeps deferred/searchable OpenClaw dynamic tools
-inside Codex's own code execution and tool-search surface instead of adding a
-PI-style tool-search wrapper on top of Codex.
+OpenClaw starts Codex app-server threads with Codex native code mode enabled
+while leaving code-mode-only off by default. That keeps Codex native workspace
+and code capabilities available while OpenClaw dynamic tools continue through
+the app-server `item/tool/call` bridge. Restricted tool policies still disable
+native code mode entirely.
 
 For the broader model/provider/runtime split, start with
 [Agent runtimes](/concepts/agent-runtimes). The short version is:
@@ -201,6 +202,8 @@ Common command routing:
 | Attach the current chat                               | `/codex bind [--cwd <path>]`                                                                          |
 | Resume an existing Codex thread                       | `/codex resume <thread-id>`                                                                           |
 | List or filter Codex threads                          | `/codex threads [filter]`                                                                             |
+| List native Codex plugins                             | `/codex plugins list`                                                                                 |
+| Enable or disable a configured native Codex plugin    | `/codex plugins enable <name>`, `/codex plugins disable <name>`                                       |
 | Attach an existing Codex CLI session on a paired node | `/codex sessions --host <node> [filter]`, then `/codex resume <session-id> --host <node> --bind here` |
 | Send Codex feedback only                              | `/codex diagnostics [note]`                                                                           |
 | Start an ACP/acpx task                                | ACP/acpx session commands, not `/codex`                                                               |
@@ -345,7 +348,10 @@ Local stdio app-server sessions default to the trusted local operator posture:
 implicit YOLO posture, OpenClaw selects allowed guardian permissions instead.
 When an OpenClaw sandbox is active for the session, OpenClaw narrows Codex
 `danger-full-access` to Codex `workspace-write` so native Codex code-mode turns
-stay inside the sandboxed workspace.
+stay inside the sandboxed workspace. The Codex turn network flag follows the
+OpenClaw sandbox egress policy: Docker `network: "none"` stays offline, while
+`network: "bridge"` or a custom Docker network allows outbound access.
+Explicit Codex `workspace-write` turns use the same egress-derived network flag.
 
 Use guardian mode when you want Codex native auto-review before sandbox escapes
 or extra permissions:
@@ -478,15 +484,18 @@ subprocesses can use normal user-home state.
 
 Codex dynamic tools default to `searchable` loading. OpenClaw does not expose
 dynamic tools that duplicate Codex-native workspace operations: `read`, `write`,
-`edit`, `apply_patch`, `exec`, `process`, and `update_plan`. Remaining OpenClaw
-integration tools such as messaging, sessions, media, cron, browser, nodes,
+`edit`, `apply_patch`, `exec`, `process`, and `update_plan`. Most remaining
+OpenClaw integration tools such as messaging, media, cron, browser, nodes,
 gateway, `heartbeat_respond`, and `web_search` are available through Codex tool
 search under the `openclaw` namespace, keeping the initial model context
 smaller.
-`sessions_yield` and message-tool-only source replies stay direct because those
-are turn-control contracts. Heartbeat collaboration instructions tell Codex to
-search for `heartbeat_respond` before ending a heartbeat turn when the tool is
-not already loaded.
+`sessions_yield` and message-tool-only source replies stay direct because
+those are turn-control contracts. `sessions_spawn` stays searchable so Codex's
+native `spawn_agent` remains the primary Codex subagent surface, while explicit
+OpenClaw or ACP delegation is still available through the `openclaw` dynamic
+tool namespace. Heartbeat collaboration instructions tell Codex to search for
+`heartbeat_respond` before ending a heartbeat turn when the tool is not already
+loaded.
 
 Set `codexDynamicToolsLoading: "direct"` only when connecting to a custom Codex
 app-server that cannot search deferred dynamic tools or when debugging the full
@@ -502,22 +511,23 @@ Supported top-level Codex plugin fields:
 
 Supported `appServer` fields:
 
-| Field                         | Default                                                | Meaning                                                                                                                                                                                                                                 |
-| ----------------------------- | ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `transport`                   | `"stdio"`                                              | `"stdio"` spawns Codex; `"websocket"` connects to `url`.                                                                                                                                                                                |
-| `command`                     | managed Codex binary                                   | Executable for stdio transport. Leave unset to use the managed binary; set it only for an explicit override.                                                                                                                            |
-| `args`                        | `["app-server", "--listen", "stdio://"]`               | Arguments for stdio transport.                                                                                                                                                                                                          |
-| `url`                         | unset                                                  | WebSocket app-server URL.                                                                                                                                                                                                               |
-| `authToken`                   | unset                                                  | Bearer token for WebSocket transport.                                                                                                                                                                                                   |
-| `headers`                     | `{}`                                                   | Extra WebSocket headers.                                                                                                                                                                                                                |
-| `clearEnv`                    | `[]`                                                   | Extra environment variable names removed from the spawned stdio app-server process after OpenClaw builds its inherited environment. OpenClaw keeps per-agent `CODEX_HOME` and inherited `HOME` for local launches.                      |
-| `requestTimeoutMs`            | `60000`                                                | Timeout for app-server control-plane calls.                                                                                                                                                                                             |
-| `turnCompletionIdleTimeoutMs` | `60000`                                                | Quiet window after Codex accepts a turn or after a turn-scoped app-server request while OpenClaw waits for `turn/completed`. Raise this for slow post-tool or status-only synthesis phases.                                             |
-| `mode`                        | `"yolo"` unless local Codex requirements disallow YOLO | Preset for YOLO or guardian-reviewed execution. Local stdio requirements that omit `danger-full-access`, `never` approval, or the `user` reviewer make the implicit default guardian.                                                   |
-| `approvalPolicy`              | `"never"` or an allowed guardian approval policy       | Native Codex approval policy sent to thread start/resume/turn. Guardian defaults prefer `"on-request"` when allowed.                                                                                                                    |
-| `sandbox`                     | `"danger-full-access"` or an allowed guardian sandbox  | Native Codex sandbox mode sent to thread start/resume. Guardian defaults prefer `"workspace-write"` when allowed, otherwise `"read-only"`. When an OpenClaw sandbox is active, `danger-full-access` is narrowed to `"workspace-write"`. |
-| `approvalsReviewer`           | `"user"` or an allowed guardian reviewer               | Use `"auto_review"` to let Codex review native approval prompts when allowed, otherwise `guardian_subagent` or `user`. `guardian_subagent` remains a legacy alias.                                                                      |
-| `serviceTier`                 | unset                                                  | Optional Codex app-server service tier. `"priority"` enables fast-mode routing, `"flex"` requests flex processing, `null` clears the override, and legacy `"fast"` is accepted as `"priority"`.                                         |
+| Field                         | Default                                                | Meaning                                                                                                                                                                                                                                                                                                     |
+| ----------------------------- | ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `transport`                   | `"stdio"`                                              | `"stdio"` spawns Codex; `"websocket"` connects to `url`.                                                                                                                                                                                                                                                    |
+| `command`                     | managed Codex binary                                   | Executable for stdio transport. Leave unset to use the managed binary; set it only for an explicit override.                                                                                                                                                                                                |
+| `args`                        | `["app-server", "--listen", "stdio://"]`               | Arguments for stdio transport.                                                                                                                                                                                                                                                                              |
+| `url`                         | unset                                                  | WebSocket app-server URL.                                                                                                                                                                                                                                                                                   |
+| `authToken`                   | unset                                                  | Bearer token for WebSocket transport.                                                                                                                                                                                                                                                                       |
+| `headers`                     | `{}`                                                   | Extra WebSocket headers.                                                                                                                                                                                                                                                                                    |
+| `clearEnv`                    | `[]`                                                   | Extra environment variable names removed from the spawned stdio app-server process after OpenClaw builds its inherited environment. OpenClaw keeps per-agent `CODEX_HOME` and inherited `HOME` for local launches.                                                                                          |
+| `codeModeOnly`                | `false`                                                | Opt into Codex's code-mode-only tool surface. OpenClaw dynamic tools remain registered with Codex so nested `tools.*` calls return through the app-server `item/tool/call` bridge.                                                                                                                          |
+| `requestTimeoutMs`            | `60000`                                                | Timeout for app-server control-plane calls.                                                                                                                                                                                                                                                                 |
+| `turnCompletionIdleTimeoutMs` | `60000`                                                | Quiet window after Codex accepts a turn or after a turn-scoped app-server request while OpenClaw waits for `turn/completed`. Raise this for slow post-tool or status-only synthesis phases.                                                                                                                 |
+| `mode`                        | `"yolo"` unless local Codex requirements disallow YOLO | Preset for YOLO or guardian-reviewed execution. Local stdio requirements that omit `danger-full-access`, `never` approval, or the `user` reviewer make the implicit default guardian.                                                                                                                       |
+| `approvalPolicy`              | `"never"` or an allowed guardian approval policy       | Native Codex approval policy sent to thread start/resume/turn. Guardian defaults prefer `"on-request"` when allowed.                                                                                                                                                                                        |
+| `sandbox`                     | `"danger-full-access"` or an allowed guardian sandbox  | Native Codex sandbox mode sent to thread start/resume. Guardian defaults prefer `"workspace-write"` when allowed, otherwise `"read-only"`. When an OpenClaw sandbox is active, `danger-full-access` turns use Codex `workspace-write` with network access derived from the OpenClaw sandbox egress setting. |
+| `approvalsReviewer`           | `"user"` or an allowed guardian reviewer               | Use `"auto_review"` to let Codex review native approval prompts when allowed, otherwise `guardian_subagent` or `user`. `guardian_subagent` remains a legacy alias.                                                                                                                                          |
+| `serviceTier`                 | unset                                                  | Optional Codex app-server service tier. `"priority"` enables fast-mode routing, `"flex"` requests flex processing, `null` clears the override, and legacy `"fast"` is accepted as `"priority"`.                                                                                                             |
 
 OpenClaw-owned dynamic tool calls are bounded independently from
 `appServer.requestTimeoutMs`: Codex `item/tool/call` requests use a 30 second
@@ -657,6 +667,36 @@ new configs. Select an `openai/gpt-*` model, enable
 installed and enabled. If you need strict proof while testing, set provider or
 model `agentRuntime.id: "codex"`. A forced Codex runtime fails instead of
 falling back to PI.
+
+**OpenAI Codex runtime falls back to the API-key path:** collect a redacted
+gateway excerpt that shows the model, runtime, selected provider, and failure.
+Ask affected collaborators to run this read-only command on their OpenClaw host:
+
+```bash
+(
+  pattern='openai/gpt-5\.[45]|agentRuntime(\.id)?|harnessRuntime|Runtime: OpenAI Codex|openai-codex|resolveSelectedOpenAIPiRuntimeProvider|candidateProvider[": ]+openai|status[": ]+401|Incorrect API key|No API key|api-key path|API-key path|OAuth'
+
+  if ls /tmp/openclaw/openclaw-*.log >/dev/null 2>&1; then
+    grep -E -i -n "$pattern" /tmp/openclaw/openclaw-*.log 2>/dev/null || true
+  else
+    journalctl --user -u openclaw-gateway --since today --no-pager 2>/dev/null \
+      | grep -E -i "$pattern" || true
+  fi
+) | sed -E \
+    -e 's/(Authorization: Bearer )[A-Za-z0-9._~+\/-]+/\1[REDACTED]/Ig' \
+    -e 's/(Bearer )[A-Za-z0-9._~+\/-]+/\1[REDACTED]/Ig' \
+    -e 's/(api[_ -]?key[=: ]+)[^ ,}"]+/\1[REDACTED]/Ig' \
+    -e 's/(OPENAI_API_KEY[=: ]+)[^ ,}"]+/\1[REDACTED]/Ig' \
+    -e 's/sk-[A-Za-z0-9_-]{12,}/sk-[REDACTED]/g' \
+    -e 's/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/[EMAIL-REDACTED]/g' \
+  | tail -200
+```
+
+Useful excerpts usually include `openai/gpt-5.5` or `openai/gpt-5.4`,
+`Runtime: OpenAI Codex`, `agentRuntime.id` or `harnessRuntime`,
+`candidateProvider: "openai"`, and a `401`, `Incorrect API key`, or
+`No API key` result. A corrected run should show the `openai-codex` OAuth
+path instead of a plain OpenAI API-key failure.
 
 **Legacy `openai-codex/*` config remains:** run `openclaw doctor --fix`.
 Doctor rewrites legacy model refs to `openai/*`, removes stale session and

@@ -100,7 +100,7 @@ describe("resolveCronFallbacksOverride", () => {
     ).toEqual(["openai-codex/gpt-5.2", "zai/glm-5"]);
   });
 
-  it("keeps a selected agent primary model strict ahead of default subagent fallbacks", () => {
+  it("uses default subagent fallbacks when the default subagent primary beats the agent primary", () => {
     expect(
       resolveCronFallbacksOverride({
         cfg: {
@@ -109,6 +109,38 @@ describe("resolveCronFallbacksOverride", () => {
               subagents: {
                 model: {
                   primary: "kimi/kimi-code",
+                  fallbacks: ["openai-codex/gpt-5.2"],
+                },
+              },
+            },
+            list: [
+              {
+                id: "research",
+                model: {
+                  primary: "anthropic/claude-opus-4-6",
+                },
+              },
+            ],
+          },
+        },
+        agentId: "research",
+        useSubagentFallbacks: true,
+        job: makeJob({
+          kind: "agentTurn",
+          message: "summarize",
+        }),
+      }),
+    ).toEqual(["openai-codex/gpt-5.2"]);
+  });
+
+  it("keeps a selected agent primary model strict when no default subagent primary is selectable", () => {
+    expect(
+      resolveCronFallbacksOverride({
+        cfg: {
+          agents: {
+            defaults: {
+              subagents: {
+                model: {
                   fallbacks: ["openai-codex/gpt-5.2"],
                 },
               },

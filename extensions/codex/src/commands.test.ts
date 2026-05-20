@@ -21,6 +21,11 @@ import {
   resetCodexDiagnosticsFeedbackStateForTests,
   type CodexCommandDeps,
 } from "./command-handlers.js";
+import type {
+  CodexPluginsConfigBlock,
+  CodexPluginConfigEntry,
+  CodexPluginsManagementIO,
+} from "./command-plugins-management.js";
 import { handleCodexCommand } from "./commands.js";
 
 let tempDir: string;
@@ -70,6 +75,27 @@ function createDeps(overrides: Partial<CodexCommandDeps> = {}): Partial<CodexCom
     ),
     safeCodexControlRequest: vi.fn(),
     ...overrides,
+  };
+}
+
+function inMemoryCodexPluginsIO(
+  initial: Record<string, CodexPluginConfigEntry> = {},
+  options: { enabled?: boolean } = { enabled: true },
+): CodexPluginsManagementIO & {
+  current: () => Record<string, CodexPluginConfigEntry>;
+  currentConfig: () => CodexPluginsConfigBlock;
+} {
+  const store: CodexPluginsConfigBlock = {
+    enabled: options.enabled,
+    plugins: JSON.parse(JSON.stringify(initial)),
+  };
+  return {
+    current: () => JSON.parse(JSON.stringify(store.plugins ?? {})),
+    currentConfig: () => JSON.parse(JSON.stringify(store)),
+    readConfig: () => Promise.resolve(JSON.parse(JSON.stringify(store))),
+    mutate: async (update) => {
+      update(store);
+    },
   };
 }
 
@@ -214,6 +240,46 @@ describe("codex command", () => {
 
     expect(result.text).toContain("Codex command failed: &lt;\uff20U123&gt; loader failed");
     expect(result.text).not.toContain("<@U123>");
+  });
+
+  it("lists Codex sub-plugins through the /codex plugins command surface", async () => {
+    const codexPluginsManagementIo = inMemoryCodexPluginsIO({
+      "google-calendar": {
+        enabled: true,
+        marketplaceName: "openai-curated",
+        pluginName: "google-calendar",
+      },
+    });
+
+    const result = await handleCodexCommand(createContext("plugins list"), {
+      deps: createDeps({ codexPluginsManagementIo }),
+    });
+
+    expectResultTextContains(result, "ON   google-calendar");
+    expectResultTextContains(result, "openclaw.json");
+  });
+
+  it("enables and disables Codex sub-plugins through the /codex plugins command surface", async () => {
+    const codexPluginsManagementIo = inMemoryCodexPluginsIO({
+      "google-calendar": {
+        enabled: true,
+        marketplaceName: "openai-curated",
+        pluginName: "google-calendar",
+      },
+    });
+
+    const disabled = await handleCodexCommand(createContext("plugins disable google-calendar"), {
+      deps: createDeps({ codexPluginsManagementIo }),
+    });
+    expectResultTextContains(disabled, "google-calendar: disabled in openclaw.json");
+    expect(codexPluginsManagementIo.current()["google-calendar"]?.enabled).toBe(false);
+
+    const enabled = await handleCodexCommand(createContext("plugins enable google-calendar"), {
+      deps: createDeps({ codexPluginsManagementIo }),
+    });
+    expectResultTextContains(enabled, "google-calendar: enabled in openclaw.json");
+    expect(codexPluginsManagementIo.currentConfig().enabled).toBe(true);
+    expect(codexPluginsManagementIo.current()["google-calendar"]?.enabled).toBe(true);
   });
 
   it("attaches the current session to an existing Codex thread", async () => {
@@ -1314,9 +1380,18 @@ describe("codex command", () => {
     ).resolves.toEqual({
       text: "Started Codex compaction for thread thread-123.",
     });
-    expect(codexControlRequest).toHaveBeenCalledWith(undefined, CODEX_CONTROL_METHODS.compact, {
-      threadId: "thread-123",
-    });
+    expect(codexControlRequest).toHaveBeenCalledWith(
+      undefined,
+      CODEX_CONTROL_METHODS.compact,
+      {
+        threadId: "thread-123",
+      },
+      {
+        agentDir: path.join(tempDir, "agents", "main", "agent"),
+        authProfileId: undefined,
+        config: {},
+      },
+    );
   });
 
   it("starts review with the generated app-server target shape", async () => {
@@ -1334,10 +1409,19 @@ describe("codex command", () => {
     ).resolves.toEqual({
       text: "Started Codex review for thread thread-123.",
     });
-    expect(codexControlRequest).toHaveBeenCalledWith(undefined, CODEX_CONTROL_METHODS.review, {
-      threadId: "thread-123",
-      target: { type: "uncommittedChanges" },
-    });
+    expect(codexControlRequest).toHaveBeenCalledWith(
+      undefined,
+      CODEX_CONTROL_METHODS.review,
+      {
+        threadId: "thread-123",
+        target: { type: "uncommittedChanges" },
+      },
+      {
+        agentDir: path.join(tempDir, "agents", "main", "agent"),
+        authProfileId: undefined,
+        config: {},
+      },
+    );
   });
 
   it("rejects malformed compact and review commands before starting thread actions", async () => {
@@ -1749,7 +1833,7 @@ describe("codex command", () => {
       `${secondSessionFile}.codex-app-server.json`,
       JSON.stringify({ schemaVersion: 1, threadId: "thread-222", cwd: "/repo" }),
     );
-    const safeCodexControlRequest = vi.fn(async (_config, _method, requestParams) => ({
+    const safeCodexControlRequest = vi.fn(async (configForTest, _method, requestParams) => ({
       ok: true as const,
       value: {
         threadId:
@@ -2666,6 +2750,7 @@ describe("codex command", () => {
       config: {},
       sessionFile,
       workspaceDir: "/repo",
+      agentDir: path.join(tempDir, "agents", "main", "agent"),
       threadId: "thread-123",
       model: "gpt-5.4",
       modelProvider: "openai",
@@ -2724,6 +2809,7 @@ describe("codex command", () => {
       config: {},
       sessionFile,
       workspaceDir: "/repo with space",
+      agentDir: path.join(tempDir, "agents", "main", "agent"),
       threadId: "thread-123",
       model: undefined,
       modelProvider: undefined,
@@ -2971,6 +3057,8 @@ describe("codex command", () => {
     expect(stopCodexConversationTurn).toHaveBeenCalledWith({
       sessionFile,
       pluginConfig: undefined,
+      agentDir: path.join(tempDir, "agents", "main", "agent"),
+      config: {},
     });
   });
 
@@ -3002,6 +3090,8 @@ describe("codex command", () => {
       sessionFile,
       pluginConfig: undefined,
       message: "focus tests first",
+      agentDir: path.join(tempDir, "agents", "main", "agent"),
+      config: {},
     });
   });
 
@@ -3032,16 +3122,22 @@ describe("codex command", () => {
       sessionFile,
       pluginConfig: undefined,
       model: "gpt-5.4",
+      agentDir: path.join(tempDir, "agents", "main", "agent"),
+      config: {},
     });
     expect(setCodexConversationFastMode).toHaveBeenCalledWith({
       sessionFile,
       pluginConfig: undefined,
       enabled: true,
+      agentDir: path.join(tempDir, "agents", "main", "agent"),
+      config: {},
     });
     expect(setCodexConversationPermissions).toHaveBeenCalledWith({
       sessionFile,
       pluginConfig: undefined,
       mode: "yolo",
+      agentDir: path.join(tempDir, "agents", "main", "agent"),
+      config: {},
     });
   });
 
@@ -3161,6 +3257,8 @@ describe("codex command", () => {
       sessionFile: hostSessionFile,
       pluginConfig: undefined,
       enabled: true,
+      agentDir: path.join(tempDir, "agents", "main", "agent"),
+      config: {},
     });
   });
 

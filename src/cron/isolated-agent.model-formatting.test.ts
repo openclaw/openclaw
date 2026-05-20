@@ -629,8 +629,8 @@ describe("cron model formatting and precedence edge cases", () => {
       );
     });
 
-    it("falls through metadata-only subagents.model to the global subagent default", async () => {
-      // PR #58823 (fixes #58822): metadata-only per-agent subagents.model has
+    it("falls through subagents.model without a primary to the global subagent default", async () => {
+      // PR #58823 (fixes #58822): per-agent subagents.model without a primary has
       // no primary, so resolution falls through to agents.defaults.subagents.model
       // (global subagent default), not to the agent's own model.
       await expectSelectedModel(
@@ -645,7 +645,7 @@ describe("cron model formatting and precedence edge cases", () => {
           },
           agentConfigOverride: {
             model: { primary: "anthropic/claude-opus-4-6" },
-            subagents: { model: { timeoutMs: 1_000 } },
+            subagents: { model: { fallbacks: [] } },
           },
         },
         { provider: "ollama", model: "llama3.2:3b" },

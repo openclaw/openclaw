@@ -2421,9 +2421,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               const record =
                 pluginRuntimeRecordById.get(pluginId) ??
                 registry.plugins.find((entry) => entry.id === pluginId);
-              if (record?.origin !== "bundled") {
+              if (record?.origin !== "bundled" && record?.trustedOfficialInstall !== true) {
                 throw new Error(
-                  "openKeyedStore is only available for bundled plugins in this release.",
+                  "openKeyedStore is only available for trusted plugins in this release.",
                 );
               }
               return createPluginStateKeyedStore<T>(pluginId, options);

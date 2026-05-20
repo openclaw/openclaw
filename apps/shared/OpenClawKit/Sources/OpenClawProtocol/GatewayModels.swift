@@ -2,8 +2,8 @@
 // swiftlint:disable file_length
 import Foundation
 
-public let GATEWAY_PROTOCOL_VERSION = 5
-public let GATEWAY_MIN_PROTOCOL_VERSION = 5
+public let GATEWAY_PROTOCOL_VERSION = 4
+public let GATEWAY_MIN_PROTOCOL_VERSION = 4
 
 private struct GatewayAnyCodingKey: CodingKey, Hashable {
     let stringValue: String
@@ -541,7 +541,7 @@ public struct MessageActionParams: Codable, Sendable {
     public let senderisowner: Bool?
     public let sessionkey: String?
     public let sessionid: String?
-    public let inboundeventkind: String?
+    public let inboundturnkind: String?
     public let agentid: String?
     public let toolcontext: [String: AnyCodable]?
     public let idempotencykey: String
@@ -555,7 +555,7 @@ public struct MessageActionParams: Codable, Sendable {
         senderisowner: Bool?,
         sessionkey: String?,
         sessionid: String?,
-        inboundeventkind: String? = nil,
+        inboundturnkind: String? = nil,
         agentid: String?,
         toolcontext: [String: AnyCodable]?,
         idempotencykey: String)
@@ -568,7 +568,7 @@ public struct MessageActionParams: Codable, Sendable {
         self.senderisowner = senderisowner
         self.sessionkey = sessionkey
         self.sessionid = sessionid
-        self.inboundeventkind = inboundeventkind
+        self.inboundturnkind = inboundturnkind
         self.agentid = agentid
         self.toolcontext = toolcontext
         self.idempotencykey = idempotencykey
@@ -583,7 +583,7 @@ public struct MessageActionParams: Codable, Sendable {
         case senderisowner = "senderIsOwner"
         case sessionkey = "sessionKey"
         case sessionid = "sessionId"
-        case inboundeventkind = "inboundEventKind"
+        case inboundturnkind = "inboundTurnKind"
         case agentid = "agentId"
         case toolcontext = "toolContext"
         case idempotencykey = "idempotencyKey"
@@ -1501,21 +1501,33 @@ public struct SecretsReloadParams: Codable, Sendable {}
 public struct SecretsResolveParams: Codable, Sendable {
     public let commandname: String
     public let targetids: [String]
+    public let allowedpaths: [String]?
+    public let forcedactivepaths: [String]?
+    public let optionalactivepaths: [String]?
     public let provideroverrides: [String: AnyCodable]?
 
     public init(
         commandname: String,
         targetids: [String],
+        allowedpaths: [String]?,
+        forcedactivepaths: [String]?,
+        optionalactivepaths: [String]?,
         provideroverrides: [String: AnyCodable]?)
     {
         self.commandname = commandname
         self.targetids = targetids
+        self.allowedpaths = allowedpaths
+        self.forcedactivepaths = forcedactivepaths
+        self.optionalactivepaths = optionalactivepaths
         self.provideroverrides = provideroverrides
     }
 
     private enum CodingKeys: String, CodingKey {
         case commandname = "commandName"
         case targetids = "targetIds"
+        case allowedpaths = "allowedPaths"
+        case forcedactivepaths = "forcedActivePaths"
+        case optionalactivepaths = "optionalActivePaths"
         case provideroverrides = "providerOverrides"
     }
 }
@@ -2745,6 +2757,7 @@ public struct ConfigSchemaResponse: Codable, Sendable {
 public struct ConfigSchemaLookupResult: Codable, Sendable {
     public let path: String
     public let schema: AnyCodable
+    public let reloadkind: AnyCodable?
     public let hint: [String: AnyCodable]?
     public let hintpath: String?
     public let children: [[String: AnyCodable]]
@@ -2752,12 +2765,14 @@ public struct ConfigSchemaLookupResult: Codable, Sendable {
     public init(
         path: String,
         schema: AnyCodable,
+        reloadkind: AnyCodable?,
         hint: [String: AnyCodable]?,
         hintpath: String?,
         children: [[String: AnyCodable]])
     {
         self.path = path
         self.schema = schema
+        self.reloadkind = reloadkind
         self.hint = hint
         self.hintpath = hintpath
         self.children = children
@@ -2766,6 +2781,7 @@ public struct ConfigSchemaLookupResult: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case path
         case schema
+        case reloadkind = "reloadKind"
         case hint
         case hintpath = "hintPath"
         case children
