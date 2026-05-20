@@ -54,9 +54,8 @@ export function injectCanvasLiveReload(html: string): string {
   try {
     const pathCap = (() => {
       const prefix = "/__openclaw__/cap/";
-      const idx = location.pathname.indexOf(prefix);
-      if (idx < 0) return "";
-      const rest = location.pathname.slice(idx + prefix.length);
+      if (!location.pathname.startsWith(prefix)) return "";
+      const rest = location.pathname.slice(prefix.length);
       const slash = rest.indexOf("/");
       if (slash <= 0) return "";
       try {
