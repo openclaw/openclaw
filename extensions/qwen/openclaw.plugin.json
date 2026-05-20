@@ -32,6 +32,17 @@
       }
     }
   },
+  "modelCatalog": {
+    "suppressions": [
+      {
+        "modelId": "qwen3.6-plus",
+        "when": {
+          "providerConfigApiIn": ["qwen", "modelstudio"],
+          "baseUrlHosts": ["coding-intl.dashscope.aliyuncs.com"]
+        }
+      }
+    ]
+  },
   "contracts": {
     "mediaUnderstandingProviders": ["qwen"],
     "videoGenerationProviders": ["qwen"]

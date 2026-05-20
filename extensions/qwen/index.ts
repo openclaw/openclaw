@@ -168,4 +168,3 @@ export default defineSingleProviderPluginEntry({
     api.registerVideoGenerationProvider(buildQwenVideoGenerationProvider());
   },
 });
-

@@ -3,6 +3,7 @@ import {
   applyQwenNativeStreamingUsageCompat,
   buildQwenProvider,
   QWEN_BASE_URL,
+  QWEN_CN_BASE_URL,
   QWEN_STANDARD_GLOBAL_BASE_URL,
   QWEN_DEFAULT_MODEL_ID,
 } from "./api.js";
@@ -22,18 +23,25 @@ describe("qwen provider catalog", () => {
     const modelIds = getQwenModelIds(provider);
     expect(modelIds.length).toBeGreaterThan(0);
     expect(modelIds).toContain(QWEN_DEFAULT_MODEL_ID);
-    expect(modelIds).toContain("qwen3.6-plus");
+    // Default endpoint is Global Coding Plan (coding-intl); qwen3.6-plus is not
+    // advertised there until live Global proof is added.
+    expect(modelIds).not.toContain("qwen3.6-plus");
   });
 
-  it("advertises qwen3.6-plus on all Qwen endpoints including Coding Plan CN", () => {
-    const coding = buildQwenProvider({ baseUrl: QWEN_BASE_URL });
-    const codingTrailingDot = buildQwenProvider({
+  it("advertises qwen3.6-plus on CN Coding Plan and Standard but not Global Coding Plan", () => {
+    const globalCoding = buildQwenProvider({ baseUrl: QWEN_BASE_URL });
+    const globalCodingTrailingDot = buildQwenProvider({
       baseUrl: " https://coding-intl.dashscope.aliyuncs.com./v1 ",
     });
+    const cnCoding = buildQwenProvider({ baseUrl: QWEN_CN_BASE_URL });
     const standard = buildQwenProvider({ baseUrl: QWEN_STANDARD_GLOBAL_BASE_URL });
 
-    expect(getQwenModelIds(coding)).toContain("qwen3.6-plus");
-    expect(getQwenModelIds(codingTrailingDot)).toContain("qwen3.6-plus");
+    // Global Coding Plan: unverified, suppressed
+    expect(getQwenModelIds(globalCoding)).not.toContain("qwen3.6-plus");
+    expect(getQwenModelIds(globalCodingTrailingDot)).not.toContain("qwen3.6-plus");
+    // CN Coding Plan: live-verified
+    expect(getQwenModelIds(cnCoding)).toContain("qwen3.6-plus");
+    // Standard Global: always available
     expect(getQwenModelIds(standard)).toContain("qwen3.6-plus");
   });
 

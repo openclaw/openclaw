@@ -125,13 +125,27 @@ export function isQwenCodingPlanBaseUrl(baseUrl: string | undefined): boolean {
 }
 
 export function isQwen36PlusSupportedBaseUrl(baseUrl: string | undefined): boolean {
-  return !isQwenCodingPlanBaseUrl(baseUrl);
+  // qwen3.6-plus is live-verified on CN Coding Plan (coding.dashscope.aliyuncs.com).
+  // It is NOT available on Global Coding Plan (coding-intl.dashscope.aliyuncs.com) — unverified.
+  // Standard endpoints (dashscope / dashscope-intl) are always supported.
+  const trimmed = baseUrl?.trim();
+  if (!trimmed) {
+    return false;
+  }
+  try {
+    const hostname = new URL(trimmed).hostname.toLowerCase().replace(/\.+$/, "");
+    return hostname !== "coding-intl.dashscope.aliyuncs.com";
+  } catch {
+    return false;
+  }
 }
 
 export function buildQwenModelCatalogForBaseUrl(
-  _baseUrl: string | undefined,
+  baseUrl: string | undefined,
 ): ReadonlyArray<ModelDefinitionConfig> {
-  return QWEN_MODEL_CATALOG;
+  return isQwen36PlusSupportedBaseUrl(baseUrl)
+    ? QWEN_MODEL_CATALOG
+    : QWEN_MODEL_CATALOG.filter((model) => model.id !== QWEN_36_PLUS_MODEL_ID);
 }
 
 export function isNativeQwenBaseUrl(baseUrl: string | undefined): boolean {
@@ -198,4 +212,3 @@ export const isNativeModelStudioBaseUrl = isNativeQwenBaseUrl;
 export const applyModelStudioNativeStreamingUsageCompat = applyQwenNativeStreamingUsageCompat;
 export const buildModelStudioModelDefinition = buildQwenModelDefinition;
 export const buildModelStudioDefaultModelDefinition = buildQwenDefaultModelDefinition;
-
