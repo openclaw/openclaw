@@ -166,7 +166,11 @@ export function createGatewayRequestContext(
       }
     },
     disconnectClientsUsingSharedGatewayAuth: () => {
-      disconnectAllSharedGatewayAuthClients(params.clients, params.logGateway);
+      disconnectAllSharedGatewayAuthClients(params.clients, {
+        logger: params.logGateway.warn
+          ? { warn: (m: string) => params.logGateway.warn(m) }
+          : undefined,
+      });
     },
     enforceSharedGatewayAuthGenerationForConfigWrite:
       params.enforceSharedGatewayAuthGenerationForConfigWrite,

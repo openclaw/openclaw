@@ -49,7 +49,9 @@ describe("disconnectAllSharedGatewayAuthClients", () => {
       usesSharedGatewayAuth: false,
     });
 
-    disconnectAllSharedGatewayAuthClients([throwing, healthy, skippedNonShared], { warn });
+    disconnectAllSharedGatewayAuthClients([throwing, healthy, skippedNonShared], {
+      logger: { warn },
+    });
 
     expect(throwing.socket.close).toHaveBeenCalledWith(4001, "gateway auth changed");
     expect(throwing.socket.terminate).toHaveBeenCalledTimes(1);
@@ -79,7 +81,7 @@ describe("disconnectAllSharedGatewayAuthClients", () => {
     const healthy = makeClient({ connId: "conn-good" });
 
     expect(() =>
-      disconnectAllSharedGatewayAuthClients([throwing, healthy], { warn }),
+      disconnectAllSharedGatewayAuthClients([throwing, healthy], { logger: { warn } }),
     ).not.toThrow();
 
     expect(throwing.socket.terminate).toHaveBeenCalledTimes(1);
