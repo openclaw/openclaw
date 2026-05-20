@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   CORE_HEALTH_CHECKS,
@@ -232,6 +232,49 @@ metadata: '{"openclaw":{"requires":{"bins":["openclaw-test-missing-skill-bin"]}}
         checkId: "core/doctor/workspace-suggestions",
         severity: "info",
         message: "Memory system not found in workspace.",
+      }),
+    );
+  });
+});
+
+describe("core/doctor/bootstrap-size", () => {
+  let tmp: string | undefined;
+
+  afterEach(async () => {
+    if (tmp !== undefined) {
+      await fs.rm(tmp, { recursive: true, force: true });
+      tmp = undefined;
+    }
+    vi.restoreAllMocks();
+  });
+
+  it("honors the per-agent bootstrapMaxChars override in health findings", async () => {
+    tmp = await fs.mkdtemp(join(tmpdir(), "openclaw-health-bootstrap-"));
+    // 15,000 chars: exceeds per-agent budget (10,000) but fits in defaults budget (20,000).
+    // Without the fix the check uses defaults and emits no warning; with the fix it uses
+    // the per-agent override and correctly emits a truncation warning.
+    await fs.writeFile(join(tmp, "AGENTS.md"), "a".repeat(15_000), "utf-8");
+
+    const check = CORE_HEALTH_CHECKS.find((c) => c.id === "core/doctor/bootstrap-size");
+    const findings = await check!.detect({
+      mode: "lint",
+      runtime: { log() {}, error() {}, exit() {} },
+      cfg: {
+        agents: {
+          defaults: {
+            workspace: tmp,
+            bootstrapMaxChars: 20_000,
+          },
+          list: [{ id: "custom-agent", default: true, bootstrapMaxChars: 10_000 }],
+        },
+      },
+    });
+
+    expect(findings).toContainEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/bootstrap-size",
+        severity: "warning",
+        message: expect.stringContaining("AGENTS.md"),
       }),
     );
   });
