@@ -69,7 +69,8 @@ tool with the `react` action. Reaction behavior varies by channel and transport.
 
   <Accordion title="Feishu/Lark">
     - Use the `feishu_reaction` tool with actions `add`, `remove`, and `list`.
-    - Add/remove requires `emoji_type`; remove also requires `reaction_id`.
+    - Add requires `emoji_type`.
+    - Remove accepts either `reaction_id` from `list` or `emoji_type` to remove the bot's own matching reaction.
 
   </Accordion>
 
