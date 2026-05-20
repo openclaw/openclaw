@@ -314,7 +314,7 @@ describe("createWebhookHandler", () => {
     const validRes = makeRes();
     await handler(validReq, validRes);
 
-    expect(validRes._status).toBe(204);
+    expect(validRes.status).toBe(204);
     expect(deliver).toHaveBeenCalledTimes(1);
   });
 
@@ -342,7 +342,7 @@ describe("createWebhookHandler", () => {
       (req.socket as { remoteAddress?: string }).remoteAddress = "203.0.113.30";
       const res = makeRes();
       await handler(req, res);
-      expect(res._status).toBe(401);
+      expect(res.status).toBe(401);
     }
 
     const lockedReq = makeReq(
@@ -358,7 +358,7 @@ describe("createWebhookHandler", () => {
     const lockedRes = makeRes();
     await handler(lockedReq, lockedRes);
 
-    expect(lockedRes._status).toBe(429);
+    expect(lockedRes.status).toBe(429);
     expect(deliver).not.toHaveBeenCalled();
   });
 
