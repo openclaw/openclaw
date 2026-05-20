@@ -165,6 +165,33 @@ function codexRateLimitPayload(params: {
   };
 }
 
+function codexOauthProfile(email: string, now: number, daysUntilExpiry: number) {
+  return {
+    type: "oauth" as const,
+    provider: "openai-codex",
+    access: `access-token-${email}`,
+    refresh: `refresh-token-${email}`,
+    expires: now + daysUntilExpiry * 24 * 60 * 60 * 1000,
+    email,
+  };
+}
+
+function mockOfflineAccountWithRateLimits(now: number, isolatedLimitReads: number) {
+  const safeCodexControlRequest = vi.fn().mockResolvedValueOnce({ ok: false, error: "offline" });
+  for (let index = 0; index < 1 + isolatedLimitReads; index++) {
+    safeCodexControlRequest.mockResolvedValueOnce({
+      ok: true,
+      value: codexRateLimitPayload({
+        primaryUsedPercent: 10,
+        secondaryUsedPercent: 20,
+        primaryResetSeconds: Math.ceil(now / 1000) + 120,
+        secondaryResetSeconds: Math.ceil(now / 1000) + 3600,
+      }),
+    });
+  }
+  return safeCodexControlRequest;
+}
+
 function requireRecord(value: unknown, message: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(message);
@@ -1135,6 +1162,69 @@ describe("codex command", () => {
       "\n  1. personal-email@gmail.com   ChatGPT subscription   — active now",
     );
     expect(result.text).not.toContain("api-key");
+  });
+
+  it("respects explicit Codex auth order over stale lastGood state", async () => {
+    const config = {};
+    const now = Date.now();
+    installAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          "openai-codex:fresh-email@gmail.com": codexOauthProfile("fresh-email@gmail.com", now, 8),
+          "openai-codex:default": codexOauthProfile("default-email@gmail.com", now, 1),
+        },
+        order: {
+          "openai-codex": ["openai-codex:fresh-email@gmail.com", "openai-codex:default"],
+        },
+        lastGood: {
+          "openai-codex": "openai-codex:default",
+        },
+      },
+      config,
+    );
+
+    const safeCodexControlRequest = mockOfflineAccountWithRateLimits(now, 2);
+
+    const result = await handleCodexCommand(createContext("account", undefined, { config }), {
+      deps: createDeps({ safeCodexControlRequest }),
+    });
+
+    expect(result.text).toContain(
+      "\n  1. fresh-email@gmail.com   ChatGPT subscription   — active now",
+    );
+    expect(result.text).toContain(
+      "\n  2. default-email@gmail.com   ChatGPT subscription   — available if needed",
+    );
+    expect(result.text).not.toContain(
+      "default-email@gmail.com   ChatGPT subscription   — active now",
+    );
+  });
+
+  it("keeps lastGood fallback when no explicit Codex auth order is set", async () => {
+    const config = {};
+    const now = Date.now();
+    installAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          "openai-codex:fresh-email@gmail.com": codexOauthProfile("fresh-email@gmail.com", now, 8),
+          "openai-codex:default": codexOauthProfile("default-email@gmail.com", now, 1),
+        },
+        lastGood: {
+          "openai-codex": "openai-codex:default",
+        },
+      },
+      config,
+    );
+
+    const safeCodexControlRequest = mockOfflineAccountWithRateLimits(now, 1);
+
+    const result = await handleCodexCommand(createContext("account", undefined, { config }), {
+      deps: createDeps({ safeCodexControlRequest }),
+    });
+
+    expect(result.text).toContain("default-email@gmail.com   ChatGPT subscription   — active now");
   });
 
   it("explains when an API-key backup is active because the subscription is paused", async () => {

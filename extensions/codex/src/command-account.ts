@@ -139,9 +139,7 @@ function resolveDisplayAuthOrder(params: {
   config: AuthProfileOrderConfig;
   store: AuthProfileStore;
 }): string[] {
-  const codexOrder =
-    resolveOrder(params.store.order, OPENAI_CODEX_PROVIDER_ID) ??
-    resolveOrder(params.config?.auth?.order, OPENAI_CODEX_PROVIDER_ID);
+  const codexOrder = resolveExplicitCodexAuthOrder(params);
   if (codexOrder && codexOrder.length > 0) {
     return dedupe(codexOrder);
   }
@@ -150,6 +148,16 @@ function resolveDisplayAuthOrder(params: {
     store: params.store,
     provider: OPENAI_CODEX_PROVIDER_ID,
   });
+}
+
+function resolveExplicitCodexAuthOrder(params: {
+  config: AuthProfileOrderConfig;
+  store: AuthProfileStore;
+}): string[] | undefined {
+  return (
+    resolveOrder(params.store.order, OPENAI_CODEX_PROVIDER_ID) ??
+    resolveOrder(params.config?.auth?.order, OPENAI_CODEX_PROVIDER_ID)
+  );
 }
 
 function resolveOrder(
@@ -174,6 +182,18 @@ function resolveActiveProfileId(params: {
   });
   if (liveProfileId) {
     return liveProfileId;
+  }
+  const explicitCodexOrder = resolveExplicitCodexAuthOrder({
+    config: params.config,
+    store: params.store,
+  });
+  if (explicitCodexOrder && explicitCodexOrder.length > 0) {
+    const orderedProfile = params.order.find((profileId) =>
+      isActiveProfileCandidate(params, profileId),
+    );
+    if (orderedProfile) {
+      return orderedProfile;
+    }
   }
   const lastGood = [
     params.store.lastGood?.[OPENAI_PROVIDER_ID],
