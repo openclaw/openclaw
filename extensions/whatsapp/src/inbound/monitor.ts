@@ -31,6 +31,7 @@ import {
 } from "./dedupe.js";
 import {
   describeReplyContext,
+  extractContextInfo,
   extractLocationData,
   extractContactContext,
   extractMediaPlaceholder,
@@ -50,6 +51,7 @@ import { DisconnectReason, isJidGroup, saveMediaBuffer } from "./runtime-api.js"
 import { createWebSendApi } from "./send-api.js";
 import { normalizeWhatsAppSendResult } from "./send-result.js";
 import type { WebInboundMessage, WebListenerCloseReason } from "./types.js";
+import { handleVcardCommand } from "./vcard-command-handler.js";
 
 const LOGGED_OUT_STATUS = DisconnectReason?.loggedOut ?? 401;
 const RECONNECT_IN_PROGRESS_ERROR = "no active socket - reconnection in progress";
@@ -791,6 +793,25 @@ export async function attachWebInboxToSocket(
         body: inboundMessage.body,
         fromMe: inboundMessage.fromMe,
       });
+    }
+    if (inbound.access.isSelfChat && Boolean(msg.key?.fromMe)) {
+      const contextInfo = extractContextInfo(msg.message as proto.IMessage | undefined);
+      const quotedVcard = contextInfo?.quotedMessage?.contactMessage?.vcard ?? undefined;
+      const liveCfg = options.loadConfig?.() ?? options.cfg;
+      const vcardResult = await handleVcardCommand({
+        fromMe: true,
+        selfChatMode: true,
+        configWrites: Boolean(liveCfg.channels?.whatsapp?.configWrites),
+        command: enriched.body,
+        quotedVcard,
+        selfJid: self.jid ?? "",
+        remoteJid: inbound.remoteJid,
+        accountId: options.accountId,
+        sendMessage: (jid, content) => sendTrackedMessage(jid, content),
+      });
+      if (vcardResult !== null) {
+        return;
+      }
     }
     try {
       const task = Promise.resolve(debouncer.enqueue(inboundMessage));
