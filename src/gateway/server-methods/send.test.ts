@@ -337,7 +337,7 @@ describe("gateway send mirroring", () => {
       },
     };
     mocks.applyPluginAutoEnable.mockImplementation(({ config }) => ({
-      config: sourceConfig,
+      config,
       changes: [],
       autoEnabledReasons: {},
     }));
@@ -367,6 +367,111 @@ describe("gateway send mirroring", () => {
 
     expect(mocks.getActiveSecretsRuntimeConfigSnapshot).toHaveBeenCalledTimes(1);
     expect(lastDispatchChannelMessageActionCall()?.cfg).toBe(runtimeConfig);
+    const response = firstRespondCall(respond);
+    expect(response?.[0]).toBe(true);
+  });
+
+  it("matches message.action runtime config against the pre-auto-enable source config", async () => {
+    const sourceConfig = {
+      channels: {
+        discord: {
+          accounts: {
+            drclaw: {
+              token: {
+                source: "env",
+                provider: "default",
+                id: "DISCORD_BOT_TOKEN_DRCLAW",
+              },
+            },
+          },
+        },
+      },
+    };
+    const autoEnabledSourceConfig = {
+      channels: {
+        discord: {
+          enabled: true,
+          accounts: {
+            drclaw: {
+              token: {
+                source: "env",
+                provider: "default",
+                id: "DISCORD_BOT_TOKEN_DRCLAW",
+              },
+            },
+          },
+        },
+      },
+      plugins: { allow: ["discord"] },
+    };
+    const runtimeConfig = {
+      channels: {
+        discord: {
+          accounts: {
+            drclaw: {
+              token: "resolved-token",
+            },
+          },
+        },
+      },
+    };
+    const autoEnabledRuntimeConfig = {
+      channels: {
+        discord: {
+          enabled: true,
+          accounts: {
+            drclaw: {
+              token: "resolved-token",
+            },
+          },
+        },
+      },
+      plugins: { allow: ["discord"] },
+    };
+    mocks.applyPluginAutoEnable
+      .mockReturnValueOnce({
+        config: autoEnabledSourceConfig,
+        changes: [{ path: "channels.discord.enabled", value: true }],
+        autoEnabledReasons: {},
+      })
+      .mockReturnValueOnce({
+        config: autoEnabledRuntimeConfig,
+        changes: [{ path: "channels.discord.enabled", value: true }],
+        autoEnabledReasons: {},
+      });
+    mocks.getActiveSecretsRuntimeConfigSnapshot.mockReturnValue({
+      config: runtimeConfig,
+      sourceConfig,
+    });
+
+    const context = {
+      ...makeContext(),
+      getRuntimeConfig: () => sourceConfig,
+    } as unknown as GatewayRequestContext;
+    const respond = vi.fn();
+    await sendHandlers["message.action"]({
+      params: {
+        channel: "discord",
+        action: "channel-info",
+        params: { channelId: "123", accountId: "drclaw" },
+        idempotencyKey: "idem-action-runtime-config-auto-enabled",
+      } as never,
+      respond,
+      context,
+      req: { type: "req", id: "1", method: "message.action" },
+      client: null as never,
+      isWebchatConnect: () => false,
+    });
+
+    expect(lastDispatchChannelMessageActionCall()?.cfg).toBe(autoEnabledRuntimeConfig);
+    expect(mocks.applyPluginAutoEnable).toHaveBeenNthCalledWith(1, {
+      config: sourceConfig,
+      env: process.env,
+    });
+    expect(mocks.applyPluginAutoEnable).toHaveBeenNthCalledWith(2, {
+      config: runtimeConfig,
+      env: process.env,
+    });
     const response = firstRespondCall(respond);
     expect(response?.[0]).toBe(true);
   });

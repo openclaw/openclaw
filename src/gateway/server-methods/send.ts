@@ -225,15 +225,24 @@ function resolveMessageActionRuntimeConfig(params: {
   if (!activeRuntime) {
     return params.cfg;
   }
-  const selected = selectApplicableRuntimeConfig({
-    inputConfig: params.sourceCfg,
-    runtimeConfig: activeRuntime.config,
-    runtimeSourceConfig: activeRuntime.sourceConfig,
-  });
+  const selected =
+    selectApplicableRuntimeConfig({
+      inputConfig: params.sourceCfg,
+      runtimeConfig: activeRuntime.config,
+      runtimeSourceConfig: activeRuntime.sourceConfig,
+    }) ??
+    selectApplicableRuntimeConfig({
+      inputConfig: params.cfg,
+      runtimeConfig: activeRuntime.config,
+      runtimeSourceConfig: activeRuntime.sourceConfig,
+    });
+  if (!selected) {
+    return params.cfg;
+  }
   if (selected === activeRuntime.config && selected !== params.cfg) {
     return resolveGatewayPluginConfig({ config: selected });
   }
-  return params.cfg;
+  return selected;
 }
 
 function buildGatewayDeliveryPayload(params: {
