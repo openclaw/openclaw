@@ -1229,14 +1229,16 @@ export async function runMemorySearch(
         typeof (manager as { status?: () => { workspaceDir?: string } }).status === "function"
           ? manager.status().workspaceDir
           : undefined;
-      void recordShortTermRecalls({
-        workspaceDir,
-        query,
-        results,
-        timezone: dreaming.timezone,
-      }).catch(() => {
-        // Recall tracking is best-effort and must not block normal search results.
-      });
+      if (dreaming.enabled) {
+        void recordShortTermRecalls({
+          workspaceDir,
+          query,
+          results,
+          timezone: dreaming.timezone,
+        }).catch(() => {
+          // Recall tracking is best-effort and must not block normal search results.
+        });
+      }
       if (opts.json) {
         defaultRuntime.writeJson({ results });
         return;

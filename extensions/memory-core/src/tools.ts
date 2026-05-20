@@ -109,7 +109,14 @@ function queueShortTermRecallTracking(params: {
   rawResults: MemorySearchResult[];
   surfacedResults: MemorySearchResult[];
   timezone?: string;
+  dreamingEnabled: boolean;
 }): void {
+  // Recall tracking only feeds dreaming/promotion (writes memory/.dreams/*).
+  // When dreaming is disabled, callers don't want those artifacts created on
+  // ordinary memory_search runs. Skip the write entirely. See issue #84436.
+  if (!params.dreamingEnabled) {
+    return;
+  }
   const trackingResults = resolveRecallTrackingResults(params.rawResults, params.surfacedResults);
   void recordShortTermRecalls({
     workspaceDir: params.workspaceDir,
@@ -327,16 +334,18 @@ export function createMemorySearchTool(options: {
               ...result,
               corpus: result.source,
             }));
-            const sleepTimezone = resolveMemoryDeepDreamingConfig({
+            const dreamingConfig = resolveMemoryDeepDreamingConfig({
               pluginConfig: resolveMemoryCorePluginConfig(cfg),
               cfg,
-            }).timezone;
+            });
+            const sleepTimezone = dreamingConfig.timezone;
             queueShortTermRecallTracking({
               workspaceDir: status.workspaceDir,
               query,
               rawResults,
               surfacedResults: memoryResults,
               timezone: sleepTimezone,
+              dreamingEnabled: dreamingConfig.enabled,
             });
             provider = status.provider;
             model = status.model;

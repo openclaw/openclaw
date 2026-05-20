@@ -1885,6 +1885,13 @@ describe("memory cli", () => {
 
   it("records short-term recall entries from memory search hits", async () => {
     await withTempWorkspace(async (workspaceDir) => {
+      getRuntimeConfig.mockReturnValue({
+        plugins: {
+          entries: {
+            "memory-core": { config: { dreaming: { enabled: true } } },
+          },
+        },
+      });
       const close = vi.fn(async () => {});
       const search = vi.fn(async () => [
         {
@@ -1965,6 +1972,51 @@ describe("memory cli", () => {
         recallDays: ["<today>"],
         conceptTags: ["backup", "backups", "glacier"],
       });
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
+  it("does not write .dreams recall artifacts when dreaming.enabled=false (#84436)", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      getRuntimeConfig.mockReturnValue({
+        plugins: {
+          entries: {
+            "memory-core": { config: { dreaming: { enabled: false } } },
+          },
+        },
+      });
+      const close = vi.fn(async () => {});
+      const search = vi.fn(async () => [
+        {
+          path: "memory/2026-04-03.md",
+          startLine: 1,
+          endLine: 2,
+          score: 0.91,
+          snippet: "Move backups to S3 Glacier.",
+          source: "memory",
+        },
+      ]);
+      mockManager({
+        search,
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      await runMemoryCli(["search", "glacier", "--json"]);
+
+      // Give any best-effort async recall write a chance to run.
+      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
+
+      const recallStorePath = path.join(
+        workspaceDir,
+        "memory",
+        ".dreams",
+        "short-term-recall.json",
+      );
+      const eventsPath = path.join(workspaceDir, "memory", ".dreams", "events.jsonl");
+      await expect(fs.access(recallStorePath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.access(eventsPath)).rejects.toMatchObject({ code: "ENOENT" });
       expect(close).toHaveBeenCalled();
     });
   });

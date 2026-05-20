@@ -11,6 +11,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Memory/dreaming: skip short-term recall tracking (and the `memory/.dreams/short-term-recall.json` / `memory/.dreams/events.jsonl` writes it produces) on ordinary `memory_search` tool calls and `openclaw memory search` CLI runs when `plugins.entries.memory-core.config.dreaming.enabled` is `false`, so disabling dreaming actually stops dreaming-related artifact churn during normal recall. Fixes #84436.
 - Agents: filter silent heartbeat response-tool transcript artifacts out of embedded context snapshots so later user turns are not polluted by heartbeat no-op messages. (#83477) Thanks @fuller-stack-dev.
 - Agents/OpenAI: log repeated strict tool-schema downgrade diagnostics once per provider/model/tool signature, reducing duplicate debug noise while preserving `strict=false` fallback behavior. Fixes #82930. (#82933) Thanks @galiniliev.
 - Agents/code mode: spell out the `exec` tool's JavaScript/TypeScript, no Node module, and catalog-bridge constraints in model-visible schema text so agents can use enabled tools without trial-and-error. (#84269) Thanks @Kaspre.
