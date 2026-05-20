@@ -11,6 +11,17 @@ type ToolAllowlistSource = {
   entries: string[];
 };
 
+type ActiveSandboxToolPolicy = {
+  labels: string[];
+  policy: Record<string, unknown>;
+};
+
+type PickedSandboxToolPolicyField = {
+  value: unknown;
+  label?: string;
+  defined: boolean;
+};
+
 function hasRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
@@ -124,31 +135,85 @@ function getList(value: unknown, key: "allow" | "alsoAllow" | "deny"): string[] 
     .filter(Boolean);
 }
 
-function describeSandboxAllowGateSource(label: string, policy: unknown): string {
-  if (!hasRecord(policy)) {
-    return label;
+function pickSandboxToolPolicyField(params: {
+  agentPolicy: unknown;
+  globalPolicy: unknown;
+  key: "allow" | "alsoAllow" | "deny";
+  agentLabel: string;
+}): PickedSandboxToolPolicyField {
+  const agentValue = hasRecord(params.agentPolicy) ? params.agentPolicy[params.key] : undefined;
+  if (Array.isArray(agentValue)) {
+    return {
+      value: agentValue,
+      label: `${params.agentLabel}.${params.key}`,
+      defined: true,
+    };
   }
-  if (Array.isArray(policy.allow)) {
-    return `${label}.allow`;
+
+  const globalValue = hasRecord(params.globalPolicy) ? params.globalPolicy[params.key] : undefined;
+  if (Array.isArray(globalValue)) {
+    return {
+      value: globalValue,
+      label: `tools.sandbox.tools.${params.key}`,
+      defined: true,
+    };
   }
-  if (Array.isArray(policy.alsoAllow)) {
-    return `${label}.alsoAllow`;
-  }
-  return label;
+
+  return { value: undefined, defined: false };
 }
 
-function collectActiveSandboxToolPolicies(cfg: OpenClawConfig): Array<{
-  label: string;
-  policy: unknown;
-}> {
-  const out = new Map<string, { label: string; policy: unknown }>();
+function buildEffectiveSandboxToolPolicy(params: {
+  agentPolicy?: unknown;
+  agentLabel?: string;
+  globalPolicy: unknown;
+}): ActiveSandboxToolPolicy {
+  const agentLabel = params.agentLabel ?? "agents.list[].tools.sandbox.tools";
+  const allow = pickSandboxToolPolicyField({
+    agentPolicy: params.agentPolicy,
+    globalPolicy: params.globalPolicy,
+    key: "allow",
+    agentLabel,
+  });
+  const alsoAllow = pickSandboxToolPolicyField({
+    agentPolicy: params.agentPolicy,
+    globalPolicy: params.globalPolicy,
+    key: "alsoAllow",
+    agentLabel,
+  });
+  const deny = pickSandboxToolPolicyField({
+    agentPolicy: params.agentPolicy,
+    globalPolicy: params.globalPolicy,
+    key: "deny",
+    agentLabel,
+  });
+
+  const policy: Record<string, unknown> = {};
+  if (allow.defined) {
+    policy.allow = allow.value;
+  }
+  if (alsoAllow.defined) {
+    policy.alsoAllow = alsoAllow.value;
+  }
+  if (deny.defined) {
+    policy.deny = deny.value;
+  }
+
+  const labels = [allow.label, alsoAllow.label].filter((label): label is string => Boolean(label));
+
+  return {
+    labels: labels.length > 0 ? labels : ["default sandbox tool allowlist"],
+    policy,
+  };
+}
+
+function collectActiveSandboxToolPolicies(cfg: OpenClawConfig): ActiveSandboxToolPolicy[] {
+  const out = new Map<string, ActiveSandboxToolPolicy>();
   const globalPolicy = cfg.tools?.sandbox?.tools;
+  const addPolicy = (entry: ActiveSandboxToolPolicy) => {
+    out.set(entry.labels.join("\u0000"), entry);
+  };
   const addGlobalPolicy = () => {
-    const baseLabel = hasRecord(globalPolicy)
-      ? "tools.sandbox.tools"
-      : "default sandbox tool allowlist";
-    const label = describeSandboxAllowGateSource(baseLabel, globalPolicy);
-    out.set(label, { label, policy: globalPolicy });
+    addPolicy(buildEffectiveSandboxToolPolicy({ globalPolicy }));
   };
 
   const defaultSandboxActive = isSandboxModeActive(cfg.agents?.defaults?.sandbox?.mode);
@@ -169,13 +234,13 @@ function collectActiveSandboxToolPolicies(cfg: OpenClawConfig): Array<{
         return;
       }
       const agentPolicy = hasRecord(agent.tools?.sandbox) ? agent.tools.sandbox.tools : undefined;
-      if (hasRecord(agentPolicy)) {
-        const baseLabel = `agents.list[${index}].tools.sandbox.tools`;
-        const label = describeSandboxAllowGateSource(baseLabel, agentPolicy);
-        out.set(label, { label, policy: agentPolicy });
-        return;
-      }
-      addGlobalPolicy();
+      addPolicy(
+        buildEffectiveSandboxToolPolicy({
+          agentPolicy,
+          agentLabel: `agents.list[${index}].tools.sandbox.tools`,
+          globalPolicy,
+        }),
+      );
     });
   }
 
@@ -252,7 +317,7 @@ function collectSandboxMcpAllowlistWarnings(cfg: OpenClawConfig): string[] {
         !sandboxAllowGateAllowsMcp(policy, serverNames) &&
         !sandboxPolicyIntentionallyDeniesMcp(policy, serverNames),
     )
-    .map(({ label }) => label);
+    .flatMap(({ labels }) => labels);
   if (issueSources.length === 0) {
     return [];
   }

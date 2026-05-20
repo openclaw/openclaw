@@ -102,13 +102,7 @@ describe("collectPluginToolAllowlistWarnings", () => {
           profile: "coding",
           sandbox: {
             tools: {
-              alsoAllow: [
-                "web_search",
-                "web_fetch",
-                "memory_search",
-                "memory_get",
-                "memory_recall",
-              ],
+              alsoAllow: ["web_search", "web_fetch", "memory_search", "memory_get"],
             },
           },
         },
@@ -127,6 +121,40 @@ describe("collectPluginToolAllowlistWarnings", () => {
         agents: { defaults: { sandbox: { mode: "all" } } },
         mcp: { servers: { outlook: { command: "node", args: ["outlook-server.js"] } } },
         tools: { sandbox: { tools: { alsoAllow: ["web_search", "bundle-mcp"] } } },
+      },
+      manifestRegistry,
+    });
+
+    expect(warnings).toStrictEqual([]);
+  });
+
+  it("does not warn when an agent sandbox tools partial override inherits global MCP allow", () => {
+    const warnings = collectPluginToolAllowlistWarnings({
+      cfg: {
+        agents: {
+          defaults: { sandbox: { mode: "all" } },
+          list: [
+            {
+              id: "worker",
+              tools: { sandbox: { tools: { alsoAllow: ["web_fetch"] } } },
+            },
+          ],
+        },
+        mcp: { servers: { outlook: { command: "node", args: ["outlook-server.js"] } } },
+        tools: { sandbox: { tools: { allow: ["bundle-mcp"] } } },
+      },
+      manifestRegistry,
+    });
+
+    expect(warnings).toStrictEqual([]);
+  });
+
+  it("does not warn for sandboxed MCP servers when group:plugins is explicitly allowed", () => {
+    const warnings = collectPluginToolAllowlistWarnings({
+      cfg: {
+        agents: { defaults: { sandbox: { mode: "all" } } },
+        mcp: { servers: { outlook: { command: "node", args: ["outlook-server.js"] } } },
+        tools: { sandbox: { tools: { alsoAllow: ["group:plugins"] } } },
       },
       manifestRegistry,
     });

@@ -65,14 +65,7 @@ Configured MCP servers are exposed as plugin-owned tools under the `bundle-mcp` 
   tools: {
     sandbox: {
       tools: {
-        alsoAllow: [
-          "web_search",
-          "web_fetch",
-          "memory_search",
-          "memory_get",
-          "memory_recall",
-          "bundle-mcp",
-        ],
+        alsoAllow: ["web_search", "web_fetch", "memory_search", "memory_get", "bundle-mcp"],
       },
     },
   },
