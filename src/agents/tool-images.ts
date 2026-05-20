@@ -261,9 +261,18 @@ async function resizeImageBase64IfNeeded(params: {
   const cached = lookupResizeCache(cacheKey);
   if (cached) {
     resizeCacheHits += 1;
+    // For a no-op cache hit (no resize happened), preserve the caller's
+    // declared mimeType: the same base64 bytes can legitimately arrive with
+    // different declared MIME types across calls when the format header is
+    // not fully canonicalized by `inferMimeTypeFromBase64` (e.g. WebP, HEIC,
+    // other ISO BMFF formats). Returning the cached MIME would silently swap
+    // the caller's MIME for the first caller's MIME on every later hit. The
+    // resized path always re-encodes to JPEG, so for those entries the
+    // cached MIME is the correct, transformation-derived value. Fixes the
+    // cache-identity bug flagged in PR #68677 review.
     return {
       base64: cached.base64,
-      mimeType: cached.mimeType,
+      mimeType: cached.resized ? cached.mimeType : params.mimeType,
       resized: cached.resized,
       width: cached.width,
       height: cached.height,
@@ -552,5 +561,11 @@ export const testing = {
   // success path, and two different payloads can silently converge on the
   // same stats with a colliding key.
   computeResizeCacheKey,
+  // Exposed so tests can directly assert the cache-return contract for the
+  // resize helper. `sanitizeContentBlocksImages` overrides the MIME on no-op
+  // cache hits in its line-490 selector, which would mask any regression in
+  // the cache return contract itself. Tests that probe the cache contract
+  // need to call this function directly.
+  resizeImageBase64IfNeeded,
 };
 export { testing as __testing };

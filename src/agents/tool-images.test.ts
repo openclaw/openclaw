@@ -227,6 +227,73 @@ describe("tool image sanitizing", () => {
       expect(__testing.computeResizeCacheKey(base64A, maxDimensionPx, maxBytes + 1)).not.toBe(keyA);
     });
 
+    it("preserves the caller's mimeType on a no-op cache hit (#68677 review feedback)", async () => {
+      // Regression guard for the cache-identity bug ClawSweeper flagged on
+      // the original PR submission: the resize cache key is computed from
+      // (base64, maxDimensionPx, maxBytes), but cached values include a
+      // mimeType. For formats not canonicalized by `inferMimeTypeFromBase64`
+      // (WebP, HEIC, other ISO BMFF formats), the same base64 can legitimately
+      // arrive with different declared MIME types across calls. Returning the
+      // cached MIME on every hit would silently swap the caller's declared
+      // MIME for the first caller's MIME on every later cache hit —
+      // corrupting downstream context for any future caller that trusts the
+      // helper's mimeType field on no-op returns.
+      //
+      // Note: the public `sanitizeContentBlocksImages` wrapper already
+      // overrides the helper's no-op mimeType in its output selector, so the
+      // user-visible behavior on the current call sites is not affected.
+      // This test therefore probes the resize helper *directly* via the
+      // `__testing.resizeImageBase64IfNeeded` export so the cache-return
+      // contract is verified independently of the wrapper. This is the only
+      // way to lock in the cache contract; going through the wrapper would
+      // silently pass even if the helper's contract regressed.
+      //
+      // We use WebP because (a) it falls outside `inferMimeTypeFromBase64`'s
+      // canonicalization list (so the caller's declared MIME is the input
+      // the helper actually sees) and (b) sharp can generate it without
+      // extra dependencies. A small WebP that fits under default size and
+      // dimension limits exercises the no-op return path that this bug
+      // lives on.
+      const webp = await sharp({
+        create: { width: 16, height: 16, channels: 3, background: "#336699" },
+      })
+        .webp({ quality: 80 })
+        .toBuffer();
+      const base64 = webp.toString("base64");
+      const limits = { maxDimensionPx: 1200, maxBytes: 5 * 1024 * 1024 };
+
+      const firstResult = await __testing.resizeImageBase64IfNeeded({
+        base64,
+        mimeType: "image/webp",
+        ...limits,
+      });
+      expect(firstResult.resized).toBe(false);
+      expect(firstResult.mimeType).toBe("image/webp");
+
+      const firstStats = __testing.getResizeCacheStats();
+      expect(firstStats.misses).toBe(1);
+      expect(firstStats.hits).toBe(0);
+
+      // Second call: same bytes + same limits, different declared MIME. The
+      // cache key (base64 + limits) is identical, so this is a cache hit.
+      // After the fix, the helper returns the caller's declared MIME on a
+      // no-op hit; before the fix, the cached "image/webp" would be
+      // returned instead, swapping the caller's MIME silently.
+      const secondResult = await __testing.resizeImageBase64IfNeeded({
+        base64,
+        mimeType: "image/heic",
+        ...limits,
+      });
+      const secondStats = __testing.getResizeCacheStats();
+      expect(secondStats.hits).toBe(1);
+      expect(secondStats.misses).toBe(1);
+      expect(secondResult.resized).toBe(false);
+      // The actual bug fix: caller's MIME wins on a no-op cache hit.
+      expect(secondResult.mimeType).toBe("image/heic");
+      // And the no-op cache hit returns the original bytes unchanged.
+      expect(secondResult.base64).toBe(base64);
+    }, 20_000);
+
     it("records separate cache entries for two distinct valid images (#64418 end-to-end)", async () => {
       // Behavior-level guard that the outer wrapper actually routes distinct
       // images through distinct cache entries. Two different JPEGs share
