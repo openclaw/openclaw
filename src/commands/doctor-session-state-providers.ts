@@ -16,7 +16,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listPluginDoctorSessionRouteStateOwners } from "../plugins/doctor-contract-registry.js";
 import type { DoctorSessionRouteStateOwner } from "../plugins/doctor-session-route-state-owner-types.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
-import { note } from "../terminal/note.js";
 
 type DoctorPrompterLike = {
   confirmRuntimeRepair: (params: {
@@ -24,7 +23,7 @@ type DoctorPrompterLike = {
     initialValue?: boolean;
     requiresInteractiveConfirmation?: boolean;
   }) => Promise<boolean>;
-  note?: typeof note;
+  note?: (message: string, title?: string) => void | Promise<void>;
 };
 
 function countLabel(count: number, singular: string, plural = `${singular}s`): string {

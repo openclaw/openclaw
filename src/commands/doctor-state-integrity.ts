@@ -43,7 +43,7 @@ type DoctorPrompterLike = {
     initialValue?: boolean;
     requiresInteractiveConfirmation?: boolean;
   }) => Promise<boolean>;
-  note?: typeof note;
+  note?: (message: string, title?: string) => void | Promise<void>;
 };
 
 function countLabel(count: number, singular: string, plural = `${singular}s`): string {
@@ -1046,10 +1046,10 @@ export async function noteStateIntegrity(
   }
 
   if (warnings.length > 0) {
-    noteFn(warnings.join("\n"), "State integrity");
+    await noteFn(warnings.join("\n"), "State integrity");
   }
   if (changes.length > 0) {
-    noteFn(changes.join("\n"), "Doctor changes");
+    await noteFn(changes.join("\n"), "Doctor changes");
   }
 }
 

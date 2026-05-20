@@ -442,17 +442,26 @@ async function runCodexSessionRouteHealth(ctx: DoctorHealthFlowContext): Promise
 }
 
 async function runSessionLocksHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { noteSessionLockHealth } = await import("../commands/doctor-session-locks.js");
-  await noteSessionLockHealth({
-    shouldRepair: ctx.prompter.shouldRepair,
-    config: ctx.cfg,
-    env: ctx.env,
-  });
+  if (!ctx.prompter.shouldRepair) {
+    const { noteSessionLockHealth } = await import("../commands/doctor-session-locks.js");
+    await noteSessionLockHealth({
+      shouldRepair: false,
+      config: ctx.cfg,
+      env: ctx.env,
+    });
+    return;
+  }
+  await runPositionalStructuredHealthRepair(ctx, "core/doctor/session-locks");
 }
 
 async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { noteSessionTranscriptHealth } = await import("../commands/doctor-session-transcripts.js");
-  await noteSessionTranscriptHealth({ shouldRepair: ctx.prompter.shouldRepair });
+  if (!ctx.prompter.shouldRepair) {
+    const { noteSessionTranscriptHealth } =
+      await import("../commands/doctor-session-transcripts.js");
+    await noteSessionTranscriptHealth({ shouldRepair: false });
+    return;
+  }
+  await runPositionalStructuredHealthRepair(ctx, "core/doctor/session-transcripts");
 }
 
 async function runSessionSnapshotsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -897,11 +906,13 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:session-locks",
       label: "Session locks",
+      healthCheckIds: ["core/doctor/session-locks"],
       run: runSessionLocksHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:session-transcripts",
       label: "Session transcripts",
+      healthCheckIds: ["core/doctor/session-transcripts"],
       run: runSessionTranscriptsHealth,
     }),
     createDoctorHealthContribution({

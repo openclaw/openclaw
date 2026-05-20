@@ -763,6 +763,131 @@ async function repairPluginRegistry(
   };
 }
 
+const sessionLocksCheck: RegisteredHealthCheck = defineSplitHealthCheck({
+  id: "core/doctor/session-locks",
+  kind: "core",
+  description: "Stale session write locks are detected and removed by doctor repair.",
+  source: "doctor",
+  async detect(ctx) {
+    const { detectSessionLockHealthIssues } = await import("../commands/doctor-session-locks.js");
+    const issues = await detectSessionLockHealthIssues({
+      config: ctx.cfg,
+      env: ctx.env ?? process.env,
+    });
+    return issues.map(
+      (issue): HealthFinding => ({
+        checkId: "core/doctor/session-locks",
+        severity: "warning",
+        message: `Stale session lock detected: ${path.basename(issue.lockPath)}.`,
+        path: issue.lockPath,
+        fixHint: "Run `openclaw doctor --fix` to remove stale session lock files.",
+      }),
+    );
+  },
+  async repair(ctx, findings) {
+    const { detectSessionLockHealthIssues, repairSessionLockHealthIssues } =
+      await import("../commands/doctor-session-locks.js");
+    const params = {
+      config: ctx.cfg,
+      env: ctx.env ?? process.env,
+    };
+    const findingPaths = new Set(
+      findings.map((finding) => finding.path).filter((path): path is string => path !== undefined),
+    );
+    const issues = (await detectSessionLockHealthIssues(params)).filter((issue) =>
+      findingPaths.has(issue.lockPath),
+    );
+    if (ctx.dryRun === true) {
+      return {
+        changes: issues.map((issue) => `Would remove stale session lock ${issue.lockPath}.`),
+        effects: issues.map((issue) => ({
+          kind: "file" as const,
+          action: "would-remove-stale-session-lock",
+          target: issue.lockPath,
+          dryRunSafe: false,
+        })),
+      };
+    }
+    const repaired = await repairSessionLockHealthIssues({
+      ...params,
+      lockPaths: [...findingPaths],
+    });
+    return {
+      changes: repaired
+        .filter((issue) => issue.removed)
+        .map((issue) => `Removed stale session lock ${issue.lockPath}.`),
+      effects: repaired.map((issue) => ({
+        kind: "file" as const,
+        action: "remove-stale-session-lock",
+        target: issue.lockPath,
+        dryRunSafe: false,
+      })),
+    };
+  },
+});
+
+const sessionTranscriptsCheck: RegisteredHealthCheck = defineSplitHealthCheck({
+  id: "core/doctor/session-transcripts",
+  kind: "core",
+  description: "Broken prompt-rewrite transcript branches are detected and repaired.",
+  source: "doctor",
+  async detect(ctx) {
+    const { detectSessionTranscriptHealthIssues } =
+      await import("../commands/doctor-session-transcripts.js");
+    const issues = await detectSessionTranscriptHealthIssues({ env: ctx.env ?? process.env });
+    return issues.map(
+      (issue): HealthFinding => ({
+        checkId: "core/doctor/session-transcripts",
+        severity: "warning",
+        message: `Session transcript has duplicated prompt-rewrite branches: ${path.basename(
+          issue.filePath,
+        )}.`,
+        path: issue.filePath,
+        fixHint: "Run `openclaw doctor --fix` to rewrite the transcript to its active branch.",
+      }),
+    );
+  },
+  async repair(ctx, findings) {
+    const { detectSessionTranscriptHealthIssues, repairSessionTranscriptHealthIssues } =
+      await import("../commands/doctor-session-transcripts.js");
+    const params = { env: ctx.env ?? process.env };
+    const findingPaths = new Set(
+      findings.map((finding) => finding.path).filter((path): path is string => path !== undefined),
+    );
+    const issues = (await detectSessionTranscriptHealthIssues(params)).filter((issue) =>
+      findingPaths.has(issue.filePath),
+    );
+    if (ctx.dryRun === true) {
+      return {
+        changes: issues.map(
+          (issue) => `Would rewrite session transcript active branch ${issue.filePath}.`,
+        ),
+        effects: issues.map((issue) => ({
+          kind: "file" as const,
+          action: "would-rewrite-session-transcript-active-branch",
+          target: issue.filePath,
+          dryRunSafe: true,
+        })),
+      };
+    }
+    const repaired = await repairSessionTranscriptHealthIssues({
+      ...params,
+      filePaths: [...findingPaths],
+    });
+    return {
+      changes: repaired
+        .filter((issue) => issue.repaired)
+        .map((issue) => `Rewrote session transcript active branch ${issue.filePath}.`),
+      effects: repaired.map((issue) => ({
+        kind: "file" as const,
+        action: "rewrite-session-transcript-active-branch",
+        target: issue.filePath,
+        dryRunSafe: true,
+      })),
+    };
+  },
+});
+
 function sandboxRegistryDryRunChanges(
   issues: readonly {
     kind: string;
@@ -1961,6 +2086,8 @@ function createConvertedWorkflowChecks(deps: CoreHealthCheckDeps): readonly Regi
     legacyPluginManifestsCheck,
     configuredPluginInstallsCheck,
     pluginRegistryCheck,
+    sessionLocksCheck,
+    sessionTranscriptsCheck,
     sandboxRegistryFilesCheck,
     sandboxImagesCheck,
     sandboxScopeCheck,
