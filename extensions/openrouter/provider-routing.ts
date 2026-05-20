@@ -55,11 +55,7 @@ function mergeOpenRouterProviderRouting(params: {
   const providerRouting = readRecord(params.providerParams?.provider);
   const modelRouting = readRecord(params.modelParams?.provider);
   const extraRouting = readRecord(params.extraParams.provider);
-  const merged = {
-    ...providerRouting,
-    ...modelRouting,
-    ...extraRouting,
-  };
+  const merged = Object.assign({}, providerRouting, modelRouting, extraRouting);
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
@@ -76,12 +72,15 @@ export function resolveOpenRouterExtraParamsForTransport(
   if (!providerConfigParams && !modelParams && !providerRouting) {
     return undefined;
   }
-  return {
-    patch: {
-      ...providerConfigParams,
-      ...modelParams,
-      ...ctx.extraParams,
-      ...(providerRouting ? { provider: providerRouting } : {}),
-    },
-  };
+  const patch: Record<string, unknown> = Object.assign(
+    {},
+    providerConfigParams,
+    modelParams,
+    ctx.extraParams,
+  );
+  if (providerRouting) {
+    patch.provider = providerRouting;
+  }
+
+  return { patch };
 }
