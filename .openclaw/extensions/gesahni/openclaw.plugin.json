@@ -1,0 +1,51 @@
+{
+  "id": "gesahni",
+  "name": "Gesahni Bridge",
+  "description": "OpenClaw market tools backed by Gesahni bridge endpoints, including preview-confirm writes for alerts and option watch rules.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["baseUrl", "readBridgeToken"],
+    "properties": {
+      "baseUrl": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Gesahni base URL, for example http://127.0.0.1:8000"
+      },
+      "readBridgeToken": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Service token sent as Authorization: Bearer <token>"
+      },
+      "writeBridgeToken": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Write token for confirm-stage mutations (Authorization: Bearer <token>)"
+      },
+      "defaultTimeoutMs": {
+        "type": "number",
+        "minimum": 500,
+        "maximum": 10000,
+        "default": 2500,
+        "description": "HTTP timeout in milliseconds for bridge calls"
+      }
+    }
+  },
+  "uiHints": {
+    "baseUrl": {
+      "label": "Gesahni Base URL",
+      "placeholder": "http://127.0.0.1:8000"
+    },
+    "readBridgeToken": {
+      "label": "Read Bridge Token",
+      "sensitive": true
+    },
+    "writeBridgeToken": {
+      "label": "Write Bridge Token",
+      "sensitive": true
+    },
+    "defaultTimeoutMs": {
+      "label": "Timeout (ms)"
+    }
+  }
+}

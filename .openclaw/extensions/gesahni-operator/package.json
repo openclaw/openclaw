@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/gesahni-operator",
+  "version": "2026.3.13",
+  "private": true,
+  "description": "OpenClaw Gesahni Operator bridge tool plugin",
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.48"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

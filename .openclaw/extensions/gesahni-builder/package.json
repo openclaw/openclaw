@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/gesahni-builder",
+  "version": "2026.3.15",
+  "private": true,
+  "description": "OpenClaw Gesahni Builder bridge tool plugin",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

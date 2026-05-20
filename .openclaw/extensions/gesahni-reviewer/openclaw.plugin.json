@@ -1,0 +1,40 @@
+{
+  "id": "gesahni-reviewer",
+  "name": "Gesahni Reviewer",
+  "description": "Thin OpenClaw tool bindings for Gesahni review-stage bridge routes.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "baseUrl": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Gesahni bridge base URL. Falls back to GESAHNI_BASE_URL."
+      },
+      "readBridgeToken": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Gesahni read bridge token. Falls back to GESAHNI_READ_BRIDGE_TOKEN."
+      },
+      "writeBridgeToken": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Gesahni write bridge token. Falls back to GESAHNI_WRITE_BRIDGE_TOKEN."
+      }
+    }
+  },
+  "uiHints": {
+    "baseUrl": {
+      "label": "Gesahni Base URL",
+      "placeholder": "https://gesahni.example"
+    },
+    "readBridgeToken": {
+      "label": "Read Bridge Token",
+      "sensitive": true
+    },
+    "writeBridgeToken": {
+      "label": "Write Bridge Token",
+      "sensitive": true
+    }
+  }
+}

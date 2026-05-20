@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/gesahni-reviewer",
+  "version": "2026.3.14",
+  "private": true,
+  "description": "OpenClaw Gesahni Reviewer bridge tool plugin",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

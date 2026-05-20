@@ -1,0 +1,130 @@
+{
+  "id": "shopify",
+  "name": "Shopify Ops",
+  "description": "Shopify inventory operations with dry-run-first workflow and explicit apply confirmation.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["storeDomain", "locationId", "auth"],
+    "properties": {
+      "storeDomain": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Shopify store domain, for example my-store.myshopify.com"
+      },
+      "locationId": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Shopify location GID, for example gid://shopify/Location/123456789"
+      },
+      "auth": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["mode"],
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": ["token", "oauth"],
+            "description": "Auth mode: token (static admin token) or oauth (access token exchange)"
+          },
+          "adminToken": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Shopify Admin API token for auth.mode=token"
+          },
+          "clientId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Shopify app client ID for auth.mode=oauth"
+          },
+          "clientSecret": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Shopify app client secret for auth.mode=oauth"
+          },
+          "accessToken": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional cached OAuth access token"
+          },
+          "refreshToken": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional OAuth refresh token placeholder"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "mode": { "const": "token" }
+              }
+            },
+            "then": {
+              "required": ["adminToken"]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "mode": { "const": "oauth" }
+              }
+            },
+            "then": {
+              "required": ["clientId", "clientSecret"]
+            }
+          }
+        ]
+      },
+      "apiVersion": {
+        "type": "string",
+        "default": "2026-04",
+        "description": "Shopify Admin API version"
+      },
+      "defaultDryRun": {
+        "type": "boolean",
+        "default": true,
+        "description": "When true, operational flows should preview before apply"
+      }
+    }
+  },
+  "uiHints": {
+    "storeDomain": {
+      "label": "Store Domain",
+      "placeholder": "my-store.myshopify.com"
+    },
+    "auth.mode": {
+      "label": "Auth Mode"
+    },
+    "auth.adminToken": {
+      "label": "Admin Token",
+      "sensitive": true
+    },
+    "auth.clientId": {
+      "label": "Client ID"
+    },
+    "auth.clientSecret": {
+      "label": "Client Secret",
+      "sensitive": true
+    },
+    "auth.accessToken": {
+      "label": "Access Token",
+      "sensitive": true
+    },
+    "auth.refreshToken": {
+      "label": "Refresh Token",
+      "sensitive": true
+    },
+    "locationId": {
+      "label": "Location ID",
+      "placeholder": "gid://shopify/Location/123456789"
+    },
+    "apiVersion": {
+      "label": "API Version",
+      "placeholder": "2026-04"
+    },
+    "defaultDryRun": {
+      "label": "Default Dry Run"
+    }
+  }
+}
