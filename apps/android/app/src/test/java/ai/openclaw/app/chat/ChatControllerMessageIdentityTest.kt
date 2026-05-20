@@ -116,4 +116,53 @@ class ChatControllerMessageIdentityTest {
 
     assertEquals(listOf("remote-user"), merged.map { it.id })
   }
+
+  @Test
+  fun mergeOptimisticMessagesDoesNotDuplicateGatewayPersistedUserTurnWithDifferentTimestamp() {
+    val optimistic =
+      ChatMessage(
+        id = "local-user",
+        role = "user",
+        content = listOf(ChatMessageContent(type = "text", text = "hello")),
+        timestampMs = 1000L,
+      )
+    val remoteUser = optimistic.copy(id = "remote-user", timestampMs = 2000L)
+
+    val merged = mergeOptimisticMessages(incoming = listOf(remoteUser), optimistic = listOf(optimistic))
+
+    assertEquals(listOf("remote-user"), merged.map { it.id })
+  }
+
+  @Test
+  fun mergeOptimisticMessagesKeepsRepeatedOptimisticTurnWhenHistoryOnlyHasOneMatch() {
+    val first =
+      ChatMessage(
+        id = "local-user-1",
+        role = "user",
+        content = listOf(ChatMessageContent(type = "text", text = "hello")),
+        timestampMs = 1000L,
+      )
+    val second = first.copy(id = "local-user-2", timestampMs = 1100L)
+    val remoteUser = first.copy(id = "remote-user", timestampMs = 2000L)
+
+    val merged = mergeOptimisticMessages(incoming = listOf(remoteUser), optimistic = listOf(first, second))
+
+    assertEquals(listOf("local-user-2", "remote-user"), merged.map { it.id })
+  }
+
+  @Test
+  fun mergeOptimisticMessagesDoesNotConsumeOlderIdenticalHistoryTurn() {
+    val optimistic =
+      ChatMessage(
+        id = "local-user",
+        role = "user",
+        content = listOf(ChatMessageContent(type = "text", text = "ok")),
+        timestampMs = 2000L,
+      )
+    val oldHistoryUser = optimistic.copy(id = "remote-old-user", timestampMs = 1000L)
+
+    val merged = mergeOptimisticMessages(incoming = listOf(oldHistoryUser), optimistic = listOf(optimistic))
+
+    assertEquals(listOf("remote-old-user", "local-user"), merged.map { it.id })
+  }
 }

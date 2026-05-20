@@ -75,6 +75,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -93,6 +94,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
@@ -840,21 +844,22 @@ private fun resolveGatewayConfig(
   val setup = setupCode.takeIf { it.isNotBlank() }?.let(::decodeGatewaySetupCode)
   if (setup != null) {
     val endpoint = parseGatewayEndpointResult(setup.url).config ?: return null
+    val bootstrapToken = setup.bootstrapToken?.trim().orEmpty()
     return GatewayConfig(
       host = endpoint.host,
       port = endpoint.port,
       tls = endpoint.tls,
-      bootstrapToken = setup.bootstrapToken.orEmpty(),
+      bootstrapToken = bootstrapToken,
       token =
         setup.token
           ?.trim()
           .orEmpty()
-          .ifEmpty { token.trim() },
+          .ifEmpty { if (bootstrapToken.isEmpty()) token.trim() else "" },
       password =
         setup.password
           ?.trim()
           .orEmpty()
-          .ifEmpty { password.trim() },
+          .ifEmpty { if (bootstrapToken.isEmpty()) password.trim() else "" },
     )
   }
 
@@ -962,6 +967,18 @@ private fun rememberPermissionState(
     )
   }
   var callLogGranted by rememberSaveable { mutableStateOf(!callLogAvailable || hasPermission(context, Manifest.permission.READ_CALL_LOG)) }
+  val lifecycleOwner = LocalLifecycleOwner.current
+
+  DisposableEffect(lifecycleOwner, context) {
+    val observer =
+      LifecycleEventObserver { _, event ->
+        if (event == Lifecycle.Event.ON_RESUME) {
+          notificationListenerGranted = DeviceNotificationListenerService.isAccessEnabled(context)
+        }
+      }
+    lifecycleOwner.lifecycle.addObserver(observer)
+    onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+  }
 
   val permissionLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
@@ -1015,7 +1032,6 @@ private fun rememberPermissionState(
       },
       PermissionRowModel("Notification listener", "Forward selected app alerts", Icons.Default.Sensors, notificationListenerGranted) {
         context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-        notificationListenerGranted = DeviceNotificationListenerService.isAccessEnabled(context)
       },
       if (motionAvailable) {
         PermissionRowModel("Motion", "Read activity and step context", Icons.Default.Sensors, motionGranted) {

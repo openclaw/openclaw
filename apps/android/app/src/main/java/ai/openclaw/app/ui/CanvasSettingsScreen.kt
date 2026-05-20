@@ -42,6 +42,7 @@ internal fun CanvasSettingsScreen(
   val rehydratePending by viewModel.canvasRehydratePending.collectAsState()
   val rehydrateErrorText by viewModel.canvasRehydrateErrorText.collectAsState()
   val hasLivePage = currentUrl?.isNotBlank() == true
+  val showCanvasSurface = isConnected
   val canvasLabel = if (hasLivePage) "Live page" else "Home canvas"
 
   LaunchedEffect(isConnected) {
@@ -92,7 +93,7 @@ internal fun CanvasSettingsScreen(
           border = BorderStroke(1.dp, ClawTheme.colors.border),
         ) {
           Box {
-            if (hasLivePage) {
+            if (showCanvasSurface) {
               CanvasScreen(viewModel = viewModel, visible = true, modifier = Modifier.fillMaxWidth().height(520.dp))
             } else {
               CanvasStandbyPanel(isConnected = isConnected)

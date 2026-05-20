@@ -114,7 +114,10 @@ fun ChatScreen(
     }
 
   LaunchedEffect(Unit) {
-    viewModel.loadChat(mainSessionKey)
+    val loadSessionKey = resolveInitialChatLoadSessionKey(sessionKey, mainSessionKey)
+    if (loadSessionKey != null) {
+      viewModel.loadChat(loadSessionKey)
+    }
     viewModel.refreshChatSessions(limit = 100)
   }
 
