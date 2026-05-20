@@ -39,6 +39,12 @@ type ProcessSupervisor = ReturnType<
   typeof import("../../process/supervisor/index.js").getProcessSupervisor
 >;
 type ManagedRun = Awaited<ReturnType<ProcessSupervisor["spawn"]>>;
+type ClaudeLiveTurnDiagnosticIdentity = {
+  runId?: string;
+  sessionId?: string;
+  sessionKey?: string;
+  lastProgressEmittedAt: number;
+};
 type ClaudeLiveTurn = {
   backend: CliBackendConfig;
   diagnosticRefs: ClaudeLiveDiagnosticRefs;
@@ -53,6 +59,7 @@ type ClaudeLiveTurn = {
   activeTools: Map<string, ClaudeLiveActiveTool>;
   streamingParser: ReturnType<typeof createCliJsonlStreamingParser>;
   execPermission: ClaudeLiveExecPermission;
+  diagnostic: ClaudeLiveTurnDiagnosticIdentity;
   resolve: (output: CliOutput) => void;
   reject: (error: unknown) => void;
 };
@@ -113,6 +120,22 @@ const CLAUDE_LIVE_DEFAULT_MAX_TURN_LINES = 20_000;
 const CLAUDE_LIVE_MIN_TURN_LINES = 100;
 const CLAUDE_LIVE_MAX_CONFIGURABLE_TURN_LINES = 100_000;
 const CLAUDE_LIVE_CLOSE_WAIT_TIMEOUT_MS = 5_000;
+const CLAUDE_LIVE_DIAGNOSTIC_PROGRESS_THROTTLE_MS = 10_000;
+
+function emitLiveTurnDiagnosticProgress(turn: ClaudeLiveTurn, reason: string): void {
+  const now = Date.now();
+  if (now - turn.diagnostic.lastProgressEmittedAt < CLAUDE_LIVE_DIAGNOSTIC_PROGRESS_THROTTLE_MS) {
+    return;
+  }
+  turn.diagnostic.lastProgressEmittedAt = now;
+  emitTrustedDiagnosticEvent({
+    type: "run.progress",
+    reason,
+    ...(turn.diagnostic.runId ? { runId: turn.diagnostic.runId } : {}),
+    ...(turn.diagnostic.sessionId ? { sessionId: turn.diagnostic.sessionId } : {}),
+    ...(turn.diagnostic.sessionKey ? { sessionKey: turn.diagnostic.sessionKey } : {}),
+  });
+}
 const liveSessions = new Map<string, ClaudeLiveSession>();
 const liveSessionCreates = new Map<string, Promise<ClaudeLiveSession>>();
 
@@ -945,6 +968,9 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
 
 function handleClaudeStdout(session: ClaudeLiveSession, chunk: string) {
   resetNoOutputTimer(session);
+  if (session.currentTurn) {
+    emitLiveTurnDiagnosticProgress(session.currentTurn, "cli:live:stdout");
+  }
   session.stdoutBuffer += chunk;
   const maxPendingLineChars =
     session.currentTurn?.outputLimits.maxPendingLineChars ?? CLAUDE_LIVE_DEFAULT_MAX_TURN_RAW_CHARS;
@@ -1154,6 +1180,12 @@ function createTurn(params: {
       onCommentaryText: params.onCommentaryText,
     }),
     execPermission: params.execPermission,
+    diagnostic: {
+      runId: params.context.params.runId,
+      sessionId: params.context.params.sessionId,
+      sessionKey: params.context.params.sessionKey,
+      lastProgressEmittedAt: 0,
+    },
     resolve: params.resolve,
     reject: params.reject,
   };
