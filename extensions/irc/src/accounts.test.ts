@@ -163,9 +163,7 @@ describe("resolveIrcAccount", () => {
       },
     });
 
-    const account = resolveIrcAccount({ cfg });
-    expect(account.password).toBe("");
-    expect(account.passwordSource).toBe("none");
+    expect(() => resolveIrcAccount({ cfg })).toThrow(/IRC password file.*must not be a symlink/);
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
