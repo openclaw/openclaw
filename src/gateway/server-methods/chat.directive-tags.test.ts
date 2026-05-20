@@ -1955,6 +1955,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
             presentation: {
               title: "Approval needed",
               blocks: [
+                { type: "text", text: "Status ready." },
                 {
                   type: "buttons",
                   buttons: [{ label: "Retry", value: "retry" }],
@@ -1988,6 +1989,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(text).toContain("Status ready.");
     expect(text).toContain("Approval needed");
     expect(text).toContain("- Retry");
+    expect(text?.match(/Status ready\./g)).toHaveLength(1);
     const index = await readSessionTranscriptIndex(mockState.transcriptPath);
     const persisted = index?.entries.find((entry) => {
       const message = entry.record.message as { idempotencyKey?: unknown } | undefined;
@@ -1999,6 +2001,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(persistedContent?.[0]?.text).toContain("Status ready.");
     expect(persistedContent?.[0]?.text).toContain("Approval needed");
     expect(persistedContent?.[0]?.text).toContain("- Retry");
+    expect(
+      (persistedContent?.[0]?.text as string | undefined)?.match(/Status ready\./g),
+    ).toHaveLength(1);
   });
 
   it("broadcasts legacy interactive-only internal source replies from agent runs", async () => {
@@ -2423,6 +2428,65 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const transcriptMessage = sourceEntries?.[0]?.record.message as Record<string, any> | undefined;
     const transcriptContent = transcriptMessage?.content as Array<Record<string, any>> | undefined;
     expect(transcriptContent?.some((block) => block.type === "image")).toBe(true);
+  });
+
+  it("does not broadcast managed image URLs when the source reply mirror is missing", async () => {
+    createTranscriptFixture("openclaw-chat-send-agent-source-image-missing-mirror-");
+    const sourceReplyIdempotencyKey =
+      "idem-agent-source-image-missing-mirror:internal-source-reply:0";
+    const imagePath = path.join(path.dirname(mockState.transcriptPath), "missing-mirror.png");
+    fs.writeFileSync(
+      imagePath,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=",
+        "base64",
+      ),
+    );
+    mockState.savedMediaResults = [
+      { path: imagePath, contentType: "image/png" },
+      { path: imagePath, contentType: "image/png" },
+    ];
+    mockState.triggerAgentRunStart = true;
+    mockState.dispatchedReplies = [
+      {
+        kind: "final",
+        payload: setReplyPayloadMetadata(
+          {
+            mediaUrl: imagePath,
+            mediaUrls: [imagePath],
+            trustedLocalMedia: true,
+          },
+          {
+            deliverDespiteSourceReplySuppression: true,
+            sourceReplyTranscriptMirror: {
+              sessionKey: "main",
+              agentId: "main",
+              mediaUrls: [imagePath],
+              idempotencyKey: sourceReplyIdempotencyKey,
+            },
+          },
+        ),
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-agent-source-image-missing-mirror",
+    });
+
+    expect(payload?.runId).toBe(sourceReplyIdempotencyKey);
+    const liveContent = getMessageContent(payload);
+    expect(liveContent).toEqual([{ type: "text", text: "Image reply" }]);
+    expect(JSON.stringify(payload?.message)).not.toContain("/api/chat/media/outgoing/");
+    const index = await readSessionTranscriptIndex(mockState.transcriptPath);
+    const sourceEntries = index?.entries.filter((entry) => {
+      const message = entry.record.message as { idempotencyKey?: unknown } | undefined;
+      return message?.idempotencyKey === sourceReplyIdempotencyKey;
+    });
+    expect(sourceEntries).toHaveLength(0);
   });
 
   it("upgrades each media-bearing internal source reply mirror in the same agent run", async () => {
