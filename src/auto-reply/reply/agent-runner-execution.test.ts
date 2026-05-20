@@ -3140,6 +3140,8 @@ describe("runAgentTurnWithFallback", () => {
     expect(result.kind).toBe("success");
     expect(onItemEvent).not.toHaveBeenCalled();
     expect(onToolStart).toHaveBeenCalledWith({
+      itemId: "cmd-1",
+      toolCallId: "cmd-1",
       name: "bash",
       phase: "start",
       args: { command: "pnpm test" },
@@ -3221,6 +3223,8 @@ describe("runAgentTurnWithFallback", () => {
 
     expect(result.kind).toBe("success");
     expect(onToolStart).toHaveBeenCalledWith({
+      itemId: undefined,
+      toolCallId: undefined,
       name: "exec",
       phase: "start",
       args: { command: "pnpm test -- --watch=false" },
@@ -3265,6 +3269,8 @@ describe("runAgentTurnWithFallback", () => {
     try {
       expect(result.kind).toBe("success");
       expect(onToolStart).toHaveBeenCalledWith({
+        itemId: undefined,
+        toolCallId: undefined,
         name: "exec",
         phase: "start",
         args: { command: "echo hi" },
