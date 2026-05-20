@@ -15,6 +15,7 @@ const GEMINI_3_1_FLASH_LITE_PREFIX = "gemini-3.1-flash-lite";
 const GEMINI_3_1_FLASH_PREFIX = "gemini-3.1-flash";
 const GEMINI_3_FLASH_LITE_PREFIX = "gemini-3-flash-lite";
 const GEMINI_3_FLASH_PREFIX = "gemini-3-flash";
+const GEMINI_3_5_FLASH_PREFIX = "gemini-3.5-flash";
 const GEMINI_PRO_LATEST_ID = "gemini-pro-latest";
 const GEMINI_FLASH_LATEST_ID = "gemini-flash-latest";
 const GEMINI_FLASH_LITE_LATEST_ID = "gemini-flash-lite-latest";
@@ -27,6 +28,10 @@ const GEMINI_3_1_FLASH_LITE_TEMPLATE_IDS = ["gemini-3.1-flash-lite-preview"] as 
 const GEMINI_3_1_FLASH_TEMPLATE_IDS = ["gemini-3-flash-preview", "gemini-2.5-flash"] as const;
 const GEMINI_3_PRO_ANTIGRAVITY_TEMPLATE_IDS = ["gemini-3-pro-low", "gemini-3-pro-high"] as const;
 const GEMINI_3_FLASH_ANTIGRAVITY_TEMPLATE_IDS = ["gemini-3-flash"] as const;
+// Gemini 3.5 Flash went GA at Google I/O 2026. Reuse the closest in-catalog
+// predecessors (gemini-3-flash-preview, gemini-2.5-flash) so the resolver
+// returns a runtime model with sensible metadata while the catalog catches up.
+const GEMINI_3_5_FLASH_TEMPLATE_IDS = ["gemini-3-flash-preview", "gemini-2.5-flash"] as const;
 // Gemma uses the Gemini flash template as a forward-compat approximation
 // until a dedicated Gemma template is registered in the catalog.
 const GEMMA_TEMPLATE_IDS = GEMINI_3_1_FLASH_TEMPLATE_IDS;
@@ -189,6 +194,12 @@ export function resolveGoogleGeminiForwardCompatModel(params: {
     family = {
       googleTemplateIds: GEMINI_3_1_FLASH_TEMPLATE_IDS,
       cliTemplateIds: GEMINI_3_1_FLASH_TEMPLATE_IDS,
+      antigravityTemplateIds: GEMINI_3_FLASH_ANTIGRAVITY_TEMPLATE_IDS,
+    };
+  } else if (lower.startsWith(GEMINI_3_5_FLASH_PREFIX)) {
+    family = {
+      googleTemplateIds: GEMINI_3_5_FLASH_TEMPLATE_IDS,
+      cliTemplateIds: GEMINI_3_5_FLASH_TEMPLATE_IDS,
       antigravityTemplateIds: GEMINI_3_FLASH_ANTIGRAVITY_TEMPLATE_IDS,
     };
   } else if (lower.startsWith(GEMMA_PREFIX)) {

@@ -460,6 +460,58 @@ describe("resolveGoogleGeminiForwardCompatModel", () => {
     });
   });
 
+  it("resolves gemini 3.5 flash from gemini-3-flash-preview templates", () => {
+    const model = resolveGoogleGeminiForwardCompatModel({
+      providerId: "google",
+      ctx: createContext({
+        provider: "google",
+        modelId: "gemini-3.5-flash",
+        models: [
+          createTemplateModel("google", "gemini-3-flash-preview", {
+            reasoning: true,
+            contextWindow: 1_048_576,
+          }),
+        ],
+      }),
+    });
+
+    expectModelFields(model, {
+      provider: "google",
+      id: "gemini-3.5-flash",
+      api: "google-generative-ai",
+      reasoning: true,
+      contextWindow: 1_048_576,
+    });
+  });
+
+  it("falls back to gemini-2.5-flash when the gemini-3-flash-preview template is missing", () => {
+    const model = resolveGoogleGeminiForwardCompatModel({
+      providerId: "google",
+      ctx: createContext({
+        provider: "google",
+        modelId: "gemini-3.5-flash",
+        models: [
+          createTemplateModel("google", "gemini-2.5-flash", {
+            reasoning: true,
+            contextWindow: 1_048_576,
+          }),
+        ],
+      }),
+    });
+
+    expectModelFields(model, {
+      provider: "google",
+      id: "gemini-3.5-flash",
+      api: "google-generative-ai",
+      reasoning: true,
+      contextWindow: 1_048_576,
+    });
+  });
+
+  it("treats gemini 3.5 flash as a modern google model", () => {
+    expect(isModernGoogleModel("gemini-3.5-flash")).toBe(true);
+  });
+
   it("treats gemini 2.5 ids as modern google models", () => {
     expect(isModernGoogleModel("gemini-2.5-pro")).toBe(true);
     expect(isModernGoogleModel("gemini-2.5-flash-lite")).toBe(true);
