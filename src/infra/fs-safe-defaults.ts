@@ -1,8 +1,19 @@
 import { configureFsSafePython } from "@openclaw/fs-safe/config";
 
-const hasPythonModeOverride =
-  process.env.FS_SAFE_PYTHON_MODE != null || process.env.OPENCLAW_FS_SAFE_PYTHON_MODE != null;
+let configuredPythonAuto = false;
 
-if (!hasPythonModeOverride) {
-  configureFsSafePython({ mode: "off" });
+export function ensureFsSafeDefaults(): void {
+  const hasPythonModeOverride =
+    process.env.FS_SAFE_PYTHON_MODE != null || process.env.OPENCLAW_FS_SAFE_PYTHON_MODE != null;
+  if (hasPythonModeOverride) {
+    return;
+  }
+
+  process.env.FS_SAFE_PYTHON_MODE = "auto";
+  if (!configuredPythonAuto) {
+    configureFsSafePython({ mode: "auto" });
+    configuredPythonAuto = true;
+  }
 }
+
+ensureFsSafeDefaults();

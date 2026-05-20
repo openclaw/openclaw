@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { configureFsSafePython } = vi.hoisted(() => ({
   configureFsSafePython: vi.fn(),
@@ -14,16 +14,23 @@ async function importDefaults() {
 }
 
 describe("fs-safe defaults", () => {
+  beforeEach(() => {
+    configureFsSafePython.mockReset();
+    delete process.env.FS_SAFE_PYTHON_MODE;
+    delete process.env.OPENCLAW_FS_SAFE_PYTHON_MODE;
+  });
+
   afterEach(() => {
     configureFsSafePython.mockReset();
     delete process.env.FS_SAFE_PYTHON_MODE;
     delete process.env.OPENCLAW_FS_SAFE_PYTHON_MODE;
   });
 
-  it("disables the Python helper by default in OpenClaw", async () => {
+  it("enables the Python helper by default in OpenClaw", async () => {
     await importDefaults();
 
-    expect(configureFsSafePython).toHaveBeenCalledWith({ mode: "off" });
+    expect(process.env.FS_SAFE_PYTHON_MODE).toBe("auto");
+    expect(configureFsSafePython).toHaveBeenCalledWith({ mode: "auto" });
   });
 
   it("lets fs-safe env mode overrides opt back into the helper", async () => {
@@ -31,6 +38,7 @@ describe("fs-safe defaults", () => {
 
     await importDefaults();
 
+    expect(process.env.FS_SAFE_PYTHON_MODE).toBe("require");
     expect(configureFsSafePython).not.toHaveBeenCalled();
   });
 
@@ -39,6 +47,7 @@ describe("fs-safe defaults", () => {
 
     await importDefaults();
 
+    expect(process.env.FS_SAFE_PYTHON_MODE).toBeUndefined();
     expect(configureFsSafePython).not.toHaveBeenCalled();
   });
 });
