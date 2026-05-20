@@ -240,12 +240,16 @@ export function createHttp1ProxyAgent(
     typeof options === "string" || options instanceof URL
       ? { uri: options.toString() }
       : { ...options };
+  const uri = (normalized as { uri?: string | URL }).uri;
+  const uriStr = typeof uri === "string" ? uri : uri instanceof URL ? uri.href : undefined;
+  const isHttps = typeof uriStr === "string" && uriStr.trim().toLowerCase().startsWith("https:");
+
   return new ProxyAgent(
     withHttp1OnlyDispatcherOptions(
       addIpSafeProxyClientFactory(addActiveManagedProxyTlsOptions(normalized as object)),
       timeoutMs,
       {
-        proxyTls: true,
+        proxyTls: isHttps,
       },
     ) as UndiciProxyAgentOptions,
   );
