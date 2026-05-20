@@ -1,32 +1,32 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { stringEnum } from "../schema/typebox.js";
 import {
   describeUpdatePlanTool,
   UPDATE_PLAN_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
-import { type AnyAgentTool, ToolInputError, textResult, readStringParam } from "./common.js";
+import { type AnyAgentTool, ToolInputError, readStringParam } from "./common.js";
 
 const PLAN_STEP_STATUSES = ["pending", "in_progress", "completed"] as const;
 
 const UpdatePlanToolSchema = Type.Object({
   explanation: Type.Optional(
     Type.String({
-      description: "Optional short note explaining what changed in the plan.",
+      description: "Short note: what changed.",
     }),
   ),
   plan: Type.Array(
     Type.Object(
       {
-        step: Type.String({ description: "Short plan step." }),
+        step: Type.String({ description: "Short step." }),
         status: stringEnum(PLAN_STEP_STATUSES, {
-          description: 'One of "pending", "in_progress", or "completed".',
+          description: "pending | in_progress | completed.",
         }),
       },
-      { additionalProperties: false },
+      { additionalProperties: true },
     ),
     {
       minItems: 1,
-      description: "Ordered list of plan steps. At most one step may be in_progress.",
+      description: "Ordered steps; max one in_progress.",
     },
   ),
 });
@@ -82,11 +82,16 @@ export function createUpdatePlanTool(): AnyAgentTool {
     parameters: UpdatePlanToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
-      readStringParam(params, "explanation");
-      readPlanSteps(params);
-      return textResult("Plan updated.", {
-        status: "updated" as const,
-      });
+      const explanation = readStringParam(params, "explanation");
+      const plan = readPlanSteps(params);
+      return {
+        content: [],
+        details: {
+          status: "updated" as const,
+          ...(explanation ? { explanation } : {}),
+          plan,
+        },
+      };
     },
   };
 }

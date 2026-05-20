@@ -1,96 +1,40 @@
 import type { PromptRequest } from "@agentclientprotocol/sdk";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
-import type { EventFrame } from "../gateway/protocol/index.js";
 import { createInMemorySessionStore } from "./session.js";
 import { AcpGatewayAgent } from "./translator.js";
+import {
+  createChatEvent,
+  createPendingPromptHarness,
+  createSessionAgentHarness,
+  observeSettlement,
+  promptAgent,
+} from "./translator.prompt-harness.test-support.js";
 import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
 
-type PendingPromptHarness = {
-  agent: AcpGatewayAgent;
-  promptPromise: ReturnType<AcpGatewayAgent["prompt"]>;
-  runId: string;
-};
-
-const DEFAULT_SESSION_ID = "session-1";
-const DEFAULT_SESSION_KEY = "agent:main:main";
-const DEFAULT_PROMPT_TEXT = "hello";
-
-function createSessionAgentHarness(
-  request: GatewayClient["request"],
-  options: { sessionId?: string; sessionKey?: string; cwd?: string } = {},
-) {
-  const sessionId = options.sessionId ?? DEFAULT_SESSION_ID;
-  const sessionKey = options.sessionKey ?? DEFAULT_SESSION_KEY;
-  const sessionStore = createInMemorySessionStore();
-  sessionStore.createSession({
-    sessionId,
-    sessionKey,
-    cwd: options.cwd ?? "/tmp",
-  });
-  const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
-    sessionStore,
-  });
-
-  return {
-    agent,
-    sessionId,
-    sessionKey,
-    sessionStore,
-  };
+function requireValue<T>(value: T | undefined, label: string): T {
+  if (value === undefined) {
+    throw new Error(`expected ${label}`);
+  }
+  return value;
 }
 
-function promptAgent(
-  agent: AcpGatewayAgent,
-  sessionId = DEFAULT_SESSION_ID,
-  text = DEFAULT_PROMPT_TEXT,
-) {
-  return agent.prompt({
-    sessionId,
-    prompt: [{ type: "text", text }],
-    _meta: {},
-  } as unknown as PromptRequest);
-}
-
-function observeSettlement(promise: ReturnType<AcpGatewayAgent["prompt"]>) {
-  const settleSpy = vi.fn();
-  void promise.then(
-    (value) => settleSpy({ kind: "resolve", value }),
-    (error) => settleSpy({ kind: "reject", error }),
-  );
-  return settleSpy;
-}
-
-async function createPendingPromptHarness(): Promise<PendingPromptHarness> {
-  let runId: string | undefined;
-  const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
-    if (method === "chat.send") {
-      runId = params?.idempotencyKey as string | undefined;
-      return new Promise<never>(() => {});
-    }
-    return {};
-  }) as GatewayClient["request"];
-
-  const { agent, sessionId } = createSessionAgentHarness(request);
-  const promptPromise = promptAgent(agent, sessionId);
-
-  await vi.waitFor(() => {
-    expect(runId).toBeDefined();
-  });
-
-  return {
-    agent,
-    promptPromise,
-    runId: runId!,
-  };
-}
-
-function createChatEvent(payload: Record<string, unknown>): EventFrame {
-  return {
-    type: "event",
-    event: "chat",
-    payload,
-  } as EventFrame;
+function requireFirstRequestIdempotencyKey(requestMock: {
+  mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> };
+}): string {
+  const firstCall = requestMock.mock.calls[0];
+  if (!firstCall) {
+    throw new Error("expected request mock call");
+  }
+  const params = firstCall[1];
+  if (!params || typeof params !== "object") {
+    throw new Error("expected request params");
+  }
+  const idempotencyKey = (params as { idempotencyKey?: unknown }).idempotencyKey;
+  if (typeof idempotencyKey !== "string") {
+    throw new Error("expected request idempotency key");
+  }
+  return idempotencyKey;
 }
 
 describe("acp translator stop reason mapping", () => {
@@ -138,6 +82,65 @@ describe("acp translator stop reason mapping", () => {
     );
 
     await expect(promptPromise).resolves.toEqual({ stopReason: "cancelled" });
+  });
+
+  it("reconciles provisional ACP session keys to canonical Gateway keys by run id", async () => {
+    const sentRunIds: string[] = [];
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "chat.send") {
+        const runId = params?.idempotencyKey;
+        if (typeof runId === "string") {
+          sentRunIds.push(runId);
+        }
+      }
+      return {};
+    }) as GatewayClient["request"];
+    const { agent, sessionId, sessionStore } = createSessionAgentHarness(request, {
+      sessionKey: "acp:session-1",
+    });
+
+    const firstPrompt = promptAgent(agent, sessionId);
+    await vi.waitFor(() => {
+      expect(sentRunIds).toHaveLength(1);
+    });
+    await agent.handleGatewayEvent(
+      createChatEvent({
+        runId: sentRunIds[0],
+        sessionKey: "agent:main:acp:session-1",
+        seq: 1,
+        state: "final",
+        message: {
+          content: [{ type: "text", text: "first" }],
+        },
+      }),
+    );
+
+    await expect(firstPrompt).resolves.toEqual({ stopReason: "end_turn" });
+    expect(sessionStore.getSession(sessionId)?.sessionKey).toBe("agent:main:acp:session-1");
+
+    const secondPrompt = promptAgent(agent, sessionId, "again");
+    await vi.waitFor(() => {
+      expect(sentRunIds).toHaveLength(2);
+    });
+    const requestCalls = (
+      request as unknown as {
+        mock: { calls: Array<[string, { sessionKey?: string }, { timeoutMs?: number | null }]> };
+      }
+    ).mock.calls;
+    const lastRequestCall = requestCalls.at(-1);
+    expect(lastRequestCall?.[0]).toBe("chat.send");
+    expect(lastRequestCall?.[1].sessionKey).toBe("agent:main:acp:session-1");
+    expect(lastRequestCall?.[2]).toEqual({ timeoutMs: null });
+    await agent.handleGatewayEvent(
+      createChatEvent({
+        runId: sentRunIds[1],
+        sessionKey: "agent:main:acp:session-1",
+        seq: 2,
+        state: "final",
+      }),
+    );
+
+    await expect(secondPrompt).resolves.toEqual({ stopReason: "end_turn" });
   });
 
   it("keeps in-flight prompts pending across transient gateway disconnects", async () => {
@@ -220,8 +223,10 @@ describe("acp translator stop reason mapping", () => {
     const promptPromise = promptAgent(agent, sessionId);
 
     await vi.waitFor(() => {
-      expect(runId).toBeDefined();
+      expect(runId).toBeTypeOf("string");
+      expect(runId).not.toBe("");
     });
+    const capturedRunId = requireValue(runId, "chat.send run id");
 
     agent.handleGatewayDisconnect("1006: connection lost");
     agent.handleGatewayReconnect();
@@ -230,7 +235,7 @@ describe("acp translator stop reason mapping", () => {
     expect(request).toHaveBeenCalledWith(
       "agent.wait",
       {
-        runId,
+        runId: capturedRunId,
         timeoutMs: 0,
       },
       { timeoutMs: null },
@@ -240,17 +245,21 @@ describe("acp translator stop reason mapping", () => {
   it("rechecks accepted prompts at the disconnect deadline after reconnect timeout", async () => {
     vi.useFakeTimers();
     try {
+      let chatRunId: string | undefined;
+      const agentWaitParams: Array<Record<string, unknown> | undefined> = [];
       let waitCount = 0;
       const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
         if (method === "chat.send") {
+          const runId = params?.idempotencyKey;
+          if (typeof runId !== "string") {
+            throw new Error("expected chat.send idempotency key");
+          }
+          chatRunId = runId;
           return {};
         }
         if (method === "agent.wait") {
           waitCount += 1;
-          expect(params).toEqual({
-            runId: expect.any(String),
-            timeoutMs: 0,
-          });
+          agentWaitParams.push(params);
           return waitCount === 1 ? { status: "timeout" } : { status: "ok" };
         }
         return {};
@@ -269,6 +278,16 @@ describe("acp translator stop reason mapping", () => {
 
       await vi.advanceTimersByTimeAsync(1);
       await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
+      expect(agentWaitParams).toEqual([
+        {
+          runId: requireValue(chatRunId, "chat.send run id"),
+          timeoutMs: 0,
+        },
+        {
+          runId: requireValue(chatRunId, "chat.send run id"),
+          timeoutMs: 0,
+        },
+      ]);
     } finally {
       vi.useRealTimers();
     }
@@ -330,13 +349,15 @@ describe("acp translator stop reason mapping", () => {
       await Promise.resolve();
       agent.handleGatewayDisconnect("1006: first disconnect");
       agent.handleGatewayReconnect();
-      for (let attempt = 0; attempt < 5 && !resolveAgentWait; attempt += 1) {
-        await Promise.resolve();
-      }
-      expect(resolveAgentWait).toBeDefined();
+      await vi.waitFor(() => {
+        if (resolveAgentWait === undefined) {
+          throw new Error("expected agent.wait resolver");
+        }
+      });
+      const resolveWait = requireValue(resolveAgentWait, "agent.wait resolver");
 
       agent.handleGatewayDisconnect("1006: second disconnect");
-      resolveAgentWait?.({ status: "timeout" });
+      resolveWait({ status: "timeout" });
       await Promise.resolve();
 
       await vi.advanceTimersByTimeAsync(4_999);
@@ -429,14 +450,14 @@ describe("acp translator stop reason mapping", () => {
       const firstPrompt = promptAgent(agent, sessionId, "first");
       void firstPrompt.catch(() => {});
       await Promise.resolve();
-      expect(firstSendResolve).toBeDefined();
+      const resolveFirstSend = requireValue(firstSendResolve, "first chat.send resolver");
 
       const secondPrompt = promptAgent(agent, sessionId, "second");
       void secondPrompt.catch(() => {});
       await Promise.resolve();
       expect(sendCount).toBe(2);
 
-      firstSendResolve?.();
+      resolveFirstSend();
       await Promise.resolve();
 
       agent.handleGatewayDisconnect("1006: connection lost");
@@ -534,11 +555,10 @@ describe("acp translator stop reason mapping", () => {
     await Promise.resolve();
     agent.handleGatewayReconnect();
 
-    await vi.waitFor(() => {
-      expect(settleSpy).toHaveBeenCalledWith({
-        kind: "resolve",
-        value: { stopReason: "end_turn" },
-      });
+    await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
+    expect(settleSpy).toHaveBeenCalledWith({
+      kind: "resolve",
+      value: { stopReason: "end_turn" },
     });
   });
 
@@ -565,7 +585,7 @@ describe("acp translator stop reason mapping", () => {
       const firstPrompt = promptAgent(agent, sessionId, "first");
       void firstPrompt.catch(() => {});
       await Promise.resolve();
-      const firstRunId = requestMock.mock.calls[0]?.[1]?.idempotencyKey as string;
+      const firstRunId = requireFirstRequestIdempotencyKey(requestMock);
 
       agent.handleGatewayDisconnect("1006: connection lost");
       agent.handleGatewayReconnect();

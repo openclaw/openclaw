@@ -1,8 +1,15 @@
-import type { OpenClawConfig } from "../config/config.js";
-import { normalizePluginsConfig, resolveEffectiveEnableState } from "../plugins/config-state.js";
-import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizePluginsConfig } from "../plugins/config-state.js";
+import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
-import type { PluginOrigin } from "../plugins/types.js";
+import {
+  isWorkspacePluginAllowedByConfig,
+  normalizePluginConfigId,
+} from "../plugins/plugin-config-trust.js";
+import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
+import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { normalizeProviderId } from "./provider-id.js";
 
 export type ProviderAuthAliasLookupParams = {
@@ -10,6 +17,7 @@ export type ProviderAuthAliasLookupParams = {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   includeUntrustedWorkspacePlugins?: boolean;
+  metadataSnapshot?: PluginMetadataSnapshot;
 };
 
 type ProviderAuthAliasCandidate = {
@@ -23,12 +31,47 @@ const PROVIDER_AUTH_ALIAS_ORIGIN_PRIORITY: Readonly<Record<PluginOrigin, number>
   global: 2,
   workspace: 3,
 };
+let providerAuthAliasMapCache = new WeakMap<
+  NodeJS.ProcessEnv,
+  Map<string, Record<string, string>>
+>();
+
+function buildProviderAuthAliasMapCacheKey(
+  params: ProviderAuthAliasLookupParams | undefined,
+  env: NodeJS.ProcessEnv,
+): string {
+  return JSON.stringify({
+    pluginControlPlane: resolvePluginControlPlaneFingerprint({
+      config: params?.config,
+      env,
+      workspaceDir: params?.workspaceDir,
+    }),
+    includeUntrustedWorkspacePlugins: params?.includeUntrustedWorkspacePlugins === true,
+    plugins: params?.config?.plugins ?? null,
+  });
+}
+
+export function resetProviderAuthAliasMapCacheForTest(): void {
+  providerAuthAliasMapCache = new WeakMap<NodeJS.ProcessEnv, Map<string, Record<string, string>>>();
+}
 
 function resolveProviderAuthAliasOriginPriority(origin: PluginOrigin | undefined): number {
   if (!origin) {
     return Number.MAX_SAFE_INTEGER;
   }
   return PROVIDER_AUTH_ALIAS_ORIGIN_PRIORITY[origin] ?? Number.MAX_SAFE_INTEGER;
+}
+
+function isWorkspacePluginTrustedForAuthAliases(
+  plugin: PluginManifestRecord,
+  config: OpenClawConfig | undefined,
+): boolean {
+  return isWorkspacePluginAllowedByConfig({
+    config,
+    isImplicitlyAllowed: (pluginId) =>
+      normalizePluginConfigId(config?.plugins?.slots?.contextEngine) === pluginId,
+    plugin,
+  });
 }
 
 function shouldUsePluginAuthAliases(
@@ -38,51 +81,109 @@ function shouldUsePluginAuthAliases(
   if (plugin.origin !== "workspace" || params?.includeUntrustedWorkspacePlugins === true) {
     return true;
   }
-  const normalizedConfig = normalizePluginsConfig(params?.config?.plugins);
-  return resolveEffectiveEnableState({
-    id: plugin.id,
-    origin: plugin.origin,
-    config: normalizedConfig,
-    rootConfig: params?.config,
-  }).enabled;
+  return isWorkspacePluginTrustedForAuthAliases(plugin, params?.config);
+}
+
+function setPreferredAlias(params: {
+  aliases: Map<string, ProviderAuthAliasCandidate>;
+  alias: string;
+  origin?: PluginOrigin;
+  target: string;
+}) {
+  const normalizedAlias = normalizeProviderId(params.alias);
+  const normalizedTarget = normalizeProviderId(params.target);
+  if (!normalizedAlias || !normalizedTarget) {
+    return;
+  }
+  const existing = params.aliases.get(normalizedAlias);
+  if (
+    !existing ||
+    resolveProviderAuthAliasOriginPriority(params.origin) <
+      resolveProviderAuthAliasOriginPriority(existing.origin)
+  ) {
+    params.aliases.set(normalizedAlias, {
+      origin: params.origin,
+      target: normalizedTarget,
+    });
+  }
 }
 
 export function resolveProviderAuthAliasMap(
   params?: ProviderAuthAliasLookupParams,
 ): Record<string, string> {
-  const registry = loadPluginManifestRegistry({
-    config: params?.config,
-    workspaceDir: params?.workspaceDir,
-    env: params?.env,
-  });
+  const env = params?.env ?? process.env;
+  const config = params?.config ?? {};
+  let cacheKey: string | undefined;
+  let envCache: Map<string, Record<string, string>> | undefined;
+  if (!params?.metadataSnapshot) {
+    cacheKey = buildProviderAuthAliasMapCacheKey(params, env);
+    envCache = providerAuthAliasMapCache.get(env);
+    if (!envCache) {
+      envCache = new Map<string, Record<string, string>>();
+      providerAuthAliasMapCache.set(env, envCache);
+    }
+    const cached = envCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+  }
+  const snapshot =
+    params?.metadataSnapshot ??
+    getCurrentPluginMetadataSnapshot({
+      config,
+      ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+      env,
+      allowWorkspaceScopedSnapshot: true,
+    }) ??
+    (() => {
+      if (normalizePluginsConfig(config.plugins).loadPaths.length !== 0) {
+        return undefined;
+      }
+      const currentSnapshot = getCurrentPluginMetadataSnapshot({
+        ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+        env,
+        allowWorkspaceScopedSnapshot: true,
+        requireDefaultDiscoveryContext: true,
+      });
+      return currentSnapshot;
+    })() ??
+    loadPluginMetadataSnapshot({
+      config,
+      ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+      env,
+    });
   const preferredAliases = new Map<string, ProviderAuthAliasCandidate>();
   const aliases: Record<string, string> = Object.create(null) as Record<string, string>;
-  for (const plugin of registry.plugins) {
+  for (const plugin of snapshot.plugins) {
     if (!shouldUsePluginAuthAliases(plugin, params)) {
       continue;
     }
     for (const [alias, target] of Object.entries(plugin.providerAuthAliases ?? {}).toSorted(
       ([left], [right]) => left.localeCompare(right),
     )) {
-      const normalizedAlias = normalizeProviderId(alias);
-      const normalizedTarget = normalizeProviderId(target);
-      if (normalizedAlias && normalizedTarget) {
-        const existing = preferredAliases.get(normalizedAlias);
-        if (
-          !existing ||
-          resolveProviderAuthAliasOriginPriority(plugin.origin) <
-            resolveProviderAuthAliasOriginPriority(existing.origin)
-        ) {
-          preferredAliases.set(normalizedAlias, {
-            origin: plugin.origin,
-            target: normalizedTarget,
-          });
-        }
+      setPreferredAlias({
+        aliases: preferredAliases,
+        alias,
+        origin: plugin.origin,
+        target,
+      });
+    }
+    for (const choice of plugin.providerAuthChoices ?? []) {
+      for (const deprecatedChoiceId of choice.deprecatedChoiceIds ?? []) {
+        setPreferredAlias({
+          aliases: preferredAliases,
+          alias: deprecatedChoiceId,
+          origin: plugin.origin,
+          target: choice.provider,
+        });
       }
     }
   }
   for (const [alias, candidate] of preferredAliases) {
     aliases[alias] = candidate.target;
+  }
+  if (envCache && cacheKey) {
+    envCache.set(cacheKey, aliases);
   }
   return aliases;
 }

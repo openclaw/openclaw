@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { collectFilesystemFindings } from "./audit.js";
+import { AsyncTempCaseFactory } from "./test-temp-cases.js";
 
 const windowsAuditEnv = {
   USERNAME: "Tester",
@@ -10,30 +10,20 @@ const windowsAuditEnv = {
 };
 
 describe("security audit filesystem Windows findings", () => {
-  let fixtureRoot = "";
-  let caseId = 0;
+  const tempCases = new AsyncTempCaseFactory("openclaw-security-audit-win-");
 
   beforeAll(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-audit-win-"));
+    await tempCases.setup();
   });
 
   afterAll(async () => {
-    if (!fixtureRoot) {
-      return;
-    }
-    await fs.rm(fixtureRoot, { recursive: true, force: true }).catch(() => undefined);
+    await tempCases.cleanup();
   });
-
-  const makeTmpDir = async (label: string) => {
-    const dir = path.join(fixtureRoot, `case-${caseId++}-${label}`);
-    await fs.mkdir(dir, { recursive: true });
-    return dir;
-  };
 
   it("evaluates Windows ACL-derived filesystem findings", async () => {
     await Promise.all([
       (async () => {
-        const tmp = await makeTmpDir("win");
+        const tmp = await tempCases.makeTmpDir("win");
         const stateDir = path.join(tmp, "state");
         await fs.mkdir(stateDir, { recursive: true });
         const configPath = path.join(stateDir, "openclaw.json");
@@ -64,7 +54,7 @@ describe("security audit filesystem Windows findings", () => {
         }
       })(),
       (async () => {
-        const tmp = await makeTmpDir("win-open");
+        const tmp = await tempCases.makeTmpDir("win-open");
         const stateDir = path.join(tmp, "state");
         await fs.mkdir(stateDir, { recursive: true });
         const configPath = path.join(stateDir, "openclaw.json");
@@ -94,6 +84,42 @@ describe("security audit filesystem Windows findings", () => {
               finding.checkId === "fs.state_dir.perms_readable" && finding.severity === "warn",
           ),
         ).toBe(true);
+      })(),
+      (async () => {
+        const tmp = await tempCases.makeTmpDir("win-anon-world");
+        const stateDir = path.join(tmp, "state");
+        await fs.mkdir(stateDir, { recursive: true });
+        const configPath = path.join(stateDir, "openclaw.json");
+        await fs.writeFile(configPath, "{}\n", "utf-8");
+        const findings = await collectFilesystemFindings({
+          stateDir,
+          configPath,
+          platform: "win32",
+          env: windowsAuditEnv,
+          execIcacls: async (_cmd: string, args: string[]) => {
+            const target = args[0];
+            if (target.endsWith(`${path.sep}state`)) {
+              return {
+                stdout: `${target} *S-1-5-18:(F)\n *S-1-5-7:(F)\n`,
+                stderr: "",
+              };
+            }
+            return {
+              stdout: `${target} *S-1-5-18:(F)\n DESKTOP-TEST\\Tester:(F)\n`,
+              stderr: "",
+            };
+          },
+        });
+        expect(
+          findings.some(
+            (finding) =>
+              finding.checkId === "fs.state_dir.perms_world_writable" &&
+              finding.severity === "critical",
+          ),
+        ).toBe(true);
+        expect(
+          findings.some((finding) => finding.checkId === "fs.state_dir.perms_group_writable"),
+        ).toBe(false);
       })(),
     ]);
   });

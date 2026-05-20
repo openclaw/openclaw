@@ -8,10 +8,12 @@ import {
   normalizeOptionalString,
   readStringValue,
 } from "../shared/string-coerce.js";
+import type { CommandExplanationSummary } from "./command-analysis/explain.js";
 import { resolveAllowAlwaysPatternEntries } from "./exec-approvals-allowlist.js";
 import type { ExecCommandSegment } from "./exec-approvals-analysis.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
-import { expandHomePrefix } from "./home-dir.js";
+import { assertNoSymlinkParentsSync } from "./fs-safe-advanced.js";
+import { expandHomePrefix, resolveRequiredHomeDir } from "./home-dir.js";
 import { requestJsonlSocket } from "./jsonl-socket.js";
 export * from "./exec-approvals-analysis.js";
 export * from "./exec-approvals-allowlist.js";
@@ -21,6 +23,8 @@ export type ExecHost = "sandbox" | "gateway" | "node";
 export type ExecTarget = "auto" | ExecHost;
 export type ExecSecurity = "deny" | "allowlist" | "full";
 export type ExecAsk = "off" | "on-miss" | "always";
+
+export const EXEC_TARGET_VALUES: readonly ExecTarget[] = ["auto", "sandbox", "gateway", "node"];
 
 export function normalizeExecHost(value?: string | null): ExecHost | null {
   const normalized = normalizeOptionalLowercaseString(value);
@@ -36,6 +40,30 @@ export function normalizeExecTarget(value?: string | null): ExecTarget | null {
     return normalized;
   }
   return normalizeExecHost(normalized);
+}
+
+export function requireValidExecTarget(value?: unknown): ExecTarget | null {
+  if (value == null) {
+    return null;
+  }
+  if (typeof value !== "string") {
+    throw new Error(
+      `Invalid exec host value type ${typeof value}. Allowed values: ${EXEC_TARGET_VALUES.join(
+        ", ",
+      )}.`,
+    );
+  }
+  const normalized = normalizeOptionalLowercaseString(value);
+  if (!normalized) {
+    return null;
+  }
+  const target = normalizeExecTarget(normalized);
+  if (target) {
+    return target;
+  }
+  throw new Error(
+    `Invalid exec host "${value}". Allowed values: ${EXEC_TARGET_VALUES.join(", ")}.`,
+  );
 }
 
 /** Coerce a raw JSON field to string, returning undefined for non-string types. */
@@ -81,6 +109,11 @@ export type SystemRunApprovalPlan = {
   mutableFileOperand?: SystemRunApprovalFileOperand | null;
 };
 
+export type ExecApprovalCommandSpan = {
+  startIndex: number;
+  endIndex: number;
+};
+
 export type ExecApprovalRequestPayload = {
   command: string;
   commandPreview?: string | null;
@@ -94,6 +127,9 @@ export type ExecApprovalRequestPayload = {
   host?: string | null;
   security?: string | null;
   ask?: string | null;
+  warningText?: string | null;
+  commandAnalysis?: CommandExplanationSummary | null;
+  commandSpans?: ExecApprovalCommandSpan[];
   allowedDecisions?: readonly ExecApprovalDecision[];
   agentId?: string | null;
   resolvedPath?: string | null;
@@ -229,7 +265,237 @@ function mergeLegacyAgent(
 
 function ensureDir(filePath: string) {
   const dir = path.dirname(filePath);
+  assertNoExecApprovalsSymlinkParents(dir, resolveRequiredHomeDir());
   fs.mkdirSync(dir, { recursive: true });
+  const dirStat = fs.lstatSync(dir);
+  if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) {
+    throw new Error(`Refusing to use unsafe exec approvals directory: ${dir}`);
+  }
+  try {
+    fs.chmodSync(dir, 0o700);
+  } catch (err) {
+    if (process.platform !== "win32") {
+      throw err;
+    }
+  }
+  return dir;
+}
+
+function assertNoExecApprovalsSymlinkParents(targetPath: string, trustedRoot: string): void {
+  assertNoSymlinkParentsSync({
+    rootDir: trustedRoot,
+    targetPath,
+    allowOutsideRoot: true,
+    messagePrefix: "Refusing to traverse symlink in exec approvals path",
+  });
+}
+
+function assertSafeExecApprovalsDestination(filePath: string): void {
+  try {
+    const stat = fs.lstatSync(filePath);
+    if (stat.isSymbolicLink()) {
+      throw new Error(`Refusing to write exec approvals via symlink: ${filePath}`);
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw err;
+    }
+  }
+}
+
+function assertSafeExecApprovalsOverwriteFallback(filePath: string): void {
+  assertSafeExecApprovalsDestination(filePath);
+  try {
+    const stat = fs.statSync(filePath);
+    if (stat.nlink > 1) {
+      throw new Error(`Refusing copy fallback for hard-linked exec approvals file: ${filePath}`);
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw err;
+    }
+  }
+}
+
+type ExecApprovalsFallbackDestination = {
+  existed: boolean;
+  fd: number;
+  snapshot: Buffer | null;
+};
+
+function sameFilesystemEntry(left: fs.Stats, right: fs.Stats): boolean {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
+function readExecApprovalsFallbackSnapshotFromFd(fd: number): Buffer {
+  const chunks: Buffer[] = [];
+  const buffer = Buffer.alloc(64 * 1024);
+  let position = 0;
+  while (true) {
+    const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, position);
+    if (bytesRead === 0) {
+      break;
+    }
+    chunks.push(Buffer.from(buffer.subarray(0, bytesRead)));
+    position += bytesRead;
+  }
+  return Buffer.concat(chunks);
+}
+
+function validateExecApprovalsFallbackFd(filePath: string, fd: number): fs.Stats {
+  const linkStat = fs.lstatSync(filePath);
+  if (linkStat.isSymbolicLink()) {
+    throw new Error(`Refusing to write exec approvals via symlink: ${filePath}`);
+  }
+  const pathStat = fs.statSync(filePath);
+  const fdStat = fs.fstatSync(fd);
+  if (!fdStat.isFile()) {
+    throw new Error(`Refusing copy fallback for non-file exec approvals path: ${filePath}`);
+  }
+  if (fdStat.nlink > 1) {
+    throw new Error(`Refusing copy fallback for hard-linked exec approvals file: ${filePath}`);
+  }
+  if (!sameFilesystemEntry(pathStat, fdStat)) {
+    throw new Error(`Refusing copy fallback after exec approvals path changed: ${filePath}`);
+  }
+  return fdStat;
+}
+
+function openExistingExecApprovalsFallbackDestination(
+  filePath: string,
+): ExecApprovalsFallbackDestination {
+  const noFollowFlag = fs.constants.O_NOFOLLOW ?? 0;
+  const fd = fs.openSync(filePath, fs.constants.O_RDWR | noFollowFlag, 0o600);
+  try {
+    validateExecApprovalsFallbackFd(filePath, fd);
+    return {
+      existed: true,
+      fd,
+      snapshot: readExecApprovalsFallbackSnapshotFromFd(fd),
+    };
+  } catch (err) {
+    try {
+      fs.closeSync(fd);
+    } catch {
+      // best-effort after validation failure
+    }
+    throw err;
+  }
+}
+
+function createExecApprovalsFallbackDestination(
+  filePath: string,
+): ExecApprovalsFallbackDestination {
+  const noFollowFlag = fs.constants.O_NOFOLLOW ?? 0;
+  try {
+    const fd = fs.openSync(
+      filePath,
+      fs.constants.O_RDWR | fs.constants.O_CREAT | fs.constants.O_EXCL | noFollowFlag,
+      0o600,
+    );
+    try {
+      validateExecApprovalsFallbackFd(filePath, fd);
+      return { existed: false, fd, snapshot: null };
+    } catch (err) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        // best-effort after validation failure
+      }
+      throw err;
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "EEXIST") {
+      return openExistingExecApprovalsFallbackDestination(filePath);
+    }
+    throw err;
+  }
+}
+
+function openExecApprovalsFallbackDestination(filePath: string): ExecApprovalsFallbackDestination {
+  try {
+    return openExistingExecApprovalsFallbackDestination(filePath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return createExecApprovalsFallbackDestination(filePath);
+    }
+    throw err;
+  }
+}
+
+function writeExecApprovalsFallbackBuffer(fd: number, contents: Buffer): void {
+  fs.ftruncateSync(fd, 0);
+  let written = 0;
+  while (written < contents.length) {
+    written += fs.writeSync(fd, contents, written, contents.length - written, written);
+  }
+  fs.ftruncateSync(fd, contents.length);
+  try {
+    fs.fchmodSync(fd, 0o600);
+  } catch {
+    // best-effort on platforms without chmod
+  }
+}
+
+function restoreExecApprovalsFallbackDestination(
+  filePath: string,
+  destination: ExecApprovalsFallbackDestination,
+): void {
+  if (!destination.existed) {
+    try {
+      const pathStat = fs.statSync(filePath);
+      const fdStat = fs.fstatSync(destination.fd);
+      if (sameFilesystemEntry(pathStat, fdStat)) {
+        fs.rmSync(filePath, { force: true });
+      }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw err;
+      }
+    }
+    return;
+  }
+  writeExecApprovalsFallbackBuffer(destination.fd, destination.snapshot ?? Buffer.alloc(0));
+}
+
+function copyExecApprovalsFallback(tempPath: string, filePath: string): void {
+  const contents = fs.readFileSync(tempPath);
+  const destination = openExecApprovalsFallbackDestination(filePath);
+  try {
+    writeExecApprovalsFallbackBuffer(destination.fd, contents);
+    validateExecApprovalsFallbackFd(filePath, destination.fd);
+  } catch (copyErr) {
+    try {
+      restoreExecApprovalsFallbackDestination(filePath, destination);
+    } catch (restoreErr) {
+      throw new Error(
+        `Failed to restore exec approvals after copy fallback failure for ${filePath}: ${String(
+          copyErr,
+        )}`,
+        { cause: restoreErr },
+      );
+    }
+    throw copyErr;
+  } finally {
+    fs.closeSync(destination.fd);
+  }
+}
+
+function renameExecApprovalsWithFallback(tempPath: string, filePath: string): void {
+  try {
+    fs.renameSync(tempPath, filePath);
+    return;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    // Windows can reject rename-overwrite when another process has a transient
+    // handle on the target approvals file.
+    if (code !== "EPERM" && code !== "EEXIST") {
+      throw err;
+    }
+    assertSafeExecApprovalsOverwriteFallback(filePath);
+    copyExecApprovalsFallback(tempPath, filePath);
+    fs.rmSync(tempPath, { force: true });
+  }
 }
 
 // Coerce legacy/corrupted allowlists into `ExecAllowlistEntry[]` before we spread
@@ -434,13 +700,46 @@ export function loadExecApprovals(): ExecApprovalsFile {
 
 export function saveExecApprovals(file: ExecApprovalsFile) {
   const filePath = resolveExecApprovalsPath();
-  ensureDir(filePath);
-  fs.writeFileSync(filePath, `${JSON.stringify(file, null, 2)}\n`, { mode: 0o600 });
+  const raw = `${JSON.stringify(file, null, 2)}\n`;
+  writeExecApprovalsRaw(filePath, raw);
+}
+
+function writeExecApprovalsRaw(filePath: string, raw: string) {
+  const dir = ensureDir(filePath);
+  assertSafeExecApprovalsDestination(filePath);
+  const tempPath = path.join(dir, `.exec-approvals.${process.pid}.${crypto.randomUUID()}.tmp`);
+  let tempWritten = false;
+  try {
+    fs.writeFileSync(tempPath, raw, { mode: 0o600, flag: "wx" });
+    try {
+      fs.chmodSync(tempPath, 0o600);
+    } catch {
+      // best-effort on platforms without chmod
+    }
+    tempWritten = true;
+    renameExecApprovalsWithFallback(tempPath, filePath);
+  } finally {
+    if (tempWritten && fs.existsSync(tempPath)) {
+      fs.rmSync(tempPath, { force: true });
+    }
+  }
   try {
     fs.chmodSync(filePath, 0o600);
   } catch {
     // best-effort on platforms without chmod
   }
+}
+
+export function restoreExecApprovalsSnapshot(snapshot: ExecApprovalsSnapshot): void {
+  if (!snapshot.exists) {
+    fs.rmSync(snapshot.path, { force: true });
+    return;
+  }
+  if (snapshot.raw !== null) {
+    writeExecApprovalsRaw(snapshot.path, snapshot.raw);
+    return;
+  }
+  saveExecApprovals(snapshot.file);
 }
 
 export function ensureExecApprovals(): ExecApprovalsFile {
@@ -635,7 +934,7 @@ export function resolveExecApprovalsFromFile(params: {
       defaults.askFallback ?? fallbackAskFallback,
       fallbackAskFallback,
     ),
-    autoAllowSkills: Boolean(defaults.autoAllowSkills ?? fallbackAutoAllowSkills),
+    autoAllowSkills: defaults.autoAllowSkills ?? fallbackAutoAllowSkills,
   };
   const resolvedAgentSecurity = resolveAgentSecurityField({
     field: "security",
@@ -670,9 +969,8 @@ export function resolveExecApprovalsFromFile(params: {
     security: resolvedAgentSecurity.value,
     ask: resolvedAgentAsk.value,
     askFallback: resolvedAgentAskFallback.value,
-    autoAllowSkills: Boolean(
+    autoAllowSkills:
       agent.autoAllowSkills ?? wildcard.autoAllowSkills ?? resolvedDefaults.autoAllowSkills,
-    ),
   };
   const allowlist = [
     ...(Array.isArray(wildcard.allowlist) ? wildcard.allowlist : []),
@@ -781,13 +1079,12 @@ export function recordAllowlistUse(
   const nextAllowlist = allowlist.map((item) =>
     item.pattern === entry.pattern &&
     (item.argPattern ?? undefined) === (entry.argPattern ?? undefined)
-      ? {
-          ...item,
+      ? Object.assign({}, item, {
           id: item.id ?? crypto.randomUUID(),
           lastUsedAt: Date.now(),
           lastUsedCommand: command,
           lastResolvedPath: resolvedPath,
-        }
+        })
       : item,
   );
   agents[target] = { ...existing, allowlist: nextAllowlist };

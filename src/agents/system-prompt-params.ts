@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { findGitRoot } from "../infra/git-root.js";
+import type { ActiveProcessSessionReference } from "./bash-process-references.js";
 import {
   formatUserTime,
   resolveUserTimeFormat,
@@ -9,7 +10,7 @@ import {
   type ResolvedTimeFormat,
 } from "./date-time.js";
 
-export type RuntimeInfoInput = {
+type RuntimeInfoInput = {
   agentId?: string;
   host: string;
   os: string;
@@ -23,9 +24,10 @@ export type RuntimeInfoInput = {
   /** Supported message actions for the current channel (e.g., react, edit, unsend) */
   channelActions?: string[];
   repoRoot?: string;
+  activeProcessSessions?: ActiveProcessSessionReference[];
 };
 
-export type SystemPromptRuntimeParams = {
+type SystemPromptRuntimeParams = {
   runtimeInfo: RuntimeInfoInput;
   userTimezone: string;
   userTime?: string;

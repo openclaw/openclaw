@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   collectVitestFileDurations,
   normalizeTrackedRepoPath,
+  runVitestJsonReport,
   tryReadJsonFile,
 } from "../../scripts/test-report-utils.mjs";
 
@@ -84,18 +85,16 @@ describe("scripts/test-report-utils tryReadJsonFile", () => {
 
 describe("scripts/test-report-utils runVitestJsonReport", () => {
   beforeEach(() => {
-    vi.resetModules();
     spawnSyncMock.mockReset();
   });
 
   it("launches Vitest through pnpm exec", async () => {
     spawnSyncMock.mockReturnValue({ status: 0 });
     const reportPath = path.join(os.tmpdir(), `openclaw-vitest-json-${Date.now()}.json`);
-    const { runVitestJsonReport } = await import("../../scripts/test-report-utils.mjs");
 
     expect(
       runVitestJsonReport({
-        config: "vitest.unit.config.ts",
+        config: "test/vitest/vitest.unit.config.ts",
         reportPath,
       }),
     ).toBe(reportPath);
@@ -107,15 +106,15 @@ describe("scripts/test-report-utils runVitestJsonReport", () => {
         "vitest",
         "run",
         "--config",
-        "vitest.unit.config.ts",
+        "test/vitest/vitest.unit.config.ts",
         "--reporter=json",
         "--outputFile",
         reportPath,
       ],
-      expect.objectContaining({
+      {
         stdio: "inherit",
         env: process.env,
-      }),
+      },
     );
   });
 });

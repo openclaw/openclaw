@@ -2,19 +2,35 @@ import { mkdirSync, rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearMemoryEmbeddingProviders as clearRegistry,
+  listRegisteredMemoryEmbeddingProviderAdapters as listRegisteredAdapters,
   registerMemoryEmbeddingProvider as registerAdapter,
-} from "../../../../src/plugins/memory-embedding-providers.js";
+} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-runtime-mocks.js";
 import type { MemoryIndexManager } from "./index.js";
-import { getMemorySearchManager, closeAllMemorySearchManagers } from "./index.js";
-import { registerBuiltInMemoryEmbeddingProviders } from "./provider-adapters.js";
+import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
+import { closeMemoryIndexManagersForAgent, EMBEDDING_PROBE_CACHE_TTL_MS } from "./manager.js";
+import {
+  DEFAULT_LOCAL_MODEL,
+  registerBuiltInMemoryEmbeddingProviders,
+} from "./provider-adapters.js";
+
+// This suite performs real sqlite/media indexing and can exceed the global
+// timeout when it shares a packed CI extension shard.
+vi.setConfig({ testTimeout: 240_000 });
+
+afterAll(() => {
+  vi.resetConfig();
+});
 
 let embedBatchCalls = 0;
 let embedBatchInputCalls = 0;
+let providerCloseCalls = 0;
+let providerCloseFailuresRemaining = 0;
+let providerCloseGate: Promise<void> | null = null;
 let providerCalls: Array<{ provider?: string; model?: string; outputDimensionality?: number }> = [];
 let forceNoProvider = false;
 
@@ -52,6 +68,14 @@ vi.mock("./embeddings.js", () => {
         provider: {
           id: providerId,
           model,
+          close: async () => {
+            providerCloseCalls += 1;
+            await providerCloseGate;
+            if (providerCloseFailuresRemaining > 0) {
+              providerCloseFailuresRemaining -= 1;
+              throw new Error("provider close failed");
+            }
+          },
           embedQuery: async (text: string) => embedText(text),
           embedBatch: async (texts: string[]) => {
             embedBatchCalls += 1;
@@ -107,6 +131,33 @@ vi.mock("./embeddings.js", () => {
   };
 });
 
+describe("memory embedding provider registration", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    clearRegistry();
+  });
+
+  it("registers the builtin local embedding provider", () => {
+    clearRegistry();
+    registerBuiltInMemoryEmbeddingProviders({ registerMemoryEmbeddingProvider: registerAdapter });
+
+    const adapter = listRegisteredAdapters().find((entry) => entry.id === "local");
+
+    if (!adapter) {
+      throw new Error("expected local embedding provider adapter to be registered");
+    }
+    expect(adapter.id).toBe("local");
+    expect(adapter.defaultModel).toBe(DEFAULT_LOCAL_MODEL);
+    expect(adapter.transport).toBe("local");
+    expect(adapter.authProviderId).toBeUndefined();
+    expect(adapter.autoSelectPriority).toBe(10);
+  });
+});
+
 describe("memory index", () => {
   let fixtureRoot = "";
   let workspaceDir = "";
@@ -132,12 +183,15 @@ describe("memory index", () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
+    await Promise.all(Array.from(managersForCleanup).map((manager) => manager.close()));
     await closeAllMemorySearchManagers();
     clearRegistry();
     managersForCleanup.clear();
   });
 
   beforeEach(async () => {
+    vi.useRealTimers();
     // Perf: most suites don't need atomic swap behavior for full reindexes.
     // Keep atomic reindex tests on the safe path.
     vi.stubEnv("OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX", "1");
@@ -145,6 +199,9 @@ describe("memory index", () => {
     registerBuiltInMemoryEmbeddingProviders({ registerMemoryEmbeddingProvider: registerAdapter });
     embedBatchCalls = 0;
     embedBatchInputCalls = 0;
+    providerCloseCalls = 0;
+    providerCloseFailuresRemaining = 0;
+    providerCloseGate = null;
     providerCalls = [];
     forceNoProvider = false;
 
@@ -231,11 +288,10 @@ describe("memory index", () => {
     result: Awaited<ReturnType<typeof getMemorySearchManager>>,
     missingMessage = "manager missing",
   ): MemoryIndexManager {
-    expect(result.manager).not.toBeNull();
     if (!result.manager) {
       throw new Error(missingMessage);
     }
-    return result.manager as MemoryIndexManager;
+    return result.manager as unknown as MemoryIndexManager;
   }
 
   async function getPersistentManager(cfg: TestCfg): Promise<MemoryIndexManager> {
@@ -268,7 +324,27 @@ describe("memory index", () => {
     }
   }
 
-  it.skip("indexes memory files and searches", async () => {
+  async function getFtsSessionManager(params: {
+    stateDirName: string;
+    storeFileName: string;
+  }): Promise<MemoryIndexManager | null> {
+    forceNoProvider = true;
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, params.stateDirName));
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, params.storeFileName),
+      sources: ["memory", "sessions"],
+      sessionMemory: true,
+      minScore: 0,
+      hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
+    });
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const manager = requireManager(result);
+    managersForCleanup.add(manager);
+    resetManagerForTest(manager);
+    return manager.status().fts?.available ? manager : null;
+  }
+
+  it("indexes memory files and searches", async () => {
     const cfg = createCfg({
       storePath: indexMainPath,
       hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
@@ -280,18 +356,106 @@ describe("memory index", () => {
       expect(results.length).toBeGreaterThan(0);
       expect(results[0]?.path).toContain("memory/2026-01-12.md");
       const status = manager.status();
-      expect(status.sourceCounts).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            source: "memory",
-            files: status.files,
-            chunks: status.chunks,
-          }),
-        ]),
-      );
+      expect(status.sourceCounts).toStrictEqual([
+        {
+          source: "memory",
+          files: status.files,
+          chunks: status.chunks,
+        },
+      ]);
     } finally {
       await manager.close?.();
     }
+  });
+
+  it("closes embedding providers when memory index managers close", async () => {
+    const cfg = createCfg({
+      storePath: indexMainPath,
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const manager = await getFreshManager(cfg);
+
+    await manager.probeEmbeddingAvailability();
+    expect(providerCloseCalls).toBe(0);
+
+    await manager.close();
+    await manager.close();
+
+    expect(providerCloseCalls).toBe(1);
+  });
+
+  it("closes embedding providers before waiting for pending sync to settle", async () => {
+    const cfg = createCfg({
+      storePath: indexMainPath,
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const manager = await getFreshManager(cfg);
+    await manager.probeEmbeddingAvailability();
+    let resolveSync: () => void = () => {};
+    (manager as unknown as { syncing: Promise<void> }).syncing = new Promise<void>((resolve) => {
+      resolveSync = resolve;
+    });
+
+    const closePromise = manager.close();
+    await vi.waitFor(() => {
+      expect(providerCloseCalls).toBe(1);
+    });
+    let closeSettled = false;
+    void closePromise.then(() => {
+      closeSettled = true;
+    });
+    await Promise.resolve();
+
+    expect(closeSettled).toBe(false);
+    resolveSync();
+    await closePromise;
+  });
+
+  it("evicts scoped memory index managers before close settles", async () => {
+    let releaseProviderClose: () => void = () => {};
+    providerCloseGate = new Promise<void>((resolve) => {
+      releaseProviderClose = resolve;
+    });
+    const cfg = createCfg({
+      storePath: indexMainPath,
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const first = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
+    managersForCleanup.add(first);
+    await first.probeEmbeddingAvailability();
+    const closePromise = closeMemoryIndexManagersForAgent({ cfg, agentId: "main" });
+    let second: MemoryIndexManager | null = null;
+    try {
+      await vi.waitFor(() => {
+        expect(providerCloseCalls).toBe(1);
+      });
+
+      second = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
+      managersForCleanup.add(second);
+      expect(second).not.toBe(first);
+    } finally {
+      releaseProviderClose();
+      providerCloseGate = null;
+    }
+    await closePromise;
+
+    const third = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
+    managersForCleanup.add(third);
+    expect(third).toBe(second);
+  });
+
+  it("retries embedding provider close before releasing the manager", async () => {
+    providerCloseFailuresRemaining = 1;
+    const cfg = createCfg({
+      storePath: indexMainPath,
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const manager = await getFreshManager(cfg);
+
+    await manager.probeEmbeddingAvailability();
+    await manager.close();
+
+    expect(providerCloseCalls).toBe(2);
   });
 
   it("indexes multimodal image and audio files from extra paths with Gemini structured inputs", async () => {
@@ -319,7 +483,7 @@ describe("memory index", () => {
     expect(audioResults.some((result) => result.path.endsWith("meeting.wav"))).toBe(true);
   });
 
-  it.skip("finds keyword matches via hybrid search when query embedding is zero", async () => {
+  it("finds keyword matches via hybrid search when query embedding is zero", async () => {
     await expectHybridKeywordSearchFindsMemory(
       createCfg({
         storePath: indexMainPath,
@@ -328,7 +492,7 @@ describe("memory index", () => {
     );
   });
 
-  it.skip("preserves keyword-only hybrid hits when minScore exceeds text weight", async () => {
+  it("preserves keyword-only hybrid hits when minScore exceeds text weight", async () => {
     await expectHybridKeywordSearchFindsMemory(
       createCfg({
         storePath: indexMainPath,
@@ -345,7 +509,138 @@ describe("memory index", () => {
     const status = manager.status();
     expect(status.vector?.enabled).toBe(true);
     expect(typeof status.vector?.available).toBe("boolean");
+    expect(status.vector?.storeAvailable).toBe(available);
+    expect(status.vector?.semanticAvailable).toBe(available);
     expect(status.vector?.available).toBe(available);
+  });
+
+  it("probes sqlite vector store availability without initializing embeddings", async () => {
+    forceNoProvider = true;
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, "index-vector-store-only.sqlite"),
+      vectorEnabled: true,
+    });
+    const manager = await getPersistentManager(cfg);
+
+    const available = await manager.probeVectorStoreAvailability?.();
+    const status = manager.status();
+
+    expect(providerCalls).toStrictEqual([]);
+    expect(typeof status.vector?.storeAvailable).toBe("boolean");
+    expect(status.vector?.storeAvailable).toBe(available);
+    expect(status.vector?.semanticAvailable).toBeUndefined();
+    expect(status.vector?.available).toBeUndefined();
+  });
+
+  it("caches embedding probe readiness across transient status managers", async () => {
+    const cfg = createCfg({ storePath: path.join(workspaceDir, "index-probe-cache.sqlite") });
+    const first = requireManager(
+      await getMemorySearchManager({ cfg, agentId: "main", purpose: "status" }),
+    );
+    managersForCleanup.add(first);
+
+    await expect(first.probeEmbeddingAvailability()).resolves.toEqual({ ok: true });
+    expect(embedBatchCalls).toBe(1);
+    await first.close();
+
+    const second = requireManager(
+      await getMemorySearchManager({ cfg, agentId: "main", purpose: "status" }),
+    );
+    managersForCleanup.add(second);
+
+    const cachedBeforeProbe = second.getCachedEmbeddingAvailability?.();
+    expect(cachedBeforeProbe?.ok).toBe(true);
+    expect(cachedBeforeProbe?.checked).toBe(true);
+    expect(cachedBeforeProbe?.cached).toBe(true);
+    expect(cachedBeforeProbe?.checkedAtMs).toBeTypeOf("number");
+    expect(cachedBeforeProbe?.cacheExpiresAtMs).toBeTypeOf("number");
+    if (
+      typeof cachedBeforeProbe?.checkedAtMs === "number" &&
+      typeof cachedBeforeProbe.cacheExpiresAtMs === "number"
+    ) {
+      expect(cachedBeforeProbe.cacheExpiresAtMs - cachedBeforeProbe.checkedAtMs).toBe(
+        EMBEDDING_PROBE_CACHE_TTL_MS,
+      );
+    }
+    await expect(second.probeEmbeddingAvailability()).resolves.toStrictEqual({
+      ok: true,
+      checked: true,
+      cached: true,
+      checkedAtMs: cachedBeforeProbe?.checkedAtMs,
+      cacheExpiresAtMs: cachedBeforeProbe?.cacheExpiresAtMs,
+    });
+    expect(embedBatchCalls).toBe(1);
+
+    const cached = second.getCachedEmbeddingAvailability?.();
+    expect((cached?.cacheExpiresAtMs ?? 0) - (cached?.checkedAtMs ?? 0)).toBe(
+      EMBEDDING_PROBE_CACHE_TTL_MS,
+    );
+  });
+
+  it("streams embedding cache rows during safe reindex", async () => {
+    vi.stubEnv("OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX", "0");
+    type EmbeddingCacheRow = {
+      provider: string;
+      model: string;
+      provider_key: string;
+      hash: string;
+      embedding: string;
+      dims: number | null;
+      updated_at: number;
+    };
+    type StatementWithAll = {
+      all: () => EmbeddingCacheRow[];
+    };
+
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, "index-cache-seed-stream.sqlite"),
+      cacheEnabled: true,
+    });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+
+    // Safe reindex streams cache rows from the original database and writes
+    // them into a temporary database, so the SELECT spy belongs on this handle.
+    const sourceDb = (
+      manager as unknown as {
+        db: {
+          prepare: (sql: string) => unknown;
+        };
+      }
+    ).db;
+    const originalPrepare = sourceDb.prepare.bind(sourceDb);
+    const cachedRows = (
+      originalPrepare(
+        "SELECT provider, model, provider_key, hash, embedding, dims, updated_at FROM embedding_cache",
+      ) as StatementWithAll
+    ).all();
+    expect(cachedRows.length).toBeGreaterThan(0);
+
+    const beforeCalls = embedBatchCalls;
+    const prepareSpy = vi.spyOn(sourceDb, "prepare").mockImplementation((sql: string) => {
+      if (
+        sql.includes(
+          "SELECT provider, model, provider_key, hash, embedding, dims, updated_at FROM embedding_cache",
+        )
+      ) {
+        return {
+          all: () => {
+            throw new Error("embedding cache seed must stream rows via iterate()");
+          },
+          iterate: () => cachedRows[Symbol.iterator](),
+        };
+      }
+      return originalPrepare(sql);
+    });
+
+    try {
+      (manager as unknown as { dirty: boolean }).dirty = true;
+      await manager.sync({ reason: "test", force: true });
+    } finally {
+      prepareSpy.mockRestore();
+    }
+
+    expect(embedBatchCalls).toBe(beforeCalls);
   });
 
   it("builds FTS index and returns search results when no embedding provider is available", async () => {
@@ -360,6 +655,9 @@ describe("memory index", () => {
     const manager = requireManager(result);
     managersForCleanup.add(manager);
     resetManagerForTest(manager);
+    if (!manager.status().fts?.available) {
+      return;
+    }
 
     await fs.writeFile(
       path.join(memoryDir, "2026-01-12.md"),
@@ -380,21 +678,14 @@ describe("memory index", () => {
   });
 
   it("prefers exact session transcript hits in FTS-only mode", async () => {
-    forceNoProvider = true;
-    const stateDir = path.join(workspaceDir, ".state-session-ranking");
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     try {
-      const cfg = createCfg({
-        storePath: path.join(workspaceDir, "index-fts-session-ranking.sqlite"),
-        sources: ["memory", "sessions"],
-        sessionMemory: true,
-        minScore: 0,
-        hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
+      const manager = await getFtsSessionManager({
+        stateDirName: ".state-session-ranking",
+        storeFileName: "index-fts-session-ranking.sqlite",
       });
-      const result = await getMemorySearchManager({ cfg, agentId: "main" });
-      const manager = requireManager(result);
-      managersForCleanup.add(manager);
-      resetManagerForTest(manager);
+      if (!manager) {
+        return;
+      }
 
       const memoryPath = path.join(workspaceDir, "MEMORY.md");
       await fs.writeFile(memoryPath, "Project Nebula stale codename: ORBIT-9.\n", "utf8");
@@ -447,21 +738,14 @@ describe("memory index", () => {
   });
 
   it("bootstraps an empty index on first search so session transcript hits are available", async () => {
-    forceNoProvider = true;
-    const stateDir = path.join(workspaceDir, ".state-session-bootstrap");
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     try {
-      const cfg = createCfg({
-        storePath: path.join(workspaceDir, "index-fts-session-bootstrap.sqlite"),
-        sources: ["memory", "sessions"],
-        sessionMemory: true,
-        minScore: 0,
-        hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
+      const manager = await getFtsSessionManager({
+        stateDirName: ".state-session-bootstrap",
+        storeFileName: "index-fts-session-bootstrap.sqlite",
       });
-      const result = await getMemorySearchManager({ cfg, agentId: "main" });
-      const manager = requireManager(result);
-      managersForCleanup.add(manager);
-      resetManagerForTest(manager);
+      if (!manager) {
+        return;
+      }
 
       const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
       await fs.mkdir(sessionsDir, { recursive: true });

@@ -2,9 +2,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
+import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import { AUTH_PROFILE_FILENAME } from "../agents/auth-profiles/constants.js";
-import { __testing as controlPlaneRateLimitTesting } from "./control-plane-rate-limit.js";
+import { testing as controlPlaneRateLimitTesting } from "./control-plane-rate-limit.js";
 import {
   connectOk,
   installGatewayTestHooks,
@@ -26,6 +26,16 @@ function requireWs(): Awaited<ReturnType<typeof startServerWithClient>>["ws"] {
     throw new Error("gateway test server not started");
   }
   return startedServer.ws;
+}
+
+function requireConfigObject(
+  value: Record<string, unknown> | undefined,
+  label: string,
+): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label}`);
+  }
+  return value;
 }
 
 beforeAll(async () => {
@@ -70,6 +80,30 @@ async function expectSchemaLookupInvalid(path: unknown) {
   expect(res.error?.message ?? "").toContain("invalid config.schema.lookup params");
 }
 
+async function writeUnresolvedAuthProfileTokenRef(missingEnvVar: string) {
+  delete process.env[missingEnvVar];
+  const authStorePath = path.join(resolveDefaultAgentDir({}), AUTH_PROFILE_FILENAME);
+  await fs.mkdir(path.dirname(authStorePath), { recursive: true });
+  await fs.writeFile(
+    authStorePath,
+    `${JSON.stringify(
+      {
+        version: 1,
+        profiles: {
+          "custom:token": {
+            type: "token",
+            provider: "custom",
+            tokenRef: { source: "env", provider: "default", id: missingEnvVar },
+          },
+        },
+      },
+      null,
+      2,
+    )}\n`,
+    "utf-8",
+  );
+}
+
 beforeEach(() => {
   controlPlaneRateLimitTesting.resetControlPlaneRateLimitState();
 });
@@ -84,15 +118,14 @@ describe("gateway config methods", () => {
     }>(requireWs(), "config.get", {});
     expect(current.ok).toBe(true);
     expect(typeof current.payload?.hash).toBe("string");
-    expect(current.payload?.config).toBeTruthy();
+    const currentConfig = requireConfigObject(current.payload?.config, "current config");
 
-    const nextConfig = structuredClone(current.payload?.config ?? {});
-    const channels = (nextConfig.channels ??= {}) as Record<string, unknown>;
-    const telegram = (channels.telegram ??= {}) as Record<string, unknown>;
-    telegram.botToken = { source: "env", provider: "default", id: missingEnvVar };
-    const telegramAccounts = (telegram.accounts ??= {}) as Record<string, unknown>;
-    const defaultTelegramAccount = (telegramAccounts.default ??= {}) as Record<string, unknown>;
-    defaultTelegramAccount.enabled = true;
+    const nextConfig = structuredClone(currentConfig);
+    const gateway = (nextConfig.gateway ??= {}) as Record<string, unknown>;
+    gateway.auth = {
+      mode: "token",
+      token: { source: "env", provider: "default", id: missingEnvVar },
+    };
 
     const res = await rpcReq<{ ok?: boolean; error?: { message?: string } }>(
       requireWs(),
@@ -118,46 +151,114 @@ describe("gateway config methods", () => {
     }>(requireWs(), "config.get", {});
     expect(current.ok).toBe(true);
     expect(typeof current.payload?.hash).toBe("string");
-    expect(current.payload?.config).toBeTruthy();
+    const currentConfig = requireConfigObject(current.payload?.config, "current config");
 
     const res = await rpcReq<{
       ok?: boolean;
       path?: string;
       config?: Record<string, unknown>;
     }>(requireWs(), "config.set", {
-      raw: JSON.stringify(current.payload?.config ?? {}, null, 2),
+      raw: JSON.stringify(currentConfig, null, 2),
       baseHash: current.payload?.hash,
     });
 
     expect(res.ok).toBe(true);
     expect(res.payload?.path).toBe(createConfigIO().configPath);
-    expect(res.payload?.config).toBeTruthy();
+    requireConfigObject(res.payload?.config, "updated config");
+  });
+
+  it("returns the persisted config from config.set responses", async () => {
+    const current = await rpcReq<{
+      hash?: string;
+      config?: Record<string, unknown>;
+    }>(requireWs(), "config.get", {});
+    expect(current.ok).toBe(true);
+    expect(typeof current.payload?.hash).toBe("string");
+    const nextConfig = structuredClone(
+      requireConfigObject(current.payload?.config, "current config"),
+    );
+    delete nextConfig.meta;
+
+    const gateway = (nextConfig.gateway ??= {}) as Record<string, unknown>;
+    gateway.port = 19001;
+
+    const res = await rpcReq<{
+      ok?: boolean;
+      config?: Record<string, unknown>;
+    }>(requireWs(), "config.set", {
+      raw: JSON.stringify(nextConfig, null, 2),
+      baseHash: current.payload?.hash,
+    });
+    expect(res.error).toBeUndefined();
+    expect(res.ok).toBe(true);
+
+    const after = await rpcReq<{
+      config?: Record<string, unknown>;
+    }>(requireWs(), "config.get", {});
+    expect(after.ok).toBe(true);
+    expect(res.payload?.config).toEqual(after.payload?.config);
+    requireConfigObject(res.payload?.config, "response config");
+  });
+
+  it("redacts browser cdpUrl credentials from config.get responses", async () => {
+    const { createConfigIO, resetConfigRuntimeState } = await import("../config/config.js");
+    const configPath = createConfigIO().configPath;
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    try {
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify(
+          {
+            browser: {
+              cdpUrl: "https://user:pass@chrome.browserless.io?token=supersecret123",
+              profiles: {
+                remote: {
+                  cdpUrl: "https://alice:secret@chrome.remote.example.com?token=profile-secret",
+                },
+                local: {
+                  cdpUrl: "ws://127.0.0.1:9222",
+                },
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+      resetConfigRuntimeState();
+
+      const after = await rpcReq<{
+        raw?: string | null;
+        config?: {
+          browser?: {
+            cdpUrl?: string;
+            profiles?: Record<string, { cdpUrl?: string }>;
+          };
+        };
+      }>(requireWs(), "config.get", {});
+      expect(after.ok).toBe(true);
+      expect(after.payload?.config?.browser?.cdpUrl).toBe("__OPENCLAW_REDACTED__");
+      expect(after.payload?.config?.browser?.profiles?.remote?.cdpUrl).toBe(
+        "__OPENCLAW_REDACTED__",
+      );
+      expect(after.payload?.config?.browser?.profiles?.local?.cdpUrl).toBe("ws://127.0.0.1:9222");
+      if (typeof after.payload?.raw === "string") {
+        expect(after.payload.raw).toContain("__OPENCLAW_REDACTED__");
+        expect(after.payload.raw).not.toContain("supersecret123");
+        expect(after.payload.raw).not.toContain("user:pass@");
+        expect(after.payload.raw).not.toContain("profile-secret");
+        expect(after.payload.raw).not.toContain("alice:secret@");
+      }
+    } finally {
+      await fs.rm(configPath, { force: true });
+      resetConfigRuntimeState();
+    }
   });
 
   it("does not reject config.set for unresolved auth-profile refs outside submitted config", async () => {
     const missingEnvVar = `OPENCLAW_MISSING_AUTH_PROFILE_REF_${Date.now()}`;
-    delete process.env[missingEnvVar];
-
-    const authStorePath = path.join(resolveOpenClawAgentDir(), AUTH_PROFILE_FILENAME);
-    await fs.mkdir(path.dirname(authStorePath), { recursive: true });
-    await fs.writeFile(
-      authStorePath,
-      `${JSON.stringify(
-        {
-          version: 1,
-          profiles: {
-            "custom:token": {
-              type: "token",
-              provider: "custom",
-              tokenRef: { source: "env", provider: "default", id: missingEnvVar },
-            },
-          },
-        },
-        null,
-        2,
-      )}\n`,
-      "utf-8",
-    );
+    await writeUnresolvedAuthProfileTokenRef(missingEnvVar);
 
     const current = await rpcReq<{
       hash?: string;
@@ -165,13 +266,13 @@ describe("gateway config methods", () => {
     }>(requireWs(), "config.get", {});
     expect(current.ok).toBe(true);
     expect(typeof current.payload?.hash).toBe("string");
-    expect(current.payload?.config).toBeTruthy();
+    const currentConfig = requireConfigObject(current.payload?.config, "current config");
 
     const res = await rpcReq<{ ok?: boolean; error?: { message?: string } }>(
       requireWs(),
       "config.set",
       {
-        raw: JSON.stringify(current.payload?.config ?? {}, null, 2),
+        raw: JSON.stringify(currentConfig, null, 2),
         baseHash: current.payload?.hash,
       },
     );
@@ -220,11 +321,9 @@ describe("gateway config methods", () => {
     expect(res.payload?.path).toBe("gateway.auth");
     expect(res.payload?.hintPath).toBe("gateway.auth");
     const tokenChild = res.payload?.children?.find((child) => child.key === "token");
-    expect(tokenChild).toMatchObject({
-      key: "token",
-      path: "gateway.auth.token",
-      hintPath: "gateway.auth.token",
-    });
+    expect(tokenChild?.key).toBe("token");
+    expect(tokenChild?.path).toBe("gateway.auth.token");
+    expect(tokenChild?.hintPath).toBe("gateway.auth.token");
     expect(res.payload?.schema?.properties).toBeUndefined();
   });
 
@@ -306,17 +405,13 @@ describe("gateway config methods", () => {
       "config.patch",
       {
         raw: JSON.stringify({
-          channels: {
-            telegram: {
-              botToken: {
+          gateway: {
+            auth: {
+              mode: "token",
+              token: {
                 source: "env",
                 provider: "default",
                 id: missingEnvVar,
-              },
-              accounts: {
-                default: {
-                  enabled: true,
-                },
               },
             },
           },
@@ -344,12 +439,11 @@ describe("gateway config.apply", () => {
     expect(current.ok).toBe(true);
     expect(typeof current.payload?.hash).toBe("string");
     const nextConfig = structuredClone(current.payload?.config ?? {});
-    const channels = (nextConfig.channels ??= {}) as Record<string, unknown>;
-    const telegram = (channels.telegram ??= {}) as Record<string, unknown>;
-    telegram.botToken = { source: "env", provider: "default", id: missingEnvVar };
-    const telegramAccounts = (telegram.accounts ??= {}) as Record<string, unknown>;
-    const defaultTelegramAccount = (telegramAccounts.default ??= {}) as Record<string, unknown>;
-    defaultTelegramAccount.enabled = true;
+    const gateway = (nextConfig.gateway ??= {}) as Record<string, unknown>;
+    gateway.auth = {
+      mode: "token",
+      token: { source: "env", provider: "default", id: missingEnvVar },
+    };
 
     const res = await sendConfigApply(
       {
@@ -372,38 +466,17 @@ describe("gateway config.apply", () => {
 
   it("does not reject config.apply for unresolved auth-profile refs outside submitted config", async () => {
     const missingEnvVar = `OPENCLAW_MISSING_AUTH_PROFILE_REF_APPLY_${Date.now()}`;
-    delete process.env[missingEnvVar];
-
-    const authStorePath = path.join(resolveOpenClawAgentDir(), AUTH_PROFILE_FILENAME);
-    await fs.mkdir(path.dirname(authStorePath), { recursive: true });
-    await fs.writeFile(
-      authStorePath,
-      `${JSON.stringify(
-        {
-          version: 1,
-          profiles: {
-            "custom:token": {
-              type: "token",
-              provider: "custom",
-              tokenRef: { source: "env", provider: "default", id: missingEnvVar },
-            },
-          },
-        },
-        null,
-        2,
-      )}\n`,
-      "utf-8",
-    );
+    await writeUnresolvedAuthProfileTokenRef(missingEnvVar);
 
     const current = await rpcReq<{
       config?: Record<string, unknown>;
       hash?: string;
     }>(requireWs(), "config.get", {});
     expect(current.ok).toBe(true);
-    expect(current.payload?.config).toBeTruthy();
+    const currentConfig = requireConfigObject(current.payload?.config, "current config");
 
     const res = await sendConfigApply({
-      raw: JSON.stringify(current.payload?.config ?? {}, null, 2),
+      raw: JSON.stringify(currentConfig, null, 2),
       baseHash: current.payload?.hash,
     });
     expect(res.ok).toBe(true);

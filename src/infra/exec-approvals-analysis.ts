@@ -4,19 +4,28 @@ import {
   resolveCommandResolutionFromArgv,
   type CommandResolution,
 } from "./exec-command-resolution.js";
+import {
+  extractShellWrapperInlineCommand,
+  resolveShellWrapperTransportArgv,
+} from "./exec-wrapper-resolution.js";
+import { POSIX_INLINE_COMMAND_FLAGS, resolveInlineCommandMatch } from "./shell-inline-command.js";
 
 export {
   matchAllowlist,
   parseExecArgvToken,
   resolveAllowlistCandidatePath,
   resolveApprovalAuditCandidatePath,
+  resolveApprovalAuditTrustPath,
   resolveCommandResolution,
   resolveCommandResolutionFromArgv,
   resolveExecutionTargetCandidatePath,
   resolveExecutionTargetResolution,
+  resolveExecutionTargetTrustPath,
   resolvePolicyAllowlistCandidatePath,
   resolvePolicyTargetCandidatePath,
   resolvePolicyTargetResolution,
+  resolvePolicyTargetTrustPath,
+  resolveExecutableTrustPath,
   type CommandResolution,
   type ExecutableResolution,
   type ExecArgvToken,
@@ -25,6 +34,7 @@ export {
 export type ExecCommandSegment = {
   raw: string;
   argv: string[];
+  sourceArgv?: string[];
   resolution: CommandResolution | null;
 };
 
@@ -44,11 +54,14 @@ export type ShellChainPart = {
 
 const DISALLOWED_PIPELINE_TOKENS = new Set([">", "<", "`", "\n", "\r", "(", ")"]);
 const DOUBLE_QUOTE_ESCAPES = new Set(["\\", '"', "$", "`"]);
+const MAX_UNQUOTED_HEREDOC_CONTINUATION_LINES = 1024;
+const MAX_UNQUOTED_HEREDOC_LOGICAL_LINE_LENGTH = 64 * 1024;
 const WINDOWS_UNSUPPORTED_TOKENS = new Set([
   "&",
   "|",
   "<",
   ">",
+  ";",
   "^",
   "(",
   ")",
@@ -145,6 +158,8 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
   const pendingHeredocs: HeredocSpec[] = [];
   let inHeredocBody = false;
   let heredocLine = "";
+  let unquotedHeredocLogicalChunks: string[] = [];
+  let unquotedHeredocLogicalLength = 0;
 
   const pushPart = () => {
     const trimmed = buf.trim();
@@ -170,12 +185,31 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
       }
       if (ch === "$" && !isEscapedInHeredocLine(line, i)) {
         const next = line[i + 1];
-        if (next === "(" || next === "{") {
+        if (
+          next === "(" ||
+          next === "{" ||
+          next === "[" ||
+          (next !== undefined &&
+            (/^[A-Za-z_]$/.test(next) || /^[0-9]$/.test(next) || "@*?!$#-".includes(next)))
+        ) {
           return true;
         }
       }
     }
     return false;
+  };
+
+  const stripUnquotedHeredocLineContinuation = (
+    line: string,
+  ): { line: string; continues: boolean } => {
+    let trailingSlashes = 0;
+    for (let i = line.length - 1; i >= 0 && line[i] === "\\"; i -= 1) {
+      trailingSlashes += 1;
+    }
+    if (trailingSlashes % 2 === 1) {
+      return { line: line.slice(0, -1), continues: true };
+    }
+    return { line, continues: false };
   };
 
   for (let i = 0; i < command.length; i += 1) {
@@ -187,10 +221,45 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
         const current = pendingHeredocs[0];
         if (current) {
           const line = current.stripTabs ? heredocLine.replace(/^\t+/, "") : heredocLine;
-          if (line === current.delimiter) {
-            pendingHeredocs.shift();
-          } else if (!current.quoted && hasUnquotedHeredocExpansionToken(heredocLine)) {
-            return { ok: false, reason: "command substitution in unquoted heredoc", segments: [] };
+          if (current.quoted) {
+            if (line === current.delimiter) {
+              pendingHeredocs.shift();
+            }
+          } else {
+            // An unquoted heredoc body whose previous physical line ended with
+            // `\<newline>` is spliced into the next line at runtime. In that
+            // case bash does not treat the next physical line as the delimiter,
+            // even if it matches literally — the splice wins and the body
+            // continues. Only recognize the delimiter when no continuation is
+            // pending.
+            if (line === current.delimiter && unquotedHeredocLogicalChunks.length === 0) {
+              pendingHeredocs.shift();
+            } else {
+              const continued = stripUnquotedHeredocLineContinuation(line);
+              unquotedHeredocLogicalChunks.push(continued.line);
+              if (unquotedHeredocLogicalChunks.length > MAX_UNQUOTED_HEREDOC_CONTINUATION_LINES) {
+                return {
+                  ok: false,
+                  reason: "heredoc continuation too long",
+                  segments: [],
+                };
+              }
+              unquotedHeredocLogicalLength += continued.line.length;
+              if (unquotedHeredocLogicalLength > MAX_UNQUOTED_HEREDOC_LOGICAL_LINE_LENGTH) {
+                return {
+                  ok: false,
+                  reason: "heredoc logical line too large",
+                  segments: [],
+                };
+              }
+              if (!continued.continues) {
+                if (hasUnquotedHeredocExpansionToken(unquotedHeredocLogicalChunks.join(""))) {
+                  return { ok: false, reason: "shell expansion in unquoted heredoc", segments: [] };
+                }
+                unquotedHeredocLogicalChunks = [];
+                unquotedHeredocLogicalLength = 0;
+              }
+            }
           }
         }
         heredocLine = "";
@@ -326,8 +395,24 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
   if (inHeredocBody && pendingHeredocs.length > 0) {
     const current = pendingHeredocs[0];
     const line = current.stripTabs ? heredocLine.replace(/^\t+/, "") : heredocLine;
-    if (line === current.delimiter) {
+    // Mirror the in-loop guard: a pending unquoted continuation splices into
+    // the trailing line and prevents the delimiter from terminating the
+    // heredoc, so only accept the tail as a delimiter when no continuation
+    // chunks are pending. If a continuation is pending, splice the tail into
+    // the buffered logical line and run the expansion check against what bash
+    // would actually expand at runtime, so payloads like
+    // `cat <<KEY\n$OPENAI_API_\\\nKEY` cannot slip through as "unterminated".
+    const pendingContinuation = !current.quoted && unquotedHeredocLogicalChunks.length > 0;
+    if (pendingContinuation) {
+      const continued = stripUnquotedHeredocLineContinuation(line);
+      const logical = [...unquotedHeredocLogicalChunks, continued.line].join("");
+      if (hasUnquotedHeredocExpansionToken(logical)) {
+        return { ok: false, reason: "shell expansion in unquoted heredoc", segments: [] };
+      }
+    } else if (line === current.delimiter) {
       pendingHeredocs.shift();
+      unquotedHeredocLogicalChunks = [];
+      unquotedHeredocLogicalLength = 0;
       if (pendingHeredocs.length === 0) {
         inHeredocBody = false;
       }
@@ -920,6 +1005,97 @@ function renderSafeBinSegmentArgv(
   return renderQuotedArgv(argv, platform);
 }
 
+function findSubsequence(haystack: readonly string[], needle: readonly string[]): number {
+  if (needle.length === 0 || needle.length > haystack.length) {
+    return -1;
+  }
+  for (let start = 0; start <= haystack.length - needle.length; start += 1) {
+    let matches = true;
+    for (let offset = 0; offset < needle.length; offset += 1) {
+      if (haystack[start + offset] !== needle[offset]) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) {
+      return start;
+    }
+  }
+  return -1;
+}
+
+function replaceShellInlineCommandArgv(params: {
+  argv: string[];
+  oldCommand: string;
+  nextCommand: string;
+}): string[] | null {
+  const transportArgv = resolveShellWrapperTransportArgv(params.argv);
+  if (!transportArgv) {
+    return null;
+  }
+  const transportStart = findSubsequence(params.argv, transportArgv);
+  if (transportStart < 0) {
+    return null;
+  }
+  const match = resolveInlineCommandMatch(transportArgv, POSIX_INLINE_COMMAND_FLAGS, {
+    allowCombinedC: true,
+  });
+  if (match.valueTokenIndex === null) {
+    return null;
+  }
+  const absoluteValueIndex = transportStart + match.valueTokenIndex;
+  const token = params.argv[absoluteValueIndex];
+  if (token === undefined) {
+    return null;
+  }
+  const rewritten = [...params.argv];
+  if (token === params.oldCommand) {
+    rewritten[absoluteValueIndex] = params.nextCommand;
+    return rewritten;
+  }
+  if (token.endsWith(params.oldCommand)) {
+    rewritten[absoluteValueIndex] =
+      token.slice(0, token.length - params.oldCommand.length) + params.nextCommand;
+    return rewritten;
+  }
+  return null;
+}
+
+function renderInlineChainSegmentArgv(params: {
+  segment: ExecCommandSegment;
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  platform?: string | null;
+}): string | null {
+  const inlineCommand = extractShellWrapperInlineCommand(params.segment.argv);
+  if (!inlineCommand) {
+    return null;
+  }
+  const analysis = analyzeShellCommand({
+    command: inlineCommand,
+    cwd: params.cwd,
+    env: params.env,
+    platform: params.platform,
+  });
+  if (!analysis.ok) {
+    return null;
+  }
+  const rebuilt = buildEnforcedShellCommand({
+    command: inlineCommand,
+    segments: analysis.segments,
+    platform: params.platform,
+  });
+  if (!rebuilt.ok || !rebuilt.command) {
+    return null;
+  }
+  const rewrittenArgv = replaceShellInlineCommandArgv({
+    argv: params.segment.argv,
+    oldCommand: inlineCommand,
+    nextCommand: rebuilt.command,
+  });
+  return rewrittenArgv ? renderQuotedArgv(rewrittenArgv, params.platform) : null;
+}
+
 /**
  * Rebuilds a shell command and selectively single-quotes argv tokens for segments that
  * must be treated as literal (safeBins hardening) while preserving the rest of the
@@ -928,7 +1104,16 @@ function renderSafeBinSegmentArgv(
 export function buildSafeBinsShellCommand(params: {
   command: string;
   segments: ExecCommandSegment[];
-  segmentSatisfiedBy: ("allowlist" | "safeBins" | "skills" | "skillPrelude" | null)[];
+  segmentSatisfiedBy: (
+    | "allowlist"
+    | "safeBins"
+    | "inlineChain"
+    | "skills"
+    | "skillPrelude"
+    | null
+  )[];
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
   platform?: string | null;
 }): { ok: boolean; command?: string; reason?: string } {
   if (params.segments.length !== params.segmentSatisfiedBy.length) {
@@ -944,6 +1129,18 @@ export function buildSafeBinsShellCommand(params: {
         return { ok: false, reason: "segment mapping failed" };
       }
       const needsLiteral = by === "safeBins";
+      if (by === "inlineChain") {
+        const rendered = renderInlineChainSegmentArgv({
+          segment: seg,
+          cwd: params.cwd,
+          env: params.env,
+          platform: params.platform,
+        });
+        if (!rendered) {
+          return { ok: false, reason: "inline chain execution plan unavailable" };
+        }
+        return { ok: true, rendered };
+      }
       if (!needsLiteral) {
         return { ok: true, rendered: raw.trim() };
       }
@@ -1054,6 +1251,7 @@ export function analyzeArgvCommand(params: {
       {
         raw: argv.join(" "),
         argv,
+        sourceArgv: [...params.argv],
         resolution: resolveCommandResolutionFromArgv(argv, params.cwd, params.env),
       },
     ],

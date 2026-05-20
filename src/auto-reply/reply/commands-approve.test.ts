@@ -25,6 +25,35 @@ vi.mock("../../globals.js", () => ({
   logVerbose: vi.fn(),
 }));
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label} to be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function gatewayRequest(callIndex = 0) {
+  const call = callGatewayMock.mock.calls[callIndex] as unknown[] | undefined;
+  if (!call) {
+    throw new Error(`expected gateway call ${callIndex}`);
+  }
+  return requireRecord(call[0], `gateway call ${callIndex} request`);
+}
+
+function expectGatewayResolveCall(params: {
+  callIndex?: number;
+  method: string;
+  id: string;
+  decision?: string;
+}) {
+  const request = gatewayRequest(params.callIndex ?? 0);
+  expect(request.method).toBe(params.method);
+  expect(request.params).toEqual({
+    id: params.id,
+    decision: params.decision ?? "allow-once",
+  });
+}
+
 function normalizeDiscordDirectApproverId(value: string | number): string | undefined {
   const normalized = String(value)
     .trim()
@@ -100,6 +129,19 @@ const slackApproveTestPlugin: ChannelPlugin = {
   }),
 };
 
+const whatsappApproveTestPlugin: ChannelPlugin = {
+  ...createChannelTestPluginBase({
+    id: "whatsapp",
+    label: "WhatsApp",
+    docsPath: "/channels/whatsapp",
+    capabilities: {
+      chatTypes: ["direct", "group"],
+      media: true,
+      nativeCommands: true,
+    },
+  }),
+};
+
 const signalApproveTestPlugin: ChannelPlugin = {
   ...createChannelTestPluginBase({
     id: "signal",
@@ -115,7 +157,8 @@ const signalApproveTestPlugin: ChannelPlugin = {
   approvalCapability: createResolvedApproverActionAuthAdapter({
     channelLabel: "Signal",
     resolveApprovers: ({ cfg, accountId }) => {
-      const signal = accountId ? cfg.channels?.signal?.accounts?.[accountId] : cfg.channels?.signal;
+      const scopedSignal = accountId ? cfg.channels?.signal?.accounts?.[accountId] : undefined;
+      const signal = scopedSignal ?? cfg.channels?.signal;
       return resolveApprovalApprovers({
         allowFrom: signal?.allowFrom,
         defaultTo: signal?.defaultTo,
@@ -306,8 +349,9 @@ const telegramApproveTestPlugin: ChannelPlugin = {
     },
     config: {
       listAccountIds: listConfiguredTelegramAccountIds,
-      resolveAccount: (cfg, accountId) => resolveTelegramTestAccount(cfg, accountId),
-      defaultAccountId: (cfg) =>
+      resolveAccount: (cfg: OpenClawConfig, accountId?: string | null) =>
+        resolveTelegramTestAccount(cfg, accountId),
+      defaultAccountId: (cfg: OpenClawConfig) =>
         (cfg.channels?.telegram as TelegramTestSectionConfig | undefined)?.defaultAccount ??
         DEFAULT_ACCOUNT_ID,
     },
@@ -344,6 +388,7 @@ function setApprovePluginRegistry(): void {
     createTestRegistry([
       { pluginId: "discord", plugin: discordApproveTestPlugin, source: "test" },
       { pluginId: "slack", plugin: slackApproveTestPlugin, source: "test" },
+      { pluginId: "whatsapp", plugin: whatsappApproveTestPlugin, source: "test" },
       { pluginId: "signal", plugin: signalApproveTestPlugin, source: "test" },
       { pluginId: "telegram", plugin: telegramApproveTestPlugin, source: "test" },
     ]),
@@ -452,12 +497,7 @@ describe("handleApproveCommand", () => {
 
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("Approval allow-once submitted");
-    expect(callGatewayMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "exec.approval.resolve",
-        params: { id: "abc", decision: "allow-once" },
-      }),
-    );
+    expectGatewayResolveCall({ method: "exec.approval.resolve", id: "abc" });
   });
 
   it("accepts bare approve text for Slack-style manual approvals", async () => {
@@ -480,12 +520,7 @@ describe("handleApproveCommand", () => {
 
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("Approval allow-once submitted");
-    expect(callGatewayMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "exec.approval.resolve",
-        params: { id: "abc", decision: "allow-once" },
-      }),
-    );
+    expectGatewayResolveCall({ method: "exec.approval.resolve", id: "abc" });
   });
 
   it("accepts Telegram /approve from configured approvers even when chat access is otherwise blocked", async () => {
@@ -500,12 +535,7 @@ describe("handleApproveCommand", () => {
     const result = await handleApproveCommand(params, true);
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("Approval allow-once submitted");
-    expect(callGatewayMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "exec.approval.resolve",
-        params: { id: "abc12345", decision: "allow-once" },
-      }),
-    );
+    expectGatewayResolveCall({ method: "exec.approval.resolve", id: "abc12345" });
   });
 
   it("honors the configured default account for omitted-account /approve auth", async () => {
@@ -547,12 +577,7 @@ describe("handleApproveCommand", () => {
     const result = await handleApproveCommand(params, true);
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("Approval allow-once submitted");
-    expect(callGatewayMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "exec.approval.resolve",
-        params: { id: "abc12345", decision: "allow-once" },
-      }),
-    );
+    expectGatewayResolveCall({ method: "exec.approval.resolve", id: "abc12345" });
   });
 
   it("accepts Signal /approve from configured approvers even when chat access is otherwise blocked", async () => {
@@ -578,12 +603,7 @@ describe("handleApproveCommand", () => {
     const result = await handleApproveCommand(params, true);
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("Approval allow-once submitted");
-    expect(callGatewayMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "exec.approval.resolve",
-        params: { id: "abc12345", decision: "allow-once" },
-      }),
-    );
+    expectGatewayResolveCall({ method: "exec.approval.resolve", id: "abc12345" });
   });
 
   it("does not treat implicit default approval auth as a bypass for unauthorized senders", async () => {
@@ -642,6 +662,57 @@ describe("handleApproveCommand", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
+  it("does not allow empty helper approvers to bypass unauthorized sender checks", async () => {
+    const params = buildApproveParams(
+      "/approve abc12345 allow-once",
+      {
+        commands: { text: true },
+        channels: {
+          signal: {
+            allowFrom: [],
+          },
+        },
+      } as OpenClawConfig,
+      {
+        Provider: "signal",
+        Surface: "signal",
+        SenderId: "+15551239999",
+      },
+    );
+    params.command.isAuthorizedSender = false;
+
+    const result = await handleApproveCommand(params, true);
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply).toBeUndefined();
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps same-chat /approve available to authorized senders when helper approvers are empty", async () => {
+    callGatewayMock.mockResolvedValue({ ok: true });
+    const params = buildApproveParams(
+      "/approve abc12345 allow-once",
+      {
+        commands: { text: true },
+        channels: {
+          signal: {
+            allowFrom: [],
+          },
+        },
+      } as OpenClawConfig,
+      {
+        Provider: "signal",
+        Surface: "signal",
+        SenderId: "+15551239999",
+      },
+    );
+    params.command.isAuthorizedSender = true;
+
+    const result = await handleApproveCommand(params, true);
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("Approval allow-once submitted");
+    expectGatewayResolveCall({ method: "exec.approval.resolve", id: "abc12345" });
+  });
+
   it("accepts Telegram /approve from exec target recipients when native approvals are disabled", async () => {
     const params = buildApproveParams(
       "/approve abc12345 allow-once",
@@ -672,12 +743,7 @@ describe("handleApproveCommand", () => {
     const result = await handleApproveCommand(params, true);
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("Approval allow-once submitted");
-    expect(callGatewayMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "exec.approval.resolve",
-        params: { id: "abc12345", decision: "allow-once" },
-      }),
-    );
+    expectGatewayResolveCall({ method: "exec.approval.resolve", id: "abc12345" });
   });
 
   it("requires configured Discord approvers for exec approvals", async () => {
@@ -728,13 +794,11 @@ describe("handleApproveCommand", () => {
       expect(result?.shouldContinue, testCase.name).toBe(false);
       expect(result?.reply?.text, testCase.name).toContain(testCase.expectedText);
       expect(callGatewayMock, testCase.name).toHaveBeenCalledTimes(testCase.expectedGatewayCalls);
-      if ("expectedMethod" in testCase) {
-        expect(callGatewayMock, testCase.name).toHaveBeenCalledWith(
-          expect.objectContaining({
-            method: testCase.expectedMethod,
-            params: { id: "abc12345", decision: "allow-once" },
-          }),
-        );
+      if ("expectedMethod" in testCase && testCase.expectedMethod) {
+        expectGatewayResolveCall({
+          method: testCase.expectedMethod,
+          id: "abc12345",
+        });
       }
     }
   });
@@ -787,13 +851,11 @@ describe("handleApproveCommand", () => {
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("Approval allow-once submitted");
     expect(callGatewayMock).toHaveBeenCalledTimes(2);
-    expect(callGatewayMock).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        method: "plugin.approval.resolve",
-        params: { id: "legacy-plugin-123", decision: "allow-once" },
-      }),
-    );
+    expectGatewayResolveCall({
+      callIndex: 1,
+      method: "plugin.approval.resolve",
+      id: "legacy-plugin-123",
+    });
   });
 
   it("returns the underlying not-found error for plugin-only approval routing", async () => {
@@ -839,12 +901,7 @@ describe("handleApproveCommand", () => {
     expect(result?.reply?.text).toContain("Failed to submit approval");
     expect(result?.reply?.text).toContain("unknown or expired approval id");
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
-    expect(callGatewayMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "plugin.approval.resolve",
-        params: { id: "abc123", decision: "allow-once" },
-      }),
-    );
+    expectGatewayResolveCall({ method: "plugin.approval.resolve", id: "abc123" });
   });
 
   it("requires configured Discord approvers for plugin approvals", async () => {
@@ -880,12 +937,7 @@ describe("handleApproveCommand", () => {
       expect(result?.reply?.text, testCase.name).toContain(testCase.expectedText);
       expect(callGatewayMock, testCase.name).toHaveBeenCalledTimes(testCase.expectedGatewayCalls);
       if (testCase.expectedGatewayCalls > 0) {
-        expect(callGatewayMock, testCase.name).toHaveBeenCalledWith(
-          expect.objectContaining({
-            method: "plugin.approval.resolve",
-            params: { id: "plugin:abc123", decision: "allow-once" },
-          }),
-        );
+        expectGatewayResolveCall({ method: "plugin.approval.resolve", id: "plugin:abc123" });
       }
     }
   });
@@ -992,12 +1044,11 @@ describe("handleApproveCommand", () => {
         testCase.expectedGatewayCalls,
       );
       if (testCase.expectedGatewayCalls > 0) {
-        expect(callGatewayMock, String(testCase.scopes)).toHaveBeenLastCalledWith(
-          expect.objectContaining({
-            method: "exec.approval.resolve",
-            params: { id: "abc", decision: "allow-once" },
-          }),
-        );
+        expectGatewayResolveCall({
+          callIndex: callGatewayMock.mock.calls.length - 1,
+          method: "exec.approval.resolve",
+          id: "abc",
+        });
       }
     }
   });

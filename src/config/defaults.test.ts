@@ -1,26 +1,36 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_AGENT_MAX_CONCURRENT, DEFAULT_SUBAGENT_MAX_CONCURRENT } from "./agent-limits.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  DEFAULT_AGENT_MAX_CONCURRENT,
+  DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES,
+  DEFAULT_SUBAGENT_MAX_CONCURRENT,
+} from "./agent-limits.js";
+import {
+  applyAgentDefaults,
+  applyContextPruningDefaults,
+  applyMessageDefaults,
+} from "./defaults.js";
 
 const mocks = vi.hoisted(() => ({
-  applyProviderConfigDefaultsWithPlugin: vi.fn(),
+  applyProviderConfigDefaultsForConfig: vi.fn(),
 }));
 
-vi.mock("../plugins/provider-runtime.js", () => ({
-  applyProviderConfigDefaultsWithPlugin: (
-    ...args: Parameters<typeof mocks.applyProviderConfigDefaultsWithPlugin>
-  ) => mocks.applyProviderConfigDefaultsWithPlugin(...args),
+vi.mock("./provider-policy.js", () => ({
+  applyProviderConfigDefaultsForConfig: (
+    ...args: Parameters<typeof mocks.applyProviderConfigDefaultsForConfig>
+  ) => mocks.applyProviderConfigDefaultsForConfig(...args),
+  normalizeProviderConfigForConfigDefaults: (_params: { providerConfig: unknown }) =>
+    _params.providerConfig,
 }));
-
-let applyContextPruningDefaults: typeof import("./defaults.js").applyContextPruningDefaults;
-let applyAgentDefaults: typeof import("./defaults.js").applyAgentDefaults;
-let applyMessageDefaults: typeof import("./defaults.js").applyMessageDefaults;
 
 describe("config defaults", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ applyAgentDefaults, applyContextPruningDefaults, applyMessageDefaults } =
-      await import("./defaults.js"));
-    mocks.applyProviderConfigDefaultsWithPlugin.mockReset();
+  beforeEach(() => {
+    mocks.applyProviderConfigDefaultsForConfig.mockReset();
+    vi.stubEnv("ANTHROPIC_API_KEY", "");
+    vi.stubEnv("ANTHROPIC_OAUTH_TOKEN", "");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it("skips provider defaults when agent defaults are absent", () => {
@@ -35,11 +45,27 @@ describe("config defaults", () => {
     };
 
     expect(applyContextPruningDefaults(cfg as never)).toBe(cfg);
-    expect(mocks.applyProviderConfigDefaultsWithPlugin).not.toHaveBeenCalled();
+    expect(mocks.applyProviderConfigDefaultsForConfig).not.toHaveBeenCalled();
   });
 
-  it("uses anthropic provider defaults when agent defaults exist", () => {
+  it("skips provider defaults when agent defaults have no Anthropic auth signal", () => {
     const cfg = {
+      agents: {
+        defaults: {},
+      },
+    };
+
+    expect(applyContextPruningDefaults(cfg as never)).toBe(cfg);
+    expect(mocks.applyProviderConfigDefaultsForConfig).not.toHaveBeenCalled();
+  });
+
+  it("uses anthropic provider defaults when agent defaults and auth signal exist", () => {
+    const cfg = {
+      auth: {
+        profiles: {
+          anthropic: { provider: "anthropic", mode: "api_key" },
+        },
+      },
       agents: {
         defaults: {},
       },
@@ -53,10 +79,14 @@ describe("config defaults", () => {
         },
       },
     };
-    mocks.applyProviderConfigDefaultsWithPlugin.mockReturnValue(nextCfg);
+    mocks.applyProviderConfigDefaultsForConfig.mockReturnValue(nextCfg);
 
-    expect(applyContextPruningDefaults(cfg as never)).toBe(nextCfg);
-    expect(mocks.applyProviderConfigDefaultsWithPlugin).toHaveBeenCalledTimes(1);
+    const manifestRegistry = { plugins: [] };
+    expect(applyContextPruningDefaults(cfg as never, { manifestRegistry })).toBe(nextCfg);
+    expect(mocks.applyProviderConfigDefaultsForConfig).toHaveBeenCalledTimes(1);
+    const [[defaultsParams]] = mocks.applyProviderConfigDefaultsForConfig.mock
+      .calls as unknown as Array<[{ manifestRegistry?: unknown }]>;
+    expect(defaultsParams.manifestRegistry).toBe(manifestRegistry);
   });
 
   it("defaults ackReactionScope without deriving other message fields", () => {
@@ -85,6 +115,18 @@ describe("config defaults", () => {
     const next = applyAgentDefaults({ messages: {} } as never);
 
     expect(next.agents?.defaults?.maxConcurrent).toBe(DEFAULT_AGENT_MAX_CONCURRENT);
+    expect(next.agents?.defaults?.subagents?.maxConcurrent).toBe(DEFAULT_SUBAGENT_MAX_CONCURRENT);
+    expect(next.agents?.defaults?.subagents?.archiveAfterMinutes).toBe(
+      DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES,
+    );
+  });
+
+  it("preserves explicit subagent archive default", () => {
+    const next = applyAgentDefaults({
+      agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
+    } as never);
+
+    expect(next.agents?.defaults?.subagents?.archiveAfterMinutes).toBe(0);
     expect(next.agents?.defaults?.subagents?.maxConcurrent).toBe(DEFAULT_SUBAGENT_MAX_CONCURRENT);
   });
 });

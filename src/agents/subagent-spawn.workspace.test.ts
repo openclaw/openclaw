@@ -32,9 +32,9 @@ const hoisted = vi.hoisted(() => ({
 let spawnSubagentDirect: typeof import("./subagent-spawn.js").spawnSubagentDirect;
 let resetSubagentRegistryForTests: typeof import("./subagent-registry.js").resetSubagentRegistryForTests;
 
-vi.mock("@mariozechner/pi-ai/oauth", async () => {
-  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai/oauth")>(
-    "@mariozechner/pi-ai/oauth",
+vi.mock("@earendil-works/pi-ai/oauth", async () => {
+  const actual = await vi.importActual<typeof import("@earendil-works/pi-ai/oauth")>(
+    "@earendil-works/pi-ai/oauth",
   );
   return {
     ...actual,
@@ -52,6 +52,11 @@ function createConfigOverride(overrides?: Record<string, unknown>) {
           workspace: "/tmp/workspace-main",
         },
       ],
+    },
+    session: {
+      threadBindings: {
+        defaultSpawnContext: "isolated",
+      },
     },
     ...overrides,
   });
@@ -71,6 +76,20 @@ function getRegisteredRun() {
     | undefined;
 }
 
+function findLastSessionDeleteCall() {
+  return hoisted.callGatewayMock.mock.calls.findLast(
+    ([request]) => (request as { method?: string }).method === "sessions.delete",
+  )?.[0] as
+    | {
+        params?: {
+          key?: string;
+          deleteTranscript?: boolean;
+          emitLifecycleHooks?: boolean;
+        };
+      }
+    | undefined;
+}
+
 async function expectAcceptedWorkspace(params: { agentId: string; expectedWorkspaceDir: string }) {
   const result = await spawnSubagentDirect(
     {
@@ -87,16 +106,14 @@ async function expectAcceptedWorkspace(params: { agentId: string; expectedWorksp
   );
 
   expect(result.status).toBe("accepted");
-  expect(getRegisteredRun()).toMatchObject({
-    workspaceDir: params.expectedWorkspaceDir,
-  });
+  expect(getRegisteredRun()?.workspaceDir).toBe(params.expectedWorkspaceDir);
 }
 
 describe("spawnSubagentDirect workspace inheritance", () => {
   beforeAll(async () => {
     ({ resetSubagentRegistryForTests, spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
       callGatewayMock: hoisted.callGatewayMock,
-      loadConfig: () => hoisted.configOverride,
+      getRuntimeConfig: () => hoisted.configOverride,
       registerSubagentRunMock: hoisted.registerSubagentRunMock,
       hookRunner: hoisted.hookRunner,
       resolveAgentConfig: resolveTestAgentConfig,
@@ -148,51 +165,80 @@ describe("spawnSubagentDirect workspace inheritance", () => {
     });
   });
 
-  it("passes lightweight bootstrap context flags for lightContext subagent spawns", async () => {
-    await spawnSubagentDirect(
+  it("uses explicit cwd for cross-agent native subagent spawns without leaking it to Gateway params", async () => {
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        list: [
+          {
+            id: "main",
+            workspace: "/tmp/workspace-main",
+            subagents: {
+              allowAgents: ["ops"],
+            },
+          },
+          {
+            id: "ops",
+            workspace: "/tmp/workspace-ops",
+          },
+        ],
+      },
+    });
+
+    const result = await spawnSubagentDirect(
       {
-        task: "inspect workspace",
-        lightContext: true,
+        task: "inspect explicit cwd",
+        agentId: "ops",
+        cwd: "/tmp/requester-workspace",
       },
       {
         agentSessionKey: "agent:main:main",
         agentChannel: "telegram",
         agentAccountId: "123",
         agentTo: "456",
-        workspaceDir: "/tmp/requester-workspace",
+        workspaceDir: "/tmp/fallback-requester-workspace",
       },
     );
+
+    expect(result.status).toBe("accepted");
+    expect(getRegisteredRun()?.workspaceDir).toBe("/tmp/requester-workspace");
+    const agentCall = hoisted.callGatewayMock.mock.calls.find(
+      ([request]) => (request as { method?: string }).method === "agent",
+    )?.[0] as { params?: Record<string, unknown> } | undefined;
+    expect(agentCall?.params).not.toHaveProperty("workspaceDir");
+  });
+
+  async function spawnAndReadAgentParams(task: { task: string; lightContext?: boolean }) {
+    await spawnSubagentDirect(task, {
+      agentSessionKey: "agent:main:main",
+      agentChannel: "telegram",
+      agentAccountId: "123",
+      agentTo: "456",
+      workspaceDir: "/tmp/requester-workspace",
+    });
 
     const agentCall = hoisted.callGatewayMock.mock.calls.find(
       ([request]) => (request as { method?: string }).method === "agent",
     )?.[0] as { params?: Record<string, unknown> } | undefined;
+    return agentCall?.params;
+  }
 
-    expect(agentCall?.params).toMatchObject({
-      bootstrapContextMode: "lightweight",
-      bootstrapContextRunKind: "default",
+  it("passes lightweight bootstrap context flags for lightContext subagent spawns", async () => {
+    const agentParams = await spawnAndReadAgentParams({
+      task: "inspect workspace",
+      lightContext: true,
     });
+
+    expect(agentParams?.bootstrapContextMode).toBe("lightweight");
+    expect(agentParams?.bootstrapContextRunKind).toBe("default");
   });
 
   it("omits bootstrap context flags for default subagent spawns", async () => {
-    await spawnSubagentDirect(
-      {
-        task: "inspect workspace",
-      },
-      {
-        agentSessionKey: "agent:main:main",
-        agentChannel: "telegram",
-        agentAccountId: "123",
-        agentTo: "456",
-        workspaceDir: "/tmp/requester-workspace",
-      },
-    );
+    const agentParams = await spawnAndReadAgentParams({
+      task: "inspect workspace",
+    });
 
-    const agentCall = hoisted.callGatewayMock.mock.calls.find(
-      ([request]) => (request as { method?: string }).method === "agent",
-    )?.[0] as { params?: Record<string, unknown> } | undefined;
-
-    expect(agentCall?.params).not.toHaveProperty("bootstrapContextMode");
-    expect(agentCall?.params).not.toHaveProperty("bootstrapContextRunKind");
+    expect(agentParams).not.toHaveProperty("bootstrapContextMode");
+    expect(agentParams).not.toHaveProperty("bootstrapContextRunKind");
   });
 
   it("deletes the provisional child session when a non-thread subagent start fails", async () => {
@@ -227,30 +273,15 @@ describe("spawnSubagentDirect workspace inheritance", () => {
       },
     );
 
-    expect(result).toMatchObject({
-      status: "error",
-      error: "spawn startup failed",
-    });
+    expect(result.status).toBe("error");
+    expect(result.error).toBe("spawn startup failed");
     expect(result.childSessionKey).toMatch(/^agent:main:subagent:/);
     expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
 
-    const deleteCall = hoisted.callGatewayMock.mock.calls.find(
-      ([request]) => (request as { method?: string }).method === "sessions.delete",
-    )?.[0] as
-      | {
-          params?: {
-            key?: string;
-            deleteTranscript?: boolean;
-            emitLifecycleHooks?: boolean;
-          };
-        }
-      | undefined;
-
-    expect(deleteCall?.params).toMatchObject({
-      key: result.childSessionKey,
-      deleteTranscript: true,
-      emitLifecycleHooks: false,
-    });
+    const deleteCall = findLastSessionDeleteCall();
+    expect(deleteCall?.params?.key).toBe(result.childSessionKey);
+    expect(deleteCall?.params?.deleteTranscript).toBe(true);
+    expect(deleteCall?.params?.emitLifecycleHooks).toBe(false);
   });
 
   it("keeps lifecycle hooks enabled when registerSubagentRun fails after thread binding succeeds", async () => {
@@ -285,6 +316,7 @@ describe("spawnSubagentDirect workspace inheritance", () => {
         task: "fail after register with thread binding",
         thread: true,
         mode: "session",
+        context: "isolated",
       },
       {
         agentSessionKey: "agent:main:main",
@@ -295,29 +327,14 @@ describe("spawnSubagentDirect workspace inheritance", () => {
       },
     );
 
-    expect(result).toMatchObject({
-      status: "error",
-      error: "Failed to register subagent run: registry unavailable",
-      childSessionKey: expect.stringMatching(/^agent:main:subagent:/),
-      runId: "run-thread-register-fail",
-    });
+    expect(result.status).toBe("error");
+    expect(result.error).toBe("Failed to register subagent run: registry unavailable");
+    expect(result.childSessionKey).toMatch(/^agent:main:subagent:/);
+    expect(result.runId).toBe("run-thread-register-fail");
 
-    const deleteCall = hoisted.callGatewayMock.mock.calls.findLast(
-      ([request]) => (request as { method?: string }).method === "sessions.delete",
-    )?.[0] as
-      | {
-          params?: {
-            key?: string;
-            deleteTranscript?: boolean;
-            emitLifecycleHooks?: boolean;
-          };
-        }
-      | undefined;
-
-    expect(deleteCall?.params).toMatchObject({
-      key: result.childSessionKey,
-      deleteTranscript: true,
-      emitLifecycleHooks: true,
-    });
+    const deleteCall = findLastSessionDeleteCall();
+    expect(deleteCall?.params?.key).toBe(result.childSessionKey);
+    expect(deleteCall?.params?.deleteTranscript).toBe(true);
+    expect(deleteCall?.params?.emitLifecycleHooks).toBe(true);
   });
 });

@@ -1,9 +1,12 @@
 {
   "name": "@openclaw/tavily-plugin",
-  "version": "2026.4.9",
+  "version": "2026.5.19",
   "private": true,
   "description": "OpenClaw Tavily plugin",
   "type": "module",
+  "dependencies": {
+    "typebox": "1.1.38"
+  },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
   },

@@ -1,7 +1,8 @@
-import path from "node:path";
 import {
   assertOkOrThrowHttpError,
+  buildAudioTranscriptionFormData,
   postTranscriptionRequest,
+  readProviderJsonObjectResponse,
   resolveProviderHttpRequestConfig,
   requireTranscriptionText,
 } from "./shared.js";
@@ -39,20 +40,16 @@ export async function transcribeOpenAiCompatibleAudio(
   const url = `${baseUrl}/audio/transcriptions`;
 
   const model = resolveModel(params.model, params.defaultModel);
-  const form = new FormData();
-  const fileName = params.fileName?.trim() || path.basename(params.fileName) || "audio";
-  const bytes = new Uint8Array(params.buffer);
-  const blob = new Blob([bytes], {
-    type: params.mime ?? "application/octet-stream",
+  const form = buildAudioTranscriptionFormData({
+    buffer: params.buffer,
+    fileName: params.fileName,
+    mime: params.mime,
+    fields: {
+      model,
+      language: params.language,
+      prompt: params.prompt,
+    },
   });
-  form.append("file", blob, fileName);
-  form.append("model", model);
-  if (params.language?.trim()) {
-    form.append("language", params.language.trim());
-  }
-  if (params.prompt?.trim()) {
-    form.append("prompt", params.prompt.trim());
-  }
 
   const { response: res, release } = await postTranscriptionRequest({
     url,
@@ -60,6 +57,7 @@ export async function transcribeOpenAiCompatibleAudio(
     body: form,
     timeoutMs: params.timeoutMs,
     fetchFn,
+    pinDns: false,
     allowPrivateNetwork,
     dispatcherPolicy,
   });
@@ -67,9 +65,9 @@ export async function transcribeOpenAiCompatibleAudio(
   try {
     await assertOkOrThrowHttpError(res, "Audio transcription failed");
 
-    const payload = (await res.json()) as { text?: string };
+    const payload = await readProviderJsonObjectResponse(res, "Audio transcription failed");
     const text = requireTranscriptionText(
-      payload.text,
+      typeof payload.text === "string" ? payload.text : undefined,
       "Audio transcription response missing text",
     );
     return { text, model };

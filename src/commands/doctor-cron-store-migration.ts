@@ -1,5 +1,6 @@
-import { normalizeCronJobIdentityFields } from "../cron/normalize-job-identity.js";
+import { randomUUID } from "node:crypto";
 import { parseAbsoluteTimeMs } from "../cron/parse.js";
+import { getInvalidPersistedCronJobReason } from "../cron/persisted-shape.js";
 import { coerceFiniteScheduleNumber } from "../cron/schedule.js";
 import { inferLegacyName } from "../cron/service/normalize.js";
 import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "../cron/stagger.js";
@@ -7,19 +8,28 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
+  normalizeOptionalStringifiedId,
 } from "../shared/string-coerce.js";
 import { normalizeLegacyDeliveryInput } from "./doctor-cron-legacy-delivery.js";
-import { migrateLegacyCronPayload } from "./doctor-cron-payload-migration.js";
+import {
+  hasLegacyOpenAICodexCronModelRef,
+  migrateLegacyCronPayload,
+} from "./doctor-cron-payload-migration.js";
 
 type CronStoreIssueKey =
   | "jobId"
+  | "missingId"
+  | "nonStringId"
   | "legacyScheduleString"
   | "legacyScheduleCron"
   | "legacyPayloadKind"
+  | "legacyPayloadCodexModel"
   | "legacyPayloadProvider"
   | "legacyTopLevelPayloadFields"
   | "legacyTopLevelDeliveryFields"
-  | "legacyDeliveryMode";
+  | "legacyDeliveryMode"
+  | "invalidSchedule"
+  | "invalidPayload";
 
 type CronStoreIssues = Partial<Record<CronStoreIssueKey, number>>;
 
@@ -31,6 +41,38 @@ type NormalizeCronStoreJobsResult = {
 
 function incrementIssue(issues: CronStoreIssues, key: CronStoreIssueKey) {
   issues[key] = (issues[key] ?? 0) + 1;
+}
+
+function normalizeStoredCronJobIdentity(raw: Record<string, unknown>): {
+  mutated: boolean;
+  legacyJobIdIssue: boolean;
+  missingIdIssue: boolean;
+  nonStringIdIssue: boolean;
+} {
+  const hadIdKey = "id" in raw;
+  const hadJobIdKey = "jobId" in raw;
+  const id = normalizeOptionalStringifiedId(raw.id);
+  const legacyJobId = normalizeOptionalStringifiedId(raw.jobId);
+  const canonicalId = id ?? legacyJobId ?? `cron-${randomUUID()}`;
+  const nonStringIdIssue = hadIdKey && raw.id != null && typeof raw.id !== "string";
+  const missingIdIssue = !id && !legacyJobId;
+  let mutated = false;
+
+  if (raw.id !== canonicalId) {
+    raw.id = canonicalId;
+    mutated = true;
+  }
+  if (hadJobIdKey) {
+    delete raw.jobId;
+    mutated = true;
+  }
+
+  return {
+    mutated,
+    legacyJobIdIssue: hadJobIdKey,
+    missingIdIssue,
+    nonStringIdIssue,
+  };
 }
 
 function normalizePayloadKind(payload: Record<string, unknown>) {
@@ -196,6 +238,7 @@ export function normalizeStoredCronJobs(
 ): NormalizeCronStoreJobsResult {
   const issues: CronStoreIssues = {};
   let mutated = false;
+  const keptJobs: Array<Record<string, unknown>> = [];
 
   for (const raw of jobs) {
     const jobIssues = new Set<CronStoreIssueKey>();
@@ -213,12 +256,18 @@ export function normalizeStoredCronJobs(
       mutated = true;
     }
 
-    const idNorm = normalizeCronJobIdentityFields(raw);
+    const idNorm = normalizeStoredCronJobIdentity(raw);
     if (idNorm.mutated) {
       mutated = true;
     }
     if (idNorm.legacyJobIdIssue) {
       trackIssue("jobId");
+    }
+    if (idNorm.missingIdIssue) {
+      trackIssue("missingId");
+    }
+    if (idNorm.nonStringIdIssue) {
+      trackIssue("nonStringId");
     }
 
     if (typeof raw.schedule === "string") {
@@ -339,8 +388,12 @@ export function normalizeStoredCronJobs(
 
     if (payloadRecord) {
       const hadLegacyPayloadProvider = Boolean(normalizeOptionalString(payloadRecord.provider));
+      const hadLegacyPayloadCodexModel = hasLegacyOpenAICodexCronModelRef(payloadRecord);
       if (migrateLegacyCronPayload(payloadRecord)) {
         mutated = true;
+        if (hadLegacyPayloadCodexModel) {
+          trackIssue("legacyPayloadCodexModel");
+        }
         if (hadLegacyPayloadProvider) {
           trackIssue("legacyPayloadProvider");
         }
@@ -511,6 +564,29 @@ export function normalizeStoredCronJobs(
       raw.delivery = normalizedLegacy.delivery;
       mutated = true;
     }
+
+    const invalidPersistedReason = getInvalidPersistedCronJobReason(raw);
+    if (
+      invalidPersistedReason === "missing-schedule" ||
+      invalidPersistedReason === "invalid-schedule"
+    ) {
+      trackIssue("invalidSchedule");
+      mutated = true;
+      continue;
+    }
+    if (
+      invalidPersistedReason === "missing-payload" ||
+      invalidPersistedReason === "invalid-payload"
+    ) {
+      trackIssue("invalidPayload");
+      mutated = true;
+      continue;
+    }
+    keptJobs.push(raw);
+  }
+
+  if (keptJobs.length !== jobs.length) {
+    jobs.splice(0, jobs.length, ...keptJobs);
   }
 
   return { issues, jobs, mutated };

@@ -1,67 +1,99 @@
-import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildWorkspaceSkillsPrompt } from "./skills.js";
-import { writeSkill } from "./skills.test-helpers.js";
-
-async function withTempWorkspace(run: (workspaceDir: string) => Promise<void>) {
-  const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compact-"));
-  try {
-    await run(workspaceDir);
-  } finally {
-    await fs.rm(workspaceDir, { recursive: true, force: true });
-  }
-}
+import { createCanonicalFixtureSkill } from "./skills.test-helpers.js";
+import {
+  testing as workspaceSkillsTesting,
+  buildWorkspaceSkillsPrompt,
+} from "./skills/workspace.js";
 
 describe("compactSkillPaths", () => {
-  it("replaces home directory prefix with ~ in skill locations", async () => {
-    await withTempWorkspace(async (workspaceDir) => {
-      const skillDir = path.join(workspaceDir, "skills", "test-skill");
-
-      await writeSkill({
-        dir: skillDir,
-        name: "test-skill",
-        description: "A test skill for path compaction",
-      });
-
-      const prompt = buildWorkspaceSkillsPrompt(workspaceDir, {
-        bundledSkillsDir: path.join(workspaceDir, ".bundled-empty"),
-        managedSkillsDir: path.join(workspaceDir, ".managed-empty"),
-      });
-
-      const home = os.homedir();
-      // The prompt should NOT contain the absolute home directory path
-      // when the skill is under the home directory (which tmpdir usually is on macOS)
-      if (workspaceDir.startsWith(home)) {
-        expect(prompt).not.toContain(home + path.sep);
-        expect(prompt).toContain("~/");
-      }
-
-      // The skill name and description should still be present
-      expect(prompt).toContain("test-skill");
-      expect(prompt).toContain("A test skill for path compaction");
+  function buildPromptForFixtureSkill(params: {
+    workspaceRoot: string;
+    skillDir: string;
+    name: string;
+    description: string;
+  }) {
+    return buildWorkspaceSkillsPrompt(params.workspaceRoot, {
+      entries: [
+        {
+          skill: createCanonicalFixtureSkill({
+            name: params.name,
+            description: params.description,
+            filePath: path.join(params.skillDir, "SKILL.md"),
+            baseDir: params.skillDir,
+            source: "test",
+          }),
+          frontmatter: {},
+          metadata: undefined,
+          invocation: { disableModelInvocation: false, userInvocable: true },
+          exposure: {
+            includeInRuntimeRegistry: true,
+            includeInAvailableSkillsPrompt: true,
+            userInvocable: true,
+          },
+        },
+      ],
     });
+  }
+
+  it("replaces home directory prefix with ~ in skill locations", () => {
+    const home = os.homedir();
+    const skillDir = path.join(home, ".openclaw-test-skills", "test-skill");
+
+    const prompt = buildPromptForFixtureSkill({
+      workspaceRoot: home,
+      skillDir,
+      name: "test-skill",
+      description: "A test skill for path compaction",
+    });
+
+    expect(prompt).not.toContain(home + path.sep);
+    expect(prompt).toContain("~/");
+    expect(prompt).toContain("test-skill");
+    expect(prompt).toContain("A test skill for path compaction");
   });
 
-  it("preserves paths outside home directory", async () => {
-    // Skills outside ~ should keep their absolute paths
-    await withTempWorkspace(async (workspaceDir) => {
-      const skillDir = path.join(workspaceDir, "skills", "ext-skill");
+  it("normalizes compacted Windows skill locations to forward slashes", () => {
+    const home = "C:\\Users\\alice";
+    const skillPath = path.win32.join(home, ".openclaw-test-skills", "win-skill", "SKILL.md");
 
-      await writeSkill({
-        dir: skillDir,
-        name: "ext-skill",
-        description: "External skill",
-      });
+    const compactedPath = workspaceSkillsTesting.compactHomePath(skillPath, [home]);
 
-      const prompt = buildWorkspaceSkillsPrompt(workspaceDir, {
-        bundledSkillsDir: path.join(workspaceDir, ".bundled-empty"),
-        managedSkillsDir: path.join(workspaceDir, ".managed-empty"),
-      });
+    expect(compactedPath).toBe("~/.openclaw-test-skills/win-skill/SKILL.md");
+  });
 
-      // Should still contain a valid location tag
-      expect(prompt).toMatch(/<location>[^<]+SKILL\.md<\/location>/);
+  it("preserves POSIX literal backslashes after home compaction", () => {
+    const home = os.homedir();
+    const skillDir = path.join(home, ".openclaw-test-skills\\literal-skill");
+
+    const prompt = buildPromptForFixtureSkill({
+      workspaceRoot: home,
+      skillDir,
+      name: "literal-skill",
+      description: "POSIX literal backslash skill",
     });
+
+    const locationMatch = prompt.match(/<location>([^<]+)<\/location>/);
+    if (!locationMatch) {
+      throw new Error("expected prompt location tag");
+    }
+    expect(locationMatch[1]).toContain("~/");
+    expect(locationMatch[1]).toContain("\\literal-skill");
+  });
+
+  it("preserves paths outside home directory", () => {
+    const outsideHome = path.join(path.parse(os.homedir()).root, "openclaw-external-skills");
+    const skillDir = path.join(outsideHome, "skills", "ext-skill");
+
+    const prompt = buildPromptForFixtureSkill({
+      workspaceRoot: outsideHome,
+      skillDir,
+      name: "ext-skill",
+      description: "External skill",
+    });
+
+    expect(prompt).toMatch(/<location>[^<]+SKILL\.md<\/location>/);
+    expect(prompt).toContain(path.join(skillDir, "SKILL.md"));
   });
 });

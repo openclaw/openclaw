@@ -1,6 +1,7 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listSupportedMusicGenerationModes } from "../../music-generation/capabilities.js";
 import { listRuntimeMusicGenerationProviders } from "../../music-generation/runtime.js";
+import type { AuthProfileStore } from "../auth-profiles/types.js";
 import {
   buildMusicGenerationTaskStatusDetails,
   buildMusicGenerationTaskStatusText,
@@ -26,7 +27,18 @@ function summarizeMusicGenerationCapabilities(
     edit?.maxInputImages ? `maxInputImages=${edit.maxInputImages}` : null,
     generate?.maxDurationSeconds ? `maxDurationSeconds=${generate.maxDurationSeconds}` : null,
     generate?.supportsLyrics ? "lyrics" : null,
+    generate?.supportsLyricsByModel && Object.keys(generate.supportsLyricsByModel).length > 0
+      ? `supportsLyricsByModel=${Object.entries(generate.supportsLyricsByModel)
+          .map(([modelId, supported]) => `${modelId}:${supported}`)
+          .join("; ")}`
+      : null,
     generate?.supportsInstrumental ? "instrumental" : null,
+    generate?.supportsInstrumentalByModel &&
+    Object.keys(generate.supportsInstrumentalByModel).length > 0
+      ? `supportsInstrumentalByModel=${Object.entries(generate.supportsInstrumentalByModel)
+          .map(([modelId, supported]) => `${modelId}:${supported}`)
+          .join("; ")}`
+      : null,
     generate?.supportsDuration ? "duration" : null,
     generate?.supportsFormat ? "format" : null,
     generate?.supportedFormats?.length
@@ -45,11 +57,16 @@ function summarizeMusicGenerationCapabilities(
 
 export function createMusicGenerateListActionResult(
   config?: OpenClawConfig,
+  options?: { agentDir?: string; authStore?: AuthProfileStore },
 ): MusicGenerateActionResult {
   const providers = listRuntimeMusicGenerationProviders({ config });
   return createMediaGenerateProviderListActionResult({
+    kind: "music_generation",
     providers,
     emptyText: "No music-generation providers are registered.",
+    cfg: config,
+    agentDir: options?.agentDir,
+    authStore: options?.authStore,
     listModes: listSupportedMusicGenerationModes,
     summarizeCapabilities: summarizeMusicGenerationCapabilities,
   });

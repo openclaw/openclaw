@@ -1,14 +1,37 @@
-import type { ChannelOutboundAdapter } from "../channels/plugins/types.js";
-import { readStringValue } from "../shared/string-coerce.js";
+import type { ReplyPayload as InternalReplyPayload } from "../auto-reply/reply-payload.js";
+import type { ChannelOutboundAdapter } from "../channels/plugins/outbound.types.js";
+import { createReplyToFanout } from "../infra/outbound/reply-policy.js";
+import { hasReplyPayloadContent } from "../interactive/payload.js";
+import { normalizeLowercaseStringOrEmpty, readStringValue } from "../shared/string-coerce.js";
 
 export type { MediaPayload, MediaPayloadInput } from "../channels/plugins/media-payload.js";
 export { buildMediaPayload } from "../channels/plugins/media-payload.js";
+export type ReplyPayload = Omit<InternalReplyPayload, "trustedLocalMedia">;
+export type { ReplyPayloadTtsSupplement } from "../auto-reply/reply-payload.js";
+export {
+  buildTtsSupplementMediaPayload,
+  getReplyPayloadTtsSupplement,
+  isReplyPayloadTtsSupplement,
+  markReplyPayloadAsTtsSupplement,
+} from "../auto-reply/reply-payload.js";
 
 export type OutboundReplyPayload = {
   text?: string;
   mediaUrls?: string[];
   mediaUrl?: string;
+  presentation?: InternalReplyPayload["presentation"];
+  /**
+   * @deprecated Use presentation. Runtime support remains for legacy producers.
+   */
+  interactive?: InternalReplyPayload["interactive"];
+  channelData?: InternalReplyPayload["channelData"];
+  sensitiveMedia?: boolean;
   replyToId?: string;
+};
+
+export type ReasoningReplyPayload = {
+  text?: string;
+  isReasoning?: boolean;
 };
 
 export type SendableOutboundReplyParts = {
@@ -28,6 +51,36 @@ type SendPayloadAdapter = Pick<
   "sendMedia" | "sendText" | "chunker" | "textChunkLimit"
 >;
 
+const REASONING_PREFIX_RE = /^(?:reasoning:|thinking\.{0,3}(?=\s*(?:>\s*)?_))/u;
+
+function readObjectValue(value: unknown): object | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : undefined;
+}
+
+function trimLeadingMarkdownQuoteMarkers(text: string): string {
+  let candidate = text.trimStart();
+  while (candidate.startsWith(">")) {
+    candidate = candidate.replace(/^(?:>[ \t]?)+/, "").trimStart();
+  }
+  return candidate;
+}
+
+export function isReasoningReplyPayload(payload: ReasoningReplyPayload): boolean {
+  if (payload.isReasoning === true) {
+    return true;
+  }
+  const text = payload.text;
+  if (typeof text !== "string") {
+    return false;
+  }
+  const normalized = normalizeLowercaseStringOrEmpty(text.trimStart());
+  if (REASONING_PREFIX_RE.test(normalized)) {
+    return true;
+  }
+  const unquoted = normalizeLowercaseStringOrEmpty(trimLeadingMarkdownQuoteMarkers(text));
+  return REASONING_PREFIX_RE.test(unquoted);
+}
+
 /** Extract the supported outbound reply fields from loose tool or agent payload objects. */
 export function normalizeOutboundReplyPayload(
   payload: Record<string, unknown>,
@@ -39,11 +92,21 @@ export function normalizeOutboundReplyPayload(
       )
     : undefined;
   const mediaUrl = readStringValue(payload.mediaUrl);
+  const presentation = readObjectValue(
+    payload.presentation,
+  ) as OutboundReplyPayload["presentation"];
+  const interactive = readObjectValue(payload.interactive) as OutboundReplyPayload["interactive"];
+  const channelData = readObjectValue(payload.channelData) as OutboundReplyPayload["channelData"];
+  const sensitiveMedia = payload.sensitiveMedia === true ? true : undefined;
   const replyToId = readStringValue(payload.replyToId);
   return {
     text,
     mediaUrls,
     mediaUrl,
+    presentation,
+    interactive,
+    channelData,
+    sensitiveMedia,
     replyToId,
   };
 }
@@ -96,12 +159,19 @@ export function hasOutboundText(payload: { text?: string }, options?: { trim?: b
   return Boolean(text);
 }
 
-/** Check whether an outbound payload includes any sendable text or media. */
+/** Check whether an outbound payload includes any sendable text, media, or rich reply content. */
 export function hasOutboundReplyContent(
-  payload: { text?: string; mediaUrls?: string[]; mediaUrl?: string },
+  payload: {
+    text?: string;
+    mediaUrls?: string[];
+    mediaUrl?: string;
+    presentation?: unknown;
+    interactive?: unknown;
+    channelData?: unknown;
+  },
   options?: { trimText?: boolean },
 ): boolean {
-  return hasOutboundText(payload, { trim: options?.trimText }) || hasOutboundMedia(payload);
+  return hasReplyPayloadContent(payload, { trimText: options?.trimText });
 }
 
 /** Normalize reply payload text/media into a trimmed, sendable shape for delivery paths. */
@@ -252,7 +322,9 @@ export async function sendTextMediaPayload(params: {
   if (!text && urls.length === 0) {
     return { channel: params.channel, messageId: "" };
   }
+  const nextReplyToId = createReplyToFanout(params.ctx);
   if (urls.length > 0) {
+    const audioAsVoice = params.ctx.payload.audioAsVoice ?? params.ctx.audioAsVoice;
     const lastResult = await sendPayloadMediaSequence({
       text,
       mediaUrls: urls,
@@ -261,15 +333,24 @@ export async function sendTextMediaPayload(params: {
           ...params.ctx,
           text,
           mediaUrl,
+          ...(audioAsVoice === undefined ? {} : { audioAsVoice }),
+          replyToId: nextReplyToId(),
         }),
     });
     return lastResult ?? { channel: params.channel, messageId: "" };
   }
   const limit = params.adapter.textChunkLimit;
-  const chunks = limit && params.adapter.chunker ? params.adapter.chunker(text, limit) : [text];
+  const chunks =
+    limit && params.adapter.chunker
+      ? params.adapter.chunker(text, limit, { formatting: params.ctx.formatting })
+      : [text];
   let lastResult: Awaited<ReturnType<NonNullable<typeof params.adapter.sendText>>>;
   for (const chunk of chunks) {
-    lastResult = await params.adapter.sendText!({ ...params.ctx, text: chunk });
+    lastResult = await params.adapter.sendText!({
+      ...params.ctx,
+      text: chunk,
+      replyToId: nextReplyToId(),
+    });
   }
   return lastResult!;
 }

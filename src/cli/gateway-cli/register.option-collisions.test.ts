@@ -55,14 +55,14 @@ vi.mock("./call.js", () => ({
     mocks.callGatewayCli(method, opts, params),
 }));
 
-vi.mock("./run.js", () => ({
+vi.mock("./run-command.js", () => ({
   addGatewayRunCommand: (cmd: Command) =>
     cmd
       .option("--token <token>", "Gateway token")
       .option("--password <password>", "Gateway password"),
 }));
 
-vi.mock("../daemon-cli.js", () => ({
+vi.mock("../daemon-cli/register-service-commands.js", () => ({
   addGatewayServiceCommands: () => undefined,
 }));
 
@@ -70,9 +70,9 @@ vi.mock("../../commands/health.js", () => ({
   formatHealthChannelLines: () => [],
 }));
 
-vi.mock("../../config/config.js", () => ({
-  loadConfig: () => ({}),
+vi.mock("../../config/read-best-effort-config.runtime.js", () => ({
   readBestEffortConfig: async () => ({}),
+  readSourceConfigBestEffort: async () => ({}),
 }));
 
 vi.mock("../../infra/bonjour-discovery.js", () => ({
@@ -122,6 +122,14 @@ vi.mock("./discover.js", () => ({
   renderBeaconLines: () => [],
 }));
 
+function firstGatewayCall() {
+  return callGatewayCli.mock.calls[0] ?? [];
+}
+
+function firstGatewayStatusCall() {
+  return gatewayStatusCommand.mock.calls[0] ?? [];
+}
+
 describe("gateway register option collisions", () => {
   let sharedProgram: Command = new Command();
 
@@ -145,25 +153,21 @@ describe("gateway register option collisions", () => {
       name: "forwards --token to gateway call when parent and child option names collide",
       argv: ["gateway", "call", "health", "--token", "tok_call", "--json"],
       assert: () => {
-        expect(callGatewayCli).toHaveBeenCalledWith(
-          "health",
-          expect.objectContaining({
-            token: "tok_call",
-          }),
-          {},
-        );
+        expect(callGatewayCli).toHaveBeenCalledTimes(1);
+        const [method, opts, params] = firstGatewayCall();
+        expect(method).toBe("health");
+        expect((opts as { token?: string } | undefined)?.token).toBe("tok_call");
+        expect(params).toEqual({});
       },
     },
     {
       name: "forwards --token to gateway probe when parent and child option names collide",
       argv: ["gateway", "probe", "--token", "tok_probe", "--json"],
       assert: () => {
-        expect(gatewayStatusCommand).toHaveBeenCalledWith(
-          expect.objectContaining({
-            token: "tok_probe",
-          }),
-          defaultRuntime,
-        );
+        expect(gatewayStatusCommand).toHaveBeenCalledTimes(1);
+        const [opts, runtime] = firstGatewayStatusCall();
+        expect((opts as { token?: string } | undefined)?.token).toBe("tok_probe");
+        expect(runtime).toBe(defaultRuntime);
       },
     },
   ])("$name", async ({ argv, assert }) => {

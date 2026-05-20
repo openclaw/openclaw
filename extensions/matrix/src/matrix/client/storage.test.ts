@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveMatrixAccountStorageRoot } from "../../../runtime-api.js";
+import { resolveMatrixAccountStorageRoot } from "../../storage-paths.js";
 import { installMatrixTestRuntime } from "../../test-runtime.js";
 import {
   claimCurrentTokenStorageState,
@@ -34,15 +34,6 @@ const maybeCreateMatrixMigrationSnapshotMock = vi.hoisted(() =>
   })),
 );
 
-vi.mock("../../../../../src/infra/backup-create.js", async () => {
-  const actual = await vi.importActual<typeof import("../../../../../src/infra/backup-create.js")>(
-    "../../../../../src/infra/backup-create.js",
-  );
-  return {
-    ...actual,
-    createBackupArchive: (params: unknown) => createBackupArchiveMock(params),
-  };
-});
 vi.mock("./migration-snapshot.runtime.js", () => ({
   maybeCreateMatrixMigrationSnapshot: (params: unknown) =>
     maybeCreateMatrixMigrationSnapshotMock(params),
@@ -113,6 +104,24 @@ describe("matrix client storage paths", () => {
     } as NodeJS.ProcessEnv;
   }
 
+  function expectFallbackMigrationSnapshot(env: NodeJS.ProcessEnv): void {
+    expect(maybeCreateMatrixMigrationSnapshotMock).toHaveBeenCalledTimes(1);
+    const [params] = maybeCreateMatrixMigrationSnapshotMock.mock.calls.at(0) ?? [];
+    expect(params).toEqual({
+      env,
+      log: {
+        info: (params as { log?: { info?: unknown } })?.log?.info,
+        warn: (params as { log?: { warn?: unknown } })?.log?.warn,
+        error: (params as { log?: { error?: unknown } })?.log?.error,
+      },
+      trigger: "matrix-client-fallback",
+    });
+    const log = (params as { log?: { info?: unknown; warn?: unknown; error?: unknown } })?.log;
+    expect(typeof log?.info).toBe("function");
+    expect(typeof log?.warn).toBe("function");
+    expect(typeof log?.error).toBe("function");
+  }
+
   function resolveDefaultStoragePaths(
     overrides: Partial<{
       homeserver: string;
@@ -127,6 +136,85 @@ describe("matrix client storage paths", () => {
       ...overrides,
       env: {},
     });
+  }
+
+  function setupCurrentTokenBackfillScenario(params: {
+    currentRootFiles: "thread-bindings" | "startup-verification";
+    oldRootFiles: "crypto-only" | "thread-bindings";
+  }) {
+    const stateDir = setupStateDir();
+    const canonicalPaths = resolveMatrixAccountStorageRoot({
+      stateDir,
+      homeserver: defaultStorageAuth.homeserver,
+      userId: defaultStorageAuth.userId,
+      accessToken: "secret-token-new",
+    });
+    fs.mkdirSync(canonicalPaths.rootDir, { recursive: true });
+    writeJson(canonicalPaths.rootDir, "storage-meta.json", {
+      homeserver: defaultStorageAuth.homeserver,
+      userId: defaultStorageAuth.userId,
+      accountId: "default",
+      accessTokenHash: canonicalPaths.tokenHash,
+      deviceId: null,
+    });
+    if (params.currentRootFiles === "thread-bindings") {
+      writeJson(canonicalPaths.rootDir, "thread-bindings.json", {
+        version: 1,
+        bindings: [
+          {
+            accountId: "default",
+            conversationId: "$thread-new",
+            targetKind: "subagent",
+            targetSessionKey: "agent:ops:subagent:new",
+            boundAt: 1,
+            lastActivityAt: 1,
+          },
+        ],
+      });
+      expect(
+        claimCurrentTokenStorageState({
+          rootDir: canonicalPaths.rootDir,
+        }),
+      ).toBe(true);
+    } else {
+      writeJson(canonicalPaths.rootDir, "startup-verification.json", {
+        deviceId: "DEVICE123",
+      });
+    }
+
+    const oldStoragePaths = seedExistingStorageRoot({
+      accessToken: "secret-token-old",
+      deviceId: "DEVICE123",
+      storageMeta: {
+        homeserver: defaultStorageAuth.homeserver,
+        userId: defaultStorageAuth.userId,
+        accountId: "default",
+        accessTokenHash: resolveDefaultStoragePaths({ accessToken: "secret-token-old" }).tokenHash,
+        deviceId: "DEVICE123",
+      },
+    });
+    fs.mkdirSync(oldStoragePaths.cryptoPath, { recursive: true });
+    if (params.oldRootFiles === "thread-bindings") {
+      writeJson(oldStoragePaths.rootDir, "thread-bindings.json", {
+        version: 1,
+        bindings: [
+          {
+            accountId: "default",
+            conversationId: "$thread-old",
+            targetKind: "subagent",
+            targetSessionKey: "agent:ops:subagent:old",
+            boundAt: 1,
+            lastActivityAt: 1,
+          },
+        ],
+      });
+    } else {
+      writeJson(oldStoragePaths.rootDir, "startup-verification.json", {
+        deviceId: "DEVICE123",
+      });
+    }
+
+    return { stateDir, canonicalPaths, oldStoragePaths };
   }
 
   it("resolves state file paths inside the selected storage root", () => {
@@ -273,12 +361,7 @@ describe("matrix client storage paths", () => {
       env,
     });
 
-    expect(maybeCreateMatrixMigrationSnapshotMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        env,
-        trigger: "matrix-client-fallback",
-      }),
-    );
+    expectFallbackMigrationSnapshot(env);
     expect(fs.existsSync(path.join(legacyRoot, "bot-storage.json"))).toBe(false);
     expect(fs.readFileSync(storagePaths.storagePath, "utf8")).toBe('{"legacy":true}');
     expect(fs.existsSync(storagePaths.cryptoPath)).toBe(true);
@@ -297,12 +380,7 @@ describe("matrix client storage paths", () => {
       env,
     });
 
-    expect(maybeCreateMatrixMigrationSnapshotMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        env,
-        trigger: "matrix-client-fallback",
-      }),
-    );
+    expectFallbackMigrationSnapshot(env);
     expect(fs.readFileSync(storagePaths.storagePath, "utf8")).toBe('{"new":true}');
     expect(fs.existsSync(path.join(legacyRoot, "crypto"))).toBe(false);
     expect(fs.existsSync(storagePaths.cryptoPath)).toBe(true);
@@ -497,53 +575,9 @@ describe("matrix client storage paths", () => {
   });
 
   it("keeps the current-token storage root stable after deviceId backfill when startup claimed state there", () => {
-    const stateDir = setupStateDir();
-    const canonicalPaths = resolveMatrixAccountStorageRoot({
-      stateDir,
-      homeserver: defaultStorageAuth.homeserver,
-      userId: defaultStorageAuth.userId,
-      accessToken: "secret-token-new",
-    });
-    fs.mkdirSync(canonicalPaths.rootDir, { recursive: true });
-    writeJson(canonicalPaths.rootDir, "storage-meta.json", {
-      homeserver: defaultStorageAuth.homeserver,
-      userId: defaultStorageAuth.userId,
-      accountId: "default",
-      accessTokenHash: canonicalPaths.tokenHash,
-      deviceId: null,
-    });
-    writeJson(canonicalPaths.rootDir, "thread-bindings.json", {
-      version: 1,
-      bindings: [
-        {
-          accountId: "default",
-          conversationId: "$thread-new",
-          targetKind: "subagent",
-          targetSessionKey: "agent:ops:subagent:new",
-          boundAt: 1,
-          lastActivityAt: 1,
-        },
-      ],
-    });
-    expect(
-      claimCurrentTokenStorageState({
-        rootDir: canonicalPaths.rootDir,
-      }),
-    ).toBe(true);
-    const oldStoragePaths = seedExistingStorageRoot({
-      accessToken: "secret-token-old",
-      deviceId: "DEVICE123",
-      storageMeta: {
-        homeserver: defaultStorageAuth.homeserver,
-        userId: defaultStorageAuth.userId,
-        accountId: "default",
-        accessTokenHash: resolveDefaultStoragePaths({ accessToken: "secret-token-old" }).tokenHash,
-        deviceId: "DEVICE123",
-      },
-    });
-    fs.mkdirSync(oldStoragePaths.cryptoPath, { recursive: true });
-    writeJson(oldStoragePaths.rootDir, "startup-verification.json", {
-      deviceId: "DEVICE123",
+    const { stateDir, canonicalPaths } = setupCurrentTokenBackfillScenario({
+      currentRootFiles: "thread-bindings",
+      oldRootFiles: "crypto-only",
     });
 
     repairCurrentTokenStorageMetaDeviceId({
@@ -572,48 +606,9 @@ describe("matrix client storage paths", () => {
   });
 
   it("does not keep the current-token storage root sticky when only marker files exist after backfill", () => {
-    const stateDir = setupStateDir();
-    const canonicalPaths = resolveMatrixAccountStorageRoot({
-      stateDir,
-      homeserver: defaultStorageAuth.homeserver,
-      userId: defaultStorageAuth.userId,
-      accessToken: "secret-token-new",
-    });
-    fs.mkdirSync(canonicalPaths.rootDir, { recursive: true });
-    writeJson(canonicalPaths.rootDir, "storage-meta.json", {
-      homeserver: defaultStorageAuth.homeserver,
-      userId: defaultStorageAuth.userId,
-      accountId: "default",
-      accessTokenHash: canonicalPaths.tokenHash,
-      deviceId: null,
-    });
-    writeJson(canonicalPaths.rootDir, "startup-verification.json", {
-      deviceId: "DEVICE123",
-    });
-    const oldStoragePaths = seedExistingStorageRoot({
-      accessToken: "secret-token-old",
-      deviceId: "DEVICE123",
-      storageMeta: {
-        homeserver: defaultStorageAuth.homeserver,
-        userId: defaultStorageAuth.userId,
-        accountId: "default",
-        accessTokenHash: resolveDefaultStoragePaths({ accessToken: "secret-token-old" }).tokenHash,
-        deviceId: "DEVICE123",
-      },
-    });
-    fs.mkdirSync(oldStoragePaths.cryptoPath, { recursive: true });
-    writeJson(oldStoragePaths.rootDir, "thread-bindings.json", {
-      version: 1,
-      bindings: [
-        {
-          accountId: "default",
-          conversationId: "$thread-old",
-          targetKind: "subagent",
-          targetSessionKey: "agent:ops:subagent:old",
-          boundAt: 1,
-          lastActivityAt: 1,
-        },
-      ],
+    const { stateDir, oldStoragePaths } = setupCurrentTokenBackfillScenario({
+      currentRootFiles: "startup-verification",
+      oldRootFiles: "thread-bindings",
     });
 
     repairCurrentTokenStorageMetaDeviceId({

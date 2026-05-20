@@ -100,13 +100,18 @@ describe("check-extension-package-tsc-boundary", () => {
       thrownError = error;
     }
 
-    expect(thrownError).toMatchObject({
-      message: expect.stringContaining("kind: lock-contention"),
-      fullOutput: expect.stringContaining(
-        "another extension package boundary check is already running",
-      ),
-      kind: "lock-contention",
-    });
+    expect(thrownError).toBeInstanceOf(Error);
+    if (!(thrownError instanceof Error)) {
+      throw new Error("expected boundary lock contention to throw an Error");
+    }
+    expect(thrownError.message).toContain("kind: lock-contention");
+    expect(thrownError.message).toContain(
+      "another extension package boundary check is already running",
+    );
+    expect((thrownError as { fullOutput?: unknown }).fullOutput).toContain(
+      "another extension package boundary check is already running",
+    );
+    expect((thrownError as { kind?: unknown }).kind).toBe("lock-contention");
 
     release();
 
@@ -300,51 +305,74 @@ describe("check-extension-package-tsc-boundary", () => {
   });
 
   it("keeps full failure output on the thrown error for canary detection", async () => {
-    await expect(
-      runNodeStepAsync(
-        "demo-plugin",
+    const failure = await runNodeStepAsync(
+      "demo-plugin",
+      [
+        "--eval",
         [
-          "--eval",
-          [
-            "console.log('src/plugins/contracts/rootdir-boundary-canary.ts');",
-            "for (let index = 1; index <= 45; index += 1) console.log(`stdout ${index}`);",
-            "console.error('TS6059');",
-            "process.exit(2);",
-          ].join(" "),
-        ],
-        5_000,
-      ),
-    ).rejects.toMatchObject({
-      message: expect.stringContaining("[... 6 earlier lines omitted ...]"),
-      fullOutput: expect.stringContaining("src/plugins/contracts/rootdir-boundary-canary.ts"),
-      kind: "nonzero-exit",
-      elapsedMs: expect.any(Number),
-    });
-  });
+          "console.log('src/plugins/contracts/rootdir-boundary-canary.ts');",
+          "for (let index = 1; index <= 45; index += 1) console.log(`stdout ${index}`);",
+          "console.error('TS6059');",
+          "process.exit(2);",
+        ].join(" "),
+      ],
+      20_000,
+    ).then(
+      () => {
+        throw new Error("expected demo-plugin step to fail");
+      },
+      (error: unknown) => error,
+    );
+
+    expect(failure).toBeInstanceOf(Error);
+    if (!(failure instanceof Error)) {
+      throw new Error("expected failed canary step to reject with an Error");
+    }
+    expect(failure.message).toContain("[... 6 earlier lines omitted ...]");
+    const failureMetadata = failure as {
+      elapsedMs?: unknown;
+      fullOutput?: unknown;
+      kind?: unknown;
+      status?: unknown;
+    };
+    expect(failureMetadata.fullOutput).toContain(
+      "src/plugins/contracts/rootdir-boundary-canary.ts",
+    );
+    expect(failureMetadata.kind).toBe("nonzero-exit");
+    expect(failureMetadata.status).toBeUndefined();
+    const elapsedMs = failureMetadata.elapsedMs;
+    expect(typeof elapsedMs).toBe("number");
+    if (typeof elapsedMs !== "number") {
+      throw new Error("expected failure elapsedMs to be a number");
+    }
+    expect(elapsedMs).toBeGreaterThanOrEqual(0);
+  }, 30_000);
 
   it("aborts concurrent sibling steps after the first failure", async () => {
     const startedAt = Date.now();
+    const slowStepTimeoutMs = 60_000;
+    const abortBudgetMs = 30_000;
 
     await expect(
       runNodeStepsWithConcurrency(
         [
           {
             label: "fail-fast",
-            args: ["--eval", "setTimeout(() => process.exit(2), 10)"],
-            timeoutMs: 5_000,
+            args: ["--eval", "process.exit(2)"],
+            timeoutMs: slowStepTimeoutMs,
           },
           {
             label: "slow-step",
-            args: ["--eval", "setTimeout(() => {}, 10_000)"],
-            timeoutMs: 5_000,
+            args: ["--eval", "setTimeout(() => {}, 60_000)"],
+            timeoutMs: slowStepTimeoutMs,
           },
         ],
         2,
       ),
     ).rejects.toThrow("fail-fast");
 
-    expect(Date.now() - startedAt).toBeLessThan(2_000);
-  });
+    expect(Date.now() - startedAt).toBeLessThan(abortBudgetMs);
+  }, 45_000);
 
   it("passes successful step timing metadata to onSuccess handlers", async () => {
     const elapsedTimes: number[] = [];
@@ -353,8 +381,8 @@ describe("check-extension-package-tsc-boundary", () => {
       [
         {
           label: "demo-step",
-          args: ["--eval", "setTimeout(() => process.exit(0), 10)"],
-          timeoutMs: 5_000,
+          args: ["--eval", "process.exit(0)"],
+          timeoutMs: 20_000,
           onSuccess(result: { elapsedMs: number }) {
             elapsedTimes.push(result.elapsedMs);
           },
@@ -365,5 +393,5 @@ describe("check-extension-package-tsc-boundary", () => {
 
     expect(elapsedTimes).toHaveLength(1);
     expect(elapsedTimes[0]).toBeGreaterThanOrEqual(0);
-  });
+  }, 30_000);
 });

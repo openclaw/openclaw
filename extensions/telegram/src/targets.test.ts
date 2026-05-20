@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { isNumericTelegramUserId, normalizeTelegramAllowFromEntry } from "./allow-from.js";
+import {
+  isNumericTelegramSenderUserId,
+  isNumericTelegramUserId,
+  normalizeTelegramAllowFromEntry,
+} from "./allow-from.js";
 import {
   resolveTelegramGroupRequireMention,
   resolveTelegramGroupToolPolicy,
@@ -13,6 +17,11 @@ import {
   parseTelegramTarget,
   stripTelegramInternalPrefixes,
 } from "./targets.js";
+
+const numericTelegramTargetNormalizers = [
+  { name: "normalizeTelegramChatId", normalize: normalizeTelegramChatId },
+  { name: "normalizeTelegramLookupTarget", normalize: normalizeTelegramLookupTarget },
+];
 
 describe("stripTelegramInternalPrefixes", () => {
   it("strips telegram prefix", () => {
@@ -87,17 +96,22 @@ describe("parseTelegramTarget", () => {
   });
 });
 
+describe("telegram numeric target normalization", () => {
+  it.each(numericTelegramTargetNormalizers)(
+    "$name keeps numeric chat ids unchanged",
+    ({ normalize }) => {
+      expect(normalize("-1001234567890")).toBe("-1001234567890");
+      expect(normalize("123456789")).toBe("123456789");
+    },
+  );
+});
+
 describe("normalizeTelegramChatId", () => {
   it("rejects username and t.me forms", () => {
     expect(normalizeTelegramChatId("telegram:https://t.me/MyChannel")).toBeUndefined();
     expect(normalizeTelegramChatId("tg:t.me/mychannel")).toBeUndefined();
     expect(normalizeTelegramChatId("@MyChannel")).toBeUndefined();
     expect(normalizeTelegramChatId("MyChannel")).toBeUndefined();
-  });
-
-  it("keeps numeric chat ids unchanged", () => {
-    expect(normalizeTelegramChatId("-1001234567890")).toBe("-1001234567890");
-    expect(normalizeTelegramChatId("123456789")).toBe("123456789");
   });
 
   it("returns undefined for empty input", () => {
@@ -111,11 +125,6 @@ describe("normalizeTelegramLookupTarget", () => {
     expect(normalizeTelegramLookupTarget("tg:t.me/mychannel")).toBe("@mychannel");
     expect(normalizeTelegramLookupTarget("@MyChannel")).toBe("@MyChannel");
     expect(normalizeTelegramLookupTarget("MyChannel")).toBe("@MyChannel");
-  });
-
-  it("keeps numeric chat ids unchanged", () => {
-    expect(normalizeTelegramLookupTarget("-1001234567890")).toBe("-1001234567890");
-    expect(normalizeTelegramLookupTarget("123456789")).toBe("123456789");
   });
 
   it("rejects invalid username forms", () => {
@@ -235,6 +244,17 @@ describe("telegram allow-from helpers", () => {
       expect(isNumericTelegramUserId(testCase.value)).toBe(testCase.expected);
     }
   });
+
+  it("accepts only positive numeric sender user IDs", () => {
+    const cases = [
+      { value: "123456789", expected: true },
+      { value: "-1001234567890", expected: false },
+      { value: "@someone", expected: false },
+    ] as const;
+    for (const testCase of cases) {
+      expect(isNumericTelegramSenderUserId(testCase.value)).toBe(testCase.expected);
+    }
+  });
 });
 
 describe("telegram target normalization", () => {
@@ -258,4 +278,4 @@ describe("telegram target normalization", () => {
   });
 });
 
-installMaybePersistResolvedTelegramTargetTests();
+installMaybePersistResolvedTelegramTargetTests({ includeGatewayScopeCases: true });

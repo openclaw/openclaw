@@ -1,15 +1,22 @@
+import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
-  fetchWithTimeout,
+  createProviderOperationDeadline,
+  createProviderOperationTimeoutResolver,
+  fetchProviderDownloadResponse,
+  fetchProviderOperationResponse,
   postJsonRequest,
+  resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
+  waitProviderOperationPollInterval,
+  type ProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   GeneratedVideoAsset,
   VideoGenerationProvider,
@@ -29,15 +36,17 @@ const MAX_DURATION_SECONDS = 10;
 type RunwayTaskStatus = "PENDING" | "RUNNING" | "THROTTLED" | "SUCCEEDED" | "FAILED" | "CANCELLED";
 
 type RunwayTaskCreateResponse = {
-  id?: string;
+  id?: unknown;
 };
 
 type RunwayTaskDetailResponse = {
-  id?: string;
-  status?: RunwayTaskStatus;
-  output?: string[];
-  failure?: string | { message?: string } | null;
+  id?: unknown;
+  status?: unknown;
+  output?: unknown;
+  failure?: unknown;
 };
+
+type RunwaySourceAsset = Pick<VideoGenerationSourceAsset, "buffer" | "mimeType" | "url">;
 
 const TEXT_ONLY_MODELS = new Set(["gen4.5", "veo3.1", "veo3.1_fast", "veo3"]);
 const IMAGE_MODELS = new Set([
@@ -52,6 +61,66 @@ const VIDEO_MODELS = new Set(["gen4_aleph"]);
 const RUNWAY_TEXT_ASPECT_RATIOS = ["16:9", "9:16"] as const;
 const RUNWAY_EDIT_ASPECT_RATIOS = ["1:1", "16:9", "9:16", "3:4", "4:3", "21:9"] as const;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+async function readRunwayJsonResponse<T>(
+  response: Pick<Response, "json">,
+  label: string,
+): Promise<T> {
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch (cause) {
+    throw new Error(`${label}: malformed JSON response`, { cause });
+  }
+  if (!isRecord(payload)) {
+    throw new Error(`${label}: malformed JSON response`);
+  }
+  return payload as T;
+}
+
+function readRunwayTaskStatus(payload: RunwayTaskDetailResponse): RunwayTaskStatus {
+  const status = normalizeOptionalString(payload.status);
+  switch (status) {
+    case "PENDING":
+    case "RUNNING":
+    case "THROTTLED":
+    case "SUCCEEDED":
+    case "FAILED":
+    case "CANCELLED":
+      return status;
+    case undefined:
+      throw new Error("Runway video status response missing task status");
+    default:
+      throw new Error(`Runway video status response returned unknown task status: ${status}`);
+  }
+}
+
+function readRunwayFailureMessage(failure: unknown): string | undefined {
+  if (typeof failure === "string") {
+    return normalizeOptionalString(failure);
+  }
+  if (isRecord(failure)) {
+    return normalizeOptionalString(failure.message);
+  }
+  return undefined;
+}
+
+function readRunwayOutputUrls(payload: RunwayTaskDetailResponse): string[] {
+  if (!Array.isArray(payload.output)) {
+    throw new Error("Runway video generation completed with malformed output URLs");
+  }
+  const outputUrls = payload.output
+    .map((value) => normalizeOptionalString(value))
+    .filter((value): value is string => Boolean(value));
+  if (!outputUrls.length) {
+    throw new Error("Runway video generation completed without output URLs");
+  }
+  return outputUrls;
+}
+
 function resolveRunwayBaseUrl(req: VideoGenerationRequest): string {
   return (
     normalizeOptionalString(req.cfg?.models?.providers?.runway?.baseUrl) ?? DEFAULT_RUNWAY_BASE_URL
@@ -63,7 +132,7 @@ function toDataUrl(buffer: Buffer, mimeType: string): string {
 }
 
 function resolveSourceUri(
-  asset: VideoGenerationSourceAsset | undefined,
+  asset: RunwaySourceAsset | undefined,
   fallbackMimeType: string,
 ): string | undefined {
   if (!asset) {
@@ -197,33 +266,45 @@ async function pollRunwayTask(params: {
   baseUrl: string;
   fetchFn: typeof fetch;
 }): Promise<RunwayTaskDetailResponse> {
+  const deadline = createProviderOperationDeadline({
+    timeoutMs: params.timeoutMs,
+    label: `Runway video generation task ${params.taskId}`,
+  });
   for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt += 1) {
-    const response = await fetchWithTimeout(
-      `${params.baseUrl}/v1/tasks/${params.taskId}`,
-      {
+    const response = await fetchProviderOperationResponse({
+      stage: "poll",
+      url: `${params.baseUrl}/v1/tasks/${params.taskId}`,
+      init: {
         method: "GET",
         headers: params.headers,
       },
-      params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-      params.fetchFn,
+      timeoutMs: createProviderOperationTimeoutResolver({
+        deadline,
+        defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+      }),
+      fetchFn: params.fetchFn,
+      provider: "runway",
+      requestFailedMessage: "Runway video status request failed",
+    });
+    const payload = await readRunwayJsonResponse<RunwayTaskDetailResponse>(
+      response,
+      "Runway video status request failed",
     );
-    await assertOkOrThrowHttpError(response, "Runway video status request failed");
-    const payload = (await response.json()) as RunwayTaskDetailResponse;
-    switch (payload.status) {
+    const status = readRunwayTaskStatus(payload);
+    switch (status) {
       case "SUCCEEDED":
         return payload;
       case "FAILED":
       case "CANCELLED":
         throw new Error(
-          normalizeOptionalString(
-            typeof payload.failure === "string" ? payload.failure : payload.failure?.message,
-          ) || `Runway video generation ${normalizeLowercaseStringOrEmpty(payload.status)}`,
+          readRunwayFailureMessage(payload.failure) ||
+            `Runway video generation ${normalizeLowercaseStringOrEmpty(status)}`,
         );
       case "PENDING":
       case "RUNNING":
       case "THROTTLED":
       default:
-        await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+        await waitProviderOperationPollInterval({ deadline, pollIntervalMs: POLL_INTERVAL_MS });
         break;
     }
   }
@@ -232,24 +313,25 @@ async function pollRunwayTask(params: {
 
 async function downloadRunwayVideos(params: {
   urls: string[];
-  timeoutMs?: number;
+  timeoutMs?: ProviderOperationTimeoutMs;
   fetchFn: typeof fetch;
 }): Promise<GeneratedVideoAsset[]> {
   const videos: GeneratedVideoAsset[] = [];
   for (const [index, url] of params.urls.entries()) {
-    const response = await fetchWithTimeout(
+    const response = await fetchProviderDownloadResponse({
       url,
-      { method: "GET" },
-      params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-      params.fetchFn,
-    );
-    await assertOkOrThrowHttpError(response, "Runway generated video download failed");
+      init: { method: "GET" },
+      timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      fetchFn: params.fetchFn,
+      provider: "runway",
+      requestFailedMessage: "Runway generated video download failed",
+    });
     const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
     const arrayBuffer = await response.arrayBuffer();
     videos.push({
       buffer: Buffer.from(arrayBuffer),
       mimeType,
-      fileName: `video-${index + 1}.${mimeType.includes("webm") ? "webm" : "mp4"}`,
+      fileName: `video-${index + 1}.${extensionForMime(mimeType)?.slice(1) ?? "mp4"}`,
       metadata: { sourceUrl: url },
     });
   }
@@ -302,6 +384,10 @@ export function buildRunwayVideoGenerationProvider(): VideoGenerationProvider {
       }
 
       const fetchFn = fetch;
+      const deadline = createProviderOperationDeadline({
+        timeoutMs: req.timeoutMs,
+        label: "Runway video generation",
+      });
       const requestBody = buildCreateBody(req);
       const endpoint = resolveEndpoint(req);
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
@@ -321,14 +407,20 @@ export function buildRunwayVideoGenerationProvider(): VideoGenerationProvider {
         url: `${baseUrl}${endpoint}`,
         headers,
         body: requestBody,
-        timeoutMs: req.timeoutMs,
+        timeoutMs: resolveProviderOperationTimeoutMs({
+          deadline,
+          defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+        }),
         fetchFn,
         allowPrivateNetwork,
         dispatcherPolicy,
       });
       try {
         await assertOkOrThrowHttpError(response, "Runway video generation failed");
-        const submitted = (await response.json()) as RunwayTaskCreateResponse;
+        const submitted = await readRunwayJsonResponse<RunwayTaskCreateResponse>(
+          response,
+          "Runway video generation failed",
+        );
         const taskId = normalizeOptionalString(submitted.id);
         if (!taskId) {
           throw new Error("Runway video generation response missing task id");
@@ -336,19 +428,20 @@ export function buildRunwayVideoGenerationProvider(): VideoGenerationProvider {
         const completed = await pollRunwayTask({
           taskId,
           headers,
-          timeoutMs: req.timeoutMs,
+          timeoutMs: resolveProviderOperationTimeoutMs({
+            deadline,
+            defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+          }),
           baseUrl,
           fetchFn,
         });
-        const outputUrls = completed.output
-          ?.map((value) => normalizeOptionalString(value))
-          .filter((value): value is string => Boolean(value));
-        if (!outputUrls?.length) {
-          throw new Error("Runway video generation completed without output URLs");
-        }
+        const outputUrls = readRunwayOutputUrls(completed);
         const videos = await downloadRunwayVideos({
           urls: outputUrls,
-          timeoutMs: req.timeoutMs,
+          timeoutMs: createProviderOperationTimeoutResolver({
+            deadline,
+            defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+          }),
           fetchFn,
         });
         return {
@@ -356,7 +449,7 @@ export function buildRunwayVideoGenerationProvider(): VideoGenerationProvider {
           model: normalizeOptionalString(req.model) ?? DEFAULT_RUNWAY_MODEL,
           metadata: {
             taskId,
-            status: completed.status,
+            status: normalizeOptionalString(completed.status),
             endpoint,
             outputUrls,
           },

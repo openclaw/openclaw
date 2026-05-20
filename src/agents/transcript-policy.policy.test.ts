@@ -1,11 +1,20 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveTranscriptPolicy } from "./transcript-policy.js";
 
-vi.unmock("../plugins/provider-runtime.js");
-vi.unmock("../plugins/provider-runtime.runtime.js");
-vi.unmock("../plugins/providers.runtime.js");
+vi.mock("../plugins/provider-hook-runtime.js", () => ({
+  resolveProviderRuntimePlugin: vi.fn(({ provider }: { provider?: string }) =>
+    provider === "mistral"
+      ? {
+          buildReplayPolicy: () => ({
+            sanitizeToolCallIds: true,
+            toolCallIdMode: "strict9",
+          }),
+        }
+      : undefined,
+  ),
+}));
 
-let resolveTranscriptPolicy: typeof import("./transcript-policy.js").resolveTranscriptPolicy;
 const MISTRAL_PLUGIN_CONFIG = {
   plugins: {
     entries: {
@@ -32,15 +41,7 @@ function createProviderRuntimeSmokeContext(): {
   };
 }
 
-beforeEach(async () => {
-  vi.resetModules();
-  vi.doUnmock("../plugins/provider-runtime.js");
-  vi.doUnmock("../plugins/provider-runtime.runtime.js");
-  vi.doUnmock("../plugins/providers.runtime.js");
-  ({ resolveTranscriptPolicy } = await import("./transcript-policy.js"));
-});
-
-describe("resolveTranscriptPolicy e2e smoke", () => {
+describe("resolveTranscriptPolicy provider replay policy", () => {
   it("uses images-only sanitization without tool-call id rewriting for OpenAI models", () => {
     const policy = resolveTranscriptPolicy({
       ...createProviderRuntimeSmokeContext(),

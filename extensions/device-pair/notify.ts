@@ -1,8 +1,11 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import type { OpenClawPluginApi } from "./api.js";
-import { listDevicePairing } from "./api.js";
+import type { OpenClawPluginService } from "openclaw/plugin-sdk/core";
+import { listDevicePairing } from "openclaw/plugin-sdk/device-bootstrap";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const NOTIFY_STATE_FILE = "device-pair-notify.json";
 const NOTIFY_POLL_INTERVAL_MS = 10_000;
@@ -21,7 +24,7 @@ type NotifyStateFile = {
   notifiedRequestIds: Record<string, number>;
 };
 
-export type PendingPairingRequest = {
+type PendingPairingRequest = {
   requestId: string;
   deviceId: string;
   displayName?: string;
@@ -143,9 +146,12 @@ async function readNotifyState(filePath: string): Promise<NotifyStateFile> {
 }
 
 async function writeNotifyState(filePath: string, state: NotifyStateFile): Promise<void> {
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
   const content = JSON.stringify(state, null, 2);
-  await fs.writeFile(filePath, `${content}\n`, "utf8");
+  await replaceFileAtomic({
+    filePath,
+    content: `${content}\n`,
+    tempPrefix: ".device-pair-notify",
+  });
 }
 
 function notifySubscriberKey(subscriber: {
@@ -153,7 +159,32 @@ function notifySubscriberKey(subscriber: {
   accountId?: string;
   messageThreadId?: string | number;
 }): string {
-  return [subscriber.to, subscriber.accountId ?? "", subscriber.messageThreadId ?? ""].join("|");
+  return JSON.stringify([
+    subscriber.to,
+    subscriber.accountId ?? "",
+    normalizeNotifyThreadKey(subscriber.messageThreadId),
+  ]);
+}
+
+function normalizeNotifyThreadKey(messageThreadId?: string | number): string {
+  if (typeof messageThreadId === "number" && Number.isFinite(messageThreadId)) {
+    return String(Math.trunc(messageThreadId));
+  }
+  if (typeof messageThreadId !== "string") {
+    return "";
+  }
+  const normalized = normalizeOptionalString(messageThreadId);
+  if (!normalized) {
+    return "";
+  }
+  if (!/^-?\d+$/u.test(normalized)) {
+    return normalized;
+  }
+  try {
+    return BigInt(normalized).toString();
+  } catch {
+    return normalized;
+  }
 }
 
 type NotifyTarget = {
@@ -279,9 +310,7 @@ async function notifySubscriber(params: {
     return true;
   } catch (err) {
     params.api.logger.warn(
-      `device-pair: failed to send pairing notification to ${params.subscriber.to}: ${String(
-        (err as Error)?.message ?? err,
-      )}`,
+      `device-pair: failed to send pairing notification to ${params.subscriber.to}: ${formatErrorMessage(err)}`,
     );
     return false;
   }
@@ -464,10 +493,10 @@ export async function handleNotifyCommand(params: {
   return { text: "Usage: /pair notify on|off|once|status" };
 }
 
-export function registerPairingNotifierService(api: OpenClawPluginApi): void {
+export function createPairingNotifierService(api: OpenClawPluginApi): OpenClawPluginService {
   let notifyInterval: ReturnType<typeof setInterval> | null = null;
 
-  api.registerService({
+  return {
     id: "device-pair-notifier",
     start: async (ctx) => {
       const statePath = resolveNotifyStatePath(ctx.stateDir);
@@ -476,16 +505,11 @@ export function registerPairingNotifierService(api: OpenClawPluginApi): void {
       };
 
       await tick().catch((err) => {
-        api.logger.warn(
-          `device-pair: initial notify poll failed: ${String((err as Error)?.message ?? err)}`,
-        );
+        api.logger.warn(`device-pair: initial notify poll failed: ${formatErrorMessage(err)}`);
       });
-
       notifyInterval = setInterval(() => {
         tick().catch((err) => {
-          api.logger.warn(
-            `device-pair: notify poll failed: ${String((err as Error)?.message ?? err)}`,
-          );
+          api.logger.warn(`device-pair: notify poll failed: ${formatErrorMessage(err)}`);
         });
       }, NOTIFY_POLL_INTERVAL_MS);
       notifyInterval.unref?.();
@@ -496,5 +520,9 @@ export function registerPairingNotifierService(api: OpenClawPluginApi): void {
         notifyInterval = null;
       }
     },
-  });
+  };
+}
+
+export function registerPairingNotifierService(api: OpenClawPluginApi): void {
+  api.registerService(createPairingNotifierService(api));
 }

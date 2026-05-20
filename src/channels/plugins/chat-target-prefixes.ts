@@ -27,16 +27,18 @@ export type ChatSenderAllowParams = {
   chatId?: number | null;
   chatGuid?: string | null;
   chatIdentifier?: string | null;
+  allowConversationTargets?: boolean | null;
 };
 
-function isAllowedParsedChatSender<TParsed extends ParsedChatAllowTarget>(params: {
+export function isAllowedParsedChatSender(params: {
   allowFrom: Array<string | number>;
   sender: string;
   chatId?: number | null;
   chatGuid?: string | null;
   chatIdentifier?: string | null;
+  allowConversationTargets?: boolean | null;
   normalizeSender: (sender: string) => string;
-  parseAllowTarget: (entry: string) => TParsed;
+  parseAllowTarget: (entry: string) => ParsedChatAllowTarget;
 }): boolean {
   const allowFrom = normalizeStringEntries(params.allowFrom);
   if (allowFrom.length === 0) {
@@ -47,9 +49,12 @@ function isAllowedParsedChatSender<TParsed extends ParsedChatAllowTarget>(params
   }
 
   const senderNormalized = params.normalizeSender(params.sender);
-  const chatId = params.chatId ?? undefined;
-  const chatGuid = normalizeOptionalString(params.chatGuid);
-  const chatIdentifier = normalizeOptionalString(params.chatIdentifier);
+  const allowConversationTargets = params.allowConversationTargets === true;
+  const chatId = allowConversationTargets ? (params.chatId ?? undefined) : undefined;
+  const chatGuid = allowConversationTargets ? normalizeOptionalString(params.chatGuid) : undefined;
+  const chatIdentifier = allowConversationTargets
+    ? normalizeOptionalString(params.chatIdentifier)
+    : undefined;
 
   for (const entry of allowFrom) {
     if (!entry) {
@@ -224,9 +229,10 @@ export function resolveServicePrefixedOrChatAllowTarget<
   return null;
 }
 
-export function createAllowedChatSenderMatcher<TParsed extends ParsedChatAllowTarget>(params: {
+export function createAllowedChatSenderMatcher(params: {
   normalizeSender: (sender: string) => string;
-  parseAllowTarget: (entry: string) => TParsed;
+  parseAllowTarget: (entry: string) => ParsedChatAllowTarget;
+  allowConversationTargets?: boolean;
 }): (input: ChatSenderAllowParams) => boolean {
   return (input) =>
     isAllowedParsedChatSender({
@@ -235,6 +241,8 @@ export function createAllowedChatSenderMatcher<TParsed extends ParsedChatAllowTa
       chatId: input.chatId,
       chatGuid: input.chatGuid,
       chatIdentifier: input.chatIdentifier,
+      allowConversationTargets:
+        input.allowConversationTargets ?? params.allowConversationTargets ?? false,
       normalizeSender: params.normalizeSender,
       parseAllowTarget: params.parseAllowTarget,
     });

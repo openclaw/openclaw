@@ -1,11 +1,17 @@
+import * as fs from "node:fs";
 import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { RuntimeEnv } from "../runtime.js";
+import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import {
+  handleReset,
   normalizeGatewayTokenInput,
   openUrl,
   probeGatewayReachable,
   resolveBrowserOpenCommand,
   resolveControlUiLinks,
+  summarizeExistingConfig,
   validateGatewayPasswordInput,
 } from "./onboard-helpers.js";
 
@@ -39,44 +45,108 @@ vi.mock("../gateway/probe.js", () => ({
 }));
 
 afterEach(() => {
+  vi.clearAllMocks();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
 
+type RunCommandCall = [
+  argv: string[],
+  options?: { timeoutMs?: number; windowsVerbatimArguments?: boolean },
+];
+
+function requireFirstRunCommandCall(): RunCommandCall {
+  const [call] = mocks.runCommandWithTimeout.mock.calls;
+  if (!call) {
+    throw new Error("expected browser open command call");
+  }
+  return call as RunCommandCall;
+}
+
+describe("handleReset", () => {
+  it("uses active profile paths for destructive reset targets", async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-reset-profile-"));
+    const profileStateDir = path.join(homeDir, ".openclaw-work");
+    const defaultStateDir = path.join(homeDir, ".openclaw");
+    const profileConfigPath = path.join(profileStateDir, "openclaw.json");
+    const profileCredentialsDir = path.join(profileStateDir, "credentials");
+    const profileSessionsDir = path.join(profileStateDir, "agents", "main", "sessions");
+    const workspaceDir = path.join(profileStateDir, "workspace");
+    const defaultCredentialsDir = path.join(defaultStateDir, "credentials");
+
+    fs.mkdirSync(profileCredentialsDir, { recursive: true });
+    fs.mkdirSync(profileSessionsDir, { recursive: true });
+    fs.mkdirSync(workspaceDir, { recursive: true });
+    fs.mkdirSync(defaultCredentialsDir, { recursive: true });
+    fs.writeFileSync(profileConfigPath, "{}\n");
+
+    vi.stubEnv("HOME", homeDir);
+    vi.stubEnv("OPENCLAW_HOME", homeDir);
+    vi.stubEnv("OPENCLAW_PROFILE", "work");
+    vi.stubEnv("OPENCLAW_STATE_DIR", profileStateDir);
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", profileConfigPath);
+
+    const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
+
+    await handleReset("full", workspaceDir, runtime);
+
+    const trashedPaths = mocks.runCommandWithTimeout.mock.calls.map(([argv]) => argv[1]);
+    expect(trashedPaths).toEqual([
+      profileConfigPath,
+      profileCredentialsDir,
+      profileSessionsDir,
+      workspaceDir,
+    ]);
+    expect(trashedPaths).not.toContain(defaultCredentialsDir);
+  });
+});
+
 describe("openUrl", () => {
-  it("quotes URLs on win32 so '&' is not treated as cmd separator", async () => {
+  it("passes OAuth URLs to Windows FileProtocolHandler without cmd parsing", async () => {
     vi.stubEnv("VITEST", "");
     vi.stubEnv("NODE_ENV", "");
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    vi.stubEnv("VITEST", "");
+    vi.stubEnv("SystemRoot", "C:\\Windows");
     vi.stubEnv("NODE_ENV", "development");
+    const rundll32 = path.win32.join("C:\\Windows", "System32", "rundll32.exe");
 
     const url =
       "https://accounts.google.com/o/oauth2/v2/auth?client_id=abc&response_type=code&redirect_uri=http%3A%2F%2Flocalhost";
 
-    const ok = await openUrl(url);
-    expect(ok).toBe(true);
+    await withMockedPlatform("win32", async () => {
+      const ok = await openUrl(url);
+      expect(ok).toBe(true);
 
-    expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(1);
-    const [argv, options] = mocks.runCommandWithTimeout.mock.calls[0] ?? [];
-    expect(argv?.slice(0, 4)).toEqual(["cmd", "/c", "start", '""']);
-    expect(argv?.at(-1)).toBe(`"${url}"`);
-    expect(options).toMatchObject({
-      timeoutMs: 5_000,
-      windowsVerbatimArguments: true,
+      expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(1);
+      const [argv, options] = requireFirstRunCommandCall();
+      expect(argv).toEqual([rundll32, "url.dll,FileProtocolHandler", url]);
+      expect(options?.timeoutMs).toBe(5_000);
+      expect(options?.windowsVerbatimArguments).toBeUndefined();
     });
+  });
 
-    platformSpy.mockRestore();
+  it("does not pass non-http URLs to the OS browser handler", async () => {
+    vi.stubEnv("VITEST", "");
+    vi.stubEnv("NODE_ENV", "development");
+
+    await withMockedPlatform("win32", async () => {
+      const ok = await openUrl("file://C:/Users/test/secrets.txt");
+
+      expect(ok).toBe(false);
+      expect(mocks.runCommandWithTimeout).not.toHaveBeenCalled();
+    });
   });
 });
 
 describe("resolveBrowserOpenCommand", () => {
-  it("marks win32 commands as quoteUrl=true", async () => {
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    const resolved = await resolveBrowserOpenCommand();
-    expect(resolved.argv).toEqual(["cmd", "/c", "start", ""]);
-    expect(resolved.quoteUrl).toBe(true);
-    platformSpy.mockRestore();
+  it("uses trusted rundll32 on win32", async () => {
+    vi.stubEnv("SystemRoot", "C:\\Windows");
+    const rundll32 = path.win32.join("C:\\Windows", "System32", "rundll32.exe");
+
+    await withMockedPlatform("win32", async () => {
+      const resolved = await resolveBrowserOpenCommand();
+      expect(resolved.argv).toEqual([rundll32, "url.dll,FileProtocolHandler"]);
+      expect(resolved.command).toBe(rundll32);
+    });
   });
 });
 
@@ -136,6 +206,59 @@ describe("probeGatewayReachable", () => {
   });
 });
 
+describe("summarizeExistingConfig", () => {
+  it("collapses gateway fields into a friendly remote summary", () => {
+    expect(
+      summarizeExistingConfig({
+        agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
+        gateway: {
+          mode: "remote",
+          port: 18789,
+          bind: "lan",
+          remote: { url: "ws://192.168.0.202:18789" },
+        },
+      }),
+    ).toBe("Model: openai/gpt-5.4\nGateway: remote via LAN at ws://192.168.0.202:18789");
+  });
+
+  it("uses the port when no remote gateway URL is configured", () => {
+    expect(
+      summarizeExistingConfig({
+        gateway: {
+          mode: "local",
+          port: 18789,
+          bind: "loopback",
+        },
+      }),
+    ).toBe("Gateway: local via loopback on :18789");
+  });
+
+  it("does not show a stale remote URL as active for local gateway mode", () => {
+    expect(
+      summarizeExistingConfig({
+        gateway: {
+          mode: "local",
+          port: 18789,
+          bind: "loopback",
+          remote: { url: "ws://192.168.0.202:18789" },
+        },
+      }),
+    ).toBe("Gateway: local via loopback on :18789");
+  });
+
+  it("surfaces missing remote URL instead of falling back to port for remote mode", () => {
+    expect(
+      summarizeExistingConfig({
+        gateway: {
+          mode: "remote",
+          port: 18789,
+          bind: "lan",
+        },
+      }),
+    ).toBe("Gateway: remote via LAN (missing remote URL)");
+  });
+});
+
 describe("resolveControlUiLinks", () => {
   it("uses customBindHost for custom bind", () => {
     const links = resolveControlUiLinks({
@@ -145,6 +268,17 @@ describe("resolveControlUiLinks", () => {
     });
     expect(links.httpUrl).toBe("http://192.168.1.100:18789/");
     expect(links.wsUrl).toBe("ws://192.168.1.100:18789");
+  });
+
+  it("uses secure schemes when gateway TLS is enabled", () => {
+    const links = resolveControlUiLinks({
+      port: 18789,
+      bind: "custom",
+      customBindHost: "192.168.1.100",
+      tlsEnabled: true,
+    });
+    expect(links.httpUrl).toBe("https://192.168.1.100:18789/");
+    expect(links.wsUrl).toBe("wss://192.168.1.100:18789");
   });
 
   it("falls back to loopback for invalid customBindHost", () => {

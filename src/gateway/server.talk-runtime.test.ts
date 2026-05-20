@@ -24,18 +24,44 @@ type SpeechProvider = Parameters<typeof withSpeechProviders>[0][number]["provide
 
 const ALIAS_STUB_VOICE_ID = "VoiceAlias1234567890";
 
-async function writeAcmeTalkConfig() {
-  const { writeConfigFile } = await import("../config/config.js");
-  await writeConfigFile({
-    talk: {
-      provider: "acme",
-      providers: {
-        acme: {
-          voiceId: "plugin-voice",
+async function setTalkConfig(talk: Record<string, unknown>) {
+  const { setRuntimeConfigSnapshot } = await import("../config/config.js");
+  const config = {
+    commands: {
+      ownerDisplaySecret: "openclaw-test-owner-display-secret",
+    },
+    talk,
+  };
+  setRuntimeConfigSnapshot(config, config);
+}
+
+async function setAcmeTalkConfig() {
+  await setTalkConfig({
+    provider: "acme",
+    providers: {
+      acme: {
+        voiceId: "plugin-voice",
+      },
+    },
+  });
+}
+
+async function setElevenLabsTalkConfig() {
+  await setTalkConfig({
+    provider: "elevenlabs",
+    providers: {
+      elevenlabs: {
+        voiceId: "stub-default-voice",
+        voiceAliases: {
+          Clawd: ALIAS_STUB_VOICE_ID,
         },
       },
     },
   });
+}
+
+async function setEmptyTalkConfig() {
+  await setTalkConfig({});
 }
 
 async function withAcmeSpeechProvider(
@@ -59,6 +85,15 @@ async function withAcmeSpeechProvider(
   );
 }
 
+function expectSingleSynthesizeSpeechCall() {
+  expect(synthesizeSpeechMock).toHaveBeenCalledTimes(1);
+  const params = synthesizeSpeechMock.mock.calls.at(0)?.[0];
+  if (params === undefined) {
+    throw new Error("expected synthesizeSpeech call params");
+  }
+  return params;
+}
+
 describe("gateway talk runtime", () => {
   beforeEach(() => {
     synthesizeSpeechMock.mockReset();
@@ -73,17 +108,7 @@ describe("gateway talk runtime", () => {
   });
 
   it("allows extension speech providers through the talk setup", async () => {
-    const { writeConfigFile } = await import("../config/config.js");
-    await writeConfigFile({
-      talk: {
-        provider: "acme",
-        providers: {
-          acme: {
-            voiceId: "plugin-voice",
-          },
-        },
-      },
-    });
+    await setAcmeTalkConfig();
 
     await withSpeechProviders(
       [
@@ -109,32 +134,29 @@ describe("gateway talk runtime", () => {
           text: "Hello from talk mode.",
         });
         expect(res?.ok, JSON.stringify(res?.error)).toBe(true);
-        expect(synthesizeSpeechMock).toHaveBeenCalledWith(
-          expect.objectContaining({
-            text: "Hello from talk mode.",
-            overrides: { provider: "acme" },
-            disableFallback: true,
-            cfg: expect.objectContaining({
-              messages: expect.objectContaining({
-                tts: expect.objectContaining({
-                  provider: "acme",
-                  providers: expect.objectContaining({
-                    acme: expect.objectContaining({
-                      resolvedBy: "acme-test-provider",
-                      voiceId: "plugin-voice",
-                    }),
-                  }),
-                }),
-              }),
-            }),
-          }),
-        );
+        const synthesizeParams = expectSingleSynthesizeSpeechCall();
+        expect(synthesizeParams.text).toBe("Hello from talk mode.");
+        expect(synthesizeParams.overrides).toEqual({ provider: "acme" });
+        expect(synthesizeParams.disableFallback).toBe(true);
+        const ttsConfig = (
+          synthesizeParams.cfg as {
+            messages?: {
+              tts?: {
+                provider?: string;
+                providers?: Record<string, { resolvedBy?: string; voiceId?: string }>;
+              };
+            };
+          }
+        ).messages?.tts;
+        expect(ttsConfig?.provider).toBe("acme");
+        expect(ttsConfig?.providers?.acme?.resolvedBy).toBe("acme-test-provider");
+        expect(ttsConfig?.providers?.acme?.voiceId).toBe("plugin-voice");
       },
     );
   });
 
   it("allows extension speech providers through talk.speak", async () => {
-    await writeAcmeTalkConfig();
+    await setAcmeTalkConfig();
 
     await withAcmeSpeechProvider(
       async () => ({
@@ -157,20 +179,7 @@ describe("gateway talk runtime", () => {
   });
 
   it("resolves talk voice aliases case-insensitively and forwards provider overrides", async () => {
-    const { writeConfigFile } = await import("../config/config.js");
-    await writeConfigFile({
-      talk: {
-        provider: "elevenlabs",
-        providers: {
-          elevenlabs: {
-            voiceId: "stub-default-voice",
-            voiceAliases: {
-              Clawd: ALIAS_STUB_VOICE_ID,
-            },
-          },
-        },
-      },
-    });
+    await setElevenLabsTalkConfig();
 
     await withSpeechProviders(
       [
@@ -221,29 +230,25 @@ describe("gateway talk runtime", () => {
         expect((res?.payload as TalkSpeakTestPayload | undefined)?.audioBase64).toBe(
           Buffer.from([4, 5, 6]).toString("base64"),
         );
-        expect(synthesizeSpeechMock).toHaveBeenCalledWith(
-          expect.objectContaining({
-            text: "Hello from talk mode.",
-            overrides: {
-              provider: "elevenlabs",
-              providerOverrides: {
-                elevenlabs: {
-                  voiceId: ALIAS_STUB_VOICE_ID,
-                  outputFormat: "pcm_44100",
-                  latencyTier: 3,
-                },
-              },
+        const synthesizeParams = expectSingleSynthesizeSpeechCall();
+        expect(synthesizeParams.text).toBe("Hello from talk mode.");
+        expect(synthesizeParams.overrides).toEqual({
+          provider: "elevenlabs",
+          providerOverrides: {
+            elevenlabs: {
+              voiceId: ALIAS_STUB_VOICE_ID,
+              outputFormat: "pcm_44100",
+              latencyTier: 3,
             },
-            disableFallback: true,
-          }),
-        );
+          },
+        });
+        expect(synthesizeParams.disableFallback).toBe(true);
       },
     );
   });
 
   it("returns fallback-eligible details when talk provider is not configured", async () => {
-    const { writeConfigFile } = await import("../config/config.js");
-    await writeConfigFile({ talk: {} });
+    await setEmptyTalkConfig();
 
     const res = await invokeTalkSpeakDirect({ text: "Hello from talk mode." });
     expect(res?.ok).toBe(false);
@@ -255,7 +260,7 @@ describe("gateway talk runtime", () => {
   });
 
   it("returns synthesis_failed details when the provider rejects synthesis", async () => {
-    await writeAcmeTalkConfig();
+    await setAcmeTalkConfig();
 
     await withAcmeSpeechProvider(
       async () => ({}) as never,
@@ -275,7 +280,7 @@ describe("gateway talk runtime", () => {
   });
 
   it("rejects empty audio results as invalid_audio_result", async () => {
-    await writeAcmeTalkConfig();
+    await setAcmeTalkConfig();
 
     await withAcmeSpeechProvider(
       async () => ({}) as never,

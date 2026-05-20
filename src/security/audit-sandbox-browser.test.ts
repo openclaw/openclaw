@@ -7,12 +7,22 @@ function hasFinding(
   checkId:
     | "sandbox.browser_container.hash_label_missing"
     | "sandbox.browser_container.hash_epoch_stale"
-    | "sandbox.browser_container.non_loopback_publish"
-    | "sandbox.browser_cdp_bridge_unrestricted",
+    | "sandbox.browser_container.non_loopback_publish",
   severity: "warn" | "critical",
   findings: Array<{ checkId: string; severity: string; detail: string }>,
 ) {
   return findings.some((finding) => finding.checkId === checkId && finding.severity === severity);
+}
+
+function requireFinding(
+  checkId: "sandbox.browser_container.hash_epoch_stale",
+  findings: Array<{ checkId: string; severity: string; detail: string }>,
+) {
+  const finding = findings.find((entry) => entry.checkId === checkId);
+  if (!finding) {
+    throw new Error(`Expected ${checkId} finding`);
+  }
+  return finding;
 }
 
 describe("security audit sandbox browser findings", () => {
@@ -50,10 +60,8 @@ describe("security audit sandbox browser findings", () => {
 
     expect(hasFinding("sandbox.browser_container.hash_label_missing", "warn", findings)).toBe(true);
     expect(hasFinding("sandbox.browser_container.hash_epoch_stale", "warn", findings)).toBe(true);
-    const staleEpoch = findings.find(
-      (finding) => finding.checkId === "sandbox.browser_container.hash_epoch_stale",
-    );
-    expect(staleEpoch?.detail).toContain("openclaw-sbx-browser-old");
+    const staleEpoch = requireFinding("sandbox.browser_container.hash_epoch_stale", findings);
+    expect(staleEpoch.detail).toContain("openclaw-sbx-browser-old");
   });
 
   it("skips sandbox browser hash label checks when docker inspect is unavailable", async () => {
@@ -105,7 +113,7 @@ describe("security audit sandbox browser findings", () => {
     );
   });
 
-  it("warns when bridge network omits cdpSourceRange", () => {
+  it("does not warn about cdpSourceRange since runtime auto-derives it", () => {
     const findings = collectSandboxDangerousConfigFindings({
       agents: {
         defaults: {
@@ -116,29 +124,8 @@ describe("security audit sandbox browser findings", () => {
         },
       },
     } satisfies OpenClawConfig);
-    const finding = findings.find(
-      (entry) => entry.checkId === "sandbox.browser_cdp_bridge_unrestricted",
+    expect(findings.map((finding) => finding.checkId)).not.toContain(
+      "sandbox.browser_cdp_bridge_unrestricted",
     );
-    expect(finding?.severity).toBe("warn");
-    expect(finding?.detail).toContain("agents.defaults.sandbox.browser");
-  });
-
-  it("does not warn for dedicated default browser network", () => {
-    expect(
-      hasFinding(
-        "sandbox.browser_cdp_bridge_unrestricted",
-        "warn",
-        collectSandboxDangerousConfigFindings({
-          agents: {
-            defaults: {
-              sandbox: {
-                mode: "all",
-                browser: { enabled: true },
-              },
-            },
-          },
-        } satisfies OpenClawConfig),
-      ),
-    ).toBe(false);
   });
 });

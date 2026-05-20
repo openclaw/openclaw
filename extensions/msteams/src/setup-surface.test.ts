@@ -5,7 +5,7 @@ import { createMSTeamsSetupWizardBase, msteamsSetupAdapter } from "./setup-core.
 const resolveMSTeamsUserAllowlist = vi.hoisted(() => vi.fn());
 const resolveMSTeamsChannelAllowlist = vi.hoisted(() => vi.fn());
 const normalizeSecretInputString = vi.hoisted(() =>
-  vi.fn((value: unknown) => String(value ?? "").trim() || undefined),
+  vi.fn((value: unknown) => (typeof value === "string" ? value.trim() || undefined : undefined)),
 );
 const hasConfiguredMSTeamsCredentials = vi.hoisted(() => vi.fn());
 const resolveMSTeamsCredentials = vi.hoisted(() => vi.fn());
@@ -69,7 +69,7 @@ describe("msteams setup surface", () => {
     });
   });
 
-  it("reports configured status from resolved credentials", async () => {
+  it("reports configured status from resolved credentials", () => {
     resolveMSTeamsCredentials.mockReturnValue({
       appId: "app",
     });

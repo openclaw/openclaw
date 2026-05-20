@@ -1,10 +1,11 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-status";
 import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { privateFileStore } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   deriveConceptTags,
   MAX_CONCEPT_TAGS,
@@ -12,11 +13,13 @@ import {
   type ConceptTagScriptCoverage,
 } from "./concept-vocabulary.js";
 import { asRecord } from "./dreaming-shared.js";
+import { compactMemoryForBudget, DEFAULT_MEMORY_FILE_MAX_CHARS } from "./memory-budget.js";
 
-const SHORT_TERM_PATH_RE = /(?:^|\/)memory\/(\d{4})-(\d{2})-(\d{2})\.md$/;
+const SHORT_TERM_PATH_RE = /(?:^|\/)memory\/(?:[^/]+\/)*(\d{4})-(\d{2})-(\d{2})(?:-[^/]+)?\.md$/;
+const DREAMING_MEMORY_PATH_RE = /(?:^|\/)memory\/dreaming\//;
 const SHORT_TERM_SESSION_CORPUS_RE =
   /(?:^|\/)memory\/\.dreams\/session-corpus\/(\d{4})-(\d{2})-(\d{2})\.(?:md|txt)$/;
-const SHORT_TERM_BASENAME_RE = /^(\d{4})-(\d{2})-(\d{2})\.md$/;
+const SHORT_TERM_BASENAME_RE = /^(\d{4})-(\d{2})-(\d{2})(?:-[^/]+)?\.md$/;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_RECENCY_HALF_LIFE_DAYS = 14;
 export const DEFAULT_PROMOTION_MIN_SCORE = 0.75;
@@ -31,13 +34,18 @@ const SHORT_TERM_LOCK_RELATIVE_PATH = path.join("memory", ".dreams", "short-term
 const SHORT_TERM_LOCK_WAIT_TIMEOUT_MS = 10_000;
 const SHORT_TERM_LOCK_STALE_MS = 60_000;
 const SHORT_TERM_LOCK_RETRY_DELAY_MS = 40;
-const PHASE_SIGNAL_LIGHT_BOOST_MAX = 0.05;
-const PHASE_SIGNAL_REM_BOOST_MAX = 0.08;
+// Repeated dreaming revisits should be able to clear the default promotion gate
+// without requiring separate organic recall traffic for the same snippet.
+const PHASE_SIGNAL_LIGHT_BOOST_MAX = 0.06;
+const PHASE_SIGNAL_REM_BOOST_MAX = 0.09;
 const PHASE_SIGNAL_HALF_LIFE_DAYS = 14;
+const DREAMING_TRANSCRIPT_PROMPT_LINE_RE =
+  /\[[^\]]*dreaming-narrative[^\]]*]\s*(?:User|Assistant):\s*Write a dream diary entry from these memory fragments:?/i;
+const DREAMING_DIFF_PREFIX_RE = /@@\s*-\d+(?:,\d+)?\s+[-*+]\s+/iy;
 const inProcessShortTermLocks = new Map<string, Promise<void>>();
 const ensuredShortTermDirs = new Map<string, Promise<void>>();
 
-export type PromotionWeights = {
+type PromotionWeights = {
   frequency: number;
   relevance: number;
   diversity: number;
@@ -46,7 +54,7 @@ export type PromotionWeights = {
   conceptual: number;
 };
 
-export const DEFAULT_PROMOTION_WEIGHTS: PromotionWeights = {
+const DEFAULT_PROMOTION_WEIGHTS: PromotionWeights = {
   frequency: 0.24,
   relevance: 0.3,
   diversity: 0.15,
@@ -96,7 +104,7 @@ type ShortTermPhaseSignalStore = {
   entries: Record<string, ShortTermPhaseSignalEntry>;
 };
 
-export type PromotionComponents = {
+type PromotionComponents = {
   frequency: number;
   relevance: number;
   diversity: number;
@@ -130,7 +138,7 @@ export type PromotionCandidate = {
   components: PromotionComponents;
 };
 
-export type ShortTermAuditIssue = {
+type ShortTermAuditIssue = {
   severity: "warn" | "error";
   code:
     | "recall-store-unreadable"
@@ -173,7 +181,7 @@ export type RepairShortTermPromotionArtifactsResult = {
   removedStaleLock: boolean;
 };
 
-export type RankShortTermPromotionOptions = {
+type RankShortTermPromotionOptions = {
   workspaceDir: string;
   limit?: number;
   minScore?: number;
@@ -186,7 +194,7 @@ export type RankShortTermPromotionOptions = {
   nowMs?: number;
 };
 
-export type ApplyShortTermPromotionsOptions = {
+type ApplyShortTermPromotionsOptions = {
   workspaceDir: string;
   candidates: PromotionCandidate[];
   limit?: number;
@@ -196,14 +204,27 @@ export type ApplyShortTermPromotionsOptions = {
   maxAgeDays?: number;
   nowMs?: number;
   timezone?: string;
+  /**
+   * Maximum size of MEMORY.md on disk after a promotion write, in
+   * characters. When the post-write size would exceed this budget, the
+   * oldest auto-promotion sections are compacted out before write so the
+   * file stays bounded and bootstrap injection keeps reaching new
+   * sessions. Pass `0` to disable compaction. Defaults to
+   * `DEFAULT_MEMORY_FILE_MAX_CHARS`. See #73691.
+   */
+  memoryFileMaxChars?: number;
 };
 
-export type ApplyShortTermPromotionsResult = {
+type ApplyShortTermPromotionsResult = {
   memoryPath: string;
   applied: number;
   appended: number;
   reconciledExisting: number;
   appliedCandidates: PromotionCandidate[];
+  /** Number of older promotion sections compacted out to honor the budget. */
+  compactedSections: number;
+  /** Dates of the compacted promotion sections, oldest first. */
+  compactedDates: string[];
 };
 
 function clampScore(value: number): number {
@@ -230,6 +251,72 @@ function normalizeSnippet(raw: string): string {
     return "";
   }
   return trimmed.replace(/\s+/g, " ");
+}
+
+function consumeDreamingLeadPrefix(snippet: string): string {
+  let index = 0;
+  while (index < snippet.length) {
+    DREAMING_DIFF_PREFIX_RE.lastIndex = index;
+    const diffMatch = DREAMING_DIFF_PREFIX_RE.exec(snippet);
+    if (diffMatch) {
+      index = DREAMING_DIFF_PREFIX_RE.lastIndex;
+      continue;
+    }
+    const char = snippet[index];
+    if (char === "[" || char === "(") {
+      index += 1;
+      while (snippet[index] === " ") {
+        index += 1;
+      }
+      continue;
+    }
+    if (
+      (char === "-" || char === "*" || char === "+" || char === ">") &&
+      snippet[index + 1] === " "
+    ) {
+      index += 2;
+      continue;
+    }
+    break;
+  }
+  return snippet.slice(index);
+}
+
+function hasDreamingNarrativeLead(snippet: string): boolean {
+  const withoutPrefix = consumeDreamingLeadPrefix(snippet);
+  if (/^(?:Candidate|Reflections?):/i.test(withoutPrefix)) {
+    return true;
+  }
+  // Managed dreaming blocks occasionally serialize recall metadata (status:/confidence:/
+  // evidence:/recalls:) inline before the Candidate or Reflections marker, so the
+  // start-of-string check misses shapes like "status: staged - Candidate: User: ...".
+  // The composite detector below still requires the full signal combination, so widening
+  // the lead check to anywhere in the first 200 chars closes the leak without creating
+  // false positives for ordinary durable notes that merely mention the word in prose.
+  const head = withoutPrefix.slice(0, 200);
+  return /\b(?:Candidate|Reflections?):/i.test(head);
+}
+
+function isContaminatedDreamingSnippet(raw: string): boolean {
+  const snippet = normalizeSnippet(raw);
+  if (!snippet) {
+    return false;
+  }
+  if (
+    /<!--\s*openclaw-memory-promotion:/i.test(snippet) ||
+    DREAMING_TRANSCRIPT_PROMPT_LINE_RE.test(snippet)
+  ) {
+    return true;
+  }
+
+  const hasNarrativeLead = hasDreamingNarrativeLead(snippet);
+  const hasConfidence = /\bconfidence:\s*\d/i.test(snippet);
+  const hasEvidence = /\bevidence:\s*(?:memory\/\.dreams\/session-corpus\/|memory\/)/i.test(
+    snippet,
+  );
+  const hasStatus = /\bstatus:\s*staged\b/i.test(snippet);
+  const hasRecalls = /\brecalls:\s*\d+\b/i.test(snippet);
+  return hasNarrativeLead && hasConfidence && hasEvidence && hasStatus && hasRecalls;
 }
 
 function normalizeMemoryPath(rawPath: string): string {
@@ -406,6 +493,9 @@ function normalizeStore(raw: unknown, nowIso: string): ShortTermRecallStore {
           ? entry.claimHash.trim()
           : undefined;
       const snippet = typeof entry.snippet === "string" ? normalizeSnippet(entry.snippet) : "";
+      if (snippet && isContaminatedDreamingSnippet(snippet)) {
+        continue;
+      }
       const queryHashes = Array.isArray(entry.queryHashes)
         ? normalizeDistinctStrings(entry.queryHashes, MAX_QUERY_HASHES)
         : [];
@@ -691,11 +781,11 @@ async function withShortTermLock<T>(workspaceDir: string, task: () => Promise<T>
 }
 
 async function readStore(workspaceDir: string, nowIso: string): Promise<ShortTermRecallStore> {
-  const storePath = resolveStorePath(workspaceDir);
   try {
-    const raw = await fs.readFile(storePath, "utf-8");
-    const parsed = JSON.parse(raw) as unknown;
-    return normalizeStore(parsed, nowIso);
+    return normalizeStore(
+      await privateFileStore(workspaceDir).readJsonIfExists(SHORT_TERM_STORE_RELATIVE_PATH),
+      nowIso,
+    );
   } catch (err) {
     if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
       return emptyStore(nowIso);
@@ -763,15 +853,12 @@ async function readPhaseSignalStore(
   workspaceDir: string,
   nowIso: string,
 ): Promise<ShortTermPhaseSignalStore> {
-  const phaseSignalPath = resolvePhaseSignalPath(workspaceDir);
   try {
-    const raw = await fs.readFile(phaseSignalPath, "utf-8");
-    return normalizePhaseSignalStore(JSON.parse(raw) as unknown, nowIso);
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException)?.code;
-    if (code === "ENOENT" || err instanceof SyntaxError) {
-      return emptyPhaseSignalStore(nowIso);
-    }
+    return normalizePhaseSignalStore(
+      await privateFileStore(workspaceDir).readJsonIfExists(SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH),
+      nowIso,
+    );
+  } catch {
     return emptyPhaseSignalStore(nowIso);
   }
 }
@@ -780,23 +867,24 @@ async function writePhaseSignalStore(
   workspaceDir: string,
   store: ShortTermPhaseSignalStore,
 ): Promise<void> {
-  const phaseSignalPath = resolvePhaseSignalPath(workspaceDir);
   await ensureShortTermArtifactsDir(workspaceDir);
-  const tmpPath = `${phaseSignalPath}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`;
-  await fs.writeFile(tmpPath, `${JSON.stringify(store, null, 2)}\n`, "utf-8");
-  await fs.rename(tmpPath, phaseSignalPath);
+  await privateFileStore(workspaceDir).writeJson(SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH, store, {
+    trailingNewline: true,
+  });
 }
 
 async function writeStore(workspaceDir: string, store: ShortTermRecallStore): Promise<void> {
-  const storePath = resolveStorePath(workspaceDir);
   await ensureShortTermArtifactsDir(workspaceDir);
-  const tmpPath = `${storePath}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`;
-  await fs.writeFile(tmpPath, `${JSON.stringify(store, null, 2)}\n`, "utf-8");
-  await fs.rename(tmpPath, storePath);
+  await privateFileStore(workspaceDir).writeJson(SHORT_TERM_STORE_RELATIVE_PATH, store, {
+    trailingNewline: true,
+  });
 }
 
 export function isShortTermMemoryPath(filePath: string): boolean {
   const normalized = normalizeMemoryPath(filePath);
+  if (DREAMING_MEMORY_PATH_RE.test(normalized)) {
+    return false;
+  }
   if (SHORT_TERM_PATH_RE.test(normalized)) {
     return true;
   }
@@ -804,6 +892,43 @@ export function isShortTermMemoryPath(filePath: string): boolean {
     return true;
   }
   return SHORT_TERM_BASENAME_RE.test(normalized);
+}
+
+async function shortTermRecallSourceExists(params: {
+  workspaceDir: string;
+  entry: Pick<ShortTermRecallEntry, "path">;
+}): Promise<boolean> {
+  const workspaceDir = params.workspaceDir.trim();
+  if (!workspaceDir) {
+    return false;
+  }
+  for (const sourcePath of resolveShortTermSourcePathCandidates(workspaceDir, params.entry.path)) {
+    try {
+      const stat = await fs.stat(sourcePath);
+      if (stat.isFile()) {
+        return true;
+      }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        continue;
+      }
+      throw err;
+    }
+  }
+  return false;
+}
+
+export async function filterLiveShortTermRecallEntries(params: {
+  workspaceDir: string;
+  entries: ShortTermRecallEntry[];
+}): Promise<ShortTermRecallEntry[]> {
+  const results = await Promise.all(
+    params.entries.map(async (entry) => ({
+      entry,
+      exists: await shortTermRecallSourceExists({ workspaceDir: params.workspaceDir, entry }),
+    })),
+  );
+  return results.filter((result) => result.exists).map((result) => result.entry);
 }
 
 export async function recordShortTermRecalls(params: {
@@ -843,6 +968,9 @@ export async function recordShortTermRecalls(params: {
     for (const result of relevant) {
       const normalizedPath = normalizeMemoryPath(result.path);
       const snippet = normalizeSnippet(result.snippet);
+      if (!snippet || isContaminatedDreamingSnippet(snippet)) {
+        continue;
+      }
       const claimHash = snippet ? buildClaimHash(snippet) : undefined;
       const groundedKey = claimHash
         ? buildEntryKey({
@@ -948,6 +1076,7 @@ export async function recordGroundedShortTermCandidates(params: {
       const normalizedPath = normalizeMemoryPath(item.path);
       if (
         !snippet ||
+        isContaminatedDreamingSnippet(snippet) ||
         !normalizedPath ||
         !isShortTermMemoryPath(normalizedPath) ||
         !Number.isFinite(item.startLine) ||
@@ -1128,6 +1257,9 @@ export async function rankShortTermPromotionCandidates(
 
   for (const entry of Object.values(store.entries)) {
     if (!entry || entry.source !== "memory" || !isShortTermMemoryPath(entry.path)) {
+      continue;
+    }
+    if (isContaminatedDreamingSnippet(entry.snippet)) {
       continue;
     }
     if (!includePromoted && entry.promotedAt) {
@@ -1369,6 +1501,38 @@ function relocateCandidateRange(
   };
 }
 
+const DREAMING_FENCE_START_RE = /<!--\s*openclaw:dreaming:[a-z][a-z0-9-]*:start\s*-->/i;
+const DREAMING_FENCE_END_RE = /<!--\s*openclaw:dreaming:[a-z][a-z0-9-]*:end\s*-->/i;
+
+function lineRangeOverlapsDreamingFence(
+  lines: string[],
+  startLine: number,
+  endLine: number,
+): boolean {
+  if (lines.length === 0) {
+    return false;
+  }
+  const safeStart = Math.max(1, Math.min(startLine, lines.length));
+  const safeEnd = Math.max(safeStart, Math.min(endLine, lines.length));
+  let insideFence = false;
+  for (let i = 0; i < safeEnd; i += 1) {
+    const line = lines[i] ?? "";
+    if (DREAMING_FENCE_START_RE.test(line)) {
+      insideFence = true;
+      continue;
+    }
+    if (DREAMING_FENCE_END_RE.test(line)) {
+      insideFence = false;
+      continue;
+    }
+    const oneIndexed = i + 1;
+    if (insideFence && oneIndexed >= safeStart && oneIndexed <= safeEnd) {
+      return true;
+    }
+  }
+  return false;
+}
+
 async function rehydratePromotionCandidate(
   workspaceDir: string,
   candidate: PromotionCandidate,
@@ -1388,6 +1552,13 @@ async function rehydratePromotionCandidate(
     const lines = rawSource.split(/\r?\n/);
     const relocated = relocateCandidateRange(lines, candidate);
     if (!relocated) {
+      continue;
+    }
+    // Managed dreaming blocks in daily memory files are scratchwork, not durable
+    // content. If rehydration lands inside an openclaw:dreaming fence (for example
+    // because file edits shifted lines between ranking and apply), refuse the
+    // candidate so dream artifacts cannot be promoted into MEMORY.md.
+    if (lineRangeOverlapsDreamingFence(lines, relocated.startLine, relocated.endLine)) {
       continue;
     }
     return {
@@ -1465,6 +1636,9 @@ export async function applyShortTermPromotions(
     const store = await readStore(workspaceDir, nowIso);
     const selected = options.candidates
       .filter((candidate) => {
+        if (isContaminatedDreamingSnippet(candidate.snippet)) {
+          return false;
+        }
         if (candidate.promotedAt) {
           return false;
         }
@@ -1500,7 +1674,7 @@ export async function applyShortTermPromotions(
     const rehydratedSelected: PromotionCandidate[] = [];
     for (const candidate of selected) {
       const rehydrated = await rehydratePromotionCandidate(workspaceDir, candidate);
-      if (rehydrated) {
+      if (rehydrated && !isContaminatedDreamingSnippet(rehydrated.snippet)) {
         rehydratedSelected.push(rehydrated);
       }
     }
@@ -1512,6 +1686,8 @@ export async function applyShortTermPromotions(
         appended: 0,
         reconciledExisting: 0,
         appliedCandidates: [],
+        compactedSections: 0,
+        compactedDates: [],
       };
     }
 
@@ -1527,12 +1703,25 @@ export async function applyShortTermPromotions(
     );
     const toAppend = rehydratedSelected.filter((candidate) => !existingMarkers.has(candidate.key));
 
+    let compactedDates: string[] = [];
     if (toAppend.length > 0) {
-      const header = existingMemory.trim().length > 0 ? "" : "# Long-Term Memory\n\n";
       const section = buildPromotionSection(toAppend, nowMs, options.timezone);
+      const budgetChars =
+        typeof options.memoryFileMaxChars === "number" &&
+        Number.isFinite(options.memoryFileMaxChars)
+          ? Math.max(0, Math.floor(options.memoryFileMaxChars))
+          : DEFAULT_MEMORY_FILE_MAX_CHARS;
+      const compaction = compactMemoryForBudget({
+        existingMemory,
+        newSection: section,
+        budgetChars,
+      });
+      compactedDates = compaction.droppedDates;
+      const baseMemory = compaction.compacted;
+      const header = baseMemory.trim().length > 0 ? "" : "# Long-Term Memory\n\n";
       await fs.writeFile(
         memoryPath,
-        `${header}${withTrailingNewline(existingMemory)}${section}`,
+        `${header}${withTrailingNewline(baseMemory)}${section}`,
         "utf-8",
       );
     }
@@ -1570,6 +1759,8 @@ export async function applyShortTermPromotions(
       appended: toAppend.length,
       reconciledExisting: alreadyWritten.length,
       appliedCandidates: rehydratedSelected,
+      compactedSections: compactedDates.length,
+      compactedDates,
     };
   });
 }
@@ -1866,7 +2057,7 @@ export async function removeGroundedShortTermCandidates(params: {
   return { removed, storePath };
 }
 
-export const __testing = {
+export const testing = {
   parseLockOwnerPid,
   canStealStaleLock,
   isProcessLikelyAlive,
@@ -1875,4 +2066,7 @@ export const __testing = {
   calculatePhaseSignalBoost,
   buildClaimHash,
   totalSignalCountForEntry,
+  isContaminatedDreamingSnippet,
+  lineRangeOverlapsDreamingFence,
 };
+export { testing as __testing };

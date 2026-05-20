@@ -6,7 +6,7 @@ import {
 import {
   type AuthCredentialReasonCode,
   ensureAuthProfileStore,
-  repairOAuthProfileIdMismatch,
+  hasAnyAuthProfileStoreSource,
   resolveApiKeyForProfile,
   resolveProfileUnusableUntilForDisplay,
 } from "../agents/auth-profiles.js";
@@ -16,9 +16,8 @@ import {
   classifyOAuthRefreshFailure,
   type OAuthRefreshFailureReason,
 } from "../agents/auth-profiles/oauth-refresh-failure.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { resolvePluginProviders } from "../plugins/providers.runtime.js";
 import { note } from "../terminal/note.js";
 import { isRecord } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
@@ -28,43 +27,6 @@ const CODEX_PROVIDER_ID = "openai-codex";
 const CODEX_OAUTH_WARNING_TITLE = "Codex OAuth";
 const OPENAI_BASE_URL = "https://api.openai.com/v1";
 const LEGACY_CODEX_APIS = new Set(["openai-responses", "openai-completions"]);
-
-export async function maybeRepairLegacyOAuthProfileIds(
-  cfg: OpenClawConfig,
-  prompter: DoctorPrompter,
-): Promise<OpenClawConfig> {
-  const store = ensureAuthProfileStore();
-  let nextCfg = cfg;
-  const providers = resolvePluginProviders({
-    config: cfg,
-    env: process.env,
-    mode: "setup",
-  });
-  for (const provider of providers) {
-    for (const repairSpec of provider.oauthProfileIdRepairs ?? []) {
-      const repair = repairOAuthProfileIdMismatch({
-        cfg: nextCfg,
-        store,
-        provider: provider.id,
-        legacyProfileId: repairSpec.legacyProfileId,
-      });
-      if (!repair.migrated || repair.changes.length === 0) {
-        continue;
-      }
-
-      note(repair.changes.map((c) => `- ${c}`).join("\n"), "Auth profiles");
-      const apply = await prompter.confirm({
-        message: `Update ${repairSpec.promptLabel ?? provider.label} OAuth profile id in config now?`,
-        initialValue: true,
-      });
-      if (!apply) {
-        continue;
-      }
-      nextCfg = repair.config;
-    }
-  }
-  return nextCfg;
-}
 
 function hasConfiguredCodexOAuthProfile(cfg: OpenClawConfig): boolean {
   return Object.values(cfg.auth?.profiles ?? {}).some(
@@ -206,7 +168,7 @@ export function formatOAuthRefreshFailureDoctorLine(params: {
   return `- ${params.profileId}: OAuth refresh failed — Try again; if this persists, run \`${command}\`.`;
 }
 
-export async function resolveAuthIssueHint(
+async function resolveAuthIssueHint(
   issue: AuthIssue,
   cfg: OpenClawConfig,
   store: ReturnType<typeof ensureAuthProfileStore>,
@@ -245,6 +207,12 @@ export async function noteAuthProfileHealth(params: {
   prompter: DoctorPrompter;
   allowKeychainPrompt: boolean;
 }): Promise<void> {
+  if (
+    Object.keys(params.cfg.auth?.profiles ?? {}).length === 0 &&
+    !hasAnyAuthProfileStoreSource()
+  ) {
+    return;
+  }
   const store = ensureAuthProfileStore(undefined, {
     allowKeychainPrompt: params.allowKeychainPrompt,
   });

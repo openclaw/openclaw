@@ -1,5 +1,40 @@
+import path from "node:path";
+import { getMediaDir } from "../media/store.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type { MsgContext } from "./templating.js";
+
+function stripDarwinPrivatePrefix(value: string): string {
+  return value.startsWith("/private/var/") ? value.slice("/private".length) : value;
+}
+
+function normalizeManagedInboundMediaRef(value: string): string {
+  if (!path.isAbsolute(value)) {
+    return value;
+  }
+  const mediaDir = stripDarwinPrivatePrefix(path.resolve(getMediaDir()));
+  const candidate = stripDarwinPrivatePrefix(path.resolve(value));
+  const inboundDir = path.join(mediaDir, "inbound");
+  const relativeToInbound = path.relative(inboundDir, candidate);
+  if (
+    !relativeToInbound ||
+    relativeToInbound.startsWith("..") ||
+    path.isAbsolute(relativeToInbound)
+  ) {
+    return value;
+  }
+  return `media://inbound/${path.basename(candidate)}`;
+}
+
+function sanitizeInlineMediaNoteValue(value: string | undefined): string {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return "";
+  }
+  return normalizeManagedInboundMediaRef(trimmed)
+    .replace(/[\p{Cc}\]]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
 function formatMediaAttachedLine(params: {
   path: string;
@@ -12,10 +47,12 @@ function formatMediaAttachedLine(params: {
     typeof params.index === "number" && typeof params.total === "number"
       ? `[media attached ${params.index}/${params.total}: `
       : "[media attached: ";
-  const typePart = params.type?.trim() ? ` (${params.type.trim()})` : "";
-  const urlRaw = params.url?.trim();
+  const path = sanitizeInlineMediaNoteValue(params.path);
+  const typeRaw = sanitizeInlineMediaNoteValue(params.type);
+  const typePart = typeRaw ? ` (${typeRaw})` : "";
+  const urlRaw = sanitizeInlineMediaNoteValue(params.url);
   const urlPart = urlRaw ? ` | ${urlRaw}` : "";
-  return `${prefix}${params.path}${typePart}${urlPart}]`;
+  return `${prefix}${path}${typePart}${urlPart}]`;
 }
 
 // Common audio file extensions for transcription detection
@@ -47,33 +84,48 @@ function isAudioPath(path: string | undefined): boolean {
   return false;
 }
 
-export function buildInboundMediaNote(ctx: MsgContext): string | undefined {
-  // Attachment indices follow MediaPaths/MediaUrls ordering as supplied by the channel.
-  const suppressed = new Set<number>();
+function isValidAttachmentIndex(index: number, attachmentCount: number): boolean {
+  return Number.isSafeInteger(index) && index >= 0 && index < attachmentCount;
+}
+
+function collectTranscribedAudioAttachmentIndices(
+  ctx: MsgContext,
+  attachmentCount: number,
+): Set<number> {
+  // Only audio transcription should suppress the raw attachment in prompt notes.
+  // Image/video descriptions are lossy derived context, so the original attachment
+  // must stay available to multimodal models and downstream tools.
   const transcribedAudioIndices = new Set<number>();
   if (Array.isArray(ctx.MediaUnderstanding)) {
     for (const output of ctx.MediaUnderstanding) {
-      suppressed.add(output.attachmentIndex);
-      if (output.kind === "audio.transcription") {
+      if (
+        output.kind === "audio.transcription" &&
+        isValidAttachmentIndex(output.attachmentIndex, attachmentCount)
+      ) {
         transcribedAudioIndices.add(output.attachmentIndex);
       }
     }
   }
   if (Array.isArray(ctx.MediaUnderstandingDecisions)) {
     for (const decision of ctx.MediaUnderstandingDecisions) {
-      if (decision.outcome !== "success") {
+      if (decision.capability !== "audio" || decision.outcome !== "success") {
         continue;
       }
       for (const attachment of decision.attachments) {
-        if (attachment.chosen?.outcome === "success") {
-          suppressed.add(attachment.attachmentIndex);
-          if (decision.capability === "audio") {
-            transcribedAudioIndices.add(attachment.attachmentIndex);
-          }
+        if (
+          attachment.chosen?.outcome === "success" &&
+          isValidAttachmentIndex(attachment.attachmentIndex, attachmentCount)
+        ) {
+          transcribedAudioIndices.add(attachment.attachmentIndex);
         }
       }
     }
   }
+  return transcribedAudioIndices;
+}
+
+export function buildInboundMediaNote(ctx: MsgContext): string | undefined {
+  // Attachment indices follow MediaPaths/MediaUrls ordering as supplied by the channel.
   const pathsFromArray = Array.isArray(ctx.MediaPaths) ? ctx.MediaPaths : undefined;
   const paths =
     pathsFromArray && pathsFromArray.length > 0
@@ -84,6 +136,8 @@ export function buildInboundMediaNote(ctx: MsgContext): string | undefined {
   if (paths.length === 0) {
     return undefined;
   }
+
+  const transcribedAudioIndices = collectTranscribedAudioAttachmentIndices(ctx, paths.length);
 
   const urls =
     Array.isArray(ctx.MediaUrls) && ctx.MediaUrls.length === paths.length
@@ -106,9 +160,6 @@ export function buildInboundMediaNote(ctx: MsgContext): string | undefined {
       index,
     }))
     .filter((entry) => {
-      if (suppressed.has(entry.index)) {
-        return false;
-      }
       // Strip audio attachments when transcription succeeded - the transcript is already
       // available in the context, raw audio binary would only waste tokens (issue #4197)
       // Note: Only trust MIME type from per-entry types array, not fallback ctx.MediaType

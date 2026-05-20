@@ -6,9 +6,7 @@ read_when:
 title: "OpenResponses API"
 ---
 
-# OpenResponses API (HTTP)
-
-OpenClaw’s Gateway can serve an OpenResponses-compatible `POST /v1/responses` endpoint.
+OpenClaw's Gateway can serve an OpenResponses-compatible `POST /v1/responses` endpoint.
 
 This endpoint is **disabled by default**. Enable it in config first.
 
@@ -24,7 +22,8 @@ Operational behavior matches [OpenAI Chat Completions](/gateway/openai-http-api)
 
 - use the matching Gateway HTTP auth path:
   - shared-secret auth (`gateway.auth.mode="token"` or `"password"`): `Authorization: Bearer <token-or-password>`
-  - trusted-proxy auth (`gateway.auth.mode="trusted-proxy"`): identity-aware proxy headers from a configured non-loopback trusted proxy source
+  - trusted-proxy auth (`gateway.auth.mode="trusted-proxy"`): identity-aware proxy headers from a configured trusted proxy source; same-host loopback proxies require explicit `gateway.auth.trustedProxy.allowLoopback = true`
+  - trusted-proxy local direct fallback: same-host callers with no `Forwarded`, `X-Forwarded-*`, or `X-Real-IP` headers can use `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD`
   - private-ingress open auth (`gateway.auth.mode="none"`): no auth header
 - treat the endpoint as full operator access for the gateway instance
 - for shared-secret auth modes (`token` and `password`), ignore narrower bearer-declared `x-openclaw-scopes` values and restore the normal full operator defaults
@@ -76,6 +75,8 @@ The request follows the OpenResponses API with item-based input. Current support
 - `tool_choice`: filter or require client tools.
 - `stream`: enables SSE streaming.
 - `max_output_tokens`: best-effort output limit (provider dependent).
+- `temperature`: best-effort sampling temperature forwarded to the provider. Ignored by the ChatGPT-based Codex Responses backend, which uses fixed server-side sampling.
+- `top_p`: best-effort nucleus sampling forwarded to the provider. Same Codex Responses caveat as `temperature`.
 - `user`: stable session routing.
 
 Accepted but **currently ignored**:
@@ -97,7 +98,7 @@ Supported:
 Roles: `system`, `developer`, `user`, `assistant`.
 
 - `system` and `developer` are appended to the system prompt.
-- The most recent `user` or `function_call_output` item becomes the “current message.”
+- The most recent `user` or `function_call_output` item becomes the "current message."
 - Earlier user/assistant messages are included as history for context.
 
 ### `function_call_output` (turn-based tools)
@@ -174,8 +175,9 @@ Current behavior:
   rasterized into images and passed to the model, and the injected file block uses
   the placeholder `[PDF content rendered to images]`.
 
-PDF parsing uses the Node-friendly `pdfjs-dist` legacy build (no worker). The modern
-PDF.js build expects browser workers/DOM globals, so it is not used in the Gateway.
+PDF parsing is provided by the bundled `document-extract` plugin, which uses the
+Node-friendly `pdfjs-dist` legacy build (no worker). The modern PDF.js build
+expects browser workers/DOM globals, so it is not used in the Gateway.
 
 URL fetch defaults:
 
@@ -338,3 +340,8 @@ curl -N http://127.0.0.1:18789/v1/responses \
     "input": "hi"
   }'
 ```
+
+## Related
+
+- [OpenAI chat completions](/gateway/openai-http-api)
+- [OpenAI](/providers/openai)

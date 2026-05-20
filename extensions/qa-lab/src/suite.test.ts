@@ -1,115 +1,273 @@
-import { describe, expect, it } from "vitest";
-import { createQaBusState } from "./bus-state.js";
-import { qaSuiteTesting } from "./suite.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { qaSuiteProgressTesting, runQaSuite } from "./suite.js";
 
-describe("qa suite failure reply handling", () => {
-  it("detects classified failure replies before a success-only outbound predicate matches", async () => {
-    const state = createQaBusState();
-    state.addOutboundMessage({
-      to: "dm:qa-operator",
-      text: "⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.",
-      senderId: "openclaw",
-      senderName: "OpenClaw QA",
-    });
+const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 
-    const message = qaSuiteTesting.findFailureOutboundMessage(state);
-    expect(message?.text).toContain("Something went wrong while processing your request.");
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+}));
+
+afterEach(() => {
+  fetchWithSsrFGuardMock.mockReset();
+  vi.useRealTimers();
+});
+
+describe("qa suite", () => {
+  it("rejects unsupported transport ids before starting the lab", async () => {
+    const startLab = vi.fn();
+
+    await expect(
+      runQaSuite({
+        transportId: "qa-nope" as unknown as "qa-channel",
+        startLab,
+      }),
+    ).rejects.toThrow("unsupported QA transport: qa-nope");
+
+    expect(startLab).not.toHaveBeenCalled();
   });
 
-  it("fails success-only waitForOutboundMessage calls when a classified failure reply arrives first", async () => {
-    const state = createQaBusState();
-    const pending = qaSuiteTesting.waitForOutboundMessage(
-      state,
-      (candidate) =>
-        candidate.conversation.id === "qa-operator" &&
-        candidate.text.includes("Remembered ALPHA-7."),
-      5_000,
-    );
-
-    state.addOutboundMessage({
-      to: "dm:qa-operator",
-      text: '⚠️ No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai-codex/gpt-5.4 (OAuth) or set OPENAI_API_KEY to use openai/gpt-5.4.',
-      senderId: "openclaw",
-      senderName: "OpenClaw QA",
-    });
-
-    await expect(pending).rejects.toThrow('No API key found for provider "openai".');
+  it("parses progress env booleans", () => {
+    expect(qaSuiteProgressTesting.parseQaSuiteBooleanEnv("true")).toBe(true);
+    expect(qaSuiteProgressTesting.parseQaSuiteBooleanEnv("on")).toBe(true);
+    expect(qaSuiteProgressTesting.parseQaSuiteBooleanEnv("false")).toBe(false);
+    expect(qaSuiteProgressTesting.parseQaSuiteBooleanEnv("off")).toBe(false);
+    expect(qaSuiteProgressTesting.parseQaSuiteBooleanEnv("maybe")).toBeUndefined();
   });
 
-  it("fails raw scenario waitForCondition calls when a classified failure reply arrives", async () => {
-    const state = createQaBusState();
-    const waitForCondition = qaSuiteTesting.createScenarioWaitForCondition(state);
-
-    const pending = waitForCondition(
-      () =>
-        state
-          .getSnapshot()
-          .messages.filter(
-            (message) =>
-              message.direction === "outbound" &&
-              message.conversation.id === "qa-operator" &&
-              message.text.includes("ALPHA-7"),
-          )
-          .at(-1),
-      5_000,
-      10,
-    );
-
-    state.addOutboundMessage({
-      to: "dm:qa-operator",
-      text: '⚠️ No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai-codex/gpt-5.4 (OAuth) or set OPENAI_API_KEY to use openai/gpt-5.4.',
-      senderId: "openclaw",
-      senderName: "OpenClaw QA",
+  it("stops an owned lab when readiness never becomes healthy", async () => {
+    const stop = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: { ok: false },
+      release: vi.fn(async () => {}),
     });
 
-    await expect(pending).rejects.toThrow('No API key found for provider "openai".');
+    await expect(
+      qaSuiteProgressTesting.waitForQaLabReadyOrStopOwned({
+        lab: {
+          listenUrl: "http://127.0.0.1:43123",
+          stop,
+        },
+        ownsLab: true,
+        timeoutMs: 1,
+      }),
+    ).rejects.toThrow("timed out after 1ms waiting for qa-lab ready");
+    expect(stop).toHaveBeenCalledTimes(1);
   });
 
-  it("fails raw scenario waitForCondition calls even when mixed traffic already exists", async () => {
-    const state = createQaBusState();
-    state.addInboundMessage({
-      conversation: { id: "qa-operator", kind: "direct" },
-      senderId: "alice",
-      senderName: "Alice",
-      text: "hello",
-    });
-    state.addOutboundMessage({
-      to: "dm:qa-operator",
-      text: "working on it",
-      senderId: "openclaw",
-      senderName: "OpenClaw QA",
-    });
-    state.addInboundMessage({
-      conversation: { id: "qa-operator", kind: "direct" },
-      senderId: "alice",
-      senderName: "Alice",
-      text: "ok do it",
+  it("leaves caller-owned labs running when readiness never becomes healthy", async () => {
+    const stop = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: { ok: false },
+      release: vi.fn(async () => {}),
     });
 
-    const waitForCondition = qaSuiteTesting.createScenarioWaitForCondition(state);
-    const pending = waitForCondition(
-      () =>
-        state
-          .getSnapshot()
-          .messages.slice(3)
-          .filter(
-            (message) =>
-              message.direction === "outbound" &&
-              message.conversation.id === "qa-operator" &&
-              message.text.includes("mission"),
-          )
-          .at(-1),
-      150,
-      10,
+    await expect(
+      qaSuiteProgressTesting.waitForQaLabReadyOrStopOwned({
+        lab: {
+          listenUrl: "http://127.0.0.1:43123",
+          stop,
+        },
+        ownsLab: false,
+        timeoutMs: 1,
+      }),
+    ).rejects.toThrow("timed out after 1ms waiting for qa-lab ready");
+    expect(stop).not.toHaveBeenCalled();
+  });
+
+  it("defaults progress logging from CI when no override is set", () => {
+    expect(qaSuiteProgressTesting.shouldLogQaSuiteProgress({ CI: "true" })).toBe(true);
+    expect(qaSuiteProgressTesting.shouldLogQaSuiteProgress({ CI: "false" })).toBe(false);
+  });
+
+  it("resolves transport-ready timeout from params and env", () => {
+    expect(qaSuiteProgressTesting.resolveQaSuiteTransportReadyTimeoutMs(undefined, {})).toBe(
+      120_000,
     );
+    expect(
+      qaSuiteProgressTesting.resolveQaSuiteTransportReadyTimeoutMs(undefined, {
+        OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: "180000",
+      }),
+    ).toBe(180_000);
+    expect(
+      qaSuiteProgressTesting.resolveQaSuiteTransportReadyTimeoutMs(undefined, {
+        OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: "bad",
+      }),
+    ).toBe(120_000);
+    expect(qaSuiteProgressTesting.resolveQaSuiteTransportReadyTimeoutMs(90_000, {})).toBe(90_000);
+  });
 
-    state.addOutboundMessage({
-      to: "dm:qa-operator",
-      text: '⚠️ No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai-codex/gpt-5.4 (OAuth) or set OPENAI_API_KEY to use openai/gpt-5.4.',
-      senderId: "openclaw",
-      senderName: "OpenClaw QA",
+  it("applies OPENCLAW_QA_SUITE_PROGRESS override and falls back on invalid values", () => {
+    expect(
+      qaSuiteProgressTesting.shouldLogQaSuiteProgress({
+        CI: "false",
+        OPENCLAW_QA_SUITE_PROGRESS: "true",
+      }),
+    ).toBe(true);
+    expect(
+      qaSuiteProgressTesting.shouldLogQaSuiteProgress({
+        CI: "true",
+        OPENCLAW_QA_SUITE_PROGRESS: "false",
+      }),
+    ).toBe(false);
+    expect(
+      qaSuiteProgressTesting.shouldLogQaSuiteProgress({
+        CI: "false",
+        OPENCLAW_QA_SUITE_PROGRESS: "on",
+      }),
+    ).toBe(true);
+    expect(
+      qaSuiteProgressTesting.shouldLogQaSuiteProgress({
+        CI: "true",
+        OPENCLAW_QA_SUITE_PROGRESS: "off",
+      }),
+    ).toBe(false);
+    expect(
+      qaSuiteProgressTesting.shouldLogQaSuiteProgress({
+        CI: "true",
+        OPENCLAW_QA_SUITE_PROGRESS: "definitely",
+      }),
+    ).toBe(true);
+  });
+
+  it("sanitizes scenario ids for progress logs", () => {
+    expect(qaSuiteProgressTesting.sanitizeQaSuiteProgressValue("scenario-id")).toBe("scenario-id");
+    expect(qaSuiteProgressTesting.sanitizeQaSuiteProgressValue("scenario\nid\tvalue")).toBe(
+      "scenario id value",
+    );
+    expect(qaSuiteProgressTesting.sanitizeQaSuiteProgressValue("\u0000\u0001")).toBe("<empty>");
+  });
+
+  it("records gateway RSS peak and trace samples", () => {
+    expect(
+      qaSuiteProgressTesting.buildQaSuiteRuntimeMetrics({
+        startedAt: new Date("2026-04-22T12:00:00.000Z"),
+        finishedAt: new Date("2026-04-22T12:00:12.000Z"),
+        gatewayProcessCpuStartMs: 1_000,
+        gatewayProcessCpuEndMs: 4_000,
+        gatewayProcessRssStartBytes: 100_000_000,
+        gatewayProcessRssEndBytes: 125_000_000,
+        gatewayProcessRssSamples: [
+          {
+            label: "suite-start",
+            at: "2026-04-22T12:00:00.000Z",
+            gatewayProcessRssBytes: 100_000_000,
+          },
+          {
+            label: "scenario:canary:finish",
+            at: "2026-04-22T12:00:10.000Z",
+            gatewayProcessRssBytes: 140_000_000,
+          },
+        ],
+        gatewayHeapSnapshots: [
+          {
+            label: "suite-start",
+            at: "2026-04-22T12:00:01.000Z",
+            path: "artifacts/gateway-heap-snapshots/suite-start.heapsnapshot",
+            bytes: 12_345,
+          },
+        ],
+      }),
+    ).toEqual({
+      wallMs: 12_000,
+      gatewayProcessCpuMs: 3_000,
+      gatewayCpuCoreRatio: 0.25,
+      gatewayProcessRssStartBytes: 100_000_000,
+      gatewayProcessRssEndBytes: 125_000_000,
+      gatewayProcessRssDeltaBytes: 25_000_000,
+      gatewayProcessRssPeakBytes: 140_000_000,
+      gatewayProcessRssPeakDeltaBytes: 40_000_000,
+      gatewayProcessRssSamples: [
+        {
+          label: "suite-start",
+          at: "2026-04-22T12:00:00.000Z",
+          gatewayProcessRssBytes: 100_000_000,
+        },
+        {
+          label: "scenario:canary:finish",
+          at: "2026-04-22T12:00:10.000Z",
+          gatewayProcessRssBytes: 140_000_000,
+        },
+      ],
+      gatewayHeapSnapshots: [
+        {
+          label: "suite-start",
+          at: "2026-04-22T12:00:01.000Z",
+          path: "artifacts/gateway-heap-snapshots/suite-start.heapsnapshot",
+          bytes: 12_345,
+        },
+      ],
     });
+  });
 
-    await expect(pending).rejects.toThrow('No API key found for provider "openai".');
+  it("arms gateway heap checkpoint env only when requested", () => {
+    expect(
+      qaSuiteProgressTesting.buildQaGatewayHeapCheckpointRuntimeEnvPatch({
+        OPENCLAW_QA_GATEWAY_HEAP_CHECKPOINTS: "0",
+      }),
+    ).toBeUndefined();
+    expect(
+      qaSuiteProgressTesting.buildQaGatewayHeapCheckpointRuntimeEnvPatch({
+        OPENCLAW_QA_GATEWAY_HEAP_CHECKPOINTS: "1",
+        NODE_OPTIONS: "--max-old-space-size=4096",
+      }),
+    ).toEqual({
+      NODE_OPTIONS: "--max-old-space-size=4096 --heapsnapshot-signal=SIGUSR2",
+    });
+    expect(
+      qaSuiteProgressTesting.mergeQaRuntimeEnvPatches(
+        { OPENAI_API_KEY: "mock" },
+        { NODE_OPTIONS: "--heapsnapshot-signal=SIGUSR2" },
+      ),
+    ).toEqual({
+      OPENAI_API_KEY: "mock",
+      NODE_OPTIONS: "--heapsnapshot-signal=SIGUSR2",
+    });
+  });
+
+  it("builds a codex mock runtime env patch that stays on the QA mock provider", () => {
+    expect(
+      qaSuiteProgressTesting.buildQaRuntimeEnvPatch({
+        providerMode: "mock-openai",
+        forcedRuntime: "codex",
+        mockBaseUrl: "http://127.0.0.1:44080",
+      }),
+    ).toEqual({
+      OPENCLAW_BUILD_PRIVATE_QA: "1",
+      OPENCLAW_QA_FORCE_RUNTIME: "codex",
+      OPENCLAW_CODEX_APP_SERVER_ARGS:
+        "app-server -c openai_base_url=http://127.0.0.1:44080/v1 --listen stdio://",
+      OPENAI_API_KEY: "qa-mock-openai-key",
+      CODEX_API_KEY: "qa-mock-openai-key",
+    });
+  });
+
+  it("omits mock OpenAI rewiring for non-codex runtime overrides", () => {
+    expect(
+      qaSuiteProgressTesting.buildQaRuntimeEnvPatch({
+        providerMode: "mock-openai",
+        forcedRuntime: "pi",
+        mockBaseUrl: "http://127.0.0.1:44080",
+      }),
+    ).toEqual({
+      OPENCLAW_BUILD_PRIVATE_QA: "1",
+      OPENCLAW_QA_FORCE_RUNTIME: "pi",
+    });
+  });
+
+  it("remaps mock-openai model refs onto the app-server OpenAI provider for codex cells only", () => {
+    expect(
+      qaSuiteProgressTesting.remapModelRefForForcedRuntime({
+        modelRef: "mock-openai/gpt-5.5",
+        providerMode: "mock-openai",
+        forcedRuntime: "codex",
+      }),
+    ).toBe("openai/gpt-5.5");
+    expect(
+      qaSuiteProgressTesting.remapModelRefForForcedRuntime({
+        modelRef: "mock-openai/gpt-5.5",
+        providerMode: "mock-openai",
+        forcedRuntime: "pi",
+      }),
+    ).toBe("mock-openai/gpt-5.5");
   });
 });

@@ -1,5 +1,10 @@
+import type { ChatAbortOptions, ChatSendOptions } from "./app-chat.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import type { CompactionStatus, FallbackStatus } from "./app-tool-stream.ts";
+import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./chat/input-history.ts";
+import type { RealtimeTalkStatus } from "./chat/realtime-talk.ts";
+import type { ChatRunUiStatus } from "./chat/run-lifecycle.ts";
+import type { ChatSideResult } from "./chat/side-result.ts";
 import type { CronModelSuggestionsState, CronState } from "./controllers/cron.ts";
 import type { DevicePairingList } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
@@ -9,8 +14,10 @@ import type {
   ClawHubSkillDetail,
   SkillMessage,
 } from "./controllers/skills.ts";
+import type { EmbedSandboxMode } from "./embed-sandbox.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
+import type { SidebarContent } from "./sidebar-content.ts";
 import type { UiSettings } from "./storage.ts";
 import type { ThemeTransitionContext } from "./theme-transition.ts";
 import type { ResolvedTheme, ThemeMode, ThemeName } from "./theme.ts";
@@ -26,6 +33,7 @@ import type {
   LogEntry,
   LogLevel,
   ChatModelOverride,
+  ModelAuthStatusResult,
   ModelCatalogEntry,
   NostrProfile,
   PresenceEntry,
@@ -33,6 +41,7 @@ import type {
   CostUsageSummary,
   SessionUsageTimeSeries,
   SessionsListResult,
+  SessionCompactionCheckpoint,
   SkillStatusReport,
   StatusSummary,
   ToolsCatalogResult,
@@ -54,13 +63,29 @@ export type AppViewState = {
   themeMode: ThemeMode;
   themeResolved: ResolvedTheme;
   themeOrder: ThemeName[];
+  customThemeImportUrl: string;
+  customThemeImportBusy: boolean;
+  customThemeImportMessage: { kind: "success" | "error"; text: string } | null;
+  customThemeImportExpanded: boolean;
+  customThemeImportFocusToken: number;
   hello: GatewayHelloOk | null;
   lastError: string | null;
   lastErrorCode: string | null;
   eventLog: EventLogEntry[];
   assistantName: string;
   assistantAvatar: string | null;
+  assistantAvatarSource?: string | null;
+  assistantAvatarStatus?: "none" | "local" | "remote" | "data" | null;
+  assistantAvatarReason?: string | null;
+  assistantAvatarUploadBusy: boolean;
+  assistantAvatarUploadError: string | null;
   assistantAgentId: string | null;
+  userName?: string | null;
+  userAvatar?: string | null;
+  localMediaPreviewRoots: string[];
+  embedSandboxMode: EmbedSandboxMode;
+  allowExternalEmbedUrls: boolean;
+  chatMessageMaxWidth?: string | null;
   sessionKey: string;
   chatLoading: boolean;
   chatSending: boolean;
@@ -72,21 +97,56 @@ export type AppViewState = {
   chatStream: string | null;
   chatStreamStartedAt: number | null;
   chatRunId: string | null;
+  chatSideResult: ChatSideResult | null;
+  chatSideResultTerminalRuns: Set<string>;
   compactionStatus: CompactionStatus | null;
   fallbackStatus: FallbackStatus | null;
+  chatRunStatus: ChatRunUiStatus | null;
+  chatRunStatusClearTimer?: ReturnType<typeof globalThis.setTimeout> | number | null;
   chatAvatarUrl: string | null;
+  chatAvatarSource?: string | null;
+  chatAvatarStatus?: "none" | "local" | "remote" | "data" | null;
+  chatAvatarReason?: string | null;
   chatThinkingLevel: string | null;
   chatModelOverrides: Record<string, ChatModelOverride | null>;
+  chatModelSwitchPromises: Record<string, Promise<boolean>>;
   chatModelsLoading: boolean;
   chatModelCatalog: ModelCatalogEntry[];
+  sessionSwitchNotice: { id: number; text: string } | null;
+  sessionSwitchFlashKey: string | null;
+  announceSessionSwitch?: (sessionKey: string, label: string) => void;
   chatQueue: ChatQueueItem[];
+  chatQueueBySession: Record<string, ChatQueueItem[]>;
+  chatLocalInputHistoryBySession: Record<string, Array<{ text: string; ts: number }>>;
+  chatInputHistorySessionKey: string | null;
+  chatInputHistoryItems: string[] | null;
+  chatInputHistoryIndex: number;
+  chatDraftBeforeHistory: string | null;
+  realtimeTalkActive: boolean;
+  realtimeTalkStatus: RealtimeTalkStatus;
+  realtimeTalkDetail: string | null;
+  realtimeTalkTranscript: string | null;
+  realtimeTalkOptionsOpen: boolean;
+  realtimeTalkOptions: {
+    provider: string;
+    model: string;
+    voice: string;
+    transport: string;
+    vadThreshold: string;
+    silenceDurationMs: string;
+    prefixPaddingMs: string;
+    reasoningEffort: string;
+  };
+  updateRealtimeTalkOptions: (next: Partial<AppViewState["realtimeTalkOptions"]>) => void;
   chatManualRefreshInFlight: boolean;
+  chatHeaderControlsHidden: boolean;
+  chatMobileControlsOpen: boolean;
   nodesLoading: boolean;
   nodes: Array<Record<string, unknown>>;
   chatNewMessagesBelow: boolean;
   navDrawerOpen: boolean;
   sidebarOpen: boolean;
-  sidebarContent: string | null;
+  sidebarContent: SidebarContent | null;
   sidebarError: string | null;
   splitRatio: number;
   scrollToBottom: (opts?: { smooth?: boolean }) => void;
@@ -125,15 +185,29 @@ export type AppViewState = {
   dreamingStatusError: string | null;
   dreamingStatus: import("./controllers/dreaming.js").DreamingStatus | null;
   dreamingModeSaving: boolean;
+  dreamingRestartConfirmOpen: boolean;
+  dreamingRestartConfirmLoading: boolean;
+  dreamingPendingEnabled: boolean | null;
   dreamDiaryLoading: boolean;
   dreamDiaryActionLoading: boolean;
+  dreamDiaryActionMessage: { kind: "success" | "error"; text: string } | null;
+  dreamDiaryActionArchivePath: string | null;
   dreamDiaryError: string | null;
   dreamDiaryPath: string | null;
   dreamDiaryContent: string | null;
+  wikiImportInsightsLoading: boolean;
+  wikiImportInsightsError: string | null;
+  wikiImportInsights: import("./controllers/dreaming.js").WikiImportInsights | null;
+  wikiMemoryPalaceLoading: boolean;
+  wikiMemoryPalaceError: string | null;
+  wikiMemoryPalace: import("./controllers/dreaming.js").WikiMemoryPalace | null;
   configFormMode: "form" | "raw";
+  configSettingsMode: "quick" | "advanced";
   configSearchQuery: string;
   configActiveSection: string | null;
   configActiveSubsection: string | null;
+  pendingUpdateExpectedVersion: string | null;
+  updateStatusBanner: { tone: "danger" | "warn" | "info"; text: string } | null;
   communicationsFormMode: "form" | "raw";
   communicationsSearchQuery: string;
   communicationsActiveSection: string | null;
@@ -199,10 +273,15 @@ export type AppViewState = {
   sessionsLoading: boolean;
   sessionsResult: SessionsListResult | null;
   sessionsError: string | null;
+  threadsLoading: boolean;
+  threadsResult: SessionsListResult | null;
+  threadsError: string | null;
   sessionsFilterActive: string;
   sessionsFilterLimit: string;
   sessionsIncludeGlobal: boolean;
   sessionsIncludeUnknown: boolean;
+  sessionsShowArchived: boolean;
+  sessionsFiltersCollapsed: boolean;
   sessionsHideCron: boolean;
   sessionsSearchQuery: string;
   sessionsSortColumn: "key" | "kind" | "updated" | "tokens";
@@ -211,7 +290,7 @@ export type AppViewState = {
   sessionsPageSize: number;
   sessionsSelectedKeys: Set<string>;
   sessionsExpandedCheckpointKey: string | null;
-  sessionsCheckpointItemsByKey: Record<string, import("./types.ts").SessionCompactionCheckpoint[]>;
+  sessionsCheckpointItemsByKey: Record<string, SessionCompactionCheckpoint[]>;
   sessionsCheckpointLoadingKey: string | null;
   sessionsCheckpointBusyKey: string | null;
   sessionsCheckpointErrorByKey: Record<string, string>;
@@ -221,6 +300,7 @@ export type AppViewState = {
   usageError: string | null;
   usageStartDate: string;
   usageEndDate: string;
+  usageScope: "instance" | "family";
   usageSelectedSessions: string[];
   usageSelectedDays: string[];
   usageSelectedHours: number[];
@@ -253,6 +333,9 @@ export type AppViewState = {
 } & Pick<
   CronState,
   | "cronLoading"
+  | "cronQuickCreateOpen"
+  | "cronQuickCreateStep"
+  | "cronQuickCreateDraft"
   | "cronJobsLoadingMore"
   | "cronJobs"
   | "cronJobsTotal"
@@ -268,6 +351,7 @@ export type AppViewState = {
   | "cronStatus"
   | "cronError"
   | "cronForm"
+  | "cronFormCollapsed"
   | "cronFieldErrors"
   | "cronEditingJobId"
   | "cronRunsJobId"
@@ -308,6 +392,9 @@ export type AppViewState = {
     healthLoading: boolean;
     healthResult: HealthSummary | null;
     healthError: string | null;
+    modelAuthStatusLoading: boolean;
+    modelAuthStatusResult: ModelAuthStatusResult | null;
+    modelAuthStatusError: string | null;
     debugLoading: boolean;
     debugStatus: StatusSummary | null;
     debugHealth: HealthSummary | null;
@@ -344,11 +431,21 @@ export type AppViewState = {
     refreshSessionsAfterChat: Set<string>;
     connect: () => void;
     setTab: (tab: Tab) => void;
+    setChatMobileControlsOpen: (
+      open: boolean,
+      options?: { trigger?: HTMLElement | null; restoreFocus?: boolean },
+    ) => void;
     setTheme: (theme: ThemeName, context?: ThemeTransitionContext) => void;
     setThemeMode: (mode: ThemeMode, context?: ThemeTransitionContext) => void;
+    setCustomThemeImportUrl: (next: string) => void;
+    openCustomThemeImport: () => void;
+    importCustomTheme: () => Promise<void>;
+    clearCustomTheme: () => void;
     setBorderRadius: (value: number) => void;
+    setTextScale: (value: number) => void;
     applySettings: (next: UiSettings) => void;
-    loadOverview: () => Promise<void>;
+    applyLocalUserIdentity?: (next: { name?: string | null; avatar?: string | null }) => void;
+    loadOverview: (opts?: { refresh?: boolean }) => Promise<void>;
     loadAssistantIdentity: () => Promise<void>;
     loadCron: () => Promise<void>;
     handleWhatsAppStart: (force: boolean) => Promise<void>;
@@ -393,15 +490,27 @@ export type AppViewState = {
     handleRunUpdate: () => Promise<void>;
     setPassword: (next: string) => void;
     setChatMessage: (next: string) => void;
-    handleSendChat: (messageOverride?: string, opts?: { restoreDraft?: boolean }) => Promise<void>;
-    handleAbortChat: () => Promise<void>;
+    handleChatDraftChange: (next: string) => void;
+    handleChatInputHistoryKey: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
+    resetChatInputHistoryNavigation: () => void;
+    handleSendChat: (messageOverride?: string, opts?: ChatSendOptions) => Promise<void>;
+    toggleRealtimeTalk: () => Promise<void>;
+    steerQueuedChatMessage: (id: string) => Promise<void>;
+    handleAbortChat: (opts?: ChatAbortOptions) => Promise<void>;
     removeQueuedMessage: (id: string) => void;
     handleChatScroll: (event: Event) => void;
     resetToolStream: () => void;
     resetChatScroll: () => void;
     exportLogs: (lines: string[], label: string) => void;
     handleLogsScroll: (event: Event) => void;
-    handleOpenSidebar: (content: string) => void;
+    handleOpenSidebar: (content: SidebarContent) => void;
     handleCloseSidebar: () => void;
     handleSplitRatioChange: (ratio: number) => void;
+    webPushSupported: boolean;
+    webPushPermission: NotificationPermission | "unsupported";
+    webPushSubscribed: boolean;
+    webPushLoading: boolean;
+    handleWebPushSubscribe: () => Promise<void>;
+    handleWebPushUnsubscribe: () => Promise<void>;
+    handleWebPushTest: () => Promise<void>;
   };

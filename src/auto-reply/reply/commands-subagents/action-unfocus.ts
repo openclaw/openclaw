@@ -1,3 +1,4 @@
+import { normalizeConversationRef } from "../../../infra/outbound/session-binding-normalization.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
 import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import type { CommandHandlerResult } from "../commands-types.js";
@@ -14,15 +15,14 @@ export async function handleSubagentsUnfocusAction(
     return stopWithText("⚠️ /unfocus must be run inside a focused conversation.");
   }
 
-  const binding = bindingService.resolveByConversation({
-    channel: bindingContext.channel,
-    accountId: bindingContext.accountId,
-    conversationId: bindingContext.conversationId,
-    ...(bindingContext.parentConversationId &&
-    bindingContext.parentConversationId !== bindingContext.conversationId
-      ? { parentConversationId: bindingContext.parentConversationId }
-      : {}),
-  });
+  const binding = bindingService.resolveByConversation(
+    normalizeConversationRef({
+      channel: bindingContext.channel,
+      accountId: bindingContext.accountId,
+      conversationId: bindingContext.conversationId,
+      parentConversationId: bindingContext.parentConversationId,
+    }),
+  );
   if (!binding) {
     return stopWithText("ℹ️ This conversation is not currently focused.");
   }

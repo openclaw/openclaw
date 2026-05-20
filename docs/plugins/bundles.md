@@ -4,10 +4,8 @@ read_when:
   - You want to install a Codex, Claude, or Cursor-compatible bundle
   - You need to understand how OpenClaw maps bundle content into native features
   - You are debugging bundle detection or missing capabilities
-title: "Plugin Bundles"
+title: "Plugin bundles"
 ---
-
-# Plugin Bundles
 
 OpenClaw can install plugins from three external ecosystems: **Codex**, **Claude**,
 and **Cursor**. These are called **bundles** — content and metadata packs that
@@ -104,6 +102,8 @@ loader. Cursor command markdown works through the same path.
   `mcpServers`
 - OpenClaw exposes supported bundle MCP tools during embedded Pi agent turns by
   launching stdio servers or connecting to HTTP servers
+- the `coding` and `messaging` tool profiles include bundle MCP tools by
+  default; use `tools.deny: ["bundle-mcp"]` to opt out for an agent or gateway
 - project-local Pi settings still apply after bundle defaults, so workspace
   settings can override bundle MCP entries when needed
 - bundle MCP tool catalogs are sorted deterministically before registration, so
@@ -149,6 +149,7 @@ MCP servers can use stdio or HTTP transport:
 ```
 
 - `transport` may be set to `"streamable-http"` or `"sse"`; when omitted, OpenClaw uses `sse`
+- `type: "http"` is a CLI-native downstream shape; use `transport: "streamable-http"` in OpenClaw config. `openclaw mcp set` and `openclaw doctor --fix` normalize the common alias.
 - only `http:` and `https:` URL schemes are allowed
 - `headers` values support `${ENV_VAR}` interpolation
 - a server entry with both `command` and `url` is rejected
@@ -164,12 +165,17 @@ OpenClaw registers bundle MCP tools with provider-safe names in the form
 `memory_search` tool registers as `vigil-harbor__memory_search`.
 
 - characters outside `A-Za-z0-9_-` are replaced with `-`
+- fragments that would start with a non-letter get a letter prefix, so numeric
+  server keys such as `12306` become provider-safe tool prefixes
 - server prefixes are capped at 30 characters
 - full tool names are capped at 64 characters
 - empty server names fall back to `mcp`
 - colliding sanitized names are disambiguated with numeric suffixes
 - final exposed tool order is deterministic by safe name to keep repeated Pi
   turns cache-stable
+- profile filtering treats all tools from one bundle MCP server as plugin-owned
+  by `bundle-mcp`, so profile allowlists and deny lists can include either
+  individual exposed tool names or the `bundle-mcp` plugin key
 
 #### Embedded Pi settings
 
@@ -248,6 +254,18 @@ OpenClaw checks for native plugin format first:
 
 If a directory contains both, OpenClaw uses the native path. This prevents
 dual-format packages from being partially installed as bundles.
+
+## Runtime dependencies and cleanup
+
+- Third-party compatible bundles do not get startup `npm install` repair. They
+  should be installed through `openclaw plugins install` and ship everything
+  they need in the installed plugin directory.
+- OpenClaw-owned bundled plugins are either shipped lightweight in core or
+  downloadable through the plugin installer. Gateway startup never runs a
+  package manager for them.
+- `openclaw doctor --fix` removes legacy staged dependency directories and can
+  recover downloadable plugins that are missing from the local plugin index when
+  config references them.
 
 ## Security
 

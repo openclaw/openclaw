@@ -3,7 +3,7 @@ summary: "CLI reference for `openclaw backup` (create local backup archives)"
 read_when:
   - You want a first-class backup archive for local OpenClaw state
   - You want to preview which paths would be included before reset or uninstall
-title: "backup"
+title: "Backup"
 ---
 
 # `openclaw backup`
@@ -53,6 +53,15 @@ skipped.
 
 The archive payload stores file contents from those source trees, and the embedded `manifest.json` records the resolved absolute source paths plus the archive layout used for each asset.
 
+During archive creation, OpenClaw skips known live-mutation files that do not have restoration value, including active agent session transcripts, cron run logs, rolling logs, delivery queues, socket/pid/temp files under the state directory, and related durable-queue temp files. The JSON result includes `skippedVolatileCount` so automation can see how many files were intentionally omitted.
+
+Installed plugin source and manifest files under the state directory's
+`extensions/` tree are included, but their nested `node_modules/` dependency
+trees are skipped. Those dependencies are rebuildable install artifacts; after
+restoring an archive, use `openclaw plugins update <id>` or reinstall the plugin
+with `openclaw plugins install <spec> --force` when a restored plugin reports
+missing dependencies.
+
 ## Invalid config behavior
 
 `openclaw backup` intentionally bypasses the normal config preflight so it can still help during recovery. Because workspace discovery depends on a valid config, `openclaw backup create` now fails fast when the config file exists but is invalid and workspace backup is still enabled.
@@ -82,3 +91,7 @@ Practical limits come from the local machine and destination filesystem:
 Large workspaces are usually the main driver of archive size. If you want a smaller or faster backup, use `--no-include-workspace`.
 
 For the smallest archive, use `--only-config`.
+
+## Related
+
+- [CLI reference](/cli)

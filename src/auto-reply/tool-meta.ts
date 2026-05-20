@@ -24,9 +24,12 @@ export function formatToolAggregate(
 ): string {
   const filtered = (metas ?? []).filter(Boolean).map(shortenMeta);
   const display = resolveToolDisplay({ name: toolName });
-  const prefix = `${display.emoji} ${display.label}`;
+  const normalizedToolName = normalizeLowercaseStringOrEmpty(toolName);
+  const compactCommandSummary =
+    filtered.length > 0 && (normalizedToolName === "exec" || normalizedToolName === "bash");
+  const prefix = compactCommandSummary ? display.emoji : `${display.emoji} ${display.label}`;
   if (!filtered.length) {
-    return prefix;
+    return `${display.emoji} ${display.label}`;
   }
 
   const rawSegments: string[] = [];
@@ -67,7 +70,8 @@ export function formatToolAggregate(
 
   const allSegments = [...rawSegments, ...segments];
   const meta = allSegments.join("; ");
-  return `${prefix}: ${formatMetaForDisplay(toolName, meta, options?.markdown)}`;
+  const formattedMeta = formatMetaForDisplay(toolName, meta, options?.markdown);
+  return compactCommandSummary ? `${prefix} ${formattedMeta}` : `${prefix}: ${formattedMeta}`;
 }
 
 export function formatToolPrefix(toolName?: string, meta?: string) {
@@ -137,8 +141,21 @@ function maybeWrapMarkdown(value: string, markdown?: boolean): string {
   if (!markdown) {
     return value;
   }
-  if (value.includes("`")) {
-    return value;
+  const delimiter = "`".repeat(longestBacktickRun(value) + 1);
+  const padding = value.startsWith("`") || value.endsWith("`") || value.includes("\n") ? " " : "";
+  return `${delimiter}${padding}${value}${padding}${delimiter}`;
+}
+
+function longestBacktickRun(value: string): number {
+  let longest = 0;
+  let current = 0;
+  for (const char of value) {
+    if (char === "`") {
+      current += 1;
+      longest = Math.max(longest, current);
+      continue;
+    }
+    current = 0;
   }
-  return `\`${value}\``;
+  return longest;
 }

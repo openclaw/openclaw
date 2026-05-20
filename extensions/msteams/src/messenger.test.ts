@@ -1,8 +1,9 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { SILENT_REPLY_TOKEN, type PluginRuntime } from "openclaw/plugin-sdk/msteams";
+import { SILENT_REPLY_TOKEN } from "openclaw/plugin-sdk/reply-chunking";
+import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resolvePreferredOpenClawTmpDir } from "../../../src/infra/tmp-openclaw-dir.js";
 import type { StoredConversationReference } from "./conversation-store.js";
 const graphUploadMockState = vi.hoisted(() => ({
   uploadAndShareOneDrive: vi.fn(),
@@ -20,6 +21,7 @@ vi.mock("./graph-upload.js", () => {
 
 import {
   buildActivity,
+  buildConversationReference,
   renderReplyPayloadsToMessages,
   sendMSTeamsMessages,
   type MSTeamsAdapter,
@@ -98,6 +100,34 @@ function requireSentMessage(sent: Array<{ text?: string; entities?: unknown[] }>
   return firstSent;
 }
 
+function findEntity(
+  entities: unknown,
+  predicate: (entity: Record<string, unknown>) => boolean,
+): Record<string, unknown> | undefined {
+  return (entities as Array<Record<string, unknown>> | undefined)?.find(predicate);
+}
+
+function requireAiGeneratedEntity(entities: unknown): Record<string, unknown> {
+  const entity = findEntity(
+    entities,
+    (candidate) =>
+      Array.isArray(candidate.additionalType) &&
+      candidate.additionalType.includes("AIGeneratedContent"),
+  );
+  if (!entity) {
+    throw new Error("expected Teams AI-generated entity");
+  }
+  return entity;
+}
+
+function requireMentionEntity(entities: unknown): Record<string, unknown> {
+  const entity = findEntity(entities, (candidate) => candidate.type === "mention");
+  if (!entity) {
+    throw new Error("expected Teams mention entity");
+  }
+  return entity;
+}
+
 const createFallbackAdapter = (proactiveSent: string[]): MSTeamsAdapter => ({
   continueConversation: async (_appId, _reference, logic) => {
     await logic({
@@ -131,7 +161,7 @@ describe("msteams messenger", () => {
         textChunkLimit: 4000,
         tableMode: "code",
       });
-      expect(messages).toEqual([]);
+      expect(messages).toStrictEqual([]);
     });
 
     it("does not filter non-exact silent reply prefixes", () => {
@@ -196,18 +226,21 @@ describe("msteams messenger", () => {
       serviceUrl: "https://service.example.com",
     };
 
-    async function sendAndCaptureRevokeFallbackReference(
-      conversation: StoredConversationReference["conversation"],
-    ) {
+    async function sendAndCaptureRevokeFallbackReference(params: {
+      conversation: StoredConversationReference["conversation"];
+      activityId?: string;
+      threadId?: string;
+    }) {
       const proactiveSent: string[] = [];
       let capturedReference: unknown;
       const conversationRef: StoredConversationReference = {
-        activityId: "activity456",
+        activityId: params.activityId ?? "activity456",
         user: { id: "user123", name: "User" },
         agent: { id: "bot123", name: "Bot" },
-        conversation,
+        conversation: params.conversation,
         channelId: "msteams",
         serviceUrl: "https://service.example.com",
+        ...(params.threadId ? { threadId: params.threadId } : {}),
       };
       const adapter: MSTeamsAdapter = {
         continueConversation: async (_appId, reference, logic) => {
@@ -340,21 +373,15 @@ describe("msteams messenger", () => {
         expect(firstSent.text).toContain(
           "📎 [upload.txt](https://onedrive.example.com/share/item123)",
         );
-        expect(sent[0]?.entities).toEqual(
-          expect.arrayContaining([
-            {
-              type: "mention",
-              text: "<at>John</at>",
-              mentioned: {
-                id: "29:08q2j2o3jc09au90eucae",
-                name: "John",
-              },
-            },
-            expect.objectContaining({
-              additionalType: ["AIGeneratedContent"],
-            }),
-          ]),
-        );
+        const mentionEntity = requireMentionEntity(sent[0]?.entities);
+        expect(mentionEntity.text).toBe("<at>John</at>");
+        expect(mentionEntity.mentioned).toEqual({
+          id: "29:08q2j2o3jc09au90eucae",
+          name: "John",
+        });
+        expect(requireAiGeneratedEntity(sent[0]?.entities).additionalType).toEqual([
+          "AIGeneratedContent",
+        ]);
       } finally {
         await rm(tmpDir, { recursive: true, force: true });
       }
@@ -387,6 +414,65 @@ describe("msteams messenger", () => {
       expect(retryEvents).toEqual([{ nextAttempt: 2, delayMs: 0 }]);
     });
 
+    it("retries full activity preparation when media upload fails transiently", async () => {
+      const tmpDir = await mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "msteams-retry-"));
+      const localFile = path.join(tmpDir, "retry.txt");
+      await writeFile(localFile, "hello");
+
+      try {
+        const attempts: string[] = [];
+        const retryEvents: Array<{ nextAttempt: number; delayMs: number }> = [];
+        let uploadAttempts = 0;
+        graphUploadMockState.uploadAndShareOneDrive.mockImplementation(async () => {
+          uploadAttempts += 1;
+          if (uploadAttempts === 1) {
+            throw Object.assign(new Error("transient upload failure"), { statusCode: 429 });
+          }
+          return {
+            itemId: "item123",
+            webUrl: "https://onedrive.example.com/item123",
+            shareUrl: "https://onedrive.example.com/share/item123",
+            name: "retry.txt",
+          };
+        });
+
+        const ctx = {
+          sendActivity: createRecordedSendActivity(attempts),
+          updateActivity: noopUpdateActivity,
+          deleteActivity: noopDeleteActivity,
+        };
+        const adapter = createNoopAdapter();
+
+        const ids = await sendMSTeamsMessages({
+          replyStyle: "thread",
+          adapter,
+          appId: "app123",
+          conversationRef: {
+            ...baseRef,
+            conversation: {
+              ...baseRef.conversation,
+              conversationType: "channel",
+            },
+          },
+          context: ctx,
+          messages: [{ text: "one", mediaUrl: localFile }],
+          tokenProvider: {
+            getAccessToken: async () => "token",
+          },
+          retry: { maxAttempts: 2, baseDelayMs: 0, maxDelayMs: 0 },
+          onRetry: (e) => retryEvents.push({ nextAttempt: e.nextAttempt, delayMs: e.delayMs }),
+        });
+
+        expect(uploadAttempts).toBe(2);
+        expect(attempts).toHaveLength(1);
+        expect(attempts[0]).toContain("📎 [retry.txt]");
+        expect(ids).toEqual([`id:${attempts[0]}`]);
+        expect(retryEvents).toEqual([{ nextAttempt: 2, delayMs: 0 }]);
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+
     it("does not retry thread sends on client errors (4xx)", async () => {
       const ctx = {
         sendActivity: async () => {
@@ -398,8 +484,8 @@ describe("msteams messenger", () => {
 
       const adapter = createNoopAdapter();
 
-      await expect(
-        sendMSTeamsMessages({
+      try {
+        await sendMSTeamsMessages({
           replyStyle: "thread",
           adapter,
           appId: "app123",
@@ -407,8 +493,11 @@ describe("msteams messenger", () => {
           context: ctx,
           messages: [{ text: "one" }],
           retry: { maxAttempts: 3, baseDelayMs: 0, maxDelayMs: 0 },
-        }),
-      ).rejects.toMatchObject({ statusCode: 400 });
+        });
+        throw new Error("expected Teams send client error");
+      } catch (error) {
+        expect((error as { statusCode?: unknown }).statusCode).toBe(400);
+      }
     });
 
     it("falls back to proactive messaging when thread context is revoked", async () => {
@@ -452,8 +541,10 @@ describe("msteams messenger", () => {
 
     it("reconstructs threaded conversation ID for channel revoke fallback", async () => {
       const { proactiveSent, reference } = await sendAndCaptureRevokeFallbackReference({
-        id: "19:abc@thread.tacv2;messageid=deadbeef",
-        conversationType: "channel",
+        conversation: {
+          id: "19:abc@thread.tacv2;messageid=deadbeef",
+          conversationType: "channel",
+        },
       });
 
       expect(proactiveSent).toEqual(["hello"]);
@@ -464,8 +555,10 @@ describe("msteams messenger", () => {
 
     it("does not add thread suffix for group chat revoke fallback", async () => {
       const { proactiveSent, reference } = await sendAndCaptureRevokeFallbackReference({
-        id: "19:group123@thread.v2",
-        conversationType: "groupChat",
+        conversation: {
+          id: "19:group123@thread.v2",
+          conversationType: "groupChat",
+        },
       });
 
       expect(proactiveSent).toEqual(["hello"]);
@@ -475,11 +568,42 @@ describe("msteams messenger", () => {
     });
 
     it("uses threadId instead of activityId for channel revoke fallback (#58030)", async () => {
-      const proactiveSent: string[] = [];
-      let capturedReference: unknown;
-
-      const channelRef: StoredConversationReference = {
+      const { proactiveSent, reference } = await sendAndCaptureRevokeFallbackReference({
         activityId: "current-message-id",
+        conversation: {
+          id: "19:abc@thread.tacv2",
+          conversationType: "channel",
+        },
+        // threadId is the thread root, which differs from activityId (current message)
+        threadId: "thread-root-msg-id",
+      });
+
+      expect(proactiveSent).toEqual(["hello"]);
+      // Should use threadId (thread root), NOT activityId (current message)
+      expect(reference.conversation?.id).toBe("19:abc@thread.tacv2;messageid=thread-root-msg-id");
+      expect(reference.activityId).toBeUndefined();
+    });
+
+    it("falls back to activityId when threadId is not set (backward compat)", async () => {
+      const { proactiveSent, reference } = await sendAndCaptureRevokeFallbackReference({
+        activityId: "legacy-activity-id",
+        conversation: {
+          id: "19:abc@thread.tacv2",
+          conversationType: "channel",
+        },
+        // No threadId — older stored references may not have it
+      });
+
+      expect(proactiveSent).toEqual(["hello"]);
+      // Falls back to activityId when threadId is missing
+      expect(reference.conversation?.id).toBe("19:abc@thread.tacv2;messageid=legacy-activity-id");
+    });
+
+    it("sends no-context thread replies proactively with the channel thread root", async () => {
+      let capturedReference: unknown;
+      const sent: string[] = [];
+      const channelRef: StoredConversationReference = {
+        activityId: "current-msg",
         user: { id: "user123", name: "User" },
         agent: { id: "bot123", name: "Bot" },
         conversation: {
@@ -488,16 +612,14 @@ describe("msteams messenger", () => {
         },
         channelId: "msteams",
         serviceUrl: "https://service.example.com",
-        // threadId is the thread root, which differs from activityId (current message)
         threadId: "thread-root-msg-id",
       };
 
-      const ctx = createRevokedThreadContext();
       const adapter: MSTeamsAdapter = {
         continueConversation: async (_appId, reference, logic) => {
           capturedReference = reference;
           await logic({
-            sendActivity: createRecordedSendActivity(proactiveSent),
+            sendActivity: createRecordedSendActivity(sent),
             updateActivity: noopUpdateActivity,
             deleteActivity: noopDeleteActivity,
           });
@@ -507,26 +629,24 @@ describe("msteams messenger", () => {
         deleteActivity: noopDeleteActivity,
       };
 
-      await sendMSTeamsMessages({
+      const ids = await sendMSTeamsMessages({
         replyStyle: "thread",
         adapter,
         appId: "app123",
         conversationRef: channelRef,
-        context: ctx,
         messages: [{ text: "hello" }],
       });
 
-      expect(proactiveSent).toEqual(["hello"]);
+      expect(sent).toEqual(["hello"]);
+      expect(ids).toEqual(["id:hello"]);
       const ref = capturedReference as { conversation?: { id?: string }; activityId?: string };
-      // Should use threadId (thread root), NOT activityId (current message)
       expect(ref.conversation?.id).toBe("19:abc@thread.tacv2;messageid=thread-root-msg-id");
       expect(ref.activityId).toBeUndefined();
     });
 
-    it("falls back to activityId when threadId is not set (backward compat)", async () => {
-      const proactiveSent: string[] = [];
+    it("uses activityId for no-context thread replies when threadId is absent", async () => {
       let capturedReference: unknown;
-
+      const sent: string[] = [];
       const channelRef: StoredConversationReference = {
         activityId: "legacy-activity-id",
         user: { id: "user123", name: "User" },
@@ -537,15 +657,13 @@ describe("msteams messenger", () => {
         },
         channelId: "msteams",
         serviceUrl: "https://service.example.com",
-        // No threadId — older stored references may not have it
       };
 
-      const ctx = createRevokedThreadContext();
       const adapter: MSTeamsAdapter = {
         continueConversation: async (_appId, reference, logic) => {
           capturedReference = reference;
           await logic({
-            sendActivity: createRecordedSendActivity(proactiveSent),
+            sendActivity: createRecordedSendActivity(sent),
             updateActivity: noopUpdateActivity,
             deleteActivity: noopDeleteActivity,
           });
@@ -560,14 +678,13 @@ describe("msteams messenger", () => {
         adapter,
         appId: "app123",
         conversationRef: channelRef,
-        context: ctx,
         messages: [{ text: "hello" }],
       });
 
-      expect(proactiveSent).toEqual(["hello"]);
-      const ref = capturedReference as { conversation?: { id?: string } };
-      // Falls back to activityId when threadId is missing
+      const ref = capturedReference as { conversation?: { id?: string }; activityId?: string };
+      expect(sent).toEqual(["hello"]);
       expect(ref.conversation?.id).toBe("19:abc@thread.tacv2;messageid=legacy-activity-id");
+      expect(ref.activityId).toBeUndefined();
     });
 
     it("does not add thread suffix for top-level replyStyle even with threadId set", async () => {
@@ -707,28 +824,17 @@ describe("msteams messenger", () => {
 
     it("adds AI-generated entity to text messages", async () => {
       const activity = await buildActivity({ text: "hello" }, baseRef);
-      const entities = activity.entities as Array<Record<string, unknown>>;
-      expect(entities).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            type: "https://schema.org/Message",
-            "@type": "Message",
-            additionalType: ["AIGeneratedContent"],
-          }),
-        ]),
-      );
+      const aiEntity = requireAiGeneratedEntity(activity.entities);
+      expect(aiEntity.type).toBe("https://schema.org/Message");
+      expect(aiEntity["@type"]).toBe("Message");
+      expect(aiEntity.additionalType).toEqual(["AIGeneratedContent"]);
     });
 
     it("adds AI-generated entity to media-only messages", async () => {
       const activity = await buildActivity({ mediaUrl: "https://example.com/img.png" }, baseRef);
-      const entities = activity.entities as Array<Record<string, unknown>>;
-      expect(entities).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            additionalType: ["AIGeneratedContent"],
-          }),
-        ]),
-      );
+      expect(requireAiGeneratedEntity(activity.entities).additionalType).toEqual([
+        "AIGeneratedContent",
+      ]);
     });
 
     it("preserves mention entities alongside AI entity", async () => {
@@ -736,13 +842,7 @@ describe("msteams messenger", () => {
       const entities = activity.entities as Array<Record<string, unknown>>;
       // Should have at least the AI entity
       expect(entities.length).toBeGreaterThanOrEqual(1);
-      expect(entities).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            additionalType: ["AIGeneratedContent"],
-          }),
-        ]),
-      );
+      expect(requireAiGeneratedEntity(entities).additionalType).toEqual(["AIGeneratedContent"]);
     });
 
     it("sets feedbackLoopEnabled in channelData when enabled", async () => {
@@ -764,6 +864,98 @@ describe("msteams messenger", () => {
       const activity = await buildActivity({ text: "hello" }, baseRef);
       const channelData = activity.channelData as Record<string, unknown>;
       expect(channelData.feedbackLoopEnabled).toBe(false);
+    });
+  });
+
+  // Regression coverage for #58774: proactive Teams sends fail with HTTP 403
+  // when the Bot Framework connector does not see `tenantId` / `aadObjectId`
+  // on the outbound conversation reference.
+  describe("buildConversationReference tenant/aad forwarding (#58774)", () => {
+    const storedWithChannelDataTenant: StoredConversationReference = {
+      activityId: "activity-1",
+      user: { id: "user123", name: "User", aadObjectId: "aad-user-123" },
+      agent: { id: "bot123", name: "Bot" },
+      conversation: {
+        id: "19:abc@thread.tacv2",
+        conversationType: "channel",
+      },
+      // Canonical channelData source captured by message-handler inbound code.
+      tenantId: "tenant-abc",
+      aadObjectId: "aad-user-123",
+      channelId: "msteams",
+      serviceUrl: "https://smba.trafficmanager.net/amer/",
+    };
+
+    it("forwards top-level tenantId and aadObjectId onto the outbound reference", () => {
+      const reference = buildConversationReference(storedWithChannelDataTenant);
+      expect(reference.tenantId).toBe("tenant-abc");
+      expect(reference.aadObjectId).toBe("aad-user-123");
+      expect(reference.conversation.tenantId).toBe("tenant-abc");
+      expect(reference.user?.aadObjectId).toBe("aad-user-123");
+    });
+
+    it("falls back to conversation.tenantId when no top-level tenantId is stored (legacy ref)", () => {
+      const legacy: StoredConversationReference = {
+        activityId: "activity-legacy",
+        user: { id: "user-legacy", name: "Legacy", aadObjectId: "aad-legacy" },
+        agent: { id: "bot-legacy", name: "Bot" },
+        conversation: {
+          id: "a:personal-chat",
+          conversationType: "personal",
+          tenantId: "tenant-legacy",
+        },
+        channelId: "msteams",
+        serviceUrl: "https://smba.trafficmanager.net/amer/",
+      };
+      const reference = buildConversationReference(legacy);
+      expect(reference.tenantId).toBe("tenant-legacy");
+      expect(reference.aadObjectId).toBe("aad-legacy");
+    });
+
+    it("omits tenantId and aadObjectId when neither source is available", () => {
+      const minimal: StoredConversationReference = {
+        activityId: "activity-2",
+        user: { id: "user456", name: "User" },
+        agent: { id: "bot456", name: "Bot" },
+        conversation: { id: "19:xyz@thread.tacv2", conversationType: "channel" },
+        channelId: "msteams",
+        serviceUrl: "https://smba.trafficmanager.net/amer/",
+      };
+      const reference = buildConversationReference(minimal);
+      expect(reference.tenantId).toBeUndefined();
+      expect(reference.aadObjectId).toBeUndefined();
+      expect(reference.conversation.tenantId).toBeUndefined();
+    });
+
+    it("propagates tenantId/aadObjectId through sendMSTeamsMessages proactive path", async () => {
+      let capturedReference:
+        | { tenantId?: string; aadObjectId?: string; user?: { aadObjectId?: string } }
+        | undefined;
+      const adapter: MSTeamsAdapter = {
+        continueConversation: async (_appId, reference, logic) => {
+          capturedReference = reference as typeof capturedReference;
+          await logic({
+            sendActivity: async () => ({ id: "ok" }),
+            updateActivity: noopUpdateActivity,
+            deleteActivity: noopDeleteActivity,
+          });
+        },
+        process: async () => {},
+        updateActivity: noopUpdateActivity,
+        deleteActivity: noopDeleteActivity,
+      };
+
+      await sendMSTeamsMessages({
+        replyStyle: "top-level",
+        adapter,
+        appId: "app123",
+        conversationRef: storedWithChannelDataTenant,
+        messages: [{ text: "hello" }],
+      });
+
+      expect(capturedReference?.tenantId).toBe("tenant-abc");
+      expect(capturedReference?.aadObjectId).toBe("aad-user-123");
+      expect(capturedReference?.user?.aadObjectId).toBe("aad-user-123");
     });
   });
 });

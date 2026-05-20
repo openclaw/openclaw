@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { setVerbose } from "../global-state.js";
 import {
   enableConsoleCapture,
   resetLogger,
@@ -28,6 +29,7 @@ beforeEach(() => {
   loggingState.forceConsoleToStderr = false;
   loggingState.consoleTimestampPrefix = false;
   loggingState.rawConsole = null;
+  setVerbose(false);
   resetLogger();
 });
 
@@ -37,6 +39,7 @@ afterEach(() => {
   loggingState.forceConsoleToStderr = false;
   loggingState.consoleTimestampPrefix = false;
   loggingState.rawConsole = null;
+  setVerbose(false);
   resetLogger();
   setLoggerOverride(null);
   vi.restoreAllMocks();
@@ -46,7 +49,17 @@ afterAll(async () => {
   await logPathTracker.cleanup();
 });
 
+function firstMockArgAsString(mock: { mock: { calls: readonly unknown[][] } }): string {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error("expected mock call");
+  }
+  return String(call[0]);
+}
+
 describe("enableConsoleCapture", () => {
+  const secret = "sk-testsecret1234567890abcd";
+
   it("swallows EIO from stderr writes", () => {
     setLoggerOverride({ level: "info", file: tempLogPath() });
     vi.spyOn(process.stderr, "write").mockImplementation(() => {
@@ -54,7 +67,7 @@ describe("enableConsoleCapture", () => {
     });
     routeLogsToStderr();
     enableConsoleCapture();
-    expect(() => console.log("hello")).not.toThrow();
+    expect(console.log("hello")).toBeUndefined();
   });
 
   it("swallows EIO from original console writes", () => {
@@ -63,7 +76,7 @@ describe("enableConsoleCapture", () => {
       throw eioError();
     };
     enableConsoleCapture();
-    expect(() => console.log("hello")).not.toThrow();
+    expect(console.log("hello")).toBeUndefined();
   });
 
   it("prefixes console output with timestamps when enabled", () => {
@@ -77,27 +90,13 @@ describe("enableConsoleCapture", () => {
     enableConsoleCapture();
     console.warn("[EventQueue] Slow listener detected");
     expect(warn).toHaveBeenCalledTimes(1);
-    const firstArg = String(warn.mock.calls[0]?.[0] ?? "");
+    const firstArg = firstMockArgAsString(warn);
     // Timestamp uses local time with timezone offset instead of UTC "Z" suffix
     expect(firstArg).toMatch(
       /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2} \[EventQueue\]/,
     );
     vi.useRealTimers();
   });
-
-  it.each(["DiscordMessageListener", "DiscordReactionListener", "DiscordReactionRemoveListener"])(
-    "suppresses discord EventQueue slow listener duplicates for %s",
-    (listener) => {
-      setLoggerOverride({ level: "info", file: tempLogPath() });
-      const warn = vi.fn();
-      console.warn = warn;
-      enableConsoleCapture();
-      console.warn(
-        `[EventQueue] Slow listener detected: ${listener} took 12.3 seconds for event MESSAGE_CREATE`,
-      );
-      expect(warn).not.toHaveBeenCalled();
-    },
-  );
 
   it("does not double-prefix timestamps", () => {
     setLoggerOverride({ level: "info", file: tempLogPath() });
@@ -118,7 +117,7 @@ describe("enableConsoleCapture", () => {
     const payload = JSON.stringify({ ok: true });
     console.log(payload);
     expect(log).toHaveBeenCalledTimes(1);
-    const firstArg = String(log.mock.calls[0]?.[0] ?? "");
+    const firstArg = firstMockArgAsString(log);
     expect(firstArg).toMatch(/^(?:\d{2}:\d{2}:\d{2}|\d{4}-\d{2}-\d{2}T)/);
     expect(firstArg.endsWith(` ${payload}`)).toBe(true);
   });
@@ -137,6 +136,50 @@ describe("enableConsoleCapture", () => {
     expect(stdoutWrite).toHaveBeenCalledWith('{\n  "ok": true\n}\n');
   });
 
+  it("redacts credentials before forwarding console output", () => {
+    setLoggerOverride({ level: "info", file: tempLogPath() });
+    const log = vi.fn();
+    console.log = log;
+    enableConsoleCapture();
+
+    console.log("apiKey:", secret);
+
+    expect(log).toHaveBeenCalledTimes(1);
+    const line = firstMockArgAsString(log);
+    expect(line).toContain("apiKey:");
+    expect(line).not.toContain(secret);
+  });
+
+  it("redacts credentials before writing forced stderr console output", () => {
+    setLoggerOverride({ level: "info", file: tempLogPath() });
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    routeLogsToStderr();
+    enableConsoleCapture();
+
+    console.error(`Authorization: Bearer ${secret}`);
+
+    expect(stderrWrite).toHaveBeenCalledTimes(1);
+    const line = firstMockArgAsString(stderrWrite);
+    expect(line).toContain("Authorization: Bearer");
+    expect(line).not.toContain(secret);
+  });
+
+  it("redacts credentials when timestamp prefixing console output", () => {
+    setLoggerOverride({ level: "info", file: tempLogPath() });
+    const warn = vi.fn();
+    console.warn = warn;
+    setConsoleTimestampPrefix(true);
+    enableConsoleCapture();
+
+    console.warn(`token=${secret}`);
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    const line = firstMockArgAsString(warn);
+    expect(line).toMatch(/^(?:\d{2}:\d{2}:\d{2}|\d{4}-\d{2}-\d{2}T)/);
+    expect(line).toContain("token=");
+    expect(line).not.toContain(secret);
+  });
+
   it.each([
     { name: "stdout", stream: process.stdout },
     { name: "stderr", stream: process.stderr },
@@ -145,7 +188,7 @@ describe("enableConsoleCapture", () => {
     enableConsoleCapture();
     const epipe = new Error("write EPIPE") as NodeJS.ErrnoException;
     epipe.code = "EPIPE";
-    expect(() => stream.emit("error", epipe)).not.toThrow();
+    expect(stream.emit("error", epipe)).toBe(true);
   });
 
   it("rethrows non-EPIPE errors on stdout", () => {
@@ -154,6 +197,21 @@ describe("enableConsoleCapture", () => {
     const other = new Error("EACCES") as NodeJS.ErrnoException;
     other.code = "EACCES";
     expect(() => process.stdout.emit("error", other)).toThrow("EACCES");
+  });
+
+  it("suppresses libsignal session dumps even in verbose mode", () => {
+    setLoggerOverride({ level: "info", file: tempLogPath() });
+    const info = vi.fn();
+    console.info = info;
+    setVerbose(true);
+    enableConsoleCapture();
+
+    console.info("Closing session:", {
+      currentRatchet: { rootKey: Buffer.from("root-key") },
+      privKey: "private-key",
+    });
+
+    expect(info).not.toHaveBeenCalled();
   });
 });
 

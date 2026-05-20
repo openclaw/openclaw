@@ -1,5 +1,5 @@
 import { afterAll, beforeAll } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { FollowupRun } from "./queue.js";
 
@@ -20,6 +20,7 @@ export function createQueueTestRun(params: {
   originatingTo?: string;
   originatingAccountId?: string;
   originatingThreadId?: string | number;
+  currentInboundEventKind?: FollowupRun["currentInboundEventKind"];
 }): FollowupRun {
   return {
     prompt: params.prompt,
@@ -29,6 +30,7 @@ export function createQueueTestRun(params: {
     originatingTo: params.originatingTo,
     originatingAccountId: params.originatingAccountId,
     originatingThreadId: params.originatingThreadId,
+    currentInboundEventKind: params.currentInboundEventKind,
     run: {
       agentId: "agent",
       agentDir: "/tmp",

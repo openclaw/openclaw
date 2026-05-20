@@ -1,23 +1,45 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs";
-import {
-  createServer,
-  request as httpRequest,
-  type IncomingMessage,
-  type ServerResponse,
-} from "node:http";
-import { request as httpsRequest } from "node:https";
-import net from "node:net";
+import { createServer } from "node:http";
 import path from "node:path";
-import type { Duplex } from "node:stream";
-import tls from "node:tls";
-import { fileURLToPath } from "node:url";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
-import { handleQaBusRequest, writeError, writeJson } from "./bus-server.js";
+import {
+  acquireDebugProxyCaptureStore,
+  resolveDebugProxySettings,
+} from "openclaw/plugin-sdk/proxy-capture";
+import {
+  closeQaHttpServer,
+  handleQaBusRequest,
+  readQaJsonBody,
+  writeError,
+  writeJson,
+  writeQaRequestBodyLimitError,
+} from "./bus-server.js";
 import { createQaBusState, type QaBusState } from "./bus-state.js";
 import { createQaRunnerRuntime } from "./harness-runtime.js";
+import {
+  isCaptureQueryPreset,
+  mapCaptureEventForQa,
+  probeTcpReachability,
+} from "./lab-server-capture.js";
+import {
+  detectContentType,
+  isControlUiProxyPath,
+  missingUiHtml,
+  proxyHttpRequest,
+  proxyUpgradeRequest,
+  resolveAdvertisedBaseUrl,
+  resolveUiAssetVersion,
+  tryResolveUiAsset,
+} from "./lab-server-ui.js";
+import type {
+  QaLabLatestReport,
+  QaLabScenarioOutcome,
+  QaLabScenarioRun,
+  QaLabServerHandle,
+  QaLabServerStartParams,
+} from "./lab-server.types.js";
 import type { QaRunnerModelOption } from "./model-catalog.runtime.js";
+import { createQaChannelGatewayConfig } from "./qa-channel-transport.js";
 import {
   createIdleQaRunnerSnapshot,
   createQaRunOutputDir,
@@ -27,14 +49,6 @@ import { qaChannelPlugin, setQaChannelRuntime, type OpenClawConfig } from "./run
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
 import { runQaSelfCheckAgainstState, type QaSelfCheckResult } from "./self-check.js";
 
-type QaLabLatestReport = {
-  outputPath: string;
-  markdown: string;
-  generatedAt: string;
-};
-
-export type { QaLabLatestReport };
-
 type QaLabBootstrapDefaults = {
   conversationKind: "direct" | "channel";
   conversationId: string;
@@ -42,39 +56,20 @@ type QaLabBootstrapDefaults = {
   senderName: string;
 };
 
-type QaLabRunStatus = "idle" | "running" | "completed";
+export type {
+  QaLabLatestReport,
+  QaLabScenarioOutcome,
+  QaLabScenarioRun,
+  QaLabServerHandle,
+  QaLabServerStartParams,
+} from "./lab-server.types.js";
 
-type QaLabScenarioStep = {
-  name: string;
-  status: "pass" | "fail" | "skip";
-  details?: string;
-};
-
-export type QaLabScenarioOutcome = {
-  id: string;
-  name: string;
-  status: "pending" | "running" | "pass" | "fail" | "skip";
-  details?: string;
-  steps?: QaLabScenarioStep[];
-  startedAt?: string;
-  finishedAt?: string;
-};
-
-export type QaLabScenarioRun = {
-  kind: "suite" | "self-check";
-  status: QaLabRunStatus;
-  startedAt?: string;
-  finishedAt?: string;
-  scenarios: QaLabScenarioOutcome[];
-  counts: {
-    total: number;
-    pending: number;
-    running: number;
-    passed: number;
-    failed: number;
-    skipped: number;
-  };
-};
+export function writeQaLabServerError(res: Parameters<typeof writeError>[0], error: unknown): void {
+  if (writeQaRequestBodyLimitError(res, error)) {
+    return;
+  }
+  writeError(res, 500, error);
+}
 
 function countQaLabScenarioRun(scenarios: QaLabScenarioOutcome[]) {
   return {
@@ -113,130 +108,6 @@ function injectKickoffMessage(params: {
   });
 }
 
-async function readJson(req: IncomingMessage): Promise<unknown> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of req) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  const text = Buffer.concat(chunks).toString("utf8").trim();
-  return text ? (JSON.parse(text) as unknown) : {};
-}
-
-function detectContentType(filePath: string): string {
-  if (filePath.endsWith(".css")) {
-    return "text/css; charset=utf-8";
-  }
-  if (filePath.endsWith(".js")) {
-    return "text/javascript; charset=utf-8";
-  }
-  if (filePath.endsWith(".json")) {
-    return "application/json; charset=utf-8";
-  }
-  if (filePath.endsWith(".svg")) {
-    return "image/svg+xml";
-  }
-  return "text/html; charset=utf-8";
-}
-
-function missingUiHtml() {
-  return `<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>QA Lab UI Missing</title>
-    <style>
-      body { font-family: ui-sans-serif, system-ui, sans-serif; background: #0f1115; color: #f5f7fb; margin: 0; display: grid; place-items: center; min-height: 100vh; }
-      main { max-width: 42rem; padding: 2rem; background: #171b22; border: 1px solid #283140; border-radius: 18px; box-shadow: 0 30px 80px rgba(0,0,0,.35); }
-      code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: #9ee8d8; }
-      h1 { margin-top: 0; }
-    </style>
-  </head>
-  <body>
-    <main>
-      <h1>QA Lab UI not built</h1>
-      <p>Build the private debugger bundle, then reload this page.</p>
-      <p><code>pnpm qa:lab:build</code></p>
-    </main>
-  </body>
-</html>`;
-}
-
-function resolveUiDistDir(overrideDir?: string | null, repoRoot = process.cwd()) {
-  if (overrideDir?.trim()) {
-    return overrideDir;
-  }
-  const candidates = [
-    path.resolve(repoRoot, "extensions/qa-lab/web/dist"),
-    path.resolve(repoRoot, "dist/extensions/qa-lab/web/dist"),
-    fileURLToPath(new URL("../web/dist", import.meta.url)),
-  ];
-  return (
-    candidates.find((candidate) => {
-      if (!fs.existsSync(candidate)) {
-        return false;
-      }
-      const indexPath = path.join(candidate, "index.html");
-      return fs.existsSync(indexPath) && fs.statSync(indexPath).isFile();
-    }) ?? candidates[0]
-  );
-}
-
-function listUiAssetFiles(rootDir: string, currentDir = rootDir): string[] {
-  const entries = fs
-    .readdirSync(currentDir, { withFileTypes: true })
-    .toSorted((left, right) => left.name.localeCompare(right.name));
-  const files: string[] = [];
-  for (const entry of entries) {
-    const resolved = path.join(currentDir, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...listUiAssetFiles(rootDir, resolved));
-      continue;
-    }
-    if (!entry.isFile()) {
-      continue;
-    }
-    files.push(path.relative(rootDir, resolved));
-  }
-  return files;
-}
-
-function resolveUiAssetVersion(overrideDir?: string | null): string | null {
-  try {
-    const distDir = resolveUiDistDir(overrideDir);
-    const indexPath = path.join(distDir, "index.html");
-    if (!fs.existsSync(indexPath) || !fs.statSync(indexPath).isFile()) {
-      return null;
-    }
-    const hash = createHash("sha1");
-    for (const relativeFile of listUiAssetFiles(distDir)) {
-      hash.update(relativeFile);
-      hash.update("\0");
-      hash.update(fs.readFileSync(path.join(distDir, relativeFile)));
-      hash.update("\0");
-    }
-    return hash.digest("hex").slice(0, 12);
-  } catch {
-    return null;
-  }
-}
-
-function resolveAdvertisedBaseUrl(params: {
-  bindHost?: string;
-  bindPort: number;
-  advertiseHost?: string;
-  advertisePort?: number;
-}) {
-  const advertisedHost =
-    params.advertiseHost?.trim() ||
-    (params.bindHost && params.bindHost !== "0.0.0.0" ? params.bindHost : "127.0.0.1");
-  const advertisedPort =
-    typeof params.advertisePort === "number" && Number.isFinite(params.advertisePort)
-      ? params.advertisePort
-      : params.bindPort;
-  return `http://${advertisedHost}:${advertisedPort}`;
-}
-
 function createBootstrapDefaults(autoKickoffTarget?: string): QaLabBootstrapDefaults {
   if (autoKickoffTarget === "channel") {
     return {
@@ -254,174 +125,46 @@ function createBootstrapDefaults(autoKickoffTarget?: string): QaLabBootstrapDefa
   };
 }
 
-function isControlUiProxyPath(pathname: string) {
-  return pathname === "/control-ui" || pathname.startsWith("/control-ui/");
-}
+const CONTROL_UI_CREDENTIAL_QUERY_KEYS = new Set([
+  "access_token",
+  "auth",
+  "devicetoken",
+  "password",
+  "refresh_token",
+  "token",
+]);
 
-function rewriteControlUiProxyPath(pathname: string, search: string) {
-  const stripped = pathname === "/control-ui" ? "/" : pathname.slice("/control-ui".length) || "/";
-  return `${stripped}${search}`;
-}
-
-function rewriteEmbeddedControlUiHeaders(
-  headers: IncomingMessage["headers"],
-): Record<string, string | string[] | number | undefined> {
-  const rewritten: Record<string, string | string[] | number | undefined> = { ...headers };
-  delete rewritten["x-frame-options"];
-
-  const csp = headers["content-security-policy"];
-  if (typeof csp === "string") {
-    rewritten["content-security-policy"] = csp.includes("frame-ancestors")
-      ? csp.replace(/frame-ancestors\s+[^;]+/i, "frame-ancestors 'self'")
-      : `${csp}; frame-ancestors 'self'`;
+function stripSensitiveQueryParams(rawUrl: string): string {
+  try {
+    const url = new URL(rawUrl);
+    for (const key of Array.from(url.searchParams.keys())) {
+      if (CONTROL_UI_CREDENTIAL_QUERY_KEYS.has(key.toLowerCase())) {
+        url.searchParams.delete(key);
+      }
+    }
+    return url.toString();
+  } catch {
+    return rawUrl
+      .replace(
+        /([?&])(?:access_token|auth|deviceToken|password|refresh_token|token)=[^&#\s]*&?/gi,
+        (match: string, separator: string) => (match.endsWith("&") ? separator : ""),
+      )
+      .replace(/[?&]$/, "")
+      .replace("?&", "?");
   }
-
-  return rewritten;
 }
 
-async function proxyHttpRequest(params: {
-  req: IncomingMessage;
-  res: ServerResponse;
-  target: URL;
-  pathname: string;
-  search: string;
-}) {
-  const client = params.target.protocol === "https:" ? httpsRequest : httpRequest;
-  const upstreamReq = client(
-    {
-      protocol: params.target.protocol,
-      hostname: params.target.hostname,
-      port: params.target.port || (params.target.protocol === "https:" ? 443 : 80),
-      method: params.req.method,
-      path: rewriteControlUiProxyPath(params.pathname, params.search),
-      headers: {
-        ...params.req.headers,
-        host: params.target.host,
-      },
-    },
-    (upstreamRes) => {
-      params.res.writeHead(
-        upstreamRes.statusCode ?? 502,
-        rewriteEmbeddedControlUiHeaders(upstreamRes.headers),
-      );
-      upstreamRes.pipe(params.res);
-    },
-  );
-
-  upstreamReq.on("error", (error) => {
-    if (!params.res.headersSent) {
-      writeError(params.res, 502, error);
-      return;
-    }
-    params.res.destroy(error);
-  });
-
-  if (params.req.method === "GET" || params.req.method === "HEAD") {
-    upstreamReq.end();
-    return;
-  }
-  params.req.pipe(upstreamReq);
-}
-
-function proxyUpgradeRequest(params: {
-  req: IncomingMessage;
-  socket: Duplex;
-  head: Buffer;
-  target: URL;
-}) {
-  const requestUrl = new URL(params.req.url ?? "/", "http://127.0.0.1");
-  const port = Number(params.target.port || (params.target.protocol === "https:" ? 443 : 80));
-  const upstream =
-    params.target.protocol === "https:"
-      ? tls.connect({
-          host: params.target.hostname,
-          port,
-          servername: params.target.hostname,
-        })
-      : net.connect({
-          host: params.target.hostname,
-          port,
-        });
-
-  const headerLines: string[] = [];
-  for (let index = 0; index < params.req.rawHeaders.length; index += 2) {
-    const name = params.req.rawHeaders[index];
-    const value = params.req.rawHeaders[index + 1] ?? "";
-    if (normalizeLowercaseStringOrEmpty(name) === "host") {
-      continue;
-    }
-    headerLines.push(`${name}: ${value}`);
-  }
-
-  upstream.once("connect", () => {
-    const requestText = [
-      `${params.req.method ?? "GET"} ${rewriteControlUiProxyPath(requestUrl.pathname, requestUrl.search)} HTTP/${params.req.httpVersion}`,
-      `Host: ${params.target.host}`,
-      ...headerLines,
-      "",
-      "",
-    ].join("\r\n");
-    upstream.write(requestText);
-    if (params.head.length > 0) {
-      upstream.write(params.head);
-    }
-    upstream.pipe(params.socket);
-    params.socket.pipe(upstream);
-  });
-
-  const closeBoth = () => {
-    if (!params.socket.destroyed) {
-      params.socket.destroy();
-    }
-    if (!upstream.destroyed) {
-      upstream.destroy();
-    }
-  };
-
-  upstream.on("error", () => {
-    if (!params.socket.destroyed) {
-      params.socket.write("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n");
-    }
-    closeBoth();
-  });
-  params.socket.on("error", closeBoth);
-  params.socket.on("close", closeBoth);
-}
-
-function tryResolveUiAsset(
-  pathname: string,
-  overrideDir?: string | null,
-  repoRoot = process.cwd(),
-): string | null {
-  const distDir = resolveUiDistDir(overrideDir, repoRoot);
-  if (!fs.existsSync(distDir)) {
+function sanitizeControlUiPublicUrl(url: string | null): string | null {
+  if (!url) {
     return null;
   }
-  const safePath = pathname === "/" ? "/index.html" : pathname;
-  const decoded = decodeURIComponent(safePath);
-  const candidate = path.normalize(path.join(distDir, decoded));
-  if (!candidate.startsWith(distDir)) {
-    return null;
-  }
-  if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
-    return candidate;
-  }
-  const fallback = path.join(distDir, "index.html");
-  return fs.existsSync(fallback) ? fallback : null;
+  const fragmentIndex = url.indexOf("#");
+  const withoutFragment = fragmentIndex === -1 ? url : url.slice(0, fragmentIndex);
+  return stripSensitiveQueryParams(withoutFragment);
 }
 
 function createQaLabConfig(baseUrl: string): OpenClawConfig {
-  return {
-    channels: {
-      "qa-channel": {
-        enabled: true,
-        baseUrl,
-        botUserId: "openclaw",
-        botDisplayName: "OpenClaw QA",
-        allowFrom: ["*"],
-      },
-    },
-  };
+  return createQaChannelGatewayConfig({ baseUrl });
 }
 
 async function startQaGatewayLoop(params: { state: QaBusState; baseUrl: string }) {
@@ -430,30 +173,33 @@ async function startQaGatewayLoop(params: { state: QaBusState; baseUrl: string }
   const cfg = createQaLabConfig(params.baseUrl);
   const account = qaChannelPlugin.config.resolveAccount(cfg, "default");
   const abort = new AbortController();
-  const task = qaChannelPlugin.gateway?.startAccount?.({
-    accountId: account.accountId,
-    account,
-    cfg,
-    runtime: {
-      log: () => undefined,
-      error: () => undefined,
-      exit: () => undefined,
-    },
-    abortSignal: abort.signal,
-    log: {
-      info: () => undefined,
-      warn: () => undefined,
-      error: () => undefined,
-      debug: () => undefined,
-    },
-    getStatus: () => ({
-      accountId: account.accountId,
-      configured: true,
-      enabled: true,
-      running: true,
-    }),
-    setStatus: () => undefined,
-  });
+  const task = Promise.resolve().then(
+    async () =>
+      await qaChannelPlugin.gateway?.startAccount?.({
+        accountId: account.accountId,
+        account,
+        cfg,
+        runtime: {
+          log: () => undefined,
+          error: () => undefined,
+          exit: () => undefined,
+        },
+        abortSignal: abort.signal,
+        log: {
+          info: () => undefined,
+          warn: () => undefined,
+          error: () => undefined,
+          debug: () => undefined,
+        },
+        getStatus: () => ({
+          accountId: account.accountId,
+          configured: true,
+          enabled: true,
+          running: true,
+        }),
+        setStatus: () => undefined,
+      }),
+  );
   return {
     cfg,
     async stop() {
@@ -463,22 +209,16 @@ async function startQaGatewayLoop(params: { state: QaBusState; baseUrl: string }
   };
 }
 
-export async function startQaLabServer(params?: {
-  repoRoot?: string;
-  host?: string;
-  port?: number;
-  outputPath?: string;
-  advertiseHost?: string;
-  advertisePort?: number;
-  controlUiUrl?: string;
-  controlUiToken?: string;
-  controlUiProxyTarget?: string;
-  uiDistDir?: string;
-  autoKickoffTarget?: string;
-  embeddedGateway?: string;
-  sendKickoffOnStart?: boolean;
-}) {
+export async function startQaLabServer(
+  params?: QaLabServerStartParams,
+): Promise<QaLabServerHandle> {
   const repoRoot = path.resolve(params?.repoRoot ?? process.cwd());
+  const captureSettings = resolveDebugProxySettings();
+  const captureStoreLease = acquireDebugProxyCaptureStore(
+    captureSettings.dbPath,
+    captureSettings.blobDir,
+  );
+  const captureStore = captureStoreLease.store;
   const state = createQaBusState();
   let latestReport: QaLabLatestReport | null = null;
   let latestScenarioRun: QaLabScenarioRun | null = null;
@@ -491,8 +231,8 @@ export async function startQaLabServer(params?: {
   let controlUiProxyTarget = params?.controlUiProxyTarget?.trim()
     ? new URL(params.controlUiProxyTarget)
     : null;
-  let controlUiUrl = params?.controlUiUrl?.trim() || null;
-  let controlUiToken = params?.controlUiToken?.trim() || null;
+  let controlUiProxyToken = params?.controlUiProxyToken?.trim() || null;
+  let controlUiUrl = sanitizeControlUiPublicUrl(params?.controlUiUrl?.trim() || null);
   let gateway:
     | {
         cfg: OpenClawConfig;
@@ -500,39 +240,31 @@ export async function startQaLabServer(params?: {
       }
     | undefined;
   const embeddedGatewayEnabled = params?.embeddedGateway !== "disabled";
-  let labHandle: {
-    baseUrl: string;
-    listenUrl: string;
-    state: QaBusState;
-    setControlUi: (next: {
-      controlUiUrl?: string | null;
-      controlUiToken?: string | null;
-      controlUiProxyTarget?: string | null;
-    }) => void;
-    setScenarioRun: (next: Omit<QaLabScenarioRun, "counts"> | null) => void;
-    setLatestReport: (next: QaLabLatestReport | null) => void;
-    runSelfCheck: () => Promise<QaSelfCheckResult>;
-    stop: () => Promise<void>;
-  } | null = null;
+  let labHandle: QaLabServerHandle | null = null;
 
   let publicBaseUrl = "";
   let runnerModelCatalogPromise: Promise<void> | null = null;
+  let runnerModelCatalogAbort: AbortController | null = null;
   const ensureRunnerModelCatalog = () => {
     if (runnerModelCatalogPromise) {
       return runnerModelCatalogPromise;
     }
+    runnerModelCatalogAbort = new AbortController();
     runnerModelCatalogPromise = (async () => {
       try {
         const { loadQaRunnerModelOptions } = await import("./model-catalog.runtime.js");
         runnerModelOptions = await loadQaRunnerModelOptions({
           repoRoot,
+          signal: runnerModelCatalogAbort?.signal,
         });
         runnerModelCatalogStatus = "ready";
       } catch {
         runnerModelOptions = [];
         runnerModelCatalogStatus = "failed";
       }
-    })();
+    })().finally(() => {
+      runnerModelCatalogAbort = null;
+    });
     return runnerModelCatalogPromise;
   };
 
@@ -552,8 +284,10 @@ export async function startQaLabServer(params?: {
     const result = await runQaSelfCheckAgainstState({
       state,
       cfg: gateway?.cfg ?? createQaLabConfig(listenUrl),
+      transportId: "qa-channel",
       outputPath: params?.outputPath,
       repoRoot,
+      waitTimeoutMs: params?.selfCheckWaitTimeoutMs,
     });
     latestScenarioRun = withQaLabRunCounts({
       kind: "self-check",
@@ -593,6 +327,7 @@ export async function startQaLabServer(params?: {
           target: controlUiProxyTarget,
           pathname: url.pathname,
           search: url.search,
+          authorizationToken: controlUiProxyToken,
         });
         return;
       }
@@ -602,15 +337,12 @@ export async function startQaLabServer(params?: {
         const resolvedControlUiUrl = controlUiProxyTarget
           ? `${publicBaseUrl}/control-ui/`
           : controlUiUrl;
-        const controlUiEmbeddedUrl =
-          resolvedControlUiUrl && controlUiToken
-            ? `${resolvedControlUiUrl.replace(/\/?$/, "/")}#token=${encodeURIComponent(controlUiToken)}`
-            : resolvedControlUiUrl;
+        const safeControlUiUrl = sanitizeControlUiPublicUrl(resolvedControlUiUrl);
         writeJson(res, 200, {
           baseUrl: publicBaseUrl,
           latestReport,
-          controlUiUrl: resolvedControlUiUrl,
-          controlUiEmbeddedUrl,
+          controlUiUrl: safeControlUiUrl,
+          controlUiEmbeddedUrl: safeControlUiUrl,
           kickoffTask: scenarioCatalog.kickoffTask,
           scenarios: scenarioCatalog.scenarios,
           defaults: bootstrapDefaults,
@@ -646,6 +378,104 @@ export async function startQaLabServer(params?: {
         writeJson(res, 200, { run: latestScenarioRun });
         return;
       }
+      if (req.method === "GET" && url.pathname === "/api/capture/sessions") {
+        writeJson(res, 200, {
+          sessions: captureStore.listSessions(50),
+        });
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/api/capture/startup-status") {
+        const proxyUrl = captureSettings.proxyUrl || "http://127.0.0.1:7799";
+        const gatewayUrl = controlUiUrl || "http://127.0.0.1:18789/";
+        const [proxy, gateway] = await Promise.all([
+          probeTcpReachability(proxyUrl),
+          probeTcpReachability(gatewayUrl),
+        ]);
+        writeJson(res, 200, {
+          status: {
+            proxy: {
+              ...proxy,
+              label: "Proxy",
+            },
+            gateway: {
+              ...gateway,
+              label: "Gateway",
+            },
+            qaLab: {
+              label: "QA Lab",
+              url: publicBaseUrl,
+              ok: true,
+            },
+          },
+        });
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/api/capture/events") {
+        const sessionId = url.searchParams.get("sessionId")?.trim();
+        writeJson(res, 200, {
+          events: sessionId
+            ? captureStore.getSessionEvents(sessionId, 200).map(mapCaptureEventForQa)
+            : [],
+        });
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/api/capture/coverage") {
+        const sessionId = url.searchParams.get("sessionId")?.trim();
+        if (!sessionId) {
+          writeError(res, 400, "Missing sessionId");
+          return;
+        }
+        writeJson(res, 200, {
+          coverage: captureStore.summarizeSessionCoverage(sessionId),
+        });
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/api/capture/query") {
+        const preset = url.searchParams.get("preset")?.trim();
+        const sessionId = url.searchParams.get("sessionId")?.trim() || undefined;
+        if (!preset) {
+          writeError(res, 400, "Missing preset");
+          return;
+        }
+        if (!isCaptureQueryPreset(preset)) {
+          writeError(res, 400, "Unknown preset");
+          return;
+        }
+        writeJson(res, 200, {
+          rows: captureStore.queryPreset(preset, sessionId),
+        });
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/api/capture/blob") {
+        const blobId = url.searchParams.get("id")?.trim();
+        if (!blobId) {
+          writeError(res, 400, "Missing blob id");
+          return;
+        }
+        const content = captureStore.readBlob(blobId);
+        if (content == null) {
+          writeError(res, 404, "Blob not found");
+          return;
+        }
+        writeJson(res, 200, { id: blobId, content });
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/api/capture/delete-sessions") {
+        const body = (await readQaJsonBody(req)) as { sessionIds?: unknown };
+        const sessionIds = Array.isArray(body.sessionIds)
+          ? body.sessionIds.filter((value): value is string => typeof value === "string")
+          : [];
+        writeJson(res, 200, {
+          result: captureStore.deleteSessions(sessionIds),
+        });
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/api/capture/purge") {
+        writeJson(res, 200, {
+          result: captureStore.purgeAll(),
+        });
+        return;
+      }
       if (req.method === "POST" && url.pathname === "/api/reset") {
         if (activeSuiteRun) {
           writeError(res, 409, "QA suite run already in progress");
@@ -666,7 +496,7 @@ export async function startQaLabServer(params?: {
         return;
       }
       if (req.method === "POST" && url.pathname === "/api/inbound/message") {
-        const body = await readJson(req);
+        const body = await readQaJsonBody(req);
         writeJson(res, 200, {
           message: state.addInboundMessage(body as Parameters<QaBusState["addInboundMessage"]>[0]),
         });
@@ -696,7 +526,10 @@ export async function startQaLabServer(params?: {
           writeError(res, 409, "QA suite run already in progress");
           return;
         }
-        const selection = normalizeQaRunSelection(await readJson(req), scenarioCatalog.scenarios);
+        const selection = normalizeQaRunSelection(
+          await readQaJsonBody(req),
+          scenarioCatalog.scenarios,
+        );
         state.reset();
         latestReport = null;
         latestScenarioRun = null;
@@ -711,8 +544,8 @@ export async function startQaLabServer(params?: {
         };
         activeSuiteRun = (async () => {
           try {
-            const { runQaSuiteFromRuntime } = await import("./suite-launch.runtime.js");
-            const result = await runQaSuiteFromRuntime({
+            const { runQaSuite } = await import("./suite.js");
+            const result = await runQaSuite({
               lab: labHandle ?? undefined,
               outputDir: createQaRunOutputDir(repoRoot),
               providerMode: selection.providerMode,
@@ -784,7 +617,7 @@ export async function startQaLabServer(params?: {
       }
       res.end(body);
     } catch (error) {
-      writeError(res, 500, error);
+      writeQaLabServerError(res, error);
     }
   });
 
@@ -828,6 +661,7 @@ export async function startQaLabServer(params?: {
       socket,
       head,
       target: controlUiProxyTarget,
+      authorizationToken: controlUiProxyToken,
     });
   });
 
@@ -837,11 +671,11 @@ export async function startQaLabServer(params?: {
     state,
     setControlUi(next: {
       controlUiUrl?: string | null;
-      controlUiToken?: string | null;
+      controlUiProxyToken?: string | null;
       controlUiProxyTarget?: string | null;
     }) {
-      controlUiUrl = next.controlUiUrl?.trim() || null;
-      controlUiToken = next.controlUiToken?.trim() || null;
+      controlUiUrl = sanitizeControlUiPublicUrl(next.controlUiUrl?.trim() || null);
+      controlUiProxyToken = next.controlUiProxyToken?.trim() || null;
       controlUiProxyTarget = next.controlUiProxyTarget?.trim()
         ? new URL(next.controlUiProxyTarget)
         : null;
@@ -854,10 +688,11 @@ export async function startQaLabServer(params?: {
     },
     runSelfCheck,
     async stop() {
+      runnerModelCatalogAbort?.abort();
+      await runnerModelCatalogPromise?.catch(() => undefined);
       await gateway?.stop();
-      await new Promise<void>((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      );
+      await closeQaHttpServer(server);
+      captureStoreLease.release();
     },
   };
   labHandle = lab;

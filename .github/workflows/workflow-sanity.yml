@@ -2,13 +2,20 @@ name: Workflow Sanity
 
 on:
   pull_request:
+    paths-ignore:
+      - "CHANGELOG.md"
   push:
     branches: [main]
+    paths-ignore:
+      - "CHANGELOG.md"
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: true
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -16,7 +23,7 @@ env:
 jobs:
   no-tabs:
     if: github.event_name != 'workflow_dispatch'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -48,7 +55,7 @@ jobs:
 
   actionlint:
     if: github.event_name != 'workflow_dispatch'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -80,7 +87,7 @@ jobs:
 
   generated-doc-baselines:
     if: github.event_name == 'workflow_dispatch'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -89,7 +96,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          use-sticky-disk: "false"
 
       - name: Check config docs drift statefile
         run: pnpm config:docs:check

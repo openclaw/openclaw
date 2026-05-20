@@ -1,13 +1,6 @@
-import { hasNonEmptyString } from "../infra/outbound/channel-target.js";
+import { getChannelEnvVars } from "../secrets/channel-env-vars.js";
 import { isRecord } from "../utils.js";
 import type { OpenClawConfig } from "./config.js";
-
-const STATIC_ENV_RULES: Record<string, string[] | ((env: NodeJS.ProcessEnv) => boolean)> = {
-  discord: ["DISCORD_BOT_TOKEN"],
-  slack: ["SLACK_BOT_TOKEN"],
-  telegram: ["TELEGRAM_BOT_TOKEN"],
-  irc: (env) => hasNonEmptyString(env.IRC_HOST) && hasNonEmptyString(env.IRC_NICK),
-};
 
 export function resolveChannelConfigRecord(
   cfg: OpenClawConfig,
@@ -22,7 +15,11 @@ export function hasMeaningfulChannelConfigShallow(value: unknown): boolean {
   if (!isRecord(value)) {
     return false;
   }
-  return Object.keys(value).some((key) => key !== "enabled");
+  const keys = Object.keys(value);
+  if (keys.length === 1 && keys[0] === "enabled") {
+    return value.enabled === true;
+  }
+  return keys.some((key) => key !== "enabled");
 }
 
 export function isStaticallyChannelConfigured(
@@ -30,15 +27,10 @@ export function isStaticallyChannelConfigured(
   channelId: string,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-  const staticRule = STATIC_ENV_RULES[channelId];
-  if (Array.isArray(staticRule)) {
-    for (const envVar of staticRule) {
-      if (hasNonEmptyString(env[envVar])) {
-        return true;
-      }
+  for (const envVar of getChannelEnvVars(channelId, { config: cfg, env })) {
+    if (typeof env[envVar] === "string" && env[envVar].trim().length > 0) {
+      return true;
     }
-  } else if (staticRule?.(env)) {
-    return true;
   }
   return hasMeaningfulChannelConfigShallow(resolveChannelConfigRecord(cfg, channelId));
 }

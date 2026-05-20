@@ -10,6 +10,9 @@ export type SlackSystemEventTestOverrides = {
   allowFrom?: string[];
   channelType?: "im" | "channel";
   channelUsers?: string[];
+  reactionMode?: "off" | "own" | "all" | "allowlist";
+  reactionAllowlist?: Array<string | number>;
+  userNames?: Record<string, string>;
 };
 
 export function createSlackSystemEventTestHarness(overrides?: SlackSystemEventTestOverrides) {
@@ -23,6 +26,8 @@ export function createSlackSystemEventTestHarness(overrides?: SlackSystemEventTe
   const ctx = {
     app,
     runtime: { error: () => {} },
+    botUserId: "U_BOT",
+    botId: "B_BOT",
     dmEnabled: true,
     dmPolicy: overrides?.dmPolicy ?? "open",
     defaultRequireMention: true,
@@ -37,13 +42,17 @@ export function createSlackSystemEventTestHarness(overrides?: SlackSystemEventTe
     groupPolicy: "open",
     allowFrom: overrides?.allowFrom ?? [],
     allowNameMatching: false,
+    reactionMode: overrides?.reactionMode ?? "all",
+    reactionAllowlist: overrides?.reactionAllowlist ?? [],
     shouldDropMismatchedSlackEvent: () => false,
     isChannelAllowed: () => true,
     resolveChannelName: async () => ({
       name: channelType === "im" ? "direct" : "general",
       type: channelType,
     }),
-    resolveUserName: async () => ({ name: "alice" }),
+    resolveUserName: async (userId: string) => ({
+      name: overrides?.userNames?.[userId] ?? "alice",
+    }),
     resolveSlackSystemEventSessionKey: () => "agent:main:main",
   } as unknown as SlackMonitorContext;
 

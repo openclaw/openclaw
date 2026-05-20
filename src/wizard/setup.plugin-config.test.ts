@@ -14,6 +14,20 @@ vi.mock("../plugins/manifest-registry.js", () => ({
   loadPluginManifestRegistry,
 }));
 
+vi.mock("../plugins/plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry: loadPluginManifestRegistry,
+}));
+
+vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
+  loadPluginMetadataSnapshot: () => {
+    const registry = loadPluginManifestRegistry();
+    return {
+      plugins: registry.plugins,
+      manifestRegistry: registry,
+    };
+  },
+}));
+
 function makeManifestPlugin(
   id: string,
   uiHints?: Record<string, PluginConfigUiHint>,
@@ -29,6 +43,14 @@ function makeManifestPlugin(
   };
 }
 
+function requireFirst<T>(values: T[], label: string): T {
+  const value = values[0];
+  if (value === undefined) {
+    throw new Error(`expected first ${label}`);
+  }
+  return value;
+}
+
 describe("discoverConfigurablePlugins", () => {
   it("returns plugins with non-advanced uiHints", () => {
     const plugins = [
@@ -40,11 +62,11 @@ describe("discoverConfigurablePlugins", () => {
     ];
     const result = discoverConfigurablePlugins({ manifestPlugins: plugins });
     expect(result).toHaveLength(1);
-    expect(result[0]).toBeDefined();
-    expect(result[0].id).toBe("openshell");
-    expect(Object.keys(result[0].uiHints)).toEqual(["mode", "gateway"]);
+    const plugin = requireFirst(result, "configurable plugin");
+    expect(plugin.id).toBe("openshell");
+    expect(Object.keys(plugin.uiHints)).toEqual(["mode", "gateway"]);
     // Advanced field excluded
-    expect(result[0].uiHints.gpu).toBeUndefined();
+    expect(plugin.uiHints.gpu).toBeUndefined();
   });
 
   it("excludes plugins with no uiHints", () => {
@@ -64,8 +86,10 @@ describe("discoverConfigurablePlugins", () => {
     expect(result).toHaveLength(1);
     // sensitive fields are still included in uiHints for discovery —
     // they are skipped at prompt time, not at discovery time
-    expect(result[0].uiHints.endpoint).toBeDefined();
-    expect(result[0].uiHints.apiKey).toBeDefined();
+    const plugin = requireFirst(result, "configurable plugin");
+    expect(plugin.uiHints.endpoint?.label).toBe("Endpoint");
+    expect(plugin.uiHints.apiKey?.label).toBe("API Key");
+    expect(plugin.uiHints.apiKey?.sensitive).toBe(true);
   });
 
   it("excludes plugins where all fields are advanced", () => {
@@ -112,8 +136,7 @@ describe("discoverUnconfiguredPlugins", () => {
     });
     // gateway is unconfigured
     expect(result).toHaveLength(1);
-    expect(result[0]).toBeDefined();
-    expect(result[0].id).toBe("openshell");
+    expect(requireFirst(result, "unconfigured plugin").id).toBe("openshell");
   });
 
   it("excludes plugins where all fields are configured", () => {
@@ -331,5 +354,55 @@ describe("setupPluginConfig", () => {
       },
     });
     expect(result.plugins?.entries?.brave?.config?.["webSearch.mode"]).toBeUndefined();
+  });
+
+  it("coerces integer schema fields from text input", async () => {
+    loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        makeManifestPlugin(
+          "retry-plugin",
+          {
+            retries: { label: "Retries" },
+          },
+          {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              retries: {
+                type: "integer",
+              },
+            },
+          },
+        ),
+      ],
+    });
+
+    const result = await setupPluginConfig({
+      config: {
+        plugins: {
+          entries: {
+            "retry-plugin": {
+              enabled: true,
+            },
+          },
+        },
+      },
+      prompter: {
+        intro: vi.fn(async () => {}),
+        outro: vi.fn(async () => {}),
+        note: vi.fn(async () => {}),
+        select: vi.fn(async () => "") as unknown as WizardPrompter["select"],
+        multiselect: vi.fn(async () => [
+          "retry-plugin",
+        ]) as unknown as WizardPrompter["multiselect"],
+        text: vi.fn(async () => "3") as unknown as WizardPrompter["text"],
+        confirm: vi.fn(async () => true),
+        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+      },
+    });
+
+    expect(result.plugins?.entries?.["retry-plugin"]?.config).toEqual({
+      retries: 3,
+    });
   });
 });

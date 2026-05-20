@@ -1,7 +1,7 @@
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { LocationMessageEventContent } from "../sdk.js";
 import { formatLocationText, toLocationContext, type NormalizedLocation } from "./runtime-api.js";
 import { EventType } from "./types.js";
@@ -16,6 +16,14 @@ type GeoUriParams = {
   longitude: number;
   accuracy?: number;
 };
+
+function decodeGeoUriParamValue(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
 
 function parseGeoUri(value: string): GeoUriParams | null {
   const trimmed = value.trim();
@@ -51,7 +59,7 @@ function parseGeoUri(value: string): GeoUriParams | null {
       continue;
     }
     const valuePart = rawValue.trim();
-    params.set(key, valuePart ? decodeURIComponent(valuePart) : "");
+    params.set(key, valuePart ? decodeGeoUriParamValue(valuePart) : "");
   }
 
   const accuracyRaw = params.get("u");

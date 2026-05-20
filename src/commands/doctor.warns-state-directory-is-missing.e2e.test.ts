@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createDoctorRuntime,
   ensureAuthProfileStore,
@@ -81,6 +81,22 @@ function hasCodexOAuthWarning(messageIncludes?: string): boolean {
   );
 }
 
+function requireTerminalNote(params: { title?: string; messageIncludes?: string }) {
+  const note = terminalNoteMock.mock.calls.find(
+    ([message, title]) =>
+      (params.title === undefined || title === params.title) &&
+      (params.messageIncludes === undefined || String(message).includes(params.messageIncludes)),
+  );
+  if (!note) {
+    throw new Error(
+      `expected terminal note${params.title ? ` titled ${params.title}` : ""}${
+        params.messageIncludes ? ` containing ${params.messageIncludes}` : ""
+      }`,
+    );
+  }
+  return note;
+}
+
 describe("doctor command", () => {
   beforeEach(async () => {
     doctorCommand = await loadDoctorCommandForTest({
@@ -99,11 +115,50 @@ describe("doctor command", () => {
       workspaceSuggestions: false,
     });
 
-    const stateNote = terminalNoteMock.mock.calls.find(([message]) =>
-      String(message).includes("state directory missing"),
-    );
-    expect(stateNote).toBeTruthy();
-    expect(String(stateNote?.[0])).toContain("CRITICAL");
+    const stateNote = requireTerminalNote({ messageIncludes: "state directory missing" });
+    expect(String(stateNote[0])).toContain("CRITICAL");
+  });
+
+  it("routes browser readiness through health contributions and degrades gracefully when browser facade is unavailable", async () => {
+    const loadBundledPluginPublicSurfaceModuleSync = vi.fn(() => {
+      throw new Error("missing browser doctor facade");
+    });
+    vi.doMock("../plugin-sdk/facade-loader.js", async () => {
+      const actual = await vi.importActual<typeof import("../plugin-sdk/facade-loader.js")>(
+        "../plugin-sdk/facade-loader.js",
+      );
+      return {
+        ...actual,
+        loadBundledPluginPublicSurfaceModuleSync,
+      };
+    });
+    doctorCommand = await loadDoctorCommandForTest({
+      unmockModules: [
+        "../flows/doctor-health-contributions.js",
+        "./doctor-browser.js",
+        "./doctor-state-integrity.js",
+      ],
+    });
+
+    mockDoctorConfigSnapshot({
+      config: {
+        browser: {
+          defaultProfile: "user",
+        },
+      },
+    });
+
+    await runDoctorNonInteractive();
+
+    expect(loadBundledPluginPublicSurfaceModuleSync).toHaveBeenCalledWith({
+      dirName: "browser",
+      artifactBasename: "browser-doctor.js",
+    });
+    const browserFallbackNote = requireTerminalNote({
+      title: "Browser",
+      messageIncludes: "Browser health check is unavailable",
+    });
+    expect(String(browserFallbackNote[0])).toContain("missing browser doctor facade");
   });
 
   it("warns about opencode provider overrides", async () => {
@@ -279,13 +334,10 @@ describe("doctor command", () => {
       workspaceSuggestions: false,
     });
 
-    const gatewayAuthNote = terminalNoteMock.mock.calls.find((call) => call[1] === "Gateway auth");
-    expect(gatewayAuthNote).toBeTruthy();
-    expect(String(gatewayAuthNote?.[0])).toContain("gateway.auth.mode is unset");
-    expect(String(gatewayAuthNote?.[0])).toContain("openclaw config set gateway.auth.mode token");
-    expect(String(gatewayAuthNote?.[0])).toContain(
-      "openclaw config set gateway.auth.mode password",
-    );
+    const gatewayAuthNote = requireTerminalNote({ title: "Gateway auth" });
+    expect(String(gatewayAuthNote[0])).toContain("gateway.auth.mode is unset");
+    expect(String(gatewayAuthNote[0])).toContain("openclaw config set gateway.auth.mode token");
+    expect(String(gatewayAuthNote[0])).toContain("openclaw config set gateway.auth.mode password");
   });
 
   it("keeps doctor read-only when gateway token is SecretRef-managed but unresolved", async () => {
@@ -325,12 +377,11 @@ describe("doctor command", () => {
       }
     }
 
-    const gatewayAuthNote = terminalNoteMock.mock.calls.find((call) => call[1] === "Gateway auth");
-    expect(gatewayAuthNote).toBeTruthy();
-    expect(String(gatewayAuthNote?.[0])).toContain(
+    const gatewayAuthNote = requireTerminalNote({ title: "Gateway auth" });
+    expect(String(gatewayAuthNote[0])).toContain(
       "Gateway token is managed via SecretRef and is currently unavailable.",
     );
-    expect(String(gatewayAuthNote?.[0])).toContain(
+    expect(String(gatewayAuthNote[0])).toContain(
       "Doctor will not overwrite gateway.auth.token with a plaintext value.",
     );
   });

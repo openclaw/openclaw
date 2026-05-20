@@ -86,6 +86,23 @@ describe("edit tool recovery hardening", () => {
     });
   }
 
+  function expectRecoveredText(result: Awaited<ReturnType<AnyAgentTool["execute"]>>, text: string) {
+    expect((result as { isError?: unknown }).isError).toBe(false);
+    const first = result.content[0];
+    expect(first?.type).toBe("text");
+    expect(first?.type === "text" ? first.text : undefined).toBe(text);
+  }
+
+  async function expectPathMissing(targetPath: string) {
+    try {
+      await fs.access(targetPath);
+      throw new Error(`expected ${targetPath} to be missing`);
+    } catch (error) {
+      const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+      expect(code).toBe("ENOENT");
+    }
+  }
+
   it("adds current file contents to exact-match mismatch errors", async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-edit-recovery-"));
     const filePath = path.join(tmpDir, "demo.txt");
@@ -136,11 +153,34 @@ describe("edit tool recovery hardening", () => {
       undefined,
     );
 
-    expect(result).toMatchObject({ isError: false });
-    expect(result.content[0]).toMatchObject({
-      type: "text",
-      text: `Successfully replaced text in ${filePath}.`,
+    expectRecoveredText(result, `Successfully replaced text in ${filePath}.`);
+  });
+
+  it("recovers post-write failures when edit calls use file_path", async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-edit-recovery-"));
+    const workspaceDir = path.join(tmpDir, ".openclaw", "workspace");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    const filePath = path.join(workspaceDir, "AGENTS.md");
+    await fs.writeFile(filePath, "# Agent\nold instruction\n", "utf-8");
+
+    const tool = createRecoveredEditTool({
+      root: tmpDir,
+      readFile: (absolutePath) => fs.readFile(absolutePath, "utf-8"),
+      execute: async () => {
+        await fs.writeFile(filePath, "# Agent\nnew instruction\n", "utf-8");
+        throw new Error("Simulated post-write failure (e.g. generateDiffString)");
+      },
     });
+    const result = await tool.execute(
+      "call-1",
+      {
+        file_path: filePath,
+        edits: [{ oldText: "old instruction", newText: "new instruction" }],
+      },
+      undefined,
+    );
+
+    expectRecoveredText(result, `Successfully replaced text in ${filePath}.`);
   });
 
   it("does not recover false success when the file never changed", async () => {
@@ -186,11 +226,7 @@ describe("edit tool recovery hardening", () => {
       undefined,
     );
 
-    expect(result).toMatchObject({ isError: false });
-    expect(result.content[0]).toMatchObject({
-      type: "text",
-      text: `Successfully replaced text in ${filePath}.`,
-    });
+    expectRecoveredText(result, `Successfully replaced text in ${filePath}.`);
   });
 
   it("recovers multi-edit payloads after a post-write throw", async () => {
@@ -218,11 +254,60 @@ describe("edit tool recovery hardening", () => {
       undefined,
     );
 
-    expect(result).toMatchObject({ isError: false });
-    expect(result.content[0]).toMatchObject({
-      type: "text",
-      text: `Successfully replaced 2 block(s) in ${filePath}.`,
-    });
+    expectRecoveredText(result, `Successfully replaced 2 block(s) in ${filePath}.`);
+  });
+
+  it("recovers tilde paths against the OS home even when OPENCLAW_HOME differs", async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-edit-recovery-"));
+    const osHome = path.join(tmpDir, "home");
+    const openclawHome = path.join(tmpDir, "openclaw-home");
+    await fs.mkdir(osHome, { recursive: true });
+    await fs.mkdir(openclawHome, { recursive: true });
+
+    const previousHome = process.env.HOME;
+    const previousUserProfile = process.env.USERPROFILE;
+    const previousOpenclawHome = process.env.OPENCLAW_HOME;
+    process.env.HOME = osHome;
+    process.env.USERPROFILE = osHome;
+    process.env.OPENCLAW_HOME = openclawHome;
+
+    try {
+      const filePath = path.join(osHome, "demo.txt");
+      await fs.writeFile(filePath, "before old text after\n", "utf-8");
+
+      const tool = createRecoveredEditTool({
+        root: tmpDir,
+        readFile: (absolutePath) => fs.readFile(absolutePath, "utf-8"),
+        execute: async () => {
+          await fs.writeFile(filePath, "before new text after\n", "utf-8");
+          throw new Error("Simulated post-write failure (e.g. generateDiffString)");
+        },
+      });
+      const result = await tool.execute(
+        "call-1",
+        { path: "~/demo.txt", edits: [{ oldText: "old text", newText: "new text" }] },
+        undefined,
+      );
+
+      expectRecoveredText(result, "Successfully replaced text in ~/demo.txt.");
+      await expectPathMissing(path.join(openclawHome, "demo.txt"));
+    } finally {
+      if (previousHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = previousHome;
+      }
+      if (previousUserProfile === undefined) {
+        delete process.env.USERPROFILE;
+      } else {
+        process.env.USERPROFILE = previousUserProfile;
+      }
+      if (previousOpenclawHome === undefined) {
+        delete process.env.OPENCLAW_HOME;
+      } else {
+        process.env.OPENCLAW_HOME = previousOpenclawHome;
+      }
+    }
   });
 
   it("applies the same recovery path to sandboxed edit tools", async () => {
@@ -246,10 +331,6 @@ describe("edit tool recovery hardening", () => {
       undefined,
     );
 
-    expect(result).toMatchObject({ isError: false });
-    expect(result.content[0]).toMatchObject({
-      type: "text",
-      text: `Successfully replaced text in ${filePath}.`,
-    });
+    expectRecoveredText(result, `Successfully replaced text in ${filePath}.`);
   });
 });

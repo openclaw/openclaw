@@ -151,15 +151,16 @@ describe("createNodesTool screen_record duration guardrails", () => {
       durationMs: 900_000,
     });
 
-    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
-      "node.invoke",
-      {},
-      expect.objectContaining({
-        params: expect.objectContaining({
-          durationMs: 300_000,
-        }),
-      }),
-    );
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledTimes(1);
+    const call = gatewayMocks.callGatewayTool.mock.calls[0] as
+      | [string, unknown, { params?: { durationMs?: unknown } }]
+      | undefined;
+    if (!call) {
+      throw new Error("expected callGatewayTool to be called");
+    }
+    expect(call[0]).toBe("node.invoke");
+    expect(call[1]).toStrictEqual({});
+    expect(call[2].params?.durationMs).toBe(300_000);
   });
 
   it("rejects the removed run action", async () => {
@@ -319,5 +320,36 @@ describe("createNodesTool screen_record duration guardrails", () => {
         invokeCommand: "system.run",
       }),
     ).rejects.toThrow('invokeCommand "system.run" is reserved for shell execution');
+  });
+
+  it("redirects file-transfer invoke commands to the dedicated file-transfer tool", async () => {
+    const tool = createNodesTool({ allowMediaInvokeCommands: true });
+
+    await expect(
+      tool.execute("call-1", {
+        action: "invoke",
+        node: "macbook",
+        invokeCommand: "file.fetch",
+      }),
+    ).rejects.toThrow(
+      'invokeCommand "file.fetch" enforces a path-allowlist policy and cannot be invoked via the generic nodes.invoke surface; use the dedicated file-transfer tool "file_fetch"',
+    );
+  });
+
+  it("keeps invoke pairing guidance for scope upgrade rejections", async () => {
+    gatewayMocks.callGatewayTool.mockRejectedValueOnce(
+      new Error("scope upgrade pending approval (requestId: req-123)"),
+    );
+    const tool = createNodesTool();
+
+    await expect(
+      tool.execute("call-1", {
+        action: "invoke",
+        node: "macbook",
+        invokeCommand: "device.status",
+      }),
+    ).rejects.toThrow(
+      "pairing required before node invoke. Approve pairing request req-123 and retry.",
+    );
   });
 });

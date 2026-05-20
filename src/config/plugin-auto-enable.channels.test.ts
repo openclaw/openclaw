@@ -1,15 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { applyPluginAutoEnable } from "./plugin-auto-enable.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  applyPluginAutoEnable,
+  materializePluginAutoEnableCandidates,
+} from "./plugin-auto-enable.js";
 import {
   makeApnChannelConfig,
-  makeBluebubblesAndImessageChannels,
   makeIsolatedEnv,
   makeRegistry,
   makeTempDir,
   resetPluginAutoEnableTestState,
-  writePluginManifestFixture,
 } from "./plugin-auto-enable.test-helpers.js";
 
 function applyWithApnChannelConfig(extra?: {
@@ -25,17 +26,9 @@ function applyWithApnChannelConfig(extra?: {
   });
 }
 
-function applyWithBluebubblesImessageConfig(extra?: {
-  plugins?: { entries?: Record<string, { enabled: boolean }>; deny?: string[] };
-}) {
-  return applyPluginAutoEnable({
-    config: {
-      channels: makeBluebubblesAndImessageChannels(),
-      ...(extra?.plugins ? { plugins: extra.plugins } : {}),
-    },
-    env: makeIsolatedEnv(),
-  });
-}
+beforeEach(() => {
+  resetPluginAutoEnableTestState();
+});
 
 afterEach(() => {
   resetPluginAutoEnableTestState();
@@ -71,22 +64,112 @@ describe("applyPluginAutoEnable channels", () => {
       "utf-8",
     );
 
-    const result = applyPluginAutoEnable({
+    const result = materializePluginAutoEnableCandidates({
       config: {
         channels: {
           "env-primary": { token: "primary" },
           "env-secondary": { token: "secondary" },
         },
       },
+      candidates: [
+        {
+          pluginId: "env-primary",
+          kind: "channel-configured",
+          channelId: "env-primary",
+        },
+        {
+          pluginId: "env-secondary",
+          kind: "channel-configured",
+          channelId: "env-secondary",
+        },
+      ],
       env: {
         ...makeIsolatedEnv(),
         OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
       },
       manifestRegistry: makeRegistry([]),
     });
 
     expect(result.config.plugins?.entries?.["env-secondary"]?.enabled).toBe(true);
     expect(result.config.plugins?.entries?.["env-primary"]).toBeUndefined();
+  });
+
+  it("memoizes external catalog preferOver lookups within one auto-enable pass", () => {
+    const stateDir = makeTempDir();
+    const catalogPath = path.join(stateDir, "plugins", "catalog.json");
+    fs.mkdirSync(path.dirname(catalogPath), { recursive: true });
+    fs.writeFileSync(
+      catalogPath,
+      JSON.stringify({
+        entries: [
+          {
+            name: "@openclaw/env-primary",
+            openclaw: {
+              channel: {
+                id: "env-primary",
+                label: "Env Primary",
+                selectionLabel: "Env Primary",
+                docsPath: "/channels/env-primary",
+                blurb: "Env primary entry",
+              },
+              install: {
+                npmSpec: "@openclaw/env-primary",
+              },
+            },
+          },
+          {
+            name: "@openclaw/env-secondary",
+            openclaw: {
+              channel: {
+                id: "env-secondary",
+                label: "Env Secondary",
+                selectionLabel: "Env Secondary",
+                docsPath: "/channels/env-secondary",
+                blurb: "Env secondary entry",
+                preferOver: ["env-primary"],
+              },
+              install: {
+                npmSpec: "@openclaw/env-secondary",
+              },
+            },
+          },
+        ],
+      }),
+      "utf-8",
+    );
+
+    const readFileSpy = vi.spyOn(fs, "readFileSync");
+
+    try {
+      materializePluginAutoEnableCandidates({
+        config: {
+          channels: {
+            "env-primary": { token: "primary" },
+            "env-secondary": { token: "secondary" },
+          },
+        },
+        candidates: Array.from({ length: 20 }, (_, index) => ({
+          pluginId: index % 2 === 0 ? "env-primary" : "env-secondary",
+          kind: "channel-configured" as const,
+          channelId: index % 2 === 0 ? "env-primary" : "env-secondary",
+        })),
+        env: {
+          ...makeIsolatedEnv(),
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+        },
+        manifestRegistry: makeRegistry([]),
+      });
+
+      expect(
+        readFileSpy.mock.calls.filter(([filePath]) =>
+          String(filePath).endsWith("plugins/catalog.json"),
+        ),
+      ).toHaveLength(2);
+    } finally {
+      readFileSpy.mockRestore();
+    }
   });
 
   describe("third-party channel plugins (pluginId ≠ channelId)", () => {
@@ -103,7 +186,7 @@ describe("applyPluginAutoEnable channels", () => {
         plugins: { entries: { "apn-channel": { enabled: true } } },
       });
 
-      expect(result.changes).toEqual([]);
+      expect(result.changes).toStrictEqual([]);
     });
 
     it("respects explicit disable of the plugin by its plugin id", () => {
@@ -112,10 +195,118 @@ describe("applyPluginAutoEnable channels", () => {
       });
 
       expect(result.config.plugins?.entries?.["apn-channel"]?.enabled).toBe(false);
-      expect(result.changes).toEqual([]);
+      expect(result.changes).toStrictEqual([]);
     });
 
-    it("falls back to channel key as plugin id when no installed manifest declares the channel", () => {
+    it("prefers an external plugin that declares preferOver for a bundled channel", () => {
+      const result = applyPluginAutoEnable({
+        config: {
+          channels: { "legacy-bundled-chat": { token: "legacy" } },
+        },
+        env: makeIsolatedEnv(),
+        manifestRegistry: makeRegistry([
+          {
+            id: "legacy-bundled-chat",
+            channels: ["legacy-bundled-chat"],
+            origin: "bundled",
+            channelConfigs: {
+              "legacy-bundled-chat": {
+                schema: { type: "object" },
+                label: "Legacy Bundled Chat",
+              },
+            },
+          },
+          {
+            id: "openclaw-modern-chat",
+            channels: ["legacy-bundled-chat"],
+            channelConfigs: {
+              "legacy-bundled-chat": {
+                schema: { type: "object" },
+                label: "Modern Chat",
+                preferOver: ["legacy-bundled-chat"],
+              },
+            },
+          },
+        ]),
+      });
+
+      expect(result.config.plugins?.entries?.["openclaw-modern-chat"]?.enabled).toBe(true);
+      expect(result.config.plugins?.entries?.["legacy-bundled-chat"]?.enabled).toBe(false);
+      expect(result.changes.join("\n")).toContain("Modern Chat configured, enabled automatically.");
+    });
+
+    it("falls back to the bundled channel when the preferred external plugin is disabled", () => {
+      const result = applyPluginAutoEnable({
+        config: {
+          channels: { "legacy-bundled-chat": { token: "legacy" } },
+          plugins: { entries: { "openclaw-modern-chat": { enabled: false } } },
+        },
+        env: makeIsolatedEnv(),
+        manifestRegistry: makeRegistry([
+          {
+            id: "legacy-bundled-chat",
+            channels: ["legacy-bundled-chat"],
+            origin: "bundled",
+            channelConfigs: {
+              "legacy-bundled-chat": {
+                schema: { type: "object" },
+                label: "Legacy Bundled Chat",
+              },
+            },
+          },
+          {
+            id: "openclaw-modern-chat",
+            channels: ["legacy-bundled-chat"],
+            channelConfigs: {
+              "legacy-bundled-chat": {
+                schema: { type: "object" },
+                label: "Modern Chat",
+                preferOver: ["legacy-bundled-chat"],
+              },
+            },
+          },
+        ]),
+      });
+
+      expect(result.config.plugins?.entries?.["openclaw-modern-chat"]?.enabled).toBe(false);
+      expect(result.config.plugins?.entries?.["legacy-bundled-chat"]).toBeUndefined();
+      expect(result.config.channels?.["legacy-bundled-chat"]?.enabled).toBe(true);
+      expect(result.changes.join("\n")).toContain(
+        "Legacy Bundled Chat configured, enabled automatically.",
+      );
+    });
+
+    it("does not auto-disable a lower-priority channel plugin that was explicitly selected", () => {
+      const result = applyPluginAutoEnable({
+        config: {
+          channels: { qqbot: { appId: "app", clientSecret: "secret" } },
+          plugins: {
+            entries: {
+              qqbot: { enabled: true },
+            },
+          },
+        },
+        env: makeIsolatedEnv(),
+        manifestRegistry: makeRegistry([
+          { id: "qqbot", channels: ["qqbot"] },
+          {
+            id: "openclaw-qqbot",
+            channels: ["qqbot"],
+            channelConfigs: {
+              qqbot: {
+                schema: { type: "object" },
+                preferOver: ["qqbot"],
+              },
+            },
+          },
+        ]),
+      });
+
+      expect(result.config.plugins?.entries?.["openclaw-qqbot"]?.enabled).toBe(true);
+      expect(result.config.plugins?.entries?.qqbot?.enabled).toBe(true);
+    });
+
+    it("does not synthesize plugin entries when no installed manifest declares the channel", () => {
       const result = applyPluginAutoEnable({
         config: {
           channels: { "unknown-chan": { someKey: "value" } },
@@ -124,11 +315,63 @@ describe("applyPluginAutoEnable channels", () => {
         manifestRegistry: makeRegistry([]),
       });
 
-      expect(result.config.plugins?.entries?.["unknown-chan"]?.enabled).toBe(true);
+      expect(result.config.plugins?.entries?.["unknown-chan"]).toBeUndefined();
+      expect(result.config.plugins?.allow).toBeUndefined();
+      expect(result.changes).toStrictEqual([]);
     });
   });
 
   describe("preferOver channel prioritization", () => {
+    it("uses the plugin manifest id for built-in channel claims", () => {
+      const result = applyPluginAutoEnable({
+        config: {
+          channels: {
+            wecom: { token: "enabled" },
+          },
+          plugins: {
+            allow: ["existing-plugin"],
+          },
+        },
+        env: makeIsolatedEnv(),
+        manifestRegistry: makeRegistry([
+          {
+            id: "wecom-openclaw-plugin",
+            channels: ["wecom"],
+          },
+        ]),
+      });
+
+      expect(result.config.plugins?.entries?.["wecom-openclaw-plugin"]?.enabled).toBe(true);
+      expect(result.config.plugins?.entries?.wecom).toBeUndefined();
+      expect(result.config.plugins?.allow).toEqual(["existing-plugin", "wecom-openclaw-plugin"]);
+      expect(result.changes.join("\n")).toContain("enabled automatically.");
+    });
+
+    it("preserves same-name official channel plugin ids", () => {
+      const result = applyPluginAutoEnable({
+        config: {
+          channels: {
+            discord: { token: "enabled" },
+          },
+          plugins: {
+            allow: ["existing-plugin"],
+          },
+        },
+        env: makeIsolatedEnv(),
+        manifestRegistry: makeRegistry([
+          {
+            id: "discord",
+            channels: ["discord"],
+          },
+        ]),
+      });
+
+      expect(result.config.channels?.discord?.enabled).toBe(true);
+      expect(result.config.plugins?.entries?.discord).toBeUndefined();
+      expect(result.config.plugins?.allow).toEqual(["existing-plugin", "discord"]);
+      expect(result.changes.join("\n")).toContain("Discord configured, enabled automatically.");
+    });
+
     it("uses manifest channel config preferOver metadata for plugin channels", () => {
       const result = applyPluginAutoEnable({
         config: {
@@ -154,50 +397,11 @@ describe("applyPluginAutoEnable channels", () => {
       });
 
       expect(result.config.plugins?.entries?.primary?.enabled).toBe(true);
-      expect(result.config.plugins?.entries?.secondary?.enabled).toBeUndefined();
+      expect(result.config.plugins?.entries?.secondary?.enabled).toBe(false);
       expect(result.changes.join("\n")).toContain("primary configured, enabled automatically.");
       expect(result.changes.join("\n")).not.toContain(
         "secondary configured, enabled automatically.",
       );
-    });
-
-    it("prefers bluebubbles: skips imessage auto-configure when both are configured", () => {
-      const result = applyWithBluebubblesImessageConfig();
-
-      expect(result.config.channels?.bluebubbles?.enabled).toBe(true);
-      expect(result.config.plugins?.entries?.imessage?.enabled).toBeUndefined();
-      expect(result.changes.join("\n")).toContain("BlueBubbles configured, enabled automatically.");
-      expect(result.changes.join("\n")).not.toContain(
-        "iMessage configured, enabled automatically.",
-      );
-    });
-
-    it("keeps imessage enabled if already explicitly enabled (non-destructive)", () => {
-      const result = applyWithBluebubblesImessageConfig({
-        plugins: { entries: { imessage: { enabled: true } } },
-      });
-
-      expect(result.config.channels?.bluebubbles?.enabled).toBe(true);
-      expect(result.config.plugins?.entries?.imessage?.enabled).toBe(true);
-    });
-
-    it("allows imessage auto-configure when bluebubbles is explicitly disabled", () => {
-      const result = applyWithBluebubblesImessageConfig({
-        plugins: { entries: { bluebubbles: { enabled: false } } },
-      });
-
-      expect(result.config.plugins?.entries?.bluebubbles?.enabled).toBe(false);
-      expect(result.config.channels?.imessage?.enabled).toBe(true);
-      expect(result.changes.join("\n")).toContain("iMessage configured, enabled automatically.");
-    });
-
-    it("allows imessage auto-configure when bluebubbles is in deny list", () => {
-      const result = applyWithBluebubblesImessageConfig({
-        plugins: { deny: ["bluebubbles"] },
-      });
-
-      expect(result.config.plugins?.entries?.bluebubbles).toBeUndefined();
-      expect(result.config.channels?.imessage?.enabled).toBe(true);
     });
 
     it("auto-enables imessage when only imessage is configured", () => {
@@ -210,29 +414,6 @@ describe("applyPluginAutoEnable channels", () => {
 
       expect(result.config.channels?.imessage?.enabled).toBe(true);
       expect(result.changes.join("\n")).toContain("iMessage configured, enabled automatically.");
-    });
-
-    it("uses the provided env when loading installed plugin manifests", () => {
-      const stateDir = makeTempDir();
-      const pluginDir = path.join(stateDir, "extensions", "apn-channel");
-      writePluginManifestFixture({
-        rootDir: pluginDir,
-        id: "apn-channel",
-        channels: ["apn"],
-      });
-
-      const result = applyPluginAutoEnable({
-        config: makeApnChannelConfig(),
-        env: {
-          ...makeIsolatedEnv(),
-          OPENCLAW_HOME: undefined,
-          OPENCLAW_STATE_DIR: stateDir,
-          OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
-        },
-      });
-
-      expect(result.config.plugins?.entries?.["apn-channel"]?.enabled).toBe(true);
-      expect(result.config.plugins?.entries?.apn).toBeUndefined();
     });
   });
 });

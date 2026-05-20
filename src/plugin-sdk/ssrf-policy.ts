@@ -1,6 +1,7 @@
 import {
   isBlockedHostnameOrIp,
   isPrivateIpAddress,
+  mergeSsrFPolicies,
   resolvePinnedHostnameWithPolicy,
   type LookupFn,
   type SsrFPolicy,
@@ -13,7 +14,7 @@ import type {
 } from "./channel-contract.js";
 import type { OpenClawConfig } from "./config-runtime.js";
 
-export { isPrivateIpAddress };
+export { isPrivateIpAddress, mergeSsrFPolicies };
 export type { SsrFPolicy };
 
 export type PrivateNetworkOptInInput =
@@ -23,7 +24,7 @@ export type PrivateNetworkOptInInput =
   | Pick<SsrFPolicy, "allowPrivateNetwork" | "dangerouslyAllowPrivateNetwork">
   | {
       dangerouslyAllowPrivateNetwork?: boolean | null;
-      /** Compatibility alias for legacy callers; prefer dangerouslyAllowPrivateNetwork. */
+      /** @deprecated Compatibility alias; prefer dangerouslyAllowPrivateNetwork. */
       allowPrivateNetwork?: boolean | null;
       network?:
         | Pick<SsrFPolicy, "allowPrivateNetwork" | "dangerouslyAllowPrivateNetwork">

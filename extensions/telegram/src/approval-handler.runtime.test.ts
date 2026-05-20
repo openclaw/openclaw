@@ -1,9 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import { telegramApprovalNativeRuntime } from "./approval-handler.runtime.js";
 
+type TelegramPayload = {
+  text: string;
+  buttons?: Array<Array<{ text: string }>>;
+};
+
 describe("telegramApprovalNativeRuntime", () => {
   it("renders only the allowed pending buttons", async () => {
-    const payload = await telegramApprovalNativeRuntime.presentation.buildPendingPayload({
+    const payload = (await telegramApprovalNativeRuntime.presentation.buildPendingPayload({
       cfg: {} as never,
       accountId: "default",
       context: {
@@ -38,7 +43,7 @@ describe("telegramApprovalNativeRuntime", () => {
           },
         ],
       } as never,
-    });
+    })) as TelegramPayload;
 
     expect(payload.text).toContain("/approve req-1 allow-once");
     expect(payload.text).not.toContain("allow-always");
@@ -95,24 +100,19 @@ describe("telegramApprovalNativeRuntime", () => {
       },
     });
 
-    expect(sendTyping).toHaveBeenCalledWith(
-      "-1003841603622",
-      expect.objectContaining({
-        token: "tg-token",
-        accountId: "default",
-        messageThreadId: 928,
-      }),
-    );
-    expect(sendMessage).toHaveBeenCalledWith(
-      "-1003841603622",
-      "pending",
-      expect.objectContaining({
-        token: "tg-token",
-        accountId: "default",
-        messageThreadId: 928,
-        buttons: [],
-      }),
-    );
+    expect(sendTyping).toHaveBeenCalledWith("-1003841603622", {
+      cfg: {},
+      token: "tg-token",
+      accountId: "default",
+      messageThreadId: 928,
+    });
+    expect(sendMessage).toHaveBeenCalledWith("-1003841603622", "pending", {
+      cfg: {},
+      token: "tg-token",
+      accountId: "default",
+      buttons: [],
+      messageThreadId: 928,
+    });
     expect(entry).toEqual({
       chatId: "-1003841603622",
       messageId: "m1",

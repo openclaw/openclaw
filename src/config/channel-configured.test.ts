@@ -1,8 +1,9 @@
-import fs from "node:fs";
-import path from "node:path";
-import { describe, expect, it } from "vitest";
-import { withTempDirSync } from "../test-helpers/temp-dir.js";
+import { describe, expect, it, vi } from "vitest";
 import { isChannelConfigured } from "./channel-configured.js";
+
+vi.mock("../channels/plugins/bootstrap-registry.js", () => ({
+  getBootstrapChannelPlugin: () => undefined,
+}));
 
 describe("isChannelConfigured", () => {
   it("detects Telegram env configuration through the package metadata seam", () => {
@@ -43,20 +44,41 @@ describe("isChannelConfigured", () => {
     ).toBe(true);
   });
 
-  it("detects persisted Matrix credentials through package metadata", () => {
-    withTempDirSync({ prefix: "openclaw-channel-configured-" }, (stateDir) => {
-      fs.mkdirSync(path.join(stateDir, "credentials", "matrix"), { recursive: true });
-      fs.writeFileSync(
-        path.join(stateDir, "credentials", "matrix", "credentials-ops.json"),
-        JSON.stringify({
-          homeserver: "https://matrix.example.org",
-          userId: "@ops:example.org",
-          accessToken: "token",
-        }),
-        "utf8",
-      );
+  it("treats explicit enabled channel config as configured state", () => {
+    expect(
+      isChannelConfigured(
+        {
+          channels: {
+            "openclaw-weixin": {
+              enabled: true,
+            },
+          },
+        },
+        "openclaw-weixin",
+        {},
+      ),
+    ).toBe(true);
+  });
 
-      expect(isChannelConfigured({}, "matrix", { OPENCLAW_STATE_DIR: stateDir })).toBe(true);
-    });
+  it("does not treat disabled channel config as configured state", () => {
+    expect(
+      isChannelConfigured(
+        {
+          channels: {
+            "openclaw-weixin": {
+              enabled: false,
+            },
+          },
+        },
+        "openclaw-weixin",
+        {},
+      ),
+    ).toBe(false);
+  });
+
+  it("does not treat persisted Matrix credentials as configured channel state", () => {
+    expect(
+      isChannelConfigured({}, "matrix", { OPENCLAW_STATE_DIR: "state-with-matrix-creds" }),
+    ).toBe(false);
   });
 });

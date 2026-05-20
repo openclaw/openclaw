@@ -16,6 +16,13 @@ import type {
   VideoGenerationResolution,
 } from "./types.js";
 
+const VIDEO_RESOLUTION_ORDER: readonly VideoGenerationResolution[] = [
+  "480P",
+  "720P",
+  "768P",
+  "1080P",
+];
+
 export type ResolvedVideoGenerationOverrides = {
   size?: string;
   aspectRatio?: string;
@@ -42,6 +49,7 @@ export function resolveVideoGenerationOverrides(params: {
 }): ResolvedVideoGenerationOverrides {
   const { capabilities: caps } = resolveVideoGenerationModeCapabilities({
     provider: params.provider,
+    model: params.model,
     inputImageCount: params.inputImageCount,
     inputVideoCount: params.inputVideoCount,
   });
@@ -103,6 +111,13 @@ export function resolveVideoGenerationOverrides(params: {
           requested: aspectRatio,
           applied: normalizedAspectRatio,
         };
+      } else if (!normalizedAspectRatio) {
+        // Provider-specific sentinel values like `"adaptive"` are unparseable as a
+        // numeric ratio, so `resolveClosestAspectRatio` returns undefined for
+        // providers that don't list the sentinel in `caps.aspectRatios`. Surface
+        // the drop via `ignoredOverrides` so the tool result warning picks it up
+        // instead of silently forgetting the requested value.
+        ignoredOverrides.push({ key: "aspectRatio", value: aspectRatio });
       }
       aspectRatio = normalizedAspectRatio;
     } else if (!caps.supportsAspectRatio && aspectRatio) {
@@ -130,12 +145,15 @@ export function resolveVideoGenerationOverrides(params: {
       const normalizedResolution = resolveClosestResolution({
         requestedResolution: resolution,
         supportedResolutions: caps.resolutions,
+        order: VIDEO_RESOLUTION_ORDER,
       });
       if (normalizedResolution && normalizedResolution !== resolution) {
         normalization.resolution = {
           requested: resolution,
           applied: normalizedResolution,
         };
+      } else if (!normalizedResolution) {
+        ignoredOverrides.push({ key: "resolution", value: resolution });
       }
       resolution = normalizedResolution;
     } else if (resolution && !caps.supportsResolution) {

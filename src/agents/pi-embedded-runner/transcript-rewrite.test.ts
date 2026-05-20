@@ -1,10 +1,10 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  buildSessionWriteLockModuleMock,
-  resetModulesWithSessionWriteLockDoMock,
-} from "../../test-utils/session-write-lock-module-mock.js";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildSessionWriteLockModuleMock } from "../../test-utils/session-write-lock-module-mock.js";
 
 const acquireSessionWriteLockReleaseMock = vi.hoisted(() => vi.fn(async () => {}));
 const acquireSessionWriteLockMock = vi.hoisted(() =>
@@ -22,16 +22,6 @@ let rewriteTranscriptEntriesInSessionFile: typeof import("./transcript-rewrite.j
 let rewriteTranscriptEntriesInSessionManager: typeof import("./transcript-rewrite.js").rewriteTranscriptEntriesInSessionManager;
 let onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
 let installSessionToolResultGuard: typeof import("../session-tool-result-guard.js").installSessionToolResultGuard;
-
-async function loadFreshTranscriptRewriteModuleForTest() {
-  resetModulesWithSessionWriteLockDoMock("../session-write-lock.js", (params) =>
-    acquireSessionWriteLockMock(params),
-  );
-  ({ onSessionTranscriptUpdate } = await import("../../sessions/transcript-events.js"));
-  ({ installSessionToolResultGuard } = await import("../session-tool-result-guard.js"));
-  ({ rewriteTranscriptEntriesInSessionFile, rewriteTranscriptEntriesInSessionManager } =
-    await import("./transcript-rewrite.js"));
-}
 
 type AppendMessage = Parameters<SessionManager["appendMessage"]>[0];
 
@@ -142,10 +132,30 @@ function findAssistantEntryByText(sessionManager: SessionManager, text: string) 
     );
 }
 
-beforeEach(async () => {
+function requireValue<T>(value: T | undefined, label: string): T {
+  if (value === undefined) {
+    throw new Error(`expected ${label}`);
+  }
+  return value;
+}
+
+function requireString(value: string | undefined, label: string): string {
+  if (!value) {
+    throw new Error(`expected ${label}`);
+  }
+  return value;
+}
+
+beforeAll(async () => {
+  ({ onSessionTranscriptUpdate } = await import("../../sessions/transcript-events.js"));
+  ({ installSessionToolResultGuard } = await import("../session-tool-result-guard.js"));
+  ({ rewriteTranscriptEntriesInSessionFile, rewriteTranscriptEntriesInSessionManager } =
+    await import("./transcript-rewrite.js"));
+});
+
+beforeEach(() => {
   acquireSessionWriteLockMock.mockClear();
   acquireSessionWriteLockReleaseMock.mockClear();
-  await loadFreshTranscriptRewriteModuleForTest();
 });
 
 describe("rewriteTranscriptEntriesInSessionManager", () => {
@@ -162,10 +172,8 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
       ],
     });
 
-    expect(result).toMatchObject({
-      changed: true,
-      rewrittenEntries: 1,
-    });
+    expect(result.changed).toBe(true);
+    expect(result.rewrittenEntries).toBe(1);
     expect(result.bytesFreed).toBeGreaterThan(0);
 
     const branchMessages = getBranchMessages(sessionManager);
@@ -183,9 +191,11 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
 
   it("preserves active-branch labels after rewritten entries are re-appended", () => {
     const { sessionManager, toolResultEntryId } = createReadRewriteSession();
-    const summaryEntry = findAssistantEntryByText(sessionManager, "summarized");
-    expect(summaryEntry).toBeDefined();
-    sessionManager.appendLabelChange(summaryEntry!.id, "bookmark");
+    const summaryEntry = requireValue(
+      findAssistantEntryByText(sessionManager, "summarized"),
+      "summary entry",
+    );
+    sessionManager.appendLabelChange(summaryEntry.id, "bookmark");
 
     const result = rewriteTranscriptEntriesInSessionManager({
       sessionManager,
@@ -198,10 +208,12 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
     });
 
     expect(result.changed).toBe(true);
-    const rewrittenSummaryEntry = findAssistantEntryByText(sessionManager, "summarized");
-    expect(rewrittenSummaryEntry).toBeDefined();
-    expect(sessionManager.getLabel(rewrittenSummaryEntry!.id)).toBe("bookmark");
-    expect(sessionManager.getBranch().some((entry) => entry.type === "label")).toBe(true);
+    const rewrittenSummaryEntry = requireValue(
+      findAssistantEntryByText(sessionManager, "summarized"),
+      "rewritten summary entry",
+    );
+    expect(sessionManager.getLabel(rewrittenSummaryEntry.id)).toBe("bookmark");
+    expect(sessionManager.getBranch().map((entry) => entry.type)).toContain("label");
   });
 
   it("remaps compaction keep markers when rewritten entries change ids", () => {
@@ -233,10 +245,13 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
     );
     const compactionEntry = branch.find((entry) => entry.type === "compaction");
 
-    expect(keptAssistantEntry).toBeDefined();
-    expect(compactionEntry).toBeDefined();
-    expect(compactionEntry?.firstKeptEntryId).toBe(keptAssistantEntry?.id);
-    expect(compactionEntry?.firstKeptEntryId).not.toBe(keptAssistantEntryId);
+    const keptAssistant = requireValue(keptAssistantEntry, "kept assistant entry");
+    const compaction = requireValue(compactionEntry, "compaction entry");
+    if (compaction.type !== "compaction") {
+      throw new Error("expected compaction entry");
+    }
+    expect(compaction.firstKeptEntryId).toBe(keptAssistant.id);
+    expect(compaction.firstKeptEntryId).not.toBe(keptAssistantEntryId);
   });
 
   it("bypasses persistence hooks when replaying rewritten messages", () => {
@@ -270,21 +285,44 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
     expect((branchMessages[1] as Extract<AgentMessage, { role: "toolResult" }>).content).toEqual([
       { type: "text", text: "[exact replacement]" },
     ]);
-    expect(branchMessages[2]).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: "summarized" }],
-    });
+    const replayedAssistant = branchMessages[2];
+    if (!replayedAssistant || replayedAssistant.role !== "assistant") {
+      throw new Error("expected rewritten suffix to replay the assistant summary");
+    }
+    expect(replayedAssistant.content).toEqual([{ type: "text", text: "summarized" }]);
   });
 });
 
 describe("rewriteTranscriptEntriesInSessionFile", () => {
-  it("emits transcript updates when the active branch changes", async () => {
-    const sessionFile = "/tmp/session.jsonl";
-    const { sessionManager, toolResultEntryId } = createExecRewriteSession();
+  it("emits transcript updates when the active branch changes without opening a manager", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-rewrite-"));
+    const sessionManager = SessionManager.create(dir, dir);
+    const entryIds = appendSessionMessages(sessionManager, [
+      asAppendMessage({
+        role: "user",
+        content: "run tool",
+        timestamp: 1,
+      }),
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "exec",
+        content: createTextContent("before rewrite"),
+        isError: false,
+        timestamp: 2,
+      }),
+      asAppendMessage({
+        role: "assistant",
+        content: createTextContent("summarized"),
+        timestamp: 3,
+      }),
+    ]);
+    const sessionFile = requireString(sessionManager.getSessionFile(), "persisted session file");
+    const toolResultEntryId = entryIds[1];
 
-    const openSpy = vi
-      .spyOn(SessionManager, "open")
-      .mockReturnValue(sessionManager as unknown as ReturnType<typeof SessionManager.open>);
+    const openSpy = vi.spyOn(SessionManager, "open").mockImplementation(() => {
+      throw new Error("SessionManager.open should not be used for file rewrites");
+    });
     const listener = vi.fn();
     const cleanup = onSessionTranscriptUpdate(listener);
 
@@ -305,11 +343,16 @@ describe("rewriteTranscriptEntriesInSessionFile", () => {
       expect(result.changed).toBe(true);
       expect(acquireSessionWriteLockMock).toHaveBeenCalledWith({
         sessionFile,
+        staleMs: 1_800_000,
+        timeoutMs: 60_000,
+        maxHoldMs: 300_000,
       });
       expect(acquireSessionWriteLockReleaseMock).toHaveBeenCalledTimes(1);
-      expect(listener).toHaveBeenCalledWith({ sessionFile });
+      expect(listener).toHaveBeenCalledWith({ sessionFile, sessionKey: "agent:main:test" });
 
-      const rewrittenToolResult = getBranchMessages(sessionManager)[1] as Extract<
+      openSpy.mockRestore();
+      const rewrittenSession = SessionManager.open(sessionFile);
+      const rewrittenToolResult = getBranchMessages(rewrittenSession)[1] as Extract<
         AgentMessage,
         { role: "toolResult" }
       >;

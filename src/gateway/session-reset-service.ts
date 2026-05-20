@@ -1,37 +1,52 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
+import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
 import { readAcpSessionEntry, upsertAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { clearBootstrapSnapshot } from "../agents/bootstrap-cache.js";
+import { clearAllCliSessions } from "../agents/cli-session.js";
+import { retireSessionMcpRuntime } from "../agents/pi-bundle-mcp-tools.js";
 import { abortEmbeddedPiRun, waitForEmbeddedPiRunEnd } from "../agents/pi-embedded.js";
 import { stopSubagentsForRequester } from "../auto-reply/reply/abort.js";
-import { clearSessionQueues } from "../auto-reply/reply/queue.js";
 import {
   buildSessionEndHookPayload,
   buildSessionStartHookPayload,
 } from "../auto-reply/reply/session-hooks.js";
-import { loadConfig } from "../config/config.js";
+import { clearSessionResetRuntimeState } from "../auto-reply/reply/session-reset-cleanup.js";
+import { getRuntimeConfig } from "../config/io.js";
 import {
   snapshotSessionOrigin,
   type SessionEntry,
   updateSessionStore,
 } from "../config/sessions.js";
 import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../config/sessions/paths.js";
+import { resolveResetPreservedSelection } from "../config/sessions/reset-preserved-selection.js";
+import {
+  canonicalizeAbsoluteSessionFilePath,
+  rewriteSessionFileForNewSessionId,
+} from "../config/sessions/session-file-rotation.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 import { closeTrackedBrowserTabsForSessions } from "../plugin-sdk/browser-maintenance.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { runPluginHostCleanup } from "../plugins/host-hook-cleanup.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
 import {
   isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import {
+  forgetActiveSessionForShutdown,
+  listActiveSessionsForShutdown,
+  noteActiveSessionForShutdown,
+} from "./active-sessions-shutdown-tracker.js";
 import { ErrorCodes, errorShape } from "./protocol/index.js";
 import {
   archiveSessionTranscriptsDetailed,
@@ -41,12 +56,41 @@ import {
 import {
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
-  readSessionMessages,
+  readSessionMessagesAsync,
   resolveGatewaySessionStoreTarget,
   resolveSessionModelRef,
 } from "./session-utils.js";
 
 const ACP_RUNTIME_CLEANUP_TIMEOUT_MS = 15_000;
+
+function resolveResetSessionFile(params: {
+  nextSessionId: string;
+  currentEntry?: SessionEntry;
+  storePath: string;
+  agentId: string;
+}): string {
+  const currentEntry = params.currentEntry;
+  const rewrittenSessionFile = currentEntry?.sessionId
+    ? rewriteSessionFileForNewSessionId({
+        sessionFile: currentEntry.sessionFile,
+        previousSessionId: currentEntry.sessionId,
+        nextSessionId: params.nextSessionId,
+      })
+    : undefined;
+  const normalizedRewrittenSessionFile =
+    rewrittenSessionFile && path.isAbsolute(rewrittenSessionFile)
+      ? canonicalizeAbsoluteSessionFilePath(rewrittenSessionFile)
+      : rewrittenSessionFile;
+  const preservedSessionFile = normalizedRewrittenSessionFile ?? currentEntry?.sessionFile;
+  return resolveSessionFilePath(
+    params.nextSessionId,
+    preservedSessionFile ? { sessionFile: preservedSessionFile } : undefined,
+    resolveSessionFilePathOptions({
+      storePath: params.storePath,
+      agentId: params.agentId,
+    }),
+  );
+}
 
 function stripRuntimeModelState(entry?: SessionEntry): SessionEntry | undefined {
   if (!entry) {
@@ -59,48 +103,6 @@ function stripRuntimeModelState(entry?: SessionEntry): SessionEntry | undefined 
     contextTokens: undefined,
     systemPromptReport: undefined,
   };
-}
-
-type ResetPreservedSelectionState = Pick<
-  SessionEntry,
-  | "providerOverride"
-  | "modelOverride"
-  | "modelOverrideSource"
-  | "authProfileOverride"
-  | "authProfileOverrideSource"
-  | "authProfileOverrideCompactionCount"
->;
-
-function resolveResetPreservedSelection(params: {
-  entry?: SessionEntry;
-}): Partial<ResetPreservedSelectionState> {
-  const { entry } = params;
-  if (!entry) {
-    return {};
-  }
-
-  const preserved: Partial<ResetPreservedSelectionState> = {};
-  // `modelOverrideSource` is new. Older persisted sessions can still carry
-  // user-selected overrides without the source field, so treat an absent
-  // source as legacy user state during reset and backfill it forward.
-  const preserveLegacyUserModelOverride =
-    entry.modelOverrideSource === "user" ||
-    (entry.modelOverrideSource === undefined && Boolean(entry.modelOverride));
-  if (preserveLegacyUserModelOverride && entry.modelOverride) {
-    preserved.providerOverride = entry.providerOverride;
-    preserved.modelOverride = entry.modelOverride;
-    preserved.modelOverrideSource = "user";
-  }
-
-  if (entry.authProfileOverrideSource === "user" && entry.authProfileOverride) {
-    preserved.authProfileOverride = entry.authProfileOverride;
-    preserved.authProfileOverrideSource = entry.authProfileOverrideSource;
-    if (entry.authProfileOverrideCompactionCount !== undefined) {
-      preserved.authProfileOverrideCompactionCount = entry.authProfileOverrideCompactionCount;
-    }
-  }
-
-  return preserved;
 }
 
 export function archiveSessionTranscriptsForSession(params: {
@@ -133,13 +135,22 @@ export function archiveSessionTranscriptsForSessionDetailed(params: {
 }
 
 export function emitGatewaySessionEndPluginHook(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   sessionKey: string;
   sessionId?: string;
   storePath: string;
   sessionFile?: string;
   agentId?: string;
-  reason: "new" | "reset" | "idle" | "daily" | "compaction" | "deleted" | "unknown";
+  reason:
+    | "new"
+    | "reset"
+    | "idle"
+    | "daily"
+    | "compaction"
+    | "deleted"
+    | "shutdown"
+    | "restart"
+    | "unknown";
   archivedTranscripts?: ArchivedSessionTranscript[];
   nextSessionId?: string;
   nextSessionKey?: string;
@@ -147,6 +158,10 @@ export function emitGatewaySessionEndPluginHook(params: {
   if (!params.sessionId) {
     return;
   }
+  // Drop this session from the shutdown finalizer's tracked set unconditionally
+  // -- even when no plugin hooks are registered for `session_end`, the session
+  // is being closed here and must not be re-finalized by a later shutdown drain.
+  forgetActiveSessionForShutdown(params.sessionId);
   const hookRunner = getGlobalHookRunner();
   if (!hookRunner?.hasHooks("session_end")) {
     return;
@@ -174,13 +189,32 @@ export function emitGatewaySessionEndPluginHook(params: {
 }
 
 export function emitGatewaySessionStartPluginHook(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   sessionKey: string;
   sessionId?: string;
   resumedFrom?: string;
+  storePath?: string;
+  sessionFile?: string;
+  agentId?: string;
 }): void {
   if (!params.sessionId) {
     return;
+  }
+  // Track the session for the shutdown finalizer even when no plugin hooks are
+  // registered locally, so a later restart still emits a typed `session_end`
+  // for sessions that opened while a `session_end` plugin was attached. The
+  // tracker is keyed by `sessionId`, so a session that is subsequently closed
+  // via reset / delete / compaction is forgotten before the shutdown drain
+  // ever runs (see #57790).
+  if (params.storePath) {
+    noteActiveSessionForShutdown({
+      cfg: params.cfg,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+      storePath: params.storePath,
+      sessionFile: params.sessionFile,
+      agentId: params.agentId,
+    });
   }
   const hookRunner = getGlobalHookRunner();
   if (!hookRunner?.hasHooks("session_start")) {
@@ -195,6 +229,94 @@ export function emitGatewaySessionStartPluginHook(params: {
   void hookRunner.runSessionStart(payload.event, payload.context).catch((err) => {
     logVerbose(`session_start hook failed: ${String(err)}`);
   });
+}
+
+const SHUTDOWN_DRAIN_DEFAULT_TOTAL_TIMEOUT_MS = 2_000;
+
+export type DrainActiveSessionsForShutdownResult = {
+  emittedSessionIds: string[];
+  timedOut: boolean;
+};
+
+/**
+ * Emit a typed `session_end` for every session that received `session_start`
+ * but did not yet receive a paired `session_end`. The bounded total timeout
+ * mirrors the gateway lifecycle hook timeout so a slow plugin cannot block
+ * SIGTERM/SIGINT past the runtime's overall shutdown grace window.
+ *
+ * Sessions that have already been finalized through replace / reset / delete /
+ * compaction are forgotten from the tracker by `emitGatewaySessionEndPluginHook`
+ * before this drain runs, so they will not be double-fired here.
+ */
+export async function drainActiveSessionsForShutdown(params: {
+  reason: "shutdown" | "restart";
+  totalTimeoutMs?: number;
+}): Promise<DrainActiveSessionsForShutdownResult> {
+  const tracked = listActiveSessionsForShutdown();
+  if (tracked.length === 0) {
+    return { emittedSessionIds: [], timedOut: false };
+  }
+  const totalTimeoutMs = Math.max(
+    100,
+    Math.floor(params.totalTimeoutMs ?? SHUTDOWN_DRAIN_DEFAULT_TOTAL_TIMEOUT_MS),
+  );
+  const emittedSessionIds: string[] = [];
+  const hookRunner = getGlobalHookRunner();
+  let settledEmissions = 0;
+  // Inline the session_end emission instead of calling
+  // `emitGatewaySessionEndPluginHook`, because that helper uses fire-and-forget
+  // (`void hookRunner.runSessionEnd(...)`). Start every tracked session's
+  // emission before awaiting the bounded aggregate so one slow plugin write
+  // cannot prevent later active sessions from receiving `session_end`.
+  const drain = Promise.allSettled(
+    tracked.map(async (entry) => {
+      try {
+        forgetActiveSessionForShutdown(entry.sessionId);
+        emittedSessionIds.push(entry.sessionId);
+        if (!hookRunner?.hasHooks("session_end")) {
+          return;
+        }
+        const transcript = resolveStableSessionEndTranscript({
+          sessionId: entry.sessionId,
+          storePath: entry.storePath,
+          sessionFile: entry.sessionFile,
+          agentId: entry.agentId,
+        });
+        const payload = buildSessionEndHookPayload({
+          sessionId: entry.sessionId,
+          sessionKey: entry.sessionKey,
+          cfg: entry.cfg,
+          reason: params.reason,
+          sessionFile: transcript.sessionFile,
+          transcriptArchived: transcript.transcriptArchived,
+        });
+        await hookRunner.runSessionEnd(payload.event, payload.context);
+      } catch (err) {
+        logVerbose(`session_end hook failed during shutdown drain: ${String(err)}`);
+      } finally {
+        settledEmissions++;
+      }
+    }),
+  );
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<"timeout">((resolve) => {
+    timer = setTimeout(() => resolve("timeout"), totalTimeoutMs);
+    timer.unref?.();
+  });
+  try {
+    const result = await Promise.race([drain.then(() => "ok" as const), timeout]);
+    if (result === "timeout") {
+      logVerbose(
+        `shutdown session-end drain timed out after ${totalTimeoutMs}ms with ${tracked.length - settledEmissions} session_end handler(s) still pending`,
+      );
+      return { emittedSessionIds, timedOut: true };
+    }
+    return { emittedSessionIds, timedOut: false };
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
 }
 
 export async function emitSessionUnboundLifecycleEvent(params: {
@@ -231,7 +353,7 @@ export async function emitSessionUnboundLifecycleEvent(params: {
 }
 
 async function ensureSessionRuntimeCleanup(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   key: string;
   target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
   sessionId?: string;
@@ -254,7 +376,7 @@ async function ensureSessionRuntimeCleanup(params: {
   if (params.sessionId) {
     queueKeys.add(params.sessionId);
   }
-  clearSessionQueues([...queueKeys]);
+  clearSessionResetRuntimeState([...queueKeys]);
   stopSubagentsForRequester({ cfg: params.cfg, requesterSessionKey: params.target.canonicalKey });
   if (!params.sessionId) {
     clearBootstrapSnapshot(params.target.canonicalKey);
@@ -265,6 +387,15 @@ async function ensureSessionRuntimeCleanup(params: {
   const ended = await waitForEmbeddedPiRunEnd(params.sessionId, 15_000);
   clearBootstrapSnapshot(params.target.canonicalKey);
   if (ended) {
+    await retireSessionMcpRuntime({
+      sessionId: params.sessionId,
+      reason: "gateway-session-cleanup",
+      onError: (error, sessionId) => {
+        logVerbose(
+          `sessions cleanup: failed to dispose bundle MCP runtime for ${sessionId}: ${String(error)}`,
+        );
+      },
+    });
     await closeTrackedBrowserTabs();
     return undefined;
   }
@@ -293,7 +424,7 @@ async function runAcpCleanupStep(params: {
 }
 
 async function closeAcpRuntimeForSession(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   sessionKey: string;
   entry?: SessionEntry;
   reason: "session-reset" | "session-delete";
@@ -379,7 +510,7 @@ function buildPendingAcpMeta(base: SessionAcpMeta, now: number): SessionAcpMeta 
 }
 
 async function ensureFreshAcpResetState(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   sessionKey: string;
   reason: "session-reset" | "session-delete";
   entry?: SessionEntry;
@@ -425,7 +556,7 @@ async function ensureFreshAcpResetState(params: {
 }
 
 export async function cleanupSessionBeforeMutation(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   key: string;
   target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
   entry: SessionEntry | undefined;
@@ -442,6 +573,17 @@ export async function cleanupSessionBeforeMutation(params: {
   if (cleanupError) {
     return cleanupError;
   }
+  const pluginCleanup = await runPluginHostCleanup({
+    cfg: params.cfg,
+    registry: getActivePluginRegistry(),
+    reason: params.reason === "session-reset" ? "reset" : "delete",
+    sessionKey: params.target.canonicalKey ?? params.key,
+  });
+  for (const failure of pluginCleanup.failures) {
+    logVerbose(
+      `plugin host cleanup failed for ${failure.pluginId}/${failure.hookId}: ${String(failure.error)}`,
+    );
+  }
   return await closeAcpRuntimeForSession({
     cfg: params.cfg,
     sessionKey: params.legacyKey ?? params.canonicalKey ?? params.target.canonicalKey ?? params.key,
@@ -450,14 +592,14 @@ export async function cleanupSessionBeforeMutation(params: {
   });
 }
 
-function emitGatewayBeforeResetPluginHook(params: {
-  cfg: ReturnType<typeof loadConfig>;
+export async function emitGatewayBeforeResetPluginHook(params: {
+  cfg: OpenClawConfig;
   key: string;
   target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
   storePath: string;
   entry?: SessionEntry;
   reason: "new" | "reset";
-}): void {
+}): Promise<void> {
   const hookRunner = getGlobalHookRunner();
   if (!hookRunner?.hasHooks("before_reset")) {
     return;
@@ -471,7 +613,10 @@ function emitGatewayBeforeResetPluginHook(params: {
   let messages: unknown[] = [];
   try {
     if (typeof sessionId === "string" && sessionId.trim().length > 0) {
-      messages = readSessionMessages(sessionId, params.storePath, sessionFile);
+      messages = await readSessionMessagesAsync(sessionId, params.storePath, sessionFile, {
+        mode: "full",
+        reason: "before_reset hook payload",
+      });
     }
   } catch (err) {
     logVerbose(
@@ -507,12 +652,14 @@ export async function performGatewaySessionReset(params: {
   | { ok: false; error: ReturnType<typeof errorShape> }
 > {
   const { cfg, target, storePath } = (() => {
-    const cfg = loadConfig();
+    const cfg = getRuntimeConfig();
     const target = resolveGatewaySessionStoreTarget({ cfg, key: params.key });
     return { cfg, target, storePath: target.storePath };
   })();
   const { entry, legacyKey, canonicalKey } = loadSessionEntry(params.key);
   const hadExistingEntry = Boolean(entry);
+  const agentId = normalizeAgentId(target.agentId ?? resolveDefaultAgentId(cfg));
+  const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
   const hookEvent = createInternalHookEvent(
     "command",
     params.reason,
@@ -522,6 +669,7 @@ export async function performGatewaySessionReset(params: {
       previousSessionEntry: entry,
       commandSource: params.commandSource,
       cfg,
+      workspaceDir,
     },
   );
   await triggerInternalHook(hookEvent);
@@ -569,14 +717,12 @@ export async function performGatewaySessionReset(params: {
     oldSessionFile = currentEntry?.sessionFile;
     const now = Date.now();
     const nextSessionId = randomUUID();
-    const sessionFile = resolveSessionFilePath(
+    const sessionFile = resolveResetSessionFile({
       nextSessionId,
-      currentEntry?.sessionFile ? { sessionFile: currentEntry.sessionFile } : undefined,
-      resolveSessionFilePathOptions({
-        storePath,
-        agentId: sessionAgentId,
-      }),
-    );
+      currentEntry,
+      storePath,
+      agentId: sessionAgentId,
+    });
     const nextEntry: SessionEntry = {
       sessionId: nextSessionId,
       sessionFile,
@@ -586,6 +732,7 @@ export async function performGatewaySessionReset(params: {
       thinkingLevel: currentEntry?.thinkingLevel,
       fastMode: currentEntry?.fastMode,
       verboseLevel: currentEntry?.verboseLevel,
+      traceLevel: currentEntry?.traceLevel,
       reasoningLevel: currentEntry?.reasoningLevel,
       elevatedLevel: currentEntry?.elevatedLevel,
       ttsAuto: currentEntry?.ttsAuto,
@@ -633,17 +780,29 @@ export async function performGatewaySessionReset(params: {
       lastTo: currentEntry?.lastTo,
       lastAccountId: currentEntry?.lastAccountId,
       lastThreadId: currentEntry?.lastThreadId,
-      skillsSnapshot: currentEntry?.skillsSnapshot,
+      // Do not carry the cached skills catalog across /new. Long-lived channel
+      // sessions (Signal DMs/groups in particular) otherwise keep advertising a
+      // stale <available_skills> block even after reset/restart, because the
+      // skills snapshot version is runtime-local and may reset to 0.
       acp: currentEntry?.acp,
       inputTokens: 0,
       outputTokens: 0,
       totalTokens: 0,
       totalTokensFresh: true,
     };
+    // Drop CLI provider bindings so the next turn after reset starts a fresh
+    // CLI conversation on the provider side. Preserved only for spawned
+    // subagents (canonical `:subagent:` keys), where Tak Hoffman's fa56682b3ced
+    // regression fix intentionally protects CLI continuity for
+    // orchestration-driven resets. Non-subagent sessions that happen to set
+    // `parentSessionKey` (e.g. dashboard children) are not exempt.
+    if (!isSubagentSessionKey(primaryKey)) {
+      clearAllCliSessions(nextEntry);
+    }
     store[primaryKey] = nextEntry;
     return nextEntry;
   });
-  emitGatewayBeforeResetPluginHook({
+  await emitGatewayBeforeResetPluginHook({
     cfg,
     key: params.key,
     target,
@@ -689,6 +848,9 @@ export async function performGatewaySessionReset(params: {
     sessionKey: target.canonicalKey ?? params.key,
     sessionId: next.sessionId,
     resumedFrom: oldSessionId,
+    storePath,
+    sessionFile: next.sessionFile,
+    agentId: target.agentId,
   });
   if (hadExistingEntry) {
     await emitSessionUnboundLifecycleEvent({

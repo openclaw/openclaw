@@ -1,14 +1,18 @@
 import path from "node:path";
 import { isPathInside } from "../../infra/path-guards.js";
-import type { SandboxBackendCommandParams, SandboxBackendCommandResult } from "./backend.js";
+import type {
+  SandboxBackendCommandParams,
+  SandboxBackendCommandResult,
+  SandboxFsBridgeContext,
+} from "./backend-handle.types.js";
 import { SANDBOX_PINNED_MUTATION_PYTHON } from "./fs-bridge-mutation-helper.js";
 import { createWritableRenameTargetResolver } from "./fs-bridge-rename-targets.js";
-import type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "./fs-bridge.js";
+import type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "./fs-bridge.types.js";
 import {
   isPathInsideContainerRoot,
   normalizeContainerPath as normalizeSandboxContainerPath,
+  relativePathEscapesContainerRoot,
 } from "./path-utils.js";
-import type { SandboxContext } from "./types.js";
 
 type ResolvedRemotePath = SandboxResolvedPath & {
   writable: boolean;
@@ -29,7 +33,7 @@ export type RemoteShellSandboxHandle = {
 };
 
 export function createRemoteShellSandboxFsBridge(params: {
-  sandbox: SandboxContext;
+  sandbox: SandboxFsBridgeContext;
   runtime: RemoteShellSandboxHandle;
 }): SandboxFsBridge {
   return new RemoteShellSandboxFsBridge(params.sandbox, params.runtime);
@@ -42,7 +46,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
   );
 
   constructor(
-    private readonly sandbox: SandboxContext,
+    private readonly sandbox: SandboxFsBridgeContext,
     private readonly runtime: RemoteShellSandboxHandle,
   ) {}
 
@@ -64,8 +68,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     if (
       relativePath === "" ||
       relativePath === "." ||
-      relativePath.startsWith("..") ||
-      path.posix.isAbsolute(relativePath)
+      relativePathEscapesContainerRoot(relativePath)
     ) {
       throw new Error(`Invalid sandbox entry target: ${target.containerPath}`);
     }
@@ -121,7 +124,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     const target = this.resolveTarget(params);
     this.ensureWritable(target, "create directories");
     const relativePath = path.posix.relative(target.mountRootPath, target.containerPath);
-    if (relativePath.startsWith("..") || path.posix.isAbsolute(relativePath)) {
+    if (relativePathEscapesContainerRoot(relativePath)) {
       throw new Error(
         `Sandbox path escapes allowed mounts; cannot create directories: ${target.containerPath}`,
       );
@@ -316,7 +319,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
 
   private toResolvedPath(params: { mount: MountInfo; containerPath: string }): ResolvedRemotePath {
     const relative = path.posix.relative(params.mount.containerRoot, params.containerPath);
-    if (relative.startsWith("..") || path.posix.isAbsolute(relative)) {
+    if (relativePathEscapesContainerRoot(relative)) {
       throw new Error(
         `Sandbox path escapes allowed mounts; cannot access: ${params.containerPath}`,
       );
@@ -457,7 +460,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       );
     }
     const relativeParentPath = path.posix.relative(mount.containerRoot, canonicalParent);
-    if (relativeParentPath.startsWith("..") || path.posix.isAbsolute(relativeParentPath)) {
+    if (relativePathEscapesContainerRoot(relativeParentPath)) {
       throw new Error(
         `Sandbox path escapes allowed mounts; cannot ${params.action}: ${params.containerPath}`,
       );

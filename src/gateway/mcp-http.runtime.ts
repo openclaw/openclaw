@@ -1,10 +1,6 @@
-import { loadConfig } from "../config/config.js";
-import {
-  clearActiveMcpLoopbackRuntime,
-  createMcpLoopbackServerConfig,
-  getActiveMcpLoopbackRuntime,
-  setActiveMcpLoopbackRuntime,
-} from "./mcp-http.loopback-runtime.js";
+import { applyOwnerOnlyToolPolicy } from "../agents/tool-policy.js";
+import type { InboundEventKind } from "../channels/inbound-event/kind.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildMcpToolSchema,
   type McpLoopbackTool,
@@ -16,39 +12,71 @@ const TOOL_CACHE_TTL_MS = 30_000;
 const NATIVE_TOOL_EXCLUDE = new Set(["read", "write", "edit", "apply_patch", "exec", "process"]);
 
 type CachedScopedTools = {
+  agentId: string | undefined;
   tools: McpLoopbackTool[];
   toolSchema: McpToolSchemaEntry[];
-  configRef: ReturnType<typeof loadConfig>;
+  configRef: OpenClawConfig;
   time: number;
 };
+
+export function resolveMcpLoopbackScopedTools(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  messageProvider: string | undefined;
+  accountId: string | undefined;
+  inboundEventKind: InboundEventKind | undefined;
+  senderIsOwner: boolean | undefined;
+}): { agentId: string | undefined; tools: McpLoopbackTool[] } {
+  const scoped = resolveGatewayScopedTools({
+    cfg: params.cfg,
+    sessionKey: params.sessionKey,
+    messageProvider: params.messageProvider,
+    accountId: params.accountId,
+    inboundEventKind: params.inboundEventKind,
+    senderIsOwner: params.senderIsOwner,
+    surface: "loopback",
+    excludeToolNames: NATIVE_TOOL_EXCLUDE,
+  });
+  return {
+    agentId: scoped.agentId,
+    tools: applyOwnerOnlyToolPolicy(scoped.tools, params.senderIsOwner === true),
+  };
+}
 
 export class McpLoopbackToolCache {
   #entries = new Map<string, CachedScopedTools>();
 
   resolve(params: {
-    cfg: ReturnType<typeof loadConfig>;
+    cfg: OpenClawConfig;
     sessionKey: string;
     messageProvider: string | undefined;
     accountId: string | undefined;
+    inboundEventKind: InboundEventKind | undefined;
+    senderIsOwner: boolean | undefined;
   }): CachedScopedTools {
-    const cacheKey = [params.sessionKey, params.messageProvider ?? "", params.accountId ?? ""].join(
-      "\u0000",
-    );
+    const cacheKey = [
+      params.sessionKey,
+      params.messageProvider ?? "",
+      params.accountId ?? "",
+      params.inboundEventKind ?? "",
+      params.senderIsOwner === true ? "owner" : "non-owner",
+    ].join("\u0000");
     const now = Date.now();
     const cached = this.#entries.get(cacheKey);
     if (cached && cached.configRef === params.cfg && now - cached.time < TOOL_CACHE_TTL_MS) {
       return cached;
     }
 
-    const next = resolveGatewayScopedTools({
+    const next = resolveMcpLoopbackScopedTools({
       cfg: params.cfg,
       sessionKey: params.sessionKey,
       messageProvider: params.messageProvider,
       accountId: params.accountId,
-      surface: "loopback",
-      excludeToolNames: NATIVE_TOOL_EXCLUDE,
+      inboundEventKind: params.inboundEventKind,
+      senderIsOwner: params.senderIsOwner,
     });
     const nextEntry: CachedScopedTools = {
+      agentId: next.agentId,
       tools: next.tools,
       toolSchema: buildMcpToolSchema(next.tools),
       configRef: params.cfg,
@@ -63,10 +91,3 @@ export class McpLoopbackToolCache {
     return nextEntry;
   }
 }
-
-export {
-  clearActiveMcpLoopbackRuntime,
-  createMcpLoopbackServerConfig,
-  getActiveMcpLoopbackRuntime,
-  setActiveMcpLoopbackRuntime,
-};

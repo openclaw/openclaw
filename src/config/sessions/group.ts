@@ -1,5 +1,6 @@
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { listChannelPlugins } from "../../channels/plugins/registry.js";
+import { normalizeSessionPeerId } from "../../sessions/session-key-utils.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -15,19 +16,6 @@ type LegacyGroupSessionSurface = {
   resolveLegacyGroupSessionKey?: (ctx: MsgContext) => GroupKeyResolution | null;
 };
 
-function resolveImplicitGroupSurface(params: {
-  from: string;
-  normalizedChatType?: "group" | "channel";
-}): { provider: string; chatType: "group" | "channel" } | null {
-  if (params.from.endsWith("@g.us")) {
-    return { provider: "whatsapp", chatType: "group" };
-  }
-  if (params.normalizedChatType) {
-    return null;
-  }
-  return null;
-}
-
 function resolveLegacyGroupSessionKey(ctx: MsgContext): GroupKeyResolution | null {
   for (const plugin of listChannelPlugins()) {
     const resolved = (
@@ -42,6 +30,34 @@ function resolveLegacyGroupSessionKey(ctx: MsgContext): GroupKeyResolution | nul
 
 function normalizeGroupLabel(raw?: string) {
   return normalizeHyphenSlug(raw);
+}
+
+function resolveOriginatingGroupTargetId(params: {
+  ctx: MsgContext;
+  provider: string;
+}): string | null {
+  const target = normalizeOptionalString(params.ctx.OriginatingTo ?? params.ctx.To) ?? "";
+  if (!target) {
+    return null;
+  }
+  const parts = target.split(":").filter(Boolean);
+  if (parts.length < 2) {
+    return null;
+  }
+
+  const head = normalizeLowercaseStringOrEmpty(parts[0]);
+  const second = normalizeOptionalLowercaseString(parts[1]);
+  const secondIsKind = second === "group" || second === "channel";
+  if (secondIsKind && (head === params.provider || getGroupSurfaces().has(head))) {
+    return parts.slice(2).join(":") || null;
+  }
+  if (head === params.provider || head === "chat" || head === "room" || head === "group") {
+    return parts.slice(1).join(":") || null;
+  }
+  if (head === "channel") {
+    return parts.slice(1).join(":") || null;
+  }
+  return null;
 }
 
 function shortenGroupId(value?: string) {
@@ -91,7 +107,6 @@ export function resolveGroupSessionKey(ctx: MsgContext): GroupKeyResolution | nu
   const chatType = normalizeOptionalLowercaseString(ctx.ChatType);
   const normalizedChatType =
     chatType === "channel" ? "channel" : chatType === "group" ? "group" : undefined;
-  const implicitGroupSurface = resolveImplicitGroupSurface({ from, normalizedChatType });
 
   const legacyResolution = resolveLegacyGroupSessionKey(ctx);
   const looksLikeGroup =
@@ -99,7 +114,6 @@ export function resolveGroupSessionKey(ctx: MsgContext): GroupKeyResolution | nu
     normalizedChatType === "channel" ||
     from.includes(":group:") ||
     from.includes(":channel:") ||
-    implicitGroupSurface !== null ||
     legacyResolution !== null;
   if (!looksLikeGroup) {
     return null;
@@ -115,9 +129,7 @@ export function resolveGroupSessionKey(ctx: MsgContext): GroupKeyResolution | nu
     return legacyResolution;
   }
 
-  const provider = headIsSurface
-    ? head
-    : (providerHint ?? implicitGroupSurface?.provider ?? legacyResolution?.channel);
+  const provider = headIsSurface ? head : (providerHint ?? legacyResolution?.channel);
   if (!provider) {
     return null;
   }
@@ -128,13 +140,17 @@ export function resolveGroupSessionKey(ctx: MsgContext): GroupKeyResolution | nu
     ? second
     : from.includes(":channel:") || normalizedChatType === "channel"
       ? "channel"
-      : (implicitGroupSurface?.chatType ?? "group");
-  const id = headIsSurface
-    ? secondIsKind
-      ? parts.slice(2).join(":")
-      : parts.slice(1).join(":")
-    : from;
-  const finalId = normalizeLowercaseStringOrEmpty(id);
+      : "group";
+  const originatingGroupTargetId =
+    !secondIsKind && normalizedChatType ? resolveOriginatingGroupTargetId({ ctx, provider }) : null;
+  const id = originatingGroupTargetId
+    ? originatingGroupTargetId
+    : headIsSurface
+      ? secondIsKind
+        ? parts.slice(2).join(":")
+        : parts.slice(1).join(":")
+      : from;
+  const finalId = normalizeSessionPeerId({ channel: provider, peerKind: kind, peerId: id });
   if (!finalId) {
     return null;
   }

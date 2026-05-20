@@ -1,6 +1,7 @@
 export {
   getChannelPlugin,
   getLoadedChannelPlugin,
+  getLoadedChannelPluginOrigin,
   listChannelPlugins,
   normalizeChannelId,
 } from "./registry.js";
@@ -20,5 +21,6 @@ export {
   type AllowlistMatch,
   type AllowlistMatchSource,
 } from "./allowlist-match.js";
-export type { ChannelId, ChannelPlugin } from "./types.js";
+export type { ChannelId } from "./types.public.js";
+export type { ChannelPlugin } from "./types.plugin.js";
 export { resolveChannelApprovalAdapter, resolveChannelApprovalCapability } from "./approvals.js";

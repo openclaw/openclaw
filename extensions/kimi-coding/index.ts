@@ -2,9 +2,9 @@ import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import type { SecretInput } from "openclaw/plugin-sdk/secret-input";
-import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { applyKimiCodeConfig, KIMI_CODING_MODEL_REF } from "./onboard.js";
-import { buildKimiCodingProvider } from "./provider-catalog.js";
+import { buildKimiCodingProvider, normalizeKimiCodingModelId } from "./provider-catalog.js";
 import { KIMI_REPLAY_POLICY } from "./replay-policy.js";
 import { wrapKimiProviderStream } from "./stream.js";
 
@@ -24,12 +24,6 @@ function findExplicitProviderConfig(
   );
   return isRecord(match?.[1]) ? match[1] : undefined;
 }
-
-function _buildKimiReplayPolicy() {
-  return {
-    preserveSignatures: false,
-  };
-}
 export default definePluginEntry({
   id: PLUGIN_ID,
   name: "Kimi Provider",
@@ -46,7 +40,7 @@ export default definePluginEntry({
           providerId: PROVIDER_ID,
           methodId: "api-key",
           label: "Kimi Code API key (subscription)",
-          hint: "Kimi K2.5 + Kimi",
+          hint: "Kimi K2.6 + Kimi",
           optionKey: "kimiCodeApiKey",
           flagName: "--kimi-code-api-key",
           envVar: "KIMI_API_KEY",
@@ -63,8 +57,8 @@ export default definePluginEntry({
             choiceId: "kimi-code-api-key",
             choiceLabel: "Kimi Code API key (subscription)",
             groupId: "moonshot",
-            groupLabel: "Moonshot AI (Kimi K2.5)",
-            groupHint: "Kimi K2.5",
+            groupLabel: "Moonshot AI (Kimi K2.6)",
+            groupHint: "Kimi K2.6",
           },
         }),
       ],
@@ -102,6 +96,17 @@ export default definePluginEntry({
         },
       },
       buildReplayPolicy: () => KIMI_REPLAY_POLICY,
+      normalizeResolvedModel: ({ model }) => {
+        const normalizedId = normalizeKimiCodingModelId(model.id);
+        return normalizedId === model.id ? undefined : { ...model, id: normalizedId };
+      },
+      resolveThinkingProfile: () => ({
+        levels: [
+          { id: "off", label: "off" },
+          { id: "low", label: "on" },
+        ],
+        defaultLevel: "off",
+      }),
       wrapStreamFn: wrapKimiProviderStream,
     });
   },

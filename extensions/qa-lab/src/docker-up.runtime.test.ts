@@ -5,6 +5,8 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { runQaDockerUp } from "./docker-up.runtime.js";
 
+type QaDockerUpDeps = NonNullable<Parameters<typeof runQaDockerUp>[1]>;
+
 async function occupyPortOrAcceptExisting(port: number): Promise<{ close: () => Promise<void> }> {
   const server = createServer();
   const listening = await new Promise<boolean>((resolve, reject) => {
@@ -30,17 +32,33 @@ async function occupyPortOrAcceptExisting(port: number): Promise<{ close: () => 
   };
 }
 
+function createHealthyDockerDeps(calls: string[]): QaDockerUpDeps {
+  return {
+    async runCommand(command, args, cwd) {
+      calls.push([command, ...args, `@${cwd}`].join(" "));
+      if (args.join(" ").includes("ps --format json openclaw-qa-gateway")) {
+        return { stdout: '{"Health":"healthy","State":"running"}\n', stderr: "" };
+      }
+      return { stdout: "", stderr: "" };
+    },
+    fetchImpl: vi.fn(async () => ({ ok: true })),
+    sleepImpl: vi.fn(async () => {}),
+  };
+}
+
 describe("runQaDockerUp", () => {
   it("builds the QA UI, writes the harness, starts compose, and waits for health", async () => {
     const calls: string[] = [];
     const fetchCalls: string[] = [];
     const responseQueue = [false, true, true];
     const outputDir = await mkdtemp(path.join(os.tmpdir(), "qa-docker-up-"));
+    const repoRoot = path.resolve("/repo/openclaw");
+    const composeFile = path.join(outputDir, "docker-compose.qa.yml");
 
     try {
       const result = await runQaDockerUp(
         {
-          repoRoot: "/repo/openclaw",
+          repoRoot,
           outputDir,
           gatewayPort: 18889,
           qaLabPort: 43124,
@@ -49,7 +67,7 @@ describe("runQaDockerUp", () => {
           async runCommand(command, args, cwd) {
             calls.push([command, ...args, `@${cwd}`].join(" "));
             if (args.join(" ").includes("ps --format json openclaw-qa-gateway")) {
-              return { stdout: '{"Health":"healthy","State":"running"}\n', stderr: "" };
+              return { stdout: '[{"Health":"healthy","State":"running"}]\n', stderr: "" };
             }
             return { stdout: "", stderr: "" };
           },
@@ -62,12 +80,10 @@ describe("runQaDockerUp", () => {
       );
 
       expect(calls).toEqual([
-        "pnpm qa:lab:build @/repo/openclaw",
-        `docker compose -f ${outputDir}/docker-compose.qa.yml down --remove-orphans @/repo/openclaw`,
-        expect.stringContaining(
-          `docker compose -f ${outputDir}/docker-compose.qa.yml up --build -d @/repo/openclaw`,
-        ),
-        `docker compose -f ${outputDir}/docker-compose.qa.yml ps --format json openclaw-qa-gateway @/repo/openclaw`,
+        `pnpm qa:lab:build @${repoRoot}`,
+        `docker compose -f ${composeFile} down --remove-orphans @${repoRoot}`,
+        `docker compose -f ${composeFile} up --build -d @${repoRoot}`,
+        `docker compose -f ${composeFile} ps --format json openclaw-qa-gateway @${repoRoot}`,
       ]);
       expect(fetchCalls).toEqual([
         "http://127.0.0.1:43124/healthz",
@@ -76,8 +92,8 @@ describe("runQaDockerUp", () => {
       ]);
       expect(result.qaLabUrl).toBe("http://127.0.0.1:43124");
       expect(result.gatewayUrl).toBe("http://127.0.0.1:18889/");
-      expect(result.composeFile).toBe(`${outputDir}/docker-compose.qa.yml`);
-      expect(result.stopCommand).toBe(`docker compose -f ${outputDir}/docker-compose.qa.yml down`);
+      expect(result.composeFile).toBe(composeFile);
+      expect(result.stopCommand).toBe(`docker compose -f ${composeFile} down`);
     } finally {
       await rm(outputDir, { recursive: true, force: true });
     }
@@ -86,37 +102,29 @@ describe("runQaDockerUp", () => {
   it("skips UI build and compose --build for prebuilt images", async () => {
     const calls: string[] = [];
     const outputDir = await mkdtemp(path.join(os.tmpdir(), "qa-docker-up-"));
+    const repoRoot = path.resolve("/repo/openclaw");
+    const composeFile = path.join(outputDir, "docker-compose.qa.yml");
 
     try {
       await runQaDockerUp(
         {
-          repoRoot: "/repo/openclaw",
+          repoRoot,
           outputDir,
           usePrebuiltImage: true,
           bindUiDist: true,
           skipUiBuild: true,
         },
-        {
-          async runCommand(command, args, cwd) {
-            calls.push([command, ...args, `@${cwd}`].join(" "));
-            if (args.join(" ").includes("ps --format json openclaw-qa-gateway")) {
-              return { stdout: '{"Health":"healthy","State":"running"}\n', stderr: "" };
-            }
-            return { stdout: "", stderr: "" };
-          },
-          fetchImpl: vi.fn(async () => ({ ok: true })),
-          sleepImpl: vi.fn(async () => {}),
-        },
+        createHealthyDockerDeps(calls),
       );
 
       expect(calls).toEqual([
-        `docker compose -f ${outputDir}/docker-compose.qa.yml down --remove-orphans @/repo/openclaw`,
-        `docker compose -f ${outputDir}/docker-compose.qa.yml up -d @/repo/openclaw`,
-        `docker compose -f ${outputDir}/docker-compose.qa.yml ps --format json openclaw-qa-gateway @/repo/openclaw`,
+        `docker compose -f ${composeFile} down --remove-orphans @${repoRoot}`,
+        `docker compose -f ${composeFile} up -d @${repoRoot}`,
+        `docker compose -f ${composeFile} ps --format json openclaw-qa-gateway @${repoRoot}`,
       ]);
       const compose = await readFile(path.join(outputDir, "docker-compose.qa.yml"), "utf8");
       expect(compose).toContain(":/opt/openclaw-qa-lab-ui:ro");
-      expect(compose).toContain("      - --ui-dist-dir");
+      expect(compose).toContain("--ui-dist-dir /opt/openclaw-qa-lab-ui");
     } finally {
       await rm(outputDir, { recursive: true, force: true });
     }
@@ -133,17 +141,7 @@ describe("runQaDockerUp", () => {
           usePrebuiltImage: true,
           skipUiBuild: true,
         },
-        {
-          async runCommand(command, args, cwd) {
-            calls.push([command, ...args, `@${cwd}`].join(" "));
-            if (args.join(" ").includes("ps --format json openclaw-qa-gateway")) {
-              return { stdout: '{"Health":"healthy","State":"running"}\n', stderr: "" };
-            }
-            return { stdout: "", stderr: "" };
-          },
-          fetchImpl: vi.fn(async () => ({ ok: true })),
-          sleepImpl: vi.fn(async () => {}),
-        },
+        createHealthyDockerDeps(calls),
       );
 
       expect(result.outputDir).toBe(path.join(repoRoot, ".artifacts/qa-docker"));
@@ -214,11 +212,13 @@ describe("runQaDockerUp", () => {
     const calls: string[] = [];
     const fetchCalls: string[] = [];
     const outputDir = await mkdtemp(path.join(os.tmpdir(), "qa-docker-up-"));
+    const repoRoot = path.resolve("/repo/openclaw");
+    const composeFile = path.join(outputDir, "docker-compose.qa.yml");
 
     try {
       const result = await runQaDockerUp(
         {
-          repoRoot: "/repo/openclaw",
+          repoRoot,
           outputDir,
           gatewayPort: 18889,
           qaLabPort: 43124,
@@ -253,11 +253,11 @@ describe("runQaDockerUp", () => {
       );
 
       expect(calls).toEqual([
-        `docker compose -f ${outputDir}/docker-compose.qa.yml down --remove-orphans @/repo/openclaw`,
-        `docker compose -f ${outputDir}/docker-compose.qa.yml up -d @/repo/openclaw`,
-        `docker compose -f ${outputDir}/docker-compose.qa.yml ps --format json openclaw-qa-gateway @/repo/openclaw`,
-        `docker compose -f ${outputDir}/docker-compose.qa.yml ps -q openclaw-qa-gateway @/repo/openclaw`,
-        "docker inspect --format {{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}} gateway-container @/repo/openclaw",
+        `docker compose -f ${composeFile} down --remove-orphans @${repoRoot}`,
+        `docker compose -f ${composeFile} up -d @${repoRoot}`,
+        `docker compose -f ${composeFile} ps --format json openclaw-qa-gateway @${repoRoot}`,
+        `docker compose -f ${composeFile} ps -q openclaw-qa-gateway @${repoRoot}`,
+        `docker inspect --format {{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}} gateway-container @${repoRoot}`,
       ]);
       expect(fetchCalls).toEqual([
         "http://127.0.0.1:43124/healthz",

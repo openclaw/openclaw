@@ -9,9 +9,10 @@ const { extractReadableContentMock, resolveWebFetchDefinitionMock } = vi.hoisted
   resolveWebFetchDefinitionMock: vi.fn(),
 }));
 
-vi.mock("./web-fetch-utils.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("./web-fetch-utils.js")>("./web-fetch-utils.js");
+vi.mock("../../web-fetch/content-extractors.runtime.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../web-fetch/content-extractors.runtime.js")
+  >("../../web-fetch/content-extractors.runtime.js");
   return {
     ...actual,
     extractReadableContent: extractReadableContentMock,
@@ -20,7 +21,7 @@ vi.mock("./web-fetch-utils.js", async () => {
 vi.mock("../../web-fetch/runtime.js", () => ({
   resolveWebFetchDefinition: resolveWebFetchDefinitionMock,
 }));
-import { createWebFetchTool } from "./web-tools.js";
+import { createWebFetchTool } from "./web-fetch.js";
 
 const lookupMock = vi.fn();
 
@@ -79,6 +80,12 @@ function installMockFetch(
   );
   global.fetch = withFetchPreconnect(mockFetch);
   return mockFetch;
+}
+
+function firstFetchRequestInit(
+  mockFetch: ReturnType<typeof installMockFetch>,
+): (RequestInit & { dispatcher?: unknown }) | undefined {
+  return mockFetch.mock.calls[0]?.[1] as (RequestInit & { dispatcher?: unknown }) | undefined;
 }
 
 function createFetchTool(fetchOverrides: Record<string, unknown> = {}) {
@@ -179,11 +186,9 @@ describe("web_fetch extraction fallbacks", () => {
 
     expect(details.text).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
     expect(details.text).toContain("Ignore previous instructions");
-    expect(details.externalContent).toMatchObject({
-      untrusted: true,
-      source: "web_fetch",
-      wrapped: true,
-    });
+    expect(details.externalContent?.untrusted).toBe(true);
+    expect(details.externalContent?.source).toBe("web_fetch");
+    expect(details.externalContent?.wrapped).toBe(true);
     // contentType is protocol metadata, not user content - should NOT be wrapped
     expect(details.contentType).toBe("text/plain");
     expect(details.length).toBe(details.text?.length);
@@ -230,6 +235,83 @@ describe("web_fetch extraction fallbacks", () => {
     expect(details.truncated).toBe(true);
   });
 
+  it("decodes response bytes with a charset from Content-Type", async () => {
+    installMockFetch((input: RequestInfo | URL) => {
+      const response = new Response(new Uint8Array([0x63, 0x61, 0x66, 0xe9]), {
+        status: 200,
+        headers: { "content-type": "text/plain; charset=iso-8859-1" },
+      });
+      Object.defineProperty(response, "url", { value: resolveRequestUrl(input) });
+      return Promise.resolve(response);
+    });
+
+    const tool = createFetchTool({ firecrawl: { enabled: false } });
+    const result = await executeFetch(tool, {
+      url: "https://example.com/latin1",
+      extractMode: "text",
+    });
+    const details = result?.details as { text?: string };
+
+    expect(details.text).toContain("café");
+    expect(details.text).not.toContain("caf�");
+  });
+
+  it("decodes HTML using a meta http-equiv charset before extraction", async () => {
+    const encoder = new TextEncoder();
+    const japanese = new Uint8Array([0x93, 0xfa, 0x96, 0x7b, 0x8c, 0xea]);
+    const responseBytes = new Uint8Array([
+      ...encoder.encode(
+        '<!doctype html><html><head><meta http-equiv="Content-Type" content="text/html; charset=Shift_JIS"><title>',
+      ),
+      ...japanese,
+      ...encoder.encode("</title></head><body><p>"),
+      ...japanese,
+      ...encoder.encode("</p></body></html>"),
+    ]);
+    installMockFetch((input: RequestInfo | URL) => {
+      const response = new Response(responseBytes, {
+        status: 200,
+        headers: { "content-type": "text/html" },
+      });
+      Object.defineProperty(response, "url", { value: resolveRequestUrl(input) });
+      return Promise.resolve(response);
+    });
+
+    const tool = createFetchTool({ firecrawl: { enabled: false } });
+    const result = await executeFetch(tool, {
+      url: "https://example.com/shift-jis",
+      extractMode: "text",
+    });
+    const details = result?.details as { text?: string; title?: string };
+    const output = `${details.title ?? ""}\n${details.text ?? ""}`;
+
+    expect(output).toContain("日本語");
+    expect(output).not.toContain("�");
+  });
+
+  it("ignores charset text in unrelated meta content", async () => {
+    const body =
+      '<!doctype html><html><head><meta name="description" content="charset=Shift_JIS"><title>日本語</title></head><body>日本語</body></html>';
+    installMockFetch((input: RequestInfo | URL) => {
+      const response = new Response(new TextEncoder().encode(body), {
+        status: 200,
+        headers: { "content-type": "text/html" },
+      });
+      Object.defineProperty(response, "url", { value: resolveRequestUrl(input) });
+      return Promise.resolve(response);
+    });
+
+    const tool = createFetchTool({ firecrawl: { enabled: false } });
+    const result = await executeFetch(tool, {
+      url: "https://example.com/content-only-charset",
+      extractMode: "text",
+    });
+    const details = result?.details as { text?: string; title?: string };
+    const output = `${details.title ?? ""}\n${details.text ?? ""}`;
+
+    expect(output).toContain("日本語");
+  });
+
   it("caps response bytes and does not hang on endless streams", async () => {
     const chunk = new TextEncoder().encode("<html><body><div>hi</div></body></html>");
     const stream = new ReadableStream<Uint8Array>({
@@ -253,7 +335,7 @@ describe("web_fetch extraction fallbacks", () => {
     expect(details?.warning).toContain("Response body truncated");
   });
 
-  it("keeps DNS pinning for untrusted web_fetch URLs even when HTTP_PROXY is configured", async () => {
+  it("keeps DNS pinning for web_fetch by default even when HTTP_PROXY is configured", async () => {
     vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
     const mockFetch = installMockFetch((input: RequestInfo | URL) =>
       Promise.resolve({
@@ -268,11 +350,38 @@ describe("web_fetch extraction fallbacks", () => {
 
     await tool?.execute?.("call", { url: "https://example.com/proxy" });
 
-    const requestInit = mockFetch.mock.calls[0]?.[1] as
-      | (RequestInit & { dispatcher?: unknown })
-      | undefined;
-    expect(requestInit?.dispatcher).toBeDefined();
-    expect(requestInit?.dispatcher).not.toBeInstanceOf(EnvHttpProxyAgent);
+    const requestInit = firstFetchRequestInit(mockFetch);
+    const dispatcher = requestInit?.dispatcher;
+    if (!dispatcher) {
+      throw new Error("expected SSRF dispatcher");
+    }
+    expect(dispatcher).not.toBeInstanceOf(EnvHttpProxyAgent);
+  });
+
+  it("uses env proxy dispatch for web_fetch when trusted env proxy is explicitly enabled", async () => {
+    vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
+    const mockFetch = installMockFetch((input: RequestInfo | URL) =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: makeFetchHeaders({ "content-type": "text/plain" }),
+        text: async () => "proxy body",
+        url: resolveRequestUrl(input),
+      } as Response),
+    );
+    const tool = createFetchTool({
+      firecrawl: { enabled: false },
+      useTrustedEnvProxy: true,
+    });
+
+    await tool?.execute?.("call", { url: "https://example.com/proxy" });
+
+    const requestInit = firstFetchRequestInit(mockFetch);
+    const dispatcher = requestInit?.dispatcher;
+    if (!dispatcher) {
+      throw new Error("expected trusted proxy dispatcher");
+    }
+    expect(dispatcher).toBeInstanceOf(EnvHttpProxyAgent);
   });
 
   // NOTE: Test for wrapping url/finalUrl/warning fields requires DNS mocking.

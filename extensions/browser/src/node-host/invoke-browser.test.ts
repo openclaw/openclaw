@@ -17,65 +17,23 @@ const configMocks = vi.hoisted(() => ({
     browser: {},
     nodeHost: { browserProxy: { enabled: true, allowProfiles: [] as string[] } },
   })),
+  sourceConfig: null as Record<string, unknown> | null,
 }));
 
 const browserConfigMocks = vi.hoisted(() => ({
-  resolveBrowserConfig: vi.fn(() => ({
+  resolveBrowserConfig: vi.fn((browser?: { defaultProfile?: string }) => ({
     enabled: true,
-    defaultProfile: "openclaw",
+    defaultProfile: browser?.defaultProfile ?? "openclaw",
   })),
 }));
 
-vi.mock("../core-api.js", () => ({
-  createBrowserControlContext: controlServiceMocks.createBrowserControlContext,
-  createBrowserRouteDispatcher: dispatcherMocks.createBrowserRouteDispatcher,
-  detectMime: vi.fn(async () => "image/png"),
-  isPersistentBrowserProfileMutation: vi.fn((method: string, path: string) => {
-    if (method === "POST" && (path === "/profiles/create" || path === "/reset-profile")) {
-      return true;
-    }
-    return method === "DELETE" && /^\/profiles\/[^/]+$/.test(path);
-  }),
+vi.mock("../sdk-config.js", () => ({
+  getRuntimeConfig: configMocks.loadConfig,
+  getRuntimeConfigSourceSnapshot: () => configMocks.sourceConfig,
   loadConfig: configMocks.loadConfig,
-  normalizeBrowserRequestPath: vi.fn((path: string) => path),
-  redactCdpUrl: vi.fn((url: string) => {
-    try {
-      const parsed = new URL(url);
-      parsed.username = "";
-      parsed.password = "";
-      const normalized = parsed.toString().replace(/\/$/, "");
-      const token = parsed.searchParams.get("token");
-      if (!token || token.length <= 8) {
-        return normalized;
-      }
-      return normalized.replace(token, `${token.slice(0, 6)}…${token.slice(-4)}`);
-    } catch {
-      return url;
-    }
-  }),
-  resolveBrowserConfig: browserConfigMocks.resolveBrowserConfig,
-  resolveRequestedBrowserProfile: vi.fn(
-    ({
-      query,
-      body,
-      profile,
-    }: {
-      query?: Record<string, unknown>;
-      body?: unknown;
-      profile?: string;
-    }) => {
-      if (query && typeof query.profile === "string" && query.profile.trim()) {
-        return query.profile.trim();
-      }
-      const bodyProfile =
-        body && typeof body === "object" ? (body as { profile?: unknown }).profile : undefined;
-      if (typeof bodyProfile === "string" && bodyProfile.trim()) {
-        return bodyProfile.trim();
-      }
-      return typeof profile === "string" && profile.trim() ? profile.trim() : undefined;
-    },
-  ),
-  startBrowserControlServiceFromConfig: controlServiceMocks.startBrowserControlServiceFromConfig,
+}));
+
+vi.mock("../sdk-node-runtime.js", () => ({
   withTimeout: vi.fn(
     async (
       run: (signal: AbortSignal | undefined) => Promise<unknown>,
@@ -110,6 +68,72 @@ vi.mock("../core-api.js", () => ({
   ),
 }));
 
+vi.mock("../sdk-setup-tools.js", () => ({
+  detectMime: vi.fn(async () => "image/png"),
+}));
+
+vi.mock("../browser/cdp.helpers.js", () => ({
+  redactCdpUrl: vi.fn((url: string) => {
+    try {
+      const parsed = new URL(url);
+      parsed.username = "";
+      parsed.password = "";
+      const normalized = parsed.toString().replace(/\/$/, "");
+      const token = parsed.searchParams.get("token");
+      if (!token || token.length <= 8) {
+        return normalized;
+      }
+      return normalized.replace(token, `${token.slice(0, 6)}…${token.slice(-4)}`);
+    } catch {
+      return url;
+    }
+  }),
+}));
+
+vi.mock("../browser/config.js", () => ({
+  resolveBrowserConfig: browserConfigMocks.resolveBrowserConfig,
+}));
+
+vi.mock("../browser/request-policy.js", () => ({
+  isPersistentBrowserProfileMutation: vi.fn((method: string, path: string) => {
+    if (method === "POST" && (path === "/profiles/create" || path === "/reset-profile")) {
+      return true;
+    }
+    return method === "DELETE" && /^\/profiles\/[^/]+$/.test(path);
+  }),
+  normalizeBrowserRequestPath: vi.fn((path: string) => path),
+  resolveRequestedBrowserProfile: vi.fn(
+    ({
+      query,
+      body,
+      profile,
+    }: {
+      query?: Record<string, unknown>;
+      body?: unknown;
+      profile?: string;
+    }) => {
+      if (query && typeof query.profile === "string" && query.profile.trim()) {
+        return query.profile.trim();
+      }
+      const bodyProfile =
+        body && typeof body === "object" ? (body as { profile?: unknown }).profile : undefined;
+      if (typeof bodyProfile === "string" && bodyProfile.trim()) {
+        return bodyProfile.trim();
+      }
+      return typeof profile === "string" && profile.trim() ? profile.trim() : undefined;
+    },
+  ),
+}));
+
+vi.mock("../browser/routes/dispatcher.js", () => ({
+  createBrowserRouteDispatcher: dispatcherMocks.createBrowserRouteDispatcher,
+}));
+
+vi.mock("../control-service.js", () => ({
+  createBrowserControlContext: controlServiceMocks.createBrowserControlContext,
+  startBrowserControlServiceFromConfig: controlServiceMocks.startBrowserControlServiceFromConfig,
+}));
+
 let resetBrowserProxyCommandStateForTests: typeof import("./invoke-browser.js").resetBrowserProxyCommandStateForTests;
 let runBrowserProxyCommand: typeof import("./invoke-browser.js").runBrowserProxyCommand;
 
@@ -117,6 +141,20 @@ beforeAll(async () => {
   ({ resetBrowserProxyCommandStateForTests, runBrowserProxyCommand } =
     await import("./invoke-browser.js"));
 });
+
+type BrowserDispatchRequest = {
+  path?: string;
+  query?: unknown;
+};
+
+function firstBrowserDispatchRequest(): BrowserDispatchRequest {
+  const [call] = dispatcherMocks.dispatch.mock.calls;
+  if (!call) {
+    throw new Error("expected browser dispatch call");
+  }
+  const [request] = call as [BrowserDispatchRequest, ...unknown[]];
+  return request;
+}
 
 describe("runBrowserProxyCommand", () => {
   beforeEach(() => {
@@ -128,6 +166,7 @@ describe("runBrowserProxyCommand", () => {
     }));
     controlServiceMocks.createBrowserControlContext.mockReset().mockReturnValue({ control: true });
     controlServiceMocks.startBrowserControlServiceFromConfig.mockReset().mockResolvedValue(true);
+    configMocks.sourceConfig = null;
     configMocks.loadConfig.mockReset().mockReturnValue({
       browser: {},
       nodeHost: { browserProxy: { enabled: true, allowProfiles: [] as string[] } },
@@ -282,6 +321,38 @@ describe("runBrowserProxyCommand", () => {
     expect(dispatcherMocks.dispatch).not.toHaveBeenCalled();
   });
 
+  it("uses the browser source snapshot for proxy default-profile decisions", async () => {
+    configMocks.loadConfig.mockReturnValue({
+      browser: { defaultProfile: "openclaw" },
+      nodeHost: { browserProxy: { enabled: true, allowProfiles: ["work"] } },
+    });
+    configMocks.sourceConfig = {
+      browser: { defaultProfile: "work" },
+      nodeHost: { browserProxy: { enabled: true, allowProfiles: ["work"] } },
+    };
+    browserConfigMocks.resolveBrowserConfig.mockImplementation(
+      (browser?: { defaultProfile?: string }) => ({
+        enabled: true,
+        defaultProfile: browser?.defaultProfile ?? "openclaw",
+      }),
+    );
+    dispatcherMocks.dispatch.mockResolvedValue({
+      status: 200,
+      body: { ok: true },
+    });
+
+    await runBrowserProxyCommand(
+      JSON.stringify({
+        method: "GET",
+        path: "/snapshot",
+        timeoutMs: 50,
+      }),
+    );
+
+    const request = firstBrowserDispatchRequest();
+    expect(request.path).toBe("/snapshot");
+  });
+
   it("rejects unauthorized body.profile when allowProfiles is configured", async () => {
     configMocks.loadConfig.mockReturnValue({
       browser: {},
@@ -376,12 +447,9 @@ describe("runBrowserProxyCommand", () => {
       }),
     );
 
-    expect(dispatcherMocks.dispatch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        path: "/stop",
-        query: { profile: "openclaw" },
-      }),
-    );
+    const request = firstBrowserDispatchRequest();
+    expect(request.path).toBe("/stop");
+    expect(request.query).toEqual({ profile: "openclaw" });
   });
 
   it("rejects persistent profile creation when allowProfiles is empty", async () => {

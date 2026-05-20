@@ -25,7 +25,8 @@ export function installProcessWarningFilter() {
       return;
     }
 
-    return Reflect.apply(originalEmitWarning, process, args);
+    Reflect.apply(originalEmitWarning, process, args);
+    return;
   };
 
   globalThis[warningFilterKey] = { installed: true };

@@ -4,8 +4,8 @@ import {
   resolveMergedAccountConfig,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-resolution";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import type { IMessageAccountConfig } from "../runtime-api.js";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { IMessageAccountConfig } from "./account-types.js";
 
 export type ResolvedIMessageAccount = {
   accountId: string;
@@ -15,7 +15,11 @@ export type ResolvedIMessageAccount = {
   configured: boolean;
 };
 
-const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("imessage");
+const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("imessage", {
+  implicitDefaultAccount: {
+    channelKeys: ["cliPath", "dbPath"],
+  },
+});
 export const listIMessageAccountIds = listAccountIds;
 export const resolveDefaultIMessageAccountId = resolveDefaultAccountId;
 

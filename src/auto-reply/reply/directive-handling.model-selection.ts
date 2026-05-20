@@ -1,11 +1,12 @@
 import { ensureAuthProfileStore } from "../../agents/auth-profiles.js";
+import { isModelKeyAllowedBySet } from "../../agents/model-selection-shared.js";
 import {
   type ModelAliasIndex,
   modelKey,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveProfileOverride } from "./directive-handling.auth-profile.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import { type ModelDirectiveSelection, resolveModelDirectiveSelection } from "./model-selection.js";
@@ -66,6 +67,15 @@ export function resolveModelSelectionFromDirective(params: {
   }
 
   const raw = params.directives.rawModelDirective.trim();
+  if (/^default$/i.test(raw)) {
+    return {
+      modelSelection: {
+        provider: params.defaultProvider,
+        model: params.defaultModel,
+        isDefault: true,
+      },
+    };
+  }
   const storedNumericProfile =
     params.directives.rawModelProfile === undefined
       ? resolveStoredNumericProfileModelDirective({
@@ -80,6 +90,7 @@ export function resolveModelSelectionFromDirective(params: {
         defaultModel: params.defaultModel,
         aliasIndex: params.aliasIndex,
         allowedModelKeys: params.allowedModelKeys,
+        rawRuntime: params.directives.rawModelRuntime,
       })
     : null;
   const useStoredNumericProfile =
@@ -112,7 +123,10 @@ export function resolveModelSelectionFromDirective(params: {
   });
   if (explicit) {
     const explicitKey = modelKey(explicit.ref.provider, explicit.ref.model);
-    if (params.allowedModelKeys.size === 0 || params.allowedModelKeys.has(explicitKey)) {
+    if (
+      params.allowedModelKeys.size === 0 ||
+      isModelKeyAllowedBySet(params.allowedModelKeys, explicitKey)
+    ) {
       modelSelection = {
         provider: explicit.ref.provider,
         model: explicit.ref.model,
@@ -131,6 +145,7 @@ export function resolveModelSelectionFromDirective(params: {
       defaultModel: params.defaultModel,
       aliasIndex: params.aliasIndex,
       allowedModelKeys: params.allowedModelKeys,
+      rawRuntime: params.directives.rawModelRuntime,
     });
 
     if (resolved.error) {

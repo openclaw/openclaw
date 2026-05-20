@@ -1,4 +1,4 @@
-import type { AssistantMessage } from "@mariozechner/pi-ai";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import {
   createTextEndBlockReplyHarness,
@@ -12,6 +12,8 @@ import {
 } from "./pi-embedded-subscribe.openai-responses.test-helpers.js";
 
 type TextEndBlockReplyHarness = ReturnType<typeof createTextEndBlockReplyHarness>;
+type OnBlockReplyMock = ReturnType<typeof vi.fn>;
+type BlockReplyPayload = { text?: string };
 
 function emitOpenAiResponsesTextEvent(params: {
   emit: TextEndBlockReplyHarness["emit"];
@@ -74,6 +76,42 @@ function emitOpenAiResponsesFinalMessageEnd(params: {
   });
 }
 
+async function emitSuppressedCommentary(params: {
+  emit: TextEndBlockReplyHarness["emit"];
+  text: string;
+}) {
+  params.emit({ type: "message_start", message: { role: "assistant" } });
+  emitOpenAiResponsesTextDeltaAndEnd({
+    emit: params.emit,
+    text: params.text,
+    id: "item_commentary",
+    phase: "commentary",
+  });
+  await Promise.resolve();
+}
+
+function expectSingleBlockReplyText(params: {
+  onBlockReply: OnBlockReplyMock;
+  subscription: TextEndBlockReplyHarness["subscription"];
+  text: string;
+}) {
+  expect(params.onBlockReply).toHaveBeenCalledTimes(1);
+  expect(requireBlockReplyPayload(params.onBlockReply).text).toBe(params.text);
+  expect(params.subscription.assistantTexts).toEqual([params.text]);
+}
+
+function requireBlockReplyPayload(onBlockReply: OnBlockReplyMock): BlockReplyPayload {
+  const call = onBlockReply.mock.calls[0];
+  if (!call) {
+    throw new Error("expected first block reply call");
+  }
+  const payload = call[0];
+  if (!payload || typeof payload !== "object") {
+    throw new Error("expected first block reply payload");
+  }
+  return payload as BlockReplyPayload;
+}
+
 describe("subscribeEmbeddedPiSession", () => {
   it("emits block replies on text_end and does not duplicate on message_end", async () => {
     const onBlockReply = vi.fn();
@@ -86,8 +124,8 @@ describe("subscribeEmbeddedPiSession", () => {
     await vi.waitFor(() => {
       expect(onBlockReply).toHaveBeenCalledTimes(1);
     });
-    const payload = onBlockReply.mock.calls[0][0];
-    expect(payload.text).toBe("Hello block");
+    const payload = requireBlockReplyPayload(onBlockReply);
+    expect(payload?.text).toBe("Hello block");
     expect(subscription.assistantTexts).toEqual(["Hello block"]);
 
     const assistantMessage = {
@@ -99,6 +137,32 @@ describe("subscribeEmbeddedPiSession", () => {
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
     expect(subscription.assistantTexts).toEqual(["Hello block"]);
+  });
+
+  it("message_end block-replies visible text when text_end streamed only silent NO_REPLY chunks", async () => {
+    const onBlockReply = vi.fn();
+    const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextEnd({ emit, content: "NO_REPLY" });
+    await Promise.resolve();
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Final visible reply." }],
+      } as AssistantMessage,
+    });
+    await Promise.resolve();
+
+    await vi.waitFor(() => {
+      expect(onBlockReply).toHaveBeenCalledTimes(1);
+    });
+    expect(requireBlockReplyPayload(onBlockReply).text).toBe("Final visible reply.");
+    expect(subscription.assistantTexts).toEqual(["Final visible reply."]);
   });
 
   it("does not duplicate when message_end flushes and a late text_end arrives", async () => {
@@ -148,7 +212,7 @@ describe("subscribeEmbeddedPiSession", () => {
     await Promise.resolve();
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(onBlockReply.mock.calls[0]?.[0]?.text).toBe("Legacy answer");
+    expect(requireBlockReplyPayload(onBlockReply).text).toBe("Legacy answer");
     expect(subscription.assistantTexts).toEqual(["Legacy answer"]);
 
     emit({
@@ -167,17 +231,10 @@ describe("subscribeEmbeddedPiSession", () => {
     const onBlockReply = vi.fn();
     const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
 
-    emit({ type: "message_start", message: { role: "assistant" } });
-    emitOpenAiResponsesTextDeltaAndEnd({
-      emit,
-      text: "Working...",
-      id: "item_commentary",
-      phase: "commentary",
-    });
-    await Promise.resolve();
+    await emitSuppressedCommentary({ emit, text: "Working..." });
 
     expect(onBlockReply).not.toHaveBeenCalled();
-    expect(subscription.assistantTexts).toEqual([]);
+    expect(subscription.assistantTexts).toStrictEqual([]);
 
     emitOpenAiResponsesTextDeltaAndEnd({
       emit,
@@ -189,9 +246,7 @@ describe("subscribeEmbeddedPiSession", () => {
 
     emitOpenAiResponsesFinalMessageEnd({ emit, commentaryText: "Working...", finalText: "Done." });
 
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(onBlockReply.mock.calls[0]?.[0]?.text).toBe("Done.");
-    expect(subscription.assistantTexts).toEqual(["Done."]);
+    expectSingleBlockReplyText({ onBlockReply, subscription, text: "Done." });
   });
 
   it("emits the full final answer on text_end when it extends suppressed commentary", async () => {
@@ -219,7 +274,7 @@ describe("subscribeEmbeddedPiSession", () => {
     await Promise.resolve();
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(onBlockReply.mock.calls[0]?.[0]?.text).toBe("Hello world");
+    expect(requireBlockReplyPayload(onBlockReply).text).toBe("Hello world");
     expect(subscription.assistantTexts).toEqual(["Hello world"]);
   });
 
@@ -245,7 +300,7 @@ describe("subscribeEmbeddedPiSession", () => {
     await Promise.resolve();
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(onBlockReply.mock.calls[0]?.[0]?.text).toBe("Done.");
+    expect(requireBlockReplyPayload(onBlockReply).text).toBe("Done.");
     expect(subscription.assistantTexts).toEqual(["Done."]);
   });
 
@@ -253,19 +308,10 @@ describe("subscribeEmbeddedPiSession", () => {
     const onBlockReply = vi.fn();
     const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
 
-    emit({ type: "message_start", message: { role: "assistant" } });
-    emitOpenAiResponsesTextDeltaAndEnd({
-      emit,
-      text: "Working...",
-      id: "item_commentary",
-      phase: "commentary",
-    });
-    await Promise.resolve();
+    await emitSuppressedCommentary({ emit, text: "Working..." });
 
     emitOpenAiResponsesFinalMessageEnd({ emit, commentaryText: "Working...", finalText: "Done." });
 
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(onBlockReply.mock.calls[0]?.[0]?.text).toBe("Done.");
-    expect(subscription.assistantTexts).toEqual(["Done."]);
+    expectSingleBlockReplyText({ onBlockReply, subscription, text: "Done." });
   });
 });

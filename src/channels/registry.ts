@@ -1,68 +1,19 @@
-import { getActivePluginChannelRegistry, getActivePluginRegistry } from "../plugins/runtime.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
-import { getChatChannelMeta, listChatChannels, type ChatChannelMeta } from "./chat-meta.js";
+import { normalizeChatChannelId, type ChatChannelId } from "./ids.js";
+import type { ChannelId } from "./plugins/channel-id.types.js";
+import type { ChannelMeta } from "./plugins/types.core.js";
 import {
-  CHANNEL_IDS,
-  CHAT_CHANNEL_ALIASES,
-  CHAT_CHANNEL_ORDER,
-  listChatChannelAliases,
-  normalizeChatChannelId,
-  type ChatChannelId,
-} from "./ids.js";
-import type { ChannelId, ChannelMeta } from "./plugins/types.js";
-export { CHANNEL_IDS, CHAT_CHANNEL_ORDER } from "./ids.js";
+  findRegisteredChannelPluginEntry,
+  findRegisteredChannelPluginEntryById,
+  listRegisteredChannelPluginEntries,
+} from "./registry-lookup.js";
+export { getChatChannelMeta } from "./chat-meta.js";
+export { CHAT_CHANNEL_ORDER } from "./ids.js";
 export type { ChatChannelId } from "./ids.js";
-
-type RegisteredChannelPluginEntry = {
-  plugin: {
-    id?: string | null;
-    meta?: Pick<ChannelMeta, "aliases" | "markdownCapable"> | null;
-  };
-};
-
-function listRegisteredChannelPluginEntries(): RegisteredChannelPluginEntry[] {
-  const channelRegistry = getActivePluginChannelRegistry();
-  if (channelRegistry && channelRegistry.channels && channelRegistry.channels.length > 0) {
-    return channelRegistry.channels;
-  }
-  return getActivePluginRegistry()?.channels ?? [];
-}
-
-function findRegisteredChannelPluginEntry(
-  normalizedKey: string,
-): RegisteredChannelPluginEntry | undefined {
-  return listRegisteredChannelPluginEntries().find((entry) => {
-    const id = normalizeOptionalLowercaseString(String(entry.plugin.id ?? "")) ?? "";
-    if (id && id === normalizedKey) {
-      return true;
-    }
-    return (entry.plugin.meta?.aliases ?? []).some(
-      (alias) => normalizeOptionalLowercaseString(alias) === normalizedKey,
-    );
-  });
-}
-
-function findRegisteredChannelPluginEntryById(
-  id: string,
-): RegisteredChannelPluginEntry | undefined {
-  const normalizedId = normalizeOptionalLowercaseString(id);
-  if (!normalizedId) {
-    return undefined;
-  }
-  return listRegisteredChannelPluginEntries().find(
-    (entry) => normalizeOptionalLowercaseString(entry.plugin.id) === normalizedId,
-  );
-}
-export {
-  CHAT_CHANNEL_ALIASES,
-  getChatChannelMeta,
-  listChatChannelAliases,
-  listChatChannels,
-  normalizeChatChannelId,
-};
+export { normalizeChatChannelId };
 
 // Channel docking: prefer this helper in shared code. Importing from
 // `src/channels/plugins/*` can eagerly load channel implementations.
@@ -89,22 +40,18 @@ export function listRegisteredChannelPluginIds(): ChannelId[] {
   });
 }
 
-export function listRegisteredChannelPluginAliases(): string[] {
-  return listRegisteredChannelPluginEntries().flatMap((entry) => entry.plugin.meta?.aliases ?? []);
-}
-
 export function getRegisteredChannelPluginMeta(
   id: string,
 ): Pick<ChannelMeta, "aliases" | "markdownCapable"> | null {
   return findRegisteredChannelPluginEntryById(id)?.plugin.meta ?? null;
 }
 
-export function formatChannelPrimerLine(meta: ChatChannelMeta): string {
+export function formatChannelPrimerLine(meta: ChannelMeta): string {
   return `${meta.label}: ${meta.blurb}`;
 }
 
 export function formatChannelSelectionLine(
-  meta: ChatChannelMeta,
+  meta: ChannelMeta,
   docsLink: (path: string, label?: string) => string,
 ): string {
   const docsPrefix = meta.selectionDocsPrefix ?? "Docs:";

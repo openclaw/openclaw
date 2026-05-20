@@ -1,5 +1,15 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveContextTokensForModel } from "../../agents/context.js";
+import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
+import {
+  OPENAI_CODEX_PROVIDER_ID,
+  OPENAI_PROVIDER_ID,
+  resolveContextConfigProviderForRuntime,
+} from "../../agents/openai-codex-routing.js";
+import { normalizeProviderId } from "../../agents/provider-id.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -7,6 +17,12 @@ import {
 } from "../../shared/string-coerce.js";
 import type { CommandHandler } from "./commands-types.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
+
+const compactRuntimeLoader = createLazyImportLoader(() => import("./commands-compact.runtime.js"));
+
+function loadCompactRuntime(): Promise<typeof import("./commands-compact.runtime.js")> {
+  return compactRuntimeLoader.load();
+}
 
 function extractCompactInstructions(params: {
   rawBody?: string;
@@ -67,6 +83,99 @@ function formatCompactionReason(reason?: string): string | undefined {
   return text;
 }
 
+function resolveManualCompactContextTokenBudget(params: {
+  cfg: OpenClawConfig;
+  provider?: string;
+  model?: string;
+  agentId: string;
+  sessionKey: string;
+  liveContextTokens?: number;
+  persistedContextTokens?: number;
+}): number | undefined {
+  const liveContextTokens =
+    typeof params.liveContextTokens === "number" &&
+    Number.isFinite(params.liveContextTokens) &&
+    params.liveContextTokens > 0
+      ? Math.floor(params.liveContextTokens)
+      : undefined;
+
+  const model = normalizeOptionalString(params.model);
+  const provider = normalizeOptionalString(params.provider);
+  if (!model || !provider) {
+    return liveContextTokens ?? resolvePersistedContextTokens(params.persistedContextTokens);
+  }
+
+  const harnessPolicy = resolveAgentHarnessPolicy({
+    provider,
+    modelId: model,
+    config: params.cfg,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+  });
+  const contextConfigProvider = resolveContextConfigProviderForRuntime({
+    provider,
+    runtimeId: harnessPolicy.runtime,
+  });
+  const configuredContextTokens = resolveContextTokensForModel({
+    cfg: params.cfg,
+    provider: contextConfigProvider,
+    model: resolveManualCompactContextModelId({
+      provider,
+      contextConfigProvider,
+      model,
+    }),
+    allowAsyncLoad: false,
+  });
+  if (typeof configuredContextTokens === "number" && configuredContextTokens > 0) {
+    const configuredBudget = Math.floor(configuredContextTokens);
+    return liveContextTokens !== undefined
+      ? Math.min(liveContextTokens, configuredBudget)
+      : configuredBudget;
+  }
+
+  if (liveContextTokens !== undefined) {
+    return liveContextTokens;
+  }
+
+  return resolvePersistedContextTokens(params.persistedContextTokens);
+}
+
+function resolvePersistedContextTokens(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : undefined;
+}
+
+function resolveManualCompactContextModelId(params: {
+  provider: string;
+  contextConfigProvider: string;
+  model: string;
+}): string {
+  const model = params.model.trim();
+  const slashIndex = model.indexOf("/");
+  if (slashIndex <= 0) {
+    return model;
+  }
+
+  const modelProvider = normalizeProviderId(model.slice(0, slashIndex));
+  const selectedProvider = normalizeProviderId(params.provider);
+  const contextConfigProvider = normalizeProviderId(params.contextConfigProvider);
+  const modelId = model.slice(slashIndex + 1).trim();
+  if (!modelId) {
+    return model;
+  }
+
+  if (
+    modelProvider === selectedProvider ||
+    modelProvider === contextConfigProvider ||
+    (modelProvider === OPENAI_PROVIDER_ID && contextConfigProvider === OPENAI_CODEX_PROVIDER_ID)
+  ) {
+    return modelId;
+  }
+
+  return model;
+}
+
 export const handleCompactCommand: CommandHandler = async (params) => {
   const compactRequested =
     params.command.commandBodyNormalized === "/compact" ||
@@ -80,48 +189,73 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     );
     return { shouldContinue: false };
   }
-  if (!params.sessionEntry?.sessionId) {
+  const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+  if (!targetSessionEntry?.sessionId) {
     return {
       shouldContinue: false,
       reply: { text: "⚙️ Compaction unavailable (missing session id)." },
     };
   }
-  const runtime = await import("./commands-compact.runtime.js");
-  const sessionId = params.sessionEntry.sessionId;
+  const runtime = await loadCompactRuntime();
+  const sessionId = targetSessionEntry.sessionId;
   if (runtime.isEmbeddedPiRunActive(sessionId)) {
     runtime.abortEmbeddedPiRun(sessionId);
     await runtime.waitForEmbeddedPiRunEnd(sessionId, 15_000);
   }
+  const sessionAgentId = params.sessionKey
+    ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
+    : (params.agentId ?? "main");
+  const currentAgentId = params.agentId ?? "main";
+  const sessionAgentDir =
+    sessionAgentId === currentAgentId && params.agentDir
+      ? params.agentDir
+      : resolveAgentDir(params.cfg, sessionAgentId);
   const customInstructions = extractCompactInstructions({
     rawBody: params.ctx.CommandBody ?? params.ctx.RawBody ?? params.ctx.Body,
     ctx: params.ctx,
     cfg: params.cfg,
-    agentId: params.agentId,
+    agentId: sessionAgentId,
     isGroup: params.isGroup,
+  });
+  const contextTokenBudget = resolveManualCompactContextTokenBudget({
+    cfg: params.cfg,
+    provider: params.provider,
+    model: params.model,
+    agentId: sessionAgentId,
+    sessionKey: params.sessionKey,
+    liveContextTokens: params.contextTokens,
+    persistedContextTokens: targetSessionEntry.contextTokens,
   });
   const result = await runtime.compactEmbeddedPiSession({
     sessionId,
     sessionKey: params.sessionKey,
     allowGatewaySubagentBinding: true,
     messageChannel: params.command.channel,
-    groupId: params.sessionEntry.groupId,
-    groupChannel: params.sessionEntry.groupChannel,
-    groupSpace: params.sessionEntry.space,
-    spawnedBy: params.sessionEntry.spawnedBy,
+    groupId: targetSessionEntry.groupId,
+    groupChannel: targetSessionEntry.groupChannel,
+    groupSpace: targetSessionEntry.space,
+    spawnedBy: targetSessionEntry.spawnedBy,
+    senderId: params.command.senderId,
+    senderName: params.ctx.SenderName,
+    senderUsername: params.ctx.SenderUsername,
+    senderE164: params.ctx.SenderE164,
     sessionFile: runtime.resolveSessionFilePath(
       sessionId,
-      params.sessionEntry,
+      targetSessionEntry,
       runtime.resolveSessionFilePathOptions({
-        agentId: params.agentId,
+        agentId: sessionAgentId,
         storePath: params.storePath,
       }),
     ),
     workspaceDir: params.workspaceDir,
-    agentDir: params.agentDir,
+    agentDir: sessionAgentDir,
     config: params.cfg,
-    skillsSnapshot: params.sessionEntry.skillsSnapshot,
+    skillsSnapshot: targetSessionEntry.skillsSnapshot,
     provider: params.provider,
     model: params.model,
+    contextTokenBudget,
+    agentHarnessId:
+      targetSessionEntry.sessionId === sessionId ? targetSessionEntry.agentHarnessId : undefined,
     thinkLevel: params.resolvedThinkLevel ?? (await params.resolveDefaultThinkingLevel()),
     bashElevated: {
       enabled: false,
@@ -147,21 +281,23 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   if (result.ok && result.compacted) {
     await runtime.incrementCompactionCount({
       cfg: params.cfg,
-      sessionEntry: params.sessionEntry,
+      sessionEntry: targetSessionEntry,
       sessionStore: params.sessionStore,
       sessionKey: params.sessionKey,
       storePath: params.storePath,
       // Update token counts after compaction
       tokensAfter: result.result?.tokensAfter,
+      newSessionId: result.result?.sessionId,
+      newSessionFile: result.result?.sessionFile,
     });
   }
   // Use the post-compaction token count for context summary if available
   const tokensAfterCompaction = result.result?.tokensAfter;
   const totalTokens =
-    tokensAfterCompaction ?? runtime.resolveFreshSessionTotalTokens(params.sessionEntry);
+    tokensAfterCompaction ?? runtime.resolveFreshSessionTotalTokens(targetSessionEntry);
   const contextSummary = runtime.formatContextUsageShort(
     typeof totalTokens === "number" && totalTokens > 0 ? totalTokens : null,
-    params.contextTokens ?? params.sessionEntry.contextTokens ?? null,
+    contextTokenBudget ?? null,
   );
   const reason = formatCompactionReason(result.reason);
   const line = reason

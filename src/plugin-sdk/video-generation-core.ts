@@ -1,6 +1,6 @@
 // Shared video-generation implementation helpers for bundled and third-party plugins.
 
-export type { AuthProfileStore } from "../agents/auth-profiles.js";
+export type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 export type { FallbackAttempt } from "../agents/model-fallback.types.js";
 export type { VideoGenerationProviderPlugin } from "../plugins/types.js";
 export type {
@@ -8,6 +8,7 @@ export type {
   VideoGenerationIgnoredOverride,
   VideoGenerationMode,
   VideoGenerationModeCapabilities,
+  VideoGenerationModelCapabilitiesContext,
   VideoGenerationProvider,
   VideoGenerationProviderCapabilities,
   VideoGenerationProviderConfiguredContext,
@@ -17,7 +18,7 @@ export type {
   VideoGenerationSourceAsset,
   VideoGenerationTransformCapabilities,
 } from "../video-generation/types.js";
-export type { OpenClawConfig } from "../config/config.js";
+export type { OpenClawConfig } from "../config/types.openclaw.js";
 
 export { describeFailoverError, isFailoverError } from "../agents/failover-error.js";
 export {

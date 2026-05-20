@@ -52,7 +52,7 @@ export function buildVitestProfileCommand({ mode, outputDir }) {
         "./node_modules/vitest/vitest.mjs",
         "run",
         "--config",
-        "vitest.unit.config.ts",
+        "test/vitest/vitest.unit.config.ts",
         "--no-file-parallelism",
       ],
     };
@@ -64,7 +64,7 @@ export function buildVitestProfileCommand({ mode, outputDir }) {
       "vitest",
       "run",
       "--config",
-      "vitest.unit.config.ts",
+      "test/vitest/vitest.unit.config.ts",
       "--no-file-parallelism",
       "--execArgv=--cpu-prof",
       `--execArgv=--cpu-prof-dir=${outputDir}`,

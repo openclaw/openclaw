@@ -4,8 +4,8 @@ import {
   resolveMergedAccountConfig,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-resolution";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import type { SignalAccountConfig } from "./runtime-api.js";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { SignalAccountConfig } from "./account-types.js";
 
 export type ResolvedSignalAccount = {
   accountId: string;
@@ -16,7 +16,11 @@ export type ResolvedSignalAccount = {
   config: SignalAccountConfig;
 };
 
-const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("signal");
+const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("signal", {
+  implicitDefaultAccount: {
+    channelKeys: ["account"],
+  },
+});
 export const listSignalAccountIds = listAccountIds;
 export const resolveDefaultSignalAccountId = resolveDefaultAccountId;
 

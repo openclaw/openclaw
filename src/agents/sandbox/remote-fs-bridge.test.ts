@@ -52,6 +52,20 @@ function createLocalRemoteRuntime(params: {
   return { calls, runtime };
 }
 
+function createWorkspaceReadBridge(workspaceDir: string) {
+  const { runtime } = createLocalRemoteRuntime({
+    remoteWorkspaceDir: workspaceDir,
+    remoteAgentWorkspaceDir: workspaceDir,
+  });
+  return createRemoteShellSandboxFsBridge({
+    sandbox: createSandbox({
+      workspaceDir,
+      agentWorkspaceDir: workspaceDir,
+    }),
+    runtime,
+  });
+}
+
 describe("remote sandbox fs bridge", () => {
   it.runIf(process.platform !== "win32")(
     "reads files with the pinned mutation helper",
@@ -112,6 +126,27 @@ describe("remote sandbox fs bridge", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "reads dot-dot-prefixed filenames inside the workspace",
+    async () => {
+      await withTempDir("openclaw-remote-fs-bridge-", async (stateDir) => {
+        const workspaceDir = path.join(stateDir, "workspace");
+        await fs.mkdir(workspaceDir, { recursive: true });
+        await fs.writeFile(path.join(workspaceDir, "..note.txt"), "hidden", "utf8");
+
+        const bridge = createWorkspaceReadBridge(workspaceDir);
+
+        expect(bridge.resolvePath({ filePath: "..note.txt" })).toMatchObject({
+          relativePath: "..note.txt",
+          containerPath: `${workspaceDir}/..note.txt`,
+        });
+        await expect(bridge.readFile({ filePath: "..note.txt" })).resolves.toEqual(
+          Buffer.from("hidden"),
+        );
+      });
+    },
+  );
+
   it.runIf(process.platform !== "win32")("rejects symlink escapes while reading", async () => {
     await withTempDir("openclaw-remote-fs-bridge-", async (stateDir) => {
       const workspaceDir = path.join(stateDir, "workspace");
@@ -121,17 +156,7 @@ describe("remote sandbox fs bridge", () => {
       await fs.writeFile(path.join(outsideDir, "secret.txt"), "classified", "utf8");
       await fs.symlink(path.join(outsideDir, "secret.txt"), path.join(workspaceDir, "link.txt"));
 
-      const { runtime } = createLocalRemoteRuntime({
-        remoteWorkspaceDir: workspaceDir,
-        remoteAgentWorkspaceDir: workspaceDir,
-      });
-      const bridge = createRemoteShellSandboxFsBridge({
-        sandbox: createSandbox({
-          workspaceDir,
-          agentWorkspaceDir: workspaceDir,
-        }),
-        runtime,
-      });
+      const bridge = createWorkspaceReadBridge(workspaceDir);
 
       await expect(bridge.readFile({ filePath: "link.txt" })).rejects.toThrow(
         /symbolic links|too many levels|ELOOP/i,
@@ -148,17 +173,7 @@ describe("remote sandbox fs bridge", () => {
         await fs.writeFile(path.join(workspaceDir, "note.txt"), "hello", "utf8");
         await fs.symlink("note.txt", path.join(workspaceDir, "link.txt"));
 
-        const { runtime } = createLocalRemoteRuntime({
-          remoteWorkspaceDir: workspaceDir,
-          remoteAgentWorkspaceDir: workspaceDir,
-        });
-        const bridge = createRemoteShellSandboxFsBridge({
-          sandbox: createSandbox({
-            workspaceDir,
-            agentWorkspaceDir: workspaceDir,
-          }),
-          runtime,
-        });
+        const bridge = createWorkspaceReadBridge(workspaceDir);
 
         await expect(bridge.readFile({ filePath: "link.txt" })).rejects.toThrow(
           /symbolic links|too many levels|ELOOP/i,

@@ -6,23 +6,28 @@
  */
 
 import { resolveConversationBindingContext } from "../channels/conversation-binding-context.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { ADMIN_SCOPE, isOperatorScope } from "../gateway/operator-scopes.js";
 import { logVerbose } from "../globals.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   clearPluginCommands,
   clearPluginCommandsForPlugin,
-  getPluginCommandSpecs,
+  isReservedCommandName,
   listPluginInvocationKeys,
+  pluginCommandSupportsChannel,
   registerPluginCommand,
   validateCommandName,
   validatePluginCommandDefinition,
 } from "./command-registration.js";
 import {
+  isTrustedReservedCommandOwner,
+  listRegisteredPluginAgentPromptGuidance,
   pluginCommands,
   setPluginCommandRegistryLocked,
   type RegisteredPluginCommand,
 } from "./command-registry-state.js";
+import { getPluginCommandSpecs, listProviderPluginCommandSpecs } from "./command-specs.js";
 import {
   detachPluginConversationBinding,
   getCurrentPluginConversationBinding,
@@ -42,6 +47,8 @@ export {
   clearPluginCommands,
   clearPluginCommandsForPlugin,
   getPluginCommandSpecs,
+  listProviderPluginCommandSpecs,
+  listRegisteredPluginAgentPromptGuidance,
   registerPluginCommand,
   validateCommandName,
   validatePluginCommandDefinition,
@@ -57,6 +64,7 @@ export {
  */
 export function matchPluginCommand(
   commandBody: string,
+  options: { channel?: string } = {},
 ): { command: RegisteredPluginCommand; args?: string } | null {
   const trimmed = commandBody.trim();
   if (!trimmed.startsWith("/")) {
@@ -69,11 +77,24 @@ export function matchPluginCommand(
   const args = spaceIndex === -1 ? undefined : trimmed.slice(spaceIndex + 1).trim();
 
   const key = normalizeLowercaseStringOrEmpty(commandName);
+  const alternateKeys = [key];
+  if (key.includes("_")) {
+    alternateKeys.push(key.replace(/_/g, "-"));
+  }
+  if (key.includes("-")) {
+    alternateKeys.push(key.replace(/-/g, "_"));
+  }
   const command =
-    pluginCommands.get(key) ??
-    Array.from(pluginCommands.values()).find((candidate) =>
-      listPluginInvocationNames(candidate).includes(key),
-    );
+    alternateKeys
+      .map(
+        (candidateKey) =>
+          pluginCommands.get(candidateKey) ??
+          Array.from(pluginCommands.values()).find((candidate) =>
+            listPluginInvocationNames(candidate).includes(candidateKey),
+          ),
+      )
+      .filter((candidate) => candidate && pluginCommandSupportsChannel(candidate, options.channel))
+      .find(Boolean) ?? null;
 
   if (!command) {
     return null;
@@ -116,6 +137,7 @@ function sanitizeArgs(args: string | undefined): string | undefined {
 function resolveBindingConversationFromCommand(params: {
   config?: OpenClawConfig;
   channel: string;
+  senderId?: string;
   from?: string;
   to?: string;
   accountId?: string;
@@ -140,6 +162,7 @@ function resolveBindingConversationFromCommand(params: {
     accountId: params.accountId,
     threadId: params.messageThreadId,
     threadParentId: params.threadParentId,
+    senderId: params.senderId,
     originatingTo: params.from,
     commandTo: params.to,
     fallbackTo: params.to ?? params.from,
@@ -159,9 +182,11 @@ export async function executePluginCommand(params: {
   channel: string;
   channelId?: PluginCommandContext["channelId"];
   isAuthorizedSender: boolean;
+  senderIsOwner?: boolean;
   gatewayClientScopes?: PluginCommandContext["gatewayClientScopes"];
   sessionKey?: PluginCommandContext["sessionKey"];
   sessionId?: PluginCommandContext["sessionId"];
+  sessionFile?: PluginCommandContext["sessionFile"];
   commandBody: string;
   config: OpenClawConfig;
   from?: PluginCommandContext["from"];
@@ -169,10 +194,18 @@ export async function executePluginCommand(params: {
   accountId?: PluginCommandContext["accountId"];
   messageThreadId?: PluginCommandContext["messageThreadId"];
   threadParentId?: PluginCommandContext["threadParentId"];
+  diagnosticsSessions?: PluginCommandContext["diagnosticsSessions"];
+  diagnosticsUploadApproved?: PluginCommandContext["diagnosticsUploadApproved"];
+  diagnosticsPreviewOnly?: PluginCommandContext["diagnosticsPreviewOnly"];
+  diagnosticsPrivateRouted?: PluginCommandContext["diagnosticsPrivateRouted"];
 }): Promise<PluginCommandResult> {
   const { command, args, senderId, channel, isAuthorizedSender, commandBody, config } = params;
 
   // Check authorization
+  if (!pluginCommandSupportsChannel(command, channel)) {
+    logVerbose(`Plugin command /${command.name} skipped on unsupported channel ${channel}`);
+    return { continueAgent: true };
+  }
   const requireAuth = command.requireAuth !== false; // Default to true
   if (requireAuth && !isAuthorizedSender) {
     logVerbose(
@@ -180,12 +213,40 @@ export async function executePluginCommand(params: {
     );
     return { text: "⚠️ This command requires authorization." };
   }
+  if (command.requiredScopes !== undefined && !Array.isArray(command.requiredScopes)) {
+    logVerbose(`Plugin command /${command.name} blocked: invalid requiredScopes configuration`);
+    return { text: "⚠️ This command has invalid gateway scope configuration." };
+  }
+  const requiredScopes = command.requiredScopes ?? [];
+  const unknownScope = (requiredScopes as readonly unknown[]).find(
+    (scope) => !isOperatorScope(scope),
+  );
+  if (unknownScope) {
+    logVerbose(`Plugin command /${command.name} blocked: unknown gateway scope`);
+    return { text: "⚠️ This command has invalid gateway scope configuration." };
+  }
+  if (requiredScopes.length > 0) {
+    const senderIsOwner = params.senderIsOwner === true;
+    const scopes = Array.isArray(params.gatewayClientScopes)
+      ? new Set(params.gatewayClientScopes)
+      : undefined;
+    const hasGatewayScopeContext = scopes !== undefined;
+    const hasAdmin = scopes?.has(ADMIN_SCOPE) === true;
+    const missingScope = scopes
+      ? requiredScopes.find((scope) => !hasAdmin && !scopes.has(scope))
+      : requiredScopes[0];
+    if (missingScope && (hasGatewayScopeContext || !senderIsOwner)) {
+      logVerbose(`Plugin command /${command.name} blocked: missing gateway scope ${missingScope}`);
+      return { text: `⚠️ This command requires gateway scope: ${missingScope}.` };
+    }
+  }
 
   // Sanitize args before passing to handler
   const sanitizedArgs = sanitizeArgs(args);
   const bindingConversation = resolveBindingConversationFromCommand({
     config,
     channel,
+    senderId,
     from: params.from,
     to: params.to,
     accountId: params.accountId,
@@ -193,15 +254,46 @@ export async function executePluginCommand(params: {
     threadParentId: params.threadParentId,
   });
   const effectiveAccountId = bindingConversation?.accountId ?? params.accountId;
+  const senderIsOwnerForCommand =
+    requiredScopes.length > 0 ||
+    (isTrustedReservedCommandOwner(command) &&
+      command.ownership === "reserved" &&
+      isReservedCommandName(command.name) &&
+      command.pluginId === normalizeLowercaseStringOrEmpty(command.name))
+      ? params.senderIsOwner
+      : undefined;
+  const diagnosticsPrivateRoutedForCommand =
+    isTrustedReservedCommandOwner(command) &&
+    command.ownership === "reserved" &&
+    isReservedCommandName(command.name) &&
+    command.pluginId === normalizeLowercaseStringOrEmpty(command.name)
+      ? params.diagnosticsPrivateRouted
+      : undefined;
+  const diagnosticsUploadApprovedForCommand =
+    isTrustedReservedCommandOwner(command) &&
+    command.ownership === "reserved" &&
+    isReservedCommandName(command.name) &&
+    command.pluginId === normalizeLowercaseStringOrEmpty(command.name)
+      ? params.diagnosticsUploadApproved
+      : undefined;
+  const diagnosticsPreviewOnlyForCommand =
+    isTrustedReservedCommandOwner(command) &&
+    command.ownership === "reserved" &&
+    isReservedCommandName(command.name) &&
+    command.pluginId === normalizeLowercaseStringOrEmpty(command.name)
+      ? params.diagnosticsPreviewOnly
+      : undefined;
 
   const ctx: PluginCommandContext = {
     senderId,
     channel,
     channelId: params.channelId,
     isAuthorizedSender,
+    ...(senderIsOwnerForCommand === undefined ? {} : { senderIsOwner: senderIsOwnerForCommand }),
     gatewayClientScopes: params.gatewayClientScopes,
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
+    sessionFile: params.sessionFile,
     args: sanitizedArgs,
     commandBody,
     config,
@@ -210,6 +302,16 @@ export async function executePluginCommand(params: {
     accountId: effectiveAccountId,
     messageThreadId: params.messageThreadId,
     threadParentId: params.threadParentId,
+    diagnosticsSessions: params.diagnosticsSessions,
+    ...(diagnosticsUploadApprovedForCommand === undefined
+      ? {}
+      : { diagnosticsUploadApproved: diagnosticsUploadApprovedForCommand }),
+    ...(diagnosticsPreviewOnlyForCommand === undefined
+      ? {}
+      : { diagnosticsPreviewOnly: diagnosticsPreviewOnlyForCommand }),
+    ...(diagnosticsPrivateRoutedForCommand === undefined
+      ? {}
+      : { diagnosticsPrivateRouted: diagnosticsPrivateRoutedForCommand }),
     requestConversationBinding: async (bindingParams) => {
       if (!command.pluginRoot || !bindingConversation) {
         return {
@@ -253,6 +355,10 @@ export async function executePluginCommand(params: {
     logVerbose(
       `Plugin command /${command.name} executed successfully for ${senderId || "unknown"}`,
     );
+    if (!result || typeof result !== "object") {
+      logVerbose(`Plugin command /${command.name} returned no reply payload`);
+      return {};
+    }
     return result;
   } catch (err) {
     const error = err as Error;
@@ -272,11 +378,13 @@ export function listPluginCommands(): Array<{
   name: string;
   description: string;
   pluginId: string;
+  acceptsArgs: boolean;
 }> {
   return Array.from(pluginCommands.values()).map((cmd) => ({
     name: cmd.name,
     description: cmd.description,
     pluginId: cmd.pluginId,
+    acceptsArgs: cmd.acceptsArgs ?? false,
   }));
 }
 
@@ -284,6 +392,7 @@ function listPluginInvocationNames(command: OpenClawPluginCommandDefinition): st
   return listPluginInvocationKeys(command);
 }
 
-export const __testing = {
+export const testing = {
   resolveBindingConversationFromCommand,
 };
+export { testing as __testing };

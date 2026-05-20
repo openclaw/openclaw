@@ -1,9 +1,8 @@
 import path from "node:path";
-import type { ImageContent } from "@mariozechner/pi-ai";
+import type { ImageContent } from "@earendil-works/pi-ai";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../../../infra/local-file-access.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
-import { resolveMediaBufferPath, getMediaDir } from "../../../media/store.js";
 import { loadWebMedia } from "../../../media/web-media.js";
 import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 import { resolveUserPath } from "../../../utils.js";
@@ -12,7 +11,6 @@ import {
   createSandboxBridgeReadFile,
   resolveSandboxedBridgeMediaPath,
 } from "../../sandbox-media-paths.js";
-import { assertSandboxPath } from "../../sandbox-paths.js";
 import type { SandboxFsBridge } from "../../sandbox/fs-bridge.js";
 import { sanitizeImageBlocks } from "../../tool-images.js";
 import { log } from "../logger.js";
@@ -32,15 +30,26 @@ const IMAGE_EXTENSION_NAMES = [
   "heic",
   "heif",
 ] as const;
-const IMAGE_EXTENSIONS = new Set(IMAGE_EXTENSION_NAMES.map((ext) => `.${ext}`));
+const IMAGE_EXTENSIONS = new Set<string>();
+for (const ext of IMAGE_EXTENSION_NAMES) {
+  IMAGE_EXTENSIONS.add(`.${ext}`);
+}
 const IMAGE_EXTENSION_PATTERN = IMAGE_EXTENSION_NAMES.join("|");
 const MEDIA_ATTACHED_PATH_REGEX_SOURCE =
   "^\\s*(.+?\\.(?:" + IMAGE_EXTENSION_PATTERN + "))\\s*(?:\\(|$|\\|)";
 const MESSAGE_IMAGE_REGEX_SOURCE =
   "\\[Image:\\s*source:\\s*([^\\]]+\\.(?:" + IMAGE_EXTENSION_PATTERN + "))\\]";
 const FILE_URL_REGEX_SOURCE = "file://[^\\s<>\"'`\\]]+\\.(?:" + IMAGE_EXTENSION_PATTERN + ")";
+const WINDOWS_DRIVE_PATH_REGEX_SOURCE =
+  "(?:^|\\s|[\"'`(])([A-Za-z]:[\\\\/][^\\s\"'`()\\[\\]]*\\.(?:" + IMAGE_EXTENSION_PATTERN + "))";
 const PATH_REGEX_SOURCE =
   "(?:^|\\s|[\"'`(])((\\.\\.?/|[~/])[^\\s\"'`()\\[\\]]*\\.(?:" + IMAGE_EXTENSION_PATTERN + "))";
+const MEDIA_ATTACHED_PATTERN = /\[media attached(?:\s+\d+\/\d+)?:\s*([^\]]+)\]/gi;
+const MEDIA_ATTACHED_PATH_PATTERN = new RegExp(MEDIA_ATTACHED_PATH_REGEX_SOURCE, "i");
+const MESSAGE_IMAGE_PATTERN = new RegExp(MESSAGE_IMAGE_REGEX_SOURCE, "gi");
+const FILE_URL_PATTERN = new RegExp(FILE_URL_REGEX_SOURCE, "gi");
+const WINDOWS_DRIVE_PATH_PATTERN = new RegExp(WINDOWS_DRIVE_PATH_REGEX_SOURCE, "gi");
+const PATH_PATTERN = new RegExp(PATH_REGEX_SOURCE, "gi");
 
 /**
  * Matches the opaque media URI written by the Gateway's claim-check offload:
@@ -140,6 +149,61 @@ export function mergePromptAttachmentImages(params: {
   return promptImages;
 }
 
+function createRefCountMap(refs: DetectedImageRef[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const ref of refs) {
+    const key = `${ref.type}\0${normalizeRefForDedupe(ref.resolved)}`;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return counts;
+}
+
+function consumeRefCount(counts: Map<string, number>, ref: DetectedImageRef): boolean {
+  const key = `${ref.type}\0${normalizeRefForDedupe(ref.resolved)}`;
+  const count = counts.get(key) ?? 0;
+  if (count <= 0) {
+    return false;
+  }
+  if (count === 1) {
+    counts.delete(key);
+  } else {
+    counts.set(key, count - 1);
+  }
+  return true;
+}
+
+function extractLeadingAttachmentPrompt(prompt: string): string {
+  const lines = prompt.split(/\r?\n/);
+  const attachmentLines: string[] = [];
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      break;
+    }
+    if (/^\[media attached:\s*\d+\s+files?\]$/i.test(trimmed)) {
+      attachmentLines.push(trimmed);
+      continue;
+    }
+    if (/^\[media attached(?:\s+\d+\/\d+)?:\s*[^\]]+\]$/i.test(trimmed)) {
+      attachmentLines.push(trimmed);
+      continue;
+    }
+    break;
+  }
+  return attachmentLines.join("\n");
+}
+
+function extractLeadingInlineAttachmentRefs(prompt: string, count: number): DetectedImageRef[] {
+  if (count <= 0) {
+    return [];
+  }
+  const attachmentPrompt = extractLeadingAttachmentPrompt(prompt);
+  if (!attachmentPrompt) {
+    return [];
+  }
+  return detectImageReferences(attachmentPrompt).slice(0, count);
+}
+
 function extractTrailingAttachmentMediaUris(prompt: string, count: number): string[] {
   if (count <= 0) {
     return [];
@@ -156,7 +220,12 @@ function extractTrailingAttachmentMediaUris(prompt: string, count: number): stri
     if (!match?.[1]) {
       break;
     }
-    uris.unshift(match[1]);
+    uris.push(match[1]);
+  }
+  for (let left = 0, right = uris.length - 1; left < right; left += 1, right -= 1) {
+    const uri = uris[left];
+    uris[left] = uris[right];
+    uris[right] = uri;
   }
   return uris;
 }
@@ -165,23 +234,31 @@ export function splitPromptAndAttachmentRefs(params: {
   prompt: string;
   refs: DetectedImageRef[];
   imageOrder?: PromptImageOrderEntry[];
+  existingImageCount?: number;
 }): {
   promptRefs: DetectedImageRef[];
   attachmentRefs: DetectedImageRef[];
 } {
+  const existingImageCount = params.existingImageCount ?? 0;
+  const inlineOrderCount = params.imageOrder?.filter((entry) => entry === "inline").length;
+  const inlineAttachmentRefCount = Math.min(
+    existingImageCount,
+    inlineOrderCount ?? existingImageCount,
+  );
+  const inlineAttachmentRefs = createRefCountMap(
+    extractLeadingInlineAttachmentRefs(params.prompt, inlineAttachmentRefCount),
+  );
   const offloadedCount = params.imageOrder?.filter((entry) => entry === "offloaded").length ?? 0;
-  if (offloadedCount === 0) {
-    return { promptRefs: params.refs, attachmentRefs: [] };
-  }
-
-  const attachmentUris = new Set(extractTrailingAttachmentMediaUris(params.prompt, offloadedCount));
-  if (attachmentUris.size === 0) {
-    return { promptRefs: params.refs, attachmentRefs: [] };
-  }
+  const attachmentUris = new Set(
+    offloadedCount > 0 ? extractTrailingAttachmentMediaUris(params.prompt, offloadedCount) : [],
+  );
 
   const promptRefs: DetectedImageRef[] = [];
   const attachmentRefs: DetectedImageRef[] = [];
   for (const ref of params.refs) {
+    if (consumeRefCount(inlineAttachmentRefs, ref)) {
+      continue;
+    }
     if (ref.type === "media-uri" && attachmentUris.has(ref.resolved)) {
       attachmentRefs.push(ref);
       continue;
@@ -251,13 +328,13 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
   // Pattern for [media attached: path (type) | url] or [media attached N/M: path (type) | url] format
   // Each bracket = ONE file. The | separates path from URL, not multiple files.
   // Multi-file format uses separate brackets on separate lines.
-  const mediaAttachedPattern = /\[media attached(?:\s+\d+\/\d+)?:\s*([^\]]+)\]/gi;
-  const mediaAttachedPathPattern = new RegExp(MEDIA_ATTACHED_PATH_REGEX_SOURCE, "i");
-  const messageImagePattern = new RegExp(MESSAGE_IMAGE_REGEX_SOURCE, "gi");
-  const fileUrlPattern = new RegExp(FILE_URL_REGEX_SOURCE, "gi");
-  const pathPattern = new RegExp(PATH_REGEX_SOURCE, "gi");
+  MEDIA_ATTACHED_PATTERN.lastIndex = 0;
+  MESSAGE_IMAGE_PATTERN.lastIndex = 0;
+  FILE_URL_PATTERN.lastIndex = 0;
+  WINDOWS_DRIVE_PATH_PATTERN.lastIndex = 0;
+  PATH_PATTERN.lastIndex = 0;
   let match: RegExpExecArray | null;
-  while ((match = mediaAttachedPattern.exec(prompt)) !== null) {
+  while ((match = MEDIA_ATTACHED_PATTERN.exec(prompt)) !== null) {
     const content = match[1];
 
     // Skip "[media attached: N files]" header lines
@@ -283,14 +360,14 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
     // Format is: path (type) | url  OR  just: path (type)
     // Path may contain spaces (e.g., "ChatGPT Image Apr 21.png")
     // Use non-greedy .+? to stop at first image extension
-    const pathMatch = content.match(mediaAttachedPathPattern);
+    const pathMatch = content.match(MEDIA_ATTACHED_PATH_PATTERN);
     if (pathMatch?.[1]) {
       addPathRef(pathMatch[1].trim());
     }
   }
 
   // Pattern for [Image: source: /path/...] format from messaging systems
-  while ((match = messageImagePattern.exec(prompt)) !== null) {
+  while ((match = MESSAGE_IMAGE_PATTERN.exec(prompt)) !== null) {
     const raw = match[1]?.trim();
     if (raw) {
       addPathRef(raw);
@@ -300,7 +377,7 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
   // Remote HTTP(S) URLs are intentionally ignored. Native image injection is local-only.
 
   // Pattern for file:// URLs - treat as paths since loadWebMedia handles them
-  while ((match = fileUrlPattern.exec(prompt)) !== null) {
+  while ((match = FILE_URL_PATTERN.exec(prompt)) !== null) {
     const raw = match[0];
     const dedupeKey = normalizeRefForDedupe(raw);
     if (seen.has(dedupeKey)) {
@@ -316,13 +393,20 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
     }
   }
 
+  // Pattern for Windows drive paths.
+  while ((match = WINDOWS_DRIVE_PATH_PATTERN.exec(prompt)) !== null) {
+    if (match[1]) {
+      addPathRef(match[1]);
+    }
+  }
+
   // Pattern for file paths (absolute, relative, or home)
   // Matches:
   // - /absolute/path/to/file.ext (including paths with special chars like Messages/Attachments)
   // - ./relative/path.ext
   // - ../parent/path.ext
   // - ~/home/path.ext
-  while ((match = pathPattern.exec(prompt)) !== null) {
+  while ((match = PATH_PATTERN.exec(prompt)) !== null) {
     // Use capture group 1 (the path without delimiter prefix); skip if undefined
     if (match[1]) {
       addPathRef(match[1]);
@@ -349,44 +433,6 @@ export async function loadImageFromRef(
     sandbox?: { root: string; bridge: SandboxFsBridge };
   },
 ): Promise<ImageContent | null> {
-  // Handle Gateway claim-check URIs (media://inbound/<id>).
-  // These are written by the Gateway's offload path and point to files that
-  // the Gateway has already validated and persisted. They are intentionally
-  // exempt from workspaceOnly checks because they live in the media store
-  // managed by the Gateway, not in the agent workspace.
-  if (ref.type === "media-uri") {
-    const uriMatch = ref.resolved.match(MEDIA_URI_REGEX);
-    if (!uriMatch) {
-      log.debug(`Native image: malformed media URI, skipping: ${ref.resolved}`);
-      return null;
-    }
-    const mediaId = uriMatch[1];
-    try {
-      // resolveMediaBufferPath accepts the media ID (with optional extension
-      // and original-filename prefix) and returns the absolute path of the
-      // persisted file. It applies its own guards against path traversal,
-      // symlinks, and null bytes.
-      const physicalPath = await resolveMediaBufferPath(mediaId, "inbound");
-      const media = await loadWebMedia(physicalPath, {
-        maxBytes: options?.maxBytes,
-        localRoots: [getMediaDir()],
-      });
-      if (media.kind !== "image") {
-        log.debug(`Native image: media store entry is not an image: ${mediaId}`);
-        return null;
-      }
-      const mimeType = media.contentType ?? "image/jpeg";
-      const data = media.buffer.toString("base64");
-      log.debug(`Native image: loaded media-uri ${ref.resolved} -> ${physicalPath}`);
-      return { type: "image", data, mimeType };
-    } catch (err) {
-      log.debug(
-        `Native image: failed to load media-uri ${ref.resolved}: ${formatErrorMessage(err)}`,
-      );
-      return null;
-    }
-  }
-
   try {
     let targetPath = ref.resolved;
 
@@ -411,14 +457,6 @@ export async function loadImageFromRef(
     } else if (!path.isAbsolute(targetPath)) {
       targetPath = path.resolve(workspaceDir, targetPath);
     }
-    if (options?.workspaceOnly && !options?.sandbox) {
-      const root = options?.sandbox?.root ?? workspaceDir;
-      await assertSandboxPath({
-        filePath: targetPath,
-        cwd: root,
-        root,
-      });
-    }
 
     // loadWebMedia handles local file paths (including file:// URLs)
     const media = options?.sandbox
@@ -427,7 +465,12 @@ export async function loadImageFromRef(
           sandboxValidated: true,
           readFile: createSandboxBridgeReadFile({ sandbox: options.sandbox }),
         })
-      : await loadWebMedia(targetPath, options?.maxBytes);
+      : await loadWebMedia(
+          targetPath,
+          options?.workspaceOnly
+            ? { maxBytes: options.maxBytes, localRoots: [workspaceDir] }
+            : options?.maxBytes,
+        );
 
     if (media.kind !== "image") {
       log.debug(`Native image: not an image file: ${targetPath} (got ${media.kind})`);
@@ -498,8 +541,13 @@ export async function detectAndLoadPromptImages(params: {
   const allRefs = detectImageReferences(params.prompt);
 
   if (allRefs.length === 0) {
+    const sanitizedExistingImages = await sanitizeImagesWithLog(
+      params.existingImages ?? [],
+      "prompt:images",
+      { maxDimensionPx: params.maxDimensionPx },
+    );
     return {
-      images: params.existingImages ?? [],
+      images: sanitizedExistingImages,
       detectedRefs: [],
       loadedCount: 0,
       skippedCount: 0,
@@ -511,6 +559,7 @@ export async function detectAndLoadPromptImages(params: {
     prompt: params.prompt,
     refs: allRefs,
     imageOrder: params.imageOrder,
+    existingImageCount: params.existingImages?.length,
   });
   const promptRefImages: ImageContent[] = [];
   const offloadedImages: Array<ImageContent | null> = [];

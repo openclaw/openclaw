@@ -1,28 +1,22 @@
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
-
-function asConfig(value: unknown): OpenClawConfig {
-  return value as OpenClawConfig;
-}
+import { describe, expect, it } from "vitest";
+import { asConfig, setupSecretsRuntimeSnapshotTestHooks } from "./runtime.test-support.ts";
 
 const EMPTY_LOADABLE_PLUGIN_ORIGINS = new Map();
-let clearConfigCache: typeof import("../config/config.js").clearConfigCache;
-let clearRuntimeConfigSnapshot: typeof import("../config/config.js").clearRuntimeConfigSnapshot;
-let clearSecretsRuntimeSnapshot: typeof import("./runtime.js").clearSecretsRuntimeSnapshot;
-let prepareSecretsRuntimeSnapshot: typeof import("./runtime.js").prepareSecretsRuntimeSnapshot;
+const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
+
+function expectWarning(
+  snapshot: Awaited<ReturnType<typeof prepareSecretsRuntimeSnapshot>>,
+  expected: { code: string; path: string },
+): void {
+  const warning = snapshot.warnings.find(
+    (entry) => entry.code === expected.code && entry.path === expected.path,
+  );
+  if (!warning) {
+    throw new Error(`Expected warning ${expected.code} ${expected.path}`);
+  }
+}
 
 describe("secrets runtime snapshot", () => {
-  beforeAll(async () => {
-    ({ clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/config.js"));
-    ({ clearSecretsRuntimeSnapshot, prepareSecretsRuntimeSnapshot } = await import("./runtime.js"));
-  });
-
-  afterEach(() => {
-    clearSecretsRuntimeSnapshot();
-    clearRuntimeConfigSnapshot();
-    clearConfigCache();
-  });
-
   it("resolves sandbox ssh secret refs for active ssh backends", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({
@@ -58,11 +52,10 @@ describe("secrets runtime snapshot", () => {
       loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
     });
 
-    expect(snapshot.config.agents?.defaults?.sandbox?.ssh).toMatchObject({
-      identityData: "PRIVATE KEY",
-      certificateData: "SSH CERT",
-      knownHostsData: "example.com ssh-ed25519 AAAATEST",
-    });
+    const ssh = snapshot.config.agents?.defaults?.sandbox?.ssh;
+    expect(ssh?.identityData).toBe("PRIVATE KEY");
+    expect(ssh?.certificateData).toBe("SSH CERT");
+    expect(ssh?.knownHostsData).toBe("example.com ssh-ed25519 AAAATEST");
   });
 
   it("treats sandbox ssh secret refs as inactive when ssh backend is not selected", async () => {
@@ -90,14 +83,10 @@ describe("secrets runtime snapshot", () => {
       provider: "default",
       id: "SSH_IDENTITY_DATA",
     });
-    expect(snapshot.warnings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
-          path: "agents.defaults.sandbox.ssh.identityData",
-        }),
-      ]),
-    );
+    expectWarning(snapshot, {
+      code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+      path: "agents.defaults.sandbox.ssh.identityData",
+    });
   });
 
   it("fails when an active exec ref id contains traversal segments", async () => {

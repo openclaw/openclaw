@@ -8,7 +8,7 @@ vi.mock("../infra/net/fetch-guard.js", () => ({
   fetchWithSsrFGuard: (...args: unknown[]) => fetchWithSsrFGuardMock(...args),
 }));
 
-vi.mock("./image-ops.js", () => ({
+vi.mock("./media-services.js", () => ({
   convertHeicToJpeg: (...args: unknown[]) => convertHeicToJpegMock(...args),
 }));
 
@@ -43,6 +43,48 @@ function createImageSourceLimits(allowedMimes: string[], allowUrl = false) {
   };
 }
 
+function createFileSourceLimits(allowedMimes: string[], allowUrl = false) {
+  return {
+    allowUrl,
+    allowedMimes: new Set(allowedMimes),
+    maxBytes: 1024 * 1024,
+    maxChars: 100,
+    maxRedirects: 0,
+    timeoutMs: allowUrl ? 1000 : 1,
+    pdf: { maxPages: 1, maxPixels: 1, minTextChars: 1 },
+  };
+}
+
+function mockUrlFetchResponse(params: {
+  source: Parameters<typeof extractImageContentFromSource>[0];
+  fetchedUrl?: string;
+  fetchedContentType?: string;
+  fetchedBody?: Uint8Array;
+}) {
+  if (params.source.type !== "url") {
+    return null;
+  }
+
+  const release = vi.fn(async () => {});
+  const responseBody = Uint8Array.from(params.fetchedBody ?? Buffer.from("url-source"));
+  fetchWithSsrFGuardMock.mockResolvedValueOnce({
+    response: new Response(
+      responseBody.buffer.slice(
+        responseBody.byteOffset,
+        responseBody.byteOffset + responseBody.byteLength,
+      ),
+      {
+        status: 200,
+        headers: { "content-type": params.fetchedContentType ?? "application/octet-stream" },
+      },
+    ),
+    release,
+    finalUrl: params.fetchedUrl ?? params.source.url,
+  });
+
+  return release;
+}
+
 async function expectRejectedImageMimeCase(params: {
   source: Parameters<typeof extractImageContentFromSource>[0];
   limits: Parameters<typeof extractImageContentFromSource>[1];
@@ -51,28 +93,11 @@ async function expectRejectedImageMimeCase(params: {
   fetchedContentType?: string;
   fetchedBody?: Uint8Array;
 }) {
-  const release = vi.fn(async () => {});
-  if (params.source.type === "url") {
-    const responseBody = Uint8Array.from(params.fetchedBody ?? Buffer.from("url-source"));
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(
-        responseBody.buffer.slice(
-          responseBody.byteOffset,
-          responseBody.byteOffset + responseBody.byteLength,
-        ),
-        {
-          status: 200,
-          headers: { "content-type": params.fetchedContentType ?? "application/octet-stream" },
-        },
-      ),
-      release,
-      finalUrl: params.fetchedUrl ?? params.source.url,
-    });
-  }
+  const release = mockUrlFetchResponse(params);
   await expect(extractImageContentFromSource(params.source, params.limits)).rejects.toThrow(
     params.expectedError,
   );
-  if (params.source.type === "url") {
+  if (release) {
     expect(release).toHaveBeenCalledTimes(1);
   }
 }
@@ -89,24 +114,7 @@ async function expectResolvedImageContentCase(params: {
   fetchedBody?: Uint8Array;
   expectedImage: Awaited<ReturnType<typeof extractImageContentFromSource>>;
 }) {
-  const release = vi.fn(async () => {});
-  if (params.source.type === "url") {
-    const responseBody = Uint8Array.from(params.fetchedBody ?? Buffer.from("url-source"));
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(
-        responseBody.buffer.slice(
-          responseBody.byteOffset,
-          responseBody.byteOffset + responseBody.byteLength,
-        ),
-        {
-          status: 200,
-          headers: { "content-type": params.fetchedContentType ?? "application/octet-stream" },
-        },
-      ),
-      release,
-      finalUrl: params.fetchedUrl ?? params.source.url,
-    });
-  }
+  const release = mockUrlFetchResponse(params);
   detectMimeMock.mockResolvedValueOnce(params.detectedMime);
   if (params.convertedBytes) {
     convertHeicToJpegMock.mockResolvedValueOnce(params.convertedBytes);
@@ -117,7 +125,7 @@ async function expectResolvedImageContentCase(params: {
   expect(image).toEqual(params.expectedImage);
   expect(detectMimeMock).toHaveBeenCalledTimes(1);
   expect(convertHeicToJpegMock).toHaveBeenCalledTimes(params.convertedBytes ? 1 : 0);
-  if (params.source.type === "url") {
+  if (release) {
     expect(release).toHaveBeenCalledTimes(1);
   }
 }
@@ -268,6 +276,56 @@ describe("fetchWithGuard", () => {
 
     expect(canceled).toBe(true);
     expect(release).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("input file MIME sniffing", () => {
+  it("rejects base64 files whose bytes sniff as an unsupported image despite a text media type", async () => {
+    detectMimeMock.mockResolvedValueOnce("image/png");
+
+    await expect(
+      extractFileContentFromSource({
+        source: {
+          type: "base64",
+          data: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).toString("base64"),
+          mediaType: "text/plain",
+          filename: "note.txt",
+        },
+        limits: createFileSourceLimits(["text/plain", "application/pdf"]),
+      }),
+    ).rejects.toThrow("Unsupported file MIME type: image/png");
+  });
+
+  it("rejects URL files whose bytes sniff as an unsupported image despite a text content-type", async () => {
+    mockUrlFetchResponse({
+      source: { type: "url", url: "https://example.com/note.txt", mediaType: "text/plain" },
+      fetchedContentType: "text/plain",
+      fetchedBody: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    });
+    detectMimeMock.mockResolvedValueOnce("image/png");
+
+    await expect(
+      extractFileContentFromSource({
+        source: { type: "url", url: "https://example.com/note.txt", mediaType: "text/plain" },
+        limits: createFileSourceLimits(["text/plain", "application/pdf"], true),
+      }),
+    ).rejects.toThrow("Unsupported file MIME type: image/png");
+  });
+
+  it("rejects generic zip bytes mislabeled as text", async () => {
+    detectMimeMock.mockResolvedValueOnce("application/zip");
+
+    await expect(
+      extractFileContentFromSource({
+        source: {
+          type: "base64",
+          data: Buffer.from("PK\u0003\u0004fake-zip").toString("base64"),
+          mediaType: "text/plain",
+          filename: "notes.txt",
+        },
+        limits: createFileSourceLimits(["text/plain"]),
+      }),
+    ).rejects.toThrow("Unsupported file MIME type: application/zip");
   });
 });
 

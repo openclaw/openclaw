@@ -17,7 +17,7 @@ describeLive("provider response headers (live)", () => {
         provider: "openai",
         api: "openai-responses",
         envVar: "OPENCLAW_LIVE_OPENAI_CACHE_MODEL",
-        preferredModelIds: ["gpt-5.4-mini", "gpt-5.4", "gpt-5.4"],
+        preferredModelIds: ["gpt-5.5", "gpt-5.4-mini", "gpt-5.4"],
       });
     }, 120_000);
 
@@ -49,7 +49,8 @@ describeLive("provider response headers (live)", () => {
       logLiveCache(
         `openai headers x-request-id=${requestId ?? "(missing)"} openai-processing-ms=${processingMs ?? "(missing)"} ${rateLimitHeaders.join(" ")}`.trim(),
       );
-      expect(requestId).toBeTruthy();
+      expect(typeof requestId).toBe("string");
+      expect(requestId?.trim()).not.toBe("");
     }, 120_000);
   });
 
@@ -87,7 +88,8 @@ describeLive("provider response headers (live)", () => {
 
       const requestId = response.headers.get("request-id");
       logLiveCache(`anthropic headers request-id=${requestId ?? "(missing)"}`);
-      expect(requestId).toBeTruthy();
+      expect(typeof requestId).toBe("string");
+      expect(requestId?.trim()).not.toBe("");
     }, 120_000);
   });
 });

@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it, vi } from "vitest";
-import { createTestPluginApi } from "../../test/helpers/plugins/plugin-api.js";
 import registerPhoneControl from "./index.js";
 import type {
   OpenClawPluginApi,
@@ -30,10 +30,30 @@ function createApi(params: {
         resolveStateDir: () => params.stateDir,
       },
       config: {
-        loadConfig: () => params.getConfig(),
-        writeConfigFile: (next: Record<string, unknown>) => params.writeConfig(next),
+        current: () => params.getConfig(),
+        mutateConfigFile: async ({
+          mutate,
+        }: {
+          mutate: (draft: Record<string, unknown>) => void;
+        }) => {
+          const nextConfig = structuredClone(params.getConfig());
+          mutate(nextConfig);
+          await params.writeConfig(nextConfig);
+          return {
+            path: "/tmp/openclaw.json",
+            previousHash: null,
+            persistedHash: null,
+            snapshot: {},
+            nextConfig,
+            afterWrite: { mode: "auto" },
+            followUp: { mode: "auto", requiresRestart: false },
+            result: undefined,
+          };
+        },
+        replaceConfigFile: ({ nextConfig }: { nextConfig: unknown }) =>
+          params.writeConfig(nextConfig as Record<string, unknown>),
       },
-    } as OpenClawPluginApi["runtime"],
+    } as unknown as OpenClawPluginApi["runtime"],
     registerCommand: params.registerCommand,
   });
 }
@@ -115,7 +135,7 @@ describe("phone-control plugin", () => {
         channel: "webchat",
         gatewayClientScopes: ["operator.admin"],
       });
-      const text = String(res?.text ?? "");
+      const text = res?.text ?? "";
       const nodes = (
         getConfig().gateway as { nodes?: { allowCommands?: string[]; denyCommands?: string[] } }
       ).nodes;
@@ -125,7 +145,7 @@ describe("phone-control plugin", () => {
 
       expect(writeConfigFile).toHaveBeenCalledTimes(1);
       expect(nodes.allowCommands).toEqual([...WRITE_COMMANDS]);
-      expect(nodes.denyCommands).toEqual([]);
+      expect(nodes.denyCommands).toStrictEqual([]);
       expect(text).toContain("sms.send");
     });
   });
@@ -138,7 +158,7 @@ describe("phone-control plugin", () => {
         gatewayClientScopes: ["operator.write"],
       });
 
-      expect(String(res?.text ?? "")).toContain("requires operator.admin");
+      expect(res?.text ?? "").toContain("requires operator.admin");
       expect(writeConfigFile).not.toHaveBeenCalled();
     });
   });
@@ -150,7 +170,7 @@ describe("phone-control plugin", () => {
         channel: "telegram",
       });
 
-      expect(String(res?.text ?? "")).toContain("Phone control: armed");
+      expect(res?.text ?? "").toContain("Phone control: armed");
       expect(writeConfigFile).toHaveBeenCalledTimes(1);
     });
   });
@@ -162,7 +182,7 @@ describe("phone-control plugin", () => {
         channel: "telegram",
       });
 
-      expect(String(res?.text ?? "")).toContain("Phone control: disarmed.");
+      expect(res?.text ?? "").toContain("Phone control: disarmed.");
       expect(writeConfigFile).not.toHaveBeenCalled();
     });
   });
@@ -174,7 +194,7 @@ describe("phone-control plugin", () => {
         channel: "telegram",
         gatewayClientScopes: ["operator.write"],
       });
-      expect(String(armRes?.text ?? "")).toContain("requires operator.admin");
+      expect(armRes?.text ?? "").toContain("requires operator.admin");
       expect(writeConfigFile).not.toHaveBeenCalled();
 
       const disarmRes = await command.handler({
@@ -182,7 +202,7 @@ describe("phone-control plugin", () => {
         channel: "telegram",
         gatewayClientScopes: ["operator.write"],
       });
-      expect(String(disarmRes?.text ?? "")).toContain("requires operator.admin");
+      expect(disarmRes?.text ?? "").toContain("requires operator.admin");
       expect(writeConfigFile).not.toHaveBeenCalled();
     });
   });
@@ -195,7 +215,7 @@ describe("phone-control plugin", () => {
         gatewayClientScopes: ["operator.admin"],
       });
 
-      expect(String(res?.text ?? "")).toContain("sms.send");
+      expect(res?.text ?? "").toContain("sms.send");
       expect(writeConfigFile).toHaveBeenCalledTimes(1);
     });
   });
@@ -214,7 +234,7 @@ describe("phone-control plugin", () => {
         gatewayClientScopes: ["operator.admin"],
       });
 
-      expect(String(res?.text ?? "")).toContain("disarmed");
+      expect(res?.text ?? "").toContain("disarmed");
       expect(writeConfigFile).toHaveBeenCalledTimes(2);
     });
   });

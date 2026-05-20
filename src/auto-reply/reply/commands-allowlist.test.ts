@@ -21,15 +21,67 @@ import type { HandleCommandsParams } from "./commands-types.js";
 
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const validateConfigObjectWithPluginsMock = vi.hoisted(() => vi.fn());
-const writeConfigFileMock = vi.hoisted(() => vi.fn());
+const replaceConfigFileMock = vi.hoisted(() => vi.fn());
 const readChannelAllowFromStoreMock = vi.hoisted(() => vi.fn());
 const addChannelAllowFromStoreEntryMock = vi.hoisted(() => vi.fn());
 const removeChannelAllowFromStoreEntryMock = vi.hoisted(() => vi.fn());
 
+type ConfigSnapshotMock = {
+  path?: string;
+  hash?: string | null;
+  parsed?: OpenClawConfig | null;
+  sourceConfig?: OpenClawConfig;
+  resolved?: OpenClawConfig;
+  runtimeConfig?: OpenClawConfig;
+};
+
+type TransformConfigFileWithRetryMockParams<T = unknown> = {
+  afterWrite?: unknown;
+  transform: (
+    currentConfig: OpenClawConfig,
+    context: { snapshot: ConfigSnapshotMock; previousHash: string | null; attempt: number },
+  ) =>
+    | Promise<{ nextConfig: OpenClawConfig; result?: T }>
+    | { nextConfig: OpenClawConfig; result?: T };
+};
+
+function configFromSnapshot(snapshot: ConfigSnapshotMock): OpenClawConfig {
+  return structuredClone(
+    snapshot.sourceConfig ?? snapshot.resolved ?? snapshot.runtimeConfig ?? snapshot.parsed ?? {},
+  );
+}
+
+async function transformConfigFileWithRetryMock<T = unknown>(
+  params: TransformConfigFileWithRetryMockParams<T>,
+) {
+  const snapshot = (await readConfigFileSnapshotMock()) as ConfigSnapshotMock;
+  const previousHash = snapshot.hash ?? null;
+  const transformed = await params.transform(configFromSnapshot(snapshot), {
+    snapshot,
+    previousHash,
+    attempt: 0,
+  });
+  const afterWrite = params.afterWrite ?? { mode: "auto" };
+  await replaceConfigFileMock({ nextConfig: transformed.nextConfig, afterWrite });
+  return {
+    path: snapshot.path ?? "/tmp/openclaw.json",
+    previousHash,
+    persistedHash: "persisted-hash",
+    snapshot,
+    nextConfig: transformed.nextConfig,
+    result: transformed.result,
+    attempts: 1,
+    afterWrite,
+    followUp: { action: "none" },
+  };
+}
+
 vi.mock("../../config/config.js", () => ({
+  getRuntimeConfig: () => ({}),
   readConfigFileSnapshot: readConfigFileSnapshotMock,
   validateConfigObjectWithPlugins: validateConfigObjectWithPluginsMock,
-  writeConfigFile: writeConfigFileMock,
+  replaceConfigFile: replaceConfigFileMock,
+  transformConfigFileWithRetry: transformConfigFileWithRetryMock,
 }));
 
 vi.mock("../../pairing/pairing-store.js", () => ({
@@ -56,6 +108,17 @@ type DmGroupAllowlistTestSectionConfig = {
 
 function normalizeTelegramAllowFromEntries(values: Array<string | number>): string[] {
   return formatAllowFromLowercase({ allowFrom: values, stripPrefixRe: /^(telegram|tg):/i });
+}
+
+function normalizeAllowlistValues(values: Array<string | number>): string[] {
+  const normalized: string[] = [];
+  for (const value of values) {
+    const entry = String(value).trim();
+    if (entry) {
+      normalized.push(entry);
+    }
+  }
+  return normalized;
 }
 
 function resolveTelegramTestAccount(
@@ -127,7 +190,7 @@ const whatsappAllowlistTestPlugin: ChannelPlugin = {
     channelId: "whatsapp",
     resolveAccount: ({ cfg }) =>
       (cfg.channels?.whatsapp as DmGroupAllowlistTestSectionConfig | undefined) ?? {},
-    normalize: ({ values }) => values.map((value) => String(value).trim()).filter(Boolean),
+    normalize: ({ values }) => normalizeAllowlistValues(values),
     resolveDmAllowFrom: (account) => account.allowFrom,
     resolveGroupAllowFrom: (account) => account.groupAllowFrom,
     resolveDmPolicy: () => undefined,
@@ -153,7 +216,7 @@ function createLegacyAllowlistPlugin(channelId: "discord" | "slack"): ChannelPlu
       channelId,
       resolveAccount: ({ cfg }) =>
         (cfg.channels?.[channelId] as DmGroupAllowlistTestSectionConfig | undefined) ?? {},
-      normalize: ({ values }) => values.map((value) => String(value).trim()).filter(Boolean),
+      normalize: ({ values }) => normalizeAllowlistValues(values),
       resolveDmAllowFrom: (account) => account.allowFrom ?? account.dm?.allowFrom,
       resolveGroupPolicy: () => undefined,
       resolveGroupOverrides: () => undefined,
@@ -187,10 +250,10 @@ beforeEach(() => {
     ok: true,
     config,
   }));
-  writeConfigFileMock.mockImplementation(async (config: unknown) => {
+  replaceConfigFileMock.mockImplementation(async (params: { nextConfig: unknown }) => {
     const configPath = process.env.OPENCLAW_CONFIG_PATH;
     if (configPath) {
-      await fs.writeFile(configPath, JSON.stringify(config, null, 2), "utf-8");
+      await fs.writeFile(configPath, JSON.stringify(params.nextConfig, null, 2), "utf-8");
     }
   });
   readChannelAllowFromStoreMock.mockResolvedValue([]);
@@ -405,7 +468,7 @@ describe("handleAllowlistCommand", () => {
   });
 
   it("blocks config-targeted edits when the target account disables writes", async () => {
-    const previousWriteCount = writeConfigFileMock.mock.calls.length;
+    const previousWriteCount = replaceConfigFileMock.mock.calls.length;
     const cfg = {
       commands: { text: true, config: true },
       channels: {
@@ -431,7 +494,7 @@ describe("handleAllowlistCommand", () => {
 
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("channels.telegram.accounts.work.configWrites=true");
-    expect(writeConfigFileMock.mock.calls.length).toBe(previousWriteCount);
+    expect(replaceConfigFileMock.mock.calls.length).toBe(previousWriteCount);
   });
 
   it("honors the configured default account when gating omitted-account config edits", async () => {
@@ -453,7 +516,7 @@ describe("handleAllowlistCommand", () => {
       ]),
     );
 
-    const previousWriteCount = writeConfigFileMock.mock.calls.length;
+    const previousWriteCount = replaceConfigFileMock.mock.calls.length;
     const cfg = {
       commands: { text: true, config: true },
       channels: {
@@ -479,7 +542,7 @@ describe("handleAllowlistCommand", () => {
 
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("channels.telegram.accounts.work.configWrites=true");
-    expect(writeConfigFileMock.mock.calls.length).toBe(previousWriteCount);
+    expect(replaceConfigFileMock.mock.calls.length).toBe(previousWriteCount);
   });
 
   it("blocks allowlist writes from authorized non-owner senders", async () => {
@@ -511,7 +574,7 @@ describe("handleAllowlistCommand", () => {
 
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply).toBeUndefined();
-    expect(writeConfigFileMock).not.toHaveBeenCalled();
+    expect(replaceConfigFileMock).not.toHaveBeenCalled();
     expect(addChannelAllowFromStoreEntryMock).not.toHaveBeenCalled();
   });
 
@@ -534,7 +597,7 @@ describe("handleAllowlistCommand", () => {
 
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply).toBeUndefined();
-    expect(writeConfigFileMock).not.toHaveBeenCalled();
+    expect(replaceConfigFileMock).not.toHaveBeenCalled();
     expect(addChannelAllowFromStoreEntryMock).not.toHaveBeenCalled();
   });
 
@@ -583,7 +646,7 @@ describe("handleAllowlistCommand", () => {
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("Invalid account id");
     expect((Object.prototype as Record<string, unknown>).allowFrom).toBeUndefined();
-    expect(writeConfigFileMock).not.toHaveBeenCalled();
+    expect(replaceConfigFileMock).not.toHaveBeenCalled();
   });
 
   it("removes DM allowlist entries from canonical allowFrom and deletes legacy dm.allowFrom", async () => {

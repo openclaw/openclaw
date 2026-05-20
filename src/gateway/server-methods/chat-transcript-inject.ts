@@ -1,4 +1,6 @@
-import { SessionManager } from "@mariozechner/pi-coding-agent";
+import type { SessionManager } from "@earendil-works/pi-coding-agent";
+import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 
@@ -15,6 +17,10 @@ export type GatewayInjectedTranscriptAppendResult = {
   messageId?: string;
   message?: Record<string, unknown>;
   error?: string;
+};
+
+export type GatewayInjectedTtsSupplementMarker = {
+  textSha256: string;
 };
 
 function resolveInjectedAssistantContent(params: {
@@ -41,7 +47,7 @@ function resolveInjectedAssistantContent(params: {
   return [{ type: "text", text: `${labelPrefix}${params.message}` }];
 }
 
-export function appendInjectedAssistantMessageToTranscript(params: {
+export async function appendInjectedAssistantMessageToTranscript(params: {
   transcriptPath: string;
   message: string;
   label?: string;
@@ -49,8 +55,10 @@ export function appendInjectedAssistantMessageToTranscript(params: {
   content?: Array<Record<string, unknown>>;
   idempotencyKey?: string;
   abortMeta?: GatewayInjectedAbortMeta;
+  ttsSupplement?: GatewayInjectedTtsSupplementMarker;
   now?: number;
-}): GatewayInjectedTranscriptAppendResult {
+  config?: OpenClawConfig;
+}): Promise<GatewayInjectedTranscriptAppendResult> {
   const now = params.now ?? Date.now();
   const usage = {
     input: 0,
@@ -88,6 +96,7 @@ export function appendInjectedAssistantMessageToTranscript(params: {
     provider: "openclaw",
     model: "gateway-injected",
     ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
+    ...(params.ttsSupplement ? { openclawTtsSupplement: params.ttsSupplement } : {}),
     ...(params.abortMeta
       ? {
           openclawAbort: {
@@ -100,16 +109,19 @@ export function appendInjectedAssistantMessageToTranscript(params: {
   };
 
   try {
-    // IMPORTANT: Use SessionManager so the entry is attached to the current leaf via parentId.
-    // Raw jsonl appends break the parent chain and can hide compaction summaries from context.
-    const sessionManager = SessionManager.open(params.transcriptPath);
-    const messageId = sessionManager.appendMessage(messageBody);
+    const { messageId, message: appendedMessage } = await appendSessionTranscriptMessage({
+      transcriptPath: params.transcriptPath,
+      message: messageBody,
+      now,
+      useRawWhenLinear: true,
+      config: params.config,
+    });
     emitSessionTranscriptUpdate({
       sessionFile: params.transcriptPath,
-      message: messageBody,
+      message: appendedMessage,
       messageId,
     });
-    return { ok: true, messageId, message: messageBody };
+    return { ok: true, messageId, message: appendedMessage as unknown as Record<string, unknown> };
   } catch (err) {
     return { ok: false, error: formatErrorMessage(err) };
   }

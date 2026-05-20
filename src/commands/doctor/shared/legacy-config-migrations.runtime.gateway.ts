@@ -22,9 +22,13 @@ const GATEWAY_BIND_RULE: LegacyConfigRule = {
 };
 
 function isLegacyGatewayBindHostAlias(value: unknown): boolean {
+  return normalizeLegacyGatewayBindHostAlias(value) !== null;
+}
+
+function normalizeLegacyGatewayBindHostAlias(value: unknown): "lan" | "loopback" | null {
   const normalized = normalizeOptionalLowercaseString(value);
   if (!normalized) {
-    return false;
+    return null;
   }
   if (
     normalized === "auto" ||
@@ -33,18 +37,25 @@ function isLegacyGatewayBindHostAlias(value: unknown): boolean {
     normalized === "tailnet" ||
     normalized === "custom"
   ) {
-    return false;
+    return null;
   }
-  return (
+  if (
     normalized === "0.0.0.0" ||
     normalized === "::" ||
     normalized === "[::]" ||
-    normalized === "*" ||
+    normalized === "*"
+  ) {
+    return "lan";
+  }
+  if (
     normalized === "127.0.0.1" ||
     normalized === "localhost" ||
     normalized === "::1" ||
     normalized === "[::1]"
-  );
+  ) {
+    return "loopback";
+  }
+  return null;
 }
 
 function escapeControlForLog(value: string): string {
@@ -60,7 +71,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec
       if (!gateway) {
         return;
       }
-      const bind = gateway.bind;
+      const bind = normalizeLegacyGatewayBindHostAlias(gateway.bind) ?? gateway.bind;
       if (!isGatewayNonLoopbackBindMode(bind)) {
         return;
       }
@@ -84,7 +95,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec
       gateway.controlUi = { ...controlUi, allowedOrigins: origins };
       raw.gateway = gateway;
       changes.push(
-        `Seeded gateway.controlUi.allowedOrigins ${JSON.stringify(origins)} for bind=${String(bind)}. ` +
+        `Seeded gateway.controlUi.allowedOrigins ${JSON.stringify(origins)} for bind=${bind}. ` +
           "Required since v2026.2.26. Add other machine origins to gateway.controlUi.allowedOrigins if needed.",
       );
     },
@@ -107,22 +118,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec
       if (!normalized) {
         return;
       }
-      let mapped: "lan" | "loopback" | undefined;
-      if (
-        normalized === "0.0.0.0" ||
-        normalized === "::" ||
-        normalized === "[::]" ||
-        normalized === "*"
-      ) {
-        mapped = "lan";
-      } else if (
-        normalized === "127.0.0.1" ||
-        normalized === "localhost" ||
-        normalized === "::1" ||
-        normalized === "[::1]"
-      ) {
-        mapped = "loopback";
-      }
+      const mapped = normalizeLegacyGatewayBindHostAlias(bindRaw);
 
       if (!mapped || normalized === mapped) {
         return;

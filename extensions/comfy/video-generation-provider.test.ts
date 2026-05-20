@@ -1,8 +1,13 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
+import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  _setComfyFetchGuardForTesting,
+  buildComfyConfig,
+  mockComfyCloudJobResponses,
+  mockComfyProviderApiKey,
+  parseComfyJsonBody,
+} from "./test-helpers.js";
+import {
+  setComfyFetchGuardForTesting,
   buildComfyVideoGenerationProvider,
 } from "./video-generation-provider.js";
 
@@ -11,19 +16,15 @@ const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
 }));
 
 function parseJsonBody(call: number): Record<string, unknown> {
-  const request = fetchWithSsrFGuardMock.mock.calls[call - 1]?.[0];
-  expect(request?.init?.body).toBeTruthy();
-  return JSON.parse(String(request.init.body)) as Record<string, unknown>;
+  return parseComfyJsonBody(fetchWithSsrFGuardMock, call);
 }
 
-function buildComfyConfig(config: Record<string, unknown>): OpenClawConfig {
-  return {
-    models: {
-      providers: {
-        comfy: config,
-      },
-    },
-  } as unknown as OpenClawConfig;
+function fetchGuardParams(call: number): { url?: unknown; auditContext?: unknown } {
+  const params = fetchWithSsrFGuardMock.mock.calls[call]?.[0];
+  if (!params || typeof params !== "object") {
+    throw new Error(`expected Comfy fetch guard call ${call}`);
+  }
+  return params as { url?: unknown; auditContext?: unknown };
 }
 
 describe("comfy video-generation provider", () => {
@@ -32,8 +33,12 @@ describe("comfy video-generation provider", () => {
   });
 
   afterEach(() => {
-    _setComfyFetchGuardForTesting(null);
+    setComfyFetchGuardForTesting(null);
     vi.restoreAllMocks();
+  });
+
+  it("declares explicit mode capabilities", () => {
+    expectExplicitVideoGenerationCapabilities(buildComfyVideoGenerationProvider());
   });
 
   it("treats local comfy video workflows as configured without an API key", () => {
@@ -53,7 +58,7 @@ describe("comfy video-generation provider", () => {
   });
 
   it("submits a local workflow, waits for history, and downloads videos", async () => {
-    _setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
+    setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce({
         response: new Response(JSON.stringify({ prompt_id: "local-video-1" }), {
@@ -105,33 +110,20 @@ describe("comfy video-generation provider", () => {
       }),
     });
 
-    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        url: "http://127.0.0.1:8188/prompt",
-        auditContext: "comfy-video-generate",
-      }),
-    );
+    expect(fetchGuardParams(0).url).toBe("http://127.0.0.1:8188/prompt");
+    expect(fetchGuardParams(0).auditContext).toBe("comfy-video-generate");
     expect(parseJsonBody(1)).toEqual({
       prompt: {
         "6": { inputs: { text: "animate a lobster" } },
         "9": { inputs: {} },
       },
     });
-    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        url: "http://127.0.0.1:8188/history/local-video-1",
-        auditContext: "comfy-history",
-      }),
+    expect(fetchGuardParams(1).url).toBe("http://127.0.0.1:8188/history/local-video-1");
+    expect(fetchGuardParams(1).auditContext).toBe("comfy-history");
+    expect(fetchGuardParams(2).url).toBe(
+      "http://127.0.0.1:8188/view?filename=generated.mp4&subfolder=&type=output",
     );
-    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
-      3,
-      expect.objectContaining({
-        url: "http://127.0.0.1:8188/view?filename=generated.mp4&subfolder=&type=output",
-        auditContext: "comfy-video-download",
-      }),
-    );
+    expect(fetchGuardParams(2).auditContext).toBe("comfy-video-download");
     expect(result).toEqual({
       videos: [
         {
@@ -153,59 +145,16 @@ describe("comfy video-generation provider", () => {
   });
 
   it("uses cloud endpoints for video workflows", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "comfy-test-key",
-      source: "env",
-      mode: "api-key",
+    mockComfyProviderApiKey();
+    setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
+    mockComfyCloudJobResponses(fetchWithSsrFGuardMock, {
+      body: Buffer.from("cloud-video-data"),
+      contentType: "video/mp4",
+      filename: "cloud.mp4",
+      outputKind: "gifs",
+      promptId: "cloud-video-1",
+      redirectLocation: "https://cdn.example.com/cloud.mp4",
     });
-    _setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
-    fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(JSON.stringify({ prompt_id: "cloud-video-1" }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(JSON.stringify({ status: "completed" }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(
-          JSON.stringify({
-            "cloud-video-1": {
-              outputs: {
-                "9": {
-                  gifs: [{ filename: "cloud.mp4", subfolder: "", type: "output" }],
-                },
-              },
-            },
-          }),
-          {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          },
-        ),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(null, {
-          status: 302,
-          headers: { location: "https://cdn.example.com/cloud.mp4" },
-        }),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(Buffer.from("cloud-video-data"), {
-          status: 200,
-          headers: { "content-type": "video/mp4" },
-        }),
-        release: vi.fn(async () => {}),
-      });
 
     const provider = buildComfyVideoGenerationProvider();
     const result = await provider.generateVideo({
@@ -225,13 +174,8 @@ describe("comfy video-generation provider", () => {
       }),
     });
 
-    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        url: "https://cloud.comfy.org/api/prompt",
-        auditContext: "comfy-video-generate",
-      }),
-    );
+    expect(fetchGuardParams(0).url).toBe("https://cloud.comfy.org/api/prompt");
+    expect(fetchGuardParams(0).auditContext).toBe("comfy-video-generate");
     expect(result.metadata).toEqual({
       promptId: "cloud-video-1",
       outputNodeIds: ["9"],

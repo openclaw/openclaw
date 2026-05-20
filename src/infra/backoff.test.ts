@@ -1,6 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import { computeBackoff, sleepWithAbort, type BackoffPolicy } from "./backoff.js";
 
+async function expectAbortedSleep(promise: Promise<void>): Promise<Error> {
+  try {
+    await promise;
+  } catch (error) {
+    expect(error).toBeInstanceOf(Error);
+    return error as Error;
+  }
+  throw new Error("expected aborted sleep");
+}
+
 describe("backoff helpers", () => {
   const policy: BackoffPolicy = {
     initialMs: 100,
@@ -38,9 +48,43 @@ describe("backoff helpers", () => {
     const controller = new AbortController();
     controller.abort();
 
-    await expect(sleepWithAbort(5, controller.signal)).rejects.toMatchObject({
-      message: "aborted",
-      cause: expect.anything(),
-    });
+    const error = await expectAbortedSleep(sleepWithAbort(5, controller.signal));
+    expect(error.message).toBe("aborted");
+    expect(error.cause).toBe(controller.signal.reason);
+  });
+
+  it("advances with fake timers", async () => {
+    vi.useFakeTimers();
+    try {
+      const sleeper = sleepWithAbort(50);
+      await vi.advanceTimersByTimeAsync(49);
+      await expect(
+        Promise.race([sleeper.then(() => "done"), Promise.resolve("pending")]),
+      ).resolves.toBe("pending");
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(sleeper).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects if the signal aborts during listener registration", async () => {
+    let aborted = false;
+    const signal = {
+      get aborted() {
+        return aborted;
+      },
+      get reason() {
+        return new Error("listener-registration-race");
+      },
+      addEventListener(eventValue: string, _listener: EventListenerOrEventListenerObject) {
+        aborted = true;
+      },
+      removeEventListener() {},
+    } as unknown as AbortSignal;
+
+    const error = await expectAbortedSleep(sleepWithAbort(50, signal));
+    expect(error.message).toBe("aborted");
+    expect(error.cause).toStrictEqual(new Error("listener-registration-race"));
   });
 });

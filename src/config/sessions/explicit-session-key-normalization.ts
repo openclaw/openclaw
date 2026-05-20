@@ -1,5 +1,6 @@
 import type { MsgContext } from "../../auto-reply/templating.js";
-import { getChannelPlugin, listChannelPlugins } from "../../channels/plugins/index.js";
+import { getLoadedChannelPlugin, listChannelPlugins } from "../../channels/plugins/index.js";
+import { normalizeSessionKeyPreservingOpaquePeerIds } from "../../sessions/session-key-utils.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -36,12 +37,12 @@ function resolveExplicitSessionKeyNormalizerCandidates(
 }
 
 export function normalizeExplicitSessionKey(sessionKey: string, ctx: MsgContext): string {
-  const normalized = normalizeLowercaseStringOrEmpty(sessionKey);
+  const normalized = normalizeSessionKeyPreservingOpaquePeerIds(sessionKey);
   for (const channelId of resolveExplicitSessionKeyNormalizerCandidates(normalized, ctx)) {
-    const normalize = getChannelPlugin(channelId)?.messaging?.normalizeExplicitSessionKey;
+    const normalize = getLoadedChannelPlugin(channelId)?.messaging?.normalizeExplicitSessionKey;
     const next = normalize?.({ sessionKey: normalized, ctx });
     if (typeof next === "string" && next.trim()) {
-      return normalizeLowercaseStringOrEmpty(next);
+      return normalizeSessionKeyPreservingOpaquePeerIds(next);
     }
   }
   return normalized;

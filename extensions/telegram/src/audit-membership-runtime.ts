@@ -1,11 +1,11 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { isRecord } from "openclaw/plugin-sdk/text-runtime";
-import { fetchWithTimeout } from "openclaw/plugin-sdk/text-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { fetchWithTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import type {
   AuditTelegramGroupMembershipParams,
   TelegramGroupMembershipAudit,
   TelegramGroupMembershipAuditEntry,
-} from "./audit.js";
+} from "./audit.types.js";
 import { resolveTelegramApiBase, resolveTelegramFetch } from "./fetch.js";
 import { makeProxyFetch } from "./proxy.js";
 

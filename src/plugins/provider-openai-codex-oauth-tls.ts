@@ -1,6 +1,6 @@
 import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { asNullableObjectRecord } from "../shared/record-coerce.js";
 import { note } from "../terminal/note.js";
 
@@ -86,7 +86,7 @@ function hasOpenAICodexOAuthProfile(cfg: OpenClawConfig): boolean {
   );
 }
 
-function shouldRunOpenAIOAuthTlsPrerequisites(params: {
+export function shouldRunOpenAIOAuthTlsPrerequisites(params: {
   cfg: OpenClawConfig;
   deep?: boolean;
 }): boolean {

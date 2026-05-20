@@ -1,32 +1,54 @@
-import { readStringValue } from "../shared/string-coerce.js";
-import { normalizeToolParameterSchema } from "./pi-tools.schema.js";
-import { resolveProviderRequestCapabilities } from "./provider-attribution.js";
+import type { ModelCompatConfig } from "../config/types.models.js";
+import { normalizeToolParameterSchema } from "./pi-tools-parameter-schema.js";
+export { resolveOpenAIStrictToolSetting } from "./openai-strict-tool-setting.js";
 
-type OpenAITransportKind = "stream" | "websocket";
-
-type OpenAIStrictToolModel = {
-  provider?: unknown;
-  api?: unknown;
-  baseUrl?: unknown;
-  id?: unknown;
-  compat?: { supportsStore?: boolean };
+type ToolSchemaCompatInput = {
+  unsupportedToolSchemaKeywords?: unknown;
+  omitEmptyArrayItems?: unknown;
 };
 
 type ToolWithParameters = {
+  name?: unknown;
   parameters: unknown;
 };
 
-const optionalString = readStringValue;
-
-export function normalizeStrictOpenAIJsonSchema(schema: unknown): unknown {
-  return normalizeStrictOpenAIJsonSchemaRecursive(normalizeToolParameterSchema(schema ?? {}));
+function resolveToolSchemaModelCompat(
+  compat: ToolSchemaCompatInput | null | undefined,
+): ModelCompatConfig | undefined {
+  if (!compat) {
+    return undefined;
+  }
+  const unsupportedToolSchemaKeywords = Array.isArray(compat.unsupportedToolSchemaKeywords)
+    ? compat.unsupportedToolSchemaKeywords.filter(
+        (keyword): keyword is string => typeof keyword === "string",
+      )
+    : [];
+  if (unsupportedToolSchemaKeywords.length === 0 && compat.omitEmptyArrayItems !== true) {
+    return undefined;
+  }
+  return {
+    ...(unsupportedToolSchemaKeywords.length > 0 ? { unsupportedToolSchemaKeywords } : {}),
+    ...(compat.omitEmptyArrayItems === true ? { omitEmptyArrayItems: true } : {}),
+  };
 }
 
-function normalizeStrictOpenAIJsonSchemaRecursive(schema: unknown): unknown {
+export function normalizeStrictOpenAIJsonSchema(
+  schema: unknown,
+  modelCompat?: ToolSchemaCompatInput | null,
+): unknown {
+  return normalizeStrictOpenAIJsonSchemaRecursive(
+    normalizeToolParameterSchema(schema ?? {}, {
+      modelCompat: resolveToolSchemaModelCompat(modelCompat),
+    }),
+    0,
+  );
+}
+
+function normalizeStrictOpenAIJsonSchemaRecursive(schema: unknown, depth: number): unknown {
   if (Array.isArray(schema)) {
     let changed = false;
     const normalized = schema.map((entry) => {
-      const next = normalizeStrictOpenAIJsonSchemaRecursive(entry);
+      const next = normalizeStrictOpenAIJsonSchemaRecursive(entry, depth);
       changed ||= next !== entry;
       return next;
     });
@@ -40,7 +62,10 @@ function normalizeStrictOpenAIJsonSchemaRecursive(schema: unknown): unknown {
   let changed = false;
   const normalized: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(record)) {
-    const next = normalizeStrictOpenAIJsonSchemaRecursive(value);
+    const next = normalizeStrictOpenAIJsonSchemaRecursive(
+      value,
+      key === "properties" ? depth : depth + 1,
+    );
     normalized[key] = next;
     changed ||= next !== value;
   }
@@ -56,20 +81,56 @@ function normalizeStrictOpenAIJsonSchemaRecursive(schema: unknown): unknown {
       normalized.required = [];
       changed = true;
     }
+    if (depth === 0 && !("additionalProperties" in normalized)) {
+      normalized.additionalProperties = false;
+      changed = true;
+    }
   }
 
   return changed ? normalized : schema;
 }
 
-export function normalizeOpenAIStrictToolParameters<T>(schema: T, strict: boolean): T {
+export function normalizeOpenAIStrictToolParameters<T>(
+  schema: T,
+  strict: boolean,
+  modelCompat?: ToolSchemaCompatInput | null,
+): T {
+  const toolSchemaCompat = resolveToolSchemaModelCompat(modelCompat);
   if (!strict) {
-    return normalizeToolParameterSchema(schema ?? {}) as T;
+    return normalizeToolParameterSchema(schema ?? {}, { modelCompat: toolSchemaCompat }) as T;
   }
-  return normalizeStrictOpenAIJsonSchema(schema) as T;
+  return normalizeStrictOpenAIJsonSchema(schema, toolSchemaCompat) as T;
 }
 
 export function isStrictOpenAIJsonSchemaCompatible(schema: unknown): boolean {
   return isStrictOpenAIJsonSchemaCompatibleRecursive(normalizeStrictOpenAIJsonSchema(schema));
+}
+
+type OpenAIStrictToolSchemaDiagnostic = {
+  toolIndex: number;
+  toolName?: string;
+  violations: string[];
+};
+
+export function findOpenAIStrictToolSchemaDiagnostics(
+  tools: readonly ToolWithParameters[],
+): OpenAIStrictToolSchemaDiagnostic[] {
+  return tools.flatMap((tool, toolIndex) => {
+    const violations = findStrictOpenAIJsonSchemaViolations(
+      normalizeStrictOpenAIJsonSchema(tool.parameters),
+      `${typeof tool.name === "string" && tool.name ? tool.name : `tool[${toolIndex}]`}.parameters`,
+    );
+    if (violations.length === 0) {
+      return [];
+    }
+    return [
+      {
+        toolIndex,
+        ...(typeof tool.name === "string" && tool.name ? { toolName: tool.name } : {}),
+        violations,
+      },
+    ];
+  });
 }
 
 function isStrictOpenAIJsonSchemaCompatibleRecursive(schema: unknown): boolean {
@@ -119,52 +180,78 @@ function isStrictOpenAIJsonSchemaCompatibleRecursive(schema: unknown): boolean {
   });
 }
 
-export function resolveOpenAIStrictToolFlagForInventory<T extends ToolWithParameters>(
-  tools: readonly T[],
+function findStrictOpenAIJsonSchemaViolations(schema: unknown, path: string): string[] {
+  if (Array.isArray(schema)) {
+    return schema.flatMap((entry, index) =>
+      findStrictOpenAIJsonSchemaViolations(entry, `${path}[${index}]`),
+    );
+  }
+  if (!schema || typeof schema !== "object") {
+    return [];
+  }
+
+  const record = schema as Record<string, unknown>;
+  const violations: string[] = [];
+  for (const key of ["anyOf", "oneOf", "allOf"] as const) {
+    if (key in record) {
+      violations.push(`${path}.${key}`);
+    }
+  }
+  if (Array.isArray(record.type)) {
+    violations.push(`${path}.type`);
+  }
+  if (record.type === "object") {
+    if (record.additionalProperties !== false) {
+      violations.push(`${path}.additionalProperties`);
+    }
+    const properties =
+      record.properties &&
+      typeof record.properties === "object" &&
+      !Array.isArray(record.properties)
+        ? (record.properties as Record<string, unknown>)
+        : {};
+    const required = Array.isArray(record.required)
+      ? record.required.filter((entry): entry is string => typeof entry === "string")
+      : undefined;
+    if (!required) {
+      violations.push(`${path}.required`);
+    } else {
+      const requiredSet = new Set(required);
+      for (const key of Object.keys(properties)) {
+        if (!requiredSet.has(key)) {
+          violations.push(`${path}.required.${key}`);
+        }
+      }
+    }
+  }
+
+  if (
+    record.properties &&
+    typeof record.properties === "object" &&
+    !Array.isArray(record.properties)
+  ) {
+    for (const [key, value] of Object.entries(record.properties)) {
+      violations.push(...findStrictOpenAIJsonSchemaViolations(value, `${path}.properties.${key}`));
+    }
+  }
+  for (const [key, value] of Object.entries(record)) {
+    if (key === "properties") {
+      continue;
+    }
+    if (value && typeof value === "object") {
+      violations.push(...findStrictOpenAIJsonSchemaViolations(value, `${path}.${key}`));
+    }
+  }
+
+  return violations;
+}
+
+export function resolveOpenAIStrictToolFlagForInventory(
+  tools: readonly ToolWithParameters[],
   strict: boolean | null | undefined,
 ): boolean | undefined {
   if (strict !== true) {
     return strict === false ? false : undefined;
   }
   return tools.every((tool) => isStrictOpenAIJsonSchemaCompatible(tool.parameters));
-}
-
-export function resolvesToNativeOpenAIStrictTools(
-  model: OpenAIStrictToolModel,
-  transport: OpenAITransportKind,
-): boolean {
-  const capabilities = resolveProviderRequestCapabilities({
-    provider: optionalString(model.provider),
-    api: optionalString(model.api),
-    baseUrl: optionalString(model.baseUrl),
-    capability: "llm",
-    transport,
-    modelId: optionalString(model.id),
-    compat:
-      model.compat && typeof model.compat === "object"
-        ? (model.compat as { supportsStore?: boolean })
-        : undefined,
-  });
-  if (!capabilities.usesKnownNativeOpenAIRoute) {
-    return false;
-  }
-  return (
-    capabilities.provider === "openai" ||
-    capabilities.provider === "openai-codex" ||
-    capabilities.provider === "azure-openai" ||
-    capabilities.provider === "azure-openai-responses"
-  );
-}
-
-export function resolveOpenAIStrictToolSetting(
-  model: OpenAIStrictToolModel,
-  options?: { transport?: OpenAITransportKind; supportsStrictMode?: boolean },
-): boolean | undefined {
-  if (resolvesToNativeOpenAIStrictTools(model, options?.transport ?? "stream")) {
-    return true;
-  }
-  if (options?.supportsStrictMode) {
-    return false;
-  }
-  return undefined;
 }

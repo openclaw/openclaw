@@ -1,4 +1,5 @@
-import { isRecord } from "openclaw/plugin-sdk/text-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { stripImessageLengthPrefixedUtf8Text } from "./strip-imsg-length-prefixed-text.js";
 import type { IMessagePayload } from "./types.js";
 
 function isOptionalString(value: unknown): value is string | null | undefined {
@@ -41,7 +42,9 @@ function isOptionalAttachments(value: unknown): value is IMessagePayload["attach
     return (
       isOptionalString(attachment.original_path) &&
       isOptionalString(attachment.mime_type) &&
-      isOptionalBoolean(attachment.missing)
+      isOptionalBoolean(attachment.missing) &&
+      isOptionalString(attachment.transfer_name) &&
+      isOptionalString(attachment.uti)
     );
   });
 }
@@ -61,12 +64,21 @@ export function parseIMessageNotification(raw: unknown): IMessagePayload | null 
     !isOptionalString(message.guid) ||
     !isOptionalNumber(message.chat_id) ||
     !isOptionalString(message.sender) ||
+    !isOptionalString(message.destination_caller_id) ||
     !isOptionalBoolean(message.is_from_me) ||
     !isOptionalString(message.text) ||
     !isOptionalStringOrNumber(message.reply_to_id) ||
     !isOptionalString(message.reply_to_text) ||
     !isOptionalString(message.reply_to_sender) ||
     !isOptionalString(message.created_at) ||
+    !isOptionalBoolean(message.is_reaction) ||
+    !isOptionalBoolean(message.is_tapback) ||
+    !isOptionalString(message.associated_message_guid) ||
+    !isOptionalNumber(message.associated_message_type) ||
+    !isOptionalString(message.reaction_type) ||
+    !isOptionalString(message.reaction_emoji) ||
+    !isOptionalBoolean(message.is_reaction_add) ||
+    !isOptionalString(message.reacted_to_guid) ||
     !isOptionalAttachments(message.attachments) ||
     !isOptionalString(message.chat_identifier) ||
     !isOptionalString(message.chat_guid) ||
@@ -77,5 +89,15 @@ export function parseIMessageNotification(raw: unknown): IMessagePayload | null 
     return null;
   }
 
-  return message;
+  return {
+    ...message,
+    text:
+      typeof message.text === "string"
+        ? stripImessageLengthPrefixedUtf8Text(message.text)
+        : message.text,
+    reply_to_text:
+      typeof message.reply_to_text === "string"
+        ? stripImessageLengthPrefixedUtf8Text(message.reply_to_text)
+        : message.reply_to_text,
+  };
 }

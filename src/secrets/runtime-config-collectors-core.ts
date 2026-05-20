@@ -1,10 +1,10 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
 import {
   resolveConfiguredMediaEntryCapabilities,
   resolveEffectiveMediaEntryCapabilities,
 } from "../media-understanding/entry-capabilities.js";
-import { buildMediaUnderstandingRegistry } from "../media-understanding/provider-registry.js";
+import { buildMediaUnderstandingCapabilityRegistry } from "../media-understanding/provider-capability-registry.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { collectTtsApiKeyAssignments } from "./runtime-config-collectors-tts.js";
 import { evaluateGatewayAuthSurfaceStates } from "./runtime-gateway-auth-surfaces.js";
@@ -401,9 +401,9 @@ function collectMediaRequestAssignments(params: {
     return;
   }
 
-  let providerRegistry: ReturnType<typeof buildMediaUnderstandingRegistry> | undefined;
+  let providerRegistry: ReturnType<typeof buildMediaUnderstandingCapabilityRegistry> | undefined;
   const getProviderRegistry = () => {
-    providerRegistry ??= buildMediaUnderstandingRegistry(undefined, params.config);
+    providerRegistry ??= buildMediaUnderstandingCapabilityRegistry(params.config);
     return providerRegistry;
   };
   const capabilityKeys = ["audio", "image", "video"] as const;
@@ -504,6 +504,29 @@ function collectMessagesTtsAssignments(params: {
     defaults: params.defaults,
     context: params.context,
   });
+}
+
+function collectAgentTtsAssignments(params: {
+  config: OpenClawConfig;
+  defaults: SecretDefaults | undefined;
+  context: ResolverContext;
+}): void {
+  const agents = params.config.agents as Record<string, unknown> | undefined;
+  const list = agents?.list;
+  if (!Array.isArray(list)) {
+    return;
+  }
+  for (const [index, entry] of list.entries()) {
+    if (!isRecord(entry) || !isRecord(entry.tts)) {
+      continue;
+    }
+    collectTtsApiKeyAssignments({
+      tts: entry.tts,
+      pathPrefix: `agents.list.${index}.tts`,
+      defaults: params.defaults,
+      context: params.context,
+    });
+  }
 }
 
 function collectCronAssignments(params: {
@@ -640,6 +663,7 @@ export function collectCoreConfigAssignments(params: {
   collectGatewayAssignments(params);
   collectSandboxSshAssignments(params);
   collectMessagesTtsAssignments(params);
+  collectAgentTtsAssignments(params);
   collectCronAssignments(params);
   collectMediaRequestAssignments(params);
 }

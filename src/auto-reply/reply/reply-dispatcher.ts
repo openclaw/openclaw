@@ -1,14 +1,19 @@
 import type { TypingCallbacks } from "../../channels/typing.js";
 import type { HumanDelayConfig } from "../../config/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { generateSecureInt } from "../../infra/secure-random.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
 import { sleep } from "../../utils.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { registerDispatcher } from "./dispatcher-registry.js";
 import { normalizeReplyPayload, type NormalizeReplySkipReason } from "./normalize-reply.js";
+import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
 import type { ResponsePrefixContext } from "./response-prefix-template.js";
 import type { TypingController } from "./typing.js";
 
-export type ReplyDispatchKind = "tool" | "block" | "final";
+export type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
 
 type ReplyDispatchErrorHandler = (err: unknown, info: { kind: ReplyDispatchKind }) => void;
 
@@ -20,10 +25,16 @@ type ReplyDispatchSkipHandler = (
 type ReplyDispatchDeliverer = (
   payload: ReplyPayload,
   info: { kind: ReplyDispatchKind },
-) => Promise<void>;
+) => Promise<unknown>;
+
+export type ReplyDispatchBeforeDeliver = (
+  payload: ReplyPayload,
+  info: { kind: ReplyDispatchKind },
+) => Promise<ReplyPayload | null> | ReplyPayload | null;
 
 const DEFAULT_HUMAN_DELAY_MIN_MS = 800;
 const DEFAULT_HUMAN_DELAY_MAX_MS = 2500;
+const silentReplyLogger = createSubsystemLogger("silent-reply/dispatcher");
 
 /** Generate a random delay within the configured range. */
 function getHumanDelay(config: HumanDelayConfig | undefined): number {
@@ -43,6 +54,12 @@ function getHumanDelay(config: HumanDelayConfig | undefined): number {
 
 export type ReplyDispatcherOptions = {
   deliver: ReplyDispatchDeliverer;
+  silentReplyContext?: {
+    cfg?: OpenClawConfig;
+    sessionKey?: string;
+    surface?: string;
+    conversationType?: SilentReplyConversationType;
+  };
   responsePrefix?: string;
   transformReplyPayload?: (payload: ReplyPayload) => ReplyPayload | null;
   /** Static context for response prefix template interpolation. */
@@ -57,6 +74,7 @@ export type ReplyDispatcherOptions = {
   onSkip?: ReplyDispatchSkipHandler;
   /** Human-like delay between block replies for natural rhythm. */
   humanDelay?: HumanDelayConfig;
+  beforeDeliver?: ReplyDispatchBeforeDeliver;
 };
 
 export type ReplyDispatcherWithTypingOptions = Omit<ReplyDispatcherOptions, "onIdle"> & {
@@ -73,16 +91,6 @@ type ReplyDispatcherWithTypingResult = {
   markDispatchIdle: () => void;
   /** Signal that the model run is complete so the typing controller can stop. */
   markRunComplete: () => void;
-};
-
-export type ReplyDispatcher = {
-  sendToolResult: (payload: ReplyPayload) => boolean;
-  sendBlockReply: (payload: ReplyPayload) => boolean;
-  sendFinalReply: (payload: ReplyPayload) => boolean;
-  waitForIdle: () => Promise<void>;
-  getQueuedCounts: () => Record<ReplyDispatchKind, number>;
-  getFailedCounts: () => Record<ReplyDispatchKind, number>;
-  markComplete: () => void;
 };
 
 type NormalizeReplyPayloadInternalOptions = Pick<
@@ -132,6 +140,11 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     block: 0,
     final: 0,
   };
+  const cancelledCounts: Record<ReplyDispatchKind, number> = {
+    tool: 0,
+    block: 0,
+    final: 0,
+  };
 
   // Register this dispatcher globally for gateway restart coordination.
   const { unregister } = registerDispatcher({
@@ -140,6 +153,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
   });
 
   const enqueue = (kind: ReplyDispatchKind, payload: ReplyPayload) => {
+    const originalWasExactSilent = isSilentReplyText(payload.text, SILENT_REPLY_TOKEN);
     const normalized = normalizeReplyPayloadInternal(payload, {
       responsePrefix: options.responsePrefix,
       responsePrefixContext: options.responsePrefixContext,
@@ -149,6 +163,13 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
       onSkip: (reason) => options.onSkip?.(payload, { kind, reason }),
     });
     if (!normalized) {
+      if (kind === "final" && originalWasExactSilent) {
+        silentReplyLogger.debug("exact NO_REPLY final payload was skipped before delivery", {
+          hasSessionKey: Boolean(options.silentReplyContext?.sessionKey),
+          surface: options.silentReplyContext?.surface,
+          conversationType: options.silentReplyContext?.conversationType,
+        });
+      }
       return false;
     }
     queuedCounts[kind] += 1;
@@ -169,9 +190,15 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
             await sleep(delayMs);
           }
         }
-        // Safe: deliver is called inside an async .then() callback, so even a synchronous
-        // throw becomes a rejection that flows through .catch()/.finally(), ensuring cleanup.
-        await options.deliver(normalized, { kind });
+        let deliverPayload: ReplyPayload | null = normalized;
+        if (options.beforeDeliver) {
+          deliverPayload = await options.beforeDeliver(normalized, { kind });
+          if (!deliverPayload) {
+            cancelledCounts[kind] += 1;
+            return;
+          }
+        }
+        await options.deliver(deliverPayload, { kind });
       })
       .catch((err) => {
         failedCounts[kind] += 1;
@@ -221,6 +248,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     sendFinalReply: (payload) => enqueue("final", payload),
     waitForIdle: () => sendChain,
     getQueuedCounts: () => ({ ...queuedCounts }),
+    getCancelledCounts: () => ({ ...cancelledCounts }),
     getFailedCounts: () => ({ ...failedCounts }),
     markComplete,
   };

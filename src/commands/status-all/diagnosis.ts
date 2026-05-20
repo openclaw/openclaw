@@ -1,9 +1,14 @@
 import type { ProgressReporter } from "../../cli/progress.js";
 import { formatConfigIssueLine } from "../../config/issue-format.js";
-import { resolveGatewayLogPaths } from "../../daemon/launchd.js";
+import {
+  resolveGatewayLogPaths,
+  resolveGatewayRestartLogPath,
+  resolveGatewaySupervisorLogPaths,
+} from "../../daemon/restart-logs.js";
 import {
   formatPortDiagnostics,
   isDualStackLoopbackGatewayListeners,
+  isExpectedGatewayListeners,
   type PortUsage,
 } from "../../infra/ports.js";
 import {
@@ -15,6 +20,10 @@ import {
   type PluginCompatibilityNotice,
 } from "../../plugins/status.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import {
+  formatUpdateRestartActionLines,
+  formatUpdateRestartStatusValue,
+} from "../status-update-restart.ts";
 import type { NodeOnlyGatewayInfo } from "../status.node-mode.js";
 import { formatTimeAgo, redactSecrets } from "./format.js";
 import { readFileTailLines, summarizeLogTail } from "./gateway.js";
@@ -133,6 +142,15 @@ export async function appendStatusAllDiagnosis(params: {
     lines.push(
       `  ${muted(`${summarizeRestartSentinel(params.sentinel.payload)} · ${formatTimeAgo(Date.now() - params.sentinel.payload.ts)}`)}`,
     );
+    const updateRestartValue = formatUpdateRestartStatusValue(params.sentinel.payload, {
+      formatTimeAgo,
+    });
+    if (updateRestartValue) {
+      lines.push(`  ${muted(`Update restart: ${updateRestartValue}`)}`);
+    }
+    for (const line of formatUpdateRestartActionLines(params.sentinel.payload)) {
+      lines.push(`  ${muted(line)}`);
+    }
   } else {
     emitCheck("Restart sentinel: none", "ok");
   }
@@ -150,7 +168,11 @@ export async function appendStatusAllDiagnosis(params: {
       params.portUsage.listeners,
       params.port,
     );
-    const portOk = params.portUsage.listeners.length === 0 || benignDualStackLoopback;
+    const expectedGatewayListeners = isExpectedGatewayListeners(
+      params.portUsage.listeners,
+      params.port,
+    );
+    const portOk = params.portUsage.listeners.length === 0 || expectedGatewayListeners;
     emitCheck(`Port ${params.port}`, portOk ? "ok" : "warn");
     if (!portOk) {
       for (const line of formatPortDiagnostics(params.portUsage)) {
@@ -160,6 +182,8 @@ export async function appendStatusAllDiagnosis(params: {
       lines.push(
         `  ${muted("Detected dual-stack loopback listeners (127.0.0.1 + ::1) for one gateway process.")}`,
       );
+    } else if (expectedGatewayListeners) {
+      lines.push(`  ${muted("Detected OpenClaw Gateway listener on the configured port.")}`);
     }
   }
 
@@ -169,8 +193,8 @@ export async function appendStatusAllDiagnosis(params: {
     const hasDns = Boolean(params.tailscale.dnsName);
     const label =
       params.tailscaleMode === "off"
-        ? `Tailscale: off · ${backend}${params.tailscale.dnsName ? ` · ${params.tailscale.dnsName}` : ""}`
-        : `Tailscale: ${params.tailscaleMode} · ${backend}${params.tailscale.dnsName ? ` · ${params.tailscale.dnsName}` : ""}`;
+        ? `Tailscale exposure: off · daemon ${backend}${params.tailscale.dnsName ? ` · ${params.tailscale.dnsName}` : ""}`
+        : `Tailscale exposure: ${params.tailscaleMode} · daemon ${backend}${params.tailscale.dnsName ? ` · ${params.tailscale.dnsName}` : ""}`;
     emitCheck(label, okBackend && (params.tailscaleMode === "off" || hasDns) ? "ok" : "warn");
     if (params.tailscale.error) {
       lines.push(`  ${muted(`error: ${params.tailscale.error}`)}`);
@@ -211,26 +235,40 @@ export async function appendStatusAllDiagnosis(params: {
   params.progress.setLabel("Reading logs…");
   const logPaths = (() => {
     try {
-      return resolveGatewayLogPaths(process.env);
+      return process.platform === "darwin"
+        ? resolveGatewaySupervisorLogPaths(process.env, { platform: "darwin" })
+        : resolveGatewayLogPaths(process.env);
     } catch {
       return null;
     }
   })();
   if (logPaths) {
     params.progress.setLabel("Reading logs…");
-    const [stderrTail, stdoutTail] = await Promise.all([
-      readFileTailLines(logPaths.stderrPath, 40).catch(() => []),
+    const restartLogPath = resolveGatewayRestartLogPath(process.env);
+    const readStderr = process.platform !== "darwin";
+    const [stderrTail, stdoutTail, restartTail] = await Promise.all([
+      readStderr ? readFileTailLines(logPaths.stderrPath, 40).catch(() => []) : [],
       readFileTailLines(logPaths.stdoutPath, 40).catch(() => []),
+      readFileTailLines(restartLogPath, 30).catch(() => []),
     ]);
     if (stderrTail.length > 0 || stdoutTail.length > 0) {
       lines.push("");
       lines.push(muted(`Gateway logs (tail, summarized): ${logPaths.logDir}`));
-      lines.push(`  ${muted(`# stderr: ${logPaths.stderrPath}`)}`);
-      for (const line of summarizeLogTail(stderrTail, { maxLines: 22 }).map(redactSecrets)) {
-        lines.push(`  ${muted(line)}`);
+      if (readStderr) {
+        lines.push(`  ${muted(`# stderr: ${logPaths.stderrPath}`)}`);
+        for (const line of summarizeLogTail(stderrTail, { maxLines: 22 }).map(redactSecrets)) {
+          lines.push(`  ${muted(line)}`);
+        }
       }
       lines.push(`  ${muted(`# stdout: ${logPaths.stdoutPath}`)}`);
       for (const line of summarizeLogTail(stdoutTail, { maxLines: 22 }).map(redactSecrets)) {
+        lines.push(`  ${muted(line)}`);
+      }
+    }
+    if (restartTail.length > 0) {
+      lines.push("");
+      lines.push(muted(`Gateway restart attempts (tail): ${restartLogPath}`));
+      for (const line of summarizeLogTail(restartTail, { maxLines: 16 }).map(redactSecrets)) {
         lines.push(`  ${muted(line)}`);
       }
     }

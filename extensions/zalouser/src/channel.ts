@@ -16,6 +16,7 @@ import { DEFAULT_ACCOUNT_ID } from "./channel-api.js";
 import {
   zalouserAuthAdapter,
   zalouserGroupsAdapter,
+  zalouserMessageAdapter,
   zalouserMessageActions,
   zalouserMessagingAdapter,
   zalouserOutboundAdapter,
@@ -27,12 +28,14 @@ import {
 } from "./channel.adapters.js";
 import { listZalouserDirectoryGroupMembers } from "./directory.js";
 import type { ZalouserProbeResult } from "./probe.js";
-import { zalouserSetupAdapter } from "./setup-core.js";
-import { zalouserSetupWizard } from "./setup-surface.js";
+import { createZalouserSetupWizardProxy, zalouserSetupAdapter } from "./setup-core.js";
 import { createZalouserPluginBase } from "./shared.js";
 import { collectZalouserStatusIssues } from "./status-issues.js";
 
 const loadZalouserChannelRuntime = createLazyRuntimeModule(() => import("./channel.runtime.js"));
+const zalouserSetupWizardProxy = createZalouserSetupWizardProxy(
+  async () => (await import("./setup-surface.js")).zalouserSetupWizard,
+);
 
 function mapUser(params: {
   id: string;
@@ -66,7 +69,7 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount, ZalouserProb
   createChatChannelPlugin({
     base: {
       ...createZalouserPluginBase({
-        setupWizard: zalouserSetupWizard,
+        setupWizard: zalouserSetupWizardProxy,
         setup: zalouserSetupAdapter,
       }),
       groups: zalouserGroupsAdapter,
@@ -81,7 +84,7 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount, ZalouserProb
             return null;
           }
           return mapUser({
-            id: String(parsed.userId),
+            id: parsed.userId,
             name: parsed.displayName ?? null,
             avatarUrl: parsed.avatar ?? null,
             raw: parsed,
@@ -93,7 +96,7 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount, ZalouserProb
           const friends = await listZaloFriendsMatching(account.profile, query);
           const rows = friends.map((friend) =>
             mapUser({
-              id: String(friend.userId),
+              id: friend.userId,
               name: friend.displayName ?? null,
               avatarUrl: friend.avatar ?? null,
               raw: friend,
@@ -107,7 +110,7 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount, ZalouserProb
           const groups = await listZaloGroupsMatching(account.profile, query);
           const rows = groups.map((group) =>
             mapGroup({
-              id: `group:${String(group.groupId)}`,
+              id: `group:${group.groupId}`,
               name: group.name ?? null,
               raw: group,
             }),
@@ -129,6 +132,7 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount, ZalouserProb
       },
       resolver: zalouserResolverAdapter,
       auth: zalouserAuthAdapter,
+      message: zalouserMessageAdapter,
       status: createAsyncComputedAccountStatusAdapter<ResolvedZalouserAccount, ZalouserProbeResult>(
         {
           defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
@@ -215,5 +219,3 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount, ZalouserProb
     },
     outbound: zalouserOutboundAdapter,
   });
-
-export type { ResolvedZalouserAccount };

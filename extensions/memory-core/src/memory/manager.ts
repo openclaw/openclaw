@@ -15,6 +15,7 @@ import {
   type MemoryEmbeddingProbeResult,
   type MemoryProviderStatus,
   type MemorySearchManager,
+  type MemorySearchRuntimeDebug,
   type MemorySearchResult,
   type MemorySource,
   type MemorySyncProgressUpdate,
@@ -35,6 +36,7 @@ import {
   getOrCreateManagedCacheEntry,
   resolveSingletonManagedCache,
 } from "./manager-cache.js";
+import { closeMemoryDatabase } from "./manager-db.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
 import {
   resolveMemoryPrimaryProviderRequest,
@@ -49,8 +51,6 @@ import {
 } from "./manager-status-state.js";
 import {
   enqueueMemoryTargetedSessionSync,
-  extractMemoryErrorReason,
-  isMemoryReadonlyDbError,
   runMemorySyncWithReadonlyRecovery,
   type MemoryReadonlyRecoveryState,
 } from "./manager-sync-control.js";
@@ -60,11 +60,23 @@ const VECTOR_TABLE = "chunks_vec";
 const FTS_TABLE = "chunks_fts";
 const EMBEDDING_CACHE_TABLE = "embedding_cache";
 const MEMORY_INDEX_MANAGER_CACHE_KEY = Symbol.for("openclaw.memoryIndexManagerCache");
+export const EMBEDDING_PROBE_CACHE_TTL_MS = 30_000;
 const log = createSubsystemLogger("memory");
+type MemoryIndexManagerPurpose = "default" | "status" | "cli";
 
 const { cache: INDEX_CACHE, pending: INDEX_CACHE_PENDING } =
   resolveSingletonManagedCache<MemoryIndexManager>(MEMORY_INDEX_MANAGER_CACHE_KEY);
+
+type EmbeddingProbeCacheEntry = {
+  result: MemoryEmbeddingProbeResult;
+  checkedAtMs: number;
+  expireAtMs: number;
+};
+
+const EMBEDDING_PROBE_CACHE = new Map<string, EmbeddingProbeCacheEntry>();
+
 export async function closeAllMemoryIndexManagers(): Promise<void> {
+  EMBEDDING_PROBE_CACHE.clear();
   await closeManagedCacheEntries({
     cache: INDEX_CACHE,
     pending: INDEX_CACHE_PENDING,
@@ -74,20 +86,46 @@ export async function closeAllMemoryIndexManagers(): Promise<void> {
   });
 }
 
+export async function closeMemoryIndexManagersForAgent(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+}): Promise<void> {
+  const settings = resolveMemorySearchConfig(params.cfg, params.agentId);
+  if (!settings) {
+    return;
+  }
+  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
+  const key = `${params.agentId}:${workspaceDir}:${JSON.stringify(settings)}:default`;
+  const pending = INDEX_CACHE_PENDING.get(key);
+  if (pending) {
+    await Promise.allSettled([pending]);
+  }
+  const manager = INDEX_CACHE.get(key);
+  if (!manager) {
+    return;
+  }
+  INDEX_CACHE.delete(key);
+  try {
+    await manager.close();
+  } catch (err) {
+    log.warn(`failed to close memory index manager for agent ${params.agentId}: ${String(err)}`);
+  }
+}
+
 export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements MemorySearchManager {
   private readonly cacheKey: string;
   protected readonly cfg: OpenClawConfig;
   protected readonly agentId: string;
   protected readonly workspaceDir: string;
   protected readonly settings: ResolvedMemorySearchConfig;
-  protected provider: EmbeddingProvider | null;
+  protected override provider: EmbeddingProvider | null;
   private readonly requestedProvider: EmbeddingProviderRequest;
   private providerInitPromise: Promise<void> | null = null;
   private providerInitialized = false;
-  protected fallbackFrom?: EmbeddingProviderId;
-  protected fallbackReason?: string;
+  protected override fallbackFrom?: EmbeddingProviderId;
+  protected override fallbackReason?: string;
   private providerUnavailableReason?: string;
-  protected providerRuntime?: EmbeddingProviderRuntime;
+  protected override providerRuntime?: EmbeddingProviderRuntime;
   protected batch: {
     enabled: boolean;
     wait: boolean;
@@ -100,33 +138,34 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   protected batchFailureLastProvider?: string;
   protected batchFailureLock: Promise<void> = Promise.resolve();
   protected db: DatabaseSync;
-  protected readonly sources: Set<MemorySource>;
-  protected providerKey: string;
+  protected override readonly sources: Set<MemorySource>;
+  protected override providerKey: string;
   protected readonly cache: { enabled: boolean; maxEntries?: number };
   protected readonly vector: {
     enabled: boolean;
     available: boolean | null;
+    semanticAvailable?: boolean;
     extensionPath?: string;
     loadError?: string;
     dims?: number;
   };
-  protected readonly fts: {
+  protected override readonly fts: {
     enabled: boolean;
     available: boolean;
     loadError?: string;
   };
-  protected vectorReady: Promise<boolean> | null = null;
-  protected watcher: FSWatcher | null = null;
-  protected watchTimer: NodeJS.Timeout | null = null;
-  protected sessionWatchTimer: NodeJS.Timeout | null = null;
-  protected sessionUnsubscribe: (() => void) | null = null;
-  protected intervalTimer: NodeJS.Timeout | null = null;
-  protected closed = false;
-  protected dirty = false;
-  protected sessionsDirty = false;
-  protected sessionsDirtyFiles = new Set<string>();
-  protected sessionPendingFiles = new Set<string>();
-  protected sessionDeltas = new Map<
+  protected override vectorReady: Promise<boolean> | null = null;
+  protected override watcher: FSWatcher | null = null;
+  protected override watchTimer: NodeJS.Timeout | null = null;
+  protected override sessionWatchTimer: NodeJS.Timeout | null = null;
+  protected override sessionUnsubscribe: (() => void) | null = null;
+  protected override intervalTimer: NodeJS.Timeout | null = null;
+  protected override closed = false;
+  protected override dirty = false;
+  protected override sessionsDirty = false;
+  protected override sessionsDirtyFiles = new Set<string>();
+  protected override sessionPendingFiles = new Set<string>();
+  protected override sessionDeltas = new Map<
     string,
     { lastSize: number; pendingBytes: number; pendingMessages: number }
   >();
@@ -154,7 +193,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   static async get(params: {
     cfg: OpenClawConfig;
     agentId: string;
-    purpose?: "default" | "status";
+    purpose?: MemoryIndexManagerPurpose;
   }): Promise<MemoryIndexManager | null> {
     const { cfg, agentId } = params;
     const settings = resolveMemorySearchConfig(cfg, agentId);
@@ -162,14 +201,15 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       return null;
     }
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-    const purpose = params.purpose === "status" ? "status" : "default";
+    const purpose =
+      params.purpose === "status" || params.purpose === "cli" ? params.purpose : "default";
     const key = `${agentId}:${workspaceDir}:${JSON.stringify(settings)}:${purpose}`;
-    const statusOnly = params.purpose === "status";
+    const transient = purpose === "status" || purpose === "cli";
     return await getOrCreateManagedCacheEntry({
       cache: INDEX_CACHE,
       pending: INDEX_CACHE_PENDING,
       key,
-      bypassCache: statusOnly,
+      bypassCache: transient,
       create: async () =>
         new MemoryIndexManager({
           cacheKey: key,
@@ -189,7 +229,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     workspaceDir: string;
     settings: ResolvedMemorySearchConfig;
     providerResult?: EmbeddingProviderResult;
-    purpose?: "default" | "status";
+    purpose?: MemoryIndexManagerPurpose;
   }) {
     super();
     this.cacheKey = params.cacheKey;
@@ -220,18 +260,21 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (meta?.vectorDims) {
       this.vector.dims = meta.vectorDims;
     }
-    const statusOnly = params.purpose === "status";
-    if (!statusOnly) {
+    const transient = params.purpose === "status" || params.purpose === "cli";
+    if (!transient) {
       this.ensureWatcher();
       this.ensureSessionListener();
       this.ensureIntervalSync();
     }
     this.dirty = resolveInitialMemoryDirty({
       hasMemorySource: this.sources.has("memory"),
-      statusOnly,
+      statusOnly: params.purpose === "status",
       hasIndexedMeta: Boolean(meta),
     });
     this.batch = this.resolveBatchConfig();
+    if (!transient) {
+      this.ensureSessionStartupCatchup();
+    }
   }
 
   private applyProviderResult(providerResult: EmbeddingProviderResult): void {
@@ -291,8 +334,13 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       maxResults?: number;
       minScore?: number;
       sessionKey?: string;
+      qmdSearchModeOverride?: "query" | "search" | "vsearch";
+      onDebug?: (debug: MemorySearchRuntimeDebug) => void;
+      /** When set, only these chunk sources are considered (must be enabled for this manager). */
+      sources?: MemorySource[];
     },
   ): Promise<MemorySearchResult[]> {
+    opts?.onDebug?.({ backend: "builtin" });
     let hasIndexedContent = this.hasIndexedContent();
     if (!hasIndexedContent) {
       try {
@@ -328,6 +376,18 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }
     const minScore = opts?.minScore ?? this.settings.query.minScore;
     const maxResults = opts?.maxResults ?? this.settings.query.maxResults;
+    const searchSources =
+      opts?.sources && opts.sources.length > 0
+        ? [...new Set(opts.sources)].filter((s) => this.sources.has(s))
+        : undefined;
+    if (
+      opts?.sources &&
+      opts.sources.length > 0 &&
+      (!searchSources || searchSources.length === 0)
+    ) {
+      return [];
+    }
+    const sourceFilterList = searchSources ?? [...this.sources];
     const hybrid = this.settings.query.hybrid;
     const candidates = Math.min(
       200,
@@ -341,7 +401,17 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         return [];
       }
 
-      const fullQueryResults = await this.searchKeyword(cleaned, candidates).catch(() => []);
+      const fullQueryResults = await this.searchKeyword(
+        cleaned,
+        candidates,
+        {
+          boostFallbackRanking: true,
+        },
+        sourceFilterList,
+      ).catch((err) => {
+        log.warn(`memory search: FTS keyword query failed: ${formatErrorMessage(err)}`);
+        return [];
+      });
       const resultSets =
         fullQueryResults.length > 0
           ? [fullQueryResults]
@@ -354,7 +424,17 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
                 });
                 const searchTerms = keywords.length > 0 ? keywords : [cleaned];
                 return searchTerms.map((term) =>
-                  this.searchKeyword(term, candidates).catch(() => []),
+                  this.searchKeyword(
+                    term,
+                    candidates,
+                    { boostFallbackRanking: true },
+                    sourceFilterList,
+                  ).catch((err) => {
+                    log.warn(
+                      `memory search: FTS per-keyword query failed for "${term}": ${formatErrorMessage(err)}`,
+                    );
+                    return [];
+                  }),
                 );
               })(),
             );
@@ -383,13 +463,24 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     // If FTS isn't available, hybrid mode cannot use keyword search; degrade to vector-only.
     const keywordResults =
       hybrid.enabled && this.fts.enabled && this.fts.available
-        ? await this.searchKeyword(cleaned, candidates).catch(() => [])
+        ? await this.searchKeyword(
+            cleaned,
+            candidates,
+            { boostFallbackRanking: true },
+            sourceFilterList,
+          ).catch((err) => {
+            log.warn(`memory search: FTS hybrid keyword query failed: ${formatErrorMessage(err)}`);
+            return [];
+          })
         : [];
 
     const queryVec = await this.embedQueryWithTimeout(cleaned);
     const hasVector = queryVec.some((v) => v !== 0);
     const vectorResults = hasVector
-      ? await this.searchVector(queryVec, candidates).catch(() => [])
+      ? await this.searchVector(queryVec, candidates, sourceFilterList).catch((err) => {
+          log.warn(`memory search: vector query failed: ${formatErrorMessage(err)}`);
+          return [];
+        })
       : [];
 
     if (!hybrid.enabled || !this.fts.enabled || !this.fts.available) {
@@ -409,11 +500,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       return strict.slice(0, maxResults);
     }
 
-    // Hybrid defaults can produce keyword-only matches with max score equal to
-    // textWeight (for example 0.3). If minScore is higher (for example 0.35),
-    // these exact lexical hits get filtered out even when they are the only
-    // relevant results.
-    const relaxedMinScore = Math.min(minScore, hybrid.textWeight);
+    // Hybrid defaults can produce keyword-only matches below minScore after
+    // weighting. If strict vector+keyword results are empty, preserve the FTS
+    // matches; FTS already established lexical relevance.
+    const relaxedMinScore = 0;
     const keywordKeys = new Set(
       keywordResults.map(
         (entry) => `${entry.source}:${entry.path}:${entry.startLine}:${entry.endLine}`,
@@ -465,6 +555,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   private async searchVector(
     queryVec: number[],
     limit: number,
+    sourceFilterList: MemorySource[],
   ): Promise<Array<MemorySearchResult & { id: string }>> {
     // This method should never be called without a provider
     if (!this.provider) {
@@ -478,8 +569,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       limit,
       snippetMaxChars: SNIPPET_MAX_CHARS,
       ensureVectorReady: async (dimensions) => await this.ensureVectorReady(dimensions),
-      sourceFilterVec: this.buildSourceFilter("c"),
-      sourceFilterChunks: this.buildSourceFilter(),
+      sourceFilterVec: this.buildSourceFilter("c", sourceFilterList),
+      sourceFilterChunks: this.buildSourceFilter(undefined, sourceFilterList),
     });
     return results.map((entry) => entry as MemorySearchResult & { id: string });
   }
@@ -491,11 +582,13 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   private async searchKeyword(
     query: string,
     limit: number,
+    options?: { boostFallbackRanking?: boolean },
+    sourceFilterList?: MemorySource[],
   ): Promise<Array<MemorySearchResult & { id: string; textScore: number }>> {
     if (!this.fts.enabled || !this.fts.available) {
       return [];
     }
-    const sourceFilter = this.buildSourceFilter();
+    const sourceFilter = this.buildSourceFilter(undefined, sourceFilterList);
     // In FTS-only mode (no provider), search all models; otherwise filter by current provider's model
     const providerModel = this.provider?.model;
     const results = await searchKeyword({
@@ -509,6 +602,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       sourceFilter,
       buildFtsQuery: (raw) => this.buildFtsQuery(raw),
       bm25RankToScore,
+      boostFallbackRanking: options?.boostFallbackRanking,
     });
     return results.map((entry) => entry as MemorySearchResult & { id: string; textScore: number });
   }
@@ -586,14 +680,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     );
   }
 
-  private isReadonlyDbError(err: unknown): boolean {
-    return isMemoryReadonlyDbError(err);
-  }
-
-  private extractErrorReason(err: unknown): string {
-    return extractMemoryErrorReason(err);
-  }
-
   private async runSyncWithReadonlyRecovery(params?: {
     reason?: string;
     force?: boolean;
@@ -604,10 +690,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     const getDb = () => this.db;
     const setDb = (value: DatabaseSync) => {
       this.db = value;
-    };
-    const getVectorReady = () => this.vectorReady;
-    const setVectorReady = (value: Promise<boolean> | null) => {
-      this.vectorReady = value;
     };
     const getReadonlyRecoveryAttempts = () => this.readonlyRecoveryAttempts;
     const setReadonlyRecoveryAttempts = (value: number) => {
@@ -634,12 +716,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       },
       set db(value) {
         setDb(value);
-      },
-      get vectorReady() {
-        return getVectorReady();
-      },
-      set vectorReady(value) {
-        setVectorReady(value);
       },
       vector: this.vector,
       get readonlyRecoveryAttempts() {
@@ -668,6 +744,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       },
       runSync: (nextParams) => this.runSync(nextParams),
       openDatabase: () => this.openDatabase(),
+      closeDatabase: (db) => closeMemoryDatabase(db),
+      resetVectorState: () => this.resetVectorState(),
       ensureSchema: () => this.ensureSchema(),
       readMeta: () => this.readMeta() ?? undefined,
     };
@@ -748,7 +826,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         : undefined,
       vector: {
         enabled: this.vector.enabled,
-        available: this.vector.available ?? undefined,
+        storeAvailable: this.vector.available ?? undefined,
+        semanticAvailable: this.vector.semanticAvailable,
+        available: this.vector.semanticAvailable,
         extensionPath: this.vector.extensionPath,
         loadError: this.vector.loadError,
         dims: this.vector.dims,
@@ -779,31 +859,76 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
 
   async probeVectorAvailability(): Promise<boolean> {
     if (!this.vector.enabled) {
+      this.vector.semanticAvailable = false;
       return false;
     }
     await this.ensureProviderInitialized();
     // FTS-only mode: vector search not available
     if (!this.provider) {
+      this.vector.semanticAvailable = false;
       return false;
     }
-    return this.ensureVectorReady();
+    const ready = await this.probeVectorStoreAvailability();
+    this.vector.semanticAvailable = ready;
+    return ready;
+  }
+
+  async probeVectorStoreAvailability(): Promise<boolean> {
+    if (!this.vector.enabled) {
+      this.vector.available = false;
+      return false;
+    }
+    return await this.ensureVectorReady();
+  }
+
+  private cacheProbeResult(result: MemoryEmbeddingProbeResult): MemoryEmbeddingProbeResult {
+    const checkedAtMs = Date.now();
+    EMBEDDING_PROBE_CACHE.set(this.cacheKey, {
+      result,
+      checkedAtMs,
+      expireAtMs: checkedAtMs + EMBEDDING_PROBE_CACHE_TTL_MS,
+    });
+    return result;
+  }
+
+  getCachedEmbeddingAvailability(): MemoryEmbeddingProbeResult | null {
+    const cached = EMBEDDING_PROBE_CACHE.get(this.cacheKey);
+    if (!cached) {
+      return null;
+    }
+    const nowMs = Date.now();
+    if (nowMs >= cached.expireAtMs) {
+      EMBEDDING_PROBE_CACHE.delete(this.cacheKey);
+      return null;
+    }
+    return {
+      ...cached.result,
+      checked: true,
+      cached: true,
+      checkedAtMs: cached.checkedAtMs,
+      cacheExpiresAtMs: cached.expireAtMs,
+    };
   }
 
   async probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult> {
+    const cached = this.getCachedEmbeddingAvailability();
+    if (cached) {
+      return cached;
+    }
     await this.ensureProviderInitialized();
     // FTS-only mode: embeddings not available but search still works
     if (!this.provider) {
-      return {
+      return this.cacheProbeResult({
         ok: false,
         error: this.providerUnavailableReason ?? "No embedding provider available (FTS-only mode)",
-      };
+      });
     }
     try {
       await this.embedBatchWithRetry(["ping"]);
-      return { ok: true };
+      return this.cacheProbeResult({ ok: true });
     } catch (err) {
       const message = formatErrorMessage(err);
-      return { ok: false, error: message };
+      return this.cacheProbeResult({ ok: false, error: message });
     }
   }
 
@@ -834,8 +959,36 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       this.sessionUnsubscribe();
       this.sessionUnsubscribe = null;
     }
-    await awaitPendingManagerWork({ pendingSync, pendingProviderInit });
-    this.db.close();
-    INDEX_CACHE.delete(this.cacheKey);
+    const closeErrors = new Map<EmbeddingProvider, unknown>();
+    const closeCurrentProvider = async () => {
+      const provider = this.provider;
+      if (!provider) {
+        return;
+      }
+      try {
+        await provider.close?.();
+        closeErrors.delete(provider);
+        if (this.provider === provider) {
+          this.provider = null;
+        }
+      } catch (err) {
+        closeErrors.set(provider, err);
+      }
+    };
+    await awaitPendingManagerWork({ pendingProviderInit });
+    await closeCurrentProvider();
+    try {
+      await awaitPendingManagerWork({ pendingSync });
+      await closeCurrentProvider();
+    } finally {
+      closeMemoryDatabase(this.db);
+      if (INDEX_CACHE.get(this.cacheKey) === this) {
+        INDEX_CACHE.delete(this.cacheKey);
+      }
+    }
+    const closeError = closeErrors.values().next().value;
+    if (closeError) {
+      throw closeError;
+    }
   }
 }

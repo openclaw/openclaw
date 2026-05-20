@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   ExecSecretProviderConfig,
   FileSecretProviderConfig,
@@ -10,6 +10,7 @@ import type {
   SecretRefSource,
 } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { FsSafeError, readSecureFile } from "../infra/fs-safe.js";
 import { inspectPathPermissions, safeStat } from "../security/audit-fs.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { resolveUserPath } from "../utils.js";
@@ -22,6 +23,7 @@ import {
   resolveDefaultSecretProviderAlias,
   secretRefKey,
 } from "./ref-contract.js";
+import type { SecretRefResolveCache } from "./resolve-types.js";
 import { isNonEmptyString, isRecord, normalizePositiveInt } from "./shared.js";
 
 const DEFAULT_PROVIDER_CONCURRENCY = 4;
@@ -34,10 +36,7 @@ const DEFAULT_EXEC_MAX_OUTPUT_BYTES = 1024 * 1024;
 const WINDOWS_ABS_PATH_PATTERN = /^[A-Za-z]:[\\/]/;
 const WINDOWS_UNC_PATH_PATTERN = /^\\\\[^\\]+\\[^\\]+/;
 
-export type SecretRefResolveCache = {
-  resolvedByRefKey?: Map<string, Promise<unknown>>;
-  filePayloadByProvider?: Map<string, Promise<unknown>>;
-};
+export type { SecretRefResolveCache } from "./resolve-types.js";
 
 type ResolveSecretRefOptions = {
   config: OpenClawConfig;
@@ -278,39 +277,26 @@ async function readFileProviderPayload(params: {
 }): Promise<unknown> {
   const cacheKey = params.providerName;
   const cache = params.cache;
-  if (cache?.filePayloadByProvider?.has(cacheKey)) {
-    return await (cache.filePayloadByProvider.get(cacheKey) as Promise<unknown>);
+  const cachedFilePayload = cache?.filePayloadByProvider?.get(cacheKey);
+  if (cachedFilePayload) {
+    return await cachedFilePayload;
   }
 
   const filePath = resolveUserPath(params.providerConfig.path);
   const readPromise = (async () => {
-    const secureFilePath = await assertSecurePath({
-      targetPath: filePath,
-      label: `secrets.providers.${params.providerName}.path`,
-    });
     const timeoutMs = normalizePositiveInt(
       params.providerConfig.timeoutMs,
       DEFAULT_FILE_TIMEOUT_MS,
     );
     const maxBytes = normalizePositiveInt(params.providerConfig.maxBytes, DEFAULT_FILE_MAX_BYTES);
-    const abortController = new AbortController();
-    const timeoutErrorMessage = `File provider "${params.providerName}" timed out after ${timeoutMs}ms.`;
-    let timeoutHandle: NodeJS.Timeout | null = null;
-    const timeoutPromise = new Promise<never>((_resolve, reject) => {
-      timeoutHandle = setTimeout(() => {
-        abortController.abort();
-        reject(new Error(timeoutErrorMessage));
-      }, timeoutMs);
-    });
     try {
-      const payload = await Promise.race([
-        fs.readFile(secureFilePath, { signal: abortController.signal }),
-        timeoutPromise,
-      ]);
-      if (payload.byteLength > maxBytes) {
-        throw new Error(`File provider "${params.providerName}" exceeded maxBytes (${maxBytes}).`);
-      }
-      const text = payload.toString("utf8");
+      const { buffer: payload } = await readSecureFile({
+        filePath,
+        label: `secrets.providers.${params.providerName}.path`,
+        io: { maxBytes, timeoutMs },
+        permissions: { allowInsecure: params.providerConfig.allowInsecurePath },
+      });
+      const text = payload.toString("utf8").replace(/^\uFEFF/, "");
       if (params.providerConfig.mode === "singleValue") {
         return text.replace(/\r?\n$/, "");
       }
@@ -320,14 +306,12 @@ async function readFileProviderPayload(params: {
       }
       return parsed;
     } catch (error) {
-      if (error instanceof Error && error.name === "AbortError") {
-        throw new Error(timeoutErrorMessage, { cause: error });
+      if (error instanceof FsSafeError && error.code === "timeout") {
+        throw new Error(`File provider "${params.providerName}" timed out after ${timeoutMs}ms.`, {
+          cause: error,
+        });
       }
       throw error;
-    } finally {
-      if (timeoutHandle) {
-        clearTimeout(timeoutHandle);
-      }
     }
   })();
 
@@ -819,7 +803,7 @@ async function resolveProviderRefs(params: {
       message: `Unsupported secret provider source "${String((params.providerConfig as { source?: unknown }).source)}".`,
     });
   } catch (err) {
-    throwUnknownProviderResolutionError({
+    return throwUnknownProviderResolutionError({
       source: params.source,
       provider: params.providerName,
       err,
@@ -917,8 +901,9 @@ export async function resolveSecretRefValue(
 ): Promise<unknown> {
   const cache = options.cache;
   const key = secretRefKey(ref);
-  if (cache?.resolvedByRefKey?.has(key)) {
-    return await (cache.resolvedByRefKey.get(key) as Promise<unknown>);
+  const cachedResolvedValue = cache?.resolvedByRefKey?.get(key);
+  if (cachedResolvedValue) {
+    return await cachedResolvedValue;
   }
 
   const promise = (async () => {

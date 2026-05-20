@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
+import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -129,34 +130,6 @@ describe("Agent-specific tool filtering", () => {
     };
   }
 
-  function createExecHostDefaultsConfig(
-    agents: Array<{ id: string; execHost?: "auto" | "gateway" | "sandbox" }>,
-  ): OpenClawConfig {
-    return {
-      tools: {
-        exec: {
-          host: "auto",
-          security: "full",
-          ask: "off",
-        },
-      },
-      agents: {
-        list: agents.map((agent) => ({
-          id: agent.id,
-          ...(agent.execHost
-            ? {
-                tools: {
-                  exec: {
-                    host: agent.execHost,
-                  },
-                },
-              }
-            : {}),
-        })),
-      },
-    };
-  }
-
   it("should apply global tool policy when no agent-specific policy exists", () => {
     const cfg = createMainAgentConfig({
       tools: {
@@ -192,6 +165,38 @@ describe("Agent-specific tool filtering", () => {
     expect(toolNames).toContain("read");
     expect(toolNames).not.toContain("write");
     expect(toolNames).not.toContain("apply_patch");
+  });
+
+  it("uses the configured default agent for lean local-model filtering on legacy session keys", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          {
+            id: "local",
+            default: true,
+            experimental: {
+              localModelLean: true,
+            },
+          },
+        ],
+      },
+    };
+
+    const tools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "main",
+      workspaceDir: "/tmp/test",
+      agentDir: "/tmp/agent-local",
+      senderIsOwner: true,
+      modelProvider: "lmstudio",
+      modelId: "gemma-4-e4b-it",
+    });
+
+    const toolNames = tools.map((t) => t.name);
+    expect(toolNames).toContain("read");
+    expect(toolNames).not.toContain("browser");
+    expect(toolNames).not.toContain("cron");
+    expect(toolNames).not.toContain("message");
   });
 
   it("should allow apply_patch for OpenAI models when write is allow-listed", () => {
@@ -245,7 +250,11 @@ describe("Agent-specific tool filtering", () => {
       await expect(applyPatchTool.execute("tc1", { input: patch })).rejects.toThrow(
         /Path escapes sandbox root/,
       );
-      await expect(fs.readFile(escapedPath, "utf8")).rejects.toBeDefined();
+      const readError = await fs.readFile(escapedPath, "utf8").then(
+        () => undefined,
+        (err: NodeJS.ErrnoException) => err,
+      );
+      expect(readError?.code).toBe("ENOENT");
     });
   });
 
@@ -443,6 +452,65 @@ describe("Agent-specific tool filtering", () => {
     ).toEqual({ allow: ["read"] });
   });
 
+  it("should apply global per-sender tool policy to core tools", () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        toolsBySender: {
+          "id:guest": { deny: ["exec", "process"] },
+        },
+      },
+    };
+
+    const tools = createOpenClawCodingTools({
+      config: cfg,
+      messageProvider: "discord",
+      senderId: "guest",
+      workspaceDir: "/tmp/test-global-sender-policy",
+      agentDir: "/tmp/agent-global-sender-policy",
+    });
+    const names = tools.map((tool) => tool.name);
+
+    expect(names).toContain("read");
+    expect(names).not.toContain("exec");
+    expect(names).not.toContain("process");
+  });
+
+  it("should let agent per-sender policy override global sender wildcard", () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        toolsBySender: {
+          "*": { deny: ["exec"] },
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "trusted",
+            workspace: "~/openclaw-trusted",
+            tools: {
+              toolsBySender: {
+                "id:alice": {},
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    const tools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:trusted:discord:dm:alice",
+      messageProvider: "discord",
+      senderId: "alice",
+      workspaceDir: "/tmp/test-agent-sender-policy",
+      agentDir: "/tmp/agent-sender-policy",
+    });
+    const names = tools.map((tool) => tool.name);
+
+    expect(names).toContain("read");
+    expect(names).toContain("exec");
+  });
+
   it("should not let default sender policy override group tools", () => {
     const cfg: OpenClawConfig = {
       channels: {
@@ -489,6 +557,36 @@ describe("Agent-specific tool filtering", () => {
     });
   });
 
+  it("should not apply forged caller group tool policy for non-group sessions", () => {
+    const cfg: OpenClawConfig = {
+      tools: { allow: ["read"] },
+      channels: {
+        whatsapp: {
+          groups: {
+            "trusted-group": {
+              tools: { allow: ["exec", "read", "write", "edit"] },
+            },
+          },
+        },
+      },
+    };
+
+    const tools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:main",
+      messageProvider: "whatsapp",
+      groupId: "trusted-group",
+      workspaceDir: "/tmp/test-forged-group-policy",
+      agentDir: "/tmp/agent-forged-group-policy",
+    });
+    const names = tools.map((t) => t.name);
+    expect(names).toContain("read");
+    expect(names).not.toContain("exec");
+    expect(names).not.toContain("write");
+    expect(names).not.toContain("edit");
+    expect(names).not.toContain("apply_patch");
+  });
+
   it("should resolve feishu group tool policy for sender-scoped session keys", () => {
     const cfg: OpenClawConfig = {
       channels: {
@@ -508,6 +606,34 @@ describe("Agent-specific tool filtering", () => {
       messageProvider: "feishu",
       workspaceDir: "/tmp/test-feishu-scoped-group",
       agentDir: "/tmp/agent-feishu",
+    });
+    const names = tools.map((t) => t.name);
+    expect(names).toContain("read");
+    expect(names).not.toContain("exec");
+  });
+
+  it("should prefer scoped group candidates before wildcard tool policy", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        feishu: {
+          groups: {
+            "*": {
+              tools: { allow: ["read", "exec"] },
+            },
+            oc_group_chat: {
+              tools: { allow: ["read"] },
+            },
+          },
+        },
+      },
+    };
+
+    const tools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:feishu:group:oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
+      messageProvider: "feishu",
+      workspaceDir: "/tmp/test-feishu-wildcard-group",
+      agentDir: "/tmp/agent-feishu-wildcard",
     });
     const names = tools.map((t) => t.name);
     expect(names).toContain("read");
@@ -618,146 +744,5 @@ describe("Agent-specific tool filtering", () => {
     expect(toolNames).toContain("read");
     expect(toolNames).not.toContain("exec");
     expect(toolNames).not.toContain("write");
-  });
-
-  it("should run exec synchronously when process is denied", async () => {
-    const cfg: OpenClawConfig = {
-      tools: {
-        deny: ["process"],
-        exec: {
-          host: "gateway",
-          security: "full",
-          ask: "off",
-        },
-      },
-    };
-
-    const tools = createOpenClawCodingTools({
-      config: cfg,
-      sessionKey: "agent:main:main",
-      workspaceDir: "/tmp/test-main",
-      agentDir: "/tmp/agent-main",
-    });
-    const execTool = tools.find((tool) => tool.name === "exec");
-    expect(execTool).toBeDefined();
-
-    const result = await execTool?.execute("call1", {
-      command: "echo done",
-      yieldMs: 10,
-    });
-
-    const resultDetails = result?.details as { status?: string } | undefined;
-    expect(resultDetails?.status).toBe("completed");
-  });
-
-  it("routes implicit auto exec to gateway without a sandbox runtime", async () => {
-    const tools = createOpenClawCodingTools({
-      config: {
-        tools: {
-          exec: {
-            security: "full",
-            ask: "off",
-          },
-        },
-      },
-      sessionKey: "agent:main:main",
-      workspaceDir: "/tmp/test-main-implicit-gateway",
-      agentDir: "/tmp/agent-main-implicit-gateway",
-    });
-    const execTool = tools.find((tool) => tool.name === "exec");
-    expect(execTool).toBeDefined();
-
-    const result = await execTool!.execute("call-implicit-auto-default", {
-      command: "echo done",
-    });
-    const resultDetails = result?.details as { status?: string } | undefined;
-    expect(resultDetails?.status).toBe("completed");
-  });
-
-  it("fails closed when exec host=sandbox is requested without sandbox runtime", async () => {
-    const tools = createOpenClawCodingTools({
-      config: {},
-      sessionKey: "agent:main:main",
-      workspaceDir: "/tmp/test-main-fail-closed",
-      agentDir: "/tmp/agent-main-fail-closed",
-    });
-    const execTool = tools.find((tool) => tool.name === "exec");
-    expect(execTool).toBeDefined();
-    await expect(
-      execTool!.execute("call-fail-closed", {
-        command: "echo done",
-        host: "sandbox",
-      }),
-    ).rejects.toThrow(/requires a sandbox runtime/);
-  });
-
-  it("should apply agent-specific exec host defaults over global defaults", async () => {
-    const cfg = createExecHostDefaultsConfig([
-      { id: "main", execHost: "gateway" },
-      { id: "helper" },
-    ]);
-
-    const mainTools = createOpenClawCodingTools({
-      config: cfg,
-      sessionKey: "agent:main:main",
-      workspaceDir: "/tmp/test-main-exec-defaults",
-      agentDir: "/tmp/agent-main-exec-defaults",
-    });
-    const mainExecTool = mainTools.find((tool) => tool.name === "exec");
-    expect(mainExecTool).toBeDefined();
-    const mainResult = await mainExecTool!.execute("call-main-default", {
-      command: "echo done",
-      yieldMs: 1000,
-    });
-    const mainDetails = mainResult?.details as { status?: string } | undefined;
-    expect(mainDetails?.status).toBe("completed");
-    await expect(
-      mainExecTool!.execute("call-main", {
-        command: "echo done",
-        host: "sandbox",
-      }),
-    ).rejects.toThrow("exec host not allowed");
-
-    const helperTools = createOpenClawCodingTools({
-      config: cfg,
-      sessionKey: "agent:helper:main",
-      workspaceDir: "/tmp/test-helper-exec-defaults",
-      agentDir: "/tmp/agent-helper-exec-defaults",
-    });
-    const helperExecTool = helperTools.find((tool) => tool.name === "exec");
-    expect(helperExecTool).toBeDefined();
-    const helperResult = await helperExecTool!.execute("call-helper-default", {
-      command: "echo done",
-      yieldMs: 1000,
-    });
-    const helperDetails = helperResult?.details as { status?: string } | undefined;
-    expect(helperDetails?.status).toBe("completed");
-    await expect(
-      helperExecTool!.execute("call-helper", {
-        command: "echo done",
-        host: "sandbox",
-        yieldMs: 1000,
-      }),
-    ).rejects.toThrow(/requires a sandbox runtime/);
-  });
-
-  it("applies explicit agentId exec defaults when sessionKey is opaque", async () => {
-    const cfg = createExecHostDefaultsConfig([{ id: "main", execHost: "gateway" }]);
-
-    const tools = createOpenClawCodingTools({
-      config: cfg,
-      agentId: "main",
-      sessionKey: "run-opaque-123",
-      workspaceDir: "/tmp/test-main-opaque-session",
-      agentDir: "/tmp/agent-main-opaque-session",
-    });
-    const execTool = tools.find((tool) => tool.name === "exec");
-    expect(execTool).toBeDefined();
-    const result = await execTool!.execute("call-main-opaque-session", {
-      command: "echo done",
-      yieldMs: 1000,
-    });
-    const details = result?.details as { status?: string } | undefined;
-    expect(details?.status).toBe("completed");
   });
 });

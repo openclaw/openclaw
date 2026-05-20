@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { startQaLabServer, startQaGatewayChild, startQaMockOpenAiServer } = vi.hoisted(() => ({
+const { startQaLabServer, startQaGatewayChild, startQaProviderServer } = vi.hoisted(() => ({
   startQaLabServer: vi.fn(),
   startQaGatewayChild: vi.fn(),
-  startQaMockOpenAiServer: vi.fn(),
+  startQaProviderServer: vi.fn(),
 }));
 
 vi.mock("./lab-server.js", () => ({
@@ -14,8 +14,8 @@ vi.mock("./gateway-child.js", () => ({
   startQaGatewayChild,
 }));
 
-vi.mock("./mock-openai-server.js", () => ({
-  startQaMockOpenAiServer,
+vi.mock("./providers/server-runtime.js", () => ({
+  startQaProviderServer,
 }));
 
 import { runQaManualLane } from "./manual-lane.runtime.js";
@@ -31,12 +31,18 @@ describe("runQaManualLane", () => {
     labStop.mockReset();
     startQaLabServer.mockReset();
     startQaGatewayChild.mockReset();
-    startQaMockOpenAiServer.mockReset();
+    startQaProviderServer.mockReset();
 
     startQaLabServer.mockResolvedValue({
       listenUrl: "http://127.0.0.1:43124",
       baseUrl: "http://127.0.0.1:58000",
       state: {
+        reset: vi.fn(),
+        addInboundMessage: vi.fn(),
+        addOutboundMessage: vi.fn(),
+        readMessage: vi.fn(),
+        searchMessages: vi.fn(() => []),
+        waitFor: vi.fn(),
         getSnapshot: () => ({
           messages: [
             {
@@ -58,10 +64,14 @@ describe("runQaManualLane", () => {
       stop: gatewayStop,
     });
 
-    startQaMockOpenAiServer.mockResolvedValue({
-      baseUrl: "http://127.0.0.1:44080",
-      stop: mockStop,
-    });
+    startQaProviderServer.mockImplementation(async (providerMode: string) =>
+      providerMode === "mock-openai"
+        ? {
+            baseUrl: "http://127.0.0.1:44080",
+            stop: mockStop,
+          }
+        : null,
+    );
   });
 
   afterEach(() => {
@@ -72,23 +82,18 @@ describe("runQaManualLane", () => {
     const result = await runQaManualLane({
       repoRoot: "/tmp/openclaw-repo",
       providerMode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.4",
-      alternateModel: "mock-openai/gpt-5.4-alt",
+      primaryModel: "mock-openai/gpt-5.5",
+      alternateModel: "mock-openai/gpt-5.5-alt",
       message: "check the kickoff file",
       timeoutMs: 5_000,
+      replySettleMs: 0,
     });
 
-    expect(startQaMockOpenAiServer).toHaveBeenCalledWith({
-      host: "127.0.0.1",
-      port: 0,
-    });
-    expect(startQaGatewayChild).toHaveBeenCalledWith(
-      expect.objectContaining({
-        repoRoot: "/tmp/openclaw-repo",
-        providerMode: "mock-openai",
-        providerBaseUrl: "http://127.0.0.1:44080/v1",
-      }),
-    );
+    expect(startQaProviderServer).toHaveBeenCalledWith("mock-openai");
+    const [gatewayOptions] = startQaGatewayChild.mock.calls[0] ?? [];
+    expect(gatewayOptions?.repoRoot).toBe("/tmp/openclaw-repo");
+    expect(gatewayOptions?.providerMode).toBe("mock-openai");
+    expect(gatewayOptions?.providerBaseUrl).toBe("http://127.0.0.1:44080/v1");
     expect(startQaLabServer).toHaveBeenCalledWith({
       repoRoot: "/tmp/openclaw-repo",
       embeddedGateway: "disabled",
@@ -103,23 +108,21 @@ describe("runQaManualLane", () => {
     const result = await runQaManualLane({
       repoRoot: "/tmp/openclaw-repo",
       providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.4",
-      alternateModel: "openai/gpt-5.4",
+      primaryModel: "openai/gpt-5.5",
+      alternateModel: "openai/gpt-5.5",
       message: "check the kickoff file",
       timeoutMs: 5_000,
+      replySettleMs: 0,
     });
 
-    expect(startQaMockOpenAiServer).not.toHaveBeenCalled();
+    expect(startQaProviderServer).toHaveBeenCalledWith("live-frontier");
     expect(startQaLabServer).toHaveBeenCalledWith({
       repoRoot: "/tmp/openclaw-repo",
       embeddedGateway: "disabled",
     });
-    expect(startQaGatewayChild).toHaveBeenCalledWith(
-      expect.objectContaining({
-        providerMode: "live-frontier",
-        providerBaseUrl: undefined,
-      }),
-    );
+    const [gatewayOptions] = startQaGatewayChild.mock.calls[0] ?? [];
+    expect(gatewayOptions?.providerMode).toBe("live-frontier");
+    expect(gatewayOptions?.providerBaseUrl).toBeUndefined();
     expect(result.reply).toBe("Protocol note: mock reply.");
   });
 });

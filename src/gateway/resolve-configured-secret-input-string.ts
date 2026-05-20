@@ -1,11 +1,11 @@
-import type { OpenClawConfig } from "../config/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { secretRefKey } from "../secrets/ref-contract.js";
 import { resolveSecretRefValues } from "../secrets/resolve.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 export type SecretInputUnresolvedReasonStyle = "generic" | "detailed"; // pragma: allowlist secret
-export type ConfiguredSecretInputSource =
+type ConfiguredSecretInputSource =
   | "config"
   | "secretRef" // pragma: allowlist secret
   | "fallback";

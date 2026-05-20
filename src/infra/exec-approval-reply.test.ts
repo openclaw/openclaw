@@ -258,7 +258,7 @@ describe("exec approval reply helpers", () => {
         sessionKey: undefined,
       },
     });
-    expect(payload.interactive).toEqual({
+    expect(payload.presentation).toEqual({
       blocks: [
         {
           type: "buttons",
@@ -282,11 +282,25 @@ describe("exec approval reply helpers", () => {
         },
       ],
     });
+    expect(payload.interactive).toBeUndefined();
     expect(payload.text).toContain("Heads up.");
     expect(payload.text).toContain("```txt\n/approve slug-1 allow-once\n```");
     expect(payload.text).toContain("```sh\necho ok\n```");
     expect(payload.text).toContain("Host: gateway\nNode: node-1\nCWD: /tmp/work\nExpires in: 2s");
     expect(payload.text).toContain("Full id: `req-1`");
+  });
+
+  it("compacts structured cwd paths in pending reply payloads", () => {
+    const payload = buildExecApprovalPendingReplyPayload({
+      approvalId: "req-home",
+      approvalSlug: "slug-home",
+      command: "pwd",
+      cwd: "C:\\Users\\alice\\project",
+      host: "gateway",
+    });
+
+    expect(payload.text).toContain("CWD: ~/project");
+    expect(payload.text).not.toContain("C:\\Users\\alice");
   });
 
   it("omits allow-always actions when the effective policy requires approval every time", () => {
@@ -311,7 +325,7 @@ describe("exec approval reply helpers", () => {
     expect(payload.text).toContain(
       "The effective approval policy requires approval every time, so Allow Always is unavailable.",
     );
-    expect(payload.interactive).toEqual({
+    expect(payload.presentation).toEqual({
       blocks: [
         {
           type: "buttons",
@@ -330,6 +344,7 @@ describe("exec approval reply helpers", () => {
         },
       ],
     });
+    expect(payload.interactive).toBeUndefined();
   });
 
   it("stores agent and session metadata for downstream suppression checks", () => {

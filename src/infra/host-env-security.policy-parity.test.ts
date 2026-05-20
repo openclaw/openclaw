@@ -36,6 +36,14 @@ describe("host env security policy parity", () => {
     const sanitizerSource = fs.readFileSync(sanitizerSwiftPath, "utf8");
 
     const swiftBlockedKeys = parseSwiftStringArray(generatedSource, "static let blockedKeys");
+    const swiftBlockedInheritedKeys = parseSwiftStringArray(
+      generatedSource,
+      "static let blockedInheritedKeys",
+    );
+    const swiftBlockedInheritedPrefixes = parseSwiftStringArray(
+      generatedSource,
+      "static let blockedInheritedPrefixes",
+    );
     const swiftBlockedOverrideKeys = parseSwiftStringArray(
       generatedSource,
       "static let blockedOverrideKeys",
@@ -49,11 +57,19 @@ describe("host env security policy parity", () => {
       "static let blockedPrefixes",
     );
 
+    expect(swiftBlockedInheritedKeys).toEqual(policy.blockedInheritedKeys);
+    expect(swiftBlockedInheritedPrefixes).toEqual(policy.blockedInheritedPrefixes ?? []);
     expect(swiftBlockedKeys).toEqual(policy.blockedKeys);
     expect(swiftBlockedOverrideKeys).toEqual(policy.blockedOverrideKeys ?? []);
     expect(swiftBlockedOverridePrefixes).toEqual(policy.blockedOverridePrefixes ?? []);
     expect(swiftBlockedPrefixes).toEqual(policy.blockedPrefixes);
 
+    expect(sanitizerSource).toContain(
+      "private static let blockedInheritedKeys = HostEnvSecurityPolicy.blockedInheritedKeys",
+    );
+    expect(sanitizerSource).toContain(
+      "private static let blockedInheritedPrefixes = HostEnvSecurityPolicy.blockedInheritedPrefixes",
+    );
     expect(sanitizerSource).toContain(
       "private static let blockedKeys = HostEnvSecurityPolicy.blockedKeys",
     );
@@ -73,8 +89,24 @@ describe("host env security policy parity", () => {
     const policyPath = path.join(repoRoot, "src/infra/host-env-security-policy.json");
     const rawPolicy = JSON.parse(fs.readFileSync(policyPath, "utf8"));
     const policy = loadHostEnvSecurityPolicy(rawPolicy);
+    const allowedInheritedOverrideOnlyKeys = new Set(
+      (rawPolicy.allowedInheritedOverrideOnlyKeys ?? []).map((value: string) =>
+        value.toUpperCase(),
+      ),
+    );
 
     expect(policy.blockedKeys).toEqual(sortUnique([...policy.blockedEverywhereKeys]));
     expect(policy.blockedOverrideKeys).toEqual(sortUnique([...policy.blockedOverrideOnlyKeys]));
+    expect(policy.blockedInheritedKeys).toEqual(
+      sortUnique([
+        ...policy.blockedEverywhereKeys,
+        ...policy.blockedOverrideOnlyKeys.filter(
+          (value) => !allowedInheritedOverrideOnlyKeys.has(value.toUpperCase()),
+        ),
+      ]),
+    );
+    expect(policy.blockedInheritedPrefixes).toEqual(
+      sortUnique(rawPolicy.blockedInheritedPrefixes ?? rawPolicy.blockedPrefixes ?? []),
+    );
   });
 });

@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { handleAbortTrigger } from "./commands-session-abort.js";
+import "./commands-session-abort.test-support.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 const abortEmbeddedPiRunMock = vi.hoisted(() => vi.fn());
 const persistAbortTargetEntryMock = vi.hoisted(() => vi.fn());
 const setAbortMemoryMock = vi.hoisted(() => vi.fn());
+const abortSessionRunTargetMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../agents/pi-embedded.js", () => ({
   abortEmbeddedPiRun: abortEmbeddedPiRunMock,
@@ -26,6 +28,7 @@ vi.mock("./abort-cutoff.js", () => ({
 }));
 
 vi.mock("./abort.js", () => ({
+  abortSessionRunTarget: abortSessionRunTargetMock,
   formatAbortReplyText: vi.fn(() => "⚙️ Agent was aborted."),
   isAbortTrigger: vi.fn((raw: string) => raw === "stop"),
   resolveSessionEntryForKey: vi.fn(() => ({ entry: undefined, key: "agent:main:main" })),
@@ -35,10 +38,6 @@ vi.mock("./abort.js", () => ({
 
 vi.mock("./commands-session-store.js", () => ({
   persistAbortTargetEntry: persistAbortTargetEntryMock,
-}));
-
-vi.mock("./queue.js", () => ({
-  clearSessionQueues: vi.fn(() => ({ followupCleared: 0, laneCleared: 0, keys: [] })),
 }));
 
 vi.mock("./reply-run-registry.js", () => ({
@@ -96,6 +95,7 @@ describe("handleAbortTrigger", () => {
   it("rejects unauthorized natural-language abort triggers", async () => {
     const result = await handleAbortTrigger(buildAbortParams(), true);
     expect(result).toEqual({ shouldContinue: false });
+    expect(abortSessionRunTargetMock).not.toHaveBeenCalled();
     expect(abortEmbeddedPiRunMock).not.toHaveBeenCalled();
     expect(persistAbortTargetEntryMock).not.toHaveBeenCalled();
     expect(setAbortMemoryMock).not.toHaveBeenCalled();

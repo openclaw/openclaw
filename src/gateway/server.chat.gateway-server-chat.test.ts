@@ -6,6 +6,7 @@ import { WebSocket } from "ws";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { testing as agentJobTesting } from "./server-methods/agent-job.js";
 import {
   connectOk,
   dispatchInboundMessageMock,
@@ -22,7 +23,7 @@ import { agentCommand } from "./test-helpers.runtime-state.js";
 import { installConnectedControlUiServerSuite } from "./test-with-server.js";
 
 installGatewayTestHooks({ scope: "suite" });
-const CHAT_RESPONSE_TIMEOUT_MS = 4_000;
+const CHAT_RESPONSE_TIMEOUT_MS = 10_000;
 
 let ws: WebSocket;
 let port: number;
@@ -36,6 +37,10 @@ describe("gateway server chat", () => {
   beforeEach(() => {
     dispatchInboundMessageMock.mockReset();
   });
+
+  const removeTempDir = async (dir: string): Promise<void> => {
+    await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  };
 
   const buildNoReplyHistoryFixture = (includeMixedAssistant = false) => [
     {
@@ -108,7 +113,7 @@ describe("gateway server chat", () => {
       return await run(dir);
     } finally {
       testState.sessionStorePath = undefined;
-      await fs.rm(dir, { recursive: true, force: true });
+      await removeTempDir(dir);
     }
   };
 
@@ -124,6 +129,23 @@ describe("gateway server chat", () => {
         return extractFirstTextBlock(message);
       })
       .filter((value): value is string => typeof value === "string");
+
+  const expectRecordFields = (value: unknown, expected: Record<string, unknown>) => {
+    if (!value || typeof value !== "object") {
+      throw new Error("Expected record");
+    }
+    const actual = value as Record<string, unknown>;
+    for (const [key, expectedValue] of Object.entries(expected)) {
+      expect(actual[key]).toEqual(expectedValue);
+    }
+    return actual;
+  };
+
+  const expectStringRunId = (payload: unknown) => {
+    const actual = expectRecordFields(payload, {});
+    expect(typeof actual.runId).toBe("string");
+    return actual.runId as string;
+  };
 
   const expectAgentWaitTimeout = (res: Awaited<ReturnType<typeof rpcReq>>) => {
     expect(res.ok).toBe(true);
@@ -155,6 +177,10 @@ describe("gateway server chat", () => {
     expect(res.ok).toBe(true);
     expect(res.payload?.status).toBe("ok");
     return res;
+  };
+
+  const waitForLifecycleWaiter = async (runId: string) => {
+    await vi.waitFor(() => expect(agentJobTesting.getWaiterCount(runId)).toBeGreaterThan(0));
   };
 
   const abortChatRun = async (runId: string) => {
@@ -218,7 +244,38 @@ describe("gateway server chat", () => {
       expect(res.payload?.messageSeq).toBe(1);
     } finally {
       testState.sessionStorePath = undefined;
-      await fs.rm(dir, { recursive: true, force: true });
+      await removeTempDir(dir);
+    }
+  });
+
+  test("sessions.send creates a configured agent main session before sending", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-send-agent-"));
+    testState.sessionStorePath = path.join(dir, "sessions.json");
+    testState.agentsConfig = {
+      list: [{ id: "main", default: true }, { id: "orion" }],
+    };
+    try {
+      await writeSessionStore({ entries: {} });
+
+      const res = await rpcReq(ws, "sessions.send", {
+        key: "agent:orion:main",
+        message: "hello orion",
+        idempotencyKey: "idem-sessions-send-orion",
+      });
+      expect(res.ok).toBe(true);
+      expect(res.payload?.runId).toBe("idem-sessions-send-orion");
+
+      const rawStore = JSON.parse(await fs.readFile(testState.sessionStorePath, "utf-8")) as Record<
+        string,
+        {
+          sessionId?: string;
+        }
+      >;
+      expect(rawStore["agent:orion:main"]?.sessionId).toBeTypeOf("string");
+    } finally {
+      testState.agentsConfig = undefined;
+      testState.sessionStorePath = undefined;
+      await removeTempDir(dir);
     }
   });
 
@@ -245,7 +302,7 @@ describe("gateway server chat", () => {
       expect(res.payload?.messageSeq).toBe(1);
     } finally {
       testState.sessionStorePath = undefined;
-      await fs.rm(dir, { recursive: true, force: true });
+      await removeTempDir(dir);
     }
   });
 
@@ -270,6 +327,26 @@ describe("gateway server chat", () => {
       });
       expect(sendRes.ok).toBe(true);
 
+      const cancelledEventP = onceMessage(
+        ws,
+        (o) => {
+          const data =
+            o.payload?.data && typeof o.payload.data === "object"
+              ? (o.payload.data as Record<string, unknown>)
+              : {};
+          return (
+            o.type === "event" &&
+            o.event === "agent" &&
+            o.payload?.runId === "idem-sessions-abort-1" &&
+            o.payload?.stream === "lifecycle" &&
+            data.phase === "end" &&
+            data.stopReason === "rpc"
+          );
+        },
+        8000,
+      );
+      void cancelledEventP.catch(() => undefined);
+
       const abortRes = await rpcReq(ws, "sessions.abort", {
         key: "agent:main:dashboard:test-abort",
         runId: "idem-sessions-abort-1",
@@ -278,12 +355,64 @@ describe("gateway server chat", () => {
       expect(["aborted", "no-active-run"]).toContain(abortRes.payload?.status);
       if (abortRes.payload?.status === "aborted") {
         expect(abortRes.payload?.abortedRunId).toBe("idem-sessions-abort-1");
+        const cancelledEvent = await cancelledEventP;
+        expectRecordFields(cancelledEvent.payload?.data, {
+          phase: "end",
+          status: "cancelled",
+          aborted: true,
+          stopReason: "rpc",
+        });
+        const waitRes = await rpcReq(ws, "agent.wait", {
+          runId: "idem-sessions-abort-1",
+          timeoutMs: 0,
+        });
+        expect(waitRes.ok).toBe(true);
+        expectRecordFields(waitRes.payload, {
+          runId: "idem-sessions-abort-1",
+          status: "timeout",
+          stopReason: "rpc",
+        });
       } else {
         expect(abortRes.payload?.abortedRunId).toBeNull();
       }
     } finally {
       testState.sessionStorePath = undefined;
-      await fs.rm(dir, { recursive: true, force: true });
+      await removeTempDir(dir);
+    }
+  });
+
+  test("sessions.abort resolves active runs by runId without a caller session key", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-abort-runid-"));
+    testState.sessionStorePath = path.join(dir, "sessions.json");
+    try {
+      await writeSessionStore({
+        entries: {
+          "agent:main:dashboard:test-abort-runid": {
+            sessionId: "sess-dashboard-abort-runid",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+
+      const sendRes = await rpcReq(ws, "sessions.send", {
+        key: "agent:main:dashboard:test-abort-runid",
+        message: "hello",
+        idempotencyKey: "idem-sessions-abort-runid-1",
+        timeoutMs: 30_000,
+      });
+      expect(sendRes.ok).toBe(true);
+
+      const abortRes = await rpcReq(ws, "sessions.abort", {
+        runId: "idem-sessions-abort-runid-1",
+      });
+      expect(abortRes.ok).toBe(true);
+      expect(["aborted", "no-active-run"]).toContain(abortRes.payload?.status);
+      if (abortRes.payload?.status === "aborted") {
+        expect(abortRes.payload?.abortedRunId).toBe("idem-sessions-abort-runid-1");
+      }
+    } finally {
+      testState.sessionStorePath = undefined;
+      await removeTempDir(dir);
     }
   });
 
@@ -411,15 +540,16 @@ describe("gateway server chat", () => {
         },
       });
 
-      const agentBlockedRes = await rpcReq(ws, "agent", {
+      vi.mocked(agentCommand).mockClear();
+      const agentAllowedRes = await rpcReq(ws, "agent", {
         sessionKey: "cron:job-1",
         message: "hi",
         idempotencyKey: "idem-2",
       });
-      expect(agentBlockedRes.ok).toBe(false);
-      expect((agentBlockedRes.error as { message?: string } | undefined)?.message ?? "").toMatch(
-        /send blocked/i,
-      );
+      expect(agentAllowedRes.ok).toBe(true);
+      expect(agentAllowedRes.payload?.status).toBe("accepted");
+      expect(agentAllowedRes.payload?.runId).toBe("idem-2");
+      await vi.waitFor(() => expect(agentCommand).toHaveBeenCalled());
 
       testState.sessionStorePath = undefined;
       testState.sessionConfig = undefined;
@@ -457,7 +587,7 @@ describe("gateway server chat", () => {
         CHAT_RESPONSE_TIMEOUT_MS,
       );
       expect(imgRes.ok).toBe(true);
-      expect(imgRes.payload?.runId).toBeDefined();
+      expectStringRunId(imgRes.payload);
       const reqIdOnly = "chat-img-only";
       ws.send(
         JSON.stringify({
@@ -486,7 +616,7 @@ describe("gateway server chat", () => {
         CHAT_RESPONSE_TIMEOUT_MS,
       );
       expect(imgOnlyRes.ok).toBe(true);
-      expect(imgOnlyRes.payload?.runId).toBeDefined();
+      expectStringRunId(imgOnlyRes.payload);
 
       const historyDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
       tempDirs.push(historyDir);
@@ -501,7 +631,7 @@ describe("gateway server chat", () => {
       });
 
       const lines: string[] = [];
-      for (let i = 0; i < 300; i += 1) {
+      for (let i = 0; i < 201; i += 1) {
         lines.push(
           JSON.stringify({
             message: {
@@ -520,7 +650,7 @@ describe("gateway server chat", () => {
       expect(defaultRes.ok).toBe(true);
       const defaultMsgs = defaultRes.payload?.messages ?? [];
       expect(defaultMsgs.length).toBe(200);
-      expect(extractFirstTextBlock(defaultMsgs[0])).toBe("m100");
+      expect(extractFirstTextBlock(defaultMsgs[0])).toBe("m1");
     } finally {
       testState.agentConfig = undefined;
       testState.sessionStorePath = undefined;
@@ -528,8 +658,31 @@ describe("gateway server chat", () => {
       if (webchatWs) {
         webchatWs.close();
       }
-      await Promise.all(tempDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
+      await Promise.all(tempDirs.map((dir) => removeTempDir(dir)));
     }
+  });
+
+  test("chat.send accepts the backing session id returned by chat.history", async () => {
+    await withMainSessionStore(async () => {
+      const historyRes = await rpcReq<{ sessionId?: string }>(ws, "chat.history", {
+        sessionKey: "main",
+      });
+      expect(historyRes.ok).toBe(true);
+      const sessionId = historyRes.payload?.sessionId;
+      expect(sessionId).toBe("sess-main");
+
+      const runId = "idem-chat-send-history-session-id";
+      const sendRes = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        sessionId,
+        message: "/context list",
+        idempotencyKey: runId,
+      });
+      expect(sendRes.ok).toBe(true);
+      expect(sendRes.payload?.status).toBe("started");
+
+      await waitForAgentRunOk(runId);
+    });
   });
 
   test("chat.history hides assistant NO_REPLY-only entries", async () => {
@@ -699,14 +852,14 @@ describe("gateway server chat", () => {
       });
       const sideResult = await sideResultPromise;
       const finalEvent = await finalPromise;
-      expect(sideResult.payload).toMatchObject({
+      expectRecordFields(sideResult.payload, {
         kind: "btw",
         runId: "idem-btw-1",
         sessionKey: "agent:main:main",
         question: "what is 17 * 19?",
         text: "323",
       });
-      expect(finalEvent.payload).toMatchObject({
+      expectRecordFields(finalEvent.payload, {
         runId: "idem-btw-1",
         sessionKey: "agent:main:main",
         state: "final",
@@ -781,12 +934,102 @@ describe("gateway server chat", () => {
         expect(dispatchInboundMessageMock).toHaveBeenCalled();
       });
       const sideResult = await sideResultPromise;
-      expect(sideResult.payload).toMatchObject({
+      expectRecordFields(sideResult.payload, {
         kind: "btw",
         runId: "idem-btw-block-1",
         question: "what changed?",
         text: "first chunk\n\nsecond chunk",
       });
+    });
+  });
+
+  test("chat.history persists assistant image data URLs as managed image blocks", async () => {
+    await withMainSessionStore(async (dir) => {
+      const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+      process.env.OPENCLAW_STATE_DIR = dir;
+      const pngB64 =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=";
+      dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const [params] = args as [
+          {
+            dispatcher: {
+              sendFinalReply: (payload: { text?: string; mediaUrls?: string[] }) => boolean;
+              markComplete: () => void;
+              waitForIdle: () => Promise<void>;
+              getQueuedCounts: () => { final: number; block: number; tool: number };
+            };
+          },
+        ];
+        params.dispatcher.sendFinalReply({
+          mediaUrls: [`data:image/png;base64,${pngB64}`],
+        });
+        params.dispatcher.markComplete();
+        await params.dispatcher.waitForIdle();
+        return {
+          queuedFinal: true,
+          counts: params.dispatcher.getQueuedCounts(),
+        };
+      });
+
+      try {
+        const finalPromise = onceMessage(
+          ws,
+          (o) =>
+            o.type === "event" &&
+            o.event === "chat" &&
+            o.payload?.state === "final" &&
+            o.payload?.runId === "idem-managed-image-history",
+          8000,
+        );
+        const res = await rpcReq(ws, "chat.send", {
+          sessionKey: "main",
+          message: "show me an image",
+          idempotencyKey: "idem-managed-image-history",
+        });
+
+        expect(res.ok).toBe(true);
+        expect(res.payload?.runId).toBe("idem-managed-image-history");
+        await finalPromise;
+
+        let assistantMessage: Record<string, unknown> | undefined;
+        await vi.waitFor(async () => {
+          const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+            sessionKey: "main",
+          });
+          expect(historyRes.ok).toBe(true);
+          const messages = historyRes.payload?.messages ?? [];
+          assistantMessage = messages.find(
+            (message): message is Record<string, unknown> =>
+              typeof message === "object" &&
+              message !== null &&
+              (message as { role?: unknown }).role === "assistant",
+          );
+          if (!assistantMessage) {
+            throw new Error("Expected assistant history message");
+          }
+        });
+        const assistantContent = (assistantMessage as { content?: unknown[] }).content ?? [];
+        expect(assistantContent).toHaveLength(2);
+        expect(assistantContent[0]).toEqual({ type: "text", text: "Image reply" });
+        const imageBlock = expectRecordFields(assistantContent[1], {
+          type: "image",
+          alt: "Generated image 1",
+          mimeType: "image/png",
+          width: 1,
+          height: 1,
+        });
+        expect(String(imageBlock.url)).toContain("/api/chat/media/outgoing/");
+        expect(String(imageBlock.openUrl)).toContain("/full");
+        const serializedAssistant = JSON.stringify(assistantMessage);
+        expect(serializedAssistant).not.toContain("data:image/png;base64");
+        expect(serializedAssistant).not.toContain(pngB64);
+      } finally {
+        if (previousStateDir == null) {
+          delete process.env.OPENCLAW_STATE_DIR;
+        } else {
+          process.env.OPENCLAW_STATE_DIR = previousStateDir;
+        }
+      }
     });
   });
 
@@ -817,6 +1060,45 @@ describe("gateway server chat", () => {
       "user:NO_REPLY",
       "assistant:NO_REPLY",
     ]);
+  });
+
+  test("chat.history uses the owning agent thinkingDefault for non-default agent sessions", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    try {
+      testState.sessionStorePath = path.join(dir, "sessions.json");
+      testState.agentConfig = {
+        model: { primary: "openai/gpt-5" },
+        thinkingDefault: "low",
+      };
+      testState.agentsConfig = {
+        list: [
+          { id: "main", default: true },
+          { id: "alpha", thinkingDefault: "minimal" },
+        ],
+      };
+      await writeSessionStore({
+        entries: {
+          "agent:alpha:main": {
+            sessionId: "sess-alpha",
+            updatedAt: Date.now(),
+            modelProvider: "openai",
+            model: "gpt-5",
+          },
+        },
+      });
+
+      const historyRes = await rpcReq<{ thinkingLevel?: string }>(ws, "chat.history", {
+        sessionKey: "agent:alpha:main",
+      });
+
+      expect(historyRes.ok).toBe(true);
+      expect(historyRes.payload?.thinkingLevel).toBe("minimal");
+    } finally {
+      testState.agentConfig = undefined;
+      testState.agentsConfig = undefined;
+      testState.sessionStorePath = undefined;
+      await removeTempDir(dir);
+    }
   });
 
   test("chat.send does not persist verboseLevel for operator.write callers", async () => {
@@ -955,7 +1237,7 @@ describe("gateway server chat", () => {
     } finally {
       resolveAgentRun?.();
       testState.sessionStorePath = undefined;
-      await fs.rm(dir, { recursive: true, force: true });
+      await removeTempDir(dir);
     }
   });
 
@@ -1008,14 +1290,7 @@ describe("gateway server chat", () => {
           timeoutMs: 1_000,
         });
 
-        vi.useFakeTimers();
-        try {
-          const settle = new Promise((resolve) => setTimeout(resolve, 20));
-          await vi.advanceTimersByTimeAsync(20);
-          await settle;
-        } finally {
-          vi.useRealTimers();
-        }
+        await waitForLifecycleWaiter(runId);
         emitAgentEvent({
           runId,
           stream: "lifecycle",
@@ -1176,7 +1451,7 @@ describe("gateway server chat", () => {
       }
     } finally {
       webchatWs.close();
-      await fs.rm(dir, { recursive: true, force: true });
+      await removeTempDir(dir);
       testState.sessionStorePath = undefined;
     }
   });

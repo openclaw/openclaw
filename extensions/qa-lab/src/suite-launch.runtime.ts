@@ -1,6 +1,15 @@
-export async function runQaSuiteFromRuntime(
-  ...args: Parameters<typeof import("./suite.js").runQaSuite>
-) {
+import type { QaSuiteRunParams } from "./suite.js";
+
+async function loadQaLabServerRuntime() {
+  const { startQaLabServer } = await import("./lab-server.js");
+  return startQaLabServer;
+}
+
+export async function runQaSuiteFromRuntime(...args: [QaSuiteRunParams?]) {
   const { runQaSuite } = await import("./suite.js");
-  return await runQaSuite(...args);
+  const params = args[0];
+  return await runQaSuite({
+    ...params,
+    startLab: params?.startLab ?? (await loadQaLabServerRuntime()),
+  });
 }

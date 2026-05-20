@@ -1,4 +1,5 @@
-import type { ChannelPlugin, ChannelOutboundAdapter } from "../channels/plugins/types.js";
+import type { ChannelOutboundAdapter } from "../channels/plugins/types.adapters.js";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 
 type StubChannelOptions = {
@@ -114,9 +115,9 @@ export function createDefaultGatewayTestChannels() {
       plugin: createStubChannelPlugin({ id: "zalouser", label: "Zalo Personal" }),
     },
     {
-      pluginId: "bluebubbles",
+      pluginId: "imessage",
       source: "test" as const,
-      plugin: createStubChannelPlugin({ id: "bluebubbles", label: "BlueBubbles" }),
+      plugin: createStubChannelPlugin({ id: "imessage", label: "iMessage" }),
     },
   ];
 }

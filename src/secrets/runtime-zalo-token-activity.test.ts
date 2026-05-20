@@ -1,63 +1,22 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import type { AuthProfileStore } from "../agents/auth-profiles.js";
-import type { OpenClawConfig } from "../config/config.js";
-import { createEmptyPluginRegistry } from "../plugins/registry.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { loadBundledChannelSecretContractApi } from "./channel-contract-api.js";
+import { describe, expect, it } from "vitest";
+import "./runtime-zalo.test-support.ts";
+import {
+  asConfig,
+  loadAuthStoreWithProfiles,
+  setupSecretsRuntimeSnapshotTestHooks,
+} from "./runtime.test-support.ts";
 
-const zaloSecrets = loadBundledChannelSecretContractApi("zalo");
-if (!zaloSecrets?.collectRuntimeConfigAssignments) {
-  throw new Error("Missing Zalo secret contract api");
-}
+const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
 
-vi.mock("../channels/plugins/bootstrap-registry.js", () => {
-  return {
-    getBootstrapChannelPlugin: (id: string) =>
-      id === "zalo"
-        ? {
-            secrets: {
-              collectRuntimeConfigAssignments: zaloSecrets.collectRuntimeConfigAssignments,
-            },
-          }
-        : undefined,
-    getBootstrapChannelSecrets: (id: string) =>
-      id === "zalo"
-        ? {
-            collectRuntimeConfigAssignments: zaloSecrets.collectRuntimeConfigAssignments,
-          }
-        : undefined,
-  };
-});
-
-function asConfig(value: unknown): OpenClawConfig {
-  return value as OpenClawConfig;
-}
-
-let clearConfigCache: typeof import("../config/config.js").clearConfigCache;
-let clearRuntimeConfigSnapshot: typeof import("../config/config.js").clearRuntimeConfigSnapshot;
-let clearSecretsRuntimeSnapshot: typeof import("./runtime.js").clearSecretsRuntimeSnapshot;
-let prepareSecretsRuntimeSnapshot: typeof import("./runtime.js").prepareSecretsRuntimeSnapshot;
-
-function loadAuthStoreWithProfiles(profiles: AuthProfileStore["profiles"]): AuthProfileStore {
-  return {
-    version: 1,
-    profiles,
-  };
+function requireZaloConfig(snapshot: Awaited<ReturnType<typeof prepareSecretsRuntimeSnapshot>>) {
+  const config = snapshot.config.channels?.zalo;
+  if (!config) {
+    throw new Error("expected Zalo runtime config");
+  }
+  return config;
 }
 
 describe("secrets runtime snapshot zalo token activity", () => {
-  beforeAll(async () => {
-    ({ clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/config.js"));
-    ({ clearSecretsRuntimeSnapshot, prepareSecretsRuntimeSnapshot } = await import("./runtime.js"));
-  });
-
-  afterEach(() => {
-    setActivePluginRegistry(createEmptyPluginRegistry());
-    clearSecretsRuntimeSnapshot();
-    clearRuntimeConfigSnapshot();
-    clearConfigCache();
-  });
-
   it("treats top-level Zalo botToken refs as active even when tokenFile is configured", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({
@@ -75,7 +34,7 @@ describe("secrets runtime snapshot zalo token activity", () => {
       loadAuthStore: () => loadAuthStoreWithProfiles({}),
     });
 
-    expect(snapshot.config.channels?.zalo?.botToken).toBe("resolved-zalo-token");
+    expect(requireZaloConfig(snapshot).botToken).toBe("resolved-zalo-token");
     expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
       "channels.zalo.botToken",
     );
@@ -132,7 +91,7 @@ describe("secrets runtime snapshot zalo token activity", () => {
       loadAuthStore: () => loadAuthStoreWithProfiles({}),
     });
 
-    expect(snapshot.config.channels?.zalo?.botToken).toBe("resolved-zalo-top-level-token");
+    expect(requireZaloConfig(snapshot).botToken).toBe("resolved-zalo-top-level-token");
     expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
       "channels.zalo.botToken",
     );

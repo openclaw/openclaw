@@ -1,12 +1,15 @@
 import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import type { DeliveryContext } from "../utils/delivery-context.js";
+import { configureSqliteWalMaintenance, type SqliteWalMaintenance } from "../infra/sqlite-wal.js";
+import { isRecord } from "../utils.js";
+import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import {
   resolveTaskFlowRegistryDir,
   resolveTaskFlowRegistrySqlitePath,
 } from "./task-flow-registry.paths.js";
-import type { TaskFlowRegistryStoreSnapshot } from "./task-flow-registry.store.js";
+import type { TaskFlowRegistryStoreSnapshot } from "./task-flow-registry.store.types.js";
 import type { TaskFlowRecord, TaskFlowSyncMode, JsonValue } from "./task-flow-registry.types.js";
 
 type FlowRegistryRow = {
@@ -42,6 +45,7 @@ type FlowRegistryDatabase = {
   db: DatabaseSync;
   path: string;
   statements: FlowRegistryStatements;
+  walMaintenance: SqliteWalMaintenance;
 };
 
 let cachedDatabase: FlowRegistryDatabase | null = null;
@@ -60,6 +64,7 @@ function serializeJson(value: unknown): string | null {
   return value === undefined ? null : JSON.stringify(value);
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Persisted JSON columns are typed by the receiving field.
 function parseJsonValue<T>(raw: string | null): T | undefined {
   if (!raw?.trim()) {
     return undefined;
@@ -69,6 +74,22 @@ function parseJsonValue<T>(raw: string | null): T | undefined {
   } catch {
     return undefined;
   }
+}
+
+function parseDeliveryContextJson(raw: string | null): DeliveryContext | undefined {
+  const parsed = parseJsonValue<unknown>(raw);
+  if (!isRecord(parsed)) {
+    return undefined;
+  }
+  return normalizeDeliveryContext({
+    channel: typeof parsed.channel === "string" ? parsed.channel : undefined,
+    to: typeof parsed.to === "string" ? parsed.to : undefined,
+    accountId: typeof parsed.accountId === "string" ? parsed.accountId : undefined,
+    threadId:
+      typeof parsed.threadId === "string" || typeof parsed.threadId === "number"
+        ? parsed.threadId
+        : undefined,
+  });
 }
 
 function rowToSyncMode(row: FlowRegistryRow): TaskFlowSyncMode {
@@ -81,7 +102,7 @@ function rowToSyncMode(row: FlowRegistryRow): TaskFlowSyncMode {
 function rowToFlowRecord(row: FlowRegistryRow): TaskFlowRecord {
   const endedAt = normalizeNumber(row.ended_at);
   const cancelRequestedAt = normalizeNumber(row.cancel_requested_at);
-  const requesterOrigin = parseJsonValue<DeliveryContext>(row.requester_origin_json);
+  const requesterOrigin = parseDeliveryContextJson(row.requester_origin_json);
   const stateJson = parseJsonValue<JsonValue>(row.state_json);
   const waitJson = parseJsonValue<JsonValue>(row.wait_json);
   return {
@@ -334,13 +355,14 @@ function openFlowRegistryDatabase(): FlowRegistryDatabase {
     return cachedDatabase;
   }
   if (cachedDatabase) {
+    cachedDatabase.walMaintenance.close();
     cachedDatabase.db.close();
     cachedDatabase = null;
   }
   ensureFlowRegistryPermissions(pathname);
   const { DatabaseSync } = requireNodeSqlite();
   const db = new DatabaseSync(pathname);
-  db.exec(`PRAGMA journal_mode = WAL;`);
+  const walMaintenance = configureSqliteWalMaintenance(db);
   db.exec(`PRAGMA synchronous = NORMAL;`);
   db.exec(`PRAGMA busy_timeout = 5000;`);
   ensureSchema(db);
@@ -349,6 +371,7 @@ function openFlowRegistryDatabase(): FlowRegistryDatabase {
     db,
     path: pathname,
     statements: createStatements(db),
+    walMaintenance,
   };
   return cachedDatabase;
 }
@@ -399,6 +422,7 @@ export function closeTaskFlowRegistrySqliteStore() {
   if (!cachedDatabase) {
     return;
   }
+  cachedDatabase.walMaintenance.close();
   cachedDatabase.db.close();
   cachedDatabase = null;
 }

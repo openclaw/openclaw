@@ -1,11 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
+import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
+import type { MSTeamsConversationStore } from "./conversation-store.js";
 import {
   type MSTeamsActivityHandler,
   type MSTeamsMessageHandlerDeps,
   registerMSTeamsHandlers,
 } from "./monitor-handler.js";
-import { setMSTeamsRuntime } from "./runtime.js";
+import { installMSTeamsTestRuntime } from "./monitor-handler.test-helpers.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 
 const runtimeApiMockState = vi.hoisted(() => ({
@@ -16,10 +17,8 @@ const runtimeApiMockState = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock("../runtime-api.js", async () => {
-  const actual = await vi.importActual<typeof import("../runtime-api.js")>("../runtime-api.js");
+vi.mock("openclaw/plugin-sdk/inbound-reply-dispatch", () => {
   return {
-    ...actual,
     dispatchReplyFromConfigWithSettledDispatcher:
       runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher,
   };
@@ -34,43 +33,7 @@ vi.mock("./reply-dispatcher.js", () => ({
 }));
 
 function createDeps(): MSTeamsMessageHandlerDeps {
-  setMSTeamsRuntime({
-    logging: { shouldLogVerbose: () => false },
-    system: { enqueueSystemEvent: vi.fn() },
-    channel: {
-      debounce: {
-        resolveInboundDebounceMs: () => 0,
-        createInboundDebouncer: <T>(params: {
-          onFlush: (entries: T[]) => Promise<void>;
-        }): { enqueue: (entry: T) => Promise<void> } => ({
-          enqueue: async (entry: T) => {
-            await params.onFlush([entry]);
-          },
-        }),
-      },
-      pairing: {
-        readAllowFromStore: vi.fn(async () => []),
-        upsertPairingRequest: vi.fn(async () => null),
-      },
-      text: {
-        hasControlCommand: () => false,
-      },
-      routing: {
-        resolveAgentRoute: ({ peer }: { peer: { kind: string; id: string } }) => ({
-          sessionKey: `msteams:${peer.kind}:${peer.id}`,
-          agentId: "default",
-          accountId: "default",
-        }),
-      },
-      reply: {
-        formatAgentEnvelope: ({ body }: { body: string }) => body,
-        finalizeInboundContext: <T extends Record<string, unknown>>(ctx: T) => ctx,
-      },
-      session: {
-        recordInboundSession: vi.fn(async () => undefined),
-      },
-    },
-  } as unknown as PluginRuntime);
+  installMSTeamsTestRuntime();
 
   return {
     cfg: {} as OpenClawConfig,
@@ -83,8 +46,13 @@ function createDeps(): MSTeamsMessageHandlerDeps {
     textLimit: 4000,
     mediaMaxBytes: 1024 * 1024,
     conversationStore: {
+      get: vi.fn(async () => null),
       upsert: vi.fn(async () => undefined),
-    } as unknown as MSTeamsMessageHandlerDeps["conversationStore"],
+      list: vi.fn(async () => []),
+      remove: vi.fn(async () => false),
+      findPreferredDmByUserId: vi.fn(async () => null),
+      findByUserId: vi.fn(async () => null),
+    } satisfies MSTeamsConversationStore,
     pollStore: {
       recordVote: vi.fn(async () => null),
     } as unknown as MSTeamsMessageHandlerDeps["pollStore"],
@@ -179,16 +147,12 @@ describe("msteams adaptive card action invoke", () => {
     expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).toHaveBeenCalledTimes(
       1,
     );
-    expect(
-      runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mock.calls[0]?.[0],
-    ).toMatchObject({
-      ctxPayload: {
-        RawBody: JSON.stringify(payload),
-        BodyForAgent: JSON.stringify(payload),
-        CommandBody: JSON.stringify(payload),
-        SessionKey: "msteams:direct:user-aad",
-        SenderId: "user-aad",
-      },
-    });
+    const dispatched = runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mock
+      .calls[0]?.[0] as { ctxPayload?: Record<string, unknown> } | undefined;
+    expect(dispatched?.ctxPayload?.RawBody).toBe(JSON.stringify(payload));
+    expect(dispatched?.ctxPayload?.BodyForAgent).toBe(JSON.stringify(payload));
+    expect(dispatched?.ctxPayload?.CommandBody).toBe(JSON.stringify(payload));
+    expect(dispatched?.ctxPayload?.SessionKey).toBe("msteams:direct:user-aad");
+    expect(dispatched?.ctxPayload?.SenderId).toBe("user-aad");
   });
 });

@@ -1,5 +1,6 @@
 import type { Command } from "commander";
-import { loadConfig, readConfigFileSnapshot, type OpenClawConfig } from "../config/config.js";
+import { getRuntimeConfig, readConfigFileSnapshot } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createPluginCliLogger,
   loadPluginCliDescriptors,
@@ -16,7 +17,55 @@ type RegisterPluginCliOptions = {
   primary?: string | null;
 };
 
+type PluginCliRegistrationEntries = Awaited<
+  ReturnType<typeof loadPluginCliRegistrationEntriesWithDefaults>
+>;
+
+const PLUGIN_CLI_ENTRIES_CACHE_KEY = Symbol.for("openclaw.plugin-cli-registration-entries-cache");
+
+interface ProgramWithEntriesCache {
+  [PLUGIN_CLI_ENTRIES_CACHE_KEY]?: {
+    primary: string | undefined;
+    inputKey: string;
+    entries: PluginCliRegistrationEntries;
+  };
+}
+
 const logger = createPluginCliLogger();
+const loaderOptionIds = new WeakMap<object, number>();
+let nextLoaderOptionId = 1;
+
+function stableJsonKey(value: unknown): string {
+  if (value === undefined) {
+    return "undefined";
+  }
+  try {
+    return JSON.stringify(value, (_key, entry) => {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        return entry;
+      }
+      return Object.fromEntries(
+        Object.entries(entry).toSorted(([left], [right]) => left.localeCompare(right)),
+      );
+    });
+  } catch {
+    return "unserializable";
+  }
+}
+
+function loaderOptionsKey(loaderOptions: PluginCliLoaderOptions | undefined): string {
+  if (!loaderOptions) {
+    return "undefined";
+  }
+  const existing = loaderOptionIds.get(loaderOptions);
+  if (existing) {
+    return String(existing);
+  }
+  const id = nextLoaderOptionId;
+  nextLoaderOptionId += 1;
+  loaderOptionIds.set(loaderOptions, id);
+  return String(id);
+}
 
 export const loadValidatedConfigForPluginRegistration =
   async (): Promise<OpenClawConfig | null> => {
@@ -24,7 +73,7 @@ export const loadValidatedConfigForPluginRegistration =
     if (!snapshot.valid) {
       return null;
     }
-    return loadConfig();
+    return getRuntimeConfig();
   };
 
 export async function getPluginCliCommandDescriptors(
@@ -43,18 +92,32 @@ export async function registerPluginCliCommands(
   options?: RegisterPluginCliOptions,
 ) {
   const mode = options?.mode ?? "eager";
-  const primary = options?.primary ?? null;
-
-  await registerPluginCliCommandGroups(
-    program,
-    await loadPluginCliRegistrationEntriesWithDefaults({ cfg, env, loaderOptions }),
-    {
-      mode,
-      primary,
-      existingCommands: new Set(program.commands.map((cmd) => cmd.name())),
-      logger,
-    },
+  const primary = options?.primary ?? undefined;
+  const inputKey = [stableJsonKey(cfg), stableJsonKey(env), loaderOptionsKey(loaderOptions)].join(
+    "\0",
   );
+
+  const programWithCache = program as Command & ProgramWithEntriesCache;
+  const cached = programWithCache[PLUGIN_CLI_ENTRIES_CACHE_KEY];
+  let entries: PluginCliRegistrationEntries;
+  if (cached && cached.primary === primary && cached.inputKey === inputKey) {
+    entries = cached.entries;
+  } else {
+    entries = await loadPluginCliRegistrationEntriesWithDefaults({
+      cfg,
+      env,
+      loaderOptions,
+      primaryCommand: primary,
+    });
+    programWithCache[PLUGIN_CLI_ENTRIES_CACHE_KEY] = { primary, inputKey, entries };
+  }
+
+  await registerPluginCliCommandGroups(program, entries, {
+    mode,
+    primary,
+    existingCommands: new Set(program.commands.map((cmd) => cmd.name())),
+    logger,
+  });
 }
 
 export async function registerPluginCliCommandsFromValidatedConfig(

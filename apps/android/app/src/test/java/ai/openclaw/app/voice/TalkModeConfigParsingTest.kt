@@ -13,7 +13,8 @@ class TalkModeConfigParsingTest {
   @Test
   fun readsMainSessionKeyAndInterruptFlag() {
     val config =
-      json.parseToJsonElement(
+      json
+        .parseToJsonElement(
           """
           {
             "talk": {
@@ -25,8 +26,7 @@ class TalkModeConfigParsingTest {
             }
           }
           """.trimIndent(),
-        )
-        .jsonObject
+        ).jsonObject
 
     val parsed = TalkModeGatewayConfigParser.parse(config)
 
@@ -60,6 +60,39 @@ class TalkModeConfigParsingTest {
     assertEquals(
       TalkDefaults.defaultSilenceTimeoutMs,
       TalkModeGatewayConfigParser.resolvedSilenceTimeoutMs(talk),
+    )
+  }
+
+  @Test
+  fun defaultsToNativeTalkMode() {
+    val talk =
+      buildJsonObject {
+        put("realtime", buildJsonObject { put("transport", "webrtc") })
+      }
+
+    assertEquals(
+      TalkModeExecutionMode.Native,
+      TalkModeGatewayConfigParser.resolvedExecutionMode(talk),
+    )
+  }
+
+  @Test
+  fun usesRealtimeRelayWhenGatewayRelayIsConfigured() {
+    val talk =
+      buildJsonObject {
+        put(
+          "realtime",
+          buildJsonObject {
+            put("mode", "realtime")
+            put("transport", "gateway-relay")
+            put("brain", "agent-consult")
+          },
+        )
+      }
+
+    assertEquals(
+      TalkModeExecutionMode.RealtimeRelay,
+      TalkModeGatewayConfigParser.resolvedExecutionMode(talk),
     )
   }
 }

@@ -1,9 +1,14 @@
-import { request } from "node:http";
+import { request, type IncomingMessage } from "node:http";
 import type { RealtimeTranscriptionProviderPlugin } from "openclaw/plugin-sdk/realtime-transcription";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { VoiceCallConfigSchema, type VoiceCallConfig } from "./config.js";
+import {
+  VoiceCallConfigSchema,
+  type VoiceCallConfig,
+  type VoiceCallConfigInput,
+} from "./config.js";
 import type { CallManager } from "./manager.js";
 import type { VoiceCallProvider } from "./providers/base.js";
+import type { TwilioProvider } from "./providers/twilio.js";
 import type { CallRecord, NormalizedEvent } from "./types.js";
 import { VoiceCallWebhookServer } from "./webhook.js";
 import type { RealtimeCallHandler } from "./webhook/realtime-handler.js";
@@ -24,9 +29,9 @@ const mocks = vi.hoisted(() => {
   };
 
   return {
-    getRealtimeTranscriptionProvider: vi.fn<
-      (...args: unknown[]) => RealtimeTranscriptionProviderPlugin | undefined
-    >(() => realtimeTranscriptionProvider),
+    getRealtimeTranscriptionProvider: vi.fn<(...args: unknown[]) => unknown>(
+      () => realtimeTranscriptionProvider,
+    ),
     listRealtimeTranscriptionProviders: vi.fn(() => [realtimeTranscriptionProvider]),
   };
 });
@@ -48,18 +53,50 @@ const provider: VoiceCallProvider = {
   getCallStatus: async () => ({ status: "in-progress", isTerminal: false }),
 };
 
-const createConfig = (overrides: Partial<VoiceCallConfig> = {}): VoiceCallConfig => {
+type TwilioProviderTestDouble = VoiceCallProvider &
+  Pick<
+    TwilioProvider,
+    | "isValidStreamToken"
+    | "registerCallStream"
+    | "unregisterCallStream"
+    | "hasRegisteredStream"
+    | "clearTtsQueue"
+  >;
+
+const createConfig = (overrides: VoiceCallConfigInput = {}): VoiceCallConfig => {
   const base = VoiceCallConfigSchema.parse({});
   base.serve.port = 0;
 
-  return {
+  const merged = {
     ...base,
     ...overrides,
     serve: {
       ...base.serve,
       ...overrides.serve,
     },
+    realtime: {
+      ...base.realtime,
+      ...overrides.realtime,
+      tools: overrides.realtime?.tools ?? base.realtime.tools,
+      fastContext: {
+        ...base.realtime.fastContext,
+        ...overrides.realtime?.fastContext,
+        sources: overrides.realtime?.fastContext?.sources ?? base.realtime.fastContext.sources,
+      },
+      agentContext: {
+        ...base.realtime.agentContext,
+        ...overrides.realtime?.agentContext,
+        files: overrides.realtime?.agentContext?.files ?? base.realtime.agentContext.files,
+      },
+      providers: overrides.realtime?.providers ?? base.realtime.providers,
+    },
   };
+  const parsed = VoiceCallConfigSchema.parse({
+    ...merged,
+    serve: { ...merged.serve, port: merged.serve.port === 0 ? 1 : merged.serve.port },
+  });
+  parsed.serve.port = merged.serve.port;
+  return parsed;
 };
 
 const createCall = (startedAt: number): CallRecord => ({
@@ -107,11 +144,52 @@ function requireBoundRequestUrl(server: VoiceCallWebhookServer, baseUrl: string)
   return requestUrl;
 }
 
+function requireFirstMockCall(calls: readonly unknown[][], label: string): unknown[] {
+  const call = calls.at(0);
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
 function expectWebhookUrl(url: string, expectedPath: string) {
   const parsed = new URL(url);
   expect(parsed.pathname).toBe(expectedPath);
   expect(parsed.port).not.toBe("");
   expect(parsed.port).not.toBe("0");
+}
+
+function createTwilioVerificationProvider(
+  overrides: Partial<TwilioProviderTestDouble> = {},
+): VoiceCallProvider {
+  return {
+    ...provider,
+    name: "twilio",
+    verifyWebhook: () => ({ ok: true, verifiedRequestKey: "twilio:req:test" }),
+    ...overrides,
+  };
+}
+
+function createTwilioStreamingProvider(
+  overrides: Partial<TwilioProviderTestDouble> = {},
+): TwilioProviderTestDouble {
+  return {
+    ...createTwilioVerificationProvider({
+      parseWebhookEvent: () => ({ events: [] }),
+      initiateCall: async () => ({ providerCallId: "provider-call", status: "initiated" as const }),
+      hangupCall: async () => {},
+      playTts: async () => {},
+      startListening: async () => {},
+      stopListening: async () => {},
+      getCallStatus: async () => ({ status: "in-progress", isTerminal: false }),
+    }),
+    isValidStreamToken: () => true,
+    registerCallStream: () => {},
+    unregisterCallStream: () => {},
+    hasRegisteredStream: () => true,
+    clearTtsQueue: () => {},
+    ...overrides,
+  };
 }
 
 describe("VoiceCallWebhookServer realtime transcription provider selection", () => {
@@ -147,12 +225,227 @@ describe("VoiceCallWebhookServer realtime transcription provider selection", () 
     const server = new VoiceCallWebhookServer(config, manager, provider);
     try {
       await server.start();
-      expect(mocks.getRealtimeTranscriptionProvider).toHaveBeenCalledWith(undefined, null);
+      expect(mocks.getRealtimeTranscriptionProvider).not.toHaveBeenCalled();
       expect(mocks.listRealtimeTranscriptionProviders).toHaveBeenCalledWith(null);
-      expect(server.getMediaStreamHandler()).toBeTruthy();
+      const mediaStreamHandler = server.getMediaStreamHandler();
+      if (!mediaStreamHandler) {
+        throw new Error("expected media stream handler");
+      }
+      expect(mediaStreamHandler.handleUpgrade).toBeTypeOf("function");
+      expect(mediaStreamHandler.sendAudio).toBeTypeOf("function");
+      expect(mediaStreamHandler.closeAll).toBeTypeOf("function");
     } finally {
       await server.stop();
     }
+  });
+
+  it("records media stream Talk events on the active call metadata", async () => {
+    const call = createCall(Date.now());
+    const manager = {
+      getActiveCalls: () => [call],
+      getCallByProviderCallId: (providerCallId: string) =>
+        providerCallId === "provider-call-1" ? call : undefined,
+      endCall: vi.fn(async () => ({ success: true })),
+      processEvent: vi.fn(),
+      speakInitialMessage: vi.fn(async () => {}),
+    } as unknown as CallManager;
+    const config = createConfig({
+      streaming: {
+        ...createConfig().streaming,
+        enabled: true,
+        providers: {
+          openai: {
+            apiKey: "sk-test", // pragma: allowlist secret
+          },
+        },
+      },
+    });
+
+    const server = new VoiceCallWebhookServer(config, manager, provider);
+    try {
+      await server.start();
+      const mediaHandler = server.getMediaStreamHandler() as unknown as {
+        config: {
+          onTalkEvent?: NonNullable<import("./media-stream.js").MediaStreamConfig["onTalkEvent"]>;
+        };
+      };
+      mediaHandler.config.onTalkEvent?.("provider-call-1", "MZ-talk", {
+        id: "voice-call:provider-call-1:MZ-talk:1",
+        type: "transcript.done",
+        sessionId: "voice-call:provider-call-1:MZ-talk",
+        turnId: "MZ-talk:turn:1",
+        seq: 1,
+        timestamp: "2026-05-05T06:00:00.000Z",
+        mode: "stt-tts",
+        transport: "gateway-relay",
+        brain: "agent-consult",
+        provider: "openai",
+        final: true,
+        payload: { text: "hello", role: "user" },
+      });
+
+      expect(call.metadata?.lastTalkEventAt).toBe("2026-05-05T06:00:00.000Z");
+      expect(call.metadata?.lastTalkEventType).toBe("transcript.done");
+      expect(call.metadata?.recentTalkEvents).toEqual([
+        {
+          at: "2026-05-05T06:00:00.000Z",
+          type: "transcript.done",
+          sessionId: "voice-call:provider-call-1:MZ-talk",
+          turnId: "MZ-talk:turn:1",
+        },
+      ]);
+    } finally {
+      await server.stop();
+    }
+  });
+});
+
+describe("VoiceCallWebhookServer media stream client IP resolution", () => {
+  type MediaStreamRequestDouble = {
+    headers: Record<string, string>;
+    socket: { remoteAddress?: string };
+  };
+
+  const resolveMediaStreamClientIp = (
+    configOverrides: Partial<VoiceCallConfig>,
+    requestOverrides: Partial<MediaStreamRequestDouble> = {},
+  ): string | undefined => {
+    const { manager } = createManager([]);
+    const server = new VoiceCallWebhookServer(
+      createConfig(configOverrides),
+      manager,
+      createTwilioStreamingProvider(),
+    );
+    const request = {
+      headers: {},
+      socket: { remoteAddress: "127.0.0.1" },
+      ...requestOverrides,
+    };
+
+    return (
+      server as unknown as {
+        resolveMediaStreamClientIp: (request: MediaStreamRequestDouble) => string | undefined;
+      }
+    ).resolveMediaStreamClientIp(request as never);
+  };
+
+  it("uses forwarded IPs only when forwarding trust is explicitly enabled", () => {
+    const ip = resolveMediaStreamClientIp(
+      {
+        webhookSecurity: {
+          allowedHosts: [],
+          trustForwardingHeaders: true,
+          trustedProxyIPs: ["127.0.0.1"],
+        },
+      },
+      {
+        headers: {
+          "x-forwarded-for": "198.51.100.10, 203.0.113.10",
+        },
+      },
+    );
+
+    expect(ip).toBe("203.0.113.10");
+  });
+
+  it("does not trust forwarded IPs when only allowedHosts is configured", () => {
+    const ip = resolveMediaStreamClientIp(
+      {
+        webhookSecurity: {
+          allowedHosts: ["voice.example.com"],
+          trustForwardingHeaders: false,
+          trustedProxyIPs: ["127.0.0.1"],
+        },
+      },
+      {
+        headers: {
+          "x-forwarded-for": "198.51.100.10",
+          "x-real-ip": "198.51.100.11",
+        },
+      },
+    );
+
+    expect(ip).toBe("127.0.0.1");
+  });
+
+  it("ignores spoofed forwarded IPs from untrusted remotes", () => {
+    const ip = resolveMediaStreamClientIp(
+      {
+        webhookSecurity: {
+          allowedHosts: [],
+          trustForwardingHeaders: true,
+          trustedProxyIPs: ["203.0.113.10"],
+        },
+      },
+      {
+        headers: {
+          "x-forwarded-for": "198.51.100.10",
+        },
+        socket: { remoteAddress: "127.0.0.1" },
+      },
+    );
+
+    expect(ip).toBe("127.0.0.1");
+  });
+
+  it("walks the forwarded chain from the right to support trusted multi-proxy deployments", () => {
+    const ip = resolveMediaStreamClientIp(
+      {
+        webhookSecurity: {
+          allowedHosts: [],
+          trustForwardingHeaders: true,
+          trustedProxyIPs: ["127.0.0.1", "203.0.113.10"],
+        },
+      },
+      {
+        headers: {
+          "x-forwarded-for": "198.51.100.10, 203.0.113.10",
+        },
+      },
+    );
+
+    expect(ip).toBe("198.51.100.10");
+  });
+
+  it("ignores forwarded IPs when no trusted proxy is configured", () => {
+    const ip = resolveMediaStreamClientIp(
+      {
+        webhookSecurity: {
+          allowedHosts: [],
+          trustForwardingHeaders: true,
+          trustedProxyIPs: [],
+        },
+      },
+      {
+        headers: {
+          "x-forwarded-for": "198.51.100.10",
+          "x-real-ip": "198.51.100.11",
+        },
+        socket: { remoteAddress: "127.0.0.1" },
+      },
+    );
+
+    expect(ip).toBe("127.0.0.1");
+  });
+
+  it("matches trusted proxies when the remote uses an IPv4-mapped form", () => {
+    const ip = resolveMediaStreamClientIp(
+      {
+        webhookSecurity: {
+          allowedHosts: [],
+          trustForwardingHeaders: true,
+          trustedProxyIPs: ["127.0.0.1", "203.0.113.10"],
+        },
+      },
+      {
+        headers: {
+          "x-forwarded-for": "198.51.100.10, 203.0.113.10",
+        },
+        socket: { remoteAddress: "::ffff:127.0.0.1" },
+      },
+    );
+
+    expect(ip).toBe("198.51.100.10");
   });
 });
 
@@ -160,11 +453,12 @@ async function runStaleCallReaperCase(params: {
   callAgeMs: number;
   staleCallReaperSeconds: number;
   advanceMs: number;
+  callOverrides?: Partial<CallRecord>;
 }) {
   const now = new Date("2026-02-16T00:00:00Z");
   vi.setSystemTime(now);
 
-  const call = createCall(now.getTime() - params.callAgeMs);
+  const call = { ...createCall(now.getTime() - params.callAgeMs), ...params.callOverrides };
   const { manager, endCall } = createManager([call]);
   const config = createConfig({ staleCallReaperSeconds: params.staleCallReaperSeconds });
   const server = new VoiceCallWebhookServer(config, manager, provider);
@@ -292,6 +586,19 @@ describe("VoiceCallWebhookServer stale call reaper", () => {
       await server.stop();
     }
   });
+
+  it("does not reap calls that reached the answered state", async () => {
+    const { endCall } = await runStaleCallReaperCase({
+      callAgeMs: 120_000,
+      staleCallReaperSeconds: 60,
+      advanceMs: 30_000,
+      callOverrides: {
+        state: "answered",
+        answeredAt: new Date("2026-02-15T23:58:30Z").getTime(),
+      },
+    });
+    expect(endCall).not.toHaveBeenCalled();
+  });
 });
 
 describe("VoiceCallWebhookServer path matching", () => {
@@ -323,6 +630,56 @@ describe("VoiceCallWebhookServer path matching", () => {
       expect(parseWebhookEvent).not.toHaveBeenCalled();
     } finally {
       await server.stop();
+    }
+  });
+
+  it("matches webhook paths without trusting malformed Host headers", async () => {
+    const verifyWebhook = vi.fn((ctx) => {
+      expect(ctx.url).toBe("http://localhost/voice/webhook?type=status");
+      expect(ctx.query).toEqual({ type: "status" });
+      return { ok: true, verifiedRequestKey: "verified:req:host" };
+    });
+    const parseWebhookEvent = vi.fn(() => ({ events: [], statusCode: 200 }));
+    const strictProvider: VoiceCallProvider = {
+      ...provider,
+      verifyWebhook,
+      parseWebhookEvent,
+    };
+    const { manager } = createManager([]);
+    const config = createConfig({ serve: { port: 0, bind: "127.0.0.1", path: "/voice/webhook" } });
+    const server = new VoiceCallWebhookServer(config, manager, strictProvider);
+    const readBodySpy = vi.spyOn(
+      server as unknown as {
+        readBody: (req: unknown, maxBytes: number, timeoutMs?: number) => Promise<string>;
+      },
+      "readBody",
+    );
+    readBodySpy.mockResolvedValue("CallSid=CA123&SpeechResult=hello");
+    const runWebhookPipeline = (
+      server as unknown as {
+        runWebhookPipeline: (
+          req: IncomingMessage,
+          webhookPath: string,
+        ) => Promise<{ statusCode: number; body: string }>;
+      }
+    ).runWebhookPipeline.bind(server);
+
+    try {
+      const result = await runWebhookPipeline(
+        {
+          method: "POST",
+          url: "/voice/webhook?type=status",
+          headers: { host: "[" },
+          socket: { remoteAddress: "127.0.0.1" },
+        } as unknown as IncomingMessage,
+        "/voice/webhook",
+      );
+
+      expect(result.statusCode).toBe(200);
+      expect(verifyWebhook).toHaveBeenCalledTimes(1);
+      expect(parseWebhookEvent).toHaveBeenCalledTimes(1);
+    } finally {
+      readBodySpy.mockRestore();
     }
   });
 });
@@ -374,10 +731,12 @@ describe("VoiceCallWebhookServer replay handling", () => {
     const { manager, processEvent } = createManager([]);
     const config = createConfig({
       provider: "twilio",
-      inboundPolicy: "allowlist",
+      inboundPolicy: "open",
       realtime: {
         enabled: true,
         streamPath: "/voice/stream/realtime",
+        instructions: "Be helpful.",
+        toolPolicy: "safe-read-only",
         tools: [],
         providers: {},
       },
@@ -408,6 +767,232 @@ describe("VoiceCallWebhookServer replay handling", () => {
       expect(await response.text()).toContain("<Connect><Stream");
       expect(parseWebhookEvent).not.toHaveBeenCalled();
       expect(processEvent).not.toHaveBeenCalled();
+    } finally {
+      await server.stop();
+    }
+  });
+
+  it.each(["outbound-api", "outbound-dial"] as const)(
+    "returns realtime TwiML for %s twilio TwiML fetches",
+    async (direction) => {
+      const parseWebhookEvent = vi.fn(() => ({ events: [], statusCode: 200 }));
+      const buildTwiMLPayload = vi.fn(() => ({
+        statusCode: 200,
+        headers: { "Content-Type": "text/xml" },
+        body: '<Response><Connect><Stream url="wss://example.test/voice/stream/realtime/token" /></Connect></Response>',
+      }));
+      const twilioProvider: VoiceCallProvider = {
+        ...provider,
+        name: "twilio",
+        verifyWebhook: () => ({ ok: true, verifiedRequestKey: "twilio:req:rt-outbound" }),
+        parseWebhookEvent,
+      };
+      const { manager, processEvent } = createManager([]);
+      const config = createConfig({
+        provider: "twilio",
+        inboundPolicy: "disabled",
+        realtime: {
+          enabled: true,
+          streamPath: "/voice/stream/realtime",
+          instructions: "Be helpful.",
+          toolPolicy: "safe-read-only",
+          tools: [],
+          providers: {},
+        },
+      });
+      const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
+      server.setRealtimeHandler({
+        buildTwiMLPayload,
+        getStreamPathPattern: () => "/voice/stream/realtime",
+        handleWebSocketUpgrade: () => {},
+        registerToolHandler: () => {},
+        setPublicUrl: () => {},
+      } as unknown as RealtimeCallHandler);
+
+      try {
+        const baseUrl = await server.start();
+        const response = await postWebhookFormWithHeaders(
+          server,
+          baseUrl,
+          `CallSid=CA123&Direction=${direction}&CallStatus=in-progress&From=%2B15550001111&To=%2B15550002222`,
+          { "x-twilio-signature": "sig" },
+        );
+
+        expect(response.status).toBe(200);
+        expect(await response.text()).toContain("<Connect><Stream");
+        expect(buildTwiMLPayload).toHaveBeenCalledTimes(1);
+        expect(parseWebhookEvent).not.toHaveBeenCalled();
+        expect(processEvent).not.toHaveBeenCalled();
+      } finally {
+        await server.stop();
+      }
+    },
+  );
+
+  it("serves initial provider TwiML before the realtime shortcut", async () => {
+    const parseWebhookEvent = vi.fn(() => ({ events: [], statusCode: 200 }));
+    const consumeInitialTwiML = vi.fn(
+      () =>
+        '<Response><Play digits="ww123456#" /><Redirect method="POST">https://example.test</Redirect></Response>',
+    );
+    const buildTwiMLPayload = vi.fn(() => ({
+      statusCode: 200,
+      headers: { "Content-Type": "text/xml" },
+      body: '<Response><Connect><Stream url="wss://example.test/voice/stream/realtime/token" /></Connect></Response>',
+    }));
+    const twilioProvider: VoiceCallProvider = {
+      ...provider,
+      name: "twilio",
+      verifyWebhook: () => ({ ok: true, verifiedRequestKey: "twilio:req:rt-stored" }),
+      parseWebhookEvent,
+      consumeInitialTwiML,
+    };
+    const { manager, processEvent } = createManager([]);
+    const config = createConfig({
+      provider: "twilio",
+      inboundPolicy: "disabled",
+      realtime: {
+        enabled: true,
+        streamPath: "/voice/stream/realtime",
+        instructions: "Be helpful.",
+        toolPolicy: "safe-read-only",
+        tools: [],
+        providers: {},
+      },
+    });
+    const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
+    server.setRealtimeHandler({
+      buildTwiMLPayload,
+      getStreamPathPattern: () => "/voice/stream/realtime",
+      handleWebSocketUpgrade: () => {},
+      registerToolHandler: () => {},
+      setPublicUrl: () => {},
+    } as unknown as RealtimeCallHandler);
+
+    try {
+      const baseUrl = await server.start();
+      const requestUrl = requireBoundRequestUrl(server, baseUrl);
+      requestUrl.searchParams.set("callId", "call-1");
+      const response = await fetch(requestUrl.toString(), {
+        method: "POST",
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+          "x-twilio-signature": "sig",
+        },
+        body: "CallSid=CA123&Direction=outbound-api&CallStatus=in-progress&From=%2B15550001111&To=%2B15550002222",
+      });
+
+      expect(response.status).toBe(200);
+      const body = await response.text();
+      expect(body).toContain('<Play digits="ww123456#"');
+      expect(consumeInitialTwiML).toHaveBeenCalledTimes(1);
+      expect(buildTwiMLPayload).not.toHaveBeenCalled();
+      expect(parseWebhookEvent).not.toHaveBeenCalled();
+      expect(processEvent).not.toHaveBeenCalled();
+    } finally {
+      await server.stop();
+    }
+  });
+
+  it("rejects non-allowlisted inbound realtime calls before creating a stream token", async () => {
+    const buildTwiMLPayload = vi.fn(() => ({
+      statusCode: 200,
+      headers: { "Content-Type": "text/xml" },
+      body: '<Response><Connect><Stream url="wss://example.test/voice/stream/realtime/token" /></Connect></Response>',
+    }));
+    const twilioProvider: VoiceCallProvider = {
+      ...provider,
+      name: "twilio",
+      verifyWebhook: () => ({ ok: true, verifiedRequestKey: "twilio:req:rt-deny" }),
+    };
+    const { manager } = createManager([]);
+    const config = createConfig({
+      provider: "twilio",
+      inboundPolicy: "allowlist",
+      allowFrom: ["+15550001111"],
+      realtime: {
+        enabled: true,
+        streamPath: "/voice/stream/realtime",
+        instructions: "Be helpful.",
+        toolPolicy: "safe-read-only",
+        tools: [],
+        providers: {},
+      },
+    });
+    const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
+    server.setRealtimeHandler({
+      buildTwiMLPayload,
+      getStreamPathPattern: () => "/voice/stream/realtime",
+      handleWebSocketUpgrade: () => {},
+      registerToolHandler: () => {},
+      setPublicUrl: () => {},
+    } as unknown as RealtimeCallHandler);
+
+    try {
+      const baseUrl = await server.start();
+      const response = await postWebhookFormWithHeaders(
+        server,
+        baseUrl,
+        "CallSid=CA123&Direction=inbound&CallStatus=ringing&From=%2B15550002222",
+        { "x-twilio-signature": "sig" },
+      );
+      const body = await response.text();
+
+      expect(response.status).toBe(200);
+      expect(body).toContain("<Reject");
+      expect(buildTwiMLPayload).not.toHaveBeenCalled();
+    } finally {
+      await server.stop();
+    }
+  });
+
+  it("creates a realtime stream only for allowlisted inbound callers", async () => {
+    const buildTwiMLPayload = vi.fn(() => ({
+      statusCode: 200,
+      headers: { "Content-Type": "text/xml" },
+      body: '<Response><Connect><Stream url="wss://example.test/voice/stream/realtime/token" /></Connect></Response>',
+    }));
+    const twilioProvider: VoiceCallProvider = {
+      ...provider,
+      name: "twilio",
+      verifyWebhook: () => ({ ok: true, verifiedRequestKey: "twilio:req:rt-allow" }),
+    };
+    const { manager } = createManager([]);
+    const config = createConfig({
+      provider: "twilio",
+      inboundPolicy: "allowlist",
+      allowFrom: ["+15550002222"],
+      realtime: {
+        enabled: true,
+        streamPath: "/voice/stream/realtime",
+        instructions: "Be helpful.",
+        toolPolicy: "safe-read-only",
+        tools: [],
+        providers: {},
+      },
+    });
+    const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
+    server.setRealtimeHandler({
+      buildTwiMLPayload,
+      getStreamPathPattern: () => "/voice/stream/realtime",
+      handleWebSocketUpgrade: () => {},
+      registerToolHandler: () => {},
+      setPublicUrl: () => {},
+    } as unknown as RealtimeCallHandler);
+
+    try {
+      const baseUrl = await server.start();
+      const response = await postWebhookFormWithHeaders(
+        server,
+        baseUrl,
+        "CallSid=CA123&Direction=inbound&CallStatus=ringing&From=%2B15550002222",
+        { "x-twilio-signature": "sig" },
+      );
+      const body = await response.text();
+
+      expect(response.status).toBe(200);
+      expect(body).toContain("<Connect><Stream");
+      expect(buildTwiMLPayload).toHaveBeenCalledTimes(1);
     } finally {
       await server.stop();
     }
@@ -444,7 +1029,7 @@ describe("VoiceCallWebhookServer replay handling", () => {
 
       expect(response.status).toBe(200);
       expect(parseWebhookEvent).toHaveBeenCalledTimes(1);
-      const parseOptions = parseWebhookEvent.mock.calls[0]?.[1];
+      const parseOptions = requireFirstMockCall(parseWebhookEvent.mock.calls, "webhook parse")[1];
       if (!parseOptions) {
         throw new Error("webhook server did not pass verified parse options");
       }
@@ -452,7 +1037,9 @@ describe("VoiceCallWebhookServer replay handling", () => {
         verifiedRequestKey: "verified:req:123",
       });
       expect(processEvent).toHaveBeenCalledTimes(1);
-      const firstEvent = processEvent.mock.calls[0]?.[0];
+      const firstEvent = requireFirstMockCall(processEvent.mock.calls, "processed event")[0] as
+        | NormalizedEvent
+        | undefined;
       if (!firstEvent) {
         throw new Error("webhook server did not forward the parsed event");
       }
@@ -488,11 +1075,7 @@ describe("VoiceCallWebhookServer replay handling", () => {
 describe("VoiceCallWebhookServer pre-auth webhook guards", () => {
   it("rejects missing signature headers before reading the request body", async () => {
     const verifyWebhook = vi.fn(() => ({ ok: true, verifiedRequestKey: "twilio:req:test" }));
-    const twilioProvider: VoiceCallProvider = {
-      ...provider,
-      name: "twilio",
-      verifyWebhook,
-    };
+    const twilioProvider = createTwilioVerificationProvider({ verifyWebhook });
     const { manager } = createManager([]);
     const config = createConfig({ provider: "twilio" });
     const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
@@ -519,11 +1102,7 @@ describe("VoiceCallWebhookServer pre-auth webhook guards", () => {
 
   it("uses the shared pre-auth body cap before verification", async () => {
     const verifyWebhook = vi.fn(() => ({ ok: true, verifiedRequestKey: "twilio:req:test" }));
-    const twilioProvider: VoiceCallProvider = {
-      ...provider,
-      name: "twilio",
-      verifyWebhook,
-    };
+    const twilioProvider = createTwilioVerificationProvider({ verifyWebhook });
     const { manager } = createManager([]);
     const config = createConfig({ provider: "twilio" });
     const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
@@ -560,14 +1139,19 @@ describe("VoiceCallWebhookServer pre-auth webhook guards", () => {
     const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
 
     let enteredReads = 0;
-    let releaseReads!: () => void;
-    let unblockReadBodies!: () => void;
+    let releaseReads: (() => void) | undefined;
+    let unblockReadBodies: (() => void) | undefined;
     const enteredEightReads = new Promise<void>((resolve) => {
       releaseReads = resolve;
     });
     const unblockReads = new Promise<void>((resolve) => {
       unblockReadBodies = resolve;
     });
+    if (!releaseReads || !unblockReadBodies) {
+      throw new Error("Expected webhook read gates to be initialized");
+    }
+    const releaseEnteredReads = releaseReads;
+    const unblockStartedReads = unblockReadBodies;
     const readBodySpy = vi.spyOn(
       server as unknown as {
         readBody: (req: unknown, maxBytes: number, timeoutMs?: number) => Promise<string>;
@@ -577,9 +1161,11 @@ describe("VoiceCallWebhookServer pre-auth webhook guards", () => {
     readBodySpy.mockImplementation(async () => {
       enteredReads += 1;
       if (enteredReads === 8) {
-        releaseReads();
+        releaseEnteredReads();
       }
-      await unblockReads;
+      if (enteredReads <= 8) {
+        await unblockReads;
+      }
       return "CallSid=CA123&SpeechResult=hello";
     });
 
@@ -595,14 +1181,93 @@ describe("VoiceCallWebhookServer pre-auth webhook guards", () => {
       expect(rejected.status).toBe(429);
       expect(await rejected.text()).toBe("Too Many Requests");
 
-      unblockReadBodies();
+      unblockStartedReads();
 
       const settled = await Promise.all(inFlightRequests);
-      expect(settled.every((response) => response.status === 200)).toBe(true);
+      expect(settled.map((response) => response.status)).toEqual(Array(8).fill(200));
     } finally {
-      unblockReadBodies();
+      unblockStartedReads();
       readBodySpy.mockRestore();
       await server.stop();
+    }
+  });
+
+  it("limits missing remote addresses with a shared fallback bucket", async () => {
+    const twilioProvider: VoiceCallProvider = {
+      ...provider,
+      name: "twilio",
+      verifyWebhook: () => ({ ok: true, verifiedRequestKey: "twilio:req:test" }),
+    };
+    const { manager } = createManager([]);
+    const config = createConfig({ provider: "twilio" });
+    const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
+    const runWebhookPipeline = (
+      server as unknown as {
+        runWebhookPipeline: (
+          req: IncomingMessage,
+          webhookPath: string,
+        ) => Promise<{ statusCode: number; body: string }>;
+      }
+    ).runWebhookPipeline.bind(server);
+
+    let enteredReads = 0;
+    let releaseReads: (() => void) | undefined;
+    let unblockReadBodies: (() => void) | undefined;
+    const enteredEightReads = new Promise<void>((resolve) => {
+      releaseReads = resolve;
+    });
+    const unblockReads = new Promise<void>((resolve) => {
+      unblockReadBodies = resolve;
+    });
+    if (!releaseReads || !unblockReadBodies) {
+      throw new Error("Expected webhook read gates to be initialized");
+    }
+    const releaseEnteredReads = releaseReads;
+    const unblockStartedReads = unblockReadBodies;
+    const readBodySpy = vi.spyOn(
+      server as unknown as {
+        readBody: (req: unknown, maxBytes: number, timeoutMs?: number) => Promise<string>;
+      },
+      "readBody",
+    );
+    readBodySpy.mockImplementation(async () => {
+      enteredReads += 1;
+      if (enteredReads === 8) {
+        releaseEnteredReads();
+      }
+      await unblockReads;
+      return "CallSid=CA123&SpeechResult=hello";
+    });
+
+    const makeRequestWithoutRemoteAddress = () =>
+      ({
+        method: "POST",
+        url: "/voice/webhook",
+        headers: { "x-twilio-signature": "sig" },
+        socket: { remoteAddress: undefined },
+      }) as unknown as IncomingMessage;
+
+    try {
+      const inFlightRequests = Array.from({ length: 8 }, () =>
+        runWebhookPipeline(makeRequestWithoutRemoteAddress(), "/voice/webhook"),
+      );
+      await enteredEightReads;
+
+      const rejected = await runWebhookPipeline(
+        makeRequestWithoutRemoteAddress(),
+        "/voice/webhook",
+      );
+      expect(rejected.statusCode).toBe(429);
+      expect(rejected.body).toBe("Too Many Requests");
+      expect(readBodySpy).toHaveBeenCalledTimes(8);
+
+      unblockStartedReads();
+
+      const settled = await Promise.all(inFlightRequests);
+      expect(settled.map((response) => response.statusCode)).toEqual(Array(8).fill(200));
+    } finally {
+      unblockStartedReads();
+      readBodySpy.mockRestore();
     }
   });
 });
@@ -654,6 +1319,21 @@ describe("VoiceCallWebhookServer start idempotency", () => {
     }
   });
 
+  it("supports concurrent start() calls without double-binding the port", async () => {
+    const { manager } = createManager([]);
+    const config = createConfig({ serve: { port: 0, bind: "127.0.0.1", path: "/voice/webhook" } });
+    const server = new VoiceCallWebhookServer(config, manager, provider);
+
+    try {
+      const [firstUrl, secondUrl] = await Promise.all([server.start(), server.start()]);
+
+      expectWebhookUrl(firstUrl, "/voice/webhook");
+      expect(secondUrl).toBe(firstUrl);
+    } finally {
+      await server.stop();
+    }
+  });
+
   it("can start again after stop()", async () => {
     const { manager } = createManager([]);
     const config = createConfig({ serve: { port: 0, bind: "127.0.0.1", path: "/voice/webhook" } });
@@ -674,8 +1354,7 @@ describe("VoiceCallWebhookServer start idempotency", () => {
     const config = createConfig();
     const server = new VoiceCallWebhookServer(config, manager, provider);
 
-    // Should not throw
-    await server.stop();
+    await expect(server.stop()).resolves.toBeUndefined();
   });
 });
 
@@ -706,18 +1385,8 @@ describe("VoiceCallWebhookServer stream disconnect grace", () => {
       processEvent: vi.fn(),
     } as unknown as CallManager;
 
-    let currentStreamSid: string | null = "MZ-new";
-    const twilioProvider = {
-      name: "twilio" as const,
-      verifyWebhook: () => ({ ok: true, verifiedRequestKey: "twilio:req:test" }),
-      parseWebhookEvent: () => ({ events: [] }),
-      initiateCall: async () => ({ providerCallId: "provider-call", status: "initiated" as const }),
-      hangupCall: async () => {},
-      playTts: async () => {},
-      startListening: async () => {},
-      stopListening: async () => {},
-      getCallStatus: async () => ({ status: "in-progress", isTerminal: false }),
-      isValidStreamToken: () => true,
+    let currentStreamSid: string | null = "MZ-old";
+    const twilioProvider = createTwilioStreamingProvider({
       registerCallStream: (_callSid: string, streamSid: string) => {
         currentStreamSid = streamSid;
       },
@@ -731,8 +1400,7 @@ describe("VoiceCallWebhookServer stream disconnect grace", () => {
         currentStreamSid = null;
       },
       hasRegisteredStream: () => currentStreamSid !== null,
-      clearTtsQueue: () => {},
-    };
+    });
 
     const config = createConfig({
       provider: "twilio",
@@ -746,27 +1414,30 @@ describe("VoiceCallWebhookServer stream disconnect grace", () => {
         },
       },
     });
-    const server = new VoiceCallWebhookServer(
-      config,
-      manager,
-      twilioProvider as unknown as VoiceCallProvider,
-    );
+    const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
     await server.start();
 
     const mediaHandler = server.getMediaStreamHandler() as unknown as {
       config: {
         onDisconnect?: (providerCallId: string, streamSid: string) => void;
         onConnect?: (providerCallId: string, streamSid: string) => void;
+        onTranscriptionReady?: (providerCallId: string, streamSid: string) => void;
       };
     };
     if (!mediaHandler) {
       throw new Error("expected webhook server to expose a media stream handler");
     }
 
-    mediaHandler.config.onConnect?.("CA-stream-1", "MZ-new");
     mediaHandler.config.onDisconnect?.("CA-stream-1", "MZ-old");
+    await vi.advanceTimersByTimeAsync(1_000);
+    mediaHandler.config.onConnect?.("CA-stream-1", "MZ-new");
     await vi.advanceTimersByTimeAsync(2_100);
     expect(endCall).not.toHaveBeenCalled();
+    expect(speakInitialMessage).not.toHaveBeenCalled();
+
+    mediaHandler.config.onTranscriptionReady?.("CA-stream-1", "MZ-new");
+    expect(speakInitialMessage).toHaveBeenCalledTimes(1);
+    expect(speakInitialMessage).toHaveBeenCalledWith("CA-stream-1");
 
     mediaHandler.config.onDisconnect?.("CA-stream-1", "MZ-new");
     await vi.advanceTimersByTimeAsync(2_100);
@@ -778,22 +1449,12 @@ describe("VoiceCallWebhookServer stream disconnect grace", () => {
 });
 
 describe("VoiceCallWebhookServer barge-in suppression during initial message", () => {
-  const createTwilioProvider = (clearTtsQueue: ReturnType<typeof vi.fn>) => ({
-    name: "twilio" as const,
-    verifyWebhook: () => ({ ok: true, verifiedRequestKey: "twilio:req:test" }),
-    parseWebhookEvent: () => ({ events: [] }),
-    initiateCall: async () => ({ providerCallId: "provider-call", status: "initiated" as const }),
-    hangupCall: async () => {},
-    playTts: async () => {},
-    startListening: async () => {},
-    stopListening: async () => {},
-    getCallStatus: async () => ({ status: "in-progress", isTerminal: false }),
-    isValidStreamToken: () => true,
-    registerCallStream: () => {},
-    unregisterCallStream: () => {},
-    hasRegisteredStream: () => true,
-    clearTtsQueue,
-  });
+  const createTwilioProvider = (
+    clearTtsQueue: ReturnType<typeof vi.fn<TwilioProviderTestDouble["clearTtsQueue"]>>,
+  ) =>
+    createTwilioStreamingProvider({
+      clearTtsQueue,
+    });
 
   const getMediaCallbacks = (server: VoiceCallWebhookServer) =>
     server.getMediaStreamHandler() as unknown as {
@@ -814,7 +1475,7 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
       initialMessage: "Hi, this is OpenClaw.",
     };
 
-    const clearTtsQueue = vi.fn();
+    const clearTtsQueue = vi.fn<TwilioProviderTestDouble["clearTtsQueue"]>();
     const processEvent = vi.fn((event: NormalizedEvent) => {
       if (event.type === "call.speech") {
         // Mirrors manager behavior: call.speech transitions to listening.
@@ -843,11 +1504,7 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
         },
       },
     });
-    const server = new VoiceCallWebhookServer(
-      config,
-      manager,
-      createTwilioProvider(clearTtsQueue) as unknown as VoiceCallProvider,
-    );
+    const server = new VoiceCallWebhookServer(config, manager, createTwilioProvider(clearTtsQueue));
     await server.start();
     const handleInboundResponse = vi.fn(async () => {});
     (
@@ -880,8 +1537,10 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
       expect(clearTtsQueue).toHaveBeenCalledTimes(2);
       expect(handleInboundResponse).toHaveBeenCalledTimes(1);
       expect(processEvent).toHaveBeenCalledTimes(1);
-      const [calledCallId, calledTranscript] = (handleInboundResponse.mock.calls[0] ??
-        []) as unknown as [string | undefined, string | undefined];
+      const [calledCallId, calledTranscript] = requireFirstMockCall(
+        handleInboundResponse.mock.calls,
+        "inbound response",
+      ) as [string | undefined, string | undefined];
       expect(calledCallId).toBe(call.callId);
       expect(calledTranscript).toBe("hello after greeting");
     } finally {
@@ -898,7 +1557,8 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
       initialMessage: "Hello from inbound greeting.",
     };
 
-    const clearTtsQueue = vi.fn();
+    const clearTtsQueue = vi.fn<TwilioProviderTestDouble["clearTtsQueue"]>();
+    const processEvent = vi.fn();
     const manager = {
       getActiveCalls: () => [call],
       getCallByProviderCallId: (providerCallId: string) =>
@@ -906,7 +1566,7 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
       getCall: (callId: string) => (callId === call.callId ? call : undefined),
       endCall: vi.fn(async () => ({ success: true })),
       speakInitialMessage: vi.fn(async () => {}),
-      processEvent: vi.fn(),
+      processEvent,
     } as unknown as CallManager;
 
     const config = createConfig({
@@ -921,18 +1581,33 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
         },
       },
     });
-    const server = new VoiceCallWebhookServer(
-      config,
-      manager,
-      createTwilioProvider(clearTtsQueue) as unknown as VoiceCallProvider,
-    );
+    const server = new VoiceCallWebhookServer(config, manager, createTwilioProvider(clearTtsQueue));
     await server.start();
+    const handleInboundResponse = vi.fn(async () => {});
+    (
+      server as unknown as {
+        handleInboundResponse: (callId: string, transcript: string) => Promise<void>;
+      }
+    ).handleInboundResponse = handleInboundResponse;
 
     try {
       const media = getMediaCallbacks(server);
       media.config.onSpeechStart?.("CA-inbound");
       media.config.onTranscript?.("CA-inbound", "hello");
       expect(clearTtsQueue).toHaveBeenCalledTimes(2);
+      expect(processEvent).toHaveBeenCalledTimes(1);
+      const event = requireFirstMockCall(processEvent.mock.calls, "inbound processed event")[0] as
+        | NormalizedEvent
+        | undefined;
+      expect(event?.type).toBe("call.speech");
+      if (event?.type !== "call.speech") {
+        throw new Error("expected media transcript callback to emit a speech event");
+      }
+      expect(event.callId).toBe("call-inbound");
+      expect(event.providerCallId).toBe("CA-inbound");
+      expect(event.transcript).toBe("hello");
+      expect(event.isFinal).toBe(true);
+      expect(handleInboundResponse).toHaveBeenCalledWith("call-inbound", "hello");
     } finally {
       await server.stop();
     }

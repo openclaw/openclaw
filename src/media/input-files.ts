@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { logWarn } from "../logger.js";
@@ -6,7 +7,7 @@ import {
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import { canonicalizeBase64, estimateBase64DecodedBytes } from "./base64.js";
-import { convertHeicToJpeg } from "./image-ops.js";
+import { convertHeicToJpeg } from "./media-services.js";
 import { detectMime } from "./mime.js";
 import { extractPdfContent, type PdfExtractedImage } from "./pdf-extract.js";
 import { readResponseWithLimit } from "./read-response-with-limit.js";
@@ -109,7 +110,7 @@ export const DEFAULT_INPUT_FILE_MIMES = [
 ];
 export const DEFAULT_INPUT_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
 export const DEFAULT_INPUT_FILE_MAX_BYTES = 5 * 1024 * 1024;
-export const DEFAULT_INPUT_FILE_MAX_CHARS = 200_000;
+export const DEFAULT_INPUT_FILE_MAX_CHARS = 60_000;
 export const DEFAULT_INPUT_MAX_REDIRECTS = 3;
 export const DEFAULT_INPUT_TIMEOUT_MS = 10_000;
 export const DEFAULT_INPUT_PDF_MAX_PAGES = 4;
@@ -271,6 +272,20 @@ async function normalizeInputImage(params: {
   };
 }
 
+async function resolveInputFileMime(params: {
+  buffer: Buffer;
+  declaredMime?: string;
+}): Promise<string | undefined> {
+  const sniffedMime = normalizeMimeType(await detectMime({ buffer: params.buffer }));
+  if (!sniffedMime) {
+    return params.declaredMime;
+  }
+  if (sniffedMime === "application/octet-stream") {
+    return params.declaredMime ?? sniffedMime;
+  }
+  return sniffedMime;
+}
+
 export async function extractImageContentFromSource(
   source: InputImageSource,
   limits: InputImageLimits,
@@ -322,6 +337,7 @@ export async function extractImageContentFromSource(
 export async function extractFileContentFromSource(params: {
   source: InputFileSource;
   limits: InputFileLimits;
+  config?: OpenClawConfig;
 }): Promise<InputFileExtractResult> {
   const { source, limits } = params;
   const filename = source.filename || "file";
@@ -365,6 +381,8 @@ export async function extractFileContentFromSource(params: {
     throw new Error(`File too large: ${buffer.byteLength} bytes (limit: ${limits.maxBytes} bytes)`);
   }
 
+  mimeType = await resolveInputFileMime({ buffer, declaredMime: mimeType });
+
   if (!mimeType) {
     throw new Error("input_file missing media type");
   }
@@ -378,6 +396,7 @@ export async function extractFileContentFromSource(params: {
       maxPages: limits.pdf.maxPages,
       maxPixels: limits.pdf.maxPixels,
       minTextChars: limits.pdf.minTextChars,
+      ...(params.config ? { config: params.config } : {}),
       onImageExtractionError: (err) => {
         logWarn(`media: PDF image extraction skipped, ${String(err)}`);
       },

@@ -19,14 +19,13 @@ describe("buildApiErrorObservationFields", () => {
       '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"},"request_id":"req_overload"}',
     );
 
-    expect(observed).toMatchObject({
-      rawErrorPreview: expect.stringContaining('"request_id":"sha256:'),
-      rawErrorHash: expect.stringMatching(/^sha256:/),
-      rawErrorFingerprint: expect.stringMatching(/^sha256:/),
-      providerErrorType: "overloaded_error",
-      providerErrorMessagePreview: "Overloaded",
-      requestIdHash: expect.stringMatching(/^sha256:/),
-    });
+    expect(observed.rawErrorPreview).toContain('"request_id":"sha256:');
+    expect(observed.rawErrorHash?.startsWith("sha256:")).toBe(true);
+    expect(observed.rawErrorFingerprint?.startsWith("sha256:")).toBe(true);
+    expect(observed.providerRuntimeFailureKind).toBe("timeout");
+    expect(observed.providerErrorType).toBe("overloaded_error");
+    expect(observed.providerErrorMessagePreview).toBe("Overloaded");
+    expect(observed.requestIdHash?.startsWith("sha256:")).toBe(true);
     expect(observed.rawErrorPreview).not.toContain("req_overload");
   });
 
@@ -65,14 +64,13 @@ describe("buildApiErrorObservationFields", () => {
       '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"},"request_id":"req_prev"}',
     );
 
-    expect(observed).toMatchObject({
-      textPreview: expect.stringContaining('"request_id":"sha256:'),
-      textHash: expect.stringMatching(/^sha256:/),
-      textFingerprint: expect.stringMatching(/^sha256:/),
-      providerErrorType: "overloaded_error",
-      providerErrorMessagePreview: "Overloaded",
-      requestIdHash: expect.stringMatching(/^sha256:/),
-    });
+    expect(observed.textPreview).toContain('"request_id":"sha256:');
+    expect(observed.textHash?.startsWith("sha256:")).toBe(true);
+    expect(observed.textFingerprint?.startsWith("sha256:")).toBe(true);
+    expect(observed.providerRuntimeFailureKind).toBe("timeout");
+    expect(observed.providerErrorType).toBe("overloaded_error");
+    expect(observed.providerErrorMessagePreview).toBe("Overloaded");
+    expect(observed.requestIdHash?.startsWith("sha256:")).toBe(true);
     expect(observed.textPreview).not.toContain("req_prev");
   });
 
@@ -81,11 +79,9 @@ describe("buildApiErrorObservationFields", () => {
       "LLM error overloaded_error: Overloaded (request_id: req_plaintext_123)",
     );
 
-    expect(observed).toMatchObject({
-      rawErrorPreview: expect.stringContaining("request_id: sha256:"),
-      rawErrorFingerprint: expect.stringMatching(/^sha256:/),
-      requestIdHash: expect.stringMatching(/^sha256:/),
-    });
+    expect(observed.rawErrorPreview).toContain("request_id: sha256:");
+    expect(observed.rawErrorFingerprint?.startsWith("sha256:")).toBe(true);
+    expect(observed.requestIdHash?.startsWith("sha256:")).toBe(true);
     expect(observed.rawErrorPreview).not.toContain("req_plaintext_123");
   });
 
@@ -107,8 +103,8 @@ describe("buildApiErrorObservationFields", () => {
       `{"type":"error","error":{"type":"server_error","message":"${longMessage}"},"request_id":"req_long"}`,
     );
 
-    expect(observed.rawErrorPreview).toBeDefined();
-    expect(observed.providerErrorMessagePreview).toBeDefined();
+    expect(observed.rawErrorPreview).toBeTypeOf("string");
+    expect(observed.providerErrorMessagePreview).toBeTypeOf("string");
     expect(observed.rawErrorPreview?.length).toBeLessThanOrEqual(401);
     expect(observed.providerErrorMessagePreview?.length).toBeLessThanOrEqual(201);
     expect(observed.providerErrorMessagePreview?.endsWith("…")).toBe(true);
@@ -118,16 +114,16 @@ describe("buildApiErrorObservationFields", () => {
     const oversized = "X".repeat(70_000);
     const bounded = "X".repeat(64_000);
 
-    expect(buildApiErrorObservationFields(oversized)).toMatchObject({
-      rawErrorHash: buildApiErrorObservationFields(bounded).rawErrorHash,
-      rawErrorFingerprint: buildApiErrorObservationFields(bounded).rawErrorFingerprint,
-    });
+    const observed = buildApiErrorObservationFields(oversized);
+    const boundedObserved = buildApiErrorObservationFields(bounded);
+    expect(observed.rawErrorHash).toBe(boundedObserved.rawErrorHash);
+    expect(observed.rawErrorFingerprint).toBe(boundedObserved.rawErrorFingerprint);
   });
 
   it("returns empty observation fields for empty input", () => {
-    expect(buildApiErrorObservationFields(undefined)).toEqual({});
-    expect(buildApiErrorObservationFields("")).toEqual({});
-    expect(buildApiErrorObservationFields("   ")).toEqual({});
+    expect(buildApiErrorObservationFields(undefined)).toStrictEqual({});
+    expect(buildApiErrorObservationFields("")).toStrictEqual({});
+    expect(buildApiErrorObservationFields("   ")).toStrictEqual({});
   });
 
   it("re-reads configured redact patterns on each call", () => {
@@ -150,12 +146,13 @@ describe("buildApiErrorObservationFields", () => {
       throw new Error("boom");
     });
 
-    expect(buildApiErrorObservationFields("request_id=req_123")).toEqual({});
+    expect(buildApiErrorObservationFields("request_id=req_123")).toStrictEqual({});
     expect(buildTextObservationFields("request_id=req_123")).toEqual({
       textPreview: undefined,
       textHash: undefined,
       textFingerprint: undefined,
       httpCode: undefined,
+      providerRuntimeFailureKind: undefined,
       providerErrorType: undefined,
       providerErrorMessagePreview: undefined,
       requestIdHash: undefined,
@@ -175,6 +172,15 @@ describe("buildApiErrorObservationFields", () => {
 
     expect(observed.rawErrorPreview).not.toContain("custom-secret-abc123");
     expect(observed.rawErrorPreview).toContain("custom");
+  });
+
+  it("keeps provider-less missing-scope auth payloads out of the codex-specific scope lane", () => {
+    const observed = buildApiErrorObservationFields(
+      '401 {"type":"error","error":{"type":"permission_error","message":"Missing scopes: api.responses.write"}}',
+    );
+
+    expect(observed.httpCode).toBe("401");
+    expect(observed.providerRuntimeFailureKind).toBe("unclassified");
   });
 });
 

@@ -2,16 +2,14 @@
 summary: "Hubs that link to every OpenClaw doc"
 read_when:
   - You want a complete map of the documentation
-title: "Docs Hubs"
+title: "Docs hubs"
 ---
-
-# Docs hubs
 
 <Note>
 If you are new to OpenClaw, start with [Getting Started](/start/getting-started).
 </Note>
 
-Use these hubs to discover every page, including deep dives and reference docs that don’t appear in the left nav.
+Use these hubs to discover every page, including deep dives and reference docs that don't appear in the left nav.
 
 ## Start here
 
@@ -75,9 +73,8 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Discord](/channels/discord)
 - [Mattermost](/channels/mattermost)
 - [Signal](/channels/signal)
-- [BlueBubbles (iMessage)](/channels/bluebubbles)
 - [QQ Bot](/channels/qqbot)
-- [iMessage (legacy)](/channels/imessage)
+- [iMessage](/channels/imessage)
 - [Location parsing](/channels/location)
 - [WebChat](/web/webchat)
 - [Webhooks](/automation/cron-jobs#webhooks)
@@ -86,7 +83,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 ## Gateway + operations
 
 - [Gateway runbook](/gateway)
-- [Network model](/gateway/network-model)
+- [Network model](/network#core-model)
 - [Gateway pairing](/gateway/pairing)
 - [Gateway lock](/gateway/gateway-lock)
 - [Background process](/gateway/background-process)
@@ -112,7 +109,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [PDF tool](/tools/pdf)
 - [Elevated mode](/tools/elevated)
 - [Cron jobs](/automation/cron-jobs)
-- [Automation & Tasks](/automation)
+- [Automation](/automation)
 - [Thinking + verbose](/tools/thinking)
 - [Models](/concepts/models)
 - [Sub-agents](/tools/subagents)
@@ -162,14 +159,15 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [macOS skills](/platforms/mac/skills)
 - [macOS Peekaboo](/platforms/mac/peekaboo)
 
-## Extensions + plugins
+## Plugins
 
 - [Plugins overview](/tools/plugin)
 - [Building plugins](/plugins/building-plugins)
+- [Plugin hooks](/plugins/hooks)
 - [Plugin manifest](/plugins/manifest)
 - [Agent tools](/plugins/building-plugins#registering-agent-tools)
 - [Plugin bundles](/plugins/bundles)
-- [Community plugins](/plugins/community)
+- [ClawHub](/clawhub)
 - [Capability cookbook](/tools/capability-cookbook)
 - [Voice call plugin](/plugins/voice-call)
 - [Zalo user plugin](/plugins/zalouser)
@@ -177,7 +175,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 ## Workspace + templates
 
 - [Skills](/tools/skills)
-- [ClawHub](/tools/clawhub)
+- [ClawHub](/clawhub)
 - [Skills config](/tools/skills-config)
 - [Default AGENTS](/reference/AGENTS.default)
 - [Templates: AGENTS](/reference/templates/AGENTS)
@@ -197,3 +195,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Testing](/reference/test)
 - [Release policy](/reference/RELEASING)
 - [Device models](/reference/device-models)
+
+## Related
+
+- [Getting started](/start/getting-started)

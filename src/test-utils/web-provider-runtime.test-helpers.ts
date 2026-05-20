@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   PluginWebFetchProviderEntry,
   PluginWebSearchProviderEntry,
@@ -12,14 +12,19 @@ type CommonWebProviderTestParams = {
   requiresCredential?: boolean;
   getCredentialValue?: (config?: Record<string, unknown>) => unknown;
   getConfiguredCredentialValue?: (config?: OpenClawConfig) => unknown;
+  getConfiguredCredentialFallback?:
+    | PluginWebSearchProviderEntry["getConfiguredCredentialFallback"]
+    | PluginWebFetchProviderEntry["getConfiguredCredentialFallback"];
 };
 
 export type WebSearchTestProviderParams = CommonWebProviderTestParams & {
   createTool?: PluginWebSearchProviderEntry["createTool"];
+  getConfiguredCredentialFallback?: PluginWebSearchProviderEntry["getConfiguredCredentialFallback"];
 };
 
 export type WebFetchTestProviderParams = CommonWebProviderTestParams & {
   createTool?: PluginWebFetchProviderEntry["createTool"];
+  getConfiguredCredentialFallback?: PluginWebFetchProviderEntry["getConfiguredCredentialFallback"];
 };
 
 function createCommonProviderFields(params: CommonWebProviderTestParams) {
@@ -37,6 +42,7 @@ function createCommonProviderFields(params: CommonWebProviderTestParams) {
     getCredentialValue: params.getCredentialValue ?? (() => undefined),
     setCredentialValue: () => {},
     getConfiguredCredentialValue: params.getConfiguredCredentialValue,
+    getConfiguredCredentialFallback: params.getConfiguredCredentialFallback,
   };
 }
 

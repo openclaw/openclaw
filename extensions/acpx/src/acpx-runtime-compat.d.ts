@@ -7,7 +7,9 @@ declare module "acpx/runtime" {
   export type AcpRuntimeHandle = import("../runtime-api.js").AcpRuntimeHandle;
   export type AcpRuntimeCapabilities = import("../runtime-api.js").AcpRuntimeCapabilities;
   export type AcpRuntimeStatus = import("../runtime-api.js").AcpRuntimeStatus;
+  export type AcpRuntimeTurn = import("../runtime-api.js").AcpRuntimeTurn;
   export type AcpRuntimeTurnInput = import("../runtime-api.js").AcpRuntimeTurnInput;
+  export type AcpRuntimeTurnResult = import("../runtime-api.js").AcpRuntimeTurnResult;
 
   export type AcpAgentRegistry = {
     resolve(agent: string): string | undefined;
@@ -25,10 +27,12 @@ declare module "acpx/runtime" {
     cwd: string;
     sessionStore: AcpSessionStore;
     agentRegistry: AcpAgentRegistry;
+    probeAgent?: string;
     mcpServers?: unknown;
     permissionMode?: unknown;
     nonInteractivePermissions?: unknown;
     timeoutMs?: number;
+    probeAgent?: string;
   };
 
   export class AcpxRuntime {
@@ -37,6 +41,7 @@ declare module "acpx/runtime" {
     probeAvailability(): Promise<void>;
     doctor(): Promise<AcpRuntimeDoctorReport>;
     ensureSession(input: AcpRuntimeEnsureInput): Promise<AcpRuntimeHandle>;
+    startTurn(input: AcpRuntimeTurnInput): AcpRuntimeTurn;
     runTurn(input: AcpRuntimeTurnInput): AsyncIterable<AcpRuntimeEvent>;
     getCapabilities(input?: {
       handle?: AcpRuntimeHandle;

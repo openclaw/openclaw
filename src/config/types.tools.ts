@@ -90,10 +90,14 @@ export type MediaUnderstandingConfig = MediaProviderRequestConfig & {
   maxChars?: number;
   /** Default prompt. */
   prompt?: string;
+  /** Internal request-scoped prompt override injected by CLI/runtime wrappers. */
+  _requestPromptOverride?: string;
   /** Default timeout (seconds). */
   timeoutSeconds?: number;
   /** Default language hint (audio). */
   language?: string;
+  /** Internal request-scoped language override injected by CLI/runtime wrappers. */
+  _requestLanguageOverride?: string;
   /** Attachment selection policy. */
   attachments?: MediaUnderstandingAttachmentsConfig;
   /** Ordered model list (fallbacks in order). */
@@ -141,8 +145,8 @@ export type MediaToolsConfig = {
   concurrency?: number;
   asyncCompletion?: {
     /**
-     * Enable direct channel sends for completed async media generation tasks.
-     * Default: false.
+     * Deprecated compatibility flag. Async media generation completions stay
+     * requester-session mediated so source delivery policy remains agent-owned.
      */
     directSend?: boolean;
   };
@@ -162,6 +166,11 @@ export type ToolLoopDetectionDetectorConfig = {
   pingPong?: boolean;
 };
 
+export type ToolLoopPostCompactionGuardConfig = {
+  /** How many attempts post-compaction the guard remains armed (default: 3). */
+  windowSize?: number;
+};
+
 export type ToolLoopDetectionConfig = {
   /** Enable tool-loop protection (default: false). */
   enabled?: boolean;
@@ -169,13 +178,61 @@ export type ToolLoopDetectionConfig = {
   historySize?: number;
   /** Warning threshold before a warning-only loop classification (default: 10). */
   warningThreshold?: number;
+  /** Block repeated calls to the same unavailable tool after this many misses (default: 10). */
+  unknownToolThreshold?: number;
   /** Critical threshold for blocking repetitive loops (default: 20). */
   criticalThreshold?: number;
   /** Global no-progress breaker threshold (default: 30). */
   globalCircuitBreakerThreshold?: number;
   /** Detector toggles. */
   detectors?: ToolLoopDetectionDetectorConfig;
+  /** Post-compaction loop guard: aborts when the agent repeats the same (tool, args, result) immediately after auto-compaction-retry. */
+  postCompactionGuard?: ToolLoopPostCompactionGuardConfig;
 };
+
+export type ToolSearchConfig =
+  | boolean
+  | {
+      /** Enable compact search/call cataloging for large tool sets. */
+      enabled?: boolean;
+      /** Exposed model surface. "code" exposes tool_search_code; "tools" exposes structured fallback tools. */
+      mode?: "code" | "tools";
+      /** Timeout in milliseconds for one tool_search_code execution. Runtime clamps to 1s..60s. */
+      codeTimeoutMs?: number;
+      /** Default search result count when the model omits a limit. Runtime clamps to maxSearchLimit. */
+      searchDefaultLimit?: number;
+      /** Maximum search result count. Runtime clamps to 1..50. */
+      maxSearchLimit?: number;
+    };
+
+export type CodeModeConfig =
+  | boolean
+  | {
+      /** Enable generic OpenClaw code mode. Default: false. */
+      enabled?: boolean;
+      /** Guest runtime. Only quickjs-wasi is supported. */
+      runtime?: "quickjs-wasi";
+      /** Model-facing mode. Only "only" is supported: expose exec/wait and hide normal tools. */
+      mode?: "only";
+      /** Accepted source languages. */
+      languages?: Array<"javascript" | "typescript">;
+      /** Wall-clock limit in milliseconds for one exec or wait call. */
+      timeoutMs?: number;
+      /** QuickJS heap limit in bytes. */
+      memoryLimitBytes?: number;
+      /** Maximum serialized output bytes. */
+      maxOutputBytes?: number;
+      /** Maximum serialized snapshot bytes. */
+      maxSnapshotBytes?: number;
+      /** Maximum concurrent nested tool calls. */
+      maxPendingToolCalls?: number;
+      /** Retention for suspended snapshots. */
+      snapshotTtlSeconds?: number;
+      /** Default search result count for tools.search. */
+      searchDefaultLimit?: number;
+      /** Maximum search result count for tools.search. */
+      maxSearchLimit?: number;
+    };
 
 export type SessionsToolsVisibility = "self" | "tree" | "agent" | "all";
 
@@ -199,7 +256,7 @@ export type GroupToolPolicyConfig = {
   deny?: string[];
 };
 
-export const TOOLS_BY_SENDER_KEY_TYPES = ["id", "e164", "username", "name"] as const;
+export const TOOLS_BY_SENDER_KEY_TYPES = ["channel", "id", "e164", "username", "name"] as const;
 export type ToolsBySenderKeyType = (typeof TOOLS_BY_SENDER_KEY_TYPES)[number];
 
 export function parseToolsBySenderTypedKey(
@@ -227,6 +284,7 @@ export function parseToolsBySenderTypedKey(
  * Per-sender overrides.
  *
  * Prefer explicit key prefixes:
+ * - channel:<channelId>:<senderId>
  * - id:<senderId>
  * - e164:<phone>
  * - username:<handle>
@@ -255,6 +313,8 @@ export type ExecToolConfig = {
    * Prevents silent allowlist reuse and allow-always persistence for those forms.
    */
   strictInlineEval?: boolean;
+  /** Render parser-derived command highlights in exec approval prompts (default: false). */
+  commandHighlighting?: boolean;
   /** Extra explicit directories trusted for safeBins path checks (never derived from PATH). */
   safeBinTrustedDirs?: string[];
   /** Optional custom safe-bin profiles for entries in tools.exec.safeBins. */
@@ -308,6 +368,10 @@ export type AgentToolsConfig = {
   deny?: string[];
   /** Optional tool policy overrides keyed by provider id or "provider/model". */
   byProvider?: Record<string, ToolPolicyConfig>;
+  /** Per-sender tool policy overrides keyed by sender identity. */
+  toolsBySender?: GroupToolPolicyBySenderConfig;
+  /** Per-agent code mode override; merges over the top-level tools.codeMode config. */
+  codeMode?: CodeModeConfig;
   /** Per-agent elevated exec gate (can only further restrict global tools.elevated). */
   elevated?: {
     /** Enable or disable elevated mode for this agent (default: true). */
@@ -321,6 +385,8 @@ export type AgentToolsConfig = {
   fs?: FsToolsConfig;
   /** Runtime loop detection for repetitive/ stuck tool-call patterns. */
   loopDetection?: ToolLoopDetectionConfig;
+  /** Message tool configuration for this agent. */
+  message?: MessageToolsConfig;
   sandbox?: {
     tools?: {
       allow?: string[];
@@ -363,6 +429,8 @@ export type MemorySearchConfig = {
     baseUrl?: string;
     apiKey?: SecretInput;
     headers?: Record<string, string>;
+    /** Max concurrent non-batch embedding tasks during indexing. Useful for slower local providers such as Ollama. */
+    nonBatchConcurrency?: number;
     batch?: {
       /** Enable batch API for embedding indexing (OpenAI/Gemini; default: true). */
       enabled?: boolean;
@@ -380,6 +448,12 @@ export type MemorySearchConfig = {
   fallback?: string;
   /** Embedding model id (remote) or alias (local). */
   model?: string;
+  /** Optional provider-specific embedding input_type for query and document requests. */
+  inputType?: string;
+  /** Optional provider-specific embedding input_type for query-time memory search. */
+  queryInputType?: string;
+  /** Optional provider-specific embedding input_type for document/index embeddings. */
+  documentInputType?: string;
   /**
    * Gemini embedding-2 models only: output vector dimensions.
    * Supported values today are 768, 1536, and 3072.
@@ -391,6 +465,12 @@ export type MemorySearchConfig = {
     modelPath?: string;
     /** Optional cache directory for local models. */
     modelCacheDir?: string;
+    /**
+     * Context window size for the local embedding context (default: 4096).
+     * Use `"auto"` to defer to node-llama-cpp, which picks up to the model's
+     * trained maximum — not recommended for 8B+ models.
+     */
+    contextSize?: number | "auto";
   };
   /** Index storage configuration. */
   store?: {
@@ -425,6 +505,11 @@ export type MemorySearchConfig = {
     watch?: boolean;
     watchDebounceMs?: number;
     intervalMinutes?: number;
+    /**
+     * Timeout in seconds for inline embedding batches during memory indexing.
+     * Unset uses provider defaults: 600s for local/self-hosted providers, 120s for hosted providers.
+     */
+    embeddingBatchTimeoutSeconds?: number;
     sessions?: {
       /** Minimum appended bytes before session transcripts are reindexed. */
       deltaBytes?: number;
@@ -481,6 +566,8 @@ export type ToolsConfig = {
   deny?: string[];
   /** Optional tool policy overrides keyed by provider id or "provider/model". */
   byProvider?: Record<string, ToolPolicyConfig>;
+  /** Per-sender tool policy overrides keyed by sender identity. */
+  toolsBySender?: GroupToolPolicyBySenderConfig;
   web?: {
     search?: {
       /** Enable managed web_search and optional Codex-native web search. */
@@ -550,37 +637,21 @@ export type ToolsConfig = {
       userAgent?: string;
       /** Use Readability to extract main content (default: true). */
       readability?: boolean;
+      /** Route web_fetch through a trusted HTTP(S) env proxy and let the proxy resolve DNS. Enable only when that proxy enforces outbound policy. */
+      useTrustedEnvProxy?: boolean;
+      /** SSRF policy configuration for web_fetch. */
+      ssrfPolicy?: {
+        /** Allow RFC 2544 benchmark range IPs (198.18.0.0/15) for fake-IP proxy compatibility (e.g., Clash TUN mode, Surge). */
+        allowRfc2544BenchmarkRange?: boolean;
+        /** Allow IPv6 Unique Local Addresses (fc00::/7) for trusted fake-IP proxy compatibility. */
+        allowIpv6UniqueLocalRange?: boolean;
+      };
     };
   };
   media?: MediaToolsConfig;
   links?: LinkToolsConfig;
   /** Message tool configuration. */
-  message?: {
-    /**
-     * @deprecated Use tools.message.crossContext settings.
-     * Allows cross-context sends across providers.
-     */
-    allowCrossContextSend?: boolean;
-    crossContext?: {
-      /** Allow sends to other channels within the same provider (default: true). */
-      allowWithinProvider?: boolean;
-      /** Allow sends across different providers (default: false). */
-      allowAcrossProviders?: boolean;
-      /** Cross-context marker configuration. */
-      marker?: {
-        /** Enable origin markers for cross-context sends (default: true). */
-        enabled?: boolean;
-        /** Text prefix template, supports {channel}. */
-        prefix?: string;
-        /** Text suffix template, supports {channel}. */
-        suffix?: string;
-      };
-    };
-    broadcast?: {
-      /** Enable broadcast action (default: true). */
-      enabled?: boolean;
-    };
-  };
+  message?: MessageToolsConfig;
   agentToAgent?: {
     /** Enable agent-to-agent messaging tools. Default: false. */
     enabled?: boolean;
@@ -615,10 +686,12 @@ export type ToolsConfig = {
   fs?: FsToolsConfig;
   /** Runtime loop detection for repetitive/ stuck tool-call patterns. */
   loopDetection?: ToolLoopDetectionConfig;
+  /** Compact large OpenClaw, MCP, and client tool catalogs behind search/call tools. */
+  toolSearch?: ToolSearchConfig;
+  /** Generic code mode: expose exec/wait and hide normal tools behind a QuickJS catalog bridge. */
+  codeMode?: CodeModeConfig;
   /** Sub-agent tool policy defaults (deny wins). */
   subagents?: {
-    /** Default model selection for spawned sub-agents (string or {primary,fallbacks}). */
-    model?: string | { primary?: string; fallbacks?: string[] };
     tools?: {
       allow?: string[];
       /** Additional allowlist entries merged into allow and/or default sub-agent denylist. */
@@ -635,9 +708,40 @@ export type ToolsConfig = {
       deny?: string[];
     };
   };
-  /** Experimental tool flags. Default off unless explicitly enabled or runtime auto-enabled. */
+  /** Experimental tool flags. Default off unless explicitly enabled, except strict-agentic GPT-5 OpenAI/Codex runs may auto-enable `planTool`. */
   experimental?: {
-    /** Enable or disable the structured `update_plan` tool. OpenAI-family runs auto-enable it unless this is false. */
+    /** Enable the structured `update_plan` tool explicitly outside strict-agentic execution mode. */
     planTool?: boolean;
+  };
+};
+
+export type MessageToolsConfig = {
+  /**
+   * @deprecated Use tools.message.crossContext settings.
+   * Allows cross-context sends across providers.
+   */
+  allowCrossContextSend?: boolean;
+  crossContext?: {
+    /** Allow sends to other channels within the same provider (default: true). */
+    allowWithinProvider?: boolean;
+    /** Allow sends across different providers (default: false). */
+    allowAcrossProviders?: boolean;
+    /** Cross-context marker configuration. */
+    marker?: {
+      /** Enable origin markers for cross-context sends (default: true). */
+      enabled?: boolean;
+      /** Text prefix template, supports {channel}. */
+      prefix?: string;
+      /** Text suffix template, supports {channel}. */
+      suffix?: string;
+    };
+  };
+  actions?: {
+    /** Message action names exposed and accepted by the message tool. */
+    allow?: string[];
+  };
+  broadcast?: {
+    /** Enable broadcast action (default: true). */
+    enabled?: boolean;
   };
 };

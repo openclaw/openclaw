@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { createSafeAudioFixtureBuffer } from "./runner.test-utils.js";
 import type { MediaUnderstandingProvider } from "./types.js";
@@ -29,7 +29,7 @@ const hasAvailableAuthForProviderMock = vi.hoisted(() =>
 const getApiKeyForModelMock = vi.hoisted(() =>
   vi.fn(async () => ({ apiKey: "test-key", source: "test", mode: "api-key" })),
 );
-const fetchRemoteMediaMock = vi.hoisted(() => vi.fn());
+const readRemoteMediaBufferMock = vi.hoisted(() => vi.fn());
 const runExecMock = vi.hoisted(() => vi.fn());
 const runCommandWithTimeoutMock = vi.hoisted(() => vi.fn());
 const mockDeliverOutboundPayloads = vi.hoisted(() => vi.fn());
@@ -51,7 +51,6 @@ const { MediaFetchErrorMock } = vi.hoisted(() => {
 // ---------------------------------------------------------------------------
 
 let applyMediaUnderstanding: typeof import("./apply.js").applyMediaUnderstanding;
-let clearMediaUnderstandingBinaryCacheForTests: () => void;
 
 const TEMP_MEDIA_PREFIX = "openclaw-echo-transcript-test-";
 let suiteTempMediaRootDir = "";
@@ -68,7 +67,7 @@ function createAudioCtxWithProvider(mediaPath: string, extra?: Partial<MsgContex
     Body: "<media:audio>",
     MediaPath: mediaPath,
     MediaType: "audio/ogg",
-    Provider: "whatsapp",
+    Provider: "voicechat",
     From: "+10000000001",
     AccountId: "acc1",
     ...extra,
@@ -105,10 +104,23 @@ function createAudioConfigWithEcho(opts?: {
   return { cfg, providers };
 }
 
+function disableImageUnderstanding(cfg: OpenClawConfig): void {
+  if (!cfg.tools?.media) {
+    throw new Error("Expected media tool config");
+  }
+  cfg.tools.media.image = { enabled: false };
+}
+
 function expectSingleEchoDeliveryCall() {
   expect(mockDeliverOutboundPayloads).toHaveBeenCalledOnce();
-  const callArgs = mockDeliverOutboundPayloads.mock.calls[0]?.[0];
-  expect(callArgs).toBeDefined();
+  const firstCall = mockDeliverOutboundPayloads.mock.calls[0];
+  if (!firstCall) {
+    throw new Error("Expected echo transcript delivery call");
+  }
+  const callArgs = firstCall[0];
+  if (!callArgs) {
+    throw new Error("Expected one echo transcript delivery call");
+  }
   return callArgs as {
     to?: string;
     channel?: string;
@@ -165,15 +177,18 @@ describe("applyMediaUnderstanding – echo transcript", () => {
       resolveAuthProfileOrder: vi.fn(() => []),
     }));
     vi.doMock("../media/fetch.js", () => ({
-      fetchRemoteMedia: fetchRemoteMediaMock,
+      readRemoteMediaBuffer: readRemoteMediaBufferMock,
       MediaFetchError: MediaFetchErrorMock,
     }));
     vi.doMock("../process/exec.js", () => ({
       runExec: runExecMock,
       runCommandWithTimeout: runCommandWithTimeoutMock,
     }));
-    vi.doMock("../infra/outbound/deliver-runtime.js", () => ({
-      deliverOutboundPayloads: (...args: unknown[]) => mockDeliverOutboundPayloads(...args),
+    vi.doMock("../channels/message/runtime.js", () => ({
+      sendDurableMessageBatch: (...args: unknown[]) => mockDeliverOutboundPayloads(...args),
+    }));
+    vi.doMock("../utils/message-channel.js", () => ({
+      isDeliverableMessageChannel: (channel: string) => channel === "voicechat",
     }));
     vi.doMock("./provider-registry.js", async () => {
       const actual =
@@ -211,20 +226,21 @@ describe("applyMediaUnderstanding – echo transcript", () => {
     suiteTempMediaRootDir = await fs.mkdtemp(path.join(baseDir, TEMP_MEDIA_PREFIX));
     const mod = await import("./apply.js");
     applyMediaUnderstanding = mod.applyMediaUnderstanding;
-    const runner = await import("./runner.js");
-    clearMediaUnderstandingBinaryCacheForTests = runner.clearMediaUnderstandingBinaryCacheForTests;
   });
 
   beforeEach(() => {
     resolveApiKeyForProviderMock.mockClear();
     hasAvailableAuthForProviderMock.mockClear();
     getApiKeyForModelMock.mockClear();
-    fetchRemoteMediaMock.mockClear();
+    readRemoteMediaBufferMock.mockClear();
     runExecMock.mockReset();
     runCommandWithTimeoutMock.mockReset();
     mockDeliverOutboundPayloads.mockClear();
-    mockDeliverOutboundPayloads.mockResolvedValue([{ channel: "whatsapp", messageId: "echo-1" }]);
-    clearMediaUnderstandingBinaryCacheForTests?.();
+    mockDeliverOutboundPayloads.mockResolvedValue({
+      status: "sent",
+      results: [{ channel: "voicechat", messageId: "echo-1" }],
+      receipt: { platformMessageIds: ["echo-1"], parts: [], sentAt: 1 },
+    });
   });
 
   afterAll(async () => {
@@ -266,7 +282,7 @@ describe("applyMediaUnderstanding – echo transcript", () => {
     await applyMediaUnderstanding({ ctx, cfg, providers });
 
     const callArgs = expectSingleEchoDeliveryCall();
-    expect(callArgs.channel).toBe("whatsapp");
+    expect(callArgs.channel).toBe("voicechat");
     expect(callArgs.to).toBe("+10000000001");
     expect(callArgs.accountId).toBe("acc1");
     expect(callArgs.payloads).toHaveLength(1);
@@ -283,7 +299,7 @@ describe("applyMediaUnderstanding – echo transcript", () => {
       Body: "<media:image>",
       MediaPath: imgPath,
       MediaType: "image/jpeg",
-      Provider: "whatsapp",
+      Provider: "voicechat",
       From: "+10000000001",
     };
 
@@ -291,7 +307,7 @@ describe("applyMediaUnderstanding – echo transcript", () => {
       echoTranscript: true,
       transcribedText: "should not appear",
     });
-    cfg.tools!.media!.image = { enabled: false };
+    disableImageUnderstanding(cfg);
 
     await applyMediaUnderstanding({ ctx, cfg, providers });
 

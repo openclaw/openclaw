@@ -7,6 +7,22 @@ import {
 } from "../../scripts/vitest-process-group.mjs";
 
 describe("vitest process group helpers", () => {
+  function getListenerSet(listeners: Map<string, Set<() => void>>, event: string) {
+    const set = listeners.get(event);
+    if (!set) {
+      throw new Error(`expected ${event} listener set`);
+    }
+    return set;
+  }
+
+  function expectListenerCount(
+    listeners: Map<string, Set<() => void>>,
+    event: string,
+    count: number,
+  ) {
+    expect(getListenerSet(listeners, event).size).toBe(count);
+  }
+
   it("uses detached process groups on non-Windows hosts", () => {
     expect(shouldUseDetachedVitestProcessGroup("darwin")).toBe(true);
     expect(shouldUseDetachedVitestProcessGroup("linux")).toBe(true);
@@ -23,7 +39,7 @@ describe("vitest process group helpers", () => {
     );
   });
 
-  it("forwards signals to the computed target and ignores ESRCH", () => {
+  it("forwards signals to the computed target and ignores cleanup races", () => {
     const kill = vi.fn();
     expect(
       forwardSignalToVitestProcessGroup({
@@ -38,6 +54,20 @@ describe("vitest process group helpers", () => {
     kill.mockImplementationOnce(() => {
       const error = new Error("gone") as NodeJS.ErrnoException;
       error.code = "ESRCH";
+      throw error;
+    });
+    expect(
+      forwardSignalToVitestProcessGroup({
+        child: { pid: 4200 },
+        signal: "SIGTERM",
+        platform: "darwin",
+        kill,
+      }),
+    ).toBe(false);
+
+    kill.mockImplementationOnce(() => {
+      const error = new Error("permission race") as NodeJS.ErrnoException;
+      error.code = "EPERM";
       throw error;
     });
     expect(
@@ -70,16 +100,58 @@ describe("vitest process group helpers", () => {
       kill,
     });
 
-    expect(listeners.get("SIGINT")?.size).toBe(1);
-    expect(listeners.get("SIGTERM")?.size).toBe(1);
-    expect(listeners.get("exit")?.size).toBe(1);
+    expectListenerCount(listeners, "SIGINT", 1);
+    expectListenerCount(listeners, "SIGTERM", 1);
+    expectListenerCount(listeners, "exit", 1);
 
-    listeners.get("SIGTERM")?.values().next().value?.();
+    getListenerSet(listeners, "SIGTERM").values().next().value();
     expect(kill).toHaveBeenCalledWith(-4200, "SIGTERM");
 
     teardown();
-    expect(listeners.get("SIGINT")?.size ?? 0).toBe(0);
-    expect(listeners.get("SIGTERM")?.size ?? 0).toBe(0);
-    expect(listeners.get("exit")?.size ?? 0).toBe(0);
+    expectListenerCount(listeners, "SIGINT", 0);
+    expectListenerCount(listeners, "SIGTERM", 0);
+    expectListenerCount(listeners, "exit", 0);
+  });
+
+  it("raises process listener limits for highly parallel cleanup handlers", () => {
+    const listeners = new Map<string, Set<() => void>>();
+    let maxListeners = 10;
+    const fakeProcess = {
+      getMaxListeners: () => maxListeners,
+      setMaxListeners: vi.fn((value: number) => {
+        maxListeners = value;
+        return fakeProcess;
+      }),
+      listenerCount(event: string) {
+        return listeners.get(event)?.size ?? 0;
+      },
+      on(event: string, handler: () => void) {
+        const set = listeners.get(event) ?? new Set();
+        set.add(handler);
+        listeners.set(event, set);
+      },
+      off(event: string, handler: () => void) {
+        listeners.get(event)?.delete(handler);
+      },
+    };
+
+    const teardowns = Array.from({ length: 12 }, (_, index) =>
+      installVitestProcessGroupCleanup({
+        child: { pid: 4200 + index },
+        processObject: fakeProcess as unknown as NodeJS.Process,
+        platform: "darwin",
+        kill: vi.fn(),
+      }),
+    );
+
+    expect(maxListeners).toBeGreaterThan(10);
+    expect(fakeProcess.setMaxListeners).toHaveBeenCalled();
+
+    for (const teardown of teardowns) {
+      teardown();
+    }
+    expectListenerCount(listeners, "SIGINT", 0);
+    expectListenerCount(listeners, "SIGTERM", 0);
+    expectListenerCount(listeners, "exit", 0);
   });
 });

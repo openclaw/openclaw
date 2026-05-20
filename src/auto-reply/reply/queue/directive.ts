@@ -65,7 +65,10 @@ function parseQueueDirectiveArgs(raw: string): {
     i = res.nextIndex;
     return res.token;
   };
-  while (i < len) {
+  for (;;) {
+    if (i >= len) {
+      break;
+    }
     const token = takeToken();
     if (!token) {
       break;
@@ -106,6 +109,10 @@ function parseQueueDirectiveArgs(raw: string): {
       rawMode = token;
       consumed = i;
       continue;
+    }
+    if (consumed === skipDirectiveArgPrefix(raw) && !queueReset && !hasOptions) {
+      rawMode = token;
+      consumed = i;
     }
     // Stop at first unrecognized token.
     break;

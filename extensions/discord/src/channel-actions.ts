@@ -1,22 +1,16 @@
-import { Type } from "@sinclair/typebox";
-import {
-  createUnionActionGate,
-  listTokenSourcedAccounts,
-} from "openclaw/plugin-sdk/channel-actions";
+import { createUnionActionGate } from "openclaw/plugin-sdk/channel-actions";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
   ChannelMessageToolDiscovery,
 } from "openclaw/plugin-sdk/channel-contract";
-import type { DiscordActionConfig } from "openclaw/plugin-sdk/config-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import type { DiscordActionConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
-import {
-  createDiscordActionGate,
-  listEnabledDiscordAccounts,
-  resolveDiscordAccount,
-} from "./accounts.js";
-import { createDiscordMessageToolComponentsSchema } from "./message-tool-schema.js";
+import { inspectDiscordAccount } from "./account-inspect.js";
+import { createDiscordActionGate, listDiscordAccountIds } from "./accounts.js";
+import { readDiscordComponentSpec } from "./components.js";
+import { withDiscordInboundEventDeliveryMetadata } from "./inbound-event-delivery.js";
 
 let discordChannelActionsRuntimePromise:
   | Promise<typeof import("./channel-actions.runtime.js")>
@@ -27,8 +21,14 @@ async function loadDiscordChannelActionsRuntime() {
   return await discordChannelActionsRuntimePromise;
 }
 
-function resolveDiscordActionDiscovery(cfg: Parameters<typeof listEnabledDiscordAccounts>[0]) {
-  const accounts = listTokenSourcedAccounts(listEnabledDiscordAccounts(cfg));
+function listDiscoverableDiscordAccounts(cfg: OpenClawConfig) {
+  return listDiscordAccountIds(cfg)
+    .map((accountId) => inspectDiscordAccount({ cfg, accountId }))
+    .filter((account) => account.enabled && account.configured);
+}
+
+function resolveDiscordActionDiscovery(cfg: OpenClawConfig) {
+  const accounts = listDiscoverableDiscordAccounts(cfg);
   if (accounts.length === 0) {
     return null;
   }
@@ -45,14 +45,14 @@ function resolveDiscordActionDiscovery(cfg: Parameters<typeof listEnabledDiscord
 }
 
 function resolveScopedDiscordActionDiscovery(params: {
-  cfg: Parameters<typeof listEnabledDiscordAccounts>[0];
+  cfg: OpenClawConfig;
   accountId?: string | null;
 }) {
   if (!params.accountId) {
     return resolveDiscordActionDiscovery(params.cfg);
   }
-  const account = resolveDiscordAccount({ cfg: params.cfg, accountId: params.accountId });
-  if (!account.enabled || !account.token.trim()) {
+  const account = inspectDiscordAccount({ cfg: params.cfg, accountId: params.accountId });
+  if (!account.enabled || !account.configured) {
     return null;
   }
   const gate = createDiscordActionGate({
@@ -88,6 +88,7 @@ function describeDiscordMessageTool({
     actions.add("emoji-list");
   }
   if (discovery.isEnabled("messages")) {
+    actions.add("upload-file");
     actions.add("read");
     actions.add("edit");
     actions.add("delete");
@@ -157,16 +158,13 @@ function describeDiscordMessageTool({
   }
   return {
     actions: Array.from(actions),
-    capabilities: ["interactive", "components"],
-    schema: {
-      properties: {
-        components: Type.Optional(createDiscordMessageToolComponentsSchema()),
-      },
-    },
+    capabilities: ["presentation"],
   };
 }
 
 export const discordMessageActions: ChannelMessageActionAdapter = {
+  resolveExecutionMode: ({ action }) =>
+    action === "read" || action === "search" ? "gateway" : "local",
   describeMessageTool: describeDiscordMessageTool,
   extractToolSend: ({ args }) => {
     const action = normalizeOptionalString(args.action) ?? "";
@@ -179,6 +177,51 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
     }
     return null;
   },
+  prepareSendPayload: ({ ctx, payload }) => {
+    if (ctx.action !== "send") {
+      return null;
+    }
+    const payloadWithDeliveryMetadata = withDiscordInboundEventDeliveryMetadata(payload, {
+      sessionKey: ctx.sessionKey,
+      inboundEventKind: ctx.inboundEventKind,
+    });
+    const rawComponents = ctx.params.components;
+    if (typeof rawComponents === "function") {
+      return null;
+    }
+    const componentSpec =
+      rawComponents && typeof rawComponents === "object" && !Array.isArray(rawComponents)
+        ? readDiscordComponentSpec(rawComponents)
+        : undefined;
+    const nativeComponents = Array.isArray(rawComponents) ? rawComponents : undefined;
+    const embeds = Array.isArray(ctx.params.embeds) ? ctx.params.embeds : undefined;
+    if ((componentSpec || nativeComponents) && embeds?.length) {
+      return null;
+    }
+    const filename = normalizeOptionalString(ctx.params.filename);
+    if (!componentSpec && !nativeComponents && !embeds?.length && !filename) {
+      return payloadWithDeliveryMetadata;
+    }
+    const discordData =
+      payloadWithDeliveryMetadata.channelData?.discord &&
+      typeof payloadWithDeliveryMetadata.channelData.discord === "object" &&
+      !Array.isArray(payloadWithDeliveryMetadata.channelData.discord)
+        ? (payloadWithDeliveryMetadata.channelData.discord as Record<string, unknown>)
+        : {};
+    return {
+      ...payloadWithDeliveryMetadata,
+      channelData: {
+        ...payloadWithDeliveryMetadata.channelData,
+        discord: {
+          ...discordData,
+          ...(componentSpec ? { components: componentSpec } : {}),
+          ...(nativeComponents ? { components: nativeComponents } : {}),
+          ...(embeds?.length ? { embeds } : {}),
+          ...(filename ? { filename } : {}),
+        },
+      },
+    };
+  },
   handleAction: async ({
     action,
     params,
@@ -186,7 +229,11 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
     accountId,
     requesterSenderId,
     toolContext,
+    mediaAccess,
     mediaLocalRoots,
+    mediaReadFile,
+    sessionKey,
+    inboundEventKind,
   }) => {
     return await (
       await loadDiscordChannelActionsRuntime()
@@ -197,7 +244,11 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
       accountId,
       requesterSenderId,
       toolContext,
+      mediaAccess,
       mediaLocalRoots,
+      mediaReadFile,
+      ...(sessionKey ? { sessionKey } : {}),
+      ...(inboundEventKind ? { inboundEventKind } : {}),
     });
   },
 };

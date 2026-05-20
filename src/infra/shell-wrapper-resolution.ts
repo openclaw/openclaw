@@ -6,9 +6,13 @@ import {
 } from "./dispatch-wrapper-resolution.js";
 import { normalizeExecutableToken } from "./exec-wrapper-tokens.js";
 import {
+  hasFishAttachedCommandOption,
+  hasFishInitCommandOption,
+  hasPosixInteractiveStartupBeforeInlineCommand,
+  hasPosixLoginStartupBeforeInlineCommand,
   POSIX_INLINE_COMMAND_FLAGS,
-  POWERSHELL_INLINE_COMMAND_FLAGS,
   resolveInlineCommandMatch,
+  resolvePowerShellInlineCommandMatch,
 } from "./shell-inline-command.js";
 
 const POSIX_SHELL_WRAPPER_NAMES = ["ash", "bash", "dash", "fish", "ksh", "sh", "zsh"] as const;
@@ -26,7 +30,6 @@ function withWindowsExeAliases(names: readonly string[]): string[] {
 }
 
 export const POSIX_SHELL_WRAPPERS = new Set(POSIX_SHELL_WRAPPER_NAMES);
-export const WINDOWS_CMD_WRAPPERS = new Set(withWindowsExeAliases(WINDOWS_CMD_WRAPPER_NAMES));
 export const POWERSHELL_WRAPPERS = new Set(withWindowsExeAliases(POWERSHELL_WRAPPER_NAMES));
 
 const POSIX_SHELL_WRAPPER_CANONICAL = new Set<string>(POSIX_SHELL_WRAPPER_NAMES);
@@ -38,6 +41,7 @@ const SHELL_WRAPPER_CANONICAL = new Set<string>([
   ...WINDOWS_CMD_WRAPPER_NAMES,
   ...POWERSHELL_WRAPPER_NAMES,
 ]);
+const LOGIN_STARTUP_SHELL_WRAPPER_CANONICAL = new Set<string>(POSIX_SHELL_WRAPPER_NAMES);
 
 type ShellWrapperKind = "posix" | "cmd" | "powershell";
 
@@ -52,51 +56,80 @@ const SHELL_WRAPPER_SPECS: ReadonlyArray<ShellWrapperSpec> = [
   { kind: "powershell", names: POWERSHELL_WRAPPER_CANONICAL },
 ];
 
-export type ShellWrapperCommand = {
+type ShellWrapperCommand = {
   isWrapper: boolean;
   command: string | null;
 };
+
+type ShellWrapperCandidate<TState> = {
+  argv: string[];
+  token0: string;
+  state: TState;
+};
+
+function resolveShellWrapperCandidate<TState>(params: {
+  argv: string[];
+  depth: number;
+  state: TState;
+  onDispatchUnwrap?: (state: TState, wrappedArgv: string[]) => TState;
+}): ShellWrapperCandidate<TState> | null {
+  if (!isWithinDispatchClassificationDepth(params.depth)) {
+    return null;
+  }
+
+  const token0 = params.argv[0]?.trim();
+  if (!token0) {
+    return null;
+  }
+
+  const dispatchUnwrap = unwrapKnownDispatchWrapperInvocation(params.argv);
+  if (dispatchUnwrap.kind === "blocked") {
+    return null;
+  }
+  if (dispatchUnwrap.kind === "unwrapped") {
+    return resolveShellWrapperCandidate({
+      ...params,
+      argv: dispatchUnwrap.argv,
+      depth: params.depth + 1,
+      state: params.onDispatchUnwrap?.(params.state, params.argv) ?? params.state,
+    });
+  }
+
+  const shellMultiplexerUnwrap = unwrapKnownShellMultiplexerInvocation(params.argv);
+  if (shellMultiplexerUnwrap.kind === "blocked") {
+    return null;
+  }
+  if (shellMultiplexerUnwrap.kind === "unwrapped") {
+    return resolveShellWrapperCandidate({
+      ...params,
+      argv: shellMultiplexerUnwrap.argv,
+      depth: params.depth + 1,
+    });
+  }
+
+  return { argv: params.argv, token0, state: params.state };
+}
 
 function resolveShellWrapperSpecAndArgvInternal(
   argv: string[],
   depth: number,
 ): { argv: string[]; wrapper: ShellWrapperSpec; payload: string } | null {
-  if (!isWithinDispatchClassificationDepth(depth)) {
+  const candidate = resolveShellWrapperCandidate({ argv, depth, state: null });
+  if (!candidate) {
     return null;
   }
 
-  const token0 = argv[0]?.trim();
-  if (!token0) {
-    return null;
-  }
-
-  const dispatchUnwrap = unwrapKnownDispatchWrapperInvocation(argv);
-  if (dispatchUnwrap.kind === "blocked") {
-    return null;
-  }
-  if (dispatchUnwrap.kind === "unwrapped") {
-    return resolveShellWrapperSpecAndArgvInternal(dispatchUnwrap.argv, depth + 1);
-  }
-
-  const shellMultiplexerUnwrap = unwrapKnownShellMultiplexerInvocation(argv);
-  if (shellMultiplexerUnwrap.kind === "blocked") {
-    return null;
-  }
-  if (shellMultiplexerUnwrap.kind === "unwrapped") {
-    return resolveShellWrapperSpecAndArgvInternal(shellMultiplexerUnwrap.argv, depth + 1);
-  }
-
-  const wrapper = findShellWrapperSpec(normalizeExecutableToken(token0));
+  const wrapper = findShellWrapperSpec(normalizeExecutableToken(candidate.token0));
   if (!wrapper) {
     return null;
   }
 
-  const payload = extractShellWrapperPayload(argv, wrapper);
+  const payload = extractShellWrapperPayload(candidate.argv, wrapper);
   if (!payload) {
     return null;
   }
 
-  return { argv, wrapper, payload };
+  return { argv: candidate.argv, wrapper, payload };
 }
 
 function isWithinDispatchClassificationDepth(depth: number): boolean {
@@ -105,6 +138,15 @@ function isWithinDispatchClassificationDepth(depth: number): boolean {
 
 export function isShellWrapperExecutable(token: string): boolean {
   return SHELL_WRAPPER_CANONICAL.has(normalizeExecutableToken(token));
+}
+
+function isShellWrapperInvocationInternal(argv: string[], depth: number): boolean {
+  const candidate = resolveShellWrapperCandidate({ argv, depth, state: null });
+  return candidate ? isShellWrapperExecutable(candidate.token0) : false;
+}
+
+export function isShellWrapperInvocation(argv: string[]): boolean {
+  return isShellWrapperInvocationInternal(argv, 0);
 }
 
 function normalizeRawCommand(rawCommand?: string | null): string | null {
@@ -121,7 +163,7 @@ function findShellWrapperSpec(baseExecutable: string): ShellWrapperSpec | null {
   return null;
 }
 
-export type ShellMultiplexerUnwrapResult =
+type ShellMultiplexerUnwrapResult =
   | { kind: "not-wrapper" }
   | { kind: "blocked"; wrapper: string }
   | { kind: "unwrapped"; wrapper: string; argv: string[] };
@@ -161,7 +203,7 @@ function extractPosixShellInlineCommand(argv: string[]): string | null {
 function extractCmdInlineCommand(argv: string[]): string | null {
   const idx = argv.findIndex((item) => {
     const token = normalizeLowercaseStringOrEmpty(item);
-    return token === "/c" || token === "/k";
+    return token === "/c" || token === "/k" || token === "-c" || token === "-k";
   });
   if (idx === -1) {
     return null;
@@ -175,7 +217,7 @@ function extractCmdInlineCommand(argv: string[]): string | null {
 }
 
 function extractPowerShellInlineCommand(argv: string[]): string | null {
-  return extractInlineCommandByFlags(argv, POWERSHELL_INLINE_COMMAND_FLAGS);
+  return resolvePowerShellInlineCommandMatch(argv).command;
 }
 
 function extractInlineCommandByFlags(
@@ -195,6 +237,50 @@ function extractShellWrapperPayload(argv: string[], spec: ShellWrapperSpec): str
     case "powershell":
       return extractPowerShellInlineCommand(argv);
   }
+  throw new Error("Unsupported shell wrapper kind");
+}
+
+function isLegacyLoginInlineForm(argv: string[]): boolean {
+  return argv[1]?.trim() === "-lc";
+}
+
+function isLegacyShLoginInlineForm(argv: string[], baseExecutable: string): boolean {
+  return baseExecutable === "sh" && isLegacyLoginInlineForm(argv);
+}
+
+function formatShellWrapperArgv(argv: string[]): string {
+  return argv
+    .map((arg) => {
+      if (arg.length === 0) {
+        return '""';
+      }
+      return /\s|"/.test(arg) ? `"${arg.replace(/"/g, '\\"')}"` : arg;
+    })
+    .join(" ");
+}
+
+function startupWrapperRequiresFullArgv(params: {
+  argv: string[];
+  spec: ShellWrapperSpec;
+  baseExecutable: string;
+  includeLegacyLoginInlineForm: boolean;
+}): boolean {
+  if (params.spec.kind !== "posix") {
+    return false;
+  }
+  if (params.baseExecutable === "fish" && hasFishInitCommandOption(params.argv)) {
+    return true;
+  }
+  if (
+    LOGIN_STARTUP_SHELL_WRAPPER_CANONICAL.has(params.baseExecutable) &&
+    hasPosixLoginStartupBeforeInlineCommand(params.argv, POSIX_INLINE_COMMAND_FLAGS)
+  ) {
+    return (
+      params.includeLegacyLoginInlineForm ||
+      !isLegacyShLoginInlineForm(params.argv, params.baseExecutable)
+    );
+  }
+  return hasPosixInteractiveStartupBeforeInlineCommand(params.argv, POSIX_INLINE_COMMAND_FLAGS);
 }
 
 function hasEnvManipulationBeforeShellWrapperInternal(
@@ -202,49 +288,25 @@ function hasEnvManipulationBeforeShellWrapperInternal(
   depth: number,
   envManipulationSeen: boolean,
 ): boolean {
-  if (!isWithinDispatchClassificationDepth(depth)) {
+  const candidate = resolveShellWrapperCandidate({
+    argv,
+    depth,
+    state: envManipulationSeen,
+    onDispatchUnwrap: (state, wrappedArgv) => state || hasDispatchEnvManipulation(wrappedArgv),
+  });
+  if (!candidate) {
     return false;
   }
 
-  const token0 = argv[0]?.trim();
-  if (!token0) {
-    return false;
-  }
-
-  const dispatchUnwrap = unwrapKnownDispatchWrapperInvocation(argv);
-  if (dispatchUnwrap.kind === "blocked") {
-    return false;
-  }
-  if (dispatchUnwrap.kind === "unwrapped") {
-    const nextEnvManipulationSeen = envManipulationSeen || hasDispatchEnvManipulation(argv);
-    return hasEnvManipulationBeforeShellWrapperInternal(
-      dispatchUnwrap.argv,
-      depth + 1,
-      nextEnvManipulationSeen,
-    );
-  }
-
-  const shellMultiplexerUnwrap = unwrapKnownShellMultiplexerInvocation(argv);
-  if (shellMultiplexerUnwrap.kind === "blocked") {
-    return false;
-  }
-  if (shellMultiplexerUnwrap.kind === "unwrapped") {
-    return hasEnvManipulationBeforeShellWrapperInternal(
-      shellMultiplexerUnwrap.argv,
-      depth + 1,
-      envManipulationSeen,
-    );
-  }
-
-  const wrapper = findShellWrapperSpec(normalizeExecutableToken(token0));
+  const wrapper = findShellWrapperSpec(normalizeExecutableToken(candidate.token0));
   if (!wrapper) {
     return false;
   }
-  const payload = extractShellWrapperPayload(argv, wrapper);
+  const payload = extractShellWrapperPayload(candidate.argv, wrapper);
   if (!payload) {
     return false;
   }
-  return envManipulationSeen;
+  return candidate.state;
 }
 
 export function hasEnvManipulationBeforeShellWrapper(argv: string[]): boolean {
@@ -256,12 +318,52 @@ function extractShellWrapperCommandInternal(
   rawCommand: string | null,
   depth: number,
 ): ShellWrapperCommand {
-  const resolved = resolveShellWrapperSpecAndArgvInternal(argv, depth);
+  const candidate = resolveShellWrapperCandidate({ argv, depth, state: null });
+  if (!candidate) {
+    return { isWrapper: false, command: null };
+  }
+
+  const baseExecutable = normalizeExecutableToken(candidate.token0);
+  const wrapper = findShellWrapperSpec(baseExecutable);
+  if (!wrapper) {
+    return { isWrapper: false, command: null };
+  }
+  const payload = extractShellWrapperPayload(candidate.argv, wrapper);
+  if (!payload) {
+    return { isWrapper: false, command: null };
+  }
+  if (
+    wrapper.kind === "posix" &&
+    baseExecutable === "fish" &&
+    hasFishAttachedCommandOption(candidate.argv)
+  ) {
+    return { isWrapper: true, command: null };
+  }
+  const rawMatchesPayload = rawCommand === payload;
+  const rawMatchesCanonicalArgv = rawCommand === formatShellWrapperArgv(candidate.argv);
+  const allowLegacyShLoginPayloadBinding =
+    isLegacyShLoginInlineForm(candidate.argv, baseExecutable) &&
+    (rawMatchesPayload || rawMatchesCanonicalArgv);
+  if (
+    startupWrapperRequiresFullArgv({
+      argv: candidate.argv,
+      spec: wrapper,
+      baseExecutable,
+      includeLegacyLoginInlineForm: !allowLegacyShLoginPayloadBinding,
+    })
+  ) {
+    return { isWrapper: true, command: null };
+  }
+
+  const resolved = resolveShellWrapperSpecAndArgvInternal(candidate.argv, depth);
   if (!resolved) {
     return { isWrapper: false, command: null };
   }
 
-  return { isWrapper: true, command: rawCommand ?? resolved.payload };
+  return {
+    isWrapper: true,
+    command: rawMatchesCanonicalArgv ? resolved.payload : (rawCommand ?? resolved.payload),
+  };
 }
 
 export function resolveShellWrapperTransportArgv(argv: string[]): string[] | null {
@@ -269,8 +371,14 @@ export function resolveShellWrapperTransportArgv(argv: string[]): string[] | nul
 }
 
 export function extractShellWrapperInlineCommand(argv: string[]): string | null {
-  const extracted = extractShellWrapperCommandInternal(argv, null, 0);
-  return extracted.isWrapper ? extracted.command : null;
+  return resolveShellWrapperSpecAndArgvInternal(argv, 0)?.payload ?? null;
+}
+
+export function extractBindableShellWrapperInlineCommand(
+  argv: string[],
+  rawCommand?: string | null,
+): string | null {
+  return extractShellWrapperCommandInternal(argv, normalizeRawCommand(rawCommand), 0).command;
 }
 
 export function extractShellWrapperCommand(
@@ -278,4 +386,9 @@ export function extractShellWrapperCommand(
   rawCommand?: string | null,
 ): ShellWrapperCommand {
   return extractShellWrapperCommandInternal(argv, normalizeRawCommand(rawCommand), 0);
+}
+
+export function isBlockedShellWrapperCommand(argv: string[], rawCommand?: string | null): boolean {
+  const extracted = extractShellWrapperCommandInternal(argv, normalizeRawCommand(rawCommand), 0);
+  return extracted.isWrapper && extracted.command === null;
 }
