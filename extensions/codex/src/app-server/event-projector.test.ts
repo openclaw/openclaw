@@ -301,6 +301,7 @@ describe("CodexAppServerEventProjector", () => {
       text:
         "Plan: inspect the Codex app-server tool path (completed); " +
         "make the chat announcement exact (in_progress); run focused Codex runtime tests (pending).",
+      isStatusNotice: true,
     });
     expect(onBlockReply.mock.invocationCallOrder[0]).toBeLessThan(
       onBlockReplyFlush.mock.invocationCallOrder[0],
@@ -348,6 +349,7 @@ describe("CodexAppServerEventProjector", () => {
 
     expect(onBlockReply).toHaveBeenCalledWith({
       text: "I'll check your Beszel and Uptime Kuma instances to make sure nothing looks dead or dying.",
+      isStatusNotice: true,
     });
     expect(onBlockReply.mock.invocationCallOrder[0]).toBeLessThan(
       onAgentEvent.mock.invocationCallOrder[0],
@@ -391,6 +393,7 @@ describe("CodexAppServerEventProjector", () => {
 
     expect(onBlockReply).toHaveBeenCalledWith({
       text: "I'll run the web search, then answer here.",
+      isStatusNotice: true,
     });
   });
 
@@ -420,6 +423,7 @@ describe("CodexAppServerEventProjector", () => {
 
     expect(onBlockReply).toHaveBeenCalledWith({
       text: "Plan: Inspect code; Run focused tests.",
+      isStatusNotice: true,
     });
   });
 
@@ -503,6 +507,7 @@ describe("CodexAppServerEventProjector", () => {
 
     expect(onBlockReply).toHaveBeenCalledWith({
       text: "I'll run the web search, then answer here.",
+      isStatusNotice: true,
     });
   });
 
@@ -545,6 +550,7 @@ describe("CodexAppServerEventProjector", () => {
 
     expect(onBlockReply).toHaveBeenCalledWith({
       text: "I'll run the web search, then answer here.",
+      isStatusNotice: true,
     });
   });
 
@@ -560,6 +566,7 @@ describe("CodexAppServerEventProjector", () => {
 
     expect(onBlockReply).toHaveBeenCalledWith({
       text: "I'll check the chat state, then answer here.",
+      isStatusNotice: true,
     });
     expect(projector.buildResult(buildEmptyToolTelemetry()).replayMetadata).toEqual({
       hadPotentialSideEffects: true,
@@ -606,6 +613,7 @@ describe("CodexAppServerEventProjector", () => {
 
     expect(onBlockReply).toHaveBeenCalledWith({
       text: "I'll run the web search, then answer here.",
+      isStatusNotice: true,
     });
     expect(projector.buildResult(buildEmptyToolTelemetry()).replayMetadata).toEqual({
       hadPotentialSideEffects: true,

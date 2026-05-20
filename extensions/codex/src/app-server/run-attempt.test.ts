@@ -2158,6 +2158,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(toolResult.contentItems?.[0]?.text).toMatch(/^Unknown OpenClaw tool: lookup$/u);
     expect(onBlockReply).toHaveBeenCalledWith({
       text: 'I\'ll run the "lookup" step, then report the result here.',
+      isStatusNotice: true,
     });
     expect(onBlockReply.mock.invocationCallOrder[0]).toBeLessThan(
       onExecutionPhase.mock.invocationCallOrder.find(

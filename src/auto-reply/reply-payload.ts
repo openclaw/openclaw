@@ -51,6 +51,8 @@ export type ReplyPayload = {
   isCompactionNotice?: boolean;
   /** Marks this payload as a model-fallback transition/recovery notice. */
   isFallbackNotice?: boolean;
+  /** Marks this payload as a transient status/progress notice, not final assistant content. */
+  isStatusNotice?: boolean;
   /** Channel-specific payload data (per-channel envelope). */
   channelData?: Record<string, unknown>;
 };
@@ -61,6 +63,12 @@ export type ReplyPayloadTtsSupplement = {
 };
 
 export const REPLY_MEDIA_FAILURE_WARNING = "⚠️ Media failed.";
+
+export function isReplyPayloadStatusNotice(
+  payload: Pick<ReplyPayload, "isCompactionNotice" | "isFallbackNotice" | "isStatusNotice">,
+): boolean {
+  return Boolean(payload.isCompactionNotice || payload.isFallbackNotice || payload.isStatusNotice);
+}
 
 export function appendReplyMediaFailureWarning(text: string | undefined): string {
   if (!text?.trim()) {

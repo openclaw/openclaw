@@ -10,6 +10,7 @@ import {
   appendReplyMediaFailureWarning,
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
+  isReplyPayloadStatusNotice,
   setReplyPayloadMetadata,
 } from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
@@ -330,7 +331,7 @@ export async function buildReplyPayloads(params: {
   const isDirectlySentBlockPayload = (payload: ReplyPayload) =>
     Boolean(params.directlySentBlockKeys?.has(createBlockReplyContentKey(payload)));
   const preserveUnsentMediaAfterBlockStream = (payload: ReplyPayload): ReplyPayload | null => {
-    if (payload.isError || payload.isFallbackNotice) {
+    if (payload.isError || isReplyPayloadStatusNotice(payload)) {
       return payload;
     }
     const reply = resolveSendableOutboundReplyParts(payload);

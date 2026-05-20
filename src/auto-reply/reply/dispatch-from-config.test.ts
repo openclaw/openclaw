@@ -4719,6 +4719,34 @@ describe("dispatchReplyFromConfig", () => {
     expect(blockReplySentTexts).toContain("The answer is 42");
   });
 
+  it("delivers final replies after status block replies", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "whatsapp" });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload> => {
+      await opts?.onBlockReply?.({
+        text: "I'll check local system time.",
+        isStatusNotice: true,
+      });
+      return { text: "Local system time: 2026-05-20 11:49:47 EDT (-0400)" };
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    expect(dispatcher.sendBlockReply).toHaveBeenCalledWith({
+      text: "I'll check local system time.",
+      isStatusNotice: true,
+    });
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Local system time: 2026-05-20 11:49:47 EDT (-0400)",
+      }),
+    );
+  });
+
   it("strips split TTS directives from streamed block text before delivery", async () => {
     setNoAbort();
     ttsMocks.state.synthesizeFinalAudio = true;

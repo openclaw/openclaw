@@ -97,6 +97,7 @@ import {
 import type { BlockReplyContext } from "../get-reply-options.types.js";
 import {
   getReplyPayloadMetadata,
+  isReplyPayloadStatusNotice,
   markReplyPayloadAsTtsSupplement,
   type ReplyPayload,
 } from "../reply-payload.js";
@@ -211,7 +212,7 @@ function formatSuppressedReplyPayloadForLog(reply: ReplyPayload): string {
 async function maybeApplyTtsToReplyPayload(
   params: Parameters<Awaited<ReturnType<typeof loadTtsRuntime>>["maybeApplyTtsToPayload"]>[0],
 ) {
-  if (params.payload.isCompactionNotice || params.payload.isFallbackNotice) {
+  if (isReplyPayloadStatusNotice(params.payload)) {
     return params.payload;
   }
   if (
@@ -2025,7 +2026,7 @@ export async function dispatchReplyFromConfig(
                 // Accumulate block text for TTS generation after streaming.
                 // Exclude status notices — they are informational UI signals
                 // and must not be synthesised into the spoken reply.
-                const isStatusNotice = payload.isCompactionNotice || payload.isFallbackNotice;
+                const isStatusNotice = isReplyPayloadStatusNotice(payload);
                 if (payload.text && !isStatusNotice) {
                   const joinsBufferedTtsDirective =
                     cleanBlockTtsDirectiveText?.hasBufferedDirectiveText() === true;

@@ -205,6 +205,29 @@ describe("createBlockReplyPipeline dedup with threading", () => {
     expect(pipeline.getSentMediaUrls()).toStrictEqual([]);
   });
 
+  it("does not treat status notices as streamed assistant output", async () => {
+    const sent: Array<{ text?: string; isStatusNotice?: boolean }> = [];
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async (payload) => {
+        sent.push({ text: payload.text, isStatusNotice: payload.isStatusNotice });
+      },
+      timeoutMs: 5000,
+    });
+
+    pipeline.enqueue({ text: "I'll check local system time.", isStatusNotice: true });
+    await pipeline.flush({ force: true });
+
+    expect(sent).toEqual([{ text: "I'll check local system time.", isStatusNotice: true }]);
+    expect(pipeline.didStream()).toBe(false);
+    expect(pipeline.hasSentPayload({ text: "Local system time: 11:49 EDT." })).toBe(false);
+
+    pipeline.enqueue({ text: "Local system time: 11:49 EDT." });
+    await pipeline.flush({ force: true });
+
+    expect(pipeline.didStream()).toBe(true);
+    expect(pipeline.hasSentPayload({ text: "Local system time: 11:49 EDT." })).toBe(true);
+  });
+
   it("does not coalesce logical assistant blocks across assistantMessageIndex boundaries", async () => {
     const sent: string[] = [];
     const pipeline = createBlockReplyPipeline({

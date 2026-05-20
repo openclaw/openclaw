@@ -558,6 +558,7 @@ export class CodexAppServerEventProjector {
           this.latestPlanAnnouncementText ??
           buildCodexPlanAnnouncementText(this.latestPlanAnnouncementSteps) ??
           buildCodexToolPlanAnnouncementText(details),
+        isStatusNotice: true,
       });
       await this.params.onBlockReplyFlush?.();
     } catch (error) {
@@ -1094,7 +1095,7 @@ export class CodexAppServerEventProjector {
     }
     this.toolPlanAnnouncementSent = true;
     try {
-      await this.params.onBlockReply({ text });
+      await this.params.onBlockReply({ text, isStatusNotice: true });
       await this.params.onBlockReplyFlush?.();
     } catch (error) {
       embeddedAgentLog.debug("codex tool plan announcement delivery failed", { error });

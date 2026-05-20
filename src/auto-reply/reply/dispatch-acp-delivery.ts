@@ -11,6 +11,7 @@ import {
 import { createTtsDirectiveTextStreamCleaner } from "../../tts/directives.js";
 import { resolveStatusTtsSnapshot } from "../../tts/status-config.js";
 import { resolveConfiguredTtsMode, shouldCleanTtsDirectiveText } from "../../tts/tts-config.js";
+import { isReplyPayloadStatusNotice } from "../reply-payload.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
@@ -100,7 +101,7 @@ async function maybeApplyAcpTts(params: {
   if (params.skipTts) {
     return params.payload;
   }
-  if (params.payload.isCompactionNotice || params.payload.isFallbackNotice) {
+  if (isReplyPayloadStatusNotice(params.payload)) {
     return params.payload;
   }
   const ttsStatus = resolveStatusTtsSnapshot({
@@ -314,7 +315,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     let visiblePayload = payload;
     const rawBlockText = kind === "block" ? normalizeOptionalString(payload.text) : undefined;
     if (rawBlockText) {
-      const isStatusNotice = payload.isCompactionNotice || payload.isFallbackNotice;
+      const isStatusNotice = isReplyPayloadStatusNotice(payload);
       const joinsBufferedTtsDirective =
         state.cleanBlockTtsDirectiveText?.hasBufferedDirectiveText() === true;
       if (!isStatusNotice) {
@@ -340,7 +341,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         state.accumulatedVisibleBlockText += visiblePayload.text;
       }
     }
-    const isStatusNotice = payload.isCompactionNotice || payload.isFallbackNotice;
+    const isStatusNotice = isReplyPayloadStatusNotice(payload);
     const rawFinalText =
       kind === "final" && !isStatusNotice ? normalizeOptionalString(payload.text) : undefined;
     if (rawFinalText) {
