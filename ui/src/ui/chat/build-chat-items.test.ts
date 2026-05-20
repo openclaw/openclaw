@@ -432,6 +432,52 @@ describe("buildChatItems", () => {
     ]);
   });
 
+  it("projects successful message-tool sends when tool calls are hidden", () => {
+    const groups = messageGroups({
+      showToolCalls: false,
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call-message-send-hidden-tools",
+              name: "message",
+              arguments: {
+                action: "send",
+                message: "Readable reply without tool plumbing.",
+              },
+            },
+          ],
+          timestamp: 1_000,
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call-message-send-hidden-tools",
+          toolName: "message",
+          isError: false,
+          content: [
+            {
+              type: "toolResult",
+              name: "message",
+              text: JSON.stringify({
+                ok: true,
+                messageId: "43",
+                chatId: "chat-1",
+              }),
+            },
+          ],
+          timestamp: 1_001,
+        },
+      ],
+    });
+
+    expect(groups.map((group) => group.role)).toEqual(["assistant"]);
+    expect(messageRecord(groups[0]).content).toStrictEqual([
+      { type: "text", text: "Readable reply without tool plumbing." },
+    ]);
+  });
+
   it("does not project failed message-tool sends as assistant bubbles", () => {
     const groups = messageGroups({
       messages: [

@@ -565,30 +565,45 @@ function estimateMessageRenderChars(message: unknown, limit: number): number {
   return Math.max(chars, 1);
 }
 
-function isHiddenToolMessage(message: unknown, showToolCalls: boolean): boolean {
+function isHiddenToolMessage(
+  message: unknown,
+  showToolCalls: boolean,
+  successfulMessageToolCallIds: Set<string>,
+): boolean {
   if (showToolCalls) {
+    return false;
+  }
+  if (extractMessageToolVisibleReply(message, successfulMessageToolCallIds)) {
     return false;
   }
   return safeNormalizeMessage(message)?.role.toLowerCase() === "toolresult";
 }
 
-function countVisibleHistoryMessages(messages: unknown[], showToolCalls: boolean): number {
+function countVisibleHistoryMessages(
+  messages: unknown[],
+  showToolCalls: boolean,
+  successfulMessageToolCallIds: Set<string>,
+): number {
   let count = 0;
   for (const message of messages) {
-    if (!isHiddenToolMessage(message, showToolCalls)) {
+    if (!isHiddenToolMessage(message, showToolCalls, successfulMessageToolCallIds)) {
       count += 1;
     }
   }
   return count;
 }
 
-function resolveHistoryStartIndex(messages: unknown[], showToolCalls: boolean): number {
+function resolveHistoryStartIndex(
+  messages: unknown[],
+  showToolCalls: boolean,
+  successfulMessageToolCallIds: Set<string>,
+): number {
   let visibleCount = 0;
   let renderChars = 0;
   let startIndex = messages.length;
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
-    if (isHiddenToolMessage(message, showToolCalls)) {
+    if (isHiddenToolMessage(message, showToolCalls, successfulMessageToolCallIds)) {
       continue;
     }
     if (visibleCount >= CHAT_HISTORY_RENDER_LIMIT) {
@@ -620,14 +635,20 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     text: string | null;
     timestamp: number | null;
   }>;
-  const historyStart = resolveHistoryStartIndex(history, props.showToolCalls);
+  const historyStart = resolveHistoryStartIndex(
+    history,
+    props.showToolCalls,
+    successfulMessageToolCallIds,
+  );
   const hiddenHistoryCount = countVisibleHistoryMessages(
     history.slice(0, historyStart),
     props.showToolCalls,
+    successfulMessageToolCallIds,
   );
   const visibleHistoryCount = countVisibleHistoryMessages(
     history.slice(historyStart),
     props.showToolCalls,
+    successfulMessageToolCallIds,
   );
   if (hiddenHistoryCount > 0) {
     items.push({
@@ -667,12 +688,22 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       continue;
     }
 
-    if (!props.showToolCalls && normalized.role.toLowerCase() === "toolresult") {
-      continue;
-    }
-
     const searchQuery = props.searchQuery ?? "";
     if (props.searchOpen && searchQuery.trim() && !messageMatchesSearchQuery(msg, searchQuery)) {
+      continue;
+    }
+    const visibleMessageToolReply = extractMessageToolVisibleReply(
+      msg,
+      successfulMessageToolCallIds,
+    );
+    if (!props.showToolCalls && normalized.role.toLowerCase() === "toolresult") {
+      if (visibleMessageToolReply) {
+        items.push({
+          kind: "message",
+          key: `${messageKey(msg, i)}:message-tool-visible-reply`,
+          message: projectedMessageToolReply(msg, visibleMessageToolReply),
+        });
+      }
       continue;
     }
     if (!hasRenderableNormalizedMessage(msg) && normalized.role.toLowerCase() !== "assistant") {
@@ -684,10 +715,6 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       key: messageKey(msg, i),
       message: msg,
     });
-    const visibleMessageToolReply = extractMessageToolVisibleReply(
-      msg,
-      successfulMessageToolCallIds,
-    );
     if (visibleMessageToolReply) {
       items.push({
         kind: "message",
