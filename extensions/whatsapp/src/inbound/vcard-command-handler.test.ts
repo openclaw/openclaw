@@ -112,7 +112,7 @@ describe("handleVcardCommand", () => {
     mockConfig(["+5511999988888"]);
     const result = await handleVcardCommand(makeParams({ command: "rm" }));
     expect(result).toBe("removed");
-    expect(updateConfigMock).toHaveBeenCalledTimes(2); // read pass + write pass
+    expect(updateConfigMock).toHaveBeenCalledTimes(1); // single atomic read+write pass
     expect(sendMessageMock).toHaveBeenCalledWith(SELF_JID, {
       text: "Removed +5511999988888 from manual list",
     });

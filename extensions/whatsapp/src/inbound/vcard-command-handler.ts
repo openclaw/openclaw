@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { updateConfig } from "openclaw/plugin-sdk/config-mutation";
 import { normalizeE164 } from "../text-runtime.js";
 import { parseVcard } from "../vcard.js";
@@ -16,9 +17,9 @@ export type VcardCommandParams = {
   sendMessage: (jid: string, content: { text: string }) => Promise<unknown>;
 };
 
-function readManualFrom(cfg: Record<string, unknown>, accountId: string): string[] {
-  const whatsapp = (cfg as { channels?: { whatsapp?: Record<string, unknown> } }).channels
-    ?.whatsapp;
+function readManualFrom(cfg: OpenClawConfig, accountId: string): string[] {
+  const raw = cfg as unknown as { channels?: { whatsapp?: Record<string, unknown> } };
+  const whatsapp = raw.channels?.whatsapp;
   if (!whatsapp) return [];
   if (accountId !== "default") {
     const accounts = whatsapp.accounts as Record<string, unknown> | undefined;
@@ -28,18 +29,15 @@ function readManualFrom(cfg: Record<string, unknown>, accountId: string): string
   return Array.isArray(whatsapp.manualFrom) ? (whatsapp.manualFrom as string[]) : [];
 }
 
-function writeManualFrom(
-  cfg: Record<string, unknown>,
-  accountId: string,
-  next: string[],
-): Record<string, unknown> {
-  const channels = (cfg.channels ?? {}) as Record<string, unknown>;
+function writeManualFrom(cfg: OpenClawConfig, accountId: string, next: string[]): OpenClawConfig {
+  const raw = cfg as unknown as Record<string, unknown>;
+  const channels = (raw.channels ?? {}) as Record<string, unknown>;
   const whatsapp = (channels.whatsapp ?? {}) as Record<string, unknown>;
   if (accountId !== "default") {
     const accounts = (whatsapp.accounts ?? {}) as Record<string, unknown>;
     const acct = (accounts[accountId] ?? {}) as Record<string, unknown>;
     return {
-      ...cfg,
+      ...raw,
       channels: {
         ...channels,
         whatsapp: {
@@ -47,12 +45,12 @@ function writeManualFrom(
           accounts: { ...accounts, [accountId]: { ...acct, manualFrom: next } },
         },
       },
-    };
+    } as OpenClawConfig;
   }
   return {
-    ...cfg,
+    ...raw,
     channels: { ...channels, whatsapp: { ...whatsapp, manualFrom: next } },
-  };
+  } as OpenClawConfig;
 }
 
 export async function handleVcardCommand(params: VcardCommandParams): Promise<VcardCommandResult> {
@@ -70,20 +68,16 @@ export async function handleVcardCommand(params: VcardCommandParams): Promise<Vc
   const phone = normalizeE164(parsed.phones[0]);
 
   if (cmd === "add") {
-    // Single updateConfig call: read and conditionally write.
     let outcome: "added" | "already" = "already";
     await updateConfig((cfg) => {
-      const list = readManualFrom(cfg as Record<string, unknown>, params.accountId);
+      const list = readManualFrom(cfg, params.accountId);
       const isPresent = list.map(normalizeE164).some((e) => e === phone);
       if (isPresent) {
         outcome = "already";
         return cfg;
       }
       outcome = "added";
-      return writeManualFrom(cfg as Record<string, unknown>, params.accountId, [
-        ...list,
-        phone,
-      ]) as never;
+      return writeManualFrom(cfg, params.accountId, [...list, phone]);
     });
     if (outcome === "already") {
       await params.sendMessage(params.selfJid, { text: "Already in manual list" });
@@ -93,27 +87,26 @@ export async function handleVcardCommand(params: VcardCommandParams): Promise<Vc
     return "added";
   }
 
-  // cmd === "rm": read first, then write only if present.
-  let currentList: string[] = [];
+  // cmd === "rm": single atomic mutator — read and write in one call.
+  let outcome: "removed" | "not-found" = "not-found";
   await updateConfig((cfg) => {
-    currentList = readManualFrom(cfg as Record<string, unknown>, params.accountId).map(
-      normalizeE164,
+    const list = readManualFrom(cfg, params.accountId);
+    const idx = list.map(normalizeE164).findIndex((e) => e === phone);
+    if (idx === -1) {
+      outcome = "not-found";
+      return cfg;
+    }
+    outcome = "removed";
+    return writeManualFrom(
+      cfg,
+      params.accountId,
+      list.filter((_, i) => i !== idx),
     );
-    return cfg;
   });
-
-  const isPresent = currentList.some((e) => e === phone);
-
-  if (!isPresent) {
+  if (outcome === "not-found") {
     await params.sendMessage(params.selfJid, { text: "Not in manual list" });
     return "not-found";
   }
-
-  await updateConfig((cfg) => {
-    const list = readManualFrom(cfg as Record<string, unknown>, params.accountId);
-    const next = list.filter((e) => normalizeE164(e) !== phone);
-    return writeManualFrom(cfg as Record<string, unknown>, params.accountId, next) as never;
-  });
   await params.sendMessage(params.selfJid, { text: `Removed ${phone} from manual list` });
   return "removed";
 }
