@@ -24,6 +24,7 @@ export async function bootstrapHarnessContextEngine(params: {
   runtimeContext?: ContextEngineRuntimeContext;
   runMaintenance?: typeof runHarnessContextEngineMaintenance;
   config?: SessionWriteLockAcquireTimeoutConfig;
+  agentId?: string;
   warn: (message: string) => void;
 }): Promise<void> {
   if (
@@ -49,6 +50,7 @@ export async function bootstrapHarnessContextEngine(params: {
       sessionManager: params.sessionManager,
       runtimeContext: params.runtimeContext,
       config: params.config,
+      agentId: params.agentId,
     });
   } catch (bootstrapErr) {
     params.warn(`context engine bootstrap failed: ${String(bootstrapErr)}`);
@@ -103,6 +105,7 @@ export async function finalizeHarnessContextEngineTurn(params: {
   runMaintenance?: typeof runHarnessContextEngineMaintenance;
   sessionManager?: unknown;
   config?: SessionWriteLockAcquireTimeoutConfig;
+  agentId?: string;
   warn: (message: string) => void;
 }) {
   if (!params.contextEngine) {
@@ -178,6 +181,7 @@ export async function finalizeHarnessContextEngineTurn(params: {
       sessionManager: params.sessionManager,
       runtimeContext: params.runtimeContext,
       config: params.config,
+      agentId: params.agentId,
     });
   }
 
@@ -232,6 +236,7 @@ export async function runHarnessContextEngineMaintenance(params: {
   executionMode?: "foreground" | "background";
   onDeferredMaintenance?: (promise: Promise<void>) => void;
   config?: SessionWriteLockAcquireTimeoutConfig;
+  agentId?: string;
 }) {
   return await runContextEngineMaintenance({
     contextEngine: params.contextEngine,
@@ -246,6 +251,7 @@ export async function runHarnessContextEngineMaintenance(params: {
     executionMode: params.executionMode,
     onDeferredMaintenance: params.onDeferredMaintenance,
     config: params.config,
+    agentId: params.agentId,
   });
 }
 

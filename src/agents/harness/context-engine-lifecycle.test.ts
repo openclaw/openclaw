@@ -2,10 +2,21 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it, vi } from "vitest";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../internal-runtime-context.js";
+import { runContextEngineMaintenance } from "../pi-embedded-runner/context-engine-maintenance.js";
 import {
   assembleHarnessContextEngine,
+  bootstrapHarnessContextEngine,
   finalizeHarnessContextEngineTurn,
+  runHarnessContextEngineMaintenance,
 } from "./context-engine-lifecycle.js";
+
+vi.mock("../pi-embedded-runner/context-engine-maintenance.js", () => ({
+  runContextEngineMaintenance: vi.fn(async () => ({
+    changed: false,
+    bytesFreed: 0,
+    rewrittenEntries: 0,
+  })),
+}));
 
 function textMessage(role: "user" | "assistant", text: string, timestamp: number): AgentMessage {
   return {
@@ -38,6 +49,9 @@ function createContextEngine(overrides: Partial<ContextEngine> = {}): ContextEng
     ...overrides,
   };
 }
+
+type HarnessMaintenanceParams = Parameters<typeof runHarnessContextEngineMaintenance>[0];
+const unchangedMaintenanceResult = { changed: false, bytesFreed: 0, rewrittenEntries: 0 } as const;
 
 const sessionParams = {
   sessionIdUsed: "session-1",
@@ -149,5 +163,79 @@ describe("harness context engine lifecycle", () => {
       .calls;
     const ingestBatchParams = ingestBatchCalls[0]?.[0] as { messages?: AgentMessage[] } | undefined;
     expect(ingestBatchParams?.messages).toEqual([turnUser, turnAssistant]);
+  });
+
+  it("threads legacy session agent id into bootstrap maintenance", async () => {
+    const runMaintenance = vi.fn(async (_params: HarnessMaintenanceParams) => undefined);
+
+    await bootstrapHarnessContextEngine({
+      hadSessionFile: true,
+      contextEngine: createContextEngine({
+        maintain: vi.fn(async () => unchangedMaintenanceResult),
+      }),
+      sessionId: sessionParams.sessionId,
+      sessionKey: "legacy-session-key",
+      sessionFile: sessionParams.sessionFile,
+      runMaintenance,
+      agentId: "legacy-owner",
+      warn: () => {},
+    });
+
+    expect(runMaintenance).toHaveBeenCalledOnce();
+    expect(runMaintenance.mock.calls[0]?.[0]).toMatchObject({
+      reason: "bootstrap",
+      sessionKey: "legacy-session-key",
+      agentId: "legacy-owner",
+    });
+  });
+
+  it("threads legacy session agent id into turn maintenance", async () => {
+    const runMaintenance = vi.fn(async (_params: HarnessMaintenanceParams) => undefined);
+
+    await finalizeHarnessContextEngineTurn({
+      contextEngine: createContextEngine(),
+      promptError: false,
+      aborted: false,
+      yieldAborted: false,
+      sessionIdUsed: sessionParams.sessionIdUsed,
+      sessionKey: "legacy-session-key",
+      sessionFile: sessionParams.sessionFile,
+      messagesSnapshot: [textMessage("user", "ask", 1), textMessage("assistant", "answer", 2)],
+      prePromptMessageCount: 1,
+      runMaintenance,
+      agentId: "legacy-owner",
+      warn: () => {},
+    });
+
+    expect(runMaintenance).toHaveBeenCalledOnce();
+    expect(runMaintenance.mock.calls[0]?.[0]).toMatchObject({
+      reason: "turn",
+      sessionKey: "legacy-session-key",
+      agentId: "legacy-owner",
+    });
+  });
+
+  it("passes harness context-engine maintenance agent id through to capability binding", async () => {
+    const contextEngine = createContextEngine({
+      maintain: vi.fn(async () => unchangedMaintenanceResult),
+    });
+    const mockedMaintenance = vi.mocked(runContextEngineMaintenance);
+    mockedMaintenance.mockClear();
+
+    await runHarnessContextEngineMaintenance({
+      contextEngine,
+      sessionId: sessionParams.sessionId,
+      sessionKey: "legacy-session-key",
+      sessionFile: sessionParams.sessionFile,
+      reason: "compaction",
+      agentId: "legacy-owner",
+    });
+
+    expect(mockedMaintenance).toHaveBeenCalledOnce();
+    expect(mockedMaintenance.mock.calls[0]?.[0]).toMatchObject({
+      reason: "compaction",
+      sessionKey: "legacy-session-key",
+      agentId: "legacy-owner",
+    });
   });
 });
