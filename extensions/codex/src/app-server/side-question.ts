@@ -715,7 +715,6 @@ function clampSideDynamicToolTimeoutMs(timeoutMs: number): number {
 }
 
 export const testing = {
-  CODEX_SIDE_DYNAMIC_IMAGE_GENERATION_TOOL_TIMEOUT_MS,
   resolveSideDynamicToolCallTimeoutMs,
 } as const;
 
