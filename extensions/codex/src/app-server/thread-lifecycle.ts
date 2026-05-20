@@ -884,7 +884,12 @@ function buildVisibleReplyInstruction(
     ? dynamicTools.some((tool) => tool.name.trim() === "message")
     : params.disableMessageTool !== true;
   if (params.sourceReplyDeliveryMode === "message_tool_only" && messageToolAvailable) {
-    return "To send a visible message, use the `message` tool.";
+    return [
+      "Preserve channel/session context.",
+      'If this turn needs visible output in the current channel, call `message` with `action="send"` before ending the turn.',
+      "Do not rely on normal final assistant text for visible delivery; final text is private to OpenClaw/Codex in this mode.",
+      'If no visible channel response is needed, do not call `message(action="send")`.',
+    ].join(" ");
   }
   return "To send a visible reply, use the active Codex delivery path.";
 }

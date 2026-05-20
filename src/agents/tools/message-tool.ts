@@ -859,7 +859,7 @@ function appendMessageToolVisibleReplyHint(
   const targetGuidance = requireExplicitTarget
     ? "Include target when sending."
     : "target defaults to the current source conversation; omit unless sending elsewhere.";
-  return `${description} This turn: use action="send" with message for visible replies to the current source conversation. ${targetGuidance} Normal final answers stay private.`;
+  return `${description} This turn: if visible output is needed in the current source conversation, call action="send" with message before ending. ${targetGuidance} Normal final answers stay private and are not visible in this mode.`;
 }
 
 function appendMessageToolReadHint(

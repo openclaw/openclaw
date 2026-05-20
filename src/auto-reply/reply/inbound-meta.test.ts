@@ -300,7 +300,9 @@ describe("buildInboundUserContextPrefix", () => {
       { sourceReplyDeliveryMode: "message_tool_only" },
     );
 
-    expect(text).toContain("Delivery: to send a message, use the `message` tool.");
+    expect(text).toContain(
+      'Delivery: if this turn needs visible output in the current source conversation, call `message` with `action="send"` before ending.',
+    );
     expect(text.indexOf("Delivery:")).toBeLessThan(text.indexOf("Conversation info"));
     expect(text).toContain("Conversation info (untrusted metadata):");
   });
@@ -317,7 +319,7 @@ describe("buildInboundUserContextPrefix", () => {
       { sourceReplyDeliveryMode: "automatic" },
     );
 
-    expect(text).not.toContain("Delivery: to send a message");
+    expect(text).not.toContain("Delivery: if this turn needs visible output");
     expect(text).toContain("Conversation info (untrusted metadata):");
   });
 
