@@ -140,8 +140,8 @@ describe("OpenAI Responses transport replay recovery", () => {
       } as never,
       {
         apiKey: "test",
-        onPayload: (payload) => {
-          capturedPayloads.push(payload as Record<string, unknown>);
+        onPayload: (payload: Record<string, unknown>) => {
+          capturedPayloads.push(payload);
         },
       } as never,
     ) as { result: () => Promise<AgentMessage> };
