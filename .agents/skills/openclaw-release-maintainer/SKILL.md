@@ -170,6 +170,9 @@ live`; keep it clearly beta and avoid implying stable promotion.
   CI, validation, or internal release mechanics unless the release is explicitly
   about those. Peter prefers concrete user wins: features, integrations,
   workflow improvements, and practical reliability fixes.
+- Do not feature QA parity, test coverage, release gates, or validation lanes in
+  user-facing launch tweets. Keep them for release notes or maintainer proof
+  unless the operator explicitly asks for validation-focused copy.
 - Tone: high-signal, slightly cheeky, confident, not corporate. One joke is
   enough. Avoid punching down, insulting users, or promising what was not
   verified.
