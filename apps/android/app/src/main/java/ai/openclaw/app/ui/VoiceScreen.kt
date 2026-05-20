@@ -75,7 +75,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 
 @Composable
-fun V2VoiceScreen(
+fun VoiceScreen(
   viewModel: MainViewModel,
   onOpenCommand: () -> Unit,
   onOpenVoiceSettings: () -> Unit,
@@ -125,7 +125,7 @@ fun V2VoiceScreen(
     )
 
   if (talkModeEnabled) {
-    V2TalkSessionScreen(
+    TalkSessionScreen(
       entries = talkModeConversation,
       listening = talkModeListening,
       speaking = talkModeSpeaking,
@@ -138,7 +138,7 @@ fun V2VoiceScreen(
   }
 
   if (voiceCaptureMode == VoiceCaptureMode.ManualMic || micEnabled || micIsSending) {
-    V2DictationScreen(
+    DictationScreen(
       liveTranscript = micLiveTranscript,
       conversation = micConversation,
       listening = micEnabled,
@@ -160,14 +160,14 @@ fun V2VoiceScreen(
         .padding(horizontal = 20.dp, vertical = 8.dp),
     verticalArrangement = Arrangement.spacedBy(8.dp),
   ) {
-    V2VoiceHeader(
+    VoiceHeader(
       statusText = if (voiceActive) activeStatus else "Your voice command center.",
       speakerEnabled = speakerEnabled,
       onToggleSpeaker = { viewModel.setSpeakerEnabled(!speakerEnabled) },
       onOpenCommand = onOpenCommand,
     )
 
-    V2VoiceHero(
+    VoiceHero(
       gatewayStatus = gatewayStatus,
       voiceCaptureMode = voiceCaptureMode,
       micEnabled = micEnabled,
@@ -187,7 +187,7 @@ fun V2VoiceScreen(
         )
       },
       onStartDictation = {
-        if (micCooldown) return@V2VoiceHero
+        if (micCooldown) return@VoiceHero
         runVoiceAction(
           action = VoiceAction.Dictation,
           hasMicPermission = hasMicPermission,
@@ -201,7 +201,7 @@ fun V2VoiceScreen(
     )
 
     if (!hasMicPermission) {
-      V2VoicePermissionPanel(
+      VoicePermissionPanel(
         onRequestPermission = {
           pendingAction = VoiceAction.Talk
           requestMicPermission.launch(Manifest.permission.RECORD_AUDIO)
@@ -209,7 +209,7 @@ fun V2VoiceScreen(
       )
     }
 
-    V2VoiceTranscript(
+    VoiceTranscript(
       entries = activeConversation,
       showThinking = micIsSending && activeConversation.none { it.role == VoiceConversationRole.Assistant && it.isStreaming },
       modifier = Modifier.weight(1f),
@@ -218,7 +218,7 @@ fun V2VoiceScreen(
 }
 
 @Composable
-private fun V2DictationScreen(
+private fun DictationScreen(
   liveTranscript: String?,
   conversation: List<VoiceConversationEntry>,
   listening: Boolean,
@@ -241,12 +241,12 @@ private fun V2DictationScreen(
     verticalArrangement = Arrangement.spacedBy(10.dp),
   ) {
     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-      V2VoicePlainIconButton(icon = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to voice", onClick = onCancel)
+      VoicePlainIconButton(icon = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to voice", onClick = onCancel)
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Text(text = "Dictation", style = ClawTheme.type.title.copy(fontSize = 16.sp, lineHeight = 20.sp), color = ClawTheme.colors.text)
         Text(text = "Transcribe then send", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
       }
-      V2VoicePlainIconButton(icon = Icons.Default.Settings, contentDescription = "Dictation settings", onClick = onOpenVoiceSettings)
+      VoicePlainIconButton(icon = Icons.Default.Settings, contentDescription = "Dictation settings", onClick = onOpenVoiceSettings)
     }
 
     Surface(
@@ -264,7 +264,7 @@ private fun V2DictationScreen(
           overflow = TextOverflow.Ellipsis,
         )
         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
-          V2DictationWaveform(active = listening || sending)
+          DictationWaveform(active = listening || sending)
           Row(horizontalArrangement = Arrangement.spacedBy(7.dp), verticalAlignment = Alignment.CenterVertically) {
             Icon(imageVector = Icons.Default.Mic, contentDescription = null, modifier = Modifier.size(15.dp), tint = if (listening) ClawTheme.colors.success else ClawTheme.colors.textMuted)
             Text(text = statusText, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
@@ -335,7 +335,7 @@ private fun V2DictationScreen(
 }
 
 @Composable
-private fun V2DictationWaveform(active: Boolean) {
+private fun DictationWaveform(active: Boolean) {
   Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
     List(48) { index ->
       val height = if (active) 3 + ((index * 7) % 16) else 3 + (index % 3) * 2
@@ -351,7 +351,7 @@ private fun V2DictationWaveform(active: Boolean) {
 }
 
 @Composable
-private fun V2TalkSessionScreen(
+private fun TalkSessionScreen(
   entries: List<VoiceConversationEntry>,
   listening: Boolean,
   speaking: Boolean,
@@ -369,7 +369,7 @@ private fun V2TalkSessionScreen(
     verticalArrangement = Arrangement.spacedBy(11.dp),
   ) {
     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-      V2VoicePlainIconButton(icon = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to voice", onClick = onEndTalk)
+      VoicePlainIconButton(icon = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to voice", onClick = onEndTalk)
       Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(3.dp)) {
         Text(text = "Realtime Talk", style = ClawTheme.type.title.copy(fontSize = 14.sp, lineHeight = 17.sp), color = ClawTheme.colors.text)
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
@@ -388,7 +388,7 @@ private fun V2TalkSessionScreen(
           )
         }
       }
-      V2VoicePlainIconButton(icon = Icons.Default.Info, contentDescription = "Talk settings", onClick = onOpenVoiceSettings)
+      VoicePlainIconButton(icon = Icons.Default.Info, contentDescription = "Talk settings", onClick = onOpenVoiceSettings)
     }
 
     Surface(
@@ -398,13 +398,13 @@ private fun V2TalkSessionScreen(
       border = BorderStroke(1.dp, ClawTheme.colors.borderStrong),
     ) {
       Box(contentAlignment = Alignment.Center) {
-        V2TalkWaveform(active = listening || speaking)
+        TalkWaveform(active = listening || speaking)
       }
     }
 
     Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
       Text(text = "Live transcript", style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
-      V2TalkTranscript(entries = entries, modifier = Modifier.weight(1f))
+      TalkTranscript(entries = entries, modifier = Modifier.weight(1f))
     }
 
     Row(
@@ -412,26 +412,26 @@ private fun V2TalkSessionScreen(
       horizontalArrangement = Arrangement.SpaceEvenly,
       verticalAlignment = Alignment.CenterVertically,
     ) {
-      V2TalkControl(icon = if (speakerEnabled) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeOff, label = if (speakerEnabled) "Mute" else "Unmute", onClick = onToggleSpeaker)
-      V2TalkControl(icon = Icons.Default.PhoneDisabled, label = "End", primary = true, onClick = onEndTalk)
-      V2TalkControl(icon = Icons.Default.GraphicEq, label = "Voice", onClick = onOpenVoiceSettings)
+      TalkControl(icon = if (speakerEnabled) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeOff, label = if (speakerEnabled) "Mute" else "Unmute", onClick = onToggleSpeaker)
+      TalkControl(icon = Icons.Default.PhoneDisabled, label = "End", primary = true, onClick = onEndTalk)
+      TalkControl(icon = Icons.Default.GraphicEq, label = "Voice", onClick = onOpenVoiceSettings)
     }
   }
 }
 
 @Composable
-private fun V2TalkTranscript(
+private fun TalkTranscript(
   entries: List<VoiceConversationEntry>,
   modifier: Modifier = Modifier,
 ) {
   LazyColumn(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(7.dp)) {
     if (entries.isEmpty()) {
       item {
-        V2TalkTranscriptCard(label = "OpenClaw", text = "Listening for your next turn.", muted = true)
+        TalkTranscriptCard(label = "OpenClaw", text = "Listening for your next turn.", muted = true)
       }
     } else {
       items(entries.takeLast(6), key = { it.id }) { entry ->
-        V2TalkTranscriptCard(
+        TalkTranscriptCard(
           label = if (entry.role == VoiceConversationRole.User) "You" else "OpenClaw",
           text = if (entry.isStreaming && entry.text.isBlank()) "Listening response..." else entry.text,
           muted = entry.isStreaming,
@@ -442,7 +442,7 @@ private fun V2TalkTranscript(
 }
 
 @Composable
-private fun V2TalkTranscriptCard(
+private fun TalkTranscriptCard(
   label: String,
   text: String,
   muted: Boolean = false,
@@ -461,7 +461,7 @@ private fun V2TalkTranscriptCard(
 }
 
 @Composable
-private fun V2TalkControl(
+private fun TalkControl(
   icon: androidx.compose.ui.graphics.vector.ImageVector,
   label: String,
   primary: Boolean = false,
@@ -485,7 +485,7 @@ private fun V2TalkControl(
 }
 
 @Composable
-private fun V2TalkWaveform(active: Boolean) {
+private fun TalkWaveform(active: Boolean) {
   Row(horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
     listOf(4, 12, 24, 34, 46, 28, 12, 38, 44, 24, 12, 30, 42, 18, 6).forEachIndexed { index, height ->
       Box(
@@ -500,7 +500,7 @@ private fun V2TalkWaveform(active: Boolean) {
 }
 
 @Composable
-private fun V2VoiceHeader(
+private fun VoiceHeader(
   statusText: String,
   speakerEnabled: Boolean,
   onToggleSpeaker: () -> Unit,
@@ -518,8 +518,8 @@ private fun V2VoiceHeader(
         color = ClawTheme.colors.text,
         modifier = Modifier.weight(1f),
       )
-      V2VoicePlainIconButton(icon = Icons.Default.Search, contentDescription = "Search voice", onClick = onOpenCommand)
-      V2VoiceAvatar(text = "OC")
+      VoicePlainIconButton(icon = Icons.Default.Search, contentDescription = "Search voice", onClick = onOpenCommand)
+      VoiceAvatar(text = "OC")
     }
     Row(
       modifier = Modifier.fillMaxWidth(),
@@ -536,7 +536,7 @@ private fun V2VoiceHeader(
           overflow = TextOverflow.Ellipsis,
         )
       }
-      V2VoicePlainIconButton(
+      VoicePlainIconButton(
         icon = if (speakerEnabled) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeOff,
         contentDescription = if (speakerEnabled) "Mute speaker" else "Unmute speaker",
         onClick = onToggleSpeaker,
@@ -546,7 +546,7 @@ private fun V2VoiceHeader(
 }
 
 @Composable
-private fun V2VoiceAvatar(text: String) {
+private fun VoiceAvatar(text: String) {
   Surface(
     modifier = Modifier.size(34.dp),
     shape = CircleShape,
@@ -561,7 +561,7 @@ private fun V2VoiceAvatar(text: String) {
 }
 
 @Composable
-private fun V2VoicePlainIconButton(
+private fun VoicePlainIconButton(
   icon: androidx.compose.ui.graphics.vector.ImageVector,
   contentDescription: String,
   onClick: () -> Unit,
@@ -574,7 +574,7 @@ private fun V2VoicePlainIconButton(
 }
 
 @Composable
-private fun V2VoiceHero(
+private fun VoiceHero(
   gatewayStatus: String,
   voiceCaptureMode: VoiceCaptureMode,
   micEnabled: Boolean,
@@ -586,7 +586,7 @@ private fun V2VoiceHero(
   onStartDictation: () -> Unit,
 ) {
   Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
-    V2VoiceOrb(
+    VoiceOrb(
       active = micEnabled || talkModeEnabled,
       listening = talkModeListening || voiceCaptureMode == VoiceCaptureMode.ManualMic,
       speaking = talkModeSpeaking,
@@ -632,13 +632,13 @@ private fun V2VoiceHero(
     }
 
     ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
-      V2VoiceModeRow(
+      VoiceModeRow(
         title = if (talkModeEnabled) "End Talk" else "Realtime Talk",
         subtitle = if (talkModeEnabled) "Conversation is live" else "Natural conversation in real time",
         icon = if (talkModeEnabled) Icons.Default.PhoneDisabled else Icons.Default.RecordVoiceOver,
         onClick = onStartTalk,
       )
-      V2VoiceModeRow(
+      VoiceModeRow(
         title = if (micEnabled) "Stop Dictation" else "Dictation",
         subtitle = if (micEnabled) "Listening for one turn" else "Convert speech to text",
         icon = if (micEnabled) Icons.Default.MicOff else Icons.Default.TextFields,
@@ -646,9 +646,9 @@ private fun V2VoiceHero(
       )
     }
 
-    V2VoiceProviderCard(gatewayStatus = gatewayStatus)
+    VoiceProviderCard(gatewayStatus = gatewayStatus)
 
-    V2VoicePrimaryAction(
+    VoicePrimaryAction(
       text = if (talkModeEnabled) "End Talk" else "Start Talk",
       icon = if (talkModeEnabled) Icons.Default.PhoneDisabled else Icons.Default.Phone,
       onClick = onStartTalk,
@@ -657,7 +657,7 @@ private fun V2VoiceHero(
 }
 
 @Composable
-private fun V2VoiceModeRow(
+private fun VoiceModeRow(
   title: String,
   subtitle: String,
   icon: androidx.compose.ui.graphics.vector.ImageVector,
@@ -690,7 +690,7 @@ private fun V2VoiceModeRow(
 }
 
 @Composable
-private fun V2VoiceProviderCard(gatewayStatus: String) {
+private fun VoiceProviderCard(gatewayStatus: String) {
   val ready = gatewayStatus.isVoiceGatewayReady()
   Surface(
     modifier = Modifier.fillMaxWidth().heightIn(min = 58.dp),
@@ -734,7 +734,7 @@ private fun V2VoiceProviderCard(gatewayStatus: String) {
 }
 
 @Composable
-private fun V2VoicePrimaryAction(
+private fun VoicePrimaryAction(
   text: String,
   icon: androidx.compose.ui.graphics.vector.ImageVector,
   onClick: () -> Unit,
@@ -758,7 +758,7 @@ private fun V2VoicePrimaryAction(
 }
 
 @Composable
-private fun V2VoiceOrb(
+private fun VoiceOrb(
   active: Boolean,
   listening: Boolean,
   speaking: Boolean,
@@ -782,14 +782,14 @@ private fun V2VoiceOrb(
           modifier = Modifier.size(38.dp),
           tint = ClawTheme.colors.text,
         )
-        V2Waveform(active = active)
+        Waveform(active = active)
       }
     }
   }
 }
 
 @Composable
-private fun V2Waveform(active: Boolean) {
+private fun Waveform(active: Boolean) {
   Row(horizontalArrangement = Arrangement.spacedBy(3.dp), verticalAlignment = Alignment.CenterVertically) {
     listOf(6, 11, 17, 23, 14, 9, 20, 14, 7).forEachIndexed { index, height ->
       Box(
@@ -804,7 +804,7 @@ private fun V2Waveform(active: Boolean) {
 }
 
 @Composable
-private fun V2VoiceTranscript(
+private fun VoiceTranscript(
   entries: List<VoiceConversationEntry>,
   showThinking: Boolean,
   modifier: Modifier = Modifier,
@@ -825,12 +825,12 @@ private fun V2VoiceTranscript(
   ) {
     if (showThinking) {
       item(key = "thinking") {
-        V2VoiceThinkingCard()
+        VoiceThinkingCard()
       }
     }
 
     items(entries.asReversed(), key = { it.id }) { entry ->
-      V2VoiceTurnCard(entry = entry)
+      VoiceTurnCard(entry = entry)
     }
 
     if (entries.isEmpty() && !showThinking) {
@@ -854,7 +854,7 @@ private fun V2VoiceTranscript(
 }
 
 @Composable
-private fun V2VoiceTurnCard(entry: VoiceConversationEntry) {
+private fun VoiceTurnCard(entry: VoiceConversationEntry) {
   val isUser = entry.role == VoiceConversationRole.User
   Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start) {
     Surface(
@@ -881,7 +881,7 @@ private fun V2VoiceTurnCard(entry: VoiceConversationEntry) {
 }
 
 @Composable
-private fun V2VoiceThinkingCard() {
+private fun VoiceThinkingCard() {
   ClawPanel {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
       ClawStatusPill(text = "Sending", status = ClawStatus.Warning)
@@ -891,7 +891,7 @@ private fun V2VoiceThinkingCard() {
 }
 
 @Composable
-private fun V2VoicePermissionPanel(onRequestPermission: () -> Unit) {
+private fun VoicePermissionPanel(onRequestPermission: () -> Unit) {
   ClawPanel {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
       ClawStatusPill(text = "Permission needed", status = ClawStatus.Warning)

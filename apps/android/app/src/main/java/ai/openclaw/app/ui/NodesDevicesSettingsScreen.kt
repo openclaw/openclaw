@@ -30,7 +30,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
 @Composable
-internal fun V2NodesDevicesSettingsScreen(
+internal fun NodesDevicesSettingsScreen(
   viewModel: MainViewModel,
   onBack: () -> Unit,
 ) {
@@ -45,19 +45,19 @@ internal fun V2NodesDevicesSettingsScreen(
     }
   }
 
-  V2SettingsDetailFrame(
+  SettingsDetailFrame(
     title = "Nodes & Devices",
     subtitle = "Live nodes, paired phones, and pending device requests.",
     icon = Icons.Default.Cloud,
     onBack = onBack,
   ) {
-    V2SettingsMetricPanel(
+    SettingsMetricPanel(
       rows =
         listOf(
-          V2SettingsMetric("Nodes", summary.nodes.size.toString()),
-          V2SettingsMetric("Online", summary.nodes.count { it.connected }.toString()),
-          V2SettingsMetric("Devices", if (summary.devicePairingAvailable) summary.pairedDevices.size.toString() else "Locked"),
-          V2SettingsMetric("Pending", summary.pendingDevices.size.toString()),
+          SettingsMetric("Nodes", summary.nodes.size.toString()),
+          SettingsMetric("Online", summary.nodes.count { it.connected }.toString()),
+          SettingsMetric("Devices", if (summary.devicePairingAvailable) summary.pairedDevices.size.toString() else "Locked"),
+          SettingsMetric("Pending", summary.pendingDevices.size.toString()),
         ),
     )
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -85,13 +85,13 @@ internal fun V2NodesDevicesSettingsScreen(
             Text(text = "Linked phones and node hosts will appear here after pairing.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
           }
         }
-      else -> V2NodesDevicesPanel(summary = summary)
+      else -> NodesDevicesPanel(summary = summary)
     }
   }
 }
 
 @Composable
-private fun V2NodesDevicesPanel(summary: GatewayNodesDevicesSummary) {
+private fun NodesDevicesPanel(summary: GatewayNodesDevicesSummary) {
   Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
     if (!summary.devicePairingAvailable) {
       ClawPanel {
@@ -99,9 +99,9 @@ private fun V2NodesDevicesPanel(summary: GatewayNodesDevicesSummary) {
       }
     }
     if (summary.pendingDevices.isNotEmpty()) {
-      V2NodesSection(title = "Pending Requests") {
+      NodesSection(title = "Pending Requests") {
         summary.pendingDevices.forEachIndexed { index, device ->
-          V2PendingDeviceRow(device = device)
+          PendingDeviceRow(device = device)
           if (index != summary.pendingDevices.lastIndex) {
             HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
           }
@@ -109,9 +109,9 @@ private fun V2NodesDevicesPanel(summary: GatewayNodesDevicesSummary) {
       }
     }
     if (summary.nodes.isNotEmpty()) {
-      V2NodesSection(title = "Nodes") {
+      NodesSection(title = "Nodes") {
         summary.nodes.forEachIndexed { index, node ->
-          V2NodeRow(node = node)
+          NodeRow(node = node)
           if (index != summary.nodes.lastIndex) {
             HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
           }
@@ -119,9 +119,9 @@ private fun V2NodesDevicesPanel(summary: GatewayNodesDevicesSummary) {
       }
     }
     if (summary.pairedDevices.isNotEmpty()) {
-      V2NodesSection(title = "Paired Devices") {
+      NodesSection(title = "Paired Devices") {
         summary.pairedDevices.forEachIndexed { index, device ->
-          V2PairedDeviceRow(device = device)
+          PairedDeviceRow(device = device)
           if (index != summary.pairedDevices.lastIndex) {
             HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
           }
@@ -132,7 +132,7 @@ private fun V2NodesDevicesPanel(summary: GatewayNodesDevicesSummary) {
 }
 
 @Composable
-private fun V2NodesSection(
+private fun NodesSection(
   title: String,
   content: @Composable () -> Unit,
 ) {
@@ -147,8 +147,8 @@ private fun V2NodesSection(
 }
 
 @Composable
-private fun V2NodeRow(node: GatewayNodeSummary) {
-  V2DeviceListRow(
+private fun NodeRow(node: GatewayNodeSummary) {
+  DeviceListRow(
     badge = nodeBadge(node.displayName ?: node.id),
     title = node.displayName ?: node.id,
     subtitle = nodeSubtitle(node),
@@ -158,8 +158,8 @@ private fun V2NodeRow(node: GatewayNodeSummary) {
 }
 
 @Composable
-private fun V2PendingDeviceRow(device: GatewayPendingDeviceSummary) {
-  V2DeviceListRow(
+private fun PendingDeviceRow(device: GatewayPendingDeviceSummary) {
+  DeviceListRow(
     badge = nodeBadge(device.displayName ?: device.deviceId),
     title = device.displayName ?: "New device",
     subtitle = pendingDeviceSubtitle(device),
@@ -169,8 +169,8 @@ private fun V2PendingDeviceRow(device: GatewayPendingDeviceSummary) {
 }
 
 @Composable
-private fun V2PairedDeviceRow(device: GatewayPairedDeviceSummary) {
-  V2DeviceListRow(
+private fun PairedDeviceRow(device: GatewayPairedDeviceSummary) {
+  DeviceListRow(
     badge = nodeBadge(device.displayName ?: device.deviceId),
     title = device.displayName ?: "Paired device",
     subtitle = pairedDeviceSubtitle(device),
@@ -180,7 +180,7 @@ private fun V2PairedDeviceRow(device: GatewayPairedDeviceSummary) {
 }
 
 @Composable
-private fun V2DeviceListRow(
+private fun DeviceListRow(
   badge: String,
   title: String,
   subtitle: String,

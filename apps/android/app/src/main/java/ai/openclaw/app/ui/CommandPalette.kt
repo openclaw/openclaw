@@ -51,7 +51,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
 @Composable
-internal fun V2CommandPalette(
+internal fun CommandPalette(
   viewModel: MainViewModel,
   onDismiss: () -> Unit,
   onOpenChat: () -> Unit,
@@ -70,11 +70,11 @@ internal fun V2CommandPalette(
   val normalizedQuery = query.trim().lowercase()
   val quickActions =
     listOf(
-      V2CommandItem("Open Chat", "Start or continue a conversation", Icons.Outlined.ChatBubbleOutline, onOpenChat),
-      V2CommandItem("Start Voice", "Talk or dictate with OpenClaw", Icons.Outlined.MicNone, onOpenVoice),
-      V2CommandItem("Browse Sessions", "Find previous conversations", Icons.Outlined.AccessTime, onOpenSessions),
-      V2CommandItem("Providers & Models", providerCommandSubtitle(isConnected, providers, models), Icons.Outlined.Inventory2, onOpenProviders),
-      V2CommandItem("Settings", "Gateway, voice, notifications, privacy", Icons.Outlined.Settings, onOpenSettings),
+      CommandItem("Open Chat", "Start or continue a conversation", Icons.Outlined.ChatBubbleOutline, onOpenChat),
+      CommandItem("Start Voice", "Talk or dictate with OpenClaw", Icons.Outlined.MicNone, onOpenVoice),
+      CommandItem("Browse Sessions", "Find previous conversations", Icons.Outlined.AccessTime, onOpenSessions),
+      CommandItem("Providers & Models", providerCommandSubtitle(isConnected, providers, models), Icons.Outlined.Inventory2, onOpenProviders),
+      CommandItem("Settings", "Gateway, voice, notifications, privacy", Icons.Outlined.Settings, onOpenSettings),
     )
   val actionRows = quickActions.filter { it.matches(normalizedQuery) }
   val sessionRows =
@@ -93,9 +93,9 @@ internal fun V2CommandPalette(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(9.dp),
           ) {
-            V2CommandIconButton(icon = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Close search", onClick = onDismiss)
+            CommandIconButton(icon = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Close search", onClick = onDismiss)
             Text(text = "Search", style = ClawTheme.type.title, color = ClawTheme.colors.text, modifier = Modifier.weight(1f), textAlign = TextAlign.Center)
-            V2CommandAvatar(text = "OC")
+            CommandAvatar(text = "OC")
           }
         }
 
@@ -104,7 +104,7 @@ internal fun V2CommandPalette(
         }
 
         item {
-          V2CommandSectionLabel(title = "Quick actions")
+          CommandSectionLabel(title = "Quick actions")
         }
 
         if (actionRows.isEmpty()) {
@@ -113,12 +113,12 @@ internal fun V2CommandPalette(
           }
         } else {
           item {
-            V2CommandActionList(rows = actionRows)
+            CommandActionList(rows = actionRows)
           }
         }
 
         item {
-          V2CommandSectionLabel(title = "Sessions")
+          CommandSectionLabel(title = "Sessions")
         }
 
         if (sessionRows.isEmpty()) {
@@ -133,10 +133,10 @@ internal fun V2CommandPalette(
           }
         } else {
           item {
-            V2CommandSessionList(
+            CommandSessionList(
               rows =
                 sessionRows.map { session ->
-                  V2CommandSessionRow(
+                  CommandSessionRow(
                     key = session.key,
                     title = commandSessionTitle(session.displayName),
                     subtitle = if (pendingRunCount > 0) "Assistant working" else "OpenClaw session",
@@ -152,7 +152,7 @@ internal fun V2CommandPalette(
   }
 }
 
-private data class V2CommandItem(
+private data class CommandItem(
   val title: String,
   val subtitle: String,
   val icon: ImageVector,
@@ -161,7 +161,7 @@ private data class V2CommandItem(
   fun matches(query: String): Boolean = query.isEmpty() || title.lowercase().contains(query) || subtitle.lowercase().contains(query)
 }
 
-private data class V2CommandSessionRow(
+private data class CommandSessionRow(
   val key: String,
   val title: String,
   val subtitle: String,
@@ -169,16 +169,16 @@ private data class V2CommandSessionRow(
 )
 
 @Composable
-private fun V2CommandActionList(rows: List<V2CommandItem>) {
+private fun CommandActionList(rows: List<CommandItem>) {
   ClawPanel(contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
     ClawSeparatedColumn(items = rows) { row ->
-      V2CommandActionRow(row = row)
+      CommandActionRow(row = row)
     }
   }
 }
 
 @Composable
-private fun V2CommandActionRow(row: V2CommandItem) {
+private fun CommandActionRow(row: CommandItem) {
   Surface(color = Color.Transparent, contentColor = ClawTheme.colors.text) {
     Row(
       modifier =
@@ -207,20 +207,20 @@ private fun V2CommandActionRow(row: V2CommandItem) {
 }
 
 @Composable
-private fun V2CommandSessionList(
-  rows: List<V2CommandSessionRow>,
+private fun CommandSessionList(
+  rows: List<CommandSessionRow>,
   onOpen: (String) -> Unit,
 ) {
   ClawPanel(contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
     ClawSeparatedColumn(items = rows) { row ->
-      V2CommandSessionListRow(row = row, onClick = { onOpen(row.key) })
+      CommandSessionListRow(row = row, onClick = { onOpen(row.key) })
     }
   }
 }
 
 @Composable
-private fun V2CommandSessionListRow(
-  row: V2CommandSessionRow,
+private fun CommandSessionListRow(
+  row: CommandSessionRow,
   onClick: () -> Unit,
 ) {
   Surface(color = ClawTheme.colors.canvas, contentColor = ClawTheme.colors.text) {
@@ -261,7 +261,7 @@ private fun V2CommandSessionListRow(
 }
 
 @Composable
-private fun V2CommandIconButton(
+private fun CommandIconButton(
   icon: ImageVector,
   contentDescription: String,
   onClick: () -> Unit,
@@ -274,7 +274,7 @@ private fun V2CommandIconButton(
 }
 
 @Composable
-private fun V2CommandAvatar(text: String) {
+private fun CommandAvatar(text: String) {
   Surface(
     modifier = Modifier.size(34.dp),
     shape = CircleShape,
@@ -289,7 +289,7 @@ private fun V2CommandAvatar(text: String) {
 }
 
 @Composable
-private fun V2CommandSectionLabel(title: String) {
+private fun CommandSectionLabel(title: String) {
   Row(modifier = Modifier.fillMaxWidth()) {
     Text(text = title.uppercase(), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
   }

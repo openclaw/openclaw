@@ -28,7 +28,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
 @Composable
-internal fun V2HealthLogsSettingsScreen(
+internal fun HealthLogsSettingsScreen(
   viewModel: MainViewModel,
   onBack: () -> Unit,
 ) {
@@ -49,22 +49,22 @@ internal fun V2HealthLogsSettingsScreen(
     }
   }
 
-  V2SettingsDetailFrame(
+  SettingsDetailFrame(
     title = "Health",
     subtitle = "Gateway status, phone node readiness, and recent log stream.",
     icon = Icons.Default.Settings,
     onBack = onBack,
   ) {
-    V2SettingsMetricPanel(
+    SettingsMetricPanel(
       rows =
         listOf(
-          V2SettingsMetric("Gateway", if (isConnected) "Online" else "Offline"),
-          V2SettingsMetric("Node", if (isNodeConnected) "Online" else "Waiting"),
-          V2SettingsMetric("Models", modelCount.size.toString()),
-          V2SettingsMetric("Logs", logsSummary.entries.size.toString()),
+          SettingsMetric("Gateway", if (isConnected) "Online" else "Offline"),
+          SettingsMetric("Node", if (isNodeConnected) "Online" else "Waiting"),
+          SettingsMetric("Models", modelCount.size.toString()),
+          SettingsMetric("Logs", logsSummary.entries.size.toString()),
         ),
     )
-    V2HealthStatusPanel(
+    HealthStatusPanel(
       gateway = statusText,
       node = if (isNodeConnected) "Online" else "Waiting",
       chat = if (chatHealthOk) "Ready" else "Needs connection",
@@ -90,12 +90,12 @@ internal fun V2HealthLogsSettingsScreen(
         Text(text = error, style = ClawTheme.type.body, color = ClawTheme.colors.warning)
       }
     }
-    V2GatewayLogsPanel(isConnected = isConnected, summary = logsSummary)
+    GatewayLogsPanel(isConnected = isConnected, summary = logsSummary)
   }
 }
 
 @Composable
-private fun V2HealthStatusPanel(
+private fun HealthStatusPanel(
   gateway: String,
   node: String,
   chat: String,
@@ -110,23 +110,23 @@ private fun V2HealthStatusPanel(
 ) {
   ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
     Column {
-      V2HealthStatusRow(title = "Gateway", value = gateway, healthy = isConnected)
+      HealthStatusRow(title = "Gateway", value = gateway, healthy = isConnected)
       HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
-      V2HealthStatusRow(title = "Phone Node", value = node, healthy = isNodeConnected)
+      HealthStatusRow(title = "Phone Node", value = node, healthy = isNodeConnected)
       HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
-      V2HealthStatusRow(title = "Chat", value = chat, healthy = chatHealthOk)
+      HealthStatusRow(title = "Chat", value = chat, healthy = chatHealthOk)
       HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
-      V2HealthStatusRow(title = "Models", value = models, healthy = modelsReady)
+      HealthStatusRow(title = "Models", value = models, healthy = modelsReady)
       HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
-      V2HealthStatusRow(title = "Voice", value = voice, healthy = voiceReady)
+      HealthStatusRow(title = "Voice", value = voice, healthy = voiceReady)
       HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
-      V2HealthStatusRow(title = "Runs", value = runs, healthy = true)
+      HealthStatusRow(title = "Runs", value = runs, healthy = true)
     }
   }
 }
 
 @Composable
-private fun V2HealthStatusRow(
+private fun HealthStatusRow(
   title: String,
   value: String,
   healthy: Boolean,
@@ -142,7 +142,7 @@ private fun V2HealthStatusRow(
 }
 
 @Composable
-private fun V2GatewayLogsPanel(
+private fun GatewayLogsPanel(
   isConnected: Boolean,
   summary: GatewayHealthLogsSummary,
 ) {
@@ -167,7 +167,7 @@ private fun V2GatewayLogsPanel(
           val entries = summary.entries.takeLast(12)
           Column {
             entries.forEachIndexed { index, entry ->
-              V2GatewayLogRow(entry = entry)
+              GatewayLogRow(entry = entry)
               if (index != entries.lastIndex) {
                 HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
               }
@@ -182,7 +182,7 @@ private fun V2GatewayLogsPanel(
 }
 
 @Composable
-private fun V2GatewayLogRow(entry: GatewayLogEntry) {
+private fun GatewayLogRow(entry: GatewayLogEntry) {
   Row(
     modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 7.dp),
     verticalAlignment = Alignment.Top,
