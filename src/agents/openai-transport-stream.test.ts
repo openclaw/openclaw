@@ -3015,41 +3015,80 @@ describe("openai transport stream", () => {
     expect(params.tools?.[0]?.strict).toBe(false);
   });
 
-  it("deduplicates repeated OpenAI strict schema downgrade diagnostics", () => {
-    const model = {
-      id: "gpt-5.4",
-      name: "GPT-5.4",
-      api: "openai-responses",
-      provider: "openai",
-      baseUrl: "https://api.openai.com/v1",
-      reasoning: true,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 200000,
-      maxTokens: 8192,
-    } satisfies Model<"openai-responses">;
-    const diagnostic = {
-      toolIndex: 0,
-      toolName: "read",
-      violations: ["read.parameters.required.path"],
+  it("deduplicates repeated OpenAI strict schema downgrade diagnostics", async () => {
+    const debug = vi.fn();
+    const logger = {
+      subsystem: "openai-transport",
+      isEnabled: vi.fn((level: string, target?: string) => level === "debug" && target === "any"),
+      trace: vi.fn(),
+      debug,
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      fatal: vi.fn(),
+      raw: vi.fn(),
+      child: vi.fn(),
     };
-    const diagnostics = [diagnostic];
-    const context = { transport: "responses" as const, model };
+    logger.child.mockReturnValue(logger);
 
-    testing.resetOpenAIStrictToolDowngradeDiagnosticLogCache();
-    expect(testing.shouldLogOpenAIStrictToolDowngradeDiagnostic(diagnostics, context)).toBe(true);
-    expect(testing.shouldLogOpenAIStrictToolDowngradeDiagnostic(diagnostics, context)).toBe(false);
-    expect(
-      testing.shouldLogOpenAIStrictToolDowngradeDiagnostic(
-        [
+    vi.resetModules();
+    vi.doMock("../logging/subsystem.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../logging/subsystem.js")>()),
+      createSubsystemLogger: vi.fn(() => logger),
+    }));
+
+    try {
+      const { buildOpenAIResponsesParams: isolatedBuildOpenAIResponsesParams } =
+        await import("./openai-transport-stream.js");
+      const model = {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">;
+      const context = {
+        systemPrompt: "system",
+        messages: [],
+        tools: [
           {
-            ...diagnostic,
-            violations: ["read.parameters.additionalProperties"],
+            name: "read",
+            description: "Read file",
+            parameters: {
+              type: "object",
+              additionalProperties: false,
+              properties: { path: { type: "string" } },
+              required: [],
+            },
           },
         ],
-        context,
-      ),
-    ).toBe(true);
+      } as never;
+
+      const first = isolatedBuildOpenAIResponsesParams(model, context, undefined) as {
+        tools?: Array<{ strict?: boolean }>;
+      };
+      const second = isolatedBuildOpenAIResponsesParams(model, context, undefined) as {
+        tools?: Array<{ strict?: boolean }>;
+      };
+
+      expect(first.tools?.[0]?.strict).toBe(false);
+      expect(second.tools?.[0]?.strict).toBe(false);
+      expect(
+        debug.mock.calls.filter(
+          ([message]) =>
+            typeof message === "string" &&
+            message.includes("tool schema strict mode downgraded to strict=false"),
+        ),
+      ).toHaveLength(1);
+    } finally {
+      vi.doUnmock("../logging/subsystem.js");
+      vi.resetModules();
+    }
   });
 
   it("omits responses strict tool shaping for proxy-like OpenAI routes", () => {

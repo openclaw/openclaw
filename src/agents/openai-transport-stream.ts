@@ -1039,10 +1039,6 @@ function shouldLogOpenAIStrictToolDowngradeDiagnostic(
   return true;
 }
 
-function resetOpenAIStrictToolDowngradeDiagnosticLogCache(): void {
-  loggedOpenAIStrictToolDowngradeDiagnosticKeys.clear();
-}
-
 function createResponsesFirstEventTimeoutError(model: Model<Api>, timeoutMs: number): Error {
   return new Error(
     `Azure OpenAI Responses stream did not deliver a first event within ${timeoutMs}ms after HTTP streaming headers. ` +
@@ -3227,7 +3223,5 @@ export const testing = {
   summarizeResponsesPayload,
   summarizeResponsesTools,
   withResponsesFirstEventTimeout,
-  resetOpenAIStrictToolDowngradeDiagnosticLogCache,
-  shouldLogOpenAIStrictToolDowngradeDiagnostic,
 };
 export { testing as __testing };
