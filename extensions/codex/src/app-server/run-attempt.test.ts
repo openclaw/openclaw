@@ -505,6 +505,21 @@ function createRuntimeDynamicTool(name: string): RuntimeDynamicToolForTest {
   };
 }
 
+function createNodeRoutableExecDynamicTool(): RuntimeDynamicToolForTest {
+  const tool = createRuntimeDynamicTool("exec");
+  tool.parameters = {
+    type: "object",
+    properties: {
+      command: { type: "string" },
+      host: { enum: ["auto", "sandbox", "gateway", "node"] },
+      node: { type: "string" },
+    },
+    required: ["command"],
+    additionalProperties: false,
+  };
+  return tool;
+}
+
 function createPluginAppConfigPatch() {
   return {
     apps: {
@@ -761,6 +776,101 @@ describe("runCodexAppServerAttempt", () => {
     expect(tools.find((tool) => tool.name === "sandbox_process")?.description).toContain(
       "sandbox_exec sessions",
     );
+  });
+
+  it("preserves explicitly required dynamic exec while duplicate dynamic read stays excluded", async () => {
+    testing.setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("read"),
+      createNodeRoutableExecDynamicTool(),
+      createRuntimeDynamicTool("message"),
+    ]);
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.toolsAllow = ["exec", "read"];
+
+    const tools = await testing.buildDynamicTools({
+      params,
+      resolvedWorkspace: workspaceDir,
+      effectiveWorkspace: workspaceDir,
+      sandboxSessionKey: params.sessionKey!,
+      sandbox: null as never,
+      nativeToolSurfaceEnabled: true,
+      runAbortController: new AbortController(),
+      sessionAgentId: "main",
+      pluginConfig: { codexDynamicToolsExclude: ["read"] },
+      onYieldDetected: () => undefined,
+    });
+
+    expect(tools.map((tool) => tool.name)).toEqual(["exec"]);
+  });
+
+  it("fails closed when required cron exec/read tools are absent before model dispatch", () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.trigger = "cron";
+    params.jobId = "cron-job-1";
+    params.bootstrapContextRunKind = "cron";
+    params.toolsAllow = ["exec", "read"];
+
+    let thrown: unknown;
+    try {
+      testing.assertCodexAppServerRequiredToolSurface({
+        tools: [],
+        toolsAllow: params.toolsAllow,
+        nativeToolSurfaceEnabled: false,
+        params,
+      });
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toContain("TOOL_SURFACE_UNAVAILABLE");
+    expect((thrown as Error).message).toContain("jobId=cron-job-1");
+    expect((thrown as Error).message).toContain("trigger=cron");
+    expect((thrown as Error).message).toContain("bootstrapContextRunKind=cron");
+    expect((thrown as Error).message).toContain("execNodeRoutingSchemaAvailable=false");
+    expect((thrown as { diagnostic?: { route?: unknown } }).diagnostic?.route).toEqual({
+      trigger: "cron",
+      bootstrapContextRunKind: "cron",
+      execNodeRoutingSchemaAvailable: false,
+      nativeReadAvailable: false,
+    });
+  });
+
+  it("keeps non-cron finite toolsAllow as a filter instead of a required tool contract", () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.toolsAllow = ["exec", "read"];
+
+    expect(() =>
+      testing.assertCodexAppServerRequiredToolSurface({
+        tools: [],
+        toolsAllow: params.toolsAllow,
+        nativeToolSurfaceEnabled: false,
+        params,
+      }),
+    ).not.toThrow();
+  });
+
+  it("accepts dynamic exec with node-routing schema and native read surface", () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.trigger = "cron";
+    params.jobId = "cron-job-1";
+    params.toolsAllow = ["exec", "read"];
+
+    expect(() =>
+      testing.assertCodexAppServerRequiredToolSurface({
+        tools: [createNodeRoutableExecDynamicTool()],
+        toolsAllow: params.toolsAllow,
+        nativeToolSurfaceEnabled: true,
+        params,
+      }),
+    ).not.toThrow();
   });
 
   it("keeps Docker sandbox shell tools hidden when native Code Mode can honor sandbox paths", async () => {
@@ -1326,7 +1436,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(testing.filterCodexDynamicToolsForAllowlist(tools, [" * "])).toEqual(tools);
   });
 
-  it("disables Codex native tool surfaces for restricted runtime allowlists", () => {
+  it("enables Codex native tool surfaces for finite allowlists that require exec", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     params.disableTools = false;
@@ -1337,6 +1447,12 @@ describe("runCodexAppServerAttempt", () => {
     expect(testing.shouldEnableCodexAppServerNativeToolSurface(params)).toBe(true);
 
     params.toolsAllow = [];
+    expect(testing.shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
+
+    params.toolsAllow = ["exec", "read"];
+    expect(testing.shouldEnableCodexAppServerNativeToolSurface(params)).toBe(true);
+
+    params.toolsAllow = ["read"];
     expect(testing.shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
 
     params.toolsAllow = ["message"];

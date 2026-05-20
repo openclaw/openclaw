@@ -63,6 +63,17 @@ function resolveCronOwnerOnlyToolAllowlist(toolsAllow: string[] | undefined): st
   return ["cron"];
 }
 
+function hasRequiredRuntimeToolAllowlist(toolsAllow: string[] | undefined): boolean {
+  const normalized = normalizeToolList(toolsAllow);
+  return normalized.length > 0 && !normalized.includes("*");
+}
+
+function createToolSurfaceUnavailableError(message: string): Error {
+  const err = new Error(`TOOL_SURFACE_UNAVAILABLE: ${message}`);
+  Object.assign(err, { code: "TOOL_SURFACE_UNAVAILABLE" });
+  return err;
+}
+
 const COMMAND_STYLE_CRON_PREFIX =
   /^(?:(?:[A-Z_][A-Z0-9_]*=\S+\s+)+)?(?:cd\s+\S+|(?:\.{1,2}|~)?\/\S+|[A-Za-z]:[\\/]\S+|(?:bash|bun|cargo|deno|docker|gh|git|go|make|node|npm|npx|pnpm|python|python3|ruby|sh|tsx|uv|zsh)\b)/u;
 
@@ -193,6 +204,13 @@ export function createCronPromptExecutor(params: {
         const bootstrapPromptWarningSignature =
           bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
         if (isCliProvider(executionProvider, params.cfgWithAgentDefaults)) {
+          if (hasRequiredRuntimeToolAllowlist(params.agentPayload?.toolsAllow)) {
+            throw createToolSurfaceUnavailableError(
+              `CLI backend ${executionProvider} cannot expose required cron toolsAllow: ${normalizeToolList(
+                params.agentPayload?.toolsAllow,
+              ).join(", ")}`,
+            );
+          }
           const cliSessionId = params.cronSession.isNewSession
             ? undefined
             : await getCliSessionId(params.cronSession.sessionEntry, executionProvider);

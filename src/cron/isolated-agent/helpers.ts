@@ -37,6 +37,52 @@ type NormalizedCronFailureSignal = CronFailureSignal & {
   fatalForCron: true;
 };
 
+type CronMissingToolSummarySignal = {
+  token: string;
+  field: string;
+};
+
+const CRON_MISSING_TOOL_SUMMARY_TOKENS = [
+  "exec unavailable",
+  "exec tool unavailable",
+  "exec not available",
+  "no exec/shell tool",
+  "tool unavailable",
+  "unable to run required",
+  "exec_tool_unavailable",
+  "openclaw_dynamic_exec_unavailable",
+] as const;
+
+export function detectCronMissingToolSummaryToken(text: string | undefined): string | undefined {
+  const normalized = normalizeOptionalString(text);
+  if (!normalized) {
+    return undefined;
+  }
+  const lowerText = normalized.toLowerCase();
+  for (const token of CRON_MISSING_TOOL_SUMMARY_TOKENS) {
+    if (lowerText.includes(token)) {
+      return token;
+    }
+  }
+  return undefined;
+}
+
+function resolveCronMissingToolSummarySignal(
+  fields: Array<{ field: string; text?: string | undefined }>,
+): CronMissingToolSummarySignal | undefined {
+  for (const { field, text } of fields) {
+    const token = detectCronMissingToolSummaryToken(text);
+    if (token) {
+      return { token, field };
+    }
+  }
+  return undefined;
+}
+
+function formatCronMissingToolSummarySignal(signal: CronMissingToolSummarySignal): string {
+  return `cron classifier: missing tool token "${signal.token}" detected in ${signal.field}`;
+}
+
 function normalizeCronFailureSignal(
   signal: CronFailureSignal | undefined,
 ): NormalizedCronFailureSignal | undefined {
@@ -309,13 +355,29 @@ export function resolveCronPayloadOutcome(params: {
         : [];
   const failureSignal = normalizeCronFailureSignal(params.failureSignal);
   const runLevelError = formatCronRunLevelError(params.runLevelError);
+  const missingToolSummarySignal =
+    !hasFatalStructuredErrorPayload && failureSignal === undefined && runLevelError === undefined
+      ? resolveCronMissingToolSummarySignal([
+          { field: "summary", text: summary },
+          { field: "outputText", text: outputText },
+          { field: "synthesizedText", text: synthesizedText },
+          { field: "fallbackSummary", text: fallbackSummary },
+          { field: "fallbackOutputText", text: fallbackOutputText },
+        ])
+      : undefined;
   const hasFatalErrorPayload =
-    hasFatalStructuredErrorPayload || failureSignal !== undefined || runLevelError !== undefined;
+    hasFatalStructuredErrorPayload ||
+    failureSignal !== undefined ||
+    missingToolSummarySignal !== undefined ||
+    runLevelError !== undefined;
   const structuredErrorText = hasFatalStructuredErrorPayload
     ? (lastErrorPayloadText ?? "cron isolated run returned an error payload")
     : undefined;
   const shouldUseRunLevelErrorPayload =
-    runLevelError !== undefined && structuredErrorText === undefined && failureSignal === undefined;
+    runLevelError !== undefined &&
+    structuredErrorText === undefined &&
+    failureSignal === undefined &&
+    missingToolSummarySignal === undefined;
   const fatalDeliveryText =
     structuredErrorText ??
     failureSignal?.message ??
@@ -337,7 +399,9 @@ export function resolveCronPayloadOutcome(params: {
       ? structuredErrorText
       : failureSignal
         ? formatCronFailureSignal(failureSignal)
-        : runLevelError,
+        : missingToolSummarySignal
+          ? formatCronMissingToolSummarySignal(missingToolSummarySignal)
+          : runLevelError,
     pendingPresentationWarningError: hasPendingPresentationWarning
       ? lastErrorPayloadText
       : undefined,
