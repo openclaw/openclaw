@@ -277,6 +277,71 @@ describe("openai transport stream", () => {
     expect(output.responseId).toBe("resp_failed_empty_error");
   });
 
+  it("tags Responses encrypted reasoning with replay provenance while streaming", async () => {
+    const model = {
+      id: "gpt-5.4",
+      name: "GPT-5.4",
+      api: "openai-codex-responses",
+      provider: "openai-codex",
+      baseUrl: "https://proxy.example.com/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-codex-responses">;
+    const output: OpenAIResponsesOutput = {
+      role: "assistant" as const,
+      content: [],
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+
+    await testing.processResponsesStream(
+      streamChunks([
+        { type: "response.output_item.added", item: { type: "reasoning" } },
+        {
+          type: "response.output_item.done",
+          item: {
+            type: "reasoning",
+            id: "rs_123",
+            encrypted_content: "ciphertext",
+            summary: [{ type: "summary_text", text: "Need a tool." }],
+          },
+        },
+      ]),
+      output,
+      { push: vi.fn() },
+      model,
+      { sessionId: "session-123" },
+    );
+
+    const thinkingBlock = output.content[0] as { thinkingSignature?: string };
+    const replayItem = JSON.parse(thinkingBlock.thinkingSignature ?? "{}") as Record<
+      string,
+      unknown
+    >;
+    expect(replayItem).toMatchObject({
+      type: "reasoning",
+      id: "rs_123",
+      encrypted_content: "ciphertext",
+      __openclaw_replay: testing.buildOpenAIResponsesReasoningReplayMetadata(model, {
+        sessionId: "session-123",
+      }),
+    });
+  });
+
   it("clamps Responses cached prompt usage at zero", async () => {
     const model = createAzureResponsesModel();
     const output = createResponsesAssistantOutput(model);
@@ -2099,7 +2164,7 @@ describe("openai transport stream", () => {
     expect(sanitized).toEqual(payload);
   });
 
-  it("omits prior Responses replay item ids for native Codex responses", () => {
+  it("omits native Codex replay item ids and unproven encrypted reasoning", () => {
     const params = buildOpenAIResponsesParams(
       {
         id: "gpt-5.4",
@@ -2185,9 +2250,9 @@ describe("openai transport stream", () => {
     const reasoningItem = params.input?.find((item) => item.type === "reasoning");
     expectRecordFields(reasoningItem, {
       type: "reasoning",
-      encrypted_content: "ciphertext",
     });
     expect(reasoningItem?.id).toBeUndefined();
+    expect(reasoningItem).not.toHaveProperty("encrypted_content");
     const assistantMessage = params.input?.find(
       (item) => item.type === "message" && item.role === "assistant",
     );
@@ -2206,19 +2271,21 @@ describe("openai transport stream", () => {
   });
 
   it("preserves prior Responses replay item ids for custom Codex-compatible responses", () => {
+    const model = {
+      id: "gpt-5.4",
+      name: "GPT-5.4",
+      api: "openai-codex-responses",
+      provider: "openai-codex",
+      baseUrl: "https://proxy.example.com/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-codex-responses">;
+
     const params = buildOpenAIResponsesParams(
-      {
-        id: "gpt-5.4",
-        name: "GPT-5.4",
-        api: "openai-codex-responses",
-        provider: "openai-codex",
-        baseUrl: "https://proxy.example.com/v1",
-        reasoning: true,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 200000,
-        maxTokens: 8192,
-      } satisfies Model<"openai-codex-responses">,
+      model,
       {
         systemPrompt: "system",
         messages: [
@@ -2241,11 +2308,17 @@ describe("openai transport stream", () => {
               {
                 type: "thinking",
                 thinking: "Need a tool.",
-                thinkingSignature: JSON.stringify({
-                  type: "reasoning",
-                  id: "rs_prior",
-                  encrypted_content: "ciphertext",
-                }),
+                thinkingSignature: JSON.stringify(
+                  testing.tagOpenAIResponsesReasoningReplayItem(
+                    {
+                      type: "reasoning",
+                      id: "rs_prior",
+                      encrypted_content: "ciphertext",
+                    },
+                    model,
+                    { sessionId: "session-123" },
+                  ),
+                ),
               },
               {
                 type: "text",
@@ -2285,6 +2358,7 @@ describe("openai transport stream", () => {
       id: "rs_prior",
       encrypted_content: "ciphertext",
     });
+    expect(reasoningItem).not.toHaveProperty("__openclaw_replay");
     const assistantMessage = params.input?.find(
       (item) => item.type === "message" && item.role === "assistant",
     );
@@ -2300,6 +2374,78 @@ describe("openai transport stream", () => {
       id: "fc_prior",
       call_id: "call_abc",
     });
+  });
+
+  it("strips encrypted reasoning replay when provenance does not match", () => {
+    const model = {
+      id: "gpt-5.4",
+      name: "GPT-5.4",
+      api: "openai-codex-responses",
+      provider: "openai-codex",
+      baseUrl: "https://proxy.example.com/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-codex-responses">;
+
+    const params = buildOpenAIResponsesParams(
+      model,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            api: "openai-codex-responses",
+            provider: "openai-codex",
+            model: "gpt-5.4",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            timestamp: 1,
+            content: [
+              {
+                type: "thinking",
+                thinking: "Need a tool.",
+                thinkingSignature: JSON.stringify(
+                  testing.tagOpenAIResponsesReasoningReplayItem(
+                    {
+                      type: "reasoning",
+                      id: "rs_prior",
+                      encrypted_content: "ciphertext",
+                    },
+                    model,
+                    { sessionId: "different-session" },
+                  ),
+                ),
+              },
+            ],
+          },
+        ],
+        tools: [],
+      } as never,
+      { sessionId: "session-123" },
+    ) as {
+      input?: Array<{
+        type?: string;
+        id?: string;
+        encrypted_content?: string;
+      }>;
+    };
+
+    const reasoningItem = params.input?.find((item) => item.type === "reasoning");
+    expectRecordFields(reasoningItem, {
+      type: "reasoning",
+      id: "rs_prior",
+    });
+    expect(reasoningItem).not.toHaveProperty("encrypted_content");
   });
 
   it("strips nested encrypted reasoning content from retry payloads without changing ids", () => {
