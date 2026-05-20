@@ -22,7 +22,10 @@ import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
-import { resolveGatewaySessionStoreTarget } from "./session-utils.js";
+import {
+  resolveGatewaySessionStoreTarget,
+  resolveProjectableCompactionCheckpoints,
+} from "./session-utils.js";
 
 const log = createSubsystemLogger("gateway/session-compaction-checkpoints");
 const MAX_COMPACTION_CHECKPOINTS_PER_SESSION = 25;
@@ -688,7 +691,7 @@ export async function listSessionCompactionCheckpointsWithFilesAsync(params: {
   sessionKey: string;
   storePath: string;
 }): Promise<SessionCompactionCheckpoint[]> {
-  const stored = sessionStoreCheckpoints(params.entry);
+  const stored = resolveProjectableCompactionCheckpoints(params.entry);
   const discovered = await discoverSessionCompactionCheckpointsFromDisk({
     entry: params.entry,
     sessionKey: params.sessionKey,
