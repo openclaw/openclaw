@@ -485,6 +485,46 @@ vi.mock("./model-selection.js", () => {
       allowAny: false,
     };
   };
+  const buildModelAliasIndex = ({
+    cfg,
+  }: {
+    cfg?: { agents?: { defaults?: { models?: Record<string, { alias?: string }> } } };
+  }) => {
+    const byAlias = new Map<string, { alias: string; ref: { provider: string; model: string } }>();
+    const byKey = new Map<string, string[]>();
+    for (const [ref, entry] of Object.entries(cfg?.agents?.defaults?.models ?? {})) {
+      const alias = entry?.alias?.trim();
+      if (!alias) {
+        continue;
+      }
+      const [provider, ...modelParts] = ref.split("/");
+      const model = modelParts.join("/");
+      byAlias.set(alias.toLowerCase(), { alias, ref: { provider, model } });
+      byKey.set(`${provider}/${model}`, [alias]);
+    }
+    return { byAlias, byKey };
+  };
+  const resolveModelRefFromString = ({
+    raw,
+    defaultProvider,
+    aliasIndex,
+  }: {
+    raw: string;
+    defaultProvider: string;
+    aliasIndex?: ReturnType<typeof buildModelAliasIndex>;
+  }) => {
+    const aliasMatch = aliasIndex?.byAlias.get(raw.trim().toLowerCase());
+    if (aliasMatch) {
+      return { ref: aliasMatch.ref, alias: aliasMatch.alias };
+    }
+    const slash = raw.indexOf("/");
+    return {
+      ref:
+        slash > 0
+          ? { provider: raw.slice(0, slash), model: raw.slice(slash + 1) }
+          : { provider: defaultProvider, model: raw },
+    };
+  };
   return {
     buildModelAliasIndex,
     buildAllowedModelSet,
@@ -581,28 +621,6 @@ vi.mock("./model-selection.js", () => {
       const fallback = allowedCatalog[0];
       return fallback ? { provider: fallback.provider, model: fallback.id } : null;
     },
-    buildModelAliasIndex: ({
-      cfg,
-    }: {
-      cfg?: { agents?: { defaults?: { models?: Record<string, { alias?: string }> } } };
-    }) => {
-      const byAlias = new Map<
-        string,
-        { alias: string; ref: { provider: string; model: string } }
-      >();
-      const byKey = new Map<string, string[]>();
-      for (const [ref, entry] of Object.entries(cfg?.agents?.defaults?.models ?? {})) {
-        const alias = entry?.alias?.trim();
-        if (!alias) {
-          continue;
-        }
-        const [provider, ...modelParts] = ref.split("/");
-        const model = modelParts.join("/");
-        byAlias.set(alias.toLowerCase(), { alias, ref: { provider, model } });
-        byKey.set(`${provider}/${model}`, [alias]);
-      }
-      return { byAlias, byKey };
-    },
     modelKey: (p: string, m: string) => `${p}/${m}`,
     normalizeModelRef: (p: string, m: string) => ({ provider: normalizeProviderId(p), model: m }),
     normalizeProviderId,
@@ -612,29 +630,6 @@ vi.mock("./model-selection.js", () => {
       return slash > 0
         ? { provider: m.slice(0, slash), model: m.slice(slash + 1) }
         : { provider: p, model: m };
-    },
-    resolveModelRefFromString: ({
-      raw,
-      defaultProvider,
-      aliasIndex,
-    }: {
-      raw: string;
-      defaultProvider: string;
-      aliasIndex?: {
-        byAlias: Map<string, { alias: string; ref: { provider: string; model: string } }>;
-      };
-    }) => {
-      const aliasMatch = aliasIndex?.byAlias.get(raw.trim().toLowerCase());
-      if (aliasMatch) {
-        return { ref: aliasMatch.ref, alias: aliasMatch.alias };
-      }
-      const slash = raw.indexOf("/");
-      return {
-        ref:
-          slash > 0
-            ? { provider: raw.slice(0, slash), model: raw.slice(slash + 1) }
-            : { provider: defaultProvider, model: raw },
-      };
     },
     resolveConfiguredModelRef: ({ cfg }: { cfg?: unknown }) => {
       const raw = (cfg as { agents?: { defaults?: { model?: string | { primary?: string } } } })
