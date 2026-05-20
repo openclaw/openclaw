@@ -53,7 +53,7 @@ export function createSerpApiYouTubeVideoTool(api: OpenClawPluginApi, ctx?: Serp
           type: "string",
           description:
             "Pagination token for related videos, comments, or replies. " +
-            "Use related_videos_next_page_token, comments_next_page_token, comments_sorting_token.token, or replies_next_page_token from a previous response.",
+            "Use related_videos_next_page_token, comments_next_page_token, comments_sorting_token[].token, or replies_next_page_token from a previous response.",
         },
       },
       required: ["v"],
