@@ -74,18 +74,20 @@ export function formatErrorMessage(err: unknown): string {
     const seen = new Set<unknown>([err]);
     // Skip causes that repeat a message already emitted (e.g. coerceToFailoverError).
     const seenMessages = new Set<string>([formatted]);
+    const appendCauseMessage = (message: string): void => {
+      if (!message || seenMessages.has(message)) {
+        return;
+      }
+      formatted += ` | ${message}`;
+      seenMessages.add(message);
+    };
     while (cause && !seen.has(cause)) {
       seen.add(cause);
       if (cause instanceof Error) {
-        if (cause.message && !seenMessages.has(cause.message)) {
-          formatted += ` | ${cause.message}`;
-          seenMessages.add(cause.message);
-        }
+        appendCauseMessage(cause.message);
         cause = cause.cause;
       } else if (typeof cause === "string") {
-        if (!seenMessages.has(cause)) {
-          formatted += ` | ${cause}`;
-        }
+        appendCauseMessage(cause);
         break;
       } else {
         break;
