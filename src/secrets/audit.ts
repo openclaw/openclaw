@@ -6,7 +6,7 @@ import {
   isSecretRefHeaderValueMarker,
 } from "../agents/model-auth-markers.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
-import { resolveStateDir, type OpenClawConfig } from "../config/config.js";
+import { parseConfigJson5, resolveStateDir, type OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
 import { resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -267,25 +267,57 @@ function collectConfigBackupSecrets(params: {
 }): void {
   for (const backupPath of listConfigBackupPaths(params.configPath)) {
     params.collector.filesScanned.add(backupPath);
-    const parsedResult = readJsonObjectIfExists(backupPath, {
-      requireRegularFile: true,
-      maxBytes: MAX_AUDIT_MODELS_JSON_BYTES,
-    });
-    if (parsedResult.error) {
+    let raw: string;
+    try {
+      const stats = fs.statSync(backupPath);
+      if (!stats.isFile()) {
+        addFinding(params.collector, {
+          code: "REF_UNRESOLVED",
+          severity: "error",
+          file: backupPath,
+          jsonPath: "<root>",
+          message: `Invalid config backup: Refusing to read non-regular file: ${backupPath}`,
+        });
+        continue;
+      }
+      if (stats.size > MAX_AUDIT_MODELS_JSON_BYTES) {
+        addFinding(params.collector, {
+          code: "REF_UNRESOLVED",
+          severity: "error",
+          file: backupPath,
+          jsonPath: "<root>",
+          message: `Invalid config backup: Refusing to read oversized config (${stats.size} bytes): ${backupPath}`,
+        });
+        continue;
+      }
+      raw = fs.readFileSync(backupPath, "utf8");
+    } catch (err) {
       addFinding(params.collector, {
         code: "REF_UNRESOLVED",
         severity: "error",
         file: backupPath,
         jsonPath: "<root>",
-        message: `Invalid JSON in config backup: ${parsedResult.error}`,
+        message: `Invalid config backup: ${formatErrorMessage(err)}`,
       });
       continue;
     }
-    if (!parsedResult.value) {
+
+    const parsedResult = parseConfigJson5(raw);
+    if (!parsedResult.ok) {
+      addFinding(params.collector, {
+        code: "REF_UNRESOLVED",
+        severity: "error",
+        file: backupPath,
+        jsonPath: "<root>",
+        message: `Invalid JSON5 in config backup: ${parsedResult.error}`,
+      });
+      continue;
+    }
+    if (!isRecord(parsedResult.parsed)) {
       continue;
     }
     collectConfigSecrets({
-      config: parsedResult.value as OpenClawConfig,
+      config: parsedResult.parsed as OpenClawConfig,
       configPath: backupPath,
       collector: params.collector,
     });
