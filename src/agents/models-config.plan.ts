@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { isRecord } from "../utils.js";
+import { isNonSecretApiKeyMarker, NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
 import {
   mergeProviders,
   mergeWithExistingProviderSecrets,
@@ -105,6 +106,78 @@ function resolveProvidersForMode(params: {
   });
 }
 
+function resolveExistingProviders(
+  existingParsed: unknown,
+): Record<string, ExistingProviderConfig> | undefined {
+  if (!isRecord(existingParsed) || !isRecord(existingParsed.providers)) {
+    return undefined;
+  }
+  return existingParsed.providers as Record<string, ExistingProviderConfig>;
+}
+
+function collectMergePreservedApiKeys(params: {
+  mode: NonNullable<ModelsConfig["mode"]>;
+  existingParsed: unknown;
+  providers: Record<string, ProviderConfig>;
+}): ReadonlyMap<string, string> {
+  if (params.mode !== "merge") {
+    return new Map();
+  }
+
+  const existingProviders = resolveExistingProviders(params.existingParsed);
+  if (!existingProviders) {
+    return new Map();
+  }
+
+  const preserved = new Map<string, string>();
+  for (const [providerKey, existingProvider] of Object.entries(existingProviders)) {
+    const existingApiKey = existingProvider.apiKey;
+    if (
+      typeof existingApiKey !== "string" ||
+      existingApiKey.length === 0 ||
+      isNonSecretApiKeyMarker(existingApiKey, { includeEnvVarName: false })
+    ) {
+      continue;
+    }
+
+    const plannedApiKey = params.providers[providerKey]?.apiKey;
+    if (plannedApiKey === existingApiKey) {
+      preserved.set(providerKey, existingApiKey);
+    }
+  }
+
+  return preserved;
+}
+
+function stripResolvedApiKeysForModelsJson(params: {
+  providers: Record<string, ProviderConfig>;
+  preservedApiKeys: ReadonlyMap<string, string>;
+}): Record<string, ProviderConfig> {
+  const sanitizedProviders: Record<string, ProviderConfig> = {};
+  let changed = false;
+
+  for (const [providerKey, provider] of Object.entries(params.providers)) {
+    const apiKey = provider.apiKey;
+    if (
+      typeof apiKey !== "string" ||
+      apiKey.length === 0 ||
+      isNonSecretApiKeyMarker(apiKey) ||
+      params.preservedApiKeys.get(providerKey) === apiKey
+    ) {
+      sanitizedProviders[providerKey] = provider;
+      continue;
+    }
+
+    sanitizedProviders[providerKey] = {
+      ...provider,
+      apiKey: NON_ENV_SECRETREF_MARKER,
+    };
+    changed = true;
+  }
+
+  return changed ? sanitizedProviders : params.providers;
+}
+
 export async function planOpenClawModelsJsonWithDeps(
   params: {
     cfg: OpenClawConfig;
@@ -178,7 +251,16 @@ export async function planOpenClawModelsJsonWithDeps(
       secretRefManagedProviders,
     }) ?? normalizedMergedProviders;
   const finalProviders = applyNativeStreamingUsageCompat(secretEnforcedProviders);
-  const nextContents = `${JSON.stringify({ providers: finalProviders }, null, 2)}\n`;
+  const preservedApiKeys = collectMergePreservedApiKeys({
+    mode,
+    existingParsed: params.existingParsed,
+    providers: finalProviders,
+  });
+  const serializedProviders = stripResolvedApiKeysForModelsJson({
+    providers: finalProviders,
+    preservedApiKeys,
+  });
+  const nextContents = `${JSON.stringify({ providers: serializedProviders }, null, 2)}\n`;
 
   if (params.existingRaw === nextContents) {
     return { action: "noop" };
