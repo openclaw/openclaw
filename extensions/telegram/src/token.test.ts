@@ -106,6 +106,28 @@ describe("resolveTelegramToken", () => {
     );
   });
 
+  it.runIf(process.platform !== "win32")("rejects symlinked account-level tokenFile paths", () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
+    const dir = createTempDir();
+    const tokenFile = path.join(dir, "token.txt");
+    const tokenLink = path.join(dir, "token-link.txt");
+    fs.writeFileSync(tokenFile, "file-token\n", "utf-8");
+    fs.symlinkSync(tokenFile, tokenLink);
+
+    const cfg = {
+      channels: {
+        telegram: {
+          accounts: {
+            work: { tokenFile: tokenLink },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    expect(() => resolveTelegramToken(cfg, { accountId: "work" })).toThrow(
+      /channels\.telegram\.accounts\.work\.tokenFile.*must not be a symlink/,
+    );
+  });
+
   it("does not fall back to config when tokenFile is missing", () => {
     vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
     const dir = createTempDir();
