@@ -1,0 +1,3 @@
+docker.io
+python3
+ripgrep
