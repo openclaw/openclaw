@@ -1,9 +1,14 @@
 // Preinstall Package Manager Warning tests cover preinstall package manager warning script behavior.
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   createLocalInstallPressureRefusalMessage,
   createPackageManagerWarningMessage,
   detectLifecyclePackageManager,
+  isOpenClawSourceCheckoutRoot,
   shouldRefuseLocalInstallForPressure,
   warnIfNonPnpmLifecycle,
 } from "../../scripts/preinstall-package-manager-warning.mjs";
@@ -126,6 +131,29 @@ describe("local install pressure guard", () => {
         },
       ).refuse,
     ).toBe(false);
+  });
+
+  it("only classifies real OpenClaw source roots as guarded source checkouts", () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-install-guard-"));
+    try {
+      const sourceRoot = path.join(tempRoot, "source-root");
+      const consumerRoot = path.join(tempRoot, "consumer-root");
+      const packedInstallRoot = path.join(consumerRoot, "node_modules", "openclaw");
+      fs.mkdirSync(path.join(sourceRoot, "src"), { recursive: true });
+      fs.mkdirSync(path.join(sourceRoot, "extensions"), { recursive: true });
+      fs.writeFileSync(path.join(sourceRoot, "package.json"), "{}\n");
+      fs.writeFileSync(path.join(sourceRoot, "pnpm-workspace.yaml"), "packages: []\n");
+      fs.mkdirSync(packedInstallRoot, { recursive: true });
+      fs.writeFileSync(path.join(packedInstallRoot, "package.json"), "{}\n");
+
+      expect(spawnSync("git", ["init"], { cwd: sourceRoot }).status).toBe(0);
+      expect(spawnSync("git", ["init"], { cwd: consumerRoot }).status).toBe(0);
+
+      expect(isOpenClawSourceCheckoutRoot(sourceRoot)).toBe(true);
+      expect(isOpenClawSourceCheckoutRoot(packedInstallRoot)).toBe(false);
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
   });
 
   it("formats an actionable refusal message", () => {

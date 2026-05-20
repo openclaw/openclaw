@@ -119,19 +119,29 @@ export function shouldRefuseLocalInstallForPressure(
 
   return { refuse: reasons.length > 0, reasons };
 }
+function isGitSourceCheckout(cwd) {
+  const result = spawnSync("git", ["rev-parse", "--is-inside-work-tree"], {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  return result.status === 0 && result.stdout.trim() === "true";
+}
 
-export function createLocalInstallPressureRefusalMessage(result) {
-  return [
-    "[openclaw] refusing local package install under host pressure.",
-    ...result.reasons.map((reason) => `[openclaw] - ${reason}`),
-    "[openclaw] retry when the box settles, or set OPENCLAW_INSTALL_PRESSURE_GUARD=0 to override deliberately.",
-  ].join("\n");
+export function isOpenClawSourceCheckoutRoot(cwd, pathExists = fs.existsSync) {
+  return (
+    isGitSourceCheckout(cwd) &&
+    pathExists(`${cwd}/package.json`) &&
+    pathExists(`${cwd}/pnpm-workspace.yaml`) &&
+    pathExists(`${cwd}/src`) &&
+    pathExists(`${cwd}/extensions`)
+  );
 }
 
 export function readHostPressure({ cwd = process.cwd() } = {}) {
   const meminfo = readMeminfo();
   return {
-    isSourceCheckout: isGitSourceCheckout(cwd),
+    isSourceCheckout: isOpenClawSourceCheckoutRoot(cwd),
     memAvailableBytes: meminfo.MemAvailable,
     swapFreeBytes: meminfo.SwapFree,
     load1: os.loadavg()[0] ?? 0,
@@ -151,6 +161,14 @@ export function enforceLocalInstallPressureGuard(
   return true;
 }
 
+export function createLocalInstallPressureRefusalMessage(result) {
+  return [
+    "[openclaw] refusing local package install under host pressure.",
+    ...result.reasons.map((reason) => `[openclaw] - ${reason}`),
+    "[openclaw] retry when the box settles, or set OPENCLAW_INSTALL_PRESSURE_GUARD=0 to override deliberately.",
+  ].join("\n");
+}
+
 function readMeminfo() {
   try {
     const values = {};
@@ -164,15 +182,6 @@ function readMeminfo() {
   } catch {
     return {};
   }
-}
-
-function isGitSourceCheckout(cwd) {
-  const result = spawnSync("git", ["rev-parse", "--is-inside-work-tree"], {
-    cwd,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  return result.status === 0 && result.stdout.trim() === "true";
 }
 
 function readPositiveNumber(rawValue, fallback) {
