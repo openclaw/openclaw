@@ -449,6 +449,68 @@ function readGatewayDedupeEntry(params: {
   return undefined;
 }
 
+function isAcceptedAgentDedupePayload(payload: unknown): payload is {
+  acceptedAt?: unknown;
+  dedupeKeys?: unknown;
+  expiresAtMs?: unknown;
+  ownerConnId?: unknown;
+  ownerDeviceId?: unknown;
+  runId?: unknown;
+  sessionKey?: unknown;
+  status: "accepted";
+} {
+  return (
+    typeof payload === "object" &&
+    payload !== null &&
+    (payload as { status?: unknown }).status === "accepted"
+  );
+}
+
+function isPreRegistrationAbortedAgentDedupePayload(payload: unknown): payload is {
+  runId?: unknown;
+  sessionKey?: unknown;
+  status: "timeout";
+  stopReason?: unknown;
+} {
+  const stopReason = (payload as { stopReason?: unknown } | null)?.stopReason;
+  return (
+    typeof payload === "object" &&
+    payload !== null &&
+    (payload as { status?: unknown }).status === "timeout" &&
+    (stopReason === "rpc" || stopReason === "stop")
+  );
+}
+
+function isPreRegistrationAbortedAgentDedupeEntryForSession(params: {
+  entry: ReturnType<typeof readGatewayDedupeEntry> | undefined;
+  runId: string;
+  sessionKey?: string;
+  alternateSessionKeys?: Array<string | undefined>;
+}): boolean {
+  if (!params.entry?.ok || !isPreRegistrationAbortedAgentDedupePayload(params.entry.payload)) {
+    return false;
+  }
+  const payload = params.entry.payload;
+  const payloadRunId = typeof payload.runId === "string" ? payload.runId.trim() : "";
+  if (payloadRunId && payloadRunId !== params.runId) {
+    return false;
+  }
+  const payloadSessionKey =
+    typeof payload.sessionKey === "string" && payload.sessionKey.trim()
+      ? payload.sessionKey.trim()
+      : undefined;
+  const expectedSessionKeys = new Set(
+    [params.sessionKey, ...(params.alternateSessionKeys ?? [])].filter((value): value is string =>
+      Boolean(value?.trim()),
+    ),
+  );
+  return (
+    !payloadSessionKey ||
+    expectedSessionKeys.size === 0 ||
+    expectedSessionKeys.has(payloadSessionKey)
+  );
+}
+
 function setGatewayDedupeEntries(params: {
   dedupe: GatewayRequestContext["dedupe"];
   keys: readonly string[];
@@ -461,6 +523,28 @@ function setGatewayDedupeEntries(params: {
       entry: params.entry,
     });
   }
+}
+
+function setAbortedAgentDedupeEntries(params: {
+  dedupe: GatewayRequestContext["dedupe"];
+  keys: readonly string[];
+  runId: string;
+  stopReason: string;
+}) {
+  setGatewayDedupeEntries({
+    dedupe: params.dedupe,
+    keys: params.keys,
+    entry: {
+      ts: Date.now(),
+      ok: true,
+      payload: {
+        runId: params.runId,
+        status: "timeout" as const,
+        summary: "aborted",
+        stopReason: params.stopReason,
+      },
+    },
+  });
 }
 
 function deleteGatewayDedupeEntries(params: {
@@ -716,6 +800,30 @@ export const agentHandlers: GatewayRequestHandlers = {
       keys: agentDedupeKeys,
     });
     if (cached) {
+      if (cached.ok && isAcceptedAgentDedupePayload(cached.payload)) {
+        const cachedRunId =
+          typeof cached.payload.runId === "string" && cached.payload.runId.trim()
+            ? cached.payload.runId.trim()
+            : runId;
+        const cachedSessionKey =
+          typeof cached.payload.sessionKey === "string" && cached.payload.sessionKey.trim()
+            ? cached.payload.sessionKey.trim()
+            : undefined;
+        respond(
+          true,
+          {
+            runId: cachedRunId,
+            status: "in_flight" as const,
+            ...(cachedSessionKey ? { sessionKey: cachedSessionKey } : {}),
+          },
+          undefined,
+          {
+            cached: true,
+            runId: cachedRunId,
+          },
+        );
+        return;
+      }
       respond(cached.ok, cached.payload, cached.error, {
         cached: true,
       });
@@ -723,20 +831,36 @@ export const agentHandlers: GatewayRequestHandlers = {
     }
     let agentDedupeReserved = false;
     let agentRunAccepted = false;
-    const reserveExecApprovalFollowupDedupe = () => {
-      if (agentDedupeReserved || !execApprovalFollowupApprovalId) {
+    const ownerConnId = typeof client?.connId === "string" ? client.connId : undefined;
+    const ownerDeviceId =
+      typeof client?.connect?.device?.id === "string" ? client.connect.device.id : undefined;
+    const reservePreAcceptedAgentDedupe = (sessionKey?: string) => {
+      if (agentDedupeReserved || !sessionKey) {
         return;
       }
+      const acceptedAt = Date.now();
+      const pendingTimeoutMs = resolveAgentTimeoutMs({
+        cfg,
+        overrideSeconds: typeof request.timeout === "number" ? request.timeout : undefined,
+      });
       setGatewayDedupeEntries({
         dedupe: context.dedupe,
         keys: agentDedupeKeys,
         entry: {
-          ts: Date.now(),
+          ts: acceptedAt,
           ok: true,
           payload: {
             runId,
             status: "accepted" as const,
-            acceptedAt: Date.now(),
+            sessionKey,
+            acceptedAt,
+            dedupeKeys: agentDedupeKeys,
+            expiresAtMs: resolveAgentRunExpiresAtMs({
+              now: acceptedAt,
+              timeoutMs: pendingTimeoutMs,
+            }),
+            ownerConnId,
+            ownerDeviceId,
           },
         },
       });
@@ -744,6 +868,18 @@ export const agentHandlers: GatewayRequestHandlers = {
     };
     const clearUnacceptedExecApprovalFollowupDedupe = () => {
       if (!agentDedupeReserved || agentRunAccepted) {
+        return;
+      }
+      const reservedEntry = readGatewayDedupeEntry({
+        dedupe: context.dedupe,
+        keys: agentDedupeKeys,
+      });
+      if (
+        isPreRegistrationAbortedAgentDedupeEntryForSession({
+          entry: reservedEntry,
+          runId,
+        })
+      ) {
         return;
       }
       deleteGatewayDedupeEntries({
@@ -755,91 +891,6 @@ export const agentHandlers: GatewayRequestHandlers = {
     const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(request.attachments);
     const requestedBestEffortDeliver =
       typeof request.bestEffortDeliver === "boolean" ? request.bestEffortDeliver : undefined;
-
-    let message = (request.message ?? "").trim();
-    if (!isRawModelRun) {
-      message = annotateInterSessionPromptText(message, inputProvenance);
-    }
-    let images: Array<{ type: "image"; data: string; mimeType: string }> = [];
-    let imageOrder: PromptImageOrderEntry[] = [];
-    if (normalizedAttachments.length > 0) {
-      const requestedSessionKeyRaw =
-        typeof request.sessionKey === "string" && request.sessionKey.trim()
-          ? request.sessionKey.trim()
-          : undefined;
-
-      let baseProvider: string | undefined;
-      let baseModel: string | undefined;
-      if (requestedSessionKeyRaw) {
-        const { cfg: sessCfg, entry: sessEntry } = loadSessionEntry(requestedSessionKeyRaw);
-        const sessionAgentId = resolveAgentIdFromSessionKey(requestedSessionKeyRaw);
-        const modelRef = resolveSessionModelRef(sessCfg, sessEntry, sessionAgentId);
-        baseProvider = modelRef.provider;
-        baseModel = modelRef.model;
-      }
-      const effectiveProvider = providerOverride || baseProvider;
-      const effectiveModel = modelOverride || baseModel;
-      const supportsInlineImages = await resolveGatewayModelSupportsImages({
-        loadGatewayModelCatalog: context.loadGatewayModelCatalog,
-        provider: effectiveProvider,
-        model: effectiveModel,
-      });
-
-      try {
-        const parsed = await parseMessageWithAttachments(message, normalizedAttachments, {
-          maxBytes: resolveChatAttachmentMaxBytes(cfg),
-          log: context.logGateway,
-          supportsInlineImages,
-          // agent.run does not yet wire a ctx.MediaPaths stage path, so reject
-          // non-image attachments explicitly (UnsupportedAttachmentError)
-          // instead of saving them where the agent cannot reach them.
-          acceptNonImage: false,
-        });
-        message = parsed.message.trim();
-        images = parsed.images;
-        imageOrder = parsed.imageOrder;
-        // offloadedRefs are appended as text markers to `message`; the agent
-        // runner will resolve them via detectAndLoadPromptImages.
-      } catch (err) {
-        // MediaOffloadError indicates a server-side storage fault (ENOSPC, EPERM,
-        // etc.). Map it to UNAVAILABLE so clients can retry without treating it as
-        // a bad request. All other errors are input-validation failures → 4xx.
-        logAttachmentFailure(context.logGateway, "agent attachment parse failed", err);
-        const isServerFault = err instanceof MediaOffloadError;
-        respond(
-          false,
-          undefined,
-          errorShape(
-            isServerFault ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
-            String(err),
-          ),
-        );
-        return;
-      }
-    }
-
-    // Accept internal non-delivery sources (heartbeat, cron, webhook) as valid
-    // channel hints so subagent spawns from those parent runs are not rejected.
-    const isKnownGatewayChannel = (value: string): boolean =>
-      isGatewayMessageChannel(value) || isInternalNonDeliveryChannel(value);
-    const channelHints = [request.channel, request.replyChannel]
-      .filter((value): value is string => typeof value === "string")
-      .map((value) => value.trim())
-      .filter(Boolean);
-    for (const rawChannel of channelHints) {
-      const normalized = normalizeMessageChannel(rawChannel);
-      if (normalized && normalized !== "last" && !isKnownGatewayChannel(normalized)) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `invalid agent params: unknown channel: ${normalized}`,
-          ),
-        );
-        return;
-      }
-    }
 
     const knownAgents = listAgentIds(cfg);
     const agentIdRaw = normalizeOptionalString(request.agentId) ?? "";
@@ -894,10 +945,92 @@ export const agentHandlers: GatewayRequestHandlers = {
         return;
       }
     }
-    // Exec approval followups can retry with a fresh nonce for the same approval id.
-    // Reserve the stable alias before awaited session/delivery work so overlaps dedupe.
-    reserveExecApprovalFollowupDedupe();
+    // Reserve the run before awaited attachment/session/delivery work so duplicate calls dedupe and
+    // pre-registration chat.abort can be made durable by idempotency key.
+    const preAcceptedReservedSessionKey = requestedSessionKey;
+    reservePreAcceptedAgentDedupe(preAcceptedReservedSessionKey);
+
     try {
+      let message = (request.message ?? "").trim();
+      if (!isRawModelRun) {
+        message = annotateInterSessionPromptText(message, inputProvenance);
+      }
+      let images: Array<{ type: "image"; data: string; mimeType: string }> = [];
+      let imageOrder: PromptImageOrderEntry[] = [];
+      if (normalizedAttachments.length > 0) {
+        let baseProvider: string | undefined;
+        let baseModel: string | undefined;
+        if (requestedSessionKeyRaw) {
+          const { cfg: sessCfg, entry: sessEntry } = loadSessionEntry(requestedSessionKeyRaw);
+          const sessionAgentId = resolveAgentIdFromSessionKey(requestedSessionKeyRaw);
+          const modelRef = resolveSessionModelRef(sessCfg, sessEntry, sessionAgentId);
+          baseProvider = modelRef.provider;
+          baseModel = modelRef.model;
+        }
+        const effectiveProvider = providerOverride || baseProvider;
+        const effectiveModel = modelOverride || baseModel;
+        const supportsInlineImages = await resolveGatewayModelSupportsImages({
+          loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+          provider: effectiveProvider,
+          model: effectiveModel,
+        });
+
+        try {
+          const parsed = await parseMessageWithAttachments(message, normalizedAttachments, {
+            maxBytes: resolveChatAttachmentMaxBytes(cfg),
+            log: context.logGateway,
+            supportsInlineImages,
+            // agent.run does not yet wire a ctx.MediaPaths stage path, so reject
+            // non-image attachments explicitly (UnsupportedAttachmentError)
+            // instead of saving them where the agent cannot reach them.
+            acceptNonImage: false,
+          });
+          message = parsed.message.trim();
+          images = parsed.images;
+          imageOrder = parsed.imageOrder;
+          // offloadedRefs are appended as text markers to `message`; the agent
+          // runner will resolve them via detectAndLoadPromptImages.
+        } catch (err) {
+          // MediaOffloadError indicates a server-side storage fault (ENOSPC, EPERM,
+          // etc.). Map it to UNAVAILABLE so clients can retry without treating it as
+          // a bad request. All other errors are input-validation failures → 4xx.
+          logAttachmentFailure(context.logGateway, "agent attachment parse failed", err);
+          const isServerFault = err instanceof MediaOffloadError;
+          respond(
+            false,
+            undefined,
+            errorShape(
+              isServerFault ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
+              String(err),
+            ),
+          );
+          return;
+        }
+      }
+
+      // Accept internal non-delivery sources (heartbeat, cron, webhook) as valid
+      // channel hints so subagent spawns from those parent runs are not rejected.
+      const isKnownGatewayChannel = (value: string): boolean =>
+        isGatewayMessageChannel(value) || isInternalNonDeliveryChannel(value);
+      const channelHints = [request.channel, request.replyChannel]
+        .filter((value): value is string => typeof value === "string")
+        .map((value) => value.trim())
+        .filter(Boolean);
+      for (const rawChannel of channelHints) {
+        const normalized = normalizeMessageChannel(rawChannel);
+        if (normalized && normalized !== "last" && !isKnownGatewayChannel(normalized)) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              `invalid agent params: unknown channel: ${normalized}`,
+            ),
+          );
+          return;
+        }
+      }
+
       const voiceWakeTrigger = normalizeOptionalString(request.voiceWakeTrigger) ?? "";
       const replyTo = normalizeOptionalString(request.replyTo) ?? "";
       const to = normalizeOptionalString(request.to) ?? "";
@@ -1438,6 +1571,26 @@ export const agentHandlers: GatewayRequestHandlers = {
 
       const deliver = request.deliver === true && resolvedChannel !== INTERNAL_MESSAGE_CHANNEL;
 
+      const preRegistrationAbort = readGatewayDedupeEntry({
+        dedupe: context.dedupe,
+        keys: agentDedupeKeys,
+      });
+      if (
+        isPreRegistrationAbortedAgentDedupeEntryForSession({
+          entry: preRegistrationAbort,
+          runId,
+          sessionKey: resolvedSessionKey,
+          alternateSessionKeys: [preAcceptedReservedSessionKey, requestedSessionKey],
+        })
+      ) {
+        agentRunAccepted = true;
+        respond(true, preRegistrationAbort?.payload, undefined, {
+          cached: true,
+          runId,
+        });
+        return;
+      }
+
       // Register before the accepted ack so an immediate chat.abort/sessions.abort
       // cannot race the active-run entry. Agent RPC runs use the agent timeout;
       // chat.send keeps the shorter chat cleanup cap.
@@ -1466,15 +1619,15 @@ export const agentHandlers: GatewayRequestHandlers = {
         timeoutMs,
         now,
         expiresAtMs: resolveAgentRunExpiresAtMs({ now, timeoutMs }),
-        ownerConnId: typeof client?.connId === "string" ? client.connId : undefined,
-        ownerDeviceId:
-          typeof client?.connect?.device?.id === "string" ? client.connect.device.id : undefined,
+        ownerConnId,
+        ownerDeviceId,
         providerId: activeModelProvider,
         authProviderId: activeAuthProvider,
         kind: "agent",
       });
-      if (!activeRunAbort.registered && context.chatAbortControllers.has(runId)) {
-        agentRunAccepted = true;
+      const existingRunAbort = context.chatAbortControllers.get(runId);
+      if (!activeRunAbort.registered && existingRunAbort) {
+        agentRunAccepted = existingRunAbort.kind === "agent";
         respond(true, { runId, status: "in_flight" as const }, undefined, {
           cached: true,
           runId,
@@ -1484,8 +1637,15 @@ export const agentHandlers: GatewayRequestHandlers = {
 
       const accepted = {
         runId,
+        sessionKey: resolvedSessionKey,
         status: "accepted" as const,
         acceptedAt: Date.now(),
+      };
+      const acceptedDedupePayload = {
+        ...accepted,
+        dedupeKeys: agentDedupeKeys,
+        ownerConnId,
+        ownerDeviceId,
       };
       agentRunAccepted = true;
       // Store an in-flight ack so retries do not spawn a second run.
@@ -1495,7 +1655,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         entry: {
           ts: Date.now(),
           ok: true,
-          payload: accepted,
+          payload: acceptedDedupePayload,
         },
       });
       respond(true, accepted, undefined, { runId });
@@ -1508,6 +1668,27 @@ export const agentHandlers: GatewayRequestHandlers = {
 
         let dispatched = false;
         try {
+          if (activeRunAbort.controller.signal.aborted) {
+            setAbortedAgentDedupeEntries({
+              dedupe: context.dedupe,
+              keys: agentDedupeKeys,
+              runId,
+              stopReason: "rpc",
+            });
+            respond(
+              true,
+              {
+                runId,
+                status: "timeout" as const,
+                summary: "aborted",
+                stopReason: "rpc",
+              },
+              undefined,
+              { runId },
+            );
+            return;
+          }
+
           if (resolvedSessionKey) {
             await reactivateCompletedSubagentSession({
               sessionKey: resolvedSessionKey,

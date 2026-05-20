@@ -107,6 +107,34 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function createSignalProcess() {
+  type SignalName = "SIGINT" | "SIGTERM";
+  const listeners = new Map<SignalName, Set<() => void>>();
+  const processLike = {
+    on(signal: SignalName, handler: () => void) {
+      const current = listeners.get(signal) ?? new Set<() => void>();
+      current.add(handler);
+      listeners.set(signal, current);
+      return processLike;
+    },
+    off(signal: SignalName, handler: () => void) {
+      listeners.get(signal)?.delete(handler);
+      return processLike;
+    },
+  };
+  return {
+    processLike,
+    emit(signal: SignalName) {
+      for (const handler of listeners.get(signal) ?? []) {
+        handler();
+      }
+    },
+    listenerCount(signal: SignalName) {
+      return listeners.get(signal)?.size ?? 0;
+    },
+  };
+}
+
 function mockMessages(mock: unknown): string[] {
   const calls = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls ?? [];
   return calls.map(([message]) => String(message));
@@ -361,6 +389,638 @@ describe("agentCliCommand", () => {
     );
   });
 
+  it("does not treat lazy channel deps as the process signal source", async () => {
+    await withTempStore(async () => {
+      mockGatewaySuccessReply();
+      const deps = new Proxy(
+        {},
+        {
+          get(target, property, receiver) {
+            if (property === "process") {
+              return async () => undefined;
+            }
+            return Reflect.get(target, property, receiver);
+          },
+        },
+      );
+
+      await agentCliCommand({ message: "hi", to: "+1555" }, runtime, deps);
+
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      expect(agentCommand).not.toHaveBeenCalled();
+    });
+  });
+
+  it("exits for successful gateway runs when SIGTERM arrives before return", async () => {
+    await withTempStore(async () => {
+      const signals = createSignalProcess();
+      mockGatewaySuccessReply();
+      const signalRuntime: RuntimeEnv = {
+        log: vi.fn(() => {
+          signals.emit("SIGTERM");
+        }),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+
+      const result = await agentCliCommand({ message: "hi", to: "+1555" }, signalRuntime, {
+        process: signals.processLike,
+      });
+
+      expect(result).toBeUndefined();
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      expect(agentCommand).not.toHaveBeenCalled();
+      expect(signalRuntime.log).toHaveBeenCalledWith("hello");
+      expect(signalRuntime.exit).toHaveBeenCalledWith(143);
+    });
+  });
+
+  it.each([
+    ["SIGTERM", 143],
+    ["SIGINT", 130],
+  ] as const)(
+    "aborts an accepted gateway run using the accepted session key when %s interrupts the CLI",
+    async (signalName, exitCode) => {
+      await withTempStore(async () => {
+        const signals = createSignalProcess();
+        let sameConnectionAbort:
+          | { method: string; params: unknown; opts?: { timeoutMs?: number | null } }
+          | undefined;
+        callGateway.mockImplementation(async (requestValue: unknown) => {
+          const request = requireRecord(requestValue, "gateway request");
+          if (request.method === "agent") {
+            const onAccepted = request.onAccepted as ((payload: unknown) => void) | undefined;
+            const onSignalAbort = request.onSignalAbort as
+              | ((
+                  request: (
+                    method: string,
+                    params?: unknown,
+                    opts?: { timeoutMs?: number | null },
+                  ) => Promise<unknown>,
+                ) => Promise<void>)
+              | undefined;
+            const signal = request.signal as AbortSignal | undefined;
+            onAccepted?.({
+              status: "accepted",
+              runId: "run-signal",
+              sessionKey: "agent:main:explicit:reset-run",
+            });
+            return await new Promise((_, reject) => {
+              signal?.addEventListener(
+                "abort",
+                () => {
+                  void (async () => {
+                    await onSignalAbort?.(async (method, params, opts) => {
+                      sameConnectionAbort = { method, params, opts };
+                      return { ok: true, aborted: true, runIds: ["run-signal"] };
+                    });
+                    const err = new Error("gateway request aborted for agent");
+                    err.name = "AbortError";
+                    reject(err);
+                  })();
+                },
+                { once: true },
+              );
+            });
+          }
+          throw new Error(`unexpected gateway method ${String(request.method)}`);
+        });
+
+        const run = agentCliCommand({ message: "hi", to: "+1555" }, runtime, {
+          process: signals.processLike,
+        });
+        await Promise.resolve();
+        signals.emit(signalName);
+        expect(signals.listenerCount("SIGTERM")).toBe(0);
+        expect(signals.listenerCount("SIGINT")).toBe(0);
+
+        await run;
+        expect(callGateway).toHaveBeenCalledTimes(1);
+        expect(runtime.exit).toHaveBeenCalledWith(exitCode);
+        expect(sameConnectionAbort?.method).toBe("chat.abort");
+        expect(sameConnectionAbort?.opts).toEqual({ timeoutMs: 2_000 });
+        expect(sameConnectionAbort?.params).toEqual({
+          sessionKey: "agent:main:explicit:reset-run",
+          runId: "run-signal",
+        });
+      });
+    },
+  );
+
+  it("aborts a gateway run by idempotency key before the accepted ack", async () => {
+    await withTempStore(async () => {
+      const signals = createSignalProcess();
+      let sameConnectionAbort:
+        | { method: string; params: unknown; opts?: { timeoutMs?: number | null } }
+        | undefined;
+      callGateway.mockImplementation(async (requestValue: unknown) => {
+        const request = requireRecord(requestValue, "gateway request");
+        if (request.method === "agent") {
+          const params = requireRecord(request.params, "gateway agent params");
+          expect(params.idempotencyKey).toBe("pre-accepted-run");
+          const onSignalAbort = request.onSignalAbort as
+            | ((
+                request: (
+                  method: string,
+                  params?: unknown,
+                  opts?: { timeoutMs?: number | null },
+                ) => Promise<unknown>,
+              ) => Promise<void>)
+            | undefined;
+          const signal = request.signal as AbortSignal | undefined;
+          return await new Promise((_, reject) => {
+            signal?.addEventListener(
+              "abort",
+              () => {
+                void (async () => {
+                  await onSignalAbort?.(async (method, params, opts) => {
+                    sameConnectionAbort = { method, params, opts };
+                    return { ok: true, aborted: true, runIds: ["pre-accepted-run"] };
+                  });
+                  const err = new Error("gateway request aborted before accepted ack");
+                  err.name = "AbortError";
+                  reject(err);
+                })();
+              },
+              { once: true },
+            );
+          });
+        }
+        throw new Error(`unexpected gateway method ${String(request.method)}`);
+      });
+
+      const run = agentCliCommand(
+        { message: "hi", sessionId: "pre-session", runId: "pre-accepted-run" },
+        runtime,
+        {
+          process: signals.processLike,
+        },
+      );
+      await Promise.resolve();
+      signals.emit("SIGTERM");
+
+      await run;
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      expect(runtime.exit).toHaveBeenCalledWith(143);
+      expect(sameConnectionAbort?.method).toBe("chat.abort");
+      expect(sameConnectionAbort?.opts).toEqual({ timeoutMs: 2_000 });
+      expect(sameConnectionAbort?.params).toEqual({
+        sessionKey: "agent:main:explicit:pre-session",
+        runId: "pre-accepted-run",
+      });
+      expect(signals.listenerCount("SIGTERM")).toBe(0);
+      expect(signals.listenerCount("SIGINT")).toBe(0);
+    });
+  });
+
+  it("skips fallback abort when SIGTERM interrupts before the gateway request starts", async () => {
+    await withTempStore(async () => {
+      const signals = createSignalProcess();
+      callGateway.mockImplementation(async (requestValue: unknown) => {
+        const request = requireRecord(requestValue, "gateway request");
+        if (request.method === "agent") {
+          const signal = request.signal as AbortSignal | undefined;
+          return await new Promise((_, reject) => {
+            signal?.addEventListener(
+              "abort",
+              () => {
+                const err = new Error("gateway request aborted before start");
+                err.name = "AbortError";
+                reject(err);
+              },
+              { once: true },
+            );
+          });
+        }
+        throw new Error(`unexpected gateway method ${String(request.method)}`);
+      });
+
+      const run = agentCliCommand({ message: "hi", to: "+1555" }, runtime, {
+        process: signals.processLike,
+      });
+      await Promise.resolve();
+      signals.emit("SIGTERM");
+
+      await run;
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      expect(runtime.exit).toHaveBeenCalledWith(143);
+      expect(signals.listenerCount("SIGTERM")).toBe(0);
+      expect(signals.listenerCount("SIGINT")).toBe(0);
+    });
+  });
+
+  it("retries same-connection abort before falling back to a new Gateway call", async () => {
+    await withTempStore(async () => {
+      const signals = createSignalProcess();
+      const sameConnectionAborts: Array<{
+        method: string;
+        params: unknown;
+        opts?: { timeoutMs?: number | null };
+      }> = [];
+      callGateway.mockImplementation(async (requestValue: unknown) => {
+        const request = requireRecord(requestValue, "gateway request");
+        if (request.method === "agent") {
+          const params = requireRecord(request.params, "gateway agent params");
+          expect(params.idempotencyKey).toBe("pre-accepted-run");
+          const onSignalAbort = request.onSignalAbort as
+            | ((
+                request: (
+                  method: string,
+                  params?: unknown,
+                  opts?: { timeoutMs?: number | null },
+                ) => Promise<unknown>,
+              ) => Promise<void>)
+            | undefined;
+          const signal = request.signal as AbortSignal | undefined;
+          return await new Promise((_, reject) => {
+            signal?.addEventListener(
+              "abort",
+              () => {
+                void (async () => {
+                  await onSignalAbort?.(async (method, params, opts) => {
+                    sameConnectionAborts.push({ method, params, opts });
+                    return sameConnectionAborts.length < 3
+                      ? { ok: true, aborted: false, runIds: [] }
+                      : { ok: true, aborted: true, runIds: ["pre-accepted-run"] };
+                  });
+                  const err = new Error("gateway request aborted before registration");
+                  err.name = "AbortError";
+                  reject(err);
+                })();
+              },
+              { once: true },
+            );
+          });
+        }
+        throw new Error(`unexpected gateway method ${String(request.method)}`);
+      });
+
+      const run = agentCliCommand(
+        { message: "hi", to: "+1555", runId: "pre-accepted-run" },
+        runtime,
+        {
+          process: signals.processLike,
+        },
+      );
+      await Promise.resolve();
+      signals.emit("SIGTERM");
+
+      await run;
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      expect(runtime.exit).toHaveBeenCalledWith(143);
+      expect(sameConnectionAborts).toHaveLength(3);
+      expect(sameConnectionAborts.at(-1)).toEqual({
+        method: "chat.abort",
+        opts: { timeoutMs: 2_000 },
+        params: {
+          sessionKey: "agent:main:main",
+          runId: "pre-accepted-run",
+        },
+      });
+      expect(signals.listenerCount("SIGTERM")).toBe(0);
+      expect(signals.listenerCount("SIGINT")).toBe(0);
+    });
+  });
+
+  it("falls back to a new Gateway call when the same-connection abort is not confirmed", async () => {
+    await withTempStore(async () => {
+      const signals = createSignalProcess();
+      const sameConnectionAborts: Array<{
+        method: string;
+        params: unknown;
+        opts?: { timeoutMs?: number | null };
+      }> = [];
+      let fallbackAbort: Record<string, unknown> | undefined;
+      callGateway.mockImplementation(async (requestValue: unknown) => {
+        const request = requireRecord(requestValue, "gateway request");
+        if (request.method === "agent") {
+          const params = requireRecord(request.params, "gateway agent params");
+          expect(params.idempotencyKey).toBe("pre-accepted-run");
+          const onSignalAbort = request.onSignalAbort as
+            | ((
+                request: (
+                  method: string,
+                  params?: unknown,
+                  opts?: { timeoutMs?: number | null },
+                ) => Promise<unknown>,
+              ) => Promise<void>)
+            | undefined;
+          const signal = request.signal as AbortSignal | undefined;
+          return await new Promise((_, reject) => {
+            signal?.addEventListener(
+              "abort",
+              () => {
+                void (async () => {
+                  await onSignalAbort?.(async (method, params, opts) => {
+                    sameConnectionAborts.push({ method, params, opts });
+                    return { ok: true, aborted: false, runIds: [] };
+                  });
+                  const err = new Error("gateway request aborted before registration");
+                  err.name = "AbortError";
+                  reject(err);
+                })();
+              },
+              { once: true },
+            );
+          });
+        }
+        if (request.method === "chat.abort") {
+          fallbackAbort = request;
+          return { ok: true, aborted: true, runIds: ["pre-accepted-run"] };
+        }
+        throw new Error(`unexpected gateway method ${String(request.method)}`);
+      });
+
+      const run = agentCliCommand(
+        { message: "hi", to: "+1555", runId: "pre-accepted-run" },
+        runtime,
+        {
+          process: signals.processLike,
+        },
+      );
+      await Promise.resolve();
+      signals.emit("SIGTERM");
+
+      await run;
+      expect(callGateway).toHaveBeenCalledTimes(2);
+      expect(runtime.exit).toHaveBeenCalledWith(143);
+      expect(sameConnectionAborts).toHaveLength(5);
+      expect(sameConnectionAborts.at(-1)).toEqual({
+        method: "chat.abort",
+        opts: { timeoutMs: 2_000 },
+        params: {
+          sessionKey: "agent:main:main",
+          runId: "pre-accepted-run",
+        },
+      });
+      expect(fallbackAbort?.method).toBe("chat.abort");
+      expect(fallbackAbort?.timeoutMs).toBe(2_000);
+      expect(fallbackAbort?.params).toEqual({
+        sessionKey: "agent:main:main",
+        runId: "pre-accepted-run",
+      });
+      expect(signals.listenerCount("SIGTERM")).toBe(0);
+      expect(signals.listenerCount("SIGINT")).toBe(0);
+    });
+  });
+
+  it("preserves backend admin authority when SIGTERM aborts a model override run", async () => {
+    await withTempStore(async () => {
+      const signals = createSignalProcess();
+      let sameConnectionAbort:
+        | { method: string; params: unknown; opts?: { timeoutMs?: number | null } }
+        | undefined;
+      callGateway.mockImplementation(async (requestValue: unknown) => {
+        const request = requireRecord(requestValue, "gateway request");
+        if (request.method === "agent") {
+          expect(request.clientName).toBe("gateway-client");
+          expect(request.mode).toBe("backend");
+          expect(request.scopes).toEqual(["operator.admin"]);
+          const onAccepted = request.onAccepted as ((payload: unknown) => void) | undefined;
+          const onSignalAbort = request.onSignalAbort as
+            | ((
+                request: (
+                  method: string,
+                  params?: unknown,
+                  opts?: { timeoutMs?: number | null },
+                ) => Promise<unknown>,
+              ) => Promise<void>)
+            | undefined;
+          const signal = request.signal as AbortSignal | undefined;
+          onAccepted?.({ status: "accepted", runId: "run-model-sigterm" });
+          return await new Promise((_, reject) => {
+            signal?.addEventListener(
+              "abort",
+              () => {
+                void (async () => {
+                  await onSignalAbort?.(async (method, params, opts) => {
+                    sameConnectionAbort = { method, params, opts };
+                    return { ok: true, aborted: true, runIds: ["run-model-sigterm"] };
+                  });
+                  const err = new Error("gateway request aborted for model override agent");
+                  err.name = "AbortError";
+                  reject(err);
+                })();
+              },
+              { once: true },
+            );
+          });
+        }
+        throw new Error(`unexpected gateway method ${String(request.method)}`);
+      });
+
+      const run = agentCliCommand(
+        { message: "hi", to: "+1555", model: "ollama/qwen3.5:9b" },
+        runtime,
+        {
+          process: signals.processLike,
+        },
+      );
+      await Promise.resolve();
+      signals.emit("SIGTERM");
+
+      await run;
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      expect(runtime.exit).toHaveBeenCalledWith(143);
+      expect(sameConnectionAbort?.method).toBe("chat.abort");
+      expect(sameConnectionAbort?.opts).toEqual({ timeoutMs: 2_000 });
+      expect(sameConnectionAbort?.params).toEqual({
+        sessionKey: "agent:main:main",
+        runId: "run-model-sigterm",
+      });
+      expect(signals.listenerCount("SIGTERM")).toBe(0);
+      expect(signals.listenerCount("SIGINT")).toBe(0);
+    });
+  });
+
+  it("preserves backend admin authority for model override fallback aborts", async () => {
+    await withTempStore(async () => {
+      const signals = createSignalProcess();
+      const sameConnectionAborts: Array<{
+        method: string;
+        params: unknown;
+        opts?: { timeoutMs?: number | null };
+      }> = [];
+      let fallbackAbort: Record<string, unknown> | undefined;
+      callGateway.mockImplementation(async (requestValue: unknown) => {
+        const request = requireRecord(requestValue, "gateway request");
+        if (request.method === "agent") {
+          expect(request.clientName).toBe("gateway-client");
+          expect(request.mode).toBe("backend");
+          expect(request.scopes).toEqual(["operator.admin"]);
+          const onAccepted = request.onAccepted as ((payload: unknown) => void) | undefined;
+          const onSignalAbort = request.onSignalAbort as
+            | ((
+                request: (
+                  method: string,
+                  params?: unknown,
+                  opts?: { timeoutMs?: number | null },
+                ) => Promise<unknown>,
+              ) => Promise<void>)
+            | undefined;
+          const signal = request.signal as AbortSignal | undefined;
+          onAccepted?.({ status: "accepted", runId: "run-model-fallback" });
+          return await new Promise((_, reject) => {
+            signal?.addEventListener(
+              "abort",
+              () => {
+                void (async () => {
+                  await onSignalAbort?.(async (method, params, opts) => {
+                    sameConnectionAborts.push({ method, params, opts });
+                    return { ok: true, aborted: false, runIds: [] };
+                  });
+                  const err = new Error("gateway request aborted for model override agent");
+                  err.name = "AbortError";
+                  reject(err);
+                })();
+              },
+              { once: true },
+            );
+          });
+        }
+        if (request.method === "chat.abort") {
+          fallbackAbort = request;
+          return { ok: true, aborted: true, runIds: ["run-model-fallback"] };
+        }
+        throw new Error(`unexpected gateway method ${String(request.method)}`);
+      });
+
+      const run = agentCliCommand(
+        { message: "hi", to: "+1555", model: "ollama/qwen3.5:9b" },
+        runtime,
+        {
+          process: signals.processLike,
+        },
+      );
+      await Promise.resolve();
+      signals.emit("SIGTERM");
+
+      await run;
+      expect(callGateway).toHaveBeenCalledTimes(2);
+      expect(runtime.exit).toHaveBeenCalledWith(143);
+      expect(sameConnectionAborts).toHaveLength(5);
+      expect(fallbackAbort?.method).toBe("chat.abort");
+      expect(fallbackAbort?.timeoutMs).toBe(2_000);
+      expect(fallbackAbort?.clientName).toBe("gateway-client");
+      expect(fallbackAbort?.mode).toBe("backend");
+      expect(fallbackAbort?.scopes).toEqual(["operator.admin"]);
+      expect(fallbackAbort?.params).toEqual({
+        sessionKey: "agent:main:main",
+        runId: "run-model-fallback",
+      });
+      expect(signals.listenerCount("SIGTERM")).toBe(0);
+      expect(signals.listenerCount("SIGINT")).toBe(0);
+    });
+  });
+
+  it("passes SIGTERM abort signals into local agent runs", async () => {
+    await withTempStore(async () => {
+      const signals = createSignalProcess();
+      agentCommand.mockImplementationOnce(async (opts: { abortSignal?: AbortSignal }) => {
+        expect(opts.abortSignal).toBeInstanceOf(AbortSignal);
+        return await new Promise((_, reject) => {
+          opts.abortSignal?.addEventListener(
+            "abort",
+            () => {
+              const err = new Error("local agent aborted");
+              err.name = "AbortError";
+              reject(err);
+            },
+            { once: true },
+          );
+        });
+      });
+
+      const run = agentCliCommand({ message: "hi", to: "+1555", local: true }, runtime, {
+        process: signals.processLike,
+      });
+      await Promise.resolve();
+      signals.emit("SIGTERM");
+
+      await run;
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(agentCommand).toHaveBeenCalledTimes(1);
+      expect(runtime.exit).toHaveBeenCalledWith(143);
+      expect(signals.listenerCount("SIGTERM")).toBe(0);
+      expect(signals.listenerCount("SIGINT")).toBe(0);
+    });
+  });
+
+  it("exits for local runs that resolve after SIGTERM aborts them", async () => {
+    await withTempStore(async () => {
+      const signals = createSignalProcess();
+      agentCommand.mockImplementationOnce(async (opts: { abortSignal?: AbortSignal }) => {
+        return await new Promise((resolve) => {
+          opts.abortSignal?.addEventListener(
+            "abort",
+            () => {
+              resolve({
+                payloads: [],
+                meta: { aborted: true },
+              } as unknown as Awaited<ReturnType<typeof AgentCommand>>);
+            },
+            { once: true },
+          );
+        });
+      });
+
+      const run = agentCliCommand({ message: "hi", to: "+1555", local: true }, runtime, {
+        process: signals.processLike,
+      });
+      await Promise.resolve();
+      signals.emit("SIGTERM");
+
+      await expect(run).resolves.toBeUndefined();
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(agentCommand).toHaveBeenCalledTimes(1);
+      expect(runtime.exit).toHaveBeenCalledWith(143);
+    });
+  });
+
+  it("exits for embedded fallback runs that resolve after SIGTERM aborts them", async () => {
+    await withTempStore(async () => {
+      const signals = createSignalProcess();
+      callGateway.mockRejectedValueOnce(createGatewayClosedError());
+      let resolveFallback: ((value: Awaited<ReturnType<typeof AgentCommand>>) => void) | undefined;
+      agentCommand.mockImplementationOnce(async (_opts: { abortSignal?: AbortSignal }) => {
+        return await new Promise((resolve) => {
+          resolveFallback = resolve;
+        });
+      });
+
+      const run = agentCliCommand({ message: "hi", to: "+1555" }, runtime, {
+        process: signals.processLike,
+      });
+      for (let attempt = 0; attempt < 10 && agentCommand.mock.calls.length === 0; attempt += 1) {
+        await Promise.resolve();
+      }
+      expect(agentCommand).toHaveBeenCalledTimes(1);
+      signals.emit("SIGTERM");
+      resolveFallback?.({
+        payloads: [],
+        meta: { aborted: true },
+      } as unknown as Awaited<ReturnType<typeof AgentCommand>>);
+
+      await expect(run).resolves.toBeUndefined();
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      expect(runtime.exit).toHaveBeenCalledWith(143);
+    });
+  });
+
+  it("does not route abort errors through embedded gateway fallback classification", async () => {
+    await withTempStore(async () => {
+      const err = new Error("gateway request aborted for agent");
+      err.name = "AbortError";
+      callGateway.mockRejectedValueOnce(err);
+
+      await expect(agentCliCommand({ message: "hi", to: "+1555" }, runtime)).rejects.toThrow(
+        "gateway request aborted for agent",
+      );
+
+      expect(isGatewayTransportError).not.toHaveBeenCalled();
+      expect(agentCommand).not.toHaveBeenCalled();
+    });
+  });
   it("stays silent when the gateway returns an intentional empty reply", async () => {
     await withTempStore(async () => {
       callGateway.mockResolvedValue({
@@ -394,6 +1054,23 @@ describe("agentCliCommand", () => {
       await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
 
       expect(runtime.log).toHaveBeenCalledWith("aborted");
+    });
+  });
+
+  it("surfaces duplicate in-flight gateway runs without pretending a reply arrived", async () => {
+    await withTempStore(async () => {
+      callGateway.mockResolvedValue({
+        runId: "idem-1",
+        status: "in_flight",
+        sessionKey: "agent:main:main",
+      });
+
+      await agentCliCommand({ message: "hi", to: "+1555", runId: "idem-1" }, runtime);
+
+      expect(runtime.error).toHaveBeenCalledWith(
+        "Agent run idem-1 is already in flight; not starting a duplicate run.",
+      );
+      expect(runtime.log).not.toHaveBeenCalledWith("No reply from agent.");
     });
   });
 
