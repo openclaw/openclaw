@@ -414,26 +414,28 @@ checkout_git_openclaw_ref() {
     return 0
   fi
 
-  git -C "$repo_dir" fetch --tags origin
-
   if [[ "$ref" == "main" ]]; then
+    git -C "$repo_dir" fetch --no-tags origin main
     git -C "$repo_dir" checkout main
     if [[ "$GIT_UPDATE" == "1" ]]; then
-      git -C "$repo_dir" pull --rebase || true
+      git -C "$repo_dir" pull --rebase --no-tags || true
     fi
-    return 0
-  fi
-
-  if git -C "$repo_dir" rev-parse --verify --quiet "refs/tags/${ref}^{commit}" >/dev/null; then
-    git -C "$repo_dir" checkout --detach "$ref"
     return 0
   fi
 
   if git -C "$repo_dir" ls-remote --exit-code --heads origin "$ref" >/dev/null 2>&1; then
+    git -C "$repo_dir" fetch --no-tags origin "refs/heads/${ref}:refs/remotes/origin/${ref}"
     git -C "$repo_dir" checkout -B "$ref" "origin/$ref"
     if [[ "$GIT_UPDATE" == "1" ]]; then
-      git -C "$repo_dir" pull --rebase || true
+      git -C "$repo_dir" pull --rebase --no-tags || true
     fi
+    return 0
+  fi
+
+  git -C "$repo_dir" fetch --tags origin
+
+  if git -C "$repo_dir" rev-parse --verify --quiet "refs/tags/${ref}^{commit}" >/dev/null; then
+    git -C "$repo_dir" checkout --detach "$ref"
     return 0
   fi
 
@@ -443,6 +445,18 @@ checkout_git_openclaw_ref() {
   fi
 
   fail "Requested git version not found: ${ref}"
+}
+
+git_install_lockfile_flag() {
+  local repo_dir="$1"
+  local ref="$2"
+
+  if [[ "$ref" == "main" ]] || git -C "$repo_dir" ls-remote --exit-code --heads origin "$ref" >/dev/null 2>&1; then
+    echo "--no-frozen-lockfile"
+    return 0
+  fi
+
+  echo "--frozen-lockfile"
 }
 
 repo_pnpm_spec() {
@@ -610,10 +624,21 @@ fix_npm_prefix_if_needed() {
 
 install_openclaw() {
   local requested="${OPENCLAW_VERSION:-latest}"
+  local freshness_flag="--min-release-age=0"
+  local min_release_age=""
+  min_release_age="$(env -u NPM_CONFIG_BEFORE -u npm_config_before "$(npm_bin)" config get min-release-age 2>/dev/null || true)"
+  if [[ -z "$min_release_age" || "$min_release_age" == "null" || "$min_release_age" == "undefined" ]]; then
+    local before_value=""
+    before_value="$(env -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$(npm_bin)" config get before 2>/dev/null || true)"
+    if [[ -n "$before_value" && "$before_value" != "null" && "$before_value" != "undefined" ]]; then
+      freshness_flag="--before=$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')"
+    fi
+  fi
   local npm_args=(
     --loglevel "$NPM_LOGLEVEL"
     --no-fund
     --no-audit
+    "$freshness_flag"
   )
   emit_json "{\"event\":\"step\",\"name\":\"openclaw\",\"status\":\"start\",\"version\":\"${requested}\"}"
   log "Installing OpenClaw (${requested})..."
@@ -622,14 +647,14 @@ install_openclaw() {
   fi
 
   if [[ "${requested}" == "latest" ]]; then
-    if ! SHARP_IGNORE_GLOBAL_LIBVIPS="$SHARP_IGNORE_GLOBAL_LIBVIPS" "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@latest"; then
+    if ! env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "SHARP_IGNORE_GLOBAL_LIBVIPS=$SHARP_IGNORE_GLOBAL_LIBVIPS" "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@latest"; then
       log "npm install openclaw@latest failed; retrying openclaw@next"
       emit_json "{\"event\":\"step\",\"name\":\"openclaw\",\"status\":\"retry\",\"version\":\"next\"}"
-      SHARP_IGNORE_GLOBAL_LIBVIPS="$SHARP_IGNORE_GLOBAL_LIBVIPS" "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@next"
+      env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "SHARP_IGNORE_GLOBAL_LIBVIPS=$SHARP_IGNORE_GLOBAL_LIBVIPS" "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@next"
       requested="next"
     fi
   else
-    SHARP_IGNORE_GLOBAL_LIBVIPS="$SHARP_IGNORE_GLOBAL_LIBVIPS" "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@${requested}"
+    env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "SHARP_IGNORE_GLOBAL_LIBVIPS=$SHARP_IGNORE_GLOBAL_LIBVIPS" "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@${requested}"
   fi
 
   mkdir -p "${PREFIX}/bin"
@@ -723,7 +748,9 @@ install_openclaw_from_git() {
   ensure_pnpm_git_prepare_allowlist "$repo_dir"
   activate_repo_pnpm_version "$repo_dir"
 
-  SHARP_IGNORE_GLOBAL_LIBVIPS="$SHARP_IGNORE_GLOBAL_LIBVIPS" run_pnpm -C "$repo_dir" install --frozen-lockfile
+  local install_lockfile_flag
+  install_lockfile_flag="$(git_install_lockfile_flag "$repo_dir" "$git_ref")"
+  CI="${CI:-true}" SHARP_IGNORE_GLOBAL_LIBVIPS="$SHARP_IGNORE_GLOBAL_LIBVIPS" run_pnpm -C "$repo_dir" install "$install_lockfile_flag"
 
   if ! run_pnpm -C "$repo_dir" ui:build; then
     log "UI build failed; continuing (CLI may still work)"

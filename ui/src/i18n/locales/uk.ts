@@ -349,6 +349,12 @@ export const uk: TranslationMap = {
     eventLogSubtitle: "Latest gateway events.",
     noEvents: "No events yet.",
   },
+  quickSettings: {
+    security: {
+      browserEnabled: "Browser enabled",
+      toolProfile: "Tool profile",
+    },
+  },
   execApproval: {
     expiresIn: "expires in {time}",
     expired: "expired",
@@ -697,10 +703,6 @@ export const uk: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle:
-        "Переглядайте, куди йдуть токени, коли зростає кількість сеансів і що формує вартість.",
-    },
     common: {
       emptyValue: "—",
       unknown: "невідомо",
@@ -1045,10 +1047,10 @@ export const uk: TranslationMap = {
     settings: "Налаштування чату",
     thinkingToggle: "Перемкнути показ мислення/роботи асистента",
     toolCallsToggle: "Перемкнути виклики інструментів і результати інструментів",
-    autoScrollMode: "Auto-scroll mode",
-    autoScrollAlways: "Always",
-    autoScrollNearBottom: "Near bottom",
-    autoScrollOff: "Off",
+    autoScrollMode: "Режим автопрокручування",
+    autoScrollAlways: "Завжди",
+    autoScrollNearBottom: "Біля низу",
+    autoScrollOff: "Вимкнено",
     focusToggle: "Перемкнути режим фокусу (сховати бічну панель і заголовок сторінки)",
     hideCronSessions: "Сховати сеанси Cron",
     showCronSessions: "Показати сеанси Cron",
@@ -1208,6 +1210,9 @@ export const uk: TranslationMap = {
       ascending: "За зростанням",
       descending: "За спаданням",
       reset: "Скинути",
+      emptyTitle: "No scheduled jobs yet.",
+      emptyHint: "Create one from a plain-language prompt; advanced fields can wait.",
+      emptyFilteredHint: "Clear or change filters to see scheduled jobs.",
       noMatching: "Немає відповідних завдань.",
       loading: "Завантаження...",
       loadMore: "Завантажити більше завдань",
@@ -1243,6 +1248,7 @@ export const uk: TranslationMap = {
     form: {
       editJob: "Редагувати завдання",
       newJob: "Нове завдання",
+      advancedJob: "Advanced job",
       updateSubtitle: "Оновіть вибране заплановане завдання.",
       createSubtitle: "Створіть заплановане пробудження або запуск агента.",
       required: "Обов’язково",

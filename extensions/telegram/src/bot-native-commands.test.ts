@@ -284,6 +284,23 @@ describe("registerTelegramNativeCommands", () => {
     expect(registeredHandlers).not.toContain("export-session");
   });
 
+  it("resolves plugin commands with the Telegram runtime config", () => {
+    const cfg: OpenClawConfig = {
+      commands: { native: true },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+        },
+      },
+    };
+
+    registerTelegramNativeCommands(createNativeCommandTestParams(cfg));
+
+    expect(pluginCommandMocks.getPluginCommandSpecs).toHaveBeenCalledWith("telegram", {
+      config: cfg,
+    });
+  });
+
   it("registers only Telegram-safe command names across native, custom, and plugin sources", async () => {
     const setMyCommands = vi.fn().mockResolvedValue(undefined);
 
@@ -524,6 +541,37 @@ describe("registerTelegramNativeCommands", () => {
     expect(editMessageTelegram).not.toHaveBeenCalled();
     expect(deleteMessage).toHaveBeenCalledWith(100, 999);
     expect(replyAt(firstDeliverRepliesParams()).mediaUrl).toBe("/tmp/render.png");
+  });
+
+  it("falls back to a normal reply when a progress result has presentation controls", async () => {
+    const presentation = {
+      blocks: [
+        {
+          kind: "actions",
+          buttons: [{ label: "Approve", action: { type: "command", value: "/approve yes" } }],
+        },
+      ],
+    };
+    const { handler, sendMessage, deleteMessage } = registerPlugCommand({
+      args: "now",
+      command: {
+        nativeProgressMessages: { telegram: "Working on it..." },
+      },
+      result: {
+        text: "Approval required",
+        presentation,
+      },
+    });
+
+    await handler(createPrivateCommandContext({ match: "now" }));
+
+    expect(sendMessage).toHaveBeenCalledWith(100, "Working on it...", undefined);
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(deleteMessage).toHaveBeenCalledWith(100, 999);
+    expect(replyAt(firstDeliverRepliesParams())).toMatchObject({
+      text: "Approval required",
+      presentation,
+    });
   });
 
   it("cleans up the progress placeholder before falling back after an edit failure", async () => {

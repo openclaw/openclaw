@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { resolve as resolvePath } from "node:path";
+import fs from "node:fs/promises";
+import path, { resolve as resolvePath } from "node:path";
 import {
   ACPX_BACKEND_ID,
   AcpxRuntime as BaseAcpxRuntime,
@@ -14,8 +15,11 @@ import {
   type AcpRuntimeHandle,
   type AcpRuntimeOptions,
   type AcpRuntimeStatus,
+  type AcpRuntimeTurn,
+  type AcpRuntimeTurnResult,
 } from "acpx/runtime";
-import { AcpRuntimeError, type AcpRuntime } from "../runtime-api.js";
+import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
+import { AcpRuntimeError, type AcpRuntime, type AcpRuntimeErrorCode } from "../runtime-api.js";
 import {
   createAcpxProcessLeaseId,
   hashAcpxProcessCommand,
@@ -25,7 +29,7 @@ import {
 } from "./process-lease.js";
 import {
   cleanupOpenClawOwnedAcpxProcessTree,
-  isOpenClawOwnedAcpxProcessCommand,
+  isOpenClawLeaseAwareAcpxProcessCommand,
   type AcpxProcessCleanupDeps,
 } from "./process-reaper.js";
 
@@ -41,10 +45,20 @@ type OpenClawAcpxRuntimeOptions = AcpRuntimeOptions & {
 type AcpxRuntimeTestOptions = Record<string, unknown> & {
   openclawProcessCleanup?: AcpxProcessCleanupDeps;
 };
+type OpenClawRuntimeTurnInput = Parameters<NonNullable<AcpRuntime["startTurn"]>>[0];
 
 type ResetAwareSessionStore = AcpSessionStore & {
   markFresh: (sessionKey: string) => void;
 };
+
+function withOpenClawManagedTurnTimeout<T extends object>(input: T): T & { timeoutMs: 0 } {
+  // OpenClaw owns ACP turn deadlines. acpx treats timeout after partial agent
+  // output as a completed turn, which can mark background work done early.
+  return {
+    ...input,
+    timeoutMs: 0,
+  };
+}
 
 type AcpxLaunchLeaseContext = {
   leaseId: string;
@@ -53,6 +67,52 @@ type AcpxLaunchLeaseContext = {
   wrapperRoot: string;
   stableCommand?: string;
 };
+
+const CODEX_WRAPPER_STDERR_LOG_PREFIX = "codex-acp-wrapper.stderr";
+const CODEX_WRAPPER_ERROR_TAIL_MAX_CHARS = 6_000;
+
+function safeDiagnosticFilePart(value: string): string {
+  return value.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 120) || "unknown";
+}
+
+function codexWrapperStderrLogFileName(leaseId: string): string {
+  return `${CODEX_WRAPPER_STDERR_LOG_PREFIX}.${safeDiagnosticFilePart(leaseId)}.log`;
+}
+
+function compactDiagnosticText(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function isGenericInternalAcpErrorMessage(message: string): boolean {
+  return message.trim() === "Internal error";
+}
+
+function isGenericInternalAcpError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return isGenericInternalAcpErrorMessage(error.message);
+}
+
+async function readCodexWrapperStderrTail(params: {
+  wrapperRoot: string | undefined;
+  leaseId: string | undefined;
+}): Promise<string> {
+  if (!params.wrapperRoot || !params.leaseId) {
+    return "";
+  }
+  try {
+    const text = await fs.readFile(
+      path.join(params.wrapperRoot, codexWrapperStderrLogFileName(params.leaseId)),
+      "utf8",
+    );
+    return compactDiagnosticText(
+      redactSensitiveText(text.slice(-CODEX_WRAPPER_ERROR_TAIL_MAX_CHARS)),
+    );
+  } catch {
+    return "";
+  }
+}
 
 function readSessionRecordName(record: unknown): string {
   if (typeof record !== "object" || record === null) {
@@ -104,7 +164,7 @@ function readRecordAgentPid(record: unknown): number | undefined {
   return numericPid && Number.isInteger(numericPid) && numericPid > 0 ? numericPid : undefined;
 }
 
-function readOpenClawLeaseIdFromRecord(record: AcpLoadedSessionRecord): string | undefined {
+function readOpenClawLeaseIdFromRecord(record: unknown): string | undefined {
   if (typeof record !== "object" || record === null) {
     return undefined;
   }
@@ -737,7 +797,7 @@ export class AcpxRuntime implements AcpRuntime {
       !this.wrapperRoot ||
       !this.gatewayInstanceId ||
       !this.processLeaseStore ||
-      !isOpenClawOwnedAcpxProcessCommand({
+      !isOpenClawLeaseAwareAcpxProcessCommand({
         command: params.command,
         wrapperRoot: this.wrapperRoot,
       })
@@ -765,6 +825,40 @@ export class AcpxRuntime implements AcpRuntime {
       state: "open",
     });
     return await this.launchLeaseScope.run(launch, params.run);
+  }
+
+  private async withCodexWrapperDiagnostics<T>(params: {
+    command: string | undefined;
+    fallbackCode: AcpRuntimeErrorCode;
+    run: () => Promise<T>;
+  }): Promise<T> {
+    try {
+      return await params.run();
+    } catch (error) {
+      if (!isCodexAcpCommand(params.command) || !isGenericInternalAcpError(error)) {
+        throw error;
+      }
+      const stderrTail = await readCodexWrapperStderrTail({
+        wrapperRoot: this.wrapperRoot,
+        leaseId: this.launchLeaseScope.getStore()?.leaseId,
+      });
+      if (!stderrTail) {
+        throw error;
+      }
+      throw new AcpRuntimeError(params.fallbackCode, `Internal error: ${stderrTail}`, {
+        cause: error,
+      });
+    }
+  }
+
+  private async readCodexTurnFailureStderr(params: { handle: AcpRuntimeHandle }): Promise<string> {
+    const record = await this.sessionStore.load(
+      params.handle.acpxRecordId ?? params.handle.sessionKey,
+    );
+    return readCodexWrapperStderrTail({
+      wrapperRoot: this.wrapperRoot,
+      leaseId: readOpenClawLeaseIdFromRecord(record),
+    });
   }
 
   private async cleanupProcessTreeForRecord(
@@ -870,7 +964,12 @@ export class AcpxRuntime implements AcpRuntime {
         sessionKey: input.sessionKey,
         command: stableLaunchCommand,
         enabled: shouldStartWithLease,
-        run: () => delegate.ensureSession(input),
+        run: () =>
+          this.withCodexWrapperDiagnostics({
+            command: stableLaunchCommand,
+            fallbackCode: "ACP_SESSION_INIT_FAILED",
+            run: () => delegate.ensureSession(input),
+          }),
       });
     }
 
@@ -886,13 +985,163 @@ export class AcpxRuntime implements AcpRuntime {
       enabled: shouldStartWithLease,
       run: () =>
         this.codexAcpModelOverrideScope.run(codexModelOverride, () =>
-          delegate.ensureSession(normalizedInput),
+          this.withCodexWrapperDiagnostics({
+            command: stableLaunchCommand,
+            fallbackCode: "ACP_SESSION_INIT_FAILED",
+            run: () => delegate.ensureSession(normalizedInput),
+          }),
         ),
     });
   }
 
   async *runTurn(input: Parameters<AcpRuntime["runTurn"]>[0]): AsyncIterable<AcpRuntimeEvent> {
-    yield* (await this.resolveDelegateForHandle(input.handle)).runTurn(input);
+    const command = await this.resolveCommandForHandle(input.handle);
+    const delegate = await this.resolveDelegateForHandle(input.handle);
+    try {
+      for await (const event of delegate.runTurn(withOpenClawManagedTurnTimeout(input))) {
+        if (
+          event.type !== "error" ||
+          !isCodexAcpCommand(command) ||
+          !isGenericInternalAcpErrorMessage(event.message)
+        ) {
+          yield event;
+          continue;
+        }
+        const stderrTail = await this.readCodexTurnFailureStderr({ handle: input.handle });
+        if (!stderrTail) {
+          yield event;
+          continue;
+        }
+        yield {
+          ...event,
+          code: "ACP_TURN_FAILED",
+          message: `Internal error: ${stderrTail}`,
+        };
+      }
+    } catch (error) {
+      if (!isCodexAcpCommand(command) || !isGenericInternalAcpError(error)) {
+        throw error;
+      }
+      const stderrTail = await this.readCodexTurnFailureStderr({ handle: input.handle });
+      if (!stderrTail) {
+        throw error;
+      }
+      throw new AcpRuntimeError("ACP_TURN_FAILED", `Internal error: ${stderrTail}`, {
+        cause: error,
+      });
+    }
+  }
+
+  startTurn(input: OpenClawRuntimeTurnInput): AcpRuntimeTurn {
+    const readCodexTurnFailureStderr = () =>
+      this.readCodexTurnFailureStderr({
+        handle: input.handle,
+      });
+    const turnPromise = Promise.all([
+      this.resolveCommandForHandle(input.handle),
+      this.resolveDelegateForHandle(input.handle),
+    ]).then(async ([command, delegate]) => {
+      try {
+        return {
+          command,
+          turn: delegate.startTurn(withOpenClawManagedTurnTimeout(input)),
+        };
+      } catch (error) {
+        if (!isCodexAcpCommand(command) || !isGenericInternalAcpError(error)) {
+          throw error;
+        }
+        const stderrTail = await readCodexTurnFailureStderr();
+        if (!stderrTail) {
+          throw error;
+        }
+        throw new AcpRuntimeError("ACP_TURN_FAILED", `Internal error: ${stderrTail}`, {
+          cause: error,
+        });
+      }
+    });
+
+    return {
+      requestId: input.requestId,
+      events: {
+        async *[Symbol.asyncIterator](): AsyncIterator<AcpRuntimeEvent> {
+          const { command, turn } = await turnPromise;
+          try {
+            for await (const event of turn.events) {
+              if (
+                event.type !== "error" ||
+                !isCodexAcpCommand(command) ||
+                !isGenericInternalAcpErrorMessage(event.message)
+              ) {
+                yield event;
+                continue;
+              }
+              const stderrTail = await readCodexTurnFailureStderr();
+              if (!stderrTail) {
+                yield event;
+                continue;
+              }
+              yield {
+                ...event,
+                code: "ACP_TURN_FAILED",
+                message: `Internal error: ${stderrTail}`,
+              };
+            }
+          } catch (error) {
+            if (!isCodexAcpCommand(command) || !isGenericInternalAcpError(error)) {
+              throw error;
+            }
+            const stderrTail = await readCodexTurnFailureStderr();
+            if (!stderrTail) {
+              throw error;
+            }
+            throw new AcpRuntimeError("ACP_TURN_FAILED", `Internal error: ${stderrTail}`, {
+              cause: error,
+            });
+          }
+        },
+      },
+      result: turnPromise.then(async ({ command, turn }): Promise<AcpRuntimeTurnResult> => {
+        try {
+          const result = await turn.result;
+          if (
+            result.status !== "failed" ||
+            !isCodexAcpCommand(command) ||
+            !isGenericInternalAcpErrorMessage(result.error.message)
+          ) {
+            return result;
+          }
+          const stderrTail = await this.readCodexTurnFailureStderr({ handle: input.handle });
+          if (!stderrTail) {
+            return result;
+          }
+          return {
+            status: "failed",
+            error: {
+              ...result.error,
+              code: "ACP_TURN_FAILED",
+              message: `Internal error: ${stderrTail}`,
+            },
+          };
+        } catch (error) {
+          if (!isCodexAcpCommand(command) || !isGenericInternalAcpError(error)) {
+            throw error;
+          }
+          const stderrTail = await this.readCodexTurnFailureStderr({ handle: input.handle });
+          if (!stderrTail) {
+            throw error;
+          }
+          throw new AcpRuntimeError("ACP_TURN_FAILED", `Internal error: ${stderrTail}`, {
+            cause: error,
+          });
+        }
+      }),
+      cancel(inputArgs?: { reason?: string }) {
+        return turnPromise.then(({ turn }) => turn.cancel(inputArgs));
+      },
+      closeStream(inputArgs?: { reason?: string }) {
+        return turnPromise.then(({ turn }) => turn.closeStream(inputArgs));
+      },
+    };
   }
 
   getCapabilities(): ReturnType<BaseAcpxRuntime["getCapabilities"]> {
@@ -999,7 +1248,7 @@ export {
   encodeAcpxRuntimeHandleState,
 };
 
-export const __testing = {
+export const testing = {
   appendCodexAcpConfigOverrides,
   assertSupportedRuntimeSessionMode,
   codexAcpSessionModelId,
@@ -1009,3 +1258,4 @@ export const __testing = {
 };
 
 export type { AcpAgentRegistry, AcpRuntimeOptions, AcpSessionRecord, AcpSessionStore };
+export { testing as __testing };

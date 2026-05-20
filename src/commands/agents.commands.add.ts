@@ -78,7 +78,9 @@ async function copyPortableAuthProfiles(params: {
   destAuthPath: string;
   sourceAgentDir: string;
 }): Promise<{ copied: number; skipped: number }> {
-  const sourceStore = loadPersistedAuthProfileStore(params.sourceAgentDir);
+  const sourceStore = loadPersistedAuthProfileStore(params.sourceAgentDir, {
+    resolveLegacyOAuthSidecars: false,
+  });
   if (!sourceStore || Object.keys(sourceStore.profiles).length === 0) {
     return { copied: 0, skipped: 0 };
   }
@@ -87,12 +89,7 @@ async function copyPortableAuthProfiles(params: {
     return { copied: 0, skipped: portable.skippedProfileIds.length };
   }
   await fs.mkdir(path.dirname(params.destAuthPath), { recursive: true });
-  saveJsonFile(
-    params.destAuthPath,
-    buildPersistedAuthProfileSecretsStore(portable.store, undefined, {
-      agentDir: path.dirname(params.destAuthPath),
-    }),
-  );
+  saveJsonFile(params.destAuthPath, buildPersistedAuthProfileSecretsStore(portable.store));
   return {
     copied: portable.copiedProfileIds.length,
     skipped: portable.skippedProfileIds.length,
@@ -342,7 +339,9 @@ export async function agentsAddCommand(
         (await pathExists(sourceAuthPath)) &&
         !(await pathExists(destAuthPath))
       ) {
-        const sourceStore = loadPersistedAuthProfileStore(sourceAgentDir);
+        const sourceStore = loadPersistedAuthProfileStore(sourceAgentDir, {
+          resolveLegacyOAuthSidecars: false,
+        });
         const portable = sourceStore
           ? buildPortableAuthProfileSecretsStoreForAgentCopy(sourceStore)
           : undefined;
@@ -353,10 +352,7 @@ export async function agentsAddCommand(
           });
           if (shouldCopy) {
             await fs.mkdir(path.dirname(destAuthPath), { recursive: true });
-            saveJsonFile(
-              destAuthPath,
-              buildPersistedAuthProfileSecretsStore(portable.store, undefined, { agentDir }),
-            );
+            saveJsonFile(destAuthPath, buildPersistedAuthProfileSecretsStore(portable.store));
             const skippedText =
               portable.skippedProfileIds.length > 0
                 ? ` ${formatSkippedOAuthProfilesMessage({
@@ -506,7 +502,8 @@ export async function agentsAddCommand(
   }
 }
 
-export const __testing = {
+export const testing = {
   copyPortableAuthProfiles,
   formatSkippedOAuthProfilesMessage,
 };
+export { testing as __testing };

@@ -552,8 +552,13 @@ export function installSessionToolResultGuard(
     redactLoggingConfig?: ToolResultDetailRedactionConfig;
     maxToolResultChars?: number;
     suppressNextUserMessagePersistence?: boolean;
+    suppressTranscriptOnlyAssistantPersistence?: boolean;
+    suppressAssistantErrorPersistence?: boolean;
     onUserMessagePersisted?: (
       message: Extract<AgentMessage, { role: "user" }>,
+    ) => void | Promise<void>;
+    onAssistantErrorMessagePersisted?: (
+      message: Extract<AgentMessage, { role: "assistant" }>,
     ) => void | Promise<void>;
   },
 ): {
@@ -742,6 +747,21 @@ export function installSessionToolResultGuard(
     if (!finalMessage) {
       return undefined;
     }
+    const finalRole = (finalMessage as { role?: unknown }).role;
+    if (
+      finalRole === "assistant" &&
+      toolCalls.length === 0 &&
+      opts?.suppressTranscriptOnlyAssistantPersistence === true
+    ) {
+      return undefined;
+    }
+    if (
+      finalRole === "assistant" &&
+      opts?.suppressAssistantErrorPersistence === true &&
+      (finalMessage as { stopReason?: string }).stopReason === "error"
+    ) {
+      return undefined;
+    }
     if (isUserAgentMessage(finalMessage) && suppressNextUserMessagePersistence) {
       suppressNextUserMessagePersistence = false;
       return undefined;
@@ -766,6 +786,14 @@ export function installSessionToolResultGuard(
     }
     if (isUserAgentMessage(finalMessage)) {
       void opts?.onUserMessagePersisted?.(finalMessage);
+    }
+    if (
+      finalRole === "assistant" &&
+      (finalMessage as { stopReason?: string }).stopReason === "error"
+    ) {
+      void opts?.onAssistantErrorMessagePersisted?.(
+        finalMessage as Extract<AgentMessage, { role: "assistant" }>,
+      );
     }
 
     return result;

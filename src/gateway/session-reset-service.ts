@@ -7,6 +7,7 @@ import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
 import { readAcpSessionEntry, upsertAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { clearBootstrapSnapshot } from "../agents/bootstrap-cache.js";
+import { clearAllCliSessions } from "../agents/cli-session.js";
 import { retireSessionMcpRuntime } from "../agents/pi-bundle-mcp-tools.js";
 import { abortEmbeddedPiRun, waitForEmbeddedPiRunEnd } from "../agents/pi-embedded.js";
 import { stopSubagentsForRequester } from "../auto-reply/reply/abort.js";
@@ -23,6 +24,10 @@ import {
 } from "../config/sessions.js";
 import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../config/sessions/paths.js";
 import { resolveResetPreservedSelection } from "../config/sessions/reset-preserved-selection.js";
+import {
+  canonicalizeAbsoluteSessionFilePath,
+  rewriteSessionFileForNewSessionId,
+} from "../config/sessions/session-file-rotation.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
@@ -57,6 +62,35 @@ import {
 } from "./session-utils.js";
 
 const ACP_RUNTIME_CLEANUP_TIMEOUT_MS = 15_000;
+
+function resolveResetSessionFile(params: {
+  nextSessionId: string;
+  currentEntry?: SessionEntry;
+  storePath: string;
+  agentId: string;
+}): string {
+  const currentEntry = params.currentEntry;
+  const rewrittenSessionFile = currentEntry?.sessionId
+    ? rewriteSessionFileForNewSessionId({
+        sessionFile: currentEntry.sessionFile,
+        previousSessionId: currentEntry.sessionId,
+        nextSessionId: params.nextSessionId,
+      })
+    : undefined;
+  const normalizedRewrittenSessionFile =
+    rewrittenSessionFile && path.isAbsolute(rewrittenSessionFile)
+      ? canonicalizeAbsoluteSessionFilePath(rewrittenSessionFile)
+      : rewrittenSessionFile;
+  const preservedSessionFile = normalizedRewrittenSessionFile ?? currentEntry?.sessionFile;
+  return resolveSessionFilePath(
+    params.nextSessionId,
+    preservedSessionFile ? { sessionFile: preservedSessionFile } : undefined,
+    resolveSessionFilePathOptions({
+      storePath: params.storePath,
+      agentId: params.agentId,
+    }),
+  );
+}
 
 function stripRuntimeModelState(entry?: SessionEntry): SessionEntry | undefined {
   if (!entry) {
@@ -683,14 +717,12 @@ export async function performGatewaySessionReset(params: {
     oldSessionFile = currentEntry?.sessionFile;
     const now = Date.now();
     const nextSessionId = randomUUID();
-    const sessionFile = resolveSessionFilePath(
+    const sessionFile = resolveResetSessionFile({
       nextSessionId,
-      currentEntry?.sessionFile ? { sessionFile: currentEntry.sessionFile } : undefined,
-      resolveSessionFilePathOptions({
-        storePath,
-        agentId: sessionAgentId,
-      }),
-    );
+      currentEntry,
+      storePath,
+      agentId: sessionAgentId,
+    });
     const nextEntry: SessionEntry = {
       sessionId: nextSessionId,
       sessionFile,
@@ -758,6 +790,15 @@ export async function performGatewaySessionReset(params: {
       totalTokens: 0,
       totalTokensFresh: true,
     };
+    // Drop CLI provider bindings so the next turn after reset starts a fresh
+    // CLI conversation on the provider side. Preserved only for spawned
+    // subagents (canonical `:subagent:` keys), where Tak Hoffman's fa56682b3ced
+    // regression fix intentionally protects CLI continuity for
+    // orchestration-driven resets. Non-subagent sessions that happen to set
+    // `parentSessionKey` (e.g. dashboard children) are not exempt.
+    if (!isSubagentSessionKey(primaryKey)) {
+      clearAllCliSessions(nextEntry);
+    }
     store[primaryKey] = nextEntry;
     return nextEntry;
   });

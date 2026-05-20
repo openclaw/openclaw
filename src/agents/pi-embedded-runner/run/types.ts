@@ -26,12 +26,20 @@ type EmbeddedRunAttemptBase = Omit<
   "provider" | "model" | "authProfileId" | "authProfileIdSource" | "thinkLevel" | "lane" | "enqueue"
 >;
 
+export type EmbeddedRunContextWindowInfo = {
+  tokens: number;
+  referenceTokens?: number;
+  source: "model" | "modelsConfig" | "agentContextTokens" | "default";
+};
+
 export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   initialReplayState?: EmbeddedRunReplayState;
   /** Pluggable context engine for ingest/assemble/compact lifecycle. */
   contextEngine?: ContextEngine;
   /** Resolved model context window in tokens for assemble/compact budgeting. */
   contextTokenBudget?: number;
+  /** Source metadata for the resolved model context budget. */
+  contextWindowInfo?: EmbeddedRunContextWindowInfo;
   /** Resolved API key for this run when runtime auth did not replace it. */
   resolvedApiKey?: string;
   /** Auth profile resolved for this attempt's provider/model call. */
@@ -50,6 +58,11 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   authStorage: AuthStorage;
   /** Auth profile store already resolved during startup for this attempt. */
   authProfileStore: AuthProfileStore;
+  /**
+   * Full auth profile store for OpenClaw tool availability.
+   * Plugin-owned harnesses may scope `authProfileStore` to model transport credentials.
+   */
+  toolAuthProfileStore?: AuthProfileStore;
   modelRegistry: ModelRegistry;
   thinkLevel: ThinkLevel;
   legacyBeforeAgentStartResult?: PluginHookBeforeAgentStartResult;
@@ -114,6 +127,7 @@ export type EmbeddedRunAttemptResult = {
   heartbeatToolResponse?: HeartbeatToolResponse;
   toolMediaUrls?: string[];
   toolAudioAsVoice?: boolean;
+  toolTrustedLocalMedia?: boolean;
   successfulCronAdds?: number;
   cloudCodeAssistFormatError: boolean;
   attemptUsage?: NormalizedUsage;

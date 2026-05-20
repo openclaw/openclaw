@@ -136,6 +136,10 @@ function shouldIncludeToolErrorDetails(params: {
   );
 }
 
+function shouldMarkNonTerminalToolErrorWarning(lastToolError: ToolErrorSummary): boolean {
+  return lastToolError.middlewareError === true;
+}
+
 function resolveToolErrorWarningPolicy(params: {
   lastToolError: ToolErrorSummary;
   hasUserFacingReply: boolean;
@@ -182,6 +186,7 @@ export function buildEmbeddedRunPayloads(params: {
   assistantTexts: string[];
   toolMetas: ToolMetaEntry[];
   lastAssistant: AssistantMessage | undefined;
+  currentAssistant?: AssistantMessage | null;
   lastToolError?: ToolErrorSummary;
   config?: OpenClawConfig;
   isCronTrigger?: boolean;
@@ -220,6 +225,7 @@ export function buildEmbeddedRunPayloads(params: {
     presentation?: ReplyPayload["presentation"];
     interactive?: ReplyPayload["interactive"];
     channelData?: Record<string, unknown>;
+    nonTerminalToolErrorWarning?: boolean;
     sourceReplyMirror?: {
       idempotencyKey?: string;
     };
@@ -264,16 +270,20 @@ export function buildEmbeddedRunPayloads(params: {
   const useMarkdown = params.toolResultFormat === "markdown";
   const suppressAssistantArtifacts =
     params.didSendDeterministicApprovalPrompt === true || hasSourceReplyPayload;
-  const lastAssistantStopReason = params.lastAssistant?.stopReason;
+  const nonEmptyAssistantTexts = params.assistantTexts.filter((text) => text.trim().length > 0);
+  const currentAssistant = params.currentAssistant ?? undefined;
+  const assistantForPayload =
+    currentAssistant ?? (nonEmptyAssistantTexts.length === 1 ? undefined : params.lastAssistant);
+  const lastAssistantStopReason = assistantForPayload?.stopReason;
   const lastAssistantErrored = lastAssistantStopReason === "error";
   const lastAssistantAborted = lastAssistantStopReason === "aborted";
   const runAborted = params.runAborted === true || lastAssistantAborted;
   const lastAssistantNeedsErrorSurface = lastAssistantErrored || lastAssistantAborted;
   const errorText =
-    params.lastAssistant && lastAssistantNeedsErrorSurface
+    assistantForPayload && lastAssistantNeedsErrorSurface
       ? suppressAssistantArtifacts
         ? undefined
-        : formatAssistantErrorText(params.lastAssistant, {
+        : formatAssistantErrorText(assistantForPayload, {
             cfg: params.config,
             sessionKey: params.sessionKey,
             provider: params.provider,
@@ -281,7 +291,7 @@ export function buildEmbeddedRunPayloads(params: {
           })
       : undefined;
   const rawErrorMessage = lastAssistantNeedsErrorSurface
-    ? normalizeOptionalString(params.lastAssistant?.errorMessage)
+    ? normalizeOptionalString(assistantForPayload?.errorMessage)
     : undefined;
   const rawErrorFingerprint = rawErrorMessage
     ? getApiErrorPayloadFingerprint(rawErrorMessage)
@@ -333,17 +343,17 @@ export function buildEmbeddedRunPayloads(params: {
   const reasoningText =
     suppressAssistantArtifacts || runAborted
       ? ""
-      : params.lastAssistant && params.reasoningLevel === "on" && params.thinkingLevel !== "off"
-        ? extractAssistantThinking(params.lastAssistant)
+      : assistantForPayload && params.reasoningLevel === "on" && params.thinkingLevel !== "off"
+        ? extractAssistantThinking(assistantForPayload)
         : "";
   if (reasoningText) {
     replyItems.push({ text: reasoningText, isReasoning: true });
   }
 
-  const fallbackAnswerText = params.lastAssistant
-    ? extractAssistantVisibleText(params.lastAssistant)
+  const fallbackAnswerText = assistantForPayload
+    ? extractAssistantVisibleText(assistantForPayload)
     : "";
-  const fallbackRawAnswerText = resolveRawAssistantAnswerText(params.lastAssistant);
+  const fallbackRawAnswerText = resolveRawAssistantAnswerText(assistantForPayload);
   const shouldSuppressRawErrorText = (text: string) => {
     if (!lastAssistantNeedsErrorSurface) {
       return false;
@@ -403,7 +413,6 @@ export function buildEmbeddedRunPayloads(params: {
     const parsed = parseReplyDirectives(text);
     return (parsed.mediaUrls?.length ?? 0) > 0 || parsed.audioAsVoice;
   });
-  const nonEmptyAssistantTexts = params.assistantTexts.filter((text) => text.trim().length > 0);
   const normalizedAssistantTexts = normalizeTextForComparison(nonEmptyAssistantTexts.join("\n\n"));
   const normalizedRawAnswerText = normalizeTextForComparison(rawAnswerDirectiveState?.text ?? "");
   const shouldPreferRawAnswerText =
@@ -418,7 +427,7 @@ export function buildEmbeddedRunPayloads(params: {
     ? normalizeReplyTextForComparison(fallbackAnswerSourceText)
     : "";
   const shouldUseCanonicalFinalAnswer =
-    nonEmptyAssistantTexts.length > 1 &&
+    !lastAssistantNeedsErrorSurface &&
     fallbackAnswerSourceText.length > 0 &&
     normalizedFallbackAnswerSourceText.length > 0;
   const hasAssistantTextPayload = nonEmptyAssistantTexts.length > 0;
@@ -505,6 +514,9 @@ export function buildEmbeddedRunPayloads(params: {
         replyItems.push({
           text: warningText,
           isError: true,
+          nonTerminalToolErrorWarning:
+            hasUserFacingAssistantReply &&
+            shouldMarkNonTerminalToolErrorWarning(params.lastToolError),
         });
       }
     }
@@ -525,6 +537,11 @@ export function buildEmbeddedRunPayloads(params: {
       }
       if (item.isError !== undefined) {
         payload.isError = item.isError;
+      }
+      if (item.nonTerminalToolErrorWarning) {
+        setReplyPayloadMetadata(payload, {
+          nonTerminalToolErrorWarning: true,
+        });
       }
       if (item.replyToId) {
         payload.replyToId = item.replyToId;

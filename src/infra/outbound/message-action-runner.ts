@@ -1,4 +1,5 @@
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
   readNumberParam,
@@ -9,6 +10,7 @@ import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
+import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import type {
@@ -67,6 +69,7 @@ import {
   resolveAndApplyOutboundReplyToId,
   resolveAndApplyOutboundThreadId,
 } from "./message-action-threading.js";
+import { maybeApplyTtsToMessageActionSendPayload } from "./message-action-tts.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
 import {
   applyCrossContextDecoration,
@@ -121,6 +124,7 @@ export type RunMessageActionParams = {
   sandboxRoot?: string;
   dryRun?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  inboundEventKind?: InboundEventKind;
   abortSignal?: AbortSignal;
 };
 
@@ -468,6 +472,63 @@ type SendPayloadParts = {
   silent?: boolean;
 };
 
+function updateSendPayloadPartsFromReplyPayload(
+  parts: SendPayloadParts,
+  payload: ReplyPayload,
+): SendPayloadParts {
+  const sendable = resolveSendableOutboundReplyParts(payload);
+  const mediaUrls = sendable.mediaUrls.length > 0 ? sendable.mediaUrls : undefined;
+  return {
+    ...parts,
+    message: payload.text ?? "",
+    payload,
+    mediaUrl: mediaUrls?.[0],
+    mediaUrls,
+    asVoice: payload.audioAsVoice === true,
+  };
+}
+
+function applySendPayloadPartsToActionParams(
+  actionParams: Record<string, unknown>,
+  parts: SendPayloadParts,
+) {
+  actionParams.message = parts.message;
+  actionParams.media = parts.mediaUrl;
+  actionParams.mediaUrl = parts.mediaUrl;
+  actionParams.mediaUrls = parts.mediaUrls;
+  actionParams.asVoice = parts.asVoice || undefined;
+  actionParams.audioAsVoice = parts.asVoice || undefined;
+}
+
+function collectMessageAttachmentMediaHints(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const mediaUrls: string[] = [];
+  const seen = new Set<string>();
+  const pushMedia = (entry: unknown) => {
+    const normalized = normalizeOptionalString(entry);
+    if (!normalized || seen.has(normalized)) {
+      return;
+    }
+    seen.add(normalized);
+    mediaUrls.push(normalized);
+  };
+  for (const attachment of value) {
+    if (!attachment || typeof attachment !== "object" || Array.isArray(attachment)) {
+      continue;
+    }
+    const record = attachment as Record<string, unknown>;
+    pushMedia(record.media);
+    pushMedia(record.mediaUrl);
+    pushMedia(record.path);
+    pushMedia(record.filePath);
+    pushMedia(record.fileUrl);
+    pushMedia(record.url);
+  }
+  return mediaUrls;
+}
+
 function hasExplicitRouteParam(params: Record<string, unknown>): boolean {
   for (const key of ["channel", "target", "to", "channelId"]) {
     if (normalizeOptionalString(params[key])) {
@@ -527,6 +588,7 @@ async function runGatewayPluginMessageActionOrNull(params: {
       senderIsOwner: params.input.senderIsOwner,
       sessionKey: params.input.sessionKey,
       sessionId: params.input.sessionId,
+      inboundTurnKind: params.input.inboundEventKind,
       agentId: params.agentId,
       toolContext: params.input.toolContext,
       idempotencyKey: await resolveGatewayActionIdempotencyKey(
@@ -692,12 +754,14 @@ async function buildSendPayloadParts(params: {
     readStringParam(actionParams, "path", { trim: false }) ??
     readStringParam(actionParams, "filePath", { trim: false }) ??
     readStringParam(actionParams, "fileUrl", { trim: false });
+  const attachmentMediaHints = collectMessageAttachmentMediaHints(actionParams.attachments);
+  const hasMediaHint = Boolean(mediaHint) || attachmentMediaHints.length > 0;
   const hasPresentation = hasMessagePresentationBlocks(actionParams.presentation);
   const hasInteractive = hasInteractiveReplyBlocks(actionParams.interactive);
   const caption = readStringParam(actionParams, "caption", { allowEmpty: true }) ?? "";
   let message =
     readStringParam(actionParams, "message", {
-      required: !mediaHint && !hasPresentation && !hasInteractive,
+      required: !hasMediaHint && !hasPresentation && !hasInteractive,
       allowEmpty: true,
     }) ?? "";
   if (message.includes("\\n")) {
@@ -719,6 +783,9 @@ async function buildSendPayloadParts(params: {
     mergedMediaUrls.push(trimmed);
   };
   pushMedia(mediaHint);
+  for (const attachmentMediaHint of attachmentMediaHints) {
+    pushMedia(attachmentMediaHint);
+  }
   for (const url of parsed.mediaUrls ?? []) {
     pushMedia(url);
   }
@@ -832,7 +899,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   throwIfAborted(abortSignal);
   const action: ChannelMessageActionName = "send";
   const to = readStringParam(params, "to", { required: true });
-  const sendPayload = await buildSendPayloadParts({
+  let sendPayload = await buildSendPayloadParts({
     cfg,
     actionParams: params,
     input,
@@ -861,6 +928,21 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     resolveOutboundSessionRoute,
     ensureOutboundSessionEntry,
   });
+  throwIfAborted(abortSignal);
+
+  const ttsPayload = await maybeApplyTtsToMessageActionSendPayload({
+    payload: sendPayload.payload,
+    cfg,
+    channel,
+    accountId,
+    agentId,
+    sessionKey: input.sessionKey,
+    dryRun,
+  });
+  if (ttsPayload !== sendPayload.payload) {
+    sendPayload = updateSendPayloadPartsFromReplyPayload(sendPayload, ttsPayload);
+    applySendPayloadPartsToActionParams(params, sendPayload);
+  }
   throwIfAborted(abortSignal);
 
   const gatewayPluginAction = await runGatewayPluginMessageActionOrNull({
@@ -903,6 +985,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       accountId: accountId ?? undefined,
       senderIsOwner: input.senderIsOwner,
       sessionId: input.sessionId,
+      inboundEventKind: input.inboundEventKind,
       gateway,
       toolContext: input.toolContext,
       deps: input.deps,
@@ -1009,6 +1092,7 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
       senderIsOwner: input.senderIsOwner,
       sessionKey: input.sessionKey,
       sessionId: input.sessionId,
+      inboundEventKind: input.inboundEventKind,
       gateway,
       toolContext: input.toolContext,
       dryRun,
@@ -1119,6 +1203,7 @@ async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageAc
     senderIsOwner: input.senderIsOwner,
     sessionKey: input.sessionKey,
     sessionId: input.sessionId,
+    inboundEventKind: input.inboundEventKind,
     agentId,
     gateway,
     toolContext: input.toolContext,

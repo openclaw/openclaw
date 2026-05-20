@@ -94,8 +94,8 @@ describe("docker build helper", () => {
     expect(liveCliBackend).toContain(
       'OPENCLAW_LIVE_DOCKER_REPO_ROOT="$ROOT_DIR" "$TRUSTED_HARNESS_DIR/scripts/test-live-build-docker.sh"',
     );
-    expect(liveCliBackend).toContain("direct Codex CLI probe failed before OpenClaw gateway smoke");
-    expect(liveCliBackend).toContain("==> Direct Codex CLI probe ok");
+    expect(liveCliBackend).toContain("codex-cli is no longer a bundled CLI backend");
+    expect(liveCliBackend).not.toContain("==> Direct Codex CLI probe ok");
     expect(liveCliBackend).not.toContain(
       'echo "==> Reuse live-test image: $LIVE_IMAGE_NAME (OPENCLAW_SKIP_DOCKER_BUILD=1)"',
     );
@@ -148,9 +148,11 @@ describe("docker build helper", () => {
     expect(runner).toContain("phase_mark_start");
     expect(runner).toContain("run_agent_turn_bg");
     expect(runner).toContain("wait_agent_turn_batch");
+    expect(runner).toContain("agent_turn_outputs_include_billing_drift");
+    expect(runner).toContain("SKIP: Anthropic billing drift during installer agent tool smoke");
     expect(runner).not.toContain('run_agent_turn_bg "read proof"');
     expect(runner).toContain('run_agent_turn_bg "image write"');
-    expect(runner).toContain('run_agent_turn_logged "read proof copy"');
+    expect(runner).toContain('run_agent_turn_logged_or_skip_profile "read proof copy"');
     expect(wrapper).toContain("OPENCLAW_INSTALL_E2E_AGENT_TURNS_PARALLEL");
     expect(wrapper).toContain("OPENCLAW_INSTALL_E2E_AGENT_TOOL_SMOKE");
     expect(wrapper).toContain("OPENCLAW_INSTALL_E2E_OPENAI_MODEL");

@@ -218,7 +218,7 @@ describe("describeImageWithModel", () => {
       text: "portal ok",
       model: "MiniMax-VL-01",
     });
-    expect(ensureOpenClawModelsJsonMock).toHaveBeenCalled();
+    expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
     const authRequest = getApiKeyForModelCall();
     expect(authRequest?.store).toBe(authStore);
     expect(requireApiKeyMock).toHaveBeenCalled();
@@ -297,10 +297,366 @@ describe("describeImageWithModel", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("passes workspaceDir through MiniMax VLM fallback auth", async () => {
+    const authStorage = {
+      setRuntimeApiKey: setRuntimeApiKeyMock,
+    };
+    resolveModelAsyncMock.mockResolvedValue({
+      authStorage,
+      modelRegistry: { find: vi.fn(() => null) },
+      error: "Unknown model: minimax-portal/MiniMax-VL-01",
+    });
+
+    await expect(
+      describeImageWithModel({
+        cfg: {},
+        agentDir: "/tmp/openclaw-agent",
+        workspaceDir: "/tmp/openclaw-workspace",
+        provider: "minimax-portal",
+        model: "MiniMax-VL-01",
+        buffer: Buffer.from("png-bytes"),
+        fileName: "image.png",
+        mime: "image/png",
+        prompt: "Describe the image.",
+        timeoutMs: 1000,
+      }),
+    ).resolves.toEqual({
+      text: "portal ok",
+      model: "MiniMax-VL-01",
+    });
+
+    expect(resolveApiKeyForProviderMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "minimax-portal",
+        agentDir: "/tmp/openclaw-agent",
+        workspaceDir: "/tmp/openclaw-workspace",
+      }),
+    );
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("uses canonical MiniMax CN baseUrl for VLM alias fallback", async () => {
+    const authStorage = {
+      setRuntimeApiKey: setRuntimeApiKeyMock,
+    };
+    resolveModelAsyncMock.mockResolvedValue({
+      authStorage,
+      modelRegistry: { find: vi.fn(() => null) },
+      error: "Unknown model: minimax-cn/MiniMax-VL-01",
+    });
+
+    await expect(
+      describeImageWithModel({
+        cfg: {
+          models: {
+            providers: {
+              minimax: {
+                apiKey: "minimax-test-key",
+                baseUrl: "https://api.minimaxi.com/anthropic",
+                models: [],
+              },
+            },
+          },
+        },
+        agentDir: "/tmp/openclaw-agent",
+        provider: "minimax-cn",
+        model: "MiniMax-VL-01",
+        buffer: Buffer.from("png-bytes"),
+        fileName: "image.png",
+        mime: "image/png",
+        prompt: "Describe the image.",
+        timeoutMs: 1000,
+      }),
+    ).resolves.toEqual({
+      text: "portal ok",
+      model: "MiniMax-VL-01",
+    });
+
+    expect(resolveApiKeyForProviderMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "minimax",
+      }),
+    );
+    const [fetchUrl] = requireFirstMockCall(fetchMock, "fetch");
+    expect(fetchUrl).toBe("https://api.minimaxi.com/v1/coding_plan/vlm");
+  });
+
+  it("uses MiniMax CN alias auth when the alias apiKey is a SecretRef", async () => {
+    const authStorage = {
+      setRuntimeApiKey: setRuntimeApiKeyMock,
+    };
+    resolveModelAsyncMock.mockResolvedValue({
+      authStorage,
+      modelRegistry: { find: vi.fn(() => null) },
+      error: "Unknown model: minimax-cn/MiniMax-VL-01",
+    });
+
+    await expect(
+      describeImageWithModel({
+        cfg: {
+          models: {
+            providers: {
+              "minimax-cn": {
+                apiKey: { source: "file", provider: "default", id: "/providers/minimax-cn/apiKey" },
+                baseUrl: "https://api.minimaxi.com/anthropic",
+                models: [],
+              },
+            },
+          },
+        },
+        agentDir: "/tmp/openclaw-agent",
+        provider: "minimax-cn",
+        model: "MiniMax-VL-01",
+        buffer: Buffer.from("png-bytes"),
+        fileName: "image.png",
+        mime: "image/png",
+        prompt: "Describe the image.",
+        timeoutMs: 1000,
+      }),
+    ).resolves.toEqual({
+      text: "portal ok",
+      model: "MiniMax-VL-01",
+    });
+
+    expect(resolveApiKeyForProviderMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "minimax-cn",
+      }),
+    );
+    const [fetchUrl] = requireFirstMockCall(fetchMock, "fetch");
+    expect(fetchUrl).toBe("https://api.minimaxi.com/v1/coding_plan/vlm");
+  });
+
+  it("does not inherit global MiniMax baseUrl for CN VLM aliases", async () => {
+    const authStorage = {
+      setRuntimeApiKey: setRuntimeApiKeyMock,
+    };
+    resolveModelAsyncMock.mockResolvedValue({
+      authStorage,
+      modelRegistry: { find: vi.fn(() => null) },
+      error: "Unknown model: minimax-cn/MiniMax-VL-01",
+    });
+
+    await expect(
+      describeImageWithModel({
+        cfg: {
+          models: {
+            providers: {
+              minimax: { baseUrl: "https://api.minimax.io/anthropic", models: [] },
+            },
+          },
+        },
+        agentDir: "/tmp/openclaw-agent",
+        provider: "minimax-cn",
+        model: "MiniMax-VL-01",
+        buffer: Buffer.from("png-bytes"),
+        fileName: "image.png",
+        mime: "image/png",
+        prompt: "Describe the image.",
+        timeoutMs: 1000,
+      }),
+    ).resolves.toEqual({
+      text: "portal ok",
+      model: "MiniMax-VL-01",
+    });
+
+    const [fetchUrl] = requireFirstMockCall(fetchMock, "fetch");
+    expect(fetchUrl).toBe("https://api.minimaxi.com/v1/coding_plan/vlm");
+  });
+
+  it("carries workspaceDir through image model and stream resolution", async () => {
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        provider: "google",
+        id: "gemini-2.5-flash",
+        api: "google-generative-ai",
+        input: ["text", "image"],
+      })),
+    });
+    completeMock.mockResolvedValue({
+      role: "assistant",
+      api: "google-generative-ai",
+      provider: "google",
+      model: "gemini-2.5-flash",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "workspace ok" }],
+    });
+
+    const result = await describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      workspaceDir: "/tmp/openclaw-workspace",
+      provider: "google",
+      model: "gemini-2.5-flash",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 1000,
+    });
+
+    expect(result.text).toBe("workspace ok");
+    expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
+    expect(resolveModelAsyncMock).toHaveBeenCalledWith(
+      "google",
+      "gemini-2.5-flash",
+      "/tmp/openclaw-agent",
+      {},
+      {
+        allowBundledStaticCatalogFallback: true,
+        skipPiDiscovery: true,
+        skipProviderRuntimeHooks: true,
+        workspaceDir: "/tmp/openclaw-workspace",
+      },
+    );
+    expect(registerProviderStreamForModelMock).toHaveBeenCalledWith({
+      model: {
+        provider: "google",
+        id: "gemini-2.5-flash",
+        api: "google-generative-ai",
+        input: ["text", "image"],
+      },
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      workspaceDir: "/tmp/openclaw-workspace",
+    });
+  });
+
+  it("applies provider normalization before using a fast image model match", async () => {
+    const authStorage = {
+      setRuntimeApiKey: setRuntimeApiKeyMock,
+    };
+    resolveModelAsyncMock
+      .mockResolvedValueOnce({
+        authStorage,
+        model: {
+          provider: "openai",
+          id: "gpt-5.4",
+          api: "openai-completions",
+          input: ["text", "image"],
+        },
+      })
+      .mockResolvedValueOnce({
+        authStorage,
+        model: {
+          provider: "openai",
+          id: "gpt-5.4",
+          api: "openai-responses",
+          input: ["text", "image"],
+        },
+      });
+    completeMock.mockResolvedValue({
+      role: "assistant",
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-5.4",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "normalized ok" }],
+    });
+
+    const result = await describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "openai",
+      model: "gpt-5.4",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 1000,
+    });
+
+    expect(result).toEqual({
+      text: "normalized ok",
+      model: "gpt-5.4",
+    });
+    expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
+    expect(resolveModelAsyncMock).toHaveBeenNthCalledWith(
+      1,
+      "openai",
+      "gpt-5.4",
+      "/tmp/openclaw-agent",
+      {},
+      {
+        allowBundledStaticCatalogFallback: true,
+        skipPiDiscovery: true,
+        skipProviderRuntimeHooks: true,
+      },
+    );
+    expect(resolveModelAsyncMock).toHaveBeenNthCalledWith(
+      2,
+      "openai",
+      "gpt-5.4",
+      "/tmp/openclaw-agent",
+      {},
+      {
+        allowBundledStaticCatalogFallback: true,
+        skipPiDiscovery: true,
+      },
+    );
+    const [completeModel] = requireFirstMockCall(completeMock, "complete");
+    expect(requireRecord(completeModel, "complete model").api).toBe("openai-responses");
+  });
+
+  it("uses plugin stream hooks when available for image models", async () => {
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        provider: "ollama",
+        id: "llava:latest",
+        api: "ollama",
+        input: ["text", "image"],
+      })),
+    });
+    const streamResult = {
+      result: vi.fn(async () => ({
+        role: "assistant",
+        api: "ollama",
+        provider: "ollama",
+        model: "llava:latest",
+        stopReason: "stop",
+        timestamp: Date.now(),
+        content: [{ type: "text", text: "plugin vision ok" }],
+      })),
+    };
+    const streamFn = vi.fn(() => streamResult);
+    registerProviderStreamForModelMock.mockReturnValueOnce(streamFn);
+
+    const result = await describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "ollama",
+      model: "llava:latest",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 1000,
+    });
+
+    expect(result).toEqual({
+      text: "plugin vision ok",
+      model: "llava:latest",
+    });
+    expect(registerProviderStreamForModelMock).toHaveBeenCalledWith({
+      model: {
+        provider: "ollama",
+        id: "llava:latest",
+        api: "ollama",
+        input: ["text", "image"],
+      },
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+    });
+    expect(streamFn).toHaveBeenCalledOnce();
+    expect(completeMock).not.toHaveBeenCalled();
+  });
+
   it("resolves configured image models when discovery has not registered the provider", async () => {
     const registryFind = vi.fn(() => null);
     discoverModelsMock.mockReturnValue({ find: registryFind });
-    resolveModelWithRegistryMock.mockImplementationOnce(
+    resolveModelWithRegistryMock.mockImplementation(
       ({ provider, modelId }: ResolveModelWithRegistryTestParams) => ({
         provider,
         id: modelId,
@@ -684,7 +1040,7 @@ describe("describeImageWithModel", () => {
 
   it("rejects when image runtime setup exceeds the request timeout", async () => {
     vi.useFakeTimers();
-    ensureOpenClawModelsJsonMock.mockImplementationOnce(() => new Promise(() => {}));
+    resolveModelAsyncMock.mockImplementationOnce(() => new Promise(() => {}));
 
     const result = describeImageWithModel({
       cfg: {},
@@ -743,7 +1099,7 @@ describe("describeImageWithModel", () => {
       text: "flash ok",
       model: "gemini-3-flash-preview",
     });
-    expect(findMock).toHaveBeenCalledOnce();
+    expect(findMock).toHaveBeenCalled();
     const authRequest = getApiKeyForModelCall();
     expect(authRequest?.profileId).toBe("google:default");
     expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("google", "oauth-test");
@@ -788,7 +1144,7 @@ describe("describeImageWithModel", () => {
       text: "flash lite ok",
       model: "gemini-3.1-flash-lite-preview",
     });
-    expect(findMock).toHaveBeenCalledOnce();
+    expect(findMock).toHaveBeenCalled();
     const authRequest = getApiKeyForModelCall();
     expect(authRequest?.profileId).toBe("google:default");
     expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("google", "oauth-test");

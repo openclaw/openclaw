@@ -1,12 +1,11 @@
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
+import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import { selectApplicableRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { isEmbeddedMode } from "../infra/embedded-mode.js";
-import {
-  getActiveRuntimeWebToolsMetadata,
-  getActiveSecretsRuntimeSnapshot,
-} from "../secrets/runtime.js";
+import { getActiveSecretsRuntimeSnapshot } from "../secrets/runtime-state.js";
+import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime-web-tools-state.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "./agent-scope.js";
@@ -104,6 +103,8 @@ export function createOpenClawTools(
     replyToMode?: "off" | "first" | "all" | "batched";
     /** Mutable ref to track if a reply was sent (for "first" mode). */
     hasRepliedRef?: { value: boolean };
+    /** Fail closed instead of posting same-channel thread-originated replies at the root. */
+    sameChannelThreadRequired?: boolean;
     /** If true, the model has native vision capability */
     modelHasVision?: boolean;
     /** Active model provider for provider-specific tool gating. */
@@ -120,6 +121,7 @@ export function createOpenClawTools(
     requireExplicitMessageTarget?: boolean;
     /** Visible source replies must be sent through the message tool when set to message_tool_only. */
     sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+    inboundEventKind?: InboundEventKind;
     /** If true, omit the message tool from the tool list. */
     disableMessageTool?: boolean;
     /** If true, include the heartbeat response tool for structured heartbeat outcomes. */
@@ -202,6 +204,7 @@ export function createOpenClawTools(
   const imageTool = resolveImageToolFactoryAvailable({
     config: availabilityConfig ?? resolvedConfig,
     agentDir: imageToolAgentDir,
+    workspaceDir,
     modelHasVision: options?.modelHasVision,
     authStore: options?.authProfileStore,
   })
@@ -222,6 +225,8 @@ export function createOpenClawTools(
         config: options?.config,
         agentDir: options?.agentDir,
         authProfileStore: options?.authProfileStore,
+        agentSessionKey: options?.agentSessionKey,
+        requesterOrigin: deliveryContext ?? undefined,
         workspaceDir,
         sandbox,
         fsPolicy: options?.fsPolicy,
@@ -296,9 +301,11 @@ export function createOpenClawTools(
         currentMessageId: options?.currentMessageId,
         replyToMode: options?.replyToMode,
         hasRepliedRef: options?.hasRepliedRef,
+        sameChannelThreadRequired: options?.sameChannelThreadRequired,
         sandboxRoot: options?.sandboxRoot,
         requireExplicitTarget: options?.requireExplicitMessageTarget,
         sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
+        inboundEventKind: options?.inboundEventKind,
         requesterSenderId: options?.requesterSenderId ?? undefined,
         senderIsOwner: options?.senderIsOwner,
       });
@@ -322,14 +329,33 @@ export function createOpenClawTools(
   });
   options?.recordToolPrepStage?.("openclaw-tools:nodes-tool");
   const embedded = isEmbeddedMode();
+  const explicitFactoryAllowlist = mergeFactoryPolicyList(
+    resolvedConfig?.tools?.allow,
+    resolvedConfig?.tools?.alsoAllow,
+    options?.pluginToolAllowlist,
+  );
+  const explicitFactoryDenylist = mergeFactoryPolicyList(
+    resolvedConfig?.tools?.deny,
+    options?.pluginToolDenylist,
+  );
+  const messageExplicitlyAllowed = isToolExplicitlyAllowedByFactoryPolicy({
+    toolName: "message",
+    allowlist: explicitFactoryAllowlist,
+    denylist: explicitFactoryDenylist,
+  });
+  const includeMessageTool =
+    !embedded ||
+    options?.sourceReplyDeliveryMode === "message_tool_only" ||
+    messageExplicitlyAllowed;
+  const includeSubagentSpawnTool = !embedded || options?.allowGatewaySubagentBinding === true;
   const effectiveCallGateway = embedded
     ? createEmbeddedCallGateway()
     : openClawToolsDeps.callGateway;
   const includeUpdatePlanTool =
     isToolExplicitlyAllowedByFactoryPolicy({
       toolName: "update_plan",
-      allowlist: mergeFactoryPolicyList(resolvedConfig?.tools?.allow, options?.pluginToolAllowlist),
-      denylist: mergeFactoryPolicyList(resolvedConfig?.tools?.deny, options?.pluginToolDenylist),
+      allowlist: explicitFactoryAllowlist,
+      denylist: explicitFactoryDenylist,
     }) ||
     isUpdatePlanToolEnabledForOpenClawTools({
       config: resolvedConfig,
@@ -356,7 +382,7 @@ export function createOpenClawTools(
               : {}),
           }),
         ]),
-    ...(!embedded && messageTool ? [messageTool] : []),
+    ...(messageTool && includeMessageTool ? [messageTool] : []),
     ...collectPresentOpenClawTools([heartbeatTool]),
     createTtsTool({
       agentChannel: options?.agentChannel,
@@ -400,8 +426,12 @@ export function createOpenClawTools(
             config: resolvedConfig,
             callGateway: openClawToolsDeps.callGateway,
           }),
+        ]),
+    ...(includeSubagentSpawnTool
+      ? [
           createSessionsSpawnTool({
             agentSessionKey: options?.agentSessionKey,
+            completionOwnerKey: options?.runSessionKey,
             agentChannel: options?.agentChannel,
             agentAccountId: options?.agentAccountId,
             agentTo: options?.agentTo,
@@ -417,7 +447,8 @@ export function createOpenClawTools(
             inheritedToolAllowlist: options?.inheritedToolAllowlist,
             inheritedToolDenylist: options?.inheritedToolDenylist,
           }),
-        ]),
+        ]
+      : []),
     createSessionsYieldTool({
       sessionId: options?.sessionId,
       onYield: options?.onYield,
@@ -477,7 +508,7 @@ export function createOpenClawTools(
   );
 }
 
-export const __testing = {
+export const testing = {
   resolveOptionalMediaToolFactoryPlan,
   setDepsForTest(overrides?: Partial<OpenClawToolsDeps>) {
     openClawToolsDeps = overrides
@@ -488,3 +519,4 @@ export const __testing = {
       : defaultOpenClawToolsDeps;
   },
 };
+export { testing as __testing };

@@ -16,13 +16,11 @@ function formatPlanHeader(plan: MigrationPlan, heading: string): string[] {
     lines.push(`Target: ${plan.target}`);
   }
   const visible = plan.items.filter((item) => !HIDDEN_KINDS.has(item.kind));
-  const visibleConflicts = visible.filter((item) => item.status === "conflict").length;
-  const visibleSensitive = visible.filter((item) => item.sensitive === true).length;
   lines.push(
     [
       formatCount(visible.length, "item"),
-      formatCount(visibleConflicts, "conflict"),
-      formatCount(visibleSensitive, "sensitive item"),
+      formatCount(plan.summary.conflicts, "conflict"),
+      formatCount(plan.summary.sensitive, "sensitive item"),
     ].join(", "),
   );
   return lines;
@@ -90,7 +88,7 @@ function formatPlanWarnings(plan: MigrationPlan): string[] {
   }
   const lines = ["", theme.warn("Warnings:")];
   for (const warning of plan.warnings) {
-    lines.push(`• ${warning}`);
+    lines.push(`⚠️  ${warning}`);
   }
   return lines;
 }
@@ -109,7 +107,8 @@ export function formatMigrationResult(plan: MigrationPlan): string[] {
     lines.push("");
     lines.push(theme.heading("Next:"));
     for (const step of plan.nextSteps) {
-      lines.push(`• ${step}`);
+      const prefix = plan.warnings?.includes(step) ? "⚠️ " : "•";
+      lines.push(`${prefix} ${step}`);
     }
   }
   return lines;
@@ -157,7 +156,12 @@ function humanizeReason(reason: string | undefined): string | undefined {
 
 function formatItemMessage(item: MigrationItem, mode: FormatMode): string | undefined {
   if (mode === "preview") {
-    if (item.status === "conflict" || item.status === "skipped" || item.status === "error") {
+    if (
+      item.status === "conflict" ||
+      item.status === "skipped" ||
+      item.status === "warning" ||
+      item.status === "error"
+    ) {
       return humanizeReason(item.reason) ?? item.message;
     }
     if (item.kind === "skill" && item.action === "copy") {
@@ -178,12 +182,15 @@ function formatItemMessage(item: MigrationItem, mode: FormatMode): string | unde
     if (item.status === "skipped") {
       return "Skipped";
     }
+    if (item.status === "warning") {
+      return item.message ?? humanizeReason(item.reason);
+    }
     if (item.status === "error" || item.status === "conflict") {
       return humanizeReason(item.reason) ?? item.message;
     }
     return undefined;
   }
-  if (item.status === "error" || item.status === "conflict") {
+  if (item.status === "warning" || item.status === "error" || item.status === "conflict") {
     return humanizeReason(item.reason) ?? item.message;
   }
   return item.message ?? humanizeReason(item.reason);
@@ -191,6 +198,7 @@ function formatItemMessage(item: MigrationItem, mode: FormatMode): string | unde
 
 const RESULT_STATUS_GLYPHS: Record<string, string> = {
   migrated: "✅",
+  warning: "⚠️ ",
   error: "❌",
   skipped: "⏭️ ",
   conflict: "⚠️ ",

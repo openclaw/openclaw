@@ -6,6 +6,7 @@
  */
 
 import { html, nothing, type TemplateResult } from "lit";
+import { t } from "../../i18n/index.ts";
 import { icons } from "../icons.ts";
 import type { BorderRadiusStop, TextScaleStop } from "../storage.ts";
 import { normalizeOptionalString } from "../string-coerce.ts";
@@ -547,7 +548,7 @@ function renderSecurityCard(props: QuickSettingsProps) {
           <span class="qs-row__value"><span class="qs-badge">${execPolicy}</span></span>
         </div>
         <div class="qs-row">
-          <span class="qs-row__label">Browser enabled</span>
+          <span class="qs-row__label">${t("quickSettings.security.browserEnabled")}</span>
           <label class="qs-toggle">
             <input
               type="checkbox"
@@ -560,7 +561,7 @@ function renderSecurityCard(props: QuickSettingsProps) {
           </label>
         </div>
         <div class="qs-row qs-row--tool-profile">
-          <span class="qs-row__label">Tool profile</span>
+          <span class="qs-row__label">${t("quickSettings.security.toolProfile")}</span>
           <div class="qs-segmented">
             ${toolProfiles.map(
               (profile) => html`
@@ -1110,7 +1111,7 @@ export function renderQuickSettings(props: QuickSettingsProps) {
   return html`
     <div class="qs-container">
       <div class="qs-header">
-        <h2 class="qs-header__title">${icons.settings} Settings</h2>
+        <h2 class="qs-header__title">${icons.settings} Quick Settings</h2>
         <button class="btn btn--sm" @click=${props.onAdvancedSettings}>
           Advanced ${icons.chevronRight}
         </button>

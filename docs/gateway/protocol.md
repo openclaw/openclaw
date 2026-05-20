@@ -147,24 +147,33 @@ When a device token is issued, `hello-ok` also includes:
 }
 ```
 
-Built-in QR/setup-code bootstrap is node-only. After the owner approves the
-pending node request, `hello-ok.auth` includes the primary node token:
+Built-in QR/setup-code bootstrap is a fresh mobile handoff path. A successful
+baseline setup-code connect returns a primary node token plus one bounded
+operator token:
 
 ```json
 {
   "auth": {
     "deviceToken": "…",
     "role": "node",
-    "scopes": []
+    "scopes": [],
+    "deviceTokens": [
+      {
+        "deviceToken": "…",
+        "role": "operator",
+        "scopes": ["operator.approvals", "operator.read", "operator.write"]
+      }
+    ]
   }
 }
 ```
 
-The built-in setup-code flow does not include additional `deviceTokens` entries
-or hand off an operator token. Client authors should treat the optional
-`hello-ok.auth.deviceTokens` field as legacy/custom bootstrap extension data:
-persist it only when present on a trusted transport, and do not require it for
-built-in pairing.
+The operator handoff is intentionally bounded so QR onboarding can start the
+mobile operator loop without granting `operator.admin`, `operator.pairing`, or
+`operator.talk.secrets`. Those scopes require a separate approved operator
+pairing or token flow. Clients should persist `hello-ok.auth.deviceTokens` only
+when the connect used bootstrap auth on trusted transport such as `wss://` or
+loopback/local pairing.
 
 ### Node example
 
@@ -392,8 +401,8 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `config.patch` merges a partial config update.
     - `config.apply` validates + replaces the full config payload.
     - `config.schema` returns the live config schema payload used by Control UI and CLI tooling: schema, `uiHints`, version, and generation metadata, including plugin + channel schema metadata when the runtime can load it. The schema includes field `title` / `description` metadata derived from the same labels and help text used by the UI, including nested object, wildcard, array-item, and `anyOf` / `oneOf` / `allOf` composition branches when matching field documentation exists.
-    - `config.schema.lookup` returns a path-scoped lookup payload for one config path: normalized path, a shallow schema node, matched hint + `hintPath`, and immediate child summaries for UI/CLI drill-down. Lookup schema nodes keep the user-facing docs and common validation fields (`title`, `description`, `type`, `enum`, `const`, `format`, `pattern`, numeric/string/array/object bounds, and flags like `additionalProperties`, `deprecated`, `readOnly`, `writeOnly`). Child summaries expose `key`, normalized `path`, `type`, `required`, `hasChildren`, plus the matched `hint` / `hintPath`.
-    - `update.run` runs the gateway update flow and schedules a restart only when the update itself succeeded; callers with a session can include `continuationMessage` so startup resumes one follow-up agent turn through the restart continuation queue. Package-manager updates force a non-deferred, no-cooldown update restart after the package swap so the old Gateway process does not keep lazy-loading from a replaced `dist` tree.
+    - `config.schema.lookup` returns a path-scoped lookup payload for one config path: normalized path, a shallow schema node, matched hint + `hintPath`, optional `reloadKind`, and immediate child summaries for UI/CLI drill-down. `reloadKind` is one of `restart`, `hot`, or `none` and mirrors the Gateway config reload planner for the requested path. Lookup schema nodes keep the user-facing docs and common validation fields (`title`, `description`, `type`, `enum`, `const`, `format`, `pattern`, numeric/string/array/object bounds, and flags like `additionalProperties`, `deprecated`, `readOnly`, `writeOnly`). Child summaries expose `key`, normalized `path`, `type`, `required`, `hasChildren`, optional `reloadKind`, plus the matched `hint` / `hintPath`.
+    - `update.run` runs the gateway update flow and schedules a restart only when the update itself succeeded; callers with a session can include `continuationMessage` so startup resumes one follow-up agent turn through the restart continuation queue. Package-manager updates from the control plane use a detached managed-service handoff instead of replacing the package tree inside the live Gateway. A started handoff returns `ok: true` with `result.reason: "managed-service-handoff-started"` and `handoff.status: "started"`; unavailable or failed handoffs return `ok: false` with `managed-service-handoff-unavailable` or `managed-service-handoff-failed`, plus `handoff.command` when a manual shell update is required. During a started handoff, the restart sentinel may briefly report `stats.reason: "restart-health-pending"`; the continuation is delayed until the CLI verifies the restarted Gateway and writes the final `ok` sentinel.
     - `update.status` returns the latest cached update restart sentinel, including the post-restart running version when available.
     - `wizard.start`, `wizard.next`, `wizard.status`, and `wizard.cancel` expose the onboarding wizard over WS RPC.
 
@@ -460,6 +469,8 @@ enumeration of `src/gateway/server-methods/*.ts`.
 
   <Accordion title="Automation, skills, and tools">
     - Automation: `wake` schedules an immediate or next-heartbeat wake text injection; `cron.get`, `cron.list`, `cron.status`, `cron.add`, `cron.update`, `cron.remove`, `cron.run`, `cron.runs` manage scheduled work.
+    - `cron.run` remains an enqueue-style RPC for manual runs. Clients that need completion semantics should read the returned `runId` and poll `cron.runs`.
+    - `cron.runs` accepts an optional non-empty `runId` filter so clients can follow one queued manual run without racing against other history entries for the same job.
     - Skills and tools: `commands.list`, `skills.*`, `tools.catalog`, `tools.effective`, `tools.invoke`.
 
   </Accordion>
@@ -471,8 +482,9 @@ enumeration of `src/gateway/server-methods/*.ts`.
   events. In protocol v4, delta payloads carry `deltaText`; `message` remains
   the cumulative assistant snapshot. Non-prefix replacements set `replace=true`
   and use `deltaText` as the replacement text.
-- `session.message` and `session.tool`: transcript/event-stream updates for a
-  subscribed session.
+- `session.message`, `session.operation`, and `session.tool`: transcript,
+  in-flight session operation, and event-stream updates for a subscribed
+  session.
 - `sessions.changed`: session index or metadata changed.
 - `presence`: system presence snapshot updates.
 - `tick`: periodic keepalive / liveness event.
@@ -688,17 +700,16 @@ rather than the pre-handshake defaults.
     `AUTH_TOKEN_MISMATCH` retry is gated to **trusted endpoints only** —
     loopback, or `wss://` with a pinned `tlsFingerprint`. Public `wss://`
     without pinning does not qualify.
-- Built-in setup-code bootstrap returns only the primary node
-  `hello-ok.auth.deviceToken`; clients must not expect an additional operator
-  token in `hello-ok.auth.deviceTokens`.
-- While built-in setup-code bootstrap is waiting for approval, `PAIRING_REQUIRED`
+- Built-in setup-code bootstrap returns the primary node
+  `hello-ok.auth.deviceToken` plus a bounded operator token in
+  `hello-ok.auth.deviceTokens` for trusted mobile handoff. The operator token
+  excludes `operator.admin`, `operator.pairing`, and `operator.talk.secrets`.
+- While a non-baseline setup-code bootstrap is waiting for approval, `PAIRING_REQUIRED`
   details include `recommendedNextStep: "wait_then_retry"`, `retryable: true`,
   and `pauseReconnect: false`. Clients should keep reconnecting with the same
   bootstrap token until the request is approved or the token becomes invalid.
-- If an older or custom trusted bootstrap flow includes optional
-  `hello-ok.auth.deviceTokens` entries, persist them only when the connect used
-  bootstrap auth on a trusted transport such as `wss://` or loopback/local
-  pairing.
+- Persist `hello-ok.auth.deviceTokens` only when the connect used bootstrap auth
+  on a trusted transport such as `wss://` or loopback/local pairing.
 - If a client supplies an **explicit** `deviceToken` or explicit `scopes`, that
   caller-requested scope set remains authoritative; cached scopes are only
   reused when the client is reusing the stored per-device token.

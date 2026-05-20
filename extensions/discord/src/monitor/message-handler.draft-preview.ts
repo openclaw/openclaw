@@ -4,6 +4,8 @@ import {
   type ChannelProgressDraftLine,
   formatChannelProgressDraftText,
   isChannelProgressDraftWorkToolName,
+  mergeChannelProgressDraftLine,
+  normalizeChannelProgressDraftLineIdentity,
   resolveChannelProgressDraftMaxLines,
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingPreviewToolProgress,
@@ -46,8 +48,10 @@ export function createDiscordDraftPreviewController(params: {
   const accountBlockStreamingEnabled =
     resolveChannelStreamingBlockEnabled(params.discordConfig) ??
     params.cfg.agents?.defaults?.blockStreamingDefault === "on";
+  const canStreamProgressDraftForToolOnlySource =
+    params.sourceRepliesAreToolOnly && discordStreamMode === "progress";
   const canStreamDraft =
-    !params.sourceRepliesAreToolOnly &&
+    (!params.sourceRepliesAreToolOnly || canStreamProgressDraftForToolOnlySource) &&
     discordStreamMode !== "off" &&
     !accountBlockStreamingEnabled;
   const draftStream = canStreamDraft
@@ -57,6 +61,7 @@ export function createDiscordDraftPreviewController(params: {
         maxChars: draftMaxChars,
         replyToMessageId: () => params.replyReference.peek(),
         minInitialChars: discordStreamMode === "progress" ? 0 : 30,
+        suppressEmbeds: params.discordConfig?.suppressEmbeds ?? true,
         throttleMs: 1200,
         log: params.log,
         warn: params.log,
@@ -72,7 +77,7 @@ export function createDiscordDraftPreviewController(params: {
   let draftText = "";
   let hasStreamedMessage = false;
   let finalizedViaPreviewMessage = false;
-  let finalDeliveryHandled = false;
+  let finalReplyDelivered = false;
   const previewToolProgressEnabled =
     Boolean(draftStream) && resolveChannelStreamingPreviewToolProgress(params.discordConfig);
   const suppressDefaultToolProgressMessages =
@@ -144,8 +149,8 @@ export function createDiscordDraftPreviewController(params: {
     get finalizedViaPreviewMessage() {
       return finalizedViaPreviewMessage;
     },
-    markFinalDeliveryHandled() {
-      finalDeliveryHandled = true;
+    markFinalReplyDelivered() {
+      finalReplyDelivered = true;
     },
     markPreviewFinalized() {
       finalizedViaPreviewMessage = true;
@@ -173,7 +178,7 @@ export function createDiscordDraftPreviewController(params: {
       if (isEmptyDiscordProgressLine(line)) {
         return;
       }
-      const normalized = normalizeProgressLineIdentity(line);
+      const normalized = normalizeChannelProgressDraftLineIdentity(line);
       if (!normalized) {
         return;
       }
@@ -183,13 +188,13 @@ export function createDiscordDraftPreviewController(params: {
         if (!previewToolProgressEnabled || previewToolProgressSuppressed) {
           return;
         }
-        const previous = normalizeProgressLineIdentity(previewToolProgressLines.at(-1));
-        if (previous === normalized) {
+        const nextLines = mergeChannelProgressDraftLine(previewToolProgressLines, progressLine, {
+          maxLines: resolveChannelProgressDraftMaxLines(params.discordConfig),
+        });
+        if (nextLines === previewToolProgressLines) {
           return;
         }
-        previewToolProgressLines = [...previewToolProgressLines, progressLine].slice(
-          -resolveChannelProgressDraftMaxLines(params.discordConfig),
-        );
+        previewToolProgressLines = nextLines;
         const previewText = formatChannelProgressDraftText({
           entry: params.discordConfig,
           lines: previewToolProgressLines,
@@ -203,12 +208,13 @@ export function createDiscordDraftPreviewController(params: {
         return;
       }
       if (previewToolProgressEnabled && !previewToolProgressSuppressed && normalized) {
-        const previous = normalizeProgressLineIdentity(previewToolProgressLines.at(-1));
-        if (previous !== normalized) {
-          previewToolProgressLines = [...previewToolProgressLines, progressLine].slice(
-            -resolveChannelProgressDraftMaxLines(params.discordConfig),
-          );
-        }
+        previewToolProgressLines = mergeChannelProgressDraftLine(
+          previewToolProgressLines,
+          progressLine,
+          {
+            maxLines: resolveChannelProgressDraftMaxLines(params.discordConfig),
+          },
+        );
       }
       const alreadyStarted = progressDraftGate.hasStarted;
       if (shouldStartDiscordProgressDraftNow(line)) {
@@ -367,10 +373,10 @@ export function createDiscordDraftPreviewController(params: {
     async cleanup() {
       try {
         progressDraftGate.cancel();
-        if (!finalDeliveryHandled) {
+        if (!finalReplyDelivered) {
           await draftStream?.discardPending();
         }
-        if (!finalDeliveryHandled && !finalizedViaPreviewMessage && draftStream?.messageId()) {
+        if (!finalReplyDelivered && !finalizedViaPreviewMessage && draftStream?.messageId()) {
           await draftStream.clear();
         }
       } catch (err) {
@@ -382,7 +388,7 @@ export function createDiscordDraftPreviewController(params: {
 
 function normalizeReasoningProgressLine(text: string): string {
   return text
-    .replace(/^\s*(?:>\s*)?Reasoning:\s*/i, "")
+    .replace(/^\s*(?:>\s*)?(?:Reasoning:|Thinking\.{0,3})\s*/i, "")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -403,14 +409,7 @@ function mergeReasoningProgressText(current: string, incoming: string): string {
 }
 
 function isReasoningSnapshotText(text: string): boolean {
-  return /^\s*(?:>\s*)?Reasoning:\s*/i.test(text);
-}
-
-function normalizeProgressLineIdentity(
-  line: string | ChannelProgressDraftLine | undefined,
-): string {
-  const text = typeof line === "string" ? line : line?.text;
-  return text?.replace(/\s+/g, " ").trim() ?? "";
+  return /^\s*(?:>\s*)?(?:Reasoning:|Thinking\.{0,3})\s*/i.test(text);
 }
 
 function isEmptyDiscordProgressLine(line: string | ChannelProgressDraftLine | undefined): boolean {

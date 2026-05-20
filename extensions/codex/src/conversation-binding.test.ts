@@ -178,6 +178,30 @@ describe("codex conversation binding", () => {
     ).resolves.not.toContain('"modelProvider": "openai"');
   });
 
+  it("stores and uses the owning agent dir for bound app-server sessions", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const agentDir = path.join(tempDir, "agents", "bot-a", "agent");
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+      request: vi.fn(async () => ({
+        thread: { id: "thread-new", sessionId: "session-1", cwd: tempDir },
+        model: "gpt-5.4-mini",
+      })),
+    });
+
+    const data = await startCodexConversationThread({
+      sessionFile,
+      workspaceDir: tempDir,
+      agentDir,
+      model: "gpt-5.4-mini",
+    });
+
+    const sharedClientParams = mockCallArg(sharedClientMocks.getSharedCodexAppServerClient) as {
+      agentDir?: unknown;
+    };
+    expect(sharedClientParams?.agentDir).toBe(agentDir);
+    expect(data.agentDir).toBe(agentDir);
+  });
+
   it("clears the Codex app-server sidecar when a pending bind is denied", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const sidecar = `${sessionFile}.codex-app-server.json`;
@@ -232,6 +256,55 @@ describe("codex conversation binding", () => {
     );
 
     expect(result).toEqual({ handled: true });
+  });
+
+  it("routes bound Codex CLI node sessions through node resume", async () => {
+    const resumeCodexCliSessionOnNode = vi.fn(async () => ({
+      ok: true as const,
+      sessionId: "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd",
+      text: "done",
+    }));
+
+    const result = await handleCodexConversationInboundClaim(
+      {
+        content: "continue the task",
+        channel: "discord",
+        isGroup: true,
+        commandAuthorized: true,
+      },
+      {
+        channelId: "discord",
+        pluginBinding: {
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: tempDir,
+          channel: "discord",
+          accountId: "default",
+          conversationId: "channel-1",
+          boundAt: Date.now(),
+          data: {
+            kind: "codex-cli-node-session",
+            version: 1,
+            nodeId: "mb-m5",
+            sessionId: "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd",
+            cwd: "/repo",
+          },
+        },
+      },
+      {
+        resumeCodexCliSessionOnNode,
+        timeoutMs: 1234,
+      },
+    );
+
+    expect(result).toEqual({ handled: true, reply: { text: "done" } });
+    expect(resumeCodexCliSessionOnNode).toHaveBeenCalledWith({
+      nodeId: "mb-m5",
+      sessionId: "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd",
+      prompt: "continue the task",
+      cwd: "/repo",
+      timeoutMs: 1234,
+    });
   });
 
   it("recreates a missing bound thread and preserves auth plus turn overrides", async () => {
@@ -367,6 +440,7 @@ describe("codex conversation binding", () => {
 
   it("returns a clean failure reply when app-server turn start rejects", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
+    const agentDir = path.join(tempDir, "agents", "bot-b", "agent");
     await fs.writeFile(
       `${sessionFile}.codex-app-server.json`,
       JSON.stringify({
@@ -418,6 +492,7 @@ describe("codex conversation binding", () => {
               version: 1,
               sessionFile,
               workspaceDir: tempDir,
+              agentDir,
             },
           },
         },
@@ -443,6 +518,7 @@ describe("codex conversation binding", () => {
 
   it("falls back to content when the channel body for agent is blank", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
+    const agentDir = path.join(tempDir, "agents", "bot-b", "agent");
     await fs.writeFile(
       `${sessionFile}.codex-app-server.json`,
       JSON.stringify({
@@ -504,6 +580,7 @@ describe("codex conversation binding", () => {
             version: 1,
             sessionFile,
             workspaceDir: tempDir,
+            agentDir,
           },
         },
       },
@@ -511,6 +588,10 @@ describe("codex conversation binding", () => {
     );
 
     expect(result).toEqual({ handled: true, reply: { text: "done" } });
+    const sharedClientParams = mockCallArg(sharedClientMocks.getSharedCodexAppServerClient) as {
+      agentDir?: unknown;
+    };
+    expect(sharedClientParams?.agentDir).toBe(agentDir);
     expect(turnStartParams[0]?.input).toEqual([
       { type: "text", text: "use the fallback prompt", text_elements: [] },
     ]);

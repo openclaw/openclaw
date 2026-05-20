@@ -7,7 +7,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
-import { AgentModelSchema } from "./zod-schema.agent-model.js";
+import { AgentModelSchema, AgentToolModelSchema } from "./zod-schema.agent-model.js";
 import {
   GroupChatSchema,
   HumanDelaySchema,
@@ -587,6 +587,28 @@ const ToolSearchSchema = z
   ])
   .optional();
 
+const CodeModeSchema = z
+  .union([
+    z.boolean(),
+    z
+      .object({
+        enabled: z.boolean().optional(),
+        runtime: z.literal("quickjs-wasi").optional(),
+        mode: z.literal("only").optional(),
+        languages: z.array(z.enum(["javascript", "typescript"])).optional(),
+        timeoutMs: z.number().int().positive().optional(),
+        memoryLimitBytes: z.number().int().positive().optional(),
+        maxOutputBytes: z.number().int().positive().optional(),
+        maxSnapshotBytes: z.number().int().positive().optional(),
+        maxPendingToolCalls: z.number().int().positive().optional(),
+        snapshotTtlSeconds: z.number().int().positive().optional(),
+        searchDefaultLimit: z.number().int().positive().optional(),
+        maxSearchLimit: z.number().int().positive().optional(),
+      })
+      .strict(),
+  ])
+  .optional();
+
 const SandboxSshSchema = z
   .object({
     target: z.string().min(1).optional(),
@@ -681,6 +703,7 @@ const MessageToolConfigSchema = z
 const AgentToolsSchema = z
   .object({
     ...CommonToolPolicyFields,
+    codeMode: CodeModeSchema,
     elevated: z
       .object({
         enabled: z.boolean().optional(),
@@ -866,7 +889,7 @@ export const MemorySearchSchema = z
   })
   .strict()
   .optional();
-export { AgentModelSchema };
+export { AgentModelSchema, AgentToolModelSchema };
 
 const AgentRuntimeAcpSchema = z
   .object({
@@ -913,6 +936,7 @@ export const AgentEntrySchema = z
     id: z.string(),
     default: z.boolean().optional(),
     name: z.string().optional(),
+    description: z.string().optional(),
     workspace: z.string().optional(),
     agentDir: z.string().optional(),
     systemPromptOverride: z.string().optional(),
@@ -939,6 +963,17 @@ export const AgentEntrySchema = z
     toolProgressDetail: z.enum(["explain", "raw"]).optional(),
     reasoningDefault: z.enum(["on", "off", "stream"]).optional(),
     fastModeDefault: z.boolean().optional(),
+    contextInjection: z
+      .union([z.literal("always"), z.literal("continuation-skip"), z.literal("never")])
+      .optional(),
+    bootstrapMaxChars: z.number().int().positive().optional(),
+    bootstrapTotalMaxChars: z.number().int().positive().optional(),
+    experimental: z
+      .object({
+        localModelLean: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     skills: z.array(z.string()).optional(),
     memorySearch: MemorySearchSchema,
     humanDelay: HumanDelaySchema.optional(),
@@ -953,17 +988,7 @@ export const AgentEntrySchema = z
       .object({
         delegationMode: z.enum(["suggest", "prefer"]).optional(),
         allowAgents: z.array(z.string()).optional(),
-        model: z
-          .union([
-            z.string(),
-            z
-              .object({
-                primary: z.string().optional(),
-                fallbacks: z.array(z.string()).optional(),
-              })
-              .strict(),
-          ])
-          .optional(),
+        model: AgentModelSchema.optional(),
         thinking: z.string().optional(),
         requireAgentId: z.boolean().optional(),
       })
@@ -997,6 +1022,7 @@ export const ToolsSchema = z
       .optional(),
     loopDetection: ToolLoopDetectionSchema,
     toolSearch: ToolSearchSchema,
+    codeMode: CodeModeSchema,
     message: MessageToolConfigSchema,
     agentToAgent: z
       .object({
