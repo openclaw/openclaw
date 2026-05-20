@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/gesahni-plugin",
+  "version": "2026.5.5",
+  "private": true,
+  "description": "Gesahni stock-room assistant commands",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

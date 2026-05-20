@@ -1,0 +1,153 @@
+{
+  "id": "gesahni",
+  "activation": {
+    "onStartup": true
+  },
+  "enabledByDefault": true,
+  "name": "Gesahni",
+  "description": "Stock-room market commands, data charts, option-contract parsing, and Discord alerts.",
+  "commandAliases": [
+    {
+      "name": "quote",
+      "kind": "runtime-slash"
+    },
+    {
+      "name": "contract",
+      "kind": "runtime-slash"
+    },
+    {
+      "name": "chart",
+      "kind": "runtime-slash"
+    },
+    {
+      "name": "alert",
+      "kind": "runtime-slash"
+    },
+    {
+      "name": "alerts",
+      "kind": "runtime-slash"
+    },
+    {
+      "name": "stockstatus",
+      "kind": "runtime-slash"
+    },
+    {
+      "name": "stockhelp",
+      "kind": "runtime-slash"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "baseUrl": {
+        "type": "string"
+      },
+      "readBridgeToken": {
+        "type": "string"
+      },
+      "writeBridgeToken": {
+        "type": "string"
+      },
+      "defaultTimeoutMs": {
+        "type": "number"
+      },
+      "bridge": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "baseUrl": {
+            "type": "string"
+          },
+          "readBridgeToken": {
+            "type": "string"
+          },
+          "writeBridgeToken": {
+            "type": "string"
+          },
+          "defaultTimeoutMs": {
+            "type": "number"
+          },
+          "userId": {
+            "type": "string"
+          }
+        }
+      },
+      "marketData": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "provider": {
+            "type": "string",
+            "enum": ["alpaca"]
+          },
+          "alpaca": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "baseUrl": {
+                "type": "string"
+              },
+              "keyId": {
+                "type": "string"
+              },
+              "secretKey": {
+                "type": "string"
+              },
+              "stockFeed": {
+                "type": "string"
+              },
+              "optionFeed": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "alerts": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "groupChannelId": {
+            "type": "string"
+          },
+          "groupChannelName": {
+            "type": "string"
+          },
+          "groupCreation": {
+            "type": "string",
+            "enum": ["anyone", "owner"]
+          },
+          "pollSeconds": {
+            "type": "number"
+          },
+          "cooldownSeconds": {
+            "type": "number"
+          }
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "marketData.provider": {
+      "label": "Gesahni market data provider",
+      "help": "Provider used by Gesahni fast market commands. V2 currently supports Alpaca."
+    },
+    "marketData.alpaca.keyId": {
+      "label": "Alpaca API key id",
+      "help": "Alpaca Market Data API key id. Env APCA_API_KEY_ID is also supported."
+    },
+    "marketData.alpaca.secretKey": {
+      "label": "Alpaca API secret key",
+      "help": "Alpaca Market Data API secret. Env APCA_API_SECRET_KEY is also supported."
+    },
+    "alerts.groupChannelId": {
+      "label": "Gesahni group alert channel id",
+      "help": "Discord channel id for shared group alerts, normally #stock-alerts."
+    },
+    "alerts.groupCreation": {
+      "label": "Gesahni group alert creation",
+      "help": "Who can create shared group alerts. Defaults to anyone; owner keeps the future gated path available."
+    }
+  }
+}
