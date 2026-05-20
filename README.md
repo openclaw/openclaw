@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <strong>EXFOLIATE! EXFOLIATE!</strong>
+  <strong>[EXFOLIATE! EXFOLIATE!](https://groups.google.com/g/ytplaylist/c/mmNIQ-s08Cw)</strong>
 </p>
 
 <p align="center">
