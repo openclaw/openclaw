@@ -152,6 +152,10 @@ function appendProfileLevel(profile: ResolvedThinkingProfile, id: ThinkLevel) {
   profile.levels = profile.levels.toSorted((a, b) => a.rank - b.rank);
 }
 
+function shouldProviderProfileOverrideCatalogOptOut(provider: string): boolean {
+  return provider === "openai" || provider === "openai-codex";
+}
+
 export function resolveThinkingProfile(params: {
   provider?: string | null;
   model?: string | null;
@@ -174,7 +178,9 @@ export function resolveThinkingProfile(params: {
     const normalized = normalizeThinkingProfile(pluginProfile);
     if (
       normalized.levels.length > 0 &&
-      (context.reasoning !== false || pluginProfile.preserveWhenCatalogReasoningFalse === true)
+      (context.reasoning !== false ||
+        pluginProfile.preserveWhenCatalogReasoningFalse === true ||
+        shouldProviderProfileOverrideCatalogOptOut(context.normalizedProvider))
     ) {
       return normalized;
     }

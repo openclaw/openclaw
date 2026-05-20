@@ -224,6 +224,51 @@ describe("listThinkingLevels", () => {
     ).toBe("low");
   });
 
+  it.each(["openai", "openai-codex"])(
+    "uses the %s provider profile when stale catalog metadata marks gpt-5.5 reasoning=false",
+    (provider) => {
+      providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(({ provider: id }) =>
+        id === provider
+          ? {
+              levels: [
+                { id: "off" },
+                { id: "minimal" },
+                { id: "low" },
+                { id: "medium" },
+                { id: "high" },
+                { id: "xhigh" },
+              ],
+            }
+          : undefined,
+      );
+      const catalog = [
+        {
+          provider,
+          id: "gpt-5.5",
+          name: "GPT-5.5",
+          reasoning: false,
+        },
+      ];
+
+      expect(listThinkingLevels(provider, "gpt-5.5", catalog)).toEqual([
+        "off",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+      ]);
+      expect(
+        isThinkingLevelSupported({
+          provider,
+          model: "gpt-5.5",
+          level: "xhigh",
+          catalog,
+        }),
+      ).toBe(true);
+    },
+  );
+
   it("passes catalog reasoning into provider thinking profiles for support checks", () => {
     providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(({ context }) => ({
       levels:
