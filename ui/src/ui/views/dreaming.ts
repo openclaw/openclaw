@@ -1434,6 +1434,10 @@ function renderDreamDiaryEntries(props: DreamingProps) {
 function renderDiarySection(props: DreamingProps) {
   const wikiTabSelected = _diarySubTab === "insights" || _diarySubTab === "palace";
   const memoryWikiUnavailable = wikiTabSelected && !props.memoryWikiEnabled;
+  const memoryWikiUnavailableTitle = uiText(
+    "Memory Wiki is not enabled",
+    "Memory Wiki chưa được bật",
+  );
   const diaryError =
     _diarySubTab === "dreams"
       ? props.dreamDiaryError
@@ -1538,15 +1542,13 @@ function renderDiarySection(props: DreamingProps) {
       ${memoryWikiUnavailable
         ? html`
             <div class="dreams-diary__empty">
-              <div class="dreams-diary__empty-text">
-                ${uiText("Memory Wiki is not enabled", "Memory Wiki chưa được bật")}
-              </div>
+              <div class="dreams-diary__empty-text">${memoryWikiUnavailableTitle}</div>
               <div class="dreams-diary__empty-hint">
                 ${uiText(
                   "Imported Insights and Memory Palace are provided by the bundled",
                   "Insight đã import và Memory Palace được cung cấp bởi plugin tích hợp",
                 )}
-                <code>memory-wiki</code>.
+                <code>memory-wiki</code> ${uiText("plugin", "plugin")}.
               </div>
               <div class="dreams-diary__empty-hint">
                 ${uiText("Enable", "Bật")}

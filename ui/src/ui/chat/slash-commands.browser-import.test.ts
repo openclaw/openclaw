@@ -61,6 +61,7 @@ describe("slash command browser import", () => {
       'import type { GatewayBrowserClient } from "../gateway.ts";',
       'import type { IconName } from "../icons.ts";',
       'import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";',
+      'import { viDashboardText as uiText } from "../vi-dashboard-text.ts";',
     ]);
     expect(importLines(sharedRegistry)).toEqual([
       'import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";',
