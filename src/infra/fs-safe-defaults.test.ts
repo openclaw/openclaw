@@ -20,10 +20,10 @@ describe("fs-safe defaults", () => {
     delete process.env.OPENCLAW_FS_SAFE_PYTHON_MODE;
   });
 
-  it("disables the Python helper by default in OpenClaw", async () => {
+  it("uses fs-safe Python auto mode by default in OpenClaw", async () => {
     await importDefaults();
 
-    expect(configureFsSafePython).toHaveBeenCalledWith({ mode: "off" });
+    expect(configureFsSafePython).toHaveBeenCalledWith({ mode: "auto" });
   });
 
   it("lets fs-safe env mode overrides opt back into the helper", async () => {

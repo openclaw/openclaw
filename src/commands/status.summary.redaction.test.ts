@@ -14,6 +14,9 @@ function createRecentSessionRow() {
     remainingTokens: 4,
     percentUsed: 5,
     model: "gpt-5",
+    configuredModel: "gpt-5",
+    selectedModel: "gpt-5",
+    modelSelectionReason: null,
     contextTokens: 200_000,
     flags: ["id:sess-1"],
   };
