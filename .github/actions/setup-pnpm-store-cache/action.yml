@@ -47,6 +47,29 @@ runs:
           echo "::error::Invalid pnpm-version input: '$PNPM_VERSION'"
           exit 2
         fi
+        if [[ -n "${RUNNER_TOOL_CACHE:-}" && -n "${NODE_VERSION:-}" ]]; then
+          requested_node="${NODE_VERSION#v}"
+          node_tool_root="${RUNNER_TOOL_CACHE}/node"
+          node_bin=""
+          if [[ "$requested_node" == *x ]]; then
+            requested_major="${requested_node%%.*}"
+            node_bin="$(
+              find "$node_tool_root" -path "*/bin/node" -type f 2>/dev/null |
+                awk -F/ -v major="$requested_major" '$(NF-2) ~ ("^" major "\\.") { print }' |
+                sort -r |
+                head -n 1
+            )"
+          elif [[ -d "${node_tool_root}/${requested_node}" ]]; then
+            node_bin="$(find "${node_tool_root}/${requested_node}" -path "*/bin/node" -type f 2>/dev/null | head -n 1)"
+          fi
+          if [[ -n "$node_bin" ]]; then
+            export PATH="$(dirname "$node_bin"):$PATH"
+            hash -r
+          fi
+        fi
+        node -v
+        command -v node
+        command -v corepack
         corepack enable
         for attempt in 1 2 3; do
           if corepack prepare "pnpm@$PNPM_VERSION" --activate; then

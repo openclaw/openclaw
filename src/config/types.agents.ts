@@ -131,7 +131,7 @@ export type AgentConfig = {
   subagents?: {
     /** Prompt-only guidance for how strongly this agent should delegate work. */
     delegationMode?: SubagentDelegationMode;
-    /** Allow spawning sub-agents under other agent ids. Use "*" to allow any. */
+    /** Allow spawning sub-agents under other agent ids. Use "*" to allow any configured target. */
     allowAgents?: string[];
     /** Per-agent default model for spawned sub-agents (string or {primary,fallbacks}). */
     model?: AgentModelConfig;

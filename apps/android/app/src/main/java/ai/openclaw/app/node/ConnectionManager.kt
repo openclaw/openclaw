@@ -162,7 +162,14 @@ class ConnectionManager(
   fun buildOperatorConnectOptions(): GatewayConnectOptions =
     GatewayConnectOptions(
       role = "operator",
-      scopes = listOf("operator.read", "operator.write", "operator.talk.secrets"),
+      // QR bootstrap hands Android a bounded operator token that includes approvals; keep the
+      // default operator reconnect request aligned so the post-bootstrap loop can approve work.
+      scopes =
+        listOf(
+          "operator.approvals",
+          "operator.read",
+          "operator.write",
+        ),
       caps = emptyList(),
       commands = emptyList(),
       permissions = emptyMap(),
