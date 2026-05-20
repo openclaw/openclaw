@@ -2,11 +2,14 @@ import { randomUUID } from "node:crypto";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ExtensionFactory, SessionManager } from "@earendil-works/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ContextEngine } from "../../context-engine/types.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { createAgentToolResultMiddlewareRunner } from "../harness/tool-result-middleware.js";
+import { setCompactionInterceptRuntime } from "../pi-hooks/compaction-intercept-runtime.js";
+import compactionInterceptExtension from "../pi-hooks/compaction-intercept.js";
 import { setCompactionSafeguardRuntime } from "../pi-hooks/compaction-safeguard-runtime.js";
 import compactionSafeguardExtension from "../pi-hooks/compaction-safeguard.js";
 import contextPruningExtension from "../pi-hooks/context-pruning.js";
@@ -144,6 +147,25 @@ export function buildEmbeddedExtensionFactories(params: {
   provider: string;
   modelId: string;
   model: ProviderRuntimeModel | undefined;
+  /**
+   * Active context engine for the user-facing session, when known.
+   *
+   * When the engine declares `info.interceptsCompaction === true`, a
+   * `compaction-intercept` extension is registered that routes
+   * `session_before_compact` events through `engine.interceptCompaction()`.
+   * `ownsCompaction` does NOT exclude intercept — engines may declare both
+   * because the two flags cover distinct lanes (SDK event vs queued lane).
+   * Inner LLM sessions (compaction LLM, subagent runs that have no separate
+   * engine) pass `undefined` to skip.
+   */
+  activeContextEngine?: ContextEngine;
+  /**
+   * Openclaw session key (agent:id:suffix form) for the active session.
+   * Threaded into the compaction-intercept runtime so engines that route on
+   * sessionKey (e.g. ignored-/stateless-session patterns in lossless-claw)
+   * receive it inside the `session_before_compact` handler.
+   */
+  sessionKey?: string;
 }): ExtensionFactory[] {
   const factories: ExtensionFactory[] = [];
   if (resolveEffectiveCompactionMode(params.cfg) === "safeguard") {
@@ -170,6 +192,28 @@ export function buildEmbeddedExtensionFactories(params: {
       provider: compactionCfg?.provider,
     });
     factories.push(compactionSafeguardExtension);
+  }
+  // Context-engine intercept: registered AFTER the safeguard so its result
+  // wins under last-truthy-wins semantics when both are active.
+  //
+  // Gate is `interceptsCompaction === true` ONLY (no exclusion for
+  // `ownsCompaction === true`). The two flags advertise capability against
+  // distinct flows:
+  //   - `ownsCompaction` covers the openclaw queued-compaction lane
+  //     (`compact.queued.ts` → `engine.compact()`), driven by `afterTurn`
+  //     or explicit user `/compact`.
+  //   - `interceptsCompaction` covers the pi-coding-agent SDK event
+  //     (`session_before_compact`), driven by codex's in-attempt overflow
+  //     auto-compact at ~90% context.
+  // An engine can advertise BOTH (e.g. lossless-claw v4.1 owns the queued
+  // lane AND intercepts the SDK lane), so neither flag excludes the other.
+  const engineInfo = params.activeContextEngine?.info;
+  if (params.activeContextEngine && engineInfo?.interceptsCompaction === true) {
+    setCompactionInterceptRuntime(params.sessionManager, {
+      contextEngine: params.activeContextEngine,
+      sessionKey: params.sessionKey,
+    });
+    factories.push(compactionInterceptExtension);
   }
   const pruningFactory = buildContextPruningFactory(params);
   if (pruningFactory) {

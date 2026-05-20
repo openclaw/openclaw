@@ -1,5 +1,6 @@
 import { SettingsManager } from "@earendil-works/pi-coding-agent";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ContextEngineInfo } from "../context-engine/types.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
   buildEmbeddedPiSettingsSnapshot,
@@ -52,6 +53,12 @@ export function createPreparedEmbeddedPiSettingsManager(params: {
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
   /** Resolved context window budget so reserve-token floor can be capped for small models. */
   contextTokenBudget?: number;
+  /**
+   * Active context engine info. When the engine owns or intercepts
+   * compaction, the reserve-token floor is auto-zeroed because the engine
+   * takes responsibility for post-compaction headroom.
+   */
+  contextEngineInfo?: ContextEngineInfo;
 }): SettingsManager {
   const settingsManager = createRuntimeEmbeddedPiSettingsManager(
     createEmbeddedPiSettingsManager(params),
@@ -60,6 +67,7 @@ export function createPreparedEmbeddedPiSettingsManager(params: {
     settingsManager,
     cfg: params.cfg,
     contextTokenBudget: params.contextTokenBudget,
+    contextEngineInfo: params.contextEngineInfo,
   });
   return settingsManager;
 }

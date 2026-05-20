@@ -127,6 +127,7 @@ export default function register(api) {
       id: "my-engine",
       name: "My Context Engine",
       ownsCompaction: true,
+      interceptsCompaction: true,
     },
 
     async ingest({ sessionId, message, isHeartbeat }) {
@@ -149,6 +150,16 @@ export default function register(api) {
     async compact({ sessionId, force }) {
       // Summarize older context
       return { ok: true, compacted: true };
+    },
+
+    async interceptCompaction(request) {
+      // Replace Pi's in-attempt auto-compaction summary
+      return {
+        handled: true,
+        summary: await summarizeSessionFile(request.sessionFile),
+        firstKeptEntryId: request.firstKeptEntryId,
+        tokensBefore: request.tokensBefore,
+      };
     },
   }));
 }
@@ -181,7 +192,7 @@ Required members:
 
 | Member             | Kind     | Purpose                                                  |
 | ------------------ | -------- | -------------------------------------------------------- |
-| `info`             | Property | Engine id, name, version, and whether it owns compaction |
+| `info`             | Property | Engine id, name, version, and compaction capabilities    |
 | `ingest(params)`   | Method   | Store a single message                                   |
 | `assemble(params)` | Method   | Build context for a model run (returns `AssembleResult`) |
 | `compact(params)`  | Method   | Summarize/reduce context                                 |
@@ -220,22 +231,87 @@ Optional members:
 | `bootstrap(params)`            | Method | Initialize engine state for a session. Called once when the engine first sees a session (e.g., import history). |
 | `ingestBatch(params)`          | Method | Ingest a completed turn as a batch. Called after a run completes, with all messages from that turn at once.     |
 | `afterTurn(params)`            | Method | Post-run lifecycle work (persist state, trigger background compaction).                                         |
+| `interceptCompaction(params)`  | Method | Replace Pi's `session_before_compact` summary when `info.interceptsCompaction` is `true`.                       |
 | `prepareSubagentSpawn(params)` | Method | Set up shared state for a child session before it starts.                                                       |
 | `onSubagentEnded(params)`      | Method | Clean up after a subagent ends.                                                                                 |
 | `dispose()`                    | Method | Release resources. Called during gateway shutdown or plugin reload - not per-session.                           |
 
-### ownsCompaction
+### Compaction lanes
 
-`ownsCompaction` controls whether Pi's built-in in-attempt auto-compaction stays enabled for the run:
+OpenClaw exposes two context-engine compaction lanes:
+
+- `ownsCompaction` controls OpenClaw's queued/manual lane: `/compact`,
+  overflow recovery, and proactive compaction the engine starts from
+  `afterTurn()`.
+- `interceptsCompaction` controls Pi's SDK event lane: the
+  `session_before_compact` event that Pi emits during in-attempt
+  auto-compaction.
+
+Engines can declare either flag, both flags, or neither flag. The flags do not
+exclude each other because they cover different runtime paths.
+
+`ownsCompaction` controls whether Pi's built-in in-attempt auto-compaction stays enabled, unless the engine also intercepts the SDK event:
 
 <AccordionGroup>
   <Accordion title="ownsCompaction: true">
-    The engine owns compaction behavior. OpenClaw disables Pi's built-in auto-compaction for that run, and the engine's `compact()` implementation is responsible for `/compact`, overflow recovery compaction, and any proactive compaction it wants to do in `afterTurn()`. OpenClaw may still run the pre-prompt overflow safeguard; when it predicts the full transcript will overflow, the recovery path calls the active engine's `compact()` before submitting another prompt.
+    The engine owns queued/manual compaction behavior. Its `compact()` implementation is responsible for `/compact`, overflow recovery compaction, and any proactive compaction it starts from `afterTurn()`. OpenClaw disables Pi's built-in auto-compaction for that run unless the same engine also sets `interceptsCompaction: true`. OpenClaw may still run the pre-prompt overflow safeguard; when it predicts the full transcript will overflow, the recovery path calls the active engine's `compact()` before submitting another prompt.
   </Accordion>
   <Accordion title="ownsCompaction: false or unset">
     Pi's built-in auto-compaction may still run during prompt execution, but the active engine's `compact()` method is still called for `/compact` and overflow recovery.
   </Accordion>
 </AccordionGroup>
+
+When `interceptsCompaction: true`, OpenClaw registers a Pi
+`session_before_compact` extension for the active engine and leaves Pi
+auto-compaction enabled so that event can fire. The engine must implement
+`interceptCompaction(request)`:
+
+<ParamField path="request.sessionId" type="string" required>
+  Pi session id for the conversation being compacted.
+</ParamField>
+<ParamField path="request.sessionKey" type="string">
+  OpenClaw session key when the run has one.
+</ParamField>
+<ParamField path="request.sessionFile" type="string" required>
+  On-disk JSONL transcript path. Engines that need raw history should read this
+  file instead of depending on Pi SDK event types.
+</ParamField>
+<ParamField path="request.tokenBudget" type="number">
+  Model context window when the runtime can resolve it.
+</ParamField>
+<ParamField path="request.currentTokenCount" type="number">
+  Best-effort current token estimate at the compaction point.
+</ParamField>
+<ParamField path="request.firstKeptEntryId" type="string" required>
+  Transcript entry id Pi intends to keep verbatim after compaction.
+</ParamField>
+<ParamField path="request.tokensBefore" type="number" required>
+  Pi's pre-compaction token count.
+</ParamField>
+<ParamField path="request.trigger" type='"in-attempt-auto" | "overflow" | "timeout" | "manual"'>
+  Optional trigger. Current Pi events do not expose a distinct trigger, so this
+  is usually unset.
+</ParamField>
+<ParamField path="request.signal" type="AbortSignal">
+  Abort signal for compaction work.
+</ParamField>
+
+Return `{ handled: true, summary, firstKeptEntryId, tokensBefore, details? }`
+to replace Pi's default compaction summary. Return `{ handled: false, reason }`
+to decline and let the runtime fall back to its normal compaction path. Engines
+should catch their own errors and return `handled: false`; if
+`interceptCompaction()` throws, OpenClaw logs the failure and falls back.
+
+If safeguard compaction is also enabled, OpenClaw registers the intercept after
+the safeguard so a handled intercept result wins under Pi's last-truthy result
+semantics. Safeguard cancellation results, such as auth failures, still stop the
+event chain before the intercept runs.
+
+Engines that own or intercept compaction are responsible for post-compaction
+headroom. For those engines OpenClaw treats
+`agents.defaults.compaction.reserveTokensFloor` as `0` when applying Pi
+settings, so the engine's own compaction target is not double-reserved by the
+host floor.
 
 <Warning>
 `ownsCompaction: false` does **not** mean OpenClaw automatically falls back to the legacy engine's compaction path.

@@ -582,6 +582,82 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     );
   });
 
+  it("rotates the Codex thread after an intercepting context engine advances its epoch", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-before-intercept",
+      cwd: workspaceDir,
+      dynamicToolsFingerprint: "[]",
+      contextEngine: {
+        schemaVersion: 1,
+        engineId: "lossless-claw",
+        policyFingerprint:
+          '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"projectionMaxChars":24000}',
+        projection: {
+          schemaVersion: 1,
+          mode: "thread_bootstrap",
+          epoch: "epoch-before-intercept",
+        },
+      },
+    });
+    const contextEngine = createContextEngine({
+      info: {
+        id: "lossless-claw",
+        name: "Lossless Claw",
+        ownsCompaction: true,
+        interceptsCompaction: true,
+      },
+      assemble: vi.fn(async ({ prompt }) => ({
+        messages: [
+          assistantMessage("LCM summary produced by intercepted compaction", 10),
+          userMessage(prompt ?? "", 11),
+        ],
+        estimatedTokens: 42,
+        systemPromptAddition: "context-engine system",
+        contextProjection: {
+          mode: "thread_bootstrap" as const,
+          epoch: "epoch-after-intercept",
+        },
+      })),
+    });
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-after-intercept");
+      }
+      return undefined;
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.contextEngine = contextEngine;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+
+    expect(harness.requests.map((request) => request.method)).toEqual([
+      "thread/start",
+      "turn/start",
+    ]);
+    expectRequestInputTextContains(harness, "LCM summary produced by intercepted compaction");
+
+    await harness.notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-after-intercept",
+        turnId: "turn-1",
+        turn: {
+          id: "turn-1",
+          status: "completed",
+          items: [{ type: "agentMessage", id: "msg-1", text: "fresh answer" }],
+        },
+      },
+    });
+    await run;
+
+    const savedBinding = await readCodexAppServerBinding(sessionFile);
+    expect(savedBinding?.threadId).toBe("thread-after-intercept");
+    expect(savedBinding?.contextEngine?.projection?.epoch).toBe("epoch-after-intercept");
+  });
+
   it("reprojects thread-bootstrap context when context-engine policy changes", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");

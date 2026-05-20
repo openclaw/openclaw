@@ -65,11 +65,48 @@ function toPositiveInt(value: unknown): number | undefined {
   return Math.floor(value);
 }
 
+/**
+ * True when the active context engine takes responsibility for headroom after
+ * compaction — either by fully owning the compaction lifecycle
+ * (`ownsCompaction === true`) or by intercepting the runtime's
+ * `session_before_compact` event and supplying its own assembly
+ * (`interceptsCompaction === true`).
+ *
+ * **Why both flags?** These flags advertise capability against distinct
+ * compaction lanes:
+ *   - `ownsCompaction` covers the openclaw queued-compaction lane
+ *     (`compact.queued.ts` → `engine.compact()`), driven by `afterTurn`
+ *     or explicit user `/compact`. Engines that own this lane control
+ *     their own compaction trigger and post-compact assembly entirely.
+ *   - `interceptsCompaction` covers the pi-coding-agent SDK event lane
+ *     (`session_before_compact`), driven by codex's in-attempt overflow.
+ *     Engines that intercept this event also produce post-compact
+ *     assemblies, just via a different trigger.
+ * In BOTH cases the engine — not Pi's `reserveTokensFloor` — decides how
+ * much headroom the next prompt gets, so we auto-zero the floor to avoid
+ * double-reserving (e.g. lossless-claw's `compactionTargetFraction = 0.35`
+ * already leaves ~65% of the context window free post-compaction, far more
+ * than the 20K-token default floor would reserve).
+ *
+ * The merged gate is intentional: any engine in EITHER lane manages its
+ * own headroom strategy. If we ever introduce a third lane (or split these
+ * back apart), this predicate is the single place to update.
+ */
+function engineOwnsPostCompactHeadroom(info?: ContextEngineInfo): boolean {
+  return info?.ownsCompaction === true || info?.interceptsCompaction === true;
+}
+
 export function applyPiCompactionSettingsFromConfig(params: {
   settingsManager: PiSettingsManagerLike;
   cfg?: OpenClawConfig;
   /** When known, the resolved context window budget for the current model. */
   contextTokenBudget?: number;
+  /**
+   * Active context engine info. When present and the engine owns or
+   * intercepts compaction, the host treats `reserveTokensFloor` as 0 because
+   * the engine is responsible for post-compaction headroom.
+   */
+  contextEngineInfo?: ContextEngineInfo;
 }): {
   didOverride: boolean;
   compaction: { reserveTokens: number; keepRecentTokens: number };
@@ -80,7 +117,9 @@ export function applyPiCompactionSettingsFromConfig(params: {
 
   const configuredReserveTokens = toNonNegativeInt(compactionCfg?.reserveTokens);
   const configuredKeepRecentTokens = toPositiveInt(compactionCfg?.keepRecentTokens);
-  let reserveTokensFloor = resolveCompactionReserveTokensFloor(params.cfg);
+  let reserveTokensFloor = engineOwnsPostCompactHeadroom(params.contextEngineInfo)
+    ? 0
+    : resolveCompactionReserveTokensFloor(params.cfg);
 
   // Cap the floor to a safe fraction of the context window so that
   // small-context models (e.g. Ollama with 16 K tokens) are not starved of
@@ -185,15 +224,23 @@ export function isSilentOverflowProneModel(model: {
  * or an active model that is silent-overflow-prone (openclaw#75799).
  * Default-mode runs against ordinary providers keep Pi's auto-compaction as
  * the existing baseline.
+ *
+ * EXCEPTION: when the engine declares `interceptsCompaction === true`, we MUST
+ * leave Pi's auto-compaction enabled so the threshold check in Pi still fires
+ * the `session_before_compact` event — that event is the hook the engine
+ * registers an extension against to take over compaction losslessly. Disabling
+ * Pi here would silently turn the engine's intercept extension into dead code
+ * (openclaw#81164).
  */
 export function shouldDisablePiAutoCompaction(params: {
   contextEngineInfo?: ContextEngineInfo;
   compactionMode?: AgentCompactionMode;
   silentOverflowProneProvider?: boolean;
 }): boolean {
+  const intercepts = params.contextEngineInfo?.interceptsCompaction === true;
   return (
-    params.contextEngineInfo?.ownsCompaction === true ||
-    params.compactionMode === "safeguard" ||
+    (params.contextEngineInfo?.ownsCompaction === true && !intercepts) ||
+    (params.compactionMode === "safeguard" && !intercepts) ||
     params.silentOverflowProneProvider === true
   );
 }

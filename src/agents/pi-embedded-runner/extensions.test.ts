@@ -2,6 +2,9 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import type { SessionManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { ContextEngine, ContextEngineInfo } from "../../context-engine/types.js";
+import { getCompactionInterceptRuntime } from "../pi-hooks/compaction-intercept-runtime.js";
+import compactionInterceptExtension from "../pi-hooks/compaction-intercept.js";
 import { getCompactionSafeguardRuntime } from "../pi-hooks/compaction-safeguard-runtime.js";
 import compactionSafeguardExtension from "../pi-hooks/compaction-safeguard.js";
 import contextPruningExtension from "../pi-hooks/context-pruning.js";
@@ -119,5 +122,149 @@ describe("buildEmbeddedExtensionFactories", () => {
     });
 
     expect(factories).toContain(contextPruningExtension);
+  });
+});
+
+function makeEngine(info: ContextEngineInfo): ContextEngine {
+  return {
+    info,
+    ingest: vi.fn(async () => ({ ingested: true })),
+    assemble: vi.fn(async () => ({ messages: [], estimatedTokens: 0 })),
+    compact: vi.fn(async () => ({ ok: true, compacted: false })),
+    interceptCompaction: vi.fn(async () => ({ handled: false, reason: "noop" })),
+  } as unknown as ContextEngine;
+}
+
+describe("buildEmbeddedExtensionFactories — compactionInterceptExtension wiring", () => {
+  const baseParams = {
+    cfg: undefined as OpenClawConfig | undefined,
+    provider: "anthropic",
+    modelId: "claude-sonnet-4-5",
+    model: { contextWindow: 258_000 } as Model<Api>,
+  };
+
+  it("does NOT register intercept when no activeContextEngine is supplied", () => {
+    const sessionManager = {} as SessionManager;
+    const factories = buildEmbeddedExtensionFactories({
+      ...baseParams,
+      sessionManager,
+      activeContextEngine: undefined,
+    });
+    expect(factories).not.toContain(compactionInterceptExtension);
+    expect(getCompactionInterceptRuntime(sessionManager)).toBeNull();
+  });
+
+  it("does NOT register intercept when engine info does not set interceptsCompaction", () => {
+    const sessionManager = {} as SessionManager;
+    const engine = makeEngine({ id: "legacy", name: "Legacy" });
+    const factories = buildEmbeddedExtensionFactories({
+      ...baseParams,
+      sessionManager,
+      activeContextEngine: engine,
+    });
+    expect(factories).not.toContain(compactionInterceptExtension);
+    expect(getCompactionInterceptRuntime(sessionManager)).toBeNull();
+  });
+
+  it("DOES register intercept when engine info advertises interceptsCompaction", () => {
+    const sessionManager = {} as SessionManager;
+    const engine = makeEngine({ id: "lcm", name: "LCM", interceptsCompaction: true });
+    const factories = buildEmbeddedExtensionFactories({
+      ...baseParams,
+      sessionManager,
+      activeContextEngine: engine,
+    });
+    expect(factories).toContain(compactionInterceptExtension);
+    const runtime = getCompactionInterceptRuntime(sessionManager);
+    expect(runtime?.contextEngine).toBe(engine);
+  });
+
+  it("threads sessionKey into the intercept runtime when supplied", () => {
+    const sessionManager = {} as SessionManager;
+    const engine = makeEngine({ id: "lcm", name: "LCM", interceptsCompaction: true });
+    buildEmbeddedExtensionFactories({
+      ...baseParams,
+      sessionManager,
+      activeContextEngine: engine,
+      sessionKey: "agent:main:main",
+    });
+    const runtime = getCompactionInterceptRuntime(sessionManager);
+    expect(runtime?.sessionKey).toBe("agent:main:main");
+  });
+
+  it("registers intercept with undefined sessionKey when not supplied (back-compat)", () => {
+    const sessionManager = {} as SessionManager;
+    const engine = makeEngine({ id: "lcm", name: "LCM", interceptsCompaction: true });
+    buildEmbeddedExtensionFactories({
+      ...baseParams,
+      sessionManager,
+      activeContextEngine: engine,
+      // sessionKey intentionally omitted
+    });
+    const runtime = getCompactionInterceptRuntime(sessionManager);
+    expect(runtime?.sessionKey).toBeUndefined();
+    expect(runtime?.contextEngine).toBe(engine);
+  });
+
+  it("DOES register intercept when engine has BOTH ownsCompaction and interceptsCompaction", () => {
+    // The two flags advertise distinct lanes: ownsCompaction covers
+    // openclaw's queued-compaction path (compact.queued.ts), and
+    // interceptsCompaction covers pi-coding-agent's SDK event lane
+    // (session_before_compact). An engine can declare both — codex still
+    // fires session_before_compact on in-attempt overflow even for engines
+    // that own the queued lane, so we DO want to intercept the SDK event.
+    const sessionManager = {} as SessionManager;
+    const engine = makeEngine({
+      id: "owns-and-intercepts",
+      name: "Both",
+      ownsCompaction: true,
+      interceptsCompaction: true,
+    });
+    const factories = buildEmbeddedExtensionFactories({
+      ...baseParams,
+      sessionManager,
+      activeContextEngine: engine,
+    });
+    expect(factories).toContain(compactionInterceptExtension);
+    const runtime = getCompactionInterceptRuntime(sessionManager);
+    expect(runtime?.contextEngine).toBe(engine);
+  });
+
+  it("does NOT register intercept when only ownsCompaction is set (engine declines intercept)", () => {
+    // An engine that owns queued compaction but does NOT declare
+    // interceptsCompaction is signaling "I don't want to intercept the SDK
+    // event" — fall through to codex's native compaction.
+    const sessionManager = {} as SessionManager;
+    const engine = makeEngine({
+      id: "owns-only",
+      name: "Owns Only",
+      ownsCompaction: true,
+    });
+    const factories = buildEmbeddedExtensionFactories({
+      ...baseParams,
+      sessionManager,
+      activeContextEngine: engine,
+    });
+    expect(factories).not.toContain(compactionInterceptExtension);
+    expect(getCompactionInterceptRuntime(sessionManager)).toBeNull();
+  });
+
+  it("intercept factory is pushed AFTER safeguard factory (last-truthy-wins ordering)", () => {
+    const cfg = {
+      agents: { defaults: { compaction: { mode: "safeguard" } } },
+    } as OpenClawConfig;
+    const sessionManager = {} as SessionManager;
+    const engine = makeEngine({ id: "lcm", name: "LCM", interceptsCompaction: true });
+    const factories = buildEmbeddedExtensionFactories({
+      ...baseParams,
+      cfg,
+      sessionManager,
+      activeContextEngine: engine,
+    });
+    const safeguardIndex = factories.indexOf(compactionSafeguardExtension);
+    const interceptIndex = factories.indexOf(compactionInterceptExtension);
+    expect(safeguardIndex).toBeGreaterThanOrEqual(0);
+    expect(interceptIndex).toBeGreaterThanOrEqual(0);
+    expect(interceptIndex).toBeGreaterThan(safeguardIndex);
   });
 });

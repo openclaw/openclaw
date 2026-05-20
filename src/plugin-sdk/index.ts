@@ -118,6 +118,8 @@ export type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.j
 export type {
   AssembleResult,
   BootstrapResult,
+  CompactionInterceptRequest,
+  CompactionInterceptResult,
   CompactResult,
   ContextEngine,
   ContextEngineInfo,

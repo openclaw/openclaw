@@ -2174,6 +2174,7 @@ export async function runEmbeddedAttempt(
           workspaceDir: effectiveWorkspace,
         }),
         contextTokenBudget: params.contextTokenBudget,
+        contextEngineInfo: activeContextEngine?.info,
       });
       const piAutoCompactionGuardArgs = {
         settingsManager,
@@ -2189,12 +2190,19 @@ export async function runEmbeddedAttempt(
 
       // Sets compaction/pruning runtime state and returns extension factories
       // that must be passed to the resource loader for the safeguard to be active.
+      // Threading `activeContextEngine` enables the compaction-intercept
+      // extension when the engine declares `info.interceptsCompaction === true`.
+      // `sessionKey` is also threaded so engines that route on session-key
+      // patterns (e.g. lossless-claw's ignored-/stateless-session patterns)
+      // can identify the active session inside the intercept handler.
       const extensionFactories = buildEmbeddedExtensionFactories({
         cfg: params.config,
         sessionManager,
         provider: params.provider,
         modelId: params.modelId,
         model: params.model,
+        activeContextEngine,
+        sessionKey: params.sessionKey,
       });
       const resourceLoader = createEmbeddedPiResourceLoader({
         cwd: resolvedWorkspace,
@@ -2206,11 +2214,13 @@ export async function runEmbeddedAttempt(
       // DefaultResourceLoader.reload() rehydrates settings from disk and can drop OpenClaw
       // compaction overrides applied in createPreparedEmbeddedPiSettingsManager — same
       // rehydration also restores Pi's auto-compaction (openclaw#75799), so re-apply
-      // both guards.
+      // both guards. `contextEngineInfo` must be threaded again here because the
+      // reserve-token floor is recomputed from scratch on every re-apply.
       applyPiCompactionSettingsFromConfig({
         settingsManager,
         cfg: params.config,
         contextTokenBudget: params.contextTokenBudget,
+        contextEngineInfo: activeContextEngine?.info,
       });
       applyPiAutoCompactionGuard(piAutoCompactionGuardArgs);
       prepStages.mark("session-resource-loader");
