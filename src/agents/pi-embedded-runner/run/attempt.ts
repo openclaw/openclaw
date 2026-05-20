@@ -50,6 +50,7 @@ import { ensureCustomApiRegistered } from "../../custom-api-registry.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { resolveOpenClawDocsPath } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
+import { runHallucinationGuardInline } from "../../hallucination-guard.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { normalizeProviderId, resolveDefaultModelForAgent } from "../../model-selection.js";
@@ -2758,6 +2759,20 @@ export async function runEmbeddedAttempt(
             log.warn(`llm_output hook failed: ${String(err)}`);
           });
       }
+
+      // P2.14: hallucination guard (gemma-memory follow-up).
+      // Fire-and-forget. Re-runs memory.sh by-person and posts a
+      // corrective follow-up on the telegram chat when the model
+      // hallucinated a tool report in text-only output. Gated by
+      // OPENCLAW_HALLUCINATION_GUARD_* env vars; gemma-only by default;
+      // no-op for any non-whitelisted agent.
+      runHallucinationGuardInline({
+        agentId: hookAgentId,
+        messages: messagesSnapshot,
+        lastAssistant,
+      }).catch((err) => {
+        log.warn(`hallucination-guard failed: ${String(err)}`);
+      });
 
       return {
         aborted,
