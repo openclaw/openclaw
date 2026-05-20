@@ -141,6 +141,65 @@ describe("tasks commands", () => {
     });
   });
 
+  it("explains stale running tasks retained by backing sessions in maintenance JSON", async () => {
+    await withTaskCommandStateDir(async (state) => {
+      const now = Date.now();
+      vi.useFakeTimers();
+      vi.setSystemTime(now - 45 * 60_000);
+      const childSessionKey = "agent:main:subagent:child-retained";
+      const task = createTaskRecord({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey,
+        runId: "run-retained-child",
+        status: "running",
+        task: "Review retained child session",
+      });
+      vi.setSystemTime(now);
+
+      const sessionsDir = state.sessionsDir("main");
+      await fs.mkdir(sessionsDir, { recursive: true });
+      await fs.writeFile(
+        path.join(sessionsDir, "sessions.json"),
+        JSON.stringify(
+          {
+            [childSessionKey]: {
+              sessionId: "child-retained",
+              updatedAt: now,
+            },
+          },
+          null,
+          2,
+        ),
+        "utf8",
+      );
+
+      const runtime = createRuntime();
+      await tasksMaintenanceCommand({ json: true, apply: false }, runtime);
+
+      const payload = readFirstJsonLog(runtime) as {
+        diagnostics: {
+          staleRunningTasks: Array<{
+            taskId: string;
+            decision: string;
+            reason: string;
+            childSessionKey?: string;
+          }>;
+        };
+      };
+
+      expect(payload.diagnostics.staleRunningTasks).toContainEqual(
+        expect.objectContaining({
+          taskId: task.taskId,
+          decision: "retained",
+          reason: "backing_session_present",
+          childSessionKey,
+        }),
+      );
+    });
+  });
+
   it("keeps tasks maintenance JSON additive for TaskFlow state", async () => {
     await withTaskCommandStateDir(async () => {
       const now = Date.now();
