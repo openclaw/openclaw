@@ -185,17 +185,22 @@ function tryRestartGateway() {
     appendLog("no systemd unit configured — cannot auto-restart gateway");
     return;
   }
+  // Validate unit name to prevent injection (only allow safe chars)
+  if (!/^[a-zA-Z0-9@._-]+$/.test(params.systemdUnit)) {
+    appendLog("invalid systemd unit name — refusing to restart");
+    return;
+  }
   appendLog("attempting to restart gateway via systemctl: " + params.systemdUnit);
   try {
-    const { execSync } = require("node:child_process");
-    execSync("systemctl --user start " + params.systemdUnit, {
+    const { execFileSync } = require("node:child_process");
+    execFileSync("systemctl", ["--user", "start", params.systemdUnit], {
       timeout: 30000,
       stdio: "ignore",
     });
     appendLog("gateway restart command sent successfully");
   } catch (restartErr) {
     appendLog("gateway restart failed: " + String(restartErr));
-    appendLog("manual recovery required: run \`systemctl --user start " + params.systemdUnit + "\`");
+    appendLog("manual recovery required: run 'systemctl --user start " + params.systemdUnit + "'");
   }
 }
 
@@ -409,9 +414,7 @@ export async function startManagedServiceUpdateHandoff(params: {
     metaPath,
     markerPath,
     systemdUnit:
-      params.supervisor === "systemd"
-        ? (process.env.OPENCLAW_SYSTEMD_UNIT ?? null)
-        : null,
+      params.supervisor === "systemd" ? (process.env.OPENCLAW_SYSTEMD_UNIT ?? null) : null,
     sentinelPath: resolveRestartSentinelPath(),
     sensitivePaths: [scriptPath, paramsPath, metaPath],
   };

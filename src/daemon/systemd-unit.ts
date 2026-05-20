@@ -77,12 +77,14 @@ export function buildSystemdUnit({
     "ExecStartPre=-/bin/sh -c 'test ! -f %h/.openclaw/update-in-progress || sleep 5'",
     "Restart=always",
     "RestartSec=5",
-    "RestartPreventExitStatus=78 80",
+    "RestartPreventExitStatus=78",
     "TimeoutStopSec=30",
     "TimeoutStartSec=30",
     "SuccessExitStatus=0 143",
     // The update handoff helper escapes via systemd-run --scope, so
     // control-group safely stops the gateway and all its child workers.
+    // Exit 78 is used for both "already running" and "update handoff"
+    // scenarios — both mean "don't auto-restart me".
     "KillMode=control-group",
     workingDirLine,
     ...environmentFileLines,
