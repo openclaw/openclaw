@@ -205,21 +205,21 @@ function resolveAutoCaptureStartIndex(
 // pattern at each call site.
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-const _memoryLocks = new Map<string, Promise<void>>();
+const memoryLocks = new Map<string, Promise<void>>();
 
 function withMemoryLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
-  const prev = _memoryLocks.get(id) ?? Promise.resolve();
+  const prev = memoryLocks.get(id) ?? Promise.resolve();
   let resolveLock!: () => void;
   const next = new Promise<void>((r) => {
     resolveLock = r;
   });
-  _memoryLocks.set(id, next);
+  memoryLocks.set(id, next);
   return prev
     .then(() => fn())
     .finally(() => {
       resolveLock();
-      if (_memoryLocks.get(id) === next) {
-        _memoryLocks.delete(id);
+      if (memoryLocks.get(id) === next) {
+        memoryLocks.delete(id);
       }
     });
 }
