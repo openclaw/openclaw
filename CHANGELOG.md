@@ -16,6 +16,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway/device: apply the control-plane write rate limit (3 per 60 s) to `device.pair.approve`, `device.pair.remove`, `device.token.rotate`, and `device.token.revoke` so high-privilege pairing and revocation operations are protected against rapid-fire abuse by authenticated callers.
 - Status: show the configured default, session-selected model, reason, clear hint, and docs link when a session remains pinned to a model that differs from `agents.defaults.model.primary`.
 - Mac app: keep local packaging signed with a stable app identity for permission testing and fix Control UI production builds under current Vite/Highlight.js exports.
 - macOS app: update the embedded Peekaboo bridge to 3.2.1 so OpenClaw-hosted UI automation works with current Peekaboo CLI capture flows.
