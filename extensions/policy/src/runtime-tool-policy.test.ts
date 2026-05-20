@@ -225,6 +225,46 @@ describe("policy trusted tool runtime", () => {
     });
   });
 
+  it("requires approval for critical tools with multiline metadata", async () => {
+    const policy = {
+      tools: { requireMetadata: ["risk", "sensitivity", "owner"] },
+    };
+    await fs.writeFile(join(workspaceDir, "policy.jsonc"), JSON.stringify(policy), "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "TOOLS.md"),
+      [
+        "## Tools",
+        "",
+        "### deploy",
+        "risk: critical",
+        "sensitivity: internal",
+        "owner: ops",
+        "IRREVERSIBLE_EXTERNAL",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    await expect(evaluate("deploy")).resolves.toMatchObject({
+      requireApproval: {
+        title: "Review policy-governed tool",
+        severity: "critical",
+        metadata: {
+          source: "policy",
+          policy: {
+            path: "policy.jsonc",
+            hash: policyDocumentHash(policy),
+          },
+          workspace: {
+            scope: "policy",
+            hash: expect.stringMatching(/^sha256:/),
+          },
+          target: "oc://TOOLS.md/tools/deploy",
+        },
+      },
+    });
+  });
+
   it("includes policy metadata when undeclared tools need approval", async () => {
     const policy = {
       tools: { requireMetadata: ["risk"] },

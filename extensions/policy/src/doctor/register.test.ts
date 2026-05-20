@@ -596,6 +596,66 @@ describe("registerPolicyDoctorChecks", () => {
     );
   });
 
+  it("accepts governed tool metadata declared on following lines", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({ tools: { requireMetadata: ["risk", "sensitivity", "owner"] } }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(workspaceDir, "TOOLS.md"),
+      [
+        "## Tools",
+        "",
+        "### deploy",
+        "risk: critical",
+        "sensitivity: restricted",
+        "owner: ops",
+        "IRREVERSIBLE_EXTERNAL",
+        "",
+        "### inspect",
+        "risk: low",
+        "sensitivity: public",
+        "owner: support",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()), {
+      checks: registerChecks(),
+    });
+    const evidence = collectPolicyEvidence(
+      {},
+      {
+        toolsRaw: await fs.readFile(join(workspaceDir, "TOOLS.md"), "utf-8"),
+      },
+    );
+
+    expect(result.findings).toEqual([]);
+    expect(evidence.tools).toEqual([
+      {
+        id: "deploy",
+        source: "oc://TOOLS.md/tools/deploy",
+        line: 3,
+        risk: "critical",
+        sensitivity: "restricted",
+        owner: "ops",
+        capabilities: ["IRREVERSIBLE_EXTERNAL"],
+      },
+      {
+        id: "inspect",
+        source: "oc://TOOLS.md/tools/inspect",
+        line: 9,
+        risk: "low",
+        sensitivity: "public",
+        owner: "support",
+      },
+    ]);
+  });
+
   it("reports unknown governed tool risk metadata", async () => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     await fs.writeFile(configPath, "{}", "utf-8");

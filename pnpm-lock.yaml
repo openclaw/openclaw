@@ -1237,6 +1237,9 @@ importers:
 
   extensions/policy:
     dependencies:
+      '@openclaw/oc-path':
+        specifier: workspace:*
+        version: link:../oc-path
       json5:
         specifier: 2.2.3
         version: 2.2.3
