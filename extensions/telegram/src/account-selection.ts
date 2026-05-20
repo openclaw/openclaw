@@ -129,15 +129,25 @@ export function resolveDefaultTelegramAccountSelection(cfg: OpenClawConfig): {
     };
   }
   const accountIds = listTelegramAccountIds(cfg);
+  const configuredDefaultAccountId =
+    normalizeOptionalAccountId(cfg.channels?.telegram?.defaultAccount) ?? undefined;
   const resolved = resolveListedDefaultAccountId({
     accountIds,
-    configuredDefaultAccountId:
-      normalizeOptionalAccountId(cfg.channels?.telegram?.defaultAccount) ?? undefined,
+    configuredDefaultAccountId,
   });
   return {
     accountId: resolved,
     accountIds,
+    // Fixes #83948: the previous warning fired any time the resolved account
+    // happened to match `accountIds[0]` (the alphabetical-first fallback),
+    // even when the user had explicitly set `channels.telegram.defaultAccount`
+    // and the configured value just happened to sort first. Suppress the
+    // warning whenever the user has explicitly configured a default account
+    // (the configured value is honored by `resolveListedDefaultAccountId`
+    // above), so we only nag in the true "fell back without explicit
+    // configuration" case.
     shouldWarnMissingDefault:
+      !configuredDefaultAccountId &&
       resolved === accountIds[0] &&
       !accountIds.includes(DEFAULT_ACCOUNT_ID) &&
       accountIds.length > 1,
