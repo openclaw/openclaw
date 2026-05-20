@@ -439,12 +439,12 @@ describe("exec host env validation", () => {
     try {
       await expect(
         tool.execute("call-denied-sandbox-home-override", {
-          command: "cat /workspace/.openclaw/credentials/provider.key",
+          command: 'cat "$HOME/.openclaw/credentials/provider.key"',
           env: { HOME: "/tmp" },
           workdir: "/workspace",
         }),
       ).rejects.toThrow(
-        "Security Violation: exec command references denied path /workspace/.openclaw/credentials/provider.key",
+        "Security Violation: exec command references denied path /tmp/.openclaw/credentials/provider.key",
       );
       expect(buildExecSpec).not.toHaveBeenCalled();
     } finally {

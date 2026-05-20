@@ -1528,13 +1528,6 @@ export function createExecTool(
           command: params.command,
           workdir: sandbox && host === "sandbox" ? containerWorkdir : workdir,
           env,
-          patternEnv:
-            sandbox && host === "sandbox"
-              ? {
-                  ...env,
-                  HOME: sandbox.env?.HOME ?? containerWorkdir ?? sandbox.containerWorkdir,
-                }
-              : env,
           namespace: sandbox && host === "sandbox" ? "sandbox" : "host",
         });
       }
