@@ -45,11 +45,11 @@ describe("group runtime loading", () => {
       silentToken: "NO_REPLY",
     });
     expect(toolOnlyContext).toContain("Normal final replies are private");
-    expect(toolOnlyContext).toContain('message tool with action="send" before ending');
+    expect(toolOnlyContext).toContain("message tool with action=send");
     expect(toolOnlyContext).toContain("Be a good group participant");
     expect(toolOnlyContext).toContain("wrap bare URLs");
     expect(toolOnlyContext).toContain("<https://example.com>");
-    expect(toolOnlyContext).toContain('do not call message(action="send")');
+    expect(toolOnlyContext).toContain("do not call message(action=send)");
     expect(toolOnlyContext).not.toContain('reply with exactly "NO_REPLY"');
     expect(
       isolatedGroups.buildGroupIntro({
@@ -82,8 +82,8 @@ describe("group runtime loading", () => {
       sourceReplyDeliveryMode: "message_tool_only",
     });
     expect(toolOnlyContext).toContain("Normal final replies are private");
-    expect(toolOnlyContext).toContain('message tool with action="send" before ending');
-    expect(toolOnlyContext).toContain('do not call message(action="send")');
+    expect(toolOnlyContext).toContain("message tool with action=send");
+    expect(toolOnlyContext).toContain("do not call message(action=send)");
     expect(toolOnlyContext).not.toContain("NO_REPLY");
     expect(toolOnlyContext).not.toContain("Your replies are automatically sent");
   });

@@ -479,7 +479,7 @@ function createScenarios(): PromptScenario[] {
       title: "Telegram Direct Codex Message Tool Turn",
       notes: [
         "Default happy path: OpenAI model through the Codex harness/runtime, Telegram direct conversation, and message-tool-only visible replies.",
-        'A quiet turn is represented by not calling `message` with `action="send"`; the normal final assistant text is private to OpenClaw/Codex.',
+        "A quiet turn is represented by not calling `message(action=send)`; the normal final assistant text is private to OpenClaw/Codex.",
       ],
       trigger: "user",
       ctx: telegramDirectCtx,
