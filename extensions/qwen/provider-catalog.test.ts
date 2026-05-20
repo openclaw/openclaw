@@ -22,18 +22,18 @@ describe("qwen provider catalog", () => {
     const modelIds = getQwenModelIds(provider);
     expect(modelIds.length).toBeGreaterThan(0);
     expect(modelIds).toContain(QWEN_DEFAULT_MODEL_ID);
-    expect(modelIds).not.toContain("qwen3.6-plus");
+    expect(modelIds).toContain("qwen3.6-plus");
   });
 
-  it("only advertises qwen3.6-plus on Standard endpoints", () => {
+  it("advertises qwen3.6-plus on all Qwen endpoints including Coding Plan CN", () => {
     const coding = buildQwenProvider({ baseUrl: QWEN_BASE_URL });
     const codingTrailingDot = buildQwenProvider({
       baseUrl: " https://coding-intl.dashscope.aliyuncs.com./v1 ",
     });
     const standard = buildQwenProvider({ baseUrl: QWEN_STANDARD_GLOBAL_BASE_URL });
 
-    expect(getQwenModelIds(coding)).not.toContain("qwen3.6-plus");
-    expect(getQwenModelIds(codingTrailingDot)).not.toContain("qwen3.6-plus");
+    expect(getQwenModelIds(coding)).toContain("qwen3.6-plus");
+    expect(getQwenModelIds(codingTrailingDot)).toContain("qwen3.6-plus");
     expect(getQwenModelIds(standard)).toContain("qwen3.6-plus");
   });
 
