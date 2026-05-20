@@ -123,6 +123,7 @@ const configMocks = vi.hoisted(() => ({
     () => {
       browser: Record<string, unknown>;
       gateway?: { nodes?: { browser?: { node?: string } } };
+      agents?: { defaults?: { imageMaxDimensionPx?: number } };
     }
   >(() => ({ browser: {} })),
 }));
