@@ -488,23 +488,6 @@ export async function createEmbeddedAttemptSessionLockController(params: {
 
   const noopLock: SessionLock = { release: async () => {} };
 
-  function wrapOwnedCleanupLock(
-    lock: SessionLock,
-    beforeCleanup: SessionFileFingerprint,
-  ): SessionLock {
-    return {
-      release: async () => {
-        try {
-          if (!takeoverDetected) {
-            await publishOwnedSessionFileWriteIfChanged(beforeCleanup).catch(() => {});
-          }
-        } finally {
-          await lock.release();
-        }
-      },
-    };
-  }
-
   return {
     async releaseForPrompt(): Promise<void> {
       if (!heldLock) {
@@ -537,7 +520,15 @@ export async function createEmbeddedAttemptSessionLockController(params: {
         throw new EmbeddedAttemptSessionTakeoverError(params.lockOptions.sessionFile);
       }
       if (activeWriteLock.getStore()?.active === true) {
-        return await run();
+        if (options?.publishOwnedWrite !== true) {
+          return await run();
+        }
+        const beforeWrite = await readSessionFileFingerprint(params.lockOptions.sessionFile);
+        try {
+          return await run();
+        } finally {
+          await publishOwnedSessionFileFence(beforeWrite);
+        }
       }
       const { lock, owned } = await acquireWriteLock();
       try {
@@ -596,8 +587,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
         }
         throw err;
       }
-      const beforeCleanup = await readSessionFileFingerprint(params.lockOptions.sessionFile);
-      return wrapOwnedCleanupLock(cleanupLock, beforeCleanup);
+      return cleanupLock;
     },
     hasSessionTakeover(): boolean {
       return takeoverDetected;

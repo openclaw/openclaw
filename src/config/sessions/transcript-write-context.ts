@@ -54,9 +54,32 @@ export async function runWithOwnedSessionTranscriptWriteLock<T>(
   },
   run: () => Promise<T> | T,
 ): Promise<T> {
+  return await runWithOwnedSessionTranscriptWriteContext(params, run);
+}
+
+export async function runWithOwnedSessionTranscriptWritePublication<T>(
+  params: {
+    sessionFile?: string;
+    sessionKey?: string;
+  },
+  run: () => Promise<T> | T,
+): Promise<T> {
+  return await runWithOwnedSessionTranscriptWriteContext(params, run, {
+    publishOwnedWrite: true,
+  });
+}
+
+async function runWithOwnedSessionTranscriptWriteContext<T>(
+  params: {
+    sessionFile?: string;
+    sessionKey?: string;
+  },
+  run: () => Promise<T> | T,
+  options?: { publishOwnedWrite?: boolean },
+): Promise<T> {
   const context = ownedTranscriptWriteContext.getStore();
   if (!context || !contextMatches({ context, ...params })) {
     return await run();
   }
-  return await context.withSessionWriteLock(run, { publishOwnedWrite: true });
+  return await context.withSessionWriteLock(run, options);
 }

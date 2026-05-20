@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   runWithOwnedSessionTranscriptWriteLock,
+  runWithOwnedSessionTranscriptWritePublication,
   withOwnedSessionTranscriptWrites,
 } from "../../../config/sessions/transcript-write-context.js";
 import { SessionWriteLockTimeoutError } from "../../session-write-lock-error.js";
@@ -287,7 +288,95 @@ describe("embedded attempt session lock lifecycle", () => {
     expect(controller.hasSessionTakeover()).toBe(false);
   });
 
-  it("allows post-prompt writes after another controller publishes an owned transcript write", async () => {
+  it("allows post-prompt writes after the prompt context publishes an owned transcript write", async () => {
+    const sessionFile = await createTempSessionFile();
+    const releases: string[] = [];
+    const acquireSessionWriteLock = vi.fn(async () => ({
+      release: vi.fn(async () => {
+        releases.push("release");
+      }),
+    }));
+    const firstController = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await firstController.releaseForPrompt();
+
+    const secondController = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+    const promptActiveSession = async (run: () => Promise<void>): Promise<void> =>
+      await withOwnedSessionTranscriptWrites(
+        {
+          sessionFile,
+          sessionKey: "agent:main:slack:channel:456",
+          withSessionWriteLock: (operation, options) =>
+            secondController.withSessionWriteLock(operation, options),
+        },
+        run,
+      );
+    await promptActiveSession(
+      async () =>
+        await runWithOwnedSessionTranscriptWritePublication(
+          { sessionFile, sessionKey: "agent:main:slack:channel:456" },
+          async () => {
+            await fs.appendFile(sessionFile, '{"type":"message","id":"same-process"}\n', "utf8");
+          },
+        ),
+    );
+    await secondController.releaseForPrompt();
+
+    await expect(
+      firstController.withSessionWriteLock(async () => {
+        await fs.appendFile(sessionFile, '{"type":"message","id":"post-prompt"}\n', "utf8");
+        return "post-write";
+      }),
+    ).resolves.toBe("post-write");
+
+    expect(firstController.hasSessionTakeover()).toBe(false);
+    expect(acquireSessionWriteLock).toHaveBeenCalledTimes(3);
+    expect(releases).toEqual(["release", "release", "release"]);
+  });
+
+  it("rejects external edits interleaved while another controller holds cleanup lock", async () => {
+    const sessionFile = await createTempSessionFile();
+    const releases: string[] = [];
+    const acquireSessionWriteLock = vi.fn(async () => ({
+      release: vi.fn(async () => {
+        releases.push("release");
+      }),
+    }));
+    const firstController = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await firstController.releaseForPrompt();
+
+    const secondController = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+    await secondController.releaseForPrompt();
+    const cleanupLock = await secondController.acquireForCleanup();
+
+    await fs.appendFile(sessionFile, '{"type":"message","id":"external-cleanup"}\n', "utf8");
+    await cleanupLock.release();
+
+    await expect(
+      firstController.withSessionWriteLock(async () => {
+        await fs.appendFile(sessionFile, '{"type":"message","id":"late"}\n', "utf8");
+      }),
+    ).rejects.toBeInstanceOf(EmbeddedAttemptSessionTakeoverError);
+
+    expect(firstController.hasSessionTakeover()).toBe(true);
+    expect(acquireSessionWriteLock).toHaveBeenCalledTimes(4);
+    expect(releases).toEqual(["release", "release", "release", "release"]);
+  });
+
+  it("rejects external edits interleaved inside a broad owned transcript lock", async () => {
     const sessionFile = await createTempSessionFile();
     const releases: string[] = [];
     const acquireSessionWriteLock = vi.fn(async () => ({
@@ -309,15 +398,29 @@ describe("embedded attempt session lock lifecycle", () => {
     await withOwnedSessionTranscriptWrites(
       {
         sessionFile,
-        sessionKey: "agent:main:slack:channel:456",
+        sessionKey: "agent:main:slack:channel:789",
         withSessionWriteLock: (operation, options) =>
           secondController.withSessionWriteLock(operation, options),
       },
       async () =>
         await runWithOwnedSessionTranscriptWriteLock(
-          { sessionFile, sessionKey: "agent:main:slack:channel:456" },
+          { sessionFile, sessionKey: "agent:main:slack:channel:789" },
           async () => {
-            await fs.appendFile(sessionFile, '{"type":"message","id":"same-process"}\n', "utf8");
+            await fs.appendFile(
+              sessionFile,
+              '{"type":"message","id":"external-owned-scope"}\n',
+              "utf8",
+            );
+            await runWithOwnedSessionTranscriptWritePublication(
+              { sessionFile, sessionKey: "agent:main:slack:channel:789" },
+              async () => {
+                await fs.appendFile(
+                  sessionFile,
+                  '{"type":"message","id":"same-process"}\n',
+                  "utf8",
+                );
+              },
+            );
           },
         ),
     );
@@ -325,12 +428,11 @@ describe("embedded attempt session lock lifecycle", () => {
 
     await expect(
       firstController.withSessionWriteLock(async () => {
-        await fs.appendFile(sessionFile, '{"type":"message","id":"post-prompt"}\n', "utf8");
-        return "post-write";
+        await fs.appendFile(sessionFile, '{"type":"message","id":"late"}\n', "utf8");
       }),
-    ).resolves.toBe("post-write");
+    ).rejects.toBeInstanceOf(EmbeddedAttemptSessionTakeoverError);
 
-    expect(firstController.hasSessionTakeover()).toBe(false);
+    expect(firstController.hasSessionTakeover()).toBe(true);
     expect(acquireSessionWriteLock).toHaveBeenCalledTimes(3);
     expect(releases).toEqual(["release", "release", "release"]);
   });
