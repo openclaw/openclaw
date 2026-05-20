@@ -7,6 +7,7 @@ import {
   resolveTrustedSourceLinkedOfficialClawHubSpec,
   resolveTrustedSourceLinkedOfficialNpmSpec,
 } from "../../plugins/update.js";
+import { VERSION } from "../../version.js";
 import {
   runPluginPayloadSmokeCheck,
   type PluginPayloadSmokeFailure,
@@ -62,6 +63,7 @@ export async function runPostCorePluginConvergence(params: {
 }): Promise<PostCoreConvergenceResult> {
   const env: NodeJS.ProcessEnv = {
     ...params.env,
+    OPENCLAW_COMPATIBILITY_HOST_VERSION: VERSION,
     [UPDATE_POST_CORE_CONVERGENCE_ENV]: "1",
   };
 
