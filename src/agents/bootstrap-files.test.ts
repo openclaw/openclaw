@@ -513,3 +513,332 @@ describe("resolveContextInjectionMode", () => {
     ).toBe("continuation-skip");
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PR #243 — Synthetic bootstrap path preservation
+// Test cases designed by Gem (QA Lead), SE Workflow Run #14 Step 3.
+// See nova-mind/tests/TEST-CASES-batch-agent-identity.md for full specification.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("sanitizeBootstrapFiles — synthetic path preservation (PR #243)", () => {
+  beforeEach(() => clearInternalHooks());
+  afterEach(() => clearInternalHooks());
+
+  // TC-243-U-01: db:AGENT/HEARTBEAT.md passes through unchanged
+  it("TC-243-U-01: preserves db:AGENT/HEARTBEAT.md synthetic path unchanged", async () => {
+    registerInternalHook("agent:bootstrap", (event) => {
+      const ctx = event.context as AgentBootstrapHookContext;
+      ctx.bootstrapFiles = [
+        ...ctx.bootstrapFiles,
+        {
+          name: "HEARTBEAT_DB.md",
+          path: "db:AGENT/HEARTBEAT.md",
+          content: "heartbeat",
+          missing: false,
+        } as unknown as WorkspaceBootstrapFile,
+      ];
+    });
+
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    const files = await resolveBootstrapFilesForRun({ workspaceDir });
+    const heartbeat = files.find((f) => f.path === "db:AGENT/HEARTBEAT.md");
+
+    expect(heartbeat?.path).toBe("db:AGENT/HEARTBEAT.md");
+    // Must NOT be an absolute filesystem path
+    expect(heartbeat?.path).not.toMatch(/^\//);
+    expect(heartbeat?.path).not.toContain(workspaceDir);
+  });
+
+  // TC-243-U-02: All canonical db: namespace variants pass through unchanged
+  it.each([
+    ["db:UNIVERSAL/USER.md", "USER_UNIVERSAL.md"],
+    ["db:GLOBAL/COMMUNICATION.md", "COMMUNICATION.md"],
+    ["db:DOMAIN:Quality Assurance/AB_TESTING_METHODOLOGY.md", "AB_TESTING_METHODOLOGY.md"],
+    ["db:WORKFLOW:Daily Inspiration Art/WORKFLOW.md", "WORKFLOW_SYNTH.md"],
+    ["db:agent/SOUL.md", "SOUL_AGENT.md"], // lowercase db prefix still qualifies
+  ])("TC-243-U-02: preserves synthetic path %s unchanged", async (syntheticPath, uniqueName) => {
+    registerInternalHook("agent:bootstrap", (event) => {
+      const ctx = event.context as AgentBootstrapHookContext;
+      ctx.bootstrapFiles = [
+        ...ctx.bootstrapFiles,
+        {
+          name: uniqueName,
+          path: syntheticPath,
+          content: "content",
+          missing: false,
+        } as unknown as WorkspaceBootstrapFile,
+      ];
+    });
+
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    const files = await resolveBootstrapFilesForRun({ workspaceDir });
+    // Find by the synthetic path directly (avoids name collision with workspace files)
+    const file = files.find((f) => f.path === syntheticPath);
+
+    expect(file).toBeDefined();
+    expect(file?.path).toBe(syntheticPath);
+    // Must NOT be resolved to an absolute filesystem path
+    expect(file?.path).not.toMatch(/^\//);
+  });
+
+  // TC-243-U-03: fallback: namespace path passes through unchanged
+  it("TC-243-U-03: preserves fallback: namespace path unchanged", async () => {
+    registerInternalHook("agent:bootstrap", (event) => {
+      const ctx = event.context as AgentBootstrapHookContext;
+      ctx.bootstrapFiles = [
+        ...ctx.bootstrapFiles,
+        {
+          name: "UNIVERSAL_SEED.md",
+          path: "fallback:UNIVERSAL_SEED.md",
+          content: "seed",
+          missing: false,
+        } as unknown as WorkspaceBootstrapFile,
+      ];
+    });
+
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    const files = await resolveBootstrapFilesForRun({ workspaceDir });
+    const file = files.find((f) => f.path === "fallback:UNIVERSAL_SEED.md");
+
+    expect(file?.path).toBe("fallback:UNIVERSAL_SEED.md");
+  });
+
+  // TC-243-U-04: emergency: namespace path passes through unchanged
+  it("TC-243-U-04: preserves emergency: namespace path unchanged", async () => {
+    registerInternalHook("agent:bootstrap", (event) => {
+      const ctx = event.context as AgentBootstrapHookContext;
+      ctx.bootstrapFiles = [
+        ...ctx.bootstrapFiles,
+        {
+          name: "RECOVERY.md",
+          path: "emergency:RECOVERY.md",
+          content: "recovery",
+          missing: false,
+        } as unknown as WorkspaceBootstrapFile,
+      ];
+    });
+
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    const files = await resolveBootstrapFilesForRun({ workspaceDir });
+    const file = files.find((f) => f.path === "emergency:RECOVERY.md");
+
+    expect(file?.path).toBe("emergency:RECOVERY.md");
+  });
+
+  // TC-243-U-05: Normal workspace-relative path still resolved (no regression)
+  it("TC-243-U-05: still resolves workspace-relative path AGENTS.md normally", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "rules", "utf8");
+
+    const files = await resolveBootstrapFilesForRun({ workspaceDir });
+    const agents = files.find((f) => f.name === "AGENTS.md");
+
+    expect(agents?.path).toBe(path.join(workspaceDir, "AGENTS.md"));
+    // Must be an absolute path
+    expect(path.isAbsolute(agents?.path ?? "")).toBe(true);
+  });
+
+  // TC-243-U-06: Absolute filesystem path still resolved normally (no regression)
+  it("TC-243-U-06: still handles absolute path /tmp/something.md normally", async () => {
+    const absolutePath = "/tmp/openclaw-test-bootstrap-file.md";
+    await fs.writeFile(absolutePath, "absolute content", "utf8");
+
+    registerInternalHook("agent:bootstrap", (event) => {
+      const ctx = event.context as AgentBootstrapHookContext;
+      ctx.bootstrapFiles = [
+        ...ctx.bootstrapFiles,
+        {
+          name: "something.md",
+          path: absolutePath,
+          content: "absolute content",
+          missing: false,
+        } as unknown as WorkspaceBootstrapFile,
+      ];
+    });
+
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    const files = await resolveBootstrapFilesForRun({ workspaceDir });
+    const file = files.find((f) => f.name === "something.md");
+
+    expect(file?.path).toBe(absolutePath); // resolved absolute remains absolute
+    await fs.unlink(absolutePath).catch(() => {});
+  });
+
+  // TC-243-DEDUP-01: Two identical synthetic paths → one entry survives
+  it("TC-243-DEDUP-01: deduplicates identical synthetic paths", async () => {
+    registerInternalHook("agent:bootstrap", (event) => {
+      const ctx = event.context as AgentBootstrapHookContext;
+      ctx.bootstrapFiles = [
+        ...ctx.bootstrapFiles,
+        {
+          name: "HEARTBEAT_DB.md",
+          path: "db:AGENT/HEARTBEAT.md",
+          content: "first",
+          missing: false,
+        } as unknown as WorkspaceBootstrapFile,
+        {
+          name: "HEARTBEAT_DB.md",
+          path: "db:AGENT/HEARTBEAT.md",
+          content: "second",
+          missing: false,
+        } as unknown as WorkspaceBootstrapFile,
+      ];
+    });
+
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    const files = await resolveBootstrapFilesForRun({ workspaceDir });
+    const heartbeats = files.filter((f) => f.path === "db:AGENT/HEARTBEAT.md");
+
+    expect(heartbeats).toHaveLength(1);
+    expect(heartbeats[0]?.content).toBe("first"); // first-seen wins
+  });
+
+  // TC-243-DEDUP-02: Synthetic path and workspace-relative with same-looking filename
+  // are NOT collapsed — they have different dedupe keys.
+  it("TC-243-DEDUP-02: does not collapse synthetic path and workspace-relative path with same filename", async () => {
+    registerInternalHook("agent:bootstrap", (event) => {
+      const ctx = event.context as AgentBootstrapHookContext;
+      ctx.bootstrapFiles = [
+        ...ctx.bootstrapFiles,
+        {
+          name: "HEARTBEAT.md",
+          path: "db:AGENT/HEARTBEAT.md",
+          content: "db content",
+          missing: false,
+        } as unknown as WorkspaceBootstrapFile,
+        {
+          name: "HEARTBEAT.md",
+          path: path.join(ctx.workspaceDir, "HEARTBEAT.md"),
+          content: "fs content",
+          missing: false,
+        } as unknown as WorkspaceBootstrapFile,
+      ];
+    });
+
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.writeFile(path.join(workspaceDir, "HEARTBEAT.md"), "fs content", "utf8");
+
+    const files = await resolveBootstrapFilesForRun({ workspaceDir });
+    // The workspace HEARTBEAT.md and the synthetic HEARTBEAT.md must both survive;
+    // the hook's filesystem HEARTBEAT.md is a duplicate of the workspace one and gets dropped.
+    const syntheticEntry = files.find((f) => f.path === "db:AGENT/HEARTBEAT.md");
+    const fsEntry = files.find((f) => f.path === path.join(workspaceDir, "HEARTBEAT.md"));
+
+    expect(syntheticEntry).toBeDefined();
+    expect(fsEntry).toBeDefined();
+  });
+
+  // TC-243-DEDUP-03: Two different synthetic paths with same-looking suffix remain distinct
+  it("TC-243-DEDUP-03: does not collapse distinct synthetic namespaces with same filename", async () => {
+    registerInternalHook("agent:bootstrap", (event) => {
+      const ctx = event.context as AgentBootstrapHookContext;
+      ctx.bootstrapFiles = [
+        ...ctx.bootstrapFiles,
+        {
+          name: "CONFIG.md",
+          path: "db:UNIVERSAL/CONFIG.md",
+          content: "universal",
+          missing: false,
+        } as unknown as WorkspaceBootstrapFile,
+        {
+          name: "CONFIG.md",
+          path: "db:agent/CONFIG.md",
+          content: "agent",
+          missing: false,
+        } as unknown as WorkspaceBootstrapFile,
+      ];
+    });
+
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    const files = await resolveBootstrapFilesForRun({ workspaceDir });
+    const universalEntry = files.find((f) => f.path === "db:UNIVERSAL/CONFIG.md");
+    const agentEntry = files.find((f) => f.path === "db:agent/CONFIG.md");
+
+    expect(universalEntry).toBeDefined();
+    expect(agentEntry).toBeDefined();
+  });
+
+  // TC-243-NEG-01: Non-synthetic colon-containing paths go through normal resolution
+  it.each([[":leading-colon.md"], ["1db:something.md"], ["foo/db:bar.md"]])(
+    "TC-243-NEG-01: non-synthetic path %s goes through normal (filesystem) resolution",
+    async (nonSyntheticPath) => {
+      registerInternalHook("agent:bootstrap", (event) => {
+        const ctx = event.context as AgentBootstrapHookContext;
+        ctx.bootstrapFiles = [
+          ...ctx.bootstrapFiles,
+          {
+            name: "weird.md",
+            path: nonSyntheticPath,
+            content: "content",
+            missing: false,
+          } as unknown as WorkspaceBootstrapFile,
+        ];
+      });
+
+      const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+      const files = await resolveBootstrapFilesForRun({ workspaceDir });
+      const file = files.find((f) => f.name === "weird.md");
+
+      if (file) {
+        // Path must have been resolved to an absolute filesystem path, not the raw input
+        expect(path.isAbsolute(file.path)).toBe(true);
+        expect(file.path).not.toBe(nonSyntheticPath);
+      }
+      // If the file is absent (sanitizer dropped it), that's also acceptable —
+      // the key point is it did NOT pass through as an opaque synthetic identifier.
+    },
+  );
+
+  // TC-243-U-EXTRA-01: Warning NOT emitted for valid synthetic paths
+  it("TC-243-U-EXTRA-01: does not emit a warning for valid synthetic paths", async () => {
+    registerInternalHook("agent:bootstrap", (event) => {
+      const ctx = event.context as AgentBootstrapHookContext;
+      ctx.bootstrapFiles = [
+        ...ctx.bootstrapFiles,
+        {
+          name: "HEARTBEAT_DB.md",
+          path: "db:AGENT/HEARTBEAT.md",
+          content: "hb",
+          missing: false,
+        } as unknown as WorkspaceBootstrapFile,
+      ];
+    });
+
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    const warnings: string[] = [];
+    await resolveBootstrapFilesForRun({
+      workspaceDir,
+      warn: (msg) => warnings.push(msg),
+    });
+
+    expect(warnings.filter((w) => w.includes("db:AGENT"))).toHaveLength(0);
+  });
+
+  // TC-243-CROSS-01 proxy test: synthetic path returned before any path.resolve is attempted
+  it("TC-243-CROSS-01: synthetic path is returned before any path.resolve is attempted", async () => {
+    const syntheticPath = "db:AGENT/HEARTBEAT.md";
+
+    registerInternalHook("agent:bootstrap", (event) => {
+      const ctx = event.context as AgentBootstrapHookContext;
+      ctx.bootstrapFiles = [
+        ...ctx.bootstrapFiles,
+        {
+          name: "HEARTBEAT_DB.md",
+          path: syntheticPath,
+          content: "hb",
+          missing: false,
+        } as unknown as WorkspaceBootstrapFile,
+      ];
+    });
+
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    const files = await resolveBootstrapFilesForRun({ workspaceDir });
+    const file = files.find((f) => f.path === syntheticPath);
+
+    // If path.resolve had been called, the result would be an absolute path.
+    // If synthetic bypass works, the path is exactly the input string.
+    expect(file?.path).toBe(syntheticPath);
+    expect(file?.path?.startsWith("/")).toBe(false); // Not an absolute POSIX path
+    expect(file?.path?.match(/^[A-Za-z]:\\/)).toBeNull(); // Not a Windows drive path
+  });
+});

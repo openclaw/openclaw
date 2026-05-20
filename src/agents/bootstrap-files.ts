@@ -28,6 +28,25 @@ const CONTINUATION_SCAN_MAX_TAIL_BYTES = 256 * 1024;
 const CONTINUATION_SCAN_MAX_RECORDS = 500;
 export const FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE = "openclaw:bootstrap-context:full";
 const BOOTSTRAP_WARNING_DEDUPE_LIMIT = 1024;
+
+/**
+ * Matches synthetic bootstrap path identifiers such as `db:AGENT/SOUL.md`,
+ * `fallback:UNIVERSAL_SEED.md`, or `emergency:RECOVERY.md`.
+ *
+ * A path is synthetic when it begins with an alphabetic character, followed by
+ * zero or more alphanumeric/underscore/dash characters, followed immediately by
+ * a colon — with no preceding slash.  Examples: `db:`, `fallback:`, `emergency:`.
+ *
+ * The check is intentionally namespace-agnostic (no whitelist of `db|fallback|…`)
+ * because bootstrap context records are mutable at runtime: agents add and remove
+ * their own AGENT records, and newhart adds/removes UNIVERSAL/GLOBAL/DOMAIN records.
+ * A new namespace must work without any code changes here.
+ *
+ * Non-synthetic colon-containing paths — e.g. `foo/db:bar.md` (slash before
+ * colon), `:leading.md` (starts with colon), `1db:thing.md` (leading digit) —
+ * do not match and flow through normal `path.resolve()` handling.
+ */
+const SYNTHETIC_PATH_PREFIX = /^[A-Za-z][A-Za-z0-9_-]*:/;
 const seenBootstrapWarnings = new Set<string>();
 const bootstrapWarningOrder: string[] = [];
 
@@ -161,6 +180,23 @@ function sanitizeBootstrapFiles(
       );
       continue;
     }
+    // Synthetic namespace bypass: opaque identifiers like db:AGENT/SOUL.md,
+    // fallback:UNIVERSAL_SEED.md, emergency:RECOVERY.md must be preserved verbatim.
+    // They must never reach path.isAbsolute() or path.resolve() — on any platform,
+    // those calls would corrupt the identifier into a filesystem path.
+    // Dedupe key is the literal synthetic path string; no workspace-relative
+    // resolution is applied. Synthetic keys and FS relative keys never collide
+    // because synthetic keys always contain `:` early, while FS relative keys
+    // (produced by path.normalize(path.relative(...))) never do.
+    if (SYNTHETIC_PATH_PREFIX.test(pathValue)) {
+      if (seenPaths.has(pathValue)) {
+        continue;
+      }
+      seenPaths.add(pathValue);
+      sanitized.push({ ...file, path: pathValue });
+      continue;
+    }
+
     const resolvedPath = path.isAbsolute(pathValue)
       ? path.resolve(pathValue)
       : path.resolve(workspaceRoot, pathValue);
