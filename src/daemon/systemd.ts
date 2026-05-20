@@ -812,7 +812,7 @@ async function writeSystemdGatewayEnvironmentFile(params: {
       continue;
     }
     try {
-      existing = { ...existing, ...(await readSystemdEnvironmentFile(sourceEnvFilePath)) };
+      Object.assign(existing, await readSystemdEnvironmentFile(sourceEnvFilePath));
     } catch {
       // File does not exist yet — nothing to preserve.
     }
