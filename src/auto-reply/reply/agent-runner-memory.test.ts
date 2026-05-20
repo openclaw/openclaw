@@ -95,11 +95,11 @@ type EmbeddedAgentParams = {
 };
 
 type CompactEmbeddedAgentSessionParams = {
-  agentId?: string;
   authProfileId?: string;
   contextTokenBudget?: number;
   sessionKey?: string;
   sandboxSessionKey?: string;
+  agentId?: string;
   currentTokenCount?: number;
   cwd?: string;
   sessionFile?: string;
@@ -1063,6 +1063,54 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactCall.authProfileId).toBe("anthropic:claude@martian.engineering");
     expect(compactCall.contextTokenBudget).toBe(258_000);
   });
+
+
+  it("uses inherited reserveTokensFloor for preflight projection with empty agent compaction", async () => {
+    clearMemoryPluginState();
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 5_000,
+      totalTokensFresh: false,
+    };
+
+    await runPreflightCompactionIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            model: "anthropic/claude-opus-4-6",
+            compaction: { reserveTokensFloor: 3_000 },
+          },
+          list: [
+            {
+              id: "lossless-agent",
+              model: { primary: "anthropic/claude-opus-4-6" },
+              compaction: {},
+            },
+          ],
+        },
+      },
+      followupRun: createTestFollowupRun({
+        agentId: "lossless-agent",
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+        sessionKey: "agent:lossless-agent:main",
+      }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 10_000,
+      sessionEntry,
+      sessionStore: { "agent:lossless-agent:main": sessionEntry },
+      sessionKey: "agent:lossless-agent:main",
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
+    const compactCall = requireCompactEmbeddedAgentSessionCall();
+    expect(compactCall.agentId).toBe("lossless-agent");
+    expect(compactCall.currentTokenCount).toBe(5_000);
+  });
+
   it("updates the active preflight run after transcript rotation", async () => {
     const sessionFile = path.join(rootDir, "session.jsonl");
     const successorFile = path.join(rootDir, "session-rotated.jsonl");

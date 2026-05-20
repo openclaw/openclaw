@@ -200,6 +200,7 @@ function buildCliCompactionRuntimeContext(params: CliCompactionRuntimeContextPar
       provider: params.provider,
       modelId: params.model,
       thinkLevel: params.thinkLevel,
+      useCompactionThinkingLevel: true,
       extraSystemPrompt: params.extraSystemPrompt,
     }),
     currentTokenCount: params.currentTokenCount,

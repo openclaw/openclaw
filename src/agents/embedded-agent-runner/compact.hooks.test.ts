@@ -2051,6 +2051,38 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expect(resolveCompactionTimeoutMsMock).toHaveBeenCalledWith(config, "lossless-agent");
   });
 
+  it("uses compaction.thinkingLevel for queued context-engine compaction", async () => {
+    await compactEmbeddedPiSession(
+      wrappedCompactionArgs({
+        sessionKey: "legacy-topic-47",
+        agentId: "lossless-agent",
+        config: {
+          agents: {
+            defaults: {
+              compaction: {
+                thinkingLevel: "high",
+              },
+            },
+            list: [
+              {
+                id: "lossless-agent",
+                compaction: {
+                  thinkingLevel: "off",
+                },
+              },
+            ],
+          },
+        },
+        thinkLevel: "high",
+      }),
+    );
+
+    const compactArg = mockCallArg(contextEngineCompactMock) as {
+      runtimeContext?: Record<string, unknown>;
+    };
+    expect(compactArg.runtimeContext?.thinkLevel).toBe("off");
+  });
+
   it("binds queued post-compaction maintenance to the resolved legacy session agent", async () => {
     const maintain = vi.fn(async (_params?: unknown) => ({
       changed: false,

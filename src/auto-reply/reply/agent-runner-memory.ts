@@ -1,13 +1,14 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { resolveAgentCompactionConfig, resolveAgentConfig } from "../../agents/agent-scope-config.js";
+import { resolveAgentConfig } from "../../agents/agent-scope-config.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
 import {
   classifyCompactionReason,
   DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON,
 } from "../../agents/embedded-agent-runner/compact-reasons.js";
+import { resolveCompactionReserveTokensFloor } from "../../agents/agent-settings.js";
 import { isRecoverableNativeHarnessBindingFailure } from "../../agents/harness/compaction-recovery.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
@@ -738,8 +739,7 @@ export async function runPreflightCompactionIfNeeded(params: {
   const memoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg, agentId: activeAgentId });
   const reserveTokensFloor =
     memoryFlushPlan?.reserveTokensFloor ??
-    resolveAgentCompactionConfig(params.cfg, activeAgentId)?.reserveTokensFloor ??
-    20_000;
+    resolveCompactionReserveTokensFloor(params.cfg, activeAgentId);
   const softThresholdTokens = memoryFlushPlan?.softThresholdTokens ?? 4_000;
   const freshPersistedTokens = resolveFreshSessionTotalTokens(entry);
   const persistedTotalTokens = entry.totalTokens;

@@ -403,6 +403,24 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.thinkLevel).toBe("low");
   });
 
+  it("inherits default compaction.thinkingLevel from empty per-agent compaction", () => {
+    const result = buildEmbeddedCompactionRuntimeContext({
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      agentId: "worker",
+      config: {
+        agents: {
+          defaults: { compaction: { thinkingLevel: "off" } },
+          list: [{ id: "worker", compaction: {} }],
+        },
+      } as OpenClawConfig,
+      thinkLevel: "high",
+      useCompactionThinkingLevel: true,
+    });
+
+    expect(result.thinkLevel).toBe("off");
+  });
+
   it("keeps ordinary runtime contexts on the caller thinking level", () => {
     const result = buildEmbeddedCompactionRuntimeContext({
       workspaceDir: "/tmp/workspace",

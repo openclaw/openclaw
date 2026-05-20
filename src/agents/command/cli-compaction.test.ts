@@ -981,6 +981,62 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(calls).toEqual(["ensure", "resolve"]);
   });
 
+  it("uses compaction.thinkingLevel for CLI context-engine compaction", async () => {
+    const sessionKey = "agent:lossless-agent:cli";
+    const sessionId = "session-cli-thinking";
+    const sessionFile = path.join(tmpDir, "session-cli-thinking.jsonl");
+    await writeSessionFile({ sessionFile, sessionId });
+
+    const sessionEntry: SessionEntry = {
+      sessionId,
+      updatedAt: Date.now(),
+      sessionFile,
+      contextTokens: 1_000,
+      totalTokens: 950,
+      totalTokensFresh: true,
+    };
+    const compactCalls: Array<Parameters<ContextEngine["compact"]>[0]> = [];
+    setCliCompactionTestDeps({
+      resolveContextEngine: async () => buildContextEngine({ compactCalls }),
+      createPreparedEmbeddedPiSettingsManager: async () => ({
+        getCompactionReserveTokens: () => 200,
+        getCompactionKeepRecentTokens: () => 0,
+        applyOverrides: () => {},
+      }),
+      shouldPreemptivelyCompactBeforePrompt: () => ({
+        route: "fits",
+        shouldCompact: false,
+        estimatedPromptTokens: 600,
+        promptBudgetBeforeReserve: 800,
+        overflowTokens: 0,
+        toolResultReducibleChars: 0,
+        effectiveReserveTokens: 200,
+      }),
+      resolveLiveToolResultMaxChars: () => 20_000,
+    });
+
+    await runCliTurnCompactionLifecycle({
+      cfg: {
+        agents: {
+          defaults: { compaction: { thinkingLevel: "high" } },
+          list: [{ id: "lossless-agent", compaction: { thinkingLevel: "off" } }],
+        },
+      } as OpenClawConfig,
+      sessionId,
+      sessionKey,
+      sessionEntry,
+      sessionAgentId: "lossless-agent",
+      workspaceDir: tmpDir,
+      agentDir: tmpDir,
+      provider: "claude-cli",
+      model: "opus",
+      thinkLevel: "high",
+    });
+
+    expect(compactCalls).toHaveLength(1);
+    expect(compactCalls[0]?.runtimeContext?.thinkLevel).toBe("off");
+  });
+
   it("binds CLI post-compaction maintenance to the resolved legacy session agent", async () => {
     const sessionKey = "legacy-topic-47";
     const sessionId = "session-cli-legacy-agent";

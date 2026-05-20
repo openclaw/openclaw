@@ -507,6 +507,7 @@ function buildCompactionContextEngineRuntimeContext(params: {
       modelId: params.params.model,
       modelFallbacksOverride: params.params.modelFallbacksOverride,
       thinkLevel: params.params.thinkLevel,
+      useCompactionThinkingLevel: true,
       reasoningLevel: params.params.reasoningLevel,
       bashElevated: params.params.bashElevated,
       extraSystemPrompt: params.params.extraSystemPrompt,
