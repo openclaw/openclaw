@@ -28,6 +28,7 @@ import { createEmbeddedPiSessionEventHandler } from "./pi-embedded-subscribe.han
 import {
   consumePendingAssistantReplyDirectivesIntoReply,
   consumePendingToolMediaIntoReply,
+  hasAssistantVisibleReply,
   readPendingToolMediaReply,
 } from "./pi-embedded-subscribe.handlers.messages.js";
 import {
@@ -39,7 +40,10 @@ import type {
   EmbeddedPiSubscribeState,
 } from "./pi-embedded-subscribe.handlers.types.js";
 import { isPromiseLike } from "./pi-embedded-subscribe.promise.js";
-import { filterToolResultMediaUrls } from "./pi-embedded-subscribe.tools.js";
+import {
+  buildToolLifecycleErrorResult,
+  filterToolResultMediaUrls,
+} from "./pi-embedded-subscribe.tools.js";
 import type { SubscribeEmbeddedPiSessionParams } from "./pi-embedded-subscribe.types.js";
 import { stripDowngradedToolCallText, THINKING_TAG_SCAN_RE } from "./pi-embedded-utils.js";
 import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
@@ -186,6 +190,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     pendingToolMediaUrls: initialPendingToolMediaUrls,
     pendingToolAudioAsVoice: false,
     pendingToolTrustedLocalMedia: false,
+    visibleBlockReplyCount: 0,
     pendingAssistantReplyDirectives: undefined,
     deterministicApprovalPromptPending: false,
     deterministicApprovalPromptSent: false,
@@ -217,9 +222,9 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   const emitBlockReplySafely = (
     payload: Parameters<NonNullable<SubscribeEmbeddedPiSessionParams["onBlockReply"]>>[0],
     options?: { assistantMessageIndex?: number },
-  ) => {
+  ): boolean => {
     if (!params.onBlockReply) {
-      return;
+      return false;
     }
     try {
       const taggedPayload =
@@ -230,7 +235,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
           : payload;
       const maybeTask = params.onBlockReply(taggedPayload);
       if (!isPromiseLike<void>(maybeTask)) {
-        return;
+        return true;
       }
       const task = Promise.resolve(maybeTask).catch((err) => {
         log.warn(`block reply callback failed: ${String(err)}`);
@@ -239,8 +244,10 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       void task.finally(() => {
         pendingBlockReplyTasks.delete(task);
       });
+      return true;
     } catch (err) {
       log.warn(`block reply callback failed: ${String(err)}`);
+      return false;
     }
   };
   const emitBlockReply = (
@@ -252,7 +259,10 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       options?.consumePendingToolMedia === false
         ? withAssistantDirectives
         : consumePendingToolMediaIntoReply(state, withAssistantDirectives);
-    emitBlockReplySafely(withToolMedia, options);
+    const emitted = emitBlockReplySafely(withToolMedia, options);
+    if (emitted && !withToolMedia.isReasoning && hasAssistantVisibleReply(withToolMedia)) {
+      state.visibleBlockReplyCount += 1;
+    }
   };
 
   const resetAssistantMessageState = (nextAssistantTextBaseline: number) => {
@@ -543,6 +553,18 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       result,
       params.builtinToolNames,
     );
+    if (
+      params.sourceReplyDeliveryMode === "message_tool_only" &&
+      cleanedText &&
+      filteredMediaUrls.length === 0 &&
+      hasCommittedMessagingToolDeliveryEvidence({
+        messagingToolSentTexts,
+        messagingToolSentMediaUrls,
+        messagingToolSentTargets,
+      })
+    ) {
+      return;
+    }
     if (!cleanedText && filteredMediaUrls.length === 0) {
       return;
     }
@@ -925,7 +947,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
         messagingToolSentMediaUrls,
         messagingToolSentTargets,
       }) ||
-      state.successfulCronAdds > 0;
+      state.successfulCronAdds > 0 ||
+      state.visibleBlockReplyCount > 0;
     assistantTexts.length = 0;
     toolMetas.length = 0;
     toolMetaById.clear();
@@ -941,9 +964,12 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     pendingMessagingTexts.clear();
     pendingMessagingTargets.clear();
     state.successfulCronAdds = 0;
+    state.heartbeatToolResponse = undefined;
     state.pendingMessagingMediaUrls.clear();
     state.pendingToolMediaUrls = [];
     state.pendingToolAudioAsVoice = false;
+    state.pendingToolTrustedLocalMedia = false;
+    state.visibleBlockReplyCount = 0;
     state.pendingAssistantReplyDirectives = undefined;
     state.deterministicApprovalPromptPending = false;
     state.deterministicApprovalPromptSent = false;
@@ -1063,12 +1089,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
           toolName: toolParams.toolName,
           toolCallId: toolParams.toolCallId,
           isError: true,
-          result: {
-            details: {
-              status: "error",
-              error: error instanceof Error ? error.message : String(error),
-            },
-          },
+          result: buildToolLifecycleErrorResult(error),
         } as never);
         throw error;
       }
@@ -1101,6 +1122,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     getHeartbeatToolResponse: () =>
       state.heartbeatToolResponse ? { ...state.heartbeatToolResponse } : undefined,
     getPendingToolMediaReply: () => readPendingToolMediaReply(state),
+    getVisibleBlockReplyCount: () => state.visibleBlockReplyCount,
     getSuccessfulCronAdds: () => state.successfulCronAdds,
     getReplayState: () => ({ ...state.replayState }),
     // Returns true if any messaging tool successfully sent a message.

@@ -43,7 +43,7 @@ import {
   commitPluginInteractiveCallbackDedupe,
 } from "./interactive-state.js";
 import {
-  __testing,
+  testing,
   clearPluginLoaderCache,
   loadOpenClawPlugins,
   type PluginLoadOptions,
@@ -89,7 +89,7 @@ import {
   setActivePluginRegistry,
 } from "./runtime.js";
 import {
-  __testing as runtimeRegistryLoaderTesting,
+  testing as runtimeRegistryLoaderTesting,
   ensurePluginRegistryLoaded,
 } from "./runtime/runtime-registry-loader.js";
 import type { PluginSdkResolutionPreference } from "./sdk-alias.js";
@@ -1661,7 +1661,7 @@ describe("loadOpenClawPlugins", () => {
         });
         let capturedApi: typeof api | undefined;
 
-        __testing.runPluginRegisterSync((guardedApi) => {
+        testing.runPluginRegisterSync((guardedApi) => {
           capturedApi = guardedApi;
           // Host-hook delivery remains callable after registration closes; only registration-only APIs lock.
           guardedApi.registerGatewayMethod("proofchat.ping", vi.fn() as never);
@@ -3839,9 +3839,9 @@ module.exports = { id: "throws-after-import", register() {} };`,
       filename: "cache-eviction.cjs",
       body: `module.exports = { id: "cache-eviction", register() {} };`,
     });
-    const previousCacheCap = __testing.maxPluginRegistryCacheEntries;
-    __testing.setMaxPluginRegistryCacheEntriesForTest(4);
-    const stateDirs = Array.from({ length: __testing.maxPluginRegistryCacheEntries + 1 }, () =>
+    const previousCacheCap = testing.maxPluginRegistryCacheEntries;
+    testing.setMaxPluginRegistryCacheEntriesForTest(4);
+    const stateDirs = Array.from({ length: testing.maxPluginRegistryCacheEntries + 1 }, () =>
       makeTempDir(),
     );
 
@@ -3875,7 +3875,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
       expect(loadWithStateDir(stateDirs[0] ?? makeTempDir())).toBe(first);
       expect(loadWithStateDir(stateDirs[1] ?? makeTempDir())).not.toBe(second);
     } finally {
-      __testing.setMaxPluginRegistryCacheEntriesForTest(previousCacheCap);
+      testing.setMaxPluginRegistryCacheEntriesForTest(previousCacheCap);
     }
   });
 
@@ -5598,7 +5598,7 @@ module.exports = {
 
   it("prefers setupEntry for configured channel loads during startup when opted in", () => {
     expect(
-      __testing.shouldLoadChannelPluginInSetupRuntime({
+      testing.shouldLoadChannelPluginInSetupRuntime({
         manifestChannels: ["setup-runtime-preferred-test"],
         setupSource: "./setup-entry.cjs",
         startupDeferConfiguredChannelFullLoadUntilAfterListen: true,
@@ -5904,6 +5904,45 @@ module.exports = {
       "agent_end",
       "before_agent_run",
     ]);
+  });
+
+  it("normalizes legacy deactivate typed hooks onto gateway_stop", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "legacy-deactivate-hook",
+      filename: "legacy-deactivate-hook.cjs",
+      body: `module.exports = { id: "legacy-deactivate-hook", register(api) {
+  api.on("deactivate", () => undefined);
+} };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["legacy-deactivate-hook"],
+        entries: {
+          "legacy-deactivate-hook": {
+            hooks: {
+              timeoutMs: 250,
+            },
+          },
+        },
+      },
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === "legacy-deactivate-hook")?.status).toBe(
+      "loaded",
+    );
+    expect(registry.typedHooks.map((entry) => entry.hookName)).toEqual(["gateway_stop"]);
+    expect(registry.typedHooks[0]?.timeoutMs).toBe(250);
+    expect(
+      registry.diagnostics.some(
+        (diag) =>
+          diag.pluginId === "legacy-deactivate-hook" &&
+          diag.message ===
+            'typed hook "deactivate" is deprecated (legacy-deactivate-hook-alias); use "gateway_stop". This compatibility alias will be removed after 2026-08-16.',
+      ),
+    ).toBe(true);
   });
 
   it("ignores unknown typed hooks from plugins and keeps loading", () => {
@@ -7245,19 +7284,19 @@ export const runtimeValue = helperValue;`,
   it("converts Windows absolute import specifiers to file URLs only for module loading", () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     try {
-      expect(__testing.toSafeImportPath("C:\\Users\\alice\\plugin\\index.mjs")).toBe(
+      expect(testing.toSafeImportPath("C:\\Users\\alice\\plugin\\index.mjs")).toBe(
         "file:///C:/Users/alice/plugin/index.mjs",
       );
-      expect(__testing.toSafeImportPath("C:\\Users\\alice\\plugin folder\\x#y.mjs")).toBe(
+      expect(testing.toSafeImportPath("C:\\Users\\alice\\plugin folder\\x#y.mjs")).toBe(
         "file:///C:/Users/alice/plugin%20folder/x%23y.mjs",
       );
-      expect(__testing.toSafeImportPath("\\\\server\\share\\plugin\\index.mjs")).toBe(
+      expect(testing.toSafeImportPath("\\\\server\\share\\plugin\\index.mjs")).toBe(
         "file://server/share/plugin/index.mjs",
       );
-      expect(__testing.toSafeImportPath("file:///C:/Users/alice/plugin/index.mjs")).toBe(
+      expect(testing.toSafeImportPath("file:///C:/Users/alice/plugin/index.mjs")).toBe(
         "file:///C:/Users/alice/plugin/index.mjs",
       );
-      expect(__testing.toSafeImportPath("./relative/index.mjs")).toBe("./relative/index.mjs");
+      expect(testing.toSafeImportPath("./relative/index.mjs")).toBe("./relative/index.mjs");
     } finally {
       platformSpy.mockRestore();
     }

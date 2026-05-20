@@ -4,7 +4,7 @@ import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  __testing as replyRunTesting,
+  testing as replyRunTesting,
   createReplyOperation,
   replyRunRegistry,
 } from "../auto-reply/reply/reply-run-registry.js";
@@ -145,6 +145,8 @@ function buildPreparedContext(params?: {
       env: {},
     },
     reusableCliSession: params?.cliSessionId ? { sessionId: params.cliSessionId } : {},
+    hadSessionFile: false,
+    contextEngineConfig: {},
     modelId: "gpt-5.4",
     normalizedModel: "gpt-5.4",
     contextWindowInfo: {
@@ -799,9 +801,11 @@ describe("runCliAgent reliability", () => {
       );
       expect(JSON.stringify(blockedLine)).not.toContain("secret prompt");
       expect(JSON.stringify(blockedLine)).not.toContain("matched secret prompt");
-      expect(blockedLine.message.__openclaw.beforeAgentRunBlocked.blockedBy).toBe("policy-plugin");
-      expect(blockedLine.message.__openclaw.beforeAgentRunBlocked).not.toHaveProperty("reason");
-      expect(Object.hasOwn(blockedLine.message.__openclaw, "beforeAgentRunBlocked")).toBe(true);
+      expect(blockedLine.message["__openclaw"].beforeAgentRunBlocked.blockedBy).toBe(
+        "policy-plugin",
+      );
+      expect(blockedLine.message["__openclaw"].beforeAgentRunBlocked).not.toHaveProperty("reason");
+      expect(Object.hasOwn(blockedLine.message["__openclaw"], "beforeAgentRunBlocked")).toBe(true);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

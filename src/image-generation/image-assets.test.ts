@@ -92,6 +92,26 @@ describe("image asset helpers", () => {
     ).toEqual([]);
   });
 
+  it("rejects malformed OpenAI-compatible image responses in strict mode", () => {
+    expect(() =>
+      parseOpenAiCompatibleImageResponse(
+        {
+          data: [{ b64_json: "not-base64!" }],
+        },
+        {
+          defaultMimeType: "image/png",
+          malformedResponseError: "Sample image response malformed",
+        },
+      ),
+    ).toThrow("Sample image response malformed");
+    expect(() =>
+      parseOpenAiCompatibleImageResponse(
+        { data: { b64_json: Buffer.from("png").toString("base64") } },
+        { malformedResponseError: "Sample image response malformed" },
+      ),
+    ).toThrow("Sample image response malformed");
+  });
+
   it("resolves source upload filenames from explicit names or MIME types", () => {
     expect(
       imageSourceUploadFileName({

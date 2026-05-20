@@ -11,6 +11,7 @@ import { parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
+import { isChildlessCodexNativeSubagentTask } from "./codex-native-subagent-task.js";
 import {
   formatTaskBlockedFollowupMessage,
   formatTaskStateChangeMessage,
@@ -19,6 +20,7 @@ import {
   shouldAutoDeliverTaskStateChange,
   shouldAutoDeliverTaskTerminalUpdate,
   shouldSuppressDuplicateTerminalDelivery,
+  shouldUseParentReviewTaskTerminalMessage,
 } from "./task-executor-policy.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import {
@@ -1152,15 +1154,22 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
         lastEventAt: Date.now(),
       });
     }
-    const eventText = formatTaskTerminalMessage(latest);
-    if (!canDeliverTaskToRequesterOrigin(latest)) {
+    const shouldRouteParentReview = shouldUseParentReviewTaskTerminalMessage(latest);
+    const canDeliverDirect = canDeliverTaskToRequesterOrigin(latest);
+    const directEventText = formatTaskTerminalMessage(latest);
+    const sessionEventText = formatTaskTerminalMessage(
+      latest,
+      shouldRouteParentReview ? { surface: "parent_session" } : undefined,
+    );
+    if (shouldRouteParentReview || !canDeliverDirect) {
       try {
-        queueTaskSystemEvent(latest, eventText);
+        queueTaskSystemEvent(latest, sessionEventText);
         if (latest.terminalOutcome === "blocked") {
           queueBlockedTaskFollowup(latest);
         }
         return updateTask(taskId, {
-          deliveryStatus: "session_queued",
+          deliveryStatus:
+            shouldRouteParentReview && canDeliverDirect ? "pending" : "session_queued",
           lastEventAt: Date.now(),
         });
       } catch (error) {
@@ -1184,7 +1193,7 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
         to: owner.requesterOrigin?.to ?? "",
         accountId: owner.requesterOrigin?.accountId,
         threadId: owner.requesterOrigin?.threadId,
-        content: eventText,
+        content: directEventText,
         agentId: requesterAgentId,
         idempotencyKey,
         mirror: {
@@ -1208,7 +1217,7 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
         error,
       });
       try {
-        queueTaskSystemEvent(latest, eventText);
+        queueTaskSystemEvent(latest, sessionEventText);
         if (latest.terminalOutcome === "blocked") {
           queueBlockedTaskFollowup(latest);
         }
@@ -1890,14 +1899,20 @@ export async function cancelTaskById(params: {
   try {
     if (task.runtime !== "cli") {
       if (!childSessionKey) {
-        return {
-          found: true,
-          cancelled: false,
-          reason: "Task has no cancellable child session.",
-          task: cloneTaskRecord(task),
-        };
+        if (!isChildlessCodexNativeSubagentTask(task)) {
+          return {
+            found: true,
+            cancelled: false,
+            reason: "Task has no cancellable child session.",
+            task: cloneTaskRecord(task),
+          };
+        }
       }
-      if (task.runtime === "acp") {
+      if (!childSessionKey) {
+        // Codex native subagents are mirrored from the Codex app server and do
+        // not have OpenClaw child sessions to terminate. Cancellation clears
+        // the stale task-registry record only.
+      } else if (task.runtime === "acp") {
         const { getAcpSessionManager } = await loadTaskRegistryControlRuntime();
         await getAcpSessionManager().cancelSession({
           cfg: params.cfg,

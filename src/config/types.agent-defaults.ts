@@ -2,6 +2,7 @@ import type { SilentReplyPolicyShape } from "../shared/silent-reply-policy.js";
 import type {
   AgentEmbeddedHarnessConfig,
   AgentModelConfig,
+  AgentToolModelConfig,
   AgentRuntimePolicyConfig,
   AgentSandboxConfig,
 } from "./types.agents-shared.js";
@@ -207,13 +208,13 @@ export type AgentDefaultsConfig = {
   /** Primary model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   model?: AgentModelConfig;
   /** Optional image-capable model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
-  imageModel?: AgentModelConfig;
+  imageModel?: AgentToolModelConfig;
   /** Optional image-generation model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
-  imageGenerationModel?: AgentModelConfig;
+  imageGenerationModel?: AgentToolModelConfig;
   /** Optional video-generation model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
-  videoGenerationModel?: AgentModelConfig;
+  videoGenerationModel?: AgentToolModelConfig;
   /** Optional music-generation model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
-  musicGenerationModel?: AgentModelConfig;
+  musicGenerationModel?: AgentToolModelConfig;
   /**
    * When true (default), shared image/music/video generation appends other
    * auth-backed provider defaults after explicit primary/fallback refs. Set to
@@ -222,7 +223,7 @@ export type AgentDefaultsConfig = {
    */
   mediaGenerationAutoProviderFallback?: boolean;
   /** Optional PDF-capable model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
-  pdfModel?: AgentModelConfig;
+  pdfModel?: AgentToolModelConfig;
   /** Maximum PDF file size in megabytes (default: 10). */
   pdfMaxBytesMb?: number;
   /** Maximum number of PDF pages to process (default: 20). */
@@ -273,8 +274,8 @@ export type AgentDefaultsConfig = {
   /**
    * Agent-visible bootstrap truncation warning mode:
    * - off: do not inject warning text
-   * - once: inject once per unique truncation signature (default)
-   * - always: inject on every run with truncation
+   * - once: inject once per unique truncation signature
+   * - always: inject on every run with truncation (default)
    */
   bootstrapPromptTruncationWarning?: "off" | "once" | "always";
   /** Optional IANA timezone for the user (used in system prompt; defaults to host timezone). */
@@ -421,7 +422,7 @@ export type AgentDefaultsConfig = {
     skipWhenBusy?: boolean;
     /**
      * When enabled, deliver the model's reasoning payload for heartbeat runs (when available)
-     * as a separate message prefixed with `Reasoning:` (same as `/reasoning on`).
+     * as a separate message prefixed with `Thinking.` (same as `/reasoning on`).
      *
      * Default: false (only the final heartbeat payload is delivered).
      */
@@ -433,7 +434,7 @@ export type AgentDefaultsConfig = {
   subagents?: {
     /** Prompt-only guidance for how strongly the main agent should delegate work. Default: "suggest". */
     delegationMode?: SubagentDelegationMode;
-    /** Default allowlist of target agent ids for sessions_spawn. Use "*" to allow any. */
+    /** Default allowlist of target agent ids for sessions_spawn. Use "*" to allow any configured target. */
     allowAgents?: string[];
     /** Max concurrent sub-agent runs (global lane: "subagent"). Default: 1. */
     maxConcurrent?: number;

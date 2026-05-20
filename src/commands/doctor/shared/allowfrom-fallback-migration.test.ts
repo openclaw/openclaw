@@ -114,4 +114,19 @@ describe("doctor group allowFrom fallback migration", () => {
 
     expect(maybeRepairGroupAllowFromFallback(cfg)).toEqual({ config: cfg, changes: [] });
   });
+
+  it("skips generated channel schemas that reject groupAllowFrom", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          allowFrom: ["U123"],
+          accounts: {
+            workspace: { allowFrom: ["U456"] },
+          },
+        },
+      },
+    };
+
+    expect(maybeRepairGroupAllowFromFallback(cfg)).toEqual({ config: cfg, changes: [] });
+  });
 });

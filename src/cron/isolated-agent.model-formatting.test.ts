@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import type { AgentConfig } from "../config/types.agents.js";
 
 const {
   loadModelCatalogMock,
@@ -71,12 +72,7 @@ type AgentTurnPayload = {
 
 type SelectModelOptions = {
   cfg?: Record<string, unknown>;
-  agentConfigOverride?: {
-    model?: unknown;
-    subagents?: {
-      model?: unknown;
-    };
-  };
+  agentConfigOverride?: Pick<AgentConfig, "model" | "subagents">;
   payload?: AgentTurnPayload;
   sessionEntry?: {
     modelOverride?: string;
@@ -633,7 +629,7 @@ describe("cron model formatting and precedence edge cases", () => {
       );
     });
 
-    it("falls through metadata-only subagents.model to the agent model", async () => {
+    it("falls through fallback-only subagents.model to the agent model", async () => {
       await expectSelectedModel(
         {
           cfg: {
@@ -646,7 +642,7 @@ describe("cron model formatting and precedence edge cases", () => {
           },
           agentConfigOverride: {
             model: { primary: "anthropic/claude-opus-4-6" },
-            subagents: { model: { timeoutMs: 1_000 } },
+            subagents: { model: { fallbacks: [] } },
           },
         },
         { provider: "anthropic", model: "claude-opus-4-6" },
