@@ -115,6 +115,43 @@ describe("collectPluginToolAllowlistWarnings", () => {
     ]);
   });
 
+  it("uses a config-path source label when sandbox allowlist is unset", () => {
+    const warnings = collectPluginToolAllowlistWarnings({
+      cfg: {
+        agents: { defaults: { sandbox: { mode: "all" } } },
+        mcp: { servers: { outlook: { command: "node", args: ["outlook-server.js"] } } },
+      },
+      manifestRegistry,
+    });
+
+    expect(warnings).toEqual([
+      '- mcp.servers defines 1 MCP server ("outlook"), but tools.sandbox.tools.alsoAllow (unset) does not include "bundle-mcp", "group:plugins", or a matching "<server>__*" MCP tool pattern. Sandboxed agents will filter bundled MCP tools before provider requests. Add "bundle-mcp" to tools.sandbox.tools.alsoAllow (or use "group:plugins" / server globs) if those MCP tools should be visible; use tools.sandbox.tools.allow: [] only when you intentionally want no sandbox allow gate.',
+    ]);
+  });
+
+  it("uses plural grammar when multiple sandbox allow sources hide MCP servers", () => {
+    const warnings = collectPluginToolAllowlistWarnings({
+      cfg: {
+        agents: {
+          defaults: { sandbox: { mode: "all" } },
+          list: [
+            {
+              id: "worker",
+              tools: { sandbox: { tools: { alsoAllow: ["web_fetch"] } } },
+            },
+          ],
+        },
+        mcp: { servers: { outlook: { command: "node", args: ["outlook-server.js"] } } },
+        tools: { sandbox: { tools: { alsoAllow: ["web_search"] } } },
+      },
+      manifestRegistry,
+    });
+
+    expect(warnings).toEqual([
+      '- mcp.servers defines 1 MCP server ("outlook"), but agents.list[0].tools.sandbox.tools.alsoAllow, tools.sandbox.tools.alsoAllow do not include "bundle-mcp", "group:plugins", or a matching "<server>__*" MCP tool pattern. Sandboxed agents will filter bundled MCP tools before provider requests. Add "bundle-mcp" to tools.sandbox.tools.alsoAllow (or use "group:plugins" / server globs) if those MCP tools should be visible; use tools.sandbox.tools.allow: [] only when you intentionally want no sandbox allow gate.',
+    ]);
+  });
+
   it("does not warn for sandboxed MCP servers when bundle-mcp is explicitly allowed", () => {
     const warnings = collectPluginToolAllowlistWarnings({
       cfg: {
@@ -191,6 +228,19 @@ describe("collectPluginToolAllowlistWarnings", () => {
         agents: { defaults: { sandbox: { mode: "all" } } },
         mcp: { servers: { outlook: { command: "node", args: ["outlook-server.js"] } } },
         tools: { sandbox: { tools: { alsoAllow: ["outlook__*"] } } },
+      },
+      manifestRegistry,
+    });
+
+    expect(warnings).toStrictEqual([]);
+  });
+
+  it("does not warn when a server glob matches the sanitized MCP server name", () => {
+    const warnings = collectPluginToolAllowlistWarnings({
+      cfg: {
+        agents: { defaults: { sandbox: { mode: "all" } } },
+        mcp: { servers: { "Outlook Graph": { command: "node", args: ["outlook-server.js"] } } },
+        tools: { sandbox: { tools: { alsoAllow: ["outlook-graph__*"] } } },
       },
       manifestRegistry,
     });

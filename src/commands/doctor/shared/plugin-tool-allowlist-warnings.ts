@@ -79,12 +79,27 @@ function collectToolAllowlistSources(cfg: OpenClawConfig): ToolAllowlistSource[]
   return sources;
 }
 
-function formatSourceLabels(labels: Iterable<string>): string {
-  const sorted = [...new Set(labels)].toSorted((left, right) => left.localeCompare(right));
+function collectSortedSourceLabels(labels: Iterable<string>): string[] {
+  return [...new Set(labels)].toSorted((left, right) => left.localeCompare(right));
+}
+
+function formatSortedSourceLabels(sorted: readonly string[]): string {
   if (sorted.length <= 3) {
     return sorted.join(", ");
   }
   return `${sorted.slice(0, 3).join(", ")} (+${sorted.length - 3} more)`;
+}
+
+function formatSourceLabels(labels: Iterable<string>): string {
+  return formatSortedSourceLabels(collectSortedSourceLabels(labels));
+}
+
+function formatSourceLabelSubject(labels: Iterable<string>): { text: string; verb: "does" | "do" } {
+  const sorted = collectSortedSourceLabels(labels);
+  return {
+    text: formatSortedSourceLabels(sorted),
+    verb: sorted.length === 1 ? "does" : "do",
+  };
 }
 
 function collectToolOwners(registry: PluginManifestRegistry): Map<string, string[]> {
@@ -202,7 +217,7 @@ function buildEffectiveSandboxToolPolicy(params: {
   const allowLabels = [allow.label, alsoAllow.label].filter((label): label is string =>
     Boolean(label),
   );
-  const labels = allowLabels.length > 0 ? allowLabels : ["default sandbox tool allowlist"];
+  const labels = allowLabels.length > 0 ? allowLabels : ["tools.sandbox.tools.alsoAllow (unset)"];
   const dedupeLabels = Array.from(new Set([...labels, deny.label].filter(Boolean)));
 
   return {
@@ -233,13 +248,16 @@ function collectActiveSandboxToolPolicies(cfg: OpenClawConfig): ActiveSandboxToo
       if (!hasRecord(agent)) {
         return;
       }
-      const explicitMode = agent.sandbox?.mode;
+      const agentSandbox = hasRecord(agent.sandbox) ? agent.sandbox : undefined;
+      const explicitMode = agentSandbox?.mode;
       const agentSandboxActive =
         explicitMode === undefined ? defaultSandboxActive : isSandboxModeActive(explicitMode);
       if (!agentSandboxActive) {
         return;
       }
-      const agentPolicy = hasRecord(agent.tools?.sandbox) ? agent.tools.sandbox.tools : undefined;
+      const agentTools = hasRecord(agent.tools) ? agent.tools : undefined;
+      const agentToolsSandbox = hasRecord(agentTools?.sandbox) ? agentTools.sandbox : undefined;
+      const agentPolicy = hasRecord(agentToolsSandbox?.tools) ? agentToolsSandbox.tools : undefined;
       addPolicy(
         buildEffectiveSandboxToolPolicy({
           agentPolicy,
@@ -327,8 +345,9 @@ function collectSandboxMcpAllowlistWarnings(cfg: OpenClawConfig): string[] {
   if (issueSources.length === 0) {
     return [];
   }
+  const sourceSubject = formatSourceLabelSubject(issueSources);
   return [
-    `- mcp.servers defines ${formatMcpServerSummary(serverNames)}, but ${formatSourceLabels(issueSources)} does not include "bundle-mcp", "group:plugins", or a matching "<server>${TOOL_NAME_SEPARATOR}*" MCP tool pattern. Sandboxed agents will filter bundled MCP tools before provider requests. Add "bundle-mcp" to tools.sandbox.tools.alsoAllow (or use "group:plugins" / server globs) if those MCP tools should be visible; use tools.sandbox.tools.allow: [] only when you intentionally want no sandbox allow gate.`,
+    `- mcp.servers defines ${formatMcpServerSummary(serverNames)}, but ${sourceSubject.text} ${sourceSubject.verb} not include "bundle-mcp", "group:plugins", or a matching "<server>${TOOL_NAME_SEPARATOR}*" MCP tool pattern. Sandboxed agents will filter bundled MCP tools before provider requests. Add "bundle-mcp" to tools.sandbox.tools.alsoAllow (or use "group:plugins" / server globs) if those MCP tools should be visible; use tools.sandbox.tools.allow: [] only when you intentionally want no sandbox allow gate.`,
   ];
 }
 
