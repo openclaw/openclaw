@@ -357,6 +357,34 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(payload.mediaUrls).toBeUndefined();
   });
 
+  it("uses builtin tool names as the direct-subscribe local media gate fallback", async () => {
+    const onToolResult = vi.fn();
+    const { emit } = createSubscribedHarness({
+      runId: "run",
+      onToolResult,
+      verboseLevel: "full",
+      toolResultFormat: "plain",
+      builtinToolNames: new Set(["web_search"]),
+    });
+
+    emitToolRun({
+      emit,
+      toolName: "Web_Search",
+      toolCallId: "tool-1",
+      isError: false,
+      result: {
+        content: [{ type: "text", text: "Fetched page\nMEDIA:/tmp/secret.png" }],
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(onToolResult).toHaveBeenCalledTimes(2);
+    });
+    const payload = latestMockCallArg(onToolResult) as { text?: string; mediaUrls?: string[] };
+    expect(payload.text ?? "").toContain("Fetched page");
+    expect(payload.mediaUrls).toBeUndefined();
+  });
+
   it("delivers generated image media once in markdown verbose output", async () => {
     const onToolResult = vi.fn();
     const onBlockReply = vi.fn();

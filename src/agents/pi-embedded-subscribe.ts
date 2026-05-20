@@ -124,6 +124,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   const canShowReasoning = params.thinkingLevel !== "off";
   const toolResultFormat = params.toolResultFormat ?? "markdown";
   const useMarkdown = toolResultFormat === "markdown";
+  const trustedLocalMediaToolNames = params.trustedLocalMediaToolNames ?? params.builtinToolNames;
   const initialPendingToolMediaUrls = collectPendingMediaFromInternalEvents(params.internalEvents);
   const state: EmbeddedPiSubscribeState = {
     assistantTexts: [],
@@ -548,7 +549,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       toolName,
       mediaUrls ?? [],
       result,
-      params.trustedLocalMediaToolNames,
+      trustedLocalMediaToolNames,
     );
     if (!cleanedText && filteredMediaUrls.length === 0) {
       return;
@@ -979,7 +980,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     blockChunker,
     hookRunner: params.hookRunner,
     builtinToolNames: params.builtinToolNames,
-    trustedLocalMediaToolNames: params.trustedLocalMediaToolNames,
+    trustedLocalMediaToolNames,
     noteLastAssistant,
     shouldEmitToolResult,
     shouldEmitToolOutput,

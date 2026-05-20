@@ -2262,9 +2262,7 @@ export async function runEmbeddedAttempt(
       const trustedLocalMediaToolNames = new Set(coreBuiltinToolNames);
       for (const tool of uncompactedEffectiveTools) {
         const name = (tool.name ?? "").trim();
-        const pluginId = getPluginToolMeta(
-          tool as Parameters<typeof getPluginToolMeta>[0],
-        )?.pluginId;
+        const pluginId = getPluginToolMeta(tool)?.pluginId;
         if (
           name &&
           pluginId &&
