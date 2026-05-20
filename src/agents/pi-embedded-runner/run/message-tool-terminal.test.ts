@@ -306,6 +306,14 @@ function createToolCallAssistant(
     api: "openai-responses",
     provider: "openai",
     model: "gpt-5.5",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
     stopReason: "toolUse",
     timestamp: 0,
   };
