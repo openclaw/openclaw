@@ -137,3 +137,36 @@ describe("WhatsApp prompt config Zod validation", () => {
     );
   });
 });
+
+describe("WhatsAppConfigSchema open-except", () => {
+  it("accepts open-except with manualFrom", () => {
+    const result = WhatsAppConfigSchema.safeParse({
+      dmPolicy: "open-except",
+      manualFrom: ["+5511999988888"],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts open-except with empty manualFrom", () => {
+    const result = WhatsAppConfigSchema.safeParse({
+      dmPolicy: "open-except",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.manualFrom).toEqual([]);
+    }
+  });
+
+  it("rejects unknown dmPolicy value", () => {
+    const result = WhatsAppConfigSchema.safeParse({ dmPolicy: "unknown-policy" });
+    expect(result.success).toBe(false);
+  });
+
+  it("open still requires allowFrom with star", () => {
+    const result = WhatsAppConfigSchema.safeParse({
+      dmPolicy: "open",
+      allowFrom: [],
+    });
+    expect(result.success).toBe(false);
+  });
+});

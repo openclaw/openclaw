@@ -16,6 +16,8 @@ import {
   ReplyToModeSchema,
 } from "./zod-schema.core.js";
 
+const WhatsAppDmPolicySchema = DmPolicySchema.or(z.literal("open-except"));
+
 const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
 
 const WhatsAppGroupEntrySchema = z
@@ -70,10 +72,13 @@ function buildWhatsAppCommonShape(params: { useDefaults: boolean }) {
     messagePrefix: z.string().optional(),
     responsePrefix: z.string().optional(),
     dmPolicy: params.useDefaults
-      ? DmPolicySchema.optional().default("pairing")
-      : DmPolicySchema.optional(),
+      ? WhatsAppDmPolicySchema.optional().default("pairing")
+      : WhatsAppDmPolicySchema.optional(),
     selfChatMode: z.boolean().optional(),
     allowFrom: z.array(z.string()).optional(),
+    manualFrom: params.useDefaults
+      ? z.array(z.string()).optional().default([])
+      : z.array(z.string()).optional(),
     defaultTo: z.string().optional(),
     groupAllowFrom: z.array(z.string()).optional(),
     groupPolicy: params.useDefaults

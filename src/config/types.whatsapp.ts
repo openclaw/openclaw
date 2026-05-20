@@ -20,6 +20,8 @@ export type WhatsAppActionConfig = {
   polls?: boolean;
 };
 
+export type WhatsAppDmPolicy = DmPolicy | "open-except";
+
 export type WhatsAppReactionLevel = ReactionLevel;
 
 export type WhatsAppGroupConfig = {
@@ -54,11 +56,13 @@ type WhatsAppSharedConfig = {
   /** Whether the WhatsApp channel is enabled. */
   enabled?: boolean;
   /** Direct message access policy (default: pairing). */
-  dmPolicy?: DmPolicy;
+  dmPolicy?: WhatsAppDmPolicy;
   /** Same-phone setup (bot uses your personal WhatsApp number). */
   selfChatMode?: boolean;
   /** Optional allowlist for WhatsApp direct chats (E.164). */
   allowFrom?: string[];
+  /** Contacts excluded from auto-replies (used with dmPolicy: "open-except"). E.164 numbers. */
+  manualFrom?: string[];
   /** Default delivery target for CLI `--deliver` when no explicit `--reply-to` is provided (E.164 or group JID). */
   defaultTo?: string;
   /** Optional allowlist for WhatsApp group senders (E.164). */
