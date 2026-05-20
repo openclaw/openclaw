@@ -62,6 +62,17 @@ let capturedReplyOptions:
         args?: Record<string, unknown>;
         detailMode?: "explain" | "raw";
       }) => Promise<void> | void;
+      onPatchSummary?: (payload: {
+        itemId?: string;
+        toolCallId?: string;
+        phase?: string;
+        title?: string;
+        name?: string;
+        added?: string[];
+        modified?: string[];
+        deleted?: string[];
+        summary?: string;
+      }) => Promise<void> | void;
       onPartialReply?: (payload: { text: string }) => Promise<void> | void;
     }
   | undefined;
@@ -126,6 +137,18 @@ let mockedReplyOptionEvents: Array<
       phase?: string;
       args?: Record<string, unknown>;
       detailMode?: "explain" | "raw";
+    }
+  | {
+      kind: "patch";
+      itemId?: string;
+      toolCallId?: string;
+      phase?: string;
+      title?: string;
+      name?: string;
+      added?: string[];
+      modified?: string[];
+      deleted?: string[];
+      summary?: string;
     }
   | { kind: "concurrent_items"; progressTexts: string[] }
   | { kind: "partial"; text: string }
@@ -984,6 +1007,17 @@ vi.mock("../reply.runtime.js", () => ({
         args?: Record<string, unknown>;
         detailMode?: "explain" | "raw";
       }) => Promise<void> | void;
+      onPatchSummary?: (payload: {
+        itemId?: string;
+        toolCallId?: string;
+        phase?: string;
+        title?: string;
+        name?: string;
+        added?: string[];
+        modified?: string[];
+        deleted?: string[];
+        summary?: string;
+      }) => Promise<void> | void;
       onPartialReply?: (payload: { text: string }) => Promise<void> | void;
     };
     dispatcher: {
@@ -1013,6 +1047,18 @@ vi.mock("../reply.runtime.js", () => ({
             phase: entry.phase,
             args: entry.args,
             detailMode: entry.detailMode,
+          });
+        } else if (entry.kind === "patch") {
+          await params.replyOptions?.onPatchSummary?.({
+            itemId: entry.itemId,
+            toolCallId: entry.toolCallId,
+            phase: entry.phase,
+            title: entry.title,
+            name: entry.name,
+            added: entry.added,
+            modified: entry.modified,
+            deleted: entry.deleted,
+            summary: entry.summary,
           });
         } else if (entry.kind === "concurrent_items") {
           await Promise.all(
@@ -1912,6 +1958,33 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expectNativeProgressAppend(0, [
       planUpdate("Shelling"),
       taskUpdate(taskId, "bash — 12345…uvwxyz", "complete"),
+    ]);
+  });
+
+  it("preserves patch item identity in native Slack progress task updates", async () => {
+    const taskId = expect.stringMatching(/^patch_item_1_[a-f0-9]{8}$/);
+
+    await dispatchNativeProgressScenario({
+      finalPayload: { text: FINAL_REPLY_TEXT },
+      events: [
+        {
+          kind: "patch",
+          itemId: "patch:item-1",
+          toolCallId: "patch-call-1",
+          name: "apply_patch",
+          phase: "end",
+          summary: "updated Slack progress tests",
+        },
+      ],
+    });
+
+    expectNativeProgressStart([
+      planUpdate("updated Slack progress tests"),
+      taskUpdate(taskId, "updated Slack progress tests", "in_progress"),
+    ]);
+    expectNativeProgressAppend(0, [
+      planUpdate("updated Slack progress tests"),
+      taskUpdate(taskId, "updated Slack progress tests", "complete"),
     ]);
   });
 
