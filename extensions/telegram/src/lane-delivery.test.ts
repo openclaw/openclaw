@@ -680,6 +680,24 @@ describe("createLaneTextDeliverer", () => {
     expect(harness.markDelivered).not.toHaveBeenCalled();
   });
 
+  it("does not mark streamed finals as delivered when a follow-up chunk is suppressed", async () => {
+    const harness = createHarness({
+      answerMessageId: 999,
+      draftMaxChars: 5,
+      splitFinalTextForStream: () => ["Hello", " world"],
+    });
+    harness.sendPayload.mockResolvedValueOnce(false);
+
+    await expect(deliverFinalAnswer(harness, "Hello world")).rejects.toThrow(
+      "Telegram follow-up chunk was not delivered",
+    );
+
+    expect(harness.answer?.update).toHaveBeenCalledWith("Hello");
+    expect(harness.sendPayload).toHaveBeenCalledTimes(1);
+    expect(harness.sendPayload).toHaveBeenCalledWith({ text: " world" });
+    expect(harness.markDelivered).not.toHaveBeenCalled();
+  });
+
   it("retains the streamed message when stop may have landed without a message id", async () => {
     const answer = createTestDraftStream();
     answer.sendMayHaveLanded.mockReturnValue(true);

@@ -312,7 +312,10 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         if (chunk.trim().length === 0) {
           continue;
         }
-        await params.sendPayload(followUpPayload(payload, chunk));
+        const delivered = await params.sendPayload(followUpPayload(payload, chunk));
+        if (!delivered) {
+          throw new Error("Telegram follow-up chunk was not delivered");
+        }
       }
       lane.finalized = true;
       params.markDelivered();
@@ -364,7 +367,10 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         if (chunk.trim().length === 0) {
           continue;
         }
-        await params.sendPayload(followUpPayload(payload, chunk));
+        const delivered = await params.sendPayload(followUpPayload(payload, chunk));
+        if (!delivered) {
+          throw new Error("Telegram follow-up chunk was not delivered");
+        }
       }
       params.markDelivered();
       return result("preview-finalized", { content: text, messageId, buttonsAttached });
