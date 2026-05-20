@@ -1,5 +1,5 @@
 {
-  "name": "claworks",
+  "name": "openclaw",
   "version": "2026.5.0-alpha.1",
   "description": "Enterprise robot runtime — EventKernel · ObjectStore · PlaybookEngine · A2A",
   "keywords": ["industrial", "robot", "automation", "playbook", "ontology", "a2a"],
@@ -14,7 +14,7 @@
     "url": "git+https://github.com/claworks/claworks.git"
   },
   "bin": {
-    "claworks": "openclaw.mjs",
+    "claworks": "claworks.mjs",
     "openclaw": "openclaw.mjs"
   },
   "directories": {
@@ -1405,6 +1405,17 @@
     "deps:ownership-surface:report": "node scripts/dependency-ownership-surface-report.mjs",
     "deps:transitive-risk:report": "node scripts/transitive-manifest-risk-report.mjs",
     "deps:vuln:gate": "node scripts/dependency-vulnerability-gate.mjs",
+    "claworks:init": "node scripts/claworks-init.mjs",
+    "claworks:gateway": "bash scripts/claworks-gateway-dev.sh",
+    "claworks:nexus": "node --import tsx scripts/claworks-nexus.mjs",
+    "claworks:e2e": "node --import tsx scripts/claworks-e2e-smoke.mjs",
+    "claworks:http-smoke": "node --import tsx scripts/claworks-http-smoke.mjs",
+    "claworks:smoke": "node scripts/build-claworks-runtime.mjs && node scripts/claworks-runtime-dist-smoke.mjs && node --import tsx scripts/claworks-e2e-smoke.mjs && node --import tsx scripts/claworks-http-smoke.mjs",
+    "claworks:runtime:build": "node scripts/build-claworks-runtime.mjs",
+    "claworks:runtime:dist-smoke": "node --import tsx scripts/claworks-runtime-dist-smoke.mjs",
+    "claworks:runtime:test": "vitest run packages/claworks-runtime",
+    "claworks:migrate": "node scripts/claworks-migrate.mjs",
+    "claworks:closed-loop": "node --import tsx scripts/claworks-closed-loop-demo.mjs",
     "dev": "node scripts/run-node.mjs",
     "docs:bin": "node scripts/build-docs-list.mjs",
     "docs:check-i18n-glossary": "node scripts/check-docs-i18n-glossary.mjs",
@@ -1737,6 +1748,7 @@
     "@aws/bedrock-token-generator": "1.1.0",
     "@clack/core": "1.3.0",
     "@clack/prompts": "1.3.0",
+    "@claworks/runtime": "workspace:*",
     "@earendil-works/pi-agent-core": "0.74.0",
     "@earendil-works/pi-ai": "0.74.0",
     "@earendil-works/pi-coding-agent": "0.74.0",
@@ -1817,6 +1829,7 @@
     "vitest": "4.1.6"
   },
   "optionalDependencies": {
+    "pg": "8.16.3",
     "sqlite-vec": "0.1.9"
   },
   "overrides": {

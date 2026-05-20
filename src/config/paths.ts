@@ -20,7 +20,21 @@ export const isNixMode = resolveIsNixMode();
 // Support the remaining legacy pre-rebrand state dir.
 const LEGACY_STATE_DIRNAMES = [".clawdbot"] as const;
 const NEW_STATE_DIRNAME = ".openclaw";
+const CLAWORKS_STATE_DIRNAME = ".claworks";
 const CONFIG_FILENAME = "openclaw.json";
+const CLAWORKS_CONFIG_FILENAME = "claworks.json";
+
+export function isClaworksProduct(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.CLAWORKS_PRODUCT === "1";
+}
+
+function resolveProductStateDirname(env: NodeJS.ProcessEnv = process.env): string {
+  return isClaworksProduct(env) ? CLAWORKS_STATE_DIRNAME : NEW_STATE_DIRNAME;
+}
+
+function resolveProductConfigFilename(env: NodeJS.ProcessEnv = process.env): string {
+  return isClaworksProduct(env) ? CLAWORKS_CONFIG_FILENAME : CONFIG_FILENAME;
+}
 const LEGACY_CONFIG_FILENAMES = ["clawdbot.json"] as const;
 
 function resolveDefaultHomeDir(): string {
@@ -36,8 +50,11 @@ function legacyStateDirs(homedir: () => string = resolveDefaultHomeDir): string[
   return LEGACY_STATE_DIRNAMES.map((dir) => path.join(homedir(), dir));
 }
 
-function newStateDir(homedir: () => string = resolveDefaultHomeDir): string {
-  return path.join(homedir(), NEW_STATE_DIRNAME);
+function newStateDir(
+  homedir: () => string = resolveDefaultHomeDir,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  return path.join(homedir(), resolveProductStateDirname(env));
 }
 
 export function resolveLegacyStateDir(homedir: () => string = resolveDefaultHomeDir): string {
@@ -48,8 +65,11 @@ export function resolveLegacyStateDirs(homedir: () => string = resolveDefaultHom
   return legacyStateDirs(homedir);
 }
 
-export function resolveNewStateDir(homedir: () => string = resolveDefaultHomeDir): string {
-  return newStateDir(homedir);
+export function resolveNewStateDir(
+  homedir: () => string = resolveDefaultHomeDir,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  return newStateDir(homedir, env);
 }
 
 /**
@@ -66,7 +86,7 @@ export function resolveStateDir(
   if (override) {
     return resolveUserPath(override, env, effectiveHomedir);
   }
-  const newDir = newStateDir(effectiveHomedir);
+  const newDir = newStateDir(effectiveHomedir, env);
   if (env.OPENCLAW_TEST_FAST === "1") {
     return newDir;
   }
@@ -151,7 +171,7 @@ export function resolveCanonicalConfigPath(
   if (override) {
     return resolveUserPath(override, env, envHomedir(env));
   }
-  return path.join(stateDir, CONFIG_FILENAME);
+  return path.join(stateDir, resolveProductConfigFilename(env));
 }
 
 /**
@@ -192,11 +212,12 @@ export function resolveConfigPath(
     return resolveUserPath(override, env, homedir);
   }
   if (env.OPENCLAW_TEST_FAST === "1") {
-    return path.join(stateDir, CONFIG_FILENAME);
+    return path.join(stateDir, resolveProductConfigFilename(env));
   }
   const stateOverride = env.OPENCLAW_STATE_DIR?.trim();
+  const configFilename = resolveProductConfigFilename(env);
   const candidates = [
-    path.join(stateDir, CONFIG_FILENAME),
+    path.join(stateDir, configFilename),
     ...LEGACY_CONFIG_FILENAMES.map((name) => path.join(stateDir, name)),
   ];
   const existing = candidates.find((candidate) => {
@@ -210,13 +231,13 @@ export function resolveConfigPath(
     return existing;
   }
   if (stateOverride) {
-    return path.join(stateDir, CONFIG_FILENAME);
+    return path.join(stateDir, configFilename);
   }
   const defaultStateDir = resolveStateDir(env, homedir);
   if (path.resolve(stateDir) === path.resolve(defaultStateDir)) {
     return resolveConfigPathCandidate(env, homedir);
   }
-  return path.join(stateDir, CONFIG_FILENAME);
+  return path.join(stateDir, configFilename);
 }
 
 export const CONFIG_PATH = resolveConfigPathCandidate();
@@ -237,15 +258,16 @@ export function resolveDefaultConfigCandidates(
 
   const candidates: string[] = [];
   const openclawStateDir = env.OPENCLAW_STATE_DIR?.trim();
+  const configFilename = resolveProductConfigFilename(env);
   if (openclawStateDir) {
     const resolved = resolveUserPath(openclawStateDir, env, effectiveHomedir);
-    candidates.push(path.join(resolved, CONFIG_FILENAME));
+    candidates.push(path.join(resolved, configFilename));
     candidates.push(...LEGACY_CONFIG_FILENAMES.map((name) => path.join(resolved, name)));
   }
 
-  const defaultDirs = [newStateDir(effectiveHomedir), ...legacyStateDirs(effectiveHomedir)];
+  const defaultDirs = [newStateDir(effectiveHomedir, env), ...legacyStateDirs(effectiveHomedir)];
   for (const dir of defaultDirs) {
-    candidates.push(path.join(dir, CONFIG_FILENAME));
+    candidates.push(path.join(dir, configFilename));
     candidates.push(...LEGACY_CONFIG_FILENAMES.map((name) => path.join(dir, name)));
   }
   return candidates;
@@ -257,10 +279,14 @@ export const DEFAULT_GATEWAY_PORT = 18789;
  * Gateway lock directory (ephemeral).
  * Default: os.tmpdir()/openclaw-<uid> (uid suffix when available).
  */
-export function resolveGatewayLockDir(tmpdir: () => string = os.tmpdir): string {
+export function resolveGatewayLockDir(
+  tmpdir: () => string = os.tmpdir,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
   const base = tmpdir();
   const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
-  const suffix = uid != null ? `openclaw-${uid}` : "openclaw";
+  const product = isClaworksProduct(env) ? "claworks" : "openclaw";
+  const suffix = uid != null ? `${product}-${uid}` : product;
   return path.join(base, suffix);
 }
 

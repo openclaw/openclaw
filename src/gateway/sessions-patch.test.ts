@@ -626,44 +626,4 @@ describe("gateway sessions patch", () => {
     expect(entry.providerOverride).toBe("synthetic");
     expect(entry.modelOverride).toBe("hf:moonshotai/Kimi-K2.5");
   });
-
-  test("persists projectId and projectName", async () => {
-    const entry = expectPatchOk(
-      await runPatch({
-        patch: {
-          key: MAIN_SESSION_KEY,
-          projectId: "maibot:default-workspace",
-          projectName: "Acme",
-        },
-      }),
-    );
-    expect(entry.projectId).toBe("maibot:default-workspace");
-    expect(entry.projectName).toBe("Acme");
-  });
-
-  test("clears projectId and projectName when patch sets null", async () => {
-    const store: Record<string, SessionEntry> = {
-      [MAIN_SESSION_KEY]: {
-        sessionId: "s1",
-        updatedAt: 1,
-        projectId: "p1",
-        projectName: "Old",
-      } as SessionEntry,
-    };
-    const entry = expectPatchOk(
-      await runPatch({
-        store,
-        patch: { key: MAIN_SESSION_KEY, projectId: null, projectName: null },
-      }),
-    );
-    expect(entry.projectId).toBeUndefined();
-    expect(entry.projectName).toBeUndefined();
-  });
-
-  test("rejects empty projectId string", async () => {
-    const result = await runPatch({
-      patch: { key: MAIN_SESSION_KEY, projectId: " " },
-    });
-    expectPatchError(result, "invalid projectId");
-  });
 });

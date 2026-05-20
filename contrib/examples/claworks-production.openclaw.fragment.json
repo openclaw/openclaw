@@ -1,0 +1,71 @@
+{
+  "gateway": {
+    "port": 8000,
+    "bind": "0.0.0.0",
+    "auth": { "mode": "token" }
+  },
+  "plugins": {
+    "allow": [
+      "claworks-robot",
+      "feishu",
+      "telegram",
+      "discord",
+      "webhooks",
+      "memory-core",
+      "memory-lancedb",
+      "skill-workshop",
+      "openai",
+      "anthropic",
+      "ollama",
+      "file-transfer",
+      "document-extract",
+      "diagnostics-prometheus",
+      "diagnostics-otel",
+      "qwen"
+    ],
+    "entries": {
+      "claworks-robot": {
+        "enabled": true,
+        "config": {
+          "api": {
+            "api_key": "CHANGE_ME"
+          },
+          "robot": {
+            "name": "plant-a-robot",
+            "role": "monolith",
+            "port": 8000,
+            "host": "0.0.0.0"
+          },
+          "data": {
+            "database_url": "sqlite:///.claworks/plant-a/robot.db",
+            "kb_provider": "memory-core"
+          },
+          "kernel": {
+            "scheduler_timezone": "Asia/Shanghai"
+          },
+          "a2a": {
+            "enabled": true,
+            "peers": [
+              { "name": "pipeline-robot", "url": "http://pipeline.internal:8001" },
+              { "name": "dispatch-robot", "url": "http://dispatch.internal:8002" }
+            ]
+          },
+          "packs": {
+            "paths": ["~/.claworks/packs", "../claworks-packs"],
+            "installed": ["base", "process-industry"],
+            "registry": "https://nexus.example.com"
+          },
+          "notify": {
+            "default_channel": "feishu",
+            "targets": ["feishu:oc_xxx"]
+          },
+          "connectors": {
+            "opcua": { "preset": "opcua", "enabled": false },
+            "mqtt": { "preset": "mqtt", "enabled": true },
+            "echo": { "preset": "echo", "enabled": true }
+          }
+        }
+      }
+    }
+  }
+}

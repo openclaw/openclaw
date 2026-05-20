@@ -1,12 +1,8 @@
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { getHealthSnapshot, type HealthSummary } from "../../commands/health.js";
 import { createConfigIO, getRuntimeConfig } from "../../config/io.js";
 import { STATE_DIR } from "../../config/paths.js";
 import { resolveMainSessionKey } from "../../config/sessions.js";
-import {
-  readMaibotIndexingPreferencesFromWorkspace,
-  toMaibotWorkspaceIndexingHelloSnapshot,
-} from "../../infra/maibot-indexing-preferences.js";
 import { listSystemPresence } from "../../infra/system-presence.js";
 import { getUpdateAvailable } from "../../infra/update-startup.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
@@ -46,16 +42,6 @@ export function buildGatewaySnapshot(opts?: { includeSensitive?: boolean }): Sna
     },
     updateAvailable,
   };
-  try {
-    const workspaceRoot = resolveAgentWorkspaceDir(cfg, defaultAgentId);
-    snapshot.openclawAgentWorkspaceRoot = workspaceRoot;
-    const read = readMaibotIndexingPreferencesFromWorkspace(workspaceRoot);
-    if (read.ok) {
-      snapshot.maibotWorkspaceIndexing = toMaibotWorkspaceIndexingHelloSnapshot(read.data);
-    }
-  } catch {
-    // Best-effort: missing workspace or IO errors should not break hello snapshot.
-  }
   if (opts?.includeSensitive === true) {
     const auth = resolveGatewayAuth({ authConfig: cfg.gateway?.auth, env: process.env });
     // Surface resolved paths only to admin callers that already have broader gateway access.

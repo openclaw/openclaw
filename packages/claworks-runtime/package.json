@@ -1,0 +1,84 @@
+{
+  "name": "@claworks/runtime",
+  "version": "0.1.0",
+  "description": "ClaWorks industrial robot runtime — EventKernel, ObjectStore, PlaybookEngine, REST/A2A/MCP",
+  "type": "module",
+  "license": "MIT",
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    },
+    "./kernel": {
+      "types": "./src/kernel/index.ts",
+      "import": "./src/kernel/index.ts"
+    },
+    "./pack-loader": {
+      "types": "./src/pack-loader/index.ts",
+      "import": "./src/pack-loader/index.ts"
+    },
+    "./claworks": {
+      "types": "./src/claworks/index.ts",
+      "import": "./src/claworks/index.ts"
+    },
+    "./planes/data": {
+      "types": "./src/planes/data/index.ts",
+      "import": "./src/planes/data/index.ts"
+    },
+    "./planes/orch": {
+      "types": "./src/planes/orch/index.ts",
+      "import": "./src/planes/orch/index.ts"
+    },
+    "./interfaces": {
+      "types": "./src/interfaces/index.ts",
+      "import": "./src/interfaces/index.ts"
+    },
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.mts",
+        "import": "./dist/index.mjs"
+      },
+      "./kernel": {
+        "types": "./dist/kernel/index.d.mts",
+        "import": "./dist/kernel/index.mjs"
+      },
+      "./pack-loader": {
+        "types": "./dist/pack-loader/index.d.mts",
+        "import": "./dist/pack-loader/index.mjs"
+      },
+      "./claworks": {
+        "types": "./dist/claworks/index.d.mts",
+        "import": "./dist/claworks/index.mjs"
+      },
+      "./planes/data": {
+        "types": "./dist/planes/data/index.d.mts",
+        "import": "./dist/planes/data/index.mjs"
+      },
+      "./planes/orch": {
+        "types": "./dist/planes/orch/index.d.mts",
+        "import": "./dist/planes/orch/index.mjs"
+      },
+      "./interfaces": {
+        "types": "./dist/interfaces/index.d.mts",
+        "import": "./dist/interfaces/index.mjs"
+      },
+      "./package.json": "./package.json"
+    }
+  },
+  "files": ["dist", "README.md"],
+  "scripts": {
+    "build": "../../node_modules/.bin/tsdown src/index.ts src/kernel/index.ts src/pack-loader/index.ts src/claworks/index.ts src/planes/data/index.ts src/planes/orch/index.ts src/interfaces/index.ts --no-config --platform node --format esm --dts --out-dir dist --clean",
+    "prepublishOnly": "pnpm run build",
+    "test": "vitest run src"
+  },
+  "dependencies": {
+    "commander": "14.0.3",
+    "tar": "7.5.15",
+    "yaml": "^2.8.0"
+  }
+}

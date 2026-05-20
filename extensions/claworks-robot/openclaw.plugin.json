@@ -3,7 +3,80 @@
   "name": "ClaWorks Robot",
   "description": "ClaWorks industrial robot runtime — EventKernel · DataPlane · OrchPlane · A2A",
   "version": "0.1.0-alpha",
+  "activation": {
+    "onStartup": true
+  },
   "provides": ["service", "tools"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "robot": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "name": { "type": "string" },
+          "role": { "type": "string", "enum": ["monolith", "twin", "ops", "nexus"] },
+          "port": { "type": "number" },
+          "host": { "type": "string" }
+        }
+      },
+      "data": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "database_url": { "type": "string" },
+          "kb_path": { "type": "string" },
+          "kb_provider": { "type": "string", "enum": ["stub", "memory-core"] },
+          "memory_agent_id": { "type": "string" }
+        }
+      },
+      "packs": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "notify": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "default_channel": { "type": "string" },
+          "targets": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "channel": { "type": "string" },
+                "to": { "type": "string" },
+                "accountId": { "type": "string" },
+                "threadId": {}
+              },
+              "required": ["channel", "to"]
+            }
+          }
+        }
+      },
+      "connectors": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "preset": {
+              "type": "string",
+              "enum": ["echo", "rest-poll", "mqtt", "opcua", "modbus"]
+            },
+            "enabled": { "type": "boolean" },
+            "command": { "type": "string" },
+            "args": { "type": "array", "items": { "type": "string" } },
+            "cwd": { "type": "string" },
+            "env": { "type": "object", "additionalProperties": { "type": "string" } }
+          },
+          "required": ["command"]
+        }
+      }
+    }
+  },
   "services": [
     {
       "id": "claworks-kernel",

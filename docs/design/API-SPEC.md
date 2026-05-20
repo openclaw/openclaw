@@ -232,6 +232,40 @@ Errors:     { "error": "...", "code": "SNAKE_CASE_CODE" }
 
 **Query params**: `type`, `source`, `from`, `to`, `limit`
 
+### `POST /v1/bridge/im`
+
+IM 消息经 Ingress（默认 `intent_route`）进入分类 Playbook，不泛洪 EventBus。
+
+```json
+// request
+{
+  "channel": "feishu",
+  "message_id": "om_xxx",
+  "user_id": "ou_xxx",
+  "text": "3号泵振动偏高"
+}
+
+// response (202)
+{ "action": "intent_routed", "playbookId": "classify_im_to_business_event", "runId": "...", "status": "running" }
+```
+
+### `POST /v1/bridge/webhook`
+
+外部 Webhook 载荷，与 IM 桥对称（默认 `classify_webhook_to_business_event`）。
+
+```json
+// request
+{
+  "source": "mes",
+  "webhook_id": "evt-001",
+  "body": { "alarm_code": "PUMP_VIB_HIGH", "equipment_id": "eq-3" }
+}
+```
+
+### `POST /v1/rbac/reload`
+
+从 ObjectStore 重新加载 `RbacPolicy` 与 `IngressPolicy`（需 `rest.write` + `rbac:*`）。
+
 ---
 
 ## 六、扩展包（Pack）

@@ -29,7 +29,10 @@
       "@openclaw/plugin-sdk": ["./src/plugin-sdk/index.ts"],
       "@openclaw/plugin-sdk/*": ["./src/plugin-sdk/*.ts"],
       "openclaw/plugin-sdk/account-id": ["./src/plugin-sdk/account-id.ts"],
-      "@openclaw/*": ["./extensions/*"]
+      "@openclaw/*": ["./extensions/*"],
+      "@claworks/runtime": ["./packages/claworks-runtime/src/index.ts"],
+      "@claworks/runtime/kernel": ["./packages/claworks-runtime/src/kernel/index.ts"],
+      "@claworks/runtime/pack-loader": ["./packages/claworks-runtime/src/pack-loader/index.ts"]
     }
   },
   "include": ["src/**/*", "ui/**/*", "extensions/**/*", "packages/**/*"],

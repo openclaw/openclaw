@@ -552,39 +552,6 @@ export async function applySessionsPatchToStore(params: {
     }
   }
 
-  if ("projectId" in patch) {
-    const raw = patch.projectId;
-    if (raw === null) {
-      delete next.projectId;
-    } else if (raw !== undefined) {
-      const trimmed = normalizeOptionalString(raw) ?? "";
-      if (!trimmed) {
-        return invalid("invalid projectId: empty");
-      }
-      if (trimmed.length > 512) {
-        return invalid("invalid projectId: too long");
-      }
-      next.projectId = trimmed;
-    }
-  }
-
-  if ("projectName" in patch) {
-    const raw = patch.projectName;
-    if (raw === null) {
-      delete next.projectName;
-    } else if (raw !== undefined) {
-      const trimmed = normalizeOptionalString(raw) ?? "";
-      if (trimmed.length > 512) {
-        return invalid("invalid projectName: too long");
-      }
-      if (!trimmed) {
-        delete next.projectName;
-      } else {
-        next.projectName = trimmed;
-      }
-    }
-  }
-
   store[storeKey] = next;
   return { ok: true, entry: next };
 }

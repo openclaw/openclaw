@@ -275,11 +275,6 @@ export type MsgContext = {
    * Used for hook confirmation messages like "Session context saved to memory".
    */
   HookMessages?: string[];
-  /**
-   * Trusted extra system prompt from gateway RPC (`chat.send` / `sessions.send` `extraSystemPrompt`).
-   * Merged in `get-reply-run` after inbound meta. Do not put untrusted channel content here.
-   */
-  GatewayExtraSystemPrompt?: string;
 };
 
 export type FinalizedMsgContext = Omit<MsgContext, "CommandAuthorized"> & {

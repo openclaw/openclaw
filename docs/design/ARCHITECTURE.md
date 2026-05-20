@@ -1,205 +1,319 @@
 # ClaWorks 架构总纲
 
-**版本**：v1.0  
-**日期**：2026-05-19  
-**状态**：设计基准，不再大改架构
+**版本**：v2.0  
+**日期**：2026-05-20  
+**状态**：代码同步，设计基准
 
 ---
 
 ## 一、产品定位
 
-ClaWorks 是面向工业/企业场景的**自治机器人运行时框架**。
+ClaWorks 是面向工业/企业场景的**自治机器人运行时框架**，构建在 OpenClaw 基础上。
 
 ```
-OpenClaw（官方，不改）          ClaWorks（本项目）
-─────────────────────           ────────────────────────────
-个人 AI 助理平台                企业自治机器人运行时
-用户通过 IM 与 AI 对话          机器人自主响应业务事件
-138 个 LLM Provider             PlaybookEngine + EventKernel
-Skills 生态                     Extension Pack 生态
+OpenClaw（官方，核心不改）          ClaWorks（工业自治层）
+─────────────────────              ──────────────────────────────
+个人/团队 AI 助理平台               企业自治机器人运行时
+用户通过 IM 与 AI 对话             机器人自主响应业务事件
+138 个 LLM Provider               PlaybookEngine + EventKernel
+Skills 生态                        Extension Pack 生态
+Pi embedded agent（前额叶）        Pi 作为 Playbook subagent/skill 步
 
-两者关系：
-  OpenClaw ←→ ClaWorks 通过 openclaw-claworks-extension 插件对接
-  用户用 OpenClaw IM 管理/操控 ClaWorks 机器人
-  ClaWorks 机器人通过 A2A 互联，形成企业机器人网格
+关系：同一进程，两套 Runtime
+  OpenClaw Gateway/Channel/Agent  ←→  ClaWorks EventKernel/DataPlane/OrchPlane
+  通过 runtime-bridge 桥接，共享 LLM / IM / managedFlows
+```
+
+### 「神经系统」类比
+
+| 生物类比             | ClaWorks 组件                                |
+| -------------------- | -------------------------------------------- |
+| 感觉神经             | Connector / SCADA / 视觉 / 声波              |
+| 脊髓反射（习惯动作） | EventKernel + Playbook（确定性部分）         |
+| 小脑协调             | EventBus 优先级 + Scheduler + Outbox         |
+| 长期记忆             | ObjectStore + OntologyEngine                 |
+| 短期工作记忆         | Playbook 变量 + 会话 KB                      |
+| 前额叶（推理）       | Pi embedded agent（LLM/subagent/skill 步骤） |
+| 嘴（输出）           | Channel notify / HITL 飞书卡片               |
+| 身份与自我           | **robot.md + RobotIdentity**（本次新增）     |
+| 免疫系统             | **RBAC Guard + Ingress Router**（本次新增）  |
+| 基因                 | Pack YAML（本体 + Playbook 规则）            |
+
+---
+
+## 二、核心架构图
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│                     OpenClaw Gateway 进程                             │
+│                                                                       │
+│  ┌─────────────────────────────────────────────────────────────────┐ │
+│  │              OpenClaw 原有 Runtime（不改）                        │ │
+│  │  Plugin Loader · HTTP Server · Config 热重载                      │ │
+│  │  LLM Providers · IM Channels · Pi Agent · Skills · subagent      │ │
+│  └────────────────────────────┬────────────────────────────────────┘ │
+│                               │ api.registerService / registerTool   │
+│  ┌────────────────────────────▼────────────────────────────────────┐ │
+│  │              extensions/claworks-robot 插件                       │ │
+│  │   registerRoutes(/v1 /studio /a2a /mcp)                          │ │
+│  │   registerClaworksAgentTools(cw_*)                               │ │
+│  │   registerService(claworks-kernel → ClaworksRuntime)            │ │
+│  └────────────────────────────┬────────────────────────────────────┘ │
+│                               │                                       │
+│  ┌────────────────────────────▼────────────────────────────────────┐ │
+│  │                   ClaworksRuntime                                 │ │
+│  │                                                                   │ │
+│  │  ┌─────────────────┐  ┌──────────────────┐  ┌────────────────┐  │ │
+│  │  │  RobotIdentity  │  │   RbacGuard       │  │ IngressRouter  │  │ │
+│  │  │  (robot.md)     │  │  (ObjectStore     │  │  (IM→intent,   │  │ │
+│  │  │  rules[]        │  │   RbacPolicy)     │  │  OT→kernel)    │  │ │
+│  │  └─────────────────┘  └──────────────────┘  └────────────────┘  │ │
+│  │                                                                   │ │
+│  │  ┌────────────────────────────────────────────────────────────┐  │ │
+│  │  │                  EventKernel                                │  │ │
+│  │  │  EventBus（优先级队列）· Matcher · Scheduler · Outbox       │  │ │
+│  │  │  DedupGuard（60s 去重防循环）                               │  │ │
+│  │  └──────────┬─────────────────────────────────────────────────┘  │ │
+│  │             │                                                      │ │
+│  │  ┌──────────▼──────────┐  ┌──────────────────┐  ┌─────────────┐  │ │
+│  │  │     DataPlane        │  │    OrchPlane      │  │  Interfaces │  │ │
+│  │  │  ObjectStore/Ontology│  │  PlaybookEngine   │  │  REST /v1   │  │ │
+│  │  │  KB (RAG)            │  │  HITLGate         │  │  A2A /a2a   │  │ │
+│  │  │  SQLite/PostgreSQL   │  │  StepExecutor     │  │  MCP /mcp   │  │ │
+│  │  └──────────────────────┘  └──────────────────┘  └─────────────┘  │ │
+│  └─────────────────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 二、技术基础
+## 三、两套 Runtime 的关系
 
-ClaWorks 基于 OpenClaw 代码 Fork 开发（TypeScript/Node.js），保留：
+```
+OpenClaw Runtime                 ClaWorks Runtime
+──────────────────               ──────────────────────
+会话驱动（用户发消息）            事件驱动（OT/Cron/REST）
+Pi Agent 推理                    PlaybookEngine 编排
+Skills（工具包）                  Pack（本体+Playbook）
+managedFlows（HITL 辅助）        HITLGate（Playbook 挂起）
+Channel auto-reply               EventKernel → notify → Channel
+```
 
-- **src/gateway/** — 进程生命周期、Plugin 热重载、HTTP server
-- **src/plugins/** — Plugin 注册/加载/合约体系（Extension Pack 基础）
-- **src/agents/** — LLM runner、Skills、subagent、managedFlows
-- **src/config/** — 配置热重载
-- **src/cli/** — CLI 框架
-- **src/acp/** — Agent Client Protocol（子 agent 通信）
-- **extensions/openai、anthropic 等** — LLM Providers（PlaybookEngine 直接用）
-- **extensions/feishu、telegram 等** — IM 渠道（HITL 通知）
+**打通方式**（runtime-bridge）：
 
-新增（ClaWorks 独有）：
-
-- **src/kernel/** — EventKernel（自治事件循环）
-- **src/planes/data/** — ObjectStore、OntologyEngine、KnowledgeBase
-- **src/planes/orch/** — PlaybookEngine、HITLGate、FunctionExecutor
-- **src/interfaces/a2a/** — Google A2A Server（机器人互联）
-- **src/interfaces/mcp/** — MCP Server（工具对外暴露）
+- `llmComplete` → `api.runtime.llm.complete`（Playbook 的 `llm` 步骤）
+- `subagentRun` → `api.runtime.subagent.run`（Playbook 的 `subagent` 步骤）
+- `skillRun` → `api.runtime.agent.runEmbeddedAgent`（Playbook 的 `skill` 步骤）
+- `notify` → `api.runtime.channel.outbound`（Playbook 的 `notification` 步骤）
+- HITL `suspend/resolve` → `api.runtime.tasks.managedFlows`（HITL 状态挂到 OpenClaw 管理任务中）
 
 ---
 
-## 三、仓库体系
+## 四、managedFlows / cron / hooks vs Playbook —— 必要性分析
 
-```
-/Users/power/Projects/
-├── claworks/                        ← 本项目（OpenClaw Fork → ClaWorks 产品）
-│   ├── src/                         ← 继承 OpenClaw src/ + 新增 kernel/planes/interfaces/
-│   ├── extensions/                  ← 只保留 ClaWorks 自身需要的 extension
-│   ├── packages/                    ← ClaWorks SDK + 工具包
-│   └── docs/design/                 ← 本设计文档目录
-│
-├── openclaw-claworks-extension/     ← 独立仓库：官方 OpenClaw 用户通过此插件接入 ClaWorks
-│   ├── extensions/claworks/         ← cw_* 工具（接入 ClaWorks HTTP/A2A）
-│   └── packages/claworks-client/    ← HTTP transport、instance resolver
-│
-└── claworks-packs/                  ← 独立仓库：行业扩展包（可商业化）
-    ├── base/                        ← 基础本体（开源）
-    ├── process-industry/            ← 流程工业（开源或商业）
-    └── oilgas/                      ← 油气行业（商业）
-```
+| 能力         | OpenClaw 原有                  | ClaWorks Playbook 的价值                                          |
+| ------------ | ------------------------------ | ----------------------------------------------------------------- |
+| **定时触发** | OpenClaw cron hooks（轻量）    | `scheduler_trigger` + Playbook 完整执行（对象持久化、HITL、审计） |
+| **Webhook**  | `webhooks` 插件收消息          | Ingress 路由 → 结构化事件 → Playbook（有本体校验）                |
+| **HITL**     | `managedFlows`（Agent 会话级） | `HITLGate` 挂起整个 Playbook 执行链（跨步骤状态）                 |
+| **业务对象** | 聊天 context（易丢失）         | ObjectStore（版本化、可查询、本体校验）                           |
+| **审计**     | 无                             | Playbook run 记录（DB 持久）                                      |
+| **多域协作** | 无                             | `a2a_delegate` 步骤                                               |
+| **可靠重试** | 无                             | Outbox（失败重试）                                                |
+
+**结论**：OpenClaw 的 managedFlows/cron/hooks 适合**会话辅助**；ClaWorks Playbook 适合**企业业务流程**（可靠对象 + 审计 + 多机器人）。两者互补，不重复。
 
 ---
 
-## 四、核心组件架构
+## 五、Robot Identity 与权限体系
 
-### 4.1 运行时三平面
+### Robot Identity（robot.md）
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                    ClaWorks Process                      │
-│                                                          │
-│  ┌──────────────────────────────────────────────────┐   │
-│  │               OpenClaw Gateway（继承）            │   │
-│  │  Plugin 加载 · HTTP Server · Config 热重载        │   │
-│  │  LLM Providers · IM Channels · Skills · subagent │   │
-│  └─────────────────────┬────────────────────────────┘   │
-│                         │ registerService / registerTool  │
-│  ┌──────────────────────▼──────────────────────────┐    │
-│  │              EventKernel（新增）                  │    │
-│  │   EventBus · Scheduler · Outbox · Matcher        │    │
-│  └──────┬───────────────┬────────────────┬──────────┘    │
-│         │               │                │               │
-│  ┌──────▼──────┐ ┌──────▼──────┐ ┌──────▼──────┐        │
-│  │  DataPlane  │ │  OrchPlane  │ │  Interfaces │        │
-│  │             │ │             │ │             │        │
-│  │ ObjectStore │ │PlaybookEng. │ │  A2A Server │        │
-│  │ Ontology    │ │ HITLGate    │ │  MCP Server │        │
-│  │ KB (RAG)    │ │ FuncExec    │ │  REST API   │        │
-│  └─────────────┘ └─────────────┘ └─────────────┘        │
-└─────────────────────────────────────────────────────────┘
-```
+每个机器人实例有 **`~/.claworks/robot.md`**（优先）或 Pack 内 `robot.md`（次）或内置默认。
 
-### 4.2 EventKernel 事件流
+内容包含：
+
+- 角色宣言（名称、职能、业务域）
+- 核心规则（哪些动作自动，哪些 HITL，HITL 阈值）
+- 可信主体定义（system / apikey / peer / channel_user）
+- HITL 升级条件
+
+**robot.md 是「机器人的宪法」**：不依赖运行时代码，可由运营方定制，版本化存储。
+
+### RBAC Guard
+
+策略存储在 ObjectStore（可靠数据，可通过 REST/Pack 更新）：
 
 ```
-外部事件源                 EventKernel              业务处理
-────────────          ──────────────────         ───────────
-OT Connector  ──►     EventBus.publish()  ──►    Matcher
-IM 消息        ──►     (优先级队列)          │     PlaybookEngine.run()
-A2A Task      ──►                          │     HITLGate (等待审批)
-Cron 定时      ──►     Outbox (可靠投递)  ◄─┘     FunctionExecutor (LLM)
-REST API      ──►     Scheduler
-```
-
-### 4.3 Extension Pack 体系（类比 OpenClaw Plugin）
-
-```
-OpenClaw Plugin              ClaWorks Extension Pack
-─────────────────            ──────────────────────
-definePluginEntry()    →     definePackEntry()
-api.registerTool()     →     pack.registerObjectType()
-api.registerService()  →     pack.registerPlaybook()
-api.on(hook)           →     pack.registerConnector()
-openclaw.plugin.json   →     claworks.pack.json
-~/.openclaw/skills/    →     ~/.claworks/packs/
-clawhub.ai             →     nexus.claworks.ai
-```
-
----
-
-## 五、多机器人 A2A 网格
-
-```
-                    企业 A2A 网格
-                    
-  [泵站机器人]  ◄──A2A──►  [管道机器人]  ◄──A2A──►  [调度机器人]
-  本体：Pump              本体：Pipeline            本体：WorkOrder
-  数据：实时读数           数据：流量/压力            数据：工单/班次
-                                │
-                       ┌────────▼────────┐
-                       │  OpenClaw 用户   │
-                       │  飞书/Telegram   │
-                       │  （HITL 审批）   │
-                       └─────────────────┘
-
-每个机器人：
-- 小而精的本体（单业务域，LLM 上下文不稀释）
-- 通过 A2A 委托跨域决策给相邻机器人
-- 通过 OpenClaw IM 接受人类审批
-
-vs Palantir：
-- Palantir：一个巨型本体，需要深度工业专家，6-18 个月实施
-- ClaWorks：每个机器人独立部署，天级接入，LLM 理解业务
-```
-
----
-
-## 六、Nexus Pack 仓库
-
-ClaWorks Nexus 参考 OpenClaw ClaWHub（`src/infra/clawhub.ts` 1075行）实现兼容 API：
-
-```
-claworks.pack.json                openclaw.plugin.json（参考）
-──────────────────                ────────────────────────────
-{                                 {
-  "id": "process-industry",         "id": "feishu",
-  "type": "claworks-pack",          "type": "channel",
-  "version": "1.0.0",               "version": "2026.5.x",
-  "provides": {                     "provides": ["channel"]
-    "objectTypes": [...],         }
-    "playbooks": [...],
-    "connectors": [...]
-  }
+RbacPolicy: {
+  action: "event.publish" | "rest.write" | "a2a.delegate" | "hitl.resolve"
+  resource: "alarm.*" | "playbook:diagnose" | "*"
+  subjectType: "system" | "apikey" | "peer" | "channel_user"
+  effect: "allow" | "deny"
 }
+```
 
-Nexus API（兼容 ClaWHub 形状）：
-GET  /api/packages?family=claworks-pack
-GET  /api/packages/{slug}
-GET  /api/packages/{slug}/versions/{v}/artifacts
-POST /api/packages/{slug}/install  (claworks nexus install)
+评估顺序：精确 deny → 通配 deny → 精确 allow → 通配 allow → 默认 deny（system 始终 allow）。
+
+**权限 Playbook 化**：`rbac.denied` 事件由 EventKernel 发布，Pack 内可写 Playbook 响应（告警、升级、审计）——权限拒绝不再沉默。
+
+### Ingress Router
+
+解决「IM 消息不应默认进 EventKernel」问题：
+
+```
+connector/REST/A2A/scheduler/system → kernel（直接）
+IM/webhook                          → intent_route（意图 Playbook 分类后再 publish）
+```
+
+策略可存储为 ObjectType `IngressPolicy`，Pack 热重载后 `ingress.reload()`。
+
+---
+
+## 六、多小脑 + A2A 协作（vs 单本体）
+
+ClaWorks 刻意选择**多小脑（多机器人）+ A2A 协作**而非 Palantir 式单本体，理由：
+
+| 维度       | 单本体（Palantir） | 多小脑（ClaWorks）         |
+| ---------- | ------------------ | -------------------------- |
+| LLM 上下文 | 稀释（需全域知识） | 聚焦（单域专家）           |
+| 部署复杂度 | 6-18 个月          | 天级                       |
+| 故障影响   | 全局               | 域内隔离                   |
+| 扩展方式   | 垂直扩大本体       | 水平增加机器人             |
+| 跨域决策   | 内部               | A2A 委托（可审计、可计费） |
+
+**实际验证**：越复杂的任务，机器人越不容易做好；单域 + LLM + Playbook 比超大本体更实用。
+
+---
+
+## 七、个人 OpenClaw ↔ 企业 ClaWorks 对接
+
+**HTTP** 和 **A2A** 分别用于不同场景：
+
+| 场景                           | 协议                        | 说明                        |
+| ------------------------------ | --------------------------- | --------------------------- |
+| 个人助理查询企业数据           | **HTTP REST** `/v1/objects` | 只读查询，简单 Bearer Token |
+| 个人助理触发业务流程           | **HTTP REST** `/v1/events`  | 写操作，RBAC 限制           |
+| 机器人 ↔ 机器人跨域委托        | **A2A** `/a2a/tasks/send`   | Task 委托，带 correlationId |
+| 个人 OpenClaw 委托到企业机器人 | **A2A**                     | 企业机器人作为 A2A peer     |
+
+HTTP 存在的理由：**REST 对标准 HTTP 客户端友好**，Cursor IDE、外部系统等可直接集成；A2A 是机器人间结构化委托协议，偏「任务下达」而非「查询」。
+
+---
+
+## 八、每个机器人的 IM 通道连接
+
+每个机器人实例有：
+
+- **管理员通道**：配置一个或多个飞书/Telegram 用户/群，负责 HITL 审批和运维指令
+- **值班换班**：通过 `notify.targets` 配置（ObjectStore **`RobotOwner`** 对象 + `robot.md` Owner 可动态更新）
+- **权限隔离**：channel_user 默认只读 + HITL resolve；写操作需配置 `channel_user:allow` 策略
+
+其他员工通过**个人 OpenClaw + A2A/HTTP** 连接机器人（只读查询、提交委托），不直接操作机器人内部。
+
+---
+
+## 九、Playbook 步骤交叉使用
+
+`llm` / `subagent` / `skill` 不是三选一，同一 Playbook 应根据确定性程度**混合使用**：
+
+```yaml
+steps:
+  - kind: action # 确定性：查本体对象（不用 LLM）
+  - kind: condition # 确定性：阈值判断（不用 LLM）
+  - kind: llm # 非确定性：生成诊断建议文本
+  - kind: hitl # 置信度低时暂停等人
+  - kind: skill # 调用 KB 检索 Skill
+  - kind: subagent # 复杂推理子任务（Pi Agent）
+  - kind: a2a_delegate # 跨域委托给邻域机器人
+  - kind: notification # 飞书通知
+```
+
+驱动方式不全是「发一条 IM」：
+
+- `llm` → `api.runtime.llm.complete`（结构化 prompt）
+- `skill` → `runEmbeddedAgent`（Pi，带 skill 意图）
+- `subagent` → `subagent.run` + `waitForRun`（异步 Pi）
+
+---
+
+## 十、OpenClaw 中的速度问题
+
+OpenClaw 处理慢的原因通常：
+
+1. **LLM 首 token 延迟**（模型问题，非 OpenClaw）—— 当前已 < 1s
+2. **工具串行调用**（Agent 逐步思考）—— 可用 `parallel` 工具组合
+3. **会话记忆搜索**（memory-core）—— 可限制检索范围
+4. **Playbook 并发**（`playbook_concurrency` 配置）
+
+Cursor 快的原因：专为代码编辑优化的 prompt + streaming + 增量更新，不走完整 Agent 循环。ClaWorks 的**确定性 Playbook 步骤**（action/function/connector）也不走 LLM，速度与代码调用相当；只有 `llm`/`subagent`/`skill` 步骤受 LLM 速度影响。
+
+---
+
+## 十一、开源策略
+
+| 建议开源                                     | 建议商业/私有              |
+| -------------------------------------------- | -------------------------- |
+| `src/kernel`, `src/planes`, `src/interfaces` | 行业 Pack（油气/流程工业） |
+| `packages/claworks-sdk` + Pack 规范          | 托管 SaaS / 企业 RBAC 服务 |
+| `extensions/claworks-robot` 薄封装           | 与 MES/OT 的深度连接器     |
+| 示例 Pack `base` / `process-industry` 基础版 | 高级功能模块               |
+| robot.md 规范 / A2A profile / MCP 工具定义   |                            |
+
+**不**把整仓 Fork 当「替代 OpenClaw」开源；应发布 **`@claworks/runtime`** npm 包，依赖 upstream OpenClaw。
+
+---
+
+## 十二、演进路径：库 + 薄插件
+
+**现状（2026-05-20）**：
+
+- `packages/claworks-runtime`：`kernel/`、`pack-loader/`、`claworks/`、`planes/`、`interfaces/` 均已物理迁入；M3 本地 `dist/` + dist-smoke 通过。
+- 根 `src/kernel|planes|interfaces|claworks` shim **已删除**；`packs-cli` 在 `packages/claworks-runtime/src/claworks/`。
+- `extensions/claworks-robot`：OpenClaw 薄插件（`bridge.ts`、`runtime-bridge.ts`、`notify-channel.ts`、IM `message_received` 钩子等）。
+- **发布**：当前仅本地/仓内验证，不执行 npm 公开发布。
+
+**目标形态**（未完成部分加括号）：
+
+```
+@claworks/runtime（npm 包，本地 dist 已就绪）
+  src/kernel/*           ✅
+  src/pack-loader/*      ✅
+  src/planes/*           ✅
+  src/interfaces/*       ✅
+  src/claworks/*         ✅（不含 OpenClaw api 胶水）
+  dist/ + tsdown         ✅ 本地构建；（npm 公开发布）暂缓
+  删除根 src/** shim     ✅
+
+extensions/claworks-robot（薄 OpenClaw 插件）
+  → 依赖 @claworks/runtime
+  → 通过 api.register* 挂载服务/路由
+
+openclaw-claworks-extension（官方 OpenClaw 用户，独立外仓）
+  → HTTP/A2A 连企业 ClaWorks
+  → 不捆绑 @claworks/runtime
+  （本地仓 ../openclaw-claworks-extension，npm 发布暂缓）
 ```
 
 ---
 
-## 七、爆点设计
+## 十三、远景：设备皆机器人 + A2A 网格
 
-ClaWorks 的核心价值主张（类比 OpenClaw 消除 App UI 开发）：
+```
+[摄像头机器人]  [声波机器人]  [泵站机器人]  [充电桩机器人]
+       │              │              │               │
+       └──────────────┴──────────────┴───────────────┘
+                              A2A（Task + 计量）
+                                     │
+              ┌──────────────────────┴───────────────────┐
+              │         调度/协调机器人                    │
+              │   A2A billing_meter: 按 Task 计量           │
+              └──────────────────────────────────────────┘
+                                     │
+                    ┌────────────────┴────────────────┐
+                    │    OpenClaw Channel（人）         │
+                    │    飞书/Telegram/摄像头/麦克风     │
+                    └─────────────────────────────────┘
+```
 
-**"企业现有系统接入后，80% 的例行决策自动完成，剩下 20% 通过 IM 推给人类"**
-
-三个杀手级触发场景：
-
-1. **告警→工单自动闭环**：OT 设备告警 → PlaybookEngine → 自动创建工单 → 飞书通知 → 工程师确认
-2. **HITL 审批零门槛**：重大决策机器人发飞书卡片，管理层点按钮即审批，无需登录专有系统
-3. **知识库赋能新人**：设备故障 → KB 检索历史案例+手册 → LLM 给出处置建议，新人也能做专家决策
-
----
-
-## 八、设计原则
-
-1. **OpenClaw 核心不改** — 只在 Fork 基础上新增，确保 `git merge upstream/main` 低摩擦
-2. **插件即一切** — EventKernel、DataPlane、OrchPlane 均以 `registerService` 形式挂载
-3. **YAML 驱动** — 本体/Playbook/Connector 定义用 YAML，语言无关，生态友好
-4. **渐进式部署** — 单机 monolith → twin+ops 分离 → 多机器人 A2A 网格
-5. **护城河在数据** — 行业本体 YAML + Playbook 模板是真正的 IP，代码开源，数据商业化
+**A2A 付费**：Task 带 `billing_meter` 字段（按次、按 token、按时间），在 Nexus/网格网关层统计，不写入 EventBus 核心。充电桩支付可通过 A2A 发起 `payment.request` 任务，由调度机器人确认并调外部支付 API。

@@ -344,13 +344,6 @@ export type SessionEntry = {
   claudeCliSessionId?: string;
   label?: string;
   displayName?: string;
-  /**
-   * Optional workbench / vault id (e.g. Maibot `WorkProject.gatewayProjectId`) for cross-client session grouping.
-   * Distinct from chat `channel` — persisted for `sessions.list` and UI sync.
-   */
-  projectId?: string;
-  /** Human-readable project name paired with `projectId` (UI label; not a session `label`). */
-  projectName?: string;
   channel?: string;
   groupId?: string;
   subject?: string;

@@ -1,0 +1,11 @@
+{
+  "name": "@claworks/sdk",
+  "version": "0.1.0",
+  "description": "ClaWorks Extension Pack SDK — manifest helpers and types",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": ["src"]
+}

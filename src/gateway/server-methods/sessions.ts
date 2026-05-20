@@ -110,7 +110,7 @@ import {
 import { applySessionsPatchToStore } from "../sessions-patch.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
 import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
-import { chatHandlers, normalizeOptionalChatExtraSystemPrompt } from "./chat.js";
+import { chatHandlers } from "./chat.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
@@ -633,16 +633,12 @@ async function handleSessionSend(params: {
     typeof rawIdempotencyKey === "string" && rawIdempotencyKey.trim()
       ? rawIdempotencyKey.trim()
       : randomUUID();
-  const extraSystemPrompt = normalizeOptionalChatExtraSystemPrompt(
-    (p as { extraSystemPrompt?: unknown }).extraSystemPrompt,
-  );
   await chatHandlers["chat.send"]({
     req: params.req,
     params: {
       sessionKey: canonicalKey,
       message: (p as { message: string }).message,
       thinking: (p as { thinking?: string }).thinking,
-      ...(extraSystemPrompt ? { extraSystemPrompt } : {}),
       attachments: (p as { attachments?: unknown[] }).attachments,
       timeoutMs: (p as { timeoutMs?: number }).timeoutMs,
       idempotencyKey,
@@ -1177,8 +1173,6 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       : buildDashboardSessionKey(agentId);
     const target = resolveGatewaySessionStoreTarget({ cfg, key });
     const targetAgentId = resolveAgentIdFromSessionKey(target.canonicalKey);
-    const createProjectId = normalizeOptionalString(p.projectId);
-    const createProjectName = normalizeOptionalString(p.projectName);
     const created = await updateSessionStore(target.storePath, async (store) => {
       const patched = await applySessionsPatchToStore({
         cfg,
@@ -1188,8 +1182,6 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           key: target.canonicalKey,
           label: normalizeOptionalString(p.label),
           model: normalizeOptionalString(p.model),
-          ...(createProjectId ? { projectId: createProjectId } : {}),
-          ...(createProjectName ? { projectName: createProjectName } : {}),
         },
         loadGatewayModelCatalog: context.loadGatewayModelCatalog,
       });

@@ -35,6 +35,8 @@ minimumReleaseAgeExclude:
   - "rolldown"
   - "sqlite-vec"
   - "sqlite-vec-*"
+  - "sharp@0.34.5"
+  - "scheduler@0.27.0"
 
 nodeLinker: hoisted
 blockExoticSubdeps: true

@@ -1,0 +1,18 @@
+{
+  "name": "@claworks/robot",
+  "version": "2026.5.0-alpha.1",
+  "private": true,
+  "description": "ClaWorks robot runtime plugin — EventKernel, ObjectStore, PlaybookEngine",
+  "type": "module",
+  "dependencies": {
+    "@claworks/runtime": "workspace:*"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

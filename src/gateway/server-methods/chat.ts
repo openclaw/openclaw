@@ -752,33 +752,6 @@ function normalizeOptionalChatSystemReceipt(
   return { ok: true, receipt: receipt || undefined };
 }
 
-/** Align with Maibot `CHAT_EXTRA_SYSTEM_PROMPT_MAX_CHARS` and JSON schema `maxLength`. */
-const CHAT_EXTRA_SYSTEM_PROMPT_MAX_CHARS = 65_535;
-
-/**
- * Optional `extraSystemPrompt` on `chat.send` / `sessions.send` — trusted operator/UI text only.
- */
-export function normalizeOptionalChatExtraSystemPrompt(value: unknown): string | undefined {
-  if (value == null) {
-    return undefined;
-  }
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = value.normalize("NFC");
-  if (normalized.includes("\u0000")) {
-    return undefined;
-  }
-  const stripped = stripDisallowedChatControlChars(normalized).trim();
-  if (!stripped) {
-    return undefined;
-  }
-  if (stripped.length <= CHAT_EXTRA_SYSTEM_PROMPT_MAX_CHARS) {
-    return stripped;
-  }
-  return stripped.slice(0, CHAT_EXTRA_SYSTEM_PROMPT_MAX_CHARS);
-}
-
 function isAcpBridgeClient(client: GatewayRequestHandlerOptions["client"]): boolean {
   const info = client?.connect?.client;
   return (
@@ -1947,7 +1920,6 @@ export const chatHandlers: GatewayRequestHandlers = {
       timeoutMs?: number;
       systemInputProvenance?: InputProvenance;
       systemProvenanceReceipt?: string;
-      extraSystemPrompt?: string;
       idempotencyKey: string;
     };
     const explicitOriginResult = normalizeExplicitChatSendOrigin({
@@ -1993,7 +1965,6 @@ export const chatHandlers: GatewayRequestHandlers = {
     const inboundMessage = sanitizedMessageResult.message;
     const systemInputProvenance = normalizeInputProvenance(p.systemInputProvenance);
     const systemProvenanceReceipt = systemReceiptResult.receipt;
-    const gatewayExtraSystemPrompt = normalizeOptionalChatExtraSystemPrompt(p.extraSystemPrompt);
     const stopCommand = isChatStopCommandText(inboundMessage);
     const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(p.attachments);
     const rawMessage = inboundMessage.trim();
@@ -2306,7 +2277,6 @@ export const chatHandlers: GatewayRequestHandlers = {
             }
           : {}),
         GatewayClientScopes: client?.connect?.scopes ?? [],
-        ...(gatewayExtraSystemPrompt ? { GatewayExtraSystemPrompt: gatewayExtraSystemPrompt } : {}),
         ...pluginBoundMediaFields,
       };
       if (mediaPathOffloadPaths.length > 0) {

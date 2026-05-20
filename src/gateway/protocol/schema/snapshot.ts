@@ -43,19 +43,6 @@ export const StateVersionSchema = Type.Object(
   { additionalProperties: false },
 );
 
-/** Maibot desktop mirror: `.maibot/indexing/preferences.json` (subset; optional on `hello.ok.snapshot`). */
-export const MaibotWorkspaceIndexingSnapshotSchema = Type.Object(
-  {
-    schemaVersion: Type.Integer({ minimum: 1 }),
-    updatedAt: Type.String(),
-    indexNewFolders: Type.Boolean(),
-    instantGrep: Type.Boolean(),
-    ignorePatternLines: Type.Array(Type.String()),
-    effectiveWorkspacePrimaryRoot: Type.String(),
-  },
-  { additionalProperties: false },
-);
-
 export const SnapshotSchema = Type.Object(
   {
     presence: Type.Array(PresenceEntrySchema),
@@ -80,13 +67,6 @@ export const SnapshotSchema = Type.Object(
         channel: NonEmptyString,
       }),
     ),
-    /** Populated when Maibot has mirrored indexing prefs into the default agent workspace tree. */
-    maibotWorkspaceIndexing: Type.Optional(MaibotWorkspaceIndexingSnapshotSchema),
-    /**
-     * Absolute filesystem path of the **default agent** OpenClaw workspace (`resolveAgentWorkspaceDir`);
-     * tools run relative to this root on the gateway host.
-     */
-    openclawAgentWorkspaceRoot: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
 );

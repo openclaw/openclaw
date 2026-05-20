@@ -107,6 +107,11 @@ const coreEntrySpecs: readonly CommandGroupDescriptorSpec<
         loadModule: () => import("../mcp-cli.js"),
         exportName: "registerMcpCli",
       },
+      {
+        commandNames: ["packs"],
+        loadModule: () => import("@claworks/runtime"),
+        exportName: "registerClaworksPacksCli",
+      },
     ]),
   ),
   defineImportedCommandGroupSpec(

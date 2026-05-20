@@ -514,7 +514,6 @@ export async function runPreparedReply(
     isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },
     { includeFormattingHints: !useFastReplyRuntime },
   );
-  const gatewayExtraPrompt = normalizeOptionalString(ctx.GatewayExtraSystemPrompt);
   const extraSystemPromptParts = [
     inboundMetaPrompt,
     directChatContext,
@@ -527,7 +526,6 @@ export async function runPreparedReply(
       fullAccessAvailable: fullAccessState.available,
       fullAccessBlockedReason: fullAccessState.blockedReason,
     }),
-    gatewayExtraPrompt,
   ].filter(Boolean);
   // Static parts only (no per-message inbound metadata) for CLI session reuse hashing.
   const extraSystemPromptStaticParts = [

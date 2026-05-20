@@ -122,9 +122,6 @@ export const SessionsCreateParamsSchema = Type.Object(
     emitCommandHooks: Type.Optional(Type.Boolean()),
     task: Type.Optional(Type.String()),
     message: Type.Optional(Type.String()),
-    /** Workbench / vault id for multi-client sync (e.g. Maibot work project). */
-    projectId: Type.Optional(Type.String({ maxLength: 512 })),
-    projectName: Type.Optional(Type.String({ maxLength: 512 })),
   },
   { additionalProperties: false },
 );
@@ -134,8 +131,6 @@ export const SessionsSendParamsSchema = Type.Object(
     key: NonEmptyString,
     message: Type.String(),
     thinking: Type.Optional(Type.String()),
-    /** Same semantics as `chat.send.extraSystemPrompt` (trusted caller; max 65535 — align with Maibot contracts). */
-    extraSystemPrompt: Type.Optional(Type.String({ maxLength: 65_535 })),
     attachments: Type.Optional(Type.Array(Type.Unknown())),
     timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
     idempotencyKey: Type.Optional(NonEmptyString),
@@ -207,8 +202,6 @@ export const SessionsPatchParamsSchema = Type.Object(
     groupActivation: Type.Optional(
       Type.Union([Type.Literal("mention"), Type.Literal("always"), Type.Null()]),
     ),
-    projectId: Type.Optional(Type.Union([Type.String({ maxLength: 512 }), Type.Null()])),
-    projectName: Type.Optional(Type.Union([Type.String({ maxLength: 512 }), Type.Null()])),
   },
   { additionalProperties: false },
 );

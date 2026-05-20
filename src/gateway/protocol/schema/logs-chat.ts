@@ -48,8 +48,6 @@ export const ChatSendParamsSchema = Type.Object(
     timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
     systemInputProvenance: Type.Optional(InputProvenanceSchema),
     systemProvenanceReceipt: Type.Optional(Type.String()),
-    /** Trusted UI / operator context merged into the agent system prompt for this turn only. Keep maxLength aligned with Maibot `CHAT_EXTRA_SYSTEM_PROMPT_MAX_CHARS`. */
-    extraSystemPrompt: Type.Optional(Type.String({ maxLength: 65_535 })),
     idempotencyKey: NonEmptyString,
   },
   { additionalProperties: false },

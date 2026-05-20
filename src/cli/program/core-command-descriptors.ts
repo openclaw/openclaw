@@ -71,6 +71,11 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: true,
   },
   {
+    name: "packs",
+    description: "Manage ClaWorks extension packs (Nexus registry)",
+    hasSubcommands: true,
+  },
+  {
     name: "agent",
     description: "Run one agent turn via the Gateway",
     hasSubcommands: false,

@@ -156,15 +156,6 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
     authConfig: ctx.cfg.gateway?.auth,
     tailscaleMode: ctx.cfg.gateway?.tailscale?.mode ?? "off",
   });
-  const { buildPlaintextGatewayTokenEnvVersusConfigMismatchLines } =
-    await import("../commands/doctor-gateway-token-env-plaintext-drift.js");
-  const plaintextTokenEnvDrift = buildPlaintextGatewayTokenEnvVersusConfigMismatchLines({
-    cfg: ctx.cfg,
-    env: process.env,
-  });
-  if (plaintextTokenEnvDrift && auth.mode !== "password") {
-    note(plaintextTokenEnvDrift.join("\n"), "Gateway auth");
-  }
   // Modes that don't need a token: password, none, trusted-proxy.
   // This aligns with hasExplicitGatewayInstallAuthMode() in auth-install-policy.ts.
   // Previously, only "password" and "token" (with a token present) were excluded,
