@@ -151,8 +151,10 @@ describe("logs cli", () => {
     const output = stdoutWrites.join("");
     expect(output).toContain("line one");
     const timestamp = output.match(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z?/u)?.[0];
-    expect(timestamp).toBeTruthy();
-    expect(timestamp?.endsWith("Z")).toBe(false);
+    if (timestamp === undefined) {
+      throw new Error("expected local timestamp in logs output");
+    }
+    expect(timestamp.endsWith("Z")).toBe(false);
   });
 
   it("warns when the output pipe closes", async () => {
@@ -304,7 +306,7 @@ describe("logs cli", () => {
       const stdoutWrites = captureStdoutWrites();
       const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
 
-      await runLogsCli(["logs", "--follow"]);
+      await runLogsCli(["logs", "--follow", "--interval", "1"]);
 
       expect(stderrWrites.join("")).toContain("Local Gateway RPC unavailable");
       expect(stderrWrites.join("")).not.toContain("gateway disconnected");
@@ -365,7 +367,14 @@ describe("logs cli", () => {
       const stdoutWrites = captureStdoutWrites();
       const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
 
-      await runLogsCli(["logs", "--follow", "--url", "ws://remote.example.com:18789"]);
+      await runLogsCli([
+        "logs",
+        "--follow",
+        "--interval",
+        "1",
+        "--url",
+        "ws://remote.example.com:18789",
+      ]);
 
       expect(readConfiguredLogTail).not.toHaveBeenCalled();
       expect(stderrWrites.join("")).toContain("gateway disconnected");
@@ -399,18 +408,28 @@ describe("logs cli", () => {
       const stdoutWrites = captureStdoutWrites();
       const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
 
-      await runLogsCli(["logs", "--follow", "--json", "--url", "ws://remote.example.com:18789"]);
+      await runLogsCli([
+        "logs",
+        "--follow",
+        "--interval",
+        "1",
+        "--json",
+        "--url",
+        "ws://remote.example.com:18789",
+      ]);
 
       const stderr = stderrWrites.join("");
       const noticeRecords = stderr
         .split("\n")
         .filter((line) => line.length > 0)
         .map((line) => JSON.parse(line) as { type: string; message?: string });
-      const messages = noticeRecords
-        .filter((record) => record.type === "notice")
-        .map((record) => record.message ?? "");
-      expect(messages.some((message) => message.includes("gateway disconnected"))).toBe(true);
-      expect(messages.some((message) => message.includes("gateway reconnected"))).toBe(true);
+      expect(noticeRecords.filter((record) => record.type === "notice")).toEqual([
+        {
+          type: "notice",
+          message: "[logs] gateway disconnected, reconnecting in 0s...",
+        },
+        { type: "notice", message: "[logs] gateway reconnected" },
+      ]);
       expect(stdoutWrites.join("")).toContain('"type":"meta"');
       expect(exitSpy).toHaveBeenCalledWith(1);
     });

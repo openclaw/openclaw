@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { readJsonFile, readJsonFileSync } from "../infra/json-files.js";
+import { tryReadJson, tryReadJsonSync } from "../infra/json-files.js";
 import { resolveDefaultPluginNpmDir, validatePluginId } from "./install-paths.js";
 import {
   resolveInstalledPluginIndexStorePath,
@@ -15,7 +15,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function cloneInstallRecords(
   records: Record<string, PluginInstallRecord> | undefined,
 ): Record<string, PluginInstallRecord> {
-  return structuredClone(records ?? {});
+  return readRecordMap(records) ?? {};
+}
+
+const BLOCKED_RECORD_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
+function isSafeRecordKey(key: string): boolean {
+  return !BLOCKED_RECORD_KEYS.has(key);
 }
 
 function readRecordMap(value: unknown): Record<string, PluginInstallRecord> | null {
@@ -26,6 +32,9 @@ function readRecordMap(value: unknown): Record<string, PluginInstallRecord> | nu
   for (const [pluginId, record] of Object.entries(value).toSorted(([left], [right]) =>
     left.localeCompare(right),
   )) {
+    if (!isSafeRecordKey(pluginId)) {
+      continue;
+    }
     if (isRecord(record) && typeof record.source === "string") {
       records[pluginId] = structuredClone(record) as PluginInstallRecord;
     }
@@ -34,12 +43,8 @@ function readRecordMap(value: unknown): Record<string, PluginInstallRecord> | nu
 }
 
 function readJsonObjectFileSync(filePath: string): Record<string, unknown> | null {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown;
-    return isRecord(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
+  const parsed = tryReadJsonSync(filePath);
+  return isRecord(parsed) ? parsed : null;
 }
 
 function readStringRecord(value: unknown): Record<string, string> {
@@ -50,6 +55,9 @@ function readStringRecord(value: unknown): Record<string, string> {
   for (const [key, raw] of Object.entries(value).toSorted(([left], [right]) =>
     left.localeCompare(right),
   )) {
+    if (!isSafeRecordKey(key)) {
+      continue;
+    }
     if (typeof raw === "string" && raw.trim()) {
       record[key] = raw.trim();
     }
@@ -141,15 +149,21 @@ function mergeRecoveredManagedNpmInstallRecords(
 function extractPluginInstallRecordsFromPersistedInstalledPluginIndex(
   index: unknown,
 ): Record<string, PluginInstallRecord> | null {
-  if (!isRecord(index) || !Array.isArray(index.plugins)) {
+  if (!isRecord(index)) {
     return null;
   }
   if (Object.prototype.hasOwnProperty.call(index, "installRecords")) {
     return readRecordMap(index.installRecords) ?? {};
   }
+  if (!Array.isArray(index.plugins)) {
+    return null;
+  }
   const records: Record<string, PluginInstallRecord> = {};
   for (const entry of index.plugins) {
     if (!isRecord(entry) || typeof entry.pluginId !== "string" || !isRecord(entry.installRecord)) {
+      continue;
+    }
+    if (!isSafeRecordKey(entry.pluginId)) {
       continue;
     }
     records[entry.pluginId] = structuredClone(entry.installRecord) as PluginInstallRecord;
@@ -160,14 +174,14 @@ function extractPluginInstallRecordsFromPersistedInstalledPluginIndex(
 export async function readPersistedInstalledPluginIndexInstallRecords(
   options: InstalledPluginIndexStoreOptions = {},
 ): Promise<Record<string, PluginInstallRecord> | null> {
-  const parsed = await readJsonFile<unknown>(resolveInstalledPluginIndexStorePath(options));
+  const parsed = await tryReadJson<unknown>(resolveInstalledPluginIndexStorePath(options));
   return extractPluginInstallRecordsFromPersistedInstalledPluginIndex(parsed);
 }
 
 export function readPersistedInstalledPluginIndexInstallRecordsSync(
   options: InstalledPluginIndexStoreOptions = {},
 ): Record<string, PluginInstallRecord> | null {
-  const parsed = readJsonFileSync(resolveInstalledPluginIndexStorePath(options));
+  const parsed = tryReadJsonSync(resolveInstalledPluginIndexStorePath(options));
   return extractPluginInstallRecordsFromPersistedInstalledPluginIndex(parsed);
 }
 

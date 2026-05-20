@@ -260,11 +260,16 @@ describe("provider auth choice manifest helpers", () => {
         includeUntrustedWorkspacePlugins: false,
       }),
     ).toEqual([
-      expect.objectContaining({
+      {
         pluginId: "openai",
         providerId: "openai",
+        methodId: "api-key",
         choiceId: "openai-api-key",
-      }),
+        choiceLabel: "OpenAI API key",
+        optionKey: "openaiApiKey",
+        cliFlag: "--openai-api-key",
+        cliOption: "--openai-api-key <key>",
+      },
     ]);
     expect(
       resolveManifestProviderAuthChoice("openai-api-key", {
@@ -409,7 +414,7 @@ describe("provider auth choice manifest helpers", () => {
       },
     ]);
 
-    expect(resolveManifestProviderAuthChoices()).toEqual([]);
+    expect(resolveManifestProviderAuthChoices()).toStrictEqual([]);
   });
 
   it("does not duplicate explicit provider auth choices with setup auth methods", () => {
@@ -494,11 +499,16 @@ describe("provider auth choice manifest helpers", () => {
     ]);
 
     expect(resolveManifestProviderAuthChoices()).toEqual([
-      expect.objectContaining({
+      {
         pluginId: "openai",
         providerId: "openai",
+        methodId: "api-key",
         choiceId: "openai-api-key",
-      }),
+        choiceLabel: "OpenAI API key",
+        optionKey: "openaiApiKey",
+        cliFlag: "--openai-api-key",
+        cliOption: "--openai-api-key <key>",
+      },
     ]);
     expect(resolveManifestProviderAuthChoice("openai-api-key")?.providerId).toBe("openai");
     expect(resolveManifestProviderOnboardAuthFlags()).toEqual([
@@ -549,11 +559,16 @@ describe("provider auth choice manifest helpers", () => {
     ]);
 
     expect(resolveManifestProviderAuthChoices()).toEqual([
-      expect.objectContaining({
+      {
         pluginId: "custom-openai",
         providerId: "custom-openai",
+        methodId: "api-key",
         choiceId: "openai-api-key",
-      }),
+        choiceLabel: "OpenAI API key",
+        optionKey: "openaiApiKey",
+        cliFlag: "--openai-api-key",
+        cliOption: "--openai-api-key <key>",
+      },
     ]);
     expect(resolveManifestProviderAuthChoice("openai-api-key")?.providerId).toBe("custom-openai");
     expect(resolveManifestProviderOnboardAuthFlags()).toEqual([

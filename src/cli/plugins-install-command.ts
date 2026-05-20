@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { collectChannelDoctorStaleConfigMutations } from "../commands/doctor/shared/channel-doctor.js";
-import { readConfigFileSnapshot } from "../config/config.js";
+import { assertConfigWriteAllowedInCurrentMode, readConfigFileSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { installHooksFromNpmSpec, installHooksFromPath } from "../hooks/install.js";
 import { resolveArchiveKind } from "../infra/archive.js";
@@ -14,6 +14,7 @@ import { resolveDefaultPluginExtensionsDir } from "../plugins/install-paths.js";
 import type { InstallSafetyOverrides } from "../plugins/install-security-scan.js";
 import {
   PLUGIN_INSTALL_ERROR_CODE,
+  installPluginFromNpmPackArchive,
   installPluginFromNpmSpec,
   installPluginFromPath,
 } from "../plugins/install.js";
@@ -32,6 +33,7 @@ import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { theme } from "../terminal/theme.js";
 import { shortenHomePath } from "../utils.js";
+import { formatCliCommand } from "./command-format.js";
 import { looksLikeLocalInstallSpec } from "./install-spec.js";
 import { resolvePinnedNpmInstallRecordForCli } from "./npm-resolution.js";
 import {
@@ -49,6 +51,7 @@ import {
   createHookPackInstallLogger,
   createPluginInstallLogger,
   formatPluginInstallWithHookFallbackError,
+  parseNpmPackPrefixPath,
   parseNpmPrefixSpec,
 } from "./plugins-command-helpers.js";
 import { persistHookPackInstall, persistPluginInstall } from "./plugins-install-persist.js";
@@ -64,15 +67,18 @@ function resolveInstallSafetyOverrides(overrides: InstallSafetyOverrides): Insta
   };
 }
 
-function findTrustedOfficialExternalPackageInstall(packageName: string):
+function findTrustedCatalogPackageInstall(packageName: string):
   | {
       pluginId: string;
       npmSpec?: string;
       expectedIntegrity?: string;
     }
   | undefined {
+  // The catalog is the trust list. Raw npm selectors such as
+  // @scope/pkg@latest inherit install-scan trust when their package name is
+  // cataloged; integrity remains tied to exact catalog specs in the planner.
   const entry = getOfficialExternalPluginCatalogEntryForPackage(packageName);
-  if (entry?.source !== "official") {
+  if (!entry) {
     return undefined;
   }
   const pluginId = resolveOfficialExternalPluginId(entry);
@@ -376,6 +382,54 @@ async function tryInstallPluginOrHookPackFromNpmSpec(params: {
   return { ok: true };
 }
 
+async function tryInstallPluginFromNpmPackArchive(params: {
+  snapshot: ConfigSnapshotForInstallPersist;
+  installMode: "install" | "update";
+  archivePath: string;
+  safetyOverrides: InstallSafetyOverrides;
+  extensionsDir: string;
+  runtime?: RuntimeEnv;
+}): Promise<{ ok: true } | { ok: false }> {
+  const result = await installPluginFromNpmPackArchive({
+    ...params.safetyOverrides,
+    mode: params.installMode,
+    archivePath: params.archivePath,
+    extensionsDir: params.extensionsDir,
+    logger: createPluginInstallLogger(params.runtime),
+  });
+  if (!result.ok) {
+    (params.runtime ?? defaultRuntime).error(result.error);
+    return { ok: false };
+  }
+
+  await persistPluginInstall({
+    snapshot: params.snapshot,
+    pluginId: result.pluginId,
+    install: {
+      source: "npm",
+      spec: result.npmResolution?.resolvedSpec ?? result.manifestName ?? result.pluginId,
+      sourcePath: params.archivePath,
+      installPath: result.targetDir,
+      ...(result.version ? { version: result.version } : {}),
+      ...(result.npmResolution?.name ? { resolvedName: result.npmResolution.name } : {}),
+      ...(result.npmResolution?.version ? { resolvedVersion: result.npmResolution.version } : {}),
+      ...(result.npmResolution?.resolvedSpec
+        ? { resolvedSpec: result.npmResolution.resolvedSpec }
+        : {}),
+      ...(result.npmResolution?.integrity ? { integrity: result.npmResolution.integrity } : {}),
+      ...(result.npmResolution?.shasum ? { shasum: result.npmResolution.shasum } : {}),
+      ...(result.npmResolution?.resolvedAt ? { resolvedAt: result.npmResolution.resolvedAt } : {}),
+      artifactKind: "npm-pack",
+      artifactFormat: "tgz",
+      ...(result.npmResolution?.integrity ? { npmIntegrity: result.npmResolution.integrity } : {}),
+      ...(result.npmResolution?.shasum ? { npmShasum: result.npmResolution.shasum } : {}),
+      ...(result.npmTarballName ? { npmTarballName: result.npmTarballName } : {}),
+    },
+    runtime: params.runtime,
+  });
+  return { ok: true };
+}
+
 async function tryInstallPluginFromGitSpec(params: {
   snapshot: ConfigSnapshotForInstallPersist;
   installMode: "install" | "update";
@@ -437,7 +491,13 @@ function isAllowedPluginRecoveryIssue(
       issue.message.includes("plugin path not found")) ||
     (issue.path === "plugins" &&
       typeof issue.message === "string" &&
-      issue.message.includes("requires compiled runtime output"))
+      issue.message.includes("requires compiled runtime output")) ||
+    (issue.path === `plugins.entries.${pluginId}` &&
+      typeof issue.message === "string" &&
+      issue.message.includes("requires compiled runtime output")) ||
+    (issue.path === "tools.web.search.provider" &&
+      typeof issue.message === "string" &&
+      issue.message.includes(`plugin "${pluginId}"`))
   );
 }
 
@@ -511,6 +571,8 @@ export async function runPluginInstallCommand(params: {
   };
   runtime?: RuntimeEnv;
 }) {
+  assertConfigWriteAllowedInCurrentMode();
+
   const runtime = params.runtime ?? defaultRuntime;
   const shorthand = !params.opts.marketplace
     ? await tracePluginLifecyclePhaseAsync(
@@ -532,30 +594,42 @@ export async function runPluginInstallCommand(params: {
   };
   if (opts.marketplace) {
     if (opts.link) {
-      runtime.error("`--link` is not supported with `--marketplace`.");
+      runtime.error(
+        `--link is not supported with --marketplace. Remove --link, or install a local path with ${formatCliCommand("openclaw plugins install --link <path>")}.`,
+      );
       return runtime.exit(1);
     }
     if (opts.pin) {
-      runtime.error("`--pin` is not supported with `--marketplace`.");
+      runtime.error(
+        `--pin is not supported with --marketplace. Use ${formatCliCommand("openclaw plugins install <plugin> --marketplace <name>")} without --pin.`,
+      );
       return runtime.exit(1);
     }
   }
   const gitPrefix = raw.trim().toLowerCase().startsWith("git:");
   const gitSpec = parseGitPluginSpec(raw);
   if (gitPrefix && !gitSpec) {
-    runtime.error(`unsupported git: plugin spec: ${raw}`);
+    runtime.error(
+      `Unsupported git plugin spec: ${raw}. Use ${formatCliCommand("openclaw plugins install git:<repo>@<ref>")}.`,
+    );
     return runtime.exit(1);
   }
   if (gitSpec && opts.link) {
-    runtime.error("`--link` is not supported with `git:` installs.");
+    runtime.error(
+      `--link is not supported with git: installs. Use ${formatCliCommand("openclaw plugins install git:<repo>@<ref>")} for Git installs or ${formatCliCommand("openclaw plugins install --link <path>")} for local paths.`,
+    );
     return runtime.exit(1);
   }
   if (gitSpec && opts.pin) {
-    runtime.error("`--pin` is not supported with `git:` installs; use `git:<repo>@<ref>`.");
+    runtime.error(
+      `--pin is not supported with git: installs. Pin the ref in the spec instead, for example ${formatCliCommand("openclaw plugins install git:<repo>@<ref>")}.`,
+    );
     return runtime.exit(1);
   }
   if (opts.link && opts.force) {
-    runtime.error("`--force` is not supported with `--link`.");
+    runtime.error(
+      `--force is not supported with --link. Linked plugins point at the source path directly; remove --force and re-run ${formatCliCommand("openclaw plugins install --link <path>")}.`,
+    );
     return runtime.exit(1);
   }
   const requestResolution = resolvePluginInstallRequestContext({
@@ -711,19 +785,23 @@ export async function runPluginInstallCommand(params: {
   }
 
   if (opts.link) {
-    runtime.error("`--link` requires a local path.");
+    runtime.error(
+      `--link requires a local path. Run ${formatCliCommand("openclaw plugins install --link <path>")}.`,
+    );
     return runtime.exit(1);
   }
 
   const npmPrefixSpec = parseNpmPrefixSpec(raw);
   if (npmPrefixSpec !== null) {
     if (!npmPrefixSpec) {
-      runtime.error("unsupported npm: spec: missing package");
+      runtime.error(
+        `Unsupported npm plugin spec: missing package. Use ${formatCliCommand("openclaw plugins install npm:<package>")}.`,
+      );
       return runtime.exit(1);
     }
     const officialNpmTrust = resolveOfficialExternalNpmPackageTrust({
       npmSpec: npmPrefixSpec,
-      findOfficialExternalPackage: findTrustedOfficialExternalPackageInstall,
+      findOfficialExternalPackage: findTrustedCatalogPackageInstall,
     });
     const npmPrefixResult = await tryInstallPluginOrHookPackFromNpmSpec({
       snapshot,
@@ -745,6 +823,28 @@ export async function runPluginInstallCommand(params: {
       runtime,
     });
     if (!npmPrefixResult.ok) {
+      return runtime.exit(1);
+    }
+    return;
+  }
+
+  const npmPackPath = parseNpmPackPrefixPath(raw);
+  if (npmPackPath !== null) {
+    if (!npmPackPath) {
+      runtime.error(
+        `Unsupported npm-pack plugin spec: missing archive path. Use ${formatCliCommand("openclaw plugins install npm-pack:<path-to.tgz>")}.`,
+      );
+      return runtime.exit(1);
+    }
+    const npmPackResult = await tryInstallPluginFromNpmPackArchive({
+      snapshot,
+      installMode,
+      archivePath: npmPackPath,
+      safetyOverrides,
+      extensionsDir,
+      runtime,
+    });
+    if (!npmPackResult.ok) {
       return runtime.exit(1);
     }
     return;
@@ -777,7 +877,9 @@ export async function runPluginInstallCommand(params: {
       ".zip",
     ])
   ) {
-    runtime.error(`Path not found: ${resolved}`);
+    runtime.error(
+      `Plugin path not found: ${resolved}. Check the path, or install from npm with ${formatCliCommand("openclaw plugins install npm:<package>")}.`,
+    );
     return runtime.exit(1);
   }
 
@@ -870,7 +972,7 @@ export async function runPluginInstallCommand(params: {
 
   const officialNpmTrust = resolveOfficialExternalNpmPackageTrust({
     npmSpec: raw,
-    findOfficialExternalPackage: findTrustedOfficialExternalPackageInstall,
+    findOfficialExternalPackage: findTrustedCatalogPackageInstall,
   });
   const npmResult = await tryInstallPluginOrHookPackFromNpmSpec({
     snapshot,

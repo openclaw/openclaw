@@ -57,7 +57,7 @@ describe("buildBootstrapContextFiles", () => {
   });
   it("skips empty or whitespace-only content", () => {
     const files = [makeFile({ content: "   \n  " })];
-    expect(buildBootstrapContextFiles(files)).toEqual([]);
+    expect(buildBootstrapContextFiles(files)).toStrictEqual([]);
   });
   it("truncates large bootstrap content", () => {
     const head = `HEAD-${"a".repeat(600)}`;
@@ -71,13 +71,11 @@ describe("buildBootstrapContextFiles", () => {
       warn: (message) => warnings.push(message),
     });
     const kept = result?.content.match(/kept (\d+)\+(\d+) chars/);
-    expect(kept).not.toBeNull();
-    if (!kept) {
-      throw new Error("missing truncation kept-count marker");
-    }
-    const headChars = Number(kept[1]);
-    const tailChars = Number(kept[2]);
+    expect(kept?.slice(0, 3)).toStrictEqual(["kept 74+24 chars", "74", "24"]);
+    const headChars = Number(kept?.[1]);
+    const tailChars = Number(kept?.[2]);
     expect(result?.content).toContain("[...truncated, read TOOLS.md for full content...]");
+    expect(result?.content.length).toBe(199);
     expect(result?.content.length).toBeLessThan(long.length);
     expect(result?.content.length).toBeLessThanOrEqual(maxChars);
     expect(result?.content.startsWith(long.slice(0, headChars))).toBe(true);
@@ -177,7 +175,7 @@ describe("buildBootstrapContextFiles", () => {
       maxChars: 200,
       totalMaxChars: 40,
     });
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
   });
 
   it("keeps missing markers under small total budgets", () => {
@@ -219,15 +217,15 @@ describe("buildBootstrapContextFiles", () => {
     expect(result).toHaveLength(1);
     expect(result[0]?.path).toBe("/tmp/AGENTS.md");
     expect(warnings).toHaveLength(3);
-    expect(warnings.every((warning) => warning.includes('missing or invalid "path" field'))).toBe(
-      true,
-    );
+    expect(
+      warnings.filter((warning) => !warning.includes('missing or invalid "path" field')),
+    ).toStrictEqual([]);
   });
 });
 
 type BootstrapLimitResolverCase = {
   name: "bootstrapMaxChars" | "bootstrapTotalMaxChars";
-  resolve: (cfg?: OpenClawConfig) => number;
+  resolve: (cfg?: OpenClawConfig, agentId?: string | null) => number;
   defaultValue: number;
 };
 
@@ -260,6 +258,30 @@ describe("bootstrap limit resolvers", () => {
     }
   });
 
+  it("uses per-agent values before defaults", () => {
+    for (const resolver of BOOTSTRAP_LIMIT_RESOLVERS) {
+      const cfg = {
+        agents: {
+          defaults: { [resolver.name]: 12345 },
+          list: [{ id: "worker", [resolver.name]: 6789 }],
+        },
+      } as OpenClawConfig;
+      expect(resolver.resolve(cfg, "worker")).toBe(6789);
+    }
+  });
+
+  it("falls back to defaults when the agent has no override", () => {
+    for (const resolver of BOOTSTRAP_LIMIT_RESOLVERS) {
+      const cfg = {
+        agents: {
+          defaults: { [resolver.name]: 12345 },
+          list: [{ id: "worker" }],
+        },
+      } as OpenClawConfig;
+      expect(resolver.resolve(cfg, "worker")).toBe(12345);
+    }
+  });
+
   it("fall back when values are invalid", () => {
     for (const resolver of BOOTSTRAP_LIMIT_RESOLVERS) {
       const cfg = {
@@ -271,10 +293,9 @@ describe("bootstrap limit resolvers", () => {
 });
 
 describe("resolveBootstrapPromptTruncationWarningMode", () => {
-  it("defaults to once", () => {
-    expect(resolveBootstrapPromptTruncationWarningMode()).toBe(
-      DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE,
-    );
+  it("defaults to always", () => {
+    expect(resolveBootstrapPromptTruncationWarningMode()).toBe("always");
+    expect(DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE).toBe("always");
   });
 
   it("accepts explicit valid modes", () => {
@@ -283,6 +304,11 @@ describe("resolveBootstrapPromptTruncationWarningMode", () => {
         agents: { defaults: { bootstrapPromptTruncationWarning: "off" } },
       } as OpenClawConfig),
     ).toBe("off");
+    expect(
+      resolveBootstrapPromptTruncationWarningMode({
+        agents: { defaults: { bootstrapPromptTruncationWarning: "once" } },
+      } as OpenClawConfig),
+    ).toBe("once");
     expect(
       resolveBootstrapPromptTruncationWarningMode({
         agents: { defaults: { bootstrapPromptTruncationWarning: "always" } },

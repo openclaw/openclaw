@@ -1,8 +1,11 @@
 export {
   abortEmbeddedPiRun,
   getActiveEmbeddedRunCount,
+  listActiveEmbeddedRunSessionIds,
+  listActiveEmbeddedRunSessionKeys,
   waitForActiveEmbeddedRuns,
 } from "../../agents/pi-embedded-runner/runs.js";
+export { markRestartAbortedMainSessions } from "../../agents/main-session-restart-recovery.js";
 export { getRuntimeConfig } from "../../config/config.js";
 export {
   respawnGatewayProcessForUpdate,
@@ -19,6 +22,7 @@ export {
   resetGatewayRestartStateForInProcessRestart,
   scheduleGatewaySigusr1Restart,
 } from "../../infra/restart.js";
+export { writeGatewayRestartHandoffSync } from "../../infra/restart-handoff.js";
 export { markUpdateRestartSentinelFailure } from "../../infra/restart-sentinel.js";
 export { detectRespawnSupervisor } from "../../infra/supervisor-markers.js";
 export { writeDiagnosticStabilityBundleForFailureSync } from "../../logging/diagnostic-stability-bundle.js";

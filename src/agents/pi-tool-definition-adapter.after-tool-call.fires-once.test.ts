@@ -6,7 +6,7 @@
  * Regression guard for the double-fire bug fixed by removing the adapter-side
  * after_tool_call invocation (see PR #27283 → dedup in this fix).
  */
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createBaseToolHandlerState } from "./pi-tool-handler-state.test-helpers.js";
@@ -73,7 +73,7 @@ function createToolHandlerCtx() {
       ...createBaseToolHandlerState(),
       successfulCronAdds: 0,
     },
-    log: { debug: vi.fn(), warn: vi.fn() },
+    log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
     flushBlockReplyBuffer: vi.fn(),
     shouldEmitToolResult: () => false,
     shouldEmitToolOutput: () => false,
@@ -226,9 +226,9 @@ describe("after_tool_call fires exactly once in embedded runs", () => {
 
     expect(hookMocks.runner.runAfterToolCall).toHaveBeenCalledTimes(1);
 
-    const call = (hookMocks.runner.runAfterToolCall as ReturnType<typeof vi.fn>).mock.calls[0];
+    const call = (hookMocks.runner.runAfterToolCall as ReturnType<typeof vi.fn>).mock.calls.at(0);
     const event = call?.[0] as { error?: unknown } | undefined;
-    expect(event?.error).toBeDefined();
+    expect(event?.error).toBe("tool failed");
   });
 
   it("uses before_tool_call adjusted params for after_tool_call payload", async () => {

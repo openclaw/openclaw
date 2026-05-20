@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { __testing, readSubagentOutput } from "./subagent-announce-output.js";
+import {
+  testing,
+  buildChildCompletionFindings,
+  readSubagentOutput,
+} from "./subagent-announce-output.js";
 
 type CallGateway = typeof import("../gateway/call.js").callGateway;
 type ReadLatestAssistantReply = typeof import("./tools/agent-step.js").readLatestAssistantReply;
@@ -7,7 +11,7 @@ type ReadLatestAssistantReply = typeof import("./tools/agent-step.js").readLates
 function installOutputDeps(params: { messages: Array<unknown>; latestAssistantReply?: string }) {
   const callGateway = vi.fn(async () => ({ messages: params.messages }));
   const readLatestAssistantReply = vi.fn(async () => params.latestAssistantReply);
-  __testing.setDepsForTest({
+  testing.setDepsForTest({
     callGateway: callGateway as unknown as CallGateway,
     readLatestAssistantReply: readLatestAssistantReply as unknown as ReadLatestAssistantReply,
   });
@@ -46,7 +50,7 @@ function sessionsYieldTurn(message = "Waiting for subagent completion.") {
 
 describe("readSubagentOutput", () => {
   afterEach(() => {
-    __testing.setDepsForTest();
+    testing.setDepsForTest();
   });
 
   it("does not treat a sessions_yield wait turn as subagent completion output", async () => {
@@ -99,5 +103,58 @@ describe("readSubagentOutput", () => {
     await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBe(
       "Mapped the code path.",
     );
+  });
+});
+
+describe("buildChildCompletionFindings", () => {
+  it("does not convert ANNOUNCE_SKIP child completions into no-output findings", () => {
+    const findings = buildChildCompletionFindings([
+      {
+        childSessionKey: "agent:main:subagent:silent",
+        task: "silent task",
+        createdAt: 1,
+        frozenResultText: "ANNOUNCE_SKIP",
+        outcome: { status: "ok" },
+      },
+    ]);
+
+    expect(findings).toBeUndefined();
+  });
+
+  it("keeps failed ANNOUNCE_SKIP child completions visible", () => {
+    const findings = buildChildCompletionFindings([
+      {
+        childSessionKey: "agent:main:subagent:silent",
+        task: "silent task",
+        createdAt: 1,
+        frozenResultText: "ANNOUNCE_SKIP",
+        outcome: { status: "error", error: "boom" },
+      },
+    ]);
+
+    expect(findings).toContain("status: error: boom");
+    expect(findings).toContain("ANNOUNCE_SKIP");
+  });
+
+  it("numbers findings contiguously after skipped silent completions", () => {
+    const findings = buildChildCompletionFindings([
+      {
+        childSessionKey: "agent:main:subagent:silent",
+        task: "silent task",
+        createdAt: 1,
+        frozenResultText: "ANNOUNCE_SKIP",
+        outcome: { status: "ok" },
+      },
+      {
+        childSessionKey: "agent:main:subagent:visible",
+        task: "visible task",
+        createdAt: 2,
+        frozenResultText: "actual output",
+        outcome: { status: "ok" },
+      },
+    ]);
+
+    expect(findings).toContain("1. visible task");
+    expect(findings).not.toContain("2. visible task");
   });
 });

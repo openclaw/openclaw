@@ -1,15 +1,19 @@
+import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
+  createProviderOperationTimeoutResolver,
+  fetchProviderDownloadResponse,
   fetchWithTimeout,
   pollProviderOperationJson,
   postJsonRequest,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
+  type ProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   GeneratedVideoAsset,
   VideoGenerationProvider,
@@ -104,13 +108,8 @@ function resolveReferenceAsset(req: VideoGenerationRequest) {
   const mimeType =
     normalizeOptionalString(asset.mimeType) ||
     ((req.inputVideos?.length ?? 0) > 0 ? "video/mp4" : "image/png");
-  const extension = mimeType.includes("video")
-    ? "mp4"
-    : mimeType.includes("jpeg")
-      ? "jpg"
-      : mimeType.includes("webp")
-        ? "webp"
-        : "png";
+  const extension =
+    extensionForMime(mimeType)?.slice(1) ?? (mimeType.startsWith("video/") ? "mp4" : "png");
   const fileName =
     normalizeOptionalString(asset.fileName) ||
     `${(req.inputVideos?.length ?? 0) > 0 ? "reference-video" : "reference-image"}.${extension}`;
@@ -149,31 +148,32 @@ async function pollOpenAIVideo(params: {
 async function downloadOpenAIVideo(params: {
   videoId: string;
   headers: Headers;
-  timeoutMs?: number;
+  timeoutMs?: ProviderOperationTimeoutMs;
   baseUrl: string;
   fetchFn: typeof fetch;
 }): Promise<GeneratedVideoAsset> {
   const url = new URL(`${params.baseUrl}/videos/${params.videoId}/content`);
   url.searchParams.set("variant", "video");
-  const response = await fetchWithTimeout(
-    url.toString(),
-    {
+  const response = await fetchProviderDownloadResponse({
+    url: url.toString(),
+    init: {
       method: "GET",
       headers: new Headers({
         ...Object.fromEntries(params.headers.entries()),
         Accept: "application/binary",
       }),
     },
-    params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-    params.fetchFn,
-  );
-  await assertOkOrThrowHttpError(response, "OpenAI video download failed");
+    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    fetchFn: params.fetchFn,
+    provider: "openai",
+    requestFailedMessage: "OpenAI video download failed",
+  });
   const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
   const arrayBuffer = await response.arrayBuffer();
   return {
     buffer: Buffer.from(arrayBuffer),
     mimeType,
-    fileName: `video-1.${mimeType.includes("webm") ? "webm" : "mp4"}`,
+    fileName: `video-1.${extensionForMime(mimeType)?.slice(1) ?? "mp4"}`,
   };
 }
 
@@ -357,7 +357,7 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
         const video = await downloadOpenAIVideo({
           videoId,
           headers,
-          timeoutMs: resolveProviderOperationTimeoutMs({
+          timeoutMs: createProviderOperationTimeoutResolver({
             deadline,
             defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
           }),

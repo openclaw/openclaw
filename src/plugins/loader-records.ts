@@ -19,6 +19,7 @@ export function createPluginRecord(params: {
   rootDir?: string;
   origin: PluginRecord["origin"];
   workspaceDir?: string;
+  trustedOfficialInstall?: boolean;
   enabled: boolean;
   compat?: readonly PluginCompatCode[];
   activationState?: PluginActivationState;
@@ -41,6 +42,7 @@ export function createPluginRecord(params: {
     rootDir: params.rootDir,
     origin: params.origin,
     workspaceDir: params.workspaceDir,
+    trustedOfficialInstall: params.trustedOfficialInstall,
     enabled: params.enabled,
     compat: params.compat,
     explicitlyEnabled: params.activationState?.explicitlyEnabled,
@@ -67,7 +69,6 @@ export function createPluginRecord(params: {
     contextEngineIds: [],
     memoryEmbeddingProviderIds: [...(params.contracts?.memoryEmbeddingProviders ?? [])],
     agentHarnessIds: [],
-    gatewayMethods: [],
     cliCommands: [],
     services: [],
     gatewayDiscoveryServiceIds: [],

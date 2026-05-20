@@ -64,6 +64,44 @@ describe("doctor command", () => {
     expect(confirm).not.toHaveBeenCalled();
   }, 30_000);
 
+  it("refuses doctor repair mode in Nix before repair side effects", async () => {
+    const previous = process.env.OPENCLAW_NIX_MODE;
+    process.env.OPENCLAW_NIX_MODE = "1";
+    try {
+      mockDoctorConfigSnapshot();
+      await expect(doctorCommand(createDoctorRuntime(), { repair: true })).rejects.toThrow(
+        "OPENCLAW_NIX_MODE=1",
+      );
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_NIX_MODE;
+      } else {
+        process.env.OPENCLAW_NIX_MODE = previous;
+      }
+    }
+
+    expect(writeConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("refuses doctor gateway token generation in Nix before config writes", async () => {
+    const previous = process.env.OPENCLAW_NIX_MODE;
+    process.env.OPENCLAW_NIX_MODE = "1";
+    try {
+      mockDoctorConfigSnapshot();
+      await expect(
+        doctorCommand(createDoctorRuntime(), { generateGatewayToken: true }),
+      ).rejects.toThrow("OPENCLAW_NIX_MODE=1");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_NIX_MODE;
+      } else {
+        process.env.OPENCLAW_NIX_MODE = previous;
+      }
+    }
+
+    expect(writeConfigFile).not.toHaveBeenCalled();
+  });
+
   it("skips gateway restarts in non-interactive mode", async () => {
     mockDoctorConfigSnapshot();
 
@@ -136,7 +174,12 @@ describe("doctor command", () => {
       throw new Error("Expected doctor to write migrated auth profiles");
     }
     const profiles = (written.auth as { profiles: Record<string, unknown> }).profiles;
-    expect(profiles["anthropic:me@example.com"]).toBeTruthy();
+    expect(profiles).toHaveProperty("anthropic:me@example.com");
+    const migratedProfile = profiles["anthropic:me@example.com"] as
+      | { provider?: unknown; mode?: unknown }
+      | undefined;
+    expect(migratedProfile?.provider).toBe("anthropic");
+    expect(migratedProfile?.mode).toBe("oauth");
     expect(profiles["anthropic:default"]).toBeUndefined();
   }, 30_000);
 });

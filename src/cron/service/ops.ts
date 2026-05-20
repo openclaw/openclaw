@@ -1,11 +1,14 @@
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
+import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import {
   completeTaskRunByRunId,
   createRunningTaskRun,
   failTaskRunByRunId,
 } from "../../tasks/detached-task-runtime.js";
+import { clearCronJobActive, markCronJobActive } from "../active-jobs.js";
+import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-plan.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import { createCronExecutionId } from "../run-id.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
@@ -30,13 +33,15 @@ import type {
   CronSortDir,
 } from "./list-page-types.js";
 import { locked } from "./locked.js";
-import type { CronServiceState } from "./state.js";
+import { normalizeOptionalAgentId } from "./normalize.js";
+import type { CronServiceState, CronWakeMode } from "./state.js";
 import { ensureLoaded, persist, warnIfDisabled } from "./store.js";
 import {
   applyJobResult,
   armTimer,
   emit,
   executeJobCoreWithTimeout,
+  failureNotificationDeliveryFromJobState,
   normalizeCronRunErrorText,
   runMissedJobs,
   stopTimer,
@@ -51,6 +56,20 @@ type InterruptedStartupRun = {
   durationMs: number;
 };
 
+function resolveInterruptedStartupFailureNotificationStatus(params: {
+  state: CronServiceState;
+  job: CronJob;
+}) {
+  if (params.job.delivery?.bestEffort === true) {
+    return "not-requested";
+  }
+  if (resolveFailureDestination(params.job, params.state.deps.cronConfig?.failureDestination)) {
+    return "unknown";
+  }
+  const primaryPlan = resolveCronDeliveryPlan(params.job);
+  return primaryPlan.mode === "announce" && primaryPlan.requested ? "unknown" : "not-requested";
+}
+
 function markInterruptedStartupRun(params: {
   state: CronServiceState;
   job: CronJob;
@@ -58,6 +77,10 @@ function markInterruptedStartupRun(params: {
   nowMs: number;
 }): InterruptedStartupRun {
   const { job, runningAtMs, nowMs } = params;
+  const failureNotificationStatus = resolveInterruptedStartupFailureNotificationStatus({
+    state: params.state,
+    job,
+  });
   const previousErrors =
     typeof job.state.consecutiveErrors === "number" && Number.isFinite(job.state.consecutiveErrors)
       ? Math.max(0, Math.floor(job.state.consecutiveErrors))
@@ -78,6 +101,9 @@ function markInterruptedStartupRun(params: {
   job.state.lastDelivered = false;
   job.state.lastDeliveryStatus = "unknown";
   job.state.lastDeliveryError = STARTUP_INTERRUPTED_ERROR;
+  job.state.lastFailureNotificationDelivered = undefined;
+  job.state.lastFailureNotificationDeliveryStatus = failureNotificationStatus;
+  job.state.lastFailureNotificationDeliveryError = undefined;
   job.state.nextRunAtMs = undefined;
   job.updatedAtMs = nowMs;
 
@@ -191,6 +217,7 @@ export async function start(state: CronServiceState) {
         delivered: false,
         deliveryStatus: "unknown",
         deliveryError: STARTUP_INTERRUPTED_ERROR,
+        failureNotificationDelivery: job ? failureNotificationDeliveryFromJobState(job) : undefined,
         runAtMs: interrupted.runAtMs,
         durationMs: interrupted.durationMs,
         nextRunAtMs: job?.state.nextRunAtMs,
@@ -233,6 +260,13 @@ export async function list(state: CronServiceState, opts?: { includeDisabled?: b
   });
 }
 
+export async function readJob(state: CronServiceState, id: string) {
+  return await locked(state, async () => {
+    await ensureLoadedForRead(state);
+    return state.store?.jobs.find((job) => job.id === id);
+  });
+}
+
 function resolveEnabledFilter(opts?: CronListPageOptions): CronJobsEnabledFilter {
   if (opts?.enabled === "all" || opts?.enabled === "enabled" || opts?.enabled === "disabled") {
     return opts.enabled;
@@ -272,6 +306,14 @@ function sortJobs(jobs: CronJob[], sortBy: CronJobsSortBy, sortDir: CronSortDir)
   });
 }
 
+function resolveEffectiveJobAgentId(job: CronJob, defaultAgentId: string | undefined) {
+  return (
+    normalizeOptionalAgentId(job.agentId) ??
+    normalizeOptionalAgentId(defaultAgentId) ??
+    DEFAULT_AGENT_ID
+  );
+}
+
 export async function listPage(state: CronServiceState, opts?: CronListPageOptions) {
   return await locked(state, async () => {
     await ensureLoadedForRead(state);
@@ -279,12 +321,19 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
     const enabledFilter = resolveEnabledFilter(opts);
     const sortBy = opts?.sortBy ?? "nextRunAtMs";
     const sortDir = opts?.sortDir ?? "asc";
+    const requestedAgentId = normalizeOptionalAgentId(opts?.agentId);
     const source = state.store?.jobs ?? [];
     const filtered = source.filter((job) => {
       if (enabledFilter === "enabled" && !isJobEnabled(job)) {
         return false;
       }
       if (enabledFilter === "disabled" && isJobEnabled(job)) {
+        return false;
+      }
+      if (
+        requestedAgentId &&
+        resolveEffectiveJobAgentId(job, state.deps.defaultAgentId) !== requestedAgentId
+      ) {
         return false;
       }
       if (!query) {
@@ -499,6 +548,7 @@ async function skipInvalidPersistedManualRun(params: {
     nextRunAtMs: params.job.state.nextRunAtMs,
     deliveryStatus: params.job.state.lastDeliveryStatus,
     deliveryError: params.job.state.lastDeliveryError,
+    failureNotificationDelivery: failureNotificationDeliveryFromJobState(params.job),
   });
 
   if (shouldDelete && params.state.store) {
@@ -669,6 +719,7 @@ async function prepareManualRun(
       job,
       startedAt: preflight.now,
     });
+    markCronJobActive(job.id);
     const executionJob = structuredClone(job);
     return {
       ok: true,
@@ -693,92 +744,97 @@ async function finishPreparedManualRun(
   const taskRunId = prepared.taskRunId;
   const runId = prepared.runId;
 
-  let coreResult: Awaited<ReturnType<typeof executeJobCoreWithTimeout>>;
   try {
-    coreResult = await executeJobCoreWithTimeout(state, executionJob);
-  } catch (err) {
-    coreResult = { status: "error", error: normalizeCronRunErrorText(err) };
-  }
-  const endedAt = state.deps.nowMs();
-  tryFinishManualTaskRun(state, {
-    taskRunId,
-    coreResult,
-    endedAt,
-  });
-
-  await locked(state, async () => {
-    await ensureLoaded(state, { skipRecompute: true });
-    const job = state.store?.jobs.find((entry) => entry.id === jobId);
-    if (!job) {
-      return;
+    let coreResult: Awaited<ReturnType<typeof executeJobCoreWithTimeout>>;
+    try {
+      coreResult = await executeJobCoreWithTimeout(state, executionJob);
+    } catch (err) {
+      coreResult = { status: "error", error: normalizeCronRunErrorText(err) };
     }
+    const endedAt = state.deps.nowMs();
+    tryFinishManualTaskRun(state, {
+      taskRunId,
+      coreResult,
+      endedAt,
+    });
 
-    const shouldDelete = applyJobResult(
-      state,
-      job,
-      {
+    await locked(state, async () => {
+      await ensureLoaded(state, { skipRecompute: true });
+      const job = state.store?.jobs.find((entry) => entry.id === jobId);
+      if (!job) {
+        return;
+      }
+
+      const shouldDelete = applyJobResult(
+        state,
+        job,
+        {
+          status: coreResult.status,
+          error: coreResult.error,
+          diagnostics: coreResult.diagnostics,
+          delivered: coreResult.delivered,
+          startedAt,
+          endedAt,
+        },
+        { preserveSchedule: mode === "force" },
+      );
+
+      emit(state, {
+        jobId: job.id,
+        action: "finished",
+        job,
         status: coreResult.status,
         error: coreResult.error,
+        summary: coreResult.summary,
         diagnostics: coreResult.diagnostics,
-        delivered: coreResult.delivered,
-        startedAt,
-        endedAt,
-      },
-      { preserveSchedule: mode === "force" },
-    );
+        delivered: job.state.lastDelivered,
+        deliveryStatus: job.state.lastDeliveryStatus,
+        deliveryError: job.state.lastDeliveryError,
+        failureNotificationDelivery: failureNotificationDeliveryFromJobState(job),
+        delivery: coreResult.delivery,
+        sessionId: coreResult.sessionId,
+        sessionKey: coreResult.sessionKey,
+        runId,
+        runAtMs: startedAt,
+        durationMs: job.state.lastDurationMs,
+        nextRunAtMs: job.state.nextRunAtMs,
+        model: coreResult.model,
+        provider: coreResult.provider,
+        usage: coreResult.usage,
+      });
 
-    emit(state, {
-      jobId: job.id,
-      action: "finished",
-      job,
-      status: coreResult.status,
-      error: coreResult.error,
-      summary: coreResult.summary,
-      diagnostics: coreResult.diagnostics,
-      delivered: coreResult.delivered,
-      deliveryStatus: job.state.lastDeliveryStatus,
-      deliveryError: job.state.lastDeliveryError,
-      delivery: coreResult.delivery,
-      sessionId: coreResult.sessionId,
-      sessionKey: coreResult.sessionKey,
-      runId,
-      runAtMs: startedAt,
-      durationMs: job.state.lastDurationMs,
-      nextRunAtMs: job.state.nextRunAtMs,
-      model: coreResult.model,
-      provider: coreResult.provider,
-      usage: coreResult.usage,
+      if (shouldDelete && state.store) {
+        state.store.jobs = state.store.jobs.filter((entry) => entry.id !== job.id);
+        emit(state, { jobId: job.id, action: "removed", job });
+      }
+
+      // Manual runs should not advance other due jobs without executing them.
+      // Use maintenance-only recompute to repair missing values while
+      // preserving existing past-due nextRunAtMs entries for future timer ticks.
+      const postRunSnapshot = shouldDelete
+        ? null
+        : {
+            enabled: job.enabled,
+            updatedAtMs: job.updatedAtMs,
+            state: structuredClone(job.state),
+          };
+      const postRunRemoved = shouldDelete;
+      // Isolated Telegram send can persist target writeback directly to disk.
+      // Reload before final persist so manual `cron run` keeps those changes.
+      await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+      mergeManualRunSnapshotAfterReload({
+        state,
+        jobId,
+        snapshot: postRunSnapshot,
+        removed: postRunRemoved,
+      });
+      recomputeNextRunsForMaintenance(state, { recomputeExpired: true });
+      await persist(state);
+      armTimer(state);
     });
-
-    if (shouldDelete && state.store) {
-      state.store.jobs = state.store.jobs.filter((entry) => entry.id !== job.id);
-      emit(state, { jobId: job.id, action: "removed", job });
-    }
-
-    // Manual runs should not advance other due jobs without executing them.
-    // Use maintenance-only recompute to repair missing values while
-    // preserving existing past-due nextRunAtMs entries for future timer ticks.
-    const postRunSnapshot = shouldDelete
-      ? null
-      : {
-          enabled: job.enabled,
-          updatedAtMs: job.updatedAtMs,
-          state: structuredClone(job.state),
-        };
-    const postRunRemoved = shouldDelete;
-    // Isolated Telegram send can persist target writeback directly to disk.
-    // Reload before final persist so manual `cron run` keeps those changes.
-    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
-    mergeManualRunSnapshotAfterReload({
-      state,
-      jobId,
-      snapshot: postRunSnapshot,
-      removed: postRunRemoved,
-    });
-    recomputeNextRunsForMaintenance(state, { recomputeExpired: true });
-    await persist(state);
-    armTimer(state);
-  });
+  } finally {
+    clearCronJobActive(jobId);
+  }
 }
 
 export async function run(
@@ -834,7 +890,7 @@ export async function enqueueRun(state: CronServiceState, id: string, mode?: "du
 
 export function wakeNow(
   state: CronServiceState,
-  opts: { mode: "now" | "next-heartbeat"; text: string },
+  opts: { mode: CronWakeMode; text: string; sessionKey?: string },
 ) {
   return wake(state, opts);
 }

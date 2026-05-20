@@ -6,7 +6,7 @@ import {
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export type GoogleMeetTransport = "chrome" | "chrome-node" | "twilio";
 export type GoogleMeetMode = "agent" | "bidi" | "transcribe";
@@ -216,7 +216,7 @@ const DEFAULT_GOOGLE_MEET_CONFIG: GoogleMeetConfig = {
   voiceCall: {
     enabled: true,
     requestTimeoutMs: 30_000,
-    dtmfDelayMs: 2_500,
+    dtmfDelayMs: 12_000,
     postDtmfSpeechDelayMs: 5_000,
   },
   realtime: {

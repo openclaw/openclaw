@@ -17,16 +17,28 @@ import {
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
 
-const selectGenericSystemEvents = (events: readonly SystemEvent[]): SystemEvent[] =>
-  events.filter((event) => !isExecCompletionEvent(event.text));
+const selectGenericSystemEvents = (events: readonly SystemEvent[]): SystemEvent[] => {
+  const selected: SystemEvent[] = [];
+  for (const event of events) {
+    if (!isExecCompletionEvent(event.text)) {
+      selected.push(event);
+    }
+  }
+  return selected;
+};
 
-/** Drain queued system events, format as `System:` lines, return the block (or undefined). */
-export async function drainFormattedSystemEvents(params: {
+export type FormattedSystemEventBlock = {
+  text: string;
+  forceSenderIsOwnerFalse: boolean;
+};
+
+/** Drain queued system events, format as `System:` lines, return the block with authority metadata. */
+export async function drainFormattedSystemEventBlock(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   isMainSession: boolean;
   isNewSession: boolean;
-}): Promise<string | undefined> {
+}): Promise<FormattedSystemEventBlock | undefined> {
   const compactSystemEvent = (line: string): string | null => {
     const trimmed = line.trim();
     if (!trimmed) {
@@ -90,39 +102,61 @@ export async function drainFormattedSystemEvents(params: {
     );
   };
 
+  const summaryLines: string[] = [];
   const systemLines: string[] = [];
+  let forceSenderIsOwnerFalse = false;
   // Exec completions have a dedicated heartbeat prompt; leave those entries queued
   // so the heartbeat path can consume and deliver them.
   const queued = consumeSelectedSystemEventEntries(
     params.sessionKey,
     selectGenericSystemEvents(peekSystemEventEntries(params.sessionKey)),
   );
-  systemLines.push(
-    ...queued.flatMap((event) => {
-      const compacted = compactSystemEvent(event.text);
-      if (!compacted) {
-        return [];
-      }
-      const prefix = event.trusted === false ? "System (untrusted)" : "System";
-      const timestamp = `[${formatSystemEventTimestamp(event.ts, params.cfg)}]`;
-      return compacted
-        .split("\n")
-        .map((subline, index) => `${prefix}: ${index === 0 ? `${timestamp} ` : ""}${subline}`);
-    }),
-  );
+  for (const event of queued) {
+    const compacted = compactSystemEvent(event.text);
+    if (!compacted) {
+      continue;
+    }
+    if (event.forceSenderIsOwnerFalse === true) {
+      forceSenderIsOwnerFalse = true;
+    }
+    const timestamp = `[${formatSystemEventTimestamp(event.ts, params.cfg)}]`;
+    let index = 0;
+    for (const subline of compacted.split("\n")) {
+      systemLines.push(`System: ${index === 0 ? `${timestamp} ` : ""}${subline}`);
+      index += 1;
+    }
+  }
   if (params.isMainSession && params.isNewSession) {
     const summary = await buildChannelSummary(params.cfg);
     if (summary.length > 0) {
-      systemLines.unshift(
-        ...summary.flatMap((line) => line.split("\n").map((subline) => `System: ${subline}`)),
-      );
+      for (const line of summary) {
+        for (const subline of line.split("\n")) {
+          summaryLines.push(`System: ${subline}`);
+        }
+      }
     }
   }
-  if (systemLines.length === 0) {
+  if (summaryLines.length === 0 && systemLines.length === 0) {
     return undefined;
   }
 
   // Each sub-line gets its own prefix so continuation lines can't be mistaken
   // for regular user content.
-  return systemLines.join("\n");
+  return {
+    text:
+      summaryLines.length > 0
+        ? [...summaryLines, ...systemLines].join("\n")
+        : systemLines.join("\n"),
+    forceSenderIsOwnerFalse,
+  };
+}
+
+/** Drain queued system events, format as `System:` lines, return the block text (or undefined). */
+export async function drainFormattedSystemEvents(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  isMainSession: boolean;
+  isNewSession: boolean;
+}): Promise<string | undefined> {
+  return (await drainFormattedSystemEventBlock(params))?.text;
 }

@@ -323,16 +323,16 @@ describe("Session Store Cache", () => {
 
     // Should return empty store
     const loaded = loadSessionStore(nonExistentPath);
-    expect(loaded).toEqual({});
+    expect(loaded).toStrictEqual({});
   });
 
-  it("should handle invalid JSON gracefully", async () => {
+  it("should handle invalid JSON gracefully", () => {
     // Write invalid JSON
     fs.writeFileSync(storePath, "not valid json {");
 
     // Should return empty store
     const loaded = loadSessionStore(storePath);
-    expect(loaded).toEqual({});
+    expect(loaded).toStrictEqual({});
   });
 
   it("should refresh cache when file is rewritten within the same mtime tick", async () => {
@@ -365,7 +365,6 @@ describe("Session Store Cache", () => {
 
     // The cache should detect the size change and reload from disk
     const loaded2 = loadSessionStore(storePath);
-    expect(loaded2["session:2"]).toBeDefined();
-    expect(loaded2["session:2"].displayName).toBe("Added");
+    expect(loaded2["session:2"]?.displayName).toBe("Added");
   });
 });

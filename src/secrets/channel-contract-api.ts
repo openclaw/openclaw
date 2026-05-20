@@ -3,7 +3,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { openRootFileSync } from "../infra/boundary-file-read.js";
+import { shouldRejectHardlinkedPluginFiles } from "../plugins/hardlink-policy.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
@@ -87,16 +88,21 @@ function orderedContractApiExtensions(): readonly string[] {
 }
 
 function resolvePluginContractApiPath(rootDir: string): string | null {
-  for (const extension of orderedContractApiExtensions()) {
-    const candidate = path.join(rootDir, `secret-contract-api${extension}`);
-    if (fs.existsSync(candidate)) {
-      return candidate;
-    }
-  }
-  for (const extension of orderedContractApiExtensions()) {
-    const candidate = path.join(rootDir, `contract-api${extension}`);
-    if (fs.existsSync(candidate)) {
-      return candidate;
+  // Compiled npm-published plugins place their public artifacts under <rootDir>/dist/
+  // (per package.json `openclaw.runtimeExtensions`), while flat-layout plugins keep
+  // them at <rootDir>/. Search both, preferring dist/ when running from built openclaw
+  // artifacts and rootDir/ when running from source.
+  const searchDirs = RUNNING_FROM_BUILT_ARTIFACT
+    ? [path.join(rootDir, "dist"), rootDir]
+    : [rootDir, path.join(rootDir, "dist")];
+  for (const basename of ["secret-contract-api", "contract-api"]) {
+    for (const dir of searchDirs) {
+      for (const extension of orderedContractApiExtensions()) {
+        const candidate = path.join(dir, `${basename}${extension}`);
+        if (fs.existsSync(candidate)) {
+          return candidate;
+        }
+      }
     }
   }
   return null;
@@ -112,16 +118,21 @@ function loadPluginContractModule(modulePath: string): BundledChannelContractApi
 
 function loadExternalChannelSecretContractFromRecord(
   record: PluginManifestRecord,
+  env: NodeJS.ProcessEnv = process.env,
 ): BundledChannelSecretContractApi | undefined {
   const contractPath = resolvePluginContractApiPath(record.rootDir);
   if (!contractPath) {
     return undefined;
   }
-  const opened = openBoundaryFileSync({
+  const opened = openRootFileSync({
     absolutePath: contractPath,
     rootPath: record.rootDir,
     boundaryLabel: "plugin root",
-    rejectHardlinks: record.origin !== "bundled",
+    rejectHardlinks: shouldRejectHardlinkedPluginFiles({
+      origin: record.origin,
+      rootDir: record.rootDir,
+      env,
+    }),
     skipLexicalRootCheck: true,
   });
   if (!opened.ok) {
@@ -204,7 +215,7 @@ export function loadChannelSecretContractApi(params: {
     env,
     loadablePluginOrigins: params.loadablePluginOrigins,
   })) {
-    const contract = loadExternalChannelSecretContractFromRecord(record);
+    const contract = loadExternalChannelSecretContractFromRecord(record, env);
     if (contract) {
       return contract;
     }

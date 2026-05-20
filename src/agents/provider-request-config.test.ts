@@ -433,12 +433,10 @@ describe("provider request config", () => {
       precedence: "defaults-win",
     });
 
-    expect(resolved).toMatchObject({
-      originator: "openclaw",
-      version: expect.any(String),
-      "User-Agent": expect.stringMatching(/^openclaw\//),
-      "X-Custom": "1",
-    });
+    expect(resolved?.originator).toBe("openclaw");
+    expect(typeof resolved?.version).toBe("string");
+    expect(resolved?.["User-Agent"]).toMatch(/^openclaw\//);
+    expect(resolved?.["X-Custom"]).toBe("1");
   });
 
   it("lets caller headers override defaults when requested", () => {
@@ -460,6 +458,44 @@ describe("provider request config", () => {
       "X-OpenRouter-Categories":
         "cli-agent,cloud-agent,programming-app,creative-writing,writing-assistant,general-chat,personal-agent",
       "X-Custom": "1",
+    });
+  });
+
+  it("protects NVIDIA billing invoke origin on official NIM routes", () => {
+    const resolved = resolveProviderRequestHeaders({
+      provider: "custom-nim",
+      api: "openai-completions",
+      baseUrl: "https://integrate.api.nvidia.com/v1",
+      capability: "llm",
+      transport: "stream",
+      callerHeaders: {
+        "X-BILLING-INVOKE-ORIGIN": "spoofed",
+        "X-Custom": "1",
+      },
+      precedence: "caller-wins",
+    });
+
+    expect(resolved).toEqual({
+      "X-BILLING-INVOKE-ORIGIN": "OpenClaw",
+      "X-Custom": "1",
+    });
+  });
+
+  it("does not attach NVIDIA billing invoke origin to custom proxy routes", () => {
+    const resolved = resolveProviderRequestHeaders({
+      provider: "nvidia",
+      api: "openai-completions",
+      baseUrl: "https://proxy.example.com/v1",
+      capability: "llm",
+      transport: "stream",
+      callerHeaders: {
+        "X-BILLING-INVOKE-ORIGIN": "operator-value",
+      },
+      precedence: "caller-wins",
+    });
+
+    expect(resolved).toEqual({
+      "X-BILLING-INVOKE-ORIGIN": "operator-value",
     });
   });
 
@@ -524,18 +560,17 @@ describe("provider request config", () => {
 
     expect(resolved.baseUrl).toBe("https://api.openai.com/v1");
     expect(resolved.allowPrivateNetwork).toBe(false);
+    expect(resolved.privateNetworkExplicitlyDenied).toBe(false);
     expect(resolved.policy.endpointClass).toBe("openai-public");
     expect(resolved.capabilities.allowsResponsesStore).toBe(true);
-    expect(resolved.headers).toMatchObject({
-      authorization: "Bearer test-key",
-      originator: "openclaw",
-      version: expect.any(String),
-      "User-Agent": expect.stringMatching(/^openclaw\//),
-      "X-Custom": "1",
-    });
+    expect(resolved.headers?.authorization).toBe("Bearer test-key");
+    expect(resolved.headers?.originator).toBe("openclaw");
+    expect(typeof resolved.headers?.version).toBe("string");
+    expect(resolved.headers?.["User-Agent"]).toMatch(/^openclaw\//);
+    expect(resolved.headers?.["X-Custom"]).toBe("1");
   });
 
-  it("auto-allows loopback model-provider stream requests", () => {
+  it("does not convert implicit loopback model requests into broad private-network trust", () => {
     const resolved = resolveProviderRequestPolicyConfig({
       provider: "local-agent-proxy",
       api: "openai-completions",
@@ -544,7 +579,8 @@ describe("provider request config", () => {
       transport: "stream",
     });
 
-    expect(resolved.allowPrivateNetwork).toBe(true);
+    expect(resolved.allowPrivateNetwork).toBe(false);
+    expect(resolved.privateNetworkExplicitlyDenied).toBe(false);
   });
 
   it("keeps explicit private-network denial for loopback model requests", () => {
@@ -558,6 +594,7 @@ describe("provider request config", () => {
     });
 
     expect(resolved.allowPrivateNetwork).toBe(false);
+    expect(resolved.privateNetworkExplicitlyDenied).toBe(true);
   });
 
   it("does not auto-allow non-loopback private model-provider hosts", () => {
@@ -570,5 +607,41 @@ describe("provider request config", () => {
     });
 
     expect(resolved.allowPrivateNetwork).toBe(false);
+    expect(resolved.privateNetworkExplicitlyDenied).toBe(false);
+  });
+
+  it.each([
+    {
+      provider: "lmstudio",
+      baseUrl: "http://127.0.0.1:1234/v1",
+      expectedEndpointClass: "local",
+    },
+    {
+      provider: "vllm",
+      baseUrl: "http://192.168.1.20:8000/v1",
+      expectedEndpointClass: "custom",
+    },
+    {
+      provider: "ollama",
+      baseUrl: "http://ollama-host:11434",
+      expectedEndpointClass: "custom",
+    },
+    {
+      provider: "anthropic",
+      api: "anthropic-messages",
+      baseUrl: "http://anthropic-proxy.lan:8080",
+      expectedEndpointClass: "custom",
+    },
+  ])("classifies $provider configured baseUrl as exact-origin trusted endpoint class", (entry) => {
+    const resolved = resolveProviderRequestPolicyConfig({
+      provider: entry.provider,
+      api: entry.api ?? (entry.provider === "ollama" ? "ollama" : "openai-completions"),
+      baseUrl: entry.baseUrl,
+      capability: "llm",
+      transport: "stream",
+    });
+
+    expect(resolved.policy.endpointClass).toBe(entry.expectedEndpointClass);
+    expect(resolved.privateNetworkExplicitlyDenied).toBe(false);
   });
 });

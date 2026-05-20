@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { TuiBackend } from "./tui-backend.js";
 import { createSessionActions } from "./tui-session-actions.js";
+import { TUI_SESSION_LOOKUP_LIMIT } from "./tui-session-list-policy.js";
 import type { TuiStateAccess } from "./tui-types.js";
 
 describe("tui session actions", () => {
@@ -42,7 +43,7 @@ describe("tui session actions", () => {
         clearAll: vi.fn(),
       } as unknown as import("./components/chat-log.js").ChatLog,
       btw: createBtwPresenter(),
-      tui: { requestRender: vi.fn() } as unknown as import("@mariozechner/pi-tui").TUI,
+      tui: { requestRender: vi.fn() } as unknown as import("@earendil-works/pi-tui").TUI,
       opts: {},
       state: createBaseState(),
       agentNames: new Map(),
@@ -85,7 +86,7 @@ describe("tui session actions", () => {
       client: { listSessions } as unknown as TuiBackend,
       chatLog: { addSystem: vi.fn() } as unknown as import("./components/chat-log.js").ChatLog,
       btw: createBtwPresenter(),
-      tui: { requestRender } as unknown as import("@mariozechner/pi-tui").TUI,
+      tui: { requestRender } as unknown as import("@earendil-works/pi-tui").TUI,
       state,
       updateFooter,
       updateAutocompleteProvider,
@@ -96,6 +97,13 @@ describe("tui session actions", () => {
 
     await Promise.resolve();
     expect(listSessions).toHaveBeenCalledTimes(1);
+    expect(listSessions).toHaveBeenNthCalledWith(1, {
+      limit: TUI_SESSION_LOOKUP_LIMIT,
+      search: "agent:main:main",
+      includeGlobal: false,
+      includeUnknown: false,
+      agentId: "main",
+    });
 
     resolveFirst?.({
       ts: Date.now(),
@@ -283,7 +291,7 @@ describe("tui session actions", () => {
       client: { listSessions } as unknown as TuiBackend,
       chatLog: { addSystem: vi.fn() } as unknown as import("./components/chat-log.js").ChatLog,
       btw: createBtwPresenter(),
-      tui: { requestRender: vi.fn() } as unknown as import("@mariozechner/pi-tui").TUI,
+      tui: { requestRender: vi.fn() } as unknown as import("@earendil-works/pi-tui").TUI,
       opts: {},
       state,
       agentNames: new Map(),
@@ -354,7 +362,7 @@ describe("tui session actions", () => {
         clearAll: vi.fn(),
       } as unknown as import("./components/chat-log.js").ChatLog,
       btw: createBtwPresenter(),
-      tui: { requestRender: vi.fn() } as unknown as import("@mariozechner/pi-tui").TUI,
+      tui: { requestRender: vi.fn() } as unknown as import("@earendil-works/pi-tui").TUI,
       opts: {},
       state,
       agentNames: new Map(),

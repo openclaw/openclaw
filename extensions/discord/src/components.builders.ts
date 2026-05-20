@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { ButtonStyle, MessageFlags } from "discord-api-types/v10";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildDiscordComponentCustomId as buildDiscordComponentCustomIdImpl } from "./component-custom-id.js";
 import { mapButtonStyle, normalizeModalFieldName } from "./components.parse.js";
 import type {
@@ -60,6 +60,7 @@ function createButtonComponent(params: {
     class DynamicLinkButton extends LinkButton {
       label = params.spec.label;
       url = linkUrl;
+      override disabled = params.spec.disabled ?? false;
     }
     return { component: new DynamicLinkButton() };
   }
@@ -77,9 +78,9 @@ function createButtonComponent(params: {
   class DynamicButton extends Button {
     label = params.spec.label;
     customId = customId;
-    style = style;
-    emoji = params.spec.emoji;
-    disabled = params.spec.disabled ?? false;
+    override style = style;
+    override emoji = params.spec.emoji;
+    override disabled = params.spec.disabled ?? false;
   }
   if (internalCustomId) {
     return {
@@ -137,11 +138,11 @@ function createSelectComponent(params: {
     }
     class DynamicStringSelect extends StringSelectMenu {
       customId = customId;
-      options = options;
-      minValues = params.spec.minValues;
-      maxValues = params.spec.maxValues;
-      placeholder = params.spec.placeholder;
-      disabled = false;
+      override options = options;
+      override minValues = params.spec.minValues;
+      override maxValues = params.spec.maxValues;
+      override placeholder = params.spec.placeholder;
+      override disabled = false;
     }
     return {
       component: new DynamicStringSelect(),
@@ -155,10 +156,10 @@ function createSelectComponent(params: {
   if (type === "user") {
     class DynamicUserSelect extends UserSelectMenu {
       customId = customId;
-      minValues = params.spec.minValues;
-      maxValues = params.spec.maxValues;
-      placeholder = params.spec.placeholder;
-      disabled = false;
+      override minValues = params.spec.minValues;
+      override maxValues = params.spec.maxValues;
+      override placeholder = params.spec.placeholder;
+      override disabled = false;
     }
     return {
       component: new DynamicUserSelect(),
@@ -168,10 +169,10 @@ function createSelectComponent(params: {
   if (type === "role") {
     class DynamicRoleSelect extends RoleSelectMenu {
       customId = customId;
-      minValues = params.spec.minValues;
-      maxValues = params.spec.maxValues;
-      placeholder = params.spec.placeholder;
-      disabled = false;
+      override minValues = params.spec.minValues;
+      override maxValues = params.spec.maxValues;
+      override placeholder = params.spec.placeholder;
+      override disabled = false;
     }
     return {
       component: new DynamicRoleSelect(),
@@ -181,10 +182,10 @@ function createSelectComponent(params: {
   if (type === "mentionable") {
     class DynamicMentionableSelect extends MentionableSelectMenu {
       customId = customId;
-      minValues = params.spec.minValues;
-      maxValues = params.spec.maxValues;
-      placeholder = params.spec.placeholder;
-      disabled = false;
+      override minValues = params.spec.minValues;
+      override maxValues = params.spec.maxValues;
+      override placeholder = params.spec.placeholder;
+      override disabled = false;
     }
     return {
       component: new DynamicMentionableSelect(),
@@ -193,10 +194,10 @@ function createSelectComponent(params: {
   }
   class DynamicChannelSelect extends ChannelSelectMenu {
     customId = customId;
-    minValues = params.spec.minValues;
-    maxValues = params.spec.maxValues;
-    placeholder = params.spec.placeholder;
-    disabled = false;
+    override minValues = params.spec.minValues;
+    override maxValues = params.spec.maxValues;
+    override placeholder = params.spec.placeholder;
+    override disabled = false;
   }
   return {
     component: new DynamicChannelSelect(),

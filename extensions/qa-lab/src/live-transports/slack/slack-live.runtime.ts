@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createSlackWebClient, createSlackWriteClient } from "@openclaw/slack/api.js";
 import type { WebClient } from "@slack/web-api";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { z } from "zod";
 import { startQaGatewayChild } from "../../gateway-child.js";
@@ -33,16 +33,65 @@ type SlackQaRuntimeEnv = {
   sutAppToken: string;
 };
 
-type SlackQaScenarioId = "slack-canary" | "slack-mention-gating";
+type SlackChannelStatus = {
+  connected?: boolean;
+  lastConnectedAt?: number;
+  lastDisconnect?: unknown;
+  lastError?: string;
+  restartPending?: boolean;
+  running?: boolean;
+};
+
+const SLACK_QA_READY_TIMEOUT_MS = 45_000;
+const SLACK_QA_READY_STABILITY_MS = 3_000;
+const SLACK_QA_GATEWAY_STOP_SETTLE_MS = 3_000;
+const SLACK_QA_RETRYABLE_SCENARIO_ATTEMPTS = 2;
+
+type SlackQaScenarioId =
+  | "slack-allowlist-block"
+  | "slack-canary"
+  | "slack-mention-gating"
+  | "slack-restart-resume"
+  | "slack-thread-follow-up"
+  | "slack-thread-isolation"
+  | "slack-top-level-reply-shape";
 
 type SlackQaScenarioRun = {
   expectReply: boolean;
   input: string;
   matchText: string;
+  verify?: (message: SlackMessage, context: { requestThreadTs: string; sentTs: string }) => void;
+  beforeRun?: (context: Omit<SlackQaScenarioContext, "sentTs">) => Promise<SlackQaBeforeRunResult>;
+  afterReply?: (message: SlackMessage, context: SlackQaScenarioContext) => Promise<string | void>;
+};
+
+type SlackQaBeforeRunResult =
+  | string
+  | void
+  | {
+      details?: string;
+      inputThreadTs?: string;
+    };
+
+type SlackQaConfigOverrides = {
+  replyToMode?: "all" | "off";
+  users?: string[];
+};
+
+type SlackQaScenarioContext = {
+  channelId: string;
+  driverClient: WebClient;
+  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>;
+  postSlackMessage: (params: { text: string; threadTs?: string }) => Promise<{ ts: string }>;
+  sentTs: string;
+  sutIdentity: SlackAuthIdentity;
+  sutReadClient: WebClient;
+  waitForReady: () => Promise<void>;
 };
 
 type SlackQaScenarioDefinition = LiveTransportScenarioDefinition<SlackQaScenarioId> & {
   buildRun: (sutUserId: string) => SlackQaScenarioRun;
+  configOverrides?: SlackQaConfigOverrides;
 };
 
 type SlackAuthIdentity = {
@@ -127,6 +176,7 @@ type SlackCredentialHeartbeat = ReturnType<typeof startQaCredentialLeaseHeartbea
 
 const SLACK_QA_CAPTURE_CONTENT_ENV = "OPENCLAW_QA_SLACK_CAPTURE_CONTENT";
 const QA_REDACT_PUBLIC_METADATA_ENV = "OPENCLAW_QA_REDACT_PUBLIC_METADATA";
+const SLACK_QA_WEB_API_TIMEOUT_MS = 45_000;
 const SLACK_QA_ENV_KEYS = [
   "OPENCLAW_QA_SLACK_CHANNEL_ID",
   "OPENCLAW_QA_SLACK_DRIVER_BOT_TOKEN",
@@ -167,6 +217,11 @@ const slackHistorySchema = z.object({
   messages: z.array(slackHistoryMessageSchema).optional(),
 });
 
+const slackRepliesSchema = z.object({
+  ok: z.boolean().optional(),
+  messages: z.array(slackHistoryMessageSchema).optional(),
+});
+
 const SLACK_QA_SCENARIOS: SlackQaScenarioDefinition[] = [
   {
     id: "slack-canary",
@@ -193,6 +248,145 @@ const SLACK_QA_SCENARIOS: SlackQaScenarioDefinition[] = [
         expectReply: false,
         input: `reply with only this exact marker: ${token}`,
         matchText: token,
+      };
+    },
+  },
+  {
+    id: "slack-allowlist-block",
+    standardId: "allowlist-block",
+    title: "Slack non-allowlisted sender does not trigger",
+    timeoutMs: 8_000,
+    configOverrides: { users: ["U_OPENCLAW_QA_NEVER_ALLOWED"] },
+    buildRun: (sutUserId) => {
+      const token = `SLACK_QA_BLOCK_${randomUUID().slice(0, 8).toUpperCase()}`;
+      return {
+        expectReply: false,
+        input: `<@${sutUserId}> reply with only this exact marker: ${token}`,
+        matchText: token,
+      };
+    },
+  },
+  {
+    id: "slack-top-level-reply-shape",
+    standardId: "top-level-reply-shape",
+    title: "Slack top-level reply stays top-level",
+    timeoutMs: 45_000,
+    configOverrides: { replyToMode: "off" },
+    buildRun: (sutUserId) => {
+      const token = `SLACK_QA_TOPLEVEL_${randomUUID().slice(0, 8).toUpperCase()}`;
+      return {
+        expectReply: true,
+        input: `<@${sutUserId}> reply with only this exact marker: ${token}`,
+        matchText: token,
+        verify: (message) => {
+          if (message.thread_ts) {
+            throw new Error(
+              `expected top-level Slack reply without thread_ts; got ${message.thread_ts}`,
+            );
+          }
+        },
+      };
+    },
+  },
+  {
+    id: "slack-restart-resume",
+    standardId: "restart-resume",
+    title: "Slack replies after gateway restart",
+    timeoutMs: 60_000,
+    buildRun: (sutUserId) => {
+      const token = `SLACK_QA_RESTART_${randomUUID().slice(0, 8).toUpperCase()}`;
+      return {
+        expectReply: true,
+        input: `<@${sutUserId}> reply with only this exact marker: ${token}`,
+        matchText: token,
+        afterReply: async (_message, context) => {
+          const secondToken = `SLACK_QA_RESTART_AFTER_${randomUUID().slice(0, 8).toUpperCase()}`;
+          await context.gateway.restart();
+          await context.waitForReady();
+          const sent = await sendSlackChannelMessage({
+            channelId: context.channelId,
+            client: context.driverClient,
+            text: `<@${context.sutIdentity.userId}> reply with only this exact marker: ${secondToken}`,
+          });
+          await waitForSlackScenarioReply({
+            channelId: context.channelId,
+            client: context.sutReadClient,
+            matchText: secondToken,
+            observedMessages: [],
+            observationScenarioId: "slack-restart-resume",
+            observationScenarioTitle: "Slack replies after gateway restart",
+            sentTs: sent.ts,
+            sutIdentity: context.sutIdentity,
+            timeoutMs: 45_000,
+          });
+          return `post-restart reply matched marker ${secondToken}`;
+        },
+      };
+    },
+  },
+  {
+    id: "slack-thread-follow-up",
+    standardId: "thread-follow-up",
+    title: "Slack threaded prompt receives threaded reply",
+    timeoutMs: 45_000,
+    configOverrides: { replyToMode: "all" },
+    buildRun: (sutUserId) => {
+      const token = `SLACK_QA_THREAD_${randomUUID().slice(0, 8).toUpperCase()}`;
+      return {
+        expectReply: true,
+        input: `<@${sutUserId}> reply with only this exact marker: ${token}`,
+        matchText: token,
+        beforeRun: async (context) => {
+          const parent = await context.postSlackMessage({
+            text: `thread-follow-up root for ${token}`,
+          });
+          return {
+            details: `created thread root ${parent.ts}`,
+            inputThreadTs: parent.ts,
+          };
+        },
+        verify: (message, context) => {
+          if (message.thread_ts !== context.requestThreadTs) {
+            throw new Error(
+              `expected threaded Slack reply thread_ts=${context.requestThreadTs}; got ${
+                message.thread_ts ?? "<none>"
+              }`,
+            );
+          }
+        },
+      };
+    },
+  },
+  {
+    id: "slack-thread-isolation",
+    standardId: "thread-isolation",
+    title: "Slack fresh top-level prompt stays out of previous thread",
+    timeoutMs: 45_000,
+    configOverrides: { replyToMode: "off" },
+    buildRun: (sutUserId) => {
+      const token = `SLACK_QA_ISOLATION_${randomUUID().slice(0, 8).toUpperCase()}`;
+      return {
+        expectReply: true,
+        input: `<@${sutUserId}> reply with only this exact marker: ${token}`,
+        matchText: token,
+        beforeRun: async (context) => {
+          const priorThreadToken = `SLACK_QA_PRIOR_THREAD_${randomUUID().slice(0, 8).toUpperCase()}`;
+          const parent = await context.postSlackMessage({
+            text: `prior thread root for ${priorThreadToken}`,
+          });
+          await context.postSlackMessage({
+            text: `prior thread child for ${priorThreadToken}`,
+            threadTs: parent.ts,
+          });
+          return `created unrelated prior thread ${parent.ts}`;
+        },
+        verify: (message) => {
+          if (message.thread_ts) {
+            throw new Error(
+              `expected isolated top-level Slack reply; got thread_ts=${message.thread_ts}`,
+            );
+          }
+        },
       };
     },
   },
@@ -279,6 +473,7 @@ function buildSlackQaConfig(
   params: {
     channelId: string;
     driverBotUserId: string;
+    overrides?: SlackQaConfigOverrides;
     sutAccountId: string;
     sutAppToken: string;
     sutBotToken: string;
@@ -315,12 +510,13 @@ function buildSlackQaConfig(
             appToken: params.sutAppToken,
             groupPolicy: "allowlist",
             allowBots: true,
+            replyToMode: params.overrides?.replyToMode ?? "off",
             channels: {
               [params.channelId]: {
                 enabled: true,
                 requireMention: true,
                 allowBots: true,
-                users: [params.driverBotUserId],
+                users: params.overrides?.users ?? [params.driverBotUserId],
               },
             },
           },
@@ -331,7 +527,7 @@ function buildSlackQaConfig(
 }
 
 async function getSlackIdentity(token: string): Promise<SlackAuthIdentity> {
-  const client = createSlackWebClient(token, { timeout: 15_000 });
+  const client = createSlackWebClient(token, { timeout: SLACK_QA_WEB_API_TIMEOUT_MS });
   const auth = slackAuthTestSchema.parse(await client.auth.test());
   if (!auth.user_id) {
     throw new Error("Slack auth.test did not return user_id.");
@@ -347,12 +543,14 @@ async function sendSlackChannelMessage(params: {
   channelId: string;
   client: WebClient;
   text: string;
+  threadTs?: string;
 }) {
   const sendSlackMessage = params.client.chat.postMessage.bind(params.client.chat);
   const sent = slackPostMessageSchema.parse(
     await sendSlackMessage({
       channel: params.channelId,
       text: params.text,
+      thread_ts: params.threadTs,
       unfurl_links: false,
       unfurl_media: false,
     }),
@@ -379,6 +577,22 @@ async function listSlackMessages(params: {
   return history.messages ?? [];
 }
 
+async function listSlackThreadMessages(params: {
+  channelId: string;
+  client: WebClient;
+  threadTs: string;
+}) {
+  const replies = slackRepliesSchema.parse(
+    await params.client.conversations.replies({
+      channel: params.channelId,
+      inclusive: true,
+      limit: 50,
+      ts: params.threadTs,
+    }),
+  );
+  return replies.messages ?? [];
+}
+
 function isSutSlackMessage(message: SlackMessage, sutIdentity: SlackAuthIdentity) {
   return (
     (message.user !== undefined && message.user === sutIdentity.userId) ||
@@ -394,16 +608,12 @@ async function waitForSlackScenarioReply(params: {
   observationScenarioId: string;
   observationScenarioTitle: string;
   sentTs: string;
+  threadTs?: string;
   sutIdentity: SlackAuthIdentity;
   timeoutMs: number;
 }) {
   const startedAt = Date.now();
-  while (Date.now() - startedAt < params.timeoutMs) {
-    const messages = await listSlackMessages({
-      channelId: params.channelId,
-      client: params.client,
-      oldestTs: params.sentTs,
-    });
+  const inspectMessages = (messages: SlackMessage[]) => {
     for (const message of messages) {
       const text = message.text ?? "";
       if (
@@ -431,6 +641,36 @@ async function waitForSlackScenarioReply(params: {
           observedAt: new Date().toISOString(),
         };
       }
+    }
+    return undefined;
+  };
+
+  while (Date.now() - startedAt < params.timeoutMs) {
+    const channelMessages = await listSlackMessages({
+      channelId: params.channelId,
+      client: params.client,
+      oldestTs: params.sentTs,
+    });
+    const channelReply = inspectMessages(channelMessages);
+    if (channelReply) {
+      return channelReply;
+    }
+
+    try {
+      const threadMessages = await listSlackThreadMessages({
+        channelId: params.channelId,
+        client: params.client,
+        threadTs: params.threadTs ?? params.sentTs,
+      });
+      const threadReply = inspectMessages(threadMessages);
+      if (threadReply) {
+        return threadReply;
+      }
+    } catch (error) {
+      throw new Error(
+        `Slack conversations.replies failed while waiting for ${params.observationScenarioId}: ${formatErrorMessage(error)}`,
+        { cause: error },
+      );
     }
     await new Promise((resolve) => setTimeout(resolve, 1_000));
   }
@@ -476,7 +716,9 @@ async function waitForSlackNoReply(params: {
         ts: message.ts,
         userId: message.user,
       });
-      throw new Error("unexpected Slack SUT reply observed");
+      if (matchedScenario) {
+        throw new Error("unexpected Slack SUT reply observed");
+      }
     }
     await new Promise((resolve) => setTimeout(resolve, 1_000));
   }
@@ -485,19 +727,10 @@ async function waitForSlackNoReply(params: {
 async function waitForSlackChannelRunning(
   gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
   accountId: string,
-) {
+): Promise<SlackChannelStatus> {
   const startedAt = Date.now();
-  let lastStatus:
-    | {
-        connected?: boolean;
-        lastConnectedAt?: number;
-        lastDisconnect?: unknown;
-        lastError?: string;
-        restartPending?: boolean;
-        running?: boolean;
-      }
-    | undefined;
-  while (Date.now() - startedAt < 45_000) {
+  let lastStatus: SlackChannelStatus | undefined;
+  while (Date.now() - startedAt < SLACK_QA_READY_TIMEOUT_MS) {
     try {
       const payload = (await gateway.call(
         "channels.status",
@@ -530,7 +763,10 @@ async function waitForSlackChannelRunning(
           }
         : undefined;
       if (match?.running && match.connected === true && match.restartPending !== true) {
-        return;
+        if (!lastStatus) {
+          throw new Error(`slack account "${accountId}" status disappeared after readiness check`);
+        }
+        return lastStatus;
       }
     } catch {
       // retry
@@ -541,6 +777,34 @@ async function waitForSlackChannelRunning(
     `slack account "${accountId}" did not become ready` +
       (lastStatus ? `; last status: ${JSON.stringify(lastStatus)}` : ""),
   );
+}
+
+async function waitForSlackChannelStable(
+  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
+  accountId: string,
+) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < SLACK_QA_READY_TIMEOUT_MS) {
+    const status = await waitForSlackChannelRunning(gateway, accountId);
+    const connectedAt =
+      typeof status.lastConnectedAt === "number" && status.lastConnectedAt > 0
+        ? status.lastConnectedAt
+        : Date.now();
+    const connectedForMs = Date.now() - connectedAt;
+    if (connectedForMs >= SLACK_QA_READY_STABILITY_MS) {
+      return;
+    }
+    await new Promise((resolve) =>
+      setTimeout(resolve, Math.max(500, SLACK_QA_READY_STABILITY_MS - connectedForMs)),
+    );
+  }
+  throw new Error(
+    `slack account "${accountId}" did not remain ready for ${SLACK_QA_READY_STABILITY_MS}ms`,
+  );
+}
+
+function isRetryableSlackQaScenarioError(error: unknown) {
+  return /timed out after \d+ms waiting for Slack message/iu.test(formatErrorMessage(error));
 }
 
 function toObservedSlackArtifacts(params: {
@@ -665,43 +929,72 @@ export async function runSlackQaLive(params: {
     }
 
     const driverClient = createSlackWriteClient(activeRuntimeEnv.driverBotToken, {
-      timeout: 15_000,
+      timeout: SLACK_QA_WEB_API_TIMEOUT_MS,
     });
-    const sutReadClient = createSlackWebClient(activeRuntimeEnv.sutBotToken, { timeout: 15_000 });
-    const gatewayHarness = await startQaLiveLaneGateway({
-      repoRoot,
-      transport: {
-        requiredPluginIds: [],
-        createGatewayConfig: () => ({}),
-      },
-      transportBaseUrl: "http://127.0.0.1:0",
-      providerMode,
-      primaryModel,
-      alternateModel,
-      fastMode: params.fastMode,
-      controlUiEnabled: false,
-      mutateConfig: (cfg) =>
-        buildSlackQaConfig(cfg, {
-          channelId: activeRuntimeEnv.channelId,
-          driverBotUserId: driverIdentity.userId,
-          sutAccountId,
-          sutAppToken: activeRuntimeEnv.sutAppToken,
-          sutBotToken: activeRuntimeEnv.sutBotToken,
-        }),
+    const sutReadClient = createSlackWebClient(activeRuntimeEnv.sutBotToken, {
+      timeout: SLACK_QA_WEB_API_TIMEOUT_MS,
     });
-    try {
-      await waitForSlackChannelRunning(gatewayHarness.gateway, sutAccountId);
-      assertLeaseHealthy();
-      for (const scenario of scenarios) {
-        assertLeaseHealthy();
-        const scenarioRun = scenario.buildRun(sutIdentity.userId);
-        const requestStartedAt = new Date();
+    for (const scenario of scenarios) {
+      let scenarioAttempt = 1;
+      while (true) {
+        let gatewayHarness: Awaited<ReturnType<typeof startQaLiveLaneGateway>> | undefined;
         try {
+          assertLeaseHealthy();
+          gatewayHarness = await startQaLiveLaneGateway({
+            repoRoot,
+            transport: {
+              requiredPluginIds: [],
+              createGatewayConfig: () => ({}),
+            },
+            transportBaseUrl: "http://127.0.0.1:0",
+            providerMode,
+            primaryModel,
+            alternateModel,
+            fastMode: params.fastMode,
+            controlUiEnabled: false,
+            mutateConfig: (cfg) =>
+              buildSlackQaConfig(cfg, {
+                channelId: activeRuntimeEnv.channelId,
+                driverBotUserId: driverIdentity.userId,
+                overrides: scenario.configOverrides,
+                sutAccountId,
+                sutAppToken: activeRuntimeEnv.sutAppToken,
+                sutBotToken: activeRuntimeEnv.sutBotToken,
+              }),
+          });
+          const activeGatewayHarness = gatewayHarness;
+          await waitForSlackChannelStable(activeGatewayHarness.gateway, sutAccountId);
+          const scenarioRun = scenario.buildRun(sutIdentity.userId);
+          const baseScenarioContext = {
+            channelId: activeRuntimeEnv.channelId,
+            driverClient,
+            gateway: activeGatewayHarness.gateway,
+            postSlackMessage: async (message: { text: string; threadTs?: string }) =>
+              await sendSlackChannelMessage({
+                channelId: activeRuntimeEnv.channelId,
+                client: driverClient,
+                text: message.text,
+                threadTs: message.threadTs,
+              }),
+            sutIdentity,
+            sutReadClient,
+            waitForReady: async () =>
+              await waitForSlackChannelStable(activeGatewayHarness.gateway, sutAccountId),
+          };
+          const beforeRunResult = await scenarioRun.beforeRun?.(baseScenarioContext);
+          const beforeRunDetails =
+            typeof beforeRunResult === "string" ? beforeRunResult : beforeRunResult?.details;
+          const requestStartedAt = new Date();
           const sent = await sendSlackChannelMessage({
             channelId: activeRuntimeEnv.channelId,
             client: driverClient,
             text: scenarioRun.input,
+            threadTs:
+              typeof beforeRunResult === "object" ? beforeRunResult?.inputThreadTs : undefined,
           });
+          const requestThreadTs =
+            (typeof beforeRunResult === "object" ? beforeRunResult?.inputThreadTs : undefined) ??
+            sent.ts;
           if (scenarioRun.expectReply) {
             const reply = await waitForSlackScenarioReply({
               channelId: activeRuntimeEnv.channelId,
@@ -711,16 +1004,29 @@ export async function runSlackQaLive(params: {
               observationScenarioId: scenario.id,
               observationScenarioTitle: scenario.title,
               sentTs: sent.ts,
+              threadTs: requestThreadTs,
               sutIdentity,
               timeoutMs: scenario.timeoutMs,
             });
+            scenarioRun.verify?.(reply.message, { requestThreadTs, sentTs: sent.ts });
             const responseObservedAt = new Date(reply.observedAt);
             const rttMs = responseObservedAt.getTime() - requestStartedAt.getTime();
+            const afterReplyDetails = await scenarioRun.afterReply?.(reply.message, {
+              ...baseScenarioContext,
+              sentTs: sent.ts,
+            });
             scenarioResults.push({
               id: scenario.id,
               title: scenario.title,
               status: "pass",
-              details: `reply matched in ${rttMs}ms`,
+              details: [
+                `reply matched in ${rttMs}ms`,
+                beforeRunDetails,
+                afterReplyDetails,
+                scenarioAttempt > 1 ? `retried ${scenarioAttempt - 1}x` : undefined,
+              ]
+                .filter(Boolean)
+                .join("; "),
               rttMs,
               requestStartedAt: requestStartedAt.toISOString(),
               responseObservedAt: responseObservedAt.toISOString(),
@@ -741,31 +1047,51 @@ export async function runSlackQaLive(params: {
               id: scenario.id,
               title: scenario.title,
               status: "pass",
-              details: "no reply",
+              details:
+                scenarioAttempt > 1 ? `no reply; retried ${scenarioAttempt - 1}x` : "no reply",
             });
           }
+          break;
         } catch (error) {
-          const result = {
+          if (
+            scenarioAttempt < SLACK_QA_RETRYABLE_SCENARIO_ATTEMPTS &&
+            isRetryableSlackQaScenarioError(error)
+          ) {
+            scenarioAttempt += 1;
+            continue;
+          }
+          scenarioResults.push({
             id: scenario.id,
             title: scenario.title,
-            status: "fail" as const,
-            details: formatErrorMessage(error),
-          };
-          scenarioResults.push(result);
+            status: "fail",
+            details:
+              scenarioAttempt > 1
+                ? `${formatErrorMessage(error)}; retried ${scenarioAttempt - 1}x`
+                : formatErrorMessage(error),
+          });
           preservedGatewayDebugArtifacts = true;
-          await gatewayHarness.gateway
-            .stop({ keepTemp: true, preserveToDir: gatewayDebugDirPath })
-            .catch((stopError) => {
-              appendLiveLaneIssue(cleanupIssues, "gateway debug preservation failed", stopError);
+          if (gatewayHarness) {
+            await gatewayHarness
+              .stop({ keepTemp: true, preserveToDir: gatewayDebugDirPath })
+              .catch((stopError) => {
+                appendLiveLaneIssue(cleanupIssues, "gateway debug preservation failed", stopError);
+              });
+          }
+          break;
+        } finally {
+          if (!preservedGatewayDebugArtifacts && gatewayHarness) {
+            await gatewayHarness.stop().catch((error) => {
+              appendLiveLaneIssue(cleanupIssues, "gateway stop failed", error);
             });
+            await new Promise((resolve) => setTimeout(resolve, SLACK_QA_GATEWAY_STOP_SETTLE_MS));
+          }
+        }
+        if (scenarioResults.at(-1)?.id === scenario.id) {
           break;
         }
       }
-    } finally {
-      if (!preservedGatewayDebugArtifacts) {
-        await gatewayHarness.stop().catch((error) => {
-          appendLiveLaneIssue(cleanupIssues, "gateway stop failed", error);
-        });
+      if (scenarioResults.at(-1)?.status === "fail") {
+        break;
       }
     }
   } catch (error) {
@@ -874,10 +1200,11 @@ export async function runSlackQaLive(params: {
   };
 }
 
-export const __testing = {
+export const testing = {
   findScenario,
   parseSlackQaCredentialPayload,
   resolveSlackQaRuntimeEnv,
   SLACK_QA_STANDARD_SCENARIO_IDS,
   waitForSlackNoReply,
 };
+export { testing as __testing };

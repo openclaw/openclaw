@@ -1,3 +1,4 @@
+import { reconcileChatRunFromCurrentSessionRow } from "../chat/run-lifecycle.ts";
 import { toNumber } from "../format.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type {
@@ -32,11 +33,13 @@ export type SessionsState = {
 };
 
 type LoadSessionsOverrides = {
+  agentId?: string;
   activeMinutes?: number;
   limit?: number;
   includeGlobal?: boolean;
   includeUnknown?: boolean;
   showArchived?: boolean;
+  configuredAgentsOnly?: boolean;
 };
 
 type CreateSessionParams = {
@@ -44,6 +47,7 @@ type CreateSessionParams = {
   label?: string;
   model?: string;
   parentSessionKey?: string;
+  emitCommandHooks?: boolean;
 };
 
 type CreateSessionResult = {
@@ -325,6 +329,9 @@ export function applySessionsChangedEvent(
       mutableNext[field] = value;
     }
   }
+  if (!hasOwn(source, "hasActiveRun") && nextRow.status && nextRow.status !== "running") {
+    nextRow.hasActiveRun = false;
+  }
   if (nextRow.totalTokensFresh === false && !hasOwn(source, "totalTokens")) {
     delete nextRow.totalTokens;
   }
@@ -426,10 +433,16 @@ async function loadSessionsOnce(
       ? 0
       : (overrides?.activeMinutes ?? toNumber(state.sessionsFilterActive, 0));
     const limit = overrides?.limit ?? toNumber(state.sessionsFilterLimit, 0);
+    const configuredAgentsOnly = overrides?.configuredAgentsOnly ?? true;
     const params: Record<string, unknown> = {
       includeGlobal,
       includeUnknown,
+      configuredAgentsOnly,
     };
+    const agentId = overrides?.agentId?.trim();
+    if (agentId) {
+      params.agentId = agentId;
+    }
     if (activeMinutes > 0) {
       params.activeMinutes = activeMinutes;
     }
@@ -439,6 +452,9 @@ async function loadSessionsOnce(
     const res = await client.request<SessionsListResult | undefined>("sessions.list", params);
     if (res) {
       state.sessionsResult = projectSessionsResultForAvailability(res, { showArchived });
+      reconcileChatRunFromCurrentSessionRow(
+        state as unknown as Parameters<typeof reconcileChatRunFromCurrentSessionRow>[0],
+      );
       const nextKeys = new Set(state.sessionsResult.sessions.map((row) => row.key));
       for (const key of Object.keys(state.sessionsCheckpointItemsByKey)) {
         if (!nextKeys.has(key)) {

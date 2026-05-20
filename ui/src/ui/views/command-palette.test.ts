@@ -39,6 +39,22 @@ function restoreShowModalDescriptor() {
   delete (HTMLDialogElement.prototype as Partial<HTMLDialogElement>).showModal;
 }
 
+function expectPaletteInput(): HTMLInputElement {
+  const input = container.querySelector<HTMLInputElement>("#cmd-palette-input");
+  if (!(input instanceof HTMLInputElement)) {
+    throw new Error("Expected command palette input");
+  }
+  return input;
+}
+
+function expectPaletteDialog(): HTMLDialogElement {
+  const dialog = container.querySelector<HTMLDialogElement>("dialog.cmd-palette-overlay");
+  if (!(dialog instanceof HTMLDialogElement)) {
+    throw new Error("Expected command palette dialog");
+  }
+  return dialog;
+}
+
 function createProps(overrides: Partial<CommandPaletteProps> = {}): CommandPaletteProps {
   return {
     open: true,
@@ -107,65 +123,46 @@ describe("command palette", () => {
     });
 
     const items = getPaletteItems();
-    expect(items).toContainEqual(
-      expect.objectContaining({
-        id: "slash:pair",
-        label: "/pair",
-      }),
-    );
-    expect(items).toContainEqual(
-      expect.objectContaining({
-        id: "slash:prose",
-        label: "/prose",
-      }),
-    );
+    const pair = items.find((item) => item.id === "slash:pair");
+    const prose = items.find((item) => item.id === "slash:prose");
+    expect(pair?.label).toBe("/pair");
+    expect(prose?.label).toBe("/prose");
   });
 
   it("matches localized base item labels and descriptions", async () => {
     await i18n.setLocale("zh-CN");
 
-    expect(getPaletteItems()).toContainEqual(
-      expect.objectContaining({
-        id: "nav-config",
-        label: "设置",
-      }),
-    );
-    expect(getFilteredPaletteItems("切换调试")).toContainEqual(
-      expect.objectContaining({
-        id: "skill-debug",
-      }),
-    );
+    const configItem = getPaletteItems().find((item) => item.id === "nav-config");
+    const debugItem = getFilteredPaletteItems("切换调试").find((item) => item.id === "skill-debug");
+    expect(configItem?.label).toBe("设置");
+    expect(debugItem?.id).toBe("skill-debug");
   });
 
   it("renders a labelled modal combobox with listbox options", async () => {
     await renderPalette({ query: "overview", activeIndex: 0 });
 
     const dialog = container.querySelector<HTMLDialogElement>("dialog.cmd-palette-overlay");
-    expect(dialog).not.toBeNull();
-    expect(dialog!.open).toBe(true);
-    expect(dialog!.hasAttribute("role")).toBe(false);
-    expect(dialog!.hasAttribute("aria-modal")).toBe(false);
-    expect(dialog!.getAttribute("aria-labelledby")).toBe("cmd-palette-label");
+    expect(dialog?.open).toBe(true);
+    expect(dialog?.hasAttribute("role")).toBe(false);
+    expect(dialog?.hasAttribute("aria-modal")).toBe(false);
+    expect(dialog?.getAttribute("aria-labelledby")).toBe("cmd-palette-label");
 
     const label = container.querySelector<HTMLLabelElement>("#cmd-palette-label");
     const input = container.querySelector<HTMLInputElement>("#cmd-palette-input");
     const listbox = container.querySelector<HTMLElement>("#cmd-palette-listbox");
     expect(label?.textContent).toBe("Type a command…");
     expect(label?.getAttribute("for")).toBe("cmd-palette-input");
-    expect(input).not.toBeNull();
-    expect(input!.getAttribute("role")).toBe("combobox");
-    expect(input!.getAttribute("aria-autocomplete")).toBe("list");
-    expect(input!.getAttribute("aria-expanded")).toBe("true");
-    expect(input!.getAttribute("aria-controls")).toBe("cmd-palette-listbox");
-    expect(input!.getAttribute("aria-activedescendant")).toBe("cmd-palette-option-nav-overview");
+    expect(input?.getAttribute("role")).toBe("combobox");
+    expect(input?.getAttribute("aria-autocomplete")).toBe("list");
+    expect(input?.getAttribute("aria-expanded")).toBe("true");
+    expect(input?.getAttribute("aria-controls")).toBe("cmd-palette-listbox");
+    expect(input?.getAttribute("aria-activedescendant")).toBe("cmd-palette-option-nav-overview");
     expect(document.activeElement).toBe(input);
 
-    expect(listbox).not.toBeNull();
-    expect(listbox!.getAttribute("role")).toBe("listbox");
-    const option = listbox!.querySelector<HTMLElement>("#cmd-palette-option-nav-overview");
-    expect(option).not.toBeNull();
-    expect(option!.getAttribute("role")).toBe("option");
-    expect(option!.getAttribute("aria-selected")).toBe("true");
+    expect(listbox?.getAttribute("role")).toBe("listbox");
+    const option = listbox?.querySelector<HTMLElement>("#cmd-palette-option-nav-overview");
+    expect(option?.getAttribute("role")).toBe("option");
+    expect(option?.getAttribute("aria-selected")).toBe("true");
   });
 
   it("traps Tab on the combobox and restores focus on Escape", async () => {
@@ -176,8 +173,7 @@ describe("command palette", () => {
     const onToggle = vi.fn();
 
     await renderPalette({ onToggle });
-    const input = container.querySelector<HTMLInputElement>("#cmd-palette-input");
-    expect(input).not.toBeNull();
+    const input = expectPaletteInput();
     expect(document.activeElement).toBe(input);
 
     const tab = new KeyboardEvent("keydown", {
@@ -185,7 +181,7 @@ describe("command palette", () => {
       bubbles: true,
       cancelable: true,
     });
-    input!.dispatchEvent(tab);
+    input.dispatchEvent(tab);
     expect(tab.defaultPrevented).toBe(true);
     expect(document.activeElement).toBe(input);
 
@@ -194,7 +190,7 @@ describe("command palette", () => {
       bubbles: true,
       cancelable: true,
     });
-    input!.dispatchEvent(escape);
+    input.dispatchEvent(escape);
     expect(escape.defaultPrevented).toBe(true);
     expect(onToggle).toHaveBeenCalledTimes(1);
 
@@ -206,19 +202,18 @@ describe("command palette", () => {
   it("does not toggle twice when Escape is followed by dialog cancel", async () => {
     const onToggle = vi.fn();
     await renderPalette({ onToggle });
-    const dialog = container.querySelector<HTMLDialogElement>("dialog.cmd-palette-overlay");
-    const input = container.querySelector<HTMLInputElement>("#cmd-palette-input");
-    expect(dialog).not.toBeNull();
-    expect(input).not.toBeNull();
+    const dialog = expectPaletteDialog();
+    const input = expectPaletteInput();
+    expect(dialog.open).toBe(true);
 
-    input!.dispatchEvent(
+    input.dispatchEvent(
       new KeyboardEvent("keydown", {
         key: "Escape",
         bubbles: true,
         cancelable: true,
       }),
     );
-    dialog!.dispatchEvent(new Event("cancel", { cancelable: true }));
+    dialog.dispatchEvent(new Event("cancel", { cancelable: true }));
 
     expect(onToggle).toHaveBeenCalledTimes(1);
   });

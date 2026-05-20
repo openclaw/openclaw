@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { __testing } from "../../scripts/e2e/npm-telegram-live-runner.ts";
+import { testing } from "../../scripts/e2e/npm-telegram-live-runner.ts";
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DOCKER_SCRIPT_PATH = path.resolve(TEST_DIR, "../../scripts/e2e/npm-telegram-live-docker.sh");
@@ -35,7 +35,7 @@ describe("package Telegram live Docker E2E", () => {
   it("installs the package candidate before forwarding runtime secrets", () => {
     const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
     const installRunStart = script.indexOf('echo "Running package Telegram live Docker E2E');
-    const installRunEnd = script.indexOf("# Mount only test harness/plugin QA sources");
+    const installRunEnd = script.indexOf("# Mount only QA harness source");
     const installRun = script.slice(installRunStart, installRunEnd);
 
     expect(installRunStart).toBeGreaterThanOrEqual(0);
@@ -77,7 +77,8 @@ describe("package Telegram live Docker E2E", () => {
 
     expect(script).toContain('ln -sfnT "$openclaw_package_dir/dist" /app/dist');
     expect(script).toContain('cp "$openclaw_package_dir/package.json" /app/package.json');
-    expect(script).toContain('ln -sfnT /app/extensions "$openclaw_package_dir/extensions"');
+    expect(script).toContain('-v "$ROOT_DIR/extensions/qa-lab:/app/extensions/qa-lab:ro"');
+    expect(script).not.toContain('ln -sfnT /app/extensions "$openclaw_package_dir/extensions"');
     expect(script).toContain("node scripts/e2e/lib/npm-telegram-live/prepare-package.mjs");
     expect(script).toContain("/app/node_modules/openclaw/package.json");
     expect(preparePackage).toContain('pkg.exports["./plugin-sdk/gateway-runtime"]');
@@ -102,13 +103,13 @@ describe("package Telegram live Docker E2E", () => {
 
   it("lets npm-specific credential aliases override shared QA env", () => {
     expect(
-      __testing.resolveCredentialSource({
+      testing.resolveCredentialSource({
         OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE: "convex",
         OPENCLAW_QA_CREDENTIAL_SOURCE: "env",
       }),
     ).toBe("convex");
     expect(
-      __testing.resolveCredentialRole({
+      testing.resolveCredentialRole({
         OPENCLAW_NPM_TELEGRAM_CREDENTIAL_ROLE: "ci",
         OPENCLAW_QA_CREDENTIAL_ROLE: "maintainer",
       }),
