@@ -88,6 +88,12 @@ describe("error helpers", () => {
     expect(formatted).toBe("error A | error B");
   });
 
+  it("dedupes causes whose message repeats the parent (e.g. FailoverError wrapping)", () => {
+    const inner = new Error('No API key found for provider "openai-codex".');
+    const wrapper = new Error(inner.message, { cause: inner });
+    expect(formatErrorMessage(wrapper)).toBe(inner.message);
+  });
+
   it("redacts sensitive tokens from formatted error messages", () => {
     const token = "sk-abcdefghijklmnopqrstuv";
     const formatted = formatErrorMessage(new Error(`Authorization: Bearer ${token}`));
