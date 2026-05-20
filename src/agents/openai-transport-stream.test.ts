@@ -3036,13 +3036,11 @@ describe("openai transport stream", () => {
     const diagnostics = [diagnostic];
     const context = { transport: "responses" as const, model };
 
-    __testing.resetOpenAIStrictToolDowngradeDiagnosticLogCache();
-    expect(__testing.shouldLogOpenAIStrictToolDowngradeDiagnostic(diagnostics, context)).toBe(true);
-    expect(__testing.shouldLogOpenAIStrictToolDowngradeDiagnostic(diagnostics, context)).toBe(
-      false,
-    );
+    testing.resetOpenAIStrictToolDowngradeDiagnosticLogCache();
+    expect(testing.shouldLogOpenAIStrictToolDowngradeDiagnostic(diagnostics, context)).toBe(true);
+    expect(testing.shouldLogOpenAIStrictToolDowngradeDiagnostic(diagnostics, context)).toBe(false);
     expect(
-      __testing.shouldLogOpenAIStrictToolDowngradeDiagnostic(
+      testing.shouldLogOpenAIStrictToolDowngradeDiagnostic(
         [
           {
             ...diagnostic,
