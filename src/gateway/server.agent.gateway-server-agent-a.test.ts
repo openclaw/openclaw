@@ -5,12 +5,14 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi 
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import { waitForAgentCommandCall } from "./agent-command.test-helpers.js";
+import { resetModelCatalogCacheForTest as resetGatewayModelCatalogCacheForTest } from "./server-model-catalog.js";
 import { setRegistry } from "./server.agent.gateway-server-agent.mocks.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
 import {
   agentCommand,
   connectOk,
   installGatewayTestHooks,
+  piSdkMock,
   rpcReq,
   startServerWithClient,
   testState,
@@ -219,6 +221,19 @@ describe("gateway server agent", () => {
     expect(call.to).toBeUndefined();
   });
 
+  test("agent forwards sourceReplyDeliveryMode to agentCommand", async () => {
+    const res = await rpcReq(ws, "agent", {
+      message: "hi",
+      sessionKey: "main",
+      sourceReplyDeliveryMode: "message_tool_only",
+      idempotencyKey: "idem-agent-source-reply-mode",
+    });
+    expect(res.ok).toBe(true);
+
+    const call = await waitForAgentCommandCall("idem-agent-source-reply-mode");
+    expect(call.sourceReplyDeliveryMode).toBe("message_tool_only");
+  });
+
   test("agent preserves spawnDepth on subagent sessions", async () => {
     await setTestSessionStore({
       entries: {
@@ -411,20 +426,82 @@ describe("gateway server agent", () => {
       ],
       idempotencyKey: "idem-agent-attachments",
     });
-    expect(res.ok).toBe(true);
+    expect(
+      res.ok,
+      `agent RPC failed before forwarding image attachment: ${JSON.stringify(res)}`,
+    ).toBe(true);
 
     const call = await waitForAgentCommandCall("idem-agent-attachments");
     expect(call.sessionKey).toBe("agent:main:main");
     expectChannels(call, "webchat");
     expect(typeof call.message).toBe("string");
     expect(call.message).toContain("what is in the image?");
+    const images = call.images as Array<Record<string, unknown>> | undefined;
+    expect(images, "agent command should include one forwarded image attachment").toHaveLength(1);
+    expect(images?.[0]?.type).toBe("image");
+    expect(images?.[0]?.mimeType).toBe("image/png");
+    expect(images?.[0]?.data).toBe(BASE_IMAGE_PNG);
+  });
 
-    const images = call.images as Array<Record<string, unknown>>;
-    expect(Array.isArray(images)).toBe(true);
-    expect(images.length).toBe(1);
-    expect(images[0]?.type).toBe("image");
-    expect(images[0]?.mimeType).toBe("image/png");
-    expect(images[0]?.data).toBe(BASE_IMAGE_PNG);
+  test("agent validates first image attachment against per-agent model for fresh sessions", async () => {
+    testState.agentConfig = { model: { primary: "ollama-cloud/deepseek-v4-flash" } };
+    testState.agentsConfig = {
+      list: [
+        { id: "main", default: true },
+        { id: "vision", model: "ollama-cloud/gemma4:31b" },
+      ],
+    };
+    piSdkMock.enabled = true;
+    piSdkMock.models = [
+      {
+        id: "deepseek-v4-flash",
+        name: "DeepSeek V4 Flash",
+        provider: "ollama-cloud",
+        input: ["text"],
+      },
+      {
+        id: "gemma4:31b",
+        name: "Gemma 4 31B",
+        provider: "ollama-cloud",
+        input: ["text", "image"],
+      },
+    ];
+    await resetGatewayModelCatalogCacheForTest();
+
+    await setTestSessionStore({
+      agentId: "vision",
+      entries: {
+        main: {
+          sessionId: "sess-vision-fresh-image",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    const res = await rpcReq(ws, "agent", {
+      message: "what is in the image?",
+      sessionKey: "agent:vision:main",
+      attachments: [
+        {
+          mimeType: "image/png",
+          fileName: "tiny.png",
+          content: BASE_IMAGE_PNG,
+        },
+      ],
+      idempotencyKey: "idem-agent-vision-first-image",
+    });
+    expect(
+      res.ok,
+      `agent RPC should accept image using per-agent vision model: ${JSON.stringify(res)}`,
+    ).toBe(true);
+
+    const call = await waitForAgentCommandCall("idem-agent-vision-first-image");
+    expect(call.sessionKey).toBe("agent:vision:main");
+    const images = call.images as Array<Record<string, unknown>> | undefined;
+    expect(images).toHaveLength(1);
+    expect(images?.[0]?.type).toBe("image");
+    expect(images?.[0]?.mimeType).toBe("image/png");
+    expect(images?.[0]?.data).toBe(BASE_IMAGE_PNG);
   });
 
   test("agent errors when delivery requested and no last channel exists", async () => {

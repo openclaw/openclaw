@@ -1,11 +1,10 @@
-import type { AssistantMessage } from "@mariozechner/pi-ai";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
-  isCloudflareOrHtmlErrorPage,
-  parseApiErrorInfo,
+  isGenericProviderInternalError,
 } from "../../shared/assistant-error-format.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -15,6 +14,7 @@ export {
   extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
   isCloudflareOrHtmlErrorPage,
+  isGenericProviderInternalError,
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
 import { classifyOAuthRefreshFailure } from "../auth-profiles/oauth-refresh-failure.js";
@@ -37,16 +37,14 @@ import {
   matchesProviderContextOverflow,
 } from "./provider-error-patterns.js";
 import {
-  BILLING_ERROR_USER_MESSAGE,
   formatBillingErrorMessage,
   formatDiskSpaceErrorCopy,
   formatRateLimitOrOverloadedErrorCopy,
   formatTransportErrorCopy,
-  getApiErrorPayloadFingerprint,
   isInvalidStreamingEventOrderError,
   isLikelyHttpErrorText,
   isRawApiErrorPayload,
-  sanitizeUserFacingText,
+  isStreamingJsonParseError,
 } from "./sanitize-user-facing-text.js";
 import type { FailoverReason } from "./types.js";
 
@@ -614,7 +612,13 @@ export function classifyFailoverReasonFromHttpStatus(
     ? classifyFailoverClassificationFromMessage(message, opts?.provider)
     : null;
   return failoverReasonFromClassification(
-    classifyFailoverClassificationFromHttpStatus(status, message, messageClassification, status),
+    classifyFailoverClassificationFromHttpStatus(
+      status,
+      message,
+      messageClassification,
+      status,
+      opts?.provider,
+    ),
   );
 }
 
@@ -623,6 +627,7 @@ function classifyFailoverClassificationFromHttpStatus(
   message: string | undefined,
   messageClassification: FailoverClassification | null,
   explicitStatus: number | undefined,
+  provider?: string,
 ): FailoverClassification | null {
   const messageReason = failoverReasonFromClassification(messageClassification);
   if (typeof status !== "number" || !Number.isFinite(status)) {
@@ -646,6 +651,13 @@ function classifyFailoverClassificationFromHttpStatus(
     return toReasonClassification(classify402Message(message));
   }
   if (status === 429) {
+    if (
+      message &&
+      (isProvider(provider, "moonshot") || isProvider(provider, "kimi")) &&
+      isBillingErrorMessage(message)
+    ) {
+      return toReasonClassification("billing");
+    }
     return toReasonClassification("rate_limit");
   }
   if (status === 401 || status === 403) {
@@ -701,6 +713,9 @@ function classifyFailoverClassificationFromHttpStatus(
     return toReasonClassification("timeout");
   }
   if (status === 500 || status === 502 || status === 504) {
+    if (messageReason === "server_error") {
+      return messageClassification;
+    }
     return toReasonClassification("timeout");
   }
   if (status === 529) {
@@ -710,7 +725,7 @@ function classifyFailoverClassificationFromHttpStatus(
     // 400/422 are ambiguous: inspect the payload first so provider-specific
     // rate limits, auth failures, model-not-found errors, and billing signals
     // are not collapsed into generic "format" failures.
-    if (messageClassification) {
+    if (messageClassification && messageReason !== "server_error") {
       return messageClassification;
     }
     // When the response has no body at all, or only surfaces as an HTTP wrapper
@@ -778,6 +793,13 @@ function isOpenRouterKeyLimitExceededError(raw: string, provider?: string): bool
   );
 }
 
+function isOpenRouterKeyBudgetLimitExceededError(raw: string, provider?: string): boolean {
+  return (
+    isProvider(provider, "openrouter") &&
+    /\bapi\s+key\s+budget\s+limit\s*(?:exceeded|reached|hit)\b/i.test(raw)
+  );
+}
+
 function isExactUnknownNoDetailsError(raw: string): boolean {
   return (
     normalizeOptionalLowercaseString(raw)?.trim() === "unknown error (no error details in response)"
@@ -807,7 +829,10 @@ function classifyFailoverClassificationFromMessage(
   if (reasonFrom402Text) {
     return toReasonClassification(reasonFrom402Text);
   }
-  if (isOpenRouterKeyLimitExceededError(raw, provider)) {
+  if (
+    isOpenRouterKeyLimitExceededError(raw, provider) ||
+    isOpenRouterKeyBudgetLimitExceededError(raw, provider)
+  ) {
     return toReasonClassification("billing");
   }
   if (isPeriodicUsageLimitErrorMessage(raw)) {
@@ -819,6 +844,14 @@ function classifyFailoverClassificationFromMessage(
   if (isOverloadedErrorMessage(raw)) {
     return toReasonClassification("overloaded");
   }
+  if (
+    isStructuredServerErrorMessage(raw) &&
+    !isBillingErrorMessage(raw) &&
+    !isAuthPermanentErrorMessage(raw) &&
+    !isAuthErrorMessage(raw)
+  ) {
+    return toReasonClassification("server_error");
+  }
   if (isTransientHttpError(raw)) {
     const status = extractLeadingHttpStatus(raw.trim());
     if (status?.code === 529) {
@@ -826,11 +859,18 @@ function classifyFailoverClassificationFromMessage(
     }
     return toReasonClassification("timeout");
   }
+  if (isGenericProviderInternalError(raw)) {
+    return toReasonClassification("timeout");
+  }
   // Billing and auth classifiers run before the broad isJsonApiInternalServerError
   // check so that provider errors like {"type":"api_error","message":"insufficient
   // balance"} are correctly classified as "billing"/"auth" rather than "timeout".
   if (isBillingErrorMessage(raw)) {
     return toReasonClassification("billing");
+  }
+  const oauthRefreshFailure = classifyOAuthRefreshFailure(raw);
+  if (oauthRefreshFailure?.reason) {
+    return toReasonClassification("auth_permanent");
   }
   if (isAuthPermanentErrorMessage(raw)) {
     return toReasonClassification("auth_permanent");
@@ -884,6 +924,7 @@ export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassifi
     signal.message,
     messageClassification,
     signal.status,
+    signal.provider,
   );
   if (statusClassification) {
     return statusClassification;
@@ -1111,6 +1152,10 @@ export function formatAssistantErrorText(
     return transientCopy;
   }
 
+  if (isGenericProviderInternalError(raw)) {
+    return formatRawAssistantErrorForUi(raw);
+  }
+
   const transportCopy = formatTransportErrorCopy(raw);
   if (transportCopy) {
     return transportCopy;
@@ -1137,6 +1182,10 @@ export function formatAssistantErrorText(
 
   if (isLikelyHttpErrorText(raw) || isRawApiErrorPayload(raw)) {
     return formatRawAssistantErrorForUi(raw);
+  }
+
+  if (isStreamingJsonParseError(raw)) {
+    return "LLM streaming response contained a malformed fragment. Please try again.";
   }
 
   // Never return raw unhandled errors - log for debugging but return safe message
@@ -1205,6 +1254,14 @@ function isJsonApiInternalServerError(raw: string): boolean {
   // with non-transient messages (e.g. context overflow, schema validation) should
   // fall through to more specific classifiers or remain unclassified.
   return API_ERROR_TRANSIENT_SIGNALS_RE.test(raw);
+}
+
+function isStructuredServerErrorMessage(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  const value = normalizeLowercaseStringOrEmpty(raw);
+  return value.includes('"type":"server_error"') || value.includes('"code":"server_error"');
 }
 
 export function parseImageDimensionError(raw: string): {

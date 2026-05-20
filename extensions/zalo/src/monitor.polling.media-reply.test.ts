@@ -79,6 +79,16 @@ function createHostedMediaResponse() {
   return { headers, res: res as unknown as ServerResponse & { end: ReturnType<typeof vi.fn> } };
 }
 
+function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
+  let count = 0;
+  for (const item of items) {
+    if (predicate(item)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 describe("Zalo polling media replies", () => {
   const finalizeInboundContextMock = vi.fn((ctx: Record<string, unknown>) => ctx);
   const recordInboundSessionMock = vi.fn(async () => undefined);
@@ -285,12 +295,10 @@ describe("Zalo polling media replies", () => {
       );
       expect(firstHostedMediaRoutes).toHaveLength(1);
       const hostedMediaRoute = firstHostedMediaRoutes[0];
-      expect(hostedMediaRoute).toEqual(
-        expect.objectContaining({
-          path: "/hooks/zalo/media",
-          pluginId: "zalo",
-        }),
-      );
+      expect(hostedMediaRoute?.path).toBe("/hooks/zalo/media");
+      expect(hostedMediaRoute?.pluginId).toBe("zalo");
+      expect(hostedMediaRoute?.source).toBe("zalo-hosted-media");
+      expect(hostedMediaRoute?.handler).toBeTypeOf("function");
 
       const secondRuntime = createRuntimeEnv();
       const secondSetup = createLifecycleMonitorSetup({
@@ -335,9 +343,12 @@ describe("Zalo polling media replies", () => {
 
       firstAbort.abort();
       await firstRun;
-      expect(registry.httpRoutes.filter((route) => route.source === "zalo-hosted-media")).toEqual([
+      expect(registry.httpRoutes.find((route) => route.source === "zalo-hosted-media")).toEqual(
         hostedMediaRoute,
-      ]);
+      );
+      expect(
+        countMatching(registry.httpRoutes, (route) => route.source === "zalo-hosted-media"),
+      ).toBe(1);
 
       await writeHostedZaloMediaFixture({
         id: "def456def456def456def456",

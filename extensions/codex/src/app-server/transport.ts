@@ -1,6 +1,6 @@
 export type CodexAppServerTransport = {
   stdin: {
-    write: (data: string) => unknown;
+    write: (data: string, callback?: (error?: Error | null) => void) => unknown;
     end?: () => unknown;
     destroy?: () => unknown;
     unref?: () => unknown;
@@ -28,11 +28,8 @@ export function closeCodexAppServerTransport(
   child: CodexAppServerTransport,
   options: { forceKillDelayMs?: number } = {},
 ): void {
-  child.stdout.destroy?.();
-  child.stderr.destroy?.();
   child.stdin.end?.();
   child.stdin.destroy?.();
-  signalCodexAppServerTransport(child, "SIGTERM");
   const forceKillDelayMs = options.forceKillDelayMs ?? 1_000;
   const forceKill = setTimeout(
     () => {
@@ -44,7 +41,11 @@ export function closeCodexAppServerTransport(
     Math.max(1, forceKillDelayMs),
   );
   forceKill.unref?.();
-  child.once("exit", () => clearTimeout(forceKill));
+  child.once("exit", () => {
+    clearTimeout(forceKill);
+    child.stdout.destroy?.();
+    child.stderr.destroy?.();
+  });
   child.unref?.();
   child.stdout.unref?.();
   child.stderr.unref?.();
@@ -95,7 +96,6 @@ async function waitForCodexAppServerTransportExit(
       },
       Math.max(1, timeoutMs),
     );
-    timeout.unref?.();
     child.once("exit", onExit);
   });
 }

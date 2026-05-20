@@ -41,7 +41,7 @@ type OpenAIResponsesEndpointClass =
   | "custom"
   | "invalid";
 
-export type OpenAIResponsesPayloadPolicy = {
+type OpenAIResponsesPayloadPolicy = {
   allowsServiceTier: boolean;
   compactThreshold: number;
   explicitStore: boolean | undefined;
@@ -169,7 +169,6 @@ function resolveBundledOpenAIResponsesEndpointClass(
     case "aiplatform.googleapis.com":
       return "google-vertex";
     case "api.x.ai":
-    case "api.grok.x.ai":
       return "xai-native";
     case "api.z.ai":
       return "zai-native";

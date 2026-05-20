@@ -12,6 +12,15 @@ export type AgentModelConfig =
       primary?: string;
       /** Per-agent model fallbacks (provider/model). */
       fallbacks?: string[];
+    };
+
+export type AgentToolModelConfig =
+  | string
+  | {
+      /** Primary model (provider/model). */
+      primary?: string;
+      /** Per-tool model fallbacks (provider/model). */
+      fallbacks?: string[];
       /** Optional provider request timeout in milliseconds for capabilities that support it. */
       timeoutMs?: number;
     };
@@ -19,15 +28,11 @@ export type AgentModelConfig =
 export type AgentEmbeddedHarnessConfig = {
   /** Agent runtime id. Omitted uses "pi"; "auto" opts into plugin harness auto-selection. */
   runtime?: string;
-  /** Fallback when no plugin harness matches or an auto-selected plugin harness fails. */
-  fallback?: "pi" | "none";
 };
 
 export type AgentRuntimePolicyConfig = {
   /** Agent runtime id. Omitted uses "pi"; "auto" opts into plugin harness auto-selection. */
   id?: string;
-  /** Fallback when no plugin harness matches or an auto-selected plugin harness fails. */
-  fallback?: "pi" | "none";
 };
 
 export type AgentSandboxConfig = {

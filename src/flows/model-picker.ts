@@ -1,18 +1,19 @@
-import { ensureAuthProfileStore, listProfilesForProvider } from "../agents/auth-profiles.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { hasUsableCustomProviderApiKey, resolveEnvApiKey } from "../agents/model-auth.js";
+import { resolveVisibleModelCatalog } from "../agents/model-catalog-visibility.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import {
   isModelPickerVisibleModelRef,
   isModelPickerVisibleProvider,
 } from "../agents/model-picker-visibility.js";
+import { createProviderAuthChecker } from "../agents/model-provider-auth.js";
+import { formatLiteralProviderPrefixedModelRef } from "../agents/model-ref-shared.js";
 import {
-  buildAllowedModelSet,
   buildConfiguredModelCatalog,
   buildModelAliasIndex,
   type ModelAliasIndex,
   modelKey,
+  normalizeModelRef,
   normalizeProviderId,
   resolveConfiguredModelRef,
   resolveModelRefFromString,
@@ -20,16 +21,18 @@ import {
 import { loadStaticManifestCatalogRowsForList } from "../commands/models/list.manifest-catalog.js";
 import { formatTokenK } from "../commands/models/shared.js";
 import {
+  normalizeAgentModelMapForConfig,
+  normalizeAgentModelRefForConfig,
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { applyPrimaryModel } from "../plugins/provider-model-primary.js";
 import { resolveOwningPluginIdsForProvider } from "../plugins/providers.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
 
 export { applyPrimaryModel } from "../plugins/provider-model-primary.js";
@@ -38,9 +41,20 @@ const KEEP_VALUE = "__keep__";
 const MANUAL_VALUE = "__manual__";
 const BROWSE_VALUE = "__browse__";
 const PROVIDER_FILTER_THRESHOLD = 30;
+const EMPTY_LITERAL_PREFIX_PROVIDERS = new Set<string>();
 
 // Internal router models are valid defaults during auth/setup but not manual API targets.
 const HIDDEN_ROUTER_MODELS = new Set(["openrouter/auto"]);
+
+function formatKeepCurrentModelLabel(params: {
+  configuredRaw?: string;
+  configuredLabel: string;
+  resolvedKey: string;
+}): string {
+  return params.configuredRaw
+    ? t("wizard.model.keepCurrent", { value: params.configuredLabel })
+    : t("wizard.model.keepCurrentDefault", { value: params.resolvedKey });
+}
 
 export type PromptDefaultModelParams = {
   config: OpenClawConfig;
@@ -70,42 +84,6 @@ const loadResolvedModelPickerRuntime = createLazyRuntimeSurface(
   loadModelPickerRuntime,
   ({ modelPickerRuntime }) => modelPickerRuntime,
 );
-
-function hasAuthForProvider(
-  provider: string,
-  cfg: OpenClawConfig,
-  store: ReturnType<typeof ensureAuthProfileStore>,
-) {
-  if (listProfilesForProvider(store, provider).length > 0) {
-    return true;
-  }
-  if (resolveEnvApiKey(provider)) {
-    return true;
-  }
-  if (hasUsableCustomProviderApiKey(cfg, provider)) {
-    return true;
-  }
-  return false;
-}
-
-function createProviderAuthChecker(params: {
-  cfg: OpenClawConfig;
-  agentDir?: string;
-}): (provider: string) => boolean {
-  const authStore = ensureAuthProfileStore(params.agentDir, {
-    allowKeychainPrompt: false,
-  });
-  const authCache = new Map<string, boolean>();
-  return (provider: string) => {
-    const cached = authCache.get(provider);
-    if (cached !== undefined) {
-      return cached;
-    }
-    const value = hasAuthForProvider(provider, params.cfg, authStore);
-    authCache.set(provider, value);
-    return value;
-  };
-}
 
 function resolveConfiguredModelRaw(cfg: OpenClawConfig): string {
   return resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model) ?? "";
@@ -156,7 +134,7 @@ function normalizeModelKeys(values: string[]): string[] {
   const seen = new Set<string>();
   const next: string[] = [];
   for (const raw of values) {
-    const value = raw.trim();
+    const value = normalizeAgentModelRefForConfig(raw);
     if (!value || seen.has(value)) {
       continue;
     }
@@ -211,12 +189,45 @@ function resolveFallbackModelKeys(params: {
 function resolveModelRouteHint(provider: string): string | undefined {
   const normalized = normalizeProviderId(provider);
   if (normalized === "openai") {
-    return "API key route";
+    return "Codex runtime route";
   }
   if (normalized === "openai-codex") {
-    return "ChatGPT OAuth route";
+    return "legacy Codex OAuth route";
   }
   return undefined;
+}
+
+async function resolveLiteralPrefixProviderIds(params: {
+  cfg: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<Set<string>> {
+  const { resolvePluginProviders } = await loadResolvedModelPickerRuntime();
+  const providers = resolvePluginProviders({
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    activate: false,
+    cache: false,
+    includeUntrustedWorkspacePlugins: false,
+  });
+  const ids = new Set<string>();
+  for (const provider of providers) {
+    if (!provider.preserveLiteralProviderPrefix) {
+      continue;
+    }
+    const id = normalizeProviderId(provider.id);
+    if (id) {
+      ids.add(id);
+    }
+    for (const alias of provider.aliases ?? []) {
+      const aliasId = normalizeProviderId(alias);
+      if (aliasId) {
+        ids.add(aliasId);
+      }
+    }
+  }
+  return ids;
 }
 
 function addModelSelectOption(params: {
@@ -231,12 +242,14 @@ function addModelSelectOption(params: {
   seen: Set<string>;
   aliasIndex: ReturnType<typeof buildModelAliasIndex>;
   hasAuth: (provider: string) => boolean;
+  literalPrefixProviders: Set<string>;
 }) {
-  const key = modelKey(params.entry.provider, params.entry.id);
+  const normalizedRef = normalizeModelRef(params.entry.provider, params.entry.id);
+  const key = modelKey(normalizedRef.provider, normalizedRef.model);
   if (
     params.seen.has(key) ||
     HIDDEN_ROUTER_MODELS.has(key) ||
-    !isModelPickerVisibleProvider(params.entry.provider)
+    !isModelPickerVisibleProvider(normalizedRef.provider)
   ) {
     return;
   }
@@ -254,16 +267,19 @@ function addModelSelectOption(params: {
   if (aliases?.length) {
     hints.push(`alias: ${aliases.join(", ")}`);
   }
-  const routeHint = resolveModelRouteHint(params.entry.provider);
+  const routeHint = resolveModelRouteHint(normalizedRef.provider);
   if (routeHint) {
     hints.push(routeHint);
   }
-  if (!params.hasAuth(params.entry.provider)) {
-    hints.push("auth missing");
+  if (!params.hasAuth(normalizedRef.provider)) {
+    return;
   }
+  const label = params.literalPrefixProviders.has(normalizeProviderId(normalizedRef.provider))
+    ? formatLiteralProviderPrefixedModelRef(normalizedRef.provider, key)
+    : key;
   params.options.push({
     value: key,
-    label: key,
+    label,
     hint: hints.length > 0 ? hints.join(" · ") : undefined,
   });
   params.seen.add(key);
@@ -286,6 +302,7 @@ function addModelKeySelectOption(params: {
   seen: Set<string>;
   aliasIndex: ReturnType<typeof buildModelAliasIndex>;
   hasAuth: (provider: string) => boolean;
+  literalPrefixProviders?: Set<string>;
   fallbackHint: string;
 }) {
   const entry = splitModelKey(params.key);
@@ -299,6 +316,7 @@ function addModelKeySelectOption(params: {
     seen: params.seen,
     aliasIndex: params.aliasIndex,
     hasAuth: params.hasAuth,
+    literalPrefixProviders: params.literalPrefixProviders ?? EMPTY_LITERAL_PREFIX_PROVIDERS,
   });
   if (params.seen.size > before) {
     const option = params.options.at(-1);
@@ -353,18 +371,20 @@ async function promptManualModel(params: {
   initialValue?: string;
 }): Promise<PromptDefaultModelResult> {
   const modelInput = await params.prompter.text({
-    message: params.allowBlank ? "Default model (blank to keep)" : "Default model",
+    message: params.allowBlank
+      ? t("wizard.model.defaultModelBlankToKeep")
+      : t("wizard.model.defaultModel"),
     initialValue: params.initialValue,
     placeholder: "provider/model",
     validate: params.allowBlank
       ? undefined
-      : (value) => (normalizeOptionalString(value) ? undefined : "Required"),
+      : (value) => (normalizeOptionalString(value) ? undefined : t("common.required")),
   });
   const model = (modelInput ?? "").trim();
   if (!model) {
     return {};
   }
-  return { model };
+  return { model: normalizeAgentModelRefForConfig(model) };
 }
 
 function buildModelProviderFilterOptions(
@@ -378,7 +398,7 @@ function buildModelProviderFilterOptions(
     return {
       value: provider,
       label: provider,
-      hint: `${count} model${count === 1 ? "" : "s"}`,
+      hint: t("wizard.model.modelCount", { count, plural: count === 1 ? "" : "s" }),
     };
   });
 }
@@ -414,8 +434,11 @@ async function maybeFilterModelsByProvider(params: {
     : undefined;
   if (shouldPromptProvider) {
     const selection = await params.prompter.select({
-      message: "Filter models by provider",
-      options: [{ value: "*", label: "All providers" }, ...buildModelProviderFilterOptions(next)],
+      message: t("wizard.model.filterByProvider"),
+      options: [
+        { value: "*", label: t("wizard.model.allProviders") },
+        ...buildModelProviderFilterOptions(next),
+      ],
       searchable: true,
     });
     if (selection !== "*") {
@@ -492,8 +515,8 @@ async function maybeHandleProviderPluginSelection(params: {
   }
   if (!params.agentDir || !params.runtime) {
     await params.prompter.note(
-      "Provider setup requires agent and runtime context.",
-      "Provider setup unavailable",
+      t("wizard.model.providerSetupUnavailable"),
+      t("wizard.model.providerSetupUnavailableTitle"),
     );
     return {};
   }
@@ -563,35 +586,56 @@ export async function promptDefaultModel(
   });
   const resolvedKey = modelKey(resolved.provider, resolved.model);
   const configuredKey = configuredRaw ? resolvedKey : "";
+  let literalPrefixProvidersCache: Set<string> | undefined;
+  const resolveCachedLiteralPrefixProviders = async () => {
+    if (!literalPrefixProvidersCache) {
+      literalPrefixProvidersCache = await resolveLiteralPrefixProviderIds({
+        cfg,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+      });
+    }
+    return literalPrefixProvidersCache;
+  };
+  const resolveConfiguredDisplayLabel = async () => {
+    const providerId = normalizeProviderId(resolved.provider);
+    if (!providerId) {
+      return configuredRaw || resolvedKey;
+    }
+    const literalPrefixProviders = await resolveCachedLiteralPrefixProviders();
+    return literalPrefixProviders.has(providerId)
+      ? formatLiteralProviderPrefixedModelRef(resolved.provider, resolvedKey)
+      : configuredRaw || resolvedKey;
+  };
 
   if (
     loadCatalog &&
     browseCatalogOnDemand &&
-    preferredProvider &&
     allowKeep &&
-    normalizeProviderId(resolved.provider) === preferredProvider
+    (!preferredProvider || normalizeProviderId(resolved.provider) === preferredProvider)
   ) {
+    const configuredLabel = await resolveConfiguredDisplayLabel();
     const options: WizardSelectOption[] = [
       {
         value: KEEP_VALUE,
-        label: configuredRaw
-          ? `Keep current (${configuredRaw})`
-          : `Keep current (default: ${resolvedKey})`,
+        label: formatKeepCurrentModelLabel({ configuredRaw, configuredLabel, resolvedKey }),
         hint:
-          configuredRaw && configuredRaw !== resolvedKey ? `resolves to ${resolvedKey}` : undefined,
+          configuredRaw && configuredRaw !== resolvedKey
+            ? t("wizard.model.resolvesTo", { value: resolvedKey })
+            : undefined,
       },
     ];
     if (includeManual) {
-      options.push({ value: MANUAL_VALUE, label: "Enter model manually" });
+      options.push({ value: MANUAL_VALUE, label: t("wizard.model.enterManually") });
     }
     options.push({
       value: BROWSE_VALUE,
-      label: "Browse all models",
-      hint: "loads provider catalogs",
+      label: t("wizard.model.browseAll"),
+      hint: t("wizard.model.loadsProviderCatalogs"),
     });
 
     const selection = await params.prompter.select({
-      message: params.message ?? "Default model",
+      message: params.message ?? t("wizard.model.defaultModel"),
       options,
       initialValue: KEEP_VALUE,
       searchable: false,
@@ -612,25 +656,26 @@ export async function promptDefaultModel(
   }
 
   if (!loadCatalog) {
+    const configuredLabel = await resolveConfiguredDisplayLabel();
     const options: WizardSelectOption[] = [];
     if (allowKeep) {
       options.push({
         value: KEEP_VALUE,
-        label: configuredRaw
-          ? `Keep current (${configuredRaw})`
-          : `Keep current (default: ${resolvedKey})`,
+        label: formatKeepCurrentModelLabel({ configuredRaw, configuredLabel, resolvedKey }),
         hint:
-          configuredRaw && configuredRaw !== resolvedKey ? `resolves to ${resolvedKey}` : undefined,
+          configuredRaw && configuredRaw !== resolvedKey
+            ? t("wizard.model.resolvesTo", { value: resolvedKey })
+            : undefined,
       });
     }
     if (includeManual) {
-      options.push({ value: MANUAL_VALUE, label: "Enter model manually" });
+      options.push({ value: MANUAL_VALUE, label: t("wizard.model.enterManually") });
     }
     if (configuredKey && !options.some((option) => option.value === configuredKey)) {
       options.push({
         value: configuredKey,
         label: configuredKey,
-        hint: "current",
+        hint: t("wizard.model.current"),
       });
     }
     if (options.length === 0) {
@@ -641,7 +686,7 @@ export async function promptDefaultModel(
       });
     }
     const selection = await params.prompter.select({
-      message: params.message ?? "Default model",
+      message: params.message ?? t("wizard.model.defaultModel"),
       options,
       initialValue: allowKeep ? KEEP_VALUE : configuredKey || MANUAL_VALUE,
       searchable: false,
@@ -659,7 +704,7 @@ export async function promptDefaultModel(
     return { model: selection };
   }
 
-  const catalogProgress = params.prompter.progress("Loading available models");
+  const catalogProgress = params.prompter.progress(t("wizard.model.loadingModels"));
   let catalog: Awaited<ReturnType<typeof loadModelCatalog>>;
   try {
     catalog = await loadPickerModelCatalog(cfg);
@@ -680,14 +725,15 @@ export async function promptDefaultModel(
   });
   const models = ignoreAllowlist
     ? catalog
-    : (() => {
-        const { allowedCatalog } = buildAllowedModelSet({
-          cfg,
-          catalog,
-          defaultProvider: DEFAULT_PROVIDER,
-        });
-        return allowedCatalog.length > 0 ? allowedCatalog : catalog;
-      })();
+    : resolveVisibleModelCatalog({
+        cfg,
+        catalog,
+        defaultProvider: DEFAULT_PROVIDER,
+        defaultModel: resolved.model,
+        agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+      });
   if (models.length === 0) {
     return promptManualModel({
       prompter: params.prompter,
@@ -722,21 +768,30 @@ export async function promptDefaultModel(
   const hasPreferredProvider = preferredProvider
     ? filteredModels.some((entry) => matchesPreferredProvider?.(entry.provider))
     : false;
-  const hasAuth = createProviderAuthChecker({ cfg, agentDir: params.agentDir });
+  const hasAuth = createProviderAuthChecker({
+    cfg,
+    workspaceDir: params.workspaceDir,
+    agentDir: params.agentDir,
+    env: params.env,
+  });
+  const literalPrefixProviders = await resolveCachedLiteralPrefixProviders();
+
+  // Show the literal form (e.g. nvidia/nvidia/...) in the "Keep current" label
+  // for providers that set preserveLiteralProviderPrefix, so the user sees the
+  // same ref they'll pick from the catalog rows. Config itself stays canonical.
+  const configuredLabel = literalPrefixProviders.has(normalizeProviderId(resolved.provider))
+    ? formatLiteralProviderPrefixedModelRef(resolved.provider, resolvedKey)
+    : configuredRaw || resolvedKey;
 
   const options: WizardSelectOption[] = [];
   if (allowKeep) {
     options.push({
       value: KEEP_VALUE,
-      label: configuredRaw
-        ? `Keep current (${configuredRaw})`
-        : `Keep current (default: ${resolvedKey})`,
-      hint:
-        configuredRaw && configuredRaw !== resolvedKey ? `resolves to ${resolvedKey}` : undefined,
+      label: formatKeepCurrentModelLabel({ configuredRaw, configuredLabel, resolvedKey }),
     });
   }
   if (includeManual) {
-    options.push({ value: MANUAL_VALUE, label: "Enter model manually" });
+    options.push({ value: MANUAL_VALUE, label: t("wizard.model.enterManually") });
   }
   if (includeProviderPluginSetups && params.agentDir) {
     options.push(
@@ -750,13 +805,20 @@ export async function promptDefaultModel(
 
   const seen = new Set<string>();
   for (const entry of filteredModels) {
-    addModelSelectOption({ entry, options, seen, aliasIndex, hasAuth });
+    addModelSelectOption({
+      entry,
+      options,
+      seen,
+      aliasIndex,
+      hasAuth,
+      literalPrefixProviders,
+    });
   }
   if (configuredKey && !seen.has(configuredKey)) {
     options.push({
       value: configuredKey,
-      label: configuredKey,
-      hint: "current (not in catalog)",
+      label: configuredLabel,
+      hint: t("wizard.model.currentNotInCatalog"),
     });
   }
 
@@ -774,7 +836,7 @@ export async function promptDefaultModel(
   }
 
   const selection = await params.prompter.select({
-    message: params.message ?? "Default model",
+    message: params.message ?? t("wizard.model.defaultModel"),
     options,
     initialValue,
     searchable: true,
@@ -804,7 +866,7 @@ export async function promptDefaultModel(
     return providerPluginResult;
   }
 
-  const model = selectedValue;
+  const model = normalizeAgentModelRefForConfig(selectedValue);
   const { runProviderModelSelectedHook } = await loadResolvedModelPickerRuntime();
   await runProviderModelSelectedHook({
     config: cfg,
@@ -822,6 +884,8 @@ export async function promptModelAllowlist(params: {
   prompter: WizardPrompter;
   message?: string;
   agentDir?: string;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
   allowedKeys?: string[];
   initialSelections?: string[];
   preferredProvider?: string;
@@ -870,7 +934,12 @@ export async function promptModelAllowlist(params: {
     fallbackKeys.length > 0 ||
     (params.initialSelections?.length ?? 0) > 0 ||
     configuredRaw.length > 0;
-  const hasAuth = createProviderAuthChecker({ cfg, agentDir: params.agentDir });
+  const hasAuth = createProviderAuthChecker({
+    cfg,
+    workspaceDir: params.workspaceDir,
+    agentDir: params.agentDir,
+    env: params.env,
+  });
   const matchesPreferredProvider = preferredProvider
     ? createPreferredProviderMatcher({
         preferredProvider,
@@ -901,14 +970,15 @@ export async function promptModelAllowlist(params: {
         seen,
         aliasIndex,
         hasAuth,
-        fallbackHint: allowedKeys.length > 0 ? "allowed" : "configured",
+        fallbackHint:
+          allowedKeys.length > 0 ? t("wizard.model.allowed") : t("wizard.model.configured"),
       });
     }
     if (options.length === 0) {
       return {};
     }
     const selection = await params.prompter.multiselect({
-      message: params.message ?? "Models in /model picker (multi-select)",
+      message: params.message ?? t("wizard.model.allowlistPicker"),
       options,
       initialValues: initialKeys.length > 0 ? initialKeys : undefined,
       searchable: true,
@@ -918,7 +988,7 @@ export async function promptModelAllowlist(params: {
       return { models: selected, scopeKeys };
     }
     const confirmScopedClear = await params.prompter.confirm({
-      message: "Remove these provider models from the /model picker?",
+      message: t("wizard.model.removeProviderModels"),
       initialValue: false,
     });
     if (!confirmScopedClear) {
@@ -931,7 +1001,7 @@ export async function promptModelAllowlist(params: {
     return {};
   }
 
-  const allowlistProgress = params.prompter.progress("Loading available models");
+  const allowlistProgress = params.prompter.progress(t("wizard.model.loadingModels"));
   let catalog: Awaited<ReturnType<typeof loadModelCatalog>>;
   try {
     catalog = await loadPickerModelCatalog(cfg, { preferredProvider });
@@ -954,9 +1024,7 @@ export async function promptModelAllowlist(params: {
     const noCatalogInitialKeys =
       existingKeys.length > 0 ? normalizeModelKeys([...existingKeys, ...fallbackKeys]) : [];
     const raw = await params.prompter.text({
-      message:
-        params.message ??
-        "Allowlist models (comma-separated provider/model; blank to keep current)",
+      message: params.message ?? t("wizard.model.allowlistText"),
       initialValue: noCatalogInitialKeys.join(", "),
       placeholder: "provider/model, other-provider/model",
     });
@@ -969,6 +1037,12 @@ export async function promptModelAllowlist(params: {
     }
     return { models: normalizeModelKeys(parsed) };
   }
+
+  const literalPrefixProviders = await resolveLiteralPrefixProviderIds({
+    cfg,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
 
   const options: WizardSelectOption[] = [];
   const seen = new Set<string>();
@@ -997,7 +1071,14 @@ export async function promptModelAllowlist(params: {
     : selectableInitialSeeds.filter(isModelPickerVisibleModelRef);
 
   for (const entry of filteredCatalog) {
-    addModelSelectOption({ entry, options, seen, aliasIndex, hasAuth });
+    addModelSelectOption({
+      entry,
+      options,
+      seen,
+      aliasIndex,
+      hasAuth,
+      literalPrefixProviders,
+    });
   }
 
   const supplementalKeys = (allowedKeySet ? allowedKeys : selectableInitialSeeds).filter(
@@ -1010,7 +1091,9 @@ export async function promptModelAllowlist(params: {
     options.push({
       value: key,
       label: key,
-      hint: allowedKeySet ? "allowed (not in catalog)" : "configured (not in catalog)",
+      hint: allowedKeySet
+        ? t("wizard.model.allowedNotInCatalog")
+        : t("wizard.model.configuredNotInCatalog"),
     });
     seen.add(key);
   }
@@ -1019,7 +1102,7 @@ export async function promptModelAllowlist(params: {
   }
 
   const selection = await params.prompter.multiselect({
-    message: params.message ?? "Models in /model picker (multi-select)",
+    message: params.message ?? t("wizard.model.allowlistPicker"),
     options,
     initialValues: initialKeys.length > 0 ? initialKeys : undefined,
     searchable: true,
@@ -1030,7 +1113,7 @@ export async function promptModelAllowlist(params: {
   }
   if (scopeKeys) {
     const confirmScopedClear = await params.prompter.confirm({
-      message: "Remove these provider models from the /model picker?",
+      message: t("wizard.model.removeProviderModels"),
       initialValue: false,
     });
     if (!confirmScopedClear) {
@@ -1042,7 +1125,7 @@ export async function promptModelAllowlist(params: {
     return { models: [] };
   }
   const confirmClear = await params.prompter.confirm({
-    message: "Clear the model allowlist? (shows all models)",
+    message: t("wizard.model.clearAllowlist"),
     initialValue: false,
   });
   if (!confirmClear) {
@@ -1089,7 +1172,7 @@ export function applyModelAllowlist(
     };
   }
 
-  const existingModels = defaults?.models ?? {};
+  const existingModels = normalizeAgentModelMapForConfig(defaults?.models ?? {});
   if (scopeKeySet) {
     const nextModels = { ...existingModels };
     for (const key of scopeKeySet) {
@@ -1158,6 +1241,8 @@ export function applyModelFallbacksFromSelection(
       : existingModel && typeof existingModel === "object"
         ? existingModel.primary
         : undefined;
+  const normalizedExistingPrimary =
+    existingPrimary != null ? normalizeAgentModelRefForConfig(existingPrimary) : undefined;
   const preservedModelFields =
     existingModel && typeof existingModel === "object"
       ? (({ fallbacks: _oldFallbacks, ...rest }) => rest)(existingModel)
@@ -1192,7 +1277,7 @@ export function applyModelFallbacksFromSelection(
   });
   const nextModel = {
     ...preservedModelFields,
-    ...(existingPrimary != null ? { primary: existingPrimary } : {}),
+    ...(normalizedExistingPrimary != null ? { primary: normalizedExistingPrimary } : {}),
     ...(fallbacks.length > 0 ? { fallbacks } : {}),
   };
   if (Object.keys(nextModel).length === 0) {

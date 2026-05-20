@@ -131,6 +131,16 @@ const knownDeprecatedSurfaceMarkers = [
     marker: "@deprecated Broad compatibility barrel",
   },
   {
+    code: "legacy-root-sdk-import",
+    file: "src/plugin-sdk/compat.ts",
+    marker: "@deprecated Use `openclaw/plugin-sdk/channel-message`.",
+  },
+  {
+    code: "legacy-deactivate-hook-alias",
+    file: "src/plugins/hook-types.ts",
+    marker: "@deprecated Use gateway_stop",
+  },
+  {
     code: "channel-route-key-aliases",
     file: "src/plugin-sdk/channel-route.ts",
     marker: "channelRouteIdentityKey",
@@ -150,6 +160,13 @@ function addUtcMonths(date: Date, months: number): Date {
   const next = new Date(date);
   next.setUTCMonth(next.getUTCMonth() + months);
   return next;
+}
+
+function expectNonEmptyStringList(values: readonly string[], label: string) {
+  expect(values, label).toEqual([expect.stringMatching(/\S/u), ...values.slice(1)]);
+  for (const value of values) {
+    expect(value, label).toMatch(/\S/u);
+  }
 }
 
 describe("plugin compatibility registry", () => {
@@ -174,7 +191,7 @@ describe("plugin compatibility registry", () => {
       const maxRemoveAfter = addUtcMonths(parseDate(record.warningStarts), 3);
       const removeAfter = parseDate(record.removeAfter);
       expect(removeAfter <= maxRemoveAfter, record.code).toBe(true);
-      expect(record.replacement, record.code).toBeTruthy();
+      expect(record.replacement, record.code).toMatch(/\S/u);
       expect(record.docsPath, record.code).toMatch(/^\//u);
     }
   });
@@ -183,9 +200,9 @@ describe("plugin compatibility registry", () => {
     for (const record of listPluginCompatRecords()) {
       expect(record.introduced, record.code).toMatch(datePattern);
       expect(record.docsPath, record.code).toMatch(/^\//u);
-      expect(record.surfaces.length, record.code).toBeGreaterThan(0);
-      expect(record.diagnostics.length, record.code).toBeGreaterThan(0);
-      expect(record.tests.length, record.code).toBeGreaterThan(0);
+      expectNonEmptyStringList(record.surfaces, `${record.code}: surfaces`);
+      expectNonEmptyStringList(record.diagnostics, `${record.code}: diagnostics`);
+      expectNonEmptyStringList(record.tests, `${record.code}: tests`);
       for (const testPath of record.tests) {
         expect(fs.existsSync(testPath), `${record.code}: ${testPath}`).toBe(true);
       }

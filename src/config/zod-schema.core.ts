@@ -1,5 +1,6 @@
 import path from "node:path";
 import { z } from "zod";
+import { normalizeProviderId } from "../agents/provider-id.js";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
 import {
   formatExecSecretRefIdValidationMessage,
@@ -182,9 +183,9 @@ export const SecretsConfigSchema = z
   .strict()
   .optional();
 
-export const ModelApiSchema = z.enum(MODEL_APIS);
+const ModelApiSchema = z.enum(MODEL_APIS);
 
-export const ModelCompatSchema = z
+const ModelCompatSchema = z
   .object({
     supportsStore: z.boolean().optional(),
     supportsPromptCacheKey: z.boolean().optional(),
@@ -194,6 +195,7 @@ export const ModelCompatSchema = z
     supportsTools: z.boolean().optional(),
     supportsStrictMode: z.boolean().optional(),
     requiresStringContent: z.boolean().optional(),
+    strictMessageKeys: z.boolean().optional(),
     visibleReasoningDetailTypes: z.array(z.string().min(1)).optional(),
     supportedReasoningEfforts: z.array(z.string().min(1)).optional(),
     reasoningEffortMap: z.record(z.string().min(1), z.string().min(1)).optional(),
@@ -205,6 +207,9 @@ export const ModelCompatSchema = z
         z.literal("openai"),
         z.literal("openrouter"),
         z.literal("deepseek"),
+        z.literal("together"),
+        z.literal("qwen"),
+        z.literal("qwen-chat-template"),
         z.literal("zai"),
       ])
       .optional(),
@@ -222,11 +227,11 @@ export const ModelCompatSchema = z
   .optional();
 
 type AssertAssignable<_T extends U, U> = true;
-type _ModelCompatSchemaAssignableToType = AssertAssignable<
+export type _ModelCompatSchemaAssignableToType = AssertAssignable<
   z.infer<typeof ModelCompatSchema>,
   ModelCompatConfig | undefined
 >;
-type _ModelCompatTypeAssignableToSchema = AssertAssignable<
+export type _ModelCompatTypeAssignableToSchema = AssertAssignable<
   ModelCompatConfig | undefined,
   z.infer<typeof ModelCompatSchema>
 >;
@@ -305,7 +310,14 @@ const ConfiguredModelProviderRequestSchema = z
   .strict()
   .optional();
 
-export const ModelDefinitionSchema = z
+const ModelAgentRuntimePolicySchema = z
+  .object({
+    id: z.string().optional(),
+  })
+  .strict()
+  .optional();
+
+const ModelDefinitionSchema = z
   .object({
     id: z.string().min(1),
     name: z.string().min(1),
@@ -343,15 +355,97 @@ export const ModelDefinitionSchema = z
     contextTokens: z.number().int().positive().optional(),
     maxTokens: z.number().positive().optional(),
     params: z.record(z.string(), z.unknown()).optional(),
+    agentRuntime: ModelAgentRuntimePolicySchema,
     headers: z.record(z.string(), z.string()).optional(),
     compat: ModelCompatSchema,
     metadataSource: z.literal("models-add").optional(),
   })
   .strict();
 
-export const ModelProviderSchema = z
+const ModelProviderLocalServiceSchema = z
   .object({
-    baseUrl: z.string().min(1),
+    command: z.string().min(1),
+    args: z.array(z.string()).optional(),
+    cwd: z.string().min(1).optional(),
+    env: z.record(z.string(), z.string().register(sensitive)).optional(),
+    healthUrl: z.string().min(1).optional(),
+    readyTimeoutMs: z.number().int().positive().optional(),
+    idleStopMs: z.number().int().nonnegative().optional(),
+  })
+  .strict()
+  .optional();
+
+const BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS = new Set([
+  "amazon-bedrock",
+  "amazon-bedrock-mantle",
+  "anthropic",
+  "anthropic-vertex",
+  "arcee",
+  "byteplus",
+  "byteplus-plan",
+  "cerebras",
+  "chutes",
+  "cloudflare-ai-gateway",
+  "codex",
+  "comfy",
+  "copilot-proxy",
+  "dashscope",
+  "deepinfra",
+  "deepseek",
+  "fal",
+  "fireworks",
+  "github-copilot",
+  "google",
+  "google-antigravity",
+  "google-gemini-cli",
+  "google-vertex",
+  "groq",
+  "huggingface",
+  "kilocode",
+  "kimi",
+  "kimi-coding",
+  "litellm",
+  "lmstudio",
+  "microsoft-foundry",
+  "minimax",
+  "minimax-portal",
+  "mistral",
+  "modelstudio",
+  "moonshot",
+  "nvidia",
+  "ollama",
+  "openai",
+  "openai-codex",
+  "opencode",
+  "opencode-go",
+  "openrouter",
+  "qianfan",
+  "qwen",
+  "qwencloud",
+  "sglang",
+  "stepfun",
+  "stepfun-plan",
+  "synthetic",
+  "tencent-tokenhub",
+  "together",
+  "venice",
+  "vercel-ai-gateway",
+  "vllm",
+  "volcengine",
+  "volcengine-plan",
+  "vydra",
+  "xai",
+  "xiaomi",
+  "zai",
+]);
+
+export function isBuiltInModelProviderOverlayId(providerId: string): boolean {
+  return BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS.has(normalizeProviderId(providerId));
+}
+
+const ModelProviderSchema = z
+  .object({
+    baseUrl: z.string().min(1).optional(),
     apiKey: SecretInputSchema.optional().register(sensitive),
     auth: z
       .union([z.literal("api-key"), z.literal("aws-sdk"), z.literal("oauth"), z.literal("token")])
@@ -362,24 +456,41 @@ export const ModelProviderSchema = z
     maxTokens: z.number().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     injectNumCtxForOpenAICompat: z.boolean().optional(),
+    params: z.record(z.string(), z.unknown()).optional(),
+    agentRuntime: ModelAgentRuntimePolicySchema,
+    localService: ModelProviderLocalServiceSchema,
     headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
     authHeader: z.boolean().optional(),
     request: ConfiguredModelProviderRequestSchema,
-    models: z.array(ModelDefinitionSchema),
+    models: z.array(ModelDefinitionSchema).optional(),
   })
   .strict();
 
-export const BedrockDiscoverySchema = z
-  .object({
-    enabled: z.boolean().optional(),
-    region: z.string().optional(),
-    providerFilter: z.array(z.string()).optional(),
-    refreshInterval: z.number().int().nonnegative().optional(),
-    defaultContextWindow: z.number().int().positive().optional(),
-    defaultMaxTokens: z.number().int().positive().optional(),
-  })
-  .strict()
-  .optional();
+const ModelProvidersSchema = z
+  .record(z.string(), ModelProviderSchema)
+  .superRefine((providers, ctx) => {
+    for (const [providerId, provider] of Object.entries(providers)) {
+      if (isBuiltInModelProviderOverlayId(providerId)) {
+        continue;
+      }
+      if (!provider.baseUrl) {
+        ctx.addIssue({
+          code: "custom",
+          path: [providerId, "baseUrl"],
+          message:
+            "custom model providers must declare baseUrl; provider overlays without baseUrl are only supported for bundled providers",
+        });
+      }
+      if (!Array.isArray(provider.models)) {
+        ctx.addIssue({
+          code: "custom",
+          path: [providerId, "models"],
+          message:
+            "custom model providers must declare models; provider overlays without models are only supported for bundled providers",
+        });
+      }
+    }
+  });
 
 const ModelPricingConfigSchema = z
   .object({
@@ -391,17 +502,33 @@ const ModelPricingConfigSchema = z
 export const ModelsConfigSchema = z
   .object({
     mode: z.union([z.literal("merge"), z.literal("replace")]).optional(),
-    providers: z.record(z.string(), ModelProviderSchema).optional(),
+    providers: ModelProvidersSchema.optional(),
     pricing: ModelPricingConfigSchema,
   })
   .strict()
   .optional();
 
+const VisibleRepliesValueSchema = z.enum(["automatic", "message_tool"]);
+const AmbientGroupInboundSchema = z.enum(["user_request", "room_event"]);
+
+export const VisibleRepliesSchema = z
+  .union([VisibleRepliesValueSchema, z.boolean()])
+  .overwrite((value) => {
+    if (value === true) {
+      return "automatic";
+    }
+    if (value === false) {
+      return "message_tool";
+    }
+    return value;
+  });
+
 export const GroupChatSchema = z
   .object({
     mentionPatterns: z.array(z.string()).optional(),
     historyLimit: z.number().int().positive().optional(),
-    visibleReplies: z.enum(["automatic", "message_tool"]).optional(),
+    unmentionedInbound: AmbientGroupInboundSchema.optional(),
+    visibleReplies: VisibleRepliesSchema.optional(),
   })
   .strict()
   .optional();
@@ -422,20 +549,13 @@ export const IdentitySchema = z
   .strict()
   .optional();
 
-export const QueueModeSchema = z.union([
+const QueueModeSchema = z.union([
   z.literal("steer"),
   z.literal("followup"),
   z.literal("collect"),
-  z.literal("steer-backlog"),
-  z.literal("steer+backlog"),
-  z.literal("queue"),
   z.literal("interrupt"),
 ]);
-export const QueueDropSchema = z.union([
-  z.literal("old"),
-  z.literal("new"),
-  z.literal("summarize"),
-]);
+const QueueDropSchema = z.union([z.literal("old"), z.literal("new"), z.literal("summarize")]);
 export const ReplyToModeSchema = z.union([
   z.literal("off"),
   z.literal("first"),
@@ -586,6 +706,19 @@ const CliBackendWatchdogModeSchema = z
   .strict()
   .optional();
 
+const CliBackendOutputLimitsSchema = z
+  .object({
+    maxTurnRawChars: z
+      .number()
+      .int()
+      .min(1024)
+      .max(64 * 1024 * 1024)
+      .optional(),
+    maxTurnLines: z.number().int().min(100).max(100_000).optional(),
+  })
+  .strict()
+  .optional();
+
 export const CliBackendSchema = z
   .object({
     command: z.string(),
@@ -619,8 +752,10 @@ export const CliBackendSchema = z
     imageMode: z.union([z.literal("repeat"), z.literal("list")]).optional(),
     imagePathScope: z.union([z.literal("temp"), z.literal("workspace")]).optional(),
     serialize: z.boolean().optional(),
+    reseedFromRawTranscriptWhenUncompacted: z.boolean().optional(),
     reliability: z
       .object({
+        outputLimits: CliBackendOutputLimitsSchema,
         watchdog: z
           .object({
             fresh: CliBackendWatchdogModeSchema,
@@ -696,25 +831,25 @@ export const RetryConfigSchema = z
   .strict()
   .optional();
 
-export const QueueModeBySurfaceSchema = z
+const QueueModeBySurfaceSchema = z
   .object({
     whatsapp: QueueModeSchema.optional(),
     telegram: QueueModeSchema.optional(),
     discord: QueueModeSchema.optional(),
     irc: QueueModeSchema.optional(),
+    googlechat: QueueModeSchema.optional(),
     slack: QueueModeSchema.optional(),
     mattermost: QueueModeSchema.optional(),
     signal: QueueModeSchema.optional(),
     imessage: QueueModeSchema.optional(),
     msteams: QueueModeSchema.optional(),
     webchat: QueueModeSchema.optional(),
+    matrix: QueueModeSchema.optional(),
   })
   .strict()
   .optional();
 
-export const DebounceMsBySurfaceSchema = z
-  .record(z.string(), z.number().int().nonnegative())
-  .optional();
+const DebounceMsBySurfaceSchema = z.record(z.string(), z.number().int().nonnegative()).optional();
 
 export const QueueSchema = z
   .object({
@@ -759,13 +894,13 @@ export const ExecutableTokenSchema = z
   .string()
   .refine(isSafeExecutableValue, "expected safe executable name or path");
 
-export const MediaUnderstandingScopeSchema = createAllowDenyChannelRulesSchema();
+const MediaUnderstandingScopeSchema = createAllowDenyChannelRulesSchema();
 
-export const MediaUnderstandingCapabilitiesSchema = z
+const MediaUnderstandingCapabilitiesSchema = z
   .array(z.union([z.literal("image"), z.literal("audio"), z.literal("video")]))
   .optional();
 
-export const MediaUnderstandingAttachmentsSchema = z
+const MediaUnderstandingAttachmentsSchema = z
   .object({
     mode: z.union([z.literal("first"), z.literal("all")]).optional(),
     maxAttachments: z.number().int().positive().optional(),
@@ -801,7 +936,7 @@ const MediaUnderstandingRuntimeFields = {
   request: ConfiguredProviderRequestSchema,
 };
 
-export const MediaUnderstandingModelSchema = z
+const MediaUnderstandingModelSchema = z
   .object({
     provider: z.string().optional(),
     model: z.string().optional(),
@@ -818,7 +953,7 @@ export const MediaUnderstandingModelSchema = z
   .strict()
   .optional();
 
-export const ToolsMediaUnderstandingSchema = z
+const ToolsMediaUnderstandingSchema = z
   .object({
     enabled: z.boolean().optional(),
     scope: MediaUnderstandingScopeSchema,
@@ -851,16 +986,16 @@ export const ToolsMediaSchema = z
   .optional();
 
 type ToolsMediaConfigFromSchema = NonNullable<z.infer<typeof ToolsMediaSchema>>;
-type _ToolsMediaAsyncCompletionSchemaAssignableToType = AssertAssignable<
+export type _ToolsMediaAsyncCompletionSchemaAssignableToType = AssertAssignable<
   ToolsMediaConfigFromSchema["asyncCompletion"],
   MediaToolsConfig["asyncCompletion"]
 >;
-type _ToolsMediaAsyncCompletionTypeAssignableToSchema = AssertAssignable<
+export type _ToolsMediaAsyncCompletionTypeAssignableToSchema = AssertAssignable<
   MediaToolsConfig["asyncCompletion"],
   ToolsMediaConfigFromSchema["asyncCompletion"]
 >;
 
-export const LinkModelSchema = z
+const LinkModelSchema = z
   .object({
     type: z.literal("cli").optional(),
     command: z.string().min(1),

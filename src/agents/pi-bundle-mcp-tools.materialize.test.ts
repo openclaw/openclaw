@@ -1,3 +1,4 @@
+import { validateToolArguments } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import {
@@ -6,6 +7,12 @@ import {
 } from "./pi-bundle-mcp-materialize.js";
 import type { McpCatalogTool } from "./pi-bundle-mcp-types.js";
 import type { SessionMcpRuntime } from "./pi-bundle-mcp-types.js";
+
+function expectTextContentBlock(block: unknown, text: string) {
+  const content = block as { type?: string; text?: string } | undefined;
+  expect(content?.type).toBe("text");
+  expect(content?.text).toBe(text);
+}
 
 function makeToolRuntime(
   params: {
@@ -61,10 +68,7 @@ describe("createBundleMcpToolRuntime", () => {
     expect(runtime.tools.map((tool) => tool.name)).toEqual(["bundleProbe__bundle_probe"]);
     expect(getPluginToolMeta(runtime.tools[0])?.pluginId).toBe("bundle-mcp");
     const result = await runtime.tools[0].execute("call-bundle-probe", {}, undefined, undefined);
-    expect(result.content[0]).toMatchObject({
-      type: "text",
-      text: "FROM-BUNDLE",
-    });
+    expectTextContentBlock(result.content[0], "FROM-BUNDLE");
     expect(result.details).toEqual({
       mcpServer: "bundleProbe",
       mcpTool: "bundle_probe",
@@ -111,10 +115,8 @@ describe("createBundleMcpToolRuntime", () => {
     expect(created).toHaveLength(1);
     expect(created[0].sessionId).toMatch(/^bundle-mcp:/);
     expect(created[0].workspaceDir).toBe("/workspace");
-    expect(created[0].cfg?.mcp?.servers?.configuredProbe).toMatchObject({
-      command: "node",
-      args: ["configured-probe.mjs"],
-    });
+    expect(created[0].cfg?.mcp?.servers?.configuredProbe?.command).toBe("node");
+    expect(created[0].cfg?.mcp?.servers?.configuredProbe?.args).toEqual(["configured-probe.mjs"]);
 
     expect(runtime.tools.map((tool) => tool.name)).toEqual(["configuredProbe__bundle_probe"]);
     const result = await runtime.tools[0].execute(
@@ -123,10 +125,7 @@ describe("createBundleMcpToolRuntime", () => {
       undefined,
       undefined,
     );
-    expect(result.content[0]).toMatchObject({
-      type: "text",
-      text: "FROM-CONFIG",
-    });
+    expectTextContentBlock(result.content[0], "FROM-CONFIG");
     expect(result.details).toEqual({
       mcpServer: "configuredProbe",
       mcpTool: "bundle_probe",
@@ -170,5 +169,73 @@ describe("createBundleMcpToolRuntime", () => {
       "multi__mu",
       "multi__zeta",
     ]);
+  });
+
+  it("normalizes local $ref schemas from MCP tools before exposing them", async () => {
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: makeToolRuntime({
+        tools: [
+          {
+            serverName: "notion",
+            safeServerName: "notion",
+            toolName: "API-post-page",
+            description: "Create a page",
+            inputSchema: {
+              type: "object",
+              required: ["parent"],
+              properties: {
+                parent: { $ref: "#/$defs/parentRequest" },
+              },
+              $defs: {
+                parentRequest: {
+                  oneOf: [
+                    {
+                      type: "object",
+                      required: ["page_id"],
+                      properties: { page_id: { type: "string" } },
+                    },
+                    {
+                      type: "object",
+                      required: ["database_id"],
+                      properties: { database_id: { type: "string" } },
+                    },
+                  ],
+                },
+              },
+            },
+            fallbackDescription: "Create a page",
+          },
+        ],
+      }),
+    });
+
+    expect(runtime.tools[0]?.parameters).toEqual({
+      type: "object",
+      required: ["parent"],
+      properties: {
+        parent: {
+          oneOf: [
+            {
+              type: "object",
+              required: ["page_id"],
+              properties: { page_id: { type: "string" } },
+            },
+            {
+              type: "object",
+              required: ["database_id"],
+              properties: { database_id: { type: "string" } },
+            },
+          ],
+        },
+      },
+    });
+    expect(
+      validateToolArguments(runtime.tools[0], {
+        type: "toolCall",
+        id: "call-page",
+        name: "notion__API-post-page",
+        arguments: { parent: { page_id: "page-id" } },
+      }),
+    ).toEqual({ parent: { page_id: "page-id" } });
   });
 });

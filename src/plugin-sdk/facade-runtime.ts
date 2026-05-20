@@ -1,11 +1,11 @@
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
+import { areBundledPluginsDisabled, resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import {
-  getCachedPluginJitiLoader,
-  type PluginJitiLoaderCache,
-} from "../plugins/jiti-loader-cache.js";
+  getCachedPluginSourceModuleLoader,
+  type PluginModuleLoaderCache,
+} from "../plugins/plugin-module-loader-cache.js";
 import { resolveLoaderPackageRoot } from "../plugins/sdk-alias.js";
 import {
   loadBundledPluginPublicSurfaceModuleSync as loadBundledPluginPublicSurfaceModuleSyncLight,
@@ -74,15 +74,18 @@ function resolveFacadeModuleLocationUncached(params: {
   artifactBasename: string;
   env?: NodeJS.ProcessEnv;
 }): { modulePath: string; boundaryRoot: string } | null {
-  const bundledPluginsDir = resolveBundledPluginsDir(params.env ?? process.env);
-  const bundledLocation = resolveBundledFacadeModuleLocation({
-    ...params,
-    currentModulePath: CURRENT_MODULE_PATH,
-    packageRoot: OPENCLAW_PACKAGE_ROOT,
-    bundledPluginsDir,
-  });
-  if (bundledLocation) {
-    return bundledLocation;
+  const env = params.env ?? process.env;
+  if (!areBundledPluginsDisabled(env)) {
+    const bundledPluginsDir = resolveBundledPluginsDir(env);
+    const bundledLocation = resolveBundledFacadeModuleLocation({
+      ...params,
+      currentModulePath: CURRENT_MODULE_PATH,
+      packageRoot: OPENCLAW_PACKAGE_ROOT,
+      bundledPluginsDir,
+    });
+    if (bundledLocation) {
+      return bundledLocation;
+    }
   }
   return resolveRegistryPluginModuleLocation(params);
 }
@@ -110,16 +113,15 @@ const FACADE_ACTIVATION_CHECK_RUNTIME_CANDIDATES = [
 ] as const;
 
 let facadeActivationCheckRuntimeModule: FacadeActivationCheckRuntimeModule | undefined;
-const facadeActivationCheckRuntimeJitiLoaders: PluginJitiLoaderCache = new Map();
+const facadeActivationCheckRuntimeLoaders: PluginModuleLoaderCache = new Map();
 
-function getFacadeActivationCheckRuntimeJiti(modulePath: string) {
-  return getCachedPluginJitiLoader({
-    cache: facadeActivationCheckRuntimeJitiLoaders,
+function getFacadeActivationCheckRuntimeSourceLoader(modulePath: string) {
+  return getCachedPluginSourceModuleLoader({
+    cache: facadeActivationCheckRuntimeLoaders,
     modulePath,
     importerUrl: import.meta.url,
-    jitiFilename: import.meta.url,
+    loaderFilename: import.meta.url,
     aliasMap: {},
-    tryNative: false,
   });
 }
 
@@ -149,12 +151,16 @@ function loadFacadeActivationCheckRuntime(): FacadeActivationCheckRuntimeModule 
     return facadeActivationCheckRuntimeModule;
   }
   facadeActivationCheckRuntimeModule = loadFacadeActivationCheckRuntimeFromCandidates((candidate) =>
-    getFacadeActivationCheckRuntimeJiti(candidate)(candidate),
+    getFacadeActivationCheckRuntimeSourceLoader(candidate)(candidate),
   );
   if (facadeActivationCheckRuntimeModule) {
     return facadeActivationCheckRuntimeModule;
   }
   throw new Error("Unable to load facade activation check runtime");
+}
+
+function setFacadeActivationCheckRuntimeForTest(module: FacadeActivationCheckRuntimeModule): void {
+  facadeActivationCheckRuntimeModule = module;
 }
 
 function loadFacadeModuleAtLocationSync<T extends object>(params: {
@@ -245,12 +251,12 @@ export function tryLoadActivatedBundledPluginPublicSurfaceModuleSync<T extends o
 
 export function resetFacadeRuntimeStateForTest(): void {
   resetFacadeLoaderStateForTest();
-  facadeActivationCheckRuntimeModule?.resetFacadeActivationCheckRuntimeStateForTest();
   facadeActivationCheckRuntimeModule = undefined;
-  facadeActivationCheckRuntimeJitiLoaders.clear();
+  facadeActivationCheckRuntimeLoaders.clear();
 }
 
-export const __testing = {
+export const testing = {
+  setFacadeActivationCheckRuntimeForTest,
   loadFacadeModuleAtLocationSync,
   resolveRegistryPluginModuleLocationFromRegistry: resolveRegistryPluginModuleLocationFromRecords,
   resolveFacadeModuleLocation,
@@ -293,3 +299,4 @@ export const __testing = {
       buildFacadeActivationCheckParams(params),
     )) as (params: BundledPluginPublicSurfaceParams) => string,
 };
+export { testing as __testing };

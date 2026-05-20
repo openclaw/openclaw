@@ -8,7 +8,7 @@ const mocks = vi.hoisted(() => {
       text: params.spec.text ?? "",
     })),
     collectDiscordStatusIssues: vi.fn(() => []),
-    discordOnboardingAdapter: { kind: "legacy-onboarding" },
+    discordOnboardingAdapter: { kind: "discord-onboarding" },
     inspectDiscordAccount: vi.fn(() => ({ accountId: "default" })),
     listDiscordAccountIds: vi.fn(() => ["default"]),
     listDiscordDirectoryGroupsFromConfig: vi.fn(() => []),
@@ -74,7 +74,7 @@ vi.mock("./runtime-config-snapshot.js", () => ({
   getRuntimeConfigSnapshot: () => mocks.runtimeConfig,
 }));
 
-describe("discord plugin-sdk compatibility facade", () => {
+describe("discord plugin-sdk facade", () => {
   it("exports the @openclaw/discord 2026.3.13 import surface", async () => {
     const discordSdk = await import("./discord.js");
 
@@ -117,7 +117,7 @@ describe("discord plugin-sdk compatibility facade", () => {
     }
   });
 
-  it("forwards Discord component helpers through the compatibility facade", async () => {
+  it("forwards Discord component helpers through the facade", async () => {
     const {
       buildDiscordComponentMessage,
       editDiscordComponentMessage,
@@ -151,7 +151,7 @@ describe("discord plugin-sdk compatibility facade", () => {
     });
   });
 
-  it("keeps legacy Discord subagent auto-bind calls working without cfg", async () => {
+  it("fills runtime config for Discord subagent auto-bind calls without cfg", async () => {
     const { autoBindSpawnedDiscordSubagent } = await import("./discord.js");
 
     const binding = await autoBindSpawnedDiscordSubagent({
@@ -160,19 +160,16 @@ describe("discord plugin-sdk compatibility facade", () => {
       childSessionKey: "child",
     });
 
-    expect(mocks.runtimeModule.autoBindSpawnedDiscordSubagent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "agent",
-        cfg: mocks.runtimeConfig,
-        childSessionKey: "child",
-      }),
-    );
-    expect(binding).toEqual(
-      expect.objectContaining({
-        cfg: mocks.runtimeConfig,
-        targetKind: "subagent",
-        targetSessionKey: "child",
-      }),
-    );
+    expect(mocks.runtimeModule.autoBindSpawnedDiscordSubagent).toHaveBeenCalledTimes(1);
+    const callParams = mocks.runtimeModule.autoBindSpawnedDiscordSubagent.mock.calls[0]?.[0];
+    expect(callParams.agentId).toBe("agent");
+    expect(callParams.cfg).toBe(mocks.runtimeConfig);
+    expect(callParams.childSessionKey).toBe("child");
+    if (!binding) {
+      throw new Error("expected Discord subagent binding");
+    }
+    expect(binding.cfg).toBe(mocks.runtimeConfig);
+    expect(binding.targetKind).toBe("subagent");
+    expect(binding.targetSessionKey).toBe("child");
   });
 });

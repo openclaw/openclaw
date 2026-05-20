@@ -14,6 +14,20 @@ const GOOGLE_GEMINI_CLI_BASE_URL = "https://cloudcode-pa.googleapis.com";
 const DEFAULT_CONTEXT_WINDOW = 200_000;
 const DEFAULT_MAX_TOKENS = 8192;
 const OPENROUTER_FALLBACK_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+const ANTHROPIC_VISION_MODEL_PREFIXES = [
+  "claude-opus-4-7",
+  "claude-opus-4.7",
+  "claude-opus-4-6",
+  "claude-opus-4.6",
+  "claude-sonnet-4-6",
+  "claude-sonnet-4.6",
+  "claude-opus-4-5",
+  "claude-opus-4.5",
+  "claude-sonnet-4-5",
+  "claude-sonnet-4.5",
+  "claude-haiku-4-5",
+  "claude-haiku-4.5",
+] as const;
 
 type ModelRegistryLike = {
   find: (provider: string, modelId: string) => unknown;
@@ -88,6 +102,20 @@ function normalizeDynamicModel(params: { provider: string; model: ResolvedModelL
         : undefined;
     if (baseUrl && baseUrl !== params.model.baseUrl) {
       return { ...params.model, baseUrl };
+    }
+    return undefined;
+  }
+  if (params.provider === "anthropic" || params.provider === "claude-cli") {
+    const candidates = [params.model.id, params.model.name]
+      .filter((value): value is string => typeof value === "string")
+      .map((value) => lowercasePreservingWhitespace(value))
+      .filter(Boolean);
+    const isKnownVisionModel = candidates.some((candidate) =>
+      ANTHROPIC_VISION_MODEL_PREFIXES.some((prefix) => candidate.startsWith(prefix)),
+    );
+    const hasImageInput = Array.isArray(params.model.input) && params.model.input.includes("image");
+    if (isKnownVisionModel && !hasImageInput) {
+      return { ...params.model, input: ["text", "image"] };
     }
     return undefined;
   }
@@ -188,6 +216,9 @@ function buildDynamicModel(
         baseUrl: OPENROUTER_BASE_URL,
         reasoning: capabilities?.reasoning ?? false,
         input: capabilities?.input ?? (["text"] as const),
+        ...(capabilities?.supportsTools !== undefined
+          ? { compat: { supportsTools: capabilities.supportsTools } }
+          : {}),
         cost: capabilities?.cost ?? OPENROUTER_FALLBACK_COST,
         contextWindow: capabilities?.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
         maxTokens: capabilities?.maxTokens ?? DEFAULT_MAX_TOKENS,
@@ -266,7 +297,10 @@ function buildDynamicModel(
       const template =
         lower === "gpt-5.5-pro"
           ? findTemplate(params, "openai-codex", ["gpt-5.4", "gpt-5.4-pro", "gpt-5.3-codex"])
-          : lower === "gpt-5.4" || isLegacyGpt54Alias || lower === "gpt-5.4-pro"
+          : lower === "gpt-5.4" ||
+              isLegacyGpt54Alias ||
+              lower === "gpt-5.4-pro" ||
+              lower === "gpt-5.4-mini"
             ? findTemplate(params, "openai-codex", ["gpt-5.4", "gpt-5.3-codex", "gpt-5.2-codex"])
             : lower === "gpt-5.3-codex-spark"
               ? findTemplate(params, "openai-codex", ["gpt-5.4", "gpt-5.3-codex", "gpt-5.2-codex"])
@@ -323,6 +357,22 @@ function buildDynamicModel(
             baseUrl: OPENAI_CODEX_BASE_URL,
             cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
             contextWindow: 1_050_000,
+            contextTokens: 272_000,
+            maxTokens: 128_000,
+          },
+          fallback,
+        );
+      }
+      if (lower === "gpt-5.4-mini") {
+        return cloneTemplate(
+          template,
+          modelId,
+          {
+            provider: "openai-codex",
+            api: "openai-codex-responses",
+            baseUrl: OPENAI_CODEX_BASE_URL,
+            cost: { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0 },
+            contextWindow: 400_000,
             contextTokens: 272_000,
             maxTokens: 128_000,
           },

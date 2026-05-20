@@ -2,6 +2,8 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const SCRIPT_PATH = "scripts/test-install-sh-docker.sh";
+const DOCKER_SETUP_PATH = "scripts/docker/setup.sh";
+const PODMAN_SETUP_PATH = "scripts/podman/setup.sh";
 const SMOKE_RUNNER_PATH = "scripts/docker/install-sh-smoke/run.sh";
 const BUN_GLOBAL_SMOKE_PATH = "scripts/e2e/bun-global-install-smoke.sh";
 const BUN_GLOBAL_ASSERTIONS_PATH = "scripts/e2e/lib/bun-global-install/assertions.mjs";
@@ -68,13 +70,68 @@ describe("test-install-sh-docker", () => {
     expect(dockerfile).toContain("node scripts/check-package-dist-imports.mjs /app");
   });
 
+  it("runs the root Dockerfile build with the CI heap limit", () => {
+    const dockerfile = readFileSync("Dockerfile", "utf8");
+
+    expect(dockerfile).toContain(
+      "NODE_OPTIONS=--max-old-space-size=8192 pnpm_config_verify_deps_before_run=false pnpm build:docker",
+    );
+  });
+
+  it("exports the Playwright browser cache installed by the root Dockerfile", () => {
+    const dockerfile = readFileSync("Dockerfile", "utf8");
+
+    expect(dockerfile).toContain("ENV PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright");
+    expect(dockerfile).toContain('mkdir -p "$PLAYWRIGHT_BROWSERS_PATH"');
+    expect(dockerfile).toContain(
+      "node /app/node_modules/playwright-core/cli.js install --with-deps chromium",
+    );
+  });
+
+  it("passes the baked browser build arg through Docker setup", () => {
+    const script = readFileSync(DOCKER_SETUP_PATH, "utf8");
+
+    expect(script).toContain('export OPENCLAW_INSTALL_BROWSER="${OPENCLAW_INSTALL_BROWSER:-}"');
+    expect(script).toContain("OPENCLAW_INSTALL_BROWSER \\");
+    expect(script).toContain('--build-arg "OPENCLAW_INSTALL_BROWSER=${OPENCLAW_INSTALL_BROWSER}"');
+  });
+
+  it("passes image-scoped pip packages through Docker and Podman setup", () => {
+    const dockerSetup = readFileSync(DOCKER_SETUP_PATH, "utf8");
+    const podmanSetup = readFileSync(PODMAN_SETUP_PATH, "utf8");
+    const dockerfile = readFileSync("Dockerfile", "utf8");
+
+    expect(dockerfile).toContain("ARG OPENCLAW_IMAGE_PIP_PACKAGES");
+    expect(dockerfile).toContain(
+      "python3 -m pip install --no-cache-dir --break-system-packages $OPENCLAW_IMAGE_PIP_PACKAGES",
+    );
+    expect(dockerSetup).toContain(
+      'export OPENCLAW_IMAGE_PIP_PACKAGES="${OPENCLAW_IMAGE_PIP_PACKAGES:-}"',
+    );
+    expect(dockerSetup).toContain("OPENCLAW_IMAGE_PIP_PACKAGES \\");
+    expect(dockerSetup).toContain(
+      '--build-arg "OPENCLAW_IMAGE_PIP_PACKAGES=${OPENCLAW_IMAGE_PIP_PACKAGES}"',
+    );
+    expect(dockerSetup).not.toContain("OPENCLAW_DOCKER_PIP_PACKAGES");
+    expect(podmanSetup).toContain('OPENCLAW_IMAGE_PIP_PACKAGES="${OPENCLAW_IMAGE_PIP_PACKAGES:-}"');
+    expect(podmanSetup).toContain(
+      'BUILD_ARGS+=(--build-arg "OPENCLAW_IMAGE_PIP_PACKAGES=${OPENCLAW_IMAGE_PIP_PACKAGES}")',
+    );
+    expect(podmanSetup).not.toContain("OPENCLAW_DOCKER_PIP_PACKAGES");
+  });
+
   it("allows repository branch history and release tags for secret-backed Docker release checks", () => {
     const workflow = readFileSync(LIVE_E2E_WORKFLOW_PATH, "utf8");
 
-    expect(workflow).toContain("git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*'");
     expect(workflow).toContain('git rev-parse --verify "${INPUT_REF}^{commit}"');
+    expect(workflow).toContain(
+      'git merge-base --is-ancestor "$selected_sha" refs/remotes/origin/main',
+    );
     expect(workflow).toContain("repository-branch-history");
     expect(workflow).toContain("git tag --points-at \"$selected_sha\" | grep -Eq '^v'");
+    expect(workflow).toContain(
+      "git for-each-ref --format='%(refname:short)' --contains \"$selected_sha\" refs/remotes/origin",
+    );
     expect(workflow).toContain("reachable from an OpenClaw branch or release tag");
   });
 
@@ -176,17 +233,24 @@ describe("bun global install smoke", () => {
     expect(workflow).toContain('cron: "17 3 * * *"');
     expect(workflow).toContain("run_bun_global_install_smoke:");
     expect(workflow).toContain(
-      "install-bun: ${{ needs.preflight.outputs.run_bun_global_install_smoke }}",
+      "if: needs.preflight.outputs.run_full_install_smoke == 'true' && needs.preflight.outputs.run_bun_global_install_smoke == 'true'",
     );
-    expect(workflow).toContain(
-      "if: needs.preflight.outputs.run_bun_global_install_smoke == 'true'",
-    );
+    expect(workflow).toContain("bun_global_install_smoke:");
+    expect(workflow).toContain("Setup Node environment for Bun smoke");
+    expect(workflow).toContain('install-bun: "true"');
+    expect(workflow).toContain('install-bun: "false"');
     expect(workflow).toContain("Run Bun global install image-provider smoke");
     expect(workflow).toContain("bash scripts/e2e/bun-global-install-smoke.sh");
     expect(workflow).toContain(
-      "OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE: openclaw-dockerfile-smoke:local",
+      "OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE: ${{ needs.root_dockerfile_image.outputs.image_ref }}",
     );
-    expect(workflow).toContain("format('{0}-manual-{1}', github.workflow, github.run_id)");
+    expect(workflow).toContain(
+      "github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call'",
+    );
+    expect(workflow).toContain(
+      "format('{0}-{1}-{2}', github.workflow, github.event_name, github.run_id)",
+    );
+    expect(workflow).toContain("cancel-in-progress: ${{ github.event_name != 'workflow_call' }}");
     expect(workflow).not.toContain(
       "github.event_name == 'workflow_call' || github.event_name == 'push'",
     );
@@ -201,6 +265,17 @@ describe("bun global install smoke", () => {
     expect(workflow).toContain("install-smoke-fast:");
     expect(workflow).toContain("run_fast_install_smoke");
     expect(workflow).toContain("run_full_install_smoke");
+    expect(workflow).toContain("timeout 45m docker buildx build");
+    expect(workflow).toContain('timeout 600s docker pull "$IMAGE_REF"');
+    expect(workflow).not.toContain('timeout 300s docker pull "$IMAGE_REF"');
+    expect(workflow).toContain("--progress=plain");
+    expect(workflow).toContain("--load");
+    expect(workflow).toContain("pnpm-workspace.yaml");
+    expect(workflow).toContain("workspace.patchedDependencies");
+    expect(workflow).not.toContain("pkg.pnpm?.patchedDependencies");
+    expect(workflow).not.toContain("--cache-from");
+    expect(workflow).not.toContain("--cache-to");
+    expect(workflow).not.toContain("type=gha");
     expect(workflow).toContain('OPENCLAW_INSTALL_SMOKE_SKIP_NPM_GLOBAL: "1"');
     expect(releaseChecks).toContain("install_smoke_release_checks:");
     expect(releaseChecks).toContain("uses: ./.github/workflows/install-smoke.yml");

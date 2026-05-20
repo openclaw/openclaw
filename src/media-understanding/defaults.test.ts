@@ -58,13 +58,17 @@ const mediaMetadataPlugins = vi.hoisted(() => [
         autoPriority: { image: 10, audio: 10 },
       },
       "openai-codex": {
-        capabilities: ["image"],
-        defaultModels: { image: "gpt-5.5" },
-        autoPriority: { image: 20 },
+        capabilities: ["image", "audio"],
+        defaultModels: { image: "gpt-5.5", audio: "gpt-4o-transcribe" },
+        autoPriority: { image: 20, audio: 20 },
       },
       opencode: { capabilities: ["image"], defaultModels: { image: "gpt-5-nano" } },
       "opencode-go": { capabilities: ["image"], defaultModels: { image: "kimi-k2.6" } },
-      openrouter: { capabilities: ["image"], defaultModels: { image: "auto" } },
+      openrouter: {
+        capabilities: ["image", "audio"],
+        defaultModels: { image: "auto", audio: "openai/whisper-large-v3-turbo" },
+        autoPriority: { audio: 35 },
+      },
       qwen: { capabilities: ["video"], autoPriority: { video: 20 } },
       xai: { capabilities: ["audio"], autoPriority: { audio: 25 } },
       zai: { capabilities: ["image"], autoPriority: { image: 60 } },
@@ -76,6 +80,24 @@ vi.mock("../plugins/plugin-registry.js", () => ({
   loadPluginManifestRegistryForPluginRegistry: () => ({
     plugins: mediaMetadataPlugins,
     diagnostics: [],
+  }),
+  loadPluginRegistrySnapshotWithMetadata: () => ({
+    source: "derived",
+    snapshot: { plugins: [] },
+    diagnostics: [],
+  }),
+}));
+
+vi.mock("../plugins/manifest-contract-eligibility.js", () => ({
+  loadManifestMetadataSnapshot: () => ({
+    index: { plugins: [] },
+    plugins: mediaMetadataPlugins,
+  }),
+}));
+
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
+  getCurrentPluginMetadataSnapshot: () => ({
+    plugins: mediaMetadataPlugins,
   }),
 }));
 
@@ -89,6 +111,12 @@ describe("resolveDefaultMediaModel", () => {
   it("resolves bundled audio defaults from provider metadata", () => {
     expect(resolveDefaultMediaModel({ providerId: "mistral", capability: "audio" })).toBe(
       "voxtral-mini-latest",
+    );
+    expect(resolveDefaultMediaModel({ providerId: "openai-codex", capability: "audio" })).toBe(
+      "gpt-4o-transcribe",
+    );
+    expect(resolveDefaultMediaModel({ providerId: "openrouter", capability: "audio" })).toBe(
+      "openai/whisper-large-v3-turbo",
     );
   });
 
@@ -112,13 +140,39 @@ describe("resolveDefaultMediaModel", () => {
       "kimi-k2.6",
     );
   });
+
+  it("prefers configured image models before manifest defaults", () => {
+    const cfg = {
+      models: {
+        providers: {
+          openrouter: {
+            models: [{ id: "google/gemini-2.5-flash", input: ["text", "image"] }],
+          },
+        },
+      },
+    } as never;
+
+    expect(resolveDefaultMediaModel({ providerId: "openrouter", capability: "image", cfg })).toBe(
+      "google/gemini-2.5-flash",
+    );
+    expect(
+      resolveDefaultMediaModel({
+        providerId: "openrouter",
+        capability: "image",
+        cfg,
+        includeConfiguredImageModels: false,
+      }),
+    ).toBe("auto");
+  });
 });
 
 describe("resolveAutoMediaKeyProviders", () => {
   it("keeps the bundled audio fallback order", () => {
     expect(resolveAutoMediaKeyProviders({ capability: "audio" })).toEqual([
       "openai",
+      "openai-codex",
       "xai",
+      "openrouter",
       "google",
       "mistral",
     ]);
@@ -134,6 +188,36 @@ describe("resolveAutoMediaKeyProviders", () => {
       "minimax-portal",
       "zai",
     ]);
+  });
+
+  it("preserves configured MiniMax CN aliases for image auto discovery", () => {
+    const providers = resolveAutoMediaKeyProviders({
+      capability: "image",
+      cfg: {
+        models: {
+          providers: {
+            "minimax-cn": {
+              models: [{ id: "MiniMax-M2.7", input: ["text", "image"] }],
+            },
+            "minimax-portal-cn": {
+              models: [{ id: "MiniMax-M2.7", input: ["text", "image"] }],
+            },
+            gemini: {
+              models: [{ id: "gemini-3-flash-preview", input: ["text", "image"] }],
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(providers).toContain("minimax-cn");
+    expect(providers).toContain("minimax-portal-cn");
+    expect(providers).not.toContain("gemini");
+    expect(providers).toContain("google");
+    expect(providers.indexOf("minimax-cn")).toBeLessThan(providers.indexOf("minimax"));
+    expect(providers.indexOf("minimax-portal-cn")).toBeLessThan(
+      providers.indexOf("minimax-portal"),
+    );
   });
 
   it("keeps the bundled video fallback order", () => {

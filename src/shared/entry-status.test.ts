@@ -1,23 +1,17 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import {
   evaluateEntryMetadataRequirements,
   evaluateEntryMetadataRequirementsForCurrentPlatform,
   evaluateEntryRequirementsForCurrentPlatform,
 } from "./entry-status.js";
 
-const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
-
 function setPlatform(platform: NodeJS.Platform): void {
-  Object.defineProperty(process, "platform", {
-    value: platform,
-    configurable: true,
-  });
+  mockProcessPlatform(platform);
 }
 
 afterEach(() => {
-  if (originalPlatformDescriptor) {
-    Object.defineProperty(process, "platform", originalPlatformDescriptor);
-  }
+  vi.restoreAllMocks();
 });
 
 describe("shared/entry-status", () => {
@@ -84,7 +78,7 @@ describe("shared/entry-status", () => {
     });
 
     expect(result.requirementsSatisfied).toBe(true);
-    expect(result.missing.os).toEqual([]);
+    expect(result.missing.os).toStrictEqual([]);
   });
 
   it("pulls metadata and frontmatter from entry objects in the entry wrapper", () => {

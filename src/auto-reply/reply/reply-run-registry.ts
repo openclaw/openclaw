@@ -1,3 +1,7 @@
+import {
+  markDiagnosticEmbeddedRunEnded,
+  markDiagnosticEmbeddedRunStarted,
+} from "../../logging/diagnostic-run-activity.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
@@ -54,6 +58,11 @@ export type ReplyOperation = {
   attachBackend(handle: ReplyBackendHandle): void;
   detachBackend(handle: ReplyBackendHandle): void;
   complete(): void;
+  /**
+   * Complete the operation, clear active-run state, then run follow-up work.
+   * Use when the follow-up can create another ReplyOperation for this session.
+   */
+  completeThen(afterClear: () => void): void;
   fail(code: Exclude<ReplyOperationFailureCode, "aborted_by_user">, cause?: unknown): void;
   abortByUser(): void;
   abortForRestart(): void;
@@ -176,16 +185,36 @@ function getAttachedBackend(operation: ReplyOperation): ReplyBackendHandle | und
 
 function clearReplyRunState(params: { sessionKey: string; sessionId: string }): void {
   replyRunState.activeRunsByKey.delete(params.sessionKey);
-  if (replyRunState.activeSessionIdsByKey.get(params.sessionKey) === params.sessionId) {
-    replyRunState.activeSessionIdsByKey.delete(params.sessionKey);
-  } else {
-    replyRunState.activeSessionIdsByKey.delete(params.sessionKey);
-  }
+  replyRunState.activeSessionIdsByKey.delete(params.sessionKey);
   if (replyRunState.activeKeysBySessionId.get(params.sessionId) === params.sessionKey) {
     replyRunState.activeKeysBySessionId.delete(params.sessionId);
   }
   clearWaitSessionIds(params.sessionKey);
   notifyReplyRunEnded(params.sessionKey);
+}
+
+function replyRunDiagnosticWorkKey(sessionKey: string): string {
+  return `reply:${sessionKey}`;
+}
+
+function markReplyRunDiagnosticWorkStarted(params: {
+  sessionKey: string;
+  sessionId: string;
+}): void {
+  markDiagnosticEmbeddedRunStarted({
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    workKey: replyRunDiagnosticWorkKey(params.sessionKey),
+  });
+}
+
+function markReplyRunDiagnosticWorkEnded(params: { sessionKey: string; sessionId: string }): void {
+  markDiagnosticEmbeddedRunEnded({
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    workKey: replyRunDiagnosticWorkKey(params.sessionKey),
+    clearRunActivity: false,
+  });
 }
 
 export function createReplyOperation(params: {
@@ -217,6 +246,7 @@ export function createReplyOperation(params: {
       return;
     }
     stateCleared = true;
+    markReplyRunDiagnosticWorkEnded({ sessionKey, sessionId: currentSessionId });
     clearReplyRunState({
       sessionKey,
       sessionId: currentSessionId,
@@ -303,6 +333,7 @@ export function createReplyOperation(params: {
       replyRunState.activeSessionIdsByKey.set(sessionKey, currentSessionId);
       replyRunState.activeKeysBySessionId.set(currentSessionId, sessionKey);
       registerWaitSessionId(sessionKey, currentSessionId);
+      markReplyRunDiagnosticWorkStarted({ sessionKey, sessionId: currentSessionId });
     },
     attachBackend(handle) {
       if (result) {
@@ -331,6 +362,10 @@ export function createReplyOperation(params: {
         phase = "completed";
       }
       clearState();
+    },
+    completeThen(afterClear) {
+      operation.complete();
+      afterClear();
     },
     fail(code, cause) {
       if (!result) {
@@ -363,6 +398,7 @@ export function createReplyOperation(params: {
   replyRunState.activeSessionIdsByKey.set(sessionKey, currentSessionId);
   replyRunState.activeKeysBySessionId.set(currentSessionId, sessionKey);
   registerWaitSessionId(sessionKey, currentSessionId);
+  markReplyRunDiagnosticWorkStarted({ sessionKey, sessionId: currentSessionId });
 
   return operation;
 }
@@ -519,8 +555,15 @@ export function listActiveReplyRunSessionIds(): string[] {
   return [...replyRunState.activeSessionIdsByKey.values()];
 }
 
-export const __testing = {
+export function listActiveReplyRunSessionKeys(): string[] {
+  return [...replyRunState.activeSessionIdsByKey.keys()];
+}
+
+export const testing = {
   resetReplyRunRegistry(): void {
+    for (const [sessionKey, sessionId] of replyRunState.activeSessionIdsByKey) {
+      markReplyRunDiagnosticWorkEnded({ sessionKey, sessionId });
+    }
     replyRunState.activeRunsByKey.clear();
     replyRunState.activeSessionIdsByKey.clear();
     replyRunState.activeKeysBySessionId.clear();
@@ -534,3 +577,4 @@ export const __testing = {
     replyRunState.waitersByKey.clear();
   },
 };
+export { testing as __testing };

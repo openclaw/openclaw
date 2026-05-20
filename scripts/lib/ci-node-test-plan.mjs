@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 import { commandsLightTestFiles } from "../../test/vitest/vitest.commands-light-paths.mjs";
@@ -12,6 +13,18 @@ const EXCLUDED_FULL_SUITE_SHARDS = new Set([
 const EXCLUDED_PROJECT_CONFIGS = new Set(["test/vitest/vitest.channels.config.ts"]);
 const RELEASE_ONLY_PLUGIN_SHARDS = new Set(["agentic-plugins"]);
 function listTestFiles(rootDir) {
+  const result = spawnSync("git", ["ls-files", "--", rootDir], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (result.status === 0) {
+    return result.stdout
+      .split("\n")
+      .map((line) => line.trim().replaceAll("\\", "/"))
+      .filter((line) => line.endsWith(".test.ts"))
+      .toSorted((a, b) => a.localeCompare(b));
+  }
+
   if (!existsSync(rootDir)) {
     return [];
   }
@@ -137,17 +150,138 @@ function createAgenticCommandSplitShards() {
     .filter((shard) => shard.includePatterns.length > 0);
 }
 
+const GATEWAY_SERVER_BACKED_HTTP_TESTS = new Set([
+  "src/gateway/embeddings-http.test.ts",
+  "src/gateway/models-http.test.ts",
+  "src/gateway/openai-http.test.ts",
+  "src/gateway/openresponses-http.test.ts",
+  "src/gateway/probe.auth.integration.test.ts",
+]);
+
+const GATEWAY_SERVER_EXCLUDED_TESTS = new Set([
+  "src/gateway/gateway.test.ts",
+  "src/gateway/server.startup-matrix-migration.integration.test.ts",
+  "src/gateway/sessions-history-http.test.ts",
+]);
+
+function isGatewayServerTestFile(file) {
+  return (
+    file.startsWith("src/gateway/") &&
+    !file.startsWith("src/gateway/server-methods/") &&
+    !GATEWAY_SERVER_EXCLUDED_TESTS.has(file) &&
+    (file.includes("server") || GATEWAY_SERVER_BACKED_HTTP_TESTS.has(file))
+  );
+}
+
+function resolveGatewayServerShardName(file) {
+  const name = relative("src/gateway", file).replaceAll("\\", "/");
+  if (
+    GATEWAY_SERVER_BACKED_HTTP_TESTS.has(file) ||
+    name.startsWith("server.models") ||
+    name.startsWith("server.talk")
+  ) {
+    return "agentic-control-plane-http-models";
+  }
+  if (
+    name.startsWith("server.agent") ||
+    name.startsWith("server.chat") ||
+    name.startsWith("server.sessions")
+  ) {
+    return "agentic-control-plane-agent-chat";
+  }
+  if (
+    name.includes("auth") ||
+    name.includes("device") ||
+    name.includes("node") ||
+    name.includes("roles") ||
+    name.includes("silent") ||
+    name.includes("preauth") ||
+    name.includes("control-plane-rate-limit")
+  ) {
+    return "agentic-control-plane-auth-node";
+  }
+  if (
+    name.startsWith("server-startup") ||
+    name.startsWith("server-restart") ||
+    name.startsWith("server-runtime") ||
+    name.startsWith("server.lazy") ||
+    name.startsWith("server.health") ||
+    name.startsWith("server/health-state") ||
+    name.startsWith("server/readiness") ||
+    name === "server-close.test.ts"
+  ) {
+    return "agentic-control-plane-startup-runtime";
+  }
+  if (
+    name.includes("plugin") ||
+    name.includes("hooks") ||
+    name.includes("http") ||
+    name.includes("ws-connection")
+  ) {
+    return "agentic-control-plane-http-plugin-ws";
+  }
+  return "agentic-control-plane-runtime";
+}
+
+function createGatewayServerSplitShards() {
+  const groups = new Map();
+  for (const file of listTestFiles("src/gateway").filter(isGatewayServerTestFile)) {
+    const shardName = resolveGatewayServerShardName(file);
+    groups.set(shardName, [...(groups.get(shardName) ?? []), file]);
+  }
+  return [
+    "agentic-control-plane-agent-chat",
+    "agentic-control-plane-auth-node",
+    "agentic-control-plane-http-models",
+    "agentic-control-plane-http-plugin-ws",
+    "agentic-control-plane-runtime",
+    "agentic-control-plane-startup-runtime",
+  ]
+    .map((shardName) => ({
+      configs: ["test/vitest/vitest.gateway-server.config.ts"],
+      includePatterns: groups.get(shardName) ?? [],
+      requiresDist: false,
+      runner: "blacksmith-4vcpu-ubuntu-2404",
+      shardName,
+    }))
+    .filter((shard) => shard.includePatterns.length > 0);
+}
+
+function resolveCronShardName(file) {
+  const name = relative("src/cron", file).replaceAll("\\", "/");
+  if (name.startsWith("isolated-agent")) {
+    return "core-runtime-cron-isolated-agent";
+  }
+  if (name.startsWith("service")) {
+    return "core-runtime-cron-service";
+  }
+  return "core-runtime-cron-core";
+}
+
+function createCronSplitShards() {
+  const groups = new Map();
+  for (const file of listTestFiles("src/cron")) {
+    const shardName = resolveCronShardName(file);
+    groups.set(shardName, [...(groups.get(shardName) ?? []), file]);
+  }
+
+  return ["core-runtime-cron-core", "core-runtime-cron-isolated-agent", "core-runtime-cron-service"]
+    .map((shardName) => ({
+      configs: ["test/vitest/vitest.cron.config.ts"],
+      includePatterns: groups.get(shardName) ?? [],
+      requiresDist: false,
+      shardName,
+    }))
+    .filter((shard) => shard.includePatterns.length > 0);
+}
+
 const SPLIT_NODE_SHARDS = new Map([
   [
     "core-unit-fast",
     [
       {
-        shardName: "core-unit-fast-support",
-        configs: [
-          "test/vitest/vitest.unit-fast.config.ts",
-          "test/vitest/vitest.unit-support.config.ts",
-        ],
-        includeExternalConfigs: true,
+        shardName: "core-unit-fast",
+        configs: ["test/vitest/vitest.unit-fast.config.ts"],
         requiresDist: false,
       },
     ],
@@ -167,16 +301,32 @@ const SPLIT_NODE_SHARDS = new Map([
     ],
   ],
   ["core-unit-security", []],
-  ["core-unit-support", []],
+  [
+    "core-unit-support",
+    [
+      {
+        shardName: "core-unit-support",
+        configs: ["test/vitest/vitest.unit-support.config.ts"],
+        requiresDist: false,
+      },
+    ],
+  ],
   [
     "core-runtime",
     [
       {
-        shardName: "core-runtime-infra",
+        shardName: "core-runtime-infra-state",
         configs: [
           "test/vitest/vitest.infra.config.ts",
           "test/vitest/vitest.hooks.config.ts",
           "test/vitest/vitest.secrets.config.ts",
+        ],
+        requiresDist: false,
+        runner: "blacksmith-4vcpu-ubuntu-2404",
+      },
+      {
+        shardName: "core-runtime-infra-process",
+        configs: [
           "test/vitest/vitest.logging.config.ts",
           "test/vitest/vitest.process.config.ts",
           "test/vitest/vitest.runtime-config.config.ts",
@@ -199,13 +349,13 @@ const SPLIT_NODE_SHARDS = new Map([
         shardName: "core-runtime-shared",
         configs: [
           "test/vitest/vitest.acp.config.ts",
-          "test/vitest/vitest.cron.config.ts",
           "test/vitest/vitest.shared-core.config.ts",
           "test/vitest/vitest.tasks.config.ts",
           "test/vitest/vitest.utils.config.ts",
         ],
         requiresDist: false,
       },
+      ...createCronSplitShards(),
     ],
   ],
   [
@@ -225,12 +375,7 @@ const SPLIT_NODE_SHARDS = new Map([
   [
     "agentic",
     [
-      {
-        shardName: "agentic-control-plane",
-        configs: ["test/vitest/vitest.gateway-server.config.ts"],
-        requiresDist: false,
-        runner: "blacksmith-4vcpu-ubuntu-2404",
-      },
+      ...createGatewayServerSplitShards(),
       {
         shardName: "agentic-cli",
         configs: ["test/vitest/vitest.cli.config.ts"],

@@ -1,7 +1,6 @@
 import type { BootstrapMode } from "../../bootstrap-mode.js";
 import { resolveBootstrapMode } from "../../bootstrap-mode.js";
-import { buildAgentUserPromptPrefix } from "../../system-prompt.js";
-import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
+import { DEFAULT_BOOTSTRAP_FILENAME, type WorkspaceBootstrapFile } from "../../workspace.js";
 
 export type AttemptBootstrapRoutingInput = {
   workspaceBootstrapPending: boolean;
@@ -17,13 +16,8 @@ export type AttemptBootstrapRoutingInput = {
 
 export type AttemptBootstrapRouting = {
   bootstrapMode: BootstrapMode;
-  shouldStripBootstrapFromContext: boolean;
-  userPromptPrefixText?: string;
-};
-
-export type BootstrapPromptContextFile = {
-  path?: string;
-  content?: string;
+  includeBootstrapInSystemContext: boolean;
+  includeBootstrapInRuntimeContext: boolean;
 };
 
 export type AttemptWorkspaceBootstrapRoutingInput = Omit<
@@ -31,15 +25,22 @@ export type AttemptWorkspaceBootstrapRoutingInput = Omit<
   "workspaceBootstrapPending"
 > & {
   isWorkspaceBootstrapPending: (workspaceDir: string) => Promise<boolean>;
+  bootstrapFiles?: readonly WorkspaceBootstrapFile[];
 };
 
-export function shouldStripBootstrapFromEmbeddedContext(_params: {
+export function resolveBootstrapContextTargets(params: {
   bootstrapMode: BootstrapMode;
-}): boolean {
-  return true;
+}): Pick<
+  AttemptBootstrapRouting,
+  "includeBootstrapInSystemContext" | "includeBootstrapInRuntimeContext"
+> {
+  return {
+    includeBootstrapInSystemContext: params.bootstrapMode === "full",
+    includeBootstrapInRuntimeContext: false,
+  };
 }
 
-export function resolveAttemptBootstrapRouting(
+function resolveAttemptBootstrapRouting(
   params: AttemptBootstrapRoutingInput,
 ): AttemptBootstrapRouting {
   const bootstrapMode = resolveBootstrapMode({
@@ -55,41 +56,20 @@ export function resolveAttemptBootstrapRouting(
 
   return {
     bootstrapMode,
-    shouldStripBootstrapFromContext: shouldStripBootstrapFromEmbeddedContext({
-      bootstrapMode,
-    }),
-    userPromptPrefixText: buildAgentUserPromptPrefix({
-      bootstrapMode,
-    }),
+    ...resolveBootstrapContextTargets({ bootstrapMode }),
   };
 }
 
-export function appendBootstrapFileToUserPromptPrefix(params: {
-  prefixText?: string;
-  bootstrapMode: BootstrapMode;
-  contextFiles: readonly BootstrapPromptContextFile[];
-}): string | undefined {
-  const prefix = params.prefixText?.trim();
-  if (params.bootstrapMode !== "full") {
-    return prefix || undefined;
-  }
-  const bootstrapFile = params.contextFiles.find((file) =>
-    /(^|[\\/])BOOTSTRAP\.md$/iu.test(file.path?.trim() ?? ""),
+export function hasBootstrapFileContent(files?: readonly WorkspaceBootstrapFile[]): boolean {
+  return (
+    files?.some(
+      (file) =>
+        file.name === DEFAULT_BOOTSTRAP_FILENAME &&
+        !file.missing &&
+        typeof file.content === "string" &&
+        file.content.trim().length > 0,
+    ) ?? false
   );
-  const content = bootstrapFile?.content?.trim();
-  if (!content || content.startsWith("[MISSING]")) {
-    return prefix || undefined;
-  }
-  return [
-    prefix,
-    "",
-    `${DEFAULT_BOOTSTRAP_FILENAME} contents for this bootstrap turn:`,
-    "[BEGIN BOOTSTRAP.md]",
-    content,
-    "[END BOOTSTRAP.md]",
-    "",
-    "Follow the BOOTSTRAP.md instructions above now. Treat them as workspace/user instructions, not as system policy.",
-  ].join("\n");
 }
 
 export async function resolveAttemptWorkspaceBootstrapRouting(
@@ -98,8 +78,10 @@ export async function resolveAttemptWorkspaceBootstrapRouting(
   const workspaceBootstrapPending = await params.isWorkspaceBootstrapPending(
     params.resolvedWorkspace,
   );
+  const hasHookBootstrapContent = hasBootstrapFileContent(params.bootstrapFiles);
   return resolveAttemptBootstrapRouting({
     ...params,
-    workspaceBootstrapPending,
+    workspaceBootstrapPending: workspaceBootstrapPending || hasHookBootstrapContent,
+    hasBootstrapFileAccess: params.hasBootstrapFileAccess || hasHookBootstrapContent,
   });
 }

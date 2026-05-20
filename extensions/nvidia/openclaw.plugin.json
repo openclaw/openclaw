@@ -5,6 +5,13 @@
   },
   "enabledByDefault": true,
   "providers": ["nvidia"],
+  "providerEndpoints": [
+    {
+      "endpointClass": "nvidia-native",
+      "hosts": ["integrate.api.nvidia.com"],
+      "baseUrls": ["https://integrate.api.nvidia.com/v1"]
+    }
+  ],
   "modelIdNormalization": {
     "providers": {
       "nvidia": {
@@ -100,7 +107,7 @@
       "choiceLabel": "NVIDIA API key",
       "groupId": "nvidia",
       "groupLabel": "NVIDIA",
-      "groupHint": "API key",
+      "groupHint": "Direct API key",
       "optionKey": "nvidiaApiKey",
       "cliFlag": "--nvidia-api-key",
       "cliOption": "--nvidia-api-key <key>",

@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as loggingConfigModule from "../logging/config.js";
 import {
+  buildToolLifecycleErrorResult,
+  extractToolErrorCode,
   extractToolErrorMessage,
   sanitizeToolArgs,
   sanitizeToolResult,
@@ -34,13 +36,88 @@ describe("extractToolErrorMessage", () => {
     ).toBe("SYSTEM_RUN_DENIED: approval required");
   });
 
-  it("uses result text before generic failed status when details omit aggregated output", () => {
+  it("does not promote prose-only denial output ahead of generic failed status", () => {
     expect(
       extractToolErrorMessage({
         content: [{ type: "text", text: "SYSTEM_RUN_DENIED: approval required" }],
         details: { status: "failed" },
       }),
-    ).toBe("SYSTEM_RUN_DENIED: approval required");
+    ).toBe("failed");
+  });
+
+  it("extracts structured tool error codes", () => {
+    expect(
+      extractToolErrorCode({
+        details: {
+          status: "failed",
+          error: {
+            code: "SYSTEM_RUN_DENIED",
+            message: "approval required",
+          },
+        },
+      }),
+    ).toBe("SYSTEM_RUN_DENIED");
+    expect(
+      extractToolErrorCode({
+        details: {
+          status: "failed",
+          gatewayCode: "UNAVAILABLE",
+          nodeError: {
+            code: "UNAVAILABLE",
+            message: "SYSTEM_RUN_DENIED: approval required",
+          },
+        },
+      }),
+    ).toBe("SYSTEM_RUN_DENIED");
+    expect(
+      extractToolErrorCode({
+        details: {
+          status: "failed",
+          nodeError: {
+            code: "INVALID_REQUEST",
+            message: "approval expired",
+          },
+        },
+      }),
+    ).toBe("INVALID_REQUEST");
+  });
+
+  it("does not extract error codes from prose-only tool output", () => {
+    expect(
+      extractToolErrorCode({
+        content: [{ type: "text", text: "SYSTEM_RUN_DENIED: approval required" }],
+        details: { status: "failed" },
+      }),
+    ).toBeUndefined();
+    expect(
+      extractToolErrorCode({
+        details: {
+          status: "failed",
+          error: "SYSTEM_RUN_DENIED: approval required",
+        },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("preserves structured codes from thrown gateway errors", () => {
+    const error = new Error("UNAVAILABLE: SYSTEM_RUN_DENIED: approval required") as Error & {
+      gatewayCode?: string;
+      details?: unknown;
+    };
+    error.gatewayCode = "UNAVAILABLE";
+    error.details = {
+      nodeError: {
+        code: "UNAVAILABLE",
+        message: "SYSTEM_RUN_DENIED: approval required",
+      },
+    };
+
+    const result = buildToolLifecycleErrorResult(error);
+
+    expect(extractToolErrorCode(result)).toBe("SYSTEM_RUN_DENIED");
+    expect(extractToolErrorMessage(result)).toBe(
+      "UNAVAILABLE: SYSTEM_RUN_DENIED: approval required",
+    );
   });
 });
 
@@ -62,6 +139,39 @@ describe("sanitizeToolResult", () => {
     const text = getTextContent(sanitizeToolResult(result));
     expect(text).not.toContain("sk-1234567890abcdef");
     expect(text).toContain("model");
+  });
+
+  it("redacts Link-like payment credential fields in tool result payloads", () => {
+    const result = {
+      content: [
+        {
+          type: "text",
+          text: '{"shared_payment_token":"spt_abcdefghijklmnopqrstuvwxyz","paymentCredential":"paycred_abcdefghijklmnopqrstuvwxyz","card_number":"4242424242424242","cvc":"123","amount":"4200"}',
+        },
+      ],
+      details: {
+        structuredContent: {
+          sharedPaymentToken: "spt_zyxwvutsrqponmlkjihgfedcba",
+          cardNumber: "4000056655665556",
+          amount: "4200",
+        },
+      },
+    };
+    const sanitized = sanitizeToolResult(result) as {
+      content: Array<{ text: string }>;
+      details: {
+        structuredContent: { sharedPaymentToken: string; cardNumber: string; amount: string };
+      };
+    };
+    const serialized = JSON.stringify(sanitized);
+    expect(serialized).not.toContain("spt_abcdefghijklmnopqrstuvwxyz");
+    expect(serialized).not.toContain("paycred_abcdefghijklmnopqrstuvwxyz");
+    expect(serialized).not.toContain("4242424242424242");
+    expect(serialized).not.toContain("123");
+    expect(serialized).not.toContain("spt_zyxwvutsrqponmlkjihgfedcba");
+    expect(serialized).not.toContain("4000056655665556");
+    expect(sanitized.content[0]?.text).toContain('"amount":"4200"');
+    expect(sanitized.details.structuredContent.amount).toBe("4200");
   });
 
   it("redacts ENV-style credential assignments", () => {

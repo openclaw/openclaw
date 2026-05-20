@@ -1,4 +1,6 @@
 import type {
+  CommandEntry,
+  CommandsListParams,
   SessionsListParams,
   SessionsPatchParams,
   SessionsPatchResult,
@@ -7,6 +9,7 @@ import type { ResponseUsageMode, SessionInfo, SessionScope } from "./tui-types.j
 
 export type ChatSendOptions = {
   sessionKey: string;
+  sessionId?: string | null;
   message: string;
   thinking?: string;
   deliver?: boolean;
@@ -24,6 +27,9 @@ export type TuiSessionList = {
   ts: number;
   path: string;
   count: number;
+  totalCount?: number;
+  limitApplied?: number;
+  hasMore?: boolean;
   defaults?: {
     model?: string | null;
     modelProvider?: string | null;
@@ -58,6 +64,12 @@ export type TuiSessionList = {
       space?: string;
       subject?: string;
       chatType?: string;
+      origin?: {
+        label?: string;
+        provider?: string;
+        surface?: string;
+      };
+      lastChannel?: string;
       lastProvider?: string;
       lastTo?: string;
       lastAccountId?: string;
@@ -109,4 +121,5 @@ export type TuiBackend = {
   resetSession: (key: string, reason?: "new" | "reset") => Promise<unknown>;
   getGatewayStatus: () => Promise<unknown>;
   listModels: () => Promise<TuiModelChoice[]>;
+  listCommands?: (opts?: CommandsListParams) => Promise<CommandEntry[]>;
 };

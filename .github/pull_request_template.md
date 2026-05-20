@@ -5,9 +5,15 @@ Describe the problem and fix in 2–5 bullets:
 If this PR fixes a plugin beta-release blocker, title it `fix(<plugin-id>): beta blocker - <summary>` and link the matching `Beta blocker: <plugin-name> - <summary>` issue labeled `beta-blocker`. Contributors cannot label PRs, so the title is the PR-side signal for maintainers and automation.
 
 - Problem:
-- Why it matters:
+- Solution:
 - What changed:
 - What did NOT change (scope boundary):
+
+## Motivation
+
+Explain why this change should exist now. Link it to the user pain, failure mode, maintainer need, or product goal. If this is purely mechanical, write `N/A`.
+
+-
 
 ## Change Type (select all)
 
@@ -34,6 +40,18 @@ If this PR fixes a plugin beta-release blocker, title it `fix(<plugin-id>): beta
 - Closes #
 - Related #
 - [ ] This PR fixes a bug or regression
+
+## Real behavior proof (required for external PRs)
+
+External contributors must show after-fix evidence from a real OpenClaw setup. Unit tests, mocks, lint, typechecks, snapshots, and CI are supplemental only. Screenshots are encouraged even for CLI, console, text, or log changes; terminal screenshots and copied live output count. Be mindful of private information like IP addresses, API keys, phone numbers, non-public endpoints, or other private details when providing evidence.
+
+- Behavior or issue addressed:
+- Real environment tested:
+- Exact steps or command run after this patch:
+- Evidence after fix (screenshot, recording, terminal capture, console output, redacted runtime log, linked artifact, or copied live output):
+- Observed result after fix:
+- What was not tested:
+- Before evidence (optional but encouraged):
 
 ## Root Cause (if applicable)
 

@@ -1,16 +1,33 @@
+import { resolveAgentConfig } from "../../../agents/agent-scope-config.js";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
+import { parseModelRef } from "../../../agents/model-selection-normalize.js";
+import { normalizeProviderId } from "../../../agents/provider-id.js";
+import { pickSandboxToolPolicy } from "../../../agents/sandbox-tool-policy.js";
+import { isToolAllowedByPolicies } from "../../../agents/tool-policy-match.js";
+import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../../agents/tool-policy.js";
+import { resolveAgentModelPrimaryValue } from "../../../config/model-input.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { AgentToolsConfig, ToolsConfig } from "../../../config/types.tools.js";
+import { collectChannelRouteTargets } from "../../../routing/channel-route-targets.js";
+import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
+import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 
 type ChannelDoctorModule = typeof import("./channel-doctor.js");
 
-let channelDoctorModulePromise: Promise<ChannelDoctorModule> | undefined;
+const channelDoctorModuleLoader = createLazyImportLoader<ChannelDoctorModule>(
+  () => import("./channel-doctor.js"),
+);
 
 function loadChannelDoctorModule(): Promise<ChannelDoctorModule> {
-  channelDoctorModulePromise ??= import("./channel-doctor.js");
-  return channelDoctorModulePromise;
+  return channelDoctorModuleLoader.load();
 }
 
 function hasRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function listAgentRecords(cfg: OpenClawConfig): Record<string, unknown>[] {
+  return Array.isArray(cfg.agents?.list) ? cfg.agents.list.filter(hasRecord) : [];
 }
 
 function hasChannels(cfg: OpenClawConfig): boolean {
@@ -67,11 +84,282 @@ function hasConfiguredSafeBins(cfg: OpenClawConfig): boolean {
   ) {
     return true;
   }
-  return (cfg.agents?.list ?? []).some((agent) => {
+  return listAgentRecords(cfg).some((agent) => {
     const agentExec = hasRecord(agent) && hasRecord(agent.tools) ? agent.tools.exec : undefined;
     return (
       hasRecord(agentExec) && Array.isArray(agentExec.safeBins) && agentExec.safeBins.length > 0
     );
+  });
+}
+
+type VisibleReplyPolicyProvenance = "default" | "global-explicit" | "group-explicit";
+type ToolPolicyConfig = {
+  allow?: string[];
+  alsoAllow?: string[];
+  deny?: string[];
+  profile?: string;
+};
+
+function normalizeProviderPolicyKey(value: string): string {
+  const normalized = normalizeLowercaseStringOrEmpty(value);
+  const slashIndex = normalized.indexOf("/");
+  if (slashIndex <= 0) {
+    return normalizeProviderId(normalized);
+  }
+  const provider = normalizeProviderId(normalized.slice(0, slashIndex));
+  const modelId = normalized.slice(slashIndex + 1);
+  return modelId ? `${provider}/${modelId}` : provider;
+}
+
+function isCanonicalProviderPolicyKey(value: string): boolean {
+  return normalizeLowercaseStringOrEmpty(value) === normalizeProviderPolicyKey(value);
+}
+
+function resolveProviderToolPolicy(params: {
+  byProvider?: Record<string, ToolPolicyConfig>;
+  modelProvider: string;
+  modelId: string;
+}): ToolPolicyConfig | undefined {
+  if (!params.byProvider) {
+    return undefined;
+  }
+  const lookup = new Map<string, { canonical: boolean; value: ToolPolicyConfig }>();
+  for (const [key, value] of Object.entries(params.byProvider)) {
+    const normalized = normalizeProviderPolicyKey(key);
+    if (!normalized) {
+      continue;
+    }
+    const canonical = isCanonicalProviderPolicyKey(key);
+    const existing = lookup.get(normalized);
+    if (!existing || (canonical && !existing.canonical)) {
+      lookup.set(normalized, { canonical, value });
+    }
+  }
+
+  const provider = normalizeProviderPolicyKey(params.modelProvider);
+  const modelId = normalizeLowercaseStringOrEmpty(params.modelId);
+  const fullModelId = modelId ? `${provider}/${modelId}` : undefined;
+  return (fullModelId ? lookup.get(fullModelId)?.value : undefined) ?? lookup.get(provider)?.value;
+}
+
+function resolveMessageToolAvailability(params: {
+  cfg: OpenClawConfig;
+  agentId?: string;
+  globalTools?: ToolsConfig;
+  agentTools?: AgentToolsConfig;
+  runtimeAlsoAllow?: string[];
+}): boolean {
+  const agentConfig = params.agentId ? resolveAgentConfig(params.cfg, params.agentId) : undefined;
+  const modelRef = resolvePrimaryModelRef(params.cfg, agentConfig?.model);
+  const providerPolicy = resolveProviderToolPolicy({
+    byProvider: params.globalTools?.byProvider,
+    modelProvider: modelRef.provider,
+    modelId: modelRef.model,
+  });
+  const agentProviderPolicy = resolveProviderToolPolicy({
+    byProvider: params.agentTools?.byProvider,
+    modelProvider: modelRef.provider,
+    modelId: modelRef.model,
+  });
+  const profile = params.agentTools?.profile ?? params.globalTools?.profile;
+  const configuredAlsoAllow = Array.isArray(params.agentTools?.alsoAllow)
+    ? params.agentTools.alsoAllow
+    : Array.isArray(params.globalTools?.alsoAllow)
+      ? params.globalTools.alsoAllow
+      : [];
+  const providerAlsoAllow = Array.isArray(agentProviderPolicy?.alsoAllow)
+    ? agentProviderPolicy.alsoAllow
+    : Array.isArray(providerPolicy?.alsoAllow)
+      ? providerPolicy.alsoAllow
+      : [];
+  const profileAlsoAllow = [...configuredAlsoAllow, ...(params.runtimeAlsoAllow ?? [])];
+  const providerProfileAlsoAllow = [...providerAlsoAllow, ...(params.runtimeAlsoAllow ?? [])];
+  const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), profileAlsoAllow);
+  const providerProfilePolicy = mergeAlsoAllowPolicy(
+    resolveToolProfilePolicy(agentProviderPolicy?.profile ?? providerPolicy?.profile),
+    providerProfileAlsoAllow,
+  );
+  return isToolAllowedByPolicies("message", [
+    profilePolicy,
+    providerProfilePolicy,
+    pickSandboxToolPolicy(providerPolicy),
+    pickSandboxToolPolicy(agentProviderPolicy),
+    pickSandboxToolPolicy(params.globalTools),
+    pickSandboxToolPolicy(params.agentTools),
+  ]);
+}
+
+const SOURCE_REPLY_RUNTIME_MESSAGE_ALLOW = ["message"];
+
+function resolvePrimaryModelRef(
+  cfg: OpenClawConfig,
+  agentModel?: NonNullable<ReturnType<typeof resolveAgentConfig>>["model"],
+): { provider: string; model: string } {
+  const raw =
+    resolveAgentModelPrimaryValue(agentModel) ??
+    resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model) ??
+    DEFAULT_MODEL;
+  return (
+    parseModelRef(raw, DEFAULT_PROVIDER, { allowPluginNormalization: false }) ?? {
+      provider: DEFAULT_PROVIDER,
+      model: DEFAULT_MODEL,
+    }
+  );
+}
+
+function resolveSourceReplyMessageToolAvailability(params: {
+  cfg: OpenClawConfig;
+  agentId?: string;
+  globalTools?: ToolsConfig;
+  agentTools?: AgentToolsConfig;
+}): boolean {
+  return resolveMessageToolAvailability({
+    ...params,
+    runtimeAlsoAllow: SOURCE_REPLY_RUNTIME_MESSAGE_ALLOW,
+  });
+}
+
+function sourceReplyRuntimeMayAllowMessageTool(cfg: OpenClawConfig): boolean {
+  const groupPolicy = resolveGroupVisibleReplyProvenance(cfg);
+  if (groupPolicy.value === "message_tool") {
+    return true;
+  }
+  if (cfg.messages?.visibleReplies === "message_tool") {
+    return true;
+  }
+  return false;
+}
+
+function collectMessageToolUnavailableTargets(
+  cfg: OpenClawConfig,
+  options: { sourceReplyRuntimeGrant?: boolean } = {},
+): string[] {
+  const agents = listAgentRecords(cfg);
+  if (agents.length === 0) {
+    const available = options.sourceReplyRuntimeGrant
+      ? resolveSourceReplyMessageToolAvailability({ cfg, globalTools: cfg.tools })
+      : resolveMessageToolAvailability({ cfg, globalTools: cfg.tools });
+    return available ? [] : ["default tool policy"];
+  }
+  return agents.flatMap((agent) => {
+    const agentId = typeof agent.id === "string" ? agent.id : "unknown";
+    const available = options.sourceReplyRuntimeGrant
+      ? resolveSourceReplyMessageToolAvailability({
+          cfg,
+          agentId,
+          globalTools: cfg.tools,
+          agentTools: agent.tools as AgentToolsConfig | undefined,
+        })
+      : resolveMessageToolAvailability({
+          cfg,
+          agentId,
+          globalTools: cfg.tools,
+          agentTools: agent.tools as AgentToolsConfig | undefined,
+        });
+    return available ? [] : [`agent "${agentId}"`];
+  });
+}
+
+function resolveGroupVisibleReplyProvenance(cfg: OpenClawConfig): {
+  path: "messages.groupChat.visibleReplies" | "messages.visibleReplies";
+  provenance: VisibleReplyPolicyProvenance;
+  value: "automatic" | "message_tool";
+} {
+  const groupVisibleReplies = cfg.messages?.groupChat?.visibleReplies;
+  if (groupVisibleReplies) {
+    return {
+      path: "messages.groupChat.visibleReplies",
+      provenance: "group-explicit",
+      value: groupVisibleReplies,
+    };
+  }
+  const globalVisibleReplies = cfg.messages?.visibleReplies;
+  if (globalVisibleReplies) {
+    return {
+      path: "messages.visibleReplies",
+      provenance: "global-explicit",
+      value: globalVisibleReplies,
+    };
+  }
+  return {
+    path: "messages.groupChat.visibleReplies",
+    provenance: "default",
+    value: "automatic",
+  };
+}
+
+function formatTargets(targets: string[]): string {
+  if (targets.length <= 2) {
+    return targets.join(" and ");
+  }
+  return `${targets.slice(0, 2).join(", ")}, and ${targets.length - 2} more`;
+}
+
+export function collectVisibleReplyToolPolicyWarnings(cfg: OpenClawConfig): string[] {
+  const groupPolicy = resolveGroupVisibleReplyProvenance(cfg);
+  const warnings: string[] = [];
+  if (groupPolicy.value === "message_tool") {
+    const targets = collectMessageToolUnavailableTargets(cfg, { sourceReplyRuntimeGrant: true });
+    if (targets.length === 0) {
+      return warnings;
+    }
+    warnings.push(
+      `- ${groupPolicy.path} is set to "message_tool", but the message tool is unavailable for ${formatTargets(
+        targets,
+      )}; OpenClaw falls back to automatic visible replies, so normal replies may post to the source chat. Enable the message tool or set ${groupPolicy.path} to "automatic".`,
+    );
+  }
+
+  const globalVisibleReplies = cfg.messages?.visibleReplies;
+  if (globalVisibleReplies === "message_tool" && groupPolicy.path !== "messages.visibleReplies") {
+    const targets = collectMessageToolUnavailableTargets(cfg, { sourceReplyRuntimeGrant: true });
+    if (targets.length === 0) {
+      return warnings;
+    }
+    warnings.push(
+      `- messages.visibleReplies is set to "message_tool", but the message tool is unavailable for ${formatTargets(
+        targets,
+      )}; OpenClaw falls back to automatic direct-chat replies, so normal replies may post to the source chat. Enable the message tool or set messages.visibleReplies to "automatic".`,
+    );
+  }
+  return warnings;
+}
+
+function formatChannelList(channels: string[]): string {
+  if (channels.length <= 2) {
+    return channels.map((channel) => `"${channel}"`).join(" and ");
+  }
+  return `${channels
+    .slice(0, 2)
+    .map((channel) => `"${channel}"`)
+    .join(", ")}, and ${channels.length - 2} more`;
+}
+
+export function collectChannelBoundMessageToolPolicyWarnings(cfg: OpenClawConfig): string[] {
+  return collectChannelRouteTargets(cfg).flatMap((target) => {
+    const agentTools = resolveAgentConfig(cfg, target.agentId)?.tools;
+    const runtimeMayAllowMessage = sourceReplyRuntimeMayAllowMessageTool(cfg);
+    const messageToolAvailable = runtimeMayAllowMessage
+      ? resolveSourceReplyMessageToolAvailability({
+          cfg,
+          agentId: target.agentId,
+          globalTools: cfg.tools,
+          agentTools,
+        })
+      : resolveMessageToolAvailability({
+          cfg,
+          agentId: target.agentId,
+          globalTools: cfg.tools,
+          agentTools,
+        });
+    if (messageToolAvailable) {
+      return [];
+    }
+    return [
+      `- Agent "${target.agentId}" is routed from channel ${formatChannelList(
+        target.channels,
+      )}, but the message tool is unavailable for that agent; explicit channel actions such as sendAttachment, upload-file, thread-reply, or reply can fail. Add "message" to the agent tool allowlist, add "group:messaging", or switch the agent to a profile that includes messaging tools.`,
+    ];
   });
 }
 
@@ -84,6 +372,9 @@ export async function collectDoctorPreviewWarnings(params: {
   const env = params.env ?? process.env;
   const hasChannelConfig = hasChannels(params.cfg);
   const hasPluginConfig = hasPlugins(params.cfg);
+
+  warnings.push(...collectVisibleReplyToolPolicyWarnings(params.cfg));
+  warnings.push(...collectChannelBoundMessageToolPolicyWarnings(params.cfg));
 
   const channelPluginRuntime =
     hasChannelConfig && hasExplicitChannelPluginBlockerConfig(params.cfg)
@@ -145,6 +436,8 @@ export async function collectDoctorPreviewWarnings(params: {
     const { collectCodexRouteWarnings } = await import("./codex-route-warnings.js");
     warnings.push(...collectCodexRouteWarnings({ cfg: params.cfg, env }));
   }
+  const { collectCodexNativeAssetWarnings } = await import("./codex-native-assets.js");
+  warnings.push(...(await collectCodexNativeAssetWarnings({ cfg: params.cfg, env })));
 
   if (hasPluginLoadPaths(params.cfg)) {
     const { collectBundledPluginLoadPathWarnings, scanBundledPluginLoadPathMigrations } =
@@ -222,6 +515,21 @@ export async function collectDoctorPreviewWarnings(params: {
     if (safeBinTrustedDirHints.length > 0) {
       warnings.push(collectExecSafeBinTrustedDirHintWarnings(safeBinTrustedDirHints).join("\n"));
     }
+  }
+
+  const { collectStaleOAuthProfileShadowWarnings, scanStaleOAuthProfileShadows } =
+    await import("./stale-oauth-profile-shadows.js");
+  const staleOAuthProfileShadows = await scanStaleOAuthProfileShadows({
+    cfg: params.cfg,
+    env,
+  });
+  if (staleOAuthProfileShadows.length > 0) {
+    warnings.push(
+      collectStaleOAuthProfileShadowWarnings({
+        hits: staleOAuthProfileShadows,
+        doctorFixCommand: params.doctorFixCommand,
+      }).join("\n"),
+    );
   }
 
   return warnings;

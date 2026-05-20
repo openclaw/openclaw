@@ -8,8 +8,17 @@ import {
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 
+const { extractDeliveryInfoMock } = vi.hoisted(() => ({
+  extractDeliveryInfoMock: vi.fn(),
+}));
+
 vi.mock("../../config/sessions/main-session.js", () => ({
+  canonicalizeMainSessionAlias: vi.fn(({ sessionKey }) => sessionKey),
   resolveAgentMainSessionKey: vi.fn().mockReturnValue("agent:test:main"),
+}));
+
+vi.mock("../../config/sessions/delivery-info.js", () => ({
+  extractDeliveryInfo: extractDeliveryInfoMock,
 }));
 
 vi.mock("../../config/sessions/paths.js", () => ({
@@ -39,6 +48,7 @@ vi.mock("../../infra/outbound/targets.runtime.js", () => ({
 }));
 const mockedModuleIds = [
   "../../config/sessions/main-session.js",
+  "../../config/sessions/delivery-info.js",
   "../../config/sessions/paths.js",
   "../../config/sessions/store-load.js",
   "../../infra/outbound/channel-selection.runtime.js",
@@ -102,7 +112,11 @@ const normalizeTelegramTargetForDeliveryTest = vi.fn((raw: string): string | und
 
 beforeEach(() => {
   resetPluginRuntimeStateForTest();
+  extractDeliveryInfoMock.mockReset();
+  extractDeliveryInfoMock.mockReturnValue({ deliveryContext: undefined, threadId: undefined });
   normalizeTelegramTargetForDeliveryTest.mockClear();
+  vi.mocked(readChannelAllowFromStoreEntriesSync).mockReset();
+  vi.mocked(readChannelAllowFromStoreEntriesSync).mockReturnValue([]);
   vi.mocked(resolveOutboundTarget).mockReset();
   setActivePluginRegistry(
     createTestRegistry([
@@ -141,14 +155,6 @@ beforeEach(() => {
               (cfg.channels?.alpha as { allowFrom?: string[] } | undefined)?.allowFrom,
           },
         },
-        source: "test",
-      },
-      {
-        pluginId: "telegram",
-        plugin: createOutboundTestPlugin({
-          id: "telegram",
-          outbound: createStubOutbound("Telegram"),
-        }),
         source: "test",
       },
     ]),
@@ -242,9 +248,8 @@ describe("resolveDeliveryTarget", () => {
       lastChannel: "alpha",
       lastTo: "room-denied",
     });
-    setStoredAlphaAllowFrom(["room-allowed"]);
 
-    const cfg = makeCfg({ bindings: [], channels: { alpha: { allowFrom: [] } } });
+    const cfg = makeCfg({ bindings: [], channels: { alpha: { allowFrom: ["room-allowed"] } } });
     const result = await resolveLastTarget(cfg);
 
     expect(result.channel).toBe("alpha");
@@ -257,9 +262,8 @@ describe("resolveDeliveryTarget", () => {
       lastChannel: "alpha",
       lastTo: "room-denied",
     });
-    setStoredAlphaAllowFrom(["room-allowed"]);
 
-    const cfg = makeCfg({ bindings: [], channels: { alpha: { allowFrom: [] } } });
+    const cfg = makeCfg({ bindings: [], channels: { alpha: { allowFrom: ["room-allowed"] } } });
     const result = await resolveDeliveryTarget(
       cfg,
       AGENT_ID,
@@ -289,6 +293,19 @@ describe("resolveDeliveryTarget", () => {
     });
 
     expect(result.to).toBe("room-denied");
+  });
+
+  it("does not use pairing-store entries as implicit automation recipients", async () => {
+    setMainSessionEntry(undefined);
+    setStoredAlphaAllowFrom(["room-paired"]);
+
+    const cfg = makeCfg({ bindings: [], channels: { alpha: { allowFrom: [] } } });
+    const result = await resolveLastTarget(cfg);
+
+    expect(result.ok).toBe(false);
+    expect(result.channel).toBe("alpha");
+    expect(result.to).toBeUndefined();
+    expect(readChannelAllowFromStoreEntriesSync).not.toHaveBeenCalled();
   });
 
   it("falls back to bound accountId when session has no lastAccountId", async () => {
@@ -378,19 +395,20 @@ describe("resolveDeliveryTarget", () => {
       source: "directory",
     });
 
-    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+    const cfg = makeCfg({ bindings: [] });
+    const result = await resolveDeliveryTarget(cfg, AGENT_ID, {
       channel: "forum",
       to: "123456789",
     });
 
     expect(result.ok).toBe(true);
     expect(result.to).toBe("user:123456789");
-    expect(maybeResolveIdLikeTarget).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "forum",
-        input: "123456789",
-      }),
-    );
+    expect(maybeResolveIdLikeTarget).toHaveBeenCalledWith({
+      cfg,
+      channel: "forum",
+      input: "123456789",
+      accountId: undefined,
+    });
   });
 
   it("skips id-like target normalization for dry-run delivery previews", async () => {
@@ -428,24 +446,29 @@ describe("resolveDeliveryTarget", () => {
     );
     vi.mocked(resolveOutboundTarget).mockReturnValueOnce({ ok: true, to: "room:default" });
 
-    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+    const cfg = makeCfg({ bindings: [] });
+    const result = await resolveDeliveryTarget(cfg, AGENT_ID, {
       channel: "forum",
       to: "room:default",
     });
 
-    expect(result).toEqual(
-      expect.objectContaining({
-        ok: true,
-        channel: "forum",
-        to: "room:default",
-      }),
-    );
-    expect(resolveOutboundTarget).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "forum",
-        to: "room:default",
-      }),
-    );
+    expect(result).toEqual({
+      ok: true,
+      channel: "forum",
+      to: "room:default",
+      accountId: undefined,
+      threadId: undefined,
+      mode: "explicit",
+    });
+    expect(resolveOutboundTarget).toHaveBeenCalledWith({
+      channel: "forum",
+      to: "room:default",
+      cfg,
+      accountId: undefined,
+      mode: "explicit",
+      allowFrom: undefined,
+      allowBootstrap: true,
+    });
   });
 
   it("returns an unresolved target when loaded target resolution throws", async () => {
@@ -478,6 +501,47 @@ describe("resolveDeliveryTarget", () => {
       throw new Error("expected invalid delivery target");
     }
     expect(result.error.message).toContain("Invalid delivery target: target normalizer exploded");
+  });
+
+  it("returns an unresolved target when the shared prefix guard rejects the explicit target", async () => {
+    setMainSessionEntry(undefined);
+    const resolveTarget = vi.fn(() => ({ ok: true as const, to: "telegram:1234567890" }));
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "alpha",
+          plugin: createOutboundTestPlugin({
+            id: "alpha",
+            outbound: {
+              deliveryMode: "gateway",
+              resolveTarget,
+            },
+          }),
+          source: "test",
+        },
+        {
+          pluginId: "telegram",
+          plugin: createOutboundTestPlugin({
+            id: "telegram",
+            outbound: createStubOutbound("Telegram"),
+            messaging: telegramMessagingForTest,
+          }),
+          source: "test",
+        },
+      ]),
+    );
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "alpha",
+      to: "telegram:1234567890",
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected invalid delivery target");
+    }
+    expect(result.error.message).toContain("belongs to telegram, not alpha");
+    expect(resolveTarget).not.toHaveBeenCalled();
   });
 
   it("selects correct binding when multiple agents have bindings", async () => {
@@ -616,6 +680,18 @@ describe("resolveDeliveryTarget", () => {
     expect(result.error.message).toContain("requires target");
   });
 
+  it("uses provider-prefixed explicit target instead of fallback channel for delivery.channel=last", async () => {
+    setMainSessionEntry(undefined);
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "last",
+      to: "telegram:1234567890",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.channel).toBe("telegram");
+    expect(result.to).toBe("1234567890");
+  });
+
   it("returns an error when channel selection is ambiguous", async () => {
     setMainSessionEntry(undefined);
     vi.mocked(resolveMessageChannelSelection).mockRejectedValueOnce(
@@ -658,6 +734,76 @@ describe("resolveDeliveryTarget", () => {
     expect(result.channel).toBe("forum");
     expect(result.to).toBe("thread-chat");
     expect(result.threadId).toBe(42);
+  });
+
+  it("prefers stored deliveryContext lookup over exact session-store entries", async () => {
+    extractDeliveryInfoMock.mockReturnValueOnce({
+      deliveryContext: {
+        channel: "alpha",
+        to: "RoomMixedCase",
+        accountId: "primary",
+        threadId: "thread-old-stored",
+      },
+      threadId: "thread-stored",
+    });
+    setSessionStore({
+      "agent:test:thread:42": {
+        sessionId: "thread-session",
+        updatedAt: 2000,
+        lastChannel: "alpha",
+        lastTo: "room-lowercase",
+        lastThreadId: "thread-old",
+      },
+    } as SessionStore);
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "last",
+      sessionKey: "agent:test:thread:42",
+      to: undefined,
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      channel: "alpha",
+      to: "RoomMixedCase",
+      accountId: "primary",
+      threadId: "thread-stored",
+    });
+  });
+
+  it("scopes unqualified stored delivery lookups to the job agent", async () => {
+    extractDeliveryInfoMock.mockImplementation((sessionKey: string) =>
+      sessionKey === "agent:agent-b:main"
+        ? {
+            deliveryContext: {
+              channel: "alpha",
+              to: "ops-room",
+            },
+            threadId: undefined,
+          }
+        : {
+            deliveryContext: {
+              channel: "alpha",
+              to: "default-room",
+            },
+            threadId: undefined,
+          },
+    );
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "last",
+      sessionKey: "main",
+      to: undefined,
+    });
+
+    expect(extractDeliveryInfoMock).toHaveBeenCalledWith("agent:agent-b:main", {
+      cfg: expect.any(Object),
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      channel: "alpha",
+      to: "ops-room",
+    });
   });
 
   it("falls back to the main session entry when the requested sessionKey is missing", async () => {

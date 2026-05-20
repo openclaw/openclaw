@@ -164,7 +164,7 @@ async function expectBackgroundSessionSurvivesAbort(params: {
   const running = getSession(sessionId);
   const finished = getFinishedSession(sessionId);
   try {
-    expect(supervisorMockState.cancelReasons).toEqual([]);
+    expect(supervisorMockState.cancelReasons).toStrictEqual([]);
     expect(finished).toBeUndefined();
     expect(running?.exited).toBe(false);
   } finally {
@@ -196,7 +196,6 @@ async function expectBackgroundSessionTimesOut(params: {
 
   const finished = await waitForFinishedSession(sessionId);
   try {
-    expect(finished).toBeTruthy();
     expect(finished?.status).toBe("failed");
   } finally {
     cleanupRunningSession(sessionId);

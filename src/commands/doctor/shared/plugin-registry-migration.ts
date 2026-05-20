@@ -201,7 +201,7 @@ function listConfiguredModelProviderIds(config: OpenClawConfig): Set<string> {
   );
 }
 
-export function listMigrationRelevantPluginRecords(params: {
+function listMigrationRelevantPluginRecords(params: {
   index: InstalledPluginIndex;
   config: OpenClawConfig;
   installRecords: Record<string, unknown>;
@@ -253,6 +253,12 @@ export function listMigrationRelevantPluginRecords(params: {
     }
     const manifest = manifestByPluginId.get(plugin.pluginId);
     if (plugin.enabledByDefault && (manifest?.providers.length ?? 0) > 0) {
+      return true;
+    }
+    if (plugin.startup.memory) {
+      return true;
+    }
+    if ((manifest?.commandAliases ?? []).some((alias) => alias.cliCommand)) {
       return true;
     }
     if (installedPluginIds.has(plugin.pluginId) || referencedPluginIds.has(plugin.pluginId)) {

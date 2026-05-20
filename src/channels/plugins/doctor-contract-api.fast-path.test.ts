@@ -54,23 +54,20 @@ describe("channel doctor contract api fast path", () => {
     expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
       dirName: "discord",
       artifactBasename: "doctor-contract-api.js",
-      installRuntimeDeps: false,
     });
   });
 
   it("treats empty explicit doctor contract rules as authoritative", () => {
     const api = loadBundledChannelDoctorContractApi("whatsapp");
 
-    expect(api?.legacyConfigRules).toEqual([]);
+    expect(api?.legacyConfigRules).toStrictEqual([]);
     expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
       dirName: "whatsapp",
       artifactBasename: "doctor-contract-api.js",
-      installRuntimeDeps: false,
     });
     expect(loadBundledPluginPublicArtifactModuleSyncMock).not.toHaveBeenCalledWith({
       dirName: "whatsapp",
       artifactBasename: "contract-api.js",
-      installRuntimeDeps: false,
     });
   });
 
@@ -86,12 +83,10 @@ describe("channel doctor contract api fast path", () => {
     expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
       dirName: "telegram",
       artifactBasename: "doctor-contract-api.js",
-      installRuntimeDeps: false,
     });
     expect(loadBundledPluginPublicArtifactModuleSyncMock).not.toHaveBeenCalledWith({
       dirName: "telegram",
       artifactBasename: "contract-api.js",
-      installRuntimeDeps: false,
     });
   });
 });

@@ -1,11 +1,6 @@
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
-import {
-  expandToolGroups,
-  normalizeToolList,
-  normalizeToolName,
-  resolveToolProfilePolicy,
-  TOOL_GROUPS,
-} from "./tool-policy-shared.js";
+import { IMPLICIT_ALLOW_ALL_FROM_ALSO_ALLOW } from "./sandbox-tool-policy.js";
+import { expandToolGroups, normalizeToolList, normalizeToolName } from "./tool-policy-shared.js";
 import type { AnyAgentTool } from "./tools/common.js";
 export {
   expandToolGroups,
@@ -80,6 +75,7 @@ export function applyOwnerOnlyToolPolicy(
 export type ToolPolicyLike = {
   allow?: string[];
   deny?: string[];
+  [IMPLICIT_ALLOW_ALL_FROM_ALSO_ALLOW]?: true;
 };
 
 export type PluginToolGroups = {
@@ -93,6 +89,38 @@ export type AllowlistResolution = {
   pluginOnlyAllowlist: boolean;
 };
 
+export const DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY = "__openclaw_default_plugin_tools__";
+
+export function hasRestrictiveAllowPolicy(policy?: { allow?: string[] }): boolean {
+  return (
+    Array.isArray(policy?.allow) &&
+    policy.allow.some((entry) => {
+      const normalized = normalizeToolName(entry);
+      return (
+        Boolean(normalized) &&
+        normalized !== "*" &&
+        normalized !== DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY
+      );
+    })
+  );
+}
+
+export function replaceWithEffectiveToolAllowlist(
+  target: string[],
+  tools: Array<{ name: string }>,
+): void {
+  target.length = 0;
+  const seen = new Set<string>();
+  for (const tool of tools) {
+    const normalized = normalizeToolName(tool.name);
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    target.push(normalized);
+  }
+}
+
 export function collectExplicitAllowlist(policies: Array<ToolPolicyLike | undefined>): string[] {
   const entries: string[] = [];
   for (const policy of policies) {
@@ -100,6 +128,31 @@ export function collectExplicitAllowlist(policies: Array<ToolPolicyLike | undefi
       continue;
     }
     for (const value of policy.allow) {
+      if (typeof value !== "string") {
+        continue;
+      }
+      const trimmed = value.trim();
+      if (trimmed === "*" && policy[IMPLICIT_ALLOW_ALL_FROM_ALSO_ALLOW] === true) {
+        continue;
+      }
+      if (trimmed) {
+        entries.push(trimmed);
+      }
+    }
+    if (policy[IMPLICIT_ALLOW_ALL_FROM_ALSO_ALLOW] === true) {
+      entries.push(DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY);
+    }
+  }
+  return Array.from(new Set(entries));
+}
+
+export function collectExplicitDenylist(policies: Array<ToolPolicyLike | undefined>): string[] {
+  const entries: string[] = [];
+  for (const policy of policies) {
+    if (!policy?.deny) {
+      continue;
+    }
+    for (const value of policy.deny) {
       if (typeof value !== "string") {
         continue;
       }

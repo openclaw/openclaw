@@ -1,6 +1,6 @@
 import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 
-export type ChunkDiscordTextOpts = {
+type ChunkDiscordTextOpts = {
   /** Max characters per Discord message. Default: 2000. */
   maxChars?: number;
   /**
@@ -287,7 +287,7 @@ function rebalanceReasoningItalics(source: string, chunks: string[]): string[] {
   }
 
   const opensWithReasoningItalics =
-    source.startsWith("Reasoning:\n_") && source.trimEnd().endsWith("_");
+    /^(?:Reasoning:|Thinking\.{0,3})\n+_/u.test(source) && source.trimEnd().endsWith("_");
   if (!opensWithReasoningItalics) {
     return chunks;
   }

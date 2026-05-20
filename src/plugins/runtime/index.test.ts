@@ -6,10 +6,23 @@ import {
   type OpenClawConfig,
 } from "../../config/config.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
-import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
+import {
+  requestHeartbeat,
+  resetHeartbeatWakeStateForTests,
+  setHeartbeatWakeHandler,
+} from "../../infra/heartbeat-wake.js";
 import * as execModule from "../../process/exec.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { VERSION } from "../../version.js";
+
+const runtimeModelAuthMocks = vi.hoisted(() => ({
+  getApiKeyForModel: vi.fn(),
+  getRuntimeAuthForModel: vi.fn(),
+  resolveApiKeyForProvider: vi.fn(),
+}));
+
+vi.mock("./runtime-model-auth.runtime.js", () => runtimeModelAuthMocks);
+
 import {
   clearGatewaySubagentRuntime,
   createPluginRuntime,
@@ -85,9 +98,9 @@ function createGatewaySubagentRunFixture(params?: { allowGatewaySubagentBinding?
 }
 
 function expectFunctionKeys(value: Record<string, unknown>, keys: readonly string[]) {
-  keys.forEach((key) => {
+  for (const key of keys) {
     expect(typeof value[key]).toBe("function");
-  });
+  }
 }
 
 function expectRunCommandOutcome(params: {
@@ -107,6 +120,9 @@ function expectRunCommandOutcome(params: {
 describe("plugin runtime command execution", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    runtimeModelAuthMocks.getApiKeyForModel.mockReset();
+    runtimeModelAuthMocks.getRuntimeAuthForModel.mockReset();
+    runtimeModelAuthMocks.resolveApiKeyForProvider.mockReset();
     resetConfigRuntimeState();
     clearGatewaySubagentRuntime();
   });
@@ -149,10 +165,16 @@ describe("plugin runtime command execution", () => {
       expected: onSessionTranscriptUpdate,
     },
     {
-      name: "exposes runtime.system.requestHeartbeatNow",
+      name: "exposes runtime.system.requestHeartbeat",
       readValue: (runtime: ReturnType<typeof createPluginRuntime>) =>
-        runtime.system.requestHeartbeatNow,
-      expected: requestHeartbeatNow,
+        runtime.system.requestHeartbeat,
+      expected: requestHeartbeat,
+    },
+    {
+      name: "exposes deprecated runtime.system.requestHeartbeatNow",
+      readValue: (runtime: ReturnType<typeof createPluginRuntime>) =>
+        typeof runtime.system.requestHeartbeatNow,
+      expected: "function",
     },
     {
       name: "exposes runtime.version from the shared VERSION constant",
@@ -161,6 +183,32 @@ describe("plugin runtime command execution", () => {
     },
   ] as const)("$name", ({ readValue, expected }) => {
     expectRuntimeValue(readValue, expected);
+  });
+
+  it("maps deprecated runtime.system.requestHeartbeatNow to an immediate compatibility wake", async () => {
+    vi.useFakeTimers();
+    resetHeartbeatWakeStateForTests();
+    const handler = vi.fn(async (_request: Parameters<typeof requestHeartbeat>[0]) => ({
+      status: "skipped" as const,
+      reason: "disabled",
+    }));
+    setHeartbeatWakeHandler(handler);
+    try {
+      createPluginRuntime().system.requestHeartbeatNow({
+        reason: "legacy-plugin",
+        coalesceMs: 0,
+      });
+      await vi.advanceTimersByTimeAsync(1);
+      const request = handler.mock.calls[0]?.[0] as
+        | { source?: string; intent?: string; reason?: string }
+        | undefined;
+      expect(request?.source).toBe("other");
+      expect(request?.intent).toBe("immediate");
+      expect(request?.reason).toBe("legacy-plugin");
+    } finally {
+      resetHeartbeatWakeStateForTests();
+      vi.useRealTimers();
+    }
   });
 
   it("resolves thinking policy with configured model compat from runtime config", () => {
@@ -199,6 +247,7 @@ describe("plugin runtime command execution", () => {
           "runFile",
           "describeImageFile",
           "describeImageFileWithModel",
+          "extractStructuredWithModel",
           "describeVideoFile",
         ]);
         expect(runtime.mediaUnderstanding.transcribeAudioFile).toBe(
@@ -262,6 +311,8 @@ describe("plugin runtime command execution", () => {
           "resolveAgentDir",
         ]);
         expectFunctionKeys(runtime.agent.session as Record<string, unknown>, [
+          "updateSessionStore",
+          "updateSessionStoreEntry",
           "resolveSessionFilePath",
         ]);
       },
@@ -269,8 +320,7 @@ describe("plugin runtime command execution", () => {
     {
       name: "exposes runtime.modelAuth with raw and runtime-ready auth helpers",
       assert: (runtime: ReturnType<typeof createPluginRuntime>) => {
-        expect(runtime.modelAuth).toBeDefined();
-        expectFunctionKeys(runtime.modelAuth as Record<string, unknown>, [
+        expectFunctionKeys(runtime.modelAuth, [
           "getApiKeyForModel",
           "getRuntimeAuthForModel",
           "resolveApiKeyForProvider",
@@ -291,7 +341,57 @@ describe("plugin runtime command execution", () => {
     expect(runtime.modelAuth.getApiKeyForModel).not.toBe(rawGetApiKey);
   });
 
-  it("keeps subagent unavailable by default even after gateway initialization", async () => {
+  it("modelAuth wrappers preserve workspace scope while stripping credential steering", async () => {
+    const runtime = createPluginRuntime();
+    const model = {
+      id: "workspace-cloud/model",
+      provider: "workspace-cloud",
+      api: "openai-responses",
+      baseUrl: "https://workspace-cloud.example/v1",
+    };
+    const cfg = { plugins: { allow: ["workspace-cloud"] } } as OpenClawConfig;
+    runtimeModelAuthMocks.getApiKeyForModel.mockResolvedValue({
+      apiKey: "model-key",
+      source: "workspace cloud credentials",
+      mode: "api-key",
+    });
+    runtimeModelAuthMocks.resolveApiKeyForProvider.mockResolvedValue({
+      apiKey: "provider-key",
+      source: "workspace cloud credentials",
+      mode: "api-key",
+    });
+
+    const modelAuth = await runtime.modelAuth.getApiKeyForModel({
+      model: model as never,
+      cfg,
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      store: { version: 1, profiles: {} },
+    } as never);
+    expect(modelAuth.apiKey).toBe("model-key");
+
+    const providerAuth = await runtime.modelAuth.resolveApiKeyForProvider({
+      provider: "workspace-cloud",
+      cfg,
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      store: { version: 1, profiles: {} },
+    } as never);
+    expect(providerAuth.apiKey).toBe("provider-key");
+
+    expect(runtimeModelAuthMocks.getApiKeyForModel).toHaveBeenCalledWith({
+      model,
+      cfg,
+      workspaceDir: "/tmp/workspace",
+    });
+    expect(runtimeModelAuthMocks.resolveApiKeyForProvider).toHaveBeenCalledWith({
+      provider: "workspace-cloud",
+      cfg,
+      workspaceDir: "/tmp/workspace",
+    });
+  });
+
+  it("keeps subagent unavailable by default even after gateway initialization", () => {
     const { runtime } = createGatewaySubagentRunFixture();
 
     expectGatewaySubagentRunFailure(runtime, { sessionKey: "s-1", message: "hello" });

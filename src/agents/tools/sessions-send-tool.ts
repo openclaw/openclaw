@@ -1,10 +1,17 @@
 import crypto from "node:crypto";
 import { Type } from "typebox";
 import { isRequesterParentOfBackgroundAcpSession } from "../../acp/session-interaction-mode.js";
+import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import {
+  isSubagentSessionKey,
+  normalizeAgentId,
+  resolveAgentIdFromSessionKey,
+  toAgentStoreSessionKey,
+} from "../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -12,8 +19,10 @@ import {
   type GatewayMessageChannel,
   INTERNAL_MESSAGE_CHANNEL,
 } from "../../utils/message-channel.js";
+import { listAgentIds } from "../agent-scope.js";
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import {
+  type AgentWaitResult,
   readLatestAssistantReplySnapshot,
   waitForAgentRunAndReadUpdatedAssistantReply,
 } from "../run-wait.js";
@@ -45,6 +54,101 @@ const SessionsSendToolSchema = Type.Object({
 
 type GatewayCaller = typeof callGateway;
 const SESSIONS_SEND_REPLY_HISTORY_LIMIT = 50;
+
+function resolveConfiguredAgentMainSessionKey(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  mainKey: string;
+}): string | undefined {
+  const agentId = normalizeAgentId(params.agentId);
+  if (!listAgentIds(params.cfg).includes(agentId)) {
+    return undefined;
+  }
+  return toAgentStoreSessionKey({
+    agentId,
+    requestKey: "main",
+    mainKey: params.mainKey,
+  });
+}
+
+function isConfiguredAgentMainSessionKey(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  mainKey: string;
+}): boolean {
+  const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
+  return (
+    params.sessionKey ===
+    resolveConfiguredAgentMainSessionKey({
+      cfg: params.cfg,
+      agentId,
+      mainKey: params.mainKey,
+    })
+  );
+}
+
+async function ensureConfiguredAgentMainSession(params: {
+  cfg: OpenClawConfig;
+  callGateway: GatewayCaller;
+  sessionKey: string;
+  mainKey: string;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (
+    !isConfiguredAgentMainSessionKey({
+      cfg: params.cfg,
+      sessionKey: params.sessionKey,
+      mainKey: params.mainKey,
+    })
+  ) {
+    return { ok: true };
+  }
+
+  try {
+    await params.callGateway({
+      method: "sessions.resolve",
+      params: { key: params.sessionKey },
+      timeoutMs: 10_000,
+    });
+    return { ok: true };
+  } catch {
+    try {
+      await params.callGateway({
+        method: "sessions.create",
+        params: {
+          key: params.sessionKey,
+          agentId: resolveAgentIdFromSessionKey(params.sessionKey),
+        },
+        timeoutMs: 10_000,
+      });
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: formatErrorMessage(err) };
+    }
+  }
+}
+
+type SessionsSendRouteEntry = Pick<SessionEntry, "acp" | "parentSessionKey" | "spawnedBy">;
+
+function isRequesterParentOfNativeSubagentSession(params: {
+  entry: SessionsSendRouteEntry | null | undefined;
+  requesterSessionKey: string | null | undefined;
+  targetSessionKey: string;
+}): boolean {
+  if (!params.entry || params.entry.acp || !isSubagentSessionKey(params.targetSessionKey)) {
+    return false;
+  }
+  const requester = normalizeOptionalString(params.requesterSessionKey);
+  if (!requester) {
+    return false;
+  }
+  const spawnedBy = normalizeOptionalString(params.entry.spawnedBy);
+  const parentSessionKey = normalizeOptionalString(params.entry.parentSessionKey);
+  return requester === spawnedBy || requester === parentSessionKey;
+}
+
+function isTerminalAgentWaitTimeout(result: AgentWaitResult): boolean {
+  return result.endedAt !== undefined || Boolean(result.stopReason || result.livenessState);
+}
 
 async function startAgentRun(params: {
   callGateway: GatewayCaller;
@@ -115,6 +219,21 @@ export function createSessionsSendTool(opts?: {
       }
 
       let sessionKey = sessionKeyParam;
+      if (!sessionKey && !labelParam && labelAgentIdParam) {
+        const agentMainKey = resolveConfiguredAgentMainSessionKey({
+          cfg,
+          agentId: labelAgentIdParam,
+          mainKey,
+        });
+        if (!agentMainKey) {
+          return jsonResult({
+            runId: crypto.randomUUID(),
+            status: "error",
+            error: `agent not found: ${labelAgentIdParam}`,
+          });
+        }
+        sessionKey = agentMainKey;
+      }
       if (!sessionKey && labelParam) {
         const requesterAgentId = resolveAgentIdFromSessionKey(effectiveRequesterKey);
         const requestedAgentId = labelAgentIdParam
@@ -239,6 +358,15 @@ export function createSessionsSendTool(opts?: {
       const announceTimeoutMs = timeoutSeconds === 0 ? 30_000 : timeoutMs;
       const idempotencyKey = crypto.randomUUID();
       let runId: string = idempotencyKey;
+      if (parseSessionThreadInfoFast(resolvedKey).threadId) {
+        return jsonResult({
+          runId: crypto.randomUUID(),
+          status: "error",
+          error:
+            "sessions_send cannot target a thread session for inter-agent coordination. Use the parent channel session key instead.",
+          sessionKey: displayKey,
+        });
+      }
       const visibilityGuard = await createSessionVisibilityGuard({
         action: "send",
         requesterSessionKey: effectiveRequesterKey,
@@ -251,6 +379,21 @@ export function createSessionsSendTool(opts?: {
           runId: crypto.randomUUID(),
           status: access.status,
           error: access.error,
+          sessionKey: displayKey,
+        });
+      }
+
+      const ensuredSession = await ensureConfiguredAgentMainSession({
+        cfg,
+        callGateway: gatewayCall,
+        sessionKey: resolvedKey,
+        mainKey,
+      });
+      if (!ensuredSession.ok) {
+        return jsonResult({
+          runId: crypto.randomUUID(),
+          status: "error",
+          error: ensuredSession.error,
           sessionKey: displayKey,
         });
       }
@@ -294,24 +437,34 @@ export function createSessionsSendTool(opts?: {
       const maxPingPongTurns = resolvePingPongTurns(cfg);
 
       // Skip the A2A ping-pong + announce flow when the current caller is the
-      // parent of a parent-owned background ACP subagent it spawned itself.
-      // Such sessions already report their results back to the parent through
-      // the `[Internal task completion event]` announcement path, and treating
-      // them as a peer agent causes the parent to be woken with the child's
-      // reply, generate a user-facing response, and have that response
-      // forwarded back to the child as a new message — producing a
-      // ping-pong loop between parent and ACP child (bounded by
-      // maxPingPongTurns, but user-visible as a runaway conversation).
+      // parent of a parent-owned child session it spawned itself and another
+      // parent-visible result path already exists.
+      //
+      // ACP background sessions report through the internal task completion
+      // path. Waited native subagent sends return the child reply inline. In
+      // both cases treating the child as a peer agent wakes the parent with
+      // the child's reply, can generate another user-facing response, and can
+      // forward that response back to the child as a new message — producing a
+      // ping-pong loop (bounded by maxPingPongTurns, but visible as duplicate
+      // conversation output).
       //
       // The skip is gated on requester ownership, not just target type: an
       // unrelated sender that can see the same target (e.g. under
       // `tools.sessions.visibility=all`) must still go through the normal A2A
       // path so it actually receives a follow-up delivery.
       const targetSessionEntry = loadSessionEntryByKey(resolvedKey);
-      const skipA2AFlow = isRequesterParentOfBackgroundAcpSession(
+      const skipAcpA2AFlow = isRequesterParentOfBackgroundAcpSession(
         targetSessionEntry,
         effectiveRequesterKey,
       );
+      const skipNativeParentA2AFlow =
+        timeoutSeconds !== 0 &&
+        isRequesterParentOfNativeSubagentSession({
+          entry: targetSessionEntry,
+          requesterSessionKey: effectiveRequesterKey,
+          targetSessionKey: resolvedKey,
+        });
+      const skipA2AFlow = skipAcpA2AFlow || skipNativeParentA2AFlow;
       // When the A2A flow is skipped, no follow-up announcement will fire and
       // the reply (when present) is returned inline via the `reply` field.
       // Reflect that in the metadata so the parent LLM does not wait for a
@@ -332,6 +485,7 @@ export function createSessionsSendTool(opts?: {
           maxPingPongTurns,
           requesterSessionKey,
           requesterChannel,
+          baseline: baselineReply,
           roundOneReply,
           waitRunId,
         });
@@ -377,6 +531,15 @@ export function createSessionsSendTool(opts?: {
       });
 
       if (result.status === "timeout") {
+        if (!isTerminalAgentWaitTimeout(result)) {
+          startA2AFlow(undefined, runId);
+          return jsonResult({
+            runId,
+            status: "accepted",
+            sessionKey: displayKey,
+            delivery,
+          });
+        }
         return jsonResult({
           runId,
           status: "timeout",

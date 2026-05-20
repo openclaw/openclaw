@@ -16,22 +16,22 @@
       "class": "core-runtime",
       "risk": ["native", "terminal"]
     },
-    "@mariozechner/pi-agent-core": {
+    "@earendil-works/pi-agent-core": {
       "owner": "capability:agent-runtime-pi",
       "class": "default-runtime-initially",
       "risk": ["large-transitive-cone", "agent-runtime"]
     },
-    "@mariozechner/pi-ai": {
+    "@earendil-works/pi-ai": {
       "owner": "capability:agent-runtime-pi",
       "class": "default-runtime-initially",
       "risk": ["large-transitive-cone", "provider-sdk-fanout"]
     },
-    "@mariozechner/pi-coding-agent": {
+    "@earendil-works/pi-coding-agent": {
       "owner": "capability:agent-runtime-pi",
       "class": "default-runtime-initially",
       "risk": ["large-transitive-cone", "agent-runtime"]
     },
-    "@mariozechner/pi-tui": {
+    "@earendil-works/pi-tui": {
       "owner": "capability:tui-pi",
       "class": "default-runtime-initially",
       "risk": ["tui-runtime"]
@@ -96,6 +96,11 @@
       "class": "core-runtime",
       "risk": ["file-sniffing", "untrusted-files"]
     },
+    "@openclaw/proxyline": {
+      "owner": "core:proxy",
+      "class": "core-runtime",
+      "risk": ["network", "proxy"]
+    },
     "https-proxy-agent": {
       "owner": "core:proxy",
       "class": "core-runtime",
@@ -121,6 +126,11 @@
       "class": "core-runtime",
       "risk": ["archive-parser", "untrusted-files"]
     },
+    "kysely": {
+      "owner": "core:sqlite-storage",
+      "class": "core-runtime",
+      "risk": ["database-query-builder"]
+    },
     "linkedom": {
       "owner": "plugin:web-readability",
       "class": "plugin-runtime",
@@ -137,6 +147,11 @@
       "class": "default-runtime-initially",
       "risk": ["provider-sdk", "network"]
     },
+    "playwright-core": {
+      "owner": "core:browser",
+      "class": "core-runtime",
+      "risk": ["browser-automation", "cdp"]
+    },
     "pdfjs-dist": {
       "owner": "plugin:document-extract",
       "class": "plugin-runtime",
@@ -152,11 +167,6 @@
       "owner": "core:qr-setup",
       "class": "default-runtime-initially",
       "risk": ["terminal-rendering", "png-encoding"]
-    },
-    "semver": {
-      "owner": "core:package-versioning",
-      "class": "core-runtime",
-      "risk": ["version-parser"]
     },
     "sharp": {
       "owner": "plugin:media-understanding-core",

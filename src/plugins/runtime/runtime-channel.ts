@@ -14,7 +14,7 @@ import {
   shouldComputeCommandAuthorized,
 } from "../../auto-reply/command-detection.js";
 import { shouldHandleTextCommands } from "../../auto-reply/commands-registry.js";
-import { withReplyDispatcher } from "../../auto-reply/dispatch.js";
+import { settleReplyDispatcher, withReplyDispatcher } from "../../auto-reply/dispatch.js";
 import {
   formatAgentEnvelope,
   formatInboundEnvelope,
@@ -51,6 +51,13 @@ import {
 import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load.js";
 import { recordInboundSession } from "../../channels/session.js";
 import {
+  buildChannelInboundEventContext,
+  runChannelTurn,
+  runPreparedChannelTurn,
+  runResolvedChannelTurn,
+  dispatchAssembledChannelTurn,
+} from "../../channels/turn/kernel.js";
+import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
 } from "../../config/group-policy.js";
@@ -63,7 +70,12 @@ import {
 } from "../../config/sessions.js";
 import { getChannelActivity, recordChannelActivity } from "../../infra/channel-activity.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
-import { fetchRemoteMedia } from "../../media/fetch.js";
+import {
+  fetchRemoteMedia,
+  readRemoteMediaBuffer,
+  saveRemoteMedia,
+  saveResponseMedia,
+} from "../../media/fetch.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
 import {
@@ -95,6 +107,7 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
       resolveHumanDelayConfig,
       dispatchReplyFromConfig,
       withReplyDispatcher,
+      settleReplyDispatcher,
       finalizeInboundContext,
       formatAgentEnvelope,
       /** @deprecated Prefer `BodyForAgent` + structured user-context blocks (do not build plaintext envelopes for prompts). */
@@ -120,7 +133,10 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
         }),
     },
     media: {
+      readRemoteMediaBuffer,
       fetchRemoteMedia,
+      saveRemoteMedia,
+      saveResponseMedia,
       saveMediaBuffer,
     },
     activity: {
@@ -163,6 +179,14 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
     },
     outbound: {
       loadAdapter: loadChannelOutboundAdapter,
+    },
+    turn: {
+      run: runChannelTurn,
+      runAssembled: dispatchAssembledChannelTurn,
+      runResolved: runResolvedChannelTurn,
+      buildContext: buildChannelInboundEventContext,
+      runPrepared: runPreparedChannelTurn,
+      dispatchAssembled: dispatchAssembledChannelTurn,
     },
     threadBindings: {
       setIdleTimeoutBySessionKey: ({ channelId, targetSessionKey, accountId, idleTimeoutMs }) =>

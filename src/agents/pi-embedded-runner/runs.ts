@@ -9,6 +9,10 @@ import {
   waitForReplyRunEndBySessionId,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import {
+  markDiagnosticEmbeddedRunEnded,
+  markDiagnosticEmbeddedRunStarted,
+} from "../../logging/diagnostic-run-activity.js";
+import {
   diagnosticLogger as diag,
   logMessageQueued,
   logSessionStateChange,
@@ -23,17 +27,79 @@ import {
   getActiveEmbeddedRunCount,
   type ActiveEmbeddedRunSnapshot,
   type EmbeddedPiQueueHandle,
+  type EmbeddedPiQueueMessageOptions,
   type EmbeddedRunModelSwitchRequest,
   type EmbeddedRunWaiter,
 } from "./run-state.js";
 
 export {
   getActiveEmbeddedRunCount,
+  listActiveEmbeddedRunSessionIds,
+  listActiveEmbeddedRunSessionKeys,
   type ActiveEmbeddedRunSnapshot,
   type EmbeddedPiQueueHandle,
+  type EmbeddedPiQueueMessageOptions,
   type EmbeddedRunModelSwitchRequest,
 } from "./run-state.js";
 
+export type EmbeddedPiQueueFailureReason =
+  | "no_active_run"
+  | "not_streaming"
+  | "compacting"
+  | "source_reply_delivery_mode_mismatch"
+  | "transcript_commit_wait_unsupported"
+  | "runtime_rejected";
+
+export type EmbeddedPiQueueMessageOutcome =
+  | {
+      queued: true;
+      sessionId: string;
+      target: "embedded_run" | "reply_run";
+      gatewayHealth: "live";
+      deliveredAtMs?: number;
+      enqueuedAtMs?: number;
+    }
+  | {
+      queued: false;
+      sessionId: string;
+      reason: EmbeddedPiQueueFailureReason;
+      gatewayHealth: "live";
+      errorMessage?: string;
+    };
+
+type PreparedEmbeddedPiQueueMessage =
+  | {
+      kind: "complete";
+      outcome: EmbeddedPiQueueMessageOutcome;
+    }
+  | {
+      kind: "embedded_run";
+      handle: EmbeddedPiQueueHandle;
+    };
+
+function createQueueFailureOutcome(
+  sessionId: string,
+  reason: EmbeddedPiQueueFailureReason,
+  errorMessage?: string,
+): EmbeddedPiQueueMessageOutcome {
+  return {
+    queued: false,
+    sessionId,
+    reason,
+    gatewayHealth: "live",
+    ...(errorMessage ? { errorMessage } : {}),
+  };
+}
+
+export function formatEmbeddedPiQueueFailureSummary(
+  outcome: EmbeddedPiQueueMessageOutcome,
+): string | undefined {
+  if (outcome.queued) {
+    return undefined;
+  }
+  const errorPart = outcome.errorMessage ? ` error=${outcome.errorMessage}` : "";
+  return `queue_message_failed reason=${outcome.reason} sessionId=${outcome.sessionId} gatewayHealth=${outcome.gatewayHealth}${errorPart}`;
+}
 function setActiveRunSessionKey(sessionKey: string | undefined, sessionId: string): void {
   const normalizedSessionKey = sessionKey?.trim();
   if (!normalizedSessionKey) {
@@ -57,28 +123,146 @@ function clearActiveRunSessionKeys(sessionId: string, sessionKey?: string): void
   }
 }
 
-export function queueEmbeddedPiMessage(sessionId: string, text: string): boolean {
+/**
+ * @deprecated Use queueEmbeddedPiMessageWithOutcomeAsync for delivery decisions.
+ * This boolean helper only reports immediate queue eligibility; it cannot surface
+ * async runtime rejection from the active run.
+ */
+export function queueEmbeddedPiMessage(
+  sessionId: string,
+  text: string,
+  options?: EmbeddedPiQueueMessageOptions,
+): boolean {
+  return queueEmbeddedPiMessageWithOutcome(sessionId, text, options).queued;
+}
+
+/**
+ * @deprecated Prefer queueEmbeddedPiMessageWithOutcomeAsync when callers need to
+ * know whether steering was accepted. This sync helper is fire-and-forget after
+ * initial eligibility and only logs later runtime rejection.
+ */
+export function queueEmbeddedPiMessageWithOutcome(
+  sessionId: string,
+  text: string,
+  options?: EmbeddedPiQueueMessageOptions,
+): EmbeddedPiQueueMessageOutcome {
+  const prepared = prepareEmbeddedPiQueueMessage(sessionId, text, options);
+  if (prepared.kind === "complete") {
+    return prepared.outcome;
+  }
+  logMessageQueued({ sessionId, source: "pi-embedded-runner" });
+  void prepared.handle
+    .queueMessage(text, options ?? { steeringMode: "all" })
+    .catch((err: unknown) => {
+      diag.debug(
+        `queue message rejected after enqueue: sessionId=${sessionId} err=${formatQueueError(err)}`,
+      );
+    });
+  return {
+    queued: true,
+    sessionId,
+    target: "embedded_run",
+    gatewayHealth: "live",
+    enqueuedAtMs: Date.now(),
+  };
+}
+
+function formatQueueError(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+export async function queueEmbeddedPiMessageWithOutcomeAsync(
+  sessionId: string,
+  text: string,
+  options?: EmbeddedPiQueueMessageOptions,
+): Promise<EmbeddedPiQueueMessageOutcome> {
+  const prepared = prepareEmbeddedPiQueueMessage(sessionId, text, options);
+  if (prepared.kind === "complete") {
+    return prepared.outcome;
+  }
+  try {
+    const enqueuedAtMs = Date.now();
+    await prepared.handle.queueMessage(text, options ?? { steeringMode: "all" });
+    const deliveredAtMs = options?.waitForTranscriptCommit ? Date.now() : undefined;
+    logMessageQueued({ sessionId, source: "pi-embedded-runner" });
+    return {
+      queued: true,
+      sessionId,
+      target: "embedded_run",
+      gatewayHealth: "live",
+      ...(deliveredAtMs !== undefined ? { deliveredAtMs } : {}),
+      enqueuedAtMs,
+    };
+  } catch (err) {
+    const errorMessage = formatQueueError(err);
+    diag.debug(`queue message rejected: sessionId=${sessionId} err=${errorMessage}`);
+    return createQueueFailureOutcome(sessionId, "runtime_rejected", errorMessage);
+  }
+}
+
+function prepareEmbeddedPiQueueMessage(
+  sessionId: string,
+  text: string,
+  options?: EmbeddedPiQueueMessageOptions,
+): PreparedEmbeddedPiQueueMessage {
   const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
   if (!handle) {
     const queuedReplyRunMessage = queueReplyRunMessage(sessionId, text);
     if (queuedReplyRunMessage) {
       logMessageQueued({ sessionId, source: "pi-embedded-runner" });
-      return true;
+      return {
+        kind: "complete",
+        outcome: {
+          queued: true,
+          sessionId,
+          target: "reply_run",
+          gatewayHealth: "live",
+          enqueuedAtMs: Date.now(),
+        },
+      };
+    }
+    if (options?.waitForTranscriptCommit === true) {
+      diag.debug(
+        `queue message failed: sessionId=${sessionId} reason=transcript_commit_wait_unsupported`,
+      );
+      return {
+        kind: "complete",
+        outcome: createQueueFailureOutcome(sessionId, "transcript_commit_wait_unsupported"),
+      };
     }
     diag.debug(`queue message failed: sessionId=${sessionId} reason=no_active_run`);
-    return false;
+    return { kind: "complete", outcome: createQueueFailureOutcome(sessionId, "no_active_run") };
   }
   if (!handle.isStreaming()) {
     diag.debug(`queue message failed: sessionId=${sessionId} reason=not_streaming`);
-    return false;
+    return { kind: "complete", outcome: createQueueFailureOutcome(sessionId, "not_streaming") };
   }
   if (handle.isCompacting()) {
     diag.debug(`queue message failed: sessionId=${sessionId} reason=compacting`);
-    return false;
+    return { kind: "complete", outcome: createQueueFailureOutcome(sessionId, "compacting") };
   }
-  logMessageQueued({ sessionId, source: "pi-embedded-runner" });
-  void handle.queueMessage(text);
-  return true;
+  if (options?.waitForTranscriptCommit === true && handle.supportsTranscriptCommitWait !== true) {
+    diag.debug(
+      `queue message failed: sessionId=${sessionId} reason=transcript_commit_wait_unsupported`,
+    );
+    return {
+      kind: "complete",
+      outcome: createQueueFailureOutcome(sessionId, "transcript_commit_wait_unsupported"),
+    };
+  }
+  if (
+    options?.sourceReplyDeliveryMode === "message_tool_only" &&
+    handle.sourceReplyDeliveryMode !== "message_tool_only"
+  ) {
+    diag.debug(
+      `queue message failed: sessionId=${sessionId} reason=source_reply_delivery_mode_mismatch`,
+    );
+    return {
+      kind: "complete",
+      outcome: createQueueFailureOutcome(sessionId, "source_reply_delivery_mode_mismatch"),
+    };
+  }
+  return { kind: "embedded_run", handle };
 }
 
 /**
@@ -310,6 +494,29 @@ export function waitForEmbeddedPiRunEnd(sessionId: string, timeoutMs = 15_000): 
   });
 }
 
+export type AbortAndDrainEmbeddedPiRunResult = {
+  aborted: boolean;
+  drained: boolean;
+  forceCleared: boolean;
+};
+
+export async function abortAndDrainEmbeddedPiRun(params: {
+  sessionId: string;
+  sessionKey?: string;
+  settleMs?: number;
+  forceClear?: boolean;
+  reason?: string;
+}): Promise<AbortAndDrainEmbeddedPiRunResult> {
+  const settleMs = params.settleMs ?? 15_000;
+  const aborted = abortEmbeddedPiRun(params.sessionId);
+  const drained = aborted ? await waitForEmbeddedPiRunEnd(params.sessionId, settleMs) : false;
+  const forceCleared =
+    params.forceClear === true && (!aborted || !drained)
+      ? forceClearEmbeddedPiRun(params.sessionId, params.sessionKey, params.reason)
+      : false;
+  return { aborted, drained, forceCleared };
+}
+
 function notifyEmbeddedRunEnded(sessionId: string) {
   const waiters = EMBEDDED_RUN_WAITERS.get(sessionId);
   if (!waiters || waiters.size === 0) {
@@ -337,6 +544,7 @@ export function setActiveEmbeddedRun(
     state: "processing",
     reason: wasActive ? "run_replaced" : "run_started",
   });
+  markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey });
   if (!sessionId.startsWith("probe-")) {
     diag.debug(`run registered: sessionId=${sessionId} totalActive=${ACTIVE_EMBEDDED_RUNS.size}`);
   }
@@ -357,12 +565,17 @@ export function clearActiveEmbeddedRun(
   handle: EmbeddedPiQueueHandle,
   sessionKey?: string,
 ) {
-  if (ACTIVE_EMBEDDED_RUNS.get(sessionId) === handle) {
+  const activeHandle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
+  if (activeHandle === undefined) {
+    return;
+  }
+  if (activeHandle === handle) {
     ACTIVE_EMBEDDED_RUNS.delete(sessionId);
     ACTIVE_EMBEDDED_RUN_SNAPSHOTS.delete(sessionId);
     EMBEDDED_RUN_MODEL_SWITCH_REQUESTS.delete(sessionId);
     clearActiveRunSessionKeys(sessionId, sessionKey);
     logSessionStateChange({ sessionId, sessionKey, state: "idle", reason: "run_completed" });
+    markDiagnosticEmbeddedRunEnded({ sessionId, sessionKey });
     if (!sessionId.startsWith("probe-")) {
       diag.debug(`run cleared: sessionId=${sessionId} totalActive=${ACTIVE_EMBEDDED_RUNS.size}`);
     }
@@ -384,6 +597,7 @@ export function forceClearEmbeddedPiRun(
     EMBEDDED_RUN_MODEL_SWITCH_REQUESTS.delete(sessionId);
     clearActiveRunSessionKeys(sessionId, sessionKey);
     logSessionStateChange({ sessionId, sessionKey, state: "idle", reason });
+    markDiagnosticEmbeddedRunEnded({ sessionId, sessionKey });
     notifyEmbeddedRunEnded(sessionId);
     cleared = true;
   }
@@ -391,7 +605,7 @@ export function forceClearEmbeddedPiRun(
   return forceClearReplyRunBySessionId(sessionId, cause) || cleared;
 }
 
-export const __testing = {
+export const testing = {
   resetActiveEmbeddedRuns() {
     for (const waiters of EMBEDDED_RUN_WAITERS.values()) {
       for (const waiter of waiters) {
@@ -406,3 +620,4 @@ export const __testing = {
     EMBEDDED_RUN_MODEL_SWITCH_REQUESTS.clear();
   },
 };
+export { testing as __testing };

@@ -16,17 +16,55 @@ Your agent has three memory-related files:
 
 - **`MEMORY.md`** — long-term memory. Durable facts, preferences, and
   decisions. Loaded at the start of every DM session.
-- **`memory/YYYY-MM-DD.md`** — daily notes. Running context and observations.
-  Today and yesterday's notes are loaded automatically.
+- **`memory/YYYY-MM-DD.md`** (or **`memory/YYYY-MM-DD-<slug>.md`**) — daily notes.
+  Running context and observations. Today and yesterday's notes are loaded
+  automatically, and slugged variants such as those written by the bundled
+  session-memory hook on `/new` or `/reset` are now picked up alongside the
+  date-only file.
 - **`DREAMS.md`** (optional) — Dream Diary and dreaming sweep
   summaries for human review, including grounded historical backfill entries.
 
 These files live in the agent workspace (default `~/.openclaw/workspace`).
 
+## What goes where
+
+`MEMORY.md` is the compact, curated layer. Use it for durable facts,
+preferences, standing decisions, and short summaries that should be available at
+the start of a main private session. It is not meant to be a raw transcript,
+daily log, or exhaustive archive.
+
+`memory/YYYY-MM-DD.md` files are the working layer. Use them for detailed daily
+notes, observations, session summaries, and raw context that may still be useful
+later. These files are indexed for `memory_search` and `memory_get`, but they are
+not injected into the normal bootstrap prompt on every turn.
+
+Over time, the agent is expected to distill useful material from daily notes
+into `MEMORY.md` and remove stale long-term entries. The generated workspace
+instructions and heartbeat flow can do that periodically; you do not need to
+manually edit `MEMORY.md` for every remembered detail.
+
+If `MEMORY.md` grows past the bootstrap file budget, OpenClaw keeps the file on
+disk intact but truncates the copy injected into the model context. Treat that as
+a signal to move detailed material back into `memory/*.md`, keep only the
+durable summary in `MEMORY.md`, or raise the bootstrap limits if you explicitly
+want to spend more prompt budget. Use `/context list`, `/context detail`, or
+`openclaw doctor` to see raw vs injected sizes and truncation status.
+
 <Tip>
 If you want your agent to remember something, just ask it: "Remember that I
 prefer TypeScript." It will write it to the appropriate file.
 </Tip>
+
+## Inferred commitments
+
+Some future follow-ups are not durable facts. If you mention an interview
+tomorrow, the useful memory may be "check in after the interview," not "store
+this forever in `MEMORY.md`."
+
+[Commitments](/concepts/commitments) are opt-in, short-lived follow-up memories
+for that case. OpenClaw infers them in a hidden background pass, scopes them to
+the same agent and channel, and delivers due check-ins through heartbeat.
+Explicit reminders still use [scheduled tasks](/automation/cron-jobs).
 
 ## Memory tools
 
@@ -217,3 +255,4 @@ openclaw memory index --force   # Rebuild the index
 - [Builtin memory engine](/concepts/memory-builtin)
 - [Honcho memory](/concepts/memory-honcho)
 - [Memory LanceDB](/plugins/memory-lancedb)
+- [Commitments](/concepts/commitments)

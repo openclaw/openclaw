@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { collectBundledPluginBuildEntries } from "./lib/bundled-plugin-build-entries.mjs";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "./lib/bundled-plugin-paths.mjs";
 import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 import {
@@ -20,9 +19,11 @@ const ANSI_ESCAPE_RE = new RegExp(String.raw`\u001B\[[0-9;]*m`, "g");
 const HASHED_ROOT_JS_RE = /^(?<base>.+)-[A-Za-z0-9_-]+\.js$/u;
 const DEFAULT_CAPTURE_BYTES = 8 * 1024 * 1024;
 const DEFAULT_HEARTBEAT_MS = 30_000;
+const DEFAULT_TSDOWN_NODE_OPTIONS = "--max-old-space-size=6144";
 const TERMINATION_GRACE_MS = 5_000;
 const TSDOWN_OUTPUT_ROOTS = ["dist", "dist-runtime"];
-const DIST_RUNTIME_DEPS_ROOT = "extensions";
+const GENERATED_SOURCE_DECLARATION_PATHSPEC = ":(glob)extensions/**/*.d.ts";
+const SOURCE_DECLARATION_SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs"];
 
 function removeDistPluginNodeModulesSymlinks(rootDir) {
   const extensionsDir = path.join(rootDir, "extensions");
@@ -56,101 +57,13 @@ function pruneStaleRuntimeSymlinks() {
 
 export function cleanTsdownOutputRoots(params = {}) {
   const cwd = params.cwd ?? process.cwd();
-  const stagedRuntimeDependencyPluginIds = collectStagedRuntimeDependencyPluginIds({
-    cwd,
-    env: params.env ?? process.env,
-  });
   const fsImpl = params.fs ?? fs;
   for (const root of TSDOWN_OUTPUT_ROOTS) {
     const rootPath = path.join(cwd, root);
-    if (root === "dist") {
-      cleanDistOutputRoot(rootPath, stagedRuntimeDependencyPluginIds, fsImpl);
-      continue;
-    }
     try {
       fsImpl.rmSync(rootPath, { force: true, recursive: true });
     } catch {
       // Best-effort cleanup. tsdown will recreate the output tree it needs.
-    }
-  }
-}
-
-function collectStagedRuntimeDependencyPluginIds(params) {
-  try {
-    return new Set(
-      collectBundledPluginBuildEntries(params)
-        .filter(({ packageJson }) => shouldStageBundledPluginRuntimeDependencies(packageJson))
-        .map(({ id }) => id),
-    );
-  } catch {
-    return new Set();
-  }
-}
-
-function shouldStageBundledPluginRuntimeDependencies(packageJson) {
-  return packageJson?.openclaw?.bundle?.stageRuntimeDependencies === true;
-}
-
-function cleanDistOutputRoot(distRoot, stagedRuntimeDependencyPluginIds, fsImpl) {
-  let entries = [];
-  try {
-    entries = fsImpl.readdirSync(distRoot, { withFileTypes: true });
-  } catch {
-    return;
-  }
-
-  for (const entry of entries) {
-    const entryPath = path.join(distRoot, entry.name);
-    try {
-      if (entry.isDirectory() && entry.name === DIST_RUNTIME_DEPS_ROOT) {
-        cleanDistExtensionsRoot(entryPath, stagedRuntimeDependencyPluginIds, fsImpl);
-        continue;
-      }
-      fsImpl.rmSync(entryPath, { force: true, recursive: true });
-    } catch {
-      // Best-effort cleanup. tsdown will overwrite or recreate generated output.
-    }
-  }
-}
-
-function cleanDistExtensionsRoot(extensionsDistRoot, stagedRuntimeDependencyPluginIds, fsImpl) {
-  let entries = [];
-  try {
-    entries = fsImpl.readdirSync(extensionsDistRoot, { withFileTypes: true });
-  } catch {
-    return;
-  }
-
-  for (const entry of entries) {
-    const pluginDistRoot = path.join(extensionsDistRoot, entry.name);
-    try {
-      if (!entry.isDirectory() || !stagedRuntimeDependencyPluginIds.has(entry.name)) {
-        fsImpl.rmSync(pluginDistRoot, { force: true, recursive: true });
-        continue;
-      }
-      cleanDistPluginOutputRoot(pluginDistRoot, fsImpl);
-    } catch {
-      // Best-effort cleanup. Runtime postbuild validates current plugin metadata next.
-    }
-  }
-}
-
-function cleanDistPluginOutputRoot(pluginDistRoot, fsImpl) {
-  let entries = [];
-  try {
-    entries = fsImpl.readdirSync(pluginDistRoot, { withFileTypes: true });
-  } catch {
-    return;
-  }
-
-  for (const entry of entries) {
-    if (entry.isDirectory() && entry.name === "node_modules") {
-      continue;
-    }
-    try {
-      fsImpl.rmSync(path.join(pluginDistRoot, entry.name), { force: true, recursive: true });
-    } catch {
-      // Best-effort cleanup. tsdown/runtime-postbuild will rewrite generated files.
     }
   }
 }
@@ -181,6 +94,52 @@ export function pruneStaleRootChunkFiles(params = {}) {
       }
     }
   }
+}
+
+export function pruneUntrackedGeneratedSourceDeclarations(params = {}) {
+  const cwd = params.cwd ?? process.cwd();
+  const fsImpl = params.fs ?? fs;
+  const spawnSyncImpl = params.spawnSync ?? spawnSync;
+  let result;
+  try {
+    result = spawnSyncImpl(
+      "git",
+      ["ls-files", "--others", "--exclude-standard", "--", GENERATED_SOURCE_DECLARATION_PATHSPEC],
+      {
+        cwd,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      },
+    );
+  } catch {
+    return 0;
+  }
+  if (result.status !== 0 || typeof result.stdout !== "string") {
+    return 0;
+  }
+
+  let removed = 0;
+  for (const rawPath of result.stdout.split(/\r?\n/u)) {
+    const relativePath = rawPath.trim().replaceAll("\\", "/");
+    if (!relativePath.startsWith("extensions/") || !relativePath.endsWith(".d.ts")) {
+      continue;
+    }
+    const declarationPath = path.join(cwd, relativePath);
+    const sourceBase = declarationPath.slice(0, -".d.ts".length);
+    const hasMatchingSource = SOURCE_DECLARATION_SOURCE_EXTENSIONS.some((extension) =>
+      fsImpl.existsSync(`${sourceBase}${extension}`),
+    );
+    if (!hasMatchingSource) {
+      continue;
+    }
+    try {
+      fsImpl.rmSync(declarationPath, { force: true });
+      removed += 1;
+    } catch {
+      // Best-effort cleanup; tsdown will still report any remaining stale files.
+    }
+  }
+  return removed;
 }
 
 export function pruneSourceCheckoutBundledPluginNodeModules(params = {}) {
@@ -241,6 +200,19 @@ function parseNonNegativeInteger(value) {
   return Math.trunc(parsed);
 }
 
+function resolveTsdownEnv(env) {
+  const nodeOptions = env.NODE_OPTIONS?.trim() ?? "";
+  if (/(?:^|\s)--max-old-space-size(?:=|\s+)/u.test(nodeOptions)) {
+    return env;
+  }
+  return {
+    ...env,
+    NODE_OPTIONS: nodeOptions
+      ? `${nodeOptions} ${DEFAULT_TSDOWN_NODE_OPTIONS}`
+      : DEFAULT_TSDOWN_NODE_OPTIONS,
+  };
+}
+
 export function createTsdownOutputScanner(params = {}) {
   const maxCaptureBytes = params.maxCaptureBytes ?? DEFAULT_CAPTURE_BYTES;
   let captured = "";
@@ -284,7 +256,7 @@ export function createTsdownOutputScanner(params = {}) {
 }
 
 export function resolveTsdownBuildInvocation(params = {}) {
-  const env = params.env ?? process.env;
+  const env = resolveTsdownEnv(params.env ?? process.env);
   const runner = resolvePnpmRunner({
     pnpmArgs: [
       "exec",
@@ -416,6 +388,7 @@ function isMainModule() {
 
 if (isMainModule()) {
   pruneSourceCheckoutBundledPluginNodeModules();
+  pruneUntrackedGeneratedSourceDeclarations();
   pruneStaleRuntimeSymlinks();
   cleanTsdownOutputRoots();
   const invocation = resolveTsdownBuildInvocation();

@@ -12,6 +12,7 @@ import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.GatewayTlsProbeFailure
 import ai.openclaw.app.gateway.GatewayTlsProbeResult
+import ai.openclaw.app.gateway.normalizeGatewayTlsFingerprint
 import ai.openclaw.app.gateway.probeGatewayTlsFingerprint
 import ai.openclaw.app.node.A2UIHandler
 import ai.openclaw.app.node.CalendarHandler
@@ -36,6 +37,7 @@ import ai.openclaw.app.node.Quad
 import ai.openclaw.app.node.SmsHandler
 import ai.openclaw.app.node.SmsManager
 import ai.openclaw.app.node.SystemHandler
+import ai.openclaw.app.node.TalkHandler
 import ai.openclaw.app.node.asObjectOrNull
 import ai.openclaw.app.node.asStringOrNull
 import ai.openclaw.app.node.invokeErrorFromThrowable
@@ -48,6 +50,7 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.SystemClock
+import android.util.Base64
 import android.util.Log
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
@@ -193,6 +196,7 @@ class NodeRuntime(
       readSmsAvailable = { SensitiveFeatureConfig.smsEnabled && sms.canReadSms() },
       smsSearchPossible = { SensitiveFeatureConfig.smsEnabled && sms.hasTelephonyFeature() },
       callLogAvailable = { SensitiveFeatureConfig.callLogEnabled },
+      photosAvailable = { SensitiveFeatureConfig.photosEnabled },
       hasRecordAudioPermission = { hasRecordAudioPermission() },
       manualTls = { manualTls.value },
     )
@@ -205,6 +209,16 @@ class NodeRuntime(
       deviceHandler = deviceHandler,
       notificationsHandler = notificationsHandler,
       systemHandler = systemHandler,
+      talkHandler =
+        object : TalkHandler {
+          override suspend fun handlePttStart(paramsJson: String?): GatewaySession.InvokeResult = handleTalkPttStart()
+
+          override suspend fun handlePttStop(paramsJson: String?): GatewaySession.InvokeResult = handleTalkPttStop()
+
+          override suspend fun handlePttCancel(paramsJson: String?): GatewaySession.InvokeResult = handleTalkPttCancel()
+
+          override suspend fun handlePttOnce(paramsJson: String?): GatewaySession.InvokeResult = handleTalkPttOnce()
+        },
       photosHandler = photosHandler,
       contactsHandler = contactsHandler,
       calendarHandler = calendarHandler,
@@ -221,14 +235,15 @@ class NodeRuntime(
       smsFeatureEnabled = { SensitiveFeatureConfig.smsEnabled },
       smsTelephonyAvailable = { sms.hasTelephonyFeature() },
       callLogAvailable = { SensitiveFeatureConfig.callLogEnabled },
+      photosAvailable = { SensitiveFeatureConfig.photosEnabled },
       debugBuild = { BuildConfig.DEBUG },
-      refreshNodeCanvasCapability = { nodeSession.refreshNodeCanvasCapability() },
       onCanvasA2uiPush = {
         _canvasA2uiHydrated.value = true
         _canvasRehydratePending.value = false
         _canvasRehydrateErrorText.value = null
       },
       onCanvasA2uiReset = { _canvasA2uiHydrated.value = false },
+      refreshCanvasHostUrl = { nodeSession.refreshCanvasHostUrl() },
       motionActivityAvailable = { motionHandler.isActivityAvailable() },
       motionPedometerAvailable = { motionHandler.isPedometerAvailable() },
     )
@@ -237,6 +252,7 @@ class NodeRuntime(
     val endpoint: GatewayEndpoint,
     val fingerprintSha256: String,
     val auth: GatewayConnectAuth,
+    val previousFingerprintSha256: String? = null,
   )
 
   private val _isConnected = MutableStateFlow(false)
@@ -249,6 +265,7 @@ class NodeRuntime(
 
   private val _pendingGatewayTrust = MutableStateFlow<GatewayTrustPrompt?>(null)
   val pendingGatewayTrust: StateFlow<GatewayTrustPrompt?> = _pendingGatewayTrust.asStateFlow()
+  private val connectAttemptSeq = AtomicLong(0)
 
   private fun resolveNodeMainSessionKey(agentId: String? = gatewayDefaultAgentId): String {
     val deviceId = identityStore.loadOrCreate().deviceId
@@ -411,6 +428,42 @@ class NodeRuntime(
     MicCaptureManager(
       context = appContext,
       scope = scope,
+      createTranscriptionSession = {
+        val params =
+          buildJsonObject {
+            put("mode", JsonPrimitive("transcription"))
+            put("transport", JsonPrimitive("gateway-relay"))
+            put("brain", JsonPrimitive("none"))
+          }
+        val response =
+          operatorSession.request(
+            "talk.session.create",
+            params.toString(),
+            timeoutMs = 15_000,
+          )
+        parseTalkSessionId(response)
+      },
+      appendTranscriptionAudio = { sessionId, audio, onError ->
+        val params =
+          buildJsonObject {
+            put("sessionId", JsonPrimitive(sessionId))
+            put("audioBase64", JsonPrimitive(Base64.encodeToString(audio, Base64.NO_WRAP)))
+            put("timestamp", JsonPrimitive(SystemClock.elapsedRealtime()))
+          }
+        operatorSession.sendRequestFrame(
+          "talk.session.appendAudio",
+          params.toString(),
+          timeoutMs = 8_000,
+        ) { error -> onError(error.message) }
+      },
+      closeTranscriptionSession = { sessionId ->
+        val params = buildJsonObject { put("sessionId", JsonPrimitive(sessionId)) }
+        operatorSession.request(
+          "talk.session.close",
+          params.toString(),
+          timeoutMs = 5_000,
+        )
+      },
       sendToGateway = { message, onRunIdKnown ->
         val idempotencyKey = UUID.randomUUID().toString()
         // Notify MicCaptureManager of the idempotency key *before* the network
@@ -472,6 +525,7 @@ class NodeRuntime(
       isConnected = { operatorConnected },
       onBeforeSpeak = { micCapture.pauseForTts() },
       onAfterSpeak = { micCapture.resumeAfterTts() },
+      onStoppedByRelay = { finishTalkModeAfterRelayClose() },
     )
   }
 
@@ -486,6 +540,9 @@ class NodeRuntime(
 
   val talkModeStatusText: StateFlow<String>
     get() = talkMode.statusText
+
+  val talkModeConversation: StateFlow<List<VoiceConversationEntry>>
+    get() = talkMode.conversation
 
   private fun syncMainSessionKey(agentId: String?) {
     val resolvedKey = resolveNodeMainSessionKey(agentId)
@@ -881,6 +938,88 @@ class NodeRuntime(
     setVoiceCaptureMode(if (value) VoiceCaptureMode.TalkMode else VoiceCaptureMode.Off)
   }
 
+  private suspend fun handleTalkPttStart(): GatewaySession.InvokeResult =
+    runPreparedTalkPttCommand {
+      val payload = talkMode.beginPushToTalk()
+      GatewaySession.InvokeResult.ok(payload.toJson())
+    }
+
+  private suspend fun handleTalkPttStop(): GatewaySession.InvokeResult =
+    runTalkPttCommand {
+      val payload = talkMode.endPushToTalk()
+      finishTalkCaptureIfIdle()
+      GatewaySession.InvokeResult.ok(payload.toJson())
+    }
+
+  private suspend fun handleTalkPttCancel(): GatewaySession.InvokeResult =
+    runTalkPttCommand {
+      val payload = talkMode.cancelPushToTalk()
+      finishTalkCaptureIfIdle()
+      GatewaySession.InvokeResult.ok(payload.toJson())
+    }
+
+  private suspend fun handleTalkPttOnce(): GatewaySession.InvokeResult =
+    runPreparedTalkPttCommand {
+      val payload = talkMode.runPushToTalkOnce()
+      finishTalkCaptureIfIdle()
+      GatewaySession.InvokeResult.ok(payload.toJson())
+    }
+
+  private suspend fun runPreparedTalkPttCommand(block: suspend () -> GatewaySession.InvokeResult): GatewaySession.InvokeResult =
+    runTalkPttCommand {
+      prepareTalkCapture()
+      try {
+        block()
+      } catch (err: Throwable) {
+        cleanupFailedTalkCapture()
+        throw err
+      }
+    }
+
+  private suspend fun runTalkPttCommand(block: suspend () -> GatewaySession.InvokeResult): GatewaySession.InvokeResult =
+    try {
+      block()
+    } catch (err: Throwable) {
+      val (code, message) = invokeErrorFromThrowable(err)
+      GatewaySession.InvokeResult.error(code = code, message = message)
+    }
+
+  private suspend fun prepareTalkCapture() {
+    if (!hasRecordAudioPermission()) {
+      throw IllegalStateException("MIC_PERMISSION_REQUIRED: grant Microphone permission")
+    }
+    micCapture.setMicEnabled(false)
+    stopVoicePlayback()
+    NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.TalkMode)
+    talkMode.ttsOnAllResponses = true
+    talkMode.setPlaybackEnabled(speakerEnabled.value)
+    talkMode.ensureChatSubscribed()
+    externalAudioCaptureActive.value = true
+  }
+
+  private suspend fun cleanupFailedTalkCapture() {
+    runCatching { talkMode.cancelPushToTalk() }
+    talkMode.ttsOnAllResponses = false
+    NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.Off)
+    externalAudioCaptureActive.value = false
+  }
+
+  private fun finishTalkCaptureIfIdle() {
+    if (!talkMode.isEnabled.value && !talkMode.isListening.value && !talkMode.isSpeaking.value) {
+      talkMode.ttsOnAllResponses = false
+      NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.Off)
+      externalAudioCaptureActive.value = false
+    }
+  }
+
+  private fun finishTalkModeAfterRelayClose() {
+    if (_voiceCaptureMode.value != VoiceCaptureMode.TalkMode) return
+    _voiceCaptureMode.value = VoiceCaptureMode.Off
+    talkMode.ttsOnAllResponses = false
+    NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.Off)
+    externalAudioCaptureActive.value = false
+  }
+
   val speakerEnabled: StateFlow<Boolean>
     get() = prefs.speakerEnabled
 
@@ -1027,23 +1166,58 @@ class NodeRuntime(
     endpoint: GatewayEndpoint,
     auth: GatewayConnectAuth,
   ) {
+    val connectAttemptId = connectAttemptSeq.incrementAndGet()
+    _pendingGatewayTrust.value = null
     val tls = connectionManager.resolveTlsParams(endpoint)
-    if (tls?.required == true && tls.expectedFingerprint.isNullOrBlank()) {
-      // First-time TLS: capture fingerprint, ask user to verify out-of-band, then store and connect.
+    if (tls?.required == true) {
+      val expectedFingerprint =
+        tls.expectedFingerprint
+          ?.let(::normalizeGatewayTlsFingerprint)
+          ?.takeIf { it.isNotBlank() }
       _statusText.value = "Verify gateway TLS fingerprint…"
       scope.launch {
         val tlsProbe = tlsFingerprintProbe(endpoint.host, endpoint.port)
+        if (!isCurrentConnectAttempt(connectAttemptId)) return@launch
         val fp =
           tlsProbe.fingerprintSha256 ?: run {
-            _statusText.value = gatewayTlsProbeFailureMessage(tlsProbe.failure)
+            if (expectedFingerprint == null) {
+              _statusText.value = gatewayTlsProbeFailureMessage(tlsProbe.failure)
+            } else {
+              connectAfterTlsCheck(endpoint = endpoint, auth = auth, connectAttemptId = connectAttemptId)
+            }
             return@launch
           }
-        _pendingGatewayTrust.value =
-          GatewayTrustPrompt(endpoint = endpoint, fingerprintSha256 = fp, auth = auth)
+        val observedFingerprint =
+          normalizeGatewayTlsFingerprint(fp)
+            .takeIf { it.isNotBlank() }
+            ?: fp
+        val previousFingerprint = expectedFingerprint?.takeUnless { it == observedFingerprint }
+        if (expectedFingerprint == null || previousFingerprint != null) {
+          _pendingGatewayTrust.value =
+            GatewayTrustPrompt(
+              endpoint = endpoint,
+              fingerprintSha256 = observedFingerprint,
+              auth = auth,
+              previousFingerprintSha256 = previousFingerprint,
+            )
+          return@launch
+        }
+        connectAfterTlsCheck(endpoint = endpoint, auth = auth, connectAttemptId = connectAttemptId)
       }
       return
     }
 
+    connectAfterTlsCheck(endpoint = endpoint, auth = auth, connectAttemptId = connectAttemptId)
+  }
+
+  private fun isCurrentConnectAttempt(connectAttemptId: Long): Boolean = connectAttemptSeq.get() == connectAttemptId
+
+  private fun connectAfterTlsCheck(
+    endpoint: GatewayEndpoint,
+    auth: GatewayConnectAuth,
+    connectAttemptId: Long,
+  ) {
+    if (!isCurrentConnectAttempt(connectAttemptId)) return
     connectedEndpoint = endpoint
     operatorStatusText = "Connecting…"
     nodeStatusText = "Connecting…"
@@ -1136,6 +1310,7 @@ class NodeRuntime(
   }
 
   fun disconnect() {
+    connectAttemptSeq.incrementAndGet()
     stopActiveVoiceSession()
     connectedEndpoint = null
     activeGatewayAuth = null
@@ -1284,6 +1459,17 @@ class NodeRuntime(
     } catch (_: Throwable) {
       null
     }
+  }
+
+  private fun parseTalkSessionId(response: String): String {
+    val root = json.parseToJsonElement(response).asObjectOrNull()
+    val sessionId =
+      root?.get("transcriptionSessionId").asStringOrNull()
+        ?: root?.get("sessionId").asStringOrNull()
+    if (sessionId.isNullOrBlank()) {
+      throw IllegalStateException("talk.session.create returned no session id")
+    }
+    return sessionId
   }
 
   private suspend fun refreshBrandingFromGateway() {
@@ -1529,14 +1715,14 @@ internal fun resolveOperatorSessionConnectAuth(
 
   val explicitBootstrapToken = auth.bootstrapToken?.trim()?.takeIf { it.isNotEmpty() }
   if (explicitBootstrapToken != null) {
-    return NodeRuntime.GatewayConnectAuth(
-      token = null,
-      bootstrapToken = explicitBootstrapToken,
-      password = null,
-    )
+    return null
   }
 
-  return null
+  return NodeRuntime.GatewayConnectAuth(
+    token = null,
+    bootstrapToken = null,
+    password = null,
+  )
 }
 
 internal fun shouldConnectOperatorSession(

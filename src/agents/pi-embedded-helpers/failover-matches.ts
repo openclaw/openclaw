@@ -53,6 +53,7 @@ const ZAI_AUTH_CODE_1113_RE = /"code"\s*:\s*1113\b/;
 const STATUS_INTERNAL_SERVER_ERROR_RE = /\bstatus:\s*internal server error\b/i;
 const STATUS_INTERNAL_SERVER_ERROR_WITH_500_RE =
   /^(?=[\s\S]*\bstatus:\s*internal server error\b)(?=[\s\S]*\bcode["']?\s*[:=]\s*500\b)/i;
+const HTTP_5XX_STATUS_RE = /\bHTTP\s+5\d\d\b/i;
 
 const ZAI_AUTH_ERROR_PATTERNS = [
   // Z.ai: error 1113 = wrong endpoint or invalid credentials (#48988)
@@ -167,6 +168,7 @@ const ERROR_PATTERNS = {
     // aborted). These arrive as bare strings on the outer error and, without
     // an explicit match, the fallback chain is never attempted (#69368).
     /^terminated$/i,
+    /^stream_read_error$/i,
     /\bund_err_(?:socket|connect|headers?|body|req_content_length_mismatch|aborted|closed)\b/i,
     // pi-ai's openai-codex provider surfaces `Request failed` when the HTTP
     // response has no body and no status text (typical of Cloudflare 502s
@@ -179,6 +181,8 @@ const ERROR_PATTERNS = {
     /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\s+payment/i,
     "payment required",
     "insufficient credits",
+    /used\s+all\s+available\s+credits/i,
+    /(?:monthly\s+)?spend(?:ing)?\s+limit/i,
     /insufficient[_ ]quota/i,
     "credit balance",
     "plans & billing",
@@ -214,6 +218,12 @@ const ERROR_PATTERNS = {
     "messages.1.content.1.tool_use.id",
     "invalid request format",
     /tool call id was.*must be/i,
+    // Prefill-strict models (e.g. claude-opus-4-7) reject requests that end
+    // with an assistant turn. The lane must not re-queue these — the same
+    // payload will fail identically on every retry, causing an infinite loop
+    // (#79688).
+    "does not support assistant message prefill",
+    "conversation must end with a user message",
   ],
 } as const;
 
@@ -303,9 +313,12 @@ export function isServerErrorMessage(raw: string): boolean {
   if (!value) {
     return false;
   }
-  if (STATUS_INTERNAL_SERVER_ERROR_WITH_500_RE.test(value)) {
+  if (STATUS_INTERNAL_SERVER_ERROR_WITH_500_RE.test(value) || HTTP_5XX_STATUS_RE.test(value)) {
     return true;
   }
   const scrubbed = value.replace(STATUS_INTERNAL_SERVER_ERROR_RE, "").trim();
-  return scrubbed.length > 0 && matchesErrorPatterns(scrubbed, ERROR_PATTERNS.serverError);
+  if (scrubbed === "") {
+    return true;
+  }
+  return matchesErrorPatterns(scrubbed, ERROR_PATTERNS.serverError);
 }

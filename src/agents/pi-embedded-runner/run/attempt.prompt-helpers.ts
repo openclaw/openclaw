@@ -14,13 +14,17 @@ import type {
 } from "../../../plugins/types.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
+import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-prompt.js";
+import { buildActiveImageGenerationTaskPromptContextForSession } from "../../image-generation-task-status.js";
 import { buildActiveMusicGenerationTaskPromptContextForSession } from "../../music-generation-task-status.js";
+import { resolveProcessToolScopeKey } from "../../pi-tools.js";
 import { prependSystemPromptAdditionAfterCacheBoundary } from "../../system-prompt-cache-boundary.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../../tool-fs-policy.js";
 import { derivePromptTokens, type NormalizedUsage } from "../../usage.js";
 import { buildActiveVideoGenerationTaskPromptContextForSession } from "../../video-generation-task-status.js";
 import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
+import { resolveContextEngineCapabilities } from "../context-engine-capabilities.js";
 import { log } from "../logger.js";
 import { shouldInjectHeartbeatPromptForTrigger } from "./trigger-policy.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
@@ -236,12 +240,18 @@ export function shouldWarnOnOrphanedUserRepair(
   return trigger === "user" || trigger === "manual";
 }
 
-export function hasPromptSubmissionContent(params: {
+export type PromptSubmissionSkipReason = "blank_user_prompt" | "empty_prompt_history_images";
+
+export function resolvePromptSubmissionSkipReason(params: {
   prompt: string;
   messages: readonly unknown[];
   imageCount: number;
-}): boolean {
-  return params.prompt.trim().length > 0 || params.messages.length > 0 || params.imageCount > 0;
+  runtimeOnly?: boolean;
+}): PromptSubmissionSkipReason | null {
+  if (params.prompt.trim().length > 0 || params.imageCount > 0) {
+    return null;
+  }
+  return params.messages.length > 0 ? "blank_user_prompt" : "empty_prompt_history_images";
 }
 
 const QUEUED_USER_MESSAGE_MARKER =
@@ -330,7 +340,7 @@ function sanitizeStructuredJsonValue(
     copied += 1;
   }
   if (skipped > 0) {
-    output.__truncated = `${skipped} more keys`;
+    output["__truncated"] = `${skipped} more keys`;
   }
   seen.delete(value);
   return output;
@@ -470,6 +480,7 @@ export function resolveAttemptPrependSystemContext(params: {
   const activeMediaTaskPromptContexts =
     params.trigger === "user" || params.trigger === "manual"
       ? [
+          buildActiveImageGenerationTaskPromptContextForSession(params.sessionKey),
           buildActiveVideoGenerationTaskPromptContextForSession(params.sessionKey),
           buildActiveMusicGenerationTaskPromptContextForSession(params.sessionKey),
         ]
@@ -480,32 +491,39 @@ export function resolveAttemptPrependSystemContext(params: {
   ]);
 }
 
+type AfterTurnRuntimeContextAttempt = Pick<
+  EmbeddedRunAttemptParams,
+  | "sessionKey"
+  | "sandboxSessionKey"
+  | "messageChannel"
+  | "messageProvider"
+  | "agentAccountId"
+  | "currentChannelId"
+  | "currentThreadTs"
+  | "currentMessageId"
+  | "config"
+  | "skillsSnapshot"
+  | "senderIsOwner"
+  | "senderId"
+  | "provider"
+  | "modelId"
+  | "thinkLevel"
+  | "reasoningLevel"
+  | "bashElevated"
+  | "extraSystemPrompt"
+  | "ownerNumbers"
+  | "authProfileId"
+> & {
+  sessionId?: EmbeddedRunAttemptParams["sessionId"];
+};
+
 /** Build runtime context passed into context-engine afterTurn hooks. */
 export function buildAfterTurnRuntimeContext(params: {
-  attempt: Pick<
-    EmbeddedRunAttemptParams,
-    | "sessionKey"
-    | "messageChannel"
-    | "messageProvider"
-    | "agentAccountId"
-    | "currentChannelId"
-    | "currentThreadTs"
-    | "currentMessageId"
-    | "config"
-    | "skillsSnapshot"
-    | "senderIsOwner"
-    | "senderId"
-    | "provider"
-    | "modelId"
-    | "thinkLevel"
-    | "reasoningLevel"
-    | "bashElevated"
-    | "extraSystemPrompt"
-    | "ownerNumbers"
-    | "authProfileId"
-  >;
+  attempt: AfterTurnRuntimeContextAttempt;
   workspaceDir: string;
   agentDir: string;
+  activeAgentId?: string;
+  contextEnginePluginId?: string;
   tokenBudget?: number;
   currentTokenCount?: number;
   promptCache?: ContextEnginePromptCacheInfo;
@@ -533,6 +551,20 @@ export function buildAfterTurnRuntimeContext(params: {
       bashElevated: params.attempt.bashElevated,
       extraSystemPrompt: params.attempt.extraSystemPrompt,
       ownerNumbers: params.attempt.ownerNumbers,
+      activeProcessSessions: listActiveProcessSessionReferences({
+        scopeKey: resolveProcessToolScopeKey({
+          sessionKey: params.attempt.sandboxSessionKey?.trim() || params.attempt.sessionKey,
+          sessionId: params.attempt.sessionId,
+          agentId: params.activeAgentId,
+        }),
+      }),
+    }),
+    ...resolveContextEngineCapabilities({
+      config: params.attempt.config,
+      sessionKey: params.attempt.sessionKey,
+      agentId: params.activeAgentId,
+      contextEnginePluginId: params.contextEnginePluginId,
+      purpose: "context-engine.after-turn",
     }),
     ...(typeof params.tokenBudget === "number" &&
     Number.isFinite(params.tokenBudget) &&

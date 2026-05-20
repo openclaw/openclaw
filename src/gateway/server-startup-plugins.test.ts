@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 
 const applyPluginAutoEnable = vi.hoisted(() =>
@@ -16,16 +17,25 @@ const loadGatewayStartupPlugins = vi.hoisted(() =>
     gatewayMethods: ["ping"],
   })),
 );
-const pruneUnknownBundledRuntimeDepsRoots = vi.hoisted(() =>
-  vi.fn((_params: unknown) => ({ scanned: 0, removed: 0, skippedLocked: 0 })),
+const pluginManifestRegistry = vi.hoisted(
+  (): PluginManifestRegistry => ({
+    plugins: [
+      {
+        id: "telegram",
+        origin: "bundled",
+        rootDir: "/package/dist/extensions/telegram",
+        source: "/package/dist/extensions/telegram/index.js",
+        manifestPath: "/package/dist/extensions/telegram/package.json",
+        channels: ["telegram"],
+        providers: [],
+        cliBackends: [],
+        skills: [],
+        hooks: [],
+      },
+    ],
+    diagnostics: [],
+  }),
 );
-const repairBundledRuntimeDepsInstallRootAsync = vi.hoisted(() =>
-  vi.fn(async (_params: unknown) => ({})),
-);
-const resolveBundledRuntimeDependencyPackageInstallRoot = vi.hoisted(() =>
-  vi.fn((_packageRoot: string, _params: unknown) => "/runtime"),
-);
-const pluginManifestRegistry = vi.hoisted(() => ({ plugins: [], diagnostics: [] }));
 const pluginMetadataSnapshot = vi.hoisted(
   (): PluginMetadataSnapshot => ({
     policyHash: "policy",
@@ -92,14 +102,6 @@ const runChannelPluginStartupMaintenance = vi.hoisted(() =>
   vi.fn(async (_params: unknown) => undefined),
 );
 const runStartupSessionMigration = vi.hoisted(() => vi.fn(async (_params: unknown) => undefined));
-const scanBundledPluginRuntimeDeps = vi.hoisted(() =>
-  vi.fn((_params: unknown) => ({
-    deps: [{ name: "grammy", version: "1.37.0", pluginIds: ["telegram"] }],
-    missing: [{ name: "grammy", version: "1.37.0", pluginIds: ["telegram"] }],
-    conflicts: [],
-  })),
-);
-
 vi.mock("../agents/agent-scope.js", () => ({
   resolveAgentWorkspaceDir: () => "/workspace",
   resolveDefaultAgentId: () => "default",
@@ -122,16 +124,6 @@ vi.mock("../infra/openclaw-root.js", () => ({
   resolveOpenClawPackageRootSync: (params: unknown) => resolveOpenClawPackageRootSync(params),
 }));
 
-vi.mock("../plugins/bundled-runtime-deps.js", () => ({
-  pruneUnknownBundledRuntimeDepsRoots: (params: unknown) =>
-    pruneUnknownBundledRuntimeDepsRoots(params),
-  repairBundledRuntimeDepsInstallRootAsync: (params: unknown) =>
-    repairBundledRuntimeDepsInstallRootAsync(params),
-  resolveBundledRuntimeDependencyPackageInstallRoot: (packageRoot: string, params: unknown) =>
-    resolveBundledRuntimeDependencyPackageInstallRoot(packageRoot, params),
-  scanBundledPluginRuntimeDeps: (params: unknown) => scanBundledPluginRuntimeDeps(params),
-}));
-
 vi.mock("../plugins/plugin-lookup-table.js", () => ({
   loadPluginLookUpTable: (params: unknown) => loadPluginLookUpTable(params),
 }));
@@ -147,6 +139,10 @@ vi.mock("../plugins/runtime.js", () => ({
 
 vi.mock("./server-methods-list.js", () => ({
   listGatewayMethods: () => ["ping"],
+}));
+
+vi.mock("./methods/core-descriptors.js", () => ({
+  listCoreGatewayMethodNames: () => ["ping", "config.openFile"],
 }));
 
 vi.mock("./server-methods.js", () => ({
@@ -170,18 +166,19 @@ function createLog() {
   };
 }
 
-describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
+function firstCallArg<T>(mock: { mock: { calls: unknown[][] } }, _type?: (value: T) => T): T {
+  const call = mock.mock.calls.at(0);
+  if (!call) {
+    throw new Error("Expected first mock call");
+  }
+  return call[0] as T;
+}
+
+describe("prepareGatewayPluginBootstrap startup plugins", () => {
   beforeEach(() => {
     applyPluginAutoEnable.mockClear();
     initSubagentRegistry.mockClear();
     loadGatewayStartupPlugins.mockClear();
-    pruneUnknownBundledRuntimeDepsRoots.mockClear().mockReturnValue({
-      scanned: 0,
-      removed: 0,
-      skippedLocked: 0,
-    });
-    repairBundledRuntimeDepsInstallRootAsync.mockReset().mockResolvedValue({});
-    resolveBundledRuntimeDependencyPackageInstallRoot.mockClear();
     loadPluginLookUpTable.mockClear().mockReturnValue({
       manifestRegistry: pluginManifestRegistry,
       startup: {
@@ -193,86 +190,7 @@ describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
     resolveOpenClawPackageRootSync.mockClear().mockReturnValue("/package");
     runChannelPluginStartupMaintenance.mockClear();
     runStartupSessionMigration.mockClear();
-    scanBundledPluginRuntimeDeps.mockClear().mockReturnValue({
-      deps: [{ name: "grammy", version: "1.37.0", pluginIds: ["telegram"] }],
-      missing: [{ name: "grammy", version: "1.37.0", pluginIds: ["telegram"] }],
-      conflicts: [],
-    });
   });
-
-  it("falls back to per-plugin runtime-deps installs after failed pre-start staging", async () => {
-    const installError = new Error("offline registry");
-    repairBundledRuntimeDepsInstallRootAsync.mockRejectedValueOnce(installError);
-    const log = createLog();
-    const { prepareGatewayPluginBootstrap } = await import("./server-startup-plugins.js");
-
-    await expect(
-      prepareGatewayPluginBootstrap({
-        cfgAtStart: {},
-        startupRuntimeConfig: {},
-        minimalTestGateway: false,
-        log,
-      }),
-    ).resolves.toMatchObject({
-      baseGatewayMethods: ["ping"],
-      startupPluginIds: ["telegram"],
-      pluginLookUpTable: expect.objectContaining({
-        manifestRegistry: pluginManifestRegistry,
-      }),
-    });
-
-    expect(loadGatewayStartupPlugins).toHaveBeenCalledOnce();
-    expect(loadPluginLookUpTable).toHaveBeenCalledOnce();
-    expect(loadGatewayStartupPlugins).toHaveBeenCalledWith(
-      expect.objectContaining({
-        pluginLookUpTable: expect.objectContaining({
-          manifestRegistry: pluginManifestRegistry,
-        }),
-      }),
-    );
-    expect(scanBundledPluginRuntimeDeps).toHaveBeenCalledWith(
-      expect.objectContaining({
-        selectedPluginIds: ["telegram"],
-      }),
-    );
-    expect(log.warn).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "gateway startup will continue with per-plugin runtime-deps installs",
-      ),
-    );
-    expect(loadGatewayStartupPlugins.mock.calls[0]?.[0]).not.toHaveProperty(
-      "bundledRuntimeDepsInstaller",
-    );
-  });
-
-  it("pre-stages only missing runtime deps while retaining the full startup dependency set", async () => {
-    scanBundledPluginRuntimeDeps.mockReturnValueOnce({
-      deps: [
-        { name: "alpha-runtime", version: "1.0.0", pluginIds: ["telegram"] },
-        { name: "grammy", version: "1.37.0", pluginIds: ["telegram"] },
-      ],
-      missing: [{ name: "grammy", version: "1.37.0", pluginIds: ["telegram"] }],
-      conflicts: [],
-    });
-    const log = createLog();
-    const { prepareGatewayPluginBootstrap } = await import("./server-startup-plugins.js");
-
-    await prepareGatewayPluginBootstrap({
-      cfgAtStart: {},
-      startupRuntimeConfig: {},
-      minimalTestGateway: false,
-      log,
-    });
-
-    expect(repairBundledRuntimeDepsInstallRootAsync).toHaveBeenCalledWith(
-      expect.objectContaining({
-        installRoot: "/runtime",
-        missingSpecs: ["grammy@1.37.0"],
-        installSpecs: ["alpha-runtime@1.0.0", "grammy@1.37.0"],
-      }),
-    );
-  });
-
   it("derives startup activation from source config instead of runtime plugin defaults", async () => {
     const sourceConfig = {
       channels: {
@@ -348,108 +266,47 @@ describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
       env: process.env,
       manifestRegistry: pluginManifestRegistry,
     });
-    expect(loadPluginLookUpTable).toHaveBeenCalledWith(
-      expect.objectContaining({
-        activationSourceConfig: sourceConfig,
-        metadataSnapshot: pluginMetadataSnapshot,
-        config: expect.objectContaining({
-          channels: expect.objectContaining({
-            telegram: expect.objectContaining({
-              enabled: true,
-              dmPolicy: "pairing",
-              groupPolicy: "allowlist",
-            }),
-          }),
-          plugins: expect.objectContaining({
-            allow: ["bench-plugin"],
-            entries: expect.objectContaining({
-              "bench-plugin": expect.objectContaining({
-                enabled: true,
-                config: {
-                  runtimeDefault: true,
-                },
-              }),
-              "memory-core": {
-                config: {
-                  dreaming: {
-                    enabled: false,
-                  },
-                },
-              },
-            }),
-          }),
-        }),
-      }),
-    );
-    expect(loadGatewayStartupPlugins).toHaveBeenCalledWith(
-      expect.objectContaining({
-        activationSourceConfig: sourceConfig,
-        cfg: expect.objectContaining({
-          channels: expect.objectContaining({
-            telegram: expect.objectContaining({
-              enabled: true,
-              dmPolicy: "pairing",
-              groupPolicy: "allowlist",
-            }),
-          }),
-          plugins: expect.objectContaining({
-            allow: ["bench-plugin"],
-            entries: expect.objectContaining({
-              "bench-plugin": expect.objectContaining({
-                enabled: true,
-                config: {
-                  runtimeDefault: true,
-                },
-              }),
-              "memory-core": {
-                config: {
-                  dreaming: {
-                    enabled: false,
-                  },
-                },
-              },
-            }),
-          }),
-        }),
-      }),
-    );
-  });
-
-  it("falls back to per-plugin runtime-deps installs after failed pre-start scan", async () => {
-    scanBundledPluginRuntimeDeps.mockImplementationOnce(() => {
-      throw new Error("unsupported runtime dependency spec");
+    const lookupInput = firstCallArg<{
+      activationSourceConfig?: OpenClawConfig;
+      metadataSnapshot?: PluginMetadataSnapshot;
+      config?: OpenClawConfig;
+    }>(loadPluginLookUpTable);
+    expect(lookupInput.activationSourceConfig).toBe(sourceConfig);
+    expect(lookupInput.metadataSnapshot).toBe(pluginMetadataSnapshot);
+    expect(lookupInput.config?.channels?.telegram?.enabled).toBe(true);
+    expect(lookupInput.config?.channels?.telegram?.dmPolicy).toBe("pairing");
+    expect(lookupInput.config?.channels?.telegram?.groupPolicy).toBe("allowlist");
+    expect(lookupInput.config?.plugins?.allow).toEqual(["bench-plugin"]);
+    expect(lookupInput.config?.plugins?.entries?.["bench-plugin"]?.enabled).toBe(true);
+    expect(lookupInput.config?.plugins?.entries?.["bench-plugin"]?.config).toEqual({
+      runtimeDefault: true,
     });
-    const log = createLog();
-    const { prepareGatewayPluginBootstrap } = await import("./server-startup-plugins.js");
-
-    await expect(
-      prepareGatewayPluginBootstrap({
-        cfgAtStart: {},
-        startupRuntimeConfig: {},
-        minimalTestGateway: false,
-        log,
-      }),
-    ).resolves.toMatchObject({
-      baseGatewayMethods: ["ping"],
-      startupPluginIds: ["telegram"],
-      pluginLookUpTable: expect.objectContaining({
-        manifestRegistry: pluginManifestRegistry,
-      }),
+    expect(lookupInput.config?.plugins?.entries?.["memory-core"]?.config).toEqual({
+      dreaming: { enabled: false },
     });
 
-    expect(repairBundledRuntimeDepsInstallRootAsync).not.toHaveBeenCalled();
-    expect(loadGatewayStartupPlugins).toHaveBeenCalledOnce();
-    expect(log.warn).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "failed to scan bundled runtime deps before gateway startup; gateway startup will continue with per-plugin runtime-deps installs",
-      ),
-    );
-    expect(loadGatewayStartupPlugins.mock.calls[0]?.[0]).not.toHaveProperty(
-      "bundledRuntimeDepsInstaller",
-    );
+    const startupInput = firstCallArg<{
+      activationSourceConfig?: OpenClawConfig;
+      cfg?: OpenClawConfig;
+      baseMethods?: string[];
+      coreGatewayMethodNames?: string[];
+    }>(loadGatewayStartupPlugins);
+    expect(startupInput.activationSourceConfig).toBe(sourceConfig);
+    expect(startupInput.baseMethods).toEqual(["ping"]);
+    expect(startupInput.coreGatewayMethodNames).toEqual(["ping", "config.openFile"]);
+    expect(startupInput.cfg?.channels?.telegram?.enabled).toBe(true);
+    expect(startupInput.cfg?.channels?.telegram?.dmPolicy).toBe("pairing");
+    expect(startupInput.cfg?.channels?.telegram?.groupPolicy).toBe("allowlist");
+    expect(startupInput.cfg?.plugins?.allow).toEqual(["bench-plugin"]);
+    expect(startupInput.cfg?.plugins?.entries?.["bench-plugin"]?.enabled).toBe(true);
+    expect(startupInput.cfg?.plugins?.entries?.["bench-plugin"]?.config).toEqual({
+      runtimeDefault: true,
+    });
+    expect(startupInput.cfg?.plugins?.entries?.["memory-core"]?.config).toEqual({
+      dreaming: { enabled: false },
+    });
   });
-
-  it("bypasses plugin lookup and runtime-deps staging when plugins are globally disabled", async () => {
+  it("bypasses plugin lookup when plugins are globally disabled", async () => {
     const cfg = {
       channels: {
         telegram: {
@@ -467,31 +324,29 @@ describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
     const log = createLog();
     const { prepareGatewayPluginBootstrap } = await import("./server-startup-plugins.js");
 
-    await expect(
-      prepareGatewayPluginBootstrap({
-        cfgAtStart: cfg,
-        startupRuntimeConfig: cfg,
-        minimalTestGateway: false,
-        log,
-      }),
-    ).resolves.toMatchObject({
-      startupPluginIds: [],
-      deferredConfiguredChannelPluginIds: [],
-      pluginLookUpTable: undefined,
-      baseGatewayMethods: ["ping"],
+    const result = await prepareGatewayPluginBootstrap({
+      cfgAtStart: cfg,
+      startupRuntimeConfig: cfg,
+      minimalTestGateway: false,
+      log,
     });
+    expect(result.startupPluginIds).toEqual([]);
+    expect(result.deferredConfiguredChannelPluginIds).toEqual([]);
+    expect(result.pluginLookUpTable).toBeUndefined();
+    expect(result.baseGatewayMethods).toEqual(["ping"]);
 
     expect(loadPluginLookUpTable).not.toHaveBeenCalled();
-    expect(scanBundledPluginRuntimeDeps).not.toHaveBeenCalled();
-    expect(repairBundledRuntimeDepsInstallRootAsync).not.toHaveBeenCalled();
-    expect(loadGatewayStartupPlugins).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cfg,
-        pluginIds: [],
-        pluginLookUpTable: undefined,
-        preferSetupRuntimeForChannelPlugins: false,
-        suppressPluginInfoLogs: false,
-      }),
-    );
+    const startupInput = firstCallArg<{
+      cfg?: OpenClawConfig;
+      pluginIds?: string[];
+      pluginLookUpTable?: unknown;
+      preferSetupRuntimeForChannelPlugins?: boolean;
+      suppressPluginInfoLogs?: boolean;
+    }>(loadGatewayStartupPlugins);
+    expect(startupInput.cfg).toStrictEqual(cfg);
+    expect(startupInput.pluginIds).toEqual([]);
+    expect(startupInput.pluginLookUpTable).toBeUndefined();
+    expect(startupInput.preferSetupRuntimeForChannelPlugins).toBe(false);
+    expect(startupInput.suppressPluginInfoLogs).toBe(false);
   });
 });

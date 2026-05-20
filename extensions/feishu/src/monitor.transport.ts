@@ -5,10 +5,11 @@ import { waitForAbortableDelay } from "./async.js";
 import { createFeishuWSClient } from "./client.js";
 import {
   applyBasicWebhookRequestGuards,
-  type RuntimeEnv,
   installRequestBodyLimitGuard,
   readWebhookBodyOrReject,
+  resolveRequestClientIp,
   safeEqualSecret,
+  type RuntimeEnv,
 } from "./monitor-transport-runtime-api.js";
 import {
   botNames,
@@ -22,7 +23,7 @@ import {
 } from "./monitor.state.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
-export type MonitorTransportParams = {
+type MonitorTransportParams = {
   account: ResolvedFeishuAccount;
   accountId: string;
   runtime?: RuntimeEnv;
@@ -33,6 +34,9 @@ export type MonitorTransportParams = {
 const FEISHU_WS_RECONNECT_INITIAL_DELAY_MS = 1_000;
 const FEISHU_WS_RECONNECT_MAX_DELAY_MS = 30_000;
 const FEISHU_WS_LOG_ERROR_MAX_LENGTH = 500;
+const FEISHU_WS_RECONNECT_EXHAUSTED_RE = /^WebSocket reconnect exhausted after \d+ attempts?/;
+const FEISHU_WS_AUTORECONNECT_DISABLED_ERROR =
+  "WebSocket connect failed and autoReconnect is disabled";
 
 function isFeishuWebhookPayload(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -87,6 +91,28 @@ function respondText(res: http.ServerResponse, statusCode: number, body: string)
   res.end(body);
 }
 
+function normalizeFeishuWebhookRateLimitClient(clientIp: string | undefined): string {
+  if (!clientIp) {
+    return "unknown";
+  }
+  if (clientIp === "::1" || clientIp.startsWith("127.")) {
+    return "loopback";
+  }
+  return clientIp;
+}
+
+function buildFeishuWebhookRateLimitKey(params: {
+  accountId: string;
+  path: string;
+  clientIp?: string;
+}): string {
+  return `${params.accountId}:${params.path}:${normalizeFeishuWebhookRateLimitClient(
+    params.clientIp,
+  )}`;
+}
+
+export { buildFeishuWebhookRateLimitKey as buildFeishuWebhookRateLimitKeyForTest };
+
 function getFeishuWsReconnectDelayMs(attempt: number): number {
   return Math.min(
     FEISHU_WS_RECONNECT_INITIAL_DELAY_MS * 2 ** Math.max(0, attempt - 1),
@@ -120,12 +146,21 @@ function formatFeishuWsErrorForLog(err: unknown): string {
   return `${redacted.slice(0, FEISHU_WS_LOG_ERROR_MAX_LENGTH)}...`;
 }
 
+function isFeishuWsTerminalError(err: Error): boolean {
+  const message = err.message.trim();
+  return (
+    FEISHU_WS_RECONNECT_EXHAUSTED_RE.test(message) ||
+    message.startsWith(FEISHU_WS_AUTORECONNECT_DISABLED_ERROR)
+  );
+}
+
 function cleanupFeishuWsClient(params: {
   accountId: string;
   wsClient?: Lark.WSClient;
   error: (message: string) => void;
+  clearIdentity: boolean;
 }): void {
-  const { accountId, wsClient, error } = params;
+  const { accountId, wsClient, error, clearIdentity } = params;
   if (wsClient) {
     try {
       wsClient.close();
@@ -136,27 +171,43 @@ function cleanupFeishuWsClient(params: {
     }
   }
   wsClients.delete(accountId);
-  botOpenIds.delete(accountId);
-  botNames.delete(accountId);
+  if (clearIdentity) {
+    botOpenIds.delete(accountId);
+    botNames.delete(accountId);
+  }
 }
 
-function waitForFeishuWsAbort(abortSignal?: AbortSignal): Promise<void> {
-  if (abortSignal?.aborted) {
-    return Promise.resolve();
+function waitForFeishuWsCycleEnd(params: {
+  abortSignal?: AbortSignal;
+  terminalError: Promise<Error>;
+}): Promise<"abort" | Error> {
+  if (params.abortSignal?.aborted) {
+    return Promise.resolve("abort");
   }
+
   return new Promise((resolve) => {
-    if (!abortSignal) {
-      // No external lifecycle owner was provided, so keep the SDK-managed connection alive.
+    let settled = false;
+    let handleAbort: (() => void) | undefined;
+
+    const finish = (result: "abort" | Error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (handleAbort) {
+        params.abortSignal?.removeEventListener("abort", handleAbort);
+      }
+      resolve(result);
+    };
+
+    handleAbort = () => finish("abort");
+    params.abortSignal?.addEventListener("abort", handleAbort, { once: true });
+    if (params.abortSignal?.aborted) {
+      finish("abort");
       return;
     }
-    const handleAbort = () => {
-      abortSignal.removeEventListener("abort", handleAbort);
-      resolve();
-    };
-    abortSignal.addEventListener("abort", handleAbort, { once: true });
-    if (abortSignal.aborted) {
-      handleAbort();
-    }
+
+    void params.terminalError.then(finish);
   });
 }
 
@@ -178,22 +229,55 @@ export async function monitorWebSocket({
 
     let wsClient: Lark.WSClient | undefined;
     try {
+      let reportTerminalError: (err: Error) => void = () => {};
+      const terminalError = new Promise<Error>((resolve) => {
+        reportTerminalError = resolve;
+      });
+      const handleWsError = (err: Error) => {
+        if (isFeishuWsTerminalError(err)) {
+          reportTerminalError(err);
+          return;
+        }
+
+        error(
+          `feishu[${accountId}]: WebSocket SDK reported recoverable error: ${formatFeishuWsErrorForLog(err)}`,
+        );
+      };
       log(`feishu[${accountId}]: starting WebSocket connection...`);
-      wsClient = await createFeishuWSClient(account);
+      wsClient = await createFeishuWSClient(account, {
+        onError: handleWsError,
+      });
       if (abortSignal?.aborted) {
-        cleanupFeishuWsClient({ accountId, wsClient, error });
+        cleanupFeishuWsClient({ accountId, wsClient, error, clearIdentity: true });
         break;
       }
       wsClients.set(accountId, wsClient);
       await wsClient.start({ eventDispatcher });
       attempt = 0;
       log(`feishu[${accountId}]: WebSocket client started`);
-      await waitForFeishuWsAbort(abortSignal);
-      log(`feishu[${accountId}]: abort signal received, stopping`);
-      cleanupFeishuWsClient({ accountId, wsClient, error });
-      return;
+      const cycleEnd = await waitForFeishuWsCycleEnd({ abortSignal, terminalError });
+      if (cycleEnd === "abort") {
+        log(`feishu[${accountId}]: abort signal received, stopping`);
+        cleanupFeishuWsClient({ accountId, wsClient, error, clearIdentity: true });
+        return;
+      }
+
+      cleanupFeishuWsClient({ accountId, wsClient, error, clearIdentity: false });
+      if (abortSignal?.aborted) {
+        break;
+      }
+
+      attempt += 1;
+      const delayMs = getFeishuWsReconnectDelayMs(attempt);
+      error(
+        `feishu[${accountId}]: WebSocket connection ended, recreating client in ${delayMs}ms: ${formatFeishuWsErrorForLog(cycleEnd)}`,
+      );
+      const shouldRetry = await waitForAbortableDelay(delayMs, abortSignal);
+      if (!shouldRetry) {
+        break;
+      }
     } catch (err) {
-      cleanupFeishuWsClient({ accountId, wsClient, error });
+      cleanupFeishuWsClient({ accountId, wsClient, error, clearIdentity: false });
       if (abortSignal?.aborted) {
         break;
       }
@@ -209,6 +293,7 @@ export async function monitorWebSocket({
       }
     }
   }
+  cleanupFeishuWsClient({ accountId, wsClient: undefined, error, clearIdentity: true });
 }
 
 export async function monitorWebhook({
@@ -238,7 +323,11 @@ export async function monitorWebhook({
       recordWebhookStatus(runtime, accountId, path, res.statusCode);
     });
 
-    const rateLimitKey = `${accountId}:${path}:${req.socket.remoteAddress ?? "unknown"}`;
+    const rateLimitKey = buildFeishuWebhookRateLimitKey({
+      accountId,
+      path,
+      clientIp: resolveRequestClientIp(req),
+    });
     if (
       !applyBasicWebhookRequestGuards({
         req,

@@ -1,5 +1,5 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import { createAssistantMessageEventStream, streamSimple } from "@mariozechner/pi-ai";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import { createAssistantMessageEventStream, streamSimple } from "@earendil-works/pi-ai";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { ssrfPolicyFromHttpBaseUrlAllowedHostname } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -77,7 +77,7 @@ function isPreloadCoolingDown(preloadKey: string, now: number): PreloadCooldownE
 }
 
 /** Test-only hook for clearing preload cooldown state between cases. */
-export function __resetLmstudioPreloadCooldownForTest(): void {
+export function resetLmstudioPreloadCooldownForTest(): void {
   preloadCooldown.clear();
   preloadInFlight.clear();
 }
@@ -121,6 +121,22 @@ function toRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
 }
 
+function shouldPreloadLmstudioModels(value: unknown): boolean {
+  const providerConfig = toRecord(value);
+  const params = toRecord(providerConfig?.params);
+  return params?.preload !== false;
+}
+
+function withLmstudioUsageCompat(model: StreamModel): StreamModel {
+  return {
+    ...model,
+    compat: {
+      ...(model.compat && typeof model.compat === "object" ? model.compat : {}),
+      supportsUsageInStreaming: true,
+    },
+  };
+}
+
 function resolveContextToolNames(context: StreamContext): Set<string> {
   const tools = (context as { tools?: unknown }).tools;
   if (!Array.isArray(tools)) {
@@ -140,7 +156,14 @@ function couldStillBePlainTextToolCall(text: string): boolean {
     return false;
   }
   const trimmed = text.trimStart();
-  return trimmed.length === 0 || trimmed.startsWith("[");
+  return (
+    trimmed.length === 0 ||
+    trimmed.startsWith("[") ||
+    trimmed.startsWith("<|channel|>") ||
+    trimmed.startsWith("commentary") ||
+    trimmed.startsWith("analysis") ||
+    trimmed.startsWith("final")
+  );
 }
 
 function createLmstudioToolCallBlock(parsed: {
@@ -381,7 +404,15 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
     if (!modelKey) {
       return underlying(model, context, options);
     }
-    const providerBaseUrl = ctx.config?.models?.providers?.[LMSTUDIO_PROVIDER_ID]?.baseUrl;
+    const providerConfig = ctx.config?.models?.providers?.[LMSTUDIO_PROVIDER_ID];
+    if (!shouldPreloadLmstudioModels(providerConfig)) {
+      const stream = underlying(withLmstudioUsageCompat(model), context, options);
+      return (async () => {
+        const resolvedStream = stream instanceof Promise ? await stream : stream;
+        return wrapLmstudioPlainTextToolCalls(resolvedStream, context);
+      })();
+    }
+    const providerBaseUrl = providerConfig?.baseUrl;
     const resolvedBaseUrl = resolveLmstudioInferenceBase(
       typeof model.baseUrl === "string" ? model.baseUrl : providerBaseUrl,
     );
@@ -454,14 +485,7 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
       // LM Studio uses OpenAI-compatible streaming usage payloads when requested via
       // `stream_options.include_usage`. Force this compat flag at call time so usage
       // reporting remains enabled even when catalog entries omitted compat metadata.
-      const modelWithUsageCompat = {
-        ...model,
-        compat: {
-          ...(model.compat && typeof model.compat === "object" ? model.compat : {}),
-          supportsUsageInStreaming: true,
-        },
-      };
-      const stream = underlying(modelWithUsageCompat, context, options);
+      const stream = underlying(withLmstudioUsageCompat(model), context, options);
       const resolvedStream = stream instanceof Promise ? await stream : stream;
       return wrapLmstudioPlainTextToolCalls(resolvedStream, context);
     })();

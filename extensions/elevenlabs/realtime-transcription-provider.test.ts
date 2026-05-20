@@ -1,7 +1,7 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import {
-  __testing,
+  testing,
   buildElevenLabsRealtimeTranscriptionProvider,
 } from "./realtime-transcription-provider.js";
 
@@ -24,17 +24,23 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
       },
     });
 
-    expect(resolved).toMatchObject({
+    expect(resolved).toEqual({
       apiKey: "eleven-key",
+      baseUrl: undefined,
+      modelId: undefined,
       audioFormat: "ulaw_8000",
       sampleRate: 8000,
       commitStrategy: "vad",
       languageCode: "en",
+      vadSilenceThresholdSecs: undefined,
+      vadThreshold: undefined,
+      minSpeechDurationMs: undefined,
+      minSilenceDurationMs: undefined,
     });
   });
 
   it("builds an ElevenLabs realtime websocket URL", () => {
-    const url = __testing.toElevenLabsRealtimeWsUrl({
+    const url = testing.toElevenLabsRealtimeWsUrl({
       apiKey: "eleven-key",
       baseUrl: "https://api.elevenlabs.io",
       providerConfig: {},

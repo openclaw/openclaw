@@ -2,6 +2,7 @@ import { getLoadedChannelPlugin } from "../channels/plugins/index.js";
 import { resolveReadOnlyChannelCommandDefaults } from "../channels/plugins/read-only-command-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { pluginCommandSupportsChannel } from "./command-registration.js";
 import { pluginCommands } from "./command-registry-state.js";
 import type { OpenClawPluginCommandDefinition } from "./types.js";
 
@@ -32,6 +33,7 @@ export function getPluginCommandSpecs(
 ): Array<{
   name: string;
   description: string;
+  descriptionLocalizations?: Record<string, string>;
   acceptsArgs: boolean;
 }> {
   const providerName = normalizeOptionalLowercaseString(provider);
@@ -56,11 +58,25 @@ export function getPluginCommandSpecs(
 export function listProviderPluginCommandSpecs(provider?: string): Array<{
   name: string;
   description: string;
+  descriptionLocalizations?: Record<string, string>;
   acceptsArgs: boolean;
 }> {
-  return Array.from(pluginCommands.values()).map((cmd) => ({
-    name: resolvePluginNativeName(cmd, provider),
-    description: cmd.description,
-    acceptsArgs: cmd.acceptsArgs ?? false,
-  }));
+  return Array.from(pluginCommands.values())
+    .filter((cmd) => pluginCommandSupportsChannel(cmd, provider))
+    .map((cmd) => {
+      const spec: {
+        name: string;
+        description: string;
+        descriptionLocalizations?: Record<string, string>;
+        acceptsArgs: boolean;
+      } = {
+        name: resolvePluginNativeName(cmd, provider),
+        description: cmd.description,
+        acceptsArgs: cmd.acceptsArgs ?? false,
+      };
+      if (cmd.descriptionLocalizations) {
+        spec.descriptionLocalizations = cmd.descriptionLocalizations;
+      }
+      return spec;
+    });
 }

@@ -80,4 +80,46 @@ describe("getQueuedFileWriter", () => {
 
     expect(fs.readFileSync(filePath, "utf8")).toBe("12345\n");
   });
+
+  it("drops writes that would exceed the pending queue cap", async () => {
+    const tmpDir = makeTempDir();
+    const filePath = path.join(tmpDir, "trace.jsonl");
+    const writer = getQueuedFileWriter(new Map(), filePath, { maxQueuedBytes: 6 });
+
+    expect(writer.write("12345\n")).toBe("queued");
+    expect(writer.write("after\n")).toBe("dropped");
+    await writer.flush();
+
+    expect(fs.readFileSync(filePath, "utf8")).toBe("12345\n");
+  });
+
+  it("reports pending queue diagnostics before flush drains writes", async () => {
+    const tmpDir = makeTempDir();
+    const filePath = path.join(tmpDir, "trace.jsonl");
+    const writer = getQueuedFileWriter(new Map(), filePath, {
+      maxFileBytes: 1024,
+      maxQueuedBytes: 1024,
+      yieldBeforeWrite: true,
+    });
+
+    writer.write("line\n");
+
+    expect(writer.describeQueue?.()).toEqual({
+      pendingWrites: 1,
+      queuedBytes: 5,
+      activeOperation: "idle",
+      activeWriteBytes: undefined,
+      maxFileBytes: 1024,
+      maxQueuedBytes: 1024,
+      yieldBeforeWrite: true,
+    });
+
+    await writer.flush();
+
+    expect(writer.describeQueue?.()).toMatchObject({
+      pendingWrites: 0,
+      queuedBytes: 0,
+      activeOperation: "idle",
+    });
+  });
 });

@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { Api, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
-import { streamAnthropic } from "@mariozechner/pi-ai/anthropic";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { Api, Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
+import { streamAnthropic } from "@earendil-works/pi-ai/anthropic";
 
 const MANTLE_ANTHROPIC_BETA = "fine-grained-tool-streaming-2025-05-14";
 type AnthropicOptions = ConstructorParameters<typeof Anthropic>[0];
@@ -100,7 +100,7 @@ export function createMantleAnthropicStreamFn(deps?: {
       ),
     });
     const base = buildMantleAnthropicBaseOptions(model, options, apiKey);
-    // Staged plugin runtime deps can give this plugin a distinct physical SDK copy.
+    // Plugin package deps can give this plugin a distinct physical SDK copy.
     // The client API is the same, but the SDK class private field makes types nominal.
     const streamClient = client as unknown as AnthropicStreamClient;
     if (!options?.reasoning || requiresDefaultSampling(model.id)) {

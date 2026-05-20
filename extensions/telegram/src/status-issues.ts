@@ -12,6 +12,7 @@ import {
 
 const TELEGRAM_POLLING_CONNECT_GRACE_MS = 120_000;
 const TELEGRAM_POLLING_STALE_TRANSPORT_MS = 30 * 60_000;
+const TELEGRAM_WEBHOOK_CONNECT_GRACE_MS = 120_000;
 
 type TelegramAccountStatus = {
   accountId?: unknown;
@@ -68,6 +69,14 @@ function appendTelegramRuntimeError(message: string, lastError: unknown): string
   return error ? `${message}: ${error}` : message;
 }
 
+function isTelegramPollingBacklogStallError(lastError: unknown): boolean {
+  const error = asString(lastError);
+  return Boolean(
+    error?.includes("isolated polling spool backlog stalled") ||
+    error?.includes("isolated polling spool handler timed out"),
+  );
+}
+
 function collectTelegramPollingRuntimeIssues(params: {
   account: TelegramAccountStatus;
   accountId: string;
@@ -87,14 +96,14 @@ function collectTelegramPollingRuntimeIssues(params: {
     const withinStartupGrace =
       lastStartAt != null && now - lastStartAt < TELEGRAM_POLLING_CONNECT_GRACE_MS;
     if (!withinStartupGrace) {
+      const message = isTelegramPollingBacklogStallError(account.lastError)
+        ? "Telegram isolated polling spool backlog is stalled while Bot API polling is still succeeding"
+        : "Telegram polling is running but has not completed a successful getUpdates call since startup";
       issues.push({
         channel: "telegram",
         accountId,
         kind: "runtime",
-        message: appendTelegramRuntimeError(
-          "Telegram polling is running but has not completed a successful getUpdates call since startup",
-          account.lastError,
-        ),
+        message: appendTelegramRuntimeError(message, account.lastError),
         fix,
       });
     }
@@ -122,6 +131,40 @@ function collectTelegramPollingRuntimeIssues(params: {
       });
     }
   }
+}
+
+function collectTelegramWebhookRuntimeIssues(params: {
+  account: TelegramAccountStatus;
+  accountId: string;
+  issues: ChannelStatusIssue[];
+  now: number;
+}) {
+  const { account, accountId, issues, now } = params;
+  if (account.running !== true || asString(account.mode) !== "webhook") {
+    return;
+  }
+
+  if (account.connected !== false) {
+    return;
+  }
+
+  const lastStartAt = asFiniteNumber(account.lastStartAt);
+  const withinStartupGrace =
+    lastStartAt != null && now - lastStartAt < TELEGRAM_WEBHOOK_CONNECT_GRACE_MS;
+  if (withinStartupGrace) {
+    return;
+  }
+
+  issues.push({
+    channel: "telegram",
+    accountId,
+    kind: "runtime",
+    message: appendTelegramRuntimeError(
+      "Telegram webhook listener is running but setWebhook has not completed since startup",
+      account.lastError,
+    ),
+    fix: `Run: ${formatCliCommand("openclaw channels status --probe")} (or restart the gateway). Check the webhook URL, secret, TLS/proxy reachability, and Telegram setWebhook logs if it persists.`,
+  });
 }
 
 function readTelegramGroupMembershipAuditSummary(
@@ -174,12 +217,19 @@ export function collectTelegramStatusIssues(
     if (!accountId) {
       continue;
     }
+    const now = Date.now();
 
     collectTelegramPollingRuntimeIssues({
       account,
       accountId,
       issues,
-      now: Date.now(),
+      now,
+    });
+    collectTelegramWebhookRuntimeIssues({
+      account,
+      accountId,
+      issues,
+      now,
     });
 
     if (account.allowUnmentionedGroups === true) {

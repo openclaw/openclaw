@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import { bundledDistPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { stageBundledPluginRuntime } from "../../scripts/stage-bundled-plugin-runtime.mjs";
+import { withMockedWindowsPlatform, withRestoredMocks } from "../test-utils/vitest-spies.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
@@ -93,7 +94,7 @@ afterEach(() => {
 });
 
 describe("stageBundledPluginRuntime", () => {
-  it("stages bundled dist plugins as runtime wrappers and links staged dist node_modules", () => {
+  it("stages bundled dist plugins as runtime wrappers without linking plugin node_modules", () => {
     const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-");
     const distPluginDir = createDistPluginDir(repoRoot, "diffs");
     fs.mkdirSync(path.join(repoRoot, "dist"), { recursive: true });
@@ -124,10 +125,7 @@ describe("stageBundledPluginRuntime", () => {
       pluginId: "diffs",
       expectedImport: distRuntimeImportPath("diffs"),
     });
-    expect(fs.lstatSync(path.join(runtimePluginDir, "node_modules")).isSymbolicLink()).toBe(true);
-    expect(fs.realpathSync(path.join(runtimePluginDir, "node_modules"))).toBe(
-      fs.realpathSync(path.join(distPluginDir, "node_modules")),
-    );
+    expect(fs.existsSync(path.join(runtimePluginDir, "node_modules"))).toBe(false);
     expect(fs.existsSync(path.join(distPluginDir, "node_modules"))).toBe(true);
     expect(
       fs
@@ -334,12 +332,15 @@ describe("stageBundledPluginRuntime", () => {
     ]);
 
     const match = commandsModule.matchPluginCommand("/pair now");
-    expect(match).not.toBeNull();
-    expect(match?.args).toBe("now");
+    if (match === null) {
+      throw new Error("Expected plugin command match");
+    }
+    expect(match.args).toBe("now");
+    expect(typeof match.command.handler).toBe("function");
     await expect(
       commandsModule.executePluginCommand({
-        command: match!.command,
-        args: match?.args,
+        command: match.command,
+        args: match.args,
       }),
     ).resolves.toEqual({ text: "paired:now" });
   });
@@ -521,7 +522,7 @@ describe("stageBundledPluginRuntime", () => {
       return realSymlinkSync(String(target), linkPath, type);
     }) as typeof fs.symlinkSync);
 
-    expect(() => stageBundledPluginRuntime({ repoRoot })).not.toThrow();
+    stageBundledPluginRuntime({ repoRoot });
 
     const runtimeAssetPath = path.join(
       repoRoot,
@@ -547,7 +548,6 @@ describe("stageBundledPluginRuntime", () => {
         [bundledDistPluginFile("feishu", "assets/fixture.txt")]: "# Feishu Doc\n",
       });
 
-      const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       const realSymlinkSync = fs.symlinkSync.bind(fs);
       const symlinkSpy = vi.spyOn(fs, "symlinkSync").mockImplementation(((target, link, type) => {
         const linkPath = String(link);
@@ -557,7 +557,11 @@ describe("stageBundledPluginRuntime", () => {
         return realSymlinkSync(String(target), linkPath, type);
       }) as typeof fs.symlinkSync);
 
-      stageBundledPluginRuntime({ repoRoot });
+      withRestoredMocks([symlinkSpy], () => {
+        withMockedWindowsPlatform(() => {
+          stageBundledPluginRuntime({ repoRoot });
+        });
+      });
 
       const runtimeAssetPath = path.join(
         repoRoot,
@@ -569,9 +573,6 @@ describe("stageBundledPluginRuntime", () => {
       );
       expect(fs.lstatSync(runtimeAssetPath).isSymbolicLink()).toBe(false);
       expect(fs.readFileSync(runtimeAssetPath, "utf8")).toBe("# Feishu Doc\n");
-
-      symlinkSpy.mockRestore();
-      platformSpy.mockRestore();
     },
   );
 });

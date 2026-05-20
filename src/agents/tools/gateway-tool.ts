@@ -34,12 +34,14 @@ const ALLOWED_GATEWAY_CONFIG_PATHS = [
   "agents.defaults.promptOverlays",
   "agents.defaults.model",
   "agents.defaults.thinkingDefault",
+  "agents.defaults.subagents.thinking",
   "agents.defaults.reasoningDefault",
   "agents.defaults.fastModeDefault",
   "agents.list[].id",
   "agents.list[].systemPromptOverride",
   "agents.list[].model",
   "agents.list[].thinkingDefault",
+  "agents.list[].subagents.thinking",
   "agents.list[].reasoningDefault",
   "agents.list[].fastModeDefault",
   // Mention gating is an agent-facing scope knob across channel adapters.
@@ -51,6 +53,11 @@ const ALLOWED_GATEWAY_CONFIG_PATHS = [
   "channels.*.*.*.requireMention",
   "channels.*.*.*.*.requireMention",
   "channels.*.*.*.*.*.requireMention",
+  // Visible reply delivery mode is a bounded message UX setting, not a secret
+  // or privilege boundary. Let agents repair silent group/channel rooms.
+  "messages.visibleReplies",
+  "messages.groupChat.visibleReplies",
+  "messages.groupChat.unmentionedInbound",
 ] as const;
 
 /** @internal Exposed for regression tests only; do not import from runtime code. */
@@ -365,7 +372,7 @@ export function createGatewayTool(opts?: {
     name: "gateway",
     ownerOnly: isOpenClawOwnerOnlyCoreToolName("gateway"),
     description:
-      "Restart, inspect a specific config schema path, apply config, or update the gateway in-place (SIGUSR1). Use config.schema.lookup with a targeted dot path before config edits. Use config.patch for safe partial config updates (merges with existing). Use config.apply only when replacing entire config. Config writes hot-reload when possible and restart when required. Always pass a human-readable completion message via the `note` parameter so the system can deliver it to the user after restart. If restarting during a user task and you still owe the user a reply, pass a specific one-shot `continuationMessage` for what to verify or report after boot; do not write restart sentinel files directly.",
+      "Gateway restart/config/update. Before config edits, use config.schema.lookup with targeted dot path. Prefer config.patch for partial merge; config.apply only full replace. Writes hot-reload or restart as needed. Always pass human `note` for post-restart delivery. If still owe the user a reply, pass one-shot `continuationMessage`; do not write restart sentinel files directly.",
     parameters: GatewayToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -513,6 +520,7 @@ export function createGatewayTool(opts?: {
       }
       if (action === "update.run") {
         const { sessionKey, note, restartDelayMs } = resolveGatewayWriteMeta();
+        const continuationMessage = normalizeOptionalString(params.continuationMessage);
         const updateTimeoutMs = gatewayOpts.timeoutMs ?? DEFAULT_UPDATE_TIMEOUT_MS;
         const updateGatewayOpts = {
           ...gatewayOpts,
@@ -521,6 +529,7 @@ export function createGatewayTool(opts?: {
         const result = await callGatewayTool("update.run", updateGatewayOpts, {
           sessionKey,
           note,
+          continuationMessage,
           restartDelayMs,
           timeoutMs: updateTimeoutMs,
         });

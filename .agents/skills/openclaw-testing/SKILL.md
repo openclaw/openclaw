@@ -19,9 +19,16 @@ or validating a change without wasting hours.
 Prove the touched surface first. Do not reflexively run the whole suite.
 
 1. Inspect the diff and classify the touched surface:
-   - source: `pnpm changed:lanes --json`, then `pnpm check:changed`
-   - tests only: `pnpm test:changed`
-   - one failing file: `pnpm test <path-or-filter> -- --reporter=verbose`
+   - normal source checkout, source change: `pnpm changed:lanes --json`, then `pnpm check:changed`
+   - normal source checkout, tests only: `pnpm test:changed`
+   - normal source checkout, one failing file: `pnpm test <path-or-filter> -- --reporter=verbose`
+   - Codex worktree or linked/sparse checkout, one/few explicit files: `node scripts/run-vitest.mjs <path-or-filter>`
+   - Codex worktree or linked/sparse checkout, changed gates or anything broad:
+     use the Crabbox wrapper with the provider that matches the proof surface.
+     For maintainer heavy `pnpm` gates, that is usually delegated Blacksmith
+     Testbox through Crabbox, e.g. `node scripts/crabbox-wrapper.mjs run
+--provider blacksmith-testbox ... -- pnpm check:changed`. For direct AWS
+     Crabbox proof, omit `--provider` and let `.crabbox.yaml` choose AWS.
    - workflow-only: `git diff --check`, workflow syntax/lint (`actionlint` when available)
    - docs-only: `pnpm docs:list`, docs formatter/lint only if docs tooling changed or requested
 2. Reproduce narrowly before fixing.
@@ -36,14 +43,24 @@ Prove the touched surface first. Do not reflexively run the whole suite.
 - Prefer GitHub Actions for release/Docker proof when the workflow already has the prepared image and secrets.
 - Use `scripts/committer "<msg>" <paths...>` when committing; stage only your files.
 - If deps are missing, run `pnpm install`, retry once, then report the first actionable error.
-- For Blacksmith Testbox proof, reuse only an id warmed and claimed in this
-  operator session. `blacksmith testbox list` is diagnostics only; a listed id
-  can have a local key and still carry stale rsync state from another lane.
-  After warmup, run `pnpm testbox:claim --id <id>`, then prefer
-  `pnpm testbox:run --id <id> -- "<command>"` for OpenClaw gates so stale
-  org-visible ids fail fast before syncing. Claims older than 12 hours are
-  stale unless `OPENCLAW_TESTBOX_CLAIM_TTL_MINUTES` is explicitly set for long
-  work.
+- In a Codex worktree or linked/sparse checkout, do not run direct local
+  `pnpm test*`, `pnpm check*`, `pnpm crabbox:run`, or `scripts/committer` until
+  you have verified pnpm will not reconcile or reinstall dependencies. Use
+  `node scripts/run-vitest.mjs` for tiny local proof, `node
+scripts/crabbox-wrapper.mjs` for Testbox, and `git commit --no-verify` only
+  after the relevant remote or node-wrapper proof is already clean.
+- For remote proof, use the Crabbox wrapper first, but name the actual backend.
+  Direct AWS Crabbox uses `provider=aws` and `cbx_...` ids. Delegated
+  Blacksmith Testbox through Crabbox uses `provider=blacksmith-testbox`,
+  `syncDelegated=true`, and `tbx_...` ids. Both satisfy "remote proof" when the
+  requested proof surface allows either.
+- Do not infer "no Testbox is running" from plain `blacksmith testbox list`.
+  Use `blacksmith testbox list --all` or `blacksmith testbox status <tbx_id>`
+  before reporting cloud state.
+- Reuse only an id/slug created in this operator session unless explicitly
+  coordinating with another lane. If Testbox queues, fails capacity, or cannot
+  allocate, report the blocker or switch to direct AWS Crabbox only when that
+  still proves the requested surface.
 
 ## Local Test Shortcuts
 
@@ -58,6 +75,14 @@ OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test <path-or-filter>
 
 Use targeted file paths whenever possible. Avoid raw `vitest`; use the repo
 `pnpm test` wrapper so project routing, workers, and setup stay correct.
+When the checkout is a Codex worktree, prefer the direct node harness instead:
+
+```bash
+node scripts/run-vitest.mjs <path-or-filter>
+```
+
+That keeps the test scoped without giving pnpm a chance to run dependency
+status checks or install reconciliation in a linked worktree.
 
 ## Command Semantics
 
@@ -106,6 +131,8 @@ gh run view <run-id> --job <job-id> --log
 - Check exact SHA. Ignore newer unrelated `main` unless asked.
 - For cancelled same-branch runs, confirm whether a newer run superseded it.
 - Fetch full logs only for failed or relevant jobs.
+- Prefer `gh run view <run-id> --json jobs` over PR rollup while debugging; rollup can be stale/noisy.
+- For `prompt:snapshots:check` failures, treat Linux Node 24 as CI truth. If macOS passes but CI drifts, reproduce in a Linux Node 24 container or Testbox, commit that generated output, then rerun.
 
 ## GitHub Release Workflows
 
@@ -149,9 +176,9 @@ Use `release_profile=minimum|stable|full` to control live/provider breadth:
 `minimum` keeps the fastest OpenAI/core release-critical set, `stable` adds the
 stable provider/backend set, and `full` adds the broad advisory provider/media
 matrix. Do not make `full` faster by silently dropping suites; optimize setup,
-artifact reuse, and sharding instead. The parent verifier job appends
-slowest-job tables for child runs; rerun only that verifier after a child rerun
-turns green.
+artifact reuse, and sharding instead. The parent verifier job appends a child
+overview plus slowest-job tables for child runs; rerun only that verifier after
+a child rerun turns green.
 
 Standalone manual `CI` dispatches do not run the plugin prerelease suite, the
 extension batch sweep, or the release-only `agentic-plugins` Vitest shard. Those
@@ -160,8 +187,8 @@ PRs, main pushes, and ad hoc broad CI checks do not spend Docker/package time or
 all-plugin runtime time on release-only product coverage.
 
 If a full run is already active on a newer `origin/main`, prefer watching that
-run over dispatching a duplicate. If you accidentally dispatch a stale duplicate,
-cancel it and monitor the current run.
+run over dispatching a duplicate. Do not cancel release, release-check, or child
+workflow runs unless Peter explicitly asks for cancellation.
 
 The child-dispatch jobs record the child run ids. The final
 `Verify full validation` job re-queries those child runs and is the canonical
@@ -173,7 +200,12 @@ For bounded recovery after a focused fix, pass `-f rerun_group=<group>`.
 Supported umbrella groups are `all`, `ci`, `plugin-prerelease`,
 `release-checks`, `install-smoke`, `cross-os`, `live-e2e`, `package`, `qa`,
 `qa-parity`, `qa-live`, and `npm-telegram`. Use the narrowest group that covers
-the failed box.
+the failed box. After a targeted release-check fix, do not restart the full
+umbrella by habit: dispatch the matching `rerun_group` and rerun only the parent
+verifier/evidence step after the child is green unless the release evidence is
+stale. For a single failed live/E2E shard, use
+`-f rerun_group=live-e2e -f live_suite_filter=<suite_id>` so the Blacksmith
+workflow only spends setup and queue time on that suite.
 
 ### Release Evidence
 
@@ -239,6 +271,13 @@ release checks, release-path Docker live/E2E checks, and Package Acceptance.
 When `Full Release Validation` dispatches release checks, it passes the requested
 branch/tag plus an `expected_sha` so branch/tag refs resolve through the fast
 remote-ref path while the package and QA jobs still validate the exact SHA.
+
+The full install-smoke child is split on purpose: one job prepares or reuses the
+target-SHA GHCR root Dockerfile smoke image, QR package install runs in its own
+job, root Dockerfile/gateway smokes pull the prepared image, and installer/Bun
+smokes pull the same image while building only their small installer images.
+If install-smoke gets slow again, first check whether the root image was reused
+or rebuilt before adding/removing coverage.
 
 The full-profile native live media shards use the prebuilt
 `ghcr.io/openclaw/openclaw-live-media-runner:ubuntu-24.04` container so
@@ -542,6 +581,13 @@ timing, timeout state, image kind, and log file path. The summary also includes
 top-level phase timings for preflight, image build, package prep, lane pools,
 and cleanup. Use `pnpm test:docker:timings <summary.json>` to rank slow lanes
 and phases before deciding whether a broader rerun is justified.
+
+Skill install proof: use `pnpm test:docker:skill-install` or targeted
+`docker_lanes=skill-install` for live ClawHub skill-install validation. The
+lane installs the package tarball in a bare runner, keeps
+`skills.install.allowUploadedArchives=false`, resolves the current live slug
+from `openclaw skills search`, installs it, and verifies `.clawhub` origin/lock
+metadata. Prefer this checked-in script over inline heredoc Testbox recipes.
 
 ## Cheap Docker Reruns
 
