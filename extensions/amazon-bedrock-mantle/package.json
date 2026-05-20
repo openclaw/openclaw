@@ -8,9 +8,9 @@
   },
   "type": "module",
   "dependencies": {
-    "@anthropic-ai/sdk": "0.95.2",
+    "@anthropic-ai/sdk": "0.96.0",
     "@aws/bedrock-token-generator": "1.1.0",
-    "@earendil-works/pi-ai": "0.75.1"
+    "@earendil-works/pi-ai": "0.75.3"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
