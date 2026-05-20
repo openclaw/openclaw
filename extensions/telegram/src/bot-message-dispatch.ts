@@ -1181,28 +1181,57 @@ export const dispatchTelegramMessage = async ({
       }
       return result.delivered;
     };
-    const emitPreviewFinalizedHook = (result: LaneDeliveryResult) => {
+    const repairPreviewFinalizedText = async (
+      delivery: Extract<LaneDeliveryResult, { kind: "preview-finalized" }>["delivery"],
+    ): Promise<string> => {
+      if (!delivery.content) {
+        return delivery.content;
+      }
+      const repaired = await resolveTranscriptBackedFinalText(delivery.content);
+      if (repaired === delivery.content || isDispatchSuperseded()) {
+        return delivery.content;
+      }
+      try {
+        await (telegramDeps.editMessageTelegram ?? editMessageTelegram)(
+          chatId,
+          delivery.messageId,
+          repaired,
+          {
+            api: bot.api,
+            cfg,
+            accountId: route.accountId,
+            linkPreview: telegramCfg.linkPreview,
+          },
+        );
+        return repaired;
+      } catch (err) {
+        logVerbose(`telegram preview-finalized repair edit failed: ${formatErrorMessage(err)}`);
+        return delivery.content;
+      }
+    };
+    const emitPreviewFinalizedHook = async (result: LaneDeliveryResult) => {
       if (isDispatchSuperseded() || result.kind !== "preview-finalized") {
         return;
       }
+      const deliveredContent = await repairPreviewFinalizedText(result.delivery);
       (telegramDeps.emitInternalMessageSentHook ?? emitInternalMessageSentHook)({
         sessionKeyForInternalHooks: deliveryBaseOptions.sessionKeyForInternalHooks,
         chatId: deliveryBaseOptions.chatId,
         accountId: deliveryBaseOptions.accountId,
-        content: result.delivery.content,
+        content: deliveredContent,
         success: true,
         messageId: result.delivery.messageId,
         isGroup: deliveryBaseOptions.mirrorIsGroup,
         groupId: deliveryBaseOptions.mirrorGroupId,
       });
-      if (deliveryBaseOptions.transcriptMirror && result.delivery.content) {
-        void deliveryBaseOptions
-          .transcriptMirror({ text: result.delivery.content })
-          .catch((err: unknown) => {
-            logVerbose(
-              `telegram preview-finalized transcriptMirror failed: ${formatErrorMessage(err)}`,
-            );
-          });
+      if (deliveryBaseOptions.transcriptMirror && deliveredContent) {
+        try {
+          await deliveryBaseOptions.transcriptMirror({ text: deliveredContent });
+        } catch (err) {
+          logVerbose(
+            `telegram preview-finalized transcriptMirror failed: ${formatErrorMessage(err)}`,
+          );
+        }
       }
     };
     const deliverLaneText = createLaneTextDeliverer({
@@ -1471,7 +1500,7 @@ export const dispatchTelegramMessage = async ({
                               buttons: telegramButtons,
                             });
                       if (info.kind === "final") {
-                        emitPreviewFinalizedHook(result);
+                        await emitPreviewFinalizedHook(result);
                       }
                       blockDelivered = blockDelivered || result.kind !== "skipped";
                       if (segment.lane === "reasoning") {

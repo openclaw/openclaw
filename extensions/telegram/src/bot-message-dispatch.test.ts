@@ -1111,6 +1111,55 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
   });
 
+  it("repairs a preview-finalized Telegram message when the canonical final arrives after stream finalization", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    const fullAnswer =
+      "Ja. Hier nochmal sauber Schritt fuer Schritt. Einen API Key kopiert man aus der Google Cloud Console. Danach pruefst du die Projekt- und API-Einstellungen.";
+    const truncatedFinal =
+      "Ja. Hier nochmal sauber Schritt fuer Schritt. Einen API Key kopiert man...";
+    const context = createContext();
+    context.ctxPayload.SessionKey = "agent:default:telegram:direct:123";
+    loadSessionStore.mockReturnValue({
+      "agent:default:telegram:direct:123": { sessionId: "s1" },
+    });
+    readLatestAssistantTextFromSessionTranscript
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce({
+        text: fullAnswer,
+        timestamp: Date.now() + 1_000,
+      });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: truncatedFinal }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({ context });
+
+    expect(answerDraftStream.update).toHaveBeenCalledWith(truncatedFinal);
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      expect.anything(),
+      2001,
+      fullAnswer,
+      expect.objectContaining({
+        accountId: "default",
+      }),
+    );
+    expectRecordFields(mockCallArg(emitInternalMessageSentHook), {
+      content: fullAnswer,
+      messageId: 2001,
+    });
+    const transcriptCall = expectRecordFields(mockCallArg(appendSessionTranscriptMessage), {
+      transcriptPath: "/tmp/session.jsonl",
+    });
+    expectRecordFields(transcriptCall.message, {
+      role: "assistant",
+      provider: "openclaw",
+      model: "delivery-mirror",
+      content: [{ type: "text", text: fullAnswer }],
+    });
+  });
+
   it("emits the redacted appended message in transcript updates", async () => {
     setupDraftStreams({ answerMessageId: 2001 });
     const context = createContext();
@@ -1786,6 +1835,29 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
     expect(followUpTexts.join("")).toContain("one");
     expect(editMessageTelegram).not.toHaveBeenCalled();
+  });
+
+  it("sends a visible fallback when a streamed final follow-up chunk fails", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    const longText = "one ".repeat(80);
+    deliverReplies
+      .mockRejectedValueOnce(new Error("telegram send failed"))
+      .mockResolvedValue({ delivered: true });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: longText }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({ context: createContext(), textLimit: 80 });
+
+    const firstChunk = answerDraftStream.update.mock.calls.at(-1)?.[0] ?? "";
+    expect(firstChunk.length).toBeLessThanOrEqual(80);
+    expect(deliverReplies).toHaveBeenCalledTimes(2);
+    expectDeliveredReply(
+      0,
+      { text: "Something went wrong while processing your request. Please try again." },
+      1,
+    );
   });
 
   it("keeps streamed final text in place when late media arrives", async () => {
