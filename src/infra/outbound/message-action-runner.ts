@@ -719,7 +719,7 @@ async function handleInternalSourceReplySendAction(
   const payload = {
     status: "ok",
     deliveryStatus: dryRun ? "dry_run" : "sent",
-    channel: INTERNAL_SOURCE_REPLY_SINK,
+    channel: INTERNAL_MESSAGE_CHANNEL,
     target: "current-run",
     sourceReplyDeliveryMode: input.sourceReplyDeliveryMode,
     ...(dryRun ? {} : { sourceReplySink: INTERNAL_SOURCE_REPLY_SINK }),

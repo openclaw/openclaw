@@ -458,11 +458,11 @@ describe("message tool secret scoping", () => {
     expect(second?.params?.idempotencyKey).toBe("run-message-tool:message-tool:message_222_1");
   });
 
-  it("surfaces internal UI source replies without reporting a webchat delivery channel", async () => {
+  it("keeps legacy channel while surfacing the internal UI source reply sink", async () => {
     const replyPayload = {
       status: "ok",
       deliveryStatus: "sent",
-      channel: "internal-ui",
+      channel: "webchat",
       target: "current-run",
       sourceReplyDeliveryMode: "message_tool_only",
       sourceReplySink: "internal-ui",
@@ -498,10 +498,9 @@ describe("message tool secret scoping", () => {
       throw new Error("expected text tool result");
     }
 
-    expect(firstBlock.text).not.toContain("webchat");
     const toolOutput = JSON.parse(firstBlock.text) as Record<string, unknown>;
     expect(toolOutput).toMatchObject({
-      channel: "internal-ui",
+      channel: "webchat",
       sourceReplySink: "internal-ui",
       sourceReply: {
         text: "visible reply",
