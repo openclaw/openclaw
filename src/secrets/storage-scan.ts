@@ -33,7 +33,10 @@ export function listConfigBackupPaths(configPath: string): string[] {
     }
     if (
       entry.name === `${base}.bak` ||
+      entry.name === `${base}.pre-update` ||
       entry.name.startsWith(`${base}.bak.`) ||
+      entry.name.startsWith(`${base}.clobbered.`) ||
+      entry.name.startsWith(`${base}.rejected.`) ||
       (entry.name.startsWith(`${base}.`) && entry.name.endsWith(".bak"))
     ) {
       out.push(path.join(dir, entry.name));

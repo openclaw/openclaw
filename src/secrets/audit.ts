@@ -6,7 +6,7 @@ import {
   isSecretRefHeaderValueMarker,
 } from "../agents/model-auth-markers.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
-import { resolveStateDir, type OpenClawConfig } from "../config/config.js";
+import { parseConfigJson5, resolveStateDir, type OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
 import { resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -40,6 +40,7 @@ import {
 import { discoverConfigSecretTargets } from "./target-registry.js";
 
 export type SecretsAuditCode =
+  | "CONFIG_BACKUP_UNREADABLE"
   | "PLAINTEXT_FOUND"
   | "REF_UNRESOLVED"
   | "REF_SHADOWED"
@@ -267,14 +268,56 @@ function collectConfigBackupSecrets(params: {
 }): void {
   for (const backupPath of listConfigBackupPaths(params.configPath)) {
     params.collector.filesScanned.add(backupPath);
-    const parsedResult = readJsonObjectIfExists(backupPath, {
-      requireRegularFile: true,
-      maxBytes: MAX_AUDIT_MODELS_JSON_BYTES,
-    });
-    if (!parsedResult.value) {
+    let parsed: unknown;
+    try {
+      const stats = fs.statSync(backupPath);
+      if (!stats.isFile()) {
+        addFinding(params.collector, {
+          code: "CONFIG_BACKUP_UNREADABLE",
+          severity: "warn",
+          file: backupPath,
+          jsonPath: "<root>",
+          message: "Config backup could not be audited because it is not a regular file.",
+        });
+        continue;
+      }
+      if (stats.size > MAX_AUDIT_MODELS_JSON_BYTES) {
+        addFinding(params.collector, {
+          code: "CONFIG_BACKUP_UNREADABLE",
+          severity: "warn",
+          file: backupPath,
+          jsonPath: "<root>",
+          message: `Config backup could not be audited because it is oversized (${stats.size} bytes).`,
+        });
+        continue;
+      }
+      const raw = fs.readFileSync(backupPath, "utf8");
+      const parsedResult = parseConfigJson5(raw);
+      if (!parsedResult.ok) {
+        addFinding(params.collector, {
+          code: "CONFIG_BACKUP_UNREADABLE",
+          severity: "warn",
+          file: backupPath,
+          jsonPath: "<root>",
+          message: `Config backup could not be parsed as JSON5: ${parsedResult.error}`,
+        });
+        continue;
+      }
+      parsed = parsedResult.parsed;
+    } catch (err) {
+      addFinding(params.collector, {
+        code: "CONFIG_BACKUP_UNREADABLE",
+        severity: "warn",
+        file: backupPath,
+        jsonPath: "<root>",
+        message: `Config backup could not be audited: ${formatErrorMessage(err)}`,
+      });
       continue;
     }
-    for (const target of discoverConfigSecretTargets(parsedResult.value as OpenClawConfig)) {
+    if (!isRecord(parsed)) {
+      continue;
+    }
+    for (const target of discoverConfigSecretTargets(parsed as OpenClawConfig)) {
       if (!target.entry.includeInAudit) {
         continue;
       }
