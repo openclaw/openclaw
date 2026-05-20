@@ -104,6 +104,7 @@ function getAgentCall(index = 0): AgentCallRequest {
 function expectAgentCallFields(
   call: AgentCallRequest,
   expected: {
+    accountId?: string;
     channel?: string;
     deliver?: boolean;
     sessionKey: string;
@@ -118,6 +119,9 @@ function expectAgentCallFields(
   }
   if ("to" in expected) {
     expect(call.params?.to).toBe(expected.to);
+  }
+  if ("accountId" in expected) {
+    expect(call.params?.accountId).toBe(expected.accountId);
   }
 }
 
