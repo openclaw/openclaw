@@ -72,7 +72,11 @@ function createProbe(
   };
 }
 
-function createTarget(id: string, probe: GatewayProbeResult): GatewayStatusProbedTarget {
+function createTarget(
+  id: string,
+  probe: GatewayProbeResult,
+  self: GatewayStatusProbedTarget["self"] = null,
+): GatewayStatusProbedTarget {
   return {
     target: {
       id,
@@ -82,7 +86,7 @@ function createTarget(id: string, probe: GatewayProbeResult): GatewayStatusProbe
     },
     probe,
     configSummary: null,
-    self: null,
+    self,
     authDiagnostics: [],
   };
 }
@@ -116,6 +120,73 @@ describe("gateway status output", () => {
         "No gateway answered any probe and Bonjour discovery returned no local gateways. Run `openclaw gateway status --deep --require-rpc` to inspect service state, config paths, listener owners, and logs; include `ss -ltnp` or `lsof -nP -iTCP:<port> -sTCP:LISTEN` for the configured port when filing a report.",
       targetIds: ["localLoopback"],
     });
+  });
+
+  it("does not warn about multiple gateways when reachable probes share self identity", () => {
+    const firstProbe = createProbe("read_only", {
+      ok: true,
+      connectLatencyMs: 20,
+    });
+    const secondProbe = {
+      ...createProbe("read_only", {
+        ok: true,
+        connectLatencyMs: 25,
+      }),
+      url: "ws://gateway-host:18789",
+    };
+
+    const warnings = buildGatewayStatusWarnings({
+      probed: [
+        createTarget("sshTunnel", firstProbe, {
+          host: "Gateway-Host.local",
+          ip: "192.168.1.20",
+          version: "2026.5.18",
+          platform: "linux",
+        }),
+        createTarget("configRemote", secondProbe, {
+          host: "gateway-host.local",
+          ip: "192.168.1.20",
+          version: "2026.5.18",
+          platform: "linux",
+        }),
+      ],
+      sshTarget: "user@gateway-host",
+      sshTunnelStarted: true,
+      sshTunnelError: null,
+      discoveryCount: 0,
+    });
+
+    expect(warnings.some((entry) => entry.code === "multiple_gateways")).toBe(false);
+  });
+
+  it("keeps the multiple gateways warning when reachable probe identity is missing", () => {
+    const warnings = buildGatewayStatusWarnings({
+      probed: [
+        createTarget(
+          "sshTunnel",
+          createProbe("read_only", {
+            ok: true,
+            connectLatencyMs: 20,
+          }),
+        ),
+        createTarget(
+          "configRemote",
+          createProbe("read_only", {
+            ok: true,
+            connectLatencyMs: 25,
+          }),
+        ),
+      ],
+      sshTarget: "user@gateway-host",
+      sshTunnelStarted: true,
+      sshTunnelError: null,
+      discoveryCount: 0,
+    });
+
+    expect(warnings.find((entry) => entry.code === "multiple_gateways")?.targetIds).toStrictEqual([
+      "sshTunnel",
+      "configRemote",
+    ]);
   });
 
   it("derives summary capability from reachable probes only in json output", () => {

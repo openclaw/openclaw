@@ -21,6 +21,34 @@ export type GatewayStatusWarning = {
 const noReachableGatewayDiagnostic =
   "No gateway answered any probe and Bonjour discovery returned no local gateways. Run `openclaw gateway status --deep --require-rpc` to inspect service state, config paths, listener owners, and logs; include `ss -ltnp` or `lsof -nP -iTCP:<port> -sTCP:LISTEN` for the configured port when filing a report.";
 
+function normalizeGatewayIdentityPart(value: string | undefined): string {
+  return value?.trim().toLowerCase() ?? "";
+}
+
+function readGatewayIdentityKey(entry: GatewayStatusProbedTarget): string | null {
+  const host = normalizeGatewayIdentityPart(entry.self?.host);
+  const ip = normalizeGatewayIdentityPart(entry.self?.ip);
+  if (!host && !ip) {
+    return null;
+  }
+  return `host=${host}|ip=${ip}`;
+}
+
+function hasMultipleReachableGatewayIdentities(reachable: GatewayStatusProbedTarget[]): boolean {
+  if (reachable.length <= 1) {
+    return false;
+  }
+  const identityKeys = new Set<string>();
+  for (const entry of reachable) {
+    const key = readGatewayIdentityKey(entry);
+    if (!key) {
+      return true;
+    }
+    identityKeys.add(key);
+  }
+  return identityKeys.size > 1;
+}
+
 function readModelPricingDegradedDetail(health: unknown): string | null {
   if (!health || typeof health !== "object") {
     return null;
@@ -87,7 +115,7 @@ export function buildGatewayStatusWarnings(params: {
       targetIds: params.probed.map((entry) => entry.target.id),
     });
   }
-  if (reachable.length > 1) {
+  if (hasMultipleReachableGatewayIdentities(reachable)) {
     warnings.push({
       code: "multiple_gateways",
       message:
