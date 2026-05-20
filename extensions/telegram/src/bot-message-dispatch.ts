@@ -1045,6 +1045,84 @@ export const dispatchTelegramMessage = async ({
   };
   let splitReasoningOnNextStream = false;
   let draftLaneEventQueue = Promise.resolve();
+  // Interleaved-output state: while a turn streams, we paint reasoning text
+  // (italicized) AND tool-progress lines (timestamped) into ONE Telegram
+  // message in the reasoning lane, with a rolling `Ns — HH:MM:SS` timer
+  // suffix between tool starts. interleavedOutput holds the cumulative body;
+  // rawReasoningCheckpoint marks how much of the upstream reasoning text we've
+  // already mirrored into it (so re-deliveries don't duplicate). The timer
+  // re-paints + flushes the lane every 3s so the user sees the turn is alive
+  // even while a long tool is mid-execution.
+  let interleavedOutput = "";
+  let rawReasoningCheckpoint = 0;
+  let activeTimerSuffix = "";
+  let activeTimerInterval: ReturnType<typeof setInterval> | null = null;
+  let activeToolStartTime = 0;
+  const clearActiveTimer = (): void => {
+    if (activeTimerInterval) {
+      clearInterval(activeTimerInterval);
+      activeTimerInterval = null;
+    }
+    activeTimerSuffix = "";
+  };
+  const formatTimerClock = (date: Date): string =>
+    [date.getHours(), date.getMinutes(), date.getSeconds()]
+      .map((n) => String(n).padStart(2, "0"))
+      .join(":");
+  const updateInterleavedDisplay = (): void => {
+    if (!reasoningLane.stream || !interleavedOutput) {
+      return;
+    }
+    const display = "Thinking\n\n" + interleavedOutput + activeTimerSuffix;
+    reasoningLane.hasStreamedMessage = true;
+    reasoningLane.lastPartialText = display;
+    reasoningLane.stream.update(display);
+  };
+  const startToolTimer = (): void => {
+    clearActiveTimer();
+    activeToolStartTime = Date.now();
+    activeTimerInterval = setInterval(async () => {
+      if (!reasoningLane.stream) {
+        clearActiveTimer();
+        return;
+      }
+      const elapsed = Math.round((Date.now() - activeToolStartTime) / 1000);
+      activeTimerSuffix = `\n_${elapsed}s — ${formatTimerClock(new Date())}_`;
+      updateInterleavedDisplay();
+      // Force the lane to flush past the typing-indicator throttle so the
+      // user actually sees the timer roll between deliveries.
+      try {
+        await reasoningLane.stream.flush();
+      } catch {
+        /* lane already torn down — next tick's reasoningLane.stream check
+           will clear the interval. */
+      }
+    }, 3000);
+  };
+  const injectToolLineIntoInterleave = async (
+    line: string | { text?: string } | null | undefined,
+    opts?: { startTimer?: boolean },
+  ): Promise<boolean> => {
+    const lineText = typeof line === "string" ? line : line?.text || "";
+    if (!lineText || !reasoningLane.stream) {
+      return false;
+    }
+    await enqueueDraftLaneEvent(async () => {
+      clearActiveTimer();
+      const ts = formatTimerClock(new Date());
+      interleavedOutput += `\n[${ts}] ${lineText}\n`;
+      if (opts?.startTimer) {
+        startToolTimer();
+      }
+      updateInterleavedDisplay();
+      try {
+        await reasoningLane.stream?.flush();
+      } catch {
+        /* see startToolTimer */
+      }
+    });
+    return true;
+  };
   const reasoningStepState = createTelegramReasoningStepState();
   const enqueueDraftLaneEvent = (task: () => Promise<void>): Promise<void> => {
     const next = draftLaneEventQueue.then(async () => {
@@ -1925,8 +2003,34 @@ export const dispatchTelegramMessage = async ({
                             reasoningLane.stream?.forceNewMessage();
                             resetDraftLaneState(reasoningLane);
                             splitReasoningOnNextStream = false;
+                            interleavedOutput = "";
+                            rawReasoningCheckpoint = 0;
                           }
-                          await ingestDraftLaneSegments(payload, true);
+                          // Italicize the new portion of the reasoning text
+                          // and append it to interleavedOutput so it lives in
+                          // the same message as any tool-progress lines
+                          // injected via injectToolLineIntoInterleave. The
+                          // checkpoint guards against re-deliveries of the
+                          // same accumulated text.
+                          clearActiveTimer();
+                          const fullText = typeof payload.text === "string" ? payload.text : "";
+                          const newPart = fullText.slice(rawReasoningCheckpoint);
+                          if (newPart) {
+                            const italicized = newPart
+                              .split("\n")
+                              .map((l) => (l.trim() ? `_${l}_` : ""))
+                              .join("\n");
+                            interleavedOutput += italicized;
+                            rawReasoningCheckpoint = fullText.length;
+                          }
+                          updateInterleavedDisplay();
+                          // Lane has content the user shouldn't lose; mark
+                          // finalized AFTER the segment-ingest equivalent so
+                          // the post-run cleanup keeps the message instead
+                          // of clearing it.
+                          reasoningLane.finalized = true;
+                          reasoningStepState.noteReasoningHint();
+                          reasoningStepState.noteReasoningDelivered();
                         })
                     : undefined,
                   onAssistantMessageStart: answerLane.stream
@@ -1944,6 +2048,12 @@ export const dispatchTelegramMessage = async ({
                     ? () =>
                         enqueueDraftLaneEvent(async () => {
                           splitReasoningOnNextStream = reasoningLane.hasStreamedMessage;
+                          // Keep the reasoning message visible after the
+                          // final answer: cleanup checks `finalized` and
+                          // clears the lane stream when it's false.
+                          if (reasoningLane.hasStreamedMessage) {
+                            reasoningLane.finalized = true;
+                          }
                           streamToolProgressSuppressed = false;
                           streamToolProgressLines = [];
                         })
@@ -1954,23 +2064,31 @@ export const dispatchTelegramMessage = async ({
                     !isRoomEvent && Boolean(answerLane.stream),
                   onToolStart: async (payload) => {
                     const toolName = payload.name?.trim();
-                    const progressPromise = pushStreamToolProgress(
-                      formatChannelProgressDraftLineForEntry(
-                        telegramCfg,
-                        {
-                          event: "tool",
-                          name: toolName,
-                          phase: payload.phase,
-                          args: payload.args,
-                        },
-                        payload.detailMode ? { detailMode: payload.detailMode } : undefined,
-                      ),
-                      { toolName, startImmediately: true },
+                    const formatted = formatChannelProgressDraftLineForEntry(
+                      telegramCfg,
+                      {
+                        event: "tool",
+                        name: toolName,
+                        phase: payload.phase,
+                        args: payload.args,
+                      },
+                      payload.detailMode ? { detailMode: payload.detailMode } : undefined,
                     );
+                    // Prefer interleaving into the reasoning lane (single
+                    // updating message with `[HH:MM:SS] ToolName: args` lines
+                    // + rolling timer between calls). Falls back to the
+                    // legacy per-tool channel-progress message when the
+                    // reasoning lane isn't active (room events, suppressed
+                    // reasoning level, no streaming, etc.).
+                    if (!(await injectToolLineIntoInterleave(formatted, { startTimer: true }))) {
+                      await pushStreamToolProgress(formatted, {
+                        toolName,
+                        startImmediately: true,
+                      });
+                    }
                     if (statusReactionController && toolName) {
                       await statusReactionController.setTool(toolName);
                     }
-                    await progressPromise;
                   },
                   onItemEvent: async (payload) => {
                     await pushStreamToolProgress(
