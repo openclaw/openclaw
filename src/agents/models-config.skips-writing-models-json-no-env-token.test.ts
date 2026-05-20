@@ -102,7 +102,6 @@ async function runEnvProviderCase(params: {
   envVar: "MINIMAX_API_KEY" | "SYNTHETIC_API_KEY";
   envValue: string;
   providerKey: "minimax" | "synthetic";
-  expectedApiKeyRef: string;
 }) {
   const previousValue = process.env[params.envVar];
   process.env[params.envVar] = params.envValue;
@@ -113,7 +112,9 @@ async function runEnvProviderCase(params: {
     const raw = await fs.readFile(modelPath, "utf8");
     const parsed = JSON.parse(raw) as { providers: Record<string, ParsedProviderConfig> };
     const provider = parsed.providers[params.providerKey];
-    expect(provider?.apiKey).toBe(params.expectedApiKeyRef);
+    expect(provider).toBeDefined();
+    expect(provider).not.toHaveProperty("apiKey");
+    expect(provider?.models?.[0]?.id).toBe("test-model");
   } finally {
     if (previousValue === undefined) {
       delete process.env[params.envVar];
@@ -211,7 +212,6 @@ describe("models-config", () => {
         envVar: "MINIMAX_API_KEY",
         envValue: "sk-minimax-test",
         providerKey: "minimax",
-        expectedApiKeyRef: "MINIMAX_API_KEY", // pragma: allowlist secret
       });
     });
   });
@@ -222,7 +222,6 @@ describe("models-config", () => {
         envVar: "SYNTHETIC_API_KEY",
         envValue: "sk-synthetic-test",
         providerKey: "synthetic",
-        expectedApiKeyRef: "SYNTHETIC_API_KEY", // pragma: allowlist secret
       });
     });
   });
