@@ -4758,7 +4758,11 @@ async function loadCodexNativeProjectDocFiles(params: {
     projectRootMarkers: config.projectRootMarkers,
   });
   const files: EmbeddedContextFile[] = [];
+  let remainingProjectDocBytes = config.projectDocMaxBytes;
   for (const directory of searchDirs) {
+    if (remainingProjectDocBytes === 0) {
+      break;
+    }
     const selected = await loadFirstCodexNativeProjectDocFile({
       directory,
       candidateFilenames: config.candidateFilenames,
@@ -4766,9 +4770,20 @@ async function loadCodexNativeProjectDocFiles(params: {
     if (!selected) {
       continue;
     }
+    let contentBytes = selected.contentBytes;
+    if (remainingProjectDocBytes !== undefined && contentBytes.length > remainingProjectDocBytes) {
+      contentBytes = contentBytes.subarray(0, remainingProjectDocBytes);
+    }
+    const content = contentBytes.toString("utf8");
+    if (!content.trim()) {
+      continue;
+    }
+    if (remainingProjectDocBytes !== undefined) {
+      remainingProjectDocBytes = Math.max(0, remainingProjectDocBytes - contentBytes.length);
+    }
     files.push(
       remapCodexContextFilePath({
-        file: selected,
+        file: { path: selected.path, content },
         sourceWorkspaceDir: params.resolvedWorkspace,
         targetWorkspaceDir: params.effectiveWorkspace,
       }),
@@ -4887,7 +4902,7 @@ async function findCodexNativeProjectRoot(params: {
 async function loadFirstCodexNativeProjectDocFile(params: {
   directory: string;
   candidateFilenames: readonly string[];
-}): Promise<EmbeddedContextFile | undefined> {
+}): Promise<{ path: string; contentBytes: Buffer } | undefined> {
   for (const fileName of params.candidateFilenames) {
     const sourcePath = path.join(params.directory, fileName);
     let stats;
@@ -4907,7 +4922,7 @@ async function loadFirstCodexNativeProjectDocFile(params: {
       continue;
     }
     try {
-      return { path: sourcePath, content: await fs.readFile(sourcePath, "utf8") };
+      return { path: sourcePath, contentBytes: await fs.readFile(sourcePath) };
     } catch (error) {
       if (isFileNotFoundError(error)) {
         continue;

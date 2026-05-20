@@ -5088,6 +5088,85 @@ describe("runCodexAppServerAttempt", () => {
     );
   });
 
+  it("keeps Codex bindings when native project_doc_max_bytes hides project-doc edits", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const agentDir = path.join(tempDir, "agent");
+    const codexHome = path.join(agentDir, "codex-home");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.mkdir(codexHome, { recursive: true });
+    await fs.writeFile(path.join(codexHome, "config.toml"), "project_doc_max_bytes = 8\n");
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "VISIBLE\nhidden v1.");
+    const firstHarness = createStartedThreadHarness();
+
+    const firstRun = runCodexAppServerAttempt({
+      ...createParams(sessionFile, workspaceDir),
+      agentDir,
+    });
+    await firstHarness.waitForMethod("turn/start");
+    await firstHarness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await firstRun;
+    const firstBinding = await readCodexAppServerBinding(sessionFile);
+    expect(firstBinding?.workspacePromptFingerprint).toMatch(/^[a-f0-9]{64}$/);
+
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "VISIBLE\nhidden v2.");
+    const secondHarness = createResumeHarness();
+    const secondRun = runCodexAppServerAttempt({
+      ...createParams(sessionFile, workspaceDir),
+      agentDir,
+    });
+    await secondHarness.waitForMethod("turn/start");
+    await secondHarness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+    await secondRun;
+
+    expect(secondHarness.requests.some((request) => request.method === "thread/resume")).toBe(true);
+    expect(secondHarness.requests.some((request) => request.method === "thread/start")).toBe(false);
+    const secondBinding = await readCodexAppServerBinding(sessionFile);
+    expect(secondBinding?.workspacePromptFingerprint).toBe(
+      firstBinding?.workspacePromptFingerprint,
+    );
+  });
+
+  it("rotates Codex bindings when native project_doc_max_bytes includes project-doc edits", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const agentDir = path.join(tempDir, "agent");
+    const codexHome = path.join(agentDir, "codex-home");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.mkdir(codexHome, { recursive: true });
+    await fs.writeFile(path.join(codexHome, "config.toml"), "project_doc_max_bytes = 8\n");
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "VISIBLE1 hidden.");
+    const firstHarness = createStartedThreadHarness();
+
+    const firstRun = runCodexAppServerAttempt({
+      ...createParams(sessionFile, workspaceDir),
+      agentDir,
+    });
+    await firstHarness.waitForMethod("turn/start");
+    await firstHarness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await firstRun;
+    const firstBinding = await readCodexAppServerBinding(sessionFile);
+    expect(firstBinding?.workspacePromptFingerprint).toMatch(/^[a-f0-9]{64}$/);
+
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "VISIBLE2 hidden.");
+    const secondHarness = createStartedThreadHarness();
+    const secondRun = runCodexAppServerAttempt({
+      ...createParams(sessionFile, workspaceDir),
+      agentDir,
+    });
+    await secondHarness.waitForMethod("turn/start");
+    await secondHarness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await secondRun;
+
+    expect(secondHarness.requests.some((request) => request.method === "thread/resume")).toBe(
+      false,
+    );
+    const secondBinding = await readCodexAppServerBinding(sessionFile);
+    expect(secondBinding?.workspacePromptFingerprint).not.toBe(
+      firstBinding?.workspacePromptFingerprint,
+    );
+  });
+
   it("rotates Codex bindings when native AGENTS.md in the project root changes", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const repoDir = path.join(tempDir, "repo");
