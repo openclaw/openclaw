@@ -1249,27 +1249,27 @@ export function createSubagentRegistryLifecycleController(params: {
 
     // registerSubagentRun fires both an in-process listener and a gateway
     // waitForSubagentCompletion RPC; both can reach this point for the same
-    // runId in embedded mode. Guard with a sync check-then-set so the browser
-    // driver tab-close IPC only fires once per completion.
-    if (entry.browserCleanupDispatchedAt !== undefined) {
-      return;
-    }
-    entry.browserCleanupDispatchedAt = Date.now();
-
-    try {
-      const cleanupBrowserSessions =
-        params.cleanupBrowserSessionsForLifecycleEnd ??
-        (await loadCleanupBrowserSessionsForLifecycleEnd());
-      await cleanupBrowserSessions({
-        sessionKeys: [entry.childSessionKey],
-        onWarn: (msg) => params.warn(msg, { runId: entry.runId }),
-      });
-    } catch (error) {
-      params.warn("failed to cleanup browser sessions for completed subagent", {
-        error: buildSafeLifecycleErrorMeta(error),
-        runId: maskRunId(completeParams.runId),
-        childSessionKey: maskSessionKey(entry.childSessionKey),
-      });
+    // runId in embedded mode. Dedupe only the browser driver tab-close IPC
+    // with a sync check-then-set. The retire + announce tail below must still
+    // run for every caller, so a slow or held first browser cleanup cannot
+    // strand a duplicate caller's completion behind it.
+    if (entry.browserCleanupDispatchedAt === undefined) {
+      entry.browserCleanupDispatchedAt = Date.now();
+      try {
+        const cleanupBrowserSessions =
+          params.cleanupBrowserSessionsForLifecycleEnd ??
+          (await loadCleanupBrowserSessionsForLifecycleEnd());
+        await cleanupBrowserSessions({
+          sessionKeys: [entry.childSessionKey],
+          onWarn: (msg) => params.warn(msg, { runId: entry.runId }),
+        });
+      } catch (error) {
+        params.warn("failed to cleanup browser sessions for completed subagent", {
+          error: buildSafeLifecycleErrorMeta(error),
+          runId: maskRunId(completeParams.runId),
+          childSessionKey: maskSessionKey(entry.childSessionKey),
+        });
+      }
     }
 
     try {
