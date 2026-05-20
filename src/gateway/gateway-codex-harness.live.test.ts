@@ -1240,10 +1240,8 @@ describeLive("gateway live (Codex harness)", () => {
       process.env.OPENCLAW_STATE_DIR = stateDir;
 
       await fs.mkdir(stateDir, { recursive: true });
-      await fs.writeFile(path.join(workspace, "AGENTS.md"), "VISIBLE\nhidden v1\n");
       const codexHome = path.join(stateDir, "agents", "dev", "agent", "codex-home");
       await fs.mkdir(codexHome, { recursive: true });
-      await fs.writeFile(path.join(codexHome, "config.toml"), "project_doc_max_bytes = 8\n");
       await writeLiveGatewayConfig({
         configPath,
         modelKey,
@@ -1274,6 +1272,44 @@ describeLive("gateway live (Codex harness)", () => {
 
       try {
         const sessionKey = "agent:dev:live-codex-project-doc-budget";
+        const defaultVisibleBudgetContent = "A".repeat(32 * 1024);
+        await fs.writeFile(
+          path.join(workspace, "AGENTS.md"),
+          `${defaultVisibleBudgetContent}hidden default v1.`,
+        );
+        const defaultFirstToken = `CODEX-PROJECT-DEFAULT-${randomBytes(3)
+          .toString("hex")
+          .toUpperCase()}`;
+        await requestAgentText({
+          client,
+          expectedToken: defaultFirstToken,
+          message: `Reply with exactly ${defaultFirstToken} and nothing else.`,
+          sessionKey,
+        });
+        const defaultFirstBinding = await readOnlyCodexBindingProofSummary(stateDir);
+
+        await fs.writeFile(
+          path.join(workspace, "AGENTS.md"),
+          `${defaultVisibleBudgetContent}hidden default v2.`,
+        );
+        const defaultHiddenToken = `CODEX-PROJECT-DEFAULT-HIDDEN-${randomBytes(3)
+          .toString("hex")
+          .toUpperCase()}`;
+        await requestAgentText({
+          client,
+          expectedToken: defaultHiddenToken,
+          message: `Reply with exactly ${defaultHiddenToken} and nothing else.`,
+          sessionKey,
+        });
+        const defaultHiddenBinding = await readOnlyCodexBindingProofSummary(stateDir);
+
+        expect(defaultHiddenBinding.threadId).toBe(defaultFirstBinding.threadId);
+        expect(defaultHiddenBinding.workspacePromptFingerprint).toBe(
+          defaultFirstBinding.workspacePromptFingerprint,
+        );
+
+        await fs.writeFile(path.join(codexHome, "config.toml"), "project_doc_max_bytes = 8\n");
+        await fs.writeFile(path.join(workspace, "AGENTS.md"), "VISIBLE\nhidden v1\n");
         const firstToken = `CODEX-PROJECT-DOC-${randomBytes(3).toString("hex").toUpperCase()}`;
         await requestAgentText({
           client,
@@ -1315,8 +1351,12 @@ describeLive("gateway live (Codex harness)", () => {
         );
 
         logCodexLiveStep("project-doc-budget-binding-proof", {
+          defaultHiddenEditKeptThread:
+            defaultHiddenBinding.threadId === defaultFirstBinding.threadId,
           hiddenEditKeptThread: hiddenBinding.threadId === firstBinding.threadId,
           visibleEditRotatedThread: visibleBinding.threadId !== hiddenBinding.threadId,
+          defaultFirst: defaultFirstBinding,
+          defaultHidden: defaultHiddenBinding,
           first: firstBinding,
           hidden: hiddenBinding,
           visible: visibleBinding,

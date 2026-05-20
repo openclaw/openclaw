@@ -5127,6 +5127,36 @@ describe("runCodexAppServerAttempt", () => {
     );
   });
 
+  it("keeps Codex bindings when the native default project-doc budget hides edits", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const visibleBudgetContent = "A".repeat(32 * 1024);
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), `${visibleBudgetContent}hidden v1.`);
+    const firstHarness = createStartedThreadHarness();
+
+    const firstRun = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    await firstHarness.waitForMethod("turn/start");
+    await firstHarness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await firstRun;
+    const firstBinding = await readCodexAppServerBinding(sessionFile);
+    expect(firstBinding?.workspacePromptFingerprint).toMatch(/^[a-f0-9]{64}$/);
+
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), `${visibleBudgetContent}hidden v2.`);
+    const secondHarness = createResumeHarness();
+    const secondRun = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    await secondHarness.waitForMethod("turn/start");
+    await secondHarness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+    await secondRun;
+
+    expect(secondHarness.requests.some((request) => request.method === "thread/resume")).toBe(true);
+    expect(secondHarness.requests.some((request) => request.method === "thread/start")).toBe(false);
+    const secondBinding = await readCodexAppServerBinding(sessionFile);
+    expect(secondBinding?.workspacePromptFingerprint).toBe(
+      firstBinding?.workspacePromptFingerprint,
+    );
+  });
+
   it("rotates Codex bindings when native project_doc_max_bytes includes project-doc edits", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");

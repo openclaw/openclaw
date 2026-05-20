@@ -200,6 +200,7 @@ const CODEX_NATIVE_HOOK_RELAY_RENEW_INTERVAL_MS = 60_000;
 const CODEX_STEER_ALL_DEBOUNCE_MS = 500;
 const LOG_FIELD_MAX_LENGTH = 160;
 const CODEX_NATIVE_PROJECT_DOC_FILENAMES = ["AGENTS.override.md", "AGENTS.md"] as const;
+const CODEX_NATIVE_PROJECT_DOC_MAX_BYTES_DEFAULT = 32 * 1024;
 const CODEX_NATIVE_PROJECT_DOC_BASENAMES = new Set(
   CODEX_NATIVE_PROJECT_DOC_FILENAMES.map((fileName) => fileName.toLowerCase()),
 );
@@ -4805,7 +4806,8 @@ async function loadCodexNativeProjectDocConfig(params: {
   const codexConfig = await readCodexHomeProjectDocConfig(params.codexHome);
   const projectDocMaxBytes =
     readNonNegativeInteger(params.threadConfig?.project_doc_max_bytes) ??
-    codexConfig.projectDocMaxBytes;
+    codexConfig.projectDocMaxBytes ??
+    CODEX_NATIVE_PROJECT_DOC_MAX_BYTES_DEFAULT;
   const fallbackFilenames =
     readStringArray(params.threadConfig?.project_doc_fallback_filenames) ??
     codexConfig.projectDocFallbackFilenames ??
