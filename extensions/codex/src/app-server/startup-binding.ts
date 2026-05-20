@@ -52,7 +52,7 @@ function parseCodexAppServerByteLimit(value: unknown): number | undefined {
   return Math.max(1, Math.round(amount * multiplier));
 }
 
-async function listCodexAppServerRolloutFilesForThread(
+export async function listCodexAppServerRolloutFilesForThread(
   agentDir: string,
   threadId: string,
   codexHome?: string,
