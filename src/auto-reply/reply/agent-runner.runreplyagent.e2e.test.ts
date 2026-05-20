@@ -6,6 +6,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { saveSessionStore, type SessionEntry } from "../../config/sessions.js";
 import { readSessionStoreForTest } from "../../config/sessions/test-helpers.js";
 import type { TypingMode } from "../../config/types.js";
+import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import {
@@ -1673,6 +1674,550 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(payload?.text).toContain("configured model backend lmstudio/gemma-4-e4b-it");
     expect(payload?.text).toContain("Fallback used openai/gpt-5.5");
     expect(payload?.text).toContain("no visible reply");
+  });
+
+  it("surfaces a Discord message-tool-only guard when the model ends with NO_REPLY without sending", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "NO_REPLY" }],
+      meta: { stopReason: "stop" },
+    });
+
+    const { run } = createMinimalRun({
+      runOverrides: {
+        messageProvider: "discord",
+        sourceReplyDeliveryMode: "message_tool_only",
+        allowEmptyAssistantReplyAsSilent: true,
+      },
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:C1",
+        ChatType: "channel",
+        WasMentioned: true,
+        MessageSid: "1503645939964055592",
+      },
+    });
+
+    const res = await run();
+    const payload = Array.isArray(res) ? res[0] : res;
+
+    expect(payload?.isError).toBe(true);
+    expect(payload?.text).toContain("Discord delivery guard");
+    expect(payload?.text).toContain("couldn't confirm a visible Discord reply");
+    expect(getReplyPayloadMetadata(payload ?? {})).toEqual({
+      deliverDespiteSourceReplySuppression: true,
+    });
+  });
+
+  it("surfaces a Discord message-tool-only guard when the model returns an empty final", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: { stopReason: "stop" },
+    });
+
+    const { run } = createMinimalRun({
+      runOverrides: {
+        messageProvider: "discord",
+        sourceReplyDeliveryMode: "message_tool_only",
+        allowEmptyAssistantReplyAsSilent: true,
+      },
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:C1",
+        ChatType: "channel",
+        WasMentioned: true,
+        MessageSid: "1503645939964055592",
+      },
+    });
+
+    const res = await run();
+    const payload = Array.isArray(res) ? res[0] : res;
+
+    expect(payload?.isError).toBe(true);
+    expect(payload?.text).toContain("Discord delivery guard");
+    expect(getReplyPayloadMetadata(payload ?? {})).toEqual({
+      deliverDespiteSourceReplySuppression: true,
+    });
+  });
+
+  it("marks substantive Discord message-tool-only finals for source delivery when the model skipped message.send", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "final should surface" }],
+      meta: { stopReason: "stop" },
+    });
+
+    const { run } = createMinimalRun({
+      runOverrides: {
+        messageProvider: "discord",
+        sourceReplyDeliveryMode: "message_tool_only",
+        allowEmptyAssistantReplyAsSilent: true,
+      },
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:C1",
+        ChatType: "channel",
+        WasMentioned: true,
+        MessageSid: "1503645939964055592",
+      },
+    });
+
+    const res = await run();
+    const payload = Array.isArray(res) ? res[0] : res;
+
+    expect(payload?.text).toBe("final should surface");
+    expect(getReplyPayloadMetadata(payload ?? {})).toEqual({
+      deliverDespiteSourceReplySuppression: true,
+    });
+  });
+
+  it("marks only the first substantive Discord message-tool-only final payload", async () => {
+    const blockedPayload = setReplyPayloadMetadata(
+      { text: "blocked should stay suppressed" },
+      { beforeAgentRunBlocked: true },
+    );
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [
+        blockedPayload,
+        { text: "fallback should stay suppressed", isFallbackNotice: true },
+        { text: "first substantive final should surface" },
+        { text: "second substantive final should stay suppressed" },
+      ],
+      meta: { stopReason: "stop" },
+    });
+
+    const { run } = createMinimalRun({
+      runOverrides: {
+        messageProvider: "discord",
+        sourceReplyDeliveryMode: "message_tool_only",
+        allowEmptyAssistantReplyAsSilent: true,
+      },
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:C1",
+        ChatType: "channel",
+        WasMentioned: true,
+        MessageSid: "1503645939964055592",
+      },
+    });
+
+    const res = await run();
+    expect(Array.isArray(res)).toBe(true);
+    const payloads = res as ReplyPayload[];
+
+    expect(payloads.map((payload) => payload.text)).toEqual([
+      "blocked should stay suppressed",
+      "fallback should stay suppressed",
+      "first substantive final should surface",
+      "second substantive final should stay suppressed",
+    ]);
+    expect(getReplyPayloadMetadata(payloads[0])).toEqual({ beforeAgentRunBlocked: true });
+    expect(getReplyPayloadMetadata(payloads[1])).toBeUndefined();
+    expect(getReplyPayloadMetadata(payloads[2])).toEqual({
+      deliverDespiteSourceReplySuppression: true,
+    });
+    expect(getReplyPayloadMetadata(payloads[3])).toBeUndefined();
+  });
+
+  it("surfaces the Discord message-tool-only guard after tool progress without final delivery", async () => {
+    const onBlockReply = vi.fn();
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      await params.onBlockReply?.({ text: "🛠️ tool progress is visible" });
+      return { payloads: [], meta: { stopReason: "stop" } };
+    });
+
+    const { run } = createMinimalRun({
+      opts: { onBlockReply },
+      blockStreamingEnabled: true,
+      runOverrides: {
+        messageProvider: "discord",
+        sourceReplyDeliveryMode: "message_tool_only",
+        allowEmptyAssistantReplyAsSilent: true,
+      },
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:C1",
+        ChatType: "channel",
+        WasMentioned: true,
+        MessageSid: "1503645939964055592",
+      },
+    });
+
+    const res = await run();
+    const payload = Array.isArray(res) ? res[0] : res;
+
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "🛠️ tool progress is visible" }),
+      expect.any(Object),
+    );
+    expect(payload?.isError).toBe(true);
+    expect(payload?.text).toContain("Discord delivery guard");
+    expect(getReplyPayloadMetadata(payload ?? {})).toEqual({
+      deliverDespiteSourceReplySuppression: true,
+    });
+  });
+
+  it("surfaces the Discord message-tool-only guard after cron side effects without final delivery", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "NO_REPLY" }],
+      successfulCronAdds: 1,
+      meta: { stopReason: "stop" },
+    });
+
+    const { run } = createMinimalRun({
+      runOverrides: {
+        messageProvider: "discord",
+        sourceReplyDeliveryMode: "message_tool_only",
+        allowEmptyAssistantReplyAsSilent: true,
+      },
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:C1",
+        ChatType: "channel",
+        WasMentioned: true,
+        MessageSid: "1503645939964055592",
+      },
+    });
+
+    const res = await run();
+    const payload = Array.isArray(res) ? res[0] : res;
+
+    expect(payload?.isError).toBe(true);
+    expect(payload?.text).toContain("Discord delivery guard");
+    expect(getReplyPayloadMetadata(payload ?? {})).toEqual({
+      deliverDespiteSourceReplySuppression: true,
+    });
+  });
+
+  it("does not surface the Discord message-tool-only guard after committed message.send evidence", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "NO_REPLY" }],
+      messagingToolSentTexts: ["visible result"],
+      messagingToolSentTargets: [{ tool: "message", provider: "discord", to: "channel:C1" }],
+      meta: { stopReason: "stop" },
+    });
+
+    const { run } = createMinimalRun({
+      runOverrides: {
+        messageProvider: "discord",
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:C1",
+        ChatType: "channel",
+        MessageSid: "1503645939964055592",
+      },
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+  });
+
+  it("does not surface the Discord message-tool-only guard after target-only message.send evidence", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "NO_REPLY" }],
+      messagingToolSentTargets: [{ tool: "message", provider: "discord", to: "channel:C1" }],
+      meta: { stopReason: "stop" },
+    });
+
+    const { run } = createMinimalRun({
+      runOverrides: {
+        messageProvider: "discord",
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:C1",
+        ChatType: "channel",
+        MessageSid: "1503645939964055592",
+      },
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+  });
+
+  it("does not surface the Discord message-tool-only guard after tool progress followed by message.send evidence", async () => {
+    const onBlockReply = vi.fn();
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      await params.onBlockReply?.({ text: "🛠️ tool progress is visible" });
+      return {
+        payloads: [{ text: "NO_REPLY" }],
+        messagingToolSentTexts: ["visible result"],
+        messagingToolSentTargets: [{ tool: "message", provider: "discord", to: "channel:C1" }],
+        meta: { stopReason: "stop" },
+      };
+    });
+
+    const { run } = createMinimalRun({
+      opts: { onBlockReply },
+      blockStreamingEnabled: true,
+      runOverrides: {
+        messageProvider: "discord",
+        sourceReplyDeliveryMode: "message_tool_only",
+        allowEmptyAssistantReplyAsSilent: true,
+      },
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:C1",
+        ChatType: "channel",
+        WasMentioned: true,
+        MessageSid: "1503645939964055592",
+      },
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+    expect(onBlockReply).toHaveBeenCalled();
+  });
+
+  it("does not surface the Discord message-tool-only guard after an approval prompt", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      didSendDeterministicApprovalPrompt: true,
+      meta: { stopReason: "stop" },
+    });
+
+    const { run } = createMinimalRun({
+      runOverrides: {
+        messageProvider: "discord",
+        sourceReplyDeliveryMode: "message_tool_only",
+        allowEmptyAssistantReplyAsSilent: true,
+      },
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:C1",
+        ChatType: "channel",
+        WasMentioned: true,
+        MessageSid: "1503645939964055592",
+      },
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+  });
+
+  it("does not surface the Discord message-tool-only guard after an unmentioned approval prompt", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "NO_REPLY" }],
+      didSendDeterministicApprovalPrompt: true,
+      meta: {
+        stopReason: "stop",
+        toolSummary: { calls: 1, tools: ["exec"] },
+      },
+    });
+
+    const { run } = createMinimalRun({
+      runOverrides: {
+        messageProvider: "discord",
+        sourceReplyDeliveryMode: "message_tool_only",
+        allowEmptyAssistantReplyAsSilent: true,
+      },
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:C1",
+        ChatType: "channel",
+        WasMentioned: false,
+        MessageSid: "1506696262156550234",
+      },
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+  });
+
+  it("keeps unaddressed Discord message-tool-only silence quiet when empty replies are allowed", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "NO_REPLY" }],
+      meta: { stopReason: "stop" },
+    });
+
+    const { run } = createMinimalRun({
+      runOverrides: {
+        messageProvider: "discord",
+        sourceReplyDeliveryMode: "message_tool_only",
+        allowEmptyAssistantReplyAsSilent: true,
+      },
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:C1",
+        ChatType: "channel",
+        WasMentioned: false,
+        MessageSid: "1503645939964055592",
+      },
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+  });
+
+  it("surfaces the Discord message-tool-only guard for non-mentioned tool work followed by NO_REPLY", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "NO_REPLY" }],
+      meta: {
+        stopReason: "stop",
+        toolSummary: { calls: 2, tools: ["memory_search", "memory_get"] },
+      },
+    });
+
+    const { run } = createMinimalRun({
+      runOverrides: {
+        messageProvider: "discord",
+        sourceReplyDeliveryMode: "message_tool_only",
+        allowEmptyAssistantReplyAsSilent: true,
+      },
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:C1",
+        ChatType: "channel",
+        WasMentioned: false,
+        MessageSid: "1506688634676445264",
+      },
+    });
+
+    const res = await run();
+    const payload = Array.isArray(res) ? res[0] : res;
+
+    expect(payload?.isError).toBe(true);
+    expect(payload?.text).toContain("Discord delivery guard");
+    expect(getReplyPayloadMetadata(payload ?? {})).toEqual({
+      deliverDespiteSourceReplySuppression: true,
+    });
+  });
+
+  it("surfaces the Discord guard for non-message-tool-only tool progress followed by an empty final", async () => {
+    const onBlockReply = vi.fn();
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      await params.onBlockReply?.({ text: "🛠️ process still running" });
+      return { payloads: [], meta: { stopReason: "stop" } };
+    });
+
+    const { run } = createMinimalRun({
+      opts: { onBlockReply },
+      blockStreamingEnabled: true,
+      runOverrides: {
+        messageProvider: "discord",
+        allowEmptyAssistantReplyAsSilent: true,
+      },
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:C1",
+        ChatType: "channel",
+        WasMentioned: false,
+        MessageSid: "1506777278577639425",
+      },
+    });
+
+    const res = await run();
+    const payload = Array.isArray(res) ? res[0] : res;
+
+    expect(onBlockReply).toHaveBeenCalled();
+    expect(payload?.isError).toBe(true);
+    expect(payload?.text).toContain("Discord delivery guard");
+    expect(getReplyPayloadMetadata(payload ?? {})).toEqual({
+      deliverDespiteSourceReplySuppression: true,
+    });
+  });
+
+  it("surfaces the Discord message-tool-only guard for non-mentioned tool work followed by an empty final", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {
+        stopReason: "stop",
+        toolSummary: { calls: 1, tools: ["process"] },
+      },
+    });
+
+    const { run } = createMinimalRun({
+      runOverrides: {
+        messageProvider: "discord",
+        sourceReplyDeliveryMode: "message_tool_only",
+        allowEmptyAssistantReplyAsSilent: true,
+      },
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:C1",
+        ChatType: "channel",
+        WasMentioned: false,
+        MessageSid: "1506693854282383360",
+      },
+    });
+
+    const res = await run();
+    const payload = Array.isArray(res) ? res[0] : res;
+
+    expect(payload?.isError).toBe(true);
+    expect(payload?.text).toContain("Discord delivery guard");
+    expect(getReplyPayloadMetadata(payload ?? {})).toEqual({
+      deliverDespiteSourceReplySuppression: true,
+    });
+  });
+
+  it("marks a non-mentioned substantive Discord message-tool-only final for source delivery", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "final result should still be visible" }],
+      meta: { stopReason: "stop" },
+    });
+
+    const { run } = createMinimalRun({
+      runOverrides: {
+        messageProvider: "discord",
+        sourceReplyDeliveryMode: "message_tool_only",
+        allowEmptyAssistantReplyAsSilent: true,
+      },
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:C1",
+        ChatType: "channel",
+        WasMentioned: false,
+        MessageSid: "1506694017302397151",
+      },
+    });
+
+    const res = await run();
+    const payload = Array.isArray(res) ? res[0] : res;
+
+    expect(payload?.text).toBe("final result should still be visible");
+    expect(getReplyPayloadMetadata(payload ?? {})).toEqual({
+      deliverDespiteSourceReplySuppression: true,
+    });
+  });
+
+  it("keeps non-mentioned non-message-tool-only substantive Discord finals on normal delivery", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "automatic final result" }],
+      meta: { stopReason: "stop" },
+    });
+
+    const { run } = createMinimalRun({
+      runOverrides: {
+        messageProvider: "discord",
+        allowEmptyAssistantReplyAsSilent: true,
+      },
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:C1",
+        ChatType: "channel",
+        WasMentioned: false,
+        MessageSid: "1506780103873663117",
+      },
+    });
+
+    const res = await run();
+    const payload = Array.isArray(res) ? res[0] : res;
+
+    expect(payload?.text).toBe("automatic final result");
+    expect(getReplyPayloadMetadata(payload ?? {})).toBeUndefined();
   });
 
   it("announces fallback without silence failure when fallback already replied through a messaging tool", async () => {

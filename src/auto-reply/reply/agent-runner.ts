@@ -1,6 +1,7 @@
 // Orchestrates reply agent execution, payload building, and delivery callbacks.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
+import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   hasSessionAutoModelFallbackProvenance,
@@ -60,13 +61,14 @@ import {
 } from "../fallback-state.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";
 import {
+  getReplyPayloadMetadata,
   isReplyPayloadStatusNotice,
   markReplyPayloadForSourceSuppressionDelivery,
   setReplyPayloadMetadata,
 } from "../reply-payload.js";
 import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import { resolveResponseUsageMode, type VerboseLevel } from "../thinking.js";
-import { SILENT_REPLY_TOKEN } from "../tokens.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { buildUsageContract } from "../usage-bar/contract.js";
 import { loadUsageBarTemplate } from "../usage-bar/template.js";
@@ -220,6 +222,130 @@ function resolveReplyRunDeliveryContext(params: {
   });
 }
 
+const DISCORD_MESSAGE_TOOL_ONLY_DELIVERY_GUARD_TEXT =
+  "⚠️ Discord delivery guard: I couldn't confirm a visible Discord reply for this turn after work was performed. " +
+  "Please retry or ask for the result again if the expected answer is missing.";
+
+function isDirectlyAddressedMessageToolOnlyTurn(sessionCtx: TemplateContext): boolean {
+  const chatType = normalizeOptionalString(sessionCtx.ChatType)?.toLowerCase();
+  return chatType === "direct" || chatType === "dm" || sessionCtx.WasMentioned === true;
+}
+
+function hasMessageToolOnlySubstantiveFinalPayload(payloads: ReplyPayload[]): boolean {
+  return payloads.some((payload) => {
+    if (!isMessageToolOnlyGuardDeliverablePayload(payload)) {
+      return false;
+    }
+    const text = normalizeOptionalString(payload.text);
+    return !text || !isSilentReplyText(text, SILENT_REPLY_TOKEN);
+  });
+}
+
+function isDiscordMessageToolOnlyReplyGuardCandidate(params: {
+  followupRun: FollowupRun;
+  sessionCtx: TemplateContext;
+  isHeartbeat: boolean;
+  hasVisibleReplyEvidence: boolean;
+  hasPotentialResponseActivity: boolean;
+  hasSubstantiveFinalPayload: boolean;
+}): boolean {
+  if (
+    params.isHeartbeat ||
+    params.hasVisibleReplyEvidence ||
+    params.followupRun.currentInboundEventKind === "room_event" ||
+    params.followupRun.run.silentExpected === true
+  ) {
+    return false;
+  }
+  const channelHints = [
+    params.sessionCtx.OriginatingChannel,
+    params.sessionCtx.Surface,
+    params.sessionCtx.Provider,
+    params.followupRun.originatingChannel,
+    params.followupRun.run.messageProvider,
+  ];
+  // Keep this first runtime guard Discord-specific; other message_tool_only providers need
+  // their own channel hints and privacy review before sharing this recovery path.
+  if (!channelHints.some((hint) => normalizeOptionalString(hint)?.toLowerCase() === "discord")) {
+    return false;
+  }
+  if (params.followupRun.run.sourceReplyDeliveryMode !== "message_tool_only") {
+    return params.hasPotentialResponseActivity && !params.hasSubstantiveFinalPayload;
+  }
+  if (params.followupRun.run.allowEmptyAssistantReplyAsSilent !== true) {
+    return true;
+  }
+  if (isDirectlyAddressedMessageToolOnlyTurn(params.sessionCtx)) {
+    return true;
+  }
+  // Non-mentioned Discord threads/channels can still owe a visible result after
+  // the model already performed work. Keep pure ambient/no-tool NO_REPLY turns
+  // quiet, but do not let tool/progress chatter disappear behind a private
+  // NO_REPLY/empty final. Substantive finals only need special handling when
+  // automatic source delivery is suppressed by message_tool_only.
+  return params.hasPotentialResponseActivity || params.hasSubstantiveFinalPayload;
+}
+
+function buildDiscordMessageToolOnlyDeliveryGuardPayload(): ReplyPayload {
+  return markReplyPayloadForSourceSuppressionDelivery({
+    text: DISCORD_MESSAGE_TOOL_ONLY_DELIVERY_GUARD_TEXT,
+    isError: true,
+  });
+}
+
+function isMessageToolOnlyGuardDeliverablePayload(payload: ReplyPayload): boolean {
+  if (!hasOutboundReplyContent(payload, { trimText: true })) {
+    return false;
+  }
+  if (
+    payload.isError ||
+    payload.isCompactionNotice ||
+    payload.isFallbackNotice ||
+    payload.isReasoning
+  ) {
+    return false;
+  }
+  const metadata = getReplyPayloadMetadata(payload);
+  return metadata?.beforeAgentRunBlocked !== true;
+}
+
+function hasMessageToolOnlySourceDeliveryPayload(payloads: ReplyPayload[]): boolean {
+  return payloads.some(
+    (payload) => getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true,
+  );
+}
+
+function markMessageToolOnlyGuardPayloadsForSourceDelivery(
+  payloads: ReplyPayload[],
+): ReplyPayload[] {
+  let markedSubstantivePayload = false;
+  return payloads.map((payload) => {
+    if (getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true) {
+      markedSubstantivePayload = true;
+      return payload;
+    }
+    if (!markedSubstantivePayload && isMessageToolOnlyGuardDeliverablePayload(payload)) {
+      markedSubstantivePayload = true;
+      return markReplyPayloadForSourceSuppressionDelivery(payload);
+    }
+    return payload;
+  });
+}
+
+function ensureDiscordMessageToolOnlyGuardPayloadForSourceDelivery(params: {
+  payloads: ReplyPayload[];
+  followupRun: FollowupRun;
+}): ReplyPayload[] {
+  const markedPayloads = markMessageToolOnlyGuardPayloadsForSourceDelivery(params.payloads);
+  if (hasMessageToolOnlySourceDeliveryPayload(markedPayloads)) {
+    return markedPayloads;
+  }
+  if (params.followupRun.run.sourceReplyDeliveryMode !== "message_tool_only") {
+    return markedPayloads;
+  }
+  return [...markedPayloads, buildDiscordMessageToolOnlyDeliveryGuardPayload()];
+}
+
 function hasNonEmptyStringArray(value: unknown): boolean {
   return Array.isArray(value) && value.some((entry) => typeof entry === "string" && entry.trim());
 }
@@ -274,6 +400,20 @@ function hasSuccessfulSourceReplyDelivery(params: {
     hasNonEmptyStringArray(params.messagingToolSentTexts) ||
     hasNonEmptyStringArray(params.messagingToolSentMediaUrls) ||
     hasCommittedMessagingTargetDeliveryEvidence(params.messagingToolSentTargets)
+  );
+}
+
+function hasMessageToolOnlyVisibleReplyEvidence(params: {
+  messagingToolSentTexts?: string[];
+  messagingToolSentMediaUrls?: string[];
+  messagingToolSentTargets?: unknown[];
+  didSendDeterministicApprovalPrompt?: boolean;
+}): boolean {
+  return (
+    hasNonEmptyStringArray(params.messagingToolSentTexts) ||
+    hasNonEmptyStringArray(params.messagingToolSentMediaUrls) ||
+    hasCommittedMessagingTargetDeliveryEvidence(params.messagingToolSentTargets) ||
+    params.didSendDeterministicApprovalPrompt === true
   );
 }
 
@@ -1966,6 +2106,11 @@ export async function runReplyAgent(params: {
       preserveFreshTotalTokensOnStaleUsage: preflightCompactionApplied,
     });
 
+    const hasVisibleBlockProgress = Boolean(
+      blockReplyPipeline?.didStream() && !blockReplyPipeline.isAborted(),
+    );
+    const hasDirectBlockProgress = (directlySentBlockKeys?.size ?? 0) > 0;
+    const hasRunToolActivity = (runResult.meta?.toolSummary?.calls ?? 0) > 0;
     const successfulSideEffectDelivery = hasSuccessfulSideEffectDelivery({
       blockReplyPipeline,
       directlySentBlockKeys,
@@ -1976,6 +2121,49 @@ export async function runReplyAgent(params: {
       successfulCronAdds: runResult.successfulCronAdds,
       didSendDeterministicApprovalPrompt: runResult.didSendDeterministicApprovalPrompt,
     });
+    const hasMessageToolOnlyResponseActivity =
+      successfulSideEffectDelivery ||
+      hasRunToolActivity ||
+      hasVisibleBlockProgress ||
+      hasDirectBlockProgress ||
+      (runResult.successfulCronAdds ?? 0) > 0;
+    const shouldApplyDiscordMessageToolOnlyDeliveryGuard =
+      isDiscordMessageToolOnlyReplyGuardCandidate({
+        followupRun,
+        sessionCtx,
+        isHeartbeat,
+        // Intentionally narrower than successfulSideEffectDelivery: Discord
+        // response recovery should skip only after committed visible
+        // source-reply evidence. Tool/progress chatter is activity, not proof
+        // that the user received the final/status answer.
+        hasVisibleReplyEvidence: hasMessageToolOnlyVisibleReplyEvidence({
+          messagingToolSentTexts: runResult.messagingToolSentTexts,
+          messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
+          messagingToolSentTargets: runResult.messagingToolSentTargets,
+          didSendDeterministicApprovalPrompt: runResult.didSendDeterministicApprovalPrompt,
+        }),
+        hasPotentialResponseActivity: hasMessageToolOnlyResponseActivity,
+        hasSubstantiveFinalPayload: hasMessageToolOnlySubstantiveFinalPayload(payloadArray),
+      });
+    const returnDiscordMessageToolOnlyDeliveryGuardIfNeeded = async (): Promise<
+      ReplyPayload | undefined
+    > => {
+      if (!shouldApplyDiscordMessageToolOnlyDeliveryGuard) {
+        return undefined;
+      }
+      const guardPayload = buildDiscordMessageToolOnlyDeliveryGuardPayload();
+      logVerbose(
+        "discord message_tool_only delivery guard: synthesized visible guard payload after no committed visible reply evidence",
+      );
+      replyOperation.fail(
+        "run_failed",
+        new Error(
+          "Discord message_tool_only turn completed without successful visible message.send or deliverable final payload",
+        ),
+      );
+      await signalTypingIfNeeded([guardPayload], typingSignals);
+      return returnWithQueuedFollowupDrain(guardPayload);
+    };
     const successfulSourceReplyDelivery = hasSuccessfulSourceReplyDelivery({
       blockReplyPipeline,
       directlySentBlockKeys,
@@ -2091,6 +2279,10 @@ export async function runReplyAgent(params: {
       if (silentFallbackFailurePayload) {
         return silentFallbackFailurePayload;
       }
+      const deliveryGuardPayload = await returnDiscordMessageToolOnlyDeliveryGuardIfNeeded();
+      if (deliveryGuardPayload) {
+        return deliveryGuardPayload;
+      }
       return returnWithQueuedFollowupDrain(undefined);
     }
 
@@ -2144,6 +2336,10 @@ export async function runReplyAgent(params: {
       const silentFallbackFailurePayload = await returnSilentFallbackFailureIfNeeded();
       if (silentFallbackFailurePayload) {
         return silentFallbackFailurePayload;
+      }
+      const deliveryGuardPayload = await returnDiscordMessageToolOnlyDeliveryGuardIfNeeded();
+      if (deliveryGuardPayload) {
+        return deliveryGuardPayload;
       }
       return returnWithQueuedFollowupDrain(undefined);
     }
@@ -2480,6 +2676,15 @@ export async function runReplyAgent(params: {
     }
     if (responseUsageLine) {
       finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
+    }
+    if (shouldApplyDiscordMessageToolOnlyDeliveryGuard) {
+      logVerbose(
+        "discord message_tool_only delivery guard: ensuring final payload source delivery evidence",
+      );
+      finalPayloads = ensureDiscordMessageToolOnlyGuardPayloadForSourceDelivery({
+        payloads: finalPayloads,
+        followupRun,
+      });
     }
     if (isHookBlockedRun) {
       finalPayloads = markBeforeAgentRunBlockedPayloads(finalPayloads);
