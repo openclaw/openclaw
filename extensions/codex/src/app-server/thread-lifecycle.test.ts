@@ -83,6 +83,10 @@ describe("Codex app-server native code mode config", () => {
 
     expect(instructions).toContain("chat-ready acknowledgement");
     expect(instructions).toContain("specific to the user's request");
+    expect(instructions).toContain("summarizing the overall user-facing work");
+    expect(instructions).toContain("Do not describe implementation mechanics");
+    expect(instructions).toContain("file paths");
+    expect(instructions).toContain("log excerpts");
     expect(instructions).toContain("SOUL.md");
     expect(instructions).toContain("Beszel and Uptime Kuma");
     expect(instructions).toContain("Do not say generic things");

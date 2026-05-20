@@ -122,28 +122,19 @@ export function buildCodexToolPlanAnnouncementText(
 ): string {
   const details = normalizeCodexToolPlanAnnouncementInput(input);
   const normalizedToolName = details.toolName?.trim().toLowerCase() ?? "";
-  const meta = formatAnnouncementSnippet(details.meta);
   const tool = formatAnnouncementSnippet(details.toolName);
 
   if (isCodexCommandToolName(normalizedToolName)) {
-    return meta
-      ? `I'll run the shell command ${meta}, then report the result here.`
-      : "I'll run the shell command, then report the result here.";
+    return "I'll check the relevant local state, then report the result here.";
   }
   if (isCodexReadToolName(normalizedToolName)) {
-    return meta
-      ? `I'll inspect ${meta}, then answer here.`
-      : "I'll inspect the planned files, then answer here.";
+    return "I'll inspect the relevant context, then answer here.";
   }
   if (isCodexEditToolName(normalizedToolName)) {
-    return meta
-      ? `I'll edit ${meta}, then summarize the change here.`
-      : "I'll edit the planned files, then summarize the changes here.";
+    return "I'll make the planned change, then summarize it here.";
   }
   if (normalizedToolName.includes("search") || normalizedToolName.includes("browser")) {
-    return meta
-      ? `I'll search ${meta}, then answer here.`
-      : "I'll run the web search, then answer here.";
+    return "I'll look up the relevant information, then answer here.";
   }
   if (isCodexMessagingToolName(normalizedToolName)) {
     return "I'll check the chat state, then answer here.";
@@ -155,6 +146,46 @@ export function buildCodexToolPlanAnnouncementText(
 
 export function buildCodexPlanAnnouncementText(steps: readonly string[]): string | undefined {
   return buildCodexPlanAnnouncementTextFromParts({ steps });
+}
+
+function joinAnnouncementPhrases(phrases: readonly string[]): string {
+  if (phrases.length <= 1) {
+    return phrases[0] ?? "work through the planned steps";
+  }
+  if (phrases.length === 2) {
+    return `${phrases[0]} and ${phrases[1]}`;
+  }
+  return `${phrases.slice(0, -1).join(", ")}, and ${phrases[phrases.length - 1]}`;
+}
+
+function summarizePlanAnnouncementSteps(steps: readonly string[]): string | undefined {
+  const text = steps.join(" ").toLowerCase();
+  if (!text.trim()) {
+    return undefined;
+  }
+  const phrases: string[] = [];
+  const add = (phrase: string) => {
+    if (!phrases.includes(phrase)) {
+      phrases.push(phrase);
+    }
+  };
+  if (/\b(check|inspect|review|read|load|query|look|audit|search|compare)\b/u.test(text)) {
+    add("check the relevant state");
+  }
+  if (
+    /\b(set ?up|create|configure|install|prepare|patch|edit|update|fix|change|build|make)\b/u.test(
+      text,
+    )
+  ) {
+    add("handle the requested changes");
+  }
+  if (/\b(tests?|verify|validate|smoke|prove|confirm)\b/u.test(text)) {
+    add("verify the result");
+  }
+  if (phrases.length === 0) {
+    add("work through the planned steps");
+  }
+  return `I'll ${joinAnnouncementPhrases(phrases.slice(0, 3))}, then report back here.`;
 }
 
 export function buildCodexPlanAnnouncementTextFromParts(params: {
@@ -173,8 +204,8 @@ export function buildCodexPlanAnnouncementTextFromParts(params: {
   if (cleaned.length === 0) {
     return undefined;
   }
-  const text = `Plan: ${cleaned.slice(0, 4).join("; ")}.`;
-  return truncateAnnouncementText(text);
+  const summary = summarizePlanAnnouncementSteps(cleaned);
+  return summary ? truncateAnnouncementText(summary) : undefined;
 }
 
 export function shouldEmitTranscriptToolProgress(toolName: unknown, _args?: unknown): boolean {
@@ -290,6 +321,9 @@ export class CodexAppServerEventProjector {
   private toolPlanAnnouncementSent = false;
   private toolPlanAnnouncementDeliveryPending = false;
   private deferredToolPlanAnnouncementInput: string | CodexToolPlanAnnouncementInput | undefined;
+  private readonly deferredPlanEvents: Array<
+    Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0]
+  > = [];
   private assistantStarted = false;
   private reasoningStarted = false;
   private reasoningEnded = false;
@@ -563,6 +597,8 @@ export class CodexAppServerEventProjector {
       await this.params.onBlockReplyFlush?.();
     } catch (error) {
       embeddedAgentLog.debug("codex tool plan announcement delivery failed", { error });
+    } finally {
+      this.flushDeferredPlanEvents();
     }
   }
 
@@ -570,6 +606,7 @@ export class CodexAppServerEventProjector {
     this.toolPlanAnnouncementDeliveryPending = false;
     this.deferredToolPlanAnnouncementInput = undefined;
     this.toolPlanAnnouncementSent = true;
+    this.flushDeferredPlanEvents();
   }
 
   async completeToolPlanAnnouncementDeliveryForTool(params: {
@@ -592,7 +629,9 @@ export class CodexAppServerEventProjector {
     this.deferredToolPlanAnnouncementInput = undefined;
     if (deferredInput !== undefined) {
       await this.announceToolPlanForTool(deferredInput);
+      return;
     }
+    this.flushDeferredPlanEvents();
   }
 
   recordDynamicToolResult(params: {
@@ -1071,7 +1110,7 @@ export class CodexAppServerEventProjector {
       this.latestPlanAnnouncementText = nextAnnouncementText;
     }
     await this.announceToolPlanForPlanExplanation(explanation ? nextAnnouncementText : undefined);
-    this.emitAgentEvent({
+    this.emitPlanAgentEvent({
       stream: "plan",
       data: {
         phase: "update",
@@ -1081,6 +1120,34 @@ export class CodexAppServerEventProjector {
         ...(params.steps && params.steps.length > 0 ? { steps: params.steps } : {}),
       },
     });
+  }
+
+  private shouldDeferPlanEventsUntilToolPlanAnnouncement(): boolean {
+    return (
+      this.params.sourceReplyDeliveryMode === "message_tool_only" &&
+      this.params.silentExpected !== true &&
+      Boolean(this.params.onBlockReply) &&
+      !this.toolPlanAnnouncementSent
+    );
+  }
+
+  private emitPlanAgentEvent(
+    event: Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0],
+  ): void {
+    if (this.shouldDeferPlanEventsUntilToolPlanAnnouncement()) {
+      this.deferredPlanEvents.push(event);
+      return;
+    }
+    this.emitAgentEvent(event);
+  }
+
+  private flushDeferredPlanEvents(): void {
+    while (this.deferredPlanEvents.length > 0) {
+      const event = this.deferredPlanEvents.shift();
+      if (event) {
+        this.emitAgentEvent(event);
+      }
+    }
   }
 
   private async announceToolPlanForPlanExplanation(text: string | undefined): Promise<void> {

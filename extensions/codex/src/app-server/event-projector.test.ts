@@ -299,8 +299,8 @@ describe("CodexAppServerEventProjector", () => {
 
     expect(onBlockReply).toHaveBeenCalledWith({
       text:
-        "Plan: inspect the Codex app-server tool path (completed); " +
-        "make the chat announcement exact (in_progress); run focused Codex runtime tests (pending).",
+        "I'll check the relevant state, handle the requested changes, " +
+        "and verify the result, then report back here.",
       isStatusNotice: true,
     });
     expect(onBlockReply.mock.invocationCallOrder[0]).toBeLessThan(
@@ -392,7 +392,7 @@ describe("CodexAppServerEventProjector", () => {
     );
 
     expect(onBlockReply).toHaveBeenCalledWith({
-      text: "I'll run the web search, then answer here.",
+      text: "I'll look up the relevant information, then answer here.",
       isStatusNotice: true,
     });
   });
@@ -422,7 +422,7 @@ describe("CodexAppServerEventProjector", () => {
     );
 
     expect(onBlockReply).toHaveBeenCalledWith({
-      text: "Plan: Inspect code; Run focused tests.",
+      text: "I'll check the relevant state and verify the result, then report back here.",
       isStatusNotice: true,
     });
   });
@@ -457,24 +457,24 @@ describe("CodexAppServerEventProjector", () => {
     ].filter((message): message is string => Boolean(message));
 
     expect(messages).toContain(
-      "Plan: inspect the Codex app-server runtime path; patch the announcement copy; run focused tests.",
+      "I'll check the relevant state, handle the requested changes, and verify the result, then report back here.",
     );
     expect(messages).toContain(
       "I'll check your Beszel and Uptime Kuma instances to make sure nothing looks dead or dying.",
     );
-    expect(messages).toContain(
-      'I\'ll run the shell command "pnpm test", then report the result here.',
-    );
-    expect(messages).toContain('I\'ll inspect "README.md", then answer here.');
-    expect(messages).toContain('I\'ll edit "src/app.ts", then summarize the change here.');
-    expect(messages).toContain("I'll run the web search, then answer here.");
+    expect(messages).toContain("I'll check the relevant local state, then report the result here.");
+    expect(messages).toContain("I'll inspect the relevant context, then answer here.");
+    expect(messages).toContain("I'll make the planned change, then summarize it here.");
+    expect(messages).toContain("I'll look up the relevant information, then answer here.");
 
     for (const message of messages) {
       const sentenceCount = message.split(/[.!?]+/).filter((part) => part.trim()).length;
       expect(sentenceCount).toBeLessThanOrEqual(2);
-      expect(message).not.toMatch(/\b(needed|relevant|handle this|continue with the request)\b/u);
+      expect(message).not.toMatch(/\b(needed|handle this|continue with the request)\b/u);
       expect(message).not.toContain("continue with the request");
       expect(message).not.toContain("sk-proj-plain-secret-value-12345");
+      expect(message).not.toContain("README.md");
+      expect(message).not.toContain("src/app.ts");
     }
   });
 
@@ -506,7 +506,7 @@ describe("CodexAppServerEventProjector", () => {
     await projector.announceToolPlanForTool("web_search");
 
     expect(onBlockReply).toHaveBeenCalledWith({
-      text: "I'll run the web search, then answer here.",
+      text: "I'll look up the relevant information, then answer here.",
       isStatusNotice: true,
     });
   });
@@ -549,7 +549,7 @@ describe("CodexAppServerEventProjector", () => {
     });
 
     expect(onBlockReply).toHaveBeenCalledWith({
-      text: "I'll run the web search, then answer here.",
+      text: "I'll look up the relevant information, then answer here.",
       isStatusNotice: true,
     });
   });
@@ -592,13 +592,37 @@ describe("CodexAppServerEventProjector", () => {
     );
 
     expect(onBlockReply).not.toHaveBeenCalled();
+    expect(onAgentEvent).not.toHaveBeenCalled();
+
+    projector.markToolPlanAnnouncementDelivered();
+
     expect(findAgentEvent(onAgentEvent, { stream: "plan" }).data.steps).toEqual([
       "query monitoring state (in_progress)",
     ]);
     expect(projector.buildResult(buildEmptyToolTelemetry()).replayMetadata).toEqual({
-      hadPotentialSideEffects: false,
-      replaySafe: true,
+      hadPotentialSideEffects: true,
+      replaySafe: false,
     });
+  });
+
+  it("emits message-tool-only plan events immediately when no block reply path exists", async () => {
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      sourceReplyDeliveryMode: "message_tool_only",
+      onAgentEvent,
+    });
+
+    await projector.handleNotification(
+      forCurrentTurn("turn/plan/updated", {
+        explanation: "I'll check Beszel and Uptime Kuma health now.",
+        plan: [{ step: "query monitoring state", status: "in_progress" }],
+      }),
+    );
+
+    expect(findAgentEvent(onAgentEvent, { stream: "plan" }).data.steps).toEqual([
+      "query monitoring state (in_progress)",
+    ]);
   });
 
   it("uses fallback automatic announcements in message-tool-only turns when Codex skips message first", async () => {
@@ -612,13 +636,50 @@ describe("CodexAppServerEventProjector", () => {
     await projector.announceToolPlanForTool("web_search");
 
     expect(onBlockReply).toHaveBeenCalledWith({
-      text: "I'll run the web search, then answer here.",
+      text: "I'll look up the relevant information, then answer here.",
       isStatusNotice: true,
     });
     expect(projector.buildResult(buildEmptyToolTelemetry()).replayMetadata).toEqual({
       hadPotentialSideEffects: true,
       replaySafe: false,
     });
+  });
+
+  it("delivers the acknowledgement before deferred verbose plan steps in message-tool-only fallback", async () => {
+    const onBlockReply = vi.fn();
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      sourceReplyDeliveryMode: "message_tool_only",
+      onBlockReply,
+      onAgentEvent,
+    });
+
+    await projector.handleNotification(
+      forCurrentTurn("turn/plan/updated", {
+        explanation: "I'll prepare the Proxmox template and Telegram test setup.",
+        plan: [
+          { step: "check Proxmox template prerequisites", status: "in_progress" },
+          { step: "set up Telegram test credentials", status: "pending" },
+        ],
+      }),
+    );
+
+    expect(onAgentEvent).not.toHaveBeenCalled();
+
+    await projector.announceToolPlanForTool("bash");
+
+    expect(onBlockReply).toHaveBeenCalledWith({
+      text: "I'll prepare the Proxmox template and Telegram test setup.",
+      isStatusNotice: true,
+    });
+    expect(findAgentEvent(onAgentEvent, { stream: "plan" }).data.steps).toEqual([
+      "check Proxmox template prerequisites (in_progress)",
+      "set up Telegram test credentials (pending)",
+    ]);
+    expect(onBlockReply.mock.invocationCallOrder[0]).toBeLessThan(
+      onAgentEvent.mock.invocationCallOrder[0],
+    );
   });
 
   it("projects assistant deltas and usage into embedded attempt results", async () => {

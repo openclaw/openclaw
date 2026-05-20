@@ -872,7 +872,8 @@ function buildToolPlanAnnouncementInstruction(
     isMessageToolAvailable(params, dynamicTools);
   return [
     "When the chat turn will need tools, make your first plan update include a chat-ready acknowledgement in the plan explanation before the first tool call.",
-    "Write it as the exact short message OpenClaw should send back to the same chat: specific to the user's request, naming the concrete systems/resources involved, and in the voice/style from SOUL.md and the active workspace instructions.",
+    "Write it as the exact short message OpenClaw should send back to the same chat: specific to the user's request, summarizing the overall user-facing work you plan to do, naming the concrete systems/resources involved when helpful, and in the voice/style from SOUL.md and the active workspace instructions.",
+    "Do not describe implementation mechanics in the acknowledgement: avoid exact command lines, file paths, log excerpts, private ids, tokens, raw host addresses, or low-level tool names. Save that evidence for the final answer when it is actually useful.",
     messageToolOnly
       ? "Because visible replies use the `message` tool in this turn, make your first tool call `message` with that exact acknowledgement, then immediately proceed with the rest of the work."
       : undefined,
