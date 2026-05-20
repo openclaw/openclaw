@@ -61,6 +61,17 @@ type Pending = {
   reject: (err: unknown) => void;
   expectFinal: boolean;
   timeout: NodeJS.Timeout | null;
+  cleanup?: () => void;
+  onAccepted?: (payload: unknown) => void;
+  acceptedNotified?: boolean;
+};
+
+export type GatewayClientRequestOptions = {
+  expectFinal?: boolean;
+  timeoutMs?: number | null;
+  signal?: AbortSignal;
+  /** Called once for expectFinal requests after an accepted response, before the final result. */
+  onAccepted?: (payload: unknown) => void;
 };
 
 type GatewayClientErrorShape = {
@@ -1031,12 +1042,20 @@ export class GatewayClient {
       const payload = parsed.payload as { status?: unknown } | undefined;
       const status = payload?.status;
       if (pending.expectFinal && status === "accepted") {
+        if (!pending.acceptedNotified) {
+          pending.acceptedNotified = true;
+          try {
+            pending.onAccepted?.(parsed.payload);
+          } catch (err) {
+            logDebug(
+              `gateway client accepted callback error: ${formatGatewayClientErrorForLog(err)}`,
+            );
+          }
+        }
         return;
       }
       this.pending.delete(parsed.id);
-      if (pending.timeout) {
-        clearTimeout(pending.timeout);
-      }
+      pending.cleanup?.();
       if (parsed.ok) {
         pending.resolve(parsed.payload);
       } else {
@@ -1120,9 +1139,7 @@ export class GatewayClient {
 
   private flushPendingErrors(err: Error) {
     for (const [, p] of this.pending) {
-      if (p.timeout) {
-        clearTimeout(p.timeout);
-      }
+      p.cleanup?.();
       p.reject(err);
     }
     this.pending.clear();
@@ -1185,10 +1202,13 @@ export class GatewayClient {
   async request<T = Record<string, unknown>>(
     method: string,
     params?: unknown,
-    opts?: { expectFinal?: boolean; timeoutMs?: number | null },
+    opts?: GatewayClientRequestOptions,
   ): Promise<T> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       throw new Error("gateway not connected");
+    }
+    if (opts?.signal?.aborted) {
+      throw createGatewayRequestAbortError(method);
     }
     const id = randomUUID();
     const frame: RequestFrame = { type: "req", id, method, params };
@@ -1206,22 +1226,49 @@ export class GatewayClient {
           : expectFinal
             ? null
             : this.requestTimeoutMs;
+    const signal = opts?.signal;
     const p = new Promise<T>((resolve, reject) => {
+      let abortHandler: (() => void) | undefined;
       const timeout =
         timeoutMs === null
           ? null
           : setTimeout(() => {
+              const pending = this.pending.get(id);
               this.pending.delete(id);
+              pending?.cleanup?.();
               reject(new Error(`gateway request timeout for ${method}`));
             }, timeoutMs);
+      const cleanup = () => {
+        if (timeout) {
+          clearTimeout(timeout);
+        }
+        if (signal && abortHandler) {
+          signal.removeEventListener("abort", abortHandler);
+        }
+      };
+      abortHandler = () => {
+        const pending = this.pending.get(id);
+        this.pending.delete(id);
+        pending?.cleanup?.();
+        reject(createGatewayRequestAbortError(method));
+      };
       this.pending.set(id, {
         resolve: (value) => resolve(value as T),
         reject,
         expectFinal,
         timeout,
+        cleanup,
+        onAccepted: opts?.onAccepted,
       });
+      signal?.addEventListener("abort", abortHandler, { once: true });
     });
     this.ws.send(JSON.stringify(frame));
     return p;
   }
+}
+
+function createGatewayRequestAbortError(method: string): Error {
+  const err = new Error(`gateway request aborted for ${method}`);
+  err.name = "AbortError";
+  return err;
 }
