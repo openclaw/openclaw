@@ -1369,6 +1369,16 @@ describe("createStreamingDirectiveAccumulator", () => {
     expect(finalResult?.mediaUrls).toEqual(["/tmp/cover.png"]);
   });
 
+  it("skips buffering indented MEDIA after a blank line (indented code)", () => {
+    const accumulator = createStreamingDirectiveAccumulator();
+
+    // A blank line before an indented line signals a code block — the
+    // streaming guard must NOT buffer this as a MEDIA directive.
+    const result = accumulator.consume("some text\n\n    MEDIA:/tmp/code.png");
+    expect(result?.text).toBe("some text\n\n    MEDIA:/tmp/code.png");
+    expect(result?.mediaUrls).toBeUndefined();
+  });
+
   it("does not rewrite mid-prose MEDIA into a directive across chunks", () => {
     const accumulator = createStreamingDirectiveAccumulator();
 

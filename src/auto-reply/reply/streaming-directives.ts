@@ -80,7 +80,7 @@ export const splitTrailingDirective = (
   // guard must agree to prevent tail-buffer drops.
   const isIndentedCodeLine =
     /^(?:[ ]{4,}|\t)/.test(lastLine) &&
-    (lastNewline < 0 || /\n[ \t]*$/.test(text.slice(0, lastNewline + 1)));
+    (lastNewline < 0 || /(?:^|\n)[ \t]*\n[ \t]*$/.test(text.slice(0, lastNewline + 1)));
   if (!isIndentedCodeLine && /^\s*MEDIA:/i.test(lastLine)) {
     const mediaLineStart = lastNewline < 0 ? 0 : lastNewline + 1;
     if (mediaLineStart < bufferStart) {
