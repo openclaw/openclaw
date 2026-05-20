@@ -6,7 +6,7 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { createAgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
 import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
 import { buildHierarchyReinforcementMessage } from "../../../auto-reply/handoff-summarizer.js";
-import { filterHeartbeatPairs } from "../../../auto-reply/heartbeat-filter.js";
+import { filterHeartbeatTranscriptArtifacts } from "../../../auto-reply/heartbeat-filter.js";
 import { stripInboundMetadata } from "../../../auto-reply/reply/strip-inbound-meta.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { resolveStorePath } from "../../../config/sessions/paths.js";
@@ -3033,7 +3033,7 @@ export async function runEmbeddedAttempt(
             params.config && sessionAgentId
               ? resolveHeartbeatSummaryForAgent(params.config, sessionAgentId)
               : undefined;
-          const heartbeatFiltered = filterHeartbeatPairs(
+          const heartbeatFiltered = filterHeartbeatTranscriptArtifacts(
             validated,
             heartbeatSummary?.ackMaxChars,
             heartbeatSummary?.prompt,
@@ -3052,7 +3052,7 @@ export async function runEmbeddedAttempt(
               })
             : truncated;
           cacheTrace?.recordStage("session:limited", { messages: limited });
-          if (limited.length > 0) {
+          if (limited.length > 0 || prior.length > 0) {
             activeSession.agent.state.messages = limited;
           }
         }
@@ -3627,7 +3627,7 @@ export async function runEmbeddedAttempt(
             : undefined;
 
         try {
-          const filteredMessages = filterHeartbeatPairs(
+          const filteredMessages = filterHeartbeatTranscriptArtifacts(
             activeSession.messages,
             heartbeatSummary?.ackMaxChars,
             heartbeatSummary?.prompt,
