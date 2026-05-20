@@ -19,6 +19,29 @@ export function listAuthProfileStorePaths(config: OpenClawConfig, stateDir: stri
   return listAuthProfileStorePathsFromAuthStorePaths(config, stateDir);
 }
 
+export function listConfigBackupPaths(configPath: string): string[] {
+  const resolvedConfigPath = resolveUserPath(configPath);
+  const dir = path.dirname(resolvedConfigPath);
+  const base = path.basename(resolvedConfigPath);
+  if (!fs.existsSync(dir)) {
+    return [];
+  }
+  const out: string[] = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (!entry.isFile()) {
+      continue;
+    }
+    if (
+      entry.name === `${base}.bak` ||
+      entry.name.startsWith(`${base}.bak.`) ||
+      (entry.name.startsWith(`${base}.`) && entry.name.endsWith(".bak"))
+    ) {
+      out.push(path.join(dir, entry.name));
+    }
+  }
+  return out.toSorted();
+}
+
 export function listLegacyAuthJsonPaths(stateDir: string): string[] {
   const out: string[] = [];
   const agentsRoot = path.join(resolveUserPath(stateDir), "agents");

@@ -251,6 +251,49 @@ describe("secrets audit", () => {
     expectFindingCode(report, "PLAINTEXT_FOUND");
   });
 
+  it("flags plaintext secrets left in adjacent config backups", async () => {
+    await writeJsonFile(fixture.configPath, {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-completions",
+            apiKey: { source: "env", provider: "default", id: OPENAI_API_KEY_MARKER },
+            models: [{ id: "gpt-5", name: "gpt-5" }],
+          },
+        },
+      },
+    });
+    const backupPath = `${fixture.configPath}.2026-02-28.bak`;
+    await writeJsonFile(backupPath, {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-completions",
+            apiKey: "sk-stale-backup-key", // pragma: allowlist secret
+            models: [{ id: "gpt-5", name: "gpt-5" }],
+          },
+        },
+      },
+    });
+    await fs.rm(fixture.authStorePath, { force: true });
+    await fs.writeFile(fixture.envPath, "", "utf8");
+
+    const report = await runSecretsAudit({ env: fixture.env });
+
+    expect(report.filesScanned).toContain(backupPath);
+    expect(
+      hasFinding(
+        report,
+        (entry) =>
+          entry.code === "PLAINTEXT_FOUND" &&
+          entry.file === backupPath &&
+          entry.jsonPath === "models.providers.openai.apiKey",
+      ),
+    ).toBe(true);
+  });
+
   it("does not mutate legacy auth.json during audit", async () => {
     await fs.rm(fixture.authStorePath, { force: true });
     await writeJsonFile(fixture.authJsonPath, {

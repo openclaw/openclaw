@@ -32,6 +32,7 @@ import { isNonEmptyString, isRecord } from "./shared.js";
 import {
   listAgentModelsJsonPaths,
   listAuthProfileStorePaths,
+  listConfigBackupPaths,
   listLegacyAuthJsonPaths,
   parseEnvAssignmentValue,
   readJsonObjectIfExists,
@@ -257,6 +258,44 @@ function collectConfigSecrets(params: {
       message: `${target.path} is stored as plaintext.`,
       provider: target.providerId,
     });
+  }
+}
+
+function collectConfigBackupSecrets(params: {
+  configPath: string;
+  collector: AuditCollector;
+}): void {
+  for (const backupPath of listConfigBackupPaths(params.configPath)) {
+    params.collector.filesScanned.add(backupPath);
+    const parsedResult = readJsonObjectIfExists(backupPath, {
+      requireRegularFile: true,
+      maxBytes: MAX_AUDIT_MODELS_JSON_BYTES,
+    });
+    if (!parsedResult.value) {
+      continue;
+    }
+    for (const target of discoverConfigSecretTargets(parsedResult.value as OpenClawConfig)) {
+      if (!target.entry.includeInAudit) {
+        continue;
+      }
+      if (
+        target.entry.id === "models.providers.*.headers.*" &&
+        !isLikelySensitiveModelProviderHeaderName(target.pathSegments.at(-1) ?? "")
+      ) {
+        continue;
+      }
+      if (!hasConfiguredPlaintextSecretValue(target.value, target.entry.expectedResolvedValue)) {
+        continue;
+      }
+      addFinding(params.collector, {
+        code: "PLAINTEXT_FOUND",
+        severity: "warn",
+        file: backupPath,
+        jsonPath: target.path,
+        message: `${target.path} is stored as plaintext in a config backup.`,
+        provider: target.providerId,
+      });
+    }
   }
 }
 
@@ -674,6 +713,10 @@ export async function runSecretsAudit(
   if (snapshot.valid) {
     collectConfigSecrets({
       config,
+      configPath,
+      collector,
+    });
+    collectConfigBackupSecrets({
       configPath,
       collector,
     });
