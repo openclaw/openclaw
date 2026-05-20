@@ -4,6 +4,7 @@ import { upsertChannelPairingRequest } from "openclaw/plugin-sdk/conversation-ru
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { warnMissingProviderGroupPolicyFallbackOnce } from "openclaw/plugin-sdk/runtime-group-policy";
 import { resolveWhatsAppInboundPolicy, resolveWhatsAppIngressAccess } from "../inbound-policy.js";
+import { normalizeE164 } from "../text-runtime.js";
 
 export type InboundAccessControlResult = {
   allowed: boolean;
@@ -13,6 +14,14 @@ export type InboundAccessControlResult = {
 };
 
 const PAIRING_REPLY_HISTORY_GRACE_MS = 30_000;
+
+function isInManualFrom(senderE164: string | null, manualFrom: string[]): boolean {
+  if (!senderE164 || manualFrom.length === 0) {
+    return false;
+  }
+  const normalizedSender = normalizeE164(senderE164);
+  return manualFrom.some((entry) => normalizeE164(entry) === normalizedSender);
+}
 
 function logWhatsAppVerbose(enabled: boolean | undefined, message: string) {
   if (!enabled) {
@@ -101,6 +110,27 @@ export async function checkInboundAccessControl(params: {
       return {
         allowed: false,
         shouldMarkRead: false,
+        isSelfChat: policy.isSelfChat,
+        resolvedAccountId: policy.account.accountId,
+      };
+    }
+    // "open-except" — respond to everyone except contacts in manualFrom
+    if (policy.dmPolicy === "open-except") {
+      if (isInManualFrom(params.senderE164, policy.manualFrom)) {
+        logWhatsAppVerbose(
+          params.verbose,
+          `Silently skipping DM from ${params.senderE164 ?? "unknown"} (dmPolicy: open-except, in manualFrom)`,
+        );
+        return {
+          allowed: false,
+          shouldMarkRead: false,
+          isSelfChat: policy.isSelfChat,
+          resolvedAccountId: policy.account.accountId,
+        };
+      }
+      return {
+        allowed: true,
+        shouldMarkRead: true,
         isSelfChat: policy.isSelfChat,
         resolvedAccountId: policy.account.accountId,
       };
