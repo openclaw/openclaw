@@ -1379,6 +1379,19 @@ describe("createStreamingDirectiveAccumulator", () => {
     expect(result?.mediaUrls).toBeUndefined();
   });
 
+  it("skips buffering MEDIA in consecutive indented-code lines after blank", () => {
+    const accumulator = createStreamingDirectiveAccumulator();
+
+    // Multi-line indented code: the second indented line follows another
+    // indented line (not directly preceded by a blank), but should still
+    // be treated as code because the block started after a blank line.
+    const result = accumulator.consume(
+      "text\n\n    example\n    MEDIA:/tmp/code.png",
+    );
+    expect(result?.text).toBe("text\n\n    example\n    MEDIA:/tmp/code.png");
+    expect(result?.mediaUrls).toBeUndefined();
+  });
+
   it("does not rewrite mid-prose MEDIA into a directive across chunks", () => {
     const accumulator = createStreamingDirectiveAccumulator();
 
