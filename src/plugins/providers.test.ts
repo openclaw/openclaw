@@ -482,6 +482,12 @@ describe("resolvePluginProviders", () => {
       loadPluginManifestRegistry: (...args: Parameters<LoadPluginManifestRegistry>) =>
         loadPluginManifestRegistryMock(...args),
     }));
+    vi.doMock("./plugin-metadata-snapshot.js", () => ({
+      loadPluginMetadataSnapshot: () => ({
+        manifestRegistry: loadPluginManifestRegistryMock(),
+        index: createProviderRegistrySnapshotFixture(),
+      }),
+    }));
     vi.doMock("./plugin-registry.js", async () => {
       const actual =
         await vi.importActual<typeof import("./plugin-registry.js")>("./plugin-registry.js");
