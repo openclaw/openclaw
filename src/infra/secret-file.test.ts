@@ -113,20 +113,6 @@ describe("readSecretFileSync", () => {
 
   it.each([
     {
-      name: "returns undefined from the non-throwing helper for rejected files",
-      pathValue: async () =>
-        createSecretPath(async (dir) => {
-          const target = path.join(dir, "target.txt");
-          const link = path.join(dir, "secret-link.txt");
-          await fsPromises.writeFile(target, "top-secret\n", "utf8");
-          await fsPromises.symlink(target, link);
-          return link;
-        }),
-      label: "Telegram bot token",
-      options: { rejectSymlink: true },
-      expected: undefined,
-    },
-    {
       name: "returns undefined from the non-throwing helper for blank file paths",
       pathValue: async () => "   ",
       label: "Telegram bot token",
@@ -143,6 +129,20 @@ describe("readSecretFileSync", () => {
   ])("$name", async ({ pathValue, label, options, expected }) => {
     const file = await pathValue();
     expect(tryReadSecretFileSync(file, label, options)).toBe(expected);
+  });
+
+  it("throws from the non-throwing helper for rejected symlinks", async () => {
+    const link = await createSecretPath(async (dir) => {
+      const target = path.join(dir, "target.txt");
+      const symlink = path.join(dir, "secret-link.txt");
+      await fsPromises.writeFile(target, "top-secret\n", "utf8");
+      await fsPromises.symlink(target, symlink);
+      return symlink;
+    });
+
+    expect(() =>
+      tryReadSecretFileSync(link, "Telegram bot token", { rejectSymlink: true }),
+    ).toThrow("must not be a symlink");
   });
 });
 
