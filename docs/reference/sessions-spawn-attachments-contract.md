@@ -21,6 +21,23 @@ The feature is default-off behind `tools.sessions_spawn.attachments.enabled`. Su
 
 `src/agents/tools/sessions-spawn-tool.ts` should stay a thin schema/dispatch wrapper. Validation, materialization, prompt notes, and spawn-failure cleanup belong in the native sub-agent spawn path.
 
+## Relationship to future work
+
+This page documents the shipped inline-attachment MVP from
+[#16761](https://github.com/openclaw/openclaw/pull/16761), not the full
+long-term attachment roadmap from [#17214](https://github.com/openclaw/openclaw/issues/17214).
+
+The current contract is intentionally limited to snapshot-by-value files passed
+directly in the `sessions_spawn` request. Future work such as bundle references,
+standard review-bundle schemas, archive-specific workflows, streaming uploads,
+host path mounts, or ACP attachment transport needs a separate design and should
+not silently change this inline contract.
+
+The adjacent review-bundle format discussion is tracked separately in
+[#17509](https://github.com/openclaw/openclaw/issues/17509). That work concerns
+bundle contents and schema; this page concerns only the transport and lifecycle
+contract for inline `sessions_spawn` attachments.
+
 ## Request API
 
 A `sessions_spawn` request may include:
