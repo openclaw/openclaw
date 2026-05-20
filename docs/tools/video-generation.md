@@ -63,8 +63,10 @@ session:
 2. The provider processes the job in the background (typically 30 seconds to several minutes depending on the provider and resolution; slow queue-backed providers can run up to the configured timeout).
 3. When the video is ready, OpenClaw wakes the same session with an internal completion event.
 4. The agent tells the user and attaches the finished video through the
-   message tool. OpenClaw does not auto-post the video as a fallback if the
-   completion agent writes only a private final reply.
+   message tool. If the active wake and requester-agent handoff miss the
+   generated media, OpenClaw attempts one direct generated-media fallback to the
+   original chat and mirrors that delivery into the session. If that fallback
+   cannot confirm delivery, OpenClaw marks the completion handoff as failed.
 
 While a job is in flight, duplicate `video_generate` calls in the same
 session return the current task status instead of starting another

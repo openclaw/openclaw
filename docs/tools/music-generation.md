@@ -16,10 +16,12 @@ For session-backed agent runs, OpenClaw starts music generation as a
 background task, tracks it in the task ledger, then wakes the agent again
 when the track is ready so the agent can tell the user and attach the
 finished audio. Generated-media completions are delivered by the agent through
-the message tool; OpenClaw does not auto-post the file as a fallback if the
-completion agent writes only a private final reply. The completion wake
-explicitly warns the agent that normal final replies are private for this
-route.
+the message tool. If the active wake and requester-agent handoff miss the
+generated media, OpenClaw attempts one direct generated-media fallback to the
+original chat and mirrors that delivery into the session. If that fallback
+cannot confirm delivery, OpenClaw marks the completion handoff as failed. The
+completion wake explicitly warns the agent that normal final replies are private
+for this route.
 
 <Note>
 The built-in shared tool only appears when at least one music-generation
