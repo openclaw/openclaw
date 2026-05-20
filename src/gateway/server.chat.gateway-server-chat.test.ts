@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -1137,7 +1138,12 @@ describe("gateway server chat", () => {
         const sourceReplyRunId = "idem-tui-source-reply:internal-source-reply:0";
         const chatEvents: unknown[] = [];
         const collectChatEvents = (data: WebSocket.RawData) => {
-          const obj = JSON.parse(data.toString()) as { event?: unknown; payload?: unknown };
+          const text = Array.isArray(data)
+            ? Buffer.concat(data).toString("utf8")
+            : Buffer.isBuffer(data)
+              ? data.toString("utf8")
+              : Buffer.from(data).toString("utf8");
+          const obj = JSON.parse(text) as { event?: unknown; payload?: unknown };
           if (obj.event === "chat") {
             chatEvents.push(obj.payload);
           }
