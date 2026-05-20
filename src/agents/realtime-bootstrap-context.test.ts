@@ -53,6 +53,29 @@ describe("resolveRealtimeBootstrapContextInstructions", () => {
     expect(instructions).not.toContain(workspaceDir);
   });
 
+  it("ignores unsupported file requests from unchecked callers", async () => {
+    const workspaceDir = await makeWorkspace();
+    const warnings: string[] = [];
+    const uncheckedFiles = ["IDENTITY.md", "AGENTS.md"] as unknown as NonNullable<
+      Parameters<typeof resolveRealtimeBootstrapContextInstructions>[0]["files"]
+    >;
+    await fs.writeFile(path.join(workspaceDir, "IDENTITY.md"), "Name: Wilfred\n", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "Do not load me here.\n", "utf8");
+
+    const instructions = await resolveRealtimeBootstrapContextInstructions({
+      config: makeConfig(workspaceDir),
+      agentId: "main",
+      files: uncheckedFiles,
+      warn: (message) => warnings.push(message),
+    });
+
+    expect(instructions).toContain("### IDENTITY.md");
+    expect(instructions).toContain("Name: Wilfred");
+    expect(instructions).not.toContain("AGENTS.md");
+    expect(instructions).not.toContain("Do not load me here.");
+    expect(warnings).toContain('skipping unsupported realtime bootstrap context file "AGENTS.md"');
+  });
+
   it("keeps the complete injected instruction text within the default budget", async () => {
     const workspaceDir = await makeWorkspace();
     await fs.writeFile(

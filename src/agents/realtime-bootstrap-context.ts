@@ -19,10 +19,19 @@ export const REALTIME_BOOTSTRAP_CONTEXT_FILE_NAMES = [
 export type RealtimeBootstrapContextFileName =
   (typeof REALTIME_BOOTSTRAP_CONTEXT_FILE_NAMES)[number];
 
+const REALTIME_BOOTSTRAP_CONTEXT_FILE_NAME_SET: ReadonlySet<string> = new Set(
+  REALTIME_BOOTSTRAP_CONTEXT_FILE_NAMES,
+);
 const DEFAULT_REALTIME_BOOTSTRAP_CONTEXT_MAX_CHARS = 4_000;
 const REALTIME_BOOTSTRAP_CONTEXT_TITLE = "OpenClaw realtime voice profile context:";
 const REALTIME_BOOTSTRAP_CONTEXT_GUIDANCE =
   "Use these profile files for identity, persona, and user grounding; do not mention them unless asked.";
+
+function isRealtimeBootstrapContextFileName(
+  value: string,
+): value is RealtimeBootstrapContextFileName {
+  return REALTIME_BOOTSTRAP_CONTEXT_FILE_NAME_SET.has(value);
+}
 
 function formatRealtimeBootstrapContextFileName(pathValue: string): string {
   return path.basename(pathValue.trim().replace(/\\/g, "/"));
@@ -41,6 +50,21 @@ function resolveRealtimeBootstrapContextContentBudget(params: {
   return params.totalMaxChars - params.preamble.length - separatorChars - headingChars;
 }
 
+function normalizeRealtimeBootstrapContextFileNames(
+  files: readonly string[],
+  warn?: (message: string) => void,
+): RealtimeBootstrapContextFileName[] {
+  const normalized: RealtimeBootstrapContextFileName[] = [];
+  for (const fileName of files) {
+    if (isRealtimeBootstrapContextFileName(fileName)) {
+      normalized.push(fileName);
+      continue;
+    }
+    warn?.(`skipping unsupported realtime bootstrap context file "${fileName}"`);
+  }
+  return normalized;
+}
+
 export async function resolveRealtimeBootstrapContextInstructions(params: {
   agentId: string;
   config: OpenClawConfig;
@@ -48,7 +72,10 @@ export async function resolveRealtimeBootstrapContextInstructions(params: {
   sessionKey?: string;
   warn?: (message: string) => void;
 }): Promise<string | undefined> {
-  const requestedFiles = params.files ?? REALTIME_BOOTSTRAP_CONTEXT_FILE_NAMES;
+  const requestedFiles = normalizeRealtimeBootstrapContextFileNames(
+    params.files ?? REALTIME_BOOTSTRAP_CONTEXT_FILE_NAMES,
+    params.warn,
+  );
   if (requestedFiles.length === 0) {
     return undefined;
   }
@@ -63,11 +90,18 @@ export async function resolveRealtimeBootstrapContextInstructions(params: {
   });
   const selectedFiles = bootstrapFiles
     .filter(
-      (file) => !file.missing && requestedOrder.has(file.name as RealtimeBootstrapContextFileName),
+      (file) =>
+        !file.missing &&
+        isRealtimeBootstrapContextFileName(file.name) &&
+        requestedOrder.has(file.name),
     )
     .toSorted((left, right) => {
-      const leftOrder = requestedOrder.get(left.name as RealtimeBootstrapContextFileName) ?? 0;
-      const rightOrder = requestedOrder.get(right.name as RealtimeBootstrapContextFileName) ?? 0;
+      const leftOrder = isRealtimeBootstrapContextFileName(left.name)
+        ? (requestedOrder.get(left.name) ?? 0)
+        : 0;
+      const rightOrder = isRealtimeBootstrapContextFileName(right.name)
+        ? (requestedOrder.get(right.name) ?? 0)
+        : 0;
       if (leftOrder !== rightOrder) {
         return leftOrder - rightOrder;
       }
