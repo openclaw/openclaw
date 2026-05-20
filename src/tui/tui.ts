@@ -14,6 +14,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { resolveAgentIdByWorkspacePath, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
+import type { CommandEntry } from "../gateway/protocol/index.js";
 import { registerUncaughtExceptionHandler } from "../infra/unhandled-rejections.js";
 import { setConsoleSubsystemFilter } from "../logging/console.js";
 import { loggingState } from "../logging/state.js";
@@ -346,6 +347,13 @@ type DrainableTui = {
 const TUI_SHUTDOWN_DRAIN_MAX_MS = 500;
 const TUI_SHUTDOWN_DRAIN_IDLE_MS = 100;
 const TUI_SHUTDOWN_HARD_EXIT_MS = 2000;
+const TUI_PROCESS_EXIT_AFTER_RETURN_MS = 2000;
+
+type TuiProcessExitTimer = {
+  unref?: () => void;
+};
+
+type TuiProcessExitTimeout = (callback: () => void, delayMs: number) => TuiProcessExitTimer;
 
 export async function drainAndStopTuiSafely(tui: DrainableTui): Promise<void> {
   if (typeof tui.terminal?.drainInput === "function") {
@@ -356,6 +364,36 @@ export async function drainAndStopTuiSafely(tui: DrainableTui): Promise<void> {
     }
   }
   stopTuiSafely(() => tui.stop());
+}
+
+export function scheduleProcessExitAfterTuiReturn(
+  params: {
+    delayMs?: number;
+    setTimeoutFn?: TuiProcessExitTimeout;
+    exit?: (code?: number) => never | void;
+    writeStderr?: (text: string) => void;
+  } = {},
+): TuiProcessExitTimer {
+  const delayMs = Math.max(0, Math.floor(params.delayMs ?? TUI_PROCESS_EXIT_AFTER_RETURN_MS));
+  const setTimeoutFn =
+    params.setTimeoutFn ??
+    ((callback, timeoutMs) => setTimeout(callback, timeoutMs) as unknown as TuiProcessExitTimer);
+  const exit = params.exit ?? ((code?: number) => process.exit(code));
+  const writeStderr =
+    params.writeStderr ??
+    ((text: string) => {
+      process.stderr.write(text);
+    });
+  const timer = setTimeoutFn(() => {
+    try {
+      writeStderr("openclaw tui forcing process exit after return\n");
+    } catch {
+      // Best effort only; forced exit must not depend on stderr.
+    }
+    exit(0);
+  }, delayMs);
+  timer.unref?.();
+  return timer;
 }
 
 type CtrlCAction = "clear" | "warn" | "exit";
@@ -438,6 +476,10 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   const autoMessage = opts.message?.trim();
   let autoMessageSent = false;
   let sessionInfo: SessionInfo = {};
+  let dynamicSlashCommands: CommandEntry[] = [];
+  let dynamicSlashCommandsKey: string | null = null;
+  let dynamicSlashCommandsInFlightKey: string | null = null;
+  let dynamicSlashCommandsRequestId = 0;
   let lastCtrlCAt = 0;
   let exitRequested = false;
   let exitResult: TuiResult = { exitReason: "exit" };
@@ -662,7 +704,10 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   root.addChild(footer);
   root.addChild(editor);
 
-  const updateAutocompleteProvider = () => {
+  const resolveDynamicSlashCommandsKey = () => currentAgentId;
+
+  const applyAutocompleteProvider = () => {
+    const dynamicKey = resolveDynamicSlashCommandsKey();
     editor.setAutocompleteProvider(
       new CombinedAutocompleteProvider(
         getSlashCommands({
@@ -671,10 +716,54 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
           provider: sessionInfo.modelProvider,
           model: sessionInfo.model,
           thinkingLevels: sessionInfo.thinkingLevels,
+          dynamicCommands: dynamicSlashCommandsKey === dynamicKey ? dynamicSlashCommands : [],
         }),
         process.cwd(),
       ),
     );
+  };
+
+  const refreshDynamicSlashCommands = () => {
+    const key = resolveDynamicSlashCommandsKey();
+    if (
+      !isConnected ||
+      !client.listCommands ||
+      dynamicSlashCommandsKey === key ||
+      dynamicSlashCommandsInFlightKey === key
+    ) {
+      return;
+    }
+    dynamicSlashCommandsInFlightKey = key;
+    const requestId = ++dynamicSlashCommandsRequestId;
+    const agentId = currentAgentId;
+    void client
+      .listCommands({
+        agentId,
+        scope: "text",
+        includeArgs: false,
+      })
+      .then((commands) => {
+        if (
+          requestId !== dynamicSlashCommandsRequestId ||
+          key !== resolveDynamicSlashCommandsKey()
+        ) {
+          return;
+        }
+        dynamicSlashCommands = commands;
+        dynamicSlashCommandsKey = key;
+        applyAutocompleteProvider();
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (dynamicSlashCommandsInFlightKey === key) {
+          dynamicSlashCommandsInFlightKey = null;
+        }
+      });
+  };
+
+  const updateAutocompleteProvider = () => {
+    applyAutocompleteProvider();
+    refreshDynamicSlashCommands();
   };
 
   tui.addChild(root);
@@ -1302,6 +1391,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       await refreshAgents();
       await restoreRememberedSession();
       updateHeader();
+      updateAutocompleteProvider();
       await loadHistory();
       setConnectionStatus(
         isLocalMode ? "local ready" : reconnected ? "gateway reconnected" : "gateway connected",
@@ -1325,6 +1415,11 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     isConnected = false;
     wasDisconnected = true;
     historyLoaded = false;
+    dynamicSlashCommands = [];
+    dynamicSlashCommandsKey = null;
+    dynamicSlashCommandsInFlightKey = null;
+    dynamicSlashCommandsRequestId += 1;
+    updateAutocompleteProvider();
     pauseStreamingWatchdog();
     const disconnectState = isLocalMode
       ? {
@@ -1380,5 +1475,8 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     process.once("exit", finish);
     deferredFinish.setFinish(finish);
   });
+  if (opts.forceProcessExitOnReturn === true) {
+    scheduleProcessExitAfterTuiReturn();
+  }
   return exitResult;
 }

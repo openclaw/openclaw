@@ -3,7 +3,12 @@ import fs from "node:fs";
 import path from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import {
+  buildTtsSupplementMediaPayload,
+  getReplyPayloadTtsSupplement,
+  isReplyPayloadTtsSupplement,
+  resolveSendableOutboundReplyParts,
+} from "openclaw/plugin-sdk/reply-payload";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveDefaultModelForAgent } from "../../agents/model-selection.js";
 import { rewriteTranscriptEntriesInSessionFile } from "../../agents/pi-embedded-runner/transcript-rewrite.js";
@@ -42,12 +47,14 @@ import {
   saveMediaBuffer,
 } from "../../media/store.js";
 import { createChannelMessageReplyPipeline } from "../../plugin-sdk/channel-message.js";
+import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-binding.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
 import {
   stripInlineDirectiveTagsForDisplay,
   sanitizeReplyDirectiveId,
@@ -124,7 +131,10 @@ import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { normalizeWebchatReplyMediaPathsForDisplay } from "./chat-reply-media.js";
-import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
+import {
+  appendInjectedAssistantMessageToTranscript,
+  type GatewayInjectedTtsSupplementMarker,
+} from "./chat-transcript-inject.js";
 import {
   buildWebchatAssistantMessageFromReplyPayloads,
   buildWebchatAudioContentBlocksFromReplyPayloads,
@@ -171,16 +181,51 @@ function isMediaBearingPayload(payload: ReplyPayload): boolean {
   return false;
 }
 
-function isTtsSupplementPayload(payload: ReplyPayload): boolean {
+function stripVisibleTextFromTtsSupplement(payload: ReplyPayload): ReplyPayload {
+  return isReplyPayloadTtsSupplement(payload) ? buildTtsSupplementMediaPayload(payload) : payload;
+}
+
+function resolveTtsSupplementMarkerText(text: string): string {
+  const trimmed = text.trim();
+  const projected = projectChatDisplayMessage(
+    {
+      role: "assistant",
+      content: [{ type: "text", text: trimmed }],
+    },
+    { maxChars: Number.MAX_SAFE_INTEGER },
+  );
+  const projectedContent = Array.isArray(projected?.content)
+    ? (projected.content as AssistantDisplayContentBlock[])
+    : undefined;
   return (
-    typeof payload.spokenText === "string" &&
-    payload.spokenText.trim().length > 0 &&
-    isMediaBearingPayload(payload)
+    extractAssistantDisplayTextFromContent(projectedContent) ??
+    (typeof projected?.text === "string" ? projected.text.trim() : undefined) ??
+    trimmed
   );
 }
 
-function stripVisibleTextFromTtsSupplement(payload: ReplyPayload): ReplyPayload {
-  return isTtsSupplementPayload(payload) ? { ...payload, text: undefined } : payload;
+function buildTtsSupplementTranscriptMarker(
+  payload: ReplyPayload,
+): GatewayInjectedTtsSupplementMarker | undefined {
+  const supplement = getReplyPayloadTtsSupplement(payload);
+  if (!supplement) {
+    return undefined;
+  }
+  const visibleText = resolveTtsSupplementMarkerText(
+    payload.text?.trim() || supplement.spokenText.trim(),
+  );
+  return {
+    textSha256: createHash("sha256").update(visibleText).digest("hex"),
+  };
+}
+
+function buildMediaOnlyTtsSupplementTranscriptMarker(
+  payload: ReplyPayload,
+): GatewayInjectedTtsSupplementMarker | undefined {
+  if (payload.text?.trim()) {
+    return undefined;
+  }
+  return buildTtsSupplementTranscriptMarker(payload);
 }
 
 async function hasImageChatAttachments(attachments: ChatAttachment[]): Promise<boolean> {
@@ -234,6 +279,7 @@ const CHANNEL_AGNOSTIC_SESSION_SCOPES = new Set([
 const CHANNEL_SCOPED_SESSION_SHAPES = new Set(["direct", "dm", "group", "channel"]);
 
 type ChatSendDeliveryEntry = {
+  route?: ChannelRouteRef;
   deliveryContext?: {
     channel?: string;
     to?: string;
@@ -605,19 +651,18 @@ function resolveChatSendOriginatingRoute(params: {
     };
   }
 
+  const sessionDeliveryContext = deliveryContextFromSession(params.entry);
   const routeChannelCandidate = normalizeMessageChannel(
-    params.entry?.deliveryContext?.channel ??
-      params.entry?.lastChannel ??
-      params.entry?.origin?.provider,
+    sessionDeliveryContext?.channel ?? params.entry?.lastChannel ?? params.entry?.origin?.provider,
   );
-  const routeToCandidate = params.entry?.deliveryContext?.to ?? params.entry?.lastTo;
+  const routeToCandidate = sessionDeliveryContext?.to ?? params.entry?.lastTo;
   const routeAccountIdCandidate =
-    params.entry?.deliveryContext?.accountId ??
+    sessionDeliveryContext?.accountId ??
     params.entry?.lastAccountId ??
     params.entry?.origin?.accountId ??
     undefined;
   const routeThreadIdCandidate =
-    params.entry?.deliveryContext?.threadId ??
+    sessionDeliveryContext?.threadId ??
     params.entry?.lastThreadId ??
     params.entry?.origin?.threadId;
   if (params.sessionKey.length > CHAT_SEND_SESSION_KEY_MAX_LENGTH) {
@@ -1403,6 +1448,7 @@ async function appendAssistantTranscriptMessage(params: {
     origin: AbortOrigin;
     runId: string;
   };
+  ttsSupplement?: GatewayInjectedTtsSupplementMarker;
   cfg?: OpenClawConfig;
 }): Promise<TranscriptAppendResult> {
   const transcriptPath = resolveTranscriptPath({
@@ -1442,6 +1488,7 @@ async function appendAssistantTranscriptMessage(params: {
     content: params.content,
     idempotencyKey: params.idempotencyKey,
     abortMeta: params.abortMeta,
+    ttsSupplement: params.ttsSupplement,
     config: params.cfg,
   });
 }
@@ -2464,6 +2511,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         if (!agentRunStarted || appendedWebchatAgentMedia || !isMediaBearingPayload(payload)) {
           return;
         }
+        const ttsSupplementMarker = buildTtsSupplementTranscriptMarker(payload);
         const [transcriptPayload] = await normalizeWebchatReplyMediaPathsForDisplay({
           cfg,
           sessionKey,
@@ -2530,6 +2578,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           agentId,
           createIfMissing: true,
           idempotencyKey: `${clientRunId}:assistant-media`,
+          ttsSupplement: ttsSupplementMarker,
           cfg,
         });
         if (appended.ok) {
@@ -2719,6 +2768,11 @@ export const chatHandlers: GatewayRequestHandlers = {
                     },
                   });
                   const hasSensitiveMedia = hasSensitiveMediaPayload(finalPayloads);
+                  const ttsSupplementMarker = finalPayloads
+                    .map((payload) => buildMediaOnlyTtsSupplementTranscriptMarker(payload))
+                    .find((marker): marker is GatewayInjectedTtsSupplementMarker =>
+                      Boolean(marker),
+                    );
                   const persistedAssistantContent = replaceAssistantContentTextBlocks(
                     hasSensitiveMedia
                       ? await buildAssistantDisplayContentFromReplyPayloads({
@@ -2775,6 +2829,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                       sessionFile: latestEntry?.sessionFile,
                       agentId,
                       createIfMissing: true,
+                      ttsSupplement: ttsSupplementMarker,
                       cfg,
                     });
                     if (appended.ok) {
@@ -2806,6 +2861,9 @@ export const chatHandlers: GatewayRequestHandlers = {
                             : {}),
                         ...(fallbackText ? { text: fallbackText } : {}),
                         timestamp: now,
+                        ...(ttsSupplementMarker
+                          ? { openclawTtsSupplement: ttsSupplementMarker }
+                          : {}),
                         // Keep this compatible with Pi stopReason enums even though this message isn't
                         // persisted to the transcript due to the append failure.
                         stopReason: "stop",

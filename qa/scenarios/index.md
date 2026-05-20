@@ -6,7 +6,7 @@ Single source of truth for repo-backed QA suite bootstrap data.
 - `index.md` defines pack-level bootstrap data
 - each nested `*.md` scenario defines one runnable test via `qa-scenario` + `qa-flow`
 - scenario markdown may also define coverage IDs, category metadata, required plugins,
-  lane filters, and gateway config patching
+  lane filters, runtime parity tiers, and gateway config patching
 
 - kickoff mission
 - QA operator identity
@@ -20,8 +20,25 @@ Coverage tracking:
 - prefer reusing an existing feature ID over minting a scenario-shaped ID
 - avoid copying the scenario title into coverage IDs
 - use `pnpm openclaw qa coverage` to render the current inventory
+- use `runtimeParityTier` for runtime-pair gate membership: `standard`,
+  `optional`, `live-only`, or `soak`
 - treat the old `coverage: ["id"]` / `coverage: - id` list shape as invalid
 - keep source-path tracking in the report, not in the scenario schema
+
+Runtime parity tiers:
+
+- `standard`: required Codex-vs-Pi mock gate coverage for first-hour depth and
+  default runtime-tool fixtures. OpenClaw dynamic integration tools in this
+  tier are hard-gated by `openclaw qa coverage --tools --summary`; Codex-native
+  workspace rows remain separately tracked until native/live behavior is the
+  asserted surface. Selected with
+  `openclaw qa suite --runtime-pair pi,codex --runtime-parity-tier standard`
+- `optional`: profile-, plugin-, or external-service-dependent runtime-tool
+  fixtures that stay out of the default release gate
+- `live-only`: scenarios that need real provider/runtime behavior rather than
+  mock-openai fixtures
+- `soak`: long-running scheduled or Testbox lanes such as the 100-turn parity
+  soak
 
 Theme directories:
 

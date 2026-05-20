@@ -70,6 +70,8 @@ type TelegramCachedMessageObservation = {
   mode: TelegramMessageObservationMode;
 };
 
+type TelegramEmbeddedReplyMessage = NonNullable<Message["reply_to_message"]>;
+
 const DEFAULT_MAX_MESSAGES = 5000;
 const COMPACT_THRESHOLD_RATIO = 2;
 const persistedMessageCacheBuckets = new Map<string, TelegramMessageCacheBucket>();
@@ -101,11 +103,6 @@ function resolveReplyMessage(msg: Message): Message | undefined {
 
 function resolveEmbeddedReplyMessage(msg: Message): Message | undefined {
   return msg.reply_to_message;
-}
-
-function asTelegramReplyMessage(message: Message): NonNullable<Message["reply_to_message"]> {
-  // Grammy's ReplyMessage type drops nested reply_to_message, but cached source payloads may carry it.
-  return message as NonNullable<Message["reply_to_message"]>;
 }
 
 function resolveMessageBody(msg: Message): string | undefined {
@@ -349,28 +346,27 @@ function trimMessages(messages: Map<string, TelegramCachedMessageNode>, maxMessa
 function mergeTelegramSourceMessage(existing: Message, incoming: Message): Message {
   const existingReply = resolveEmbeddedReplyMessage(existing);
   const incomingReply = resolveEmbeddedReplyMessage(incoming);
-  const merged = { ...existing, ...incoming };
   if (existingReply?.message_id != null && incomingReply?.message_id === existingReply.message_id) {
-    return {
-      ...merged,
-      reply_to_message: asTelegramReplyMessage(
-        mergeTelegramSourceMessage(existingReply, incomingReply),
-      ),
-    };
+    return Object.assign({}, existing, incoming, {
+      reply_to_message: mergeTelegramSourceMessage(
+        existingReply,
+        incomingReply,
+      ) as TelegramEmbeddedReplyMessage,
+    }) as Message;
   }
-  return merged;
+  return Object.assign({}, existing, incoming);
 }
 
 function mergeAuthoritativeTelegramSourceMessage(existing: Message, incoming: Message): Message {
   const existingReply = resolveEmbeddedReplyMessage(existing);
   const incomingReply = resolveEmbeddedReplyMessage(incoming);
   if (existingReply?.message_id != null && incomingReply?.message_id === existingReply.message_id) {
-    return {
-      ...incoming,
-      reply_to_message: asTelegramReplyMessage(
-        mergeTelegramSourceMessage(existingReply, incomingReply),
-      ),
-    };
+    return Object.assign({}, incoming, {
+      reply_to_message: mergeTelegramSourceMessage(
+        existingReply,
+        incomingReply,
+      ) as TelegramEmbeddedReplyMessage,
+    }) as Message;
   }
   return incoming;
 }
@@ -385,8 +381,7 @@ function mergeCachedMessageNode(
     mode === "authoritative"
       ? mergeAuthoritativeTelegramSourceMessage(existing.sourceMessage, incoming.sourceMessage)
       : mergeTelegramSourceMessage(existing.sourceMessage, incoming.sourceMessage);
-  const nodeParams = Number.isFinite(threadId) ? { threadId } : {};
-  return normalizeRequiredMessageNode(sourceMessage, nodeParams);
+  return normalizeRequiredMessageNode(sourceMessage, Number.isFinite(threadId) ? { threadId } : {});
 }
 
 function upsertCachedMessageNode(params: {
@@ -567,7 +562,7 @@ export function createTelegramMessageCache(params?: {
       }
       let recordedEntry: TelegramCachedMessageNode | null = null;
       for (const { node, mode } of observations) {
-        const messageId = node.messageId;
+        const { messageId } = node;
         if (!messageId) {
           continue;
         }
@@ -702,11 +697,12 @@ function resolveSessionBoundaryNode(params: {
   if (!params.messageId) {
     return undefined;
   }
+  const { messageId } = params;
   const candidates = params.cache
     .recentBefore({
       accountId: params.accountId,
       chatId: params.chatId,
-      messageId: params.messageId,
+      messageId,
       ...(params.threadId !== undefined ? { threadId: params.threadId } : {}),
       limit: Number.MAX_SAFE_INTEGER,
     })
@@ -714,7 +710,7 @@ function resolveSessionBoundaryNode(params: {
   const current = params.cache.get({
     accountId: params.accountId,
     chatId: params.chatId,
-    messageId: params.messageId,
+    messageId,
   });
   if (current && isSessionBoundaryCommandNode(current)) {
     candidates.push(current);

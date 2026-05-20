@@ -116,6 +116,38 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     );
   });
 
+  it("uses the final assistant answer when one streamed text contains progress and final text", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Need inspect.\n\nDone."],
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [
+          {
+            type: "text",
+            text: "Need inspect.",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "item_commentary",
+              phase: "commentary",
+            }),
+          },
+          {
+            type: "text",
+            text: "Done.",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "item_final",
+              phase: "final_answer",
+            }),
+          },
+        ],
+      } as AssistantMessage,
+    });
+
+    expectSinglePayloadText(payloads, "Done.");
+  });
+
   it("keeps a current one-chunk reply when only a stale transcript assistant is available", () => {
     const payloads = buildPayloads({
       assistantTexts: ["Current room event reply."],
@@ -319,6 +351,28 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
+  it("marks middleware tool-error warnings after assistant output as non-terminal", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Queued 3 topics."],
+      lastToolError: {
+        toolName: "exec",
+        error: "Tool output unavailable due to post-processing error",
+        middlewareError: true,
+      },
+      verboseLevel: "off",
+    });
+
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0]?.text).toBe("Queued 3 topics.");
+    expect(payloads[1]).toMatchObject({
+      isError: true,
+    });
+    expect(payloads[1]?.text).toContain("Exec failed");
+    expect(getReplyPayloadMetadata(payloads[1] as object)).toMatchObject({
+      nonTerminalToolErrorWarning: true,
+    });
+  });
+
   it("surfaces concise bash tool errors when verbose mode is off", () => {
     const payloads = buildPayloads({
       lastToolError: { toolName: "bash", error: "command failed" },
@@ -328,6 +382,23 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expectSingleToolErrorPayload(payloads, {
       title: "Bash",
       absentDetail: "command failed",
+    });
+  });
+
+  it("surfaces declined Codex native command errors for aborted empty turns", () => {
+    const payloads = buildPayloads({
+      assistantTexts: [],
+      lastToolError: {
+        toolName: "bash",
+        error: "codex native tool blocked",
+        mutatingAction: true,
+      },
+      runAborted: true,
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Bash",
+      absentDetail: "codex native tool blocked",
     });
   });
 

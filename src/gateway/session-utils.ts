@@ -1045,6 +1045,7 @@ export function listAgentsForGateway(cfg: OpenClawConfig): {
     if (!entry?.id) {
       continue;
     }
+    const configuredName = normalizeOptionalString(entry.name);
     const identity = entry.identity
       ? {
           name: normalizeOptionalString(entry.identity.name),
@@ -1059,7 +1060,7 @@ export function listAgentsForGateway(cfg: OpenClawConfig): {
         }
       : undefined;
     configuredById.set(normalizeAgentId(entry.id), {
-      name: normalizeOptionalString(entry.name),
+      name: configuredName ?? identity?.name,
       identity,
     });
   }

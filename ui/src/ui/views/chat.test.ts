@@ -73,7 +73,7 @@ vi.mock("../chat/build-chat-items.ts", () => ({
         (message) =>
           typeof message === "object" &&
           message !== null &&
-          (message as { __testDivider?: unknown }).__testDivider === true,
+          (message as { __testDivider?: unknown })["__testDivider"] === true,
       )
     ) {
       return [
@@ -489,6 +489,37 @@ describe("chat loading skeleton", () => {
     expect(container.querySelector(".agent-chat__welcome")).toBeNull();
   });
 
+  it("shows the loading skeleton for an active run with no stream", () => {
+    const container = renderChatView({ canAbort: true, loading: true });
+
+    expect(container.querySelector(".chat-loading-skeleton")).not.toBeNull();
+    expect(container.querySelectorAll(".chat-reading-indicator")).toHaveLength(0);
+    expect(container.querySelector(".agent-chat__welcome")).toBeNull();
+  });
+
+  it("shows the reading indicator when an active run has an empty stream", () => {
+    const container = renderChatView({ canAbort: true, stream: "" });
+
+    expect(container.querySelector(".chat-reading-indicator")).not.toBeNull();
+  });
+
+  it("does not keep the reading indicator after an assistant response has rendered", () => {
+    const container = renderChatView({
+      canAbort: true,
+      messages: [
+        {
+          role: "assistant",
+          content: "Finished answer",
+          timestamp: 1,
+        },
+      ],
+      stream: null,
+    });
+
+    expect(container.querySelector(".chat-reading-indicator")).toBeNull();
+    expect(container.querySelector(".chat-group")?.textContent?.trim()).toBe("Finished answer");
+  });
+
   it("keeps existing messages visible without the skeleton during a background reload", () => {
     const container = renderChatView({
       loading: true,
@@ -527,6 +558,51 @@ describe("chat loading skeleton", () => {
 
     expect(container.querySelector(".chat-loading-skeleton")).toBeNull();
     expect(container.querySelectorAll(".chat-reading-indicator")).toHaveLength(1);
+  });
+
+  it("lets terminal run status win over stale abortable session UI", () => {
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    try {
+      const container = renderChatView({
+        canAbort: true,
+        runStatus: {
+          phase: "done",
+          runId: "run-1",
+          sessionKey: "main",
+          occurredAt: 1_000,
+        },
+        sessions: {
+          ts: 0,
+          path: "",
+          count: 1,
+          defaults: { modelProvider: null, model: null, contextTokens: 200_000 },
+          sessions: [
+            {
+              key: "main",
+              kind: "direct",
+              updatedAt: null,
+              hasActiveRun: true,
+              status: "done",
+              totalTokens: 190_000,
+              contextTokens: 200_000,
+            },
+          ],
+        },
+        onCompact: () => undefined,
+      });
+
+      expect(container.querySelector(".agent-chat__run-status--done")?.textContent).toContain(
+        "Done",
+      );
+      expect(container.querySelector(".agent-chat__run-status--in-progress")).toBeNull();
+      expect(container.querySelector(".chat-reading-indicator")).toBeNull();
+      expect(container.querySelector(".chat-send-btn--stop")).toBeNull();
+      expect(container.querySelector<HTMLButtonElement>(".context-notice__action")?.disabled).toBe(
+        false,
+      );
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 });
 
@@ -1331,7 +1407,7 @@ describe("chat session controls", () => {
     ]);
     expect(
       [...(thinkingSelect?.options ?? [])].map((option) => option.textContent?.trim()),
-    ).toEqual(["Off", "Off", "Override: adaptive", "Override: xhigh", "Override: maximum"]);
+    ).toEqual(["Off", "Off", "Adaptive", "Extra high", "Maximum"]);
   });
 
   it("labels chat thinking default from the active session row", () => {
@@ -1348,8 +1424,8 @@ describe("chat session controls", () => {
     );
 
     expect(thinkingSelect?.value).toBe("");
-    expect(thinkingSelect?.options[0]?.textContent?.trim()).toBe("Inherited: adaptive");
-    expect(thinkingSelect?.title).toBe("Inherited: adaptive");
+    expect(thinkingSelect?.options[0]?.textContent?.trim()).toBe("Inherited: Adaptive");
+    expect(thinkingSelect?.title).toBe("Inherited: Adaptive");
   });
 
   it("always renders full thinking labels", () => {
@@ -1379,14 +1455,14 @@ describe("chat session controls", () => {
 
     expect(container.querySelector('select[data-chat-thinking-select-compact="true"]')).toBeNull();
     expect(thinkingSelect?.value).toBe("");
-    expect(thinkingSelect?.title).toBe("Inherited: high");
+    expect(thinkingSelect?.title).toBe("Inherited: High");
     expect([...thinkingSelect!.options].map((option) => option.textContent?.trim())).toEqual([
-      "Inherited: high",
+      "Inherited: High",
       "Off",
-      "Override: low",
-      "Override: medium",
-      "Override: high",
-      "Override: xhigh",
+      "Low",
+      "Medium",
+      "High",
+      "Extra high",
     ]);
   });
 
@@ -1403,7 +1479,7 @@ describe("chat session controls", () => {
     );
 
     expect(thinkingSelect?.value).toBe("");
-    expect(thinkingSelect?.options[0]?.textContent?.trim()).toBe("Inherited: adaptive");
-    expect(thinkingSelect?.title).toBe("Inherited: adaptive");
+    expect(thinkingSelect?.options[0]?.textContent?.trim()).toBe("Inherited: Adaptive");
+    expect(thinkingSelect?.title).toBe("Inherited: Adaptive");
   });
 });
