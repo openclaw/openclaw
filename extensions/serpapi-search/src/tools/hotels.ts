@@ -38,6 +38,19 @@ function isoDateOffsetFrom(isoDate: string, days: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+function parseIsoDate(value: string, label: string): string {
+  const trimmed = value.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    throw new Error(`serpapi_hotels: ${label} must use YYYY-MM-DD format`);
+  }
+  const [year, month, day] = trimmed.split("-").map((p) => Number.parseInt(p, 10));
+  const d = new Date(Date.UTC(year, month - 1, day));
+  if (d.getUTCFullYear() !== year || d.getUTCMonth() !== month - 1 || d.getUTCDate() !== day) {
+    throw new Error(`serpapi_hotels: ${label} must be a valid calendar date`);
+  }
+  return trimmed;
+}
+
 function extract(raw: Record<string, unknown>): Record<string, unknown> {
   return {
     engine: "google_hotels",
@@ -96,8 +109,15 @@ export function createSerpApiHotelsTool(api: OpenClawPluginApi, ctx?: SerpApiToo
     execute: async (_toolCallId: string, args: Record<string, unknown>, signal?: AbortSignal) => {
       const cfg = resolveToolConfig(api, ctx);
       const vacationRentals = readBooleanArg(args, "vacation_rentals");
-      const checkIn = readStringParam(args, "check_in_date") ?? isoDateOffset(1);
-      const checkOut = readStringParam(args, "check_out_date") ?? isoDateOffsetFrom(checkIn, 2);
+      const rawCheckIn = readStringParam(args, "check_in_date");
+      const rawCheckOut = readStringParam(args, "check_out_date");
+      const checkIn = rawCheckIn ? parseIsoDate(rawCheckIn, "check_in_date") : isoDateOffset(1);
+      const checkOut = rawCheckOut
+        ? parseIsoDate(rawCheckOut, "check_out_date")
+        : isoDateOffsetFrom(checkIn, 2);
+      if (rawCheckIn && rawCheckOut && checkOut <= checkIn) {
+        throw new Error("serpapi_hotels: check_out_date must be after check_in_date");
+      }
       const raw = await callSerpApi({
         cfg,
         engine: "google_hotels",
