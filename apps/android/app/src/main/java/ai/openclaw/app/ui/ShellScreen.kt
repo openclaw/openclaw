@@ -7,7 +7,7 @@ import ai.openclaw.app.GatewayNodesDevicesSummary
 import ai.openclaw.app.GatewaySkillSummary
 import ai.openclaw.app.HomeDestination
 import ai.openclaw.app.MainViewModel
-import ai.openclaw.app.ui.chat.V2ChatScreen
+import ai.openclaw.app.ui.chat.ChatScreen
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import ai.openclaw.app.ui.design.ClawEmptyState
 import ai.openclaw.app.ui.design.ClawPanel
@@ -71,7 +71,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-private enum class V2Tab(
+private enum class Tab(
   val key: String,
   val label: String,
 ) {
@@ -84,13 +84,13 @@ private enum class V2Tab(
 }
 
 @Composable
-fun V2ShellScreen(
+fun ShellScreen(
   viewModel: MainViewModel,
   modifier: Modifier = Modifier,
 ) {
   ClawDesignTheme {
-    var activeTab by rememberSaveable { mutableStateOf(V2Tab.Overview) }
-    var settingsRoute by rememberSaveable { mutableStateOf(V2SettingsRoute.Home) }
+    var activeTab by rememberSaveable { mutableStateOf(Tab.Overview) }
+    var settingsRoute by rememberSaveable { mutableStateOf(SettingsRoute.Home) }
     var returnToOverviewFromSettings by rememberSaveable { mutableStateOf(false) }
     var commandOpen by rememberSaveable { mutableStateOf(false) }
     val requestedHomeDestination by viewModel.requestedHomeDestination.collectAsState()
@@ -99,25 +99,25 @@ fun V2ShellScreen(
       val destination = requestedHomeDestination ?: return@LaunchedEffect
       activeTab =
         when (destination) {
-          HomeDestination.Connect -> V2Tab.Overview
-          HomeDestination.Chat -> V2Tab.Chat
-          HomeDestination.Voice -> V2Tab.Voice
-          HomeDestination.Screen -> V2Tab.Chat
-          HomeDestination.Settings -> V2Tab.Settings
+          HomeDestination.Connect -> Tab.Overview
+          HomeDestination.Chat -> Tab.Chat
+          HomeDestination.Voice -> Tab.Voice
+          HomeDestination.Screen -> Tab.Chat
+          HomeDestination.Settings -> Tab.Settings
         }
       if (destination == HomeDestination.Settings) {
-        settingsRoute = V2SettingsRoute.Home
+        settingsRoute = SettingsRoute.Home
         returnToOverviewFromSettings = false
       }
       viewModel.clearRequestedHomeDestination()
     }
 
     LaunchedEffect(activeTab) {
-      viewModel.setVoiceScreenActive(activeTab == V2Tab.Voice)
+      viewModel.setVoiceScreenActive(activeTab == Tab.Voice)
     }
 
-    BackHandler(enabled = activeTab != V2Tab.Overview) {
-      activeTab = V2Tab.Overview
+    BackHandler(enabled = activeTab != Tab.Overview) {
+      activeTab = Tab.Overview
     }
 
     BackHandler(enabled = commandOpen) {
@@ -126,51 +126,51 @@ fun V2ShellScreen(
 
     Box(modifier = modifier.fillMaxSize()) {
       when (activeTab) {
-        V2Tab.Overview ->
-          V2OverviewScreen(
+        Tab.Overview ->
+          OverviewScreen(
             viewModel = viewModel,
             onSelectTab = { activeTab = it },
             onOpenSettingsRoute = {
               settingsRoute = it
               returnToOverviewFromSettings = true
-              activeTab = V2Tab.Settings
+              activeTab = Tab.Settings
             },
             onOpenCommand = { commandOpen = true },
           )
-        V2Tab.Chat ->
-          V2ChatShellScreen(
+        Tab.Chat ->
+          ChatShellScreen(
             viewModel = viewModel,
-            onBack = { activeTab = V2Tab.Overview },
-            onVoice = { activeTab = V2Tab.Voice },
+            onBack = { activeTab = Tab.Overview },
+            onVoice = { activeTab = Tab.Voice },
           )
-        V2Tab.Voice ->
-          V2VoiceShellScreen(
+        Tab.Voice ->
+          VoiceShellScreen(
             viewModel = viewModel,
             onOpenCommand = { commandOpen = true },
             onOpenVoiceSettings = {
-              settingsRoute = V2SettingsRoute.Voice
+              settingsRoute = SettingsRoute.Voice
               returnToOverviewFromSettings = false
-              activeTab = V2Tab.Settings
+              activeTab = Tab.Settings
             },
           )
-        V2Tab.ProvidersModels ->
-          V2ProvidersModelsScreen(
+        Tab.ProvidersModels ->
+          ProvidersModelsScreen(
             viewModel = viewModel,
-            onBack = { activeTab = V2Tab.Overview },
+            onBack = { activeTab = Tab.Overview },
             onAddProvider = {
-              settingsRoute = V2SettingsRoute.Gateway
+              settingsRoute = SettingsRoute.Gateway
               returnToOverviewFromSettings = false
-              activeTab = V2Tab.Settings
+              activeTab = Tab.Settings
             },
           )
-        V2Tab.Sessions ->
-          V2SessionsScreen(
+        Tab.Sessions ->
+          SessionsScreen(
             viewModel = viewModel,
             onOpenCommand = { commandOpen = true },
-            onOpenChat = { activeTab = V2Tab.Chat },
+            onOpenChat = { activeTab = Tab.Chat },
           )
-        V2Tab.Settings ->
-          V2SettingsShellScreen(
+        Tab.Settings ->
+          SettingsShellScreen(
             viewModel = viewModel,
             route = settingsRoute,
             onRouteChange = {
@@ -178,10 +178,10 @@ fun V2ShellScreen(
               returnToOverviewFromSettings = false
             },
             onRouteBack = {
-              settingsRoute = V2SettingsRoute.Home
+              settingsRoute = SettingsRoute.Home
               if (returnToOverviewFromSettings) {
                 returnToOverviewFromSettings = false
-                activeTab = V2Tab.Overview
+                activeTab = Tab.Overview
               }
             },
             onOpenCommand = { commandOpen = true },
@@ -189,34 +189,34 @@ fun V2ShellScreen(
       }
 
       if (commandOpen) {
-        V2CommandPalette(
+        CommandPalette(
           viewModel = viewModel,
           onDismiss = { commandOpen = false },
           onOpenChat = {
-            activeTab = V2Tab.Chat
+            activeTab = Tab.Chat
             commandOpen = false
           },
           onOpenVoice = {
-            activeTab = V2Tab.Voice
+            activeTab = Tab.Voice
             commandOpen = false
           },
           onOpenSessions = {
-            activeTab = V2Tab.Sessions
+            activeTab = Tab.Sessions
             commandOpen = false
           },
           onOpenProviders = {
-            activeTab = V2Tab.ProvidersModels
+            activeTab = Tab.ProvidersModels
             commandOpen = false
           },
           onOpenSettings = {
-            settingsRoute = V2SettingsRoute.Home
+            settingsRoute = SettingsRoute.Home
             returnToOverviewFromSettings = false
-            activeTab = V2Tab.Settings
+            activeTab = Tab.Settings
             commandOpen = false
           },
           onOpenSession = { sessionKey ->
             viewModel.switchChatSession(sessionKey)
-            activeTab = V2Tab.Chat
+            activeTab = Tab.Chat
             commandOpen = false
           },
         )
@@ -226,10 +226,10 @@ fun V2ShellScreen(
 }
 
 @Composable
-private fun V2OverviewScreen(
+private fun OverviewScreen(
   viewModel: MainViewModel,
-  onSelectTab: (V2Tab) -> Unit,
-  onOpenSettingsRoute: (V2SettingsRoute) -> Unit,
+  onSelectTab: (Tab) -> Unit,
+  onOpenSettingsRoute: (SettingsRoute) -> Unit,
   onOpenCommand: () -> Unit,
 ) {
   val isConnected by viewModel.isConnected.collectAsState()
@@ -274,23 +274,23 @@ private fun V2OverviewScreen(
               color = ClawTheme.colors.text,
               modifier = Modifier.weight(1f),
             )
-            V2PlainIconButton(icon = Icons.Default.Search, contentDescription = "Search", onClick = onOpenCommand)
-            V2OverviewAvatar(text = "OC")
+            PlainIconButton(icon = Icons.Default.Search, contentDescription = "Search", onClick = onOpenCommand)
+            OverviewAvatar(text = "OC")
           }
         }
 
         item {
-          V2SectionLabel(title = "MODULES")
+          SectionLabel(title = "MODULES")
         }
 
         item {
-          V2ModuleList(
+          ModuleList(
             rows =
               listOf(
-                V2ModuleRow("Chat", null, null, Icons.Outlined.ChatBubbleOutline, V2Tab.Chat),
-                V2ModuleRow("Sessions", null, if (sessions.isEmpty()) "Empty" else "${sessions.size} recent", Icons.Outlined.AccessTime, V2Tab.Sessions),
-                V2ModuleRow("Voice", null, if (isConnected) "Ready" else "Offline", Icons.Outlined.MicNone, V2Tab.Voice),
-                V2ModuleRow(
+                ModuleRow("Chat", null, null, Icons.Outlined.ChatBubbleOutline, Tab.Chat),
+                ModuleRow("Sessions", null, if (sessions.isEmpty()) "Empty" else "${sessions.size} recent", Icons.Outlined.AccessTime, Tab.Sessions),
+                ModuleRow("Voice", null, if (isConnected) "Ready" else "Offline", Icons.Outlined.MicNone, Tab.Voice),
+                ModuleRow(
                   title = "Providers & Models",
                   subtitle = null,
                   metadata =
@@ -301,16 +301,16 @@ private fun V2OverviewScreen(
                       else -> "Setup"
                     },
                   icon = Icons.Outlined.Inventory2,
-                  tab = V2Tab.ProvidersModels,
+                  tab = Tab.ProvidersModels,
                 ),
-                V2ModuleRow("Channels", null, channelsSummaryText(channelsSummary), Icons.Default.Notifications, V2Tab.Settings, V2SettingsRoute.Channels),
-                V2ModuleRow("Agents", null, if (agents.isEmpty()) "Load" else "${agents.size} ready", Icons.Default.Person, V2Tab.Settings, V2SettingsRoute.Agents),
-                V2ModuleRow("Approvals", null, approvalsSummary(pendingToolCalls.size), Icons.Default.Lock, V2Tab.Settings, V2SettingsRoute.Approvals),
-                V2ModuleRow("Cron Jobs", null, cronJobsSummary(cronStatus.jobs), Icons.Outlined.AccessTime, V2Tab.Settings, V2SettingsRoute.CronJobs),
-                V2ModuleRow("Skills", null, skillsSummaryText(skillsSummary.skills), Icons.Default.Settings, V2Tab.Settings, V2SettingsRoute.Skills),
-                V2ModuleRow("Nodes & Devices", null, nodesDevicesSummaryText(nodesDevicesSummary), Icons.Default.Cloud, V2Tab.Settings, V2SettingsRoute.NodesDevices),
-                V2ModuleRow("Usage", null, usageSummaryText(usageSummary.providers.size), Icons.Default.Storage, V2Tab.Settings, V2SettingsRoute.Usage),
-                V2ModuleRow("Settings", null, null, Icons.Outlined.Settings, V2Tab.Settings, V2SettingsRoute.Home),
+                ModuleRow("Channels", null, channelsSummaryText(channelsSummary), Icons.Default.Notifications, Tab.Settings, SettingsRoute.Channels),
+                ModuleRow("Agents", null, if (agents.isEmpty()) "Load" else "${agents.size} ready", Icons.Default.Person, Tab.Settings, SettingsRoute.Agents),
+                ModuleRow("Approvals", null, approvalsSummary(pendingToolCalls.size), Icons.Default.Lock, Tab.Settings, SettingsRoute.Approvals),
+                ModuleRow("Cron Jobs", null, cronJobsSummary(cronStatus.jobs), Icons.Outlined.AccessTime, Tab.Settings, SettingsRoute.CronJobs),
+                ModuleRow("Skills", null, skillsSummaryText(skillsSummary.skills), Icons.Default.Settings, Tab.Settings, SettingsRoute.Skills),
+                ModuleRow("Nodes & Devices", null, nodesDevicesSummaryText(nodesDevicesSummary), Icons.Default.Cloud, Tab.Settings, SettingsRoute.NodesDevices),
+                ModuleRow("Usage", null, usageSummaryText(usageSummary.providers.size), Icons.Default.Storage, Tab.Settings, SettingsRoute.Usage),
+                ModuleRow("Settings", null, null, Icons.Outlined.Settings, Tab.Settings, SettingsRoute.Home),
               ),
             onSelectTab = onSelectTab,
             onOpenSettingsRoute = onOpenSettingsRoute,
@@ -318,12 +318,12 @@ private fun V2OverviewScreen(
         }
 
         item {
-          V2SectionLabel(
+          SectionLabel(
             title = "Recent Sessions",
             action = {
               Text(
                 text = "View all",
-                modifier = Modifier.clickable { onSelectTab(V2Tab.Sessions) },
+                modifier = Modifier.clickable { onSelectTab(Tab.Sessions) },
                 style = ClawTheme.type.caption,
                 color = ClawTheme.colors.textMuted,
               )
@@ -336,15 +336,15 @@ private fun V2OverviewScreen(
             ClawEmptyState(
               title = "No recent sessions",
               body = "Start a chat and your active OpenClaw conversations will appear here.",
-              action = { ClawPrimaryButton(text = "Start Chat", onClick = { onSelectTab(V2Tab.Chat) }) },
+              action = { ClawPrimaryButton(text = "Start Chat", onClick = { onSelectTab(Tab.Chat) }) },
             )
           }
         } else {
           item {
-            V2RecentSessionList(
+            RecentSessionList(
               rows =
                 sessions.take(7).map { session ->
-                  V2RecentSessionListItem(
+                  RecentSessionListItem(
                     key = session.key,
                     title = displaySessionTitle(session.displayName),
                     subtitle = if (pendingRunCount > 0) "Assistant working" else "OpenClaw session",
@@ -353,28 +353,28 @@ private fun V2OverviewScreen(
                 },
               onOpen = { sessionKey ->
                 viewModel.switchChatSession(sessionKey)
-                onSelectTab(V2Tab.Chat)
+                onSelectTab(Tab.Chat)
               },
             )
           }
         }
       }
-      V2OverviewChatButton(onClick = { onSelectTab(V2Tab.Chat) }, modifier = Modifier.align(Alignment.BottomEnd).padding(bottom = 8.dp))
+      OverviewChatButton(onClick = { onSelectTab(Tab.Chat) }, modifier = Modifier.align(Alignment.BottomEnd).padding(bottom = 8.dp))
     }
   }
 }
 
-private data class V2ModuleRow(
+private data class ModuleRow(
   val title: String,
   val subtitle: String?,
   val metadata: String?,
   val icon: ImageVector,
-  val tab: V2Tab,
-  val settingsRoute: V2SettingsRoute? = null,
+  val tab: Tab,
+  val settingsRoute: SettingsRoute? = null,
 )
 
 @Composable
-private fun V2OverviewChatButton(
+private fun OverviewChatButton(
   onClick: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
@@ -397,7 +397,7 @@ private fun V2OverviewChatButton(
 }
 
 @Composable
-private fun V2OverviewAvatar(text: String) {
+private fun OverviewAvatar(text: String) {
   Surface(
     modifier = Modifier.size(34.dp),
     shape = CircleShape,
@@ -412,7 +412,7 @@ private fun V2OverviewAvatar(text: String) {
 }
 
 @Composable
-private fun V2SectionLabel(
+private fun SectionLabel(
   title: String,
   action: (@Composable () -> Unit)? = null,
 ) {
@@ -427,15 +427,15 @@ private fun V2SectionLabel(
 }
 
 @Composable
-private fun V2ModuleList(
-  rows: List<V2ModuleRow>,
-  onSelectTab: (V2Tab) -> Unit,
-  onOpenSettingsRoute: (V2SettingsRoute) -> Unit,
+private fun ModuleList(
+  rows: List<ModuleRow>,
+  onSelectTab: (Tab) -> Unit,
+  onOpenSettingsRoute: (SettingsRoute) -> Unit,
 ) {
   ClawPanel(contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
     Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
       rows.forEachIndexed { index, row ->
-        V2ModuleListRow(
+        ModuleListRow(
           row = row,
           onClick = {
             val route = row.settingsRoute
@@ -455,8 +455,8 @@ private fun V2ModuleList(
 }
 
 @Composable
-private fun V2ModuleListRow(
-  row: V2ModuleRow,
+private fun ModuleListRow(
+  row: ModuleRow,
   onClick: () -> Unit,
 ) {
   Surface(color = Color.Transparent, contentColor = ClawTheme.colors.text) {
@@ -497,16 +497,16 @@ private fun V2ModuleListRow(
 }
 
 @Composable
-private fun V2RecentSessionRow(
+private fun RecentSessionRow(
   title: String,
   subtitle: String,
   metadata: String,
   onClick: () -> Unit,
 ) {
-  V2RecentSessionRowContent(title = title, subtitle = subtitle, metadata = metadata, onClick = onClick)
+  RecentSessionRowContent(title = title, subtitle = subtitle, metadata = metadata, onClick = onClick)
 }
 
-private data class V2RecentSessionListItem(
+private data class RecentSessionListItem(
   val key: String,
   val title: String,
   val subtitle: String,
@@ -514,14 +514,14 @@ private data class V2RecentSessionListItem(
 )
 
 @Composable
-private fun V2RecentSessionList(
-  rows: List<V2RecentSessionListItem>,
+private fun RecentSessionList(
+  rows: List<RecentSessionListItem>,
   onOpen: (String) -> Unit,
 ) {
   ClawPanel(contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
     Column {
       rows.forEachIndexed { index, row ->
-        V2RecentSessionRowContent(
+        RecentSessionRowContent(
           title = row.title,
           subtitle = row.subtitle,
           metadata = row.metadata,
@@ -536,7 +536,7 @@ private fun V2RecentSessionList(
 }
 
 @Composable
-private fun V2RecentSessionRowContent(
+private fun RecentSessionRowContent(
   title: String,
   subtitle: String,
   metadata: String,
@@ -580,32 +580,32 @@ private fun V2RecentSessionRowContent(
 }
 
 @Composable
-private fun V2ChatShellScreen(
+private fun ChatShellScreen(
   viewModel: MainViewModel,
   onBack: () -> Unit,
   onVoice: () -> Unit,
 ) {
   ClawScaffold(contentPadding = PaddingValues(start = 0.dp, top = 8.dp, end = 0.dp, bottom = 8.dp)) {
-    V2ChatScreen(viewModel = viewModel, onBack = onBack, onVoice = onVoice)
+    ChatScreen(viewModel = viewModel, onBack = onBack, onVoice = onVoice)
   }
 }
 
 @Composable
-private fun V2VoiceShellScreen(
+private fun VoiceShellScreen(
   viewModel: MainViewModel,
   onOpenCommand: () -> Unit,
   onOpenVoiceSettings: () -> Unit,
 ) {
   ClawScaffold(contentPadding = PaddingValues(start = 0.dp, top = 8.dp, end = 0.dp, bottom = 8.dp)) {
-    V2VoiceScreen(viewModel = viewModel, onOpenCommand = onOpenCommand, onOpenVoiceSettings = onOpenVoiceSettings)
+    VoiceScreen(viewModel = viewModel, onOpenCommand = onOpenCommand, onOpenVoiceSettings = onOpenVoiceSettings)
   }
 }
 
 @Composable
-private fun V2SettingsShellScreen(
+private fun SettingsShellScreen(
   viewModel: MainViewModel,
-  route: V2SettingsRoute,
-  onRouteChange: (V2SettingsRoute) -> Unit,
+  route: SettingsRoute,
+  onRouteChange: (SettingsRoute) -> Unit,
   onRouteBack: () -> Unit,
   onOpenCommand: () -> Unit,
 ) {
@@ -636,12 +636,12 @@ private fun V2SettingsShellScreen(
     }
   }
 
-  BackHandler(enabled = route != V2SettingsRoute.Home) {
+  BackHandler(enabled = route != SettingsRoute.Home) {
     onRouteBack()
   }
 
-  if (route != V2SettingsRoute.Home) {
-    V2SettingsDetailScreen(viewModel = viewModel, route = route, onBack = onRouteBack)
+  if (route != SettingsRoute.Home) {
+    SettingsDetailScreen(viewModel = viewModel, route = route, onBack = onRouteBack)
     return
   }
 
@@ -654,43 +654,43 @@ private fun V2SettingsShellScreen(
           horizontalArrangement = Arrangement.spacedBy(9.dp),
         ) {
           Text(text = "Settings", style = ClawTheme.type.title.copy(fontSize = 16.sp, lineHeight = 20.sp), color = ClawTheme.colors.text, modifier = Modifier.weight(1f))
-          V2SettingsSearchButton(onClick = onOpenCommand)
+          SettingsSearchButton(onClick = onOpenCommand)
         }
       }
 
       item {
-        V2ProfilePanel(displayName = displayName.ifBlank { "OpenClaw" }, onClick = { onRouteChange(V2SettingsRoute.Profile) })
+        ProfilePanel(displayName = displayName.ifBlank { "OpenClaw" }, onClick = { onRouteChange(SettingsRoute.Profile) })
       }
 
       item {
-        V2SettingsGroup(
+        SettingsGroup(
           rows =
             listOf(
-              V2SettingsRow("Profile", displayName.ifBlank { "Local device" }, Icons.Default.Person, route = V2SettingsRoute.Profile),
-              V2SettingsRow("Voice", if (speakerEnabled) "Speaker on" else "Speaker muted", Icons.Default.Mic, route = V2SettingsRoute.Voice),
-              V2SettingsRow("Agents", if (agents.isEmpty()) "Load from gateway" else "${agents.size} available", Icons.Default.Person, status = agents.isNotEmpty(), route = V2SettingsRoute.Agents),
-              V2SettingsRow("Approvals", approvalsSummary(pendingToolCalls.size), Icons.Default.Lock, status = approvalsStatus(pendingToolCalls.size), route = V2SettingsRoute.Approvals),
-              V2SettingsRow("Cron Jobs", cronJobsSummary(cronStatus.jobs), Icons.Outlined.AccessTime, status = if (cronStatus.jobs > 0) cronStatus.enabled else null, route = V2SettingsRoute.CronJobs),
-              V2SettingsRow("Usage", usageSummaryText(usageSummary.providers.size), Icons.Default.Storage, status = if (usageSummary.providers.isNotEmpty()) true else null, route = V2SettingsRoute.Usage),
-              V2SettingsRow("Skills", skillsSummaryText(skillsSummary.skills), Icons.Default.Settings, status = skillsStatus(skillsSummary.skills), route = V2SettingsRoute.Skills),
-              V2SettingsRow("Nodes & Devices", nodesDevicesSummaryText(nodesDevicesSummary), Icons.Default.Cloud, status = nodesDevicesStatus(nodesDevicesSummary), route = V2SettingsRoute.NodesDevices),
-              V2SettingsRow("Channels", channelsSummaryText(channelsSummary), Icons.Default.Notifications, status = channelsStatus(channelsSummary), route = V2SettingsRoute.Channels),
-              V2SettingsRow("Dreaming", dreamingSummaryText(dreamingSummary), Icons.Default.Storage, status = dreamingStatus(dreamingSummary), route = V2SettingsRoute.Dreaming),
-              V2SettingsRow("Canvas", "Screen surface", Icons.AutoMirrored.Filled.ScreenShare, status = isConnected, route = V2SettingsRoute.Canvas),
-              V2SettingsRow("Notifications", if (notificationForwardingEnabled) "Smart delivery" else "Off", Icons.Default.Notifications, route = V2SettingsRoute.Notifications),
-              V2SettingsRow("Phone Capabilities", if (cameraEnabled) "Camera enabled" else "Locked", Icons.Default.Lock, status = !cameraEnabled, route = V2SettingsRoute.PhoneCapabilities),
-              V2SettingsRow("Gateway", gatewaySummary(statusText, isConnected), Icons.Default.Cloud, status = isConnected, route = V2SettingsRoute.Gateway),
-              V2SettingsRow("Appearance", "Dark", Icons.Default.Palette, route = V2SettingsRoute.Appearance),
-              V2SettingsRow("Health", "Diagnostics", Icons.Default.Settings, status = isConnected, route = V2SettingsRoute.Health),
-              V2SettingsRow("About", "Version and update", Icons.Default.Storage, route = V2SettingsRoute.About),
+              SettingsRow("Profile", displayName.ifBlank { "Local device" }, Icons.Default.Person, route = SettingsRoute.Profile),
+              SettingsRow("Voice", if (speakerEnabled) "Speaker on" else "Speaker muted", Icons.Default.Mic, route = SettingsRoute.Voice),
+              SettingsRow("Agents", if (agents.isEmpty()) "Load from gateway" else "${agents.size} available", Icons.Default.Person, status = agents.isNotEmpty(), route = SettingsRoute.Agents),
+              SettingsRow("Approvals", approvalsSummary(pendingToolCalls.size), Icons.Default.Lock, status = approvalsStatus(pendingToolCalls.size), route = SettingsRoute.Approvals),
+              SettingsRow("Cron Jobs", cronJobsSummary(cronStatus.jobs), Icons.Outlined.AccessTime, status = if (cronStatus.jobs > 0) cronStatus.enabled else null, route = SettingsRoute.CronJobs),
+              SettingsRow("Usage", usageSummaryText(usageSummary.providers.size), Icons.Default.Storage, status = if (usageSummary.providers.isNotEmpty()) true else null, route = SettingsRoute.Usage),
+              SettingsRow("Skills", skillsSummaryText(skillsSummary.skills), Icons.Default.Settings, status = skillsStatus(skillsSummary.skills), route = SettingsRoute.Skills),
+              SettingsRow("Nodes & Devices", nodesDevicesSummaryText(nodesDevicesSummary), Icons.Default.Cloud, status = nodesDevicesStatus(nodesDevicesSummary), route = SettingsRoute.NodesDevices),
+              SettingsRow("Channels", channelsSummaryText(channelsSummary), Icons.Default.Notifications, status = channelsStatus(channelsSummary), route = SettingsRoute.Channels),
+              SettingsRow("Dreaming", dreamingSummaryText(dreamingSummary), Icons.Default.Storage, status = dreamingStatus(dreamingSummary), route = SettingsRoute.Dreaming),
+              SettingsRow("Canvas", "Screen surface", Icons.AutoMirrored.Filled.ScreenShare, status = isConnected, route = SettingsRoute.Canvas),
+              SettingsRow("Notifications", if (notificationForwardingEnabled) "Smart delivery" else "Off", Icons.Default.Notifications, route = SettingsRoute.Notifications),
+              SettingsRow("Phone Capabilities", if (cameraEnabled) "Camera enabled" else "Locked", Icons.Default.Lock, status = !cameraEnabled, route = SettingsRoute.PhoneCapabilities),
+              SettingsRow("Gateway", gatewaySummary(statusText, isConnected), Icons.Default.Cloud, status = isConnected, route = SettingsRoute.Gateway),
+              SettingsRow("Appearance", "Dark", Icons.Default.Palette, route = SettingsRoute.Appearance),
+              SettingsRow("Health", "Diagnostics", Icons.Default.Settings, status = isConnected, route = SettingsRoute.Health),
+              SettingsRow("About", "Version and update", Icons.Default.Storage, route = SettingsRoute.About),
             ),
           onOpen = onRouteChange,
         )
       }
 
       item {
-        V2SettingsGroup(
-          rows = listOf(V2SettingsRow("Sign Out", "Disconnect", Icons.AutoMirrored.Filled.ExitToApp)),
+        SettingsGroup(
+          rows = listOf(SettingsRow("Sign Out", "Disconnect", Icons.AutoMirrored.Filled.ExitToApp)),
           onOpen = { },
           onAction = { viewModel.disconnect() },
         )
@@ -802,16 +802,16 @@ private fun dreamingStatus(summary: GatewayDreamingSummary): Boolean? =
     else -> null
   }
 
-private data class V2SettingsRow(
+private data class SettingsRow(
   val title: String,
   val value: String,
   val icon: ImageVector,
   val status: Boolean? = null,
-  val route: V2SettingsRoute? = null,
+  val route: SettingsRoute? = null,
 )
 
 @Composable
-private fun V2ProfilePanel(
+private fun ProfilePanel(
   displayName: String,
   onClick: () -> Unit,
 ) {
@@ -855,15 +855,15 @@ private fun V2ProfilePanel(
 }
 
 @Composable
-private fun V2SettingsGroup(
-  rows: List<V2SettingsRow>,
-  onOpen: (V2SettingsRoute) -> Unit,
+private fun SettingsGroup(
+  rows: List<SettingsRow>,
+  onOpen: (SettingsRoute) -> Unit,
   onAction: (() -> Unit)? = null,
 ) {
   ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
     Column {
       rows.forEachIndexed { index, row ->
-        V2SettingsListRow(
+        SettingsListRow(
           row = row,
           onClick = {
             val rowRoute = row.route
@@ -883,8 +883,8 @@ private fun V2SettingsGroup(
 }
 
 @Composable
-private fun V2SettingsListRow(
-  row: V2SettingsRow,
+private fun SettingsListRow(
+  row: SettingsRow,
   onClick: () -> Unit,
 ) {
   Row(
@@ -918,7 +918,7 @@ private fun V2SettingsListRow(
 }
 
 @Composable
-private fun V2SettingsSearchButton(onClick: () -> Unit) {
+private fun SettingsSearchButton(onClick: () -> Unit) {
   Surface(onClick = onClick, modifier = Modifier.size(ClawTheme.spacing.touchTarget), shape = CircleShape, color = Color.Transparent, contentColor = ClawTheme.colors.text) {
     Box(contentAlignment = Alignment.Center) {
       Icon(imageVector = Icons.Default.Search, contentDescription = "Search settings", modifier = Modifier.size(18.dp))
@@ -927,7 +927,7 @@ private fun V2SettingsSearchButton(onClick: () -> Unit) {
 }
 
 @Composable
-private fun V2PlainIconButton(
+private fun PlainIconButton(
   icon: ImageVector,
   contentDescription: String,
   onClick: () -> Unit,

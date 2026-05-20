@@ -26,7 +26,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
 @Composable
-internal fun V2ChannelsSettingsScreen(
+internal fun ChannelsSettingsScreen(
   viewModel: MainViewModel,
   onBack: () -> Unit,
 ) {
@@ -42,19 +42,19 @@ internal fun V2ChannelsSettingsScreen(
     }
   }
 
-  V2SettingsDetailFrame(
+  SettingsDetailFrame(
     title = "Channels",
     subtitle = "Messaging surfaces connected to this gateway.",
     icon = Icons.Default.Notifications,
     onBack = onBack,
   ) {
-    V2SettingsMetricPanel(
+    SettingsMetricPanel(
       rows =
         listOf(
-          V2SettingsMetric("Channels", channels.size.toString()),
-          V2SettingsMetric("Connected", channels.count { it.connected }.toString()),
-          V2SettingsMetric("Configured", channels.count { it.configured }.toString()),
-          V2SettingsMetric("Issues", channels.count { it.error != null }.toString()),
+          SettingsMetric("Channels", channels.size.toString()),
+          SettingsMetric("Connected", channels.count { it.connected }.toString()),
+          SettingsMetric("Configured", channels.count { it.configured }.toString()),
+          SettingsMetric("Issues", channels.count { it.error != null }.toString()),
         ),
     )
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -87,20 +87,20 @@ internal fun V2ChannelsSettingsScreen(
             Text(text = "Telegram, WhatsApp, email, and other channels appear here after setup.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
           }
         }
-      else -> V2ChannelsPanel(channels = channels)
+      else -> ChannelsPanel(channels = channels)
     }
   }
 }
 
 @Composable
-private fun V2ChannelsPanel(channels: List<GatewayChannelSummary>) {
+private fun ChannelsPanel(channels: List<GatewayChannelSummary>) {
   ClawListPanel(items = channels) { channel ->
-    V2ChannelRow(channel = channel)
+    ChannelRow(channel = channel)
   }
 }
 
 @Composable
-private fun V2ChannelRow(channel: GatewayChannelSummary) {
+private fun ChannelRow(channel: GatewayChannelSummary) {
   ClawDetailRow(
     title = channel.label,
     subtitle = channelSubtitle(channel),

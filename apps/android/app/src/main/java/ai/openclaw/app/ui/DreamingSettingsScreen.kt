@@ -33,7 +33,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
 @Composable
-internal fun V2DreamingSettingsScreen(
+internal fun DreamingSettingsScreen(
   viewModel: MainViewModel,
   onBack: () -> Unit,
 ) {
@@ -48,19 +48,19 @@ internal fun V2DreamingSettingsScreen(
     }
   }
 
-  V2SettingsDetailFrame(
+  SettingsDetailFrame(
     title = "Dreaming",
     subtitle = "Memory consolidation and dream diary.",
     icon = Icons.Default.Storage,
     onBack = onBack,
   ) {
-    V2SettingsMetricPanel(
+    SettingsMetricPanel(
       rows =
         listOf(
-          V2SettingsMetric("Status", if (summary.enabled) "On" else "Off"),
-          V2SettingsMetric("Waiting", summary.shortTermCount.toString()),
-          V2SettingsMetric("Signals", summary.totalSignalCount.toString()),
-          V2SettingsMetric("Next Cycle", formatDreamingNextRun(summary.nextRunAtMs)),
+          SettingsMetric("Status", if (summary.enabled) "On" else "Off"),
+          SettingsMetric("Waiting", summary.shortTermCount.toString()),
+          SettingsMetric("Signals", summary.totalSignalCount.toString()),
+          SettingsMetric("Next Cycle", formatDreamingNextRun(summary.nextRunAtMs)),
         ),
     )
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -81,41 +81,41 @@ internal fun V2DreamingSettingsScreen(
         ClawPanel {
           Text(text = "Connect the gateway to load dreaming.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
         }
-      else -> V2DreamingPanel(summary = summary)
+      else -> DreamingPanel(summary = summary)
     }
   }
 }
 
 @Composable
-private fun V2DreamingPanel(summary: GatewayDreamingSummary) {
+private fun DreamingPanel(summary: GatewayDreamingSummary) {
   Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
     ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
       Column {
-        V2DreamingHealthRow(
+        DreamingHealthRow(
           title = "Memory Store",
           value = if (summary.storeHealthy) "Healthy" else "Needs attention",
           healthy = summary.storeHealthy,
         )
         HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
-        V2DreamingHealthRow(
+        DreamingHealthRow(
           title = "Signal Index",
           value = if (summary.phaseSignalHealthy) "Healthy" else "Needs attention",
           healthy = summary.phaseSignalHealthy,
         )
         HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
-        V2DreamingHealthRow(
+        DreamingHealthRow(
           title = "Promoted",
           value = "${summary.promotedToday} today · ${summary.promotedTotal} total",
           healthy = true,
         )
       }
     }
-    V2DreamDiaryPanel(summary = summary)
+    DreamDiaryPanel(summary = summary)
   }
 }
 
 @Composable
-private fun V2DreamingHealthRow(
+private fun DreamingHealthRow(
   title: String,
   value: String,
   healthy: Boolean,
@@ -132,7 +132,7 @@ private fun V2DreamingHealthRow(
 }
 
 @Composable
-private fun V2DreamDiaryPanel(summary: GatewayDreamingSummary) {
+private fun DreamDiaryPanel(summary: GatewayDreamingSummary) {
   Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
     Text(text = "DIARY", style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
     if (!summary.diaryFound) {
@@ -153,7 +153,7 @@ private fun V2DreamDiaryPanel(summary: GatewayDreamingSummary) {
     ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
       Column {
         summary.diaryEntries.forEachIndexed { index, entry ->
-          V2DreamDiaryRow(entry = entry)
+          DreamDiaryRow(entry = entry)
           if (index != summary.diaryEntries.lastIndex) {
             HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
           }
@@ -164,7 +164,7 @@ private fun V2DreamDiaryPanel(summary: GatewayDreamingSummary) {
 }
 
 @Composable
-private fun V2DreamDiaryRow(entry: GatewayDreamDiaryEntry) {
+private fun DreamDiaryRow(entry: GatewayDreamDiaryEntry) {
   Row(
     modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 7.dp),
     verticalAlignment = Alignment.Top,

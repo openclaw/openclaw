@@ -56,7 +56,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 @Composable
-internal fun V2ProvidersModelsScreen(
+internal fun ProvidersModelsScreen(
   viewModel: MainViewModel,
   onBack: () -> Unit,
   onAddProvider: () -> Unit,
@@ -87,8 +87,8 @@ internal fun V2ProvidersModelsScreen(
               verticalAlignment = Alignment.CenterVertically,
               horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-              V2ProviderHeaderIconButton(icon = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", onClick = onBack)
-              V2ProviderHeaderIconButton(icon = Icons.Default.Add, contentDescription = "Add provider", outlined = true, onClick = onAddProvider)
+              ProviderHeaderIconButton(icon = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", onClick = onBack)
+              ProviderHeaderIconButton(icon = Icons.Default.Add, contentDescription = "Add provider", outlined = true, onClick = onAddProvider)
             }
             Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
               Text(text = "Providers & Models", style = ClawTheme.type.display.copy(fontSize = 14.8.sp, lineHeight = 18.sp), color = ClawTheme.colors.text, maxLines = 1)
@@ -102,7 +102,7 @@ internal fun V2ProvidersModelsScreen(
         }
 
         item {
-          V2ProviderOverviewPanel(
+          ProviderOverviewPanel(
             isConnected = isConnected,
             providerRows = providerRows,
             modelCount = models.size,
@@ -113,22 +113,22 @@ internal fun V2ProvidersModelsScreen(
         }
 
         item {
-          V2ProviderSectionLabel(title = "Provider setup")
+          ProviderSectionLabel(title = "Provider setup")
         }
 
         item {
-          V2ProviderSetupList(rows = setupRows, onSetup = onAddProvider)
+          ProviderSetupList(rows = setupRows, onSetup = onAddProvider)
         }
 
         item {
-          V2ProviderSectionLabel(title = "Connected providers")
+          ProviderSectionLabel(title = "Connected providers")
         }
 
         item {
           if (!isConnected && providerRows.isEmpty()) {
             ClawEmptyState(title = "Gateway offline", body = "Connect your Gateway to load provider readiness and model catalog.")
           } else {
-            V2ProviderList(rows = providerRows, refreshing = refreshing)
+            ProviderList(rows = providerRows, refreshing = refreshing)
           }
         }
 
@@ -141,12 +141,12 @@ internal fun V2ProvidersModelsScreen(
         }
 
         item {
-          V2ProviderSectionLabel(title = "Model catalog")
+          ProviderSectionLabel(title = "Model catalog")
         }
 
         if (modelGroups.isEmpty()) {
           item {
-            V2ModelCatalogEmpty(
+            ModelCatalogEmpty(
               title = if (refreshing) "Loading models" else "No models loaded",
               body = if (isConnected) "Refresh after configuring a provider on the Gateway." else "Connect the Gateway to browse models.",
             )
@@ -154,7 +154,7 @@ internal fun V2ProvidersModelsScreen(
         } else {
           items(modelGroups, key = { it.first }) { entry ->
             val expanded = expandedModelProviders.contains(entry.first)
-            V2ModelGroup(
+            ModelGroup(
               provider = entry.first,
               models = entry.second,
               expanded = expanded,
@@ -170,19 +170,19 @@ internal fun V2ProvidersModelsScreen(
           }
         }
       }
-      V2ProviderAddButton(onClick = onAddProvider, modifier = Modifier.align(Alignment.BottomCenter))
+      ProviderAddButton(onClick = onAddProvider, modifier = Modifier.align(Alignment.BottomCenter))
     }
   }
 }
 
-private data class V2ProviderSetupRow(
+private data class ProviderSetupRow(
   val id: String,
   val name: String,
   val subtitle: String,
   val ready: Boolean,
 )
 
-private data class V2ProviderRow(
+private data class ProviderRow(
   val id: String,
   val name: String,
   val status: String,
@@ -193,12 +193,12 @@ private data class V2ProviderRow(
 private fun providerRows(
   providers: List<GatewayModelProviderSummary>,
   models: List<GatewayModelSummary>,
-): List<V2ProviderRow> {
+): List<ProviderRow> {
   val modelCounts = models.groupingBy { it.provider }.eachCount()
   val authRows =
     providers.map { provider ->
       val ready = modelProviderReady(provider.status)
-      V2ProviderRow(
+      ProviderRow(
         id = provider.id,
         name = provider.displayName,
         status = if (ready) "Ready" else "Needs setup",
@@ -210,7 +210,7 @@ private fun providerRows(
     modelCounts.keys
       .filter { provider -> authRows.none { it.id == provider } }
       .map { provider ->
-        V2ProviderRow(
+        ProviderRow(
           id = provider,
           name = providerDisplayName(provider),
           status = "Ready",
@@ -221,11 +221,11 @@ private fun providerRows(
   return (authRows + missingAuthRows).sortedWith(compareBy(::providerPriority, { it.name.lowercase() }))
 }
 
-private fun providerSetupRows(providerRows: List<V2ProviderRow>): List<V2ProviderSetupRow> {
+private fun providerSetupRows(providerRows: List<ProviderRow>): List<ProviderSetupRow> {
   val byId = providerRows.associateBy { it.id.trim().lowercase() }
   return listOf("openai", "anthropic", "google", "openrouter", "ollama").map { id ->
     val row = byId[id] ?: byId["ollama-local"].takeIf { id == "ollama" }
-    V2ProviderSetupRow(
+    ProviderSetupRow(
       id = id,
       name = providerDisplayName(id),
       subtitle = providerSetupSubtitle(id, row),
@@ -236,7 +236,7 @@ private fun providerSetupRows(providerRows: List<V2ProviderRow>): List<V2Provide
 
 private fun providerSetupSubtitle(
   id: String,
-  row: V2ProviderRow?,
+  row: ProviderRow?,
 ): String =
   when {
     row?.ready == true -> if (row.modelCount > 0) "${row.modelCount} models available" else "Ready"
@@ -257,7 +257,7 @@ private fun sortedModelGroups(models: List<GatewayModelSummary>): List<Pair<Stri
     .sortedWith(compareBy({ providerPriority(it.key) }, { providerDisplayName(it.key).lowercase() }))
     .map { it.key to it.value }
 
-private fun providerPriority(row: V2ProviderRow): Int = providerPriority(row.id)
+private fun providerPriority(row: ProviderRow): Int = providerPriority(row.id)
 
 private fun providerPriority(provider: String): Int =
   when (provider.trim().lowercase()) {
@@ -271,18 +271,18 @@ private fun providerPriority(provider: String): Int =
   }
 
 @Composable
-private fun V2ProviderList(
-  rows: List<V2ProviderRow>,
+private fun ProviderList(
+  rows: List<ProviderRow>,
   refreshing: Boolean,
 ) {
   ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
     Column {
       if (rows.isEmpty()) {
-        V2ProviderListRow(V2ProviderRow(id = "loading", name = "Provider catalog", status = if (refreshing) "Loading" else "No providers", ready = false, modelCount = 0))
+        ProviderListRow(ProviderRow(id = "loading", name = "Provider catalog", status = if (refreshing) "Loading" else "No providers", ready = false, modelCount = 0))
       } else {
         val visibleRows = rows.take(5)
         visibleRows.forEachIndexed { index, row ->
-          V2ProviderListRow(row)
+          ProviderListRow(row)
           if (index != visibleRows.lastIndex) {
             HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
           }
@@ -293,9 +293,9 @@ private fun V2ProviderList(
 }
 
 @Composable
-private fun V2ProviderOverviewPanel(
+private fun ProviderOverviewPanel(
   isConnected: Boolean,
-  providerRows: List<V2ProviderRow>,
+  providerRows: List<ProviderRow>,
   modelCount: Int,
   refreshing: Boolean,
   onRefresh: () -> Unit,
@@ -306,9 +306,9 @@ private fun V2ProviderOverviewPanel(
   ClawPanel(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp)) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
       Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        V2ProviderMetricTile(label = "Ready", value = readyCount.toString(), modifier = Modifier.weight(1f))
-        V2ProviderMetricTile(label = "Models", value = modelCount.toString(), modifier = Modifier.weight(1f))
-        V2ProviderMetricTile(label = "Setup", value = needsSetupCount.toString(), modifier = Modifier.weight(1f))
+        ProviderMetricTile(label = "Ready", value = readyCount.toString(), modifier = Modifier.weight(1f))
+        ProviderMetricTile(label = "Models", value = modelCount.toString(), modifier = Modifier.weight(1f))
+        ProviderMetricTile(label = "Setup", value = needsSetupCount.toString(), modifier = Modifier.weight(1f))
       }
       Text(
         text = if (isConnected) "Choose a provider below, then finish credentials on your Gateway." else "Connect your Gateway before adding model providers.",
@@ -324,7 +324,7 @@ private fun V2ProviderOverviewPanel(
 }
 
 @Composable
-private fun V2ProviderMetricTile(
+private fun ProviderMetricTile(
   label: String,
   value: String,
   modifier: Modifier = Modifier,
@@ -344,14 +344,14 @@ private fun V2ProviderMetricTile(
 }
 
 @Composable
-private fun V2ProviderSetupList(
-  rows: List<V2ProviderSetupRow>,
+private fun ProviderSetupList(
+  rows: List<ProviderSetupRow>,
   onSetup: () -> Unit,
 ) {
   ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
     Column {
       rows.forEachIndexed { index, row ->
-        V2ProviderSetupListRow(row = row, onClick = onSetup)
+        ProviderSetupListRow(row = row, onClick = onSetup)
         if (index != rows.lastIndex) {
           HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
         }
@@ -361,8 +361,8 @@ private fun V2ProviderSetupList(
 }
 
 @Composable
-private fun V2ProviderSetupListRow(
-  row: V2ProviderSetupRow,
+private fun ProviderSetupListRow(
+  row: ProviderSetupRow,
   onClick: () -> Unit,
 ) {
   Surface(onClick = onClick, color = Color.Transparent, contentColor = ClawTheme.colors.text) {
@@ -371,7 +371,7 @@ private fun V2ProviderSetupListRow(
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-      V2ProviderBadge(text = row.name)
+      ProviderBadge(text = row.name)
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
         Text(text = row.name, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1)
         Text(text = row.subtitle, style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -386,9 +386,9 @@ private fun V2ProviderSetupListRow(
 }
 
 @Composable
-private fun V2ProviderListRow(row: V2ProviderRow) {
+private fun ProviderListRow(row: ProviderRow) {
   Row(modifier = Modifier.fillMaxWidth().heightIn(min = 58.dp).padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-    V2ProviderBadge(text = row.name)
+    ProviderBadge(text = row.name)
     Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
       Text(text = row.name, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1)
       Text(text = if (row.modelCount > 0) "${row.modelCount} models" else "Provider setup", style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
@@ -401,7 +401,7 @@ private fun V2ProviderListRow(row: V2ProviderRow) {
 }
 
 @Composable
-private fun V2ProviderBadge(text: String) {
+private fun ProviderBadge(text: String) {
   Surface(modifier = Modifier.size(30.dp), shape = RoundedCornerShape(ClawTheme.radii.row), color = ClawTheme.colors.surfacePressed, border = BorderStroke(1.dp, ClawTheme.colors.border)) {
     Box(contentAlignment = Alignment.Center) {
       Text(text = providerInitials(text), style = ClawTheme.type.label, color = ClawTheme.colors.text, textAlign = TextAlign.Center)
@@ -419,7 +419,7 @@ private fun providerInitials(value: String): String =
     .ifBlank { "AI" }
 
 @Composable
-private fun V2ModelCatalogEmpty(
+private fun ModelCatalogEmpty(
   title: String,
   body: String,
 ) {
@@ -432,7 +432,7 @@ private fun V2ModelCatalogEmpty(
 }
 
 @Composable
-private fun V2ModelGroup(
+private fun ModelGroup(
   provider: String,
   models: List<GatewayModelSummary>,
   expanded: Boolean,
@@ -442,16 +442,16 @@ private fun V2ModelGroup(
     Column {
       Surface(onClick = onToggle, color = Color.Transparent, contentColor = ClawTheme.colors.text) {
         Row(modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp).padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-          V2ProviderBadge(text = providerDisplayName(provider))
+          ProviderBadge(text = providerDisplayName(provider))
           Text(text = providerDisplayName(provider), style = ClawTheme.type.body, color = ClawTheme.colors.text, modifier = Modifier.weight(1f), maxLines = 1)
-          V2ProviderMiniTag(text = "${models.size} models")
+          ProviderMiniTag(text = "${models.size} models")
           Icon(imageVector = if (expanded) Icons.Default.KeyboardArrowDown else Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = if (expanded) "Collapse ${providerDisplayName(provider)} models" else "Expand ${providerDisplayName(provider)} models", modifier = Modifier.size(14.dp), tint = ClawTheme.colors.textMuted)
         }
       }
       HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
       val visibleModels = if (expanded) models else models.take(3)
       visibleModels.forEachIndexed { index, model ->
-        V2ModelRow(model)
+        ModelRow(model)
         if (index != visibleModels.lastIndex || models.size > visibleModels.size) {
           HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
         }
@@ -469,11 +469,11 @@ private fun V2ModelGroup(
 }
 
 @Composable
-private fun V2ModelRow(model: GatewayModelSummary) {
+private fun ModelRow(model: GatewayModelSummary) {
   Row(modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(horizontal = 10.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
     Text(text = model.name, style = ClawTheme.type.mono, color = ClawTheme.colors.text, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
     modelCapabilityLabels(model).take(3).forEach { label ->
-      V2ProviderMiniTag(text = label)
+      ProviderMiniTag(text = label)
     }
     Box(modifier = Modifier.size(4.5.dp).clip(CircleShape).background(ClawTheme.colors.success))
   }
@@ -490,14 +490,14 @@ private fun modelCapabilityLabels(model: GatewayModelSummary): List<String> =
   }
 
 @Composable
-private fun V2ProviderSectionLabel(title: String) {
+private fun ProviderSectionLabel(title: String) {
   Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
     Text(text = title.uppercase(), style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted)
   }
 }
 
 @Composable
-private fun V2ProviderHeaderIconButton(
+private fun ProviderHeaderIconButton(
   icon: ImageVector,
   contentDescription: String,
   outlined: Boolean = false,
@@ -518,7 +518,7 @@ private fun V2ProviderHeaderIconButton(
 }
 
 @Composable
-private fun V2ProviderAddButton(
+private fun ProviderAddButton(
   onClick: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
@@ -542,7 +542,7 @@ private fun V2ProviderAddButton(
 }
 
 @Composable
-private fun V2ProviderMiniTag(text: String) {
+private fun ProviderMiniTag(text: String) {
   Surface(
     shape = RoundedCornerShape(5.dp),
     color = Color.Transparent,

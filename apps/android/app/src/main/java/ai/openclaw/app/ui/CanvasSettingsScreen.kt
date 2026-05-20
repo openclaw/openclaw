@@ -32,7 +32,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
 @Composable
-internal fun V2CanvasSettingsScreen(
+internal fun CanvasSettingsScreen(
   viewModel: MainViewModel,
   onBack: () -> Unit,
 ) {
@@ -50,18 +50,18 @@ internal fun V2CanvasSettingsScreen(
     }
   }
 
-  V2SettingsDetailFrame(
+  SettingsDetailFrame(
     title = "Canvas",
     subtitle = "Current screen output and interactive app surface.",
     icon = Icons.AutoMirrored.Filled.ScreenShare,
     onBack = onBack,
   ) {
-    V2SettingsMetricPanel(
+    SettingsMetricPanel(
       rows =
         listOf(
-          V2SettingsMetric("Connection", if (isConnected) "Online" else "Offline"),
-          V2SettingsMetric("Surface", canvasLabel),
-          V2SettingsMetric("Bridge", if (hasLivePage && hydrated) "Ready" else "Standby"),
+          SettingsMetric("Connection", if (isConnected) "Online" else "Offline"),
+          SettingsMetric("Surface", canvasLabel),
+          SettingsMetric("Bridge", if (hasLivePage && hydrated) "Ready" else "Standby"),
         ),
     )
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -95,7 +95,7 @@ internal fun V2CanvasSettingsScreen(
             if (hasLivePage) {
               CanvasScreen(viewModel = viewModel, visible = true, modifier = Modifier.fillMaxWidth().height(520.dp))
             } else {
-              V2CanvasStandbyPanel(isConnected = isConnected)
+              CanvasStandbyPanel(isConnected = isConnected)
             }
           }
         }
@@ -105,7 +105,7 @@ internal fun V2CanvasSettingsScreen(
 }
 
 @Composable
-private fun V2CanvasStandbyPanel(isConnected: Boolean) {
+private fun CanvasStandbyPanel(isConnected: Boolean) {
   Column(
     modifier = Modifier.fillMaxWidth().height(520.dp).padding(horizontal = 24.dp),
     horizontalAlignment = Alignment.CenterHorizontally,

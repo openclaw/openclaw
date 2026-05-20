@@ -74,7 +74,7 @@ import java.util.Date
 import java.util.Locale
 
 @Composable
-fun V2ChatScreen(
+fun ChatScreen(
   viewModel: MainViewModel,
   onBack: () -> Unit,
   onVoice: () -> Unit,
@@ -147,7 +147,7 @@ fun V2ChatScreen(
         .padding(horizontal = 18.dp, vertical = 6.dp),
     verticalArrangement = Arrangement.spacedBy(5.dp),
   ) {
-    V2ChatHeader(
+    ChatHeader(
       sessionTitle = currentSessionTitle(sessionKey = sessionKey, sessions = sessions),
       thinkingLevel = thinkingLevel,
       healthOk = healthOk,
@@ -160,10 +160,10 @@ fun V2ChatScreen(
     )
 
     errorText?.takeIf { it.isNotBlank() }?.let { error ->
-      V2ChatNotice(title = "Chat needs attention", body = userFacingChatError(error))
+      ChatNotice(title = "Chat needs attention", body = userFacingChatError(error))
     }
 
-    V2ChatMessageList(
+    ChatMessageList(
       messages = messages,
       pendingRunCount = pendingRunCount,
       pendingToolCalls = pendingToolCalls,
@@ -173,7 +173,7 @@ fun V2ChatScreen(
       modifier = Modifier.weight(1f),
     )
 
-    V2ChatComposer(
+    ChatComposer(
       value = input,
       onValueChange = { input = it },
       attachments = attachments,
@@ -187,7 +187,7 @@ fun V2ChatScreen(
       onAbort = viewModel::abortChat,
       onSend = {
         val message = input.trim()
-        if (message.isEmpty() && attachments.isEmpty()) return@V2ChatComposer
+        if (message.isEmpty() && attachments.isEmpty()) return@ChatComposer
         val outgoing =
           attachments.map { attachment ->
             OutgoingAttachment(
@@ -208,7 +208,7 @@ fun V2ChatScreen(
 }
 
 @Composable
-private fun V2ChatHeader(
+private fun ChatHeader(
   sessionTitle: String,
   thinkingLevel: String,
   healthOk: Boolean,
@@ -221,7 +221,7 @@ private fun V2ChatHeader(
     verticalAlignment = Alignment.CenterVertically,
     horizontalArrangement = Arrangement.spacedBy(6.dp),
   ) {
-    V2HeaderIcon(icon = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", onClick = onBack)
+    HeaderIcon(icon = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", onClick = onBack)
 
     Column(
       modifier = Modifier.weight(1f),
@@ -236,7 +236,7 @@ private fun V2ChatHeader(
         overflow = TextOverflow.Ellipsis,
         textAlign = TextAlign.Center,
       )
-      V2ModelPill(
+      ModelPill(
         text =
           when {
             pendingRunCount > 0 -> "Working"
@@ -252,12 +252,12 @@ private fun V2ChatHeader(
       )
     }
 
-    V2HeaderIcon(icon = Icons.Default.Refresh, contentDescription = "Refresh chat", onClick = onMore)
+    HeaderIcon(icon = Icons.Default.Refresh, contentDescription = "Refresh chat", onClick = onMore)
   }
 }
 
 @Composable
-private fun V2ModelPill(
+private fun ModelPill(
   text: String,
   status: ClawStatus,
 ) {
@@ -283,7 +283,7 @@ private fun V2ModelPill(
 }
 
 @Composable
-private fun V2HeaderIcon(
+private fun HeaderIcon(
   icon: androidx.compose.ui.graphics.vector.ImageVector,
   contentDescription: String,
   onClick: () -> Unit,
@@ -302,7 +302,7 @@ private fun V2HeaderIcon(
 }
 
 @Composable
-private fun V2ChatMessageList(
+private fun ChatMessageList(
   messages: List<ChatMessage>,
   pendingRunCount: Int,
   pendingToolCalls: List<ChatPendingToolCall>,
@@ -334,35 +334,35 @@ private fun V2ChatMessageList(
     ) {
       if (!stream.isNullOrEmpty()) {
         item(key = "stream") {
-          V2ChatBubble(role = "assistant", live = true, content = listOf(ChatMessageContent(text = stream)), timestampMs = null)
+          ChatBubble(role = "assistant", live = true, content = listOf(ChatMessageContent(text = stream)), timestampMs = null)
         }
       }
 
       if (pendingToolCalls.isNotEmpty()) {
         item(key = "tools") {
-          V2ToolBubble(toolCalls = pendingToolCalls)
+          ToolBubble(toolCalls = pendingToolCalls)
         }
       }
 
       if (pendingRunCount > 0) {
         item(key = "thinking") {
-          V2ChatThinkingBubble()
+          ChatThinkingBubble()
         }
       }
 
       items(items = displayMessages, key = { it.id }) { message ->
-        V2ChatBubble(role = message.role, live = false, content = message.content, timestampMs = message.timestampMs)
+        ChatBubble(role = message.role, live = false, content = message.content, timestampMs = message.timestampMs)
       }
     }
 
     if (messages.isEmpty() && pendingRunCount == 0 && pendingToolCalls.isEmpty() && stream.isNullOrBlank()) {
-      V2EmptyChatHint(healthOk = healthOk, onStarterPrompt = onStarterPrompt, modifier = Modifier.align(Alignment.Center))
+      EmptyChatHint(healthOk = healthOk, onStarterPrompt = onStarterPrompt, modifier = Modifier.align(Alignment.Center))
     }
   }
 }
 
 @Composable
-private fun V2EmptyChatHint(
+private fun EmptyChatHint(
   healthOk: Boolean,
   onStarterPrompt: (String) -> Unit,
   modifier: Modifier = Modifier,
@@ -387,17 +387,17 @@ private fun V2EmptyChatHint(
       )
     }
     if (healthOk) {
-      V2StarterPromptList(onStarterPrompt = onStarterPrompt)
+      StarterPromptList(onStarterPrompt = onStarterPrompt)
     }
   }
 }
 
 @Composable
-private fun V2StarterPromptList(onStarterPrompt: (String) -> Unit) {
+private fun StarterPromptList(onStarterPrompt: (String) -> Unit) {
   ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
     Column {
       starterPrompts.forEachIndexed { index, prompt ->
-        V2StarterPromptRow(prompt = prompt, onClick = { onStarterPrompt(prompt.message) })
+        StarterPromptRow(prompt = prompt, onClick = { onStarterPrompt(prompt.message) })
         if (index != starterPrompts.lastIndex) {
           HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
         }
@@ -407,8 +407,8 @@ private fun V2StarterPromptList(onStarterPrompt: (String) -> Unit) {
 }
 
 @Composable
-private fun V2StarterPromptRow(
-  prompt: V2StarterPrompt,
+private fun StarterPromptRow(
+  prompt: StarterPrompt,
   onClick: () -> Unit,
 ) {
   Surface(onClick = onClick, color = Color.Transparent, contentColor = ClawTheme.colors.text) {
@@ -434,7 +434,7 @@ private fun V2StarterPromptRow(
   }
 }
 
-private data class V2StarterPrompt(
+private data class StarterPrompt(
   val mark: String,
   val title: String,
   val subtitle: String,
@@ -443,13 +443,13 @@ private data class V2StarterPrompt(
 
 private val starterPrompts =
   listOf(
-    V2StarterPrompt(mark = "1", title = "Catch me up", subtitle = "Summarize recent sessions and next steps.", message = "Catch me up on my recent OpenClaw sessions and suggest next steps."),
-    V2StarterPrompt(mark = "2", title = "Plan the work", subtitle = "Turn a goal into an actionable checklist.", message = "Help me turn this goal into a practical checklist: "),
-    V2StarterPrompt(mark = "3", title = "Use this phone", subtitle = "Ask OpenClaw to use Android capabilities.", message = "What can you help me do from this phone right now?"),
+    StarterPrompt(mark = "1", title = "Catch me up", subtitle = "Summarize recent sessions and next steps.", message = "Catch me up on my recent OpenClaw sessions and suggest next steps."),
+    StarterPrompt(mark = "2", title = "Plan the work", subtitle = "Turn a goal into an actionable checklist.", message = "Help me turn this goal into a practical checklist: "),
+    StarterPrompt(mark = "3", title = "Use this phone", subtitle = "Ask OpenClaw to use Android capabilities.", message = "What can you help me do from this phone right now?"),
   )
 
 @Composable
-private fun V2ChatBubble(
+private fun ChatBubble(
   role: String,
   live: Boolean,
   content: List<ChatMessageContent>,
@@ -491,7 +491,7 @@ private fun V2ChatBubble(
         )
         displayableContent.forEach { part ->
           if (part.type == "text") {
-            V2ChatText(text = part.text.orEmpty(), textColor = ClawTheme.colors.text)
+            ChatText(text = part.text.orEmpty(), textColor = ClawTheme.colors.text)
           } else {
             Text(text = part.fileName ?: "Attachment", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
           }
@@ -510,7 +510,7 @@ private fun V2ChatBubble(
 }
 
 @Composable
-private fun V2ChatText(
+private fun ChatText(
   text: String,
   textColor: Color,
 ) {
@@ -526,7 +526,7 @@ private fun V2ChatText(
 }
 
 @Composable
-private fun V2ToolBubble(toolCalls: List<ChatPendingToolCall>) {
+private fun ToolBubble(toolCalls: List<ChatPendingToolCall>) {
   ClawPanel {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
       ClawStatusPill(text = "Tools running", status = ClawStatus.Warning)
@@ -541,7 +541,7 @@ private fun V2ToolBubble(toolCalls: List<ChatPendingToolCall>) {
 }
 
 @Composable
-private fun V2ChatThinkingBubble() {
+private fun ChatThinkingBubble() {
   ClawPanel {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
       ClawStatusPill(text = "Thinking", status = ClawStatus.Warning)
@@ -551,7 +551,7 @@ private fun V2ChatThinkingBubble() {
 }
 
 @Composable
-private fun V2ChatNotice(
+private fun ChatNotice(
   title: String,
   body: String,
 ) {
@@ -577,7 +577,7 @@ private fun V2ChatNotice(
 }
 
 @Composable
-private fun V2ChatComposer(
+private fun ChatComposer(
   value: String,
   onValueChange: (String) -> Unit,
   attachments: List<PendingImageAttachment>,
@@ -593,14 +593,14 @@ private fun V2ChatComposer(
 ) {
   Column(modifier = Modifier.fillMaxWidth().imePadding(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
     if (attachments.isNotEmpty()) {
-      V2AttachmentStrip(attachments = attachments, onRemoveAttachment = onRemoveAttachment)
+      AttachmentStrip(attachments = attachments, onRemoveAttachment = onRemoveAttachment)
     }
 
-    V2ChatContextMeter(thinkingLevel = thinkingLevel, onClick = { onThinkingLevelChange(nextThinkingValue(thinkingLevel)) })
+    ChatContextMeter(thinkingLevel = thinkingLevel, onClick = { onThinkingLevelChange(nextThinkingValue(thinkingLevel)) })
 
     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-      V2ChatInputPill(value = value, onValueChange = onValueChange, onPickImages = onPickImages, onVoice = onVoice, modifier = Modifier.weight(1f))
-      V2SendButton(
+      ChatInputPill(value = value, onValueChange = onValueChange, onPickImages = onPickImages, onVoice = onVoice, modifier = Modifier.weight(1f))
+      SendButton(
         enabled = healthOk && pendingRunCount == 0 && (value.trim().isNotEmpty() || attachments.isNotEmpty()),
         onClick = onSend,
       )
@@ -630,7 +630,7 @@ private fun V2ChatComposer(
 }
 
 @Composable
-private fun V2ChatContextMeter(
+private fun ChatContextMeter(
   thinkingLevel: String,
   onClick: () -> Unit,
 ) {
@@ -674,7 +674,7 @@ private fun V2ChatContextMeter(
 }
 
 @Composable
-private fun V2ChatInputPill(
+private fun ChatInputPill(
   value: String,
   onValueChange: (String) -> Unit,
   onPickImages: () -> Unit,
@@ -733,19 +733,19 @@ private fun V2ChatInputPill(
 }
 
 @Composable
-private fun V2AttachmentStrip(
+private fun AttachmentStrip(
   attachments: List<PendingImageAttachment>,
   onRemoveAttachment: (String) -> Unit,
 ) {
   Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
     attachments.forEach { attachment ->
-      V2AttachmentChip(fileName = attachment.fileName, onRemove = { onRemoveAttachment(attachment.id) })
+      AttachmentChip(fileName = attachment.fileName, onRemove = { onRemoveAttachment(attachment.id) })
     }
   }
 }
 
 @Composable
-private fun V2AttachmentChip(
+private fun AttachmentChip(
   fileName: String,
   onRemove: () -> Unit,
 ) {
@@ -780,7 +780,7 @@ private fun currentSessionTitle(
 }
 
 @Composable
-private fun V2SendButton(
+private fun SendButton(
   enabled: Boolean,
   onClick: () -> Unit,
 ) {

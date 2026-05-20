@@ -53,7 +53,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 @Composable
-internal fun V2SessionsScreen(
+internal fun SessionsScreen(
   viewModel: MainViewModel,
   onOpenCommand: () -> Unit,
   onOpenChat: () -> Unit,
@@ -61,15 +61,15 @@ internal fun V2SessionsScreen(
   val sessions by viewModel.chatSessions.collectAsState()
   val chatSessionKey by viewModel.chatSessionKey.collectAsState()
   val isConnected by viewModel.isConnected.collectAsState()
-  var filter by rememberSaveable { mutableStateOf(V2SessionFilter.Recent) }
+  var filter by rememberSaveable { mutableStateOf(SessionFilter.Recent) }
   var compactLayout by rememberSaveable { mutableStateOf(false) }
   var recentFirst by rememberSaveable { mutableStateOf(true) }
   val visibleSessions =
     sessions
       .let { rows ->
         when (filter) {
-          V2SessionFilter.Recent -> rows
-          V2SessionFilter.Live -> rows.filter { it.key == chatSessionKey }
+          SessionFilter.Recent -> rows
+          SessionFilter.Live -> rows.filter { it.key == chatSessionKey }
         }
       }.let { rows ->
         if (recentFirst) {
@@ -94,15 +94,15 @@ internal fun V2SessionsScreen(
           horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
           Text(text = "Sessions", style = ClawTheme.type.display.copy(fontSize = 17.4.sp, lineHeight = 21.sp), color = ClawTheme.colors.text, modifier = Modifier.weight(1f))
-          V2SessionPlainIconButton(icon = Icons.Default.Search, contentDescription = "Search sessions", onClick = onOpenCommand)
-          V2SessionPlainIconButton(icon = Icons.Default.SwapVert, contentDescription = "Reverse session sort", onClick = { recentFirst = !recentFirst })
+          SessionPlainIconButton(icon = Icons.Default.Search, contentDescription = "Search sessions", onClick = onOpenCommand)
+          SessionPlainIconButton(icon = Icons.Default.SwapVert, contentDescription = "Reverse session sort", onClick = { recentFirst = !recentFirst })
         }
       }
 
       item {
         Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-          V2FilterPill(text = "Recent", icon = Icons.Outlined.AccessTime, active = filter == V2SessionFilter.Recent, onClick = { filter = V2SessionFilter.Recent })
-          V2FilterPill(text = "Live", icon = Icons.Outlined.MicNone, active = filter == V2SessionFilter.Live, live = sessions.any { it.key == chatSessionKey }, onClick = { filter = V2SessionFilter.Live })
+          FilterPill(text = "Recent", icon = Icons.Outlined.AccessTime, active = filter == SessionFilter.Recent, onClick = { filter = SessionFilter.Recent })
+          FilterPill(text = "Live", icon = Icons.Outlined.MicNone, active = filter == SessionFilter.Live, live = sessions.any { it.key == chatSessionKey }, onClick = { filter = SessionFilter.Live })
         }
       }
 
@@ -120,7 +120,7 @@ internal fun V2SessionsScreen(
             Text(text = "Sort: ${if (recentFirst) "Newest" else "Oldest"}", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
             Icon(imageVector = Icons.Default.KeyboardArrowDown, contentDescription = null, modifier = Modifier.size(11.dp), tint = ClawTheme.colors.textMuted)
           }
-          V2SessionOutlineIconButton(icon = Icons.Default.Storage, contentDescription = "Toggle session layout", onClick = { compactLayout = !compactLayout })
+          SessionOutlineIconButton(icon = Icons.Default.Storage, contentDescription = "Toggle session layout", onClick = { compactLayout = !compactLayout })
         }
       }
 
@@ -139,7 +139,7 @@ internal fun V2SessionsScreen(
       } else {
         items(visibleSessions, key = { it.key }) { session ->
           val active = session.key == chatSessionKey
-          V2SessionRow(
+          SessionRow(
             title = displaySessionTitle(session.displayName),
             subtitle = if (active) "Current session" else "OpenClaw session",
             metadata = session.updatedAtMs?.let(::relativeSessionTime) ?: "now",
@@ -161,7 +161,7 @@ internal fun V2SessionsScreen(
 }
 
 @Composable
-private fun V2FilterPill(
+private fun FilterPill(
   text: String,
   icon: ImageVector? = null,
   active: Boolean = false,
@@ -195,7 +195,7 @@ private fun V2FilterPill(
 }
 
 @Composable
-private fun V2SessionRow(
+private fun SessionRow(
   title: String,
   subtitle: String,
   metadata: String,
@@ -243,8 +243,8 @@ private fun V2SessionRow(
           if (!compact) {
             Text(text = subtitle, style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-              V2SessionMiniTag(text = "Workspace")
-              V2SessionMiniTag(text = if (active) "Active" else "OpenClaw")
+              SessionMiniTag(text = "Workspace")
+              SessionMiniTag(text = if (active) "Active" else "OpenClaw")
             }
           }
         }
@@ -260,7 +260,7 @@ private fun V2SessionRow(
 }
 
 @Composable
-private fun V2SessionPlainIconButton(
+private fun SessionPlainIconButton(
   icon: ImageVector,
   contentDescription: String,
   onClick: () -> Unit,
@@ -273,7 +273,7 @@ private fun V2SessionPlainIconButton(
 }
 
 @Composable
-private fun V2SessionOutlineIconButton(
+private fun SessionOutlineIconButton(
   icon: ImageVector,
   contentDescription: String,
   onClick: () -> Unit,
@@ -293,7 +293,7 @@ private fun V2SessionOutlineIconButton(
 }
 
 @Composable
-private fun V2SessionMiniTag(text: String) {
+private fun SessionMiniTag(text: String) {
   Surface(
     shape = RoundedCornerShape(5.dp),
     color = Color.Transparent,
@@ -304,21 +304,21 @@ private fun V2SessionMiniTag(text: String) {
   }
 }
 
-private enum class V2SessionFilter {
+private enum class SessionFilter {
   Recent,
   Live,
 }
 
-private fun emptySessionTitle(filter: V2SessionFilter): String =
+private fun emptySessionTitle(filter: SessionFilter): String =
   when (filter) {
-    V2SessionFilter.Recent -> "No sessions yet"
-    V2SessionFilter.Live -> "No live session"
+    SessionFilter.Recent -> "No sessions yet"
+    SessionFilter.Live -> "No live session"
   }
 
-private fun emptySessionBody(filter: V2SessionFilter): String =
+private fun emptySessionBody(filter: SessionFilter): String =
   when (filter) {
-    V2SessionFilter.Recent -> "Start a new conversation and it will show up here."
-    V2SessionFilter.Live -> "Open Chat to start or resume the current session."
+    SessionFilter.Recent -> "Start a new conversation and it will show up here."
+    SessionFilter.Live -> "Open Chat to start or resume the current session."
   }
 
 private fun relativeSessionTime(updatedAtMs: Long): String {

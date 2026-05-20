@@ -91,7 +91,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 
-internal enum class V2SettingsRoute {
+internal enum class SettingsRoute {
   Home,
   Profile,
   Voice,
@@ -113,35 +113,35 @@ internal enum class V2SettingsRoute {
 }
 
 @Composable
-internal fun V2SettingsDetailScreen(
+internal fun SettingsDetailScreen(
   viewModel: MainViewModel,
-  route: V2SettingsRoute,
+  route: SettingsRoute,
   onBack: () -> Unit,
 ) {
   when (route) {
-    V2SettingsRoute.Home -> Unit
-    V2SettingsRoute.Profile -> V2ProfileSettingsScreen(viewModel = viewModel, onBack = onBack)
-    V2SettingsRoute.Voice -> V2VoiceSettingsScreen(viewModel = viewModel, onBack = onBack)
-    V2SettingsRoute.Agents -> V2AgentsSettingsScreen(viewModel = viewModel, onBack = onBack)
-    V2SettingsRoute.Approvals -> V2ApprovalsSettingsScreen(viewModel = viewModel, onBack = onBack)
-    V2SettingsRoute.CronJobs -> V2CronJobsSettingsScreen(viewModel = viewModel, onBack = onBack)
-    V2SettingsRoute.Usage -> V2UsageSettingsScreen(viewModel = viewModel, onBack = onBack)
-    V2SettingsRoute.Skills -> V2SkillsSettingsScreen(viewModel = viewModel, onBack = onBack)
-    V2SettingsRoute.NodesDevices -> V2NodesDevicesSettingsScreen(viewModel = viewModel, onBack = onBack)
-    V2SettingsRoute.Channels -> V2ChannelsSettingsScreen(viewModel = viewModel, onBack = onBack)
-    V2SettingsRoute.Dreaming -> V2DreamingSettingsScreen(viewModel = viewModel, onBack = onBack)
-    V2SettingsRoute.Canvas -> V2CanvasSettingsScreen(viewModel = viewModel, onBack = onBack)
-    V2SettingsRoute.Notifications -> V2NotificationSettingsScreen(viewModel = viewModel, onBack = onBack)
-    V2SettingsRoute.PhoneCapabilities -> V2PhoneCapabilitiesScreen(viewModel = viewModel, onBack = onBack)
-    V2SettingsRoute.Gateway -> V2GatewaySettingsScreen(viewModel = viewModel, onBack = onBack)
-    V2SettingsRoute.Appearance -> V2AppearanceSettingsScreen(onBack = onBack)
-    V2SettingsRoute.Health -> V2HealthLogsSettingsScreen(viewModel = viewModel, onBack = onBack)
-    V2SettingsRoute.About -> V2AboutSettingsScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.Home -> Unit
+    SettingsRoute.Profile -> ProfileSettingsScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.Voice -> VoiceSettingsScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.Agents -> AgentsSettingsScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.Approvals -> ApprovalsSettingsScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.CronJobs -> CronJobsSettingsScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.Usage -> UsageSettingsScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.Skills -> SkillsSettingsScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.NodesDevices -> NodesDevicesSettingsScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.Channels -> ChannelsSettingsScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.Dreaming -> DreamingSettingsScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.Canvas -> CanvasSettingsScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.Notifications -> NotificationSettingsScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.PhoneCapabilities -> PhoneCapabilitiesScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.Gateway -> GatewaySettingsScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.Appearance -> AppearanceSettingsScreen(onBack = onBack)
+    SettingsRoute.Health -> HealthLogsSettingsScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.About -> AboutSettingsScreen(viewModel = viewModel, onBack = onBack)
   }
 }
 
 @Composable
-private fun V2UsageSettingsScreen(
+private fun UsageSettingsScreen(
   viewModel: MainViewModel,
   onBack: () -> Unit,
 ) {
@@ -158,13 +158,13 @@ private fun V2UsageSettingsScreen(
     }
   }
 
-  V2SettingsDetailFrame(title = "Usage", subtitle = "Provider limits and quota health.", icon = Icons.Default.Storage, onBack = onBack) {
-    V2SettingsMetricPanel(
+  SettingsDetailFrame(title = "Usage", subtitle = "Provider limits and quota health.", icon = Icons.Default.Storage, onBack = onBack) {
+    SettingsMetricPanel(
       rows =
         listOf(
-          V2SettingsMetric("Providers", providerCount.toString()),
-          V2SettingsMetric("Issues", issueCount.toString()),
-          V2SettingsMetric("Updated", formatUsageUpdated(usageSummary.updatedAtMs)),
+          SettingsMetric("Providers", providerCount.toString()),
+          SettingsMetric("Issues", issueCount.toString()),
+          SettingsMetric("Updated", formatUsageUpdated(usageSummary.updatedAtMs)),
         ),
     )
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -187,13 +187,13 @@ private fun V2UsageSettingsScreen(
             Text(text = "Provider limits will appear here when your gateway reports them.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
           }
         }
-      else -> V2UsageProvidersPanel(providers = usageSummary.providers)
+      else -> UsageProvidersPanel(providers = usageSummary.providers)
     }
   }
 }
 
 @Composable
-private fun V2CronJobsSettingsScreen(
+private fun CronJobsSettingsScreen(
   viewModel: MainViewModel,
   onBack: () -> Unit,
 ) {
@@ -215,13 +215,13 @@ private fun V2CronJobsSettingsScreen(
     }
   }
 
-  V2SettingsDetailFrame(title = "Cron Jobs", subtitle = "Scheduled OpenClaw work from your gateway.", icon = Icons.Default.Bolt, onBack = onBack) {
-    V2SettingsMetricPanel(
+  SettingsDetailFrame(title = "Cron Jobs", subtitle = "Scheduled OpenClaw work from your gateway.", icon = Icons.Default.Bolt, onBack = onBack) {
+    SettingsMetricPanel(
       rows =
         listOf(
-          V2SettingsMetric("Status", if (cronStatus.enabled) "Enabled" else "Off"),
-          V2SettingsMetric("Jobs", cronStatus.jobs.toString()),
-          V2SettingsMetric("Next Wake", formatCronWake(cronStatus.nextWakeAtMs)),
+          SettingsMetric("Status", if (cronStatus.enabled) "Enabled" else "Off"),
+          SettingsMetric("Jobs", cronStatus.jobs.toString()),
+          SettingsMetric("Next Wake", formatCronWake(cronStatus.nextWakeAtMs)),
         ),
     )
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -229,7 +229,7 @@ private fun V2CronJobsSettingsScreen(
       ClawPrimaryButton(text = if (showEditor) "Close" else "New Job", onClick = { showEditor = !showEditor }, enabled = isConnected, modifier = Modifier.weight(1f))
     }
     if (showEditor) {
-      V2CronJobEditorPanel(
+      CronJobEditorPanel(
         name = jobName,
         onNameChange = { jobName = it },
         message = jobMessage,
@@ -274,13 +274,13 @@ private fun V2CronJobsSettingsScreen(
             Text(text = "Create recurring OpenClaw work here or from the WebUI.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
           }
         }
-      else -> V2CronJobsPanel(jobs = cronJobs)
+      else -> CronJobsPanel(jobs = cronJobs)
     }
   }
 }
 
 @Composable
-private fun V2CronJobEditorPanel(
+private fun CronJobEditorPanel(
   name: String,
   onNameChange: (String) -> Unit,
   message: String,
@@ -318,7 +318,7 @@ private fun cronSchedulePlaceholder(scheduleKind: String): String =
   }
 
 @Composable
-private fun V2AgentsSettingsScreen(
+private fun AgentsSettingsScreen(
   viewModel: MainViewModel,
   onBack: () -> Unit,
 ) {
@@ -332,12 +332,12 @@ private fun V2AgentsSettingsScreen(
     }
   }
 
-  V2SettingsDetailFrame(title = "Agents", subtitle = "Choose and inspect the assistants available on this gateway.", icon = Icons.Default.Person, onBack = onBack) {
-    V2SettingsMetricPanel(
+  SettingsDetailFrame(title = "Agents", subtitle = "Choose and inspect the assistants available on this gateway.", icon = Icons.Default.Person, onBack = onBack) {
+    SettingsMetricPanel(
       rows =
         listOf(
-          V2SettingsMetric("Available", agents.size.toString()),
-          V2SettingsMetric("Default", defaultAgentName(agents, defaultAgentId)),
+          SettingsMetric("Available", agents.size.toString()),
+          SettingsMetric("Default", defaultAgentName(agents, defaultAgentId)),
         ),
     )
     when {
@@ -349,13 +349,13 @@ private fun V2AgentsSettingsScreen(
         ClawPanel {
           Text(text = "No agents loaded yet.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
         }
-      else -> V2AgentsPanel(agents = agents, defaultAgentId = defaultAgentId)
+      else -> AgentsPanel(agents = agents, defaultAgentId = defaultAgentId)
     }
   }
 }
 
 @Composable
-private fun V2ApprovalsSettingsScreen(
+private fun ApprovalsSettingsScreen(
   viewModel: MainViewModel,
   onBack: () -> Unit,
 ) {
@@ -364,13 +364,13 @@ private fun V2ApprovalsSettingsScreen(
   val waitingCount = pendingToolCalls.count { it.isError != true }
   val issueCount = pendingToolCalls.count { it.isError == true }
 
-  V2SettingsDetailFrame(title = "Approvals", subtitle = "Review actions that need your attention.", icon = Icons.Default.Lock, onBack = onBack) {
-    V2SettingsMetricPanel(
+  SettingsDetailFrame(title = "Approvals", subtitle = "Review actions that need your attention.", icon = Icons.Default.Lock, onBack = onBack) {
+    SettingsMetricPanel(
       rows =
         listOf(
-          V2SettingsMetric("Pending", waitingCount.toString()),
-          V2SettingsMetric("Issues", issueCount.toString()),
-          V2SettingsMetric("Active Runs", pendingRunCount.toString()),
+          SettingsMetric("Pending", waitingCount.toString()),
+          SettingsMetric("Issues", issueCount.toString()),
+          SettingsMetric("Active Runs", pendingRunCount.toString()),
         ),
     )
     if (pendingToolCalls.isEmpty()) {
@@ -381,20 +381,20 @@ private fun V2ApprovalsSettingsScreen(
         }
       }
     } else {
-      V2ApprovalsPanel(toolCalls = pendingToolCalls)
+      ApprovalsPanel(toolCalls = pendingToolCalls)
     }
   }
 }
 
 @Composable
-private fun V2ProfileSettingsScreen(
+private fun ProfileSettingsScreen(
   viewModel: MainViewModel,
   onBack: () -> Unit,
 ) {
   val displayName by viewModel.displayName.collectAsState()
   var draft by remember(displayName) { mutableStateOf(displayName.ifBlank { "OpenClaw" }) }
 
-  V2SettingsDetailFrame(title = "Profile", subtitle = "How this phone appears to OpenClaw.", icon = Icons.Default.Person, onBack = onBack) {
+  SettingsDetailFrame(title = "Profile", subtitle = "How this phone appears to OpenClaw.", icon = Icons.Default.Person, onBack = onBack) {
     ClawPanel {
       Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
         ClawTextField(value = draft, onValueChange = { draft = it }, placeholder = "Device name")
@@ -405,7 +405,7 @@ private fun V2ProfileSettingsScreen(
 }
 
 @Composable
-private fun V2VoiceSettingsScreen(
+private fun VoiceSettingsScreen(
   viewModel: MainViewModel,
   onBack: () -> Unit,
 ) {
@@ -413,15 +413,15 @@ private fun V2VoiceSettingsScreen(
   val micEnabled by viewModel.micEnabled.collectAsState()
   val talkModeEnabled by viewModel.talkModeEnabled.collectAsState()
 
-  V2SettingsDetailFrame(title = "Talk Provider Setup", subtitle = "Configure voice, transport, and playback.", icon = Icons.Default.Mic, onBack = onBack) {
+  SettingsDetailFrame(title = "Talk Provider Setup", subtitle = "Configure voice, transport, and playback.", icon = Icons.Default.Mic, onBack = onBack) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-      V2VoiceSetupPanel(
+      VoiceSetupPanel(
         voiceActive = micEnabled || talkModeEnabled,
       )
       Text(text = "Audio Test", style = ClawTheme.type.section, color = ClawTheme.colors.text)
       Text(text = "Check that OpenClaw can speak clearly on this phone.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-      V2SettingsWaveformPanel(active = speakerEnabled, onClick = ::playVoiceSetupTone)
-      V2VoiceSetupActionRow(
+      SettingsWaveformPanel(active = speakerEnabled, onClick = ::playVoiceSetupTone)
+      VoiceSetupActionRow(
         title = if (speakerEnabled) "Mute speaker" else "Enable speaker",
         subtitle = if (speakerEnabled) "Replies play aloud" else "Assistant speech muted",
         icon = Icons.AutoMirrored.Filled.VolumeUp,
@@ -435,25 +435,25 @@ private fun V2VoiceSettingsScreen(
 }
 
 @Composable
-private fun V2VoiceSetupPanel(
+private fun VoiceSetupPanel(
   voiceActive: Boolean,
 ) {
   Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
-    V2VoiceSetupActionRow(
+    VoiceSetupActionRow(
       title = "Realtime Provider",
       subtitle = "Gateway voice relay",
       icon = Icons.Default.GraphicEq,
       statusText = if (voiceActive) "Live" else "Ready",
       ready = true,
     )
-    V2VoiceSetupActionRow(
+    VoiceSetupActionRow(
       title = "Voice",
       subtitle = "Voice input",
       icon = Icons.Default.Mic,
       statusText = "Configured",
       ready = true,
     )
-    V2VoiceSetupActionRow(
+    VoiceSetupActionRow(
       title = "Transport",
       subtitle = "Socket relay",
       icon = Icons.Default.Bolt,
@@ -464,7 +464,7 @@ private fun V2VoiceSetupPanel(
 }
 
 @Composable
-private fun V2VoiceSetupActionRow(
+private fun VoiceSetupActionRow(
   title: String,
   subtitle: String,
   icon: ImageVector,
@@ -519,7 +519,7 @@ private fun V2VoiceSetupActionRow(
 }
 
 @Composable
-private fun V2SettingsWaveformPanel(
+private fun SettingsWaveformPanel(
   active: Boolean,
   onClick: () -> Unit,
 ) {
@@ -558,7 +558,7 @@ private fun playVoiceSetupTone() {
 }
 
 @Composable
-private fun V2NotificationSettingsScreen(
+private fun NotificationSettingsScreen(
   viewModel: MainViewModel,
   onBack: () -> Unit,
 ) {
@@ -582,7 +582,7 @@ private fun V2NotificationSettingsScreen(
       viewModel.setNotificationForwardingEnabled(false)
       return
     }
-    if (Build.VERSION.SDK_INT >= 33 && !hasV2Permission(context, Manifest.permission.POST_NOTIFICATIONS)) {
+    if (Build.VERSION.SDK_INT >= 33 && !hasPermission(context, Manifest.permission.POST_NOTIFICATIONS)) {
       notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
     } else {
       viewModel.setNotificationForwardingEnabled(true)
@@ -590,30 +590,30 @@ private fun V2NotificationSettingsScreen(
     listenerEnabled = DeviceNotificationListenerService.isAccessEnabled(context)
   }
 
-  V2SettingsDetailFrame(title = "Notifications", subtitle = "Choose what reaches OpenClaw.", icon = Icons.Default.Notifications, onBack = onBack) {
-    V2SettingsTogglePanel(
+  SettingsDetailFrame(title = "Notifications", subtitle = "Choose what reaches OpenClaw.", icon = Icons.Default.Notifications, onBack = onBack) {
+    SettingsTogglePanel(
       rows =
         listOf(
-          V2SettingsToggleRow("Forward Notifications", if (enabled) "OpenClaw can receive selected alerts." else "Alerts stay on this phone.", Icons.Default.Notifications, enabled, ::setForwarding),
-          V2SettingsToggleRow("Quiet Hours", "$quietStart to $quietEnd", Icons.Default.Bolt, quietEnabled) { checked ->
+          SettingsToggleRow("Forward Notifications", if (enabled) "OpenClaw can receive selected alerts." else "Alerts stay on this phone.", Icons.Default.Notifications, enabled, ::setForwarding),
+          SettingsToggleRow("Quiet Hours", "$quietStart to $quietEnd", Icons.Default.Bolt, quietEnabled) { checked ->
             viewModel.setNotificationForwardingQuietHours(enabled = checked, start = quietStart, end = quietEnd)
           },
         ),
     )
-    V2SettingsMetricPanel(
+    SettingsMetricPanel(
       rows =
         listOf(
-          V2SettingsMetric("Policy", modeLabel),
-          V2SettingsMetric("Selected Apps", packages.size.toString()),
-          V2SettingsMetric("Rate Limit", "$maxEventsPerMinute/min"),
-          V2SettingsMetric("Access", if (listenerEnabled) "Granted" else "Setup"),
+          SettingsMetric("Policy", modeLabel),
+          SettingsMetric("Selected Apps", packages.size.toString()),
+          SettingsMetric("Rate Limit", "$maxEventsPerMinute/min"),
+          SettingsMetric("Access", if (listenerEnabled) "Granted" else "Setup"),
         ),
     )
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
       ClawSecondaryButton(
         text = if (listenerEnabled) "Check Access" else "Open System Access",
         onClick = {
-          openV2NotificationListenerSettings(context)
+          openNotificationListenerSettings(context)
           listenerEnabled = DeviceNotificationListenerService.isAccessEnabled(context)
         },
         modifier = Modifier.weight(1f),
@@ -635,7 +635,7 @@ private fun V2NotificationSettingsScreen(
 }
 
 @Composable
-private fun V2PhoneCapabilitiesScreen(
+private fun PhoneCapabilitiesScreen(
   viewModel: MainViewModel,
   onBack: () -> Unit,
 ) {
@@ -661,7 +661,7 @@ private fun V2PhoneCapabilitiesScreen(
       viewModel.setCameraEnabled(false)
       return
     }
-    if (hasV2Permission(context, Manifest.permission.CAMERA)) {
+    if (hasPermission(context, Manifest.permission.CAMERA)) {
       viewModel.setCameraEnabled(true)
     } else {
       cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
@@ -673,7 +673,7 @@ private fun V2PhoneCapabilitiesScreen(
       viewModel.setLocationMode(LocationMode.Off)
       return
     }
-    if (hasV2LocationPermission(context)) {
+    if (hasLocationPermission(context)) {
       viewModel.setLocationMode(LocationMode.WhileUsing)
     } else {
       locationPermissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
@@ -685,7 +685,7 @@ private fun V2PhoneCapabilitiesScreen(
       viewModel.setLocationPreciseEnabled(false)
       return
     }
-    if (hasV2Permission(context, Manifest.permission.ACCESS_FINE_LOCATION)) {
+    if (hasPermission(context, Manifest.permission.ACCESS_FINE_LOCATION)) {
       viewModel.setLocationPreciseEnabled(true)
       viewModel.setLocationMode(LocationMode.WhileUsing)
     } else {
@@ -693,14 +693,14 @@ private fun V2PhoneCapabilitiesScreen(
     }
   }
 
-  V2SettingsDetailFrame(title = "Phone Capabilities", subtitle = "Choose what this phone can share.", icon = Icons.AutoMirrored.Filled.ScreenShare, onBack = onBack) {
-    V2SettingsTogglePanel(
+  SettingsDetailFrame(title = "Phone Capabilities", subtitle = "Choose what this phone can share.", icon = Icons.AutoMirrored.Filled.ScreenShare, onBack = onBack) {
+    SettingsTogglePanel(
       rows =
         listOf(
-          V2SettingsToggleRow("Camera", "Allow camera tools when requested.", Icons.Default.CameraAlt, cameraEnabled, ::setCameraAccess),
-          V2SettingsToggleRow("Precise Location", "Share precise location while location is enabled.", Icons.Default.LocationOn, locationPreciseEnabled, ::setPreciseLocation),
-          V2SettingsToggleRow("Keep Awake", "Keep the node available during active work.", Icons.Default.Bolt, preventSleep, viewModel::setPreventSleep),
-          V2SettingsToggleRow("Canvas Status", "Show screen-sharing debug state.", Icons.AutoMirrored.Filled.ScreenShare, canvasDebugStatusEnabled, viewModel::setCanvasDebugStatusEnabled),
+          SettingsToggleRow("Camera", "Allow camera tools when requested.", Icons.Default.CameraAlt, cameraEnabled, ::setCameraAccess),
+          SettingsToggleRow("Precise Location", "Share precise location while location is enabled.", Icons.Default.LocationOn, locationPreciseEnabled, ::setPreciseLocation),
+          SettingsToggleRow("Keep Awake", "Keep the node available during active work.", Icons.Default.Bolt, preventSleep, viewModel::setPreventSleep),
+          SettingsToggleRow("Canvas Status", "Show screen-sharing debug state.", Icons.AutoMirrored.Filled.ScreenShare, canvasDebugStatusEnabled, viewModel::setCanvasDebugStatusEnabled),
         ),
     )
     ClawPanel {
@@ -717,7 +717,7 @@ private fun V2PhoneCapabilitiesScreen(
 }
 
 @Composable
-private fun V2GatewaySettingsScreen(
+private fun GatewaySettingsScreen(
   viewModel: MainViewModel,
   onBack: () -> Unit,
 ) {
@@ -727,15 +727,15 @@ private fun V2GatewaySettingsScreen(
   val serverName by viewModel.serverName.collectAsState()
   val remoteAddress by viewModel.remoteAddress.collectAsState()
 
-  V2SettingsDetailFrame(title = "Gateway", subtitle = "Connection between this phone and OpenClaw.", icon = Icons.Default.Cloud, onBack = onBack) {
-    V2SettingsMetricPanel(
+  SettingsDetailFrame(title = "Gateway", subtitle = "Connection between this phone and OpenClaw.", icon = Icons.Default.Cloud, onBack = onBack) {
+    SettingsMetricPanel(
       rows =
         listOf(
-          V2SettingsMetric("Connection", if (isConnected) "Connected" else "Offline"),
-          V2SettingsMetric("Node", if (isNodeConnected) "Online" else "Not paired"),
-          V2SettingsMetric("Gateway", serverName?.takeIf { it.isNotBlank() } ?: "Home Gateway"),
-          V2SettingsMetric("Address", remoteAddress?.takeIf { it.isNotBlank() } ?: "Not available"),
-          V2SettingsMetric("Status", statusText),
+          SettingsMetric("Connection", if (isConnected) "Connected" else "Offline"),
+          SettingsMetric("Node", if (isNodeConnected) "Online" else "Not paired"),
+          SettingsMetric("Gateway", serverName?.takeIf { it.isNotBlank() } ?: "Home Gateway"),
+          SettingsMetric("Address", remoteAddress?.takeIf { it.isNotBlank() } ?: "Not available"),
+          SettingsMetric("Status", statusText),
         ),
     )
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -746,24 +746,24 @@ private fun V2GatewaySettingsScreen(
 }
 
 @Composable
-private fun V2AppearanceSettingsScreen(onBack: () -> Unit) {
-  V2SettingsDetailFrame(title = "Appearance", subtitle = "A calm, high-contrast OpenClaw interface.", icon = Icons.Default.Palette, onBack = onBack) {
-    V2SettingsMetricPanel(
+private fun AppearanceSettingsScreen(onBack: () -> Unit) {
+  SettingsDetailFrame(title = "Appearance", subtitle = "A calm, high-contrast OpenClaw interface.", icon = Icons.Default.Palette, onBack = onBack) {
+    SettingsMetricPanel(
       rows =
         listOf(
-          V2SettingsMetric("Theme", "Dark"),
-          V2SettingsMetric("Contrast", "High"),
-          V2SettingsMetric("Typography", "Readable"),
+          SettingsMetric("Theme", "Dark"),
+          SettingsMetric("Contrast", "High"),
+          SettingsMetric("Typography", "Readable"),
         ),
     )
     ClawPanel {
-      Text(text = "The v2 app uses a fixed premium dark theme so it stays consistent across devices.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+      Text(text = "OpenClaw uses a fixed premium dark theme so it stays consistent across devices.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
     }
   }
 }
 
 @Composable
-private fun V2AboutSettingsScreen(
+private fun AboutSettingsScreen(
   viewModel: MainViewModel,
   onBack: () -> Unit,
 ) {
@@ -774,23 +774,23 @@ private fun V2AboutSettingsScreen(
   val latestVersion = updateAvailable?.latestVersion?.takeIf { it.isNotBlank() }
   val currentGatewayVersion = updateAvailable?.currentVersion?.takeIf { it.isNotBlank() } ?: gatewayVersion
 
-  V2SettingsDetailFrame(title = "About", subtitle = "OpenClaw for Android.", icon = Icons.Default.Info, onBack = onBack) {
-    V2SettingsMetricPanel(
+  SettingsDetailFrame(title = "About", subtitle = "OpenClaw for Android.", icon = Icons.Default.Info, onBack = onBack) {
+    SettingsMetricPanel(
       rows =
         listOf(
-          V2SettingsMetric("Android App", BuildConfig.VERSION_NAME),
-          V2SettingsMetric("Build", BuildConfig.VERSION_CODE.toString()),
-          V2SettingsMetric("Channel", "Play"),
-          V2SettingsMetric("Gateway", currentGatewayVersion ?: "Not connected"),
+          SettingsMetric("Android App", BuildConfig.VERSION_NAME),
+          SettingsMetric("Build", BuildConfig.VERSION_CODE.toString()),
+          SettingsMetric("Channel", "Play"),
+          SettingsMetric("Gateway", currentGatewayVersion ?: "Not connected"),
         ),
     )
     ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
       Column {
-        V2AboutStatusRow(title = "Gateway", value = serverName?.takeIf { it.isNotBlank() } ?: "Home Gateway", healthy = isConnected)
+        AboutStatusRow(title = "Gateway", value = serverName?.takeIf { it.isNotBlank() } ?: "Home Gateway", healthy = isConnected)
         HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
-        V2AboutStatusRow(title = "Runtime", value = currentGatewayVersion ?: "Waiting", healthy = currentGatewayVersion != null)
+        AboutStatusRow(title = "Runtime", value = currentGatewayVersion ?: "Waiting", healthy = currentGatewayVersion != null)
         HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
-        V2AboutStatusRow(
+        AboutStatusRow(
           title = "Update",
           value = latestVersion?.let { "v$it available" } ?: "Up to date",
           healthy = latestVersion == null,
@@ -804,7 +804,7 @@ private fun V2AboutSettingsScreen(
 }
 
 @Composable
-private fun V2AboutStatusRow(
+private fun AboutStatusRow(
   title: String,
   value: String,
   healthy: Boolean,
@@ -830,7 +830,7 @@ private fun aboutUpdateText(latestVersion: String?): String =
   }
 
 @Composable
-internal fun V2SettingsDetailFrame(
+internal fun SettingsDetailFrame(
   title: String,
   subtitle: String,
   icon: ImageVector,
@@ -841,9 +841,9 @@ internal fun V2SettingsDetailFrame(
     LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
       item {
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-          V2SettingsBackButton(onClick = onBack)
+          SettingsBackButton(onClick = onBack)
           Text(text = title, style = ClawTheme.type.title, color = ClawTheme.colors.text, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-          V2SettingsIconMark(icon = icon)
+          SettingsIconMark(icon = icon)
         }
       }
       item {
@@ -859,7 +859,7 @@ internal fun V2SettingsDetailFrame(
   }
 }
 
-private data class V2SettingsToggleRow(
+private data class SettingsToggleRow(
   val title: String,
   val subtitle: String,
   val icon: ImageVector,
@@ -867,20 +867,20 @@ private data class V2SettingsToggleRow(
   val onCheckedChange: (Boolean) -> Unit,
 )
 
-internal data class V2SettingsMetric(
+internal data class SettingsMetric(
   val title: String,
   val value: String,
 )
 
 @Composable
-private fun V2ApprovalsPanel(toolCalls: List<ChatPendingToolCall>) {
+private fun ApprovalsPanel(toolCalls: List<ChatPendingToolCall>) {
   ClawListPanel(items = toolCalls) { toolCall ->
-    V2ApprovalListRow(toolCall = toolCall)
+    ApprovalListRow(toolCall = toolCall)
   }
 }
 
 @Composable
-private fun V2ApprovalListRow(toolCall: ChatPendingToolCall) {
+private fun ApprovalListRow(toolCall: ChatPendingToolCall) {
   val hasIssue = toolCall.isError == true
   ClawDetailRow(
     title = approvalActionName(toolCall.name),
@@ -891,21 +891,21 @@ private fun V2ApprovalListRow(toolCall: ChatPendingToolCall) {
 }
 
 @Composable
-private fun V2CronJobsPanel(jobs: List<GatewayCronJobSummary>) {
+private fun CronJobsPanel(jobs: List<GatewayCronJobSummary>) {
   ClawListPanel(items = jobs) { job ->
-    V2CronJobListRow(job = job)
+    CronJobListRow(job = job)
   }
 }
 
 @Composable
-private fun V2UsageProvidersPanel(providers: List<GatewayUsageProviderSummary>) {
+private fun UsageProvidersPanel(providers: List<GatewayUsageProviderSummary>) {
   ClawListPanel(items = providers) { provider ->
-    V2UsageProviderListRow(provider = provider)
+    UsageProviderListRow(provider = provider)
   }
 }
 
 @Composable
-private fun V2UsageProviderListRow(provider: GatewayUsageProviderSummary) {
+private fun UsageProviderListRow(provider: GatewayUsageProviderSummary) {
   val hasIssue = provider.error != null
   ClawDetailRow(
     title = provider.displayName,
@@ -916,7 +916,7 @@ private fun V2UsageProviderListRow(provider: GatewayUsageProviderSummary) {
 }
 
 @Composable
-private fun V2CronJobListRow(job: GatewayCronJobSummary) {
+private fun CronJobListRow(job: GatewayCronJobSummary) {
   ClawDetailRow(
     title = job.name,
     subtitle = cronJobSubtitle(job),
@@ -926,17 +926,17 @@ private fun V2CronJobListRow(job: GatewayCronJobSummary) {
 }
 
 @Composable
-private fun V2AgentsPanel(
+private fun AgentsPanel(
   agents: List<GatewayAgentSummary>,
   defaultAgentId: String?,
 ) {
   ClawListPanel(items = agents) { agent ->
-    V2AgentListRow(agent = agent, isDefault = agent.id == defaultAgentId)
+    AgentListRow(agent = agent, isDefault = agent.id == defaultAgentId)
   }
 }
 
 @Composable
-private fun V2AgentListRow(
+private fun AgentListRow(
   agent: GatewayAgentSummary,
   isDefault: Boolean,
 ) {
@@ -1053,16 +1053,16 @@ private fun formatCronWake(timeMs: Long?): String {
 }
 
 @Composable
-private fun V2SettingsTogglePanel(rows: List<V2SettingsToggleRow>) {
+private fun SettingsTogglePanel(rows: List<SettingsToggleRow>) {
   ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
     ClawSeparatedColumn(items = rows) { row ->
-      V2SettingsToggleListRow(row)
+      SettingsToggleListRow(row)
     }
   }
 }
 
 @Composable
-private fun V2SettingsToggleListRow(row: V2SettingsToggleRow) {
+private fun SettingsToggleListRow(row: SettingsToggleRow) {
   Row(
     modifier =
       Modifier
@@ -1083,7 +1083,7 @@ private fun V2SettingsToggleListRow(row: V2SettingsToggleRow) {
 }
 
 @Composable
-internal fun V2SettingsMetricPanel(rows: List<V2SettingsMetric>) {
+internal fun SettingsMetricPanel(rows: List<SettingsMetric>) {
   ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
     ClawSeparatedColumn(items = rows) { row ->
       Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1095,7 +1095,7 @@ internal fun V2SettingsMetricPanel(rows: List<V2SettingsMetric>) {
 }
 
 @Composable
-private fun V2SettingsBackButton(onClick: () -> Unit) {
+private fun SettingsBackButton(onClick: () -> Unit) {
   Surface(onClick = onClick, modifier = Modifier.size(ClawTheme.spacing.touchTarget), shape = CircleShape, color = Color.Transparent, contentColor = ClawTheme.colors.text) {
     Box(contentAlignment = Alignment.Center) {
       Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", modifier = Modifier.size(18.dp))
@@ -1104,7 +1104,7 @@ private fun V2SettingsBackButton(onClick: () -> Unit) {
 }
 
 @Composable
-private fun V2SettingsIconMark(icon: ImageVector) {
+private fun SettingsIconMark(icon: ImageVector) {
   Surface(
     modifier = Modifier.size(30.dp),
     shape = CircleShape,
@@ -1118,16 +1118,16 @@ private fun V2SettingsIconMark(icon: ImageVector) {
   }
 }
 
-private fun hasV2Permission(
+private fun hasPermission(
   context: Context,
   permission: String,
 ): Boolean = ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
 
-private fun hasV2LocationPermission(context: Context): Boolean =
-  hasV2Permission(context, Manifest.permission.ACCESS_FINE_LOCATION) ||
-    hasV2Permission(context, Manifest.permission.ACCESS_COARSE_LOCATION)
+private fun hasLocationPermission(context: Context): Boolean =
+  hasPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ||
+    hasPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION)
 
-private fun openV2NotificationListenerSettings(context: Context) {
+private fun openNotificationListenerSettings(context: Context) {
   val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
   context.startActivity(intent)
 }

@@ -12,9 +12,9 @@ fun RootScreen(viewModel: MainViewModel) {
   val onboardingCompleted by viewModel.onboardingCompleted.collectAsState()
 
   if (!onboardingCompleted) {
-    V2OnboardingFlow(viewModel = viewModel, modifier = Modifier.fillMaxSize())
+    OnboardingFlow(viewModel = viewModel, modifier = Modifier.fillMaxSize())
     return
   }
 
-  V2ShellScreen(viewModel = viewModel, modifier = Modifier.fillMaxSize())
+  ShellScreen(viewModel = viewModel, modifier = Modifier.fillMaxSize())
 }

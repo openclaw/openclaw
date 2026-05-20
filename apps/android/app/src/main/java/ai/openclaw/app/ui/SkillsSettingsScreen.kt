@@ -25,7 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
 @Composable
-internal fun V2SkillsSettingsScreen(
+internal fun SkillsSettingsScreen(
   viewModel: MainViewModel,
   onBack: () -> Unit,
 ) {
@@ -43,18 +43,18 @@ internal fun V2SkillsSettingsScreen(
     }
   }
 
-  V2SettingsDetailFrame(
+  SettingsDetailFrame(
     title = "Skills",
     subtitle = "Installed capabilities available to OpenClaw.",
     icon = Icons.Default.Settings,
     onBack = onBack,
   ) {
-    V2SettingsMetricPanel(
+    SettingsMetricPanel(
       rows =
         listOf(
-          V2SettingsMetric("Installed", skills.size.toString()),
-          V2SettingsMetric("Ready", readyCount.toString()),
-          V2SettingsMetric("Needs Setup", needsSetupCount.toString()),
+          SettingsMetric("Installed", skills.size.toString()),
+          SettingsMetric("Ready", readyCount.toString()),
+          SettingsMetric("Needs Setup", needsSetupCount.toString()),
         ),
     )
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -82,20 +82,20 @@ internal fun V2SkillsSettingsScreen(
             Text(text = "Skills installed on the gateway will appear here.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
           }
         }
-      else -> V2SkillsPanel(skills = skills)
+      else -> SkillsPanel(skills = skills)
     }
   }
 }
 
 @Composable
-private fun V2SkillsPanel(skills: List<GatewaySkillSummary>) {
+private fun SkillsPanel(skills: List<GatewaySkillSummary>) {
   ClawListPanel(items = skills) { skill ->
-    V2SkillListRow(skill = skill)
+    SkillListRow(skill = skill)
   }
 }
 
 @Composable
-private fun V2SkillListRow(skill: GatewaySkillSummary) {
+private fun SkillListRow(skill: GatewaySkillSummary) {
   ClawDetailRow(
     title = skill.name,
     subtitle = skillSubtitle(skill),
