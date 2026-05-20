@@ -20,6 +20,27 @@ type DowngradeOpenAIReasoningBlocksOptions = {
   dropReplayableReasoning?: boolean;
 };
 
+function latestUserTurnHasImage(messages: AgentMessage[]): boolean {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (!msg || typeof msg !== "object") {
+      continue;
+    }
+    if ((msg as { role?: unknown }).role !== "user") {
+      continue;
+    }
+    const content = (msg as { content?: unknown }).content;
+    return Array.isArray(content)
+      ? content.some((block) =>
+          Boolean(
+            block && typeof block === "object" && (block as { type?: unknown }).type === "image",
+          ),
+        )
+      : false;
+  }
+  return false;
+}
+
 function parseOpenAIReasoningSignature(value: unknown): OpenAIReasoningSignature | null {
   if (!value) {
     return null;
@@ -280,4 +301,12 @@ export function downgradeOpenAIReasoningBlocks(
   }
 
   return anyChanged ? out : messages;
+}
+
+export function downgradeOpenAIReasoningBlocksForImageTurn(
+  messages: AgentMessage[],
+): AgentMessage[] {
+  return downgradeOpenAIReasoningBlocks(messages, {
+    dropReplayableReasoning: latestUserTurnHasImage(messages),
+  });
 }

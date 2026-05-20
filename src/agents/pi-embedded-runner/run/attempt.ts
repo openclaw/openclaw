@@ -108,7 +108,7 @@ import {
 import type { EmbeddedContextFile } from "../../pi-embedded-helpers.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
-  downgradeOpenAIReasoningBlocks,
+  downgradeOpenAIReasoningBlocksForImageTurn,
   isCloudCodeAssistFormatError,
   resolveBootstrapMaxChars,
   resolveBootstrapPromptTruncationWarningMode,
@@ -2807,9 +2807,11 @@ export async function runEmbeddedAttempt(
           if (!Array.isArray(messages)) {
             return inner(model, context, options);
           }
-          // Strip orphaned reasoning blocks first, then fix function-call
+          // Strip unsafe reasoning blocks first, then fix function-call
           // pairing — matches the call order in google.ts.
-          const reasoningSanitized = downgradeOpenAIReasoningBlocks(messages as AgentMessage[]);
+          const reasoningSanitized = downgradeOpenAIReasoningBlocksForImageTurn(
+            messages as AgentMessage[],
+          );
           const sanitized = downgradeOpenAIFunctionCallReasoningPairs(reasoningSanitized);
           if (sanitized === messages) {
             return inner(model, context, options);

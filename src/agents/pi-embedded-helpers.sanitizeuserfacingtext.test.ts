@@ -7,6 +7,7 @@ import {
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
   downgradeOpenAIReasoningBlocks,
+  downgradeOpenAIReasoningBlocksForImageTurn,
   isMessagingToolDuplicate,
   normalizeTextForComparison,
   sanitizeToolCallId,
@@ -734,6 +735,57 @@ describe("downgradeOpenAIReasoningBlocks", () => {
     expect(downgradeOpenAIReasoningBlocks(input as any, { dropReplayableReasoning: true })).toEqual(
       [{ role: "assistant", content: [{ type: "text", text: "answer" }] }],
     );
+  });
+
+  it("drops replayable reasoning when the latest user turn carries an image", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "internal reasoning",
+            thinkingSignature: JSON.stringify({ id: "rs_123", type: "reasoning" }),
+          },
+          { type: "text", text: "answer" },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "what is this?" },
+          { type: "image", data: "AA==", mimeType: "image/png" },
+        ],
+      },
+    ];
+
+    expect(downgradeOpenAIReasoningBlocksForImageTurn(input as any)).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "answer" }] },
+      input[1],
+    ]);
+  });
+
+  it("keeps replayable reasoning when only older user turns carry images", () => {
+    const input = [
+      {
+        role: "user",
+        content: [{ type: "image", data: "AA==", mimeType: "image/png" }],
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "internal reasoning",
+            thinkingSignature: JSON.stringify({ id: "rs_123", type: "reasoning" }),
+          },
+          { type: "text", text: "answer" },
+        ],
+      },
+      { role: "user", content: [{ type: "text", text: "continue" }] },
+    ];
+
+    expect(downgradeOpenAIReasoningBlocksForImageTurn(input as any)).toEqual(input);
   });
 
   it("drops orphaned reasoning blocks without following content", () => {
