@@ -127,7 +127,7 @@ function resolveAcpTurnText(params: {
     [
       "Source channel delivery is private by default for this turn.",
       "Normal ACP final output will not be automatically posted to the source channel.",
-      "To send visible output, use message(action=send). The target defaults to the current source channel.",
+      'If visible output is needed in the current source channel, call `message` with `action="send"` before ending. The target defaults to the current source channel.',
     ].join(" "),
   );
   return params.promptText ? `${guidance}\n\n${params.promptText}` : guidance;

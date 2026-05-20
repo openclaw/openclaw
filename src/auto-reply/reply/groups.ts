@@ -231,7 +231,7 @@ export function buildGroupChatContext(params: {
   lines.push(`You are in a ${providerLabel} group chat.`);
   if (messageToolOnly) {
     lines.push(
-      "Normal final replies are private and are not automatically sent to this group chat. To post visible output here, use the message tool with action=send; the target defaults to this group chat.",
+      'Normal final replies are private and are not automatically sent to this group chat. If this turn needs visible output here, call the message tool with action="send" before ending; the target defaults to this group chat.',
     );
   } else {
     lines.push(
@@ -255,7 +255,7 @@ export function buildGroupChatContext(params: {
     !messageToolOnly && params.silentToken && params.silentReplyPolicy !== "disallow";
   if (messageToolOnly) {
     lines.push(
-      "If no visible group response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to the group.",
+      'If no visible group response is needed, do not call message(action="send"). Your normal final answer stays private and will not be posted to the group.',
     );
   }
   if (canUseSilentReply) {
@@ -286,10 +286,10 @@ export function buildDirectChatContext(params: {
   lines.push(`You are in a ${providerLabel} direct conversation.`);
   if (messageToolOnly) {
     lines.push(
-      "Normal final replies are private and are not automatically sent to this conversation. To post visible output here, use the message tool with action=send; the target defaults to this conversation.",
+      'Normal final replies are private and are not automatically sent to this conversation. If this turn needs visible output here, call the message tool with action="send" before ending; the target defaults to this conversation.',
     );
     lines.push(
-      "If no visible direct response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to the conversation.",
+      'If no visible direct response is needed, do not call message(action="send"). Your normal final answer stays private and will not be posted to the conversation.',
     );
     return lines.join(" ");
   }
