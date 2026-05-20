@@ -72,6 +72,25 @@ export function buildRemoteCommand(argv: string[]): string {
   return argv.map((entry) => shellEscape(entry)).join(" ");
 }
 
+export function applyGatewayEndpointToSshConfig(params: {
+  configText: string;
+  gatewayEndpoint?: string;
+}): string {
+  const endpoint = params.gatewayEndpoint?.trim();
+  if (!endpoint) {
+    return params.configText;
+  }
+  return params.configText.replace(/^(\s*ProxyCommand\s+)(.*)$/m, (line, prefix, command) => {
+    if (!command.includes("ssh-proxy")) {
+      return line;
+    }
+    if (/(^|\s)--server(\s|=)|(^|\s)--gateway-endpoint(\s|=)/.test(command)) {
+      return line;
+    }
+    return `${prefix}${command} --server ${shellEscape(endpoint)}`;
+  });
+}
+
 export async function runOpenShellCli(params: {
   context: OpenShellExecContext;
   args: string[];
@@ -97,6 +116,9 @@ export async function createOpenShellSshSession(params: {
     throw new Error(result.stderr.trim() || "openshell sandbox ssh-config failed");
   }
   return await createSshSandboxSessionFromConfigText({
-    configText: result.stdout,
+    configText: applyGatewayEndpointToSshConfig({
+      configText: result.stdout,
+      gatewayEndpoint: params.context.config.gatewayEndpoint,
+    }),
   });
 }
