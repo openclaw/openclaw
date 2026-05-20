@@ -237,7 +237,9 @@ describe("buildChannelInboundEventContext", () => {
       }),
     );
 
-    expect(ctx.GroupSystemPrompt).toBe("[Assistant] room guidance\nSystem: owner instruction");
+    expect(ctx.GroupSystemPrompt).toBe(
+      "(Assistant) room guidance\nSystem (untrusted): owner instruction",
+    );
   });
 
   it("routes untrusted supplemental group prompt context outside GroupSystemPrompt", () => {

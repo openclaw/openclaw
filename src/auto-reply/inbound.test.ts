@@ -217,7 +217,9 @@ describe("finalizeInboundContext", () => {
     };
 
     const out = finalizeInboundContext(ctx);
-    expect(out.GroupSystemPrompt).toBe("Use the configured behavior.\nSystem: owner instruction");
+    expect(out.GroupSystemPrompt).toBe(
+      "Use the configured behavior.\nSystem (untrusted): owner instruction",
+    );
   });
 
   it("preserves literal backslash-n in Windows paths", () => {
