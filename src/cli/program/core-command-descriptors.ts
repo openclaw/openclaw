@@ -32,7 +32,7 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "backup",
-    description: "Create and verify local backup archives for OpenClaw state",
+    description: "Create, verify, and restore local backup archives for OpenClaw state",
     hasSubcommands: true,
   },
   {

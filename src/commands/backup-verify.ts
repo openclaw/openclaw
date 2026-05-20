@@ -6,13 +6,13 @@ import { isRecord, resolveUserPath } from "../utils.js";
 
 const WINDOWS_ABSOLUTE_ARCHIVE_PATH_RE = /^[A-Za-z]:[\\/]/;
 
-type BackupManifestAsset = {
+export type BackupManifestAsset = {
   kind: string;
   sourcePath: string;
   archivePath: string;
 };
 
-type BackupManifest = {
+export type BackupManifest = {
   schemaVersion: number;
   createdAt: string;
   archiveRoot: string;
@@ -272,11 +272,13 @@ function findDuplicateNormalizedEntryPath(
   return undefined;
 }
 
-export async function backupVerifyCommand(
-  runtime: RuntimeEnv,
-  opts: BackupVerifyOptions,
-): Promise<BackupVerifyResult> {
-  const archivePath = resolveUserPath(opts.archive);
+export type ReadBackupManifestResult = {
+  manifest: BackupManifest;
+  normalizedEntrySet: Set<string>;
+  rawEntryCount: number;
+};
+
+export async function readBackupManifest(archivePath: string): Promise<ReadBackupManifestResult> {
   const rawEntries = await listArchiveEntries(archivePath);
   if (rawEntries.length === 0) {
     throw new Error("Backup archive is empty.");
@@ -305,6 +307,16 @@ export async function backupVerifyCommand(
   const manifest = parseManifest(manifestRaw);
   verifyManifestAgainstEntries(manifest, normalizedEntrySet);
 
+  return { manifest, normalizedEntrySet, rawEntryCount: rawEntries.length };
+}
+
+export async function backupVerifyCommand(
+  runtime: RuntimeEnv,
+  opts: BackupVerifyOptions,
+): Promise<BackupVerifyResult> {
+  const archivePath = resolveUserPath(opts.archive);
+  const { manifest, rawEntryCount } = await readBackupManifest(archivePath);
+
   const result: BackupVerifyResult = {
     ok: true,
     archivePath,
@@ -312,7 +324,7 @@ export async function backupVerifyCommand(
     createdAt: manifest.createdAt,
     runtimeVersion: manifest.runtimeVersion,
     assetCount: manifest.assets.length,
-    entryCount: rawEntries.length,
+    entryCount: rawEntryCount,
   };
 
   if (opts.json) {
