@@ -13,6 +13,7 @@ export type DeviceBootstrapProfileInput = {
 export const BOOTSTRAP_HANDOFF_OPERATOR_SCOPES = [
   "operator.approvals",
   "operator.read",
+  "operator.talk.secrets",
   "operator.write",
 ] as const;
 
