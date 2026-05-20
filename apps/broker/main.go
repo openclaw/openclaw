@@ -550,6 +550,19 @@ func claudeChatArgs(promptArg, sessionID string) []string {
 	return args
 }
 
+// codexChatArgs builds the argv for the spawn-per-prompt codex path.
+// The tenant Fly machine is the sandbox boundary; Codex's workspace
+// sandbox blocks DNS/network inside shell tools.
+func codexChatArgs(promptArg string) []string {
+	return []string{
+		"exec",
+		"--json",
+		"--sandbox", "danger-full-access",
+		"--skip-git-repo-check",
+		promptArg,
+	}
+}
+
 func chatHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonError(w, http.StatusMethodNotAllowed, "method_not_allowed",
@@ -654,7 +667,7 @@ func chatHandler(w http.ResponseWriter, r *http.Request) {
 		// /home/runtime is not a git repo, so codex refuses to start
 		// without this flag (verified live: "Not inside a trusted
 		// directory and --skip-git-repo-check was not specified").
-		args = []string{"exec", "--json", "--skip-git-repo-check", promptArg}
+		args = codexChatArgs(promptArg)
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(),

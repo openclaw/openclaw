@@ -53,6 +53,20 @@ func TestClaudeChatArgsHasAutoExecute(t *testing.T) {
 	}
 }
 
+func TestCodexChatArgsUsesTenantMachineNetwork(t *testing.T) {
+	args := codexChatArgs("publish to hf")
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "--sandbox danger-full-access") {
+		t.Fatalf("expected danger-full-access sandbox for tenant runtime network, got %q", joined)
+	}
+	if !strings.Contains(joined, "--skip-git-repo-check") {
+		t.Fatalf("expected --skip-git-repo-check, got %q", joined)
+	}
+	if got := args[len(args)-1]; got != "publish to hf" {
+		t.Fatalf("expected prompt as final arg, got %q", got)
+	}
+}
+
 func TestConstantTimeStringEq(t *testing.T) {
 	if !constantTimeStringEq("abc", "abc") {
 		t.Fatal("equal strings should match")
