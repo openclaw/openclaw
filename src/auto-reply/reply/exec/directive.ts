@@ -27,7 +27,12 @@ type ExecDirectiveParse = {
 
 function normalizeExecSecurity(value?: string): ExecSecurity | undefined {
   const normalized = normalizeOptionalLowercaseString(value);
-  if (normalized === "deny" || normalized === "allowlist" || normalized === "full") {
+  if (
+    normalized === "deny" ||
+    normalized === "denylist" ||
+    normalized === "allowlist" ||
+    normalized === "full"
+  ) {
     return normalized;
   }
   return undefined;

@@ -56,9 +56,16 @@ function invalid(message: string): { ok: false; error: ErrorShape } {
   return { ok: false, error: errorShape(ErrorCodes.INVALID_REQUEST, message) };
 }
 
-function normalizeExecSecurity(raw: string): "deny" | "allowlist" | "full" | undefined {
+function normalizeExecSecurity(
+  raw: string,
+): "deny" | "denylist" | "allowlist" | "full" | undefined {
   const normalized = normalizeOptionalLowercaseString(raw);
-  if (normalized === "deny" || normalized === "allowlist" || normalized === "full") {
+  if (
+    normalized === "deny" ||
+    normalized === "denylist" ||
+    normalized === "allowlist" ||
+    normalized === "full"
+  ) {
     return normalized;
   }
   return undefined;
@@ -482,7 +489,7 @@ export async function applySessionsPatchToStore(params: {
     } else if (raw !== undefined) {
       const normalized = normalizeExecSecurity(raw);
       if (!normalized) {
-        return invalid('invalid execSecurity (use "deny"|"allowlist"|"full")');
+        return invalid('invalid execSecurity (use "deny"|"denylist"|"allowlist"|"full")');
       }
       next.execSecurity = normalized;
     }

@@ -46,7 +46,11 @@ final class ExecApprovalsGatewayPrompter {
             let presentation = self.shouldPresent(request: request)
             guard presentation.shouldAsk else {
                 // Ask policy says no prompt needed – resolve based on security policy
-                let decision: ExecApprovalDecision = presentation.security == .full ? .allowOnce : .deny
+                let decision = Self.fallbackDecision(
+                    request: request.request,
+                    askFallback: presentation.security,
+                    allowlist: presentation.allowlist,
+                    denylist: presentation.denylist)
                 try await GatewayConnection.shared.requestVoid(
                     method: .execApprovalResolve,
                     params: [
@@ -60,7 +64,8 @@ final class ExecApprovalsGatewayPrompter {
                 let decision = Self.fallbackDecision(
                     request: request.request,
                     askFallback: presentation.askFallback,
-                    allowlist: presentation.allowlist)
+                    allowlist: presentation.allowlist,
+                    denylist: presentation.denylist)
                 try await GatewayConnection.shared.requestVoid(
                     method: .execApprovalResolve,
                     params: [
@@ -109,6 +114,7 @@ final class ExecApprovalsGatewayPrompter {
         /// Fallback security policy when a prompt is needed but can't be presented.
         var askFallback: ExecSecurity
         var allowlist: [ExecAllowlistEntry]
+        var denylist: [ExecDenylistEntry]
     }
 
     private func shouldPresent(request: GatewayApprovalRequest) -> PresentationDecision {
@@ -135,14 +141,25 @@ final class ExecApprovalsGatewayPrompter {
             canPresent: canPresent,
             security: security,
             askFallback: approvals.agent.askFallback,
-            allowlist: approvals.allowlist)
+            allowlist: approvals.allowlist,
+            denylist: approvals.denylist)
     }
 
     private static func fallbackDecision(
         request: ExecApprovalPromptRequest,
         askFallback: ExecSecurity,
-        allowlist: [ExecAllowlistEntry]) -> ExecApprovalDecision
+        allowlist: [ExecAllowlistEntry],
+        denylist: [ExecDenylistEntry]) -> ExecApprovalDecision
     {
+        if askFallback == .denylist {
+            let parsedCommand = ExecDenylistEvaluator.splitShellWords(request.command)
+            let denied = ExecDenylistEvaluator.denied(
+                command: parsedCommand.isEmpty ? [request.command] : parsedCommand,
+                displayCommand: request.command,
+                env: [:],
+                denylist: denylist)
+            return denied ? .deny : .allowOnce
+        }
         guard askFallback == .allowlist else {
             return askFallback == .full ? .allowOnce : .deny
         }
@@ -240,7 +257,28 @@ extension ExecApprovalsGatewayPrompter {
                 resolvedPath: resolvedPath,
                 sessionKey: nil),
             askFallback: askFallback,
-            allowlist: allowlistPatterns.map { ExecAllowlistEntry(pattern: $0) })
+            allowlist: allowlistPatterns.map { ExecAllowlistEntry(pattern: $0) },
+            denylist: [])
+    }
+
+    static func _testFallbackDecision(
+        command: String,
+        askFallback: ExecSecurity,
+        denylistPatterns: [String]) -> ExecApprovalDecision
+    {
+        self.fallbackDecision(
+            request: ExecApprovalPromptRequest(
+                command: command,
+                cwd: nil,
+                host: nil,
+                security: nil,
+                ask: nil,
+                agentId: nil,
+                resolvedPath: nil,
+                sessionKey: nil),
+            askFallback: askFallback,
+            allowlist: [],
+            denylist: denylistPatterns.map { ExecDenylistEntry(id: nil, pattern: $0, flags: nil) })
     }
 }
 #endif

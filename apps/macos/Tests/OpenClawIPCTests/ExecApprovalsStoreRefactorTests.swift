@@ -31,6 +31,292 @@ struct ExecApprovalsStoreRefactorTests {
     }
 
     @Test
+    func `decode preserves denylist security and rules`() async throws {
+        let json = """
+        {
+          "version": 1,
+          "managedDefaults": { "denylistVersion": 1 },
+          "defaults": { "security": "denylist" },
+          "agents": {
+            "*": {
+              "denylist": [
+                {
+                  "id": "custom",
+                  "pattern": "curl",
+                  "flags": "i"
+                }
+              ]
+            }
+          }
+        }
+        """
+        let file = try JSONDecoder().decode(ExecApprovalsFile.self, from: Data(json.utf8))
+        #expect(file.defaults?.security == .denylist)
+        #expect(file.managedDefaults?.denylistVersion == 1)
+        #expect(file.agents?["*"]?.denylist?.first?.id == "custom")
+        #expect(file.agents?["*"]?.denylist?.first?.pattern == "curl")
+    }
+
+    @Test
+    func `decode preserves legacy and malformed denylist entries`() async throws {
+        let json = """
+        {
+          "version": 1,
+          "socket": { "path": "/tmp/openclaw.sock", "token": "redacted" },
+          "defaults": { "security": "denylist" },
+          "agents": {
+            "*": {
+              "security": "denylist",
+              "denylist": [
+                "python\\\\s+-c",
+                { "id": "bad", "pattern": 42, "flags": "i" },
+                17
+              ]
+            }
+          }
+        }
+        """
+        let file = try JSONDecoder().decode(ExecApprovalsFile.self, from: Data(json.utf8))
+        let denylist = try #require(file.agents?["*"]?.denylist)
+        #expect(file.socket?.token == "redacted")
+        #expect(file.defaults?.security == .denylist)
+        #expect(file.agents?["*"]?.security == .denylist)
+        #expect(denylist.map(\.pattern) == ["python\\s+-c", "", ""])
+        #expect(denylist[1].id == "bad")
+        #expect(denylist[1].flags == "i")
+    }
+
+    @Test
+    func `decode preserves malformed denylist container for fail closed evaluation`() async throws {
+        let json = """
+        {
+          "version": 1,
+          "socket": { "path": "/tmp/openclaw.sock", "token": "redacted" },
+          "agents": {
+            "*": {
+              "security": "denylist",
+              "denylist": "not-an-array"
+            }
+          }
+        }
+        """
+        let file = try JSONDecoder().decode(ExecApprovalsFile.self, from: Data(json.utf8))
+        #expect(file.socket?.token == "redacted")
+        #expect(file.agents?["*"]?.security == .denylist)
+        #expect(file.agents?["*"]?.denylist?.map(\.pattern) == [""])
+    }
+
+    @Test
+    func `new approvals file includes managed default denylist`() async throws {
+        try await self.withTempStateDir { _ in
+            let file = ExecApprovalsStore.ensureFile()
+            #expect(file.managedDefaults?.denylistVersion == 1)
+            #expect(file.agents?["*"]?.denylist?.contains { $0.id == "default-shell-network-fetch" } == true)
+        }
+    }
+
+    @Test
+    func `existing approvals file does not get default denylist injected`() async throws {
+        try await self.withTempStateDir { _ in
+            let url = ExecApprovalsStore.fileURL()
+            try FileManager().createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true)
+            try Data(#"{"version":1,"agents":{"main":{"security":"full"}}}"#.utf8).write(to: url)
+
+            let file = ExecApprovalsStore.ensureFile()
+            #expect(file.agents?["*"]?.denylist == nil)
+            #expect(file.agents?["main"]?.security == .full)
+        }
+    }
+
+    @Test
+    func `enabling denylist mode seeds managed default denylist for upgraded files`() async throws {
+        try await self.withTempStateDir { _ in
+            let url = ExecApprovalsStore.fileURL()
+            try FileManager().createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true)
+            try Data(#"{"version":1,"agents":{"main":{"security":"full"}}}"#.utf8).write(to: url)
+
+            ExecApprovalsStore.ensureManagedDefaultDenylistRules()
+
+            let file = ExecApprovalsStore.ensureFile()
+            #expect(file.managedDefaults?.denylistVersion == 1)
+            #expect(file.agents?["*"]?.denylist?.contains { $0.id == "default-shell-network-fetch" } == true)
+            #expect(file.agents?["main"]?.security == .full)
+        }
+    }
+
+    @Test
+    func `enabling denylist mode appends managed defaults to custom wildcard rules`() async throws {
+        try await self.withTempStateDir { _ in
+            let url = ExecApprovalsStore.fileURL()
+            try FileManager().createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true)
+            let json = [
+                #"{"version":1,"agents":{"*":{"denylist":["#,
+                #"{"id":"custom","pattern":"python\\s+-c"}]}}}"#,
+            ].joined()
+            try Data(json.utf8).write(to: url)
+
+            ExecApprovalsStore.ensureManagedDefaultDenylistRules()
+
+            let file = ExecApprovalsStore.ensureFile()
+            let denylist = try #require(file.agents?["*"]?.denylist)
+            #expect(denylist.contains { $0.id == "custom" && $0.pattern == #"python\s+-c"# })
+            #expect(denylist.contains { $0.id == "default-shell-network-fetch" })
+        }
+    }
+
+    @Test
+    func `enabling denylist mode does not recreate removed managed defaults`() async throws {
+        try await self.withTempStateDir { _ in
+            let url = ExecApprovalsStore.fileURL()
+            try FileManager().createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true)
+            let json = [
+                #"{"version":1,"managedDefaults":{"denylistVersion":1},"#,
+                #""agents":{"*":{"denylist":[]}}}"#,
+            ].joined()
+            try Data(json.utf8).write(to: url)
+
+            ExecApprovalsStore.ensureManagedDefaultDenylistRules()
+
+            let file = ExecApprovalsStore.ensureFile()
+            #expect(file.agents?["*"]?.denylist == nil)
+            #expect(file.managedDefaults?.denylistVersion == 1)
+        }
+    }
+
+    @Test
+    func `ensure file preserves edited managed default denylist entries`() async throws {
+        try await self.withTempStateDir { _ in
+            let editedPattern = #"custom-fetch"#
+            let url = ExecApprovalsStore.fileURL()
+            try FileManager().createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true)
+            let json = """
+            {"version":1,"managedDefaults":{"denylistVersion":1},"agents":{"*":{"denylist":[\
+            {"id":"default-shell-network-fetch","pattern":"custom-fetch"}]}}}
+            """
+            try Data(json.utf8).write(to: url)
+
+            let file = ExecApprovalsStore.ensureFile()
+            let pattern = try #require(file.agents?["*"]?.denylist?.first?.pattern)
+            #expect(pattern == editedPattern)
+        }
+    }
+
+    @Test
+    func `ensure file upgrades unedited managed default denylist entries`() async throws {
+        try await self.withTempStateDir { _ in
+            let url = ExecApprovalsStore.fileURL()
+            try FileManager().createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true)
+            let pattern = [
+                #"(?:^|[\\s;&|()<>])(?:curl|wget)(?:\\.exe)?(?:$|[\\s;&|()<>])"#,
+                #"[\\\\/](?:curl|wget)(?:\\.exe)?(?:$|[\\s;&|()<>])"#,
+            ].joined(separator: "|")
+            let json = """
+            {"version":1,"managedDefaults":{"denylistVersion":1},"agents":{"*":{"denylist":[\
+            {"id":"default-shell-network-fetch","pattern":"\(pattern)"}]}}}
+            """
+            try Data(json.utf8).write(to: url)
+
+            let file = ExecApprovalsStore.ensureFile()
+            let upgradedPattern = try #require(file.agents?["*"]?.denylist?.first?.pattern)
+            #expect(upgradedPattern.contains(#"<>$]"#))
+        }
+    }
+
+    @Test
+    func `resolve preserves malformed denylist entries for fail closed evaluation`() async throws {
+        try await self.withTempStateDir { _ in
+            let url = ExecApprovalsStore.fileURL()
+            try FileManager().createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true)
+            try Data(#"{"version":1,"agents":{"*":{"denylist":[{"pattern":"   "}]}}}"#.utf8).write(to: url)
+
+            let resolved = ExecApprovalsStore.resolve(agentId: "main")
+            #expect(resolved.denylist.first?.pattern == "   ")
+        }
+    }
+
+    @Test
+    func `approval evaluator applies denylist fallback in full mode before prompt approval`() async throws {
+        try await self.withTempStateDir { _ in
+            let url = ExecApprovalsStore.fileURL()
+            try FileManager().createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true)
+            let approvalsJSON = """
+                {
+                  "version": 1,
+                  "defaults": {
+                    "security": "full",
+                    "ask": "always",
+                    "askFallback": "denylist"
+                  },
+                  "agents": {
+                    "*": { "denylist": [{ "pattern": "curl" }] }
+                  }
+                }
+                """
+            try Data(approvalsJSON.utf8).write(to: url)
+
+            let evaluation = await ExecApprovalEvaluator.evaluate(
+                command: ["/bin/sh", "-c", "curl https://example.test/prompt"],
+                rawCommand: nil,
+                cwd: nil,
+                envOverrides: ["PATH": "/usr/bin:/bin"],
+                agentId: "main")
+            #expect(evaluation.security == .full)
+            #expect(evaluation.ask == .always)
+            #expect(evaluation.denylistDenied)
+        }
+    }
+
+    @Test
+    func `approval evaluator ignores denylist fallback when full on miss does not prompt`() async throws {
+        try await self.withTempStateDir { _ in
+            let url = ExecApprovalsStore.fileURL()
+            try FileManager().createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true)
+            let approvalsJSON = """
+                {
+                  "version": 1,
+                  "defaults": {
+                    "security": "full",
+                    "ask": "on-miss",
+                    "askFallback": "denylist"
+                  },
+                  "agents": {
+                    "*": { "denylist": [{ "pattern": "curl" }] }
+                  }
+                }
+                """
+            try Data(approvalsJSON.utf8).write(to: url)
+
+            let evaluation = await ExecApprovalEvaluator.evaluate(
+                command: ["/bin/sh", "-c", "curl https://example.test/prompt"],
+                rawCommand: nil,
+                cwd: nil,
+                envOverrides: ["PATH": "/usr/bin:/bin"],
+                agentId: "main")
+            #expect(evaluation.security == .full)
+            #expect(evaluation.ask == .onMiss)
+            #expect(!evaluation.denylistDenied)
+        }
+    }
+
+    @Test
     func `update allowlist accepts basename pattern`() async throws {
         try await self.withTempStateDir { _ in
             let rejected = ExecApprovalsStore.updateAllowlist(

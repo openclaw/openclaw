@@ -1282,6 +1282,7 @@
                   "tools/diffs",
                   "tools/elevated",
                   "tools/exec-approvals",
+                  "tools/exec-denylist",
                   "tools/exec-approvals-advanced",
                   "tools/exec",
                   "tools/image-generation",

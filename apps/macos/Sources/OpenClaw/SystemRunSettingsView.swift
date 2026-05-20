@@ -36,8 +36,10 @@ struct SystemRunSettingsView: View {
 
             if self.tab == .policy {
                 self.policyView
-            } else {
+            } else if self.tab == .allowlist {
                 self.allowlistView
+            } else {
+                self.denylistView
             }
         }
         .task { await self.model.refresh() }
@@ -240,6 +242,25 @@ struct SystemRunSettingsView: View {
         }
     }
 
+    private var denylistView: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            SettingsCardGroup("Denied Commands") {
+                SettingsCardRow(
+                    title: "Built-in shell network fetch",
+                    subtitle: "Blocks curl and wget command invocations before prompts or approvals can allow them.",
+                    showsDivider: false)
+                {
+                    StatusPill(text: "default", tint: .red)
+                }
+            }
+
+            Text("Denylist entries are managed in exec-approvals.json and are preserved by the native app.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     private var defaultsAllowlistEmptyState: some View {
         Label {
             VStack(alignment: .leading, spacing: 4) {
@@ -297,6 +318,7 @@ struct SystemRunSettingsView: View {
 private enum ExecApprovalsSettingsTab: String, CaseIterable, Identifiable {
     case policy
     case allowlist
+    case denylist
 
     var id: String {
         self.rawValue
@@ -306,6 +328,7 @@ private enum ExecApprovalsSettingsTab: String, CaseIterable, Identifiable {
         switch self {
         case .policy: "Access"
         case .allowlist: "Allowlist"
+        case .denylist: "Denylist"
         }
     }
 }
@@ -382,6 +405,7 @@ extension ExecSecurity {
     fileprivate var tint: Color {
         switch self {
         case .deny: .red
+        case .denylist: .pink
         case .allowlist: .orange
         case .full: .green
         }
@@ -390,6 +414,7 @@ extension ExecSecurity {
     fileprivate var systemImage: String {
         switch self {
         case .deny: "hand.raised.fill"
+        case .denylist: "exclamationmark.shield.fill"
         case .allowlist: "checklist.checked"
         case .full: "bolt.shield.fill"
         }
@@ -398,6 +423,7 @@ extension ExecSecurity {
     fileprivate var summaryTitle: String {
         switch self {
         case .deny: "Shell commands blocked"
+        case .denylist: "Denied commands blocked"
         case .allowlist: "Trusted commands can run"
         case .full: "Shell commands allowed"
         }
@@ -406,6 +432,7 @@ extension ExecSecurity {
     fileprivate var summarySubtitle: String {
         switch self {
         case .deny: "system.run requests are denied unless the policy changes."
+        case .denylist: "Commands matching denylist rules are blocked; other commands can run."
         case .allowlist: "Known commands can run; new commands use the prompt policy."
         case .full: "Agents can run shell commands on this Mac without allowlist checks."
         }
@@ -414,6 +441,7 @@ extension ExecSecurity {
     fileprivate var policyDescription: String {
         switch self {
         case .deny: "Block agent shell commands on this Mac."
+        case .denylist: "Block configured denied commands while allowing other shell commands."
         case .allowlist: "Allow trusted command patterns and handle misses with prompts."
         case .full: "Allow shell commands without checking the allowlist."
         }
@@ -536,6 +564,9 @@ final class ExecApprovalsSettingsModel {
                 entry.security = security
             }
         }
+        if security == .denylist {
+            ExecApprovalsStore.ensureManagedDefaultDenylistRules()
+        }
         self.syncQuickMode()
     }
 
@@ -563,6 +594,9 @@ final class ExecApprovalsSettingsModel {
             ExecApprovalsStore.updateAgentSettings(agentId: self.selectedAgentId) { entry in
                 entry.askFallback = mode
             }
+        }
+        if mode == .denylist {
+            ExecApprovalsStore.ensureManagedDefaultDenylistRules()
         }
     }
 

@@ -15,6 +15,18 @@ export const ExecApprovalsAllowlistEntrySchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const ExecApprovalsDenylistEntrySchema = Type.Union([
+  Type.String(),
+  Type.Object(
+    {
+      id: Type.Optional(NonEmptyString),
+      pattern: Type.String(),
+      flags: Type.Optional(Type.String()),
+    },
+    { additionalProperties: false },
+  ),
+]);
+
 const ExecApprovalsPolicyFields = {
   security: Type.Optional(Type.String()),
   ask: Type.Optional(Type.String()),
@@ -30,6 +42,7 @@ export const ExecApprovalsAgentSchema = Type.Object(
   {
     ...ExecApprovalsPolicyFields,
     allowlist: Type.Optional(Type.Array(ExecApprovalsAllowlistEntrySchema)),
+    denylist: Type.Optional(Type.Array(ExecApprovalsDenylistEntrySchema)),
   },
   { additionalProperties: false },
 );
@@ -42,6 +55,14 @@ export const ExecApprovalsFileSchema = Type.Object(
         {
           path: Type.Optional(Type.String()),
           token: Type.Optional(Type.String()),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+    managedDefaults: Type.Optional(
+      Type.Object(
+        {
+          denylistVersion: Type.Optional(Type.Literal(1)),
         },
         { additionalProperties: false },
       ),

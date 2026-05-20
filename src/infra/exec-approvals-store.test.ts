@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeTempDir } from "./exec-approvals-test-helpers.js";
+import { DEFAULT_EXEC_DENYLIST_ENTRIES } from "./exec-denylist.js";
 
 const requestJsonlSocketMock = vi.hoisted(() => vi.fn());
 
@@ -49,6 +50,16 @@ beforeAll(async () => {
     saveExecApprovals,
   } = await import("./exec-approvals.js"));
 });
+
+const normalizedDefaultExecApprovals = () =>
+  normalizeExecApprovals({
+    version: 1,
+    agents: {
+      "*": {
+        denylist: [...DEFAULT_EXEC_DENYLIST_ENTRIES],
+      },
+    },
+  });
 
 beforeEach(() => {
   requestJsonlSocketMock.mockReset();
@@ -165,7 +176,7 @@ describe("exec approvals store helpers", () => {
     const missing = readExecApprovalsSnapshot();
     expect(missing.exists).toBe(false);
     expect(missing.raw).toBeNull();
-    expect(missing.file).toEqual(normalizeExecApprovals({ version: 1, agents: {} }));
+    expect(missing.file).toEqual(normalizedDefaultExecApprovals());
     expect(path.normalize(missing.path)).toBe(path.normalize(approvalsFilePath(dir)));
 
     fs.mkdirSync(path.dirname(approvalsFilePath(dir)), { recursive: true });
@@ -174,7 +185,7 @@ describe("exec approvals store helpers", () => {
     const invalid = readExecApprovalsSnapshot();
     expect(invalid.exists).toBe(true);
     expect(invalid.raw).toBe("{invalid");
-    expect(invalid.file).toEqual(normalizeExecApprovals({ version: 1, agents: {} }));
+    expect(invalid.file).toEqual(normalizedDefaultExecApprovals());
   });
 
   it("ensures approvals file with default socket path and generated token", () => {
@@ -641,6 +652,120 @@ describe("exec approvals store helpers", () => {
     expect(allowlist[0]?.pattern).toBe("=command:test");
     expect(allowlist[0]?.source).toBe("allow-always");
     expect(allowlist[0]).not.toHaveProperty("commandText");
+  });
+
+  it("keeps built-in denylist defaults for newly created approvals files", () => {
+    const dir = createHomeDir();
+    const approvals = ensureExecApprovals();
+    const patterns = approvals.agents?.["*"]?.denylist?.map((entry) => entry.pattern) ?? [];
+
+    expect(approvals.managedDefaults?.denylistVersion).toBe(1);
+    expect(patterns).toEqual(DEFAULT_EXEC_DENYLIST_ENTRIES.map((entry) => entry.pattern));
+    expect(readApprovalsFile(dir).managedDefaults?.denylistVersion).toBe(1);
+  });
+
+  it("does not add built-in denylist defaults to existing approvals files on upgrade", () => {
+    const normalized = normalizeExecApprovals({
+      version: 1,
+      agents: {
+        "*": {
+          allowlist: [{ pattern: "git status *" }],
+        },
+      },
+    });
+
+    expect(normalized.managedDefaults?.denylistVersion).toBe(1);
+    expect(normalized.agents?.["*"]?.denylist).toBeUndefined();
+    expect(normalized.agents?.["*"]?.allowlist).toHaveLength(1);
+  });
+
+  it("preserves valid legacy wildcard denylist strings without adding built-in defaults", () => {
+    const normalized = normalizeExecApprovals({
+      version: 1,
+      agents: {
+        "*": {
+          denylist: ["python\\s+-c"] as never,
+        },
+      },
+    });
+
+    const patterns = normalized.agents?.["*"]?.denylist?.map((entry) => entry.pattern) ?? [];
+    expect(patterns).toContain("python\\s+-c");
+    expect(patterns).not.toContain(DEFAULT_EXEC_DENYLIST_ENTRIES[0]?.pattern);
+  });
+
+  it("keeps malformed existing wildcard denylist fail-closed without adding built-in defaults", () => {
+    const normalized = normalizeExecApprovals({
+      version: 1,
+      agents: {
+        "*": {
+          denylist: "not-an-array" as never,
+        },
+      },
+    });
+
+    const patterns = normalized.agents?.["*"]?.denylist?.map((entry) => entry.pattern) ?? [];
+    expect(patterns).toContain("");
+    expect(patterns).not.toContain(DEFAULT_EXEC_DENYLIST_ENTRIES[0]?.pattern);
+  });
+
+  it("does not re-add built-in denylist defaults after they have been removed", () => {
+    const normalized = normalizeExecApprovals({
+      version: 1,
+      managedDefaults: { denylistVersion: 1 },
+      agents: {
+        "*": {
+          denylist: [],
+        },
+      },
+    });
+
+    expect(normalized.agents?.["*"]?.denylist).toEqual([]);
+  });
+
+  it("preserves edited managed default denylist entries during normalization", () => {
+    const editedPattern = String.raw`(?:^|[\s;&|()<>])(?:custom-fetch)(?:\.exe)?(?:$|[\s;&|()<>])`;
+    const normalized = normalizeExecApprovals({
+      version: 1,
+      managedDefaults: { denylistVersion: 1 },
+      agents: {
+        "*": {
+          denylist: [
+            {
+              id: "default-shell-network-fetch",
+              pattern: editedPattern,
+            },
+          ],
+        },
+      },
+    });
+
+    expect(normalized.agents?.["*"]?.denylist?.[0]?.pattern).toBe(editedPattern);
+  });
+
+  it("upgrades unedited managed default denylist entries during normalization", () => {
+    const previousPattern = [
+      String.raw`(?:^|[\s;&|()<>])(?:curl|wget)(?:\.exe)?(?:$|[\s;&|()<>])`,
+      String.raw`[\\/](?:curl|wget)(?:\.exe)?(?:$|[\s;&|()<>])`,
+    ].join("|");
+    const normalized = normalizeExecApprovals({
+      version: 1,
+      managedDefaults: { denylistVersion: 1 },
+      agents: {
+        "*": {
+          denylist: [
+            {
+              id: "default-shell-network-fetch",
+              pattern: previousPattern,
+            },
+          ],
+        },
+      },
+    });
+
+    expect(normalized.agents?.["*"]?.denylist?.[0]?.pattern).toBe(
+      DEFAULT_EXEC_DENYLIST_ENTRIES[0]?.pattern,
+    );
   });
 
   it("preserves source and argPattern metadata for allow-always entries", () => {

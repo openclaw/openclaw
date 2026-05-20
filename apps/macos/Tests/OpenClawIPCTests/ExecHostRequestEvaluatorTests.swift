@@ -49,6 +49,48 @@ struct ExecHostRequestEvaluatorTests {
         }
     }
 
+    @Test func `evaluate denies denylist match before approval can allow`() {
+        let context = Self.makeContext(
+            security: .denylist,
+            ask: .always,
+            allowlistSatisfied: false,
+            denylistDenied: true,
+            skillAllow: false)
+        let decision = ExecHostRequestEvaluator.evaluate(context: context, approvalDecision: .allowOnce)
+        switch decision {
+        case let .deny(error):
+            #expect(error.reason == "denylist")
+        case .requiresPrompt:
+            Issue.record("expected denylist denial")
+        case .allow:
+            Issue.record("expected denylist denial")
+        }
+    }
+
+    @Test func `evaluate denies denylist match in allowlist mode before approval can allow`() {
+        let context = Self.makeContext(
+            security: .allowlist,
+            ask: .always,
+            allowlistSatisfied: true,
+            denylistDenied: true,
+            skillAllow: false)
+        let decision = ExecHostRequestEvaluator.evaluate(context: context, approvalDecision: .allowOnce)
+        switch decision {
+        case let .deny(error):
+            #expect(error.reason == "denylist")
+        case .requiresPrompt:
+            Issue.record("expected denylist denial")
+        case .allow:
+            Issue.record("expected denylist denial")
+        }
+    }
+
+    @Test func `quick mode preserves denylist security`() {
+        #expect(ExecApprovalQuickMode.from(security: .denylist, ask: .off) == .denylist)
+        #expect(ExecApprovalQuickMode.denylist.security == .denylist)
+        #expect(ExecApprovalQuickMode.denylist.ask == .off)
+    }
+
     @Test func `evaluate denies on explicit deny decision`() {
         let context = Self.makeContext(security: .full, ask: .off, allowlistSatisfied: true, skillAllow: false)
         let decision = ExecHostRequestEvaluator.evaluate(context: context, approvalDecision: .deny)
@@ -66,6 +108,7 @@ struct ExecHostRequestEvaluatorTests {
         security: ExecSecurity,
         ask: ExecAsk,
         allowlistSatisfied: Bool,
+        denylistDenied: Bool = false,
         skillAllow: Bool) -> ExecApprovalEvaluation
     {
         ExecApprovalEvaluation(
@@ -81,6 +124,7 @@ struct ExecHostRequestEvaluatorTests {
             allowlistMatches: [],
             allowlistSatisfied: allowlistSatisfied,
             allowlistMatch: nil,
+            denylistDenied: denylistDenied,
             skillAllow: skillAllow)
     }
 }

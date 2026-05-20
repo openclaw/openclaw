@@ -740,7 +740,7 @@ The default manifest enables the Slack App Home **Home** tab and subscribes to `
     {
       "command": "/exec",
       "description": "Show or set exec defaults",
-      "usage_hint": "host=<auto|sandbox|gateway|node> security=<deny|allowlist|full> ask=<off|on-miss|always> node=<id>"
+      "usage_hint": "host=<auto|sandbox|gateway|node> security=<deny|denylist|allowlist|full> ask=<off|on-miss|always> node=<id>"
     },
     {
       "command": "/approve",

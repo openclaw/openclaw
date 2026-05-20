@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
 import type {
   ExecApprovalsAllowlistEntry,
+  ExecApprovalsDenylistEntry,
   ExecApprovalsFile,
 } from "../controllers/exec-approvals.ts";
 import { clampText, formatRelativeTimestamp } from "../format.ts";
@@ -12,7 +13,7 @@ import {
 } from "./nodes-shared.ts";
 import type { NodesProps } from "./nodes.types.ts";
 
-type ExecSecurity = "deny" | "allowlist" | "full";
+type ExecSecurity = "deny" | "denylist" | "allowlist" | "full";
 type ExecAsk = "off" | "on-miss" | "always";
 
 type ExecApprovalsResolvedDefaults = {
@@ -37,11 +38,13 @@ type ExecApprovalsState = {
   loading: boolean;
   saving: boolean;
   form: ExecApprovalsFile | null;
+  hasInvalidDenylistEntries: boolean;
   defaults: ExecApprovalsResolvedDefaults;
   selectedScope: string;
   selectedAgent: Record<string, unknown> | null;
   agents: ExecApprovalsAgentOption[];
   allowlist: ExecApprovalsAllowlistEntry[];
+  denylist: ExecApprovalsDenylistEntry[];
   target: "gateway" | "node";
   targetNodeId: string | null;
   targetNodes: ExecApprovalsTargetNode[];
@@ -57,6 +60,7 @@ const EXEC_APPROVALS_DEFAULT_SCOPE = "__defaults__";
 
 const SECURITY_OPTIONS: Array<{ value: ExecSecurity; label: string }> = [
   { value: "deny", label: "Deny" },
+  { value: "denylist", label: "Denylist" },
   { value: "allowlist", label: "Allowlist" },
   { value: "full", label: "Full" },
 ];
@@ -68,7 +72,7 @@ const ASK_OPTIONS: Array<{ value: ExecAsk; label: string }> = [
 ];
 
 function normalizeSecurity(value?: string): ExecSecurity {
-  if (value === "allowlist" || value === "full" || value === "deny") {
+  if (value === "denylist" || value === "allowlist" || value === "full" || value === "deny") {
     return value;
   }
   return "deny";
@@ -166,6 +170,14 @@ export function resolveExecApprovalsState(props: NodesProps): ExecApprovalsState
   const allowlist = Array.isArray((selectedAgent as { allowlist?: unknown })?.allowlist)
     ? ((selectedAgent as { allowlist?: ExecApprovalsAllowlistEntry[] }).allowlist ?? [])
     : [];
+  const denylist = Array.isArray((selectedAgent as { denylist?: unknown })?.denylist)
+    ? ((selectedAgent as { denylist?: ExecApprovalsDenylistEntry[] }).denylist ?? [])
+    : [];
+  const hasInvalidDenylistEntries = denylist.some(
+    (entry) =>
+      getDenylistPattern(entry).trim().length === 0 ||
+      !isValidDenylistFlags(getDenylistFlags(entry)),
+  );
   return {
     ready,
     disabled: props.execApprovalsSaving || props.execApprovalsLoading,
@@ -173,11 +185,13 @@ export function resolveExecApprovalsState(props: NodesProps): ExecApprovalsState
     loading: props.execApprovalsLoading,
     saving: props.execApprovalsSaving,
     form,
+    hasInvalidDenylistEntries,
     defaults,
     selectedScope,
     selectedAgent,
     agents,
     allowlist,
+    denylist,
     target,
     targetNodeId,
     targetNodes,
@@ -193,20 +207,19 @@ export function resolveExecApprovalsState(props: NodesProps): ExecApprovalsState
 export function renderExecApprovals(state: ExecApprovalsState) {
   const ready = state.ready;
   const targetReady = state.target !== "node" || Boolean(state.targetNodeId);
+  const saveDisabled =
+    state.disabled || !state.dirty || !targetReady || state.hasInvalidDenylistEntries;
   return html`
     <section class="card">
       <div class="row" style="justify-content: space-between; align-items: center;">
         <div>
           <div class="card-title">Exec approvals</div>
           <div class="card-sub">
-            Allowlist and approval policy for <span class="mono">exec host=gateway/node</span>.
+            Denylist, allowlist, and approval policy for
+            <span class="mono">exec host=gateway/node</span>.
           </div>
         </div>
-        <button
-          class="btn"
-          ?disabled=${state.disabled || !state.dirty || !targetReady}
-          @click=${state.onSave}
-        >
+        <button class="btn" ?disabled=${saveDisabled} @click=${state.onSave}>
           ${state.saving ? "Saving…" : "Save"}
         </button>
       </div>
@@ -223,7 +236,7 @@ export function renderExecApprovals(state: ExecApprovalsState) {
             ${renderExecApprovalsTabs(state)} ${renderExecApprovalsPolicy(state)}
             ${state.selectedScope === EXEC_APPROVALS_DEFAULT_SCOPE
               ? nothing
-              : renderExecApprovalsAllowlist(state)}
+              : html`${renderExecApprovalsDenylist(state)} ${renderExecApprovalsAllowlist(state)}`}
           `}
     </section>
   `;
@@ -488,6 +501,147 @@ function renderExecApprovalsPolicy(state: ExecApprovalsState) {
               </button>`
             : nothing}
         </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderExecApprovalsDenylist(state: ExecApprovalsState) {
+  const denylistPath = ["agents", state.selectedScope, "denylist"];
+  const entries = state.denylist;
+  return html`
+    <div class="row" style="margin-top: 18px; justify-content: space-between;">
+      <div>
+        <div class="card-title">Denylist</div>
+        <div class="card-sub">
+          Regex rules. Matches are denied before approvals or allowlist trust.
+        </div>
+      </div>
+      <button
+        class="btn btn--sm"
+        ?disabled=${state.disabled}
+        @click=${() => {
+          const next = [...entries, { pattern: "" }];
+          state.onPatch(denylistPath, next);
+        }}
+      >
+        Add rule
+      </button>
+    </div>
+    <div class="list" style="margin-top: 12px;">
+      ${state.hasInvalidDenylistEntries
+        ? html`<div class="callout danger">
+            Denylist rules need a pattern and only i, m, or u flags before saving. Remove blank
+            rules you do not want.
+          </div>`
+        : nothing}
+      ${entries.length === 0
+        ? html` <div class="muted">No denylist rules yet.</div> `
+        : entries.map((entry, index) => renderDenylistEntry(state, entry, index))}
+    </div>
+  `;
+}
+
+function getDenylistPattern(entry: ExecApprovalsDenylistEntry): string {
+  if (typeof entry === "string") {
+    return entry;
+  }
+  return typeof entry.pattern === "string" ? entry.pattern : "";
+}
+
+function getDenylistId(entry: ExecApprovalsDenylistEntry): string | undefined {
+  return typeof entry === "string" ? undefined : entry.id;
+}
+
+function getDenylistFlags(entry: ExecApprovalsDenylistEntry): unknown {
+  return typeof entry === "string" ? undefined : entry.flags;
+}
+
+function getDenylistFlagsText(flags: unknown): string | undefined {
+  return typeof flags === "string" ? flags : undefined;
+}
+
+function isValidDenylistFlags(flags: unknown): boolean {
+  return flags == null || (typeof flags === "string" && /^[imu]*$/u.test(flags.trim()));
+}
+
+function renderDenylistEntry(
+  state: ExecApprovalsState,
+  entry: ExecApprovalsDenylistEntry,
+  index: number,
+) {
+  const pattern = getDenylistPattern(entry);
+  const rawFlags = getDenylistFlags(entry);
+  const flags = getDenylistFlagsText(rawFlags);
+  const title = getDenylistId(entry)?.trim() || `Rule ${index + 1}`;
+  return html`
+    <div class="list-item">
+      <div class="list-main">
+        <div class="list-title">${title}</div>
+        <div class="list-sub mono">${pattern.trim() ? pattern : "New rule"}</div>
+        ${flags?.trim() ? html`<div class="list-sub">Flags: ${flags}</div>` : nothing}
+      </div>
+      <div class="list-meta">
+        <label class="field">
+          <span>Pattern</span>
+          <input
+            type="text"
+            .value=${pattern}
+            ?disabled=${state.disabled}
+            @input=${(event: Event) => {
+              const target = event.target as HTMLInputElement;
+              if (typeof entry === "string") {
+                state.onPatch(["agents", state.selectedScope, "denylist", index], {
+                  pattern: target.value,
+                });
+              } else {
+                state.onPatch(
+                  ["agents", state.selectedScope, "denylist", index, "pattern"],
+                  target.value,
+                );
+              }
+            }}
+          />
+        </label>
+        <label class="field">
+          <span>Flags</span>
+          <input
+            type="text"
+            .value=${flags ?? ""}
+            ?disabled=${state.disabled}
+            @input=${(event: Event) => {
+              const target = event.target as HTMLInputElement;
+              const value = target.value.trim();
+              if (value) {
+                if (typeof entry === "string") {
+                  state.onPatch(["agents", state.selectedScope, "denylist", index], {
+                    pattern,
+                    flags: value,
+                  });
+                } else {
+                  state.onPatch(["agents", state.selectedScope, "denylist", index, "flags"], value);
+                }
+              } else {
+                if (typeof entry !== "string") {
+                  state.onRemove(["agents", state.selectedScope, "denylist", index, "flags"]);
+                }
+              }
+            }}
+          />
+        </label>
+        <button
+          class="btn btn--sm danger"
+          ?disabled=${state.disabled}
+          @click=${() => {
+            if (state.denylist.length <= 1) {
+              state.onRemove(["agents", state.selectedScope, "denylist"]);
+              return;
+            }
+            state.onRemove(["agents", state.selectedScope, "denylist", index]);
+          }}
+        >
+          Remove
+        </button>
       </div>
     </div>
   `;

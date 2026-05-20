@@ -357,12 +357,12 @@ describe("normalizeReplyPayload", () => {
 
   it("leaves complex Options lines as plain text", () => {
     const result = normalizeReplyPayload({
-      text: "ACP runtime choices.\nOptions: host=auto|sandbox|gateway|node, security=deny|allowlist|full.",
+      text: "ACP runtime choices.\nOptions: host=auto|sandbox|gateway|node, security=deny|denylist|allowlist|full.",
     });
 
     const reply = expectNormalizedReply(result);
     expect(reply.text).toBe(
-      "ACP runtime choices.\nOptions: host=auto|sandbox|gateway|node, security=deny|allowlist|full.",
+      "ACP runtime choices.\nOptions: host=auto|sandbox|gateway|node, security=deny|denylist|allowlist|full.",
     );
     expect(reply.interactive).toBeUndefined();
   });

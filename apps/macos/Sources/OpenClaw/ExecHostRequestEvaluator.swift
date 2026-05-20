@@ -53,6 +53,14 @@ enum ExecHostRequestEvaluator {
                     reason: "security=deny"))
         }
 
+        if context.denylistDenied {
+            return .deny(
+                ExecHostError(
+                    code: "UNAVAILABLE",
+                    message: "SYSTEM_RUN_DENIED: exec command is denied due to command in deny list",
+                    reason: "denylist"))
+        }
+
         if approvalDecision == .deny {
             return .deny(
                 ExecHostError(

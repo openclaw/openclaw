@@ -5,6 +5,7 @@ import {
 } from "./bash-tools.exec-approval-followup-state.js";
 import {
   buildExecApprovalPendingToolResult,
+  createExecApprovalDecisionState,
   enforceStrictInlineEvalApprovalBoundary,
   MAX_EXEC_APPROVAL_FOLLOWUP_FAILURE_LOG_KEYS as maxExecApprovalFollowupFailureLogKeys,
   resolveExecApprovalUnavailableState,
@@ -229,6 +230,33 @@ describe("sendExecApprovalFollowupResult", () => {
   });
 });
 
+describe("createExecApprovalDecisionState", () => {
+  it("does not treat denylist fallback as approved unless the denylist was prechecked", () => {
+    expect(
+      createExecApprovalDecisionState({
+        decision: null,
+        askFallback: "denylist",
+      }),
+    ).toMatchObject({
+      approvedByAsk: false,
+      deniedReason: "approval-timeout (denylist-not-checked)",
+    });
+  });
+
+  it("allows denylist fallback after the caller prechecked the denylist", () => {
+    expect(
+      createExecApprovalDecisionState({
+        decision: null,
+        askFallback: "denylist",
+        denylistFallbackPrechecked: true,
+      }),
+    ).toMatchObject({
+      approvedByAsk: true,
+      deniedReason: null,
+    });
+  });
+});
+
 describe("resolveExecHostApprovalContext", () => {
   it("does not let exec-approvals.json broaden security beyond the requested policy", () => {
     mocks.resolveExecApprovals.mockReturnValue({
@@ -251,6 +279,34 @@ describe("resolveExecHostApprovalContext", () => {
     const result = resolveExecHostApprovalContext({
       agentId: "agent-main",
       security: "allowlist",
+      ask: "off",
+      host: "gateway",
+    });
+
+    expect(result.hostSecurity).toBe("allowlist");
+  });
+
+  it("does not let requested denylist broaden a host allowlist policy", () => {
+    mocks.resolveExecApprovals.mockReturnValue({
+      defaults: {
+        security: "allowlist",
+        ask: "off",
+        askFallback: "deny",
+        autoAllowSkills: false,
+      },
+      agent: {
+        security: "allowlist",
+        ask: "off",
+        askFallback: "deny",
+        autoAllowSkills: false,
+      },
+      allowlist: [],
+      file: { version: 1, agents: {} },
+    });
+
+    const result = resolveExecHostApprovalContext({
+      agentId: "agent-main",
+      security: "denylist",
       ask: "off",
       host: "gateway",
     });

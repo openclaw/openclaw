@@ -45,7 +45,7 @@ Run in a pseudo-terminal when available. Use for TTY-only CLIs, coding agents, a
 Where to execute. `auto` resolves to `sandbox` when a sandbox runtime is active and `gateway` otherwise.
 </ParamField>
 
-<ParamField path="security" type="'deny' | 'allowlist' | 'full'">
+<ParamField path="security" type="'deny' | 'denylist' | 'allowlist' | 'full'">
 Ignored for normal tool calls. `gateway` / `node` security is controlled by
 `tools.exec.security` and `~/.openclaw/exec-approvals.json`; elevated mode can
 force `security=full` only when the operator explicitly grants elevated access.
@@ -100,6 +100,7 @@ Notes:
 ## Config
 
 - `tools.exec.notifyOnExit` (default: true): when true, backgrounded exec sessions enqueue a system event and request a heartbeat on exit.
+- `tools.exec.logDenylistDenials` (default: true): when true, exec denylist matches and malformed denylist fail-closed decisions are written to the log without exposing the raw command or regex.
 - `tools.exec.approvalRunningNoticeMs` (default: 10000): emit a single "running" notice when an approval-gated exec runs longer than this (0 disables).
 - `tools.exec.timeoutSec` (default: 1800): default per-command exec timeout in seconds. Per-call `timeout` overrides it; per-call `timeout: 0` disables the exec process timeout.
 - `tools.exec.host` (default: `auto`; resolves to `sandbox` when sandbox runtime is active, `gateway` otherwise)
@@ -107,6 +108,7 @@ Notes:
 - `tools.exec.ask` (default: `off`)
 - No-approval host exec is the default for gateway + node. If you want approvals/allowlist behavior, tighten both `tools.exec.*` and the host `~/.openclaw/exec-approvals.json`; see [Exec approvals](/tools/exec-approvals#yolo-mode-no-approval).
 - YOLO comes from the host-policy defaults (`security=full`, `ask=off`), not from `host=auto`. If you want to force gateway or node routing, set `tools.exec.host` or use `/exec host=...`.
+- `security=denylist` allows commands by default except for effective denylist rules in `~/.openclaw/exec-approvals.json`. Denylist matches do not create approval prompts and override allowlist, safe-bin, and allow-always trust. See [Exec denylist](/tools/exec-denylist) for setup and rule examples.
 - In `security=full` plus `ask=off` mode, host exec follows the configured policy directly; there is no extra heuristic command-obfuscation prefilter or script-preflight rejection layer.
 - `tools.exec.node` (default: unset)
 - `tools.exec.strictInlineEval` (default: false): when true, inline interpreter eval forms such as `python -c`, `node -e`, `ruby -e`, `perl -e`, `php -r`, `lua -e`, and `osascript -e` require reviewer or explicit approval. In `mode=auto`, the normal exec approval path may let the native auto reviewer allow a clearly low-risk one-off command; direct node-host `system.run` calls still require an explicit approval because they cannot hand the command to a human approval route. If the reviewer asks, the request goes to a human. `allow-always` can still persist benign interpreter/script invocations, but inline-eval forms do not become durable allow rules.
@@ -190,12 +192,19 @@ only path.
 Manual allowlist enforcement matches resolved binary path globs and bare command-name
 globs. Bare names match only commands invoked through PATH, so `rg` can match
 `/opt/homebrew/bin/rg` when the command is `rg`, but not `./rg` or `/tmp/rg`.
+When `security=denylist`, shell commands run unless the raw command, parsed
+argv, resolved executable path, or cheap inline command payload candidates match
+an effective denylist rule. Use this to block known-unwanted command families
+such as shell network fetches, while leaving ordinary local shell work available.
+For configuration details, see [Exec denylist](/tools/exec-denylist).
+
 When `security=allowlist`, shell commands are auto-allowed only if every pipeline
 segment is allowlisted or a safe bin. Chaining (`;`, `&&`, `||`) and redirections
 are rejected in allowlist mode unless every top-level segment satisfies the
 allowlist (including safe bins). Redirections remain unsupported.
 Durable `allow-always` trust does not bypass that rule: a chained command still requires every
 top-level segment to match.
+Effective denylist rules still win over allowlist and allow-always matches.
 
 `autoAllowSkills` is a separate convenience path in exec approvals. It is not the same as
 manual path allowlist entries. For strict explicit trust, keep `autoAllowSkills` disabled.

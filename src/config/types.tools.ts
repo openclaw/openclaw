@@ -302,7 +302,7 @@ export type ExecToolConfig = {
   /** Normalized exec policy mode. Prefer this over raw security/ask knobs. */
   mode?: "deny" | "allowlist" | "ask" | "auto" | "full";
   /** Exec security mode (default: full; sandbox host defaults to deny). */
-  security?: "deny" | "allowlist" | "full";
+  security?: "deny" | "denylist" | "allowlist" | "full";
   /** Exec ask mode (default: off). */
   ask?: "off" | "on-miss" | "always";
   /** Default node binding for exec.host=node (node id/name). */
@@ -344,6 +344,8 @@ export type ExecToolConfig = {
    * Default false to reduce context noise.
    */
   notifyOnExitEmptySuccess?: boolean;
+  /** Log exec denylist denials and malformed denylist fail-closed decisions (default: true). */
+  logDenylistDenials?: boolean;
   /** apply_patch subtool configuration. */
   applyPatch?: {
     /** Enable apply_patch for OpenAI models (default: true; set false to disable). */

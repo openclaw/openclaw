@@ -173,6 +173,7 @@ export function createDefaultExecApprovalRequestContext(params: {
 export function resolveBaseExecApprovalDecision(params: {
   decision: string | null;
   askFallback: ResolvedExecApprovals["agent"]["askFallback"];
+  denylistFallbackPrechecked?: boolean;
 }): {
   approvedByAsk: boolean;
   deniedReason: string | null;
@@ -184,6 +185,16 @@ export function resolveBaseExecApprovalDecision(params: {
   if (!params.decision) {
     if (params.askFallback === "full") {
       return { approvedByAsk: true, deniedReason: null, timedOut: true };
+    }
+    if (params.askFallback === "denylist") {
+      if (params.denylistFallbackPrechecked === true) {
+        return { approvedByAsk: true, deniedReason: null, timedOut: true };
+      }
+      return {
+        approvedByAsk: false,
+        deniedReason: "approval-timeout (denylist-not-checked)",
+        timedOut: true,
+      };
     }
     if (params.askFallback === "deny") {
       return { approvedByAsk: false, deniedReason: "approval-timeout", timedOut: true };
@@ -334,10 +345,12 @@ export function buildExecApprovalFollowupTarget(
 export function createExecApprovalDecisionState(params: {
   decision: string | null | undefined;
   askFallback: ResolvedExecApprovals["agent"]["askFallback"];
+  denylistFallbackPrechecked?: boolean;
 }) {
   const baseDecision = resolveBaseExecApprovalDecision({
     decision: params.decision ?? null,
     askFallback: params.askFallback,
+    denylistFallbackPrechecked: params.denylistFallbackPrechecked,
   });
   return {
     baseDecision,

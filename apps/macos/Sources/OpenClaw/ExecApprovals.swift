@@ -5,6 +5,7 @@ import Security
 
 enum ExecSecurity: String, CaseIterable, Codable, Identifiable {
     case deny
+    case denylist
     case allowlist
     case full
 
@@ -15,6 +16,7 @@ enum ExecSecurity: String, CaseIterable, Codable, Identifiable {
     var title: String {
         switch self {
         case .deny: "Deny"
+        case .denylist: "Denylist"
         case .allowlist: "Allowlist"
         case .full: "Always Allow"
         }
@@ -23,6 +25,7 @@ enum ExecSecurity: String, CaseIterable, Codable, Identifiable {
 
 enum ExecApprovalQuickMode: String, CaseIterable, Identifiable {
     case deny
+    case denylist
     case ask
     case allow
 
@@ -33,6 +36,7 @@ enum ExecApprovalQuickMode: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .deny: "Deny"
+        case .denylist: "Denylist"
         case .ask: "Always Ask"
         case .allow: "Always Allow"
         }
@@ -41,6 +45,7 @@ enum ExecApprovalQuickMode: String, CaseIterable, Identifiable {
     var security: ExecSecurity {
         switch self {
         case .deny: .deny
+        case .denylist: .denylist
         case .ask: .allowlist
         case .allow: .full
         }
@@ -49,6 +54,7 @@ enum ExecApprovalQuickMode: String, CaseIterable, Identifiable {
     var ask: ExecAsk {
         switch self {
         case .deny: .off
+        case .denylist: .off
         case .ask: .onMiss
         case .allow: .off
         }
@@ -58,6 +64,8 @@ enum ExecApprovalQuickMode: String, CaseIterable, Identifiable {
         switch security {
         case .deny:
             .deny
+        case .denylist:
+            .denylist
         case .full:
             .allow
         case .allowlist:
@@ -163,6 +171,57 @@ struct ExecAllowlistEntry: Codable, Hashable, Identifiable {
     }
 }
 
+struct ExecDenylistEntry: Codable, Hashable, Identifiable {
+    var id: String?
+    var pattern: String
+    var flags: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case pattern
+        case flags
+    }
+
+    init(id: String? = nil, pattern: String, flags: String? = nil) {
+        self.id = id
+        self.pattern = pattern
+        self.flags = flags
+    }
+
+    init(from decoder: Decoder) throws {
+        if let stringContainer = try? decoder.singleValueContainer(),
+           let pattern = try? stringContainer.decode(String.self)
+        {
+            self.id = nil
+            self.pattern = pattern
+            self.flags = nil
+            return
+        }
+
+        guard let container = try? decoder.container(keyedBy: CodingKeys.self) else {
+            self.id = nil
+            self.pattern = ""
+            self.flags = nil
+            return
+        }
+
+        self.id = try? container.decodeIfPresent(String.self, forKey: .id)
+        self.pattern = (try? container.decodeIfPresent(String.self, forKey: .pattern)) ?? ""
+        self.flags = try? container.decodeIfPresent(String.self, forKey: .flags)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(self.id, forKey: .id)
+        try container.encode(self.pattern, forKey: .pattern)
+        try container.encodeIfPresent(self.flags, forKey: .flags)
+    }
+}
+
+struct ExecApprovalsManagedDefaults: Codable {
+    var denylistVersion: Int?
+}
+
 struct ExecApprovalsDefaults: Codable {
     var security: ExecSecurity?
     var ask: ExecAsk?
@@ -176,10 +235,61 @@ struct ExecApprovalsAgent: Codable {
     var askFallback: ExecSecurity?
     var autoAllowSkills: Bool?
     var allowlist: [ExecAllowlistEntry]?
+    var denylist: [ExecDenylistEntry]?
+
+    private enum CodingKeys: String, CodingKey {
+        case security
+        case ask
+        case askFallback
+        case autoAllowSkills
+        case allowlist
+        case denylist
+    }
+
+    init(
+        security: ExecSecurity? = nil,
+        ask: ExecAsk? = nil,
+        askFallback: ExecSecurity? = nil,
+        autoAllowSkills: Bool? = nil,
+        allowlist: [ExecAllowlistEntry]? = nil,
+        denylist: [ExecDenylistEntry]? = nil)
+    {
+        self.security = security
+        self.ask = ask
+        self.askFallback = askFallback
+        self.autoAllowSkills = autoAllowSkills
+        self.allowlist = allowlist
+        self.denylist = denylist
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.security = try? container.decodeIfPresent(ExecSecurity.self, forKey: .security)
+        self.ask = try? container.decodeIfPresent(ExecAsk.self, forKey: .ask)
+        self.askFallback = try? container.decodeIfPresent(ExecSecurity.self, forKey: .askFallback)
+        self.autoAllowSkills = try? container.decodeIfPresent(Bool.self, forKey: .autoAllowSkills)
+        self.allowlist = try? container.decodeIfPresent([ExecAllowlistEntry].self, forKey: .allowlist)
+        if container.contains(.denylist) {
+            self.denylist = (try? container.decodeIfPresent([ExecDenylistEntry].self, forKey: .denylist))
+                ?? [ExecDenylistEntry(pattern: "")]
+        } else {
+            self.denylist = nil
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(self.security, forKey: .security)
+        try container.encodeIfPresent(self.ask, forKey: .ask)
+        try container.encodeIfPresent(self.askFallback, forKey: .askFallback)
+        try container.encodeIfPresent(self.autoAllowSkills, forKey: .autoAllowSkills)
+        try container.encodeIfPresent(self.allowlist, forKey: .allowlist)
+        try container.encodeIfPresent(self.denylist, forKey: .denylist)
+    }
 
     var isEmpty: Bool {
         self.security == nil && self.ask == nil && self.askFallback == nil && self
-            .autoAllowSkills == nil && (self.allowlist?.isEmpty ?? true)
+            .autoAllowSkills == nil && (self.allowlist?.isEmpty ?? true) && (self.denylist?.isEmpty ?? true)
     }
 }
 
@@ -191,6 +301,7 @@ struct ExecApprovalsSocketConfig: Codable {
 struct ExecApprovalsFile: Codable {
     var version: Int
     var socket: ExecApprovalsSocketConfig?
+    var managedDefaults: ExecApprovalsManagedDefaults?
     var defaults: ExecApprovalsDefaults?
     var agents: [String: ExecApprovalsAgent]?
 }
@@ -209,6 +320,7 @@ struct ExecApprovalsResolved {
     let defaults: ExecApprovalsResolvedDefaults
     let agent: ExecApprovalsResolvedDefaults
     let allowlist: [ExecAllowlistEntry]
+    let denylist: [ExecDenylistEntry]
     var file: ExecApprovalsFile
 }
 
@@ -226,6 +338,21 @@ enum ExecApprovalsStore {
     private static let defaultAsk: ExecAsk = .onMiss
     private static let defaultAskFallback: ExecSecurity = .deny
     private static let defaultAutoAllowSkills = false
+    private static let defaultDenylistVersion = 1
+    private static let defaultShellNetworkFetchId = "default-shell-network-fetch"
+    private static let previousShellNetworkFetchPattern = [
+        #"(?:^|[\s;&|()<>])(?:curl|wget)(?:\.exe)?(?:$|[\s;&|()<>])"#,
+        #"[\\/](?:curl|wget)(?:\.exe)?(?:$|[\s;&|()<>])"#,
+    ].joined(separator: "|")
+    private static let defaultDenylistEntries = [
+        ExecDenylistEntry(
+            id: defaultShellNetworkFetchId,
+            pattern: [
+                #"(?:^|[\s;&|()<>])(?:curl|wget)(?:\.exe)?(?:$|[\s;&|()<>$])"#,
+                #"[\\/](?:curl|wget)(?:\.exe)?(?:$|[\s;&|()<>$])"#,
+            ].joined(separator: "|"),
+            flags: "i"),
+    ]
     private static let secureStateDirPermissions = 0o700
     private static let fileLock = NSRecursiveLock()
 
@@ -263,6 +390,10 @@ enum ExecApprovalsStore {
                     let normalized = self.normalizeAllowlistEntries(allowlist, dropInvalid: false).entries
                     agent.allowlist = normalized.isEmpty ? nil : normalized
                 }
+                if let denylist = agent.denylist {
+                    let normalized = self.normalizeDenylistEntries(denylist, dropInvalid: false)
+                    agent.denylist = normalized.isEmpty ? nil : normalized
+                }
                 normalizedAgents[key] = agent
             }
             agents = normalizedAgents
@@ -272,6 +403,7 @@ enum ExecApprovalsStore {
             socket: ExecApprovalsSocketConfig(
                 path: socketPath.isEmpty ? nil : socketPath,
                 token: token.isEmpty ? nil : token),
+            managedDefaults: file.managedDefaults,
             defaults: file.defaults,
             agents: agents.isEmpty ? nil : agents)
     }
@@ -284,7 +416,7 @@ enum ExecApprovalsStore {
                     path: url.path,
                     exists: false,
                     hash: self.hashRaw(nil),
-                    file: ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:]))
+                    file: ExecApprovalsFile(version: 1, socket: nil, managedDefaults: nil, defaults: nil, agents: [:]))
             }
             let raw = try? String(contentsOf: url, encoding: .utf8)
             let data = raw.flatMap { $0.data(using: .utf8) }
@@ -294,7 +426,7 @@ enum ExecApprovalsStore {
                 {
                     return file
                 }
-                return ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:])
+                return ExecApprovalsFile(version: 1, socket: nil, managedDefaults: nil, defaults: nil, agents: [:])
             }()
             return ExecApprovalsSnapshot(
                 path: url.path,
@@ -310,12 +442,14 @@ enum ExecApprovalsStore {
             return ExecApprovalsFile(
                 version: file.version,
                 socket: nil,
+                managedDefaults: file.managedDefaults,
                 defaults: file.defaults,
                 agents: file.agents)
         }
         return ExecApprovalsFile(
             version: file.version,
             socket: ExecApprovalsSocketConfig(path: socketPath, token: nil),
+            managedDefaults: file.managedDefaults,
             defaults: file.defaults,
             agents: file.agents)
     }
@@ -324,18 +458,18 @@ enum ExecApprovalsStore {
         self.withFileLock {
             let url = self.fileURL()
             guard FileManager().fileExists(atPath: url.path) else {
-                return ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:])
+                return ExecApprovalsFile(version: 1, socket: nil, managedDefaults: nil, defaults: nil, agents: [:])
             }
             do {
                 let data = try Data(contentsOf: url)
                 let decoded = try JSONDecoder().decode(ExecApprovalsFile.self, from: data)
                 if decoded.version != 1 {
-                    return ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:])
+                    return ExecApprovalsFile(version: 1, socket: nil, managedDefaults: nil, defaults: nil, agents: [:])
                 }
                 return decoded
             } catch {
                 self.logger.warning("exec approvals load failed: \(error.localizedDescription, privacy: .public)")
-                return ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:])
+                return ExecApprovalsFile(version: 1, socket: nil, managedDefaults: nil, defaults: nil, agents: [:])
             }
         }
     }
@@ -378,6 +512,15 @@ enum ExecApprovalsStore {
                 file.socket?.token = self.generateToken()
             }
             if file.agents == nil { file.agents = [:] }
+            if !existed {
+                file.managedDefaults = ExecApprovalsManagedDefaults(
+                    denylistVersion: self.defaultDenylistVersion)
+                var wildcard = file.agents?["*"] ?? ExecApprovalsAgent()
+                if wildcard.denylist?.isEmpty ?? true {
+                    wildcard.denylist = self.defaultDenylistEntries
+                }
+                file.agents?["*"] = wildcard
+            }
             if !existed || loadedHash != self.hashFile(file) {
                 self.saveFile(file)
             }
@@ -417,6 +560,9 @@ enum ExecApprovalsStore {
         let allowlist = self.normalizeAllowlistEntries(
             (wildcardEntry.allowlist ?? []) + (agentEntry.allowlist ?? []),
             dropInvalid: true).entries
+        let denylist = self.normalizeDenylistEntries(
+            (wildcardEntry.denylist ?? []) + (agentEntry.denylist ?? []),
+            dropInvalid: false)
         let socketPath = self.expandPath(file.socket?.path ?? self.socketPath())
         let token = file.socket?.token ?? ""
         return ExecApprovalsResolved(
@@ -426,6 +572,7 @@ enum ExecApprovalsStore {
             defaults: resolvedDefaults,
             agent: resolvedAgent,
             allowlist: allowlist,
+            denylist: denylist,
             file: file)
     }
 
@@ -442,6 +589,27 @@ enum ExecApprovalsStore {
     static func saveDefaults(_ defaults: ExecApprovalsDefaults) {
         self.updateFile { file in
             file.defaults = defaults
+        }
+    }
+
+    static func ensureManagedDefaultDenylistRules() {
+        self.updateFile { file in
+            let hasManagedDefaults = file.managedDefaults?.denylistVersion != nil
+            var agents = file.agents ?? [:]
+            var wildcard = agents["*"] ?? ExecApprovalsAgent()
+            var denylist = self.normalizeDenylistEntries(wildcard.denylist ?? [], dropInvalid: false)
+            if !hasManagedDefaults {
+                for entry in self.defaultDenylistEntries {
+                    if !denylist.contains(where: { $0.id == entry.id }) {
+                        denylist.append(entry)
+                    }
+                }
+            }
+            wildcard.denylist = denylist
+            agents["*"] = wildcard
+            file.agents = agents
+            file.managedDefaults = ExecApprovalsManagedDefaults(
+                denylistVersion: self.defaultDenylistVersion)
         }
     }
 
@@ -726,6 +894,8 @@ enum ExecApprovalsStore {
     {
         let currentAllowlist = self.normalizeAllowlistEntries(current.allowlist ?? [], dropInvalid: false).entries
         let legacyAllowlist = self.normalizeAllowlistEntries(legacy.allowlist ?? [], dropInvalid: false).entries
+        let currentDenylist = self.normalizeDenylistEntries(current.denylist ?? [], dropInvalid: false)
+        let legacyDenylist = self.normalizeDenylistEntries(legacy.denylist ?? [], dropInvalid: false)
         var seen = Set<String>()
         var allowlist: [ExecAllowlistEntry] = []
         func append(_ entry: ExecAllowlistEntry) {
@@ -742,12 +912,75 @@ enum ExecApprovalsStore {
             append(entry)
         }
 
+        var seenDenylist = Set<String>()
+        var denylist: [ExecDenylistEntry] = []
+        func appendDenylist(_ entry: ExecDenylistEntry) {
+            let key = "\(entry.id ?? "")\n\(entry.pattern)\n\(entry.flags ?? "")"
+            guard !seenDenylist.contains(key) else { return }
+            seenDenylist.insert(key)
+            denylist.append(entry)
+        }
+        for entry in currentDenylist {
+            appendDenylist(entry)
+        }
+        for entry in legacyDenylist {
+            appendDenylist(entry)
+        }
+
         return ExecApprovalsAgent(
             security: current.security ?? legacy.security,
             ask: current.ask ?? legacy.ask,
             askFallback: current.askFallback ?? legacy.askFallback,
             autoAllowSkills: current.autoAllowSkills ?? legacy.autoAllowSkills,
-            allowlist: allowlist.isEmpty ? nil : allowlist)
+            allowlist: allowlist.isEmpty ? nil : allowlist,
+            denylist: denylist.isEmpty ? nil : denylist)
+    }
+
+    private static func normalizeDenylistEntries(
+        _ entries: [ExecDenylistEntry],
+        dropInvalid: Bool) -> [ExecDenylistEntry]
+    {
+        var normalized: [ExecDenylistEntry] = []
+        normalized.reserveCapacity(entries.count)
+        for entry in entries {
+            let pattern = entry.pattern.trimmingCharacters(in: .whitespacesAndNewlines)
+            let flags = entry.flags?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if pattern.isEmpty {
+                if !dropInvalid {
+                    normalized.append(ExecDenylistEntry(
+                        id: entry.id,
+                        pattern: entry.pattern,
+                        flags: entry.flags))
+                }
+                continue
+            }
+            normalized.append(ExecDenylistEntry(
+                id: entry.id,
+                pattern: pattern,
+                flags: flags?.isEmpty == false ? flags : nil))
+        }
+        self.migrateUneditedManagedDefaultDenylistEntries(&normalized)
+        return normalized
+    }
+
+    private static func migrateUneditedManagedDefaultDenylistEntries(
+        _ entries: inout [ExecDenylistEntry])
+    {
+        guard let current = self.defaultDenylistEntries.first(
+            where: { $0.id == self.defaultShellNetworkFetchId })
+        else {
+            return
+        }
+        for index in entries.indices where
+            entries[index].id == self.defaultShellNetworkFetchId &&
+            entries[index].pattern == self.previousShellNetworkFetchPattern &&
+            entries[index].flags == nil
+        {
+            entries[index] = ExecDenylistEntry(
+                id: entries[index].id,
+                pattern: current.pattern,
+                flags: current.flags)
+        }
     }
 }
 

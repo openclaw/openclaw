@@ -24,7 +24,7 @@ import {
   resolveExecApprovalsPath,
   saveExecApprovals,
 } from "../infra/exec-approvals.js";
-import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
+import { DEFAULT_EXEC_DENYLIST_ENTRIES } from "../infra/exec-denylist.js";
 import type { ExecHostResponse } from "../infra/exec-host.js";
 import { buildSystemRunApprovalPlan } from "./invoke-system-run-plan.js";
 import { handleSystemRunInvoke } from "./invoke-system-run.js";
@@ -291,14 +291,6 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     };
   }
 
-  function resolveProductionExecSecurity(value?: string): "deny" | "allowlist" | "full" {
-    return value === "deny" || value === "allowlist" || value === "full" ? value : "allowlist";
-  }
-
-  function resolveProductionExecAsk(value?: string): "off" | "on-miss" | "always" {
-    return value === "off" || value === "on-miss" || value === "always" ? value : "on-miss";
-  }
-
   function createInvokeSpies(params?: { runCommand?: MockedRunCommand }): {
     runCommand: MockedRunCommand;
     sendInvokeResult: MockedSendInvokeResult;
@@ -447,8 +439,10 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     rawCommand?: string | null;
     systemRunPlan?: SystemRunApprovalPlan | null;
     cwd?: string;
-    security?: "full" | "allowlist";
+    security?: "full" | "denylist" | "allowlist";
     ask?: "off" | "on-miss" | "always";
+    requestedSecurity?: "full" | "denylist" | "allowlist";
+    requestedAsk?: "off" | "on-miss" | "always";
     approvalDecision?: "allow" | "allow-always" | "deny" | null;
     approved?: boolean;
     runCommand?: HandleSystemRunInvokeOptions["runCommand"];
@@ -459,9 +453,6 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     skillBinsCurrent?: () => Promise<Array<{ name: string; resolvedPath: string }>>;
     isCmdExeInvocation?: HandleSystemRunInvokeOptions["isCmdExeInvocation"];
     sanitizeEnv?: HandleSystemRunInvokeOptions["sanitizeEnv"];
-    resolveExecSecurity?: HandleSystemRunInvokeOptions["resolveExecSecurity"];
-    resolveExecAsk?: HandleSystemRunInvokeOptions["resolveExecAsk"];
-    autoReviewer?: ExecAutoReviewer;
   }): Promise<{
     runCommand: MockedRunCommand;
     runViaMacAppExecHost: MockedRunViaMacAppExecHost;
@@ -511,6 +502,8 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         cwd: params.cwd,
         approvalDecision: params.approvalDecision,
         approved: params.approved ?? false,
+        requestedSecurity: params.requestedSecurity,
+        requestedAsk: params.requestedAsk,
         sessionKey: "agent:main:main",
       },
       skillBins: {
@@ -518,8 +511,14 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       },
       execHostEnforced: false,
       execHostFallbackAllowed: true,
-      resolveExecSecurity: params.resolveExecSecurity ?? (() => params.security ?? "full"),
-      resolveExecAsk: params.resolveExecAsk ?? (() => params.ask ?? "off"),
+      resolveExecSecurity: (value) =>
+        value === "full" || value === "denylist" || value === "allowlist"
+          ? value
+          : (params.security ?? "full"),
+      resolveExecAsk: (value) =>
+        value === "off" || value === "on-miss" || value === "always"
+          ? value
+          : (params.ask ?? "off"),
       isCmdExeInvocation: params.isCmdExeInvocation ?? (() => false),
       sanitizeEnv: params.sanitizeEnv ?? (() => undefined),
       runCommand,
@@ -530,7 +529,6 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       sendExecFinishedEvent,
       preferMacAppExecHost: params.preferMacAppExecHost,
       getRuntimeConfig: () => getRuntimeConfigSnapshot() ?? {},
-      autoReviewer: params.autoReviewer,
     });
 
     return {
@@ -585,191 +583,187 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     );
   });
 
-  it("uses auto reviewer for system.run approval misses when exec mode is auto", async () => {
-    const tmp = createFixtureDir("openclaw-system-run-auto-review-");
-    const executablePath = createTempExecutable({ dir: tmp, name: "read-info" });
-    setRuntimeConfigSnapshot({
-      tools: {
-        exec: {
-          mode: "auto",
-        },
-      },
+  it("denies node system.run denylist matches before execution", async () => {
+    const invoke = await runSystemInvoke({
+      preferMacAppExecHost: false,
+      command: ["curl", "https://example.test/prompt"],
+      security: "denylist",
+      ask: "off",
     });
-    try {
-      const autoReviewer = vi.fn<ExecAutoReviewer>(() => ({
-        decision: "allow-once",
-        rationale: "reads fixture metadata only",
-        risk: "low",
-      }));
-      const runCommand = vi.fn(async () => createLocalRunResult("auto-reviewed"));
-      const prepared = buildSystemRunApprovalPlan({
-        command: [executablePath],
-        cwd: tmp,
-      });
-      expect(prepared.ok).toBe(true);
-      if (!prepared.ok) {
-        throw new Error("unreachable");
-      }
-      const invoke = await runSystemInvoke({
-        preferMacAppExecHost: false,
-        command: prepared.plan.argv,
-        cwd: prepared.plan.cwd ?? tmp,
-        systemRunPlan: prepared.plan,
-        runCommand,
-        resolveExecSecurity: resolveProductionExecSecurity,
-        resolveExecAsk: resolveProductionExecAsk,
-        autoReviewer,
-      });
 
-      expect(autoReviewer).toHaveBeenCalledTimes(1);
-      expect(autoReviewer).toHaveBeenCalledWith(
-        expect.objectContaining({
-          command: executablePath,
-          argv: [executablePath],
-          cwd: tmp,
-          host: "node",
-          reason: "approval-required",
-          analysis: expect.objectContaining({
-            parsed: true,
-            allowlistMatched: false,
-            inlineEval: false,
-          }),
-        }),
-      );
-      expect(runCommand).toHaveBeenCalledTimes(1);
-      expectInvokeOk(invoke.sendInvokeResult, { payloadContains: "auto-reviewed" });
-    } finally {
-      clearRuntimeConfigSnapshot();
-    }
+    expect(invoke.runCommand).not.toHaveBeenCalled();
+    expectInvokeErrorMessage(invoke.sendInvokeResult, {
+      message: "exec command is denied due to command in deny list",
+    });
   });
 
-  it("does not auto-review direct system.run approval misses without an approval plan", async () => {
-    const tmp = createFixtureDir("openclaw-system-run-auto-review-no-plan-");
-    const executablePath = createTempExecutable({ dir: tmp, name: "read-info" });
-    setRuntimeConfigSnapshot({
-      tools: {
-        exec: {
-          mode: "auto",
+  it("denies node system.run wrapper executable denylist matches", async () => {
+    const approvals = loadExecApprovals();
+    saveExecApprovals({
+      ...approvals,
+      agents: {
+        ...approvals.agents,
+        main: {
+          denylist: [{ pattern: String.raw`(?:^|[\\/])sh(?:$|\s)` }],
         },
       },
     });
-    try {
-      const autoReviewer = vi.fn<ExecAutoReviewer>(() => ({
-        decision: "allow-once",
-        rationale: "reads fixture metadata only",
-        risk: "low",
-      }));
-      const runCommand = vi.fn(async () => createLocalRunResult("should-not-run"));
-      const invoke = await runSystemInvoke({
-        preferMacAppExecHost: false,
-        command: [executablePath],
-        cwd: tmp,
-        runCommand,
-        resolveExecSecurity: resolveProductionExecSecurity,
-        resolveExecAsk: resolveProductionExecAsk,
-        autoReviewer,
-      });
 
-      expect(autoReviewer).not.toHaveBeenCalled();
-      expect(runCommand).not.toHaveBeenCalled();
-      expectInvokeErrorMessage(invoke.sendInvokeResult, {
-        message: "SYSTEM_RUN_DENIED: approval required",
-      });
-    } finally {
-      clearRuntimeConfigSnapshot();
-    }
+    const invoke = await runSystemInvoke({
+      preferMacAppExecHost: false,
+      command: ["/bin/sh", "-lc", "echo ok"],
+      security: "denylist",
+      ask: "off",
+    });
+
+    expect(invoke.runCommand).not.toHaveBeenCalled();
+    expectInvokeErrorMessage(invoke.sendInvokeResult, {
+      message: "exec command is denied due to command in deny list",
+    });
   });
 
-  it("does not auto-review direct system.run security audit suppression edits", async () => {
-    const tmp = createFixtureDir("openclaw-system-run-auto-review-suppression-");
-    const executablePath = createTempExecutable({ dir: tmp, name: "openclaw" });
-    setRuntimeConfigSnapshot({
-      tools: {
-        exec: {
-          mode: "auto",
+  it("does not let broader host approvals bypass requested denylist security", async () => {
+    const approvals = loadExecApprovals();
+    saveExecApprovals({
+      ...approvals,
+      agents: {
+        ...approvals.agents,
+        main: {
+          security: "full",
+          ask: "off",
         },
       },
     });
-    try {
-      const autoReviewer = vi.fn<ExecAutoReviewer>(() => ({
-        decision: "allow-once",
-        rationale: "test reviewer would allow it",
-        risk: "low",
-      }));
-      const runCommand = vi.fn(async () => createLocalRunResult("should-not-run"));
-      const prepared = buildSystemRunApprovalPlan({
-        command: [executablePath, "config", "set", "security.audit.suppressions", "[]"],
-        cwd: tmp,
-      });
-      expect(prepared.ok).toBe(true);
-      if (!prepared.ok) {
-        throw new Error("unreachable");
-      }
-      const invoke = await runSystemInvoke({
-        preferMacAppExecHost: false,
-        command: prepared.plan.argv,
-        cwd: prepared.plan.cwd ?? tmp,
-        systemRunPlan: prepared.plan,
-        runCommand,
-        resolveExecSecurity: resolveProductionExecSecurity,
-        resolveExecAsk: resolveProductionExecAsk,
-        autoReviewer,
-      });
 
-      expect(autoReviewer).not.toHaveBeenCalled();
-      expect(runCommand).not.toHaveBeenCalled();
-      expectInvokeErrorMessage(invoke.sendInvokeResult, {
-        message: "SYSTEM_RUN_DENIED: approval required",
-      });
-    } finally {
-      clearRuntimeConfigSnapshot();
-    }
+    const invoke = await runSystemInvoke({
+      preferMacAppExecHost: false,
+      command: ["curl", "https://example.test/prompt"],
+      security: "denylist",
+      ask: "off",
+    });
+
+    expect(invoke.runCommand).not.toHaveBeenCalled();
+    expectInvokeErrorMessage(invoke.sendInvokeResult, {
+      message: "exec command is denied due to command in deny list",
+    });
   });
 
-  it("defers to human approval when system.run auto reviewer asks", async () => {
-    const tmp = createFixtureDir("openclaw-system-run-auto-review-ask-");
-    const executablePath = createTempExecutable({ dir: tmp, name: "read-info" });
-    setRuntimeConfigSnapshot({
-      tools: {
-        exec: {
-          mode: "auto",
+  it("denies explicit node-owned denylist matches in allowlist mode", async () => {
+    const approvals = loadExecApprovals();
+    saveExecApprovals({
+      ...approvals,
+      agents: {
+        ...approvals.agents,
+        main: {
+          allowlist: [{ pattern: "*" }],
+          denylist: [{ pattern: String.raw`(?:^|\s)echo(?:\s|$)` }],
         },
       },
     });
-    try {
-      const autoReviewer = vi.fn<ExecAutoReviewer>(() => ({
-        decision: "ask",
-        rationale: "needs a person",
-        risk: "medium",
-      }));
-      const runCommand = vi.fn(async () => createLocalRunResult("should-not-run"));
-      const prepared = buildSystemRunApprovalPlan({
-        command: [executablePath],
-        cwd: tmp,
-      });
-      expect(prepared.ok).toBe(true);
-      if (!prepared.ok) {
-        throw new Error("unreachable");
-      }
-      const invoke = await runSystemInvoke({
-        preferMacAppExecHost: false,
-        command: prepared.plan.argv,
-        cwd: prepared.plan.cwd ?? tmp,
-        systemRunPlan: prepared.plan,
-        runCommand,
-        resolveExecSecurity: resolveProductionExecSecurity,
-        resolveExecAsk: resolveProductionExecAsk,
-        autoReviewer,
-      });
 
-      expect(autoReviewer).toHaveBeenCalledTimes(1);
-      expect(runCommand).not.toHaveBeenCalled();
-      expectInvokeErrorMessage(invoke.sendInvokeResult, {
-        message: "exec auto-review deferred to human approval",
-      });
-    } finally {
-      clearRuntimeConfigSnapshot();
-    }
+    const invoke = await runSystemInvoke({
+      preferMacAppExecHost: false,
+      command: ["echo", "ok"],
+      security: "allowlist",
+      ask: "off",
+    });
+
+    expect(invoke.runCommand).not.toHaveBeenCalled();
+    expectInvokeErrorMessage(invoke.sendInvokeResult, {
+      message: "exec command is denied due to command in deny list",
+    });
+  });
+
+  it("does not apply managed default node-owned deny rules in allowlist mode", async () => {
+    const approvals = loadExecApprovals();
+    saveExecApprovals({
+      ...approvals,
+      agents: {
+        ...approvals.agents,
+        main: {
+          allowlist: [{ pattern: "*" }],
+          denylist: [...DEFAULT_EXEC_DENYLIST_ENTRIES],
+        },
+      },
+    });
+
+    const invoke = await runSystemInvoke({
+      preferMacAppExecHost: false,
+      command: ["curl", "https://example.test/prompt"],
+      security: "allowlist",
+      ask: "off",
+    });
+
+    expect(invoke.runCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it("applies requested denylist security against node-owned approvals", async () => {
+    const invoke = await runSystemInvoke({
+      preferMacAppExecHost: false,
+      command: ["curl", "https://example.test/prompt"],
+      security: "full",
+      ask: "off",
+      requestedSecurity: "denylist",
+      requestedAsk: "off",
+    });
+
+    expect(invoke.runCommand).not.toHaveBeenCalled();
+    expectInvokeErrorMessage(invoke.sendInvokeResult, {
+      message: "exec command is denied due to command in deny list",
+    });
+  });
+
+  it("does not apply gateway defaults when node-owned denylist removed defaults", async () => {
+    const approvals = loadExecApprovals();
+    saveExecApprovals({
+      ...approvals,
+      managedDefaults: { denylistVersion: 1 },
+      agents: {
+        ...approvals.agents,
+        "*": {
+          denylist: [],
+        },
+        main: {
+          security: "full",
+          ask: "off",
+        },
+      },
+    });
+
+    const invoke = await runSystemInvoke({
+      preferMacAppExecHost: false,
+      command: ["curl", "https://example.test/prompt"],
+      security: "full",
+      ask: "off",
+      requestedSecurity: "denylist",
+      requestedAsk: "off",
+    });
+
+    expect(invoke.runCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not let host approvals broaden configured ask policy", async () => {
+    const approvals = loadExecApprovals();
+    saveExecApprovals({
+      ...approvals,
+      defaults: {
+        security: "full",
+        ask: "off",
+        askFallback: "full",
+      },
+    });
+
+    const invoke = await runSystemInvoke({
+      preferMacAppExecHost: false,
+      command: ["echo", "ok"],
+      security: "full",
+      ask: "always",
+    });
+
+    expect(invoke.runCommand).not.toHaveBeenCalled();
+    expectInvokeErrorMessage(invoke.sendInvokeResult, {
+      message: "SYSTEM_RUN_DENIED: approval required",
+    });
   });
 
   const approvedEnvShellWrapperCases = [

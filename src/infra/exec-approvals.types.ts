@@ -8,3 +8,9 @@ export type ExecAllowlistEntry = {
   lastUsedCommand?: string;
   lastResolvedPath?: string;
 };
+
+export type ExecDenylistEntry = {
+  id?: string;
+  pattern: string;
+  flags?: string;
+};

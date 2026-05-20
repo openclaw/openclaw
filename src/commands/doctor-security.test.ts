@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { MAX_EXEC_DENYLIST_RULES } from "../infra/exec-denylist.js";
 
 const note = vi.hoisted(() => vi.fn());
 const pluginRegistry = vi.hoisted(() => ({ list: [] as unknown[] }));
@@ -453,20 +454,21 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).toContain("stricter side wins");
   });
 
-  it("warns when normalized tools.exec mode is broader than host exec defaults", async () => {
+  it("warns when tools.exec denylist is broader than host allowlist", async () => {
     await withExecApprovalsFile(
       {
         version: 1,
         defaults: {
           security: "allowlist",
-          ask: "on-miss",
+          ask: "off",
         },
       },
       async () => {
         await noteSecurityWarnings({
           tools: {
             exec: {
-              mode: "full",
+              security: "denylist",
+              ask: "off",
             },
           },
         } as OpenClawConfig);
@@ -475,9 +477,8 @@ describe("noteSecurityWarnings gateway exposure", () => {
 
     const message = lastMessage();
     expect(message).toContain("tools.exec is broader than the host exec policy");
-    expect(message).toContain('tools.exec.mode="full"');
+    expect(message).toContain('security="denylist"');
     expect(message).toContain('defaults.security="allowlist"');
-    expect(message).not.toContain("OpenClaw default");
   });
 
   it("attributes broader host policy warnings to wildcard agent entries", async () => {
@@ -527,6 +528,50 @@ describe("noteSecurityWarnings gateway exposure", () => {
     const message = lastMessage();
     expect(message).toContain("No channel security warnings detected");
     expect(message).not.toContain('ask="on-miss"');
+  });
+
+  it("warns when exec denylist rules are invalid", async () => {
+    await withExecApprovalsFile(
+      {
+        version: 1,
+        agents: {
+          main: {
+            denylist: [{ pattern: "(a+)+" }],
+          },
+        },
+      },
+      async () => {
+        await noteSecurityWarnings({} as OpenClawConfig);
+      },
+    );
+
+    const message = lastMessage();
+    expect(message).toContain("agents.main.denylist is invalid");
+    expect(message).toContain("unsafe-regex rule 0");
+    expect(message).toContain("fails closed");
+  });
+
+  it("warns when exec denylist has too many rules", async () => {
+    await withExecApprovalsFile(
+      {
+        version: 1,
+        agents: {
+          main: {
+            denylist: Array.from({ length: MAX_EXEC_DENYLIST_RULES + 1 }, (_, idx) => ({
+              pattern: `rule-${idx}`,
+            })),
+          },
+        },
+      },
+      async () => {
+        await noteSecurityWarnings({} as OpenClawConfig);
+      },
+    );
+
+    const message = lastMessage();
+    expect(message).toContain("agents.main.denylist is invalid");
+    expect(message).toContain("too-many-rules");
+    expect(message).toContain("fails closed");
   });
 
   it("warns when a per-agent exec policy is broader than the matching host agent policy", async () => {

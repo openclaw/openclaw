@@ -19,13 +19,23 @@ export type ExecApprovalsAllowlistEntry = {
   lastResolvedPath?: string;
 };
 
+export type ExecApprovalsDenylistObjectEntry = {
+  id?: string;
+  pattern: string;
+  flags?: string;
+};
+
+export type ExecApprovalsDenylistEntry = string | ExecApprovalsDenylistObjectEntry;
+
 export type ExecApprovalsAgent = ExecApprovalsDefaults & {
   allowlist?: ExecApprovalsAllowlistEntry[];
+  denylist?: ExecApprovalsDenylistEntry[];
 };
 
 export type ExecApprovalsFile = {
   version?: number;
   socket?: { path?: string };
+  managedDefaults?: { denylistVersion?: 1 };
   defaults?: ExecApprovalsDefaults;
   agents?: Record<string, ExecApprovalsAgent>;
 };

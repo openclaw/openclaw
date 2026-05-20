@@ -11,19 +11,20 @@ import {
 import type { CommandExplanationSummary } from "./command-analysis/explain.js";
 import { resolveAllowAlwaysPatternEntries } from "./exec-approvals-allowlist.js";
 import { analyzeShellCommand, type ExecCommandSegment } from "./exec-approvals-analysis.js";
-import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
+import type { ExecAllowlistEntry, ExecDenylistEntry } from "./exec-approvals.types.js";
+import { DEFAULT_EXEC_DENYLIST_ENTRIES } from "./exec-denylist.js";
 import { assertNoSymlinkParentsSync } from "./fs-safe-advanced.js";
 import { expandHomePrefix, resolveRequiredHomeDir } from "./home-dir.js";
 import { requestJsonlSocket } from "./jsonl-socket.js";
 export * from "./exec-approvals-analysis.js";
 export * from "./exec-approvals-allowlist.js";
-export type { ExecAllowlistEntry } from "./exec-approvals.types.js";
+export type { ExecAllowlistEntry, ExecDenylistEntry } from "./exec-approvals.types.js";
 
 export type ExecHost = "sandbox" | "gateway" | "node";
 export type ExecTarget = "auto" | ExecHost;
-export type ExecSecurity = "deny" | "allowlist" | "full";
+export type ExecSecurity = "deny" | "denylist" | "allowlist" | "full";
 export type ExecAsk = "off" | "on-miss" | "always";
-export type ExecMode = "deny" | "allowlist" | "ask" | "auto" | "full";
+export type ExecMode = "deny" | "denylist" | "allowlist" | "ask" | "auto" | "full";
 
 export const EXEC_TARGET_VALUES: readonly ExecTarget[] = ["auto", "sandbox", "gateway", "node"];
 
@@ -72,7 +73,12 @@ const toStringOrUndefined = readStringValue;
 
 export function normalizeExecSecurity(value?: string | null): ExecSecurity | null {
   const normalized = normalizeOptionalLowercaseString(value);
-  if (normalized === "deny" || normalized === "allowlist" || normalized === "full") {
+  if (
+    normalized === "deny" ||
+    normalized === "denylist" ||
+    normalized === "allowlist" ||
+    normalized === "full"
+  ) {
     return normalized;
   }
   return null;
@@ -86,10 +92,116 @@ export function normalizeExecAsk(value?: string | null): ExecAsk | null {
   return null;
 }
 
+function normalizeCommandName(value: string | undefined): string {
+  return (value ?? "").split(/[\\/]/).pop()?.toLowerCase() ?? "";
+}
+
+function textMentionsSecurityAuditSuppressions(value: string): boolean {
+  const normalized = value.toLowerCase();
+  return (
+    normalized.includes("security.audit.suppressions") ||
+    /["']?security["']?[\s\S]{0,200}["']?audit["']?[\s\S]{0,200}["']?suppressions["']?/.test(
+      normalized,
+    )
+  );
+}
+
+function isReadOnlySecurityAuditSuppressionInspection(argv: string[]): boolean {
+  const command = normalizeCommandName(argv[0]);
+  let offset = command === "pnpm" && argv[1] === "openclaw" ? 1 : 0;
+  if (normalizeCommandName(argv[offset]) !== "openclaw") {
+    return false;
+  }
+  offset += 1;
+  while (offset < argv.length) {
+    const arg = argv[offset];
+    if (["--dev", "--no-color"].includes(arg ?? "")) {
+      offset += 1;
+      continue;
+    }
+    if (["--profile", "--container", "--log-level"].includes(arg ?? "")) {
+      offset += 2;
+      continue;
+    }
+    if (
+      arg?.startsWith("--profile=") ||
+      arg?.startsWith("--container=") ||
+      arg?.startsWith("--log-level=")
+    ) {
+      offset += 1;
+      continue;
+    }
+    break;
+  }
+  return (
+    argv[offset] === "config" && ["get", "schema", "validate"].includes(argv[offset + 1] ?? "")
+  );
+}
+
+function removeParsedSegmentText(command: string, segments: Array<{ raw?: string }>): string {
+  let remaining = command;
+  for (const segment of segments) {
+    const raw = segment.raw?.trim();
+    if (!raw) {
+      continue;
+    }
+    remaining = remaining.replace(raw, " ");
+  }
+  return remaining;
+}
+
+export function commandRequiresSecurityAuditSuppressionApproval(params: {
+  command: string;
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  segments: Array<{ argv: string[]; raw?: string }>;
+}): boolean {
+  let sawSegmentMention = false;
+  for (const segment of params.segments) {
+    const segmentText = `${segment.raw ?? ""} ${segment.argv.join(" ")}`;
+    if (!textMentionsSecurityAuditSuppressions(segmentText)) {
+      continue;
+    }
+    sawSegmentMention = true;
+    if (!isReadOnlySecurityAuditSuppressionInspection(segment.argv)) {
+      return true;
+    }
+  }
+  if (sawSegmentMention) {
+    const rawAnalysis = analyzeShellCommand({
+      command: params.command,
+      cwd: params.cwd,
+      env: params.env,
+      platform: process.platform,
+    });
+    if (!rawAnalysis.ok) {
+      return textMentionsSecurityAuditSuppressions(params.command);
+    }
+    for (const segment of rawAnalysis.segments) {
+      if (
+        textMentionsSecurityAuditSuppressions(`${segment.raw} ${segment.argv.join(" ")}`) &&
+        !isReadOnlySecurityAuditSuppressionInspection(segment.argv)
+      ) {
+        return true;
+      }
+    }
+    if (
+      textMentionsSecurityAuditSuppressions(
+        removeParsedSegmentText(params.command, rawAnalysis.segments),
+      )
+    ) {
+      return true;
+    }
+    return false;
+  }
+  return textMentionsSecurityAuditSuppressions(params.command);
+}
+
 export function normalizeExecMode(value?: string | null): ExecMode | null {
   const normalized = normalizeOptionalLowercaseString(value);
   if (
     normalized === "deny" ||
+    normalized === "denylist" ||
     normalized === "allowlist" ||
     normalized === "ask" ||
     normalized === "auto" ||
@@ -100,12 +212,39 @@ export function normalizeExecMode(value?: string | null): ExecMode | null {
   return null;
 }
 
+export function resolveExecPolicyForMode(mode: ExecMode): {
+  security: ExecSecurity;
+  ask: ExecAsk;
+  autoReview: boolean;
+} {
+  switch (mode) {
+    case "deny":
+      return { security: "deny", ask: "off", autoReview: false };
+    case "denylist":
+      return { security: "denylist", ask: "off", autoReview: false };
+    case "allowlist":
+      return { security: "allowlist", ask: "off", autoReview: false };
+    case "ask":
+      return { security: "allowlist", ask: "on-miss", autoReview: false };
+    case "auto":
+      return { security: "allowlist", ask: "on-miss", autoReview: true };
+    case "full":
+      return { security: "full", ask: "off", autoReview: false };
+  }
+  const unreachable: never = mode;
+  void unreachable;
+  throw new Error("Unhandled exec mode");
+}
+
 export function resolveExecModeFromPolicy(params: {
   security: ExecSecurity;
   ask: ExecAsk;
 }): ExecMode {
   if (params.security === "deny") {
     return "deny";
+  }
+  if (params.security === "denylist" && params.ask === "off") {
+    return "denylist";
   }
   if (params.security === "allowlist" && params.ask === "off") {
     return "allowlist";
@@ -116,48 +255,20 @@ export function resolveExecModeFromPolicy(params: {
   return "ask";
 }
 
-export function resolveExecPolicyForMode(mode: ExecMode): {
-  security: ExecSecurity;
-  ask: ExecAsk;
-  autoReview: boolean;
-} {
-  switch (mode) {
-    case "deny":
-      return { security: "deny", ask: "off", autoReview: false };
-    case "allowlist":
-      return { security: "allowlist", ask: "off", autoReview: false };
-    case "ask":
-      return { security: "allowlist", ask: "on-miss", autoReview: false };
-    case "auto":
-      return { security: "allowlist", ask: "on-miss", autoReview: true };
-    case "full":
-      return { security: "full", ask: "off", autoReview: false };
-  }
-  const exhaustiveMode: never = mode;
-  throw new Error(`Unsupported exec mode: ${String(exhaustiveMode)}`);
-}
-
 export function resolveExecModePolicy(params: {
   mode?: ExecMode | null;
   security: ExecSecurity;
   ask: ExecAsk;
-}): {
-  mode: ExecMode;
-  security: ExecSecurity;
-  ask: ExecAsk;
-  autoReview: boolean;
-} {
-  if (!params.mode) {
-    return {
-      mode: resolveExecModeFromPolicy({ security: params.security, ask: params.ask }),
-      security: params.security,
-      ask: params.ask,
-      autoReview: false,
-    };
+}): { mode: ExecMode; security: ExecSecurity; ask: ExecAsk; autoReview: boolean } {
+  if (params.mode) {
+    const policy = resolveExecPolicyForMode(params.mode);
+    return { mode: params.mode, ...policy };
   }
   return {
-    mode: params.mode,
-    ...resolveExecPolicyForMode(params.mode),
+    mode: resolveExecModeFromPolicy({ security: params.security, ask: params.ask }),
+    security: params.security,
+    ask: params.ask,
+    autoReview: false,
   };
 }
 
@@ -240,6 +351,7 @@ export type ExecApprovalsDefaults = {
 
 export type ExecApprovalsAgent = ExecApprovalsDefaults & {
   allowlist?: ExecAllowlistEntry[];
+  denylist?: ExecDenylistEntry[];
 };
 
 export type ExecApprovalsFile = {
@@ -247,6 +359,9 @@ export type ExecApprovalsFile = {
   socket?: {
     path?: string;
     token?: string;
+  };
+  managedDefaults?: {
+    denylistVersion?: 1;
   };
   defaults?: ExecApprovalsDefaults;
   agents?: Record<string, ExecApprovalsAgent>;
@@ -272,6 +387,7 @@ export type ExecApprovalsResolved = {
     askFallback: string | null;
   };
   allowlist: ExecAllowlistEntry[];
+  denylist: ExecDenylistEntry[];
   file: ExecApprovalsFile;
 };
 
@@ -284,6 +400,12 @@ export const DEFAULT_EXEC_APPROVAL_ASK_FALLBACK: ExecSecurity = "full";
 const DEFAULT_AUTO_ALLOW_SKILLS = false;
 const DEFAULT_SOCKET = "~/.openclaw/exec-approvals.sock";
 const DEFAULT_FILE = "~/.openclaw/exec-approvals.json";
+const DEFAULT_DENYLIST_VERSION = 1;
+const DEFAULT_SHELL_NETWORK_FETCH_ID = "default-shell-network-fetch";
+const PREVIOUS_SHELL_NETWORK_FETCH_PATTERN = [
+  String.raw`(?:^|[\s;&|()<>])(?:curl|wget)(?:\.exe)?(?:$|[\s;&|()<>])`,
+  String.raw`[\\/](?:curl|wget)(?:\.exe)?(?:$|[\s;&|()<>])`,
+].join("|");
 
 function hashExecApprovalsRaw(raw: string | null): string {
   return crypto
@@ -310,7 +432,9 @@ function mergeLegacyAgent(
   legacy: ExecApprovalsAgent,
 ): ExecApprovalsAgent {
   const allowlist: ExecAllowlistEntry[] = [];
+  const denylist: ExecDenylistEntry[] = [];
   const seen = new Set<string>();
+  const seenDeny = new Set<string>();
   const pushEntry = (entry: ExecAllowlistEntry) => {
     const patternKey = normalizeAllowlistPattern(entry.pattern);
     if (!patternKey) {
@@ -323,11 +447,30 @@ function mergeLegacyAgent(
     seen.add(key);
     allowlist.push(entry);
   };
+  const pushDenyEntry = (entry: ExecDenylistEntry) => {
+    const patternKey = normalizeAllowlistPattern(entry.pattern);
+    if (!patternKey) {
+      return;
+    }
+    const flags = entry.flags?.trim() ?? "";
+    const key = `${patternKey}\x00${flags}`;
+    if (seenDeny.has(key)) {
+      return;
+    }
+    seenDeny.add(key);
+    denylist.push(entry);
+  };
   for (const entry of current.allowlist ?? []) {
     pushEntry(entry);
   }
   for (const entry of legacy.allowlist ?? []) {
     pushEntry(entry);
+  }
+  for (const entry of current.denylist ?? []) {
+    pushDenyEntry(entry);
+  }
+  for (const entry of legacy.denylist ?? []) {
+    pushDenyEntry(entry);
   }
 
   return {
@@ -336,6 +479,7 @@ function mergeLegacyAgent(
     askFallback: current.askFallback ?? legacy.askFallback,
     autoAllowSkills: current.autoAllowSkills ?? legacy.autoAllowSkills,
     allowlist: allowlist.length > 0 ? allowlist : undefined,
+    denylist: denylist.length > 0 ? denylist : undefined,
   };
 }
 
@@ -605,6 +749,48 @@ function coerceAllowlistEntries(allowlist: unknown): ExecAllowlistEntry[] | unde
   return changed ? (result.length > 0 ? result : undefined) : (allowlist as ExecAllowlistEntry[]);
 }
 
+function coerceDenylistEntries(denylist: unknown): ExecDenylistEntry[] | undefined {
+  if (denylist === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(denylist)) {
+    return [{ pattern: "" }];
+  }
+  if (denylist.length === 0) {
+    return denylist as ExecDenylistEntry[];
+  }
+  let changed = false;
+  const result: ExecDenylistEntry[] = [];
+  let malformed = false;
+  for (const item of denylist) {
+    if (typeof item === "string") {
+      const trimmed = item.trim();
+      if (trimmed) {
+        result.push({ pattern: trimmed });
+        changed = true;
+      } else {
+        malformed = true;
+        changed = true;
+      }
+    } else if (item && typeof item === "object" && !Array.isArray(item)) {
+      const pattern = (item as { pattern?: unknown }).pattern;
+      if (typeof pattern === "string" && pattern.trim().length > 0) {
+        result.push(item as ExecDenylistEntry);
+      } else {
+        malformed = true;
+        changed = true;
+      }
+    } else {
+      malformed = true;
+      changed = true;
+    }
+  }
+  if (malformed) {
+    result.push({ pattern: "" });
+  }
+  return changed ? (result.length > 0 ? result : undefined) : (denylist as ExecDenylistEntry[]);
+}
+
 function ensureAllowlistIds(
   allowlist: ExecAllowlistEntry[] | undefined,
 ): ExecAllowlistEntry[] | undefined {
@@ -620,6 +806,51 @@ function ensureAllowlistIds(
     return { ...entry, id: crypto.randomUUID() };
   });
   return changed ? next : allowlist;
+}
+
+function ensureDenylistIds(
+  denylist: ExecDenylistEntry[] | undefined,
+): ExecDenylistEntry[] | undefined {
+  if (!Array.isArray(denylist) || denylist.length === 0) {
+    return denylist;
+  }
+  let changed = false;
+  const next = denylist.map((entry) => {
+    if (entry.id) {
+      return entry;
+    }
+    changed = true;
+    return { ...entry, id: crypto.randomUUID() };
+  });
+  return changed ? next : denylist;
+}
+
+function migrateUneditedManagedDefaultDenylistEntries(
+  entries: ExecDenylistEntry[] | undefined,
+): boolean {
+  if (!Array.isArray(entries)) {
+    return false;
+  }
+  const current = DEFAULT_EXEC_DENYLIST_ENTRIES.find(
+    (entry) => entry.id === DEFAULT_SHELL_NETWORK_FETCH_ID,
+  );
+  if (!current) {
+    return false;
+  }
+  let changed = false;
+  for (const entry of entries) {
+    if (
+      entry.id !== DEFAULT_SHELL_NETWORK_FETCH_ID ||
+      entry.pattern !== PREVIOUS_SHELL_NETWORK_FETCH_PATTERN ||
+      entry.flags !== undefined
+    ) {
+      continue;
+    }
+    entry.pattern = current.pattern;
+    entry.flags = current.flags;
+    changed = true;
+  }
+  return changed;
 }
 
 function stripAllowlistCommandText(
@@ -648,10 +879,18 @@ function sanitizeExecApprovalPolicy(
   const askFallback = toStringOrUndefined(policy?.askFallback)?.trim();
   return {
     security:
-      security === "deny" || security === "allowlist" || security === "full" ? security : undefined,
+      security === "deny" ||
+      security === "denylist" ||
+      security === "allowlist" ||
+      security === "full"
+        ? security
+        : undefined,
     ask: ask === "off" || ask === "on-miss" || ask === "always" ? ask : undefined,
     askFallback:
-      askFallback === "deny" || askFallback === "allowlist" || askFallback === "full"
+      askFallback === "deny" ||
+      askFallback === "denylist" ||
+      askFallback === "allowlist" ||
+      askFallback === "full"
         ? askFallback
         : undefined,
     autoAllowSkills: policy?.autoAllowSkills,
@@ -672,9 +911,14 @@ export function normalizeExecApprovals(file: ExecApprovalsFile): ExecApprovalsFi
     const coerced = coerceAllowlistEntries(agent.allowlist);
     const withIds = ensureAllowlistIds(coerced);
     const allowlist = stripAllowlistCommandText(withIds);
+    const coercedDenylist = coerceDenylistEntries(agent.denylist);
+    const migratedDenylist = migrateUneditedManagedDefaultDenylistEntries(coercedDenylist);
+    const denylist = ensureDenylistIds(coercedDenylist);
     const sanitizedPolicy = sanitizeExecApprovalPolicy(agent);
     const agentChanged =
       allowlist !== agent.allowlist ||
+      denylist !== agent.denylist ||
+      migratedDenylist ||
       sanitizedPolicy.security !== agent.security ||
       sanitizedPolicy.ask !== agent.ask ||
       sanitizedPolicy.askFallback !== agent.askFallback;
@@ -682,6 +926,7 @@ export function normalizeExecApprovals(file: ExecApprovalsFile): ExecApprovalsFi
       agents[key] = {
         ...agent,
         allowlist,
+        denylist,
         security: sanitizedPolicy.security,
         ask: sanitizedPolicy.ask,
         askFallback: sanitizedPolicy.askFallback,
@@ -695,12 +940,50 @@ export function normalizeExecApprovals(file: ExecApprovalsFile): ExecApprovalsFi
       path: socketPath && socketPath.length > 0 ? socketPath : undefined,
       token: token && token.length > 0 ? token : undefined,
     },
+    managedDefaults: {
+      denylistVersion: DEFAULT_DENYLIST_VERSION,
+    },
     defaults: {
       ...sanitizedDefaults,
     },
     agents,
   };
   return normalized;
+}
+
+function createDefaultExecApprovalsFile(): ExecApprovalsFile {
+  return normalizeExecApprovals({
+    version: 1,
+    agents: {
+      "*": {
+        denylist: [...DEFAULT_EXEC_DENYLIST_ENTRIES],
+      },
+    },
+  });
+}
+
+export function ensureManagedDefaultDenylistRules(
+  file: ExecApprovalsFile,
+  options: { forceSeed?: boolean } = {},
+): ExecApprovalsFile {
+  const next = structuredClone(file ?? { version: 1 });
+  next.version = 1;
+  const hasManagedDefaults = next.managedDefaults?.denylistVersion != null;
+  const agents = { ...next.agents };
+  const wildcard = { ...agents["*"] };
+  const denylist = coerceDenylistEntries(wildcard.denylist) ?? [];
+  if (options.forceSeed === true || !hasManagedDefaults) {
+    for (const entry of DEFAULT_EXEC_DENYLIST_ENTRIES) {
+      if (!denylist.some((candidate) => candidate.id === entry.id)) {
+        denylist.push({ ...entry });
+      }
+    }
+  }
+  wildcard.denylist = ensureDenylistIds(denylist) ?? [];
+  agents["*"] = wildcard;
+  next.agents = agents;
+  next.managedDefaults = { denylistVersion: DEFAULT_DENYLIST_VERSION };
+  return normalizeExecApprovals(next);
 }
 
 export function mergeExecApprovalsSocketDefaults(params: {
@@ -728,7 +1011,7 @@ function generateToken(): string {
 export function readExecApprovalsSnapshot(): ExecApprovalsSnapshot {
   const filePath = resolveExecApprovalsPath();
   if (!fs.existsSync(filePath)) {
-    const file = normalizeExecApprovals({ version: 1, agents: {} });
+    const file = createDefaultExecApprovalsFile();
     return {
       path: filePath,
       exists: false,
@@ -745,9 +1028,7 @@ export function readExecApprovalsSnapshot(): ExecApprovalsSnapshot {
     parsed = null;
   }
   const file =
-    parsed?.version === 1
-      ? normalizeExecApprovals(parsed)
-      : normalizeExecApprovals({ version: 1, agents: {} });
+    parsed?.version === 1 ? normalizeExecApprovals(parsed) : createDefaultExecApprovalsFile();
   return {
     path: filePath,
     exists: true,
@@ -761,16 +1042,16 @@ export function loadExecApprovals(): ExecApprovalsFile {
   const filePath = resolveExecApprovalsPath();
   try {
     if (!fs.existsSync(filePath)) {
-      return normalizeExecApprovals({ version: 1, agents: {} });
+      return createDefaultExecApprovalsFile();
     }
     const raw = fs.readFileSync(filePath, "utf8");
     const parsed = JSON.parse(raw) as ExecApprovalsFile;
     if (parsed?.version !== 1) {
-      return normalizeExecApprovals({ version: 1, agents: {} });
+      return createDefaultExecApprovalsFile();
     }
     return normalizeExecApprovals(parsed);
   } catch {
-    return normalizeExecApprovals({ version: 1, agents: {} });
+    return createDefaultExecApprovalsFile();
   }
 }
 
@@ -860,7 +1141,7 @@ function readExecApprovalsForNoPersistence(filePath: string): ExecApprovalsFile 
 }
 
 function isExecSecurity(value: unknown): value is ExecSecurity {
-  return value === "allowlist" || value === "full" || value === "deny";
+  return value === "allowlist" || value === "denylist" || value === "full" || value === "deny";
 }
 
 function isExecAsk(value: unknown): value is ExecAsk {
@@ -1028,6 +1309,21 @@ export function resolveExecApprovals(
   });
 }
 
+export function resolveExecApprovalsReadOnly(
+  agentId?: string,
+  overrides?: ExecApprovalsDefaultOverrides,
+): ExecApprovalsResolved {
+  const file = loadExecApprovals();
+  return resolveExecApprovalsFromFile({
+    file,
+    agentId,
+    overrides,
+    path: resolveExecApprovalsPath(),
+    socketPath: expandHomePrefix(file.socket?.path ?? resolveExecApprovalsSocketPath()),
+    token: file.socket?.token ?? "",
+  });
+}
+
 export function resolveExecApprovalsFromFile(params: {
   file: ExecApprovalsFile;
   agentId?: string;
@@ -1097,6 +1393,10 @@ export function resolveExecApprovalsFromFile(params: {
     ...(Array.isArray(wildcard.allowlist) ? wildcard.allowlist : []),
     ...(Array.isArray(agent.allowlist) ? agent.allowlist : []),
   ];
+  const denylist = [
+    ...(Array.isArray(wildcard.denylist) ? wildcard.denylist : []),
+    ...(Array.isArray(agent.denylist) ? agent.denylist : []),
+  ];
   return {
     path: params.path ?? resolveExecApprovalsPath(),
     socketPath: expandHomePrefix(
@@ -1111,6 +1411,7 @@ export function resolveExecApprovalsFromFile(params: {
       askFallback: resolvedAgentAskFallback.source,
     },
     allowlist,
+    denylist,
     file,
   };
 }
@@ -1133,111 +1434,6 @@ export function requiresExecApproval(params: {
     params.security === "allowlist" &&
     (!params.analysisOk || !params.allowlistSatisfied)
   );
-}
-
-function normalizeCommandName(value: string | undefined): string {
-  return (value ?? "").split(/[\\/]/).pop()?.toLowerCase() ?? "";
-}
-
-function textMentionsSecurityAuditSuppressions(value: string): boolean {
-  const normalized = value.toLowerCase();
-  return (
-    normalized.includes("security.audit.suppressions") ||
-    /["']?security["']?[\s\S]{0,200}["']?audit["']?[\s\S]{0,200}["']?suppressions["']?/.test(
-      normalized,
-    )
-  );
-}
-
-function isReadOnlySecurityAuditSuppressionInspection(argv: string[]): boolean {
-  const command = normalizeCommandName(argv[0]);
-  let offset = command === "pnpm" && argv[1] === "openclaw" ? 1 : 0;
-  if (normalizeCommandName(argv[offset]) !== "openclaw") {
-    return false;
-  }
-  offset += 1;
-  while (offset < argv.length) {
-    const arg = argv[offset];
-    if (["--dev", "--no-color"].includes(arg ?? "")) {
-      offset += 1;
-      continue;
-    }
-    if (["--profile", "--container", "--log-level"].includes(arg ?? "")) {
-      offset += 2;
-      continue;
-    }
-    if (
-      arg?.startsWith("--profile=") ||
-      arg?.startsWith("--container=") ||
-      arg?.startsWith("--log-level=")
-    ) {
-      offset += 1;
-      continue;
-    }
-    break;
-  }
-  return (
-    argv[offset] === "config" && ["get", "schema", "validate"].includes(argv[offset + 1] ?? "")
-  );
-}
-
-function removeParsedSegmentText(command: string, segments: Array<{ raw?: string }>): string {
-  let remaining = command;
-  for (const segment of segments) {
-    const raw = segment.raw?.trim();
-    if (!raw) {
-      continue;
-    }
-    remaining = remaining.replace(raw, " ");
-  }
-  return remaining;
-}
-
-export function commandRequiresSecurityAuditSuppressionApproval(params: {
-  command: string;
-  cwd?: string;
-  env?: NodeJS.ProcessEnv;
-  segments: Array<{ argv: string[]; raw?: string }>;
-}): boolean {
-  let sawSegmentMention = false;
-  for (const segment of params.segments) {
-    const segmentText = `${segment.raw ?? ""} ${segment.argv.join(" ")}`;
-    if (!textMentionsSecurityAuditSuppressions(segmentText)) {
-      continue;
-    }
-    sawSegmentMention = true;
-    if (!isReadOnlySecurityAuditSuppressionInspection(segment.argv)) {
-      return true;
-    }
-  }
-  if (sawSegmentMention) {
-    const rawAnalysis = analyzeShellCommand({
-      command: params.command,
-      cwd: params.cwd,
-      env: params.env,
-      platform: process.platform,
-    });
-    if (!rawAnalysis.ok) {
-      return textMentionsSecurityAuditSuppressions(params.command);
-    }
-    for (const segment of rawAnalysis.segments) {
-      if (
-        textMentionsSecurityAuditSuppressions(`${segment.raw} ${segment.argv.join(" ")}`) &&
-        !isReadOnlySecurityAuditSuppressionInspection(segment.argv)
-      ) {
-        return true;
-      }
-    }
-    if (
-      textMentionsSecurityAuditSuppressions(
-        removeParsedSegmentText(params.command, rawAnalysis.segments),
-      )
-    ) {
-      return true;
-    }
-    return false;
-  }
-  return textMentionsSecurityAuditSuppressions(params.command);
 }
 
 export function hasDurableExecApproval(params: {
@@ -1448,7 +1644,7 @@ export function persistAllowAlwaysPatterns(params: {
 }
 
 export function minSecurity(a: ExecSecurity, b: ExecSecurity): ExecSecurity {
-  const order: Record<ExecSecurity, number> = { deny: 0, allowlist: 1, full: 2 };
+  const order: Record<ExecSecurity, number> = { deny: 0, allowlist: 1, denylist: 2, full: 3 };
   return order[a] <= order[b] ? a : b;
 }
 

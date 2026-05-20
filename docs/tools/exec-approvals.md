@@ -1,5 +1,5 @@
 ---
-summary: "Host exec approvals: policy knobs, allowlists, and the YOLO/strict workflow"
+summary: "Host exec approvals: policy knobs, denylists, allowlists, and the YOLO/strict workflow"
 read_when:
   - Configuring exec approvals or allowlists
   - Implementing exec approval UX in the macOS app
@@ -92,10 +92,17 @@ Example schema:
   },
   "agents": {
     "main": {
-      "security": "allowlist",
+      "security": "denylist",
       "ask": "on-miss",
       "askFallback": "deny",
       "autoAllowSkills": true,
+      "denylist": [
+        {
+          "id": "E6D02B91-26A5-4B23-B08E-27A64D9B6781",
+          "pattern": "(?:^|[\\s;&|()<>])(?:curl|wget)(?:\\.exe)?(?:$|[\\s;&|()<>$])|[\\\\/](?:curl|wget)(?:\\.exe)?(?:$|[\\s;&|()<>$])",
+          "flags": "i"
+        }
+      ],
       "allowlist": [
         {
           "id": "B0C8C0B3-2C2D-4F8A-9A3C-5A4B3C2D1E0F",
@@ -130,12 +137,47 @@ when set at the narrower session or agent scope.
 
 ### `exec.security`
 
-<ParamField path="security" type='"deny" | "allowlist" | "full"'>
+<ParamField path="security" type='"deny" | "denylist" | "allowlist" | "full"'>
   - `deny` - block all host exec requests.
+  - `denylist` - allow commands unless an effective denylist rule matches.
   - `allowlist` - allow only allowlisted commands.
   - `full` - allow everything (equivalent to elevated).
 
 </ParamField>
+
+### `exec.denylist`
+
+`denylist` entries are regex patterns evaluated before approval prompts,
+allowlist matches, safe-bin matches, durable `allow-always` trust, and process
+spawn. A match denies the command immediately and logs a policy denial. There is
+no approval override.
+
+For setup steps, rule examples, UI guidance, default curl/wget behavior, and
+troubleshooting, see [Exec denylist](/tools/exec-denylist).
+
+Set `tools.exec.logDenylistDenials: false` to suppress denylist decision log
+entries. The default is `true`.
+
+The default approvals file created by OpenClaw includes normal denylist entries
+for `curl` and `wget`, because shell network fetches can bypass purpose-built
+web/search tools and can return prompt-injection payloads. Operators can edit or
+remove those entries like any other denylist rule.
+
+```json
+{
+  "agents": {
+    "*": {
+      "denylist": [
+        "(?:^|[\\s;&|()<>])(?:curl|wget)(?:\\.exe)?(?:$|[\\s;&|()<>$])|[\\\\/](?:curl|wget)(?:\\.exe)?(?:$|[\\s;&|()<>$])"
+      ]
+    }
+  }
+}
+```
+
+Prefer specific command-token patterns over broad whole-command expressions.
+For web research or retrieval, use the web/search tools instead of `curl` or
+`wget` from exec.
 
 ### `exec.ask`
 
@@ -148,10 +190,11 @@ when set at the narrower session or agent scope.
 
 ### `askFallback`
 
-<ParamField path="askFallback" type='"deny" | "allowlist" | "full"'>
+<ParamField path="askFallback" type='"deny" | "denylist" | "allowlist" | "full"'>
   Resolution when a prompt is required but no UI is reachable.
 
 - `deny` - block.
+- `denylist` - allow only if no denylist rule matches.
 - `allowlist` - allow only if allowlist matches.
 - `full` - allow.
 
@@ -230,7 +273,7 @@ restrictive effective exec policy normalizes live launches to
 mode.
 
 If you want a more conservative setup, tighten OpenClaw exec policy back to
-`allowlist` / `on-miss` or `deny`.
+`denylist`, `allowlist` / `on-miss`, or `deny`.
 
 ### Persistent gateway-host "never prompt" setup
 
@@ -404,9 +447,10 @@ native approval clients), see
 ## Control UI editing
 
 Use the **Control UI → Nodes → Exec approvals** card to edit defaults,
-per-agent overrides, and allowlists. Pick a scope (Defaults or an agent),
-tweak the policy, add/remove allowlist patterns, then **Save**. The UI
-shows last-used metadata per pattern so you can keep the list tidy.
+per-agent overrides, denylists, and allowlists. Pick a scope (Defaults or an
+agent), tweak the policy, add/remove denylist or allowlist patterns, then
+**Save**. The UI shows last-used metadata for allowlist patterns so you can keep
+the list tidy.
 
 The target selector chooses **Gateway** (local approvals) or a **Node**.
 Nodes must advertise `system.execApprovals.get/set` (macOS app or

@@ -130,6 +130,8 @@ describe("exec approvals policy helpers", () => {
   });
 
   it.each([
+    { raw: " deny ", expected: "deny" },
+    { raw: " denylist ", expected: "denylist" },
     { raw: " allowlist ", expected: "allowlist" },
     { raw: "FULL", expected: "full" },
     { raw: "unknown", expected: null },
@@ -214,6 +216,16 @@ describe("exec approvals policy helpers", () => {
 
   it.each([
     { left: "deny" as const, right: "full" as const, expected: "deny" as const },
+    {
+      left: "denylist" as const,
+      right: "allowlist" as const,
+      expected: "allowlist" as const,
+    },
+    {
+      left: "full" as const,
+      right: "denylist" as const,
+      expected: "denylist" as const,
+    },
     {
       left: "allowlist" as const,
       right: "full" as const,

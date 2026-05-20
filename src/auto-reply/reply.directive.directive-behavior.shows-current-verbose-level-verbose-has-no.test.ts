@@ -131,7 +131,7 @@ describe("directive behavior", () => {
       "Current exec defaults: host=gateway, effective=gateway, security=allowlist, ask=always, node=mac-1.",
     );
     expect(execText).toContain(
-      "Options: host=auto|sandbox|gateway|node, security=deny|allowlist|full, ask=off|on-miss|always, node=<id>.",
+      "Options: host=auto|sandbox|gateway|node, security=deny|denylist|allowlist|full, ask=off|on-miss|always, node=<id>.",
     );
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });

@@ -138,7 +138,7 @@ config secret provider/auth profile posture, and tool metadata looks like this:
       "requireWorkspaceOnly": true,
     },
     "exec": {
-      "allowSecurity": ["deny", "allowlist"],
+      "allowSecurity": ["deny", "denylist", "allowlist"],
       "requireAsk": ["always"],
       "allowHosts": ["sandbox"],
     },
@@ -381,7 +381,7 @@ allowlist such as `["all"]`.
 | ------------------------------- | ----------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
 | `tools.profiles.allow`          | `tools.profile` and `agents.list[].tools.profile`           | Allow only tool profile ids such as `minimal`, `messaging`, or `coding`.                                 |
 | `tools.fs.requireWorkspaceOnly` | `tools.fs.workspaceOnly` and per-agent `tools.fs` overrides | Set to `true` to require workspace-only filesystem tool posture.                                         |
-| `tools.exec.allowSecurity`      | `tools.exec.security` and per-agent exec security           | Allow only exec security modes such as `deny` or `allowlist`.                                            |
+| `tools.exec.allowSecurity`      | `tools.exec.security` and per-agent exec security           | Allow only exec security modes such as `deny`, `denylist`, or `allowlist`.                               |
 | `tools.exec.requireAsk`         | `tools.exec.ask` and per-agent exec ask mode                | Require approval posture such as `always`.                                                               |
 | `tools.exec.allowHosts`         | `tools.exec.host` and per-agent exec host routing           | Allow only exec host routing modes such as `sandbox`.                                                    |
 | `tools.elevated.allow`          | `tools.elevated.enabled` and per-agent elevated posture     | Set to `false` to require elevated tool mode to stay disabled.                                           |

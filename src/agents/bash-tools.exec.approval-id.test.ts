@@ -269,7 +269,7 @@ async function expectGatewayExecWithoutApproval(options: {
   config: Record<string, unknown>;
   command: string;
   ask?: "always" | "on-miss" | "off";
-  security?: "allowlist" | "full";
+  security?: "denylist" | "allowlist" | "full";
 }) {
   await writeExecApprovalsConfig(options.config);
   const calls: string[] = [];
@@ -621,6 +621,46 @@ describe("exec approvals", () => {
     expect(runCwd).toBeUndefined();
   });
 
+  it("does not apply the gateway denylist before routing host=node", async () => {
+    await writeExecApprovalsConfig({
+      version: 1,
+      agents: {
+        main: {
+          denylist: [{ pattern: String.raw`(?:^|\s)curl(?:\s|$)` }],
+        },
+      },
+    });
+    const calls: string[] = [];
+    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+      calls.push(method);
+      if (method === "node.invoke") {
+        const invoke = params as { command?: string };
+        if (invoke.command === "system.run.prepare") {
+          return buildPreparedSystemRunPayload(params);
+        }
+        if (invoke.command === "system.run") {
+          return { payload: { success: true, stdout: "node-ok" } };
+        }
+      }
+      return { ok: true };
+    });
+
+    const tool = createExecTool({
+      host: "node",
+      ask: "off",
+      security: "denylist",
+      approvalRunningNoticeMs: 0,
+    });
+
+    const result = await tool.execute("call-node-denylist-owned-by-node", {
+      command: "curl https://example.test/prompt",
+    });
+
+    expect(result.details.status).toBe("completed");
+    expect(getResultText(result)).toContain("node-ok");
+    expect(calls).toContain("node.invoke");
+  });
+
   it("routes explicit host=node to node invoke when elevated default is on under auto host", async () => {
     const calls: string[] = [];
 
@@ -679,7 +719,7 @@ describe("exec approvals", () => {
     const cases: Array<{
       config: Record<string, unknown>;
       ask?: "always" | "on-miss" | "off";
-      security?: "allowlist" | "full";
+      security?: "denylist" | "allowlist" | "full";
     }> = [
       {
         config: {

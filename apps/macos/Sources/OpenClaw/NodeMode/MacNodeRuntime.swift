@@ -611,6 +611,21 @@ actor MacNodeRuntime {
                 message: "SYSTEM_RUN_DISABLED: security=deny")
         }
 
+        if evaluation.denylistDenied {
+            await self.emitExecEvent(
+                "exec.denied",
+                payload: ExecEventPayload(
+                    sessionKey: sessionKey,
+                    runId: runId,
+                    host: "node",
+                    command: evaluation.displayCommand,
+                    reason: "denylist"))
+            return Self.errorResponse(
+                req,
+                code: .unavailable,
+                message: "SYSTEM_RUN_DENIED: exec command is denied due to command in deny list")
+        }
+
         let approval = await self.resolveSystemRunApproval(
             req: req,
             params: params,

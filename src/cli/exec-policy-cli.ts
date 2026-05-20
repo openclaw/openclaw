@@ -412,9 +412,9 @@ export function registerExecPolicyCli(program: Command) {
     .command("set")
     .description("Synchronize local config and host approvals using explicit values")
     .option("--host <host>", "Exec host target: auto|sandbox|gateway|node")
-    .option("--security <mode>", "Exec security: deny|allowlist|full")
+    .option("--security <mode>", "Exec security: deny|denylist|allowlist|full")
     .option("--ask <mode>", "Exec ask mode: off|on-miss|always")
-    .option("--ask-fallback <mode>", "Host approvals fallback: deny|allowlist|full")
+    .option("--ask-fallback <mode>", "Host approvals fallback: deny|denylist|allowlist|full")
     .option("--json", "Output as JSON", false)
     .action(
       async (opts: {

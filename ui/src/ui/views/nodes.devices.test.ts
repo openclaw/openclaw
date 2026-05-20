@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 import { render } from "lit";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { renderNodes, type NodesProps } from "./nodes.ts";
 
 function baseProps(overrides: Partial<NodesProps> = {}): NodesProps {
@@ -63,6 +63,17 @@ function getDevicesCard(container: Element): Element {
   return card;
 }
 
+function getExecApprovalsCard(container: Element): Element {
+  const card = Array.from(container.querySelectorAll(".card")).find(
+    (candidate) => candidate.querySelector(".card-title")?.textContent?.trim() === "Exec approvals",
+  );
+  expect(card).toBeInstanceOf(Element);
+  if (!(card instanceof Element)) {
+    throw new Error("Expected exec approvals card");
+  }
+  return card;
+}
+
 function getPendingDeviceDetails(container: Element): string[] {
   const item = getDevicesCard(container).querySelector(".list-item");
   expect(item).toBeInstanceOf(Element);
@@ -73,6 +84,172 @@ function getPendingDeviceDetails(container: Element): string[] {
     (line) => line.textContent?.trim() ?? "",
   );
 }
+
+describe("nodes exec approvals rendering", () => {
+  it("shows denylist mode and per-agent denylist rules", () => {
+    const container = renderNodesContainer({
+      execApprovalsSelectedAgent: "*",
+      execApprovalsSnapshot: {
+        path: "~/.openclaw/exec-approvals.json",
+        exists: true,
+        hash: "hash",
+        file: {
+          version: 1,
+          agents: {
+            "*": {
+              security: "denylist",
+              denylist: [
+                {
+                  id: "default-shell-network-fetch",
+                  pattern: "(?:^|[\\s;&|()<>])(?:curl|wget)(?:$|[\\s;&|()<>])",
+                },
+              ],
+            },
+          },
+        },
+      },
+    });
+    const card = getExecApprovalsCard(container);
+
+    expect(card.textContent).toContain("Denylist");
+    expect(card.textContent).toContain("default-shell-network-fetch");
+    expect(card.textContent).toContain("(?:^|[\\s;&|()<>])(?:curl|wget)(?:$|[\\s;&|()<>])");
+    expect(
+      Array.from(card.querySelectorAll("option")).some(
+        (option) => option.value === "denylist" && option.textContent?.trim() === "Denylist",
+      ),
+    ).toBe(true);
+  });
+
+  it("disables saving while a denylist rule is blank", () => {
+    const container = renderNodesContainer({
+      execApprovalsSelectedAgent: "*",
+      execApprovalsDirty: true,
+      execApprovalsSnapshot: {
+        path: "~/.openclaw/exec-approvals.json",
+        exists: true,
+        hash: "hash",
+        file: {
+          version: 1,
+          agents: {
+            "*": {
+              security: "denylist",
+              denylist: [{ pattern: "" }],
+            },
+          },
+        },
+      },
+    });
+    const card = getExecApprovalsCard(container);
+    const saveButton = Array.from(card.querySelectorAll("button")).find(
+      (button) => button.textContent?.trim() === "Save",
+    );
+
+    expect(saveButton).toBeInstanceOf(HTMLButtonElement);
+    expect(saveButton?.disabled).toBe(true);
+    expect(card.textContent).toContain("Denylist rules need a pattern and only i, m, or u flags");
+  });
+
+  it("disables saving while a denylist rule has invalid regex flags", () => {
+    const container = renderNodesContainer({
+      execApprovalsSelectedAgent: "*",
+      execApprovalsDirty: true,
+      execApprovalsSnapshot: {
+        path: "~/.openclaw/exec-approvals.json",
+        exists: true,
+        hash: "hash",
+        file: {
+          version: 1,
+          agents: {
+            "*": {
+              security: "denylist",
+              denylist: [{ pattern: "curl", flags: "g" }],
+            },
+          },
+        },
+      },
+    });
+    const card = getExecApprovalsCard(container);
+    const saveButton = Array.from(card.querySelectorAll("button")).find(
+      (button) => button.textContent?.trim() === "Save",
+    );
+
+    expect(saveButton).toBeInstanceOf(HTMLButtonElement);
+    expect(saveButton?.disabled).toBe(true);
+    expect(card.textContent).toContain("Denylist rules need a pattern and only i, m, or u flags");
+  });
+
+  it("renders malformed denylist flags as invalid without crashing", () => {
+    const container = renderNodesContainer({
+      execApprovalsSelectedAgent: "*",
+      execApprovalsDirty: true,
+      execApprovalsSnapshot: {
+        path: "~/.openclaw/exec-approvals.json",
+        exists: true,
+        hash: "hash",
+        file: {
+          version: 1,
+          agents: {
+            "*": {
+              security: "denylist",
+              denylist: [{ pattern: "curl", flags: 1 } as never],
+            },
+          },
+        },
+      },
+    });
+    const card = getExecApprovalsCard(container);
+    const saveButton = Array.from(card.querySelectorAll("button")).find(
+      (button) => button.textContent?.trim() === "Save",
+    );
+
+    expect(saveButton).toBeInstanceOf(HTMLButtonElement);
+    expect(saveButton?.disabled).toBe(true);
+    expect(card.textContent).toContain("Denylist rules need a pattern and only i, m, or u flags");
+  });
+
+  it("keeps legacy string denylist rules editable", () => {
+    const onPatch = vi.fn();
+    const container = renderNodesContainer({
+      execApprovalsSelectedAgent: "*",
+      execApprovalsDirty: true,
+      onExecApprovalsPatch: onPatch,
+      execApprovalsSnapshot: {
+        path: "~/.openclaw/exec-approvals.json",
+        exists: true,
+        hash: "hash",
+        file: {
+          version: 1,
+          agents: {
+            "*": {
+              security: "denylist",
+              denylist: ["curl"],
+            },
+          },
+        },
+      },
+    });
+    const card = getExecApprovalsCard(container);
+    const saveButton = Array.from(card.querySelectorAll("button")).find(
+      (button) => button.textContent?.trim() === "Save",
+    );
+    const patternInput = Array.from(card.querySelectorAll("input")).find(
+      (input) => input.value === "curl",
+    );
+
+    expect(saveButton).toBeInstanceOf(HTMLButtonElement);
+    expect(saveButton?.disabled).toBe(false);
+    expect(card.textContent).not.toContain(
+      "Denylist rules need a pattern and only i, m, or u flags",
+    );
+    expect(patternInput).toBeInstanceOf(HTMLInputElement);
+
+    (patternInput as HTMLInputElement).value = "wget";
+    patternInput?.dispatchEvent(new InputEvent("input", { bubbles: true }));
+
+    expect(onPatch).toHaveBeenCalledWith(["agents", "*", "denylist", 0], { pattern: "wget" });
+  });
+});
 
 describe("nodes devices pending rendering", () => {
   it("shows requested and approved access for a scope upgrade", () => {

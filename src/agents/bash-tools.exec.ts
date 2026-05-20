@@ -5,22 +5,24 @@ import { buildCommandPayloadCandidates } from "../infra/command-analysis/risks.j
 import { analyzeShellCommand } from "../infra/exec-approvals-analysis.js";
 import {
   type ExecAsk,
+  type ExecDenylistEntry,
   type ExecHost,
   type ExecSecurity,
   loadExecApprovals,
   maxAsk,
-  minSecurity,
   requireValidExecTarget,
-  resolveExecApprovalsFromFile,
+  minSecurity,
   resolveExecModePolicy,
+  resolveExecApprovalsReadOnly,
 } from "../infra/exec-approvals.js";
+import { evaluateExecDenylist, resolveExecDenylistForSecurity } from "../infra/exec-denylist.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import { sanitizeHostExecEnvWithDiagnostics } from "../infra/host-env-security.js";
 import {
   getShellPathFromLoginShell,
   resolveShellEnvFallbackTimeoutMs,
 } from "../infra/shell-env.js";
-import { logInfo } from "../logger.js";
+import { logInfo, logWarn } from "../logger.js";
 import {
   normalizeAgentId,
   parseAgentSessionKey,
@@ -99,6 +101,44 @@ function buildExecForegroundResult(params: {
     aggregated: params.outcome.aggregated,
     cwd: params.cwd,
   });
+}
+
+function buildExecDenylistDeniedResult(params: {
+  host: ExecHost;
+  cwd?: string;
+  nodeId?: string;
+}): AgentToolResult<ExecToolDetails> {
+  return textResult("exec command is denied due to command in deny list", {
+    status: "denied",
+    reason: "denylist",
+    host: params.host,
+    cwd: params.cwd,
+    nodeId: params.nodeId,
+  });
+}
+
+function logExecDenylistDecision(params: {
+  decision: ReturnType<typeof evaluateExecDenylist>;
+  agentId?: string;
+  host: ExecHost;
+  trigger?: string;
+}) {
+  if (!params.decision.denied) {
+    return;
+  }
+  const parts = [
+    "exec denylist: denied command",
+    `hash=${params.decision.commandHash}`,
+    `length=${params.decision.commandLength}`,
+    `host=${params.host}`,
+    params.agentId ? `agent=${params.agentId}` : undefined,
+    params.trigger ? `trigger=${params.trigger}` : undefined,
+    params.decision.invalid ? `invalid=${params.decision.reason}` : undefined,
+    typeof params.decision.ruleIndex === "number"
+      ? `ruleIndex=${params.decision.ruleIndex}`
+      : undefined,
+  ].filter(Boolean);
+  logWarn(parts.join(" "));
 }
 
 const PREFLIGHT_ENV_OPTIONS_WITH_VALUES = new Set([
@@ -1278,6 +1318,7 @@ export function createExecTool(
   }
   const notifyOnExit = defaults?.notifyOnExit !== false;
   const notifyOnExitEmptySuccess = defaults?.notifyOnExitEmptySuccess === true;
+  const logDenylistDenials = defaults?.logDenylistDenials !== false;
   const notifySessionKey = normalizeOptionalString(defaults?.sessionKey);
   const notifyDeliveryContext = normalizeDeliveryContext({
     channel: defaults?.messageProvider,
@@ -1418,58 +1459,29 @@ export function createExecTool(
       });
       const host: ExecHost = target.effectiveHost;
 
-      const explicitSecurity = defaults?.security;
-      const configuredSecurity = explicitSecurity ?? (host === "sandbox" ? "deny" : "full");
-      const modePolicy = resolveExecModePolicy({
-        mode: defaults?.mode,
-        security: configuredSecurity,
-        ask: defaults?.ask ?? "off",
-      });
-      const approvalPolicy =
-        host === "sandbox"
-          ? undefined
-          : resolveExecApprovalsFromFile({
-              file: loadExecApprovals(),
-              agentId,
-              overrides: {
-                security: "full",
-                ask: "off",
-              },
-            }).agent;
-      let security = minSecurity(
-        modePolicy.security,
-        approvalPolicy?.security ?? modePolicy.security,
-      );
-      if (
-        security === "deny" &&
-        (host !== "sandbox" || defaults?.mode === "deny" || explicitSecurity === "deny")
-      ) {
-        throw new Error(`exec denied: host=${host} security=deny`);
-      }
-      const hostPolicyAllowsFullBypass =
-        (approvalPolicy?.security ?? "full") === "full" && (approvalPolicy?.ask ?? "off") === "off";
-      const modePolicyAllowsFullBypass = modePolicy.security === "full" && modePolicy.ask === "off";
-      if (
-        elevatedRequested &&
-        elevatedMode === "full" &&
-        modePolicyAllowsFullBypass &&
-        hostPolicyAllowsFullBypass
-      ) {
+      const approvalDefaults = loadExecApprovals().defaults;
+      const configuredSecurity =
+        defaults?.security ?? approvalDefaults?.security ?? (host === "sandbox" ? "deny" : "full");
+      // Keep local exec defaults in sync with exec-approvals.json when tools.exec.* is unset.
+      const configuredAsk = defaults?.ask ?? approvalDefaults?.ask ?? "off";
+      const configuredModePolicy = defaults?.mode
+        ? resolveExecModePolicy({
+            mode: defaults.mode,
+            security: configuredSecurity,
+            ask: configuredAsk,
+          })
+        : null;
+      let security = configuredModePolicy?.security ?? configuredSecurity;
+      if (elevatedRequested && elevatedMode === "full") {
         security = "full";
       }
-      // Keep local exec defaults in sync with exec-approvals.json when tools.exec.* is unset.
       const requestedAsk = normalizeExecAsk(params.ask);
-      const hostAsk = maxAsk(modePolicy.ask, approvalPolicy?.ask ?? modePolicy.ask);
-      let ask = maxAsk(hostAsk, requestedAsk ?? hostAsk);
-      const bypassApprovals =
-        elevatedRequested &&
-        elevatedMode === "full" &&
-        modePolicyAllowsFullBypass &&
-        hostPolicyAllowsFullBypass;
+      let ask = configuredModePolicy?.ask ?? maxAsk(configuredAsk, requestedAsk ?? configuredAsk);
+      const autoReview = configuredModePolicy?.autoReview ?? false;
+      const bypassApprovals = elevatedRequested && elevatedMode === "full";
       if (bypassApprovals) {
         ask = "off";
       }
-      const autoReview = modePolicy.autoReview && ask === modePolicy.ask && !bypassApprovals;
 
       const sandbox = host === "sandbox" ? defaults?.sandbox : undefined;
       if (target.selectedTarget === "sandbox" && !sandbox) {
@@ -1582,6 +1594,62 @@ export function createExecTool(
         applyPathPrepend(env, defaultPathPrepend);
       }
 
+      let denylistFallbackPrechecked = false;
+      let denylistFallbackDenylist: readonly ExecDenylistEntry[] = [];
+      if (host !== "node") {
+        const resolvedApprovalsForDenylist = resolveExecApprovalsReadOnly(agentId, {
+          security: configuredSecurity,
+          ask,
+        });
+        const hostSecurityForDenylist =
+          host === "sandbox"
+            ? configuredSecurity
+            : minSecurity(configuredSecurity, resolvedApprovalsForDenylist.agent.security);
+        const hostAskForDenylist = bypassApprovals
+          ? "off"
+          : host === "sandbox"
+            ? ask
+            : maxAsk(ask, resolvedApprovalsForDenylist.agent.ask);
+        const askFallbackForDenylist = minSecurity(
+          hostSecurityForDenylist,
+          resolvedApprovalsForDenylist.agent.askFallback,
+        );
+        const shouldEvaluateFallbackDenylist =
+          hostSecurityForDenylist === "full" &&
+          hostAskForDenylist === "always" &&
+          askFallbackForDenylist === "denylist";
+        const effectiveDenylist = shouldEvaluateFallbackDenylist
+          ? resolvedApprovalsForDenylist.denylist
+          : resolveExecDenylistForSecurity(
+              hostSecurityForDenylist,
+              resolvedApprovalsForDenylist.denylist,
+            );
+        denylistFallbackPrechecked = effectiveDenylist.length > 0 || shouldEvaluateFallbackDenylist;
+        denylistFallbackDenylist = resolvedApprovalsForDenylist.denylist;
+        if (denylistFallbackPrechecked) {
+          const denyDecision = evaluateExecDenylist({
+            command: params.command,
+            denylist: effectiveDenylist,
+            cwd: workdir,
+            env,
+          });
+          if (denyDecision.denied) {
+            if (logDenylistDenials) {
+              logExecDenylistDecision({
+                decision: denyDecision,
+                agentId,
+                host,
+                trigger: defaults?.trigger,
+              });
+            }
+            return buildExecDenylistDeniedResult({
+              host,
+              cwd: workdir,
+            });
+          }
+        }
+      }
+
       if (host === "node") {
         return executeNodeHostCommand({
           command: params.command,
@@ -1611,6 +1679,9 @@ export function createExecTool(
           notifySessionKey,
           notifyOnExit,
           trustedSafeBinDirs,
+          denylistFallbackPrechecked,
+          denylistFallbackDenylist,
+          logDenylistDenials,
         });
       }
 
@@ -1654,6 +1725,8 @@ export function createExecTool(
           maxOutput,
           pendingMaxOutput,
           trustedSafeBinDirs,
+          denylistFallbackPrechecked,
+          logDenylistDenials,
         });
         if (gatewayResult.pendingResult) {
           return gatewayResult.pendingResult;
@@ -1704,7 +1777,6 @@ export function createExecTool(
 
       let yielded = false;
       let yieldTimer: NodeJS.Timeout | null = null;
-      let registeredAbortSignal: AbortSignal | null = null;
 
       // Tool-call abort should not kill backgrounded sessions; timeouts still must.
       const onAbortSignal = () => {
@@ -1722,27 +1794,17 @@ export function createExecTool(
         run.kill();
       };
 
-      const cleanupToolRunListeners = () => {
-        if (registeredAbortSignal) {
-          registeredAbortSignal.removeEventListener("abort", onAbortSignal);
-          registeredAbortSignal = null;
-        }
-        if (yieldTimer) {
-          clearTimeout(yieldTimer);
-          yieldTimer = null;
-        }
-      };
-
       if (signal?.aborted) {
         onAbortSignal();
       } else if (signal) {
         signal.addEventListener("abort", onAbortSignal, { once: true });
-        registeredAbortSignal = signal;
       }
 
       return new Promise<AgentToolResult<ExecToolDetails>>((resolve, reject) => {
-        const resolveRunning = () => {
-          cleanupToolRunListeners();
+        const cleanupAbortSignal = () => {
+          signal?.removeEventListener("abort", onAbortSignal);
+        };
+        const resolveRunning = () =>
           resolve({
             content: [
               {
@@ -1761,14 +1823,17 @@ export function createExecTool(
               tail: run.session.tail,
             },
           });
-        };
 
         const onYieldNow = () => {
+          if (yieldTimer) {
+            clearTimeout(yieldTimer);
+          }
           if (yielded) {
             return;
           }
           yielded = true;
           markBackgrounded(run.session);
+          cleanupAbortSignal();
           resolveRunning();
         };
 
@@ -1782,6 +1847,7 @@ export function createExecTool(
               }
               yielded = true;
               markBackgrounded(run.session);
+              cleanupAbortSignal();
               resolveRunning();
             }, yieldWindow);
           }
@@ -1789,7 +1855,10 @@ export function createExecTool(
 
         run.promise
           .then((outcome) => {
-            cleanupToolRunListeners();
+            if (yieldTimer) {
+              clearTimeout(yieldTimer);
+            }
+            cleanupAbortSignal();
             if (yielded || run.session.backgrounded) {
               return;
             }
@@ -1802,7 +1871,10 @@ export function createExecTool(
             );
           })
           .catch((err) => {
-            cleanupToolRunListeners();
+            if (yieldTimer) {
+              clearTimeout(yieldTimer);
+            }
+            cleanupAbortSignal();
             if (yielded || run.session.backgrounded) {
               return;
             }

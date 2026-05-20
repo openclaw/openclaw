@@ -57,6 +57,7 @@ struct ExecApprovalsGatewayPrompterTests {
 
     @Test func `ask always prompts regardless of security`() {
         #expect(ExecApprovalsGatewayPrompter._testShouldAsk(security: .deny, ask: .always))
+        #expect(ExecApprovalsGatewayPrompter._testShouldAsk(security: .denylist, ask: .always))
         #expect(ExecApprovalsGatewayPrompter._testShouldAsk(security: .allowlist, ask: .always))
         #expect(ExecApprovalsGatewayPrompter._testShouldAsk(security: .full, ask: .always))
     }
@@ -64,11 +65,13 @@ struct ExecApprovalsGatewayPrompterTests {
     @Test func `ask on miss prompts only for allowlist`() {
         #expect(ExecApprovalsGatewayPrompter._testShouldAsk(security: .allowlist, ask: .onMiss))
         #expect(!ExecApprovalsGatewayPrompter._testShouldAsk(security: .deny, ask: .onMiss))
+        #expect(!ExecApprovalsGatewayPrompter._testShouldAsk(security: .denylist, ask: .onMiss))
         #expect(!ExecApprovalsGatewayPrompter._testShouldAsk(security: .full, ask: .onMiss))
     }
 
     @Test func `ask off never prompts`() {
         #expect(!ExecApprovalsGatewayPrompter._testShouldAsk(security: .deny, ask: .off))
+        #expect(!ExecApprovalsGatewayPrompter._testShouldAsk(security: .denylist, ask: .off))
         #expect(!ExecApprovalsGatewayPrompter._testShouldAsk(security: .allowlist, ask: .off))
         #expect(!ExecApprovalsGatewayPrompter._testShouldAsk(security: .full, ask: .off))
     }
@@ -98,5 +101,29 @@ struct ExecApprovalsGatewayPrompterTests {
             askFallback: .full,
             allowlistPatterns: [])
         #expect(decision == .allowOnce)
+    }
+
+    @Test func `fallback denylist allows non matching commands`() {
+        let decision = ExecApprovalsGatewayPrompter._testFallbackDecision(
+            command: "git status",
+            askFallback: .denylist,
+            denylistPatterns: ["curl"])
+        #expect(decision == .allowOnce)
+    }
+
+    @Test func `fallback denylist denies matching commands`() {
+        let decision = ExecApprovalsGatewayPrompter._testFallbackDecision(
+            command: "curl https://example.test",
+            askFallback: .denylist,
+            denylistPatterns: ["curl"])
+        #expect(decision == .deny)
+    }
+
+    @Test func `fallback denylist parses shell wrapper display commands`() {
+        let decision = ExecApprovalsGatewayPrompter._testFallbackDecision(
+            command: #"/bin/sh -c 'cu""rl https://example.test'"#,
+            askFallback: .denylist,
+            denylistPatterns: ["curl"])
+        #expect(decision == .deny)
     }
 }

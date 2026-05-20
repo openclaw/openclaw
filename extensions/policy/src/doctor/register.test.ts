@@ -6296,6 +6296,44 @@ describe("registerPolicyDoctorChecks", () => {
     );
   });
 
+  it("accepts denylist exec security in policy posture", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      tools: {
+        exec: {
+          security: "denylist",
+        },
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        tools: {
+          exec: {
+            allowSecurity: ["denylist"],
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+
+    expect(result.findings).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/tools-exec-security-unapproved",
+        }),
+        expect.objectContaining({
+          checkId: "policy/policy-jsonc-invalid",
+        }),
+      ]),
+    );
+  });
+
   it("accepts omitted exec defaults and individual denies for required deny groups", async () => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {

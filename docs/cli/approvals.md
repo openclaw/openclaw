@@ -16,6 +16,7 @@ Alias: `openclaw exec-approvals`
 Related:
 
 - Exec approvals: [Exec approvals](/tools/exec-approvals)
+- Exec denylist: [Exec denylist](/tools/exec-denylist)
 - Nodes: [Nodes](/nodes)
 
 ## `openclaw exec-policy`
@@ -176,6 +177,39 @@ Targeting notes:
 `allowlist add|remove` also supports:
 
 - `--agent <id>` (defaults to `*`)
+
+## Denylist rules
+
+Denylist entries are edited by replacing the approvals file with
+`openclaw approvals set --file` or `--stdin`, or through the Control UI. Shared
+denylist rules live under the `*` agent scope:
+
+```bash
+openclaw approvals set --stdin <<'EOF'
+{
+  version: 1,
+  defaults: {
+    security: "denylist",
+    ask: "off",
+    askFallback: "deny"
+  },
+  agents: {
+    "*": {
+      denylist: [
+        {
+          id: "block-shell-network-fetch",
+          pattern: "(?:^|[\\s;&|()<>])(?:curl|wget)(?:\\.exe)?(?:$|[\\s;&|()<>$])|[\\\\/](?:curl|wget)(?:\\.exe)?(?:$|[\\s;&|()<>$])",
+          flags: "i"
+        }
+      ]
+    }
+  }
+}
+EOF
+```
+
+See [Exec denylist](/tools/exec-denylist) for rule format, matching behavior,
+logging, default curl/wget rules, and troubleshooting.
 
 ## Notes
 

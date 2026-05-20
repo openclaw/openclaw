@@ -77,7 +77,9 @@ type NodeInvokeRequestPayload = {
 export type { SkillBinsProvider } from "./invoke-types.js";
 
 function resolveExecSecurity(value?: string): ExecSecurity {
-  return value === "deny" || value === "allowlist" || value === "full" ? value : "allowlist";
+  return value === "deny" || value === "denylist" || value === "allowlist" || value === "full"
+    ? value
+    : "allowlist";
 }
 
 function isCmdExeInvocation(argv: string[]): boolean {

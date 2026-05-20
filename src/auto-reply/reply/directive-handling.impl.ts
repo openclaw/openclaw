@@ -271,7 +271,7 @@ export async function handleDirectiveOnly(
     }
     if (directives.invalidExecSecurity) {
       return {
-        text: `Unrecognized exec security "${directives.rawExecSecurity ?? ""}". Valid: deny, allowlist, full.`,
+        text: `Unrecognized exec security "${directives.rawExecSecurity ?? ""}". Valid: deny, denylist, allowlist, full.`,
       };
     }
     if (directives.invalidExecAsk) {
@@ -295,7 +295,7 @@ export async function handleDirectiveOnly(
       return {
         text: withOptions(
           `Current exec defaults: host=${renderExecTargetLabel(execDefaults.host)}, effective=${execDefaults.effectiveHost}, security=${execDefaults.security}, ask=${execDefaults.ask}, ${nodeLabel}.`,
-          "host=auto|sandbox|gateway|node, security=deny|allowlist|full, ask=off|on-miss|always, node=<id>",
+          "host=auto|sandbox|gateway|node, security=deny|denylist|allowlist|full, ask=off|on-miss|always, node=<id>",
         ),
       };
     }

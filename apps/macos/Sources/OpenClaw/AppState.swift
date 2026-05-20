@@ -240,6 +240,9 @@ final class AppState {
                     defaults.security = self.execApprovalMode.security
                     defaults.ask = self.execApprovalMode.ask
                 }
+                if self.execApprovalMode.security == .denylist {
+                    ExecApprovalsStore.ensureManagedDefaultDenylistRules()
+                }
             }
         }
     }
