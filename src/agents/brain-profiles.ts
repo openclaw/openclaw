@@ -110,7 +110,8 @@ export const DEFAULT_BRAIN_PROFILES: Record<string, BrainProfile> = {
     fallbacks: [],
     allowMeteredFallback: false,
     commercialSafe: true,
-    notes: "Reserved profile shape for Ollama, vLLM, LM Studio, or private OpenAI-compatible servers.",
+    notes:
+      "Reserved profile shape for Ollama, vLLM, LM Studio, or private OpenAI-compatible servers.",
   },
 };
 
@@ -177,7 +178,9 @@ function isBillingType(value: unknown): value is BrainBillingType {
 }
 
 function normalizeProfile(id: string, raw: unknown): BrainProfile | undefined {
-  if (!isRecord(raw)) return undefined;
+  if (!isRecord(raw)) {
+    return undefined;
+  }
   const label = typeof raw.label === "string" && raw.label.trim() ? raw.label.trim() : id;
   const provider = typeof raw.provider === "string" ? raw.provider.trim() : "";
   const model = typeof raw.model === "string" ? raw.model.trim() : "";
@@ -187,8 +190,12 @@ function normalizeProfile(id: string, raw: unknown): BrainProfile | undefined {
       : provider && model
         ? `${provider}/${model}`
         : "";
-  if (!id || !provider || !model || !modelRef) return undefined;
-  if (!isAuthType(raw.auth) || !isBillingType(raw.billing)) return undefined;
+  if (!id || !provider || !model || !modelRef) {
+    return undefined;
+  }
+  if (!isAuthType(raw.auth) || !isBillingType(raw.billing)) {
+    return undefined;
+  }
 
   return {
     id,
@@ -237,7 +244,7 @@ export function normalizeBrainTierConfigParts(
 
   return {
     globalMode: config.globalMode ?? "economy",
-    agentOverrides: { ...(config.agentOverrides ?? {}) },
+    agentOverrides: { ...config.agentOverrides },
     tierRouting,
     brainProfiles,
   };
@@ -285,7 +292,7 @@ export function resolveBrainProfileForMode(
     auth: profile.auth,
     billing: profile.billing,
     commercialSafe: profile.commercialSafe,
-    params: { ...(profile.params ?? {}) },
+    params: { ...profile.params },
     fallbacks,
     blockedFallbacks,
     label: profile.label,

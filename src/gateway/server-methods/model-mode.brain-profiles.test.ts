@@ -69,10 +69,10 @@ describe("model-mode brain profiles", () => {
     fs.rmSync(tempStateDir, { recursive: true, force: true });
   });
 
-  it("returns public-safe brain metadata from get", () => {
+  it("returns public-safe brain metadata from get", async () => {
     const { calls, respond } = captureRespond();
 
-    modelModeHandlers["model-mode.get"]({ respond } as never);
+    await modelModeHandlers["model-mode.get"]({ respond } as never);
 
     expect(calls[0].ok).toBe(true);
     expect(calls[0].payload).toMatchObject({

@@ -17,7 +17,6 @@ import {
   type ModelTierMode,
 } from "../../agents/model-tiers.js";
 import { readConfigFileSnapshotForWrite, writeConfigFile } from "../../config/config.js";
-import { applyMergePatch } from "../../config/merge-patch.js";
 import { validateConfigObjectWithPlugins } from "../../config/validation.js";
 import { resolveControlPlaneActor, formatControlPlaneActor } from "../control-plane-audit.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
@@ -96,17 +95,12 @@ export const modelModeHandlers: GatewayRequestHandlers = {
 
     // Update tier state file
     const tierConfig = loadModelTierConfig();
-    tierConfig.globalMode = mode as ModelTierMode;
+    tierConfig.globalMode = mode;
     saveModelTierConfig(tierConfig);
-    const resolved = resolveBrainProfileForMode(tierConfig, mode as ModelTierMode);
+    const resolved = resolveBrainProfileForMode(tierConfig, mode);
 
     // Patch agents.defaults.model AND all agent entries in openclaw.json
-    const writeResult = await writeGlobalTierChange(
-      mode as ModelTierMode,
-      tierConfig,
-      client,
-      context,
-    );
+    const writeResult = await writeGlobalTierChange(mode, tierConfig, client, context);
     if (!writeResult.ok) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, writeResult.error));
       return;
@@ -128,7 +122,7 @@ export const modelModeHandlers: GatewayRequestHandlers = {
         provider: resolved.provider,
         auth: resolved.auth,
         billing: resolved.billing,
-        label: MODEL_TIER_LABELS[mode as ModelTierMode],
+        label: MODEL_TIER_LABELS[mode],
       },
       undefined,
     );
@@ -165,18 +159,12 @@ export const modelModeHandlers: GatewayRequestHandlers = {
     if (mode === "inherit") {
       delete tierConfig.agentOverrides[agentId];
     } else {
-      tierConfig.agentOverrides[agentId] = mode as ModelTierMode;
+      tierConfig.agentOverrides[agentId] = mode;
     }
     saveModelTierConfig(tierConfig);
 
     // Patch the agent's model in openclaw.json
-    const writeResult = await writeAgentModelPatch(
-      agentId,
-      mode as ModelTierMode | "inherit",
-      tierConfig,
-      client,
-      context,
-    );
+    const writeResult = await writeAgentModelPatch(agentId, mode, tierConfig, client, context);
     if (!writeResult.ok) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, writeResult.error));
       return;
@@ -210,27 +198,6 @@ type WriteResult = { ok: true; actor: string } | { ok: false; error: string };
  * Apply a merge-patch to openclaw.json, validate, and write.
  * Does NOT schedule a restart — caller handles that.
  */
-async function writeConfigPatch(
-  patch: Record<string, unknown>,
-  client: unknown,
-  context: { logGateway: { info: (msg: string) => void } },
-  method: string,
-): Promise<WriteResult> {
-  const { snapshot, writeOptions } = await readConfigFileSnapshotForWrite();
-  if (!snapshot.valid) {
-    return { ok: false, error: "invalid config; fix before patching" };
-  }
-  const merged = applyMergePatch(snapshot.config, patch, { mergeObjectArraysById: true });
-  const validated = validateConfigObjectWithPlugins(merged);
-  if (!validated.ok) {
-    return { ok: false, error: "config validation failed" };
-  }
-  const actor = resolveControlPlaneActor(client as Parameters<typeof resolveControlPlaneActor>[0]);
-  context?.logGateway?.info(`${method} write ${formatControlPlaneActor(actor)} reason=${method}`);
-  await writeConfigFile(validated.config, writeOptions);
-  return { ok: true, actor: actor.actor ?? "unknown" };
-}
-
 /**
  * Patch a specific agent's model in openclaw.json.
  */

@@ -46,7 +46,7 @@ function ensureModelParams(config: ConfigObject, resolved: ResolvedBrainProfile)
   models[resolved.modelRef] = {
     ...existing,
     params: {
-      ...((existing.params as Record<string, unknown> | undefined) ?? {}),
+      ...(existing.params as Record<string, unknown> | undefined),
       ...resolved.params,
     },
   };
@@ -66,7 +66,9 @@ export function applyGlobalBrainTierPatch(
 
   agents.list = (agents.list as Array<Record<string, unknown>>).map((entry) => {
     const agentId = typeof entry.id === "string" ? entry.id : "";
-    if (!agentId) return entry;
+    if (!agentId) {
+      return entry;
+    }
     const effectiveMode = tierConfig.agentOverrides[agentId] ?? mode;
     const resolved = resolveBrainProfileForMode(tierConfig, effectiveMode);
     ensureModelParams(next, resolved);

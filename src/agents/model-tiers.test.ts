@@ -37,9 +37,7 @@ describe("model tier config", () => {
     expect(config.globalMode).toBe("economy");
     expect(config.agentOverrides).toEqual({});
     expect(config.tierRouting.economy).toBe("legacy-anthropic-haiku");
-    expect(getProviderModelForTier("economy", config)).toBe(
-      "anthropic/claude-haiku-4-5-20251001",
-    );
+    expect(getProviderModelForTier("economy", config)).toBe("anthropic/claude-haiku-4-5-20251001");
   });
 
   it("loads new tierRouting and brainProfiles", () => {

@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { normalizeBrainTierConfigParts } from "./brain-profiles.js";
 import { applyAgentBrainTierPatch, applyGlobalBrainTierPatch } from "./brain-config-patch.js";
+import { normalizeBrainTierConfigParts } from "./brain-profiles.js";
+
+type PatchedAgentsConfig = {
+  agents: {
+    defaults: {
+      model?: unknown;
+      models: Record<string, unknown>;
+    };
+    list: Array<Record<string, unknown>>;
+  };
+};
 
 describe("brain config patch helpers", () => {
   it("patches global default model, agent strings, and profile params", () => {
@@ -16,7 +26,7 @@ describe("brain config patch helpers", () => {
       },
       "einstein",
       tierConfig,
-    );
+    ) as PatchedAgentsConfig;
 
     expect(next.agents.defaults.model).toBe("openai-codex/gpt-5.5");
     expect(next.agents.defaults.models["openai-codex/gpt-5.5"]).toMatchObject({
@@ -43,7 +53,7 @@ describe("brain config patch helpers", () => {
       },
       "baller",
       tierConfig,
-    );
+    ) as PatchedAgentsConfig;
 
     expect(next.agents.list[0].model).toEqual({
       primary: "openai/gpt-5.4",
@@ -79,7 +89,7 @@ describe("brain config patch helpers", () => {
       },
       "einstein",
       tierConfig,
-    );
+    ) as PatchedAgentsConfig;
 
     expect(next.agents.defaults.model).toEqual({
       primary: "openai-codex/gpt-5.5",
@@ -103,7 +113,7 @@ describe("brain config patch helpers", () => {
       { agents: { defaults: {}, list: [{ id: "quinn" }, { id: "main" }] } },
       "baller",
       tierConfig,
-    );
+    ) as PatchedAgentsConfig;
 
     expect(next.agents.list[0].model).toBe("openai-codex/gpt-5.5");
     expect(next.agents.list[1].model).toBe("openai/gpt-5.4");
@@ -119,7 +129,7 @@ describe("brain config patch helpers", () => {
       "new-agent",
       "einstein",
       tierConfig,
-    );
+    ) as PatchedAgentsConfig;
 
     expect(next.agents.list).toEqual([{ id: "new-agent", model: "openai-codex/gpt-5.5" }]);
   });
@@ -132,7 +142,7 @@ describe("brain config patch helpers", () => {
       "quinn",
       "inherit",
       tierConfig,
-    );
+    ) as PatchedAgentsConfig;
 
     expect(next.agents.list[0]).toEqual({ id: "quinn" });
   });
