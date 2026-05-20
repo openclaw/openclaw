@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Dependencies: bump the bundled Codex harness to `@openai/codex` `0.132.0` and refresh the app-server model-list docs for the new catalog.
 - Agents/config: allow `agents.list[].experimental.localModelLean` so lean local-model mode can be enabled for one configured agent instead of globally.
 - Providers/xAI: add device-code OAuth login so remote and headless setups can authorize xAI without a localhost browser callback. (#84005) Thanks @fuller-stack-dev.
 
