@@ -99,6 +99,22 @@ export type AgentPatchSummaryEventData = {
   summary: string;
 };
 
+export type AgentRuntimeIncidentEventData = {
+  phase: "detected";
+  kind: "runtime_fallback";
+  incidentType:
+    | "command_lane_timeout"
+    | "response_generation_timeout"
+    | "session_history_out_of_sync"
+    | "generic_runner_failure";
+  severity: "warning" | "error";
+  suspectedLayer: string;
+  impact: string;
+  recommendedNext: "resume_original_task_first_then_triage_runtime" | "triage_runtime_first";
+  error?: string;
+  userVisibleText?: string;
+};
+
 export type AgentEventPayload = {
   runId: string;
   seq: number;
@@ -294,6 +310,19 @@ export function emitAgentPatchSummaryEvent(params: {
   emitAgentEvent({
     runId: params.runId,
     stream: "patch",
+    data: params.data as unknown as Record<string, unknown>,
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+  });
+}
+
+export function emitAgentRuntimeIncidentEvent(params: {
+  runId: string;
+  data: AgentRuntimeIncidentEventData;
+  sessionKey?: string;
+}) {
+  emitAgentEvent({
+    runId: params.runId,
+    stream: "incident",
     data: params.data as unknown as Record<string, unknown>,
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
   });

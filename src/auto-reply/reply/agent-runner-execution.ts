@@ -53,7 +53,12 @@ import {
 import { resolveSilentReplyPolicy } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
-import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
+import {
+  emitAgentEvent,
+  emitAgentRuntimeIncidentEvent,
+  registerAgentRunContext,
+  type AgentRuntimeIncidentEventData,
+} from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
@@ -474,6 +479,72 @@ type ExternalRunFailureReply = {
   text: string;
   isGenericRunnerFailure: boolean;
 };
+
+function classifyRuntimeFallbackIncident(
+  message: string,
+): Pick<AgentRuntimeIncidentEventData, "incidentType" | "suspectedLayer" | "impact"> {
+  if (/CommandLaneTaskTimeoutError|lane task error|task timed out|Command lane/iu.test(message)) {
+    return {
+      incidentType: "command_lane_timeout",
+      suspectedLayer: "OpenClaw command lane / main run timeout",
+      impact:
+        "The main run may have timed out before the assistant could explain or finish the task.",
+    };
+  }
+  if (/Request timed out before a response was generated/iu.test(message)) {
+    return {
+      incidentType: "response_generation_timeout",
+      suspectedLayer: "agent response generation",
+      impact: "The model/run did not produce a final response before timeout.",
+    };
+  }
+  if (
+    CLI_BACKEND_NO_OUTPUT_STALL_RE.test(message) ||
+    CLI_BACKEND_OVERALL_TIMEOUT_RE.test(message)
+  ) {
+    return {
+      incidentType: "response_generation_timeout",
+      suspectedLayer: "CLI backend subprocess",
+      impact: "The CLI backend timed out before producing a complete assistant response.",
+    };
+  }
+  if (isToolResultTurnMismatchError(message)) {
+    return {
+      incidentType: "session_history_out_of_sync",
+      suspectedLayer: "session history synchronization",
+      impact:
+        "The session context may be inconsistent; continuing blindly risks acting on stale state.",
+    };
+  }
+  return {
+    incidentType: "generic_runner_failure",
+    suspectedLayer: "agent reply fallback",
+    impact: "A user-visible fallback may have replaced the real failure detail.",
+  };
+}
+
+function emitRuntimeFallbackIncident(params: {
+  runId: string;
+  sessionKey?: string;
+  message: string;
+  userVisibleText: string;
+  recommendedNext?: AgentRuntimeIncidentEventData["recommendedNext"];
+}) {
+  const classification = classifyRuntimeFallbackIncident(params.message);
+  emitAgentRuntimeIncidentEvent({
+    runId: params.runId,
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    data: {
+      phase: "detected",
+      kind: "runtime_fallback",
+      severity: "warning",
+      recommendedNext: params.recommendedNext ?? "triage_runtime_first",
+      error: sanitizeUserFacingText(params.message, { errorContext: true }).slice(0, 900),
+      userVisibleText: params.userVisibleText,
+      ...classification,
+    },
+  });
+}
 
 function isNonDirectConversationContext(ctx: TemplateContext): boolean {
   const chatType = normalizeLowercaseStringOrEmpty(ctx.ChatType);
@@ -2358,6 +2429,20 @@ export async function runAgentTurnWithFallback(params: {
         isGenericRunnerFailure: externalRunFailureReply?.isGenericRunnerFailure ?? false,
         cfg: params.followupRun.run.config,
       });
+      const runtimeIncidentClassification = classifyRuntimeFallbackIncident(message);
+      if (
+        externalRunFailureReply?.isGenericRunnerFailure ||
+        runtimeIncidentClassification.incidentType === "command_lane_timeout" ||
+        runtimeIncidentClassification.incidentType === "response_generation_timeout" ||
+        runtimeIncidentClassification.incidentType === "session_history_out_of_sync"
+      ) {
+        emitRuntimeFallbackIncident({
+          runId,
+          sessionKey: params.sessionKey,
+          message,
+          userVisibleText: userVisibleFallbackText,
+        });
+      }
 
       params.replyOperation?.fail("run_failed", err);
       return {

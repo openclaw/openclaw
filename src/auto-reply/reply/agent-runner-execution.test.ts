@@ -115,6 +115,7 @@ vi.mock("../../infra/agent-events.js", async () => {
   return {
     ...actual,
     emitAgentEvent: vi.fn(),
+    emitAgentRuntimeIncidentEvent: vi.fn(),
     registerAgentRunContext: vi.fn(),
   };
 });
@@ -4022,6 +4023,68 @@ describe("runAgentTurnWithFallback", () => {
     if (result.kind === "final") {
       expect(result.payload.text).toBe(GENERIC_RUN_FAILURE_TEXT);
     }
+  });
+
+  it("emits a structured runtime incident for generic runner failures", async () => {
+    const agentEvents = await import("../../infra/agent-events.js");
+    const emitAgentRuntimeIncidentEvent = vi.mocked(agentEvents.emitAgentRuntimeIncidentEvent);
+    state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
+      new Error("openai-codex/gpt-5.5 ended with an incomplete terminal response"),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({
+        sessionCtx: {
+          Provider: "discord",
+          Surface: "discord",
+          ChatType: "direct",
+          MessageSid: "msg",
+        } as unknown as TemplateContext,
+        opts: { runId: "run-generic-failure" } as GetReplyOptions,
+      }),
+    );
+
+    expect(result.kind).toBe("final");
+    expect(emitAgentRuntimeIncidentEvent).toHaveBeenCalledWith({
+      runId: "run-generic-failure",
+      sessionKey: "main",
+      data: expect.objectContaining({
+        phase: "detected",
+        kind: "runtime_fallback",
+        incidentType: "generic_runner_failure",
+        severity: "warning",
+        suspectedLayer: "agent reply fallback",
+        recommendedNext: "triage_runtime_first",
+        userVisibleText: GENERIC_RUN_FAILURE_TEXT,
+      }),
+    });
+  });
+
+  it("classifies command lane timeouts as runtime incidents", async () => {
+    const agentEvents = await import("../../infra/agent-events.js");
+    const emitAgentRuntimeIncidentEvent = vi.mocked(agentEvents.emitAgentRuntimeIncidentEvent);
+    state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
+      new Error(
+        'lane task error: lane=main durationMs=629999 error="CommandLaneTaskTimeoutError: Command lane main task timed out after 630000ms"',
+      ),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    await runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({
+        opts: { runId: "run-lane-timeout" } as GetReplyOptions,
+      }),
+    );
+
+    expect(emitAgentRuntimeIncidentEvent).toHaveBeenCalledWith({
+      runId: "run-lane-timeout",
+      sessionKey: "main",
+      data: expect.objectContaining({
+        incidentType: "command_lane_timeout",
+        suspectedLayer: "OpenClaw command lane / main run timeout",
+      }),
+    });
   });
 
   it("keeps raw runner failure guidance visible in verbose Discord direct chats", async () => {
