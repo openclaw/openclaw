@@ -640,6 +640,8 @@ export const OpenClawSchema = z
                 maxBytes: z.number().int().positive().optional(),
                 timeoutSeconds: z.number().int().positive().optional(),
                 type: z.union([z.literal("provider"), z.literal("cli")]).optional(),
+                command: z.string().optional(),
+                args: z.array(z.string()).optional(),
                 profile: z.string().optional(),
                 preferredProfile: z.string().optional(),
               })

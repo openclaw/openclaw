@@ -107,6 +107,8 @@ export type BrowserConfig = {
     maxBytes?: number;
     timeoutSeconds?: number;
     type?: "provider" | "cli";
+    command?: string;
+    args?: string[];
     profile?: string;
     preferredProfile?: string;
   }>;
