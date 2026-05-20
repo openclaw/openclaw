@@ -1317,6 +1317,7 @@ export async function prepareSlackMessage(params: {
         label: directThreadRoutedToDmSession ? undefined : threadLabel,
       },
       groupSystemPrompt,
+      groupSystemPromptTrusted: true,
     },
     extra: {
       GroupSubject: isRoomish ? roomLabel : undefined,

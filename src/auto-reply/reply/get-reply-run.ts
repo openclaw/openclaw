@@ -71,7 +71,6 @@ import {
   buildInboundUserContextPrefix,
   resolveInboundUserContextPromptJoiner,
 } from "./inbound-meta.js";
-import { normalizeInboundTextNewlines, sanitizeInboundSystemTags } from "./inbound-text.js";
 import type { createModelSelectionState } from "./model-selection.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { buildReplyPromptEnvelope, buildReplyPromptEnvelopeBase } from "./prompt-prelude.js";
@@ -530,9 +529,7 @@ export async function runPreparedReply(
         defaultActivation,
         silentReplyPolicy: silentReplySettings.policy,
       }).allowEmptyAssistantReplyAsSilent);
-  const groupSystemPrompt = sanitizeInboundSystemTags(
-    normalizeInboundTextNewlines(normalizeOptionalString(promptSessionCtx.GroupSystemPrompt) ?? ""),
-  );
+  const groupSystemPrompt = normalizeOptionalString(promptSessionCtx.GroupSystemPrompt) ?? "";
   const inboundMetaPrompt = buildInboundMetaSystemPrompt(
     isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },
     { includeFormattingHints: !useFastReplyRuntime },

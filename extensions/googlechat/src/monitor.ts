@@ -330,6 +330,7 @@ async function processMessageWithPipeline(params: {
         : undefined,
     supplemental: {
       groupSystemPrompt: isGroup ? groupSystemPrompt : undefined,
+      groupSystemPromptTrusted: true,
     },
     extra: {
       ChatType: isGroup ? "channel" : "direct",

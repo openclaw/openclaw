@@ -224,6 +224,7 @@ export type SupplementalContextFacts = {
   };
   untrustedContext?: Array<{ label: string; source?: string; type?: string; payload: unknown }>;
   groupSystemPrompt?: string;
+  groupSystemPromptTrusted?: boolean;
 };
 
 export type InboundMediaFacts = {
