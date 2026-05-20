@@ -265,15 +265,23 @@ export function createAcpReplyProjector(params: {
     clearLiveIdleTimer();
     blockReplyPipeline.stop();
     blockReplyPipeline = createTurnBlockReplyPipeline();
-    emittedOutputChars = 0;
-    truncationNoticeEmitted = false;
+    if (settings.deliveryMode !== "final_only") {
+      emittedOutputChars = 0;
+      truncationNoticeEmitted = false;
+      lastVisibleOutputTail = undefined;
+      pendingHiddenBoundary = false;
+    }
     lastStatusHash = undefined;
     lastToolHash = undefined;
     lastUsageTuple = undefined;
-    lastVisibleOutputTail = undefined;
-    pendingHiddenBoundary = false;
     liveBufferText = "";
-    finalOnlyOutputText = "";
+    // finalOnlyOutputText deliberately survives resetTurnState so text
+    // produced before tool calls accumulates across model invocations
+    // within a single ACP turn. emittedOutputChars, truncation state,
+    // lastVisibleOutputTail, and pendingHiddenBoundary also persist in
+    // final_only mode so the per-turn output limit, separator insertion,
+    // and hidden-boundary tracking stay scoped to the accumulated turn
+    // (#84486).
     pendingToolDeliveries.length = 0;
     toolLifecycleById.clear();
   };
@@ -287,14 +295,14 @@ export function createAcpReplyProjector(params: {
     }
   };
 
-  const flush = async (force = false): Promise<void> => {
+  const flush = async (force = false, opts?: { skipFinalText?: boolean }): Promise<void> => {
     if (settings.deliveryMode === "live") {
       clearLiveIdleTimer();
       flushLiveBuffer({ force: true });
     }
     await flushBufferedToolDeliveries(force);
     if (settings.deliveryMode === "final_only") {
-      if (force && finalOnlyOutputText.trim().length > 0) {
+      if (force && !opts?.skipFinalText && finalOnlyOutputText.trim().length > 0) {
         const text = finalOnlyOutputText;
         finalOnlyOutputText = "";
         await params.deliver("final", { text });
@@ -498,7 +506,13 @@ export function createAcpReplyProjector(params: {
     }
 
     if (event.type === "done" || event.type === "error") {
-      await flush(true);
+      // In final_only mode, skip final text delivery on intermediate done
+      // events so text accumulated before tool calls is carried forward.
+      // The accumulated text is delivered once at turn completion via the
+      // flush(true) call in tryDispatchAcpReply (#84486).
+      await flush(true, {
+        skipFinalText: settings.deliveryMode === "final_only",
+      });
       resetTurnState();
     }
   };

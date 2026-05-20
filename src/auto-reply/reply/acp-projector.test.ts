@@ -364,12 +364,19 @@ describe("createAcpReplyProjector", () => {
     expect(deliveries).toStrictEqual([]);
 
     await projector.onEvent({ type: "done" });
-    expect(deliveries).toHaveLength(3);
+    // Tool/status messages are flushed on done, but final text is deferred
+    // to the turn-level flush(true) call so text accumulated before tool
+    // calls is preserved across model invocations within the same turn
+    // (#84486).
+    expect(deliveries).toHaveLength(2);
     expect(deliveries[0]).toEqual({
       kind: "tool",
       text: prefixSystemMessage("available commands updated (7)"),
     });
     expectToolCallSummary(deliveries[1]);
+
+    await projector.flush(true);
+    expect(deliveries).toHaveLength(3);
     expect(deliveries[2]).toEqual({ kind: "final", text: "What now?" });
   });
 
@@ -398,6 +405,157 @@ describe("createAcpReplyProjector", () => {
       text: prefixSystemMessage("available commands updated (7)"),
     });
     expectToolCallSummary(deliveries[1]);
+  });
+
+  it("accumulates text across multiple done events in final_only mode (#84486)", async () => {
+    const { deliveries, projector } = createFinalOnlyStatusToolHarness();
+
+    // First model invocation: text before a tool call
+    await projector.onEvent({
+      type: "text_delta",
+      text: "Step 1: Checking data schema.",
+      tag: "agent_message_chunk",
+    });
+    await projector.onEvent({
+      type: "text_delta",
+      text: " Step 2: Planning the query.",
+      tag: "agent_message_chunk",
+    });
+
+    // First done (toolUse stopReason): tool messages are flushed, but text is
+    // accumulated, not delivered.
+    await projector.onEvent({ type: "done" });
+    expect(deliveries).toHaveLength(0);
+    expect(countMatching(deliveries, (d) => d.kind === "final")).toBe(0);
+
+    // Second model invocation: text after tool result
+    await projector.onEvent({
+      type: "text_delta",
+      text: " Step 3: The results show...",
+      tag: "agent_message_chunk",
+    });
+    await projector.onEvent({ type: "done" });
+    expect(countMatching(deliveries, (d) => d.kind === "final")).toBe(0);
+
+    // Turn completion: flush(true) delivers all accumulated text together
+    await projector.flush(true);
+    const finals = deliveries.filter((d) => d.kind === "final");
+    expect(finals).toHaveLength(1);
+    expect(finals[0]?.text).toContain("Step 1: Checking data schema.");
+    expect(finals[0]?.text).toContain("Step 2: Planning the query.");
+    expect(finals[0]?.text).toContain("Step 3: The results show...");
+  });
+
+  it("enforces maxOutputChars across multiple invocations in final_only mode (#84486)", async () => {
+    const { deliveries, projector } = createFinalOnlyStatusToolHarness();
+    // Override to a very low limit: 5 chars per turn
+    const limitedProjector = createAcpReplyProjector({
+      cfg: createCfg({
+        acp: {
+          enabled: true,
+          stream: {
+            coalesceIdleMs: 0,
+            maxChunkChars: 512,
+            deliveryMode: "final_only",
+            maxOutputChars: 5,
+            tagVisibility: {
+              available_commands_update: true,
+              tool_call: true,
+            },
+          },
+        },
+      }),
+      shouldSendToolSummaries: true,
+      deliver: async (kind, payload) => {
+        deliveries.push({ kind, text: payload.text });
+        return true;
+      },
+    });
+
+    // First invocation: 3 chars accepted, 2 budget remains
+    await limitedProjector.onEvent({
+      type: "text_delta",
+      text: "abc",
+      tag: "agent_message_chunk",
+    });
+
+    // done(toolUse): counter persists in final_only mode
+    await limitedProjector.onEvent({ type: "done" });
+
+    // Second invocation: "de" accepted (fills remaining budget), "fgh..." rejected
+    await limitedProjector.onEvent({
+      type: "text_delta",
+      text: "defghijklm",
+      tag: "agent_message_chunk",
+    });
+    await limitedProjector.onEvent({ type: "done" });
+
+    // Turn completion: deliver accumulated text + truncation notice
+    await limitedProjector.flush(true);
+
+    const finals = deliveries.filter((d) => d.kind === "final");
+    expect(finals).toHaveLength(1);
+    // 5 chars total: abc + de
+    expect(finals[0]?.text).toBe("abcde");
+
+    const truncationNotices = deliveries.filter(
+      (d) => d.kind === "tool" && d.text?.includes("output truncated"),
+    );
+    expect(truncationNotices).toHaveLength(1);
+  });
+
+  it("preserves hidden-boundary separator across done boundaries in final_only mode (#84486)", async () => {
+    // When a hidden tool_call occurs in invocation 1 and visible text follows
+    // in invocation 2, the hidden-boundary separator must still be inserted.
+    const { deliveries, projector } = createProjectorHarness({
+      acp: {
+        enabled: true,
+        stream: {
+          coalesceIdleMs: 0,
+          maxChunkChars: 256,
+          deliveryMode: "final_only",
+          tagVisibility: {
+            tool_call: false, // hidden tool calls
+            tool_call_update: false, // hidden updates
+          },
+        },
+      },
+    });
+
+    // Invocation 1: visible text, then hidden tool call
+    await projector.onEvent({
+      type: "text_delta",
+      text: "Looking up data.",
+      tag: "agent_message_chunk",
+    });
+    await projector.onEvent({
+      type: "tool_call",
+      tag: "tool_call",
+      toolCallId: "call_hidden",
+      status: "in_progress",
+      title: "Hidden lookup",
+      text: "Hidden lookup (in_progress)",
+    });
+    // First done: text deferred, hidden-boundary state must survive
+    await projector.onEvent({ type: "done" });
+
+    // Invocation 2: visible text follows — separator should be inserted
+    await projector.onEvent({
+      type: "text_delta",
+      text: "Results incoming.",
+      tag: "agent_message_chunk",
+    });
+    await projector.onEvent({ type: "done" });
+
+    // Turn completion
+    await projector.flush(true);
+
+    const finals = deliveries.filter((d) => d.kind === "final");
+    expect(finals).toHaveLength(1);
+    // Default hiddenBoundarySeparator in non-live mode is "paragraph" (\n\n).
+    // The separator is inserted between the previous visible text tail and the
+    // next text because pendingHiddenBoundary survived across the done boundary.
+    expect(finals[0]?.text).toBe("Looking up data.\n\nResults incoming.");
   });
 
   it("suppresses usage_update by default and allows deduped usage when tag-visible", async () => {
