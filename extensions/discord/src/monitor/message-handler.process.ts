@@ -726,7 +726,7 @@ export async function processDiscordMessage(
           kind: info.kind,
         });
         replyReference.markSent();
-        if (isFinal) {
+        if (isFinal && payload.isError !== true) {
           draftPreview.markFinalReplyDelivered();
           observer?.onFinalReplyDelivered?.();
         }
