@@ -290,5 +290,5 @@ function shouldInsertTranscriptSpace(base: string, next: string): boolean {
   if (!last || !first || /\s/.test(last) || /\s/.test(first)) {
     return false;
   }
-  return /[\p{L}\p{N}]/u.test(last) && /[\p{L}\p{N}]/u.test(first);
+  return /[\p{L}\p{N}.!?,:;)\]\}"'’”]/u.test(last) && /[\p{L}\p{N}]/u.test(first);
 }

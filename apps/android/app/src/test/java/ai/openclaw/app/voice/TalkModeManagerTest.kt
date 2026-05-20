@@ -168,6 +168,20 @@ class TalkModeManagerTest {
   }
 
   @Test
+  fun realtimeTranscriptFragmentsInsertSpacingAfterPunctuation() {
+    val manager = createManager()
+
+    setPrivateField(manager, "realtimeSessionId", "relay-1")
+
+    manager.handleGatewayEvent("talk.event", realtimeTranscriptPayload(role = "assistant", text = "Ready."))
+    manager.handleGatewayEvent("talk.event", realtimeTranscriptPayload(role = "assistant", text = "What next?"))
+
+    val entry = manager.conversation.value.single()
+    assertEquals("Ready. What next?", entry.text)
+    assertTrue(entry.isStreaming)
+  }
+
+  @Test
   fun realtimeFinalTranscriptCanCompleteDeltaText() {
     val manager = createManager()
 

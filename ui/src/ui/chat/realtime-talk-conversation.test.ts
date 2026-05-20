@@ -27,6 +27,27 @@ describe("realtime Talk conversation", () => {
     ]);
   });
 
+  it("inserts spacing after punctuation-ended transcript fragments", () => {
+    let state = createRealtimeTalkConversationState();
+
+    state = updateRealtimeTalkConversation(state, {
+      role: "assistant",
+      text: "Ready.",
+      final: false,
+      nowMs: 1,
+    });
+    state = updateRealtimeTalkConversation(state, {
+      role: "assistant",
+      text: "What next?",
+      final: false,
+      nowMs: 2,
+    });
+
+    expect(state.entries).toMatchObject([
+      { role: "assistant", text: "Ready. What next?", isStreaming: true },
+    ]);
+  });
+
   it("keeps a late final rewrite in the original user bubble", () => {
     let state = createRealtimeTalkConversationState();
 

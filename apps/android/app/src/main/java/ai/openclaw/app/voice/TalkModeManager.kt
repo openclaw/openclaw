@@ -1411,8 +1411,12 @@ class TalkModeManager internal constructor(
     val last = existing.lastOrNull() ?: return false
     val first = incoming.firstOrNull() ?: return false
     if (last.isWhitespace() || first.isWhitespace()) return false
-    return last.isLetterOrDigit() && first.isLetterOrDigit()
+    return first.isLetterOrDigit() &&
+      (last.isLetterOrDigit() || transcriptSpaceAfterPunctuation.contains(last))
   }
+
+  private val transcriptSpaceAfterPunctuation =
+    setOf('.', '!', '?', ',', ':', ';', ')', ']', '}', '"', '\'', '’', '”')
 
   private fun startListeningInternal(markListening: Boolean) {
     val r = recognizer ?: return
