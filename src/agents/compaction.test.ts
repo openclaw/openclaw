@@ -4,14 +4,21 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 import "./test-helpers/pi-coding-agent-token-mock.js";
 
+let SAFETY_MARGIN: typeof import("./compaction.js").SAFETY_MARGIN;
+let chunkMessagesByMaxTokens: typeof import("./compaction.js").chunkMessagesByMaxTokens;
 let estimateMessagesTokens: typeof import("./compaction.js").estimateMessagesTokens;
 let pruneHistoryForContextShare: typeof import("./compaction.js").pruneHistoryForContextShare;
 let splitMessagesByTokenShare: typeof import("./compaction.js").splitMessagesByTokenShare;
 
 beforeAll(async () => {
   vi.resetModules();
-  ({ estimateMessagesTokens, pruneHistoryForContextShare, splitMessagesByTokenShare } =
-    await import("./compaction.js"));
+  ({
+    SAFETY_MARGIN,
+    chunkMessagesByMaxTokens,
+    estimateMessagesTokens,
+    pruneHistoryForContextShare,
+    splitMessagesByTokenShare,
+  } = await import("./compaction.js"));
 });
 
 function makeMessage(id: number, size: number): AgentMessage {
@@ -367,5 +374,41 @@ describe("pruneHistoryForContextShare", () => {
     const keptToolResults = pruned.messages.filter((m) => m.role === "toolResult");
     expect(keptToolResults).toHaveLength(0);
     expect(pruned.droppedMessages).toBe(pruned.droppedMessagesList.length);
+  });
+});
+
+describe("SAFETY_MARGIN regression (#82956)", () => {
+  it("equals 1.5 to account for CJK and code token underestimation", () => {
+    expect(SAFETY_MARGIN).toBe(1.5);
+  });
+
+  it("chunkMessagesByMaxTokens splits within the tighter 1.5 margin", () => {
+    // Two messages whose combined estimated tokens exceed floor(maxTokens/1.5)
+    // but stay under floor(maxTokens/1.2), proving the wider margin is active.
+    const maxTokens = 3000;
+    // floor(3000 / 1.5) = 2000 (new effective max)
+    // floor(3000 / 1.2) = 2500 (old effective max)
+    // Each message: 4400 chars -> ceil(4400/4) = 1100 est. tokens
+    // Combined: 2200 tokens -- exceeds 2000 but not 2500
+    const content = "x".repeat(4400);
+    const messages: AgentMessage[] = [
+      { role: "user", content, timestamp: 1 },
+      { role: "user", content, timestamp: 2 },
+    ];
+
+    const combined = estimateMessagesTokens(messages);
+    expect(combined).toBeGreaterThan(Math.floor(maxTokens / 1.5));
+    expect(combined).toBeLessThan(Math.floor(maxTokens / 1.2));
+
+    const chunks = chunkMessagesByMaxTokens(messages, maxTokens);
+    expect(chunks.length).toBe(2);
+  });
+
+  it("effective chunk budget is 66% of raw limit with 1.5 margin", () => {
+    const maxTokens = 3000;
+    const effectiveMax = Math.floor(maxTokens / SAFETY_MARGIN);
+    expect(effectiveMax).toBe(2000);
+    // The old 1.2 margin would allow 2500 -- 25% more headroom consumed
+    expect(effectiveMax).toBeLessThan(Math.floor(maxTokens / 1.2));
   });
 });
