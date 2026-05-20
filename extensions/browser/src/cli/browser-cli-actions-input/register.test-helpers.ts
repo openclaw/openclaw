@@ -9,14 +9,11 @@ import {
 } from "../browser-cli.test-support.js";
 import * as cliCoreApiModule from "../core-api.js";
 
-export type BrowserActionRequest = {
-  method?: string;
-  path?: string;
-  query?: Record<string, string>;
-  body?: Record<string, unknown>;
-};
+export type BrowserActionRequest = Parameters<typeof browserCliSharedModule.callBrowserRequest>[1];
 
-export type BrowserActionRuntimeOptions = { timeoutMs?: number };
+export type BrowserActionRuntimeOptions = Parameters<
+  typeof browserCliSharedModule.callBrowserRequest
+>[2];
 
 type BrowserActionCall = [
   unknown,
