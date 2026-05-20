@@ -34,6 +34,9 @@ import {
 } from "./stored-model-override.js";
 
 type ModelCatalog = ModelCatalogEntry[];
+type ThinkingCatalogEntryWithSource = ModelCatalogEntry & {
+  source?: "configured" | "runtime";
+};
 
 type ModelSelectionState = {
   provider: string;
@@ -348,13 +351,23 @@ export async function createModelSelectionState(params: {
     }
   }
 
-  let thinkingCatalog: ModelCatalog | undefined;
+  let thinkingCatalog: ThinkingCatalogEntryWithSource[] | undefined;
+  const withThinkingCatalogSource = (
+    catalog: ModelCatalog,
+    source: "configured" | "runtime",
+  ): ThinkingCatalogEntryWithSource[] =>
+    catalog.map((entry) => ({
+      ...entry,
+      source,
+    }));
   const resolveThinkingCatalog = async () => {
     if (thinkingCatalog) {
       return thinkingCatalog;
     }
     let catalogForThinking =
       modelCatalog && modelCatalog.length > 0 ? modelCatalog : allowedModelCatalog;
+    let catalogSource: "configured" | "runtime" =
+      modelCatalog && modelCatalog.length > 0 ? "runtime" : "configured";
     const selectedCatalogEntry = catalogForThinking?.find(
       (entry) => entry.provider === provider && entry.id === model,
     );
@@ -366,14 +379,18 @@ export async function createModelSelectionState(params: {
       const runtimeSelectedEntry = modelCatalog.find(
         (entry) => entry.provider === provider && entry.id === model,
       );
-      catalogForThinking =
-        runtimeSelectedEntry || !catalogForThinking || catalogForThinking.length === 0
-          ? modelCatalog.length > 0
-            ? modelCatalog
-            : allowedModelCatalog
-          : allowedModelCatalog;
+      if (runtimeSelectedEntry || !catalogForThinking || catalogForThinking.length === 0) {
+        catalogForThinking = modelCatalog.length > 0 ? modelCatalog : allowedModelCatalog;
+        catalogSource = modelCatalog.length > 0 ? "runtime" : "configured";
+      } else {
+        catalogForThinking = allowedModelCatalog;
+        catalogSource = "configured";
+      }
     }
-    thinkingCatalog = catalogForThinking.length > 0 ? catalogForThinking : undefined;
+    thinkingCatalog =
+      catalogForThinking.length > 0
+        ? withThinkingCatalogSource(catalogForThinking, catalogSource)
+        : undefined;
     return thinkingCatalog;
   };
 

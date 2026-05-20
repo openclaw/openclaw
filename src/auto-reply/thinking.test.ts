@@ -238,6 +238,7 @@ describe("listThinkingLevels", () => {
                 { id: "high" },
                 { id: "xhigh" },
               ],
+              overridesRuntimeCatalogReasoningFalse: true,
             }
           : undefined,
       );
@@ -246,6 +247,7 @@ describe("listThinkingLevels", () => {
           provider,
           id: "gpt-5.5",
           name: "GPT-5.5",
+          source: "runtime" as const,
           reasoning: false,
         },
       ];
@@ -266,6 +268,42 @@ describe("listThinkingLevels", () => {
           catalog,
         }),
       ).toBe(true);
+    },
+  );
+
+  it.each(["openai", "openai-codex"])(
+    "preserves explicit configured %s reasoning=false opt-outs",
+    (provider) => {
+      providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
+        levels: [
+          { id: "off" },
+          { id: "minimal" },
+          { id: "low" },
+          { id: "medium" },
+          { id: "high" },
+          { id: "xhigh" },
+        ],
+        overridesRuntimeCatalogReasoningFalse: true,
+      });
+      const catalog = [
+        {
+          provider,
+          id: "gpt-5.5",
+          name: "GPT-5.5",
+          source: "configured" as const,
+          reasoning: false,
+        },
+      ];
+
+      expect(listThinkingLevels(provider, "gpt-5.5", catalog)).toEqual(["off"]);
+      expect(
+        isThinkingLevelSupported({
+          provider,
+          model: "gpt-5.5",
+          level: "xhigh",
+          catalog,
+        }),
+      ).toBe(false);
     },
   );
 

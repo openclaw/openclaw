@@ -55,4 +55,10 @@ export type ProviderThinkingProfile = {
    * `reasoning: false` remains authoritative for ordinary catalog entries.
    */
   preserveWhenCatalogReasoningFalse?: boolean;
+  /**
+   * Allows this provider profile to override stale runtime catalog rows that
+   * advertise `reasoning: false`. Explicit configured catalog opt-outs remain
+   * authoritative.
+   */
+  overridesRuntimeCatalogReasoningFalse?: boolean;
 };

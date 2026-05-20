@@ -1616,6 +1616,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
                     { id: "xhigh" },
                   ]
                 : [{ id: "off" }],
+            overridesRuntimeCatalogReasoningFalse: true,
           }),
         },
       ]);
@@ -1625,6 +1626,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
         provider,
         id: model,
         name: model,
+        source: "runtime" as const,
         reasoning: false,
       };
 
@@ -1642,6 +1644,61 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
 
       expect(result?.text).toContain("Thinking level set to xhigh.");
       expect(sessionEntry.thinkingLevel).toBe("xhigh");
+    },
+  );
+
+  it.each([
+    ["openai", "gpt-5.5"],
+    ["openai-codex", "gpt-5.5"],
+  ])(
+    "rejects xhigh for %s/%s when configured catalog explicitly opts out of reasoning",
+    async (provider, model) => {
+      setDirectiveTestProviders([
+        {
+          id: provider,
+          label: provider,
+          auth: [],
+          resolveThinkingProfile: ({ modelId }) => ({
+            levels:
+              modelId === "gpt-5.5"
+                ? [
+                    { id: "off" },
+                    { id: "minimal" },
+                    { id: "low" },
+                    { id: "medium" },
+                    { id: "high" },
+                    { id: "xhigh" },
+                  ]
+                : [{ id: "off" }],
+            overridesRuntimeCatalogReasoningFalse: true,
+          }),
+        },
+      ]);
+      const sessionEntry = createSessionEntry();
+      const sessionStore = { [sessionKey]: sessionEntry };
+      const configuredCatalogEntry = {
+        provider,
+        id: model,
+        name: model,
+        source: "configured" as const,
+        reasoning: false,
+      };
+
+      const result = await handleDirectiveOnly(
+        createHandleParams({
+          directives: parseInlineDirectives("/think xhigh"),
+          provider,
+          model,
+          allowedModelCatalog: [configuredCatalogEntry],
+          thinkingCatalog: [configuredCatalogEntry],
+          sessionEntry,
+          sessionStore,
+        }),
+      );
+
+      expect(result?.text).toContain('Thinking level "xhigh" is not supported');
+      expect(result?.text).toContain("Use one of: off");
+      expect(sessionEntry.thinkingLevel).toBeUndefined();
     },
   );
 

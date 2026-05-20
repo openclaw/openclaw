@@ -73,6 +73,7 @@ function resolveThinkingPolicyContext(params: {
     normalizedProvider,
     modelId,
     modelKey,
+    source: candidate?.source,
     reasoning: candidate?.reasoning,
     compat: candidate?.compat,
   };
@@ -152,10 +153,6 @@ function appendProfileLevel(profile: ResolvedThinkingProfile, id: ThinkLevel) {
   profile.levels = profile.levels.toSorted((a, b) => a.rank - b.rank);
 }
 
-function shouldProviderProfileOverrideCatalogOptOut(provider: string): boolean {
-  return provider === "openai" || provider === "openai-codex";
-}
-
 export function resolveThinkingProfile(params: {
   provider?: string | null;
   model?: string | null;
@@ -180,7 +177,8 @@ export function resolveThinkingProfile(params: {
       normalized.levels.length > 0 &&
       (context.reasoning !== false ||
         pluginProfile.preserveWhenCatalogReasoningFalse === true ||
-        shouldProviderProfileOverrideCatalogOptOut(context.normalizedProvider))
+        (context.source === "runtime" &&
+          pluginProfile.overridesRuntimeCatalogReasoningFalse === true))
     ) {
       return normalized;
     }

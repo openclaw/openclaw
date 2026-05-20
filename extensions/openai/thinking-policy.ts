@@ -43,6 +43,7 @@ function buildOpenAIThinkingProfile(params: {
         ? [{ id: "xhigh" as const }]
         : []),
     ],
+    overridesRuntimeCatalogReasoningFalse: true,
   };
 }
 

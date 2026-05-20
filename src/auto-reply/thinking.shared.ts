@@ -25,6 +25,7 @@ export type UsageDisplayLevel = "off" | "tokens" | "full";
 export type ThinkingCatalogEntry = {
   provider: string;
   id: string;
+  source?: "configured" | "runtime";
   reasoning?: boolean;
   compat?: {
     supportedReasoningEfforts?: readonly string[] | null;
