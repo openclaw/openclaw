@@ -636,8 +636,14 @@ export async function runAgentTurnWithFallback(params: {
   // See #26905: Slack DM sessions silently swallowed messages when context
   // overflow errors were returned as embedded error payloads.
   const finalEmbeddedError = runResult?.meta?.error;
+  // Cover the case where `meta.error` was not populated (e.g. the run path
+  // surfaced the failure via the last assistant turn rather than the embedded
+  // error meta) but the assistant still ended with stopReason === "error" and
+  // an errorMessage that matches the context-overflow signature.
+  const lastAssistantErrorMessage = runResult?.meta?.lastAssistantErrorMessage;
+  const errorForOverflowCheck = finalEmbeddedError?.message ?? lastAssistantErrorMessage;
   const hasPayloadText = runResult?.payloads?.some((p) => p.text?.trim());
-  if (finalEmbeddedError && isContextOverflowError(finalEmbeddedError.message) && !hasPayloadText) {
+  if (errorForOverflowCheck && isContextOverflowError(errorForOverflowCheck) && !hasPayloadText) {
     return {
       kind: "final",
       payload: {

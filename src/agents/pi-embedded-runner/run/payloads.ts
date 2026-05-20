@@ -198,7 +198,12 @@ export function buildEmbeddedRunPayloads(params: {
     replyItems.push({ text: reasoningText, isReasoning: true });
   }
 
-  const fallbackAnswerText = params.lastAssistant ? extractAssistantText(params.lastAssistant) : "";
+  // Guard: never reuse an errored assistant turn's text as fallback. When the
+  // model errored out (e.g. vLLM 400 context overflow) the last successful
+  // assistant text would otherwise be re-emitted to the user as if it were a
+  // fresh reply, producing duplicate messages. See work-report 20260520-040.
+  const fallbackAnswerText =
+    params.lastAssistant && !lastAssistantErrored ? extractAssistantText(params.lastAssistant) : "";
   const shouldSuppressRawErrorText = (text: string) => {
     if (!lastAssistantErrored) {
       return false;

@@ -46,6 +46,13 @@ export type EmbeddedPiRunMeta = {
   };
   /** Stop reason for the agent run (e.g., "completed", "tool_calls"). */
   stopReason?: string;
+  /**
+   * Raw error message from the final assistant turn when it ended with
+   * stopReason === "error". Exposed so callers (e.g. the agent runner safety
+   * net) can run context-overflow detection even when `meta.error` is not
+   * populated for this run path.
+   */
+  lastAssistantErrorMessage?: string;
   /** Pending tool calls when stopReason is "tool_calls". */
   pendingToolCalls?: Array<{
     id: string;

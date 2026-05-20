@@ -1580,6 +1580,10 @@ export async function runEmbeddedPiAgent(
                 : attempt.yieldDetected
                   ? "end_turn"
                   : (lastAssistant?.stopReason as string | undefined),
+              lastAssistantErrorMessage:
+                lastAssistant?.stopReason === "error"
+                  ? lastAssistant.errorMessage?.trim() || undefined
+                  : undefined,
               pendingToolCalls: attempt.clientToolCall
                 ? [
                     {
