@@ -9,6 +9,7 @@ import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
   buildContextOverflowRecoveryText,
+  computeContextAwareReserveTokensFloor,
   MAX_LIVE_SWITCH_RETRIES,
   resolveRunAfterAutoFallbackPrimaryProbeRecheck,
 } from "./agent-runner-execution.js";
@@ -405,6 +406,44 @@ function createMinimalRunAgentTurnParams(overrides?: {
   };
 }
 
+describe("computeContextAwareReserveTokensFloor", () => {
+  it("returns 100000 for 1M context windows", () => {
+    expect(computeContextAwareReserveTokensFloor(1_000_000)).toBe(100_000);
+  });
+
+  it("returns 50000 for 200k context windows", () => {
+    expect(computeContextAwareReserveTokensFloor(200_000)).toBe(50_000);
+  });
+
+  it("returns 35000 for 100k context windows", () => {
+    expect(computeContextAwareReserveTokensFloor(100_000)).toBe(35_000);
+  });
+
+  it("returns 20000 for context windows below 100k", () => {
+    expect(computeContextAwareReserveTokensFloor(99_999)).toBe(20_000);
+    expect(computeContextAwareReserveTokensFloor(32_768)).toBe(20_000);
+    expect(computeContextAwareReserveTokensFloor(50_000)).toBe(20_000);
+  });
+
+  it("returns 20000 for undefined context window", () => {
+    expect(computeContextAwareReserveTokensFloor(undefined)).toBe(20_000);
+  });
+
+  it("returns 20000 for non-positive context window", () => {
+    expect(computeContextAwareReserveTokensFloor(0)).toBe(20_000);
+    expect(computeContextAwareReserveTokensFloor(-1)).toBe(20_000);
+  });
+
+  it("returns correct tiers at exact boundaries", () => {
+    expect(computeContextAwareReserveTokensFloor(100_000)).toBe(35_000);
+    expect(computeContextAwareReserveTokensFloor(200_000)).toBe(50_000);
+    expect(computeContextAwareReserveTokensFloor(1_000_000)).toBe(100_000);
+    expect(computeContextAwareReserveTokensFloor(99_999)).toBe(20_000);
+    expect(computeContextAwareReserveTokensFloor(199_999)).toBe(35_000);
+    expect(computeContextAwareReserveTokensFloor(999_999)).toBe(50_000);
+  });
+});
+
 describe("buildContextOverflowRecoveryText", () => {
   it("keeps the generic compaction-buffer hint without heartbeat model evidence", () => {
     const text = buildContextOverflowRecoveryText({
@@ -414,6 +453,138 @@ describe("buildContextOverflowRecoveryText", () => {
     });
 
     expect(text).toContain("reserveTokensFloor");
+    expect(text).toContain("20000");
+    expect(text).not.toContain("heartbeat model bleed");
+  });
+
+  it("suggests 100000 reserveTokensFloor for 1M context models", () => {
+    const text = buildContextOverflowRecoveryText({
+      cfg: {
+        models: {
+          providers: {
+            openrouter: {
+              baseUrl: "https://openrouter.test",
+              models: [makeTestModel("qwen3.6-plus", 1_000_000)],
+            },
+          },
+        },
+      },
+      primaryProvider: "openrouter",
+      primaryModel: "qwen3.6-plus",
+    });
+
+    expect(text).toContain("reserveTokensFloor");
+    expect(text).toContain("100000");
+    expect(text).not.toContain("heartbeat model bleed");
+  });
+
+  it("suggests 50000 reserveTokensFloor for 200k context models", () => {
+    const text = buildContextOverflowRecoveryText({
+      cfg: {
+        models: {
+          providers: {
+            openrouter: {
+              baseUrl: "https://openrouter.test",
+              models: [makeTestModel("gpt-5.5-200k", 200_000)],
+            },
+          },
+        },
+      },
+      primaryProvider: "openrouter",
+      primaryModel: "gpt-5.5-200k",
+    });
+
+    expect(text).toContain("reserveTokensFloor");
+    expect(text).toContain("50000");
+    expect(text).not.toContain("heartbeat model bleed");
+  });
+
+  it("suggests 35000 reserveTokensFloor for 100k context models", () => {
+    const text = buildContextOverflowRecoveryText({
+      cfg: {
+        models: {
+          providers: {
+            openrouter: {
+              baseUrl: "https://openrouter.test",
+              models: [makeTestModel("gpt-5.5", 100_000)],
+            },
+          },
+        },
+      },
+      primaryProvider: "openrouter",
+      primaryModel: "gpt-5.5",
+    });
+
+    expect(text).toContain("reserveTokensFloor");
+    expect(text).toContain("35000");
+    expect(text).not.toContain("heartbeat model bleed");
+  });
+
+  it("suggests 20000 reserveTokensFloor for small context windows", () => {
+    const text = buildContextOverflowRecoveryText({
+      cfg: {
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "http://ollama.test",
+              models: [makeTestModel("qwen3.5-9b-32k:latest", 32_768)],
+            },
+          },
+        },
+      },
+      primaryProvider: "ollama",
+      primaryModel: "qwen3.5-9b-32k:latest",
+    });
+
+    expect(text).toContain("reserveTokensFloor");
+    expect(text).toContain("20000");
+    expect(text).not.toContain("heartbeat model bleed");
+  });
+
+  it("uses session contextTokens as fallback when model metadata is unavailable", () => {
+    const text = buildContextOverflowRecoveryText({
+      cfg: {},
+      primaryProvider: "openrouter",
+      primaryModel: "unknown-model",
+      activeSessionEntry: {
+        sessionId: "session",
+        updatedAt: 1,
+        modelProvider: "openrouter",
+        model: "unknown-model",
+        contextTokens: 200_000,
+      },
+    });
+
+    expect(text).toContain("reserveTokensFloor");
+    expect(text).toContain("50000");
+    expect(text).not.toContain("heartbeat model bleed");
+  });
+
+  it("prefers model metadata over session contextTokens", () => {
+    const text = buildContextOverflowRecoveryText({
+      cfg: {
+        models: {
+          providers: {
+            openrouter: {
+              baseUrl: "https://openrouter.test",
+              models: [makeTestModel("qwen3.6-plus", 1_000_000)],
+            },
+          },
+        },
+      },
+      primaryProvider: "openrouter",
+      primaryModel: "qwen3.6-plus",
+      activeSessionEntry: {
+        sessionId: "session",
+        updatedAt: 1,
+        modelProvider: "openrouter",
+        model: "qwen3.6-plus",
+        contextTokens: 32_768,
+      },
+    });
+
+    expect(text).toContain("reserveTokensFloor");
+    expect(text).toContain("100000");
     expect(text).not.toContain("heartbeat model bleed");
   });
 
