@@ -1130,27 +1130,28 @@ describe("flushAllInboundDebouncers", () => {
     expect(errors).toEqual([]);
   });
 
-  it("auto-evicts stale debouncers idle >5 min even with a tight deadline", async () => {
+  it("keeps quiet debouncers registered across restart-drain sweeps", async () => {
     vi.useFakeTimers();
+    const calls: Array<string[]> = [];
 
-    // Use a debounceMs longer than the staleness window so the debounce
-    // timeout does NOT fire when we advance the clock.
-    createInboundDebouncer<{ key: string; id: string }>({
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
       debounceMs: 10 * 60 * 1000,
       buildKey: (item) => item.key,
-      onFlush: async () => {},
+      onFlush: async (items) => {
+        calls.push(items.map((entry) => entry.id));
+      },
     });
 
-    // Advance past the 5-minute staleness window (debounce timer still pending)
+    // Advance past the old staleness window with no pending message. The
+    // debouncer still represents a live channel until teardown unregisters it.
     vi.advanceTimersByTime(5 * 60 * 1000 + 1);
 
-    // Flush with a zero-ms timeout. The deadline fires immediately so the
-    // debouncer cannot actually drain, but the staleness guard evicts it.
     await flushAllInboundDebouncers({ timeoutMs: 0 });
 
-    // Second flush should find nothing — stale entry was auto-evicted
-    const flushed2 = await flushAllInboundDebouncers();
-    expect(flushed2).toBe(0);
+    await debouncer.enqueue({ key: "session-1", id: "msg-1" });
+    const flushed = await flushAllInboundDebouncers();
+    expect(flushed).toBe(1);
+    expect(calls).toEqual([["msg-1"]]);
 
     vi.useRealTimers();
   });
