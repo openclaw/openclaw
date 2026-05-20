@@ -106,7 +106,7 @@ describe("runEmbeddedAttempt cache-ttl tracking after compaction", () => {
     });
   });
 
-  it("does not inherit cache-ttl when per-agent contextPruning is empty or partial", () => {
+  it("inherits cache-ttl when per-agent contextPruning is empty or partial", () => {
     for (const contextPruning of [{}, { ttl: "15m" }]) {
       const sessionManager = {
         appendCustomEntry: vi.fn(),
@@ -138,8 +138,12 @@ describe("runEmbeddedAttempt cache-ttl tracking after compaction", () => {
         now: 789,
       });
 
-      expect(appended).toBe(false);
-      expect(sessionManager.appendCustomEntry).not.toHaveBeenCalled();
+      expect(appended).toBe(true);
+      expect(sessionManager.appendCustomEntry).toHaveBeenCalledWith(ATTEMPT_CACHE_TTL_CUSTOM_TYPE, {
+        timestamp: 789,
+        provider: "anthropic",
+        modelId: "claude-sonnet-4-20250514",
+      });
     }
   });
 });

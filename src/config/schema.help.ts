@@ -1546,7 +1546,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.contextPruning.hardClear.placeholder":
     "Placeholder text inserted when hard clear removes transcript content. Keep this short and explicit so later turns know pruning happened.",
   "agents.list[].compaction":
-    "Optional per-agent compaction block. Omit it to inherit agents.defaults.compaction; set it to replace the default for this agent; set {} to clear an inherited default.",
+    "Optional per-agent compaction block. Omit it to inherit agents.defaults.compaction; set only the fields that should differ. Per-agent compaction deep-merges over the default block.",
   "agents.list[].compaction.mode":
     'Use this per-agent compaction mode override to select "default" or "safeguard" behavior for the matching agent.',
   "agents.list[].compaction.provider":
@@ -1606,7 +1606,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.list[].compaction.memoryFlush.systemPrompt":
     "Use this per-agent system prompt override to control memory flush turns before compaction.",
   "agents.list[].contextPruning":
-    "Optional per-agent transcript-pruning block. Omit it to inherit agents.defaults.contextPruning; set it to replace the default for this agent; set {} to clear an inherited default.",
+    "Optional per-agent transcript-pruning block. Omit it to inherit agents.defaults.contextPruning; set only the fields that should differ. Per-agent contextPruning deep-merges over the default block.",
   "agents.list[].contextPruning.mode":
     'Use this per-agent transcript-pruning strategy to select "off" or "cache-ttl" behavior for the matching agent.',
   "agents.list[].contextPruning.ttl":

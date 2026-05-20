@@ -375,7 +375,7 @@ describe("resolveCompactionReserveTokensFloor", () => {
     expect(resolveCompactionReserveTokensFloor(cfg, "other")).toBe(20_000);
   });
 
-  it("does not inherit default reserveTokensFloor when per-agent compaction is empty or partial", () => {
+  it("inherits default reserveTokensFloor when per-agent compaction is empty or partial", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
@@ -390,12 +390,8 @@ describe("resolveCompactionReserveTokensFloor", () => {
       },
     };
 
-    expect(resolveCompactionReserveTokensFloor(cfg, "empty")).toBe(
-      DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR,
-    );
-    expect(resolveCompactionReserveTokensFloor(cfg, "partial")).toBe(
-      DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR,
-    );
+    expect(resolveCompactionReserveTokensFloor(cfg, "empty")).toBe(24_000);
+    expect(resolveCompactionReserveTokensFloor(cfg, "partial")).toBe(24_000);
   });
 });
 describe("resolveEffectiveCompactionMode", () => {
@@ -456,7 +452,7 @@ describe("resolveEffectiveCompactionMode", () => {
     expect(resolveEffectiveCompactionMode(cfg, "other")).toBe("default");
   });
 
-  it("does not inherit default provider when per-agent compaction is empty or partial", () => {
+  it("inherits default provider when per-agent compaction is empty or partial", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
@@ -471,8 +467,8 @@ describe("resolveEffectiveCompactionMode", () => {
       },
     };
 
-    expect(resolveEffectiveCompactionMode(cfg, "empty")).toBe("default");
-    expect(resolveEffectiveCompactionMode(cfg, "partial")).toBe("default");
+    expect(resolveEffectiveCompactionMode(cfg, "empty")).toBe("safeguard");
+    expect(resolveEffectiveCompactionMode(cfg, "partial")).toBe("safeguard");
     expect(resolveEffectiveCompactionMode(cfg, "other")).toBe("safeguard");
   });
 });

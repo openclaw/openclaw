@@ -349,7 +349,7 @@ OpenClaw also enforces a safety floor for embedded runs:
   summarization use a reasoning budget independent from the active session's
   normal thinking level. `"off"` explicitly disables reasoning for compaction.
   Per-agent `agents.list[].compaction.thinkingLevel` overrides the default
-  compaction thinking level through the same replacement semantics as
+  compaction thinking level through the same merge semantics as
   `agents.list[].compaction.model`.
 - Set `agents.defaults.compaction.midTurnPrecheck.enabled: true` to run the
   optional tool-loop precheck after new tool results and before the next model

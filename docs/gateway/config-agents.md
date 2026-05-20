@@ -673,7 +673,7 @@ Periodic heartbeat runs.
 - `notifyUser`: when `true`, sends brief notices to the user when compaction starts and when it completes (for example, "Compacting context..." and "Compaction complete"). Disabled by default to keep compaction silent.
 - `memoryFlush`: silent agentic turn before auto-compaction to store durable memories. Set `model` to an exact provider/model such as `ollama/qwen3:8b` when this housekeeping turn should stay on a local model; the override does not inherit the active session fallback chain. Skipped when workspace is read-only.
 
-Per-agent `agents.list[].compaction` and `agents.list[].contextPruning` blocks are supported. Omit the block to inherit the matching default. Set the block on an agent to replace the default for that agent; use `{}` to clear an inherited default and return that agent to built-in behavior.
+Per-agent `agents.list[].compaction` and `agents.list[].contextPruning` blocks are supported. Omit the block to inherit the matching default. Set only the fields that should differ for an agent; per-agent blocks deep-merge over the matching default block.
 
 ### `agents.defaults.runRetries`
 
@@ -1101,8 +1101,8 @@ for provider examples and precedence.
 - `thinkingDefault`: optional per-agent default thinking level (`off | minimal | low | medium | high | xhigh | adaptive | max`). Overrides `agents.defaults.thinkingDefault` for this agent when no per-message or session override is set. The selected provider/model profile controls which values are valid; for Google Gemini, `adaptive` keeps provider-owned dynamic thinking (`thinkingLevel` omitted on Gemini 3/3.1, `thinkingBudget: -1` on Gemini 2.5).
 - `reasoningDefault`: optional per-agent default reasoning visibility (`on | off | stream`). Overrides `agents.defaults.reasoningDefault` for this agent when no per-message or session reasoning override is set.
 - `fastModeDefault`: optional per-agent default for fast mode (`true | false`). Applies when no per-message or session fast-mode override is set.
-- `contextPruning`: optional per-agent pruning policy. If omitted, the agent inherits `agents.defaults.contextPruning`. If set, the block replaces the default for that agent; `{}` clears an inherited pruning policy.
-- `compaction`: optional per-agent compaction policy. If omitted, the agent inherits `agents.defaults.compaction`. If set, the block replaces the default for that agent; `{}` clears an inherited compaction model, provider, safeguard behavior, and memory-flush model.
+- `contextPruning`: optional per-agent pruning policy. If omitted, the agent inherits `agents.defaults.contextPruning`. If set, the block deep-merges over the default for that agent.
+- `compaction`: optional per-agent compaction policy. If omitted, the agent inherits `agents.defaults.compaction`. If set, the block deep-merges over the default for that agent, including nested `qualityGuard`, `midTurnPrecheck`, and `memoryFlush` fields.
 - `models`: optional per-agent model catalog/runtime overrides keyed by full `provider/model` ids. Use `models["provider/model"].agentRuntime` for per-agent runtime exceptions.
 - `runtime`: optional per-agent runtime descriptor. Use `type: "acp"` with `runtime.acp` defaults (`agent`, `backend`, `mode`, `cwd`) when the agent should default to ACP harness sessions.
 - `identity.avatar`: workspace-relative path, `http(s)` URL, or `data:` URI.

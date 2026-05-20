@@ -11,6 +11,8 @@ import { resolveUserPath } from "../utils.js";
 import { resolveDefaultAgentWorkspaceDir } from "./workspace-default.js";
 
 type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
+type AgentCompactionConfig = NonNullable<AgentEntry["compaction"]>;
+type AgentContextPruningConfig = NonNullable<AgentEntry["contextPruning"]>;
 
 export type ResolvedAgentConfig = {
   name?: string;
@@ -104,6 +106,55 @@ function resolveAgentEntry(cfg: OpenClawConfig, agentId: string): AgentEntry | u
   return listAgentEntries(cfg).find((entry) => normalizeAgentId(entry.id) === id);
 }
 
+function mergePlainConfig<T extends Record<string, unknown>>(
+  defaults: T | undefined,
+  override: T | undefined,
+): T | undefined {
+  if (!override) {
+    return defaults;
+  }
+  const merged: Record<string, unknown> = { ...defaults };
+  for (const [key, value] of Object.entries(override)) {
+    const inherited = merged[key];
+    if (
+      value &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      inherited &&
+      typeof inherited === "object" &&
+      !Array.isArray(inherited)
+    ) {
+      merged[key] = {
+        ...(inherited as Record<string, unknown>),
+        ...(value as Record<string, unknown>),
+      };
+    } else {
+      merged[key] = value;
+    }
+  }
+  return merged as T;
+}
+
+function resolveScopedCompactionConfig(
+  defaults: AgentCompactionConfig | undefined,
+  override: AgentEntry["compaction"],
+): AgentEntry["compaction"] {
+  return mergePlainConfig(
+    defaults as Record<string, unknown> | undefined,
+    override as Record<string, unknown> | undefined,
+  ) as AgentEntry["compaction"];
+}
+
+function resolveScopedContextPruningConfig(
+  defaults: AgentContextPruningConfig | undefined,
+  override: AgentEntry["contextPruning"],
+): AgentEntry["contextPruning"] {
+  return mergePlainConfig(
+    defaults as Record<string, unknown> | undefined,
+    override as Record<string, unknown> | undefined,
+  ) as AgentEntry["contextPruning"];
+}
+
 export function resolveAgentConfig(
   cfg: OpenClawConfig,
   agentId: string,
@@ -122,14 +173,11 @@ export function resolveAgentConfig(
       typeof entry.model === "string" || (entry.model && typeof entry.model === "object")
         ? entry.model
         : undefined,
-    compaction:
-      typeof entry.compaction === "object" && entry.compaction
-        ? entry.compaction
-        : agentDefaults?.compaction,
-    contextPruning:
-      typeof entry.contextPruning === "object" && entry.contextPruning
-        ? entry.contextPruning
-        : agentDefaults?.contextPruning,
+    compaction: resolveScopedCompactionConfig(agentDefaults?.compaction, entry.compaction),
+    contextPruning: resolveScopedContextPruningConfig(
+      agentDefaults?.contextPruning,
+      entry.contextPruning,
+    ),
     thinkingDefault: entry.thinkingDefault,
     verboseDefault: entry.verboseDefault ?? agentDefaults?.verboseDefault,
     reasoningDefault: entry.reasoningDefault,

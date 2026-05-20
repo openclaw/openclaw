@@ -147,7 +147,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.authProfileId).toBeUndefined();
   });
 
-  it("uses session model when per-agent compaction clears a default model override", () => {
+  it("inherits default model override when per-agent compaction is empty", () => {
     const result = buildEmbeddedCompactionRuntimeContext({
       workspaceDir: "/tmp/workspace",
       agentDir: "/tmp/agent",
@@ -167,12 +167,12 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       authProfileId: "openai:p1",
     });
 
-    expect(result.provider).toBe("openai");
-    expect(result.model).toBe("gpt-5.5");
-    expect(result.authProfileId).toBe("openai:p1");
+    expect(result.provider).toBe("anthropic");
+    expect(result.model).toBe("claude-opus-4-6");
+    expect(result.authProfileId).toBeUndefined();
   });
 
-  it("uses session model when partial per-agent compaction omits model", () => {
+  it("inherits default model override when partial per-agent compaction omits model", () => {
     const result = buildEmbeddedCompactionRuntimeContext({
       workspaceDir: "/tmp/workspace",
       agentDir: "/tmp/agent",
@@ -192,9 +192,9 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       authProfileId: "openai:p1",
     });
 
-    expect(result.provider).toBe("openai");
-    expect(result.model).toBe("gpt-5.5");
-    expect(result.authProfileId).toBe("openai:p1");
+    expect(result.provider).toBe("anthropic");
+    expect(result.model).toBe("claude-opus-4-6");
+    expect(result.authProfileId).toBeUndefined();
   });
 
   it("uses session model when no compaction.model override configured", () => {
