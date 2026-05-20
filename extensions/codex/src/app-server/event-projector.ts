@@ -7,6 +7,7 @@ import {
   formatToolAggregate,
   formatToolProgressOutput,
   inferToolMetaFromArgs,
+  isMessagingTool,
   normalizeUsage,
   runAgentHarnessAfterCompactionHook,
   runAgentHarnessAfterToolCallHook,
@@ -21,6 +22,7 @@ import {
   type ToolProgressDetailMode,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import { resolveCodexLocalRuntimeAttribution } from "./local-runtime-attribution.js";
 import { CodexNativeSubagentTaskMirror } from "./native-subagent-task-mirror.js";
 import {
@@ -108,9 +110,119 @@ const TRANSCRIPT_PROGRESS_SUPPRESSED_TOOL_NAMES = new Set([
   "typing",
 ]);
 
+export type CodexToolPlanAnnouncementInput = {
+  toolName?: string | null;
+  meta?: string | null;
+};
+
+export function buildCodexToolPlanAnnouncementText(
+  input: string | CodexToolPlanAnnouncementInput | undefined,
+): string {
+  const details = normalizeCodexToolPlanAnnouncementInput(input);
+  const normalizedToolName = details.toolName?.trim().toLowerCase() ?? "";
+  const meta = formatAnnouncementSnippet(details.meta);
+  const tool = formatAnnouncementSnippet(details.toolName);
+
+  if (isCodexCommandToolName(normalizedToolName)) {
+    return meta
+      ? `I'll run the shell command ${meta}, then report the result here.`
+      : "I'll run the shell command, then report the result here.";
+  }
+  if (isCodexReadToolName(normalizedToolName)) {
+    return meta
+      ? `I'll inspect ${meta}, then answer here.`
+      : "I'll inspect the planned files, then answer here.";
+  }
+  if (isCodexEditToolName(normalizedToolName)) {
+    return meta
+      ? `I'll edit ${meta}, then summarize the change here.`
+      : "I'll edit the planned files, then summarize the changes here.";
+  }
+  if (normalizedToolName.includes("search") || normalizedToolName.includes("browser")) {
+    return meta
+      ? `I'll search ${meta}, then answer here.`
+      : "I'll run the web search, then answer here.";
+  }
+  return tool
+    ? `I'll run the ${tool} step, then report the result here.`
+    : "I'll run the next planned step, then report the result here.";
+}
+
+export function buildCodexPlanAnnouncementText(steps: readonly string[]): string | undefined {
+  return buildCodexPlanAnnouncementTextFromParts({ steps });
+}
+
+export function buildCodexPlanAnnouncementTextFromParts(params: {
+  explanation?: string | null;
+  steps?: readonly string[];
+}): string | undefined {
+  const explanation = truncateAnnouncementText(
+    normalizeAnnouncementText(redactToolPayloadText(params.explanation ?? "")),
+  );
+  if (explanation) {
+    return explanation;
+  }
+  const cleaned = (params.steps ?? [])
+    .map((step) => normalizeAnnouncementText(redactToolPayloadText(step)))
+    .filter((step) => step.length > 0);
+  if (cleaned.length === 0) {
+    return undefined;
+  }
+  const text = `Plan: ${cleaned.slice(0, 4).join("; ")}.`;
+  return truncateAnnouncementText(text);
+}
+
 export function shouldEmitTranscriptToolProgress(toolName: unknown, _args?: unknown): boolean {
   const normalized = typeof toolName === "string" ? toolName.trim().toLowerCase() : "";
   return Boolean(normalized && !TRANSCRIPT_PROGRESS_SUPPRESSED_TOOL_NAMES.has(normalized));
+}
+
+function isCodexCommandToolName(toolName: string): boolean {
+  return toolName === "bash" || toolName === "exec" || toolName === "shell";
+}
+
+function isCodexReadToolName(toolName: string): boolean {
+  return toolName === "read" || toolName === "grep" || toolName === "glob" || toolName === "list";
+}
+
+function isCodexEditToolName(toolName: string): boolean {
+  return toolName === "apply_patch" || toolName === "edit" || toolName === "write";
+}
+
+function isCodexMessagingToolName(toolName: string | undefined): boolean {
+  const normalizedToolName = toolName?.trim().toLowerCase();
+  return Boolean(normalizedToolName && isMessagingTool(normalizedToolName));
+}
+
+function normalizeCodexToolPlanAnnouncementInput(
+  input: string | CodexToolPlanAnnouncementInput | undefined,
+): CodexToolPlanAnnouncementInput {
+  return typeof input === "string" || input === undefined ? { toolName: input } : input;
+}
+
+function formatAnnouncementSnippet(value: string | null | undefined): string | undefined {
+  const normalized = normalizeAnnouncementText(redactToolPayloadText(value ?? ""));
+  if (!normalized) {
+    return undefined;
+  }
+  const maxLength = 96;
+  const truncated =
+    normalized.length > maxLength
+      ? `${normalized.slice(0, maxLength - 3).trimEnd()}...`
+      : normalized;
+  return `"${truncated.replace(/"/gu, "'")}"`;
+}
+
+function normalizeAnnouncementText(value: string | null | undefined): string {
+  return value?.replace(/\s+/gu, " ").trim() ?? "";
+}
+
+function truncateAnnouncementText(text: string): string | undefined {
+  if (!text) {
+    return undefined;
+  }
+  const maxLength = 220;
+  return text.length > maxLength ? `${text.slice(0, maxLength - 3).trimEnd()}...` : text;
 }
 
 type ToolTranscriptCallInput = {
@@ -158,6 +270,9 @@ export class CodexAppServerEventProjector {
   private readonly nativeGeneratedMediaUrls = new Set<string>();
   private readonly diagnosticToolStartedAtByItem = new Map<string, number>();
   private readonly afterToolCallObservedItemIds = new Set<string>();
+  private latestPlanAnnouncementSteps: string[] = [];
+  private latestPlanAnnouncementText: string | undefined;
+  private toolPlanAnnouncementSent = false;
   private assistantStarted = false;
   private reasoningStarted = false;
   private reasoningEnded = false;
@@ -219,10 +334,10 @@ export class CodexAppServerEventProjector {
         await this.handleReasoningDelta(params);
         break;
       case "item/plan/delta":
-        this.handlePlanDelta(params);
+        await this.handlePlanDelta(params);
         break;
       case "turn/plan/updated":
-        this.handleTurnPlanUpdated(params);
+        await this.handleTurnPlanUpdated(params);
         break;
       case "item/started":
         await this.handleItemStarted(params);
@@ -360,8 +475,8 @@ export class CodexAppServerEventProjector {
       cloudCodeAssistFormatError: false,
       attemptUsage: this.tokenUsage,
       replayMetadata: {
-        hadPotentialSideEffects,
-        replaySafe: !hadPotentialSideEffects,
+        hadPotentialSideEffects: hadPotentialSideEffects || this.toolPlanAnnouncementSent,
+        replaySafe: !hadPotentialSideEffects && !this.toolPlanAnnouncementSent,
       },
       itemLifecycle: {
         startedCount: this.activeItemIds.size + this.completedItemIds.size,
@@ -383,6 +498,32 @@ export class CodexAppServerEventProjector {
       name: params.tool,
       arguments: args,
     });
+  }
+
+  async announceToolPlanForTool(
+    input: string | CodexToolPlanAnnouncementInput | undefined,
+  ): Promise<void> {
+    const details = normalizeCodexToolPlanAnnouncementInput(input);
+    if (
+      this.toolPlanAnnouncementSent ||
+      this.params.silentExpected === true ||
+      !this.params.onBlockReply ||
+      isCodexMessagingToolName(details.toolName ?? undefined)
+    ) {
+      return;
+    }
+    this.toolPlanAnnouncementSent = true;
+    try {
+      await this.params.onBlockReply({
+        text:
+          this.latestPlanAnnouncementText ??
+          buildCodexPlanAnnouncementText(this.latestPlanAnnouncementSteps) ??
+          buildCodexToolPlanAnnouncementText(details),
+      });
+      await this.params.onBlockReplyFlush?.();
+    } catch (error) {
+      embeddedAgentLog.debug("codex tool plan announcement delivery failed", { error });
+    }
   }
 
   recordDynamicToolResult(params: {
@@ -451,7 +592,7 @@ export class CodexAppServerEventProjector {
     await this.params.onReasoningStream?.({ text: delta });
   }
 
-  private handlePlanDelta(params: JsonObject): void {
+  private async handlePlanDelta(params: JsonObject): Promise<void> {
     const itemId = readString(params, "itemId") ?? readString(params, "id") ?? "plan";
     const delta = readString(params, "delta") ?? "";
     if (!delta) {
@@ -459,10 +600,10 @@ export class CodexAppServerEventProjector {
     }
     const text = `${this.planTextByItem.get(itemId) ?? ""}${delta}`;
     this.planTextByItem.set(itemId, text);
-    this.emitPlanUpdate({ explanation: undefined, steps: splitPlanText(text) });
+    await this.emitPlanUpdate({ explanation: undefined, steps: splitPlanText(text) });
   }
 
-  private handleTurnPlanUpdated(params: JsonObject): void {
+  private async handleTurnPlanUpdated(params: JsonObject): Promise<void> {
     const plan = Array.isArray(params.plan)
       ? params.plan.flatMap((entry) => {
           if (!isJsonObject(entry)) {
@@ -476,7 +617,7 @@ export class CodexAppServerEventProjector {
           return status ? [`${step} (${status})`] : [step];
         })
       : undefined;
-    this.emitPlanUpdate({
+    await this.emitPlanUpdate({
       explanation: readNullableString(params, "explanation"),
       steps: plan,
     });
@@ -517,6 +658,14 @@ export class CodexAppServerEventProjector {
       });
     }
     this.recordToolMeta(item);
+    if (item && shouldSynthesizeToolProgressForItem(item)) {
+      await this.announceToolPlanForTool(
+        buildCodexToolPlanAnnouncementInputForItem(
+          item,
+          resolveCodexToolProgressDetailMode(this.params.toolProgressDetail),
+        ),
+      );
+    }
     this.emitStandardItemEvent({ phase: "start", item });
     this.emitNormalizedToolItemEvent({ phase: "start", item });
     this.recordNativeToolTranscriptCall(item);
@@ -545,7 +694,7 @@ export class CodexAppServerEventProjector {
     this.recordNativeGeneratedMedia(item);
     if (item?.type === "plan" && typeof item.text === "string" && item.text) {
       this.planTextByItem.set(item.id, item.text);
-      this.emitPlanUpdate({ explanation: undefined, steps: splitPlanText(item.text) });
+      await this.emitPlanUpdate({ explanation: undefined, steps: splitPlanText(item.text) });
     }
     if (item?.type === "contextCompaction" && itemId) {
       this.activeCompactionItemIds.delete(itemId);
@@ -683,7 +832,7 @@ export class CodexAppServerEventProjector {
       this.recordNativeGeneratedMedia(item);
       if (item.type === "plan" && typeof item.text === "string" && item.text) {
         this.planTextByItem.set(item.id, item.text);
-        this.emitPlanUpdate({ explanation: undefined, steps: splitPlanText(item.text) });
+        await this.emitPlanUpdate({ explanation: undefined, steps: splitPlanText(item.text) });
       }
       this.recordToolMeta(item);
       this.emitSnapshotOnlyNativeToolProgress(item);
@@ -830,10 +979,26 @@ export class CodexAppServerEventProjector {
     await this.params.onReasoningEnd?.();
   }
 
-  private emitPlanUpdate(params: { explanation?: string | null; steps?: string[] }): void {
+  private async emitPlanUpdate(params: {
+    explanation?: string | null;
+    steps?: string[];
+  }): Promise<void> {
     if (!params.explanation && (!params.steps || params.steps.length === 0)) {
       return;
     }
+    const steps = params.steps?.map(normalizeAnnouncementText).filter((step) => step.length > 0);
+    if (steps && steps.length > 0) {
+      this.latestPlanAnnouncementSteps = steps;
+    }
+    const explanation = normalizeAnnouncementText(params.explanation);
+    const nextAnnouncementText = buildCodexPlanAnnouncementTextFromParts({
+      explanation: params.explanation,
+      steps,
+    });
+    if (explanation || !this.latestPlanAnnouncementText) {
+      this.latestPlanAnnouncementText = nextAnnouncementText;
+    }
+    await this.announceToolPlanForPlanExplanation(explanation ? nextAnnouncementText : undefined);
     this.emitAgentEvent({
       stream: "plan",
       data: {
@@ -844,6 +1009,24 @@ export class CodexAppServerEventProjector {
         ...(params.steps && params.steps.length > 0 ? { steps: params.steps } : {}),
       },
     });
+  }
+
+  private async announceToolPlanForPlanExplanation(text: string | undefined): Promise<void> {
+    if (
+      !text ||
+      this.toolPlanAnnouncementSent ||
+      this.params.silentExpected === true ||
+      !this.params.onBlockReply
+    ) {
+      return;
+    }
+    this.toolPlanAnnouncementSent = true;
+    try {
+      await this.params.onBlockReply({ text });
+      await this.params.onBlockReplyFlush?.();
+    } catch (error) {
+      embeddedAgentLog.debug("codex tool plan announcement delivery failed", { error });
+    }
   }
 
   private rememberAssistantPhase(item: CodexThreadItem | undefined): void {
@@ -1766,6 +1949,16 @@ function isSideEffectingNativeToolItem(item: CodexThreadItem): boolean {
     itemStatus(item) !== "blocked" &&
     (isMutatingNativeToolItem(item) || item.type === "mcpToolCall")
   );
+}
+
+function buildCodexToolPlanAnnouncementInputForItem(
+  item: CodexThreadItem,
+  detailMode: ToolProgressDetailMode,
+): CodexToolPlanAnnouncementInput {
+  return {
+    toolName: itemName(item),
+    meta: item.type === "webSearch" ? undefined : itemMeta(item, detailMode),
+  };
 }
 
 function shouldSynthesizeToolProgressForItem(item: CodexThreadItem): boolean {

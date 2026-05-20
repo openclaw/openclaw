@@ -16,6 +16,9 @@ import {
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  buildCodexPlanAnnouncementText,
+  buildCodexPlanAnnouncementTextFromParts,
+  buildCodexToolPlanAnnouncementText,
   CodexAppServerEventProjector,
   type CodexAppServerEventProjectorOptions,
   type CodexAppServerToolTelemetry,
@@ -262,6 +265,198 @@ function turnCompleted(items: unknown[] = []): ProjectorNotification {
 }
 
 describe("CodexAppServerEventProjector", () => {
+  it("delivers a concise Codex tool plan announcement before native tool progress", async () => {
+    const onBlockReply = vi.fn();
+    const onBlockReplyFlush = vi.fn();
+    const onRunAgentEvent = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      onBlockReply,
+      onBlockReplyFlush,
+      onAgentEvent: onRunAgentEvent,
+    });
+    await projector.handleNotification(
+      forCurrentTurn("turn/plan/updated", {
+        plan: [
+          { step: "inspect the Codex app-server tool path", status: "completed" },
+          { step: "make the chat announcement exact", status: "in_progress" },
+          { step: "run focused Codex runtime tests", status: "pending" },
+        ],
+      }),
+    );
+    const postPlanEventIndex = onRunAgentEvent.mock.calls.length;
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-1",
+          command: "pnpm test",
+          status: "inProgress",
+        },
+      }),
+    );
+
+    expect(onBlockReply).toHaveBeenCalledWith({
+      text:
+        "Plan: inspect the Codex app-server tool path (completed); " +
+        "make the chat announcement exact (in_progress); run focused Codex runtime tests (pending).",
+    });
+    expect(onBlockReply.mock.invocationCallOrder[0]).toBeLessThan(
+      onBlockReplyFlush.mock.invocationCallOrder[0],
+    );
+    expect(onBlockReplyFlush.mock.invocationCallOrder[0]).toBeLessThan(
+      onRunAgentEvent.mock.invocationCallOrder[postPlanEventIndex],
+    );
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: {
+          type: "webSearch",
+          id: "search-1",
+          query: "OpenClaw docs",
+          status: "inProgress",
+        },
+      }),
+    );
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(projector.buildResult(buildEmptyToolTelemetry()).replayMetadata).toEqual({
+      hadPotentialSideEffects: true,
+      replaySafe: false,
+    });
+  });
+
+  it("prefers Codex's chat-ready plan explanation over mechanical plan steps", async () => {
+    const onBlockReply = vi.fn();
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      onBlockReply,
+      onAgentEvent,
+    });
+    await projector.handleNotification(
+      forCurrentTurn("turn/plan/updated", {
+        explanation:
+          "I'll check your Beszel and Uptime Kuma instances to make sure nothing looks dead or dying.",
+        plan: [
+          { step: "load monitoring credentials", status: "pending" },
+          { step: "query health endpoints", status: "pending" },
+        ],
+      }),
+    );
+
+    expect(onBlockReply).toHaveBeenCalledWith({
+      text: "I'll check your Beszel and Uptime Kuma instances to make sure nothing looks dead or dying.",
+    });
+    expect(onBlockReply.mock.invocationCallOrder[0]).toBeLessThan(
+      onAgentEvent.mock.invocationCallOrder[0],
+    );
+    expect(findAgentEvent(onAgentEvent, { stream: "plan" }).data.steps).toEqual([
+      "load monitoring credentials (pending)",
+      "query health endpoints (pending)",
+    ]);
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: {
+          type: "webSearch",
+          id: "search-1",
+          query: "monitoring",
+          status: "inProgress",
+        },
+      }),
+    );
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to exact first action when Codex has not emitted a plan", async () => {
+    const onBlockReply = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      onBlockReply,
+    });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: {
+          type: "webSearch",
+          id: "search-1",
+          query: "OpenClaw Telegram forum topics",
+          status: "inProgress",
+        },
+      }),
+    );
+
+    expect(onBlockReply).toHaveBeenCalledWith({
+      text: "I'll run the web search, then answer here.",
+    });
+  });
+
+  it("keeps Codex plan announcement copy exact, short, and redacted", () => {
+    const messages = [
+      buildCodexPlanAnnouncementText([
+        "inspect the Codex app-server runtime path",
+        "patch the announcement copy",
+        "run focused tests",
+      ]),
+      buildCodexPlanAnnouncementTextFromParts({
+        explanation:
+          "I'll check your Beszel and Uptime Kuma instances to make sure nothing looks dead or dying.",
+        steps: ["load monitoring credentials", "query health endpoints"],
+      }),
+      buildCodexPlanAnnouncementText([
+        "run OPENAI_API_KEY=sk-proj-plain-secret-value-12345 pnpm test",
+      ]),
+      buildCodexToolPlanAnnouncementText({
+        toolName: "bash",
+        meta: "pnpm test",
+      }),
+      buildCodexToolPlanAnnouncementText({ toolName: "read", meta: "README.md" }),
+      buildCodexToolPlanAnnouncementText({ toolName: "apply_patch", meta: "src/app.ts" }),
+      buildCodexToolPlanAnnouncementText("web_search"),
+      buildCodexToolPlanAnnouncementText("custom_tool"),
+      buildCodexToolPlanAnnouncementText({
+        toolName: "bash",
+        meta: "OPENAI_API_KEY=sk-proj-plain-secret-value-12345 pnpm test",
+      }),
+    ].filter((message): message is string => Boolean(message));
+
+    expect(messages).toContain(
+      "Plan: inspect the Codex app-server runtime path; patch the announcement copy; run focused tests.",
+    );
+    expect(messages).toContain(
+      "I'll check your Beszel and Uptime Kuma instances to make sure nothing looks dead or dying.",
+    );
+    expect(messages).toContain(
+      'I\'ll run the shell command "pnpm test", then report the result here.',
+    );
+    expect(messages).toContain('I\'ll inspect "README.md", then answer here.');
+    expect(messages).toContain('I\'ll edit "src/app.ts", then summarize the change here.');
+    expect(messages).toContain("I'll run the web search, then answer here.");
+
+    for (const message of messages) {
+      const sentenceCount = message.split(/[.!?]+/).filter((part) => part.trim()).length;
+      expect(sentenceCount).toBeLessThanOrEqual(2);
+      expect(message).not.toMatch(/\b(needed|relevant|handle this|continue with the request)\b/u);
+      expect(message).not.toContain("continue with the request");
+      expect(message).not.toContain("sk-proj-plain-secret-value-12345");
+    }
+  });
+
+  it("does not announce before Codex messaging tool sends", async () => {
+    const onBlockReply = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      onBlockReply,
+    });
+
+    await projector.announceToolPlanForTool("message");
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
   it("projects assistant deltas and usage into embedded attempt results", async () => {
     const { onAssistantMessageStart, onPartialReply, projector } =
       await createProjectorWithAssistantHooks();

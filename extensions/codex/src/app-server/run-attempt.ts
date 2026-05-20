@@ -2106,6 +2106,10 @@ export async function runCodexAppServerAttempt(
       armCompletionWatchOnResponse = true;
       markCurrentTurnRequestProgress();
       turnCrossedToolHandoff = true;
+      const toolProgressDetailMode = resolveCodexToolProgressDetailMode(params.toolProgressDetail);
+      await projector?.announceToolPlanForTool({
+        toolName: call.tool,
+      });
       pendingOpenClawDynamicToolCompletionIds.add(call.callId);
       trajectoryRecorder?.recordEvent("tool.call", {
         threadId: call.threadId,
@@ -2130,7 +2134,6 @@ export async function runCodexAppServerAttempt(
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
       });
-      const toolProgressDetailMode = resolveCodexToolProgressDetailMode(params.toolProgressDetail);
       const toolMeta = inferCodexDynamicToolMeta(call, toolProgressDetailMode);
       const toolArgs = sanitizeCodexToolArguments(call.arguments);
       const shouldEmitDynamicToolProgress = shouldEmitTranscriptToolProgress(call.tool, toolArgs);

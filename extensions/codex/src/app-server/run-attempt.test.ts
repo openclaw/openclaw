@@ -2116,6 +2116,7 @@ describe("runCodexAppServerAttempt", () => {
     const harness = createStartedThreadHarness();
     const onRunAgentEvent = vi.fn();
     const onExecutionPhase = vi.fn();
+    const onBlockReply = vi.fn();
     const globalAgentEvents: AgentEventPayload[] = [];
     const diagnosticEvents: DiagnosticEventPayload[] = [];
     onAgentEvent((event) => globalAgentEvents.push(event));
@@ -2128,6 +2129,7 @@ describe("runCodexAppServerAttempt", () => {
     );
     params.onAgentEvent = onRunAgentEvent;
     params.onExecutionPhase = onExecutionPhase;
+    params.onBlockReply = onBlockReply;
 
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("thread/start");
@@ -2154,6 +2156,14 @@ describe("runCodexAppServerAttempt", () => {
     expect(toolResult.success).toBe(false);
     expect(toolResult.contentItems?.[0]?.type).toBe("inputText");
     expect(toolResult.contentItems?.[0]?.text).toMatch(/^Unknown OpenClaw tool: lookup$/u);
+    expect(onBlockReply).toHaveBeenCalledWith({
+      text: 'I\'ll run the "lookup" step, then report the result here.',
+    });
+    expect(onBlockReply.mock.invocationCallOrder[0]).toBeLessThan(
+      onExecutionPhase.mock.invocationCallOrder.find(
+        (_, index) => onExecutionPhase.mock.calls[index]?.[0]?.phase === "tool_execution_started",
+      ) ?? Number.POSITIVE_INFINITY,
+    );
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;

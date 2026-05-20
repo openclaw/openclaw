@@ -1633,19 +1633,13 @@ export async function dispatchReplyFromConfig(
       }
       return `${collapsed.slice(0, 77).trimEnd()}...`;
     };
-    const formatPlanUpdateText = (payload: { explanation?: string; steps?: string[] }) => {
-      const explanation = payload.explanation?.replace(/\s+/g, " ").trim();
+    const formatPlanUpdateText = (payload: { steps?: string[] }) => {
       const steps = (payload.steps ?? [])
         .map((step) => step.replace(/\s+/g, " ").trim())
         .filter(Boolean);
-      const parts: string[] = [];
-      if (explanation) {
-        parts.push(explanation);
-      }
-      if (steps.length > 0) {
-        parts.push(steps.map((step, index) => `${index + 1}. ${step}`).join("\n"));
-      }
-      return parts.join("\n\n").trim() || "Planning next steps.";
+      return steps.length > 0
+        ? steps.map((step, index) => `${index + 1}. ${step}`).join("\n")
+        : undefined;
     };
     const maybeSendWorkingStatus = async (label: string): Promise<void> => {
       if (shouldSuppressProgressDelivery()) {
@@ -1684,9 +1678,11 @@ export async function dispatchReplyFromConfig(
       ) {
         return;
       }
-      const replyPayload: ReplyPayload = {
-        text: formatPlanUpdateText(payload),
-      };
+      const text = formatPlanUpdateText(payload);
+      if (!text) {
+        return;
+      }
+      const replyPayload: ReplyPayload = { text };
       if (shouldRouteToOriginating) {
         await sendPayloadAsync(replyPayload, undefined, false);
         return;

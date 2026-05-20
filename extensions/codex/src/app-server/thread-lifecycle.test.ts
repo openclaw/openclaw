@@ -16,6 +16,7 @@ function createAttemptParams(params: {
   bootstrapContextMode?: "full" | "lightweight";
   bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
   images?: EmbeddedRunAttemptParams["images"];
+  silentExpected?: boolean;
 }): EmbeddedRunAttemptParams {
   const authProfileProviders =
     params.authProfileProviders ??
@@ -32,6 +33,7 @@ function createAttemptParams(params: {
       ? { bootstrapContextRunKind: params.bootstrapContextRunKind }
       : {}),
     ...(params.images ? { images: params.images } : {}),
+    ...(params.silentExpected !== undefined ? { silentExpected: params.silentExpected } : {}),
     authProfileStore: {
       version: 1,
       profiles: Object.fromEntries(
@@ -66,6 +68,24 @@ describe("Codex app-server native code mode config", () => {
     expect(instructions).toContain(
       "Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation.",
     );
+  });
+
+  it("instructs Codex to make tool-start acknowledgements specific and persona-shaped", () => {
+    const instructions = buildDeveloperInstructions(createAttemptParams({ provider: "openai" }));
+
+    expect(instructions).toContain("chat-ready acknowledgement");
+    expect(instructions).toContain("specific to the user's request");
+    expect(instructions).toContain("SOUL.md");
+    expect(instructions).toContain("Beszel and Uptime Kuma");
+    expect(instructions).toContain("Do not say generic things");
+  });
+
+  it("omits tool-start acknowledgement instructions for silent turns", () => {
+    const instructions = buildDeveloperInstructions(
+      createAttemptParams({ provider: "openai", silentExpected: true }),
+    );
+
+    expect(instructions).not.toContain("chat-ready acknowledgement");
   });
 
   it("summarizes deferred dynamic tool names in developer instructions", () => {
