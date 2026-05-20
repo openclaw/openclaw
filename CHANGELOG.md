@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Channels/Telegram: add `channels.telegram.rateLimit` config so deployments running `dmPolicy="pairing"` or `"allowlist"` can throttle inbound DMs per sender id before they enter `messages.queue`. Separate `perSender` and `pairing` sliding windows, optional `backoffMs` hard cooldown, and `exemptSenderIds` bypass for known operators. Default unset preserves current behavior. (#84447)
 - Agents/config: allow `agents.list[].experimental.localModelLean` so lean local-model mode can be enabled for one configured agent instead of globally.
 - Providers/xAI: add device-code OAuth login so remote and headless setups can authorize xAI without a localhost browser callback. (#84005) Thanks @fuller-stack-dev.
 

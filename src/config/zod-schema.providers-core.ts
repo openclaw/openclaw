@@ -242,6 +242,56 @@ const validateTelegramCustomCommands = (
   }
 };
 
+const TelegramRateLimitDropPolicySchema = z
+  .enum(["silent", "errorReply", "summary"])
+  .describe(
+    'Telemetry hint for what to do when a sender exceeds the limit. "silent" drops the event with no reply (default), "errorReply" surfaces a rate-limit notice to the sender once per window, "summary" includes the drop in messages.queue.drop summarisation.',
+  );
+
+const TelegramRateLimitWindowSchema = z
+  .object({
+    windowSeconds: z
+      .number()
+      .int()
+      .positive()
+      .describe("Sliding window length in seconds. Must be > 0."),
+    maxRequests: z
+      .number()
+      .int()
+      .positive()
+      .describe("Max inbound events from a single sender within the window."),
+    backoffMs: z
+      .number()
+      .int()
+      .nonnegative()
+      .optional()
+      .describe(
+        "Optional hard cooldown (ms) applied after a sender exceeds the limit. While in cooldown all further events are denied without sliding the window.",
+      ),
+    dropPolicy: TelegramRateLimitDropPolicySchema.optional(),
+  })
+  .strict();
+
+export const TelegramRateLimitSchema = z
+  .object({
+    perSender: TelegramRateLimitWindowSchema.optional().describe(
+      "Limiter applied to inbound DMs that already passed dmPolicy / allowFrom gates. Default: no limit.",
+    ),
+    pairing: TelegramRateLimitWindowSchema.optional().describe(
+      "Independent counter for inbound pairing-flow events. Default: no limit.",
+    ),
+    exemptSenderIds: z
+      .array(z.union([z.string(), z.number()]))
+      .optional()
+      .describe(
+        'Sender ids that bypass both limiters. Bare numeric ids or "telegram:"/"tg:" prefixed strings are accepted. Owners and allowlist members are NOT auto-exempted: place them here explicitly.',
+      ),
+  })
+  .strict()
+  .describe(
+    "Per-sender inbound rate limiting. Counted before messages enter messages.queue so a single sender's spam cannot evict other senders' traffic at the global queue cap. See https://github.com/openclaw/openclaw/issues/84447.",
+  );
+
 export const TelegramAccountSchemaBase = z
   .object({
     name: z.string().optional(),
@@ -291,6 +341,7 @@ export const TelegramAccountSchemaBase = z
       ),
     pollingStallThresholdMs: z.number().int().min(30_000).max(600_000).optional(),
     retry: RetryConfigSchema,
+    rateLimit: TelegramRateLimitSchema.optional(),
     network: z
       .object({
         autoSelectFamily: z.boolean().optional(),

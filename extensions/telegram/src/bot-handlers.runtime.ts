@@ -134,6 +134,7 @@ import {
   resolveModelSelection,
   type ProviderInfo,
 } from "./model-buttons.js";
+import { TelegramRateLimiter, type RateLimiterScope } from "./rate-limiter.js";
 import { buildInlineKeyboard } from "./send.js";
 
 export const registerTelegramHandlers = ({
@@ -196,6 +197,11 @@ export const registerTelegramHandlers = ({
 
   const mediaGroupBuffer = new Map<string, BufferedMediaGroupEntry>();
   const mediaGroupProcessingByKey = new Map<string, Promise<void>>();
+
+  // Per-sender inbound rate limiter. Counted BEFORE inbound messages reach
+  // `messages.queue`, so a single sender's spam cannot evict other senders at
+  // the global queue cap. See https://github.com/openclaw/openclaw/issues/84447.
+  const inboundRateLimiter = new TelegramRateLimiter(telegramCfg.rateLimit);
   const messageCache = createTelegramMessageCache({
     persistedPath: resolveTelegramMessageCachePath(
       telegramDeps.resolveStorePath(cfg.session?.store),
@@ -2672,6 +2678,21 @@ export const registerTelegramHandlers = ({
         })
       ) {
         return;
+      }
+
+      if (!event.isGroup && inboundRateLimiter.isEnabled()) {
+        const isPairingAttempt =
+          dmPolicy === "pairing" &&
+          !effectiveDmAllow.hasWildcard &&
+          (event.senderId ? !effectiveDmAllow.entries.includes(event.senderId) : true);
+        const scope: RateLimiterScope = isPairingAttempt ? "pairing" : "dm";
+        const decision = inboundRateLimiter.tryConsume(event.senderId, scope);
+        if (!decision.allowed) {
+          logVerbose(
+            `Rate-limited telegram inbound from ${event.senderId || "unknown"} (scope=${scope}, reason=${decision.reason}, retryAfterMs=${decision.retryAfterMs}, dropPolicy=${decision.dropPolicy})`,
+          );
+          return;
+        }
       }
 
       if (!event.isGroup && (hasInboundMedia(event.msg) || hasReplyTargetMedia(event.msg))) {
