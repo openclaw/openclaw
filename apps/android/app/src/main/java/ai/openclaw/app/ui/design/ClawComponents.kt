@@ -254,12 +254,21 @@ internal fun <T> ClawListPanel(
   row: @Composable (T) -> Unit,
 ) {
   ClawPanel(modifier = modifier, contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
-    Column {
-      items.forEachIndexed { index, item ->
-        row(item)
-        if (index != items.lastIndex) {
-          HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
-        }
+    ClawSeparatedColumn(items = items, row = row)
+  }
+}
+
+@Composable
+internal fun <T> ClawSeparatedColumn(
+  items: List<T>,
+  modifier: Modifier = Modifier,
+  row: @Composable (T) -> Unit,
+) {
+  Column(modifier = modifier) {
+    items.forEachIndexed { index, item ->
+      row(item)
+      if (index != items.lastIndex) {
+        HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
       }
     }
   }
