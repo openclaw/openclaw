@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- MSTeams: support files >4 MiB via Graph resumable upload sessions (createUploadSession + chunked PUT). Small files keep the simple `:/content` path.
 - Docs: add direct BotFather link and verification reminder in Telegram setup. (#4064) Thanks @shatner.
 - Docs: add Mintlify language navigation for zh-Hans. (#6416) Thanks @joshp123.
 - Telegram: use shared pairing store. (#6127) Thanks @obviyus.
@@ -13,6 +14,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Voice-call: hang up rejected inbound calls instead of leaving them ringing/connected when the caller is outside the allowlist.
 - Docs: run oxfmt to fix format checks. (#6513) Thanks @app/clawdinator.
 - Auto-reply: avoid referencing workspace files in /new greeting prompt. (#5706) Thanks @bravostation.
 - Process: resolve Windows `spawn()` failures for npm-family CLIs by appending `.cmd` when needed. (#5815) Thanks @thejhinvirtuoso.

@@ -7,6 +7,12 @@
  * - Uploading files to SharePoint (group/channel scope)
  * - Creating sharing links (organization-wide or per-user)
  * - Getting chat members for per-user sharing
+ *
+ * Files <= LARGE_FILE_THRESHOLD use the simple `:/content` PUT endpoint.
+ * Larger files use the Graph resumable upload session protocol:
+ *   1. POST createUploadSession -> uploadUrl
+ *   2. PUT each chunk to uploadUrl with Content-Range; 202 advances, 200/201 returns the driveItem
+ *   3. On error mid-upload, DELETE uploadUrl is sent best-effort as cleanup.
  */
 
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
@@ -15,16 +21,193 @@ const GRAPH_ROOT = "https://graph.microsoft.com/v1.0";
 const GRAPH_BETA = "https://graph.microsoft.com/beta";
 const GRAPH_SCOPE = "https://graph.microsoft.com";
 
+// Simple PUT upload is documented to support up to 4 MiB; above that we MUST use upload sessions.
+const LARGE_FILE_THRESHOLD = 4 * 1024 * 1024;
+// Graph requires chunk sizes that are multiples of 320 KiB. 16 * 320 KiB ≈ 5 MiB is the common default.
+const GRAPH_CHUNK_UNIT = 320 * 1024;
+const DEFAULT_CHUNK_SIZE = 16 * GRAPH_CHUNK_UNIT;
+
 export interface OneDriveUploadResult {
   id: string;
   webUrl: string;
   name: string;
 }
 
+interface DriveItemResponse {
+  id?: string;
+  webUrl?: string;
+  name?: string;
+}
+
+function assertDriveItem(data: DriveItemResponse, label: string): OneDriveUploadResult {
+  if (!data.id || !data.webUrl || !data.name) {
+    throw new Error(`${label} response missing required fields`);
+  }
+  return { id: data.id, webUrl: data.webUrl, name: data.name };
+}
+
+/**
+ * Create a resumable upload session for a path that lives under either /me/drive or /sites/{id}/drive.
+ * Returns the uploadUrl the caller PUTs chunks to.
+ */
+async function createUploadSession(params: {
+  sessionUrl: string;
+  filename: string;
+  tokenProvider: MSTeamsAccessTokenProvider;
+  fetchFn: typeof fetch;
+  label: string;
+}): Promise<{ uploadUrl: string }> {
+  const token = await params.tokenProvider.getAccessToken(GRAPH_SCOPE);
+  const res = await params.fetchFn(params.sessionUrl, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      item: {
+        "@microsoft.graph.conflictBehavior": "rename",
+        name: params.filename,
+      },
+    }),
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(
+      `${params.label} createUploadSession failed: ${res.status} ${res.statusText} - ${body}`,
+    );
+  }
+
+  const data = (await res.json()) as { uploadUrl?: string };
+  if (!data.uploadUrl) {
+    throw new Error(`${params.label} createUploadSession response missing uploadUrl`);
+  }
+  return { uploadUrl: data.uploadUrl };
+}
+
+/**
+ * PUT the buffer to an active upload session URL in chunked ranges.
+ * The final chunk's response (200/201) carries the completed driveItem.
+ * If any chunk PUT fails, DELETE uploadUrl is sent best-effort as cleanup.
+ */
+async function putChunks(params: {
+  uploadUrl: string;
+  buffer: Buffer;
+  chunkSize: number;
+  fetchFn: typeof fetch;
+  label: string;
+}): Promise<OneDriveUploadResult> {
+  const total = params.buffer.length;
+  let offset = 0;
+  let final: DriveItemResponse | null = null;
+
+  while (offset < total) {
+    const end = Math.min(offset + params.chunkSize, total);
+    const chunk = params.buffer.subarray(offset, end);
+
+    let res: Response;
+    try {
+      res = await params.fetchFn(params.uploadUrl, {
+        method: "PUT",
+        headers: {
+          "Content-Length": String(chunk.length),
+          "Content-Range": `bytes ${offset}-${end - 1}/${total}`,
+        },
+        body: new Uint8Array(chunk),
+      });
+    } catch (err) {
+      await cancelUploadSession(params.uploadUrl, params.fetchFn);
+      throw err;
+    }
+
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      await cancelUploadSession(params.uploadUrl, params.fetchFn);
+      throw new Error(
+        `${params.label} chunk upload failed at bytes ${offset}-${end - 1}/${total}: ${res.status} ${res.statusText} - ${body}`,
+      );
+    }
+
+    if (res.status === 200 || res.status === 201) {
+      final = (await res.json()) as DriveItemResponse;
+      break;
+    }
+    // 202: chunk accepted, continue. We trust our own slicing and ignore nextExpectedRanges.
+    offset = end;
+  }
+
+  if (!final) {
+    throw new Error(
+      `${params.label} upload session ended without a final driveItem response (${total} bytes)`,
+    );
+  }
+  return assertDriveItem(final, params.label);
+}
+
+async function cancelUploadSession(uploadUrl: string, fetchFn: typeof fetch): Promise<void> {
+  try {
+    await fetchFn(uploadUrl, { method: "DELETE" });
+  } catch {
+    // Best-effort cleanup; the session expires server-side regardless.
+  }
+}
+
+/**
+ * Internal: route the buffer to either the simple `:/content` PUT path or the resumable session path.
+ */
+async function uploadBuffer(params: {
+  buffer: Buffer;
+  filename: string;
+  contentType?: string;
+  tokenProvider: MSTeamsAccessTokenProvider;
+  fetchFn: typeof fetch;
+  simpleUrl: string;
+  sessionUrl: string;
+  label: string;
+  chunkSize: number;
+}): Promise<OneDriveUploadResult> {
+  if (params.buffer.length <= LARGE_FILE_THRESHOLD) {
+    const token = await params.tokenProvider.getAccessToken(GRAPH_SCOPE);
+    const res = await params.fetchFn(params.simpleUrl, {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": params.contentType ?? "application/octet-stream",
+      },
+      body: new Uint8Array(params.buffer),
+    });
+
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw new Error(`${params.label} upload failed: ${res.status} ${res.statusText} - ${body}`);
+    }
+    return assertDriveItem((await res.json()) as DriveItemResponse, params.label);
+  }
+
+  const { uploadUrl } = await createUploadSession({
+    sessionUrl: params.sessionUrl,
+    filename: params.filename,
+    tokenProvider: params.tokenProvider,
+    fetchFn: params.fetchFn,
+    label: params.label,
+  });
+
+  return putChunks({
+    uploadUrl,
+    buffer: params.buffer,
+    chunkSize: params.chunkSize,
+    fetchFn: params.fetchFn,
+    label: params.label,
+  });
+}
+
 /**
  * Upload a file to the user's OneDrive root folder.
- * For larger files, this uses the simple upload endpoint (up to 4MB).
- * TODO: For files >4MB, implement resumable upload session.
+ * Switches to the resumable upload-session protocol for files larger than 4 MiB.
+ *
+ * @param params.chunkSize - Optional override for the chunk size used in session uploads.
+ *   Must be a multiple of 320 KiB per Graph's contract. Defaults to ~5 MiB.
  */
 export async function uploadToOneDrive(params: {
   buffer: Buffer;
@@ -32,42 +215,22 @@ export async function uploadToOneDrive(params: {
   contentType?: string;
   tokenProvider: MSTeamsAccessTokenProvider;
   fetchFn?: typeof fetch;
+  chunkSize?: number;
 }): Promise<OneDriveUploadResult> {
   const fetchFn = params.fetchFn ?? fetch;
-  const token = await params.tokenProvider.getAccessToken(GRAPH_SCOPE);
-
-  // Use "OpenClawShared" folder to organize bot-uploaded files
   const uploadPath = `/OpenClawShared/${encodeURIComponent(params.filename)}`;
 
-  const res = await fetchFn(`${GRAPH_ROOT}/me/drive/root:${uploadPath}:/content`, {
-    method: "PUT",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": params.contentType ?? "application/octet-stream",
-    },
-    body: new Uint8Array(params.buffer),
+  return uploadBuffer({
+    buffer: params.buffer,
+    filename: params.filename,
+    contentType: params.contentType,
+    tokenProvider: params.tokenProvider,
+    fetchFn,
+    simpleUrl: `${GRAPH_ROOT}/me/drive/root:${uploadPath}:/content`,
+    sessionUrl: `${GRAPH_ROOT}/me/drive/root:${uploadPath}:/createUploadSession`,
+    label: "OneDrive",
+    chunkSize: params.chunkSize ?? DEFAULT_CHUNK_SIZE,
   });
-
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`OneDrive upload failed: ${res.status} ${res.statusText} - ${body}`);
-  }
-
-  const data = (await res.json()) as {
-    id?: string;
-    webUrl?: string;
-    name?: string;
-  };
-
-  if (!data.id || !data.webUrl || !data.name) {
-    throw new Error("OneDrive upload response missing required fields");
-  }
-
-  return {
-    id: data.id,
-    webUrl: data.webUrl,
-    name: data.name,
-  };
 }
 
 export interface OneDriveSharingLink {
@@ -165,8 +328,11 @@ export async function uploadAndShareOneDrive(params: {
 /**
  * Upload a file to a SharePoint site.
  * This is used for group chats and channels where /me/drive doesn't work for bots.
+ * Switches to the resumable upload-session protocol for files larger than 4 MiB.
  *
  * @param params.siteId - SharePoint site ID (e.g., "contoso.sharepoint.com,guid1,guid2")
+ * @param params.chunkSize - Optional override for the chunk size used in session uploads.
+ *   Must be a multiple of 320 KiB per Graph's contract. Defaults to ~5 MiB.
  */
 export async function uploadToSharePoint(params: {
   buffer: Buffer;
@@ -175,45 +341,23 @@ export async function uploadToSharePoint(params: {
   tokenProvider: MSTeamsAccessTokenProvider;
   siteId: string;
   fetchFn?: typeof fetch;
+  chunkSize?: number;
 }): Promise<OneDriveUploadResult> {
   const fetchFn = params.fetchFn ?? fetch;
-  const token = await params.tokenProvider.getAccessToken(GRAPH_SCOPE);
-
-  // Use "OpenClawShared" folder to organize bot-uploaded files
   const uploadPath = `/OpenClawShared/${encodeURIComponent(params.filename)}`;
+  const siteBase = `${GRAPH_ROOT}/sites/${params.siteId}/drive/root:${uploadPath}`;
 
-  const res = await fetchFn(
-    `${GRAPH_ROOT}/sites/${params.siteId}/drive/root:${uploadPath}:/content`,
-    {
-      method: "PUT",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": params.contentType ?? "application/octet-stream",
-      },
-      body: new Uint8Array(params.buffer),
-    },
-  );
-
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`SharePoint upload failed: ${res.status} ${res.statusText} - ${body}`);
-  }
-
-  const data = (await res.json()) as {
-    id?: string;
-    webUrl?: string;
-    name?: string;
-  };
-
-  if (!data.id || !data.webUrl || !data.name) {
-    throw new Error("SharePoint upload response missing required fields");
-  }
-
-  return {
-    id: data.id,
-    webUrl: data.webUrl,
-    name: data.name,
-  };
+  return uploadBuffer({
+    buffer: params.buffer,
+    filename: params.filename,
+    contentType: params.contentType,
+    tokenProvider: params.tokenProvider,
+    fetchFn,
+    simpleUrl: `${siteBase}:/content`,
+    sessionUrl: `${siteBase}:/createUploadSession`,
+    label: "SharePoint",
+    chunkSize: params.chunkSize ?? DEFAULT_CHUNK_SIZE,
+  });
 }
 
 export interface ChatMember {

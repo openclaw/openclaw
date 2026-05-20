@@ -551,7 +551,23 @@ export class CallManager {
     if (!call && event.direction === "inbound" && event.providerCallId) {
       // Check if we should accept this inbound call
       if (!this.shouldAcceptInbound(event.from)) {
-        // TODO: Could hang up the call here
+        // Hang up the rejected call so the caller isn't left ringing/connected.
+        // processEvent is sync; fire-and-forget with a logged failure path.
+        const providerCallId = event.providerCallId;
+        if (this.provider) {
+          void this.provider
+            .hangupCall({
+              callId: crypto.randomUUID(),
+              providerCallId,
+              reason: "hangup-bot",
+            })
+            .catch((err) => {
+              console.warn(
+                `[voice-call] Failed to hang up rejected inbound call ${providerCallId}:`,
+                err,
+              );
+            });
+        }
         return;
       }
 
