@@ -902,7 +902,6 @@ describe("createAcpReplyProjector", () => {
         tag: "tool_call",
         text: "Running search",
         toolCallId: "call_1",
-        toolName: "search",
         status: "completed",
       });
       // Intermediate done
