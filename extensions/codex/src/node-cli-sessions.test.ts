@@ -202,6 +202,7 @@ describe("codex cli node sessions", () => {
       config: {},
       approvals,
       invokeNode,
+      timeoutMs: 1_200_000,
     });
 
     expect(result).toEqual({
@@ -219,6 +220,8 @@ describe("codex cli node sessions", () => {
         allowedDecisions: ["allow-once", "deny"],
       }),
     );
+    const [approvalRequest] = approvals.request.mock.calls[0] ?? [];
+    expect((approvalRequest as { timeoutMs?: unknown } | undefined)?.timeoutMs).toBeUndefined();
   });
 
   it("does not treat allow-always as a valid Codex CLI resume approval", async () => {

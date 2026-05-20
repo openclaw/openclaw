@@ -103,10 +103,6 @@ export function createCodexCliSessionNodeInvokePolicies(): OpenClawPluginNodeInv
           allowedDecisions: ["allow-once", "deny"],
           agentId: typeof params.agentId === "string" ? params.agentId : undefined,
           sessionKey: typeof params.sessionKey === "string" ? params.sessionKey : undefined,
-          timeoutMs:
-            typeof ctx.timeoutMs === "number" && Number.isFinite(ctx.timeoutMs)
-              ? ctx.timeoutMs
-              : undefined,
         });
         if (approval?.decision !== "allow-once") {
           return {
