@@ -25,9 +25,11 @@ import {
   mergeChannelProgressDraftLine,
   resolveChannelProgressDraftMaxLines,
   resolveChannelStreamingBlockEnabled,
+  resolveChannelStreamingPreviewNativeToolProgress,
+  resolveChannelStreamingPreviewNativeToolProgressAllowFrom,
   resolveChannelStreamingPreviewToolProgress,
+  resolveTranscriptBackedChannelFinalText,
 } from "openclaw/plugin-sdk/channel-streaming";
-import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
 import type {
   OpenClawConfig,
   ReplyToMode,
@@ -35,6 +37,7 @@ import type {
 } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { runInboundReplyTurn } from "openclaw/plugin-sdk/inbound-reply-dispatch";
+import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import {
   createOutboundPayloadPlan,
   projectOutboundPayloadPlanForDelivery,
@@ -51,6 +54,7 @@ import {
   sleepWithAbort,
 } from "openclaw/plugin-sdk/runtime-env";
 import { resolveTelegramConfigReasoningDefault } from "./agent-config.js";
+import { normalizeAllowFrom } from "./bot-access.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import {
@@ -66,6 +70,7 @@ import {
   generateTopicLabel,
   getAgentScopedMediaLocalRoots,
   loadSessionStore,
+  readLatestAssistantTextFromSessionTranscript,
   resolveAutoTopicLabelConfig,
   resolveChunkMode,
   resolveMarkdownTableMode,
@@ -81,7 +86,7 @@ import {
   type TelegramNativeQuoteCandidateByMessageId,
 } from "./bot/native-quote.js";
 import type { TelegramStreamMode } from "./bot/types.js";
-import type { TelegramInlineButtons } from "./button-types.js";
+import { resolveTelegramInlineButtons, type TelegramInlineButtons } from "./button-types.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
 import {
   buildTelegramErrorScopeKey,
@@ -91,7 +96,7 @@ import {
 } from "./error-policy.js";
 import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
 import { markdownToTelegramChunks, renderTelegramHtmlText } from "./format.js";
-import { beginTelegramInboundTurnDeliveryCorrelation } from "./inbound-turn-delivery.js";
+import { beginTelegramInboundEventDeliveryCorrelation } from "./inbound-event-delivery.js";
 import {
   createLaneDeliveryStateTracker,
   createLaneTextDeliverer,
@@ -99,14 +104,30 @@ import {
   type LaneDeliveryResult,
   type LaneName,
 } from "./lane-delivery.js";
+import { createNativeTelegramToolProgressDraft } from "./native-tool-progress-draft.js";
 import {
   createTelegramReasoningStepState,
   splitTelegramReasoningText,
 } from "./reasoning-lane-coordinator.js";
 import { editMessageTelegram } from "./send.js";
+import { getTelegramSequentialKey } from "./sequential-key.js";
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
+import {
+  beginTelegramReplyFence,
+  buildTelegramNonInterruptingReplyFenceKey,
+  buildTelegramReplyFenceLaneKey,
+  endTelegramReplyFence,
+  getTelegramReplyFenceSizeForTests,
+  isTelegramReplyFenceSuperseded,
+  releaseTelegramReplyFenceAbortController,
+  resetTelegramReplyFenceForTests,
+  resolveTelegramReplyFenceKey,
+  shouldSupersedeTelegramReplyFence,
+  supersedeTelegramReplyFence,
+} from "./telegram-reply-fence.js";
 
 export { pruneStickerMediaFromContext } from "./bot-message-dispatch.media.js";
+export { getTelegramReplyFenceSizeForTests, resetTelegramReplyFenceForTests };
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 const silentReplyDispatchLogger = createSubsystemLogger("telegram/silent-reply-dispatch");
@@ -130,6 +151,57 @@ function resolveDraftPartialText(
     return undefined;
   }
   return nextText;
+}
+
+function resolvePayloadTelegramInlineButtons(
+  payload: ReplyPayload,
+): TelegramInlineButtons | undefined {
+  const telegramData = payload.channelData?.telegram as
+    | { buttons?: TelegramInlineButtons }
+    | undefined;
+  const presentation = normalizeMessagePresentation(payload.presentation);
+  return resolveTelegramInlineButtons({
+    buttons: telegramData?.buttons,
+    presentation,
+    interactive: payload.interactive,
+  });
+}
+
+function hasExecApprovalPayload(payload: ReplyPayload): boolean {
+  const channelData = payload.channelData;
+  if (!channelData || typeof channelData !== "object" || Array.isArray(channelData)) {
+    return false;
+  }
+  const execApproval = channelData.execApproval;
+  return Boolean(execApproval && typeof execApproval === "object" && !Array.isArray(execApproval));
+}
+
+function canUseNativeToolProgressDraft(params: {
+  payload: ReplyPayload;
+  reply: ReturnType<typeof resolveSendableOutboundReplyParts>;
+  buttons?: TelegramInlineButtons;
+}): boolean {
+  return (
+    !params.reply.hasMedia &&
+    params.payload.isError !== true &&
+    !hasExecApprovalPayload(params.payload) &&
+    params.buttons === undefined
+  );
+}
+
+function canUseNativeToolProgressDraftForChat(params: {
+  telegramCfg: TelegramAccountConfig;
+  chatId: number | string;
+}): boolean {
+  if (!resolveChannelStreamingPreviewNativeToolProgress(params.telegramCfg)) {
+    return false;
+  }
+  const allowFrom = resolveChannelStreamingPreviewNativeToolProgressAllowFrom(params.telegramCfg);
+  if (!allowFrom || allowFrom.length === 0) {
+    return true;
+  }
+  const normalized = normalizeAllowFrom(allowFrom);
+  return normalized.hasWildcard || normalized.entries.includes(String(params.chatId));
 }
 
 async function resolveStickerVisionSupport(cfg: OpenClawConfig, agentId: string) {
@@ -162,81 +234,6 @@ type DispatchTelegramMessageParams = {
 type TelegramReasoningLevel = "off" | "on" | "stream";
 
 type TelegramTranscriptMirrorPayload = { text?: string; mediaUrls?: string[] };
-
-type TelegramReplyFenceState = {
-  generation: number;
-  activeDispatches: number;
-};
-
-// Newer accepted turns and authorized aborts can arrive ahead of older same-session reply work.
-const telegramReplyFenceByKey = new Map<string, TelegramReplyFenceState>();
-
-function normalizeTelegramFenceKey(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function resolveTelegramReplyFenceKey(params: {
-  ctxPayload: { SessionKey?: string; CommandTargetSessionKey?: string };
-  chatId: number | string;
-  threadSpec: { id?: number | string | null; scope?: string };
-}): string {
-  return (
-    normalizeTelegramFenceKey(params.ctxPayload.CommandTargetSessionKey) ??
-    normalizeTelegramFenceKey(params.ctxPayload.SessionKey) ??
-    `telegram:${String(params.chatId)}:${params.threadSpec.scope ?? "default"}:${params.threadSpec.id ?? "root"}`
-  );
-}
-
-function beginTelegramReplyFence(params: { key: string; supersede: boolean }): number {
-  const existing = telegramReplyFenceByKey.get(params.key);
-  const state: TelegramReplyFenceState = existing ?? {
-    generation: 0,
-    activeDispatches: 0,
-  };
-  if (params.supersede) {
-    state.generation += 1;
-  }
-  state.activeDispatches += 1;
-  telegramReplyFenceByKey.set(params.key, state);
-  return state.generation;
-}
-
-function isTelegramReplyFenceSuperseded(params: { key: string; generation: number }): boolean {
-  return (telegramReplyFenceByKey.get(params.key)?.generation ?? 0) !== params.generation;
-}
-
-function endTelegramReplyFence(key: string): void {
-  const state = telegramReplyFenceByKey.get(key);
-  if (!state) {
-    return;
-  }
-  state.activeDispatches -= 1;
-  if (state.activeDispatches <= 0) {
-    telegramReplyFenceByKey.delete(key);
-  }
-}
-
-function shouldSupersedeTelegramReplyFence(ctxPayload: {
-  Body?: string;
-  RawBody?: string;
-  CommandBody?: string;
-  CommandAuthorized: boolean;
-}): boolean {
-  const dispatchText = ctxPayload.CommandBody ?? ctxPayload.RawBody ?? ctxPayload.Body ?? "";
-  return !isAbortRequestText(dispatchText) || ctxPayload.CommandAuthorized;
-}
-
-export function getTelegramReplyFenceSizeForTests(): number {
-  return telegramReplyFenceByKey.size;
-}
-
-export function resetTelegramReplyFenceForTests(): void {
-  telegramReplyFenceByKey.clear();
-}
 
 function resolveTelegramReasoningLevel(params: {
   cfg: OpenClawConfig;
@@ -383,6 +380,7 @@ export const dispatchTelegramMessage = async ({
   telegramDeps: injectedTelegramDeps,
   opts,
 }: DispatchTelegramMessageParams) => {
+  const dispatchStartedAt = Date.now();
   const telegramDeps =
     injectedTelegramDeps ?? (await import("./bot-deps.js")).defaultTelegramBotDeps;
   const {
@@ -403,8 +401,10 @@ export const dispatchTelegramMessage = async ({
     ackReactionPromise,
     reactionApi,
     removeAckAfterReply,
-    statusReactionController,
+    statusReactionController: rawStatusReactionController,
   } = context;
+  const isRoomEvent = ctxPayload.InboundEventKind === "room_event";
+  const statusReactionController = isRoomEvent ? null : rawStatusReactionController;
   const statusReactionTiming = {
     ...DEFAULT_TIMING,
     ...cfg.messages?.statusReactions?.timing,
@@ -452,19 +452,33 @@ export const dispatchTelegramMessage = async ({
     chatId,
     threadSpec,
   });
+  const replyFenceLaneKey = getTelegramSequentialKey({
+    message: msg,
+    ...(context.primaryCtx.me ? { me: context.primaryCtx.me } : {}),
+  });
+  const scopedReplyFenceLaneKey = buildTelegramReplyFenceLaneKey({
+    accountId: route.accountId,
+    sequentialKey: replyFenceLaneKey,
+  });
+  let activeReplyFenceKey = replyFenceKey.activeKey;
   let replyFenceGeneration: number | undefined;
+  const replyAbortController = new AbortController();
+  let replyAbortControllerQueued = false;
   let dispatchWasSuperseded = false;
   const isDispatchSuperseded = () =>
     replyFenceGeneration !== undefined &&
     isTelegramReplyFenceSuperseded({
-      key: replyFenceKey,
+      key: activeReplyFenceKey,
       generation: replyFenceGeneration,
     });
   const releaseReplyFence = () => {
     if (replyFenceGeneration === undefined) {
       return;
     }
-    endTelegramReplyFence(replyFenceKey);
+    endTelegramReplyFence(
+      activeReplyFenceKey,
+      replyAbortControllerQueued ? undefined : replyAbortController,
+    );
     replyFenceGeneration = undefined;
   };
   const draftMaxChars = Math.min(textLimit, 4096);
@@ -488,7 +502,7 @@ export const dispatchTelegramMessage = async ({
   });
   const forceBlockStreamingForReasoning = resolvedReasoningLevel === "on";
   const streamReasoningDraft = resolvedReasoningLevel === "stream";
-  const streamDeliveryEnabled = streamMode !== "off";
+  const streamDeliveryEnabled = !isRoomEvent && streamMode !== "off";
   const rawReplyQuoteText =
     ctxPayload.ReplyToIsQuote && typeof ctxPayload.ReplyToQuoteText === "string"
       ? ctxPayload.ReplyToQuoteText
@@ -541,7 +555,7 @@ export const dispatchTelegramMessage = async ({
     !hasTelegramQuoteReply &&
     !accountBlockStreamingEnabled &&
     !forceBlockStreamingForReasoning;
-  const canStreamReasoningDraft = streamReasoningDraft;
+  const canStreamReasoningDraft = !isRoomEvent && streamReasoningDraft;
   const draftReplyToMessageId =
     replyToMode !== "off" && typeof msg.message_id === "number"
       ? (replyQuoteMessageId ?? msg.message_id)
@@ -588,6 +602,22 @@ export const dispatchTelegramMessage = async ({
   const reasoningLane = lanes.reasoning;
   const streamToolProgressEnabled =
     Boolean(answerLane.stream) && resolveChannelStreamingPreviewToolProgress(telegramCfg);
+  const nativeToolProgressDraft =
+    streamToolProgressEnabled &&
+    !isRoomEvent &&
+    !isGroup &&
+    threadSpec.scope === "dm" &&
+    canUseNativeToolProgressDraftForChat({ telegramCfg, chatId })
+      ? (
+          telegramDeps.createNativeTelegramToolProgressDraft ??
+          createNativeTelegramToolProgressDraft
+        )({
+          api: bot.api,
+          chatId,
+          thread: threadSpec,
+          log: logVerbose,
+        })
+      : undefined;
   let streamToolProgressSuppressed = false;
   let streamToolProgressLines: Array<string | ChannelProgressDraftLine> = [];
   let lastAnswerPartialText = "";
@@ -604,9 +634,9 @@ export const dispatchTelegramMessage = async ({
     }
     activeAnswerDraftIsToolProgressOnly = true;
   }
-  const renderProgressDraft = async (options?: { flush?: boolean }) => {
+  const renderProgressDraft = async (options?: { flush?: boolean }): Promise<boolean> => {
     if (!answerLane.stream || streamMode !== "progress") {
-      return;
+      return false;
     }
     const streamText = formatChannelProgressDraftText({
       entry: telegramCfg,
@@ -615,7 +645,7 @@ export const dispatchTelegramMessage = async ({
       formatLine: formatProgressAsMarkdownCode,
     });
     if (!streamText || streamText === answerLane.lastPartialText) {
-      return;
+      return false;
     }
     await prepareAnswerLaneForToolProgress();
     answerLane.lastPartialText = streamText;
@@ -625,34 +655,58 @@ export const dispatchTelegramMessage = async ({
     if (options?.flush) {
       await answerLane.stream.flush();
     }
+    return true;
   };
   const progressDraftGate = createChannelProgressDraftGate({
-    onStart: () => renderProgressDraft({ flush: true }),
+    onStart: async () => {
+      await renderProgressDraft({ flush: true });
+    },
   });
   const pushStreamToolProgress = async (
     line?: string | ChannelProgressDraftLine,
     options?: { toolName?: string; startImmediately?: boolean },
   ) => {
     if (!answerLane.stream) {
-      return;
+      return false;
     }
     if (options?.toolName !== undefined && !isChannelProgressDraftWorkToolName(options.toolName)) {
-      return;
+      return false;
     }
     const rawText = typeof line === "string" ? line : line?.text;
     const normalized = sanitizeProgressMarkdownText(rawText?.replace(/\s+/g, " ").trim() ?? "");
+    if (streamToolProgressSuppressed) {
+      return false;
+    }
+    if (streamMode !== "progress" && !streamToolProgressEnabled) {
+      return false;
+    }
+    const shouldUpdateProgressLines =
+      streamToolProgressEnabled && !streamToolProgressSuppressed && Boolean(normalized);
+    if (!shouldUpdateProgressLines && streamMode !== "progress") {
+      return false;
+    }
     const progressLine =
       typeof line === "object" && line !== undefined ? { ...line, text: normalized } : normalized;
-    if (streamMode !== "progress") {
-      if (!streamToolProgressEnabled || streamToolProgressSuppressed || !normalized) {
-        return;
-      }
-      const nextLines = mergeChannelProgressDraftLine(streamToolProgressLines, progressLine, {
-        maxLines: resolveChannelProgressDraftMaxLines(telegramCfg),
+    const nextLines = shouldUpdateProgressLines
+      ? mergeChannelProgressDraftLine(streamToolProgressLines, progressLine, {
+          maxLines: resolveChannelProgressDraftMaxLines(telegramCfg),
+        })
+      : streamToolProgressLines;
+    if (shouldUpdateProgressLines && nextLines === streamToolProgressLines) {
+      return false;
+    }
+    if (nativeToolProgressDraft && shouldUpdateProgressLines) {
+      const streamText = formatChannelProgressDraftText({
+        entry: telegramCfg,
+        lines: nextLines,
+        seed: progressSeed,
       });
-      if (nextLines === streamToolProgressLines) {
-        return;
+      if (streamText && (await nativeToolProgressDraft.update(streamText))) {
+        streamToolProgressLines = nextLines;
+        return true;
       }
+    }
+    if (streamMode !== "progress") {
       streamToolProgressLines = nextLines;
       const streamText = formatChannelProgressDraftText({
         entry: telegramCfg,
@@ -665,35 +719,25 @@ export const dispatchTelegramMessage = async ({
       answerLane.hasStreamedMessage = true;
       answerLane.finalized = false;
       answerLane.stream.update(streamText);
-      return;
+      return true;
     }
-    if (streamToolProgressEnabled && !streamToolProgressSuppressed && normalized) {
-      streamToolProgressLines = mergeChannelProgressDraftLine(
-        streamToolProgressLines,
-        progressLine,
-        {
-          maxLines: resolveChannelProgressDraftMaxLines(telegramCfg),
-        },
-      );
-    }
-    if (
-      options?.startImmediately &&
-      streamToolProgressEnabled &&
-      !streamToolProgressSuppressed &&
-      normalized
-    ) {
+    streamToolProgressLines = nextLines;
+    if (options?.startImmediately) {
       const alreadyStarted = progressDraftGate.hasStarted;
       await progressDraftGate.startNow();
       if (alreadyStarted && progressDraftGate.hasStarted) {
         await renderProgressDraft();
+        return true;
       }
-      return;
+      return progressDraftGate.hasStarted;
     }
     const alreadyStarted = progressDraftGate.hasStarted;
     await progressDraftGate.noteWork();
     if (alreadyStarted && progressDraftGate.hasStarted) {
       await renderProgressDraft();
+      return true;
     }
+    return false;
   };
   let splitReasoningOnNextStream = false;
   let draftLaneEventQueue = Promise.resolve();
@@ -768,6 +812,7 @@ export const dispatchTelegramMessage = async ({
     resetDraftLaneState(lane);
   };
   const rotateAnswerLaneAfterToolProgress = async () => {
+    nativeToolProgressDraft?.stop();
     if (!activeAnswerDraftIsToolProgressOnly) {
       return false;
     }
@@ -779,6 +824,7 @@ export const dispatchTelegramMessage = async ({
     return true;
   };
   const prepareAnswerLaneForText = async () => {
+    nativeToolProgressDraft?.stop();
     if (await rotateAnswerLaneAfterToolProgress()) {
       return;
     }
@@ -849,9 +895,21 @@ export const dispatchTelegramMessage = async ({
 
   const chunkMode = resolveChunkMode(cfg, "telegram", route.accountId);
 
+  const supersedeReplyFence = shouldSupersedeTelegramReplyFence(ctxPayload);
+  activeReplyFenceKey = supersedeReplyFence
+    ? replyFenceKey.activeKey
+    : buildTelegramNonInterruptingReplyFenceKey({
+        activeKey: replyFenceKey.activeKey,
+        laneKey: scopedReplyFenceLaneKey,
+      });
+  if (!isRoomEvent && supersedeReplyFence) {
+    supersedeTelegramReplyFence(replyFenceKey.roomEventKey);
+  }
   replyFenceGeneration = beginTelegramReplyFence({
-    key: replyFenceKey,
-    supersede: shouldSupersedeTelegramReplyFence(ctxPayload),
+    key: activeReplyFenceKey,
+    supersede: supersedeReplyFence,
+    abortController: replyAbortController,
+    laneKey: scopedReplyFenceLaneKey,
   });
 
   const implicitQuoteReplyTargetId =
@@ -866,14 +924,6 @@ export const dispatchTelegramMessage = async ({
     ? ctxPayload.ReplyToQuoteEntities
     : undefined;
   const deliveryState = createLaneDeliveryStateTracker();
-  const endTelegramInboundTurnDeliveryCorrelation = beginTelegramInboundTurnDeliveryCorrelation(
-    ctxPayload.SessionKey,
-    {
-      outboundTo: String(chatId),
-      outboundAccountId: route.accountId,
-      markInboundTurnDelivered: () => deliveryState.markDelivered(),
-    },
-  );
   const clearGroupHistory = () => {
     if (isGroup && historyKey) {
       createChannelHistoryWindow({ historyMap: groupHistories }).clear({
@@ -882,7 +932,60 @@ export const dispatchTelegramMessage = async ({
       });
     }
   };
+  const beginDeliveryCorrelation = () =>
+    beginTelegramInboundEventDeliveryCorrelation(
+      ctxPayload.SessionKey,
+      {
+        outboundTo: historyKey || String(chatId),
+        outboundAccountId: route.accountId,
+        markInboundEventDelivered: () => {
+          deliveryState.markDelivered();
+          if (isRoomEvent) {
+            clearGroupHistory();
+          }
+        },
+      },
+      { inboundEventKind: ctxPayload.InboundEventKind },
+    );
+  const endTelegramInboundEventDeliveryCorrelation = beginDeliveryCorrelation();
   const sessionKey = ctxPayload.SessionKey;
+  const resolveCurrentTurnTranscriptFinalText = async (): Promise<string | undefined> => {
+    if (!sessionKey) {
+      return undefined;
+    }
+    try {
+      const storePath = telegramDeps.resolveStorePath(cfg.session?.store, {
+        agentId: route.agentId,
+      });
+      const store = (telegramDeps.loadSessionStore ?? loadSessionStore)(storePath, {
+        skipCache: true,
+      });
+      const sessionEntry = resolveSessionStoreEntry({
+        store,
+        sessionKey,
+      }).existing;
+      if (!sessionEntry?.sessionId) {
+        return undefined;
+      }
+      const { sessionFile } = await resolveAndPersistSessionFile({
+        sessionId: sessionEntry.sessionId,
+        sessionKey,
+        sessionStore: store,
+        storePath,
+        sessionEntry,
+        agentId: route.agentId,
+        sessionsDir: path.dirname(storePath),
+      });
+      const latest = await readLatestAssistantTextFromSessionTranscript(sessionFile);
+      if (!latest?.timestamp || latest.timestamp < dispatchStartedAt) {
+        return undefined;
+      }
+      return latest.text;
+    } catch (err) {
+      logVerbose(`telegram transcript final candidate lookup failed: ${formatErrorMessage(err)}`);
+      return undefined;
+    }
+  };
   const deliveryBaseOptions = {
     chatId: String(chatId),
     accountId: route.accountId,
@@ -1062,6 +1165,7 @@ export const dispatchTelegramMessage = async ({
       }
       const result = await (telegramDeps.deliverReplies ?? deliverReplies)({
         ...deliveryBaseOptions,
+        transcriptMirror: options?.durable ? deliveryBaseOptions.transcriptMirror : undefined,
         replies: [deliverablePayload],
         onVoiceRecording: sendRecordVoice,
         silent,
@@ -1122,6 +1226,7 @@ export const dispatchTelegramMessage = async ({
           buttons,
         });
       },
+      resolveFinalTextCandidate: () => resolveCurrentTurnTranscriptFinalText(),
       log: logVerbose,
       markDelivered: () => {
         deliveryState.markDelivered();
@@ -1141,6 +1246,11 @@ export const dispatchTelegramMessage = async ({
       answerLane.finalized = true;
       return delivered ? { kind: "sent" } : { kind: "skipped" };
     };
+    const resolveTranscriptBackedFinalText = async (text: string): Promise<string> =>
+      await resolveTranscriptBackedChannelFinalText({
+        finalText: text,
+        resolveCandidateText: resolveCurrentTurnTranscriptFinalText,
+      });
 
     if (isDmTopic) {
       try {
@@ -1162,7 +1272,7 @@ export const dispatchTelegramMessage = async ({
       }
     }
 
-    if (statusReactionController) {
+    if (statusReactionController && !isRoomEvent) {
       void statusReactionController.setThinking();
     }
 
@@ -1247,11 +1357,7 @@ export const dispatchTelegramMessage = async ({
                       queuedFinal = true;
                       return;
                     }
-                    const telegramButtons = (
-                      effectivePayload.channelData?.telegram as
-                        | { buttons?: TelegramInlineButtons }
-                        | undefined
-                    )?.buttons;
+                    const telegramButtons = resolvePayloadTelegramInlineButtons(effectivePayload);
                     const split = splitTextIntoLaneSegments(
                       { text: effectivePayload.text },
                       payload.isReasoning,
@@ -1264,13 +1370,14 @@ export const dispatchTelegramMessage = async ({
                       text: string,
                       buttons?: TelegramInlineButtons,
                     ) => {
+                      const finalText = await resolveTranscriptBackedFinalText(text);
                       if (streamMode === "progress") {
-                        return deliverProgressModeFinalAnswer(answerPayload, text);
+                        return deliverProgressModeFinalAnswer(answerPayload, finalText);
                       }
                       await rotateAnswerLaneAfterToolProgress();
                       return deliverLaneText({
                         laneName: "answer",
-                        text,
+                        text: finalText,
                         payload: answerPayload,
                         infoKind: "final",
                         buttons,
@@ -1283,11 +1390,7 @@ export const dispatchTelegramMessage = async ({
                       if (!buffered) {
                         return;
                       }
-                      const bufferedButtons = (
-                        buffered.payload.channelData?.telegram as
-                          | { buttons?: TelegramInlineButtons }
-                          | undefined
-                      )?.buttons;
+                      const bufferedButtons = resolvePayloadTelegramInlineButtons(buffered.payload);
                       await deliverFinalAnswerText(
                         buffered.payload,
                         buffered.text,
@@ -1314,6 +1417,19 @@ export const dispatchTelegramMessage = async ({
                         reasoningStepState.noteReasoningHint();
                       }
                       if (segment.lane === "answer" && info.kind === "tool") {
+                        if (
+                          nativeToolProgressDraft &&
+                          canUseNativeToolProgressDraft({
+                            payload: effectivePayload,
+                            reply,
+                            buttons: telegramButtons,
+                          })
+                        ) {
+                          if (await pushStreamToolProgress(segment.update.text)) {
+                            blockDelivered = true;
+                            continue;
+                          }
+                        }
                         await prepareAnswerLaneForToolProgress();
                       }
                       const result =
@@ -1434,6 +1550,26 @@ export const dispatchTelegramMessage = async ({
                 replyOptions: {
                   skillFilter,
                   disableBlockStreaming,
+                  abortSignal: replyAbortController.signal,
+                  sourceReplyDeliveryMode: isRoomEvent ? "message_tool_only" : undefined,
+                  queuedDeliveryCorrelations: isRoomEvent
+                    ? [{ begin: beginDeliveryCorrelation }]
+                    : undefined,
+                  queuedFollowupLifecycle: isRoomEvent
+                    ? {
+                        onEnqueued: () => {
+                          replyAbortControllerQueued = true;
+                        },
+                        onComplete: () => {
+                          replyAbortControllerQueued = false;
+                          releaseTelegramReplyFenceAbortController(
+                            activeReplyFenceKey,
+                            replyAbortController,
+                          );
+                        },
+                      }
+                    : undefined,
+                  suppressTyping: isRoomEvent,
                   onPartialReply:
                     answerLane.stream || reasoningLane.stream
                       ? (payload) =>
@@ -1473,7 +1609,8 @@ export const dispatchTelegramMessage = async ({
                     : undefined,
                   suppressDefaultToolProgressMessages:
                     !streamDeliveryEnabled || Boolean(answerLane.stream),
-                  allowProgressCallbacksWhenSourceDeliverySuppressed: Boolean(answerLane.stream),
+                  allowProgressCallbacksWhenSourceDeliverySuppressed:
+                    !isRoomEvent && Boolean(answerLane.stream),
                   onToolStart: async (payload) => {
                     const toolName = payload.name?.trim();
                     const progressPromise = pushStreamToolProgress(
@@ -1599,8 +1736,9 @@ export const dispatchTelegramMessage = async ({
       dispatchError = err;
       runtime.error?.(danger(`telegram dispatch failed: ${String(err)}`));
     } finally {
-      await draftLaneEventQueue;
       progressDraftGate.cancel();
+      await draftLaneEventQueue;
+      nativeToolProgressDraft?.stop();
       const lanesToCleanup: Array<{ laneName: LaneName; lane: DraftLaneState }> = [
         { laneName: "answer", lane: answerLane },
         { laneName: "reasoning", lane: reasoningLane },
@@ -1624,7 +1762,7 @@ export const dispatchTelegramMessage = async ({
   } finally {
     dispatchWasSuperseded = isDispatchSuperseded();
     releaseReplyFence();
-    endTelegramInboundTurnDeliveryCorrelation();
+    endTelegramInboundEventDeliveryCorrelation();
   }
   if (dispatchWasSuperseded) {
     if (statusReactionController) {
@@ -1653,16 +1791,19 @@ export const dispatchTelegramMessage = async ({
         },
       });
     }
-    clearGroupHistory();
+    if (!isRoomEvent || deliveryState.snapshot().delivered) {
+      clearGroupHistory();
+    }
     return;
   }
   let sentFallback = false;
   const deliverySummary = deliveryState.snapshot();
-  if (
-    dispatchError ||
-    (!deliverySummary.delivered &&
-      (deliverySummary.skippedNonSilent > 0 || deliverySummary.failedNonSilent > 0))
-  ) {
+  const shouldSendFailureFallback =
+    !isRoomEvent &&
+    (dispatchError ||
+      (!deliverySummary.delivered &&
+        (deliverySummary.skippedNonSilent > 0 || deliverySummary.failedNonSilent > 0)));
+  if (shouldSendFailureFallback) {
     const fallbackText = dispatchError
       ? "Something went wrong while processing your request. Please try again."
       : EMPTY_RESPONSE_FALLBACK;
@@ -1722,7 +1863,13 @@ export const dispatchTelegramMessage = async ({
     );
   }
 
+  const shouldClearGroupHistory =
+    !isRoomEvent || deliverySummary.delivered || sentFallback || queuedFinal;
+
   if (!hasFinalResponse) {
+    if (!shouldClearGroupHistory) {
+      return;
+    }
     clearGroupHistory();
     return;
   }
@@ -1795,5 +1942,7 @@ export const dispatchTelegramMessage = async ({
       },
     });
   }
-  clearGroupHistory();
+  if (shouldClearGroupHistory) {
+    clearGroupHistory();
+  }
 };

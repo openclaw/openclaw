@@ -81,6 +81,16 @@ function formatLegacyIssuePreview(issues: Partial<Record<string, number>>): stri
       `- ${pluralize(issues.legacyDeliveryMode, "job")} still uses delivery mode \`deliver\``,
     );
   }
+  if (issues.invalidSchedule) {
+    lines.push(
+      `- ${pluralize(issues.invalidSchedule, "job")} has an invalid persisted schedule and will be removed`,
+    );
+  }
+  if (issues.invalidPayload) {
+    lines.push(
+      `- ${pluralize(issues.invalidPayload, "job")} has an invalid persisted payload and will be removed`,
+    );
+  }
   return lines;
 }
 
@@ -122,7 +132,7 @@ function getRecord(value: unknown): Record<string, unknown> | null {
 
 function formatProviderCounts(counts: Map<string, number>): string {
   return [...counts.entries()]
-    .sort(([left], [right]) => left.localeCompare(right))
+    .toSorted(([left], [right]) => left.localeCompare(right))
     .map(([provider, count]) => `${provider}=${count}`)
     .join(", ");
 }
@@ -277,37 +287,46 @@ function findLegacyWhatsAppHealthCrontabLines(crontab: unknown): string[] {
     .filter((line) => LEGACY_WHATSAPP_HEALTH_SCRIPT_RE.test(line));
 }
 
-export async function noteLegacyWhatsAppCrontabHealthCheck(
+export async function collectLegacyWhatsAppCrontabHealthWarning(
   params: {
     platform?: NodeJS.Platform;
     readCrontab?: CrontabReader;
   } = {},
-): Promise<void> {
+): Promise<string | null> {
   if ((params.platform ?? process.platform) !== "linux") {
-    return;
+    return null;
   }
 
   let crontab: unknown;
   try {
     crontab = (await (params.readCrontab ?? readUserCrontab)()).stdout;
   } catch {
-    return;
+    return null;
   }
 
   const legacyLines = findLegacyWhatsAppHealthCrontabLines(crontab);
   if (legacyLines.length === 0) {
-    return;
+    return null;
   }
 
-  note(
-    [
-      "Legacy WhatsApp crontab health check detected.",
-      "`~/.openclaw/bin/ensure-whatsapp.sh` is not maintained by current OpenClaw and can misreport `Gateway inactive` from cron when the systemd user bus environment is missing.",
-      `Remove the stale crontab entry with ${formatCliCommand("crontab -e")}; use ${formatCliCommand("openclaw channels status --probe")}, ${formatCliCommand("openclaw doctor")}, and ${formatCliCommand("openclaw gateway status")} for current health checks.`,
-      `Matched ${pluralize(legacyLines.length, "entry")}.`,
-    ].join("\n"),
-    "Cron",
-  );
+  return [
+    "Legacy WhatsApp crontab health check detected.",
+    "`~/.openclaw/bin/ensure-whatsapp.sh` is not maintained by current OpenClaw and can misreport `Gateway inactive` from cron when the systemd user bus environment is missing.",
+    `Remove the stale crontab entry with ${formatCliCommand("crontab -e")}; use ${formatCliCommand("openclaw channels status --probe")}, ${formatCliCommand("openclaw doctor")}, and ${formatCliCommand("openclaw gateway status")} for current health checks.`,
+    `Matched ${pluralize(legacyLines.length, "entry")}.`,
+  ].join("\n");
+}
+
+export async function noteLegacyWhatsAppCrontabHealthCheck(
+  params: {
+    platform?: NodeJS.Platform;
+    readCrontab?: CrontabReader;
+  } = {},
+): Promise<void> {
+  const warning = await collectLegacyWhatsAppCrontabHealthWarning(params);
+  if (warning) {
+    note(warning, "Cron");
+  }
 }
 
 export async function maybeRepairLegacyCronStore(params: {

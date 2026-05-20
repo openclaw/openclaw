@@ -60,6 +60,8 @@ type FetchMediaOptions = {
   filePathHint?: string;
   maxBytes?: number;
   maxRedirects?: number;
+  /** Abort the guarded fetch request if it has not completed by this deadline (ms). */
+  timeoutMs?: number;
   /** Abort if the response body stops yielding data for this long (ms). */
   readIdleTimeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
@@ -127,6 +129,18 @@ function parseContentDispositionFileName(header?: string | null): string | undef
   return undefined;
 }
 
+function basenameFromUrlPathname(pathname: string): string {
+  const base = basenameFromAnyPath(pathname);
+  if (!base) {
+    return "";
+  }
+  try {
+    return decodeURIComponent(base).replace(/[\\/]/g, "_");
+  } catch {
+    return base;
+  }
+}
+
 async function readErrorBodySnippet(
   res: Response,
   opts?: {
@@ -157,6 +171,7 @@ async function fetchGuardedMediaResponse(
     fetchImpl,
     requestInit,
     maxRedirects,
+    timeoutMs,
     ssrfPolicy,
     lookupFn,
     dispatcherPolicy,
@@ -179,6 +194,7 @@ async function fetchGuardedMediaResponse(
         fetchImpl,
         init: requestInit,
         maxRedirects,
+        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
         policy: ssrfPolicy,
         lookupFn: attempt.lookupFn ?? lookupFn,
         dispatcherPolicy: attempt.dispatcherPolicy,
@@ -291,7 +307,7 @@ function resolveRemoteFileName(params: {
   let fileNameFromUrl: string | undefined;
   try {
     const parsed = new URL(params.finalUrl);
-    const base = basenameFromAnyPath(parsed.pathname);
+    const base = basenameFromUrlPathname(parsed.pathname);
     fileNameFromUrl = base || undefined;
   } catch {
     // ignore parse errors; leave undefined

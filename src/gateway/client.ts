@@ -13,11 +13,13 @@ import {
 } from "../infra/device-identity.js";
 import {
   ensureInheritedManagedProxyRoutingActive,
-  withManagedProxyGatewayLoopbackRouting,
+  registerManagedProxyGatewayLoopbackBypass,
 } from "../infra/net/proxy/proxy-lifecycle.js";
 import { normalizeFingerprint } from "../infra/tls/fingerprint.js";
 import { rawDataToString } from "../infra/ws.js";
 import { logDebug, logError } from "../logger.js";
+import { redactToolPayloadText } from "../logging/redact.js";
+import { isSensitiveUrlQueryParamName } from "../shared/net/redact-sensitive-url.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -190,6 +192,15 @@ function isGatewayClientStoppedError(err: unknown): boolean {
   return message === "gateway client stopped" || message === "Error: gateway client stopped";
 }
 
+function formatGatewayClientErrorForLog(err: unknown): string {
+  const redactedUrlLikeString = String(err)
+    .replace(/\/\/([^@/?#\s]+)@/g, "//***:***@")
+    .replace(/([?&])([^=&\s]+)=([^&#\s"'<>)]*)/g, (match, prefix: string, key: string) =>
+      isSensitiveUrlQueryParamName(key) ? `${prefix}${key}=***` : match,
+    );
+  return redactToolPayloadText(redactedUrlLikeString);
+}
+
 export function resolveGatewayClientConnectChallengeTimeoutMs(
   opts: Pick<
     GatewayClientOptions,
@@ -296,7 +307,7 @@ export class GatewayClient {
     };
     if (url.startsWith("wss://") && this.opts.tlsFingerprint) {
       wsOptions.rejectUnauthorized = false;
-      wsOptions.checkServerIdentity = (_host: string, cert: CertMeta) => {
+      wsOptions.checkServerIdentity = (_hostValue: string, cert: CertMeta) => {
         const fingerprintValue =
           typeof cert === "object" && cert && "fingerprint256" in cert
             ? ((cert as { fingerprint256?: string }).fingerprint256 ?? "")
@@ -317,10 +328,13 @@ export class GatewayClient {
         return undefined;
       };
     }
-    const ws = withManagedProxyGatewayLoopbackRouting(
-      url,
-      () => new WebSocket(url, wsOptions as ClientOptions),
-    );
+    const unregisterGatewayLoopbackBypass = registerManagedProxyGatewayLoopbackBypass(url);
+    let ws: WebSocket;
+    try {
+      ws = new WebSocket(url, wsOptions as ClientOptions);
+    } finally {
+      unregisterGatewayLoopbackBypass?.();
+    }
     this.ws = ws;
     this.socketOpened = false;
     this.connectNonce = null;
@@ -395,7 +409,7 @@ export class GatewayClient {
       this.opts.onClose?.(code, reasonText);
     });
     ws.on("error", (err) => {
-      logDebug(`gateway client error: ${String(err)}`);
+      logDebug(`gateway client error: ${formatGatewayClientErrorForLog(err)}`);
       if (!this.connectSent) {
         this.opts.onConnectError?.(err instanceof Error ? err : new Error(String(err)));
       }
@@ -636,7 +650,7 @@ export class GatewayClient {
         ) {
           const deviceId = this.opts.deviceIdentity.deviceId;
           try {
-            clearDeviceAuthToken({ deviceId, role });
+            clearDeviceAuthToken({ deviceId, role, env: this.opts.env });
             logDebug(`cleared stale device-auth token for device ${deviceId}`);
           } catch (clearErr) {
             logDebug(
@@ -652,7 +666,7 @@ export class GatewayClient {
         const startupRetryAfterMs = resolveGatewayStartupRetryAfterMs(err);
         if (startupRetryAfterMs !== null) {
           this.pendingStartupReconnectDelayMs = startupRetryAfterMs;
-          logDebug(`gateway connect failed: ${String(err)}`);
+          logDebug(`gateway connect failed: ${formatGatewayClientErrorForLog(err)}`);
           this.ws?.close(1013, "gateway starting");
           return;
         }
@@ -670,7 +684,7 @@ export class GatewayClient {
           return;
         }
         this.opts.onConnectError?.(err instanceof Error ? err : new Error(String(err)));
-        const msg = `gateway connect failed: ${String(err)}`;
+        const msg = `gateway connect failed: ${formatGatewayClientErrorForLog(err)}`;
         if (this.opts.mode === GATEWAY_CLIENT_MODES.PROBE || isGatewayClientStoppedError(err)) {
           logDebug(msg);
         } else {
@@ -938,7 +952,7 @@ export class GatewayClient {
         }
       }
     } catch (err) {
-      logDebug(`gateway client parse error: ${String(err)}`);
+      logDebug(`gateway client parse error: ${formatGatewayClientErrorForLog(err)}`);
     }
   }
 
@@ -1056,7 +1070,7 @@ export class GatewayClient {
       this.ws as WebSocket & {
         _socket?: { getPeerCertificate?: () => { fingerprint256?: string } };
       }
-    )._socket;
+    )["_socket"];
     if (!socket || typeof socket.getPeerCertificate !== "function") {
       return new Error("gateway tls fingerprint unavailable");
     }

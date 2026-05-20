@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { expectNoReaddirSyncDuring } from "../../src/test-utils/fs-scan-assertions.js";
+import { listGitTrackedFiles, toRepoRelativePath } from "../../src/test-utils/repo-files.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
 const CODE_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"]);
@@ -13,7 +15,41 @@ type SuppressionEntry = {
   rule: string;
 };
 
+function isProductionCodeFile(relativePath: string): boolean {
+  const basename = path.posix.basename(relativePath);
+  if (!CODE_EXTENSIONS.has(path.extname(relativePath))) {
+    return false;
+  }
+  if (basename.startsWith("__rootdir_boundary_canary__.")) {
+    return false;
+  }
+  return !(
+    relativePath.includes("/test/") ||
+    relativePath.endsWith(".test.ts") ||
+    relativePath.endsWith(".test.tsx") ||
+    relativePath.endsWith(".spec.ts") ||
+    relativePath.endsWith(".spec.tsx")
+  );
+}
+
+function listGitCodeFiles(root: string): string[] | null {
+  return (
+    listGitTrackedFiles({ repoRoot, pathspecs: root })
+      ?.filter(isProductionCodeFile)
+      .filter((relativePath) => fs.existsSync(path.join(repoRoot, relativePath))) ?? null
+  );
+}
+
 function walkCodeFiles(dir: string, files: string[] = []): string[] {
+  const relativeRoot = toRepoRelativePath(repoRoot, dir);
+  if (relativeRoot && !relativeRoot.startsWith("..") && !path.isAbsolute(relativeRoot)) {
+    const gitFiles = listGitCodeFiles(relativeRoot);
+    if (gitFiles) {
+      files.push(...gitFiles);
+      return files;
+    }
+  }
+
   if (!fs.existsSync(dir)) {
     return files;
   }
@@ -26,20 +62,8 @@ function walkCodeFiles(dir: string, files: string[] = []): string[] {
       walkCodeFiles(fullPath, files);
       continue;
     }
-    if (!CODE_EXTENSIONS.has(path.extname(entry.name))) {
-      continue;
-    }
-    if (entry.name.startsWith("__rootdir_boundary_canary__.")) {
-      continue;
-    }
-    const relativePath = path.relative(repoRoot, fullPath).replaceAll(path.sep, "/");
-    if (
-      relativePath.includes("/test/") ||
-      relativePath.endsWith(".test.ts") ||
-      relativePath.endsWith(".test.tsx") ||
-      relativePath.endsWith(".spec.ts") ||
-      relativePath.endsWith(".spec.tsx")
-    ) {
+    const relativePath = toRepoRelativePath(repoRoot, fullPath);
+    if (!isProductionCodeFile(relativePath)) {
       continue;
     }
     files.push(relativePath);
@@ -76,6 +100,15 @@ function summarizeSuppressions(entries: readonly SuppressionEntry[]): string[] {
 }
 
 describe("production lint suppressions", () => {
+  it("lists production files from git without walking source roots", () => {
+    expectNoReaddirSyncDuring(() => {
+      const files = ROOTS.flatMap((root) => walkCodeFiles(path.join(repoRoot, root))).toSorted();
+
+      expect(files.length).toBeGreaterThan(0);
+      expect(files.some((file) => file.endsWith(".test.ts"))).toBe(false);
+    });
+  });
+
   it("keeps the intentional production suppression tail on an explicit allowlist", () => {
     expect(summarizeSuppressions(collectProductionLintSuppressions())).toEqual([
       "extensions/browser/src/browser/pw-tools-core.interactions.ts|@typescript-eslint/no-implied-eval|2",
@@ -134,6 +167,7 @@ describe("production lint suppressions", () => {
       "src/test-utils/bundled-plugin-public-surface.ts|typescript/no-unnecessary-type-parameters|2",
       "src/test-utils/vitest-mock-fn.ts|typescript/no-explicit-any|1",
       "src/utils.ts|typescript/no-unnecessary-type-parameters|1",
+      "src/version.ts|eslint/no-underscore-dangle|1",
       "ui/src/ui/views/overview-log-tail.ts|no-control-regex|1",
     ]);
   });

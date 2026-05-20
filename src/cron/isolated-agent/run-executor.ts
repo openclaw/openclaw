@@ -5,6 +5,7 @@ import { normalizeToolList } from "../../agents/tool-policy.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { SourceDeliveryPlan } from "../../infra/outbound/source-delivery-plan.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { CronAgentExecutionPhaseUpdate, CronJob } from "../types.js";
 import {
@@ -14,6 +15,7 @@ import {
 import { resolveCronPayloadOutcome } from "./helpers.js";
 import {
   getCliSessionId,
+  ensureSelectedAgentHarnessPlugin,
   isCliProvider,
   LiveSessionModelSwitchError,
   logWarn,
@@ -109,20 +111,17 @@ export function createCronPromptExecutor(params: {
   /** Set when the cron payload's `timeoutSeconds` was explicitly configured. */
   runTimeoutOverrideMs?: number;
   senderIsOwner: boolean;
-  messageChannel: string | undefined;
   suppressExecNotifyOnExit: boolean;
   resolvedDelivery: {
+    channel?: string;
     accountId?: string;
     to?: string;
     threadId?: string | number;
   };
-  toolPolicy: {
-    requireExplicitMessageTarget: boolean;
-    disableMessageTool: boolean;
-    forceMessageTool: boolean;
-  };
+  sourceDelivery: SourceDeliveryPlan;
   skillsSnapshot: SkillSnapshot;
   agentPayload: AgentTurnPayload;
+  useSubagentFallbacks: boolean;
   liveSelection: CronLiveSelection;
   cronSession: MutableCronSession;
   abortSignal?: AbortSignal;
@@ -144,6 +143,7 @@ export function createCronPromptExecutor(params: {
     cfg: params.cfg,
     job: params.job,
     agentId: params.agentId,
+    useSubagentFallbacks: params.useSubagentFallbacks,
   });
   let runResult: CronPromptRunResult | undefined;
   let fallbackProvider = params.liveSelection.provider;
@@ -153,6 +153,8 @@ export function createCronPromptExecutor(params: {
     params.cronSession.sessionEntry.systemPromptReport,
   );
   const bootstrapContextMode = resolveCronBootstrapContextMode(params.agentPayload);
+  const sourceReplyDeliveryMode = params.sourceDelivery.sourceReplyDeliveryMode;
+  const messageChannel = params.sourceDelivery.target.channel ?? params.resolvedDelivery.channel;
 
   const runPrompt = async (promptText: string) => {
     const fallbackResult = await runWithModelFallback({
@@ -163,6 +165,19 @@ export function createCronPromptExecutor(params: {
       sessionId: params.cronSession.sessionEntry.sessionId,
       lane: resolveCronAgentLane(params.lane),
       agentDir: params.agentDir,
+      agentId: params.agentId,
+      sessionKey: params.runSessionKey,
+      prepareAgentHarnessRuntime: async ({ provider, model, agentHarnessRuntimeOverride }) => {
+        await ensureSelectedAgentHarnessPlugin({
+          config: params.cfgWithAgentDefaults,
+          provider,
+          modelId: model,
+          agentId: params.agentId,
+          sessionKey: params.runSessionKey,
+          agentHarnessRuntimeOverride,
+          workspaceDir: params.workspaceDir,
+        });
+      },
       fallbacksOverride: cronFallbacksOverride,
       run: async (providerOverride, modelOverride, runOptions) => {
         if (params.abortSignal?.aborted) {
@@ -199,7 +214,8 @@ export function createCronPromptExecutor(params: {
             lane: resolveCronAgentLane(params.lane),
             cliSessionId,
             skillsSnapshot: params.skillsSnapshot,
-            messageChannel: params.messageChannel,
+            messageChannel,
+            sourceReplyDeliveryMode,
             abortSignal: params.abortSignal,
             onExecutionStarted: params.onExecutionStarted,
             onExecutionPhase: params.onExecutionPhase,
@@ -216,7 +232,7 @@ export function createCronPromptExecutor(params: {
         }
         const { resolveFastModeState, runEmbeddedPiAgent } = await loadCronEmbeddedRuntime();
         const currentChannelId = await resolveCurrentChannelTarget({
-          channel: params.messageChannel,
+          channel: messageChannel,
           to: params.resolvedDelivery.to,
           threadId: params.resolvedDelivery.threadId,
         });
@@ -232,7 +248,7 @@ export function createCronPromptExecutor(params: {
           ownerOnlyToolAllowlist: resolveCronOwnerOnlyToolAllowlist(
             params.agentPayload?.toolsAllow,
           ),
-          messageChannel: params.messageChannel,
+          messageChannel,
           agentAccountId: params.resolvedDelivery.accountId,
           messageTo: params.resolvedDelivery.to,
           messageThreadId: params.resolvedDelivery.threadId,
@@ -246,6 +262,7 @@ export function createCronPromptExecutor(params: {
           lane: resolveCronAgentLane(params.lane),
           provider: providerOverride,
           model: modelOverride,
+          modelFallbacksOverride: cronFallbacksOverride,
           authProfileId: params.liveSelection.authProfileId,
           authProfileIdSource: params.liveSelection.authProfileId
             ? params.liveSelection.authProfileIdSource
@@ -270,10 +287,11 @@ export function createCronPromptExecutor(params: {
                 notifyOnExitEmptySuccess: false,
               }
             : undefined,
+          sourceReplyDeliveryMode,
           runId: params.cronSession.sessionEntry.sessionId,
-          requireExplicitMessageTarget: params.toolPolicy.requireExplicitMessageTarget,
-          disableMessageTool: params.toolPolicy.disableMessageTool,
-          forceMessageTool: params.toolPolicy.forceMessageTool,
+          requireExplicitMessageTarget: params.sourceDelivery.messageTool.requireExplicitTarget,
+          disableMessageTool: !params.sourceDelivery.messageTool.enabled,
+          forceMessageTool: params.sourceDelivery.messageTool.force,
           allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
           abortSignal: params.abortSignal,
           onExecutionStarted: params.onExecutionStarted,
@@ -323,13 +341,10 @@ export async function executeCronRun(params: {
     to?: string;
     threadId?: string | number;
   };
-  toolPolicy: {
-    requireExplicitMessageTarget: boolean;
-    disableMessageTool: boolean;
-    forceMessageTool: boolean;
-  };
+  sourceDelivery: SourceDeliveryPlan;
   skillsSnapshot: SkillSnapshot;
   agentPayload: AgentTurnPayload;
+  useSubagentFallbacks: boolean;
   agentVerboseDefault: AgentDefaultsConfig["verboseDefault"];
   liveSelection: CronLiveSelection;
   cronSession: MutableCronSession;
@@ -373,12 +388,12 @@ export async function executeCronRun(params: {
     thinkLevel: params.thinkLevel,
     timeoutMs: params.timeoutMs,
     runTimeoutOverrideMs: params.runTimeoutOverrideMs,
-    messageChannel: params.resolvedDelivery.channel,
     suppressExecNotifyOnExit: params.suppressExecNotifyOnExit,
     resolvedDelivery: params.resolvedDelivery,
-    toolPolicy: params.toolPolicy,
+    sourceDelivery: params.sourceDelivery,
     skillsSnapshot: params.skillsSnapshot,
     agentPayload: params.agentPayload,
+    useSubagentFallbacks: params.useSubagentFallbacks,
     liveSelection: params.liveSelection,
     cronSession: params.cronSession,
     abortSignal: params.abortSignal,

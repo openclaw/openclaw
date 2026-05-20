@@ -35,7 +35,7 @@ describe("firecrawl tools", () => {
   let createFirecrawlWebFetchProvider: typeof import("./firecrawl-fetch-provider.js").createFirecrawlWebFetchProvider;
   let createFirecrawlSearchTool: typeof import("./firecrawl-search-tool.js").createFirecrawlSearchTool;
   let createFirecrawlScrapeTool: typeof import("./firecrawl-scrape-tool.js").createFirecrawlScrapeTool;
-  let firecrawlClientTesting: typeof import("./firecrawl-client.js").__testing;
+  let firecrawlClientTesting: typeof import("./firecrawl-client.js").testing;
   let runActualFirecrawlSearch: typeof import("./firecrawl-client.js").runFirecrawlSearch;
   let runActualFirecrawlScrape: typeof import("./firecrawl-client.js").runFirecrawlScrape;
   let ssrfMock: { mockRestore: () => void } | undefined;
@@ -47,7 +47,7 @@ describe("firecrawl tools", () => {
     ({ createFirecrawlSearchTool } = await import("./firecrawl-search-tool.js"));
     ({ createFirecrawlScrapeTool } = await import("./firecrawl-scrape-tool.js"));
     ({
-      __testing: firecrawlClientTesting,
+      testing: firecrawlClientTesting,
       runFirecrawlSearch: runActualFirecrawlSearch,
       runFirecrawlScrape: runActualFirecrawlScrape,
     } = await vi.importActual<typeof import("./firecrawl-client.js")>("./firecrawl-client.js"));
@@ -86,6 +86,24 @@ describe("firecrawl tools", () => {
 
     expect(provider.id).toBe("firecrawl");
     expect(provider.credentialPath).toBe("plugins.entries.firecrawl.config.webSearch.apiKey");
+    expect(
+      provider.getConfiguredCredentialFallback?.({
+        plugins: {
+          entries: {
+            firecrawl: {
+              config: {
+                webFetch: {
+                  apiKey: { source: "env", provider: "default", id: "FIRECRAWL_API_KEY" },
+                },
+              },
+            },
+          },
+        },
+      } as never),
+    ).toEqual({
+      path: "plugins.entries.firecrawl.config.webFetch.apiKey",
+      value: { source: "env", provider: "default", id: "FIRECRAWL_API_KEY" },
+    });
     const pluginEntry = applied.plugins?.entries?.firecrawl;
     if (!pluginEntry) {
       throw new Error("expected Firecrawl plugin entry");

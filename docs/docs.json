@@ -1105,6 +1105,7 @@
                   "channels/access-groups",
                   "channels/group-messages",
                   "channels/groups",
+                  "channels/ambient-room-events",
                   "channels/broadcast-groups",
                   "channels/channel-routing",
                   "channels/location",
@@ -1133,6 +1134,7 @@
                   "start/bootstrapping",
                   "concepts/experimental-features",
                   "concepts/qa-e2e-automation",
+                  "concepts/personal-agent-benchmark-pack",
                   "concepts/qa-matrix"
                 ]
               },
@@ -1202,6 +1204,7 @@
                 "group": "Bundled plugin guides",
                 "pages": [
                   "plugins/codex-harness",
+                  "plugins/codex-native-plugins",
                   "plugins/codex-computer-use",
                   "plugins/google-meet",
                   "plugins/webhooks",
@@ -1218,6 +1221,7 @@
                 "group": "Building plugins",
                 "pages": [
                   "plugins/building-plugins",
+                  "plugins/tool-plugins",
                   "plugins/sdk-channel-plugins",
                   "plugins/sdk-provider-plugins",
                   "plugins/cli-backend-plugins",
@@ -1701,8 +1705,7 @@
                 "group": "Codex harness",
                 "pages": [
                   "plugins/codex-harness-reference",
-                  "plugins/codex-harness-runtime",
-                  "plugins/codex-native-plugins"
+                  "plugins/codex-harness-runtime"
                 ]
               },
               {

@@ -26,6 +26,154 @@ function expectMigrationChangesToIncludeFragments(changes: string[], fragments: 
   expect(unmatchedFragments).toStrictEqual([]);
 }
 
+describe("legacy silent reply config migrate", () => {
+  it("removes silent reply rewrite and direct-chat silent reply config", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          silentReply: {
+            direct: "allow",
+            group: "allow",
+            internal: "allow",
+          },
+          silentReplyRewrite: {
+            direct: true,
+            group: false,
+          },
+        },
+      },
+      surfaces: {
+        telegram: {
+          silentReply: {
+            direct: "disallow",
+            group: "allow",
+          },
+          silentReplyRewrite: {
+            direct: true,
+          },
+        },
+      },
+    });
+
+    expect(res.config?.agents?.defaults?.silentReply).toEqual({
+      group: "allow",
+      internal: "allow",
+    });
+    expect(res.config?.agents?.defaults).not.toHaveProperty("silentReplyRewrite");
+    expect(res.config?.surfaces?.telegram?.silentReply).toEqual({ group: "allow" });
+    expect(res.config?.surfaces?.telegram).not.toHaveProperty("silentReplyRewrite");
+    expectMigrationChangesToIncludeFragments(res.changes, [
+      "Removed agents.defaults.silentReply.direct",
+      "Removed agents.defaults.silentReplyRewrite",
+      "Removed surfaces.telegram.silentReply.direct",
+      "Removed surfaces.telegram.silentReplyRewrite",
+    ]);
+  });
+
+  it("removes malformed silent reply rewrite keys by presence", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          silentReplyRewrite: true,
+        },
+      },
+      surfaces: {
+        telegram: {
+          silentReplyRewrite: false,
+        },
+      },
+    });
+
+    expect(res.config?.agents?.defaults).not.toHaveProperty("silentReplyRewrite");
+    expect(res.config?.surfaces?.telegram).not.toHaveProperty("silentReplyRewrite");
+    expectMigrationChangesToIncludeFragments(res.changes, [
+      "Removed agents.defaults.silentReplyRewrite",
+      "Removed surfaces.telegram.silentReplyRewrite",
+    ]);
+  });
+});
+
+describe("legacy agent model timeout migrate", () => {
+  it("removes ignored timeoutMs from agent and subagent model selection config", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.5",
+            fallbacks: ["anthropic/claude-sonnet-4-6"],
+            timeoutMs: 30_000,
+          },
+          subagents: {
+            model: {
+              primary: "openai/gpt-5.4",
+              timeoutMs: 10_000,
+            },
+          },
+          imageGenerationModel: {
+            primary: "openrouter/openai/gpt-5.4-image-2",
+            timeoutMs: 180_000,
+          },
+          pdfModel: {
+            primary: "openai/gpt-5.5",
+            timeoutMs: 45_000,
+          },
+        },
+        list: [
+          {
+            id: "worker",
+            model: {
+              primary: "openai/gpt-5.4",
+              timeoutMs: 20_000,
+            },
+            subagents: {
+              model: {
+                primary: "openai/gpt-5.4-mini",
+                timeoutMs: 5_000,
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    const root = res.config as Record<string, unknown> | null;
+    const agents = root?.agents as Record<string, unknown>;
+    const defaults = agents.defaults as Record<string, unknown>;
+    const defaultSubagents = defaults.subagents as Record<string, unknown>;
+    const list = agents.list as Array<Record<string, unknown>>;
+    const firstAgent = list[0];
+    const firstSubagents = firstAgent.subagents as Record<string, unknown>;
+
+    expect(defaults.model).toEqual({
+      primary: "openai/gpt-5.5",
+      fallbacks: ["anthropic/claude-sonnet-4-6"],
+    });
+    expect(defaultSubagents.model).toEqual({
+      primary: "openai/gpt-5.4",
+    });
+    expect(defaults.imageGenerationModel).toEqual({
+      primary: "openrouter/openai/gpt-5.4-image-2",
+      timeoutMs: 180_000,
+    });
+    expect(defaults.pdfModel).toEqual({
+      primary: "openai/gpt-5.5",
+      timeoutMs: 45_000,
+    });
+    expect(firstAgent.model).toEqual({
+      primary: "openai/gpt-5.4",
+    });
+    expect(firstSubagents.model).toEqual({
+      primary: "openai/gpt-5.4-mini",
+    });
+    expect(res.changes).toStrictEqual([
+      "Removed agents.defaults.model.timeoutMs; agent model config only selects models.",
+      "Removed agents.defaults.subagents.model.timeoutMs; agent model config only selects models.",
+      "Removed agents.list.0.model.timeoutMs; agent model config only selects models.",
+      "Removed agents.list.0.subagents.model.timeoutMs; agent model config only selects models.",
+    ]);
+  });
+});
+
 describe("legacy session maintenance migrate", () => {
   it("removes deprecated session.maintenance.rotateBytes", () => {
     const res = migrateLegacyConfigForTest({
@@ -62,6 +210,75 @@ describe("legacy session parent fork migrate", () => {
     });
     expect(res.changes).toStrictEqual([
       "Removed session.parentForkMaxTokens; parent fork sizing is automatic.",
+    ]);
+  });
+});
+
+describe("legacy diagnostics memory pressure snapshot migrate", () => {
+  it("renames the boolean toggle", () => {
+    const res = migrateLegacyConfigForTest({
+      diagnostics: {
+        enabled: true,
+        memoryPressureBundle: false,
+      },
+    });
+
+    expect(res.config?.diagnostics).toEqual({
+      enabled: true,
+      memoryPressureSnapshot: false,
+    });
+    expect(res.changes).toStrictEqual([
+      "Moved diagnostics.memoryPressureBundle → memoryPressureSnapshot.",
+    ]);
+  });
+
+  it("preserves the renamed toggle when both keys are present", () => {
+    const res = migrateLegacyConfigForTest({
+      diagnostics: {
+        memoryPressureBundle: false,
+        memoryPressureSnapshot: true,
+      },
+    });
+
+    expect(res.config?.diagnostics).toEqual({
+      memoryPressureSnapshot: true,
+    });
+    expect(res.changes).toStrictEqual([
+      "Removed diagnostics.memoryPressureBundle (memoryPressureSnapshot already set).",
+    ]);
+  });
+
+  it("moves nested enabled to the renamed boolean", () => {
+    const res = migrateLegacyConfigForTest({
+      diagnostics: {
+        enabled: true,
+        memoryPressureBundle: {
+          enabled: false,
+        },
+      },
+    });
+
+    expect(res.config?.diagnostics).toEqual({
+      enabled: true,
+      memoryPressureSnapshot: false,
+    });
+    expect(res.changes).toStrictEqual([
+      "Moved diagnostics.memoryPressureBundle → memoryPressureSnapshot.",
+    ]);
+  });
+
+  it("moves empty object form to the renamed default boolean", () => {
+    const res = migrateLegacyConfigForTest({
+      diagnostics: {
+        memoryPressureBundle: {},
+      },
+    });
+
+    expect(res.config?.diagnostics).toEqual({
+      memoryPressureSnapshot: true,
+    });
+    expect(res.changes).toStrictEqual([
+      "Moved diagnostics.memoryPressureBundle → memoryPressureSnapshot.",
     ]);
   });
 });
@@ -345,7 +562,7 @@ describe("legacy migrate sandbox scope aliases", () => {
     });
 
     expect(res.changes).toStrictEqual([
-      "Removed agents.defaults.llm; model idle timeout now follows models.providers.<id>.timeoutSeconds.",
+      "Removed agents.defaults.llm; model idle timeout now follows models.providers.<id>.timeoutSeconds within the agent/run timeout ceiling.",
     ]);
     expect(res.config?.agents?.defaults).toEqual({
       model: { primary: "openai/gpt-5.4" },
@@ -382,6 +599,85 @@ describe("legacy migrate sandbox scope aliases", () => {
     expect(res.config?.agents?.defaults).toStrictEqual({});
     expect(res.config?.agents?.list?.[0]).toEqual({
       id: "reviewer",
+    });
+  });
+
+  it("moves recoverable whole-agent Claude CLI runtime policy before removing stale pins", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          agentRuntime: { id: "claude-cli" },
+          model: {
+            primary: "anthropic/claude-opus-4-7",
+            fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.5"],
+          },
+          models: {
+            "anthropic/claude-opus-4-7": { alias: "Opus" },
+          },
+        },
+        list: [
+          {
+            id: "paige",
+            agentRuntime: { id: "claude-cli" },
+            model: "anthropic/claude-sonnet-4-6",
+          },
+        ],
+      },
+    });
+
+    expect(res.changes).toStrictEqual([
+      "Moved agents.defaults.agentRuntime.id claude-cli to matching anthropic model runtime policy.",
+      "Removed agents.defaults.agentRuntime; runtime is now provider/model scoped.",
+      "Moved agents.list.0.agentRuntime.id claude-cli to matching anthropic model runtime policy.",
+      "Removed agents.list.0.agentRuntime; runtime is now provider/model scoped.",
+    ]);
+    expect(res.config?.agents?.defaults).toEqual({
+      model: {
+        primary: "anthropic/claude-opus-4-7",
+        fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.5"],
+      },
+      models: {
+        "anthropic/claude-opus-4-7": {
+          alias: "Opus",
+          agentRuntime: { id: "claude-cli" },
+        },
+        "anthropic/claude-sonnet-4-6": {
+          agentRuntime: { id: "claude-cli" },
+        },
+      },
+    });
+    expect(res.config?.agents?.list?.[0]).toEqual({
+      id: "paige",
+      model: "anthropic/claude-sonnet-4-6",
+      models: {
+        "anthropic/claude-sonnet-4-6": {
+          agentRuntime: { id: "claude-cli" },
+        },
+      },
+    });
+  });
+
+  it("does not overwrite explicit model runtime when removing stale whole-agent policy", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          agentRuntime: { id: "claude-cli" },
+          model: "anthropic/claude-opus-4-7",
+          models: {
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "pi" } },
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toStrictEqual([
+      "Removed agents.defaults.agentRuntime; runtime is now provider/model scoped.",
+    ]);
+    expect(res.config?.agents?.defaults).toEqual({
+      model: "anthropic/claude-opus-4-7",
+      models: {
+        "anthropic/claude-opus-4-7": { agentRuntime: { id: "pi" } },
+      },
     });
   });
 
@@ -808,5 +1104,35 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
       "http://localhost:18789",
       "http://127.0.0.1:18789",
     ]);
+  });
+
+  it("seeds allowedOrigins for non-loopback host aliases before normalizing bind", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: {
+        bind: "0.0.0.0",
+        auth: { mode: "token", token: "tok" },
+      },
+    });
+    expect(res.config?.gateway?.bind).toBe("lan");
+    expect(res.config?.gateway?.controlUi?.allowedOrigins).toEqual([
+      "http://localhost:18789",
+      "http://127.0.0.1:18789",
+    ]);
+    expect(res.changes).toStrictEqual([
+      'Seeded gateway.controlUi.allowedOrigins ["http://localhost:18789","http://127.0.0.1:18789"] for bind=lan. Required since v2026.2.26. Add other machine origins to gateway.controlUi.allowedOrigins if needed.',
+      'Normalized gateway.bind "0.0.0.0" → "lan".',
+    ]);
+  });
+
+  it("does not seed allowedOrigins for loopback host aliases", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: {
+        bind: "localhost",
+        auth: { mode: "token", token: "tok" },
+      },
+    });
+    expect(res.config?.gateway?.bind).toBe("loopback");
+    expect(res.config?.gateway?.controlUi).toBeUndefined();
+    expect(res.changes).toStrictEqual(['Normalized gateway.bind "localhost" → "loopback".']);
   });
 });

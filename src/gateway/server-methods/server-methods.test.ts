@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import os from "node:os";
@@ -588,11 +589,279 @@ describe("projectRecentChatDisplayMessages", () => {
         { role: "assistant", content: "older answer", timestamp: 2 },
         { role: "assistant", content: "NO_REPLY", timestamp: 3 },
         { role: "assistant", content: "ANNOUNCE_SKIP", timestamp: 4 },
+        {
+          role: "custom",
+          customType: "openclaw.runtime-context",
+          content: "hidden runtime context",
+          display: false,
+          timestamp: 5,
+        },
       ],
       { maxMessages: 1 },
     );
 
     expect(result).toEqual([{ role: "assistant", content: "older answer", timestamp: 2 }]);
+  });
+
+  it("keeps media-only user messages while dropping empty text-only user messages", () => {
+    const mediaOnly = {
+      role: "user",
+      content: "",
+      MediaPath: "/tmp/openclaw/user-upload.png",
+      timestamp: 1,
+    };
+    const multiMediaOnly = {
+      role: "user",
+      content: "",
+      MediaPaths: ["/tmp/openclaw/first.png", "/tmp/openclaw/second.jpg"],
+      timestamp: 2,
+    };
+    const result = projectRecentChatDisplayMessages([
+      mediaOnly,
+      multiMediaOnly,
+      { role: "user", content: "", timestamp: 3 },
+    ]);
+
+    expect(result).toEqual([mediaOnly, multiMediaOnly]);
+  });
+
+  it("merges delayed TTS supplements into their original assistant message", () => {
+    const visibleText = "**Here** is the answer.";
+    const spokenText = "Here is the answer.";
+    const textSha256 = createHash("sha256").update(visibleText).digest("hex");
+
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "first" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: visibleText }],
+        timestamp: 2,
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "second" }],
+        timestamp: 3,
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Audio reply" },
+          {
+            type: "attachment",
+            attachment: {
+              url: "/tmp/tts.mp3",
+              kind: "audio",
+              label: "tts.mp3",
+              mimeType: "audio/mpeg",
+            },
+          },
+        ],
+        openclawTtsSupplement: { textSha256, spokenText },
+        timestamp: 4,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "first" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: visibleText },
+          {
+            type: "attachment",
+            attachment: {
+              url: "/tmp/tts.mp3",
+              kind: "audio",
+              label: "tts.mp3",
+              mimeType: "audio/mpeg",
+            },
+          },
+        ],
+        timestamp: 2,
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "second" }],
+        timestamp: 3,
+      },
+    ]);
+  });
+
+  it("merges delayed TTS supplements when directive tags are stripped for display", () => {
+    const rawVisibleText = "[[reply_to_current]]Visible answer.";
+    const projectedVisibleText = "Visible answer.";
+    const textSha256 = createHash("sha256").update(projectedVisibleText).digest("hex");
+
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: rawVisibleText }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Audio reply" },
+          {
+            type: "attachment",
+            attachment: {
+              url: "/tmp/tts.mp3",
+              kind: "audio",
+              label: "tts.mp3",
+              mimeType: "audio/mpeg",
+            },
+          },
+        ],
+        openclawTtsSupplement: { textSha256 },
+        timestamp: 2,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: projectedVisibleText },
+          {
+            type: "attachment",
+            attachment: {
+              url: "/tmp/tts.mp3",
+              kind: "audio",
+              label: "tts.mp3",
+              mimeType: "audio/mpeg",
+            },
+          },
+        ],
+        timestamp: 1,
+      },
+    ]);
+  });
+
+  it("merges delayed TTS supplements before display truncation", () => {
+    const projectedVisibleText = "Visible answer ".repeat(8).trim();
+    const rawVisibleText = `[[reply_to_current]]${projectedVisibleText}`;
+    const textSha256 = createHash("sha256").update(projectedVisibleText).digest("hex");
+
+    const result = projectRecentChatDisplayMessages(
+      [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: rawVisibleText }],
+          timestamp: 1,
+        },
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "Audio reply" },
+            {
+              type: "attachment",
+              attachment: {
+                url: "/tmp/tts.mp3",
+                kind: "audio",
+                label: "tts.mp3",
+                mimeType: "audio/mpeg",
+              },
+            },
+          ],
+          openclawTtsSupplement: { textSha256 },
+          timestamp: 2,
+        },
+      ],
+      { maxChars: 24 },
+    );
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: `${projectedVisibleText.slice(0, 24)}\n...(truncated)...` },
+          {
+            type: "attachment",
+            attachment: {
+              url: "/tmp/tts.mp3",
+              kind: "audio",
+              label: "tts.mp3",
+              mimeType: "audio/mpeg",
+            },
+          },
+        ],
+        timestamp: 1,
+      },
+    ]);
+  });
+
+  it("does not merge visible TTS finals into an older identical assistant message", () => {
+    const visibleText = "Done.";
+    const textSha256 = createHash("sha256").update(visibleText).digest("hex");
+    const ttsSupplement = { textSha256 };
+
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: visibleText }],
+        timestamp: 1,
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "again" }],
+        timestamp: 2,
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: visibleText },
+          {
+            type: "attachment",
+            attachment: {
+              url: "/tmp/tts.mp3",
+              kind: "audio",
+              label: "tts.mp3",
+              mimeType: "audio/mpeg",
+            },
+          },
+        ],
+        openclawTtsSupplement: ttsSupplement,
+        timestamp: 3,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: visibleText }],
+        timestamp: 1,
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "again" }],
+        timestamp: 2,
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: visibleText },
+          {
+            type: "attachment",
+            attachment: {
+              url: "/tmp/tts.mp3",
+              kind: "audio",
+              label: "tts.mp3",
+              mimeType: "audio/mpeg",
+            },
+          },
+        ],
+        openclawTtsSupplement: ttsSupplement,
+        timestamp: 3,
+      },
+    ]);
   });
 });
 
@@ -919,7 +1188,7 @@ describe("exec approval handlers", () => {
     });
     const respond = vi.fn();
     const context = {
-      broadcast: (_event: string, _payload: unknown) => {},
+      broadcast: (eventValue: string, _payload: unknown) => {},
       hasExecApprovalClients: () => false,
     };
     return {
@@ -1153,7 +1422,7 @@ describe("exec approval handlers", () => {
     const manager = new ExecApprovalManager();
     const handlers = createExecApprovalHandlers(manager);
     const context = {
-      broadcast: (_event: string, _payload: unknown) => {},
+      broadcast: (eventValue: string, _payload: unknown) => {},
     };
     const ownerClient = {
       connId: "conn-owner",
@@ -1772,7 +2041,7 @@ describe("exec approval handlers", () => {
     const handlers = createExecApprovalHandlers(manager);
     const respond = vi.fn();
     const context = {
-      broadcast: (_event: string, _payload: unknown) => {},
+      broadcast: (eventValue: string, _payload: unknown) => {},
     };
 
     const record = manager.create({ command: "echo ok" }, 60_000, "approval-12345678-aaaa");
@@ -1794,7 +2063,7 @@ describe("exec approval handlers", () => {
     const handlers = createExecApprovalHandlers(manager);
     const respond = vi.fn();
     const context = {
-      broadcast: (_event: string, _payload: unknown) => {},
+      broadcast: (eventValue: string, _payload: unknown) => {},
     };
 
     void manager.register(
@@ -1844,7 +2113,7 @@ describe("exec approval handlers", () => {
     const manager = new ExecApprovalManager();
     const handlers = createExecApprovalHandlers(manager);
     const context = {
-      broadcast: (_event: string, _payload: unknown) => {},
+      broadcast: (eventValue: string, _payload: unknown) => {},
       hasExecApprovalClients: () => true,
     };
     const respondOne = vi.fn();

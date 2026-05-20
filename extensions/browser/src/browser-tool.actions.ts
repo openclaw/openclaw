@@ -114,7 +114,7 @@ function resolveActProxyTimeoutMs(request: BrowserActRequest): number | undefine
   return candidateTimeouts.length ? Math.max(...candidateTimeouts) : undefined;
 }
 
-export const __testing = {
+export const testing = {
   setDepsForTest(
     overrides: Partial<{
       browserAct: typeof browserAct;
@@ -404,6 +404,31 @@ export async function executeSnapshotAction(params: {
   }
   params.onTabActivity?.(readStringValue(snapshot.targetId) ?? targetId);
   if (snapshot.format === "ai") {
+    const dialogStateFields = {
+      ...(snapshot.blockedByDialog ? { blockedByDialog: true } : {}),
+      ...(snapshot.browserState !== undefined ? { browserState: snapshot.browserState } : {}),
+    };
+    if (snapshot.blockedByDialog) {
+      const wrapped = wrapBrowserExternalJson({
+        kind: "snapshot",
+        payload: {
+          format: snapshot.format,
+          targetId: snapshot.targetId,
+          url: snapshot.url,
+          ...dialogStateFields,
+        },
+      });
+      return {
+        content: [{ type: "text" as const, text: wrapped.wrappedText }],
+        details: {
+          ...wrapped.safeDetails,
+          format: snapshot.format,
+          targetId: snapshot.targetId,
+          url: snapshot.url,
+          ...dialogStateFields,
+        },
+      };
+    }
     const extractedText = snapshot.snapshot ?? "";
     const wrappedSnapshot = wrapExternalContent(extractedText, {
       source: "browser",
@@ -423,6 +448,7 @@ export async function executeSnapshotAction(params: {
       imagePath: snapshot.imagePath,
       imageType: snapshot.imageType,
       refsFallback,
+      ...dialogStateFields,
       externalContent: {
         untrusted: true,
         source: "browser",
@@ -457,6 +483,8 @@ export async function executeSnapshotAction(params: {
         targetId: snapshot.targetId,
         url: snapshot.url,
         nodeCount: snapshot.nodes.length,
+        ...(snapshot.blockedByDialog ? { blockedByDialog: true } : {}),
+        ...(snapshot.browserState !== undefined ? { browserState: snapshot.browserState } : {}),
         externalContent: {
           untrusted: true,
           source: "browser",
@@ -574,3 +602,4 @@ export async function executeActAction(params: {
     throw err;
   }
 }
+export { testing as __testing };

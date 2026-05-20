@@ -10,6 +10,12 @@ import {
 } from "../../agents/agent-scope.js";
 import { selectAgentHarness } from "../../agents/harness/selection.js";
 import {
+  buildModelAliasIndex,
+  resolveDefaultModelForAgent,
+  resolveModelRefFromString,
+  type ModelAliasIndex,
+} from "../../agents/model-selection.js";
+import {
   isToolAllowedByPolicies,
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
@@ -26,10 +32,10 @@ import {
   touchConversationBindingRecord,
 } from "../../bindings/records.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
+import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { shouldSuppressLocalExecApprovalPrompt } from "../../channels/plugins/exec-approval-local.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
-import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -85,9 +91,14 @@ import {
   resolveCommandTurnTargetSessionKey,
 } from "../command-turn-context.js";
 import type { BlockReplyContext } from "../get-reply-options.types.js";
-import { getReplyPayloadMetadata, type ReplyPayload } from "../reply-payload.js";
+import {
+  getReplyPayloadMetadata,
+  markReplyPayloadAsTtsSupplement,
+  type ReplyPayload,
+} from "../reply-payload.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import { normalizeVerboseLevel } from "../thinking.js";
+import { resolveSessionRuntimeOverrideForProvider } from "./agent-runner-execution.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
 import {
   createInternalHookEvent,
@@ -105,11 +116,13 @@ import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
 import { claimInboundDedupe, commitInboundDedupe, releaseInboundDedupe } from "./inbound-dedupe.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
+import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { resolveReplyRoutingDecision } from "./routing-policy.js";
 import {
   isExplicitSourceReplyCommand,
   resolveSourceReplyVisibilityPolicy,
 } from "./source-reply-delivery-mode.js";
+import { resolveStoredModelOverride } from "./stored-model-override.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 
 const routeReplyRuntimeLoader = createLazyImportLoader(() => import("./route-reply.runtime.js"));
@@ -147,9 +160,35 @@ function loadReplyMediaPathsRuntime() {
   return replyMediaPathsRuntimeLoader.load();
 }
 
+function formatSuppressedReplyPayloadForLog(reply: ReplyPayload): string {
+  const metadata = getReplyPayloadMetadata(reply);
+  const text = normalizeOptionalString(reply.text);
+  const textPreview = text ? text.replace(/\s+/g, " ").slice(0, 160) : undefined;
+  const sendableParts = resolveSendableOutboundReplyParts(reply);
+  const richParts = [
+    reply.presentation ? "presentation" : undefined,
+    reply.interactive ? "interactive" : undefined,
+    reply.channelData ? "channelData" : undefined,
+  ].filter(Boolean);
+  return [
+    `textChars=${text?.length ?? 0}`,
+    `media=${sendableParts.mediaCount}`,
+    `rich=${richParts.length ? richParts.join("|") : "none"}`,
+    `error=${reply.isError === true}`,
+    `beforeAgentRunBlocked=${metadata?.beforeAgentRunBlocked === true}`,
+    `deliverDespiteSuppression=${metadata?.deliverDespiteSourceReplySuppression === true}`,
+    textPreview ? `textPreview=${JSON.stringify(textPreview)}` : undefined,
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
 async function maybeApplyTtsToReplyPayload(
   params: Parameters<Awaited<ReturnType<typeof loadTtsRuntime>>["maybeApplyTtsToPayload"]>[0],
 ) {
+  if (params.payload.isCompactionNotice || params.payload.isFallbackNotice) {
+    return params.payload;
+  }
   if (
     !shouldAttemptTtsPayload({
       cfg: params.cfg,
@@ -224,6 +263,7 @@ const resolveSessionStoreLookup = (
   sessionKey?: string;
   storePath?: string;
   entry?: SessionEntry;
+  store?: Record<string, SessionEntry>;
 } => {
   const targetSessionKey = resolveCommandTurnTargetSessionKey(ctx);
   const sessionKey = normalizeOptionalString(targetSessionKey ?? ctx.SessionKey);
@@ -237,6 +277,7 @@ const resolveSessionStoreLookup = (
     return {
       sessionKey,
       storePath,
+      store,
       entry: resolveSessionStoreEntry({ store, sessionKey }).existing,
     };
   } catch {
@@ -300,30 +341,199 @@ const createShouldEmitVerboseProgress = (params: {
   };
 };
 
+type HarnessSourceVisibleRepliesDefault = "automatic" | "message_tool";
+
+type HarnessDefaultCandidate = {
+  provider: string;
+  model?: string;
+};
+
+function resolveHarnessDefaultChannel(params: {
+  ctx: FinalizedMsgContext;
+  entry?: SessionEntry;
+}): string | undefined {
+  const originatingChannel =
+    typeof params.ctx.OriginatingChannel === "string" ? params.ctx.OriginatingChannel : undefined;
+
+  return (
+    params.entry?.channel ??
+    params.entry?.origin?.provider ??
+    originatingChannel ??
+    params.ctx.Provider ??
+    params.ctx.Surface
+  );
+}
+
+function resolveHarnessDefaultParentSessionKey(params: {
+  ctx: FinalizedMsgContext;
+  entry?: SessionEntry;
+}): string | undefined {
+  return (
+    params.entry?.parentSessionKey ??
+    params.ctx.ModelParentSessionKey ??
+    params.ctx.ParentSessionKey
+  );
+}
+
+function resolveTurnModelOverride(
+  replyOptions: DispatchFromConfigParams["replyOptions"],
+): string | undefined {
+  const modelOverride = normalizeOptionalString(replyOptions?.modelOverride);
+  if (modelOverride) {
+    return modelOverride;
+  }
+  if (replyOptions?.isHeartbeat !== true) {
+    return undefined;
+  }
+  return normalizeOptionalString(replyOptions.heartbeatModelOverride);
+}
+
+function resolveChannelModelCandidate(params: {
+  aliasIndex: ModelAliasIndex;
+  cfg: OpenClawConfig;
+  ctx: FinalizedMsgContext;
+  defaultProvider: string;
+  entry?: SessionEntry;
+  parentSessionKey?: string;
+}): HarnessDefaultCandidate | undefined {
+  if (!params.cfg.channels?.modelByChannel) {
+    return undefined;
+  }
+
+  const channel = resolveHarnessDefaultChannel({
+    ctx: params.ctx,
+    entry: params.entry,
+  });
+  const channelModelOverride = resolveChannelModelOverride({
+    cfg: params.cfg,
+    channel,
+    groupId: params.entry?.groupId,
+    groupChatType: params.entry?.chatType ?? params.ctx.ChatType,
+    groupChannel: params.entry?.groupChannel ?? params.ctx.GroupChannel,
+    groupSubject: params.entry?.subject ?? params.ctx.GroupSubject,
+    parentSessionKey: params.parentSessionKey,
+  });
+  if (!channelModelOverride) {
+    return undefined;
+  }
+
+  return resolveModelRefFromString({
+    raw: channelModelOverride.model,
+    defaultProvider: params.defaultProvider,
+    aliasIndex: params.aliasIndex,
+  })?.ref;
+}
+
+function resolveStoredModelCandidate(params: {
+  defaultProvider: string;
+  entry?: SessionEntry;
+  parentSessionKey?: string;
+  sessionKey?: string;
+  sessionStore?: Record<string, SessionEntry>;
+}): HarnessDefaultCandidate | undefined {
+  const storedModelRef = resolveStoredModelOverride({
+    sessionEntry: params.entry,
+    sessionStore: params.sessionStore,
+    sessionKey: params.sessionKey,
+    parentSessionKey: params.parentSessionKey,
+    defaultProvider: params.defaultProvider,
+  });
+  if (!storedModelRef) {
+    return undefined;
+  }
+  return {
+    provider: storedModelRef.provider ?? params.defaultProvider,
+    model: storedModelRef.model,
+  };
+}
+
+function resolveModelOverrideCandidate(params: {
+  aliasIndex: ModelAliasIndex;
+  defaultProvider: string;
+  modelOverride?: string;
+}): HarnessDefaultCandidate | undefined {
+  if (!params.modelOverride) {
+    return undefined;
+  }
+  return resolveModelRefFromString({
+    raw: params.modelOverride,
+    defaultProvider: params.defaultProvider,
+    aliasIndex: params.aliasIndex,
+  })?.ref;
+}
+
 const resolveHarnessSourceVisibleRepliesDefault = (params: {
   cfg: OpenClawConfig;
   ctx: FinalizedMsgContext;
   entry?: SessionEntry;
   sessionAgentId: string;
   sessionKey?: string;
-}): "automatic" | "message_tool" | undefined => {
+  sessionStore?: Record<string, SessionEntry>;
+  turnModelOverride?: string;
+}): HarnessSourceVisibleRepliesDefault | undefined => {
   if (isNativeCommandTurn(resolveCommandTurnContext(params.ctx))) {
     return undefined;
   }
   try {
-    const provider =
-      normalizeOptionalString(params.entry?.modelProvider) ??
-      normalizeOptionalString(params.ctx.Provider) ??
-      normalizeOptionalString(params.ctx.Surface) ??
-      "";
-    const harness = selectAgentHarness({
-      provider,
-      modelId: normalizeOptionalString(params.entry?.model),
-      config: params.cfg,
+    const defaultModelRef = resolveDefaultModelForAgent({
+      cfg: params.cfg,
       agentId: params.sessionAgentId,
-      sessionKey: params.sessionKey,
     });
-    return harness.deliveryDefaults?.sourceVisibleReplies;
+    const aliasIndex = buildModelAliasIndex({
+      cfg: params.cfg,
+      defaultProvider: defaultModelRef.provider,
+    });
+    const parentSessionKey = resolveHarnessDefaultParentSessionKey(params);
+    const channelModelCandidate = resolveChannelModelCandidate({
+      aliasIndex,
+      cfg: params.cfg,
+      ctx: params.ctx,
+      defaultProvider: defaultModelRef.provider,
+      entry: params.entry,
+      parentSessionKey,
+    });
+    const storedModelCandidate = resolveStoredModelCandidate({
+      defaultProvider: defaultModelRef.provider,
+      entry: params.entry,
+      parentSessionKey,
+      sessionKey: params.sessionKey,
+      sessionStore: params.sessionStore,
+    });
+    const turnModelCandidate = resolveModelOverrideCandidate({
+      aliasIndex,
+      defaultProvider: defaultModelRef.provider,
+      modelOverride: params.turnModelOverride,
+    });
+    const resolveCandidateDefault = (candidate: { provider: string; model?: string }) => {
+      const agentHarnessRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
+        provider: candidate.provider,
+        entry: params.entry,
+      });
+      const harness = selectAgentHarness({
+        provider: candidate.provider,
+        modelId: candidate.model,
+        config: params.cfg,
+        agentId: params.sessionAgentId,
+        sessionKey: params.sessionKey,
+        agentHarnessRuntimeOverride,
+      });
+      return harness.deliveryDefaults?.sourceVisibleReplies;
+    };
+    const selectedModelCandidate =
+      turnModelCandidate ?? storedModelCandidate ?? channelModelCandidate;
+    if (selectedModelCandidate) {
+      return resolveCandidateDefault(selectedModelCandidate);
+    }
+    const sourceProvider = normalizeOptionalString(
+      params.entry?.origin?.provider ?? params.ctx.Provider ?? params.ctx.Surface,
+    );
+    if (sourceProvider) {
+      const sourceDefault = resolveCandidateDefault({ provider: sourceProvider });
+      if (sourceDefault) {
+        return sourceDefault;
+      }
+    }
+    return resolveCandidateDefault(defaultModelRef);
   } catch (error) {
     logVerbose(
       `dispatch-from-config: could not resolve harness visible-reply defaults: ${formatErrorMessage(error)}`,
@@ -495,8 +705,10 @@ export async function dispatchReplyFromConfig(
   // Do not read thread ids from the normalised session store here: `origin.threadId` can be
   // folded back into lastThreadId/deliveryContext during store normalisation and resurrect a
   // stale route after thread delivery was intentionally cleared.
-  const routeThreadId =
-    ctx.MessageThreadId ?? parseSessionThreadInfoFast(acpDispatchSessionKey).threadId;
+  const routeThreadId = resolveRoutedDeliveryThreadId({
+    ctx,
+    sessionKey: acpDispatchSessionKey,
+  });
   const inboundAudio = isInboundAudioContext(ctx);
   const sessionTtsAuto = normalizeTtsAutoMode(sessionStoreEntry.entry?.ttsAuto);
   const workspaceDir = resolveAgentWorkspaceDir(cfg, sessionAgentId);
@@ -734,16 +946,17 @@ export async function dispatchReplyFromConfig(
           entry: sessionStoreEntry.entry,
           sessionAgentId,
           sessionKey: acpDispatchSessionKey,
+          sessionStore: sessionStoreEntry.store,
+          turnModelOverride: resolveTurnModelOverride(params.replyOptions),
         })
       : undefined;
   const effectiveVisibleReplies = configuredVisibleReplies ?? harnessDefaultVisibleReplies;
   const prefersMessageToolDelivery =
     params.replyOptions?.sourceReplyDeliveryMode === "message_tool_only" ||
+    ctx.InboundEventKind === "room_event" ||
     (params.replyOptions?.sourceReplyDeliveryMode === undefined &&
       !isExplicitSourceReplyCommand(ctx) &&
-      (chatType === "group" || chatType === "channel"
-        ? effectiveVisibleReplies !== "automatic"
-        : effectiveVisibleReplies === "message_tool"));
+      effectiveVisibleReplies === "message_tool");
   const runtimeProfileAlsoAllow = prefersMessageToolDelivery ? ["message"] : [];
   const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), [
     ...(profileAlsoAllow ?? []),
@@ -801,6 +1014,7 @@ export async function dispatchReplyFromConfig(
     cfg,
     ctx,
     requested: params.replyOptions?.sourceReplyDeliveryMode,
+    strictMessageToolOnly: ctx.InboundEventKind === "room_event",
     sendPolicy,
     suppressAcpChildUserDelivery,
     explicitSuppressTyping: params.replyOptions?.suppressTyping === true,
@@ -1010,7 +1224,14 @@ export async function dispatchReplyFromConfig(
     const shouldSendVerboseProgressMessages =
       !isSlackNonDirectSurface && (ctx.ChatType !== "group" || ctx.IsForum === true);
     const shouldSendToolSummaries = shouldSendVerboseProgressMessages;
-    const shouldSendToolStartStatuses = shouldSendVerboseProgressMessages;
+    const shouldSendToolStartStatuses = false;
+    const shouldDeliverVerboseProgressDespiteSourceSuppression = () =>
+      suppressAutomaticSourceDelivery &&
+      sourceReplyDeliveryMode === "message_tool_only" &&
+      ctx.InboundEventKind !== "room_event" &&
+      !sendPolicyDenied &&
+      shouldEmitVerboseProgress() &&
+      shouldSendVerboseProgressMessages;
     const sendFinalPayload = async (
       payload: ReplyPayload,
     ): Promise<{ queuedFinal: boolean; routedFinalCount: number }> => {
@@ -1174,7 +1395,7 @@ export async function dispatchReplyFromConfig(
       return parts.join("\n\n").trim() || "Planning next steps.";
     };
     const maybeSendWorkingStatus = async (label: string): Promise<void> => {
-      if (suppressDelivery) {
+      if (shouldSuppressProgressDelivery()) {
         return;
       }
       const normalizedLabel = normalizeWorkingLabel(label);
@@ -1203,7 +1424,11 @@ export async function dispatchReplyFromConfig(
       explanation?: string;
       steps?: string[];
     }): Promise<void> => {
-      if (suppressDelivery || !shouldEmitVerboseProgress() || !shouldSendVerboseProgressMessages) {
+      if (
+        shouldSuppressProgressDelivery() ||
+        !shouldEmitVerboseProgress() ||
+        !shouldSendVerboseProgressMessages
+      ) {
         return;
       }
       const replyPayload: ReplyPayload = {
@@ -1305,6 +1530,9 @@ export async function dispatchReplyFromConfig(
       params.replyOptions?.suppressDefaultToolProgressMessages === true;
     const shouldSuppressDefaultToolProgressMessages = () =>
       suppressDefaultToolProgressMessages && !shouldEmitVerboseProgress();
+    const shouldSuppressProgressDelivery = () =>
+      sendPolicyDenied ||
+      (suppressDelivery && !shouldDeliverVerboseProgressDespiteSourceSuppression());
     const onToolResultFromReplyOptions = params.replyOptions?.onToolResult;
     const onPlanUpdateFromReplyOptions = params.replyOptions?.onPlanUpdate;
     const onApprovalEventFromReplyOptions = params.replyOptions?.onApprovalEvent;
@@ -1376,7 +1604,7 @@ export async function dispatchReplyFromConfig(
               if (!suppressAutomaticSourceDelivery) {
                 await onToolResultFromReplyOptions?.(payload);
               }
-              if (suppressDelivery) {
+              if (shouldSuppressProgressDelivery()) {
                 return;
               }
               const ttsPayload = await maybeApplyTtsToReplyPayload({
@@ -1481,9 +1709,10 @@ export async function dispatchReplyFromConfig(
                 return;
               }
               // Accumulate block text for TTS generation after streaming.
-              // Exclude compaction status notices — they are informational UI
-              // signals and must not be synthesised into the spoken reply.
-              if (payload.text && !payload.isCompactionNotice) {
+              // Exclude status notices — they are informational UI signals
+              // and must not be synthesised into the spoken reply.
+              const isStatusNotice = payload.isCompactionNotice || payload.isFallbackNotice;
+              if (payload.text && !isStatusNotice) {
                 const joinsBufferedTtsDirective =
                   cleanBlockTtsDirectiveText?.hasBufferedDirectiveText() === true;
                 if (accumulatedBlockText.length > 0) {
@@ -1497,7 +1726,7 @@ export async function dispatchReplyFromConfig(
                 blockCount++;
               }
               const visiblePayload =
-                payload.text && cleanBlockTtsDirectiveText && !payload.isCompactionNotice
+                payload.text && cleanBlockTtsDirectiveText && !isStatusNotice
                   ? (() => {
                       const text = cleanBlockTtsDirectiveText.push(payload.text);
                       return { ...payload, text: text.trim() ? text : undefined };
@@ -1598,6 +1827,7 @@ export async function dispatchReplyFromConfig(
     let finalDeliveryFailed = false;
     const shouldDeliverDespiteSourceReplySuppression = (reply: ReplyPayload) =>
       suppressAutomaticSourceDelivery &&
+      ctx.InboundEventKind !== "room_event" &&
       !sendPolicyDenied &&
       getReplyPayloadMetadata(reply)?.deliverDespiteSourceReplySuppression === true;
     for (const reply of replies) {
@@ -1607,6 +1837,20 @@ export async function dispatchReplyFromConfig(
         continue;
       }
       if (suppressDelivery && !shouldDeliverDespiteSourceReplySuppression(reply)) {
+        if (hasOutboundReplyContent(reply, { trimText: true })) {
+          logVerbose(
+            [
+              `dispatch-from-config: final reply suppressed by ${deliverySuppressionReason || "source delivery policy"}`,
+              `(session=${acpDispatchSessionKey ?? sessionKey ?? "unknown"}`,
+              `provider=${ctx.Provider ?? "unknown"}`,
+              `surface=${ctx.Surface ?? "unknown"}`,
+              `chatType=${chatType ?? "unknown"}`,
+              `inboundEventKind=${ctx.InboundEventKind ?? "unknown"}`,
+              `message=${ctx.MessageSidFull ?? ctx.MessageSid ?? "unknown"}`,
+              `${formatSuppressedReplyPayloadForLog(reply)})`,
+            ].join(" "),
+          );
+        }
         continue;
       }
       attemptedFinalDelivery = true;
@@ -1655,11 +1899,16 @@ export async function dispatchReplyFromConfig(
           if (ttsSyntheticReply.mediaUrl) {
             // Send TTS-only payload (no text, just audio) so it doesn't duplicate the block content.
             // Keep the spoken text only for hooks/archive consumers.
-            const ttsOnlyPayload: ReplyPayload = {
-              mediaUrl: ttsSyntheticReply.mediaUrl,
-              audioAsVoice: ttsSyntheticReply.audioAsVoice,
-              spokenText: accumulatedBlockTtsText,
-            };
+            const ttsOnlyPayload = markReplyPayloadAsTtsSupplement(
+              {
+                mediaUrl: ttsSyntheticReply.mediaUrl,
+                audioAsVoice: ttsSyntheticReply.audioAsVoice,
+                spokenText: accumulatedBlockTtsText,
+                trustedLocalMedia: true,
+              },
+              accumulatedBlockTtsText,
+              { visibleTextAlreadyDelivered: true },
+            );
             const normalizedTtsOnlyPayload = await normalizeReplyMediaPayload(ttsOnlyPayload);
             const result = await routeReplyToOriginating(normalizedTtsOnlyPayload);
             if (result) {

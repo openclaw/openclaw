@@ -1,6 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
-import { watch } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -38,51 +37,18 @@ async function addCompileCacheProbe(fixtureRoot: string): Promise<void> {
   );
 }
 
-async function waitForFile(filePath: string, timeoutMs: number): Promise<string> {
-  try {
-    return await fs.readFile(filePath, "utf8");
-  } catch {
-    // Wait below.
+async function waitForJsonFile<T>(filePath: string, timeoutMs: number): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
+  let lastError: unknown;
+  while (Date.now() <= deadline) {
+    try {
+      return JSON.parse(await fs.readFile(filePath, "utf8")) as T;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
   }
-
-  const signal = AbortSignal.timeout(timeoutMs);
-  return await new Promise<string>((resolve, reject) => {
-    let settled = false;
-    let watcher: ReturnType<typeof watch> | undefined;
-    const fileName = path.basename(filePath);
-
-    const cleanup = () => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      watcher?.close();
-    };
-    const tryRead = async () => {
-      try {
-        const content = await fs.readFile(filePath, "utf8");
-        cleanup();
-        resolve(content);
-      } catch {
-        // Keep watching until the deadline aborts.
-      }
-    };
-
-    signal.addEventListener(
-      "abort",
-      () => {
-        cleanup();
-        reject(new Error(`timed out waiting for ${filePath}`));
-      },
-      { once: true },
-    );
-    watcher = watch(path.dirname(filePath), { signal }, (_event, changedFileName) => {
-      if (!changedFileName || changedFileName.toString() === fileName) {
-        void tryRead();
-      }
-    });
-    void tryRead();
-  });
+  throw new Error(`timed out waiting for parseable JSON in ${filePath}`, { cause: lastError });
 }
 
 async function waitForProcessExit(
@@ -139,6 +105,72 @@ describe("openclaw launcher", () => {
     cleanupTempDirs(fixtureRoots);
   });
 
+  it("keeps the bootstrap Node floor aligned with package and runtime guards", async () => {
+    const [launcher, runtimeGuard, packageJsonRaw] = await Promise.all([
+      fs.readFile(path.resolve(process.cwd(), "openclaw.mjs"), "utf8"),
+      fs.readFile(path.resolve(process.cwd(), "src/infra/runtime-guard.ts"), "utf8"),
+      fs.readFile(path.resolve(process.cwd(), "package.json"), "utf8"),
+    ]);
+    const packageJson = JSON.parse(packageJsonRaw) as { engines?: { node?: string } };
+    const launcherMatch = launcher.match(
+      /const MIN_NODE_MAJOR = (\d+);\s+const MIN_NODE_MINOR = (\d+);/u,
+    );
+    const runtimeMatch = runtimeGuard.match(
+      /const MIN_NODE: Semver = \{ major: (\d+), minor: (\d+), patch: (\d+) \};/u,
+    );
+    const engineMatch = packageJson.engines?.node?.match(/^>=(\d+)\.(\d+)\.(\d+)$/u);
+
+    if (!launcherMatch) {
+      throw new Error("openclaw.mjs MIN_NODE_* constants were not found");
+    }
+    if (!runtimeMatch) {
+      throw new Error("src/infra/runtime-guard.ts MIN_NODE constant was not found");
+    }
+    if (!engineMatch) {
+      throw new Error("package.json engines.node must use >=<major>.<minor>.<patch>");
+    }
+    const [engineMajor, engineMinor, enginePatch] = engineMatch.slice(1, 4).map(Number);
+    const launcherMinimumLabel = `${engineMajor}.${engineMinor}`;
+
+    expect(
+      [Number(launcherMatch[1]), Number(launcherMatch[2]), 0],
+      "openclaw.mjs MIN_NODE_* must match package.json engines.node",
+    ).toEqual([engineMajor, engineMinor, enginePatch]);
+    expect(
+      runtimeMatch.slice(1, 4).map(Number),
+      "src/infra/runtime-guard.ts MIN_NODE must match package.json engines.node",
+    ).toEqual([engineMajor, engineMinor, enginePatch]);
+
+    const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+    const mockedNodeVersion =
+      engineMinor > 0 ? `${engineMajor}.${engineMinor - 1}.0` : `${engineMajor - 1}.999.0`;
+    const mockNodeVersionPath = path.join(fixtureRoot, "mock-node-version.mjs");
+    await fs.writeFile(
+      mockNodeVersionPath,
+      [
+        "Object.defineProperty(process.versions, 'node', {",
+        `  value: ${JSON.stringify(mockedNodeVersion)},`,
+        "});",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      ["--import", mockNodeVersionPath, path.join(fixtureRoot, "openclaw.mjs"), "--help"],
+      {
+        cwd: fixtureRoot,
+        env: launcherEnv(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      `openclaw: Node.js v${launcherMinimumLabel}+ is required (current: v${mockedNodeVersion}).`,
+    );
+  });
+
   it("surfaces transitive entry import failures instead of masking them as missing dist", async () => {
     const fixtureRoot = await makeLauncherFixture(fixtureRoots);
     await fs.writeFile(
@@ -169,6 +201,144 @@ describe("openclaw launcher", () => {
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("missing dist/entry.(m)js");
+  });
+
+  it("uses precomputed root help when plugin config does not invalidate it", async () => {
+    const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "cli-startup-metadata.json"),
+      JSON.stringify({ rootHelpText: "PRECOMPUTED help\n" }),
+      "utf8",
+    );
+
+    const result = spawnSync(process.execPath, [path.join(fixtureRoot, "openclaw.mjs"), "--help"], {
+      cwd: fixtureRoot,
+      env: launcherEnv(),
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("PRECOMPUTED help\n");
+  });
+
+  it("defers root help to the runtime entry when plugin config can change help", async () => {
+    const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+    const configPath = path.join(fixtureRoot, "openclaw.json");
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "cli-startup-metadata.json"),
+      JSON.stringify({ rootHelpText: "PRECOMPUTED memory help\n" }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "entry.js"),
+      "process.stdout.write('RUNTIME ENTRY\\n');\n",
+      "utf8",
+    );
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({ plugins: { slots: { memory: "memory-lancedb" } } }),
+      "utf8",
+    );
+
+    const result = spawnSync(process.execPath, [path.join(fixtureRoot, "openclaw.mjs"), "--help"], {
+      cwd: fixtureRoot,
+      env: launcherEnv({ OPENCLAW_CONFIG_PATH: configPath }),
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("RUNTIME ENTRY\n");
+    expect(result.stdout).not.toContain("PRECOMPUTED");
+  });
+
+  it("checks the OPENCLAW_HOME default config path before using precomputed root help", async () => {
+    const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+    const openclawHome = path.join(fixtureRoot, "home");
+    const configDir = path.join(openclawHome, ".openclaw");
+    await fs.mkdir(configDir, { recursive: true });
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "cli-startup-metadata.json"),
+      JSON.stringify({ rootHelpText: "PRECOMPUTED memory help\n" }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "entry.js"),
+      "process.stdout.write('RUNTIME ENTRY\\n');\n",
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(configDir, "openclaw.json"),
+      JSON.stringify({ plugins: { slots: { memory: "memory-lancedb" } } }),
+      "utf8",
+    );
+
+    const result = spawnSync(process.execPath, [path.join(fixtureRoot, "openclaw.mjs"), "--help"], {
+      cwd: fixtureRoot,
+      env: launcherEnv({ OPENCLAW_HOME: openclawHome }),
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("RUNTIME ENTRY\n");
+    expect(result.stdout).not.toContain("PRECOMPUTED");
+  });
+
+  it("checks legacy config candidates before using precomputed root help", async () => {
+    const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+    const home = path.join(fixtureRoot, "home");
+    const legacyConfigDir = path.join(home, ".clawdbot");
+    await fs.mkdir(legacyConfigDir, { recursive: true });
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "cli-startup-metadata.json"),
+      JSON.stringify({ rootHelpText: "PRECOMPUTED memory help\n" }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "entry.js"),
+      "process.stdout.write('RUNTIME ENTRY\\n');\n",
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(legacyConfigDir, "clawdbot.json"),
+      JSON.stringify({ plugins: { slots: { memory: "memory-lancedb" } } }),
+      "utf8",
+    );
+
+    const result = spawnSync(process.execPath, [path.join(fixtureRoot, "openclaw.mjs"), "--help"], {
+      cwd: fixtureRoot,
+      env: launcherEnv({ HOME: home, OPENCLAW_HOME: undefined }),
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("RUNTIME ENTRY\n");
+    expect(result.stdout).not.toContain("PRECOMPUTED");
+  });
+
+  it("defers root help when the active config has includes", async () => {
+    const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+    const configPath = path.join(fixtureRoot, "openclaw.json");
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "cli-startup-metadata.json"),
+      JSON.stringify({ rootHelpText: "PRECOMPUTED memory help\n" }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "entry.js"),
+      "process.stdout.write('RUNTIME ENTRY\\n');\n",
+      "utf8",
+    );
+    await fs.writeFile(configPath, JSON.stringify({ $include: "memory.json" }), "utf8");
+
+    const result = spawnSync(process.execPath, [path.join(fixtureRoot, "openclaw.mjs"), "--help"], {
+      cwd: fixtureRoot,
+      env: launcherEnv({ OPENCLAW_CONFIG_PATH: configPath }),
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("RUNTIME ENTRY\n");
+    expect(result.stdout).not.toContain("PRECOMPUTED");
   });
 
   it("explains how to recover from an unbuilt source install", async () => {
@@ -250,7 +420,7 @@ describe("openclaw launcher", () => {
       let respawnChildPid: number | undefined;
 
       try {
-        const childInfo = JSON.parse(await waitForFile(childInfoPath, 5000)) as { pid: number };
+        const childInfo = await waitForJsonFile<{ pid: number }>(childInfoPath, 5000);
         respawnChildPid = childInfo.pid;
 
         launcher.kill("SIGTERM");
@@ -301,7 +471,7 @@ describe("openclaw launcher", () => {
       let respawnChildPid: number | undefined;
 
       try {
-        const childInfo = JSON.parse(await waitForFile(childInfoPath, 5000)) as { pid: number };
+        const childInfo = await waitForJsonFile<{ pid: number }>(childInfoPath, 5000);
         respawnChildPid = childInfo.pid;
 
         launcher.kill("SIGTERM");

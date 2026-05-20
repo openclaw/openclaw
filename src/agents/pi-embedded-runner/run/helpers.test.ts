@@ -1,5 +1,6 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
+import { createUsageAccumulator } from "../usage-accumulator.js";
 import {
   buildErrorAgentMeta,
   resolveFinalAssistantRawText,
@@ -86,7 +87,7 @@ describe("buildErrorAgentMeta", () => {
         sessionFile: "/tmp/session-rotated.jsonl",
         provider: "anthropic",
         model: "claude-opus-4-6",
-        usageAccumulator: {},
+        usageAccumulator: createUsageAccumulator(),
         lastRunPromptUsage: undefined,
       }),
     ).toMatchObject({

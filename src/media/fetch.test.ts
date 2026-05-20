@@ -539,6 +539,24 @@ describe("readRemoteMediaBuffer", () => {
     });
   });
 
+  it("passes request timeout through the guarded fetch path", async () => {
+    const fetchImpl = vi.fn(async () => new Response("ok", { status: 200 }));
+
+    await readRemoteMediaBuffer({
+      url: "https://example.com/file.bin",
+      fetchImpl,
+      lookupFn: makeLookupFn(),
+      maxBytes: 1024,
+      timeoutMs: 1234,
+    });
+
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+    expect(requireFetchGuardRequest()).toMatchObject({
+      url: "https://example.com/file.bin",
+      timeoutMs: 1234,
+    });
+  });
+
   it("streams successful responses directly into the media store", async () => {
     const fetchImpl = vi.fn(
       async () =>
@@ -564,6 +582,70 @@ describe("readRemoteMediaBuffer", () => {
     expect(saved.path).not.toMatch(/photo---/);
     await expect(fs.readFile(saved.path)).resolves.toStrictEqual(Buffer.from([1, 2, 3, 4]));
   });
+
+  it("decodes URL path basenames when deriving remote media filenames", async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(makeStream([new Uint8Array([1, 2, 3])]), {
+          status: 200,
+          headers: { "content-type": "application/pdf" },
+        }),
+    );
+
+    const saved = await saveRemoteMedia({
+      url: "https://example.com/files/My%20Report.pdf",
+      fetchImpl,
+      lookupFn: makeLookupFn(),
+      maxBytes: 8,
+    });
+
+    expect(saved.fileName).toBe("My Report.pdf");
+  });
+
+  it("keeps raw URL path basenames when percent escapes are malformed", async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(makeStream([new Uint8Array([1, 2, 3])]), {
+          status: 200,
+          headers: { "content-type": "application/pdf" },
+        }),
+    );
+
+    const saved = await saveRemoteMedia({
+      url: "https://example.com/files/bad%E0%A4%A.pdf",
+      fetchImpl,
+      lookupFn: makeLookupFn(),
+      maxBytes: 8,
+    });
+
+    expect(saved.fileName).toBe("bad%E0%A4%A.pdf");
+  });
+
+  it.each([
+    ["https://example.com/files/reports%2FQ1.pdf", "reports_Q1.pdf"],
+    ["https://example.com/files/reports%5CQ1.pdf", "reports_Q1.pdf"],
+    ["https://example.com/files/reports%2F%2FQ1.pdf", "reports__Q1.pdf"],
+  ])(
+    "keeps decoded URL fallback separators inside the selected basename",
+    async (url, fileName) => {
+      const fetchImpl = vi.fn(
+        async () =>
+          new Response(makeStream([new Uint8Array([1, 2, 3])]), {
+            status: 200,
+            headers: { "content-type": "application/pdf" },
+          }),
+      );
+
+      const saved = await saveRemoteMedia({
+        url,
+        fetchImpl,
+        lookupFn: makeLookupFn(),
+        maxBytes: 8,
+      });
+
+      expect(saved.fileName).toBe(fileName);
+    },
+  );
 
   it("saves bodyless successful responses without unbounded buffering", async () => {
     const saved = await saveResponseMedia(new Response(null, { status: 204 }), {

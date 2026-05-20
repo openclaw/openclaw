@@ -245,6 +245,25 @@ function findMatchingToolCallCloseIndex(text: string, start: number, tagName: st
   return -1;
 }
 
+function findAdjacentOpeningToolCallTag(
+  text: string,
+  start: number,
+  tagName: string,
+): ParsedToolCallTag | null {
+  let idx = start;
+  while (idx < text.length && /\s/.test(text[idx])) {
+    idx += 1;
+  }
+  if (text[idx] !== "<") {
+    return null;
+  }
+  const tag = parseToolCallTagAt(text, idx);
+  if (!tag || tag.isClose || tag.tagName !== tagName) {
+    return null;
+  }
+  return tag;
+}
+
 function parseToolCallTagAt(text: string, start: number): ParsedToolCallTag | null {
   if (text[start] !== "<") {
     return null;
@@ -299,7 +318,10 @@ function parseToolCallTagAt(text: string, start: number): ParsedToolCallTag | nu
 
 export function stripToolCallXmlTags(
   text: string,
-  options: { stripFunctionCallsXmlPayloads?: boolean } = {},
+  options: {
+    stripFunctionCallsXmlPayloads?: boolean;
+    stripFunctionResponseAfterPluralToolCalls?: boolean;
+  } = {},
 ): string {
   if (!text || !TOOL_CALL_QUICK_RE.test(text)) {
     return text;
@@ -355,11 +377,24 @@ export function stripToolCallXmlTags(
         continue;
       }
       const payloadStart = tag.isTruncated ? tag.contentStart : tag.end;
+      const isPluralToolCallWrapper =
+        tag.tagName === "function_calls" || tag.tagName === "tool_calls";
+      const matchingCloseStart = isPluralToolCallWrapper
+        ? findMatchingToolCallCloseIndex(text, tag.end, tag.tagName)
+        : -1;
+      const matchingCloseTag =
+        matchingCloseStart === -1 ? null : parseToolCallTagAt(text, matchingCloseStart);
+      const shouldStripPluralWrapperBeforeResponse =
+        options.stripFunctionResponseAfterPluralToolCalls === true &&
+        isPluralToolCallWrapper &&
+        matchingCloseTag !== null &&
+        findAdjacentOpeningToolCallTag(text, matchingCloseTag.end, "function_response") !== null;
       const shouldDetectXmlPayload =
         tag.tagName === "tool_call" ||
         tag.tagName === "function" ||
-        (options.stripFunctionCallsXmlPayloads === true &&
-          (tag.tagName === "function_calls" || tag.tagName === "tool_calls"));
+        ((options.stripFunctionCallsXmlPayloads === true ||
+          shouldStripPluralWrapperBeforeResponse) &&
+          isPluralToolCallWrapper);
       const payloadKind = shouldDetectXmlPayload
         ? detectToolCallPayloadKind(text, payloadStart)
         : TOOL_CALL_JSON_PAYLOAD_START_RE.test(text.slice(payloadStart))
@@ -732,6 +767,7 @@ type AssistantVisibleTextPipelineOptions = {
   preserveDowngradedToolText?: boolean;
   preserveMinimaxToolXml?: boolean;
   stripFunctionCallsXmlPayloads?: boolean;
+  stripFunctionResponseAfterPluralToolCalls?: boolean;
   reasoningMode: ReasoningTagMode;
   reasoningTrim: ReasoningTagTrim;
   stageOrder: "reasoning-first" | "reasoning-last";
@@ -743,6 +779,7 @@ const ASSISTANT_VISIBLE_TEXT_PIPELINE_OPTIONS: Record<
 > = {
   delivery: {
     finalTrim: "both",
+    stripFunctionResponseAfterPluralToolCalls: true,
     reasoningMode: "strict",
     reasoningTrim: "both",
     stageOrder: "reasoning-last",
@@ -794,6 +831,7 @@ function applyAssistantVisibleTextStagePipeline(
     cleaned = stripRelevantMemoriesTags(cleaned);
     cleaned = stripToolCallXmlTags(cleaned, {
       stripFunctionCallsXmlPayloads: options.stripFunctionCallsXmlPayloads,
+      stripFunctionResponseAfterPluralToolCalls: options.stripFunctionResponseAfterPluralToolCalls,
     });
     cleaned = stripLegacyBracketToolCallBlocks(cleaned);
     cleaned = stripPlainTextToolCallBlocks(cleaned);
