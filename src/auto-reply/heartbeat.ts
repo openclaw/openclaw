@@ -64,6 +64,10 @@ export function isHeartbeatContentEffectivelyEmpty(content: string | undefined |
     if (/^```[A-Za-z0-9_-]*$/.test(trimmed)) {
       continue;
     }
+    // Skip standalone markdown link lines (doc links like "- [Heartbeat config](/gateway/config-agents)")
+    if (/^[-*+]\s+\[[^\]]+\]\([^)]+\)\s*$/.test(trimmed) || /^\[[^\]]+\]\([^)]+\)\s*$/.test(trimmed)) {
+      continue;
+    }
     // Found a non-empty, non-comment line - there's actionable content
     return false;
   }
