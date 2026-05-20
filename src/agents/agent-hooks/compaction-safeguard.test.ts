@@ -139,11 +139,12 @@ const createCompactionEvent = (params: { messageText: string; tokensBefore: numb
 
 const createCompactionContext = (params: {
   sessionManager: ExtensionContext["sessionManager"];
+  model?: NonNullable<ExtensionContext["model"]>;
   getApiKeyAndHeadersMock?: ReturnType<typeof vi.fn>;
   getApiKeyMock?: ReturnType<typeof vi.fn>;
 }) =>
   ({
-    model: undefined,
+    model: params.model,
     sessionManager: params.sessionManager,
     modelRegistry: {
       getApiKeyAndHeaders:
@@ -162,6 +163,7 @@ async function runCompactionScenario(params: {
   sessionManager: ExtensionContext["sessionManager"];
   event: unknown;
   apiKey: string | null;
+  ctxModel?: NonNullable<ExtensionContext["model"]>;
 }) {
   const compactionHandler = createCompactionHandler();
   const getApiKeyAndHeadersMock = vi
@@ -173,6 +175,7 @@ async function runCompactionScenario(params: {
     );
   const mockContext = createCompactionContext({
     sessionManager: params.sessionManager,
+    model: params.ctxModel,
     getApiKeyAndHeadersMock,
   });
   const result = (await compactionHandler(params.event, mockContext)) as {
@@ -1969,6 +1972,35 @@ describe("compaction-safeguard extension model fallback", () => {
     // Verify runtime.model is still available (for completeness)
     const retrieved = getCompactionSafeguardRuntime(sessionManager);
     expect(retrieved?.model).toEqual(model);
+  });
+
+  it("prefers runtime.model over ctx.model so safeguard auto-compaction uses the resolved compaction model", async () => {
+    const sessionManager = stubSessionManager();
+    const sessionModel = createAnthropicModelFixture({
+      id: "claude-haiku-3-5",
+      name: "Claude Haiku 3.5",
+    });
+    const compactionModel = createAnthropicModelFixture({
+      id: "claude-opus-4-5",
+      name: "Claude Opus 4.5",
+    });
+
+    setCompactionSafeguardRuntime(sessionManager, { model: compactionModel });
+
+    const mockEvent = createCompactionEvent({
+      messageText: "test message",
+      tokensBefore: 1000,
+    });
+    const { result, getApiKeyAndHeadersMock } = await runCompactionScenario({
+      sessionManager,
+      event: mockEvent,
+      apiKey: null,
+      ctxModel: sessionModel,
+    });
+
+    expect(result).toEqual({ cancel: true });
+    expect(getApiKeyAndHeadersMock).toHaveBeenCalledWith(compactionModel);
+    expect(getApiKeyAndHeadersMock).not.toHaveBeenCalledWith(sessionModel);
   });
 
   it("cancels compaction when both ctx.model and runtime.model are undefined", async () => {

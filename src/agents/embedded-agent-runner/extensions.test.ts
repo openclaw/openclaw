@@ -1,5 +1,6 @@
 import type { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import type { Api, Model } from "openclaw/plugin-sdk/llm";
+import type { ModelRegistry } from "../../llm/model-registry.js";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { getCompactionSafeguardRuntime } from "../agent-hooks/compaction-safeguard-runtime.js";
@@ -119,6 +120,58 @@ describe("buildEmbeddedExtensionFactories", () => {
     expect(getCompactionSafeguardRuntime(sessionManager)?.workspaceDir).toBe(
       "/tmp/openclaw-workspace",
     );
+  });
+
+  it("resolves per-agent compaction.model into the safeguard runtime", () => {
+    const sessionManager = {} as SessionManager;
+    const sessionModel = {
+      id: "claude-haiku-3-5",
+      provider: "anthropic",
+      api: "anthropic",
+      contextWindow: 200_000,
+    } as Model<Api>;
+    const compactionModel = {
+      id: "claude-opus-4-5",
+      provider: "anthropic",
+      api: "anthropic",
+      contextWindow: 50_000,
+    } as Model<Api>;
+    const modelRegistry = {
+      find: vi.fn((provider: string, modelId: string) =>
+        provider === "anthropic" && modelId === "claude-opus-4-5" ? compactionModel : null,
+      ),
+    } as unknown as ModelRegistry;
+
+    buildEmbeddedExtensionFactories({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              mode: "safeguard",
+            },
+          },
+          list: [
+            {
+              id: "worker",
+              compaction: {
+                mode: "safeguard",
+                model: "anthropic/claude-opus-4-5",
+              },
+            },
+          ],
+        },
+      } as OpenClawConfig,
+      sessionManager,
+      agentId: "worker",
+      provider: "anthropic",
+      modelId: "claude-haiku-3-5",
+      model: sessionModel,
+      modelRegistry,
+    });
+
+    const runtime = getCompactionSafeguardRuntime(sessionManager);
+    expect(runtime?.model).toBe(compactionModel);
+    expect(runtime?.contextWindowTokens).toBe(50_000);
   });
 
   it("enables cache-ttl pruning for custom anthropic-messages providers", () => {
