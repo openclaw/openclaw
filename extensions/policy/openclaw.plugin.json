@@ -30,11 +30,11 @@
       },
       "expectedHash": {
         "type": "string",
-        "description": "Optional sha256 hash for hash-locking the approved policy artifact."
+        "description": "Optional sha256 hash for hash-locking the approved policy artifact from trusted config."
       },
       "expectedAttestationHash": {
         "type": "string",
-        "description": "Optional sha256 hash for the last accepted clean policy check."
+        "description": "Optional sha256 hash for the last accepted clean policy check from trusted config."
       },
       "path": {
         "type": "string",

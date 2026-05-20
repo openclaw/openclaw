@@ -1,8 +1,5 @@
 import type { ExecApprovalDecision } from "./exec-approvals.js";
-import {
-  policyApprovalMetadataLines,
-  type ApprovalMetadataValue,
-} from "./policy-approval-metadata.js";
+import { policyApprovalMetadataLines } from "./policy-approval-metadata.js";
 
 type PluginApprovalJsonValue =
   | string
@@ -27,7 +24,6 @@ export type PluginApprovalRequestPayload = {
   turnSourceTo?: string | null;
   turnSourceAccountId?: string | null;
   turnSourceThreadId?: string | number | null;
-  metadata?: ApprovalMetadataValue;
 };
 
 export type PluginApprovalRequest = {

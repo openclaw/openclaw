@@ -36,8 +36,10 @@ stable attestation hash.
 When `runtimeToolPolicy` is enabled, the Policy plugin registers a trusted tool
 policy that blocks unverifiable governed tool calls and requests approval for
 critical or irreversible governed tools. If `expectedAttestationHash` is
-configured, the same gate fails closed when current policy evidence no longer
-matches the accepted clean policy check.
+configured by a trusted operator, gateway, or supervisor, the same gate fails
+closed when current policy evidence no longer matches the accepted clean policy
+check. If the governed workspace can edit its own OpenClaw config, the hash is
+an advisory audit lock rather than a boundary against that workspace.
 
 Policy findings do not have to be backed by oc-path. Config and workspace
 findings use `oc://` targets only when the system can point to a resolvable
