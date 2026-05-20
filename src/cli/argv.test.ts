@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   buildParseArgv,
   getFlagValue,
@@ -20,6 +20,20 @@ import {
 } from "./argv.js";
 
 describe("argv helpers", () => {
+  let originalPrivateQaCli: string | undefined;
+
+  beforeEach(() => {
+    originalPrivateQaCli = process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI;
+  });
+
+  afterEach(() => {
+    if (originalPrivateQaCli === undefined) {
+      delete process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI;
+    } else {
+      process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI = originalPrivateQaCli;
+    }
+  });
+
   it.each([
     {
       name: "help flag",
@@ -233,6 +247,18 @@ describe("argv helpers", () => {
     },
   ])("detects help/version invocations: $name", ({ argv, expected }) => {
     expect(isHelpOrVersionInvocation(argv)).toBe(expected);
+  });
+
+  it("keeps private qa descriptors out of root command classification unless enabled", () => {
+    delete process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI;
+    expect(isHelpOrVersionInvocation(["node", "openclaw", "qa", "scenario", "help"])).toBe(
+      true,
+    );
+
+    process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI = "1";
+    expect(isHelpOrVersionInvocation(["node", "openclaw", "qa", "scenario", "help"])).toBe(
+      false,
+    );
   });
 
   it.each([

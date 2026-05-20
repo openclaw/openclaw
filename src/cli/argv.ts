@@ -6,20 +6,24 @@ import {
 } from "../infra/cli-root-options.js";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { CORE_CLI_COMMAND_DESCRIPTORS } from "./program/core-command-descriptors.js";
-import { SUB_CLI_DESCRIPTORS } from "./program/subcli-descriptors.js";
+import { getSubCliEntries } from "./program/subcli-descriptors.js";
 
 const HELP_FLAGS = new Set(["-h", "--help"]);
 const VERSION_FLAGS = new Set(["-V", "--version"]);
 const ROOT_VERSION_ALIAS_FLAG = "-v";
-const ROOT_COMMAND_DESCRIPTORS = [...CORE_CLI_COMMAND_DESCRIPTORS, ...SUB_CLI_DESCRIPTORS];
-const KNOWN_ROOT_COMMANDS: ReadonlySet<string> = new Set(
-  ROOT_COMMAND_DESCRIPTORS.map((descriptor) => descriptor.name),
-);
-const ROOT_COMMANDS_WITH_SUBCOMMANDS: ReadonlySet<string> = new Set(
-  ROOT_COMMAND_DESCRIPTORS.filter((descriptor) => descriptor.hasSubcommands).map(
-    (descriptor) => descriptor.name,
-  ),
-);
+function getRootCommandDescriptors() {
+  return [...CORE_CLI_COMMAND_DESCRIPTORS, ...getSubCliEntries()];
+}
+
+function isKnownRootCommand(command: string): boolean {
+  return getRootCommandDescriptors().some((descriptor) => descriptor.name === command);
+}
+
+function rootCommandHasSubcommands(command: string): boolean {
+  return getRootCommandDescriptors().some(
+    (descriptor) => descriptor.name === command && descriptor.hasSubcommands,
+  );
+}
 
 export function hasHelpOrVersion(argv: string[]): boolean {
   return (
@@ -65,10 +69,10 @@ export function isHelpOrVersionInvocation(argv: string[]): boolean {
     const [primary] = positionals;
     // Positional `help` may be a command argument for known leaf commands.
     // Unknown roots are treated as plugin command namespaces.
-    if (!primary || !KNOWN_ROOT_COMMANDS.has(primary)) {
+    if (!primary || !isKnownRootCommand(primary)) {
       return true;
     }
-    if (positionals.length === 2 && ROOT_COMMANDS_WITH_SUBCOMMANDS.has(primary)) {
+    if (positionals.length === 2 && rootCommandHasSubcommands(primary)) {
       return true;
     }
     return false;
