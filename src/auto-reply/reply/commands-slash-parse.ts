@@ -10,13 +10,25 @@ export type ParsedSlashCommand =
   | { ok: true; action: string; args: string }
   | { ok: false; message: string };
 
-function parseSlashCommandActionArgs(raw: string, slash: string): SlashCommandParseResult {
+export function extractSlashCommandRest(raw: string, slash: string): string | null {
   const trimmed = raw.trim();
   const slashLower = normalizeLowercaseStringOrEmpty(slash);
   if (!normalizeLowercaseStringOrEmpty(trimmed).startsWith(slashLower)) {
+    return null;
+  }
+  const nextChar = trimmed.charAt(slash.length);
+  if (nextChar && !/[\s:]/.test(nextChar)) {
+    return null;
+  }
+  const restStart = nextChar === ":" ? slash.length + 1 : slash.length;
+  return trimmed.slice(restStart).trim();
+}
+
+function parseSlashCommandActionArgs(raw: string, slash: string): SlashCommandParseResult {
+  const rest = extractSlashCommandRest(raw, slash);
+  if (rest === null) {
     return { kind: "no-match" };
   }
-  const rest = trimmed.slice(slash.length).trim();
   if (!rest) {
     return { kind: "empty" };
   }

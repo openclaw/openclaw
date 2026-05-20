@@ -6,7 +6,11 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
-import { buildModelsProviderData, handleModelsCommand } from "./commands-models.js";
+import {
+  buildModelsProviderData,
+  handleModelsCommand,
+  resolveModelsCommandReply,
+} from "./commands-models.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 const modelCatalogMocks = vi.hoisted(() => ({
@@ -188,6 +192,24 @@ function firstAuthCheckerParams() {
 }
 
 describe("handleModelsCommand", () => {
+  it("ignores longer slash command names that share the /models prefix", async () => {
+    const result = await handleModelsCommand(buildParams("/models-check openai"), true);
+
+    expect(result).toBeNull();
+    expect(modelCatalogMocks.loadModelCatalog).not.toHaveBeenCalled();
+  });
+
+  it("ignores longer slash command names in the shared /models reply resolver", async () => {
+    const result = await resolveModelsCommandReply({
+      cfg: buildParams("/models-check openai").cfg,
+      commandBodyNormalized: "/models-check openai",
+      surface: "discord",
+    });
+
+    expect(result).toBeNull();
+    expect(modelCatalogMocks.loadModelCatalog).not.toHaveBeenCalled();
+  });
+
   it("shows a simple providers menu on text surfaces", async () => {
     const result = await handleModelsCommand(buildParams("/models"), true);
 

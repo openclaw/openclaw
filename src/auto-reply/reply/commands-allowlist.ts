@@ -20,6 +20,7 @@ import {
   requireCommandFlagEnabled,
   requireGatewayClientScope,
 } from "./command-gates.js";
+import { extractSlashCommandRest } from "./commands-slash-parse.js";
 import type { CommandHandler } from "./commands-types.js";
 import { applyAllowlistConfigMutation, AutoReplyConfigMutationError } from "./config-mutations.js";
 import { resolveConfigWriteDeniedText } from "./config-write-authorization.js";
@@ -74,12 +75,10 @@ function resolveAllowlistAccountId(params: {
 }
 
 function parseAllowlistCommand(raw: string): AllowlistCommand | null {
-  const trimmed = raw.trim();
-  const trimmedLower = normalizeOptionalLowercaseString(trimmed) ?? "";
-  if (!trimmedLower.startsWith("/allowlist")) {
+  const rest = extractSlashCommandRest(raw, "/allowlist");
+  if (rest === null) {
     return null;
   }
-  const rest = trimmed.slice("/allowlist".length).trim();
   if (!rest) {
     return { action: "list", scope: "dm" };
   }

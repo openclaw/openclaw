@@ -15,6 +15,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
+import { extractSlashCommandRest } from "./commands-slash-parse.js";
 import type { CommandHandler } from "./commands-types.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 
@@ -39,14 +40,9 @@ function extractCompactInstructions(params: {
   if (!trimmed) {
     return undefined;
   }
-  const lowered = normalizeLowercaseStringOrEmpty(trimmed);
-  const prefix = lowered.startsWith("/compact") ? "/compact" : null;
-  if (!prefix) {
+  const rest = extractSlashCommandRest(trimmed, "/compact");
+  if (rest === null) {
     return undefined;
-  }
-  let rest = trimmed.slice(prefix.length).trimStart();
-  if (rest.startsWith(":")) {
-    rest = rest.slice(1).trimStart();
   }
   return rest.length ? rest : undefined;
 }
@@ -177,10 +173,7 @@ function resolveManualCompactContextModelId(params: {
 }
 
 export const handleCompactCommand: CommandHandler = async (params) => {
-  const compactRequested =
-    params.command.commandBodyNormalized === "/compact" ||
-    params.command.commandBodyNormalized.startsWith("/compact ");
-  if (!compactRequested) {
+  if (extractSlashCommandRest(params.command.commandBodyNormalized, "/compact") === null) {
     return null;
   }
   if (!params.command.isAuthorizedSender) {

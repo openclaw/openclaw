@@ -110,6 +110,19 @@ describe("handleCompactCommand", () => {
     expect(vi.mocked(compactEmbeddedPiSession)).not.toHaveBeenCalled();
   });
 
+  it("returns null when a longer slash command shares the /compact prefix", async () => {
+    const result = await handleCompactCommand(
+      buildCompactParams("/compact-check now", {
+        commands: { text: true },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+      } as OpenClawConfig),
+      true,
+    );
+
+    expect(result).toBeNull();
+    expect(vi.mocked(compactEmbeddedPiSession)).not.toHaveBeenCalled();
+  });
+
   it("rejects unauthorized /compact commands", async () => {
     const params = buildCompactParams("/compact", {
       commands: { text: true },
