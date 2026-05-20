@@ -2387,15 +2387,22 @@ export function projectConfigOntoRuntimeSourceSnapshot(config: OpenClawConfig): 
   return coerceConfig(applyMergePatch(projectedSource, runtimePatch));
 }
 
-export function loadConfig(): OpenClawConfig {
+export function loadConfig(options?: { skipPluginValidation?: boolean }): OpenClawConfig {
   // First successful load becomes the process snapshot. Long-lived runtimes
   // should swap this snapshot via explicit reload/watcher paths instead of
   // reparsing openclaw.json on hot code paths.
-  return loadPinnedRuntimeConfig(() => createConfigIO().loadConfig());
+  //
+  // `skipPluginValidation` lets pure-client callers (e.g. the TUI talking to a
+  // remote gateway) load the config without triggering the plugin metadata
+  // snapshot, which is otherwise pulled in by plugin-aware config validation
+  // and is the dominant cost of cold startup.
+  return loadPinnedRuntimeConfig(() =>
+    createConfigIO(options?.skipPluginValidation ? { pluginValidation: "skip" } : {}).loadConfig(),
+  );
 }
 
-export function getRuntimeConfig(): OpenClawConfig {
-  return loadConfig();
+export function getRuntimeConfig(options?: { skipPluginValidation?: boolean }): OpenClawConfig {
+  return loadConfig(options);
 }
 
 export async function readBestEffortConfig(): Promise<OpenClawConfig> {
