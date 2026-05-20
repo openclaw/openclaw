@@ -3101,6 +3101,59 @@ describe("collectCodexRouteWarnings", () => {
     ).toBe("pi");
   });
 
+  it("does not apply pre-existing canonical default runtime pins to listed-agent legacy refs", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/*": {
+              agentRuntime: { id: "pi" },
+            },
+          },
+        },
+        list: [
+          {
+            id: "worker",
+            model: "openai-codex/gpt-5.4",
+          },
+        ],
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      resolveAgentHarnessPolicy({
+        provider: "openai-codex",
+        modelId: "gpt-5.4",
+        agentId: "worker",
+        config: cfg,
+      }).runtime,
+    ).toBe("codex");
+
+    const result = maybeRepairCodexRoutes({
+      cfg,
+      shouldRepair: true,
+    });
+
+    expect(result.cfg.agents?.defaults?.models?.["openai/*"]?.agentRuntime).toEqual({
+      id: "pi",
+    });
+    expect(result.cfg.agents?.list?.[0]?.model).toBe("openai/gpt-5.4");
+    expect(result.cfg.agents?.list?.[0]?.models?.["openai/gpt-5.4"]?.agentRuntime).toEqual({
+      id: "codex",
+    });
+    expect(result.changes.join("\n")).toContain(
+      'Set agents.list.worker.models.openai/gpt-5.4.agentRuntime.id to "codex"',
+    );
+    expect(
+      resolveAgentHarnessPolicy({
+        provider: "openai",
+        modelId: "gpt-5.4",
+        agentId: "worker",
+        config: result.cfg,
+      }).runtime,
+    ).toBe("codex");
+  });
+
   it("preserves explicit model-scoped runtime pins when repairing legacy model map keys", () => {
     const result = maybeRepairCodexRoutes({
       cfg: {
