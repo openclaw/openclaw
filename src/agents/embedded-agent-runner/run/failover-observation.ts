@@ -41,6 +41,12 @@ export type FailoverDecisionLoggerInput = {
   status?: number;
 };
 
+export type FailoverDecisionLoggerExtra = Pick<FailoverDecisionLoggerInput, "status"> & {
+  /** Selected fallback target for this decision, when it differs from the failed source. */
+  targetProvider?: string;
+  targetModel?: string;
+};
+
 export type FailoverDecisionLoggerBase = Omit<
   FailoverDecisionLoggerInput,
   "decision" | "status"
@@ -75,21 +81,25 @@ export function createFailoverDecisionLogger(
   base: FailoverDecisionLoggerBase,
 ): (
   decision: FailoverDecisionLoggerInput["decision"],
-  extra?: Pick<FailoverDecisionLoggerInput, "status">,
+  extra?: FailoverDecisionLoggerExtra,
 ) => void {
   const normalizedBase = normalizeFailoverDecisionObservationBase(base);
   const safeProfileId = normalizedBase.profileId
     ? redactIdentifier(normalizedBase.profileId, { len: 12 })
     : undefined;
   const safeRunId = sanitizeForConsole(normalizedBase.runId) ?? "-";
-  const safeProvider = sanitizeForConsole(normalizedBase.provider) ?? "-";
-  const safeModel = sanitizeForConsole(normalizedBase.model) ?? "-";
-  const safeSourceProvider = sanitizeForConsole(normalizedBase.sourceProvider) ?? safeProvider;
-  const safeSourceModel = sanitizeForConsole(normalizedBase.sourceModel) ?? safeModel;
+  const baseSafeProvider = sanitizeForConsole(normalizedBase.provider) ?? "-";
+  const baseSafeModel = sanitizeForConsole(normalizedBase.model) ?? "-";
+  const safeSourceProvider = sanitizeForConsole(normalizedBase.sourceProvider) ?? baseSafeProvider;
+  const safeSourceModel = sanitizeForConsole(normalizedBase.sourceModel) ?? baseSafeModel;
   const profileText = safeProfileId ?? "-";
   const reasonText = normalizedBase.failoverReason ?? "none";
-  const sourceChanged = safeSourceProvider !== safeProvider || safeSourceModel !== safeModel;
   return (decision, extra) => {
+    const targetProvider = extra?.targetProvider ?? normalizedBase.provider;
+    const targetModel = extra?.targetModel ?? normalizedBase.model;
+    const safeProvider = sanitizeForConsole(targetProvider) ?? "-";
+    const safeModel = sanitizeForConsole(targetModel) ?? "-";
+    const sourceChanged = safeSourceProvider !== safeProvider || safeSourceModel !== safeModel;
     const observedError = buildApiErrorObservationFields(normalizedBase.rawError);
     const safeRawErrorPreview = sanitizeForConsole(observedError.rawErrorPreview);
     // Some provider/runtime failure kinds already have normalized detail fields.
@@ -108,8 +118,8 @@ export function createFailoverDecisionLogger(
       decision,
       failoverReason: normalizedBase.failoverReason,
       profileFailureReason: normalizedBase.profileFailureReason,
-      provider: normalizedBase.provider,
-      model: normalizedBase.model,
+      provider: targetProvider,
+      model: targetModel,
       sourceProvider: normalizedBase.sourceProvider ?? normalizedBase.provider,
       sourceModel: normalizedBase.sourceModel ?? normalizedBase.model,
       profileId: safeProfileId,
@@ -134,8 +144,8 @@ export function createFailoverDecisionLogger(
         agentId: normalizedBase.agentId,
         sessionId: normalizedBase.sessionId,
         sessionKey: normalizedBase.sessionKey,
-        provider: normalizedBase.provider,
-        model: normalizedBase.model,
+        provider: targetProvider,
+        model: targetModel,
         sourceProvider: normalizedBase.sourceProvider,
         sourceModel: normalizedBase.sourceModel,
         stage: normalizedBase.stage,
