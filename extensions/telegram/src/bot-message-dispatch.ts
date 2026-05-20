@@ -1120,13 +1120,14 @@ export const dispatchTelegramMessage = async ({
     };
     const sendPayload = async (
       payload: ReplyPayload,
-      options?: { durable?: boolean; silent?: boolean },
+      options?: { durable?: boolean; silent?: boolean; markDeliveredState?: boolean },
     ) => {
       if (isDispatchSuperseded()) {
         return false;
       }
       const deliverablePayload = applyQuoteReplyTarget(payload);
       const silent = options?.silent ?? (silentErrorReplies && payload.isError === true);
+      const markDeliveredState = options?.markDeliveredState ?? true;
       const durableDelivery = telegramDeps.deliverInboundReplyWithMessageSendContext;
       if (options?.durable && durableDelivery) {
         const durable = await durableDelivery({
@@ -1161,7 +1162,9 @@ export const dispatchTelegramMessage = async ({
           throw durable.error;
         }
         if (durable.status === "handled_visible") {
-          deliveryState.markDelivered();
+          if (markDeliveredState) {
+            deliveryState.markDelivered();
+          }
           return true;
         }
         if (durable.status === "handled_no_send") {
@@ -1176,7 +1179,7 @@ export const dispatchTelegramMessage = async ({
         silent,
         mediaLoader: telegramDeps.loadWebMedia,
       });
-      if (result.delivered) {
+      if (result.delivered && markDeliveredState) {
         deliveryState.markDelivered();
       }
       return result.delivered;

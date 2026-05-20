@@ -50,7 +50,7 @@ type CreateLaneTextDelivererParams = {
   splitFinalTextForStream?: (text: string) => readonly string[];
   sendPayload: (
     payload: ReplyPayload,
-    options?: { durable?: boolean; silent?: boolean },
+    options?: { durable?: boolean; silent?: boolean; markDeliveredState?: boolean },
   ) => Promise<boolean>;
   flushDraftLane: (lane: DraftLaneState) => Promise<void>;
   stopDraftLane: (lane: DraftLaneState) => Promise<void>;
@@ -312,7 +312,9 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         if (chunk.trim().length === 0) {
           continue;
         }
-        const delivered = await params.sendPayload(followUpPayload(payload, chunk));
+        const delivered = await params.sendPayload(followUpPayload(payload, chunk), {
+          markDeliveredState: false,
+        });
         if (!delivered) {
           throw new Error("Telegram follow-up chunk was not delivered");
         }
@@ -367,7 +369,9 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         if (chunk.trim().length === 0) {
           continue;
         }
-        const delivered = await params.sendPayload(followUpPayload(payload, chunk));
+        const delivered = await params.sendPayload(followUpPayload(payload, chunk), {
+          markDeliveredState: false,
+        });
         if (!delivered) {
           throw new Error("Telegram follow-up chunk was not delivered");
         }
