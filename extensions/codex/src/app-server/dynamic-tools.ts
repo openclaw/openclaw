@@ -42,6 +42,8 @@ type CodexDynamicToolHookContext = {
 
 type CodexToolResultHookContext = Omit<CodexDynamicToolHookContext, "config">;
 
+const INTERNAL_SOURCE_REPLY_SINK = "internal-ui";
+
 export type CodexDynamicToolBridge = {
   availableSpecs: CodexDynamicToolSpec[];
   specs: CodexDynamicToolSpec[];
@@ -403,7 +405,7 @@ function collectToolTelemetry(params: {
 function extractInternalSourceReplyPayload(
   details: unknown,
 ): MessagingToolSourceReplyPayload | undefined {
-  if (!isRecord(details) || details.sourceReplySink !== "internal-ui") {
+  if (!isRecord(details) || details.sourceReplySink !== INTERNAL_SOURCE_REPLY_SINK) {
     return undefined;
   }
   const rawPayload = details.sourceReply;

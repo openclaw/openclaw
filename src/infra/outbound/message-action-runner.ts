@@ -55,6 +55,10 @@ import {
   resolveMessageChannelSelection,
 } from "./channel-selection.js";
 import type { OutboundSendDeps } from "./deliver.js";
+import {
+  INTERNAL_SOURCE_REPLY_SINK,
+  INTERNAL_SOURCE_REPLY_TARGET,
+} from "./internal-source-reply.js";
 import { normalizeMessageActionInput } from "./message-action-normalization.js";
 import {
   collectActionMediaSourceHints,
@@ -97,8 +101,6 @@ export type MessageActionRunnerGateway = {
   clientDisplayName?: string;
   mode: GatewayClientMode;
 };
-
-const INTERNAL_SOURCE_REPLY_SINK = "internal-ui" as const;
 
 let messageActionGatewayRuntimePromise: Promise<
   typeof import("./message.gateway.runtime.js")
@@ -720,7 +722,7 @@ async function handleInternalSourceReplySendAction(
     status: "ok",
     deliveryStatus: dryRun ? "dry_run" : "sent",
     channel: INTERNAL_MESSAGE_CHANNEL,
-    target: "current-run",
+    target: INTERNAL_SOURCE_REPLY_TARGET,
     sourceReplyDeliveryMode: input.sourceReplyDeliveryMode,
     ...(dryRun ? {} : { sourceReplySink: INTERNAL_SOURCE_REPLY_SINK }),
     sourceReply: sourceReply.payload,
@@ -733,7 +735,7 @@ async function handleInternalSourceReplySendAction(
     kind: "send",
     channel: INTERNAL_MESSAGE_CHANNEL,
     action: "send",
-    to: "current-run",
+    to: INTERNAL_SOURCE_REPLY_TARGET,
     handledBy: "internal-source",
     payload,
     toolResult: buildInternalSourceReplyToolResult(payload),

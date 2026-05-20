@@ -16,6 +16,7 @@ import {
   selectApplicableRuntimeConfig,
   type OpenClawConfig,
 } from "../../config/config.js";
+import { INTERNAL_SOURCE_REPLY_TARGET } from "../../infra/outbound/internal-source-reply.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -232,7 +233,9 @@ function buildEmbeddedContextFromTemplate(params: {
     memberRoleIds: normalizeMemberRoleIds(params.sessionCtx.MemberRoleIds),
     // Provider threading context for tool auto-injection
     ...threadingContext,
-    ...(shouldPinInternalSourceReplyContext ? { currentChannelId: "current-run" } : {}),
+    ...(shouldPinInternalSourceReplyContext
+      ? { currentChannelId: INTERNAL_SOURCE_REPLY_TARGET }
+      : {}),
   };
 }
 
