@@ -103,6 +103,11 @@ function resolveEmbeddedReplyMessage(msg: Message): Message | undefined {
   return msg.reply_to_message;
 }
 
+function asTelegramReplyMessage(message: Message): NonNullable<Message["reply_to_message"]> {
+  // Grammy's ReplyMessage type drops nested reply_to_message, but cached source payloads may carry it.
+  return message as NonNullable<Message["reply_to_message"]>;
+}
+
 function resolveMessageBody(msg: Message): string | undefined {
   const text = getTelegramTextParts(msg).text.trim();
   if (text) {
@@ -348,7 +353,9 @@ function mergeTelegramSourceMessage(existing: Message, incoming: Message): Messa
   if (existingReply?.message_id != null && incomingReply?.message_id === existingReply.message_id) {
     return {
       ...merged,
-      reply_to_message: mergeTelegramSourceMessage(existingReply, incomingReply),
+      reply_to_message: asTelegramReplyMessage(
+        mergeTelegramSourceMessage(existingReply, incomingReply),
+      ),
     };
   }
   return merged;
@@ -360,7 +367,9 @@ function mergeAuthoritativeTelegramSourceMessage(existing: Message, incoming: Me
   if (existingReply?.message_id != null && incomingReply?.message_id === existingReply.message_id) {
     return {
       ...incoming,
-      reply_to_message: mergeTelegramSourceMessage(existingReply, incomingReply),
+      reply_to_message: asTelegramReplyMessage(
+        mergeTelegramSourceMessage(existingReply, incomingReply),
+      ),
     };
   }
   return incoming;
@@ -376,9 +385,8 @@ function mergeCachedMessageNode(
     mode === "authoritative"
       ? mergeAuthoritativeTelegramSourceMessage(existing.sourceMessage, incoming.sourceMessage)
       : mergeTelegramSourceMessage(existing.sourceMessage, incoming.sourceMessage);
-  return normalizeRequiredMessageNode(sourceMessage, {
-    ...(Number.isFinite(threadId) ? { threadId } : {}),
-  });
+  const nodeParams = Number.isFinite(threadId) ? { threadId } : {};
+  return normalizeRequiredMessageNode(sourceMessage, nodeParams);
 }
 
 function upsertCachedMessageNode(params: {
@@ -559,9 +567,13 @@ export function createTelegramMessageCache(params?: {
       }
       let recordedEntry: TelegramCachedMessageNode | null = null;
       for (const { node, mode } of observations) {
-        const key = telegramMessageCacheKey({ accountId, chatId, messageId: node.messageId });
+        const messageId = node.messageId;
+        if (!messageId) {
+          continue;
+        }
+        const key = telegramMessageCacheKey({ accountId, chatId, messageId });
         const cachedNode = upsertCachedMessageNode({ messages, key, node, mode });
-        if (node.messageId === currentObservation.node.messageId) {
+        if (messageId === currentObservation.node.messageId) {
           recordedEntry = cachedNode;
         }
         trimMessages(messages, maxMessages);
