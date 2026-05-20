@@ -1562,6 +1562,7 @@ function rewriteAgentModelRefs(params: {
         cfg: params.cfg,
         agent,
         agentPath: params.path,
+        agentId: params.agentId,
         modelRef: hit.canonicalModel,
         isDefaults: params.path === "agents.defaults",
         changes: params.runtimePolicyChanges,
@@ -1657,6 +1658,7 @@ function rewriteAgentModelRefs(params: {
             cfg: params.cfg,
             agent,
             agentPath: params.path,
+            agentId: params.agentId,
             modelRef: inheritedCanonicalModel,
             isDefaults: params.path === "agents.defaults",
             changes: params.runtimePolicyChanges,
@@ -1854,6 +1856,7 @@ function preserveMigratedLosslessCodexRuntimePolicy(params: {
       cfg: params.cfg,
       agent: owner,
       agentPath: ownerPath,
+      agentId: agentIdFromAgentPath(ownerPath),
       modelRef: params.summaryModel,
       isDefaults: ownerPath === "agents.defaults",
       changes: params.changes,
@@ -2033,10 +2036,42 @@ function legacyEntryHasExplicitNonDefaultRuntimePin(
   return false;
 }
 
+function agentIdFromAgentPath(agentPath: string): string | undefined {
+  const prefix = "agents.list.";
+  return agentPath.startsWith(prefix) ? agentPath.slice(prefix.length) : undefined;
+}
+
+function inheritedDefaultModelPolicyHasExplicitNonDefaultRuntimePin(params: {
+  cfg: OpenClawConfig;
+  modelRef: string;
+  agentId?: string;
+}): boolean {
+  if (!params.agentId) {
+    return false;
+  }
+  const defaultModels = asMutableRecord(params.cfg.agents?.defaults?.models);
+  if (!defaultModels) {
+    return false;
+  }
+  for (const [ref, entry] of Object.entries(defaultModels)) {
+    if (ref !== params.modelRef && toCanonicalOpenAIModelRef(ref) !== params.modelRef) {
+      continue;
+    }
+    const runtimeId = normalizeRuntimeString(
+      asMutableRecord(asMutableRecord(entry)?.agentRuntime)?.id,
+    );
+    if (runtimeId && runtimeId !== "auto" && runtimeId !== "default" && runtimeId !== "codex") {
+      return true;
+    }
+  }
+  return false;
+}
+
 function ensureCodexRuntimePolicy(params: {
   cfg: OpenClawConfig;
   agent: MutableRecord;
   agentPath: string;
+  agentId?: string;
   modelRef: string;
   isDefaults?: boolean;
   changes: string[];
@@ -2048,20 +2083,23 @@ function ensureCodexRuntimePolicy(params: {
       changes: params.changes,
     });
   }
-  const models = asMutableRecord(params.agent.models) ?? {};
-  if (params.agent.models !== models) {
-    params.agent.models = models;
-  }
-  const entry = asMutableRecord(models[params.modelRef]) ?? {};
-  if (models[params.modelRef] !== entry) {
-    models[params.modelRef] = entry;
-  }
-  const priorRuntime = asMutableRecord(entry.agentRuntime);
+  const models = asMutableRecord(params.agent.models);
+  const entry = asMutableRecord(models?.[params.modelRef]);
+  const priorRuntime = asMutableRecord(entry?.agentRuntime);
   const runtimeId = normalizeString(priorRuntime?.id);
   if (runtimeId && runtimeId !== "auto" && runtimeId !== "default") {
     return;
   }
-  if (legacyEntryHasExplicitNonDefaultRuntimePin(models, params.modelRef)) {
+  if (models && legacyEntryHasExplicitNonDefaultRuntimePin(models, params.modelRef)) {
+    return;
+  }
+  if (
+    inheritedDefaultModelPolicyHasExplicitNonDefaultRuntimePin({
+      cfg: params.cfg,
+      modelRef: params.modelRef,
+      agentId: params.agentId,
+    })
+  ) {
     return;
   }
   setModelRuntimePolicy({
