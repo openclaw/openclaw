@@ -41,14 +41,15 @@ let markDispatchIdleMock: ReturnType<typeof vi.fn>;
 // ---------------------------------------------------------------------------
 
 vi.mock("../reply.runtime.js", () => ({
-  createReplyDispatcherWithTyping: (params: {
-    deliver: (payload: unknown, info: { kind: "tool" | "block" | "final" }) => Promise<void>;
-  }) => ({
+  createReplyDispatcherWithTyping: (_params: Record<string, unknown>) => ({
     dispatcher: {
-      deliver: params.deliver,
+      sendToolResult: vi.fn(() => true),
+      sendBlockReply: vi.fn(() => true),
+      sendFinalReply: vi.fn(() => true),
       markComplete: vi.fn(),
       waitForIdle: vi.fn(async () => {}),
       getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+      getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
     },
     replyOptions: {},
     markDispatchIdle: () => {
@@ -60,15 +61,7 @@ vi.mock("../reply.runtime.js", () => ({
       callOrder.push("markRunComplete");
     },
   }),
-  dispatchInboundMessage: async (params: {
-    replyOptions?: unknown;
-    dispatcher: {
-      deliver: (payload: unknown, info: { kind: "tool" | "block" | "final" }) => Promise<void>;
-    };
-  }) => {
-    for (const entry of mockedDispatchSequence) {
-      await params.dispatcher.deliver(entry.payload, { kind: entry.kind });
-    }
+  dispatchInboundMessage: async (_params: Record<string, unknown>) => {
     return {
       queuedFinal: false,
       counts: { final: mockedDispatchSequence.filter((e) => e.kind === "final").length },
