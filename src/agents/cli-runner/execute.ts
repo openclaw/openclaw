@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { shouldLogVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
+import { emitTrustedDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import { requestHeartbeat as requestHeartbeatImpl } from "../../infra/heartbeat-wake.js";
 import { sanitizeHostExecEnv } from "../../infra/host-env-security.js";
@@ -47,6 +48,20 @@ const executeDeps = {
 
 const CLI_RUNNER_OUTPUT_TAIL_BYTES = 64 * 1024;
 const CLI_RUNNER_OUTPUT_PARSE_BYTES = 1024 * 1024;
+const CLI_DIAGNOSTIC_PROGRESS_THROTTLE_MS = 10_000;
+
+function emitCliDiagnosticProgress(
+  params: { runId?: string; sessionId?: string; sessionKey?: string },
+  reason: string,
+  state: { lastEmittedAt: number },
+): void {
+  const now = Date.now();
+  if (now - state.lastEmittedAt < CLI_DIAGNOSTIC_PROGRESS_THROTTLE_MS) {
+    return;
+  }
+  state.lastEmittedAt = now;
+  emitTrustedDiagnosticEvent({ type: "run.progress", reason, ...params });
+}
 
 function appendCliOutputTail(tail: Buffer, chunk: string): Buffer {
   if (!chunk) {
@@ -457,6 +472,7 @@ export async function executePreparedCliRun(
           claudeSkillsPluginCleanupOwned = true;
           const ownedPreparedBackendCleanup = context.preparedBackend.cleanup;
           context.preparedBackend.cleanup = undefined;
+          const liveDiagnosticState = { lastEmittedAt: 0 };
           const liveResult = await runClaudeLiveSessionTurn({
             context,
             args,
@@ -466,6 +482,11 @@ export async function executePreparedCliRun(
             noOutputTimeoutMs,
             getProcessSupervisor: executeDeps.getProcessSupervisor,
             onAssistantDelta: ({ text, delta }) => {
+              emitCliDiagnosticProgress(
+                { runId: params.runId, sessionId: params.sessionId, sessionKey: params.sessionKey },
+                "cli:live:delta",
+                liveDiagnosticState,
+              );
               emitAgentEvent({
                 runId: params.runId,
                 stream: "assistant",
@@ -534,6 +555,7 @@ export async function executePreparedCliRun(
         let stderrTail: Buffer = Buffer.alloc(0);
         let stderrParseBuffer: Buffer = Buffer.alloc(0);
         let stderrParseExceeded = false;
+        const batchDiagnosticState = { lastEmittedAt: 0 };
 
         params.onExecutionPhase?.({
           phase: "process_spawned",
@@ -555,6 +577,11 @@ export async function executePreparedCliRun(
           input: stdinPayload,
           captureOutput: false,
           onStdout: (chunk: string) => {
+            emitCliDiagnosticProgress(
+              { runId: params.runId, sessionId: params.sessionId, sessionKey: params.sessionKey },
+              "cli:stdout",
+              batchDiagnosticState,
+            );
             stdoutTail = appendCliOutputTail(stdoutTail, chunk);
             if (!stdoutParseExceeded) {
               const nextStdoutParse = appendCliOutputParseBuffer(stdoutParseBuffer, chunk);
