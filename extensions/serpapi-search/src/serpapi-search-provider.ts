@@ -112,7 +112,7 @@ export function createSerpApiWebSearchProvider(): WebSearchProviderPlugin {
         const location = readStringParam(args, "location") ?? undefined;
         const uule = readStringParam(args, "uule") ?? undefined;
         if (location != null && uule != null) {
-          throw new Error("location and uule cannot be used together");
+          throw new Error("serpapi web_search: location and uule cannot be used together");
         }
         const raw = await call({
           cfg: ctx.config,
