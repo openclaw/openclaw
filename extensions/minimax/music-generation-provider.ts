@@ -7,8 +7,10 @@ import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
+  createProviderOperationDeadline,
   fetchProviderDownloadResponse,
   postJsonRequest,
+  resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -16,6 +18,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 const DEFAULT_MINIMAX_MUSIC_BASE_URL = "https://api.minimax.io";
 const DEFAULT_MINIMAX_MUSIC_MODEL = "music-2.6";
 const DEFAULT_TIMEOUT_MS = 120_000;
+const DEFAULT_OPERATION_TIMEOUT_MS = 300_000;
 
 type MinimaxBaseResp = {
   status_code?: number;
@@ -31,6 +34,14 @@ type MinimaxMusicCreateResponse = {
     audio?: string;
     audio_url?: string;
     lyrics?: string;
+  };
+  base_resp?: MinimaxBaseResp;
+};
+
+type MinimaxMusicStreamFrame = {
+  data?: {
+    audio?: string;
+    status?: number | string;
   };
   base_resp?: MinimaxBaseResp;
 };
@@ -105,6 +116,48 @@ async function downloadTrackFromUrl(params: {
   };
 }
 
+async function readStreamingTrack(response: Response): Promise<GeneratedMusicAsset> {
+  const contentType = normalizeOptionalString(response.headers.get("content-type")) ?? "";
+  if (contentType.toLowerCase().startsWith("audio/")) {
+    const ext = extensionForMime(contentType)?.replace(/^\./u, "") || "mp3";
+    return {
+      buffer: Buffer.from(await response.arrayBuffer()),
+      mimeType: contentType,
+      fileName: `track-1.${ext}`,
+    };
+  }
+  const chunks: Buffer[] = [];
+  const text = await response.text();
+  for (const rawLine of text.split(/\r?\n/u)) {
+    const line = rawLine.trim();
+    if (!line.startsWith("data:")) {
+      continue;
+    }
+    const json = line.slice("data:".length).trim();
+    if (!json || json === "[DONE]") {
+      continue;
+    }
+    const frame = JSON.parse(json) as MinimaxMusicStreamFrame;
+    assertMinimaxBaseResp(frame.base_resp, "MiniMax music generation failed");
+    const audio = normalizeOptionalString(frame.data?.audio);
+    if (audio) {
+      if (String(frame.data?.status ?? "") === "2" && chunks.length > 0) {
+        continue;
+      }
+      chunks.push(decodePossibleBinary(audio));
+    }
+  }
+  const buffer = Buffer.concat(chunks);
+  if (buffer.byteLength === 0) {
+    throw new Error("MiniMax music generation response missing audio output");
+  }
+  return {
+    buffer,
+    mimeType: "audio/mpeg",
+    fileName: "track-1.mp3",
+  };
+}
+
 function resolveMinimaxMusicModel(model: string | undefined): string {
   const trimmed = normalizeOptionalString(model);
   if (!trimmed) {
@@ -158,6 +211,10 @@ function buildMinimaxMusicProvider(providerId: string): MusicGenerationProvider 
       }
 
       const fetchFn = fetch;
+      const deadline = createProviderOperationDeadline({
+        timeoutMs: req.timeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS,
+        label: "MiniMax music generation",
+      });
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
         resolveProviderHttpRequestConfig({
           baseUrl: resolveMinimaxMusicBaseUrl(req.cfg, providerId),
@@ -180,7 +237,8 @@ function buildMinimaxMusicProvider(providerId: string): MusicGenerationProvider 
         prompt: req.prompt.trim(),
         ...(req.instrumental === true ? { is_instrumental: true } : {}),
         ...(lyrics ? { lyrics } : req.instrumental === true ? {} : { lyrics_optimizer: true }),
-        output_format: "url",
+        stream: true,
+        output_format: "hex",
         audio_setting: {
           sample_rate: 44_100,
           bitrate: 256_000,
@@ -192,7 +250,10 @@ function buildMinimaxMusicProvider(providerId: string): MusicGenerationProvider 
         url: `${baseUrl}/v1/music_generation`,
         headers: jsonHeaders,
         body,
-        timeoutMs: req.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+        timeoutMs: resolveProviderOperationTimeoutMs({
+          deadline,
+          defaultTimeoutMs: DEFAULT_OPERATION_TIMEOUT_MS,
+        }),
         fetchFn,
         pinDns: false,
         allowPrivateNetwork,
@@ -201,22 +262,32 @@ function buildMinimaxMusicProvider(providerId: string): MusicGenerationProvider 
 
       try {
         await assertOkOrThrowHttpError(res, "MiniMax music generation failed");
-        const payload = (await res.json()) as MinimaxMusicCreateResponse;
-        assertMinimaxBaseResp(payload.base_resp, "MiniMax music generation failed");
+        const contentType = normalizeOptionalString(res.headers.get("content-type")) ?? "";
+        const lowerContentType = contentType.toLowerCase();
+        const payload =
+          lowerContentType.includes("text/event-stream") || lowerContentType.startsWith("audio/")
+            ? null
+            : ((await res.clone().json()) as MinimaxMusicCreateResponse);
+        if (payload) {
+          assertMinimaxBaseResp(payload.base_resp, "MiniMax music generation failed");
+        }
 
         const audioCandidate =
-          normalizeOptionalString(payload.audio) ?? normalizeOptionalString(payload.data?.audio);
+          normalizeOptionalString(payload?.audio) ?? normalizeOptionalString(payload?.data?.audio);
         const audioUrl =
-          normalizeOptionalString(payload.audio_url) ||
-          normalizeOptionalString(payload.data?.audio_url) ||
+          normalizeOptionalString(payload?.audio_url) ||
+          normalizeOptionalString(payload?.data?.audio_url) ||
           (isLikelyRemoteUrl(audioCandidate) ? audioCandidate : undefined);
         const inlineAudio = isLikelyRemoteUrl(audioCandidate) ? undefined : audioCandidate;
-        const lyrics = decodePossibleText(payload.lyrics ?? payload.data?.lyrics ?? "");
+        const lyrics = decodePossibleText(payload?.lyrics ?? payload?.data?.lyrics ?? "");
 
         const track = audioUrl
           ? await downloadTrackFromUrl({
               url: audioUrl,
-              timeoutMs: req.timeoutMs,
+              timeoutMs: resolveProviderOperationTimeoutMs({
+                deadline,
+                defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+              }),
               fetchFn,
             })
           : inlineAudio
@@ -225,7 +296,7 @@ function buildMinimaxMusicProvider(providerId: string): MusicGenerationProvider 
                 mimeType: "audio/mpeg",
                 fileName: "track-1.mp3",
               }
-            : null;
+            : await readStreamingTrack(res);
         if (!track) {
           throw new Error("MiniMax music generation response missing audio output");
         }
@@ -235,8 +306,8 @@ function buildMinimaxMusicProvider(providerId: string): MusicGenerationProvider 
           ...(lyrics ? { lyrics: [lyrics] } : {}),
           model,
           metadata: {
-            ...(normalizeOptionalString(payload.task_id)
-              ? { taskId: normalizeOptionalString(payload.task_id) }
+            ...(normalizeOptionalString(payload?.task_id)
+              ? { taskId: normalizeOptionalString(payload?.task_id) }
               : {}),
             ...(audioUrl ? { audioUrl } : {}),
             instrumental: req.instrumental === true,
