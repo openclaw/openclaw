@@ -1135,7 +1135,7 @@ async function repairMissingPluginInstalls(params: {
     configChannel: normalizeUpdateChannel(params.cfg.update?.channel),
     currentVersion: VERSION,
   });
-  const preferNpmInstalls = isLegacyPackageUpdateDoctorPass(env);
+  const preferNpmInstalls = isLegacyPackageUpdateDoctorPass(env) || isPostCoreConvergencePass(env);
   let nextRecords = records;
 
   for (const [pluginId, record] of Object.entries(records)) {
