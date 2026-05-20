@@ -7,6 +7,7 @@ import {
   contextEngineCompactMock,
   createAgentSessionMock,
   createPreparedEmbeddedAgentSettingsManagerMock,
+  createAgentSessionMock,
   createOpenClawCodingToolsMock,
   enqueueCommandInLaneMock,
   ensureRuntimePluginsLoaded,
@@ -909,6 +910,63 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     if (mockCallArg(resolveModelMock, 0, 3) === undefined) {
       throw new Error("Expected resolve-model options");
     }
+  });
+
+  it("uses global compaction.thinkingLevel for compaction sessions", async () => {
+    const result = await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionKey: TEST_SESSION_KEY,
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+      thinkLevel: "high",
+      config: {
+        agents: {
+          defaults: {
+            compaction: {
+              thinkingLevel: "off",
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(createAgentSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({ thinkingLevel: "off" }),
+    );
+  });
+
+  it("prefers per-agent compaction.thinkingLevel for compaction sessions", async () => {
+    const result = await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionKey: TEST_SESSION_KEY,
+      agentId: "main",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+      thinkLevel: "high",
+      config: {
+        agents: {
+          defaults: {
+            compaction: {
+              thinkingLevel: "off",
+            },
+          },
+          list: [
+            {
+              id: "main",
+              compaction: {
+                thinkingLevel: "low",
+              },
+            },
+          ],
+        },
+      } as never,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(createAgentSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({ thinkingLevel: "low" }),
+    );
   });
 
   it("preserves compaction failure status and code metadata", async () => {

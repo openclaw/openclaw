@@ -1,5 +1,9 @@
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
-import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
+import {
+  normalizeThinkLevel,
+  type ReasoningLevel,
+  type ThinkLevel,
+} from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import { resolveAgentCompactionConfig } from "../agent-scope-config.js";
@@ -111,6 +115,17 @@ export function resolveEmbeddedCompactionTarget(params: {
   };
 }
 
+export function resolveEmbeddedCompactionThinkingLevel(params: {
+  config?: OpenClawConfig;
+  agentId?: string | null;
+  thinkLevel?: ThinkLevel | string | null;
+}): ThinkLevel {
+  const configured = normalizeThinkLevel(
+    resolveAgentCompactionConfig(params.config, params.agentId)?.thinkingLevel,
+  );
+  return configured ?? normalizeThinkLevel(params.thinkLevel) ?? "off";
+}
+
 export function buildEmbeddedCompactionRuntimeContext(params: {
   sessionKey?: string | null;
   messageChannel?: string | null;
@@ -132,6 +147,7 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
   modelId?: string | null;
   modelFallbacksOverride?: string[];
   thinkLevel?: ThinkLevel;
+  useCompactionThinkingLevel?: boolean;
   reasoningLevel?: ReasoningLevel;
   bashElevated?: ExecElevatedDefaults;
   extraSystemPrompt?: string;
@@ -172,7 +188,13 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
     runtimeProvider: resolved.runtimeProvider,
     model: resolved.model,
     modelFallbacksOverride: params.modelFallbacksOverride,
-    thinkLevel: params.thinkLevel,
+    thinkLevel: params.useCompactionThinkingLevel
+      ? resolveEmbeddedCompactionThinkingLevel({
+          config: params.config,
+          agentId: params.agentId,
+          thinkLevel: params.thinkLevel,
+        })
+      : params.thinkLevel,
     reasoningLevel: params.reasoningLevel,
     bashElevated: params.bashElevated,
     extraSystemPrompt: params.extraSystemPrompt,

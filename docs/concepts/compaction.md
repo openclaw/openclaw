@@ -93,6 +93,25 @@ This works with local models too, for example a second Ollama model dedicated to
 When unset, compaction starts with the active session model. If summarization fails with a model-fallback-eligible provider error, OpenClaw retries that compaction attempt through the session's existing model fallback chain. The fallback choice is temporary and is not written back to session state. An explicit `agents.defaults.compaction.model` override remains exact and does not inherit the session fallback chain.
 Per-agent `agents.list[].compaction.model` overrides are also supported. Omit `agents.list[].compaction` to inherit `agents.defaults.compaction`; set `agents.list[].compaction` to replace the default block for that agent; set `agents.list[].compaction: {}` to clear the inherited compaction block and return that agent to built-in compaction behavior.
 
+### Thinking level
+
+By default, compaction uses the active session's thinking level. Set `agents.defaults.compaction.thinkingLevel` when summarization should use a different reasoning budget than normal replies. Use `"off"` to explicitly disable reasoning for compaction:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "compaction": {
+        "model": "openai/gpt-5.4-mini",
+        "thinkingLevel": "off"
+      }
+    }
+  }
+}
+```
+
+Per-agent `agents.list[].compaction.thinkingLevel` uses the same replacement semantics as other per-agent compaction settings.
+
 ### Identifier preservation
 
 Compaction summarization preserves opaque identifiers by default (`identifierPolicy: "strict"`). Override with `identifierPolicy: "off"` to disable, or `identifierPolicy: "custom"` plus `identifierInstructions` for custom guidance.
