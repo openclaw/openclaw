@@ -28,9 +28,6 @@ export function listConfigBackupPaths(configPath: string): string[] {
   }
   const out: string[] = [];
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (!entry.isFile()) {
-      continue;
-    }
     if (
       entry.name === `${base}.bak` ||
       entry.name === `${base}.pre-update` ||

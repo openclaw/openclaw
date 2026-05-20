@@ -270,7 +270,7 @@ function collectConfigBackupSecrets(params: {
     params.collector.filesScanned.add(backupPath);
     let parsed: unknown;
     try {
-      const stats = fs.statSync(backupPath);
+      const stats = fs.lstatSync(backupPath);
       if (!stats.isFile()) {
         addFinding(params.collector, {
           code: "CONFIG_BACKUP_UNREADABLE",

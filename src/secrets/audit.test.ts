@@ -345,6 +345,46 @@ describe("secrets audit", () => {
     }
   });
 
+  it("reports non-regular adjacent config backups as unreadable", async () => {
+    await writeJsonFile(fixture.configPath, {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-completions",
+            apiKey: { source: "env", provider: "default", id: OPENAI_API_KEY_MARKER },
+            models: [{ id: "gpt-5", name: "gpt-5" }],
+          },
+        },
+      },
+    });
+    const backupDirPath = `${fixture.configPath}.bak`;
+    await fs.mkdir(backupDirPath);
+    const nonRegularBackupPaths = [backupDirPath];
+    if (process.platform !== "win32") {
+      const backupSymlinkPath = `${fixture.configPath}.pre-update`;
+      await fs.symlink(fixture.configPath, backupSymlinkPath);
+      nonRegularBackupPaths.push(backupSymlinkPath);
+    }
+    await fs.rm(fixture.authStorePath, { force: true });
+    await fs.writeFile(fixture.envPath, "", "utf8");
+
+    const report = await runSecretsAudit({ env: fixture.env });
+
+    for (const backupPath of nonRegularBackupPaths) {
+      expect(report.filesScanned).toContain(backupPath);
+      expect(
+        hasFinding(
+          report,
+          (entry) =>
+            entry.code === "CONFIG_BACKUP_UNREADABLE" &&
+            entry.file === backupPath &&
+            entry.jsonPath === "<root>",
+        ),
+      ).toBe(true);
+    }
+  });
+
   it("parses adjacent config backups with JSON5 semantics", async () => {
     await writeJsonFile(fixture.configPath, {
       models: {
