@@ -1392,6 +1392,115 @@ describe("codex command", () => {
     expect(safeCodexControlRequest).toHaveBeenCalledTimes(2);
   });
 
+  it("respects openai-alias explicit order over stale lastGood for API key profiles", async () => {
+    const config = {};
+    const now = Date.now();
+    installAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          "openai:fresh-key": {
+            type: "api_key",
+            provider: "openai",
+            key: "sk-fresh-111",
+          },
+          "openai:stale-key": {
+            type: "api_key",
+            provider: "openai",
+            key: "sk-stale-222",
+          },
+        },
+        order: {
+          openai: ["openai:fresh-key", "openai:stale-key"],
+        },
+        lastGood: {
+          openai: "openai:stale-key",
+        },
+      },
+      config,
+    );
+
+    const safeCodexControlRequest = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        value: { account: { type: "unknown" }, requiresOpenaiAuth: false },
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        error: "usage data unavailable",
+      });
+
+    const result = await handleCodexCommand(createContext("account", undefined, { config }), {
+      deps: createDeps({ safeCodexControlRequest }),
+    });
+
+    expect(result.text).toContain("\n  1. fresh-key   API key   — active now");
+    expect(result.text).not.toContain("stale-key   API key   — active now");
+    expect(safeCodexControlRequest).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses first explicit-order profile rather than lastGood when all token credentials are expired", async () => {
+    // Both profiles use type:"token" with expired expiry, so resolveAuthProfileEligibility
+    // returns eligible=false for both and firstUsable is undefined. The fix must return
+    // params.order[0] (fresh) rather than falling through to lastGood (stale).
+    const config = {};
+    const now = Date.now();
+    installAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          "openai-codex:fresh@example.com": {
+            type: "token",
+            provider: "openai-codex",
+            token: "fresh-token",
+            expires: now - 1000,
+            email: "fresh@example.com",
+          },
+          "openai-codex:stale@example.com": {
+            type: "token",
+            provider: "openai-codex",
+            token: "stale-token",
+            expires: now - 2000,
+            email: "stale@example.com",
+          },
+        },
+        order: {
+          "openai-codex": ["openai-codex:fresh@example.com", "openai-codex:stale@example.com"],
+        },
+        lastGood: {
+          "openai-codex": "openai-codex:stale@example.com",
+        },
+      },
+      config,
+    );
+
+    const safeCodexControlRequest = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        value: { account: { type: "unknown" }, requiresOpenaiAuth: true },
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        error: "rate limits unavailable",
+      });
+
+    const result = await handleCodexCommand(createContext("account", undefined, { config }), {
+      deps: createDeps({ safeCodexControlRequest }),
+    });
+
+    // With explicit order, order[0] (fresh) must be shown as active even though
+    // all credentials are expired. lastGood (stale) must not override the stated
+    // operator rank.
+    expect(result.text).toContain("\n  1. fresh@example.com   ChatGPT subscription   — active now");
+    expect(result.text).toContain(
+      "\n  2. stale@example.com   ChatGPT subscription   — sign-in expired",
+    );
+    expect(result.text).not.toContain("stale@example.com   ChatGPT subscription   — active now");
+    expect(safeCodexControlRequest).toHaveBeenCalledTimes(2);
+  });
+
   it("escapes successful Codex account fallback summaries before chat display", async () => {
     const unsafe = "<@U123> [trusted](https://evil) @here";
     const safeCodexControlRequest = vi

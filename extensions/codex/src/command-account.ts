@@ -204,7 +204,10 @@ function resolveActiveProfileId(params: {
   // Explicit auth order (`models auth order set` or `config.auth.order`) is
   // authoritative for the status display and overrides `lastGood`/usage
   // heuristics, matching the core `resolveAuthProfileOrder` precedence so the
-  // display does not silently disagree with the runtime resolver.
+  // display does not silently disagree with the runtime resolver. When no
+  // fully-usable candidate exists, anchor to params.order[0] so the display
+  // stays consistent with operator intent rather than deferring to stale
+  // lastGood/mostRecent heuristics that could show a lower-ranked profile.
   if (params.explicitOrder) {
     const firstUsable = params.order.find(
       (profileId) =>
@@ -217,9 +220,7 @@ function resolveActiveProfileId(params: {
           now: params.now,
         }).eligible,
     );
-    if (firstUsable) {
-      return firstUsable;
-    }
+    return firstUsable ?? params.order[0];
   }
   const lastGood = [
     params.store.lastGood?.[OPENAI_PROVIDER_ID],

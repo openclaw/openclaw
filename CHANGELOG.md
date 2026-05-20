@@ -11,6 +11,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Codex: fix `/codex account` showing a stale auth profile as "active now" after `models auth login` + `models auth order set` establishes a new explicit order; the display now respects explicit operator order over `lastGood` heuristics, and anchors to the first explicit-order entry rather than deferring to a lower-ranked profile when all candidates are temporarily unusable. (#84412) Thanks @openperf
 - Agents/code mode: spell out the `exec` tool's JavaScript/TypeScript, no Node module, and catalog-bridge constraints in model-visible schema text so agents can use enabled tools without trial-and-error. (#84269) Thanks @Kaspre.
 - Codex: give `image_generate` dynamic-tool calls a 120s default watchdog when no per-call or configured image timeout is set, so image generation no longer falls back to the generic 30s bridge timeout. (#84254) Thanks @moritzmmayerhofer.
 - CLI/message: include a stable top-level `messageId` in `openclaw message --json` output when channel sends return one. (#84191) Thanks @100menotu001.
