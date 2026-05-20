@@ -156,6 +156,35 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
     ]);
   });
 
+  it("removes OpenAI Responses input/output text heartbeat pairs", () => {
+    const messages = [
+      {
+        role: "user",
+        content: [
+          {
+            type: "input_text",
+            text: `Delivery: to send a message, use the \`message\` tool. ${HEARTBEAT_TRANSCRIPT_PROMPT}`,
+          },
+        ],
+      },
+      {
+        role: "assistant",
+        content: [{ type: "output_text", text: "HEARTBEAT_OK" }],
+      },
+      {
+        role: "user",
+        content: [{ type: "input_text", text: "what model are you" }],
+      },
+    ];
+
+    expect(filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT)).toEqual([
+      {
+        role: "user",
+        content: [{ type: "input_text", text: "what model are you" }],
+      },
+    ]);
+  });
+
   it("removes prompt-only interrupted heartbeat spans", () => {
     const messages = [
       { role: "user", content: HEARTBEAT_TRANSCRIPT_PROMPT },

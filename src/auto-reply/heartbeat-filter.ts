@@ -23,6 +23,7 @@ const TOOL_RESULT_BLOCK_TYPES = new Set([
   "tool_result_error",
   "function_call_output",
 ]);
+const MESSAGE_TOOL_DELIVERY_PREFIX = "Delivery: to send a message, use the `message` tool.";
 
 type HeartbeatTranscriptMessage = { role: string; content?: unknown };
 
@@ -271,7 +272,7 @@ function resolveMessageText(content: unknown): { text: string; hasNonTextContent
       hasNonTextContent = true;
       continue;
     }
-    if (block.type !== "text") {
+    if (block.type !== "text" && block.type !== "input_text" && block.type !== "output_text") {
       hasNonTextContent = true;
       continue;
     }
@@ -299,6 +300,12 @@ export function isHeartbeatUserMessage(
   }
   const normalizedHeartbeatPrompt = heartbeatPrompt?.trim();
   if (trimmed === HEARTBEAT_TRANSCRIPT_PROMPT) {
+    return true;
+  }
+  if (
+    trimmed.startsWith(MESSAGE_TOOL_DELIVERY_PREFIX) &&
+    trimmed.endsWith(HEARTBEAT_TRANSCRIPT_PROMPT)
+  ) {
     return true;
   }
   if (matchesHeartbeatPromptText(trimmed, normalizedHeartbeatPrompt)) {
