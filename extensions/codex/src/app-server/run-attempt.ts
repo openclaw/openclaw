@@ -1239,7 +1239,8 @@ export async function runCodexAppServerAttempt(
     const resolvedPluginPolicy = pluginThreadConfigRequired
       ? resolveCodexPluginsPolicy(pluginThreadConfigPluginConfig)
       : undefined;
-    const computerUseMcpElicitationDelegationRequired = computerUseConfig.enabled;
+    const computerUseMcpElicitationDelegationRequired =
+      computerUseConfig.enabled && computerUseConfig.mcpServerName.includes("computer-use");
     const mcpElicitationDelegationRequired =
       resolvedPluginPolicy?.enabled === true || computerUseMcpElicitationDelegationRequired;
     const enabledPluginConfigKeys = resolvedPluginPolicy
@@ -2065,9 +2066,6 @@ export async function runCodexAppServerAttempt(
           threadId: thread.threadId,
           turnId,
           pluginAppPolicyContext: thread.pluginAppPolicyContext,
-          ...(computerUseConfig.enabled
-            ? { computerUseMcpServerName: computerUseConfig.mcpServerName }
-            : {}),
           signal: runAbortController.signal,
         });
       }

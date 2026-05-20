@@ -319,7 +319,6 @@ describe("Codex app-server elicitation bridge", () => {
       threadId: "thread-1",
       turnId: "turn-1",
       pluginAppPolicyContext: createPluginAppPolicyContext({ apps: [] }),
-      computerUseMcpServerName: "computer-use",
     });
 
     expect(result).toEqual({
@@ -347,7 +346,6 @@ describe("Codex app-server elicitation bridge", () => {
       threadId: "thread-1",
       turnId: "turn-1",
       pluginAppPolicyContext: createPluginAppPolicyContext({ apps: [] }),
-      computerUseMcpServerName: "computer-use",
     });
 
     expect(result).toEqual({
@@ -366,37 +364,10 @@ describe("Codex app-server elicitation bridge", () => {
       threadId: "thread-1",
       turnId: "turn-1",
       pluginAppPolicyContext: createPluginAppPolicyContext({ apps: [] }),
-      computerUseMcpServerName: "computer-use",
     });
 
     expect(result).toBeUndefined();
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
-  });
-
-  it("routes configured custom Computer Use server names through plugin approvals", async () => {
-    mockCallGatewayTool
-      .mockResolvedValueOnce({ id: "plugin:approval-custom-computer-use", status: "accepted" })
-      .mockResolvedValueOnce({
-        id: "plugin:approval-custom-computer-use",
-        decision: "allow-once",
-      });
-
-    const result = await handleCodexAppServerElicitationRequest({
-      requestParams: buildComputerUseApprovalElicitation({ serverName: "desktop-control" }),
-      paramsForRun: createParams(),
-      threadId: "thread-1",
-      turnId: "turn-1",
-      pluginAppPolicyContext: createPluginAppPolicyContext({ apps: [] }),
-      computerUseMcpServerName: "desktop-control",
-    });
-
-    expect(result).toEqual({
-      action: "accept",
-      content: null,
-      _meta: null,
-    });
-    const approvalRequest = gatewayToolArg(0, 2) as { description: string };
-    expect(approvalRequest.description).toContain("MCP server: desktop-control");
   });
 
   it("declines approved Computer Use app approvals with unmappable non-empty schemas", async () => {
@@ -422,7 +393,6 @@ describe("Codex app-server elicitation bridge", () => {
       threadId: "thread-1",
       turnId: "turn-1",
       pluginAppPolicyContext: createPluginAppPolicyContext({ apps: [] }),
-      computerUseMcpServerName: "computer-use",
     });
 
     expect(result).toEqual({ action: "decline", content: null, _meta: null });
@@ -439,7 +409,14 @@ describe("Codex app-server elicitation bridge", () => {
     );
   });
 
-  it("does not bridge Computer Use elicitations without an approval form schema", async () => {
+  it("normalizes missing Computer Use schemas to the empty object schema", async () => {
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-computer-use-schema", status: "accepted" })
+      .mockResolvedValueOnce({
+        id: "plugin:approval-computer-use-schema",
+        decision: "allow-once",
+      });
+
     const result = await handleCodexAppServerElicitationRequest({
       requestParams: buildComputerUseApprovalElicitation({
         requestedSchema: "not-a-schema",
@@ -448,27 +425,13 @@ describe("Codex app-server elicitation bridge", () => {
       threadId: "thread-1",
       turnId: "turn-1",
       pluginAppPolicyContext: createPluginAppPolicyContext({ apps: [] }),
-      computerUseMcpServerName: "computer-use",
     });
 
-    expect(result).toBeUndefined();
-    expect(mockCallGatewayTool).not.toHaveBeenCalled();
-  });
-
-  it("does not bridge Computer Use elicitations outside form mode", async () => {
-    const result = await handleCodexAppServerElicitationRequest({
-      requestParams: buildComputerUseApprovalElicitation({
-        mode: "notification",
-      }),
-      paramsForRun: createParams(),
-      threadId: "thread-1",
-      turnId: "turn-1",
-      pluginAppPolicyContext: createPluginAppPolicyContext({ apps: [] }),
-      computerUseMcpServerName: "computer-use",
+    expect(result).toEqual({
+      action: "accept",
+      content: null,
+      _meta: null,
     });
-
-    expect(result).toBeUndefined();
-    expect(mockCallGatewayTool).not.toHaveBeenCalled();
   });
 
   it("falls back to a Computer Use approval title and sanitizes server names", async () => {
@@ -486,7 +449,6 @@ describe("Codex app-server elicitation bridge", () => {
       threadId: "thread-1",
       turnId: "turn-1",
       pluginAppPolicyContext: createPluginAppPolicyContext({ apps: [] }),
-      computerUseMcpServerName: "computer-use\u009b31m",
     });
 
     expect(result).toEqual({
