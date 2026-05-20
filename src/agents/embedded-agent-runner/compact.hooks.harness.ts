@@ -179,6 +179,9 @@ export const resolveAgentTransportOverrideMock: Mock<(params?: unknown) => strin
 export const resolveSandboxContextMock = vi.fn(async () => null);
 export const maybeCompactAgentHarnessSessionMock: Mock<(params?: unknown) => Promise<unknown>> =
   vi.fn(async () => undefined);
+export const resolveCompactionTimeoutMsMock: Mock<
+  (cfg?: unknown, agentId?: string | null) => number
+> = vi.fn(() => 30_000);
 export const rotateTranscriptAfterCompactionMock: Mock<
   (_params?: unknown) => Promise<CompactionTranscriptRotation>
 > = vi.fn(async () => ({
@@ -407,6 +410,8 @@ export function resetCompactHooksHarnessMocks(): void {
     reason: undefined,
     result: { summary: "engine-summary", tokensAfter: 50 },
   });
+  resolveCompactionTimeoutMsMock.mockReset();
+  resolveCompactionTimeoutMsMock.mockReturnValue(30_000);
 
   resolveModelMock.mockReset();
   resolveModelMock.mockReturnValue({
@@ -742,7 +747,7 @@ export async function loadCompactHooksHarness(): Promise<{
     );
     return {
       compactWithSafetyTimeout,
-      resolveCompactionTimeoutMs: vi.fn(() => 30_000),
+      resolveCompactionTimeoutMs: resolveCompactionTimeoutMsMock,
       // Mirror the real wrapper: bound the engine's compact() with the
       // (mocked) safety timeout and thread the abort signal into its params.
       compactContextEngineWithSafetyTimeout: vi.fn(

@@ -1067,4 +1067,72 @@ describe("runCliTurnCompactionLifecycle", () => {
       "claude-session",
     );
   });
+
+  it("selects CLI context-engine compaction timeout from the session agent", async () => {
+    const sessionKey = "agent:lossless-agent:cli";
+    const sessionId = "session-cli-agent-timeout";
+    const sessionFile = path.join(tmpDir, "session-agent-timeout.jsonl");
+    await writeSessionFile({ sessionFile, sessionId });
+
+    const sessionEntry: SessionEntry = {
+      sessionId,
+      updatedAt: Date.now(),
+      sessionFile,
+      contextTokens: 1_000,
+      totalTokens: 950,
+      totalTokensFresh: true,
+    };
+    const compactCalls: Array<Parameters<ContextEngine["compact"]>[0]> = [];
+    setCliCompactionTestDeps({
+      resolveContextEngine: async () => ({
+        ...buildContextEngine({ compactCalls }),
+        async compact(compactParams) {
+          compactCalls.push(compactParams);
+          return await new Promise(() => {});
+        },
+      }),
+      createPreparedEmbeddedPiSettingsManager: async () => ({
+        getCompactionReserveTokens: () => 200,
+        getCompactionKeepRecentTokens: () => 0,
+        applyOverrides: () => {},
+      }),
+      shouldPreemptivelyCompactBeforePrompt: () => ({
+        route: "fits",
+        shouldCompact: false,
+        estimatedPromptTokens: 600,
+        promptBudgetBeforeReserve: 800,
+        overflowTokens: 0,
+        toolResultReducibleChars: 0,
+        effectiveReserveTokens: 200,
+      }),
+      resolveLiveToolResultMaxChars: () => 20_000,
+    });
+
+    vi.useFakeTimers();
+    const pending = runCliTurnCompactionLifecycle({
+      cfg: {
+        agents: {
+          defaults: { compaction: { timeoutSeconds: 60 } },
+          list: [{ id: "lossless-agent", compaction: { timeoutSeconds: 1 } }],
+        },
+      } as OpenClawConfig,
+      sessionId,
+      sessionKey,
+      sessionEntry,
+      sessionAgentId: "lossless-agent",
+      workspaceDir: tmpDir,
+      agentDir: tmpDir,
+      provider: "claude-cli",
+      model: "opus",
+    });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    const updatedEntry = await pending;
+    vi.useRealTimers();
+
+    expect(compactCalls).toHaveLength(1);
+    expect(compactCalls[0]?.abortSignal).toBeInstanceOf(AbortSignal);
+    expect(compactCalls[0]?.abortSignal?.aborted).toBe(true);
+    expect(updatedEntry).toBe(sessionEntry);
+  });
 });

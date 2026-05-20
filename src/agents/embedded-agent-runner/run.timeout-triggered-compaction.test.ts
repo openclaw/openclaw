@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeAttemptResult, makeCompactionSuccess } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
@@ -8,6 +8,7 @@ import {
   mockedGlobalHookRunner,
   mockedPickFallbackThinkingLevel,
   mockedResolveAuthProfileOrder,
+  mockedResolveCompactionTimeoutMs,
   mockedRunEmbeddedAttempt,
   mockedRunPostCompactionSideEffects,
   overflowBaseRunParams,
@@ -113,6 +114,10 @@ describe("timeout-triggered compaction", () => {
 
   beforeEach(() => {
     resetRunOverflowCompactionHarnessMocks();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("attempts compaction when LLM times out with high prompt token usage (>65%)", async () => {
@@ -480,6 +485,42 @@ describe("timeout-triggered compaction", () => {
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
     expect(result.payloads?.[0]?.isError).toBe(true);
     expect(result.payloads?.[0]?.text).toContain("timed out");
+  });
+
+  it("selects timeout-recovery context-engine compaction timeout from the session agent", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        timedOut: true,
+        lastAssistant: {
+          usage: { input: 150000 },
+        } as never,
+      }),
+    );
+    const config = {
+      agents: {
+        defaults: { compaction: { timeoutSeconds: 60 } },
+        list: [{ id: "lossless-agent", compaction: { timeoutSeconds: 1 } }],
+      },
+    };
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "timeout recovery compaction",
+        tokensAfter: 80_000,
+      }),
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      agentId: "lossless-agent",
+      config,
+    });
+
+    expect(mockedResolveCompactionTimeoutMs).toHaveBeenCalledWith(config, "lossless-agent");
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+    const compactParams = compactCallAt(0);
+    expect(compactParams.runtimeContext?.trigger).toBe("timeout_recovery");
+    expect(result.meta.error).toBeUndefined();
   });
 
   it("fires compaction hooks during timeout recovery for ownsCompaction engines", async () => {

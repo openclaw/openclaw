@@ -324,7 +324,7 @@ export async function compactEmbeddedAgentSession(
               force: params.trigger === "manual",
               runtimeContext,
             },
-            resolveCompactionTimeoutMs(params.config),
+            resolveCompactionTimeoutMs(params.config, sessionAgentId),
             params.abortSignal,
           );
         } catch (compactErr) {

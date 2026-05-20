@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentHarness } from "../harness/types.js";
 import type { AgentInternalEvent } from "../internal-events.js";
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
@@ -30,6 +30,7 @@ import {
   mockedMarkAuthProfileSuccess,
   mockedPickFallbackThinkingLevel,
   mockedResolveAuthProfileOrder,
+  mockedResolveCompactionTimeoutMs,
   mockedResolveContextWindowInfo,
   mockedResolveFailoverStatus,
   mockedResolveModelAsync,
@@ -223,6 +224,10 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
   beforeEach(() => {
     resetRunOverflowCompactionHarnessMocks();
     mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "ok" }]);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("passes precomputed before_agent_start result into the attempt", async () => {
@@ -2241,6 +2246,39 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     expect(mockedGlobalHookRunner.runAfterCompaction).not.toHaveBeenCalled();
     expect(result.meta.error?.kind).toBe("context_overflow");
     expect(result.payloads?.[0]?.isError).toBe(true);
+  });
+
+  it("selects overflow-recovery context-engine compaction timeout from the session agent", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({ promptError: makeOverflowError() }),
+    );
+    const config = {
+      agents: {
+        defaults: { compaction: { timeoutSeconds: 60 } },
+        list: [{ id: "lossless-agent", compaction: { timeoutSeconds: 1 } }],
+      },
+    };
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "overflow recovery compaction",
+        tokensAfter: 80_000,
+      }),
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      agentId: "lossless-agent",
+      config,
+    });
+
+    expect(mockedResolveCompactionTimeoutMs).toHaveBeenCalledWith(config, "lossless-agent");
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+    const compactParams = mockCallArg(mockedCompactDirect) as {
+      runtimeContext?: { trigger?: string };
+    };
+    expect(compactParams.runtimeContext?.trigger).toBe("overflow");
+    expect(result.meta.error).toBeUndefined();
   });
 
   it("threads a composed run abort signal into engine-owned overflow compaction", async () => {

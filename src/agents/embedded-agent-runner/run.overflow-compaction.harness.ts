@@ -82,6 +82,7 @@ export const mockedContextEngine = {
 
 export const mockedContextEngineCompact = mockedContextEngine.compact;
 export const mockedCompactDirect = mockedContextEngine.compact;
+export const mockedResolveCompactionTimeoutMs = vi.fn(() => 30_000);
 export const mockedResolveContextEngine = vi.fn(async () => mockedContextEngine);
 export const mockedResolveContextEngineOwnerPluginId = vi.fn(() => undefined);
 export const mockedBuildAgentRuntimePlan = vi.fn(() => ({}));
@@ -286,6 +287,8 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
     compacted: false,
     reason: "nothing to compact",
   });
+  mockedResolveCompactionTimeoutMs.mockReset();
+  mockedResolveCompactionTimeoutMs.mockReturnValue(30_000);
 
   mockedEnsureRuntimePluginsLoaded.mockReset();
   mockedResolveModelAsync.mockReset();
@@ -596,6 +599,16 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   vi.doMock("./run/attempt.js", () => ({
     runEmbeddedAttempt: mockedRunEmbeddedAttempt,
   }));
+
+  vi.doMock("./compaction-safety-timeout.js", async () => {
+    const actual = await vi.importActual<typeof import("./compaction-safety-timeout.js")>(
+      "./compaction-safety-timeout.js",
+    );
+    return {
+      ...actual,
+      resolveCompactionTimeoutMs: mockedResolveCompactionTimeoutMs,
+    };
+  });
 
   vi.doMock("./tool-result-truncation.js", () => ({
     resolveLiveToolResultMaxChars: mockedResolveLiveToolResultMaxChars,
