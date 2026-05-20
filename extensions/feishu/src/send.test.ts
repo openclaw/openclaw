@@ -246,6 +246,9 @@ describe("getMessageFeishu", () => {
       messageId: "om_legacy_card",
     });
 
+    if (!result) {
+      throw new Error("expected interactive card result");
+    }
     expect(result.content).toBe("saber\n请升级至最新版本客户端，以查看内容");
     expect(result.contentType).toBe("interactive");
   });
