@@ -11,9 +11,18 @@ const daemonMocks = vi.hoisted(() => ({
   runNodeDaemonUninstall: vi.fn(),
 }));
 
+type RunNodeHostStub = (opts: {
+  gatewayHost?: string;
+  gatewayPort?: number;
+  gatewayTls?: boolean;
+  gatewayTlsFingerprint?: string;
+  nodeId?: string;
+  displayName?: string;
+}) => Promise<void>;
+
 const nodeHostMocks = vi.hoisted(() => ({
   loadNodeHostConfig: vi.fn(async () => null as Awaited<unknown>),
-  runNodeHost: vi.fn(async () => {}),
+  runNodeHost: vi.fn<RunNodeHostStub>(async () => {}),
 }));
 
 vi.mock("./daemon.js", () => daemonMocks);
@@ -82,8 +91,8 @@ describe("openclaw node run --port validation (#83923)", () => {
 
     expect(nodeHostMocks.runNodeHost).not.toHaveBeenCalled();
     expect(exitSpy).toHaveBeenCalledWith(2);
-    const stderrMessages = stderrSpy.mock.calls.map((call) => String(call[0]));
-    expect(stderrMessages.some((msg) => msg.includes("Invalid --port"))).toBe(true);
+    const stderrMessages = stderrSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+    expect(stderrMessages.some((msg: string) => msg.includes("Invalid --port"))).toBe(true);
   });
 
   it("rejects --port 0 (out of range) without starting the host", async () => {
