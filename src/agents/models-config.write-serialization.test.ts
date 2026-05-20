@@ -194,6 +194,65 @@ describe("models-config write serialization", () => {
     });
   });
 
+  it("migrates existing models.json-only provider api keys to auth profiles", async () => {
+    await withModelsTempHome(async (home) => {
+      const agentDir = path.join(home, "agent");
+      await fs.mkdir(agentDir, { recursive: true });
+      await fs.writeFile(
+        path.join(agentDir, "models.json"),
+        `${JSON.stringify(
+          {
+            providers: {
+              custom: {
+                baseUrl: "https://custom.example/v1",
+                api: "openai-completions",
+                apiKey: "sk-existing-models-json-only", // pragma: allowlist secret
+                models: [],
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+      );
+
+      await ensureOpenClawModelsJson(
+        {
+          models: {
+            mode: "merge",
+            providers: {
+              custom: {
+                baseUrl: "https://custom.example/v1",
+                api: "openai-completions",
+                models: [],
+              },
+            },
+          },
+        },
+        agentDir,
+      );
+
+      const modelsJson = JSON.parse(
+        await fs.readFile(path.join(agentDir, "models.json"), "utf8"),
+      ) as {
+        providers: Record<string, { apiKey?: string }>;
+      };
+      expect(modelsJson.providers.custom?.apiKey).toBeUndefined();
+
+      const authProfiles = JSON.parse(
+        await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf8"),
+      ) as {
+        profiles: Record<string, unknown>;
+      };
+      expect(authProfiles.profiles["custom:models-json"]).toMatchObject({
+        type: "api_key",
+        provider: "custom",
+        key: "sk-existing-models-json-only",
+        copyToAgents: false,
+      });
+    });
+  });
+
   it("does not reuse scoped startup discovery cache for a different provider scope", async () => {
     await withModelsTempHome(async (home) => {
       planOpenClawModelsJsonMock.mockImplementation(async () => ({ action: "skip" }));

@@ -11,13 +11,21 @@ import { privateFileStore } from "../infra/private-file-store.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { isRecord } from "../utils.js";
 import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentDir,
   resolveDefaultAgentId,
 } from "./agent-scope.js";
+import {
+  ensureAuthProfileStore,
+  listProfilesForProvider,
+  upsertAuthProfileWithLock,
+} from "./auth-profiles.js";
+import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
 import { MODELS_JSON_STATE } from "./models-config-state.js";
 import { planOpenClawModelsJson } from "./models-config.plan.js";
+import { findNormalizedProviderValue, normalizeProviderId } from "./provider-id.js";
 import { stableStringify } from "./stable-stringify.js";
 
 export { resetModelsJsonReadyCacheForTest } from "./models-config-state.js";
@@ -90,6 +98,97 @@ async function readExistingModelsFile(pathname: string): Promise<{
       raw: "",
       parsed: null,
     };
+  }
+}
+
+function resolveProviderCatalog(value: unknown): Record<string, unknown> {
+  if (!isRecord(value) || !isRecord(value.providers)) {
+    return {};
+  }
+  return value.providers;
+}
+
+function resolvePlaintextProviderApiKey(provider: unknown): string | undefined {
+  if (!isRecord(provider) || typeof provider.apiKey !== "string") {
+    return undefined;
+  }
+  const apiKey = provider.apiKey.trim();
+  if (!apiKey || isNonSecretApiKeyMarker(apiKey)) {
+    return undefined;
+  }
+  return apiKey;
+}
+
+function hasConfiguredProviderApiKey(cfg: OpenClawConfig, providerKey: string): boolean {
+  const provider = findNormalizedProviderValue(cfg.models?.providers, providerKey);
+  return isRecord(provider) && provider.apiKey !== undefined;
+}
+
+function resolveMigratedModelsJsonProfileId(providerKey: string): string {
+  const normalized = normalizeProviderId(providerKey)
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return `${normalized || "provider"}:models-json`;
+}
+
+async function migrateExistingModelsJsonOnlyProviderApiKeys(params: {
+  cfg: OpenClawConfig;
+  agentDir: string;
+  existingParsed: unknown;
+  nextContents: string;
+}): Promise<void> {
+  const existingProviders = resolveProviderCatalog(params.existingParsed);
+  if (Object.keys(existingProviders).length === 0) {
+    return;
+  }
+
+  let nextProviders: Record<string, unknown>;
+  try {
+    nextProviders = resolveProviderCatalog(JSON.parse(params.nextContents) as unknown);
+  } catch {
+    return;
+  }
+
+  const candidates = Object.entries(existingProviders).flatMap(
+    ([providerKey, existingProvider]) => {
+      const existingApiKey = resolvePlaintextProviderApiKey(existingProvider);
+      if (!existingApiKey) {
+        return [];
+      }
+      if (hasConfiguredProviderApiKey(params.cfg, providerKey)) {
+        return [];
+      }
+      if (resolvePlaintextProviderApiKey(nextProviders[providerKey])) {
+        return [];
+      }
+      return [{ providerKey, existingApiKey }];
+    },
+  );
+
+  if (candidates.length === 0) {
+    return;
+  }
+
+  const store = ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false });
+  for (const { providerKey, existingApiKey } of candidates) {
+    if (listProfilesForProvider(store, providerKey).length > 0) {
+      continue;
+    }
+
+    const profileId = resolveMigratedModelsJsonProfileId(providerKey);
+    const credential = {
+      type: "api_key",
+      provider: providerKey,
+      key: existingApiKey,
+      copyToAgents: false,
+      displayName: "Migrated from models.json",
+    } as const;
+    await upsertAuthProfileWithLock({
+      agentDir: params.agentDir,
+      profileId,
+      credential,
+    });
+    store.profiles[profileId] = credential;
   }
 }
 
@@ -237,6 +336,12 @@ export async function ensureOpenClawModelsJson(
     }
 
     await fs.mkdir(agentDir, { recursive: true, mode: 0o700 });
+    await migrateExistingModelsJsonOnlyProviderApiKeys({
+      cfg,
+      agentDir,
+      existingParsed: existingModelsFile.parsed,
+      nextContents: plan.contents,
+    });
     await writeModelsFileAtomicForModelsJson(targetPath, plan.contents);
     await ensureModelsFileModeForModelsJson(targetPath);
     return { fingerprint, result: { agentDir, wrote: true } };

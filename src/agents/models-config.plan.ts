@@ -200,7 +200,8 @@ export async function planOpenClawModelsJsonWithDeps(
       sourceSecretDefaults: params.sourceConfigForSecrets?.secrets?.defaults,
       secretRefManagedProviders,
     }) ?? normalizedMergedProviders;
-  const finalProviders = applyNativeStreamingUsageCompat(secretEnforcedProviders);
+  const compatProviders = applyNativeStreamingUsageCompat(secretEnforcedProviders);
+  const finalProviders = stripPlaintextProviderApiKeys(compatProviders);
   const nextContents = `${JSON.stringify({ providers: finalProviders }, null, 2)}\n`;
 
   if (params.existingRaw === nextContents) {

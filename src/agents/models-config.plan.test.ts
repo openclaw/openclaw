@@ -77,7 +77,7 @@ describe("models-config plan", () => {
     expect(providers.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
   });
 
-  it("preserves existing models.json-only provider api keys in merge mode", async () => {
+  it("strips existing models.json-only provider api keys in merge mode", async () => {
     const providers = await planGeneratedProviders({
       config: {
         models: {
@@ -103,6 +103,6 @@ describe("models-config plan", () => {
       },
     });
 
-    expect(providers.custom?.apiKey).toBe("sk-existing-models-json-only"); // pragma: allowlist secret
+    expect(providers.custom?.apiKey).toBeUndefined();
   });
 });
