@@ -149,6 +149,29 @@ describe("collectPluginToolAllowlistWarnings", () => {
     expect(warnings).toStrictEqual([]);
   });
 
+  it("still warns for inherited allow policy when one agent intentionally denies MCP", () => {
+    const warnings = collectPluginToolAllowlistWarnings({
+      cfg: {
+        agents: {
+          defaults: { sandbox: { mode: "all" } },
+          list: [
+            {
+              id: "worker",
+              tools: { sandbox: { tools: { deny: ["bundle-mcp"] } } },
+            },
+          ],
+        },
+        mcp: { servers: { outlook: { command: "node", args: ["outlook-server.js"] } } },
+        tools: { sandbox: { tools: { alsoAllow: ["web_fetch"] } } },
+      },
+      manifestRegistry,
+    });
+
+    expect(warnings).toEqual([
+      '- mcp.servers defines 1 MCP server ("outlook"), but tools.sandbox.tools.alsoAllow does not include "bundle-mcp", "group:plugins", or a matching "<server>__*" MCP tool pattern. Sandboxed agents will filter bundled MCP tools before provider requests. Add "bundle-mcp" to tools.sandbox.tools.alsoAllow (or use "group:plugins" / server globs) if those MCP tools should be visible; use tools.sandbox.tools.allow: [] only when you intentionally want no sandbox allow gate.',
+    ]);
+  });
+
   it("does not warn for sandboxed MCP servers when group:plugins is explicitly allowed", () => {
     const warnings = collectPluginToolAllowlistWarnings({
       cfg: {

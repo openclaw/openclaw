@@ -13,6 +13,7 @@ type ToolAllowlistSource = {
 
 type ActiveSandboxToolPolicy = {
   labels: string[];
+  dedupeKey: string;
   policy: Record<string, unknown>;
 };
 
@@ -198,10 +199,15 @@ function buildEffectiveSandboxToolPolicy(params: {
     policy.deny = deny.value;
   }
 
-  const labels = [allow.label, alsoAllow.label].filter((label): label is string => Boolean(label));
+  const allowLabels = [allow.label, alsoAllow.label].filter((label): label is string =>
+    Boolean(label),
+  );
+  const labels = allowLabels.length > 0 ? allowLabels : ["default sandbox tool allowlist"];
+  const dedupeLabels = Array.from(new Set([...labels, deny.label].filter(Boolean)));
 
   return {
-    labels: labels.length > 0 ? labels : ["default sandbox tool allowlist"],
+    labels,
+    dedupeKey: dedupeLabels.join("\u0000"),
     policy,
   };
 }
@@ -210,7 +216,7 @@ function collectActiveSandboxToolPolicies(cfg: OpenClawConfig): ActiveSandboxToo
   const out = new Map<string, ActiveSandboxToolPolicy>();
   const globalPolicy = cfg.tools?.sandbox?.tools;
   const addPolicy = (entry: ActiveSandboxToolPolicy) => {
-    out.set(entry.labels.join("\u0000"), entry);
+    out.set(entry.dedupeKey, entry);
   };
   const addGlobalPolicy = () => {
     addPolicy(buildEffectiveSandboxToolPolicy({ globalPolicy }));
