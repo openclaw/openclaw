@@ -29,6 +29,7 @@ import {
 } from "openclaw/plugin-sdk/hook-runtime";
 import { clearPluginCommands, registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { registerSandboxBackend } from "openclaw/plugin-sdk/sandbox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 function queueActiveRunMessageForTest(
@@ -752,6 +753,7 @@ describe("runCodexAppServerAttempt", () => {
       effectiveWorkspace: workspaceDir,
       sandboxSessionKey,
       sandbox: { enabled: true, backendId: "ssh" } as never,
+      nativeToolSurfaceEnabled: false,
       runAbortController: new AbortController(),
       sessionAgentId: "main",
       pluginConfig: {},
@@ -767,7 +769,7 @@ describe("runCodexAppServerAttempt", () => {
     );
   });
 
-  it("keeps Docker sandbox shell tools hidden when native Code Mode can honor sandbox paths", async () => {
+  it("exposes Docker sandbox shell tools when OpenClaw sandboxing disables native Code Mode", async () => {
     testing.setOpenClawCodingToolsFactoryForTests(() => [
       createRuntimeDynamicTool("exec"),
       createRuntimeDynamicTool("process"),
@@ -782,21 +784,31 @@ describe("runCodexAppServerAttempt", () => {
     if (!sandboxSessionKey) {
       throw new Error("createParams must provide a sessionKey for Codex dynamic tool tests.");
     }
+    const sandbox = { enabled: true, backendId: "docker" } as never;
+    const nativeToolSurfaceEnabled = testing.shouldEnableCodexAppServerNativeToolSurface(
+      params,
+      sandbox,
+    );
 
     const dockerTools = await testing.buildDynamicTools({
       params,
       resolvedWorkspace: workspaceDir,
       effectiveWorkspace: workspaceDir,
       sandboxSessionKey,
-      sandbox: { enabled: true, backendId: "docker" } as never,
-      nativeToolSurfaceEnabled: true,
+      sandbox,
+      nativeToolSurfaceEnabled,
       runAbortController: new AbortController(),
       sessionAgentId: "main",
       pluginConfig: {},
       onYieldDetected: () => undefined,
     });
 
-    expect(dockerTools.map((tool) => tool.name)).toEqual(["message"]);
+    expect(nativeToolSurfaceEnabled).toBe(false);
+    expect(dockerTools.map((tool) => tool.name)).toEqual([
+      "message",
+      "sandbox_exec",
+      "sandbox_process",
+    ]);
   });
 
   it("exposes Docker sandbox shell tools when native Code Mode cannot honor sandbox paths", async () => {
@@ -836,6 +848,71 @@ describe("runCodexAppServerAttempt", () => {
     expect(tools.find((tool) => tool.name === "sandbox_exec")?.description).toContain(
       "Docker container-path bind layout",
     );
+  });
+
+  it("starts active OpenClaw sandbox turns with Codex native execution disabled", async () => {
+    const restoreSandboxBackend = registerSandboxBackend("codex-test-sandbox", async () => ({
+      id: "codex-test-sandbox",
+      runtimeId: "codex-test-runtime",
+      runtimeLabel: "Codex Test Sandbox",
+      workdir: "/workspace",
+      buildExecSpec: async () => ({
+        argv: ["true"],
+        env: {},
+        stdinMode: "pipe-closed" as const,
+      }),
+      runShellCommand: async () => ({
+        stdout: Buffer.alloc(0),
+        stderr: Buffer.alloc(0),
+        code: 0,
+      }),
+    }));
+    try {
+      testing.setOpenClawCodingToolsFactoryForTests(() => [
+        createRuntimeDynamicTool("exec"),
+        createRuntimeDynamicTool("process"),
+        createRuntimeDynamicTool("message"),
+      ]);
+      const sessionFile = path.join(tempDir, "session.jsonl");
+      const workspaceDir = path.join(tempDir, "workspace");
+      const params = createParams(sessionFile, workspaceDir);
+      params.disableTools = false;
+      params.runtimePlan = createCodexRuntimePlanFixture();
+      params.config = {
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "all",
+              backend: "codex-test-sandbox",
+              scope: "session",
+            },
+          },
+        },
+      } as never;
+      const { requests, waitForMethod, completeTurn } = createStartedThreadHarness();
+
+      const run = runCodexAppServerAttempt(params, {
+        pluginConfig: { appServer: { mode: "yolo" } },
+      });
+      await waitForMethod("turn/start");
+      await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      await run;
+
+      const startRequest = requests.find((request) => request.method === "thread/start");
+      const startParams = startRequest?.params as Record<string, unknown> | undefined;
+      const startConfig = startParams?.config as Record<string, unknown> | undefined;
+      const dynamicTools = startParams?.dynamicTools as Array<{ name: string }> | undefined;
+      expect(startConfig?.["features.code_mode"]).toBe(false);
+      expect(startConfig?.["features.code_mode_only"]).toBe(false);
+      expect(startParams?.environments).toEqual([]);
+      expect(dynamicTools?.map((tool) => tool.name)).toEqual([
+        "message",
+        "sandbox_exec",
+        "sandbox_process",
+      ]);
+    } finally {
+      restoreSandboxBackend();
+    }
   });
 
   it("does not expose sandbox shell tools when sandbox routing is disabled", async () => {
@@ -946,6 +1023,7 @@ describe("runCodexAppServerAttempt", () => {
     const processTool = createRuntimeDynamicTool("process");
     const tools = testing.addSandboxShellDynamicToolsIfAvailable([], [execTool, processTool], {
       sandbox: { enabled: true, backendId: "ssh" },
+      nativeToolSurfaceEnabled: false,
       pluginConfig: {},
     } as never);
 
@@ -1347,10 +1425,18 @@ describe("runCodexAppServerAttempt", () => {
     expect(testing.shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
   });
 
-  it("disables Codex native tool surfaces when Docker bind targets need container paths", () => {
+  it("disables Codex native tool surfaces whenever an OpenClaw sandbox is active", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     params.disableTools = false;
+
+    expect(
+      testing.shouldEnableCodexAppServerNativeToolSurface(params, {
+        enabled: true,
+        backendId: "docker",
+        docker: { binds: [] },
+      } as never),
+    ).toBe(false);
 
     expect(
       testing.shouldEnableCodexAppServerNativeToolSurface(params, {
@@ -1366,7 +1452,7 @@ describe("runCodexAppServerAttempt", () => {
         backendId: "docker",
         docker: { binds: ["/tmp/openclaw-data:/tmp/openclaw-data:rw"] },
       } as never),
-    ).toBe(true);
+    ).toBe(false);
 
     expect(
       testing.shouldEnableCodexAppServerNativeToolSurface(params, {
@@ -1379,6 +1465,39 @@ describe("runCodexAppServerAttempt", () => {
           ],
         },
       } as never),
+    ).toBe(false);
+
+    expect(
+      testing.shouldEnableCodexAppServerNativeToolSurface(params, {
+        enabled: true,
+        backendId: "ssh",
+      } as never),
+    ).toBe(false);
+  });
+
+  it("projects mirrored history for transient native-disabled Codex threads", () => {
+    expect(
+      testing.shouldProjectMirroredHistoryForCodexStart({
+        startupBinding: {
+          threadId: "thread-existing",
+          dynamicToolsFingerprint: "same-tools",
+        } as never,
+        dynamicToolsFingerprint: "same-tools",
+        historyMessages: [userMessage("earlier request", Date.now())],
+        forceProject: true,
+      }),
+    ).toBe(true);
+
+    expect(
+      testing.shouldProjectMirroredHistoryForCodexStart({
+        startupBinding: {
+          threadId: "thread-existing",
+          dynamicToolsFingerprint: "same-tools",
+        } as never,
+        dynamicToolsFingerprint: "same-tools",
+        historyMessages: [assistantMessage("earlier response", Date.now())],
+        forceProject: true,
+      }),
     ).toBe(false);
   });
 
@@ -9530,109 +9649,6 @@ describe("runCodexAppServerAttempt", () => {
     expect(turnRequestParams?.sandboxPolicy).toEqual({ type: "dangerFullAccess" });
     expect(turnRequestParams?.serviceTier).toBe("priority");
     expect(turnRequestParams?.model).toBe("gpt-5.4-codex");
-  });
-
-  it("maps active OpenClaw sandbox egress into Codex workspace-write turns", () => {
-    const appServer = resolveCodexAppServerRuntimeOptions({
-      pluginConfig: {
-        appServer: {
-          approvalPolicy: "never",
-          sandbox: "danger-full-access",
-        },
-      },
-    });
-
-    expect(
-      testing.resolveCodexAppServerSandboxPolicyForOpenClawSandbox(
-        appServer,
-        {
-          enabled: true,
-          backendId: "docker",
-          docker: { network: "none" },
-        } as never,
-        "/tmp/workspace",
-      ),
-    ).toEqual({
-      type: "workspaceWrite",
-      writableRoots: ["/tmp/workspace"],
-      networkAccess: false,
-      excludeTmpdirEnvVar: false,
-      excludeSlashTmp: false,
-    });
-
-    expect(
-      testing.resolveCodexAppServerSandboxPolicyForOpenClawSandbox(
-        { ...appServer, sandbox: "workspace-write" },
-        {
-          enabled: true,
-          backendId: "docker",
-          docker: { network: "bridge" },
-        } as never,
-        "/tmp/workspace",
-      ),
-    ).toEqual({
-      type: "workspaceWrite",
-      writableRoots: ["/tmp/workspace"],
-      networkAccess: true,
-      excludeTmpdirEnvVar: false,
-      excludeSlashTmp: false,
-    });
-
-    expect(
-      testing.resolveCodexAppServerSandboxPolicyForOpenClawSandbox(
-        appServer,
-        {
-          enabled: true,
-          backendId: "docker",
-          docker: {
-            network: "bridge",
-            binds: [
-              "/tmp/openclaw-writable-data:/data:rw",
-              "/tmp/openclaw-readonly-data:/readonly:ro",
-            ],
-          },
-        } as never,
-        "/tmp/workspace",
-      ),
-    ).toEqual({
-      type: "workspaceWrite",
-      writableRoots: ["/tmp/workspace", path.resolve("/tmp/openclaw-writable-data")],
-      networkAccess: true,
-      excludeTmpdirEnvVar: false,
-      excludeSlashTmp: false,
-    });
-
-    expect(
-      testing.resolveCodexAppServerSandboxPolicyForOpenClawSandbox(
-        appServer,
-        {
-          enabled: true,
-          backendId: "ssh",
-        } as never,
-        "/tmp/workspace",
-      ),
-    ).toEqual({
-      type: "workspaceWrite",
-      writableRoots: ["/tmp/workspace"],
-      networkAccess: true,
-      excludeTmpdirEnvVar: false,
-      excludeSlashTmp: false,
-    });
-
-    expect(
-      testing.resolveCodexAppServerSandboxPolicyForOpenClawSandbox(
-        appServer,
-        null,
-        "/tmp/workspace",
-      ),
-    ).toBeUndefined();
-    expect(
-      testing.resolveCodexAppServerSandboxPolicyForOpenClawSandbox(
-        { ...appServer, sandbox: "read-only" },
-        { enabled: true } as never,
-        "/tmp/workspace",
-      ),
-    ).toBeUndefined();
   });
 
   it("passes current Codex service tier request values through app-server resume and turn requests", async () => {
