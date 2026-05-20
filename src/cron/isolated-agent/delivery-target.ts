@@ -7,7 +7,10 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-id-resolution.js";
-import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
+import {
+  inferTargetResolveKind,
+  normalizeTargetForProvider,
+} from "../../infra/outbound/target-normalization.js";
 import { tryResolveLoadedOutboundTarget } from "../../infra/outbound/targets-loaded.js";
 import { resolveSessionDeliveryTarget } from "../../infra/outbound/targets-session.js";
 import type { OutboundChannel } from "../../infra/outbound/targets.js";
@@ -324,6 +327,10 @@ export async function resolveDeliveryTarget(
     channel,
     input: docked.to,
     accountId,
+    preferredKind: inferTargetResolveKind({
+      channel,
+      raw: docked.to,
+    }),
   });
   return {
     ok: true,
