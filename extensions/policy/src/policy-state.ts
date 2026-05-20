@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { parseMd } from "@openclaw/oc-path/api.js";
 
 export type PolicyAttestation = {
   readonly checkedAt: string;
@@ -16,6 +17,12 @@ export type PolicyAttestation = {
 
 export type PolicyEvidence = {
   readonly channels: readonly PolicyChannelEvidence[];
+  readonly tools?: readonly PolicyToolEvidence[];
+  readonly channelRuntime: readonly PolicyChannelRuntimeEvidence[];
+  readonly mcpServers: readonly PolicyMcpServerEvidence[];
+  readonly modelProviders: readonly PolicyModelProviderEvidence[];
+  readonly modelRefs: readonly PolicyModelRefEvidence[];
+  readonly network: readonly PolicyNetworkEvidence[];
 };
 
 export type PolicyChannelEvidence = {
@@ -23,6 +30,51 @@ export type PolicyChannelEvidence = {
   readonly provider: string;
   readonly source: string;
   readonly enabled?: boolean;
+};
+
+export type PolicyChannelRuntimeEvidence = {
+  readonly id: string;
+  readonly accountId: string;
+  readonly source: string;
+  readonly running: boolean;
+  readonly enabled?: boolean;
+  readonly configured?: boolean;
+};
+
+export type PolicyMcpServerEvidence = {
+  readonly id: string;
+  readonly transport: "stdio" | "sse" | "streamable-http" | "unknown";
+  readonly source: string;
+  readonly command?: string;
+  readonly url?: string;
+};
+
+export type PolicyToolEvidence = {
+  readonly id: string;
+  readonly source: string;
+  readonly line: number;
+  readonly risk?: string;
+  readonly sensitivity?: string;
+  readonly owner?: string;
+  readonly capabilities?: readonly string[];
+};
+
+export type PolicyModelProviderEvidence = {
+  readonly id: string;
+  readonly source: string;
+};
+
+export type PolicyModelRefEvidence = {
+  readonly ref: string;
+  readonly provider: string;
+  readonly model: string;
+  readonly source: string;
+};
+
+export type PolicyNetworkEvidence = {
+  readonly id: string;
+  readonly source: string;
+  readonly value: boolean;
 };
 
 const RESERVED_CHANNEL_CONFIG_KEYS = new Set(["defaults", "modelByChannel"]);
@@ -82,10 +134,68 @@ export function createPolicyAttestation(input: {
   };
 }
 
-export function collectPolicyEvidence(cfg: Record<string, unknown>): PolicyEvidence {
-  return {
+export function collectPolicyEvidence(
+  cfg: Record<string, unknown>,
+  options: { readonly toolsRaw?: string; readonly channelRuntime?: unknown } = {},
+): PolicyEvidence {
+  const evidence: PolicyEvidence = {
     channels: scanPolicyChannels(cfg),
+    channelRuntime: scanPolicyChannelRuntime(options.channelRuntime),
+    mcpServers: scanPolicyMcpServers(cfg),
+    modelProviders: scanPolicyModelProviders(cfg),
+    modelRefs: scanPolicyModelRefs(cfg),
+    network: scanPolicyNetwork(cfg),
   };
+  if (options.toolsRaw === undefined) {
+    return evidence;
+  }
+  return { ...evidence, tools: scanPolicyTools(options.toolsRaw) };
+}
+
+export function scanPolicyChannelRuntime(
+  runtime: unknown,
+): readonly PolicyChannelRuntimeEvidence[] {
+  if (!isRecord(runtime) || !isRecord(runtime.channelAccounts)) {
+    return [];
+  }
+  const entries: PolicyChannelRuntimeEvidence[] = [];
+  for (const [channelId, accounts] of Object.entries(runtime.channelAccounts)) {
+    if (!isRecord(accounts)) {
+      continue;
+    }
+    for (const [accountId, snapshot] of Object.entries(accounts)) {
+      if (!isRecord(snapshot)) {
+        continue;
+      }
+      const entry: {
+        id: string;
+        accountId: string;
+        source: string;
+        running: boolean;
+        enabled?: boolean;
+        configured?: boolean;
+      } = {
+        id: channelId,
+        accountId,
+        source: `runtime:channels/${runtimeRefSegment(channelId)}/accounts/${runtimeRefSegment(accountId)}`,
+        running: snapshot.running === true,
+      };
+      if (typeof snapshot.enabled === "boolean") {
+        entry.enabled = snapshot.enabled;
+      }
+      if (typeof snapshot.configured === "boolean") {
+        entry.configured = snapshot.configured;
+      }
+      entries.push(entry);
+    }
+  }
+  return entries.toSorted(
+    (a, b) => a.id.localeCompare(b.id) || a.accountId.localeCompare(b.accountId),
+  );
+}
+
+function runtimeRefSegment(value: string): string {
+  return encodeURIComponent(value);
 }
 
 export function scanPolicyChannels(cfg: Record<string, unknown>): readonly PolicyChannelEvidence[] {
@@ -110,8 +220,348 @@ export function scanPolicyChannels(cfg: Record<string, unknown>): readonly Polic
     });
 }
 
+export function scanPolicyMcpServers(
+  cfg: Record<string, unknown>,
+): readonly PolicyMcpServerEvidence[] {
+  return Object.entries(configuredMcpServers(cfg))
+    .toSorted(([a], [b]) => a.localeCompare(b))
+    .map(([id, value]) => {
+      const entry: {
+        id: string;
+        transport: "stdio" | "sse" | "streamable-http" | "unknown";
+        source: string;
+        command?: string;
+        url?: string;
+      } = {
+        id,
+        transport: mcpServerTransport(value),
+        source: `oc://openclaw.config/mcp/servers/${id}`,
+      };
+      if (isRecord(value)) {
+        if (typeof value.command === "string") {
+          entry.command = value.command;
+        }
+        if (typeof value.url === "string") {
+          entry.url = redactMcpUrlForEvidence(value.url);
+        }
+      }
+      return entry;
+    });
+}
+
+export function scanPolicyModelProviders(
+  cfg: Record<string, unknown>,
+): readonly PolicyModelProviderEvidence[] {
+  return Object.keys(configuredModelProviders(cfg))
+    .toSorted((a, b) => a.localeCompare(b))
+    .map((id) => ({
+      id,
+      source: `oc://openclaw.config/models/providers/${id}`,
+    }));
+}
+
+export function scanPolicyModelRefs(
+  cfg: Record<string, unknown>,
+): readonly PolicyModelRefEvidence[] {
+  const refs: PolicyModelRefEvidence[] = [];
+  if (isRecord(cfg.agents)) {
+    collectModelRefsFromRecord(refs, cfg.agents, "oc://openclaw.config/agents");
+    collectModelRefsFromAgentAllowlist(refs, cfg.agents);
+  }
+  return refs.toSorted(
+    (a, b) => a.provider.localeCompare(b.provider) || a.model.localeCompare(b.model),
+  );
+}
+
+export function scanPolicyNetwork(cfg: Record<string, unknown>): readonly PolicyNetworkEvidence[] {
+  return [
+    networkBooleanEvidence(
+      cfg,
+      "browser-private-network",
+      ["browser", "ssrfPolicy", "dangerouslyAllowPrivateNetwork"],
+      "oc://openclaw.config/browser/ssrfPolicy/dangerouslyAllowPrivateNetwork",
+    ),
+    networkBooleanEvidence(
+      cfg,
+      "browser-private-network-legacy",
+      ["browser", "ssrfPolicy", "allowPrivateNetwork"],
+      "oc://openclaw.config/browser/ssrfPolicy/allowPrivateNetwork",
+    ),
+    networkBooleanEvidence(
+      cfg,
+      "web-fetch-private-network",
+      ["tools", "web", "fetch", "ssrfPolicy", "dangerouslyAllowPrivateNetwork"],
+      "oc://openclaw.config/tools/web/fetch/ssrfPolicy/dangerouslyAllowPrivateNetwork",
+    ),
+    networkBooleanEvidence(
+      cfg,
+      "web-fetch-private-network-legacy",
+      ["tools", "web", "fetch", "ssrfPolicy", "allowPrivateNetwork"],
+      "oc://openclaw.config/tools/web/fetch/ssrfPolicy/allowPrivateNetwork",
+    ),
+    networkBooleanEvidence(
+      cfg,
+      "web-fetch-rfc2544-benchmark-range",
+      ["tools", "web", "fetch", "ssrfPolicy", "allowRfc2544BenchmarkRange"],
+      "oc://openclaw.config/tools/web/fetch/ssrfPolicy/allowRfc2544BenchmarkRange",
+    ),
+    networkBooleanEvidence(
+      cfg,
+      "web-fetch-ipv6-unique-local-range",
+      ["tools", "web", "fetch", "ssrfPolicy", "allowIpv6UniqueLocalRange"],
+      "oc://openclaw.config/tools/web/fetch/ssrfPolicy/allowIpv6UniqueLocalRange",
+    ),
+  ].filter((entry): entry is PolicyNetworkEvidence => entry !== undefined);
+}
+
+export function scanPolicyTools(raw: string): readonly PolicyToolEvidence[] {
+  return scanPolicyToolHeaders(raw);
+}
+
+function scanPolicyToolHeaders(raw: string): readonly PolicyToolEvidence[] {
+  const toolsBlock = parseMd(raw).ast.blocks.find((block) => block.slug === "tools");
+  if (toolsBlock === undefined) {
+    return [];
+  }
+  const body = toolsBlock.bodyText.split(/\r?\n/);
+  const tools: PolicyToolEvidence[] = [];
+  for (let index = 0; index < body.length; index += 1) {
+    const line = body[index];
+    const match = /^###\s+([^\s#]+)(.*)$/.exec(line);
+    if (match === null) {
+      continue;
+    }
+    const id = match[1].trim();
+    const entry: {
+      id: string;
+      source: string;
+      line: number;
+      risk?: string;
+      sensitivity?: string;
+      owner?: string;
+      capabilities?: readonly string[];
+    } = {
+      id,
+      source: `oc://TOOLS.md/tools/${id}`,
+      line: toolsBlock.line + index + 1,
+    };
+    const metaLines = [match[2] ?? ""];
+    for (let metaIndex = index + 1; metaIndex < body.length; metaIndex += 1) {
+      const metaLine = body[metaIndex];
+      if (/^###\s+\S+/.test(metaLine.trim())) {
+        break;
+      }
+      metaLines.push(metaLine);
+    }
+    const meta = metaLines.join("\n");
+    const risk = riskFromMeta(meta);
+    const sensitivity = /\bsensitivity\s*:\s*([a-z0-9_-]+)\b/i.exec(meta)?.[1]?.toLowerCase();
+    const owner = /\bowner\s*:\s*([^\s#]+)\b/i.exec(meta)?.[1];
+    const capabilities = capabilityTokensFromMetaLines(metaLines);
+    if (risk !== undefined) {
+      entry.risk = risk;
+    }
+    if (sensitivity !== undefined) {
+      entry.sensitivity = sensitivity;
+    }
+    if (owner !== undefined) {
+      entry.owner = owner;
+    }
+    if (capabilities.length > 0) {
+      entry.capabilities = capabilities;
+    }
+    tools.push(entry);
+  }
+  return tools;
+}
+
+function riskFromMeta(meta: string): string | undefined {
+  const namedRisk = /\brisk\s*:\s*([a-z0-9_-]+)\b/i.exec(meta)?.[1];
+  if (namedRisk !== undefined) {
+    return namedRisk.toLowerCase();
+  }
+  const alias = /\bR([0-5])\b/.exec(meta)?.[1];
+  switch (alias) {
+    case "0":
+    case "1":
+      return "low";
+    case "2":
+    case "3":
+      return "medium";
+    case "4":
+      return "high";
+    case "5":
+      return "critical";
+    default:
+      return undefined;
+  }
+}
+
+function capabilityTokensFromMetaLines(lines: readonly string[]): readonly string[] {
+  return lines.flatMap((line, index): string[] => {
+    const trimmed = line.trim();
+    if (trimmed.length === 0) {
+      return [];
+    }
+    const tokens = trimmed.match(/\b[A-Z][A-Z0-9_]{2,}\b/g) ?? [];
+    if (index === 0 || /\bcapabilities\s*:/i.test(trimmed)) {
+      return tokens;
+    }
+    const withoutTokens = tokens.reduce((remaining, token) => {
+      return remaining.replace(token, "");
+    }, trimmed);
+    return /^[\s,;:[\](){}#*_-]*$/.test(withoutTokens) ? tokens : [];
+  });
+}
+
 function configuredChannels(cfg: Record<string, unknown>): Record<string, unknown> {
   return isRecord(cfg.channels) ? cfg.channels : {};
+}
+
+function configuredMcpServers(cfg: Record<string, unknown>): Record<string, unknown> {
+  return isRecord(cfg.mcp) && isRecord(cfg.mcp.servers) ? cfg.mcp.servers : {};
+}
+
+function mcpServerTransport(value: unknown): PolicyMcpServerEvidence["transport"] {
+  if (!isRecord(value)) {
+    return "unknown";
+  }
+  if (typeof value.command === "string") {
+    return "stdio";
+  }
+  if (value.transport === "sse" || value.transport === "streamable-http") {
+    return value.transport;
+  }
+  if (typeof value.url === "string") {
+    return "streamable-http";
+  }
+  return "unknown";
+}
+
+function redactMcpUrlForEvidence(raw: string): string {
+  try {
+    const url = new URL(raw);
+    return `${url.protocol}//${url.host}`;
+  } catch {
+    return "[redacted-url]";
+  }
+}
+
+function configuredModelProviders(cfg: Record<string, unknown>): Record<string, unknown> {
+  return isRecord(cfg.models) && isRecord(cfg.models.providers) ? cfg.models.providers : {};
+}
+
+function networkBooleanEvidence(
+  cfg: Record<string, unknown>,
+  id: string,
+  path: readonly string[],
+  source: string,
+): PolicyNetworkEvidence | undefined {
+  const value = readBooleanPath(cfg, path);
+  return value === undefined ? undefined : { id, source, value };
+}
+
+function readBooleanPath(value: unknown, path: readonly string[]): boolean | undefined {
+  let current = value;
+  for (const part of path) {
+    if (!isRecord(current)) {
+      return undefined;
+    }
+    current = current[part];
+  }
+  return typeof current === "boolean" ? current : undefined;
+}
+
+function collectModelRefsFromValue(
+  refs: PolicyModelRefEvidence[],
+  value: unknown,
+  source: string,
+): void {
+  if (typeof value === "string") {
+    pushModelRef(refs, value, source);
+    return;
+  }
+  if (!isRecord(value)) {
+    return;
+  }
+  if (typeof value.primary === "string") {
+    pushModelRef(refs, value.primary, `${source}/primary`);
+  }
+  if (Array.isArray(value.fallbacks)) {
+    for (const [index, fallback] of value.fallbacks.entries()) {
+      if (typeof fallback === "string") {
+        pushModelRef(refs, fallback, `${source}/fallbacks/#${index}`);
+      }
+    }
+  }
+}
+
+function collectModelRefsFromRecord(
+  refs: PolicyModelRefEvidence[],
+  value: Record<string, unknown>,
+  source: string,
+): void {
+  for (const [key, child] of Object.entries(value)) {
+    const childPath = `${source}/${key}`;
+    if (isModelSettingKey(key)) {
+      collectModelRefsFromValue(refs, child, childPath);
+      continue;
+    }
+    if (Array.isArray(child)) {
+      for (const [index, item] of child.entries()) {
+        if (isRecord(item)) {
+          collectModelRefsFromRecord(refs, item, `${childPath}/#${index}`);
+        }
+      }
+      continue;
+    }
+    if (isRecord(child)) {
+      collectModelRefsFromRecord(refs, child, childPath);
+    }
+  }
+}
+
+function collectModelRefsFromAgentAllowlist(
+  refs: PolicyModelRefEvidence[],
+  agents: Record<string, unknown>,
+): void {
+  const defaults = agents.defaults;
+  if (!isRecord(defaults) || !isRecord(defaults.models)) {
+    return;
+  }
+  for (const ref of Object.keys(defaults.models)) {
+    pushModelRef(refs, ref, `oc://openclaw.config/agents/defaults/models/${escapeRefSegment(ref)}`);
+  }
+}
+
+function isModelSettingKey(key: string): boolean {
+  return key === "model" || key.endsWith("Model");
+}
+
+function escapeRefSegment(value: string): string {
+  return value.replaceAll("/", "~1");
+}
+
+function pushModelRef(refs: PolicyModelRefEvidence[], ref: string, source: string): void {
+  const parsed = parseModelRef(ref);
+  if (parsed === undefined) {
+    return;
+  }
+  refs.push({ ref, provider: parsed.provider, model: parsed.model, source });
+}
+
+function parseModelRef(
+  ref: string,
+): { readonly provider: string; readonly model: string } | undefined {
+  const trimmed = ref.trim();
+  const slash = trimmed.indexOf("/");
+  if (slash <= 0 || slash >= trimmed.length - 1) {
+    return undefined;
+  }
+  return {
+    provider: trimmed.slice(0, slash),
+    model: trimmed.slice(slash + 1),
+  };
 }
 
 function sha256(value: string): string {

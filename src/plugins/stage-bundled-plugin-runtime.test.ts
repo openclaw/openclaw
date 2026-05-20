@@ -107,6 +107,8 @@ describe("stageBundledPluginRuntime", () => {
       "dist/plugin-sdk/channel-entry-contract.js":
         "export { contract } from '../channel-entry-contract-abc.js';\n",
       "dist/channel-entry-contract-abc.js": "export const contract = true;\n",
+      [bundledDistPluginFile("oc-path", "index.js")]: "export const full = true;\n",
+      [bundledDistPluginFile("oc-path", "api.js")]: "export const md = true;\n",
       [bundledDistPluginFile("diffs", "index.js")]: "export default {}\n",
       [bundledDistPluginFile("diffs", "node_modules/@pierre/diffs/index.js")]:
         "export default {}\n",
@@ -146,6 +148,26 @@ describe("stageBundledPluginRuntime", () => {
         "utf8",
       ),
     ).toContain('"./plugin-sdk/*": "./plugin-sdk/*.js"');
+    expect(
+      fs.readFileSync(
+        path.join(
+          repoRoot,
+          "dist",
+          "extensions",
+          "node_modules",
+          "@openclaw",
+          "oc-path",
+          "package.json",
+        ),
+        "utf8",
+      ),
+    ).toContain('"./api.js": "./api.js"');
+    expect(
+      fs.readFileSync(
+        path.join(repoRoot, "dist", "extensions", "node_modules", "@openclaw", "oc-path", "api.js"),
+        "utf8",
+      ),
+    ).toContain("../../../oc-path/api.js");
     expect(
       fs.readFileSync(
         path.join(

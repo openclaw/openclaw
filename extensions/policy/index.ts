@@ -1,6 +1,7 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { registerPolicyCli } from "./src/cli.js";
 import { registerPolicyDoctorChecks } from "./src/doctor/register.js";
+import { registerPolicyTrustedToolPolicy } from "./src/runtime-tool-policy.js";
 
 export default definePluginEntry({
   id: "policy",
@@ -22,5 +23,6 @@ export default definePluginEntry({
       },
     );
     registerPolicyDoctorChecks();
+    registerPolicyTrustedToolPolicy(api);
   },
 });

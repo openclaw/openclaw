@@ -1,10 +1,20 @@
 import type { ExecApprovalDecision } from "./exec-approvals.js";
+import { policyApprovalMetadataLines } from "./policy-approval-metadata.js";
+
+type PluginApprovalJsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | PluginApprovalJsonValue[]
+  | { [key: string]: PluginApprovalJsonValue };
 
 export type PluginApprovalRequestPayload = {
   pluginId?: string | null;
   title: string;
   description: string;
   severity?: "info" | "warning" | "critical" | null;
+  metadata?: PluginApprovalJsonValue;
   toolName?: string | null;
   toolCallId?: string | null;
   allowedDecisions?: readonly ExecApprovalDecision[] | null;
@@ -86,6 +96,10 @@ export function buildPluginApprovalRequestMessage(
   }
   if (request.request.agentId) {
     lines.push(`Agent: ${request.request.agentId}`);
+  }
+  const policyMetadata = policyApprovalMetadataLines(request.request.metadata);
+  for (const line of policyMetadata) {
+    lines.push(line);
   }
   lines.push(`ID: ${request.id}`);
   const expiresIn = Math.max(0, Math.round((request.expiresAtMs - nowMsValue) / 1000));

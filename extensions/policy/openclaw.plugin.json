@@ -20,17 +20,21 @@
         "type": "boolean",
         "description": "Enable policy doctor checks even before policy.jsonc exists."
       },
+      "runtimeToolPolicy": {
+        "type": "boolean",
+        "description": "Apply enabled policy tool requirements at runtime through the trusted tool policy hook."
+      },
       "workspaceRepairs": {
         "type": "boolean",
         "description": "Allow doctor --fix to repair policy-managed workspace settings."
       },
       "expectedHash": {
         "type": "string",
-        "description": "Optional sha256 hash for hash-locking the approved policy artifact."
+        "description": "Optional sha256 hash for hash-locking the approved policy artifact from trusted config."
       },
       "expectedAttestationHash": {
         "type": "string",
-        "description": "Optional sha256 hash for the last accepted clean policy check."
+        "description": "Optional sha256 hash for the last accepted clean policy check from trusted config."
       },
       "path": {
         "type": "string",

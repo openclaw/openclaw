@@ -5,6 +5,7 @@
   "description": "OpenClaw policy doctor checks for workspace conformance",
   "type": "module",
   "dependencies": {
+    "@openclaw/oc-path": "workspace:*",
     "json5": "2.2.3"
   },
   "devDependencies": {

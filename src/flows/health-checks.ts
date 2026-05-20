@@ -49,6 +49,10 @@ export interface HealthCheckContext {
   readonly cfg: OpenClawConfig;
   readonly cwd?: string;
   readonly configPath?: string;
+  readonly runtimeEvidence?: {
+    readonly channels?: unknown;
+    readonly channelRuntime?: unknown;
+  };
 }
 
 export interface HealthRepairContext extends Omit<HealthCheckContext, "mode"> {
