@@ -190,6 +190,7 @@ describe("models-config", () => {
           string,
           {
             baseUrl?: string;
+            apiKey?: string;
             models?: Array<{
               id?: string;
               cost?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number };
@@ -199,6 +200,8 @@ describe("models-config", () => {
       };
 
       expect(parsed.providers["custom-proxy"]?.baseUrl).toBe("http://localhost:4000/v1");
+      expect(parsed.providers["custom-proxy"]?.apiKey).toBeUndefined();
+      expect(raw).not.toContain("TEST_KEY");
       const model = parsed.providers["custom-proxy"]?.models?.[0];
       expect(model?.id).toBe("llama-3.1-8b");
       expect(model?.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
