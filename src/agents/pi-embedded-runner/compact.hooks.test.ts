@@ -330,11 +330,16 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       sessionAgentId: "main",
       effectiveWorkspace: "/tmp/workspace",
       agentDir: "/tmp/workspace",
+      runtimePlan: {
+        auth: { forwardedAuthProfileId: "openai:profile-1" },
+        transport: { resolveExtraParams: vi.fn(() => undefined) },
+      } as never,
     });
 
     const streamArg = mockCallArg(resolveEmbeddedAgentStreamFnMock) as Record<string, unknown>;
     expect(streamArg.currentStreamFn).toBeTypeOf("function");
     expect(streamArg.sessionId).toBe("session-1");
+    expect(streamArg.authProfileId).toBe("openai:profile-1");
     expect(applyExtraParamsToAgentMock).toHaveBeenCalledWith(
       expectRecordFields(mockCallArg(applyExtraParamsToAgentMock), { streamFn: resolvedStreamFn }),
       undefined,

@@ -14,9 +14,11 @@ import {
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
+  emitDiagnosticEvent,
   emitTrustedDiagnosticEvent,
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
+  waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import {
@@ -80,7 +82,19 @@ type RunCodexAppServerAttemptOptions = NonNullable<
 >;
 
 function flushDiagnosticEvents() {
-  return new Promise<void>((resolve) => setImmediate(resolve));
+  return waitForDiagnosticEventsDrained();
+}
+
+function emitAsyncDiagnosticBacklog(count: number): void {
+  for (let index = 0; index < count; index += 1) {
+    emitDiagnosticEvent({
+      type: "model.call.started",
+      runId: `backlog-run-${index}`,
+      callId: `backlog-call-${index}`,
+      provider: "openai",
+      model: "gpt-5.4",
+    });
+  }
 }
 
 function activeDiagnosticToolKeys(events: DiagnosticEventPayload[]): Set<string> {
@@ -830,6 +844,7 @@ describe("runCodexAppServerAttempt", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(sessionFile, workspaceDir);
     params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
     const sandboxSessionKey = params.sessionKey;
     if (!sandboxSessionKey) {
       throw new Error("createParams must provide a sessionKey for Codex dynamic tool tests.");
@@ -1902,6 +1917,22 @@ describe("runCodexAppServerAttempt", () => {
     ).toBe(180_000);
   });
 
+  it("uses a 120 second default for Codex image generation dynamic tool calls", () => {
+    expect(
+      testing.resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-image-generate-default",
+          namespace: null,
+          tool: "image_generate",
+          arguments: { prompt: "cat" },
+        },
+        config: undefined,
+      }),
+    ).toBe(120_000);
+  });
+
   it("uses the media image timeout for Codex image dynamic tool calls", () => {
     expect(
       testing.resolveDynamicToolCallTimeoutMs({
@@ -2504,6 +2535,7 @@ describe("runCodexAppServerAttempt", () => {
 
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("thread/start");
+    emitAsyncDiagnosticBacklog(150);
 
     const toolResult = (await harness.handleServerRequest({
       id: "request-echo-error-tool",

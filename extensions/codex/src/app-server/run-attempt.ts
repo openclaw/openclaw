@@ -51,6 +51,7 @@ import {
 import { markAuthProfileBlockedUntil, resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import {
   emitTrustedDiagnosticEvent,
+  hasPendingInternalDiagnosticEvent,
   onInternalDiagnosticEvent,
   type DiagnosticEventPayload,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
@@ -181,6 +182,7 @@ import { filterToolsForVisionInputs } from "./vision-tools.js";
 
 const CODEX_DYNAMIC_TOOL_TIMEOUT_MS = 30_000;
 const CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS = 600_000;
+const CODEX_DYNAMIC_IMAGE_GENERATION_TOOL_TIMEOUT_MS = 120_000;
 const CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS = 60_000;
 const CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS = 3;
 const CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS = 100;
@@ -2182,8 +2184,15 @@ export async function runCodexAppServerAttempt(
             },
           });
         }
-        await waitForDiagnosticEventDrain();
-        if (!terminalDiagnosticObserved) {
+        if (
+          !terminalDiagnosticObserved &&
+          !hasPendingDynamicToolTerminalDiagnostic({
+            call,
+            runId: params.runId,
+            sessionId: params.sessionId,
+            sessionKey: params.sessionKey,
+          })
+        ) {
           emitDynamicToolTerminalDiagnostic({
             response,
             call,
@@ -2195,8 +2204,15 @@ export async function runCodexAppServerAttempt(
         }
         return protocolResponse as JsonValue;
       } catch (error) {
-        await waitForDiagnosticEventDrain();
-        if (!terminalDiagnosticObserved) {
+        if (
+          !terminalDiagnosticObserved &&
+          !hasPendingDynamicToolTerminalDiagnostic({
+            call,
+            runId: params.runId,
+            sessionId: params.sessionId,
+            sessionKey: params.sessionKey,
+          })
+        ) {
           emitDynamicToolErrorDiagnostic({
             call,
             runId: params.runId,
@@ -2947,10 +2963,6 @@ function toCodexDynamicToolProtocolResponse(
   };
 }
 
-function waitForDiagnosticEventDrain(): Promise<void> {
-  return new Promise((resolve) => setImmediate(resolve));
-}
-
 type TerminalToolExecutionDiagnostic = Extract<
   DiagnosticEventPayload,
   { type: "tool.execution.blocked" | "tool.execution.completed" | "tool.execution.error" }
@@ -2995,6 +3007,26 @@ function isMatchingDynamicToolTerminalDiagnostic(params: {
   );
 }
 
+function hasPendingDynamicToolTerminalDiagnostic(params: {
+  call: CodexDynamicToolCallParams;
+  runId?: string;
+  sessionId?: string;
+  sessionKey?: string;
+}): boolean {
+  return hasPendingInternalDiagnosticEvent((event) => {
+    if (!isDynamicToolTerminalDiagnosticEvent(event)) {
+      return false;
+    }
+    return isMatchingDynamicToolTerminalDiagnostic({
+      event,
+      call: params.call,
+      runId: params.runId,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+    });
+  });
+}
+
 function resolveDynamicToolCallTimeoutMs(params: {
   call: CodexDynamicToolCallParams;
   config: EmbeddedRunAttemptParams["config"];
@@ -3020,9 +3052,12 @@ function readConfiguredDynamicToolTimeoutMs(
   if (toolName === "image_generate") {
     const imageGenerationModel = config?.agents?.defaults?.imageGenerationModel;
     if (!imageGenerationModel || typeof imageGenerationModel !== "object") {
-      return undefined;
+      return CODEX_DYNAMIC_IMAGE_GENERATION_TOOL_TIMEOUT_MS;
     }
-    return readPositiveFiniteTimeoutMs(imageGenerationModel.timeoutMs);
+    return (
+      readPositiveFiniteTimeoutMs(imageGenerationModel.timeoutMs) ??
+      CODEX_DYNAMIC_IMAGE_GENERATION_TOOL_TIMEOUT_MS
+    );
   }
 
   if (toolName === "image") {
