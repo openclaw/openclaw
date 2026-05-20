@@ -601,7 +601,7 @@ describe("buildContextOverflowRecoveryText", () => {
     expect(text).not.toContain("reset our conversation");
   });
 
-  it("uses fallback model from session when primary model metadata is unavailable", () => {
+  it("falls back to session entry model when runtimeProvider is not provided", () => {
     const text = buildContextOverflowRecoveryText({
       cfg: {
         models: {
@@ -629,7 +629,7 @@ describe("buildContextOverflowRecoveryText", () => {
     expect(text).not.toContain("heartbeat model bleed");
   });
 
-  it("uses fallback model context over session contextTokens numeric value", () => {
+  it("prefers session entry model context over session contextTokens numeric value", () => {
     const text = buildContextOverflowRecoveryText({
       cfg: {
         models: {
@@ -715,6 +715,62 @@ describe("buildContextOverflowRecoveryText", () => {
     expect(text).toContain("reserveTokensFloor");
     expect(text).toContain("20000");
     expect(text).not.toContain("50000");
+    expect(text).not.toContain("heartbeat model bleed");
+  });
+
+  it("uses runtime model over primary model when both are available", () => {
+    const text = buildContextOverflowRecoveryText({
+      cfg: {
+        models: {
+          providers: {
+            openrouter: {
+              baseUrl: "https://openrouter.test",
+              models: [makeTestModel("qwen3.6-plus", 1_000_000)],
+            },
+            ollama: {
+              baseUrl: "http://ollama.test",
+              models: [makeTestModel("qwen3.5-9b-32k:latest", 32_768)],
+            },
+          },
+        },
+      },
+      primaryProvider: "openrouter",
+      primaryModel: "qwen3.6-plus",
+      runtimeProvider: "ollama",
+      runtimeModel: "qwen3.5-9b-32k:latest",
+    });
+
+    expect(text).toContain("reserveTokensFloor");
+    expect(text).toContain("20000");
+    expect(text).not.toContain("100000");
+    expect(text).not.toContain("heartbeat model bleed");
+  });
+
+  it("uses runtime model with 200k context when primary is 1M", () => {
+    const text = buildContextOverflowRecoveryText({
+      cfg: {
+        models: {
+          providers: {
+            openrouter: {
+              baseUrl: "https://openrouter.test",
+              models: [makeTestModel("qwen3.6-plus", 1_000_000)],
+            },
+            openai: {
+              baseUrl: "https://openai.test",
+              models: [makeTestModel("gpt-5.5-200k", 200_000)],
+            },
+          },
+        },
+      },
+      primaryProvider: "openrouter",
+      primaryModel: "qwen3.6-plus",
+      runtimeProvider: "openai",
+      runtimeModel: "gpt-5.5-200k",
+    });
+
+    expect(text).toContain("reserveTokensFloor");
+    expect(text).toContain("50000");
+    expect(text).not.toContain("100000");
     expect(text).not.toContain("heartbeat model bleed");
   });
 

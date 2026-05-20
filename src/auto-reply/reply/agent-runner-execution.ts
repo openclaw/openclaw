@@ -737,11 +737,26 @@ function resolveContextWindowForCompactionHint(params: {
   cfg: FollowupRun["run"]["config"];
   primaryProvider?: string;
   primaryModel?: string;
+  runtimeProvider?: string;
+  runtimeModel?: string;
   agentId?: string;
   activeSessionEntry?: SessionEntry;
 }): number | undefined {
   let modelWindow: number | undefined;
-  if (params.primaryProvider && params.primaryModel) {
+  const runtimeProvider = params.runtimeProvider ?? params.activeSessionEntry?.modelProvider;
+  const runtimeModel = params.runtimeModel ?? params.activeSessionEntry?.model;
+  if (runtimeProvider && runtimeModel) {
+    const resolved = resolveContextTokensForModel({
+      cfg: params.cfg,
+      provider: runtimeProvider,
+      model: runtimeModel,
+      allowAsyncLoad: false,
+    });
+    if (typeof resolved === "number" && resolved > 0) {
+      modelWindow = resolved;
+    }
+  }
+  if (modelWindow === undefined && params.primaryProvider && params.primaryModel) {
     const resolved = resolveContextTokensForModel({
       cfg: params.cfg,
       provider: params.primaryProvider,
@@ -750,21 +765,6 @@ function resolveContextWindowForCompactionHint(params: {
     });
     if (typeof resolved === "number" && resolved > 0) {
       modelWindow = resolved;
-    }
-  }
-  if (modelWindow === undefined) {
-    const sessionProvider = params.activeSessionEntry?.modelProvider;
-    const sessionModel = params.activeSessionEntry?.model;
-    if (sessionProvider && sessionModel) {
-      const resolved = resolveContextTokensForModel({
-        cfg: params.cfg,
-        provider: sessionProvider,
-        model: sessionModel,
-        allowAsyncLoad: false,
-      });
-      if (typeof resolved === "number" && resolved > 0) {
-        modelWindow = resolved;
-      }
     }
   }
   const agentCap = resolveAgentContextTokensCap(params.cfg, params.agentId);
@@ -991,6 +991,8 @@ export function buildContextOverflowRecoveryText(params: {
   agentId?: string;
   primaryProvider?: string;
   primaryModel?: string;
+  runtimeProvider?: string;
+  runtimeModel?: string;
   activeSessionEntry?: SessionEntry;
 }): string {
   const prefix = params.preserveSessionMapping
@@ -1002,6 +1004,8 @@ export function buildContextOverflowRecoveryText(params: {
     cfg: params.cfg,
     primaryProvider: params.primaryProvider,
     primaryModel: params.primaryModel,
+    runtimeProvider: params.runtimeProvider,
+    runtimeModel: params.runtimeModel,
     agentId: params.agentId,
     activeSessionEntry: params.activeSessionEntry,
   });
@@ -2373,6 +2377,8 @@ export async function runAgentTurnWithFallback(params: {
               agentId: params.followupRun.run.agentId,
               primaryProvider: params.followupRun.run.provider,
               primaryModel: params.followupRun.run.model,
+              runtimeProvider: fallbackProvider,
+              runtimeModel: fallbackModel,
               activeSessionEntry: params.getActiveSessionEntry(),
             }),
           }),
@@ -2503,6 +2509,8 @@ export async function runAgentTurnWithFallback(params: {
               agentId: params.followupRun.run.agentId,
               primaryProvider: params.followupRun.run.provider,
               primaryModel: params.followupRun.run.model,
+              runtimeProvider: fallbackProvider,
+              runtimeModel: fallbackModel,
               activeSessionEntry: params.getActiveSessionEntry(),
             }),
           }),
