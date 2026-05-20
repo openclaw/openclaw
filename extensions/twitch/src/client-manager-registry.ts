@@ -93,12 +93,17 @@ export async function removeClientManager(accountId: string): Promise<void> {
  * this, the module-level `registry` Map survives across tests when vitest
  * is run with `--isolate=false` (or any harness that does not tear the
  * module graph down between cases), and a stale entry from one test will
- * shadow `getOrCreateClientManager` calls in subsequent tests — silently
+ * shadow `getOrCreateClientManager` calls in subsequent tests, silently
  * handing back another test's mocked logger/manager. See #83887.
  *
- * Production code MUST NOT call this. It is safe to call when the registry
- * is empty (clear() is a no-op on an empty Map).
+ * Production code MUST NOT call this. It disconnects cached managers before
+ * clearing the registry so tests do not leave handlers or clients behind.
  */
-export function clearRegistryForTest(): void {
-  registry.clear();
+export async function clearRegistryForTest(): Promise<void> {
+  const entries = [...registry.values()];
+  try {
+    await Promise.all(entries.map((entry) => entry.manager.disconnectAll()));
+  } finally {
+    registry.clear();
+  }
 }
