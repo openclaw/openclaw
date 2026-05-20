@@ -62,6 +62,12 @@ type SessionsLoadControl = {
 
 const sessionsLoadControls = new WeakMap<object, SessionsLoadControl>();
 
+function reconcileChatRunFromSessionsState(state: SessionsState) {
+  reconcileChatRunFromCurrentSessionRow(
+    state as unknown as Parameters<typeof reconcileChatRunFromCurrentSessionRow>[0],
+  );
+}
+
 const SESSION_EVENT_ROW_FIELDS = [
   "abortedLastRun",
   "childSessions",
@@ -360,6 +366,7 @@ export function applySessionsChangedEvent(
     count: existingIndex >= 0 ? state.sessionsResult.count : state.sessionsResult.count + 1,
     sessions,
   };
+  reconcileChatRunFromSessionsState(state);
 
   if (previousCheckpointSignature !== checkpointSummarySignature(nextRow)) {
     invalidateCheckpointCacheForKey(state, key);
@@ -452,9 +459,7 @@ async function loadSessionsOnce(
     const res = await client.request<SessionsListResult | undefined>("sessions.list", params);
     if (res) {
       state.sessionsResult = projectSessionsResultForAvailability(res, { showArchived });
-      reconcileChatRunFromCurrentSessionRow(
-        state as unknown as Parameters<typeof reconcileChatRunFromCurrentSessionRow>[0],
-      );
+      reconcileChatRunFromSessionsState(state);
       const nextKeys = new Set(state.sessionsResult.sessions.map((row) => row.key));
       for (const key of Object.keys(state.sessionsCheckpointItemsByKey)) {
         if (!nextKeys.has(key)) {

@@ -810,6 +810,55 @@ describe("applySessionsChangedEvent", () => {
     });
   });
 
+  it("clears the local chat run when an applied websocket patch makes the current session terminal", () => {
+    const requestUpdate = vi.fn();
+    const state: SessionsState & {
+      sessionKey: string;
+      chatRunId: string | null;
+      chatStream: string | null;
+      chatStreamStartedAt: number | null;
+      requestUpdate: () => void;
+    } = {
+      ...createState(async () => undefined, {
+        sessionsResult: {
+          ts: 1,
+          path: "(multiple)",
+          count: 1,
+          defaults: { modelProvider: null, model: null, contextTokens: null },
+          sessions: [
+            {
+              key: "agent:super:main",
+              kind: "direct",
+              updatedAt: 1,
+              hasActiveRun: true,
+              status: "running",
+            },
+          ],
+        },
+      }),
+      sessionKey: "agent:super:main",
+      chatRunId: "run-1",
+      chatStream: "",
+      chatStreamStartedAt: 1,
+      requestUpdate,
+    };
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:super:main",
+      sessionId: "sess-main",
+      status: "done",
+      hasActiveRun: false,
+      endedAt: 2,
+      ts: 2,
+    });
+
+    expect(applied).toEqual({ applied: true, change: "updated" });
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatStream).toBeNull();
+    expect(state.chatStreamStartedAt).toBeNull();
+    expect(requestUpdate).toHaveBeenCalled();
+  });
+
   it("updates fresh context usage from websocket event payloads", () => {
     const state = createState(async () => undefined, {
       sessionsResult: {
