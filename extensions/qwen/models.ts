@@ -129,7 +129,7 @@ export function isQwen36PlusSupportedBaseUrl(baseUrl: string | undefined): boole
 }
 
 export function buildQwenModelCatalogForBaseUrl(
-  baseUrl: string | undefined,
+  _baseUrl: string | undefined,
 ): ReadonlyArray<ModelDefinitionConfig> {
   return QWEN_MODEL_CATALOG;
 }
