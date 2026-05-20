@@ -28,8 +28,6 @@ export const GATEWAY_CURRENT_SESSION_CLIENT_IDS = [
   GATEWAY_CLIENT_IDS.ANDROID_APP,
 ] as const;
 
-export type GatewayCurrentSessionClientId = (typeof GATEWAY_CURRENT_SESSION_CLIENT_IDS)[number];
-
 export const GATEWAY_INTERNAL_CHAT_SURFACE_CLIENT_IDS = [
   GATEWAY_CLIENT_IDS.WEBCHAT_UI,
   GATEWAY_CLIENT_IDS.CONTROL_UI,
@@ -38,9 +36,6 @@ export const GATEWAY_INTERNAL_CHAT_SURFACE_CLIENT_IDS = [
   GATEWAY_CLIENT_IDS.IOS_APP,
   GATEWAY_CLIENT_IDS.ANDROID_APP,
 ] as const;
-
-export type GatewayInternalChatSurfaceClientId =
-  (typeof GATEWAY_INTERNAL_CHAT_SURFACE_CLIENT_IDS)[number];
 
 // Back-compat naming (internal): these values are IDs, not display names.
 export const GATEWAY_CLIENT_NAMES = GATEWAY_CLIENT_IDS;

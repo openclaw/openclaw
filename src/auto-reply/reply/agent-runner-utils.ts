@@ -205,6 +205,8 @@ function buildEmbeddedContextFromTemplate(params: {
     normalizeMessageChannel(params.sessionCtx.Provider) ??
     normalizeMessageChannel(params.sessionCtx.Surface);
   const originatingChannel = normalizeMessageChannel(params.sessionCtx.OriginatingChannel);
+  // Internal UI source replies must stay on the active run even when the
+  // session key still carries a stale external delivery route.
   const shouldPinInternalSourceReplyContext =
     params.run.sourceReplyDeliveryMode === "message_tool_only" &&
     params.sessionCtx.ExplicitDeliverRoute !== true &&

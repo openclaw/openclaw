@@ -382,6 +382,8 @@ export function createInternalSourceReplyBroadcaster(params: {
           );
         },
       });
+      // Sensitive media may render in the live chat event, but must not be
+      // copied into durable transcript mirrors below.
       const mediaMessage = await buildInternalChatAssistantMediaMessage([displayPayload], {
         localRoots: mediaLocalRoots,
         onLocalAudioAccessDenied: (message) => {

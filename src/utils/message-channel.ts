@@ -75,10 +75,6 @@ export function isWebchatClient(client?: GatewayClientInfoLike | null): boolean 
   return normalizeGatewayClientName(client?.id) === GATEWAY_CLIENT_NAMES.WEBCHAT_UI;
 }
 
-export function isTuiClient(client?: GatewayClientInfoLike | null): boolean {
-  return normalizeGatewayClientName(client?.id) === GATEWAY_CLIENT_NAMES.TUI;
-}
-
 export function isInternalChatSurfaceClient(client?: GatewayClientInfoLike | null): boolean {
   const mode = normalizeGatewayClientMode(client?.mode);
   if (mode === GATEWAY_CLIENT_MODES.WEBCHAT) {
