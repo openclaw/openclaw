@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { resolveUsableCustomProviderApiKey } from "../agents/model-auth.js";
 import { NON_ENV_SECRETREF_MARKER } from "../agents/model-auth-markers.js";
+import { planOpenClawModelsJsonWithDeps } from "../agents/models-config.plan.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import {
@@ -245,5 +247,61 @@ describe("buildSingleProviderApiKeyCatalog", () => {
       }),
       expected: createPairedCatalogProviders("OPENAI_API_KEY"),
     });
+  });
+
+  it("keeps raw catalog credentials out of generated models.json while source config auth remains usable", async () => {
+    const rawApiKey = "sk-provider-catalog-proof-secret";
+    const catalogResult = await buildSingleProviderApiKeyCatalog({
+      ctx: createCatalogContext({
+        apiKeys: { "test-provider": rawApiKey },
+      }),
+      providerId: "test-provider",
+      buildProvider: () => createProviderConfig(),
+    });
+    if (!catalogResult || !("provider" in catalogResult)) {
+      throw new Error("expected provider catalog result");
+    }
+
+    const plan = await planOpenClawModelsJsonWithDeps(
+      {
+        cfg: {},
+        agentDir: "/tmp/openclaw-provider-catalog-proof",
+        env: {},
+        existingRaw: "",
+        existingParsed: null,
+      },
+      {
+        resolveImplicitProviders: async () => ({
+          "test-provider": catalogResult.provider,
+        }),
+      },
+    );
+
+    expect(plan.action).toBe("write");
+    if (plan.action !== "write") {
+      throw new Error(`expected models.json write plan, got ${plan.action}`);
+    }
+    expect(plan.contents).not.toContain(rawApiKey);
+    const parsed = JSON.parse(plan.contents) as {
+      providers: Record<string, { apiKey?: string }>;
+    };
+    expect(parsed.providers["test-provider"]?.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
+
+    const sourceAuth = resolveUsableCustomProviderApiKey({
+      cfg: {
+        models: {
+          providers: {
+            "test-provider": {
+              ...createProviderConfig(),
+              apiKey: rawApiKey,
+            },
+          },
+        },
+      },
+      provider: "test-provider",
+      env: {},
+    });
+    expect(sourceAuth?.apiKey).toBe(rawApiKey);
+    expect(sourceAuth?.source).toBe("models.json");
   });
 });
