@@ -1,10 +1,18 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
+import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { isValidXaiTtsVoice, XAI_BASE_URL, XAI_TTS_VOICES, xaiTTS } from "./tts.js";
 
 describe("xai tts", () => {
   const originalFetch = globalThis.fetch;
+  let ssrfMock: { mockRestore: () => void } | undefined;
+
+  beforeEach(() => {
+    ssrfMock = mockPinnedHostnameResolution();
+  });
 
   afterEach(() => {
+    ssrfMock?.mockRestore();
+    ssrfMock = undefined;
     globalThis.fetch = originalFetch;
     vi.restoreAllMocks();
   });
@@ -65,6 +73,34 @@ describe("xai tts", () => {
       ).rejects.toThrow(
         "xAI TTS API error (401): Invalid API key [type=invalid_request_error, code=invalid_api_key] [request_id=req_123]",
       );
+    });
+
+    it("sends an openclaw User-Agent on xAI TTS requests", async () => {
+      vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
+      const fetchMock = vi.fn(
+        async (_input: RequestInfo | URL, _init?: RequestInit) =>
+          new Response(Buffer.from("audio-bytes"), {
+            status: 200,
+            headers: { "Content-Type": "audio/mpeg" },
+          }),
+      );
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      await xaiTTS({
+        text: "hello",
+        apiKey: "ok-key",
+        baseUrl: XAI_BASE_URL,
+        voiceId: "eve",
+        language: "en",
+        responseFormat: "mp3",
+        timeoutMs: 5_000,
+      });
+
+      const init = fetchMock.mock.calls.at(0)?.[1];
+      const headers = new Headers(init?.headers ?? {});
+      expect(headers.get("user-agent")).toBe("openclaw/2026.3.22");
+      expect(headers.get("authorization")).toBe("Bearer ok-key");
+      vi.unstubAllEnvs();
     });
 
     it("falls back to raw body text when the error body is non-JSON", async () => {

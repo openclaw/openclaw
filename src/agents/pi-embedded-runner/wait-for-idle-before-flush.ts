@@ -44,15 +44,13 @@ export async function flushPendingToolResultsAfterIdle(opts: {
   agent: IdleAwareAgent | null | undefined;
   sessionManager: ToolResultFlushManager | null | undefined;
   timeoutMs?: number;
-  clearPendingOnTimeout?: boolean;
 }): Promise<void> {
-  const timedOut = await waitForAgentIdleBestEffort(
-    opts.agent,
-    opts.timeoutMs ?? DEFAULT_WAIT_FOR_IDLE_TIMEOUT_MS,
-  );
-  if (timedOut && opts.clearPendingOnTimeout && opts.sessionManager?.clearPendingToolResults) {
-    opts.sessionManager.clearPendingToolResults();
-    return;
+  const isImmediateTimeout = opts.timeoutMs !== undefined && opts.timeoutMs <= 0;
+  if (!isImmediateTimeout) {
+    await waitForAgentIdleBestEffort(
+      opts.agent,
+      opts.timeoutMs ?? DEFAULT_WAIT_FOR_IDLE_TIMEOUT_MS,
+    );
   }
   opts.sessionManager?.flushPendingToolResults?.();
 }

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { resolveAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
+import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import {
   listAgentIds,
   resolveAgentConfig,
@@ -79,9 +79,9 @@ import {
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
 import { normalizeSessionDeliveryFields } from "../utils/delivery-context.shared.js";
+import type { ModelCostConfig } from "../utils/usage-format.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
 import {
-  canonicalizeSpawnedByForAgent,
   resolveSessionStoreAgentId,
   resolveSessionStoreKey,
   resolveStoredSessionKeyForAgentStore,
@@ -256,20 +256,52 @@ function resolveNonNegativeNumber(value: number | null | undefined): number | un
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
-function resolveLatestCompactionCheckpoint(
+type SessionCompactionCheckpointEntry = NonNullable<SessionEntry["compactionCheckpoints"]>[number];
+
+function isProjectableCompactionCheckpoint(
+  value: unknown,
+): value is SessionCompactionCheckpointEntry {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const checkpoint = value as {
+    checkpointId?: unknown;
+    createdAt?: unknown;
+    reason?: unknown;
+  };
+  return (
+    Boolean(normalizeOptionalString(checkpoint.checkpointId)) &&
+    typeof checkpoint.createdAt === "number" &&
+    Number.isFinite(checkpoint.createdAt) &&
+    (checkpoint.reason === "manual" ||
+      checkpoint.reason === "auto-threshold" ||
+      checkpoint.reason === "overflow-retry" ||
+      checkpoint.reason === "timeout-retry")
+  );
+}
+
+function resolveProjectableCompactionCheckpoints(
   entry?: Pick<SessionEntry, "compactionCheckpoints"> | null,
-): NonNullable<SessionEntry["compactionCheckpoints"]>[number] | undefined {
+): SessionCompactionCheckpointEntry[] {
   const checkpoints = entry?.compactionCheckpoints;
   if (!Array.isArray(checkpoints) || checkpoints.length === 0) {
-    return undefined;
+    return [];
   }
-  return checkpoints.reduce((latest, checkpoint) =>
-    !latest || checkpoint.createdAt > latest.createdAt ? checkpoint : latest,
+  return checkpoints.filter(isProjectableCompactionCheckpoint);
+}
+
+function resolveLatestCompactionCheckpoint(
+  checkpoints: readonly SessionCompactionCheckpointEntry[],
+): SessionCompactionCheckpointEntry | undefined {
+  return checkpoints.reduce<SessionCompactionCheckpointEntry | undefined>(
+    (latest, checkpoint) =>
+      !latest || checkpoint.createdAt > latest.createdAt ? checkpoint : latest,
+    undefined,
   );
 }
 
 function buildCompactionCheckpointPreview(
-  checkpoint: NonNullable<SessionEntry["compactionCheckpoints"]>[number] | undefined,
+  checkpoint: SessionCompactionCheckpointEntry | undefined,
 ): GatewaySessionRow["latestCompactionCheckpoint"] {
   if (!checkpoint) {
     return undefined;
@@ -295,6 +327,24 @@ function buildCompactionCheckpointPreview(
   };
 }
 
+function resolveModelCostConfigCached(
+  provider: string | undefined,
+  model: string | undefined,
+  cfg: OpenClawConfig,
+  rowContext?: SessionListRowContext,
+): ModelCostConfig | undefined {
+  if (!rowContext) {
+    return resolveModelCostConfig({ provider, model, config: cfg });
+  }
+  const key = createSessionRowModelCacheKey(provider, model);
+  if (rowContext.modelCostConfigByModelRef.has(key)) {
+    return rowContext.modelCostConfigByModelRef.get(key);
+  }
+  const value = resolveModelCostConfig({ provider, model, config: cfg });
+  rowContext.modelCostConfigByModelRef.set(key, value);
+  return value;
+}
+
 function resolveEstimatedSessionCostUsd(params: {
   cfg: OpenClawConfig;
   provider?: string;
@@ -304,6 +354,7 @@ function resolveEstimatedSessionCostUsd(params: {
     "estimatedCostUsd" | "inputTokens" | "outputTokens" | "cacheRead" | "cacheWrite"
   >;
   explicitCostUsd?: number;
+  rowContext?: SessionListRowContext;
 }): number | undefined {
   const explicitCostUsd = resolveNonNegativeNumber(
     params.explicitCostUsd ?? params.entry?.estimatedCostUsd,
@@ -323,11 +374,12 @@ function resolveEstimatedSessionCostUsd(params: {
   ) {
     return undefined;
   }
-  const cost = resolveModelCostConfig({
-    provider: params.provider,
-    model: params.model,
-    config: params.cfg,
-  });
+  const cost = resolveModelCostConfigCached(
+    params.provider,
+    params.model,
+    params.cfg,
+    params.rowContext,
+  );
   if (!cost) {
     return undefined;
   }
@@ -373,6 +425,10 @@ type SessionListRowContext = {
   subagentRuns: ReturnType<typeof buildSubagentRunReadIndex>;
   storeChildSessionsByKey: Map<string, string[]>;
   selectedModelByOverrideRef: Map<string, ReturnType<typeof resolveSessionModelRef>>;
+  // Per-list memoization for deterministic resolvers that scale linearly with
+  // session count but only depend on (provider, model[, agentId]). Sessions
+  // in a single list typically share a small set of those tuples, so caching
+  // here collapses the work to O(unique tuples) per call.
   thinkingMetadataByModelRef: Map<
     string,
     {
@@ -380,6 +436,8 @@ type SessionListRowContext = {
       defaultLevel: ReturnType<typeof resolveGatewaySessionThinkingDefault>;
     }
   >;
+  displayModelIdentityByKey: Map<string, { provider?: string; model?: string }>;
+  modelCostConfigByModelRef: Map<string, ModelCostConfig | undefined>;
 };
 
 function resolveRuntimeChildSessionKeys(
@@ -498,6 +556,8 @@ function buildSessionListRowContext(params: {
     storeChildSessionsByKey: buildStoreChildSessionIndex(params.store, params.now, subagentRuns),
     selectedModelByOverrideRef: new Map(),
     thinkingMetadataByModelRef: new Map(),
+    displayModelIdentityByKey: new Map(),
+    modelCostConfigByModelRef: new Map(),
   };
 }
 
@@ -623,6 +683,7 @@ function resolveTranscriptUsageFallback(params: {
   fallbackProvider?: string;
   fallbackModel?: string;
   maxTranscriptBytes?: number;
+  rowContext?: SessionListRowContext;
 }): {
   estimatedCostUsd?: number;
   totalTokens?: number;
@@ -669,6 +730,7 @@ function resolveTranscriptUsageFallback(params: {
       cacheRead: snapshot.cacheRead,
       cacheWrite: snapshot.cacheWrite,
     },
+    rowContext: params.rowContext,
   });
   return {
     modelProvider,
@@ -700,12 +762,13 @@ export function resolveDeletedAgentIdFromSessionKey(
   return agentId;
 }
 
-export function loadSessionEntry(sessionKey: string) {
+export function loadSessionEntry(sessionKey: string, opts?: { agentId?: string }) {
   const cfg = getRuntimeConfig();
   const key = normalizeOptionalString(sessionKey) ?? "";
   const target = resolveGatewaySessionStoreTarget({
     cfg,
     key,
+    ...(opts?.agentId ? { agentId: opts.agentId } : {}),
   });
   const storePath = target.storePath;
   const store = loadSessionStore(storePath);
@@ -979,6 +1042,7 @@ export function listAgentsForGateway(cfg: OpenClawConfig): {
     if (!entry?.id) {
       continue;
     }
+    const configuredName = normalizeOptionalString(entry.name);
     const identity = entry.identity
       ? {
           name: normalizeOptionalString(entry.identity.name),
@@ -993,7 +1057,7 @@ export function listAgentsForGateway(cfg: OpenClawConfig): {
         }
       : undefined;
     configuredById.set(normalizeAgentId(entry.id), {
-      name: normalizeOptionalString(entry.name),
+      name: configuredName ?? identity?.name,
       identity,
     });
   }
@@ -1012,13 +1076,21 @@ export function listAgentsForGateway(cfg: OpenClawConfig): {
   const agents = agentIds.map((id) => {
     const meta = configuredById.get(id);
     const model = resolveGatewayAgentModel(cfg, id);
+    const resolvedModel = resolveDefaultModelForAgent({ cfg, agentId: id });
     return Object.assign(
       {
         id,
         name: meta?.name,
         identity: meta?.identity,
         workspace: resolveAgentWorkspaceDir(cfg, id),
-        agentRuntime: resolveAgentRuntimeMetadata(cfg, id),
+        agentRuntime: resolveModelAgentRuntimeMetadata({
+          cfg,
+          agentId: id,
+          provider: resolvedModel.provider,
+          model: resolvedModel.model,
+          sessionKey: resolveAgentMainSessionKey({ cfg, agentId: id }),
+          acpRuntime: false,
+        }),
       },
       model ? { model } : {},
     );
@@ -1201,6 +1273,7 @@ function resolveExplicitDeletedLegacyMainStoreTarget(params: {
 export function resolveGatewaySessionStoreTarget(params: {
   cfg: OpenClawConfig;
   key: string;
+  agentId?: string;
   scanLegacyKeys?: boolean;
   store?: Record<string, SessionEntry>;
 }): {
@@ -1223,7 +1296,11 @@ export function resolveGatewaySessionStoreTarget(params: {
     cfg: params.cfg,
     sessionKey: key,
   });
-  const agentId = resolveSessionStoreAgentId(params.cfg, canonicalKey);
+  const requestedAgentId = normalizeOptionalString(params.agentId);
+  const agentId =
+    canonicalKey === "global" && requestedAgentId
+      ? normalizeAgentId(requestedAgentId)
+      : resolveSessionStoreAgentId(params.cfg, canonicalKey);
   const { storePath, store } = resolveGatewaySessionStoreLookup({
     cfg: params.cfg,
     key,
@@ -1501,6 +1578,30 @@ export function resolveSessionModelIdentityRef(
   return { provider: resolved.provider, model: resolved.model };
 }
 
+function resolveSessionDisplayModelIdentityRefCached(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  provider?: string;
+  model?: string;
+  rowContext?: SessionListRowContext;
+}): { provider?: string; model?: string } {
+  const ctx = params.rowContext;
+  if (!ctx) {
+    return resolveSessionDisplayModelIdentityRef(params);
+  }
+  const key = `${params.agentId}\u0000${createSessionRowModelCacheKey(
+    params.provider,
+    params.model,
+  )}`;
+  const cached = ctx.displayModelIdentityByKey.get(key);
+  if (cached) {
+    return cached;
+  }
+  const value = resolveSessionDisplayModelIdentityRef(params);
+  ctx.displayModelIdentityByKey.set(key, value);
+  return value;
+}
+
 export function resolveSessionDisplayModelIdentityRef(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -1664,6 +1765,7 @@ export function buildGatewaySessionRow(params: {
       provider: resolvedModel.provider,
       model: resolvedModel.model ?? DEFAULT_MODEL,
       entry,
+      rowContext,
     }) === undefined;
   const transcriptUsage =
     !skipTranscriptUsage &&
@@ -1676,6 +1778,7 @@ export function buildGatewaySessionRow(params: {
           fallbackProvider: resolvedModel.provider,
           fallbackModel: resolvedModel.model ?? DEFAULT_MODEL,
           maxTranscriptBytes: params.transcriptUsageMaxBytes,
+          rowContext: params.rowContext,
         })
       : null;
   const preferLiveSubagentModelIdentity =
@@ -1708,22 +1811,35 @@ export function buildGatewaySessionRow(params: {
         params.storeChildSessionsByKey.get(key),
       )
     : resolveChildSessionKeys(key, store, now, rowContext?.subagentRuns);
+  const compactionCheckpoints = resolveProjectableCompactionCheckpoints(entry);
+  const compactionCheckpointCount = Array.isArray(entry?.compactionCheckpoints)
+    ? compactionCheckpoints.length
+    : undefined;
   const latestCompactionCheckpoint = buildCompactionCheckpointPreview(
-    resolveLatestCompactionCheckpoint(entry),
+    resolveLatestCompactionCheckpoint(compactionCheckpoints),
   );
-  const agentRuntime = resolveAgentRuntimeMetadata(cfg, sessionAgentId);
   const selectedOrRuntimeModelProvider = selectedModel?.provider ?? modelProvider;
   const selectedOrRuntimeModel = selectedModel?.model ?? model;
   const rowModelIdentity = lightweight
     ? { provider: selectedOrRuntimeModelProvider, model: selectedOrRuntimeModel }
-    : resolveSessionDisplayModelIdentityRef({
+    : resolveSessionDisplayModelIdentityRefCached({
         cfg,
         agentId: sessionAgentId,
         provider: selectedOrRuntimeModelProvider,
         model: selectedOrRuntimeModel,
+        rowContext: params.rowContext,
       });
   const rowModelProvider = rowModelIdentity.provider;
   const rowModel = rowModelIdentity.model;
+  const agentRuntime = resolveModelAgentRuntimeMetadata({
+    cfg,
+    agentId: sessionAgentId,
+    provider: rowModelProvider,
+    model: rowModel,
+    sessionKey: key,
+    acpRuntime: entry?.acp != null,
+    acpBackend: entry?.acp?.backend,
+  });
   const estimatedCostUsd = lightweight
     ? resolveNonNegativeNumber(entry?.estimatedCostUsd)
     : (resolveEstimatedSessionCostUsd({
@@ -1731,6 +1847,7 @@ export function buildGatewaySessionRow(params: {
         provider: rowModelProvider,
         model: rowModel,
         entry,
+        rowContext: params.rowContext,
       }) ?? resolveNonNegativeNumber(transcriptUsage?.estimatedCostUsd));
   const contextTokens = lightweight
     ? resolvePositiveNumber(entry?.contextTokens)
@@ -1802,7 +1919,7 @@ export function buildGatewaySessionRow(params: {
     abortedLastRun: entry?.abortedLastRun,
     thinkingLevel: entry?.thinkingLevel,
     thinkingLevels,
-    thinkingOptions: thinkingLevels?.map((level) => level.label),
+    thinkingOptions: thinkingLevels.map((level) => level.label),
     thinkingDefault,
     fastMode: entry?.fastMode,
     verboseLevel: entry?.verboseLevel,
@@ -1833,7 +1950,7 @@ export function buildGatewaySessionRow(params: {
     lastTo: deliveryFields.lastTo ?? entry?.lastTo,
     lastAccountId: deliveryFields.lastAccountId ?? entry?.lastAccountId,
     lastThreadId: deliveryFields.lastThreadId ?? entry?.lastThreadId,
-    compactionCheckpointCount: entry?.compactionCheckpoints?.length,
+    compactionCheckpointCount,
     latestCompactionCheckpoint,
     pluginExtensions: pluginExtensions.length > 0 ? pluginExtensions : undefined,
   };

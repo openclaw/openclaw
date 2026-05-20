@@ -1,8 +1,20 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { configHandlers, resolveConfigOpenCommand } from "./config.js";
+import {
+  clearConfigSchemaResponseCacheForTests,
+  configHandlers,
+  loadConfigSchemaResponseForTests,
+  resolveConfigOpenCommand,
+} from "./config.js";
 import { createConfigHandlerHarness } from "./config.test-helpers.js";
 
-const execFileMock = vi.hoisted(() => vi.fn());
+const { execFileMock, loadGatewayRuntimeConfigSchemaMock } = vi.hoisted(() => ({
+  execFileMock: vi.fn(),
+  loadGatewayRuntimeConfigSchemaMock: vi.fn(() => ({
+    schema: { type: "object" },
+    uiHints: undefined,
+    version: "test-schema",
+  })),
+}));
 
 vi.mock("node:child_process", async () => {
   const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
@@ -16,11 +28,22 @@ vi.mock("node:child_process", async () => {
   );
 });
 
+vi.mock("../../config/runtime-schema.js", () => ({
+  loadGatewayRuntimeConfigSchema: loadGatewayRuntimeConfigSchemaMock,
+}));
+
 function invokeExecFileCallback(args: unknown[], error: Error | null) {
   const callback = args.at(-1);
-  expect(callback).toEqual(expect.any(Function));
-  (callback as (error: Error | null) => void)(error);
+  if (typeof callback !== "function") {
+    throw new Error("expected execFile callback");
+  }
+  callback(error);
 }
+
+afterEach(() => {
+  clearConfigSchemaResponseCacheForTests();
+  vi.clearAllMocks();
+});
 
 describe("resolveConfigOpenCommand", () => {
   it("uses open on macOS", () => {
@@ -53,7 +76,6 @@ describe("resolveConfigOpenCommand", () => {
 describe("config.openFile", () => {
   afterEach(() => {
     delete process.env.OPENCLAW_CONFIG_PATH;
-    vi.clearAllMocks();
   });
 
   it("opens the configured file without shell interpolation", async () => {
@@ -102,6 +124,25 @@ describe("config.openFile", () => {
       },
       undefined,
     );
-    expect(logGateway.warn).toHaveBeenCalledWith(expect.stringContaining("spawn xdg-open ENOENT"));
+    expect(logGateway.warn).toHaveBeenCalledWith(
+      "config.openFile failed path=/tmp/config.json: spawn xdg-open ENOENT",
+    );
+  });
+});
+
+describe("config schema response cache", () => {
+  it("reuses a recent schema build across burst config requests", () => {
+    loadConfigSchemaResponseForTests();
+    loadConfigSchemaResponseForTests();
+
+    expect(loadGatewayRuntimeConfigSchemaMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("can be cleared when config writes change schema inputs", () => {
+    loadConfigSchemaResponseForTests();
+    clearConfigSchemaResponseCacheForTests();
+    loadConfigSchemaResponseForTests();
+
+    expect(loadGatewayRuntimeConfigSchemaMock).toHaveBeenCalledTimes(2);
   });
 });

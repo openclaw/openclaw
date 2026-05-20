@@ -1,4 +1,4 @@
-import type { Model } from "@mariozechner/pi-ai";
+import type { Model } from "@earendil-works/pi-ai";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelProviderConfig } from "../config/config.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
@@ -123,6 +123,7 @@ vi.mock("../plugins/provider-runtime.js", async () => {
 
 let applyAuthHeaderOverride: typeof import("./model-auth.js").applyAuthHeaderOverride;
 let applyLocalNoAuthHeaderOverride: typeof import("./model-auth.js").applyLocalNoAuthHeaderOverride;
+let formatMissingAuthError: typeof import("./model-auth.js").formatMissingAuthError;
 let hasUsableCustomProviderApiKey: typeof import("./model-auth.js").hasUsableCustomProviderApiKey;
 let hasSyntheticLocalProviderAuthConfig: typeof import("./model-auth.js").hasSyntheticLocalProviderAuthConfig;
 let requireApiKey: typeof import("./model-auth.js").requireApiKey;
@@ -141,6 +142,7 @@ beforeAll(async () => {
   ({
     applyAuthHeaderOverride,
     applyLocalNoAuthHeaderOverride,
+    formatMissingAuthError,
     hasSyntheticLocalProviderAuthConfig,
     hasUsableCustomProviderApiKey,
     requireApiKey,
@@ -225,6 +227,21 @@ async function resolveCustomProviderAuth(
       },
     },
   });
+}
+
+function expectAuthFields(
+  auth: Awaited<ReturnType<typeof resolveApiKeyForProvider>>,
+  expected: {
+    apiKey: string;
+    mode: "api-key" | "oauth";
+    source?: string;
+  },
+) {
+  expect(auth.apiKey).toBe(expected.apiKey);
+  expect(auth.mode).toBe(expected.mode);
+  if (expected.source !== undefined) {
+    expect(auth.source).toBe(expected.source);
+  }
 }
 
 describe("resolveAwsSdkEnvVarName", () => {
@@ -339,6 +356,20 @@ describe("resolveModelAuthMode", () => {
 });
 
 describe("requireApiKey", () => {
+  it("formats missing auth errors with the checked credential source", () => {
+    expect(
+      formatMissingAuthError(
+        {
+          source: "env: OPENAI_API_KEY",
+          mode: "api-key",
+        },
+        "openai",
+      ),
+    ).toBe(
+      'No API key resolved for provider "openai" (auth mode: api-key, checked: env: OPENAI_API_KEY).',
+    );
+  });
+
   it("normalizes line breaks in resolved API keys", () => {
     const key = requireApiKey(
       {
@@ -361,7 +392,9 @@ describe("requireApiKey", () => {
         },
         "openai",
       ),
-    ).toThrow('No API key resolved for provider "openai"');
+    ).toThrow(
+      'No API key resolved for provider "openai" (auth mode: api-key, checked: env: OPENAI_API_KEY).',
+    );
   });
 });
 
@@ -735,7 +768,7 @@ describe("resolveApiKeyForProvider", () => {
       }),
     );
 
-    expect(resolved).toMatchObject({
+    expectAuthFields(resolved, {
       apiKey: "plugin-web-fallback-key",
       source: "plugins.entries.plugin-web.config.webSearch.apiKey",
       mode: "api-key",
@@ -779,7 +812,7 @@ describe("resolveApiKeyForProvider", () => {
       }),
     );
 
-    expect(resolved).toMatchObject({
+    expectAuthFields(resolved, {
       apiKey: "plugin-web-runtime-key",
       source: "plugins.entries.plugin-web.config.webSearch.apiKey",
       mode: "api-key",
@@ -861,7 +894,7 @@ describe("resolveApiKeyForProvider", () => {
       },
     });
 
-    expect(resolved).toMatchObject({
+    expectAuthFields(resolved, {
       apiKey: "sk-config-live",
       source: "models.json",
       mode: "api-key",
@@ -885,7 +918,7 @@ describe("resolveApiKeyForProvider", () => {
       }),
     );
 
-    expect(resolved).toMatchObject({
+    expectAuthFields(resolved, {
       apiKey: "ollama-local",
       mode: "api-key",
     });
@@ -1002,7 +1035,7 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
       store: { version: 1, profiles: {} },
     });
 
-    expect(auth).toMatchObject({
+    expectAuthFields(auth, {
       apiKey: "ollama-local",
       source: "models.json (local marker)",
       mode: "api-key",
@@ -1036,7 +1069,7 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
       store: { version: 1, profiles: {} },
     });
 
-    expect(auth).toMatchObject({
+    expectAuthFields(auth, {
       apiKey: "ollama-local",
       source: "models.providers.ollama-gpu1 (synthetic local key)",
       mode: "api-key",
@@ -1071,7 +1104,7 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
       store: { version: 1, profiles: {} },
     });
 
-    expect(auth).toMatchObject({
+    expectAuthFields(auth, {
       apiKey: CUSTOM_LOCAL_AUTH_MARKER,
       source: "models.json (local marker)",
       mode: "api-key",
@@ -1226,10 +1259,8 @@ describe("applyLocalNoAuthHeaderOverride", () => {
       },
     );
 
-    expect(model.headers).toMatchObject({
-      Authorization: null,
-      "X-Test": "1",
-    });
+    expect(model.headers?.Authorization).toBeNull();
+    expect(model.headers?.["X-Test"]).toBe("1");
   });
 });
 

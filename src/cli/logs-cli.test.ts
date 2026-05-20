@@ -151,8 +151,10 @@ describe("logs cli", () => {
     const output = stdoutWrites.join("");
     expect(output).toContain("line one");
     const timestamp = output.match(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z?/u)?.[0];
-    expect(timestamp).toBeTruthy();
-    expect(timestamp?.endsWith("Z")).toBe(false);
+    if (timestamp === undefined) {
+      throw new Error("expected local timestamp in logs output");
+    }
+    expect(timestamp.endsWith("Z")).toBe(false);
   });
 
   it("warns when the output pipe closes", async () => {
@@ -421,11 +423,13 @@ describe("logs cli", () => {
         .split("\n")
         .filter((line) => line.length > 0)
         .map((line) => JSON.parse(line) as { type: string; message?: string });
-      const messages = noticeRecords
-        .filter((record) => record.type === "notice")
-        .map((record) => record.message ?? "");
-      expect(messages.some((message) => message.includes("gateway disconnected"))).toBe(true);
-      expect(messages.some((message) => message.includes("gateway reconnected"))).toBe(true);
+      expect(noticeRecords.filter((record) => record.type === "notice")).toEqual([
+        {
+          type: "notice",
+          message: "[logs] gateway disconnected, reconnecting in 0s...",
+        },
+        { type: "notice", message: "[logs] gateway reconnected" },
+      ]);
       expect(stdoutWrites.join("")).toContain('"type":"meta"');
       expect(exitSpy).toHaveBeenCalledWith(1);
     });

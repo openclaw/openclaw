@@ -8,6 +8,7 @@ import {
 } from "../shared/custom-command-config.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { ToolPolicySchema } from "./zod-schema.agent-runtime.js";
+import { NativeExecApprovalEnableModeSchema } from "./zod-schema.approvals.js";
 import {
   ChannelHealthMonitorSchema,
   ChannelHeartbeatVisibilitySchema,
@@ -87,11 +88,16 @@ const ChannelStreamingPreviewSchema = z
     commandText: z.enum(["raw", "status"]).optional(),
   })
   .strict();
+const TelegramStreamingPreviewSchema = ChannelStreamingPreviewSchema.extend({
+  nativeToolProgress: z.boolean().optional(),
+  nativeToolProgressAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+}).strict();
 const ChannelStreamingProgressSchema = z
   .object({
     label: z.union([z.string(), z.literal(false)]).optional(),
     labels: z.array(z.string()).optional(),
     maxLines: z.number().int().positive().optional(),
+    maxLineChars: z.number().int().positive().optional(),
     render: z.enum(["text", "rich"]).optional(),
     toolProgress: z.boolean().optional(),
     commandText: z.enum(["raw", "status"]).optional(),
@@ -106,6 +112,9 @@ const ChannelPreviewStreamingConfigSchema = z
     block: ChannelStreamingBlockSchema.optional(),
   })
   .strict();
+const TelegramPreviewStreamingConfigSchema = ChannelPreviewStreamingConfigSchema.extend({
+  preview: TelegramStreamingPreviewSchema.optional(),
+}).strict();
 const SlackStreamingConfigSchema = ChannelPreviewStreamingConfigSchema.extend({
   nativeTransport: z.boolean().optional(),
 }).strict();
@@ -117,6 +126,14 @@ const SlackCapabilitiesSchema = z.union([
     })
     .strict(),
 ]);
+const BotLoopProtectionSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    maxEventsPerWindow: z.number().int().positive().optional(),
+    windowSeconds: z.number().int().positive().optional(),
+    cooldownSeconds: z.number().int().positive().optional(),
+  })
+  .strict();
 
 const TelegramErrorPolicySchema = z.enum(["always", "once", "silent"]).optional();
 const TelegramCommandNamePattern = /^[a-z0-9_]{1,32}$/;
@@ -232,7 +249,7 @@ export const TelegramAccountSchemaBase = z
     capabilities: TelegramCapabilitiesSchema.optional(),
     execApprovals: z
       .object({
-        enabled: z.boolean().optional(),
+        enabled: NativeExecApprovalEnableModeSchema.optional(),
         approvers: TelegramIdListSchema.optional(),
         agentFilter: z.array(z.string()).optional(),
         sessionFilter: z.array(z.string()).optional(),
@@ -261,7 +278,7 @@ export const TelegramAccountSchemaBase = z
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
     direct: z.record(z.string(), TelegramDirectSchema.optional()).optional(),
     textChunkLimit: z.number().int().positive().optional(),
-    streaming: ChannelPreviewStreamingConfigSchema.optional(),
+    streaming: TelegramPreviewStreamingConfigSchema.optional(),
     mediaMaxMb: z.number().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     mediaGroupFlushMs: z
@@ -540,11 +557,55 @@ const DiscordVoiceAutoJoinSchema = z
   })
   .strict();
 
+const DiscordVoiceAllowedChannelSchema = z
+  .object({
+    guildId: z.string().min(1),
+    channelId: z.string().min(1),
+  })
+  .strict();
+
+const DiscordVoiceRealtimeToolPolicySchema = z.enum(["safe-read-only", "owner", "none"]);
+const DiscordVoiceRealtimeConsultPolicySchema = z.enum(["auto", "always"]);
+const DiscordVoiceRealtimeSchema = z
+  .object({
+    provider: z.string().min(1).optional(),
+    model: z.string().min(1).optional(),
+    voice: z.string().min(1).optional(),
+    instructions: z.string().min(1).optional(),
+    toolPolicy: DiscordVoiceRealtimeToolPolicySchema.optional(),
+    consultPolicy: DiscordVoiceRealtimeConsultPolicySchema.optional(),
+    bargeIn: z.boolean().optional(),
+    minBargeInAudioEndMs: z.number().int().min(0).max(10_000).optional(),
+    debounceMs: z.number().int().positive().max(10_000).optional(),
+    providers: z.record(z.string(), z.record(z.string(), z.unknown()).optional()).optional(),
+  })
+  .strict();
+
+const DiscordVoiceAgentSessionSchema = z
+  .object({
+    mode: z.enum(["voice", "target"]).optional(),
+    target: z.string().min(1).optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.mode === "target" && !value.target) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["target"],
+        message: 'voice.agentSession.target is required when mode is "target"',
+      });
+    }
+  });
+
 const DiscordVoiceSchema = z
   .object({
     enabled: z.boolean().optional(),
+    mode: z.enum(["stt-tts", "agent-proxy", "bidi"]).optional(),
+    agentSession: DiscordVoiceAgentSessionSchema.optional(),
     model: z.string().min(1).optional(),
+    realtime: DiscordVoiceRealtimeSchema.optional(),
     autoJoin: z.array(DiscordVoiceAutoJoinSchema).optional(),
+    allowedChannels: z.array(DiscordVoiceAllowedChannelSchema).optional(),
     daveEncryption: z.boolean().optional(),
     decryptionFailureTolerance: z.number().int().min(0).optional(),
     connectTimeoutMs: z.number().int().positive().max(120_000).optional(),
@@ -570,6 +631,7 @@ export const DiscordAccountSchema = z
     gatewayReadyTimeoutMs: z.number().int().positive().max(120_000).optional(),
     gatewayRuntimeReadyTimeoutMs: z.number().int().positive().max(120_000).optional(),
     allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),
+    botLoopProtection: BotLoopProtectionSchema.optional(),
     dangerouslyAllowNameMatching: z.boolean().optional(),
     mentionAliases: z.record(z.string(), DiscordSnowflakeStringSchema).optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
@@ -578,6 +640,7 @@ export const DiscordAccountSchema = z
     dmHistoryLimit: z.number().int().min(0).optional(),
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
     textChunkLimit: z.number().int().positive().optional(),
+    suppressEmbeds: z.boolean().optional(),
     streaming: ChannelPreviewStreamingConfigSchema.optional(),
     maxLinesPerMessage: z.number().int().positive().optional(),
     mediaMaxMb: z.number().positive().optional(),
@@ -619,7 +682,7 @@ export const DiscordAccountSchema = z
     healthMonitor: ChannelHealthMonitorSchema,
     execApprovals: z
       .object({
-        enabled: z.boolean().optional(),
+        enabled: NativeExecApprovalEnableModeSchema.optional(),
         approvers: DiscordIdListSchema.optional(),
         agentFilter: z.array(z.string()).optional(),
         sessionFilter: z.array(z.string()).optional(),
@@ -842,6 +905,7 @@ export const GoogleChatGroupSchema = z
   .object({
     enabled: z.boolean().optional(),
     requireMention: z.boolean().optional(),
+    botLoopProtection: BotLoopProtectionSchema.optional(),
     users: z.array(z.union([z.string(), z.number()])).optional(),
     systemPrompt: z.string().optional(),
   })
@@ -854,6 +918,7 @@ export const GoogleChatAccountSchema = z
     enabled: z.boolean().optional(),
     configWrites: z.boolean().optional(),
     allowBots: z.boolean().optional(),
+    botLoopProtection: BotLoopProtectionSchema.optional(),
     dangerouslyAllowNameMatching: z.boolean().optional(),
     requireMention: z.boolean().optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
@@ -916,7 +981,8 @@ export const SlackChannelSchema = z
     requireMention: z.boolean().optional(),
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,
-    allowBots: z.boolean().optional(),
+    allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),
+    botLoopProtection: BotLoopProtectionSchema.optional(),
     users: z.array(z.union([z.string(), z.number()])).optional(),
     skills: z.array(z.string()).optional(),
     systemPrompt: z.string().optional(),
@@ -958,7 +1024,7 @@ export const SlackAccountSchema = z
     capabilities: SlackCapabilitiesSchema.optional(),
     execApprovals: z
       .object({
-        enabled: z.boolean().optional(),
+        enabled: NativeExecApprovalEnableModeSchema.optional(),
         approvers: z.array(z.union([z.string(), z.number()])).optional(),
         agentFilter: z.array(z.string()).optional(),
         sessionFilter: z.array(z.string()).optional(),
@@ -974,7 +1040,8 @@ export const SlackAccountSchema = z
     appToken: SecretInputSchema.optional().register(sensitive),
     userToken: SecretInputSchema.optional().register(sensitive),
     userTokenReadOnly: z.boolean().optional().default(true),
-    allowBots: z.boolean().optional(),
+    allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),
+    botLoopProtection: BotLoopProtectionSchema.optional(),
     dangerouslyAllowNameMatching: z.boolean().optional(),
     requireMention: z.boolean().optional(),
     groupPolicy: GroupPolicySchema.optional(),
@@ -983,6 +1050,8 @@ export const SlackAccountSchema = z
     dmHistoryLimit: z.number().int().min(0).optional(),
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
     textChunkLimit: z.number().int().positive().optional(),
+    unfurlLinks: z.boolean().optional(),
+    unfurlMedia: z.boolean().optional(),
     streaming: SlackStreamingConfigSchema.optional(),
     mediaMaxMb: z.number().positive().optional(),
     reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
@@ -1167,6 +1236,7 @@ export const SignalAccountSchemaBase = z
 export const SignalAccountSchema = SignalAccountSchemaBase;
 
 export const SignalConfigSchema = SignalAccountSchemaBase.extend({
+  apiMode: z.enum(["auto", "native", "container"]).optional(),
   accounts: z.record(z.string(), SignalAccountSchema.optional()).optional(),
   defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {
@@ -1350,6 +1420,23 @@ export const IrcConfigSchema = IrcAccountSchemaBase.extend({
   }
 });
 
+const IMessageActionSchema = z
+  .object({
+    reactions: z.boolean().optional(),
+    edit: z.boolean().optional(),
+    unsend: z.boolean().optional(),
+    reply: z.boolean().optional(),
+    sendWithEffect: z.boolean().optional(),
+    renameGroup: z.boolean().optional(),
+    setGroupIcon: z.boolean().optional(),
+    addParticipant: z.boolean().optional(),
+    removeParticipant: z.boolean().optional(),
+    leaveGroup: z.boolean().optional(),
+    sendAttachment: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
 export const IMessageAccountSchemaBase = z
   .object({
     name: z.string().optional(),
@@ -1363,6 +1450,7 @@ export const IMessageAccountSchemaBase = z
       .string()
       .refine(isSafeScpRemoteHost, "expected SSH host or user@host (no spaces/options)")
       .optional(),
+    actions: IMessageActionSchema,
     service: z.union([z.literal("imessage"), z.literal("sms"), z.literal("auto")]).optional(),
     region: z.string().optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
@@ -1382,10 +1470,14 @@ export const IMessageAccountSchemaBase = z
       .array(z.string().refine(isValidInboundPathRootPattern, "expected absolute path root"))
       .optional(),
     mediaMaxMb: z.number().int().positive().optional(),
+    probeTimeoutMs: z.number().int().positive().optional(),
     textChunkLimit: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
+    sendReadReceipts: z.boolean().optional(),
+    reactionNotifications: z.enum(["off", "own", "all"]).optional(),
+    coalesceSameSenderDms: z.boolean().optional(),
     groups: z
       .record(
         z.string(),
@@ -1394,10 +1486,21 @@ export const IMessageAccountSchemaBase = z
             requireMention: z.boolean().optional(),
             tools: ToolPolicySchema,
             toolsBySender: ToolPolicyBySenderSchema,
+            systemPrompt: z.string().optional(),
           })
           .strict()
           .optional(),
       )
+      .optional(),
+    catchup: z
+      .object({
+        enabled: z.boolean().optional(),
+        maxAgeMinutes: z.number().int().min(1).max(720).optional(),
+        perRunLimit: z.number().int().min(1).max(500).optional(),
+        firstRunLookbackMinutes: z.number().int().min(1).max(720).optional(),
+        maxFailureRetries: z.number().int().min(1).max(1000).optional(),
+      })
+      .strict()
       .optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
     healthMonitor: ChannelHealthMonitorSchema,

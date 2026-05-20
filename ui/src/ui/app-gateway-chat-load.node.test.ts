@@ -58,6 +58,7 @@ vi.mock("./gateway.ts", async (importOriginal) => {
 
 vi.mock("./app-chat.ts", () => ({
   CHAT_SESSIONS_ACTIVE_MINUTES: 60,
+  CHAT_SESSIONS_REFRESH_LIMIT: 100,
   clearPendingQueueItemsForRun: vi.fn(),
   flushChatQueueForEvent: vi.fn(),
   refreshChatAvatar: refreshChatAvatarMock,
@@ -179,7 +180,9 @@ function connectHost(tab: Tab) {
   const host = createHost(tab);
   connectGateway(host);
   const client = gatewayClients[0];
-  expect(client).toBeDefined();
+  if (!client) {
+    throw new Error("Expected gateway client instance");
+  }
   return { host, client };
 }
 
@@ -214,5 +217,15 @@ describe("connectGateway chat load startup work", () => {
 
     await vi.waitFor(() => expect(refreshActiveTabMock).toHaveBeenCalledWith(host));
     expect(refreshChatAvatarMock).toHaveBeenCalledWith(host);
+  });
+
+  it("lets the active tab refresh own node and device loading after hello", async () => {
+    const { host, client } = connectHost("overview");
+
+    client.emitHello();
+
+    await vi.waitFor(() => expect(refreshActiveTabMock).toHaveBeenCalledWith(host));
+    expect(loadNodesMock).not.toHaveBeenCalled();
+    expect(loadDevicesMock).not.toHaveBeenCalled();
   });
 });

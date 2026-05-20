@@ -1,5 +1,5 @@
-import type { Api, Model } from "@mariozechner/pi-ai";
-import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
+import type { Api, Model } from "@earendil-works/pi-ai";
+import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import {
   shouldSuppressBuiltInModel,
@@ -9,6 +9,9 @@ import { normalizeProviderId } from "../../agents/provider-id.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { NormalizedModelCatalogRow } from "../../model-catalog/index.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
+import { normalizeProviderResolvedModelWithPlugin } from "../../plugins/provider-runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { ModelListAuthIndex } from "./list.auth-index.js";
 import type { ListRowModel } from "./list.model-row.js";
@@ -35,6 +38,8 @@ export type RowBuilderContext = {
   discoveredKeys: Set<string>;
   filter: RowFilter;
   skipRuntimeModelSuppression?: boolean;
+  metadataSnapshot?: PluginMetadataSnapshot;
+  workspaceDir?: string;
 };
 
 const modelCatalogModuleLoader = createLazyImportLoader<ModelCatalogModule>(
@@ -114,6 +119,38 @@ function shouldSuppressListModel(params: {
   });
 }
 
+function normalizeListRowWithProviderPlugin(params: {
+  model: ListRowModel;
+  context: RowBuilderContext;
+}): ListRowModel {
+  const normalized = normalizeProviderResolvedModelWithPlugin({
+    provider: params.model.provider,
+    config: params.context.cfg,
+    workspaceDir: params.context.workspaceDir,
+    context: {
+      config: params.context.cfg,
+      agentDir: params.context.agentDir,
+      workspaceDir: params.context.workspaceDir,
+      provider: params.model.provider,
+      modelId: params.model.id,
+      model: params.model as ProviderRuntimeModel,
+    },
+  });
+  if (!normalized) {
+    return params.model;
+  }
+  return {
+    ...params.model,
+    id: normalized.id,
+    name: normalized.name,
+    provider: normalized.provider,
+    baseUrl: normalized.baseUrl,
+    input: toListRowInput(normalized.input),
+    contextWindow: normalized.contextWindow,
+    contextTokens: normalized.contextTokens,
+  };
+}
+
 async function appendVisibleRow(params: {
   rows: ModelRow[];
   model: ListRowModel;
@@ -129,15 +166,19 @@ async function appendVisibleRow(params: {
   if (!matchesRowFilter(params.context.filter, params.model)) {
     return false;
   }
+  const normalizedModel = normalizeListRowWithProviderPlugin({
+    model: params.model,
+    context: params.context,
+  });
   if (
     !params.skipSuppression &&
-    shouldSuppressListModel({ model: params.model, context: params.context })
+    shouldSuppressListModel({ model: normalizedModel, context: params.context })
   ) {
     return false;
   }
   params.rows.push(
     await buildRow({
-      model: params.model,
+      model: normalizedModel,
       key: params.key,
       context: params.context,
       allowProviderAvailabilityFallback: params.allowProviderAvailabilityFallback,
@@ -174,13 +215,25 @@ function toConfiguredProviderListModel(params: {
   };
 }
 
-function toManifestCatalogListModel(row: NormalizedModelCatalogRow): ListRowModel {
+function toListRowInput(input: readonly string[] | undefined): ListRowModel["input"] {
+  const parsed = input?.filter(
+    (item): item is ListRowModel["input"][number] =>
+      item === "text" || item === "image" || item === "document",
+  );
+  return parsed?.length ? parsed : ["text"];
+}
+
+function toManifestCatalogListModel(
+  row: Pick<NormalizedModelCatalogRow, "provider" | "id" | "name" | "baseUrl" | "contextWindow"> & {
+    input?: readonly string[];
+  },
+): ListRowModel {
   return {
     provider: row.provider,
     id: row.id,
     name: row.name,
     baseUrl: row.baseUrl,
-    input: [...row.input],
+    input: toListRowInput(row.input),
     contextWindow: row.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
   };
 }
@@ -305,6 +358,33 @@ export async function appendConfiguredProviderRows(params: {
   }
 }
 
+export async function appendAuthenticatedCatalogRows(params: {
+  rows: ModelRow[];
+  context: RowBuilderContext;
+  seenKeys: Set<string>;
+}): Promise<void> {
+  const { loadModelCatalog } = await loadModelCatalogModule();
+  const catalog = await loadModelCatalog({
+    config: params.context.cfg,
+    readOnly: true,
+    metadataSnapshot: params.context.metadataSnapshot,
+  });
+  for (const entry of catalog) {
+    if (!params.context.authIndex.hasProviderAuth(entry.provider)) {
+      continue;
+    }
+    const key = modelKey(entry.provider, entry.id);
+    await appendVisibleRow({
+      rows: params.rows,
+      model: toManifestCatalogListModel(entry),
+      key,
+      context: params.context,
+      seenKeys: params.seenKeys,
+      allowProviderAvailabilityFallback: true,
+    });
+  }
+}
+
 export async function appendModelCatalogRows(params: {
   rows: ModelRow[];
   context: RowBuilderContext;
@@ -352,7 +432,11 @@ export async function appendCatalogSupplementRows(params: {
     loadModelCatalogModule(),
     loadModelResolverModule(),
   ]);
-  const catalog = await loadModelCatalog({ config: params.context.cfg, readOnly: true });
+  const catalog = await loadModelCatalog({
+    config: params.context.cfg,
+    readOnly: true,
+    metadataSnapshot: params.context.metadataSnapshot,
+  });
   for (const entry of catalog) {
     if (
       params.context.filter.provider &&
@@ -399,15 +483,21 @@ export async function appendProviderCatalogRows(params: {
   context: RowBuilderContext;
   seenKeys: Set<string>;
   staticOnly?: boolean;
+  catalogModels?: readonly Model<Api>[];
 }): Promise<number> {
   let appended = 0;
-  const { loadProviderCatalogModelsForList } = await loadProviderCatalogModule();
-  for (const model of await loadProviderCatalogModelsForList({
-    cfg: params.context.cfg,
-    agentDir: params.context.agentDir,
-    providerFilter: params.context.filter.provider,
-    staticOnly: params.staticOnly,
-  })) {
+  let catalogModels = params.catalogModels;
+  if (catalogModels == null) {
+    const { loadProviderCatalogModelsForList } = await loadProviderCatalogModule();
+    catalogModels = await loadProviderCatalogModelsForList({
+      cfg: params.context.cfg,
+      agentDir: params.context.agentDir,
+      providerFilter: params.context.filter.provider,
+      staticOnly: params.staticOnly,
+      metadataSnapshot: params.context.metadataSnapshot,
+    });
+  }
+  for (const model of catalogModels) {
     const key = modelKey(model.provider, model.id);
     if (
       await appendVisibleRow({
@@ -441,7 +531,7 @@ export async function appendConfiguredRows(params: {
     ) {
       continue;
     }
-    const model =
+    const resolvedModel =
       params.modelRegistry && resolveModelWithRegistry
         ? resolveModelWithRegistry({
             provider: entry.ref.provider,
@@ -450,6 +540,9 @@ export async function appendConfiguredRows(params: {
             cfg: params.context.cfg,
           })
         : toFallbackConfiguredListModel(entry, params.context.cfg);
+    const model = resolvedModel
+      ? normalizeListRowWithProviderPlugin({ model: resolvedModel, context: params.context })
+      : resolvedModel;
     if (params.context.filter.local && model && !isLocalBaseUrl(model.baseUrl ?? "")) {
       continue;
     }

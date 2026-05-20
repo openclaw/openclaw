@@ -1,4 +1,4 @@
-import type { AssistantMessage, Usage } from "@mariozechner/pi-ai";
+import type { AssistantMessage, Usage } from "@earendil-works/pi-ai";
 import {
   classifyAgentHarnessTerminalOutcome,
   embeddedAgentLog,
@@ -9,6 +9,7 @@ import {
   inferToolMetaFromArgs,
   normalizeUsage,
   runAgentHarnessAfterCompactionHook,
+  runAgentHarnessAfterToolCallHook,
   runAgentHarnessBeforeCompactionHook,
   TOOL_PROGRESS_OUTPUT_MAX_CHARS,
   type AgentMessage,
@@ -16,11 +17,16 @@ import {
   type EmbeddedRunAttemptResult,
   type HeartbeatToolResponse,
   type MessagingToolSend,
+  type MessagingToolSourceReplyPayload,
   type ToolProgressDetailMode,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { resolveCodexLocalRuntimeAttribution } from "./local-runtime-attribution.js";
+import { CodexNativeSubagentTaskMirror } from "./native-subagent-task-mirror.js";
 import { readCodexTurn } from "./protocol-validators.js";
 import {
   isJsonObject,
+  type CodexDynamicToolCallOutputContentItem,
   type CodexServerNotification,
   type CodexThreadItem,
   type CodexTurn,
@@ -35,17 +41,24 @@ import {
   sanitizeCodexAgentEventRecord,
   sanitizeCodexToolArguments,
 } from "./tool-progress-normalization.js";
-import { attachCodexMirrorIdentity } from "./transcript-mirror.js";
+import type { CodexTrajectoryRecorder } from "./trajectory.js";
+import { attachCodexMirrorIdentity, buildCodexUserPromptMessage } from "./transcript-mirror.js";
 
 export type CodexAppServerToolTelemetry = {
   didSendViaMessagingTool: boolean;
   messagingToolSentTexts: string[];
   messagingToolSentMediaUrls: string[];
   messagingToolSentTargets: MessagingToolSend[];
+  messagingToolSourceReplyPayloads?: MessagingToolSourceReplyPayload[];
   heartbeatToolResponse?: HeartbeatToolResponse;
   toolMediaUrls?: string[];
   toolAudioAsVoice?: boolean;
   successfulCronAdds?: number;
+};
+
+export type CodexAppServerEventProjectorOptions = {
+  nativePostToolUseRelayEnabled?: boolean;
+  trajectoryRecorder?: CodexTrajectoryRecorder | null;
 };
 
 const ZERO_USAGE: Usage = {
@@ -80,23 +93,69 @@ const CODEX_PROMPT_TOTAL_INPUT_KEYS = [
 ] as const;
 
 const MAX_TOOL_OUTPUT_DELTA_MESSAGES_PER_ITEM = 20;
+const TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS = 12_000;
+const TRANSCRIPT_PROGRESS_SUPPRESSED_TOOL_NAMES = new Set([
+  "message",
+  "messages",
+  "reply",
+  "send",
+  "reaction",
+  "react",
+  "typing",
+]);
+
+export function shouldEmitTranscriptToolProgress(toolName: unknown, args?: unknown): boolean {
+  const normalized = typeof toolName === "string" ? toolName.trim().toLowerCase() : "";
+  return Boolean(
+    normalized &&
+    !TRANSCRIPT_PROGRESS_SUPPRESSED_TOOL_NAMES.has(normalized) &&
+    !isActivityLogCommandProgress(normalized, args),
+  );
+}
+
+type ToolTranscriptCallInput = {
+  id: string;
+  name: string;
+  arguments?: unknown;
+};
+
+type ToolTranscriptResultInput = {
+  id: string;
+  name: string;
+  text?: string;
+  isError: boolean;
+};
 
 export class CodexAppServerEventProjector {
   private readonly assistantTextByItem = new Map<string, string>();
   private readonly assistantItemOrder: string[] = [];
+  private readonly assistantPhaseByItem = new Map<string, string>();
+  private readonly lastCommentaryProgressTextByItem = new Map<string, string>();
   private readonly reasoningTextByItem = new Map<string, string>();
   private readonly planTextByItem = new Map<string, string>();
   private readonly activeItemIds = new Set<string>();
   private readonly completedItemIds = new Set<string>();
   private readonly activeCompactionItemIds = new Set<string>();
+  private readonly toolProgressTexts = new Set<string>();
   private readonly toolResultSummaryItemIds = new Set<string>();
   private readonly toolResultOutputItemIds = new Set<string>();
   private readonly toolResultOutputStreamedItemIds = new Set<string>();
+  private readonly transcriptToolProgressSuppressedIds = new Set<string>();
+  private readonly toolTranscriptArgumentsById = new Map<string, unknown>();
   private readonly toolResultOutputDeltaState = new Map<
     string,
     { chars: number; messages: number; truncated: boolean }
   >();
+  private readonly toolResultOutputTextByItem = new Map<string, string>();
   private readonly toolMetas = new Map<string, { toolName: string; meta?: string }>();
+  private readonly toolTranscriptMessages: AgentMessage[] = [];
+  private readonly toolTranscriptCallIds = new Set<string>();
+  private readonly toolTranscriptResultIds = new Set<string>();
+  private readonly transcriptToolProgressCallIds = new Set<string>();
+  private lastNativeToolError: EmbeddedRunAttemptResult["lastToolError"];
+  private readonly nativeGeneratedMediaUrls = new Set<string>();
+  private readonly diagnosticToolStartedAtByItem = new Map<string, number>();
+  private readonly afterToolCallObservedItemIds = new Set<string>();
   private assistantStarted = false;
   private reasoningStarted = false;
   private reasoningEnded = false;
@@ -108,17 +167,33 @@ export class CodexAppServerEventProjector {
   private guardianReviewCount = 0;
   private completedCompactionCount = 0;
   private latestRateLimits: JsonValue | undefined;
+  private readonly nativeSubagentTaskMirror: CodexNativeSubagentTaskMirror;
 
   constructor(
     private readonly params: EmbeddedRunAttemptParams,
     private readonly threadId: string,
     private readonly turnId: string,
-  ) {}
+    private readonly options: CodexAppServerEventProjectorOptions = {},
+  ) {
+    this.nativeSubagentTaskMirror = new CodexNativeSubagentTaskMirror({
+      parentThreadId: threadId,
+      requesterSessionKey: params.sessionKey,
+      agentId: params.agentId,
+    });
+  }
 
   async handleNotification(notification: CodexServerNotification): Promise<void> {
     const params = isJsonObject(notification.params) ? notification.params : undefined;
     if (!params) {
       return;
+    }
+    try {
+      this.nativeSubagentTaskMirror.handleNotification(notification);
+    } catch (error) {
+      embeddedAgentLog.warn("Failed to mirror Codex native subagent lifecycle event", {
+        method: notification.method,
+        error: formatErrorMessage(error),
+      });
     }
     if (notification.method === "account/rateLimits/updated") {
       this.latestRateLimits = params;
@@ -211,14 +286,7 @@ export class CodexAppServerEventProjector {
     //     distinct turnIds → distinct identities → both kept.
     const turnId = this.turnId;
     const messagesSnapshot: AgentMessage[] = [
-      attachCodexMirrorIdentity(
-        {
-          role: "user",
-          content: this.params.prompt,
-          timestamp: Date.now(),
-        },
-        `${turnId}:prompt`,
-      ),
+      attachCodexMirrorIdentity(buildCodexUserPromptMessage(this.params), `${turnId}:prompt`),
     ];
     // Codex owns the canonical thread. These mirror records keep enough local
     // context for OpenClaw history, search, and future harness switching.
@@ -238,6 +306,7 @@ export class CodexAppServerEventProjector {
         ),
       );
     }
+    messagesSnapshot.push(...this.toolTranscriptMessages);
     if (lastAssistant) {
       messagesSnapshot.push(attachCodexMirrorIdentity(lastAssistant, `${turnId}:assistant`));
     }
@@ -270,12 +339,14 @@ export class CodexAppServerEventProjector {
       assistantTexts,
       toolMetas: [...this.toolMetas.values()],
       lastAssistant,
+      ...(this.lastNativeToolError ? { lastToolError: this.lastNativeToolError } : {}),
       didSendViaMessagingTool: toolTelemetry.didSendViaMessagingTool,
       messagingToolSentTexts: toolTelemetry.messagingToolSentTexts,
       messagingToolSentMediaUrls: toolTelemetry.messagingToolSentMediaUrls,
       messagingToolSentTargets: toolTelemetry.messagingToolSentTargets,
+      messagingToolSourceReplyPayloads: toolTelemetry.messagingToolSourceReplyPayloads ?? [],
       heartbeatToolResponse: toolTelemetry.heartbeatToolResponse,
-      toolMediaUrls: toolTelemetry.toolMediaUrls,
+      toolMediaUrls: this.buildToolMediaUrls(toolTelemetry),
       toolAudioAsVoice: toolTelemetry.toolAudioAsVoice,
       successfulCronAdds: toolTelemetry.successfulCronAdds,
       cloudCodeAssistFormatError: false,
@@ -297,10 +368,36 @@ export class CodexAppServerEventProjector {
     };
   }
 
+  recordDynamicToolCall(params: { callId: string; tool: string; arguments?: JsonValue }): void {
+    this.recordToolTranscriptCall({
+      id: params.callId,
+      name: params.tool,
+      arguments: sanitizeCodexToolArguments(params.arguments),
+    });
+  }
+
+  recordDynamicToolResult(params: {
+    callId: string;
+    tool: string;
+    success: boolean;
+    contentItems: CodexDynamicToolCallOutputContentItem[];
+  }): void {
+    this.recordToolTranscriptResult({
+      id: params.callId,
+      name: params.tool,
+      text: collectDynamicToolContentText(params.contentItems),
+      isError: !params.success,
+    });
+  }
+
   markTimedOut(): void {
     this.aborted = true;
     this.promptError = "codex app-server attempt timed out";
     this.promptErrorSource = "prompt";
+  }
+
+  markAborted(): void {
+    this.aborted = true;
   }
 
   isCompacting(): boolean {
@@ -320,6 +417,9 @@ export class CodexAppServerEventProjector {
     this.rememberAssistantItem(itemId);
     const text = `${this.assistantTextByItem.get(itemId) ?? ""}${delta}`;
     this.assistantTextByItem.set(itemId, text);
+    if (this.isCommentaryAssistantItem(itemId)) {
+      this.emitCommentaryProgress({ itemId, text });
+    }
     // Codex app-server can emit multiple agentMessage items per turn, including
     // intermediate coordination/progress prose. Keep those deltas internal until
     // turn completion chooses the last assistant item as the user-visible reply.
@@ -370,6 +470,7 @@ export class CodexAppServerEventProjector {
   private async handleItemStarted(params: JsonObject): Promise<void> {
     const item = readItem(params.item);
     const itemId = item?.id ?? readString(params, "itemId") ?? readString(params, "id");
+    this.rememberAssistantPhase(item);
     if (itemId) {
       this.activeItemIds.add(itemId);
     }
@@ -402,6 +503,7 @@ export class CodexAppServerEventProjector {
     }
     this.emitStandardItemEvent({ phase: "start", item });
     this.emitNormalizedToolItemEvent({ phase: "start", item });
+    this.recordNativeToolTranscriptCall(item);
     this.emitToolResultSummary(item);
     this.emitAgentEvent({
       stream: "codex_app_server.item",
@@ -416,10 +518,15 @@ export class CodexAppServerEventProjector {
       this.activeItemIds.delete(itemId);
       this.completedItemIds.add(itemId);
     }
+    this.rememberAssistantPhase(item);
     if (item?.type === "agentMessage" && typeof item.text === "string" && item.text) {
       this.rememberAssistantItem(item.id);
       this.assistantTextByItem.set(item.id, item.text);
+      if (this.isCommentaryAssistantItem(item.id)) {
+        this.emitCommentaryProgress({ itemId: item.id, text: item.text });
+      }
     }
+    this.recordNativeGeneratedMedia(item);
     if (item?.type === "plan" && typeof item.text === "string" && item.text) {
       this.planTextByItem.set(item.id, item.text);
       this.emitPlanUpdate({ explanation: undefined, steps: splitPlanText(item.text) });
@@ -447,6 +554,7 @@ export class CodexAppServerEventProjector {
         data: {
           phase: "end",
           backend: "codex-app-server",
+          completed: true,
           threadId: this.threadId,
           turnId: this.turnId,
           itemId,
@@ -456,6 +564,8 @@ export class CodexAppServerEventProjector {
     this.recordToolMeta(item);
     this.emitStandardItemEvent({ phase: "end", item });
     this.emitNormalizedToolItemEvent({ phase: "result", item });
+    this.recordNativeToolTranscriptCall(item);
+    this.recordNativeToolTranscriptResult(item);
     this.emitToolResultSummary(item);
     this.emitToolResultOutput(item);
     this.emitAgentEvent({
@@ -549,15 +659,21 @@ export class CodexAppServerEventProjector {
       this.promptErrorSource = "prompt";
     }
     for (const item of turn.items ?? []) {
+      this.rememberAssistantPhase(item);
       if (item.type === "agentMessage" && typeof item.text === "string" && item.text) {
         this.rememberAssistantItem(item.id);
         this.assistantTextByItem.set(item.id, item.text);
       }
+      this.recordNativeGeneratedMedia(item);
       if (item.type === "plan" && typeof item.text === "string" && item.text) {
         this.planTextByItem.set(item.id, item.text);
         this.emitPlanUpdate({ explanation: undefined, steps: splitPlanText(item.text) });
       }
       this.recordToolMeta(item);
+      this.emitSnapshotOnlyNativeToolProgress(item);
+      this.recordNativeToolTranscriptCall(item);
+      this.recordNativeToolTranscriptResult(item);
+      this.emitAfterToolCallObservation(item);
       this.emitToolResultSummary(item);
       this.emitToolResultOutput(item);
     }
@@ -565,10 +681,45 @@ export class CodexAppServerEventProjector {
     await this.maybeEndReasoning();
   }
 
+  private emitSnapshotOnlyNativeToolProgress(item: CodexThreadItem): void {
+    if (
+      !shouldSynthesizeToolProgressForItem(item) ||
+      !this.isCurrentTurnSnapshotItem(item) ||
+      this.completedItemIds.has(item.id) ||
+      itemStatus(item) === "running"
+    ) {
+      return;
+    }
+    const wasStarted = this.activeItemIds.has(item.id);
+    if (!wasStarted) {
+      this.emitStandardItemEvent({ phase: "start", item });
+      this.emitNormalizedToolItemEvent({ phase: "start", item });
+    }
+    this.activeItemIds.delete(item.id);
+    this.emitStandardItemEvent({ phase: "end", item });
+    this.emitNormalizedToolItemEvent({ phase: "result", item });
+    this.completedItemIds.add(item.id);
+  }
+
+  private isCurrentTurnSnapshotItem(item: CodexThreadItem): boolean {
+    const itemTurnId = readItemString(item, "turnId") ?? readItemString(item, "turn_id");
+    return itemTurnId === undefined || itemTurnId === this.turnId;
+  }
+
   private handleOutputDelta(params: JsonObject, toolName: string): void {
     const itemId = readString(params, "itemId");
     const delta = readString(params, "delta");
-    if (!itemId || !delta || !this.shouldEmitToolOutput()) {
+    if (!itemId || !delta) {
+      return;
+    }
+    appendToolOutputDeltaText(this.toolResultOutputTextByItem, itemId, delta);
+    if (!this.shouldEmitToolOutput()) {
+      return;
+    }
+    if (
+      this.transcriptToolProgressSuppressedIds.has(itemId) ||
+      !shouldEmitTranscriptToolProgress(toolName, this.toolTranscriptArgumentsById.get(itemId))
+    ) {
       return;
     }
     const state = this.toolResultOutputDeltaState.get(itemId) ?? {
@@ -622,8 +773,37 @@ export class CodexAppServerEventProjector {
       return;
     }
     const itemId = readString(item, "id") ?? `raw-assistant-${this.assistantItemOrder.length + 1}`;
+    const phase = readString(item, "phase");
+    if (phase) {
+      this.assistantPhaseByItem.set(itemId, phase);
+    }
     this.rememberAssistantItem(itemId);
     this.assistantTextByItem.set(itemId, text);
+    if (phase === "commentary") {
+      this.emitCommentaryProgress({ itemId, text });
+    }
+  }
+
+  private recordNativeGeneratedMedia(item: CodexThreadItem | undefined): void {
+    if (item?.type !== "imageGeneration") {
+      return;
+    }
+    const savedPath = readItemString(item, "savedPath")?.trim();
+    if (savedPath) {
+      this.nativeGeneratedMediaUrls.add(savedPath);
+    }
+  }
+
+  private buildToolMediaUrls(toolTelemetry: CodexAppServerToolTelemetry): string[] | undefined {
+    const mediaUrls = new Set(
+      toolTelemetry.toolMediaUrls?.map((url) => url.trim()).filter(Boolean) ?? [],
+    );
+    if ((toolTelemetry.messagingToolSentMediaUrls?.length ?? 0) === 0) {
+      for (const mediaUrl of this.nativeGeneratedMediaUrls) {
+        mediaUrls.add(mediaUrl);
+      }
+    }
+    return mediaUrls.size > 0 ? [...mediaUrls] : toolTelemetry.toolMediaUrls;
   }
 
   private async maybeEndReasoning(): Promise<void> {
@@ -646,6 +826,42 @@ export class CodexAppServerEventProjector {
         source: "codex-app-server",
         ...(params.explanation ? { explanation: params.explanation } : {}),
         ...(params.steps && params.steps.length > 0 ? { steps: params.steps } : {}),
+      },
+    });
+  }
+
+  private rememberAssistantPhase(item: CodexThreadItem | undefined): void {
+    if (item?.type !== "agentMessage") {
+      return;
+    }
+    const phase = readItemString(item, "phase");
+    if (phase) {
+      this.assistantPhaseByItem.set(item.id, phase);
+    }
+  }
+
+  private isCommentaryAssistantItem(itemId: string): boolean {
+    return this.assistantPhaseByItem.get(itemId) === "commentary";
+  }
+
+  private emitCommentaryProgress(params: { itemId: string; text: string }): void {
+    const progressText = params.text.replace(/\s+/g, " ").trim();
+    if (
+      !progressText ||
+      this.lastCommentaryProgressTextByItem.get(params.itemId) === progressText
+    ) {
+      return;
+    }
+    this.lastCommentaryProgressTextByItem.set(params.itemId, progressText);
+    this.emitAgentEvent({
+      stream: "item",
+      data: {
+        itemId: params.itemId,
+        kind: "preamble",
+        title: "Preamble",
+        phase: "update",
+        progressText,
+        source: "codex-app-server",
       },
     });
   }
@@ -691,9 +907,20 @@ export class CodexAppServerEventProjector {
     if (!name) {
       return;
     }
-    const meta = itemMeta(item, this.toolProgressDetailMode());
-    const args = params.phase === "start" ? itemToolArgs(item) : undefined;
     const status = params.phase === "result" ? itemStatus(item) : "running";
+    const args = itemToolArgs(item);
+    const meta = itemMeta(item, this.toolProgressDetailMode());
+    this.recordToolTrajectoryEvent({ phase: params.phase, item, name, args, status });
+    this.emitDiagnosticToolExecutionEvent({ phase: params.phase, item, name, status });
+    if (params.phase === "result") {
+      this.recordNativeToolError({ item, name, meta, status });
+    }
+    if (!shouldEmitTranscriptToolProgress(name, args)) {
+      if (params.phase === "result") {
+        this.emitAfterToolCallObservation(item);
+      }
+      return;
+    }
     this.emitAgentEvent({
       stream: "tool",
       data: {
@@ -702,7 +929,7 @@ export class CodexAppServerEventProjector {
         itemId: item.id,
         toolCallId: item.id,
         ...(meta ? { meta } : {}),
-        ...(args ? { args } : {}),
+        ...(params.phase === "start" && args ? { args } : {}),
         ...(params.phase === "result"
           ? {
               status,
@@ -712,6 +939,172 @@ export class CodexAppServerEventProjector {
           : {}),
       },
     });
+    if (params.phase === "result") {
+      this.emitAfterToolCallObservation(item);
+    }
+  }
+
+  private recordNativeToolError(params: {
+    item: CodexThreadItem;
+    name: string;
+    meta?: string;
+    status: ReturnType<typeof itemStatus>;
+  }): void {
+    if (!isNonSuccessItemStatus(params.status)) {
+      if (!this.lastNativeToolError) {
+        return;
+      }
+      if (!this.lastNativeToolError.mutatingAction) {
+        this.lastNativeToolError = undefined;
+        return;
+      }
+      const actionFingerprint = nativeToolActionFingerprint(params.item);
+      if (
+        this.lastNativeToolError.actionFingerprint &&
+        actionFingerprint &&
+        this.lastNativeToolError.actionFingerprint === actionFingerprint
+      ) {
+        this.lastNativeToolError = undefined;
+      }
+      return;
+    }
+    const error = itemToolError(params.item, params.status, this.toolResultOutputTextByItem);
+    const actionFingerprint = nativeToolActionFingerprint(params.item);
+    this.lastNativeToolError = {
+      toolName: params.name,
+      ...(params.meta ? { meta: params.meta } : {}),
+      ...(error ? { error } : {}),
+      ...(isMutatingNativeToolItem(params.item) ? { mutatingAction: true } : {}),
+      ...(actionFingerprint ? { actionFingerprint } : {}),
+    };
+  }
+
+  private recordToolTrajectoryEvent(params: {
+    phase: "start" | "result";
+    item: CodexThreadItem;
+    name: string;
+    args?: Record<string, unknown>;
+    status: ReturnType<typeof itemStatus>;
+  }): void {
+    if (params.phase === "start") {
+      this.options.trajectoryRecorder?.recordEvent("tool.call", {
+        threadId: this.threadId,
+        turnId: this.turnId,
+        itemId: params.item.id,
+        toolCallId: params.item.id,
+        name: params.name,
+        arguments: params.args,
+      });
+      return;
+    }
+    const toolResult = itemToolResult(params.item).result;
+    const output = itemOutputText(params.item, this.toolResultOutputTextByItem);
+    this.options.trajectoryRecorder?.recordEvent("tool.result", {
+      threadId: this.threadId,
+      turnId: this.turnId,
+      itemId: params.item.id,
+      toolCallId: params.item.id,
+      name: params.name,
+      status: params.status,
+      isError: isNonSuccessItemStatus(params.status),
+      ...(toolResult ? { result: toolResult } : {}),
+      ...(output ? { output } : {}),
+    });
+  }
+
+  private emitDiagnosticToolExecutionEvent(params: {
+    phase: "start" | "result";
+    item: CodexThreadItem;
+    name: string;
+    status: ReturnType<typeof itemStatus>;
+  }): void {
+    const base = {
+      runId: this.params.runId,
+      sessionId: this.params.sessionId,
+      sessionKey: this.params.sessionKey,
+      toolName: params.name,
+      toolCallId: params.item.id,
+    };
+    if (params.phase === "start") {
+      this.diagnosticToolStartedAtByItem.set(params.item.id, Date.now());
+      emitTrustedDiagnosticEvent({
+        type: "tool.execution.started",
+        ...base,
+      });
+      return;
+    }
+
+    const startedAt = this.diagnosticToolStartedAtByItem.get(params.item.id);
+    this.diagnosticToolStartedAtByItem.delete(params.item.id);
+    const itemDurationMs =
+      typeof params.item.durationMs === "number" ? params.item.durationMs : undefined;
+    const durationMs =
+      itemDurationMs ?? (startedAt === undefined ? 0 : Math.max(0, Date.now() - startedAt));
+    const terminalEvent =
+      params.status === "blocked"
+        ? {
+            type: "tool.execution.blocked" as const,
+            reason: "codex_native_tool_blocked",
+            deniedReason: "codex_native_tool_blocked",
+          }
+        : params.status === "failed"
+          ? {
+              type: "tool.execution.error" as const,
+              durationMs,
+              errorCategory: "codex_native_tool_error",
+            }
+          : {
+              type: "tool.execution.completed" as const,
+              durationMs,
+            };
+    emitTrustedDiagnosticEvent({ ...base, ...terminalEvent });
+  }
+
+  private emitAfterToolCallObservation(item: CodexThreadItem): void {
+    if (!this.shouldEmitAfterToolCallObservation(item)) {
+      return;
+    }
+    const name = itemName(item);
+    if (!name) {
+      return;
+    }
+    const status = itemStatus(item);
+    if (status === "running") {
+      return;
+    }
+    this.afterToolCallObservedItemIds.add(item.id);
+    const result = itemToolResult(item).result;
+    const error = itemToolError(item, status, this.toolResultOutputTextByItem);
+    const startedAt =
+      typeof item.durationMs === "number" ? Date.now() - Math.max(0, item.durationMs) : undefined;
+    const hookParams = {
+      toolName: name,
+      toolCallId: item.id,
+      runId: this.params.runId,
+      agentId: this.params.agentId,
+      sessionId: this.params.sessionId,
+      sessionKey: this.params.sessionKey,
+      startArgs: itemToolArgs(item) ?? {},
+      ...(result !== undefined ? { result } : {}),
+      ...(error ? { error } : {}),
+      ...(startedAt !== undefined ? { startedAt } : {}),
+    };
+    setImmediate(() => {
+      void runAgentHarnessAfterToolCallHook(hookParams);
+    });
+  }
+
+  private shouldEmitAfterToolCallObservation(item: CodexThreadItem): boolean {
+    if (
+      !shouldSynthesizeToolProgressForItem(item) ||
+      this.afterToolCallObservedItemIds.has(item.id)
+    ) {
+      return false;
+    }
+    if (this.options.nativePostToolUseRelayEnabled && isNativePostToolUseRelayItem(item)) {
+      return false;
+    }
+    return true;
   }
 
   private emitToolResultSummary(item: CodexThreadItem | undefined): void {
@@ -724,6 +1117,9 @@ export class CodexAppServerEventProjector {
     }
     const toolName = itemName(item);
     if (!toolName) {
+      return;
+    }
+    if (!shouldEmitTranscriptToolProgress(toolName, itemToolArgs(item))) {
       return;
     }
     this.toolResultSummaryItemIds.add(itemId);
@@ -746,14 +1142,18 @@ export class CodexAppServerEventProjector {
       return;
     }
     const toolName = itemName(item);
-    const output = itemOutputText(item);
+    const output = itemOutputText(item, this.toolResultOutputTextByItem);
     if (!toolName || !output) {
+      return;
+    }
+    if (!shouldEmitTranscriptToolProgress(toolName, itemToolArgs(item))) {
       return;
     }
     this.emitToolResultMessage({
       itemId,
       text: formatToolOutput(toolName, itemMeta(item, this.toolProgressDetailMode()), output),
       finalOutput: true,
+      isError: isNonSuccessItemStatus(itemStatus(item)),
     });
   }
 
@@ -761,12 +1161,23 @@ export class CodexAppServerEventProjector {
     itemId: string;
     text: string;
     finalOutput?: boolean;
+    isError?: boolean;
   }): void {
+    const text = params.text.trim();
+    if (!text) {
+      return;
+    }
+    this.toolProgressTexts.add(text);
     if (params.finalOutput) {
       this.toolResultOutputItemIds.add(params.itemId);
     }
     try {
-      void Promise.resolve(this.params.onToolResult?.({ text: params.text })).catch(() => {
+      void Promise.resolve(
+        this.params.onToolResult?.({
+          text,
+          ...(params.isError === true ? { isError: true } : {}),
+        }),
+      ).catch(() => {
         // Tool progress delivery is best-effort and should not affect the turn.
       });
     } catch {
@@ -802,6 +1213,132 @@ export class CodexAppServerEventProjector {
     this.toolMetas.set(item.id, {
       toolName,
       ...(meta ? { meta } : {}),
+    });
+  }
+
+  private recordNativeToolTranscriptCall(item: CodexThreadItem | undefined): void {
+    if (!item || !shouldSynthesizeToolProgressForItem(item)) {
+      return;
+    }
+    const name = itemName(item);
+    if (!name) {
+      return;
+    }
+    this.recordToolTranscriptCall({
+      id: item.id,
+      name,
+      arguments: itemToolArgs(item),
+    });
+  }
+
+  private recordNativeToolTranscriptResult(item: CodexThreadItem | undefined): void {
+    if (!item || !shouldSynthesizeToolProgressForItem(item)) {
+      return;
+    }
+    const name = itemName(item);
+    if (!name) {
+      return;
+    }
+    this.recordToolTranscriptResult({
+      id: item.id,
+      name,
+      text: itemTranscriptResultText(item, this.toolResultOutputTextByItem),
+      isError: isNonSuccessItemStatus(itemStatus(item)),
+    });
+  }
+
+  private recordToolTranscriptCall(params: ToolTranscriptCallInput): void {
+    if (!params.id || !params.name || this.toolTranscriptCallIds.has(params.id)) {
+      return;
+    }
+    this.toolTranscriptCallIds.add(params.id);
+    this.toolTranscriptArgumentsById.set(params.id, params.arguments);
+    if (!shouldEmitTranscriptToolProgress(params.name, params.arguments)) {
+      this.transcriptToolProgressSuppressedIds.add(params.id);
+    } else {
+      this.transcriptToolProgressSuppressedIds.delete(params.id);
+    }
+    this.emitTranscriptToolCallProgress(params);
+    this.toolTranscriptMessages.push(
+      attachCodexMirrorIdentity(
+        this.createToolCallMessage(params),
+        `${this.turnId}:tool:${params.id}:call`,
+      ),
+    );
+  }
+
+  private recordToolTranscriptResult(params: ToolTranscriptResultInput): void {
+    if (!params.id || !params.name || this.toolTranscriptResultIds.has(params.id)) {
+      return;
+    }
+    this.toolTranscriptResultIds.add(params.id);
+    this.emitTranscriptToolResultProgress(params);
+    this.toolTranscriptMessages.push(
+      attachCodexMirrorIdentity(
+        this.createToolResultMessage(params),
+        `${this.turnId}:tool:${params.id}:result`,
+      ),
+    );
+  }
+
+  private emitTranscriptToolCallProgress(params: ToolTranscriptCallInput): void {
+    if (!shouldEmitTranscriptToolProgress(params.name, params.arguments)) {
+      return;
+    }
+    this.transcriptToolProgressCallIds.add(params.id);
+    const args = normalizeToolTranscriptArguments(params.arguments);
+    const meta = inferToolMetaFromArgs(params.name, args, {
+      detailMode: this.toolProgressDetailMode(),
+    });
+    if (
+      !this.params.onToolResult ||
+      !this.shouldEmitToolResult() ||
+      this.toolResultSummaryItemIds.has(params.id) ||
+      this.toolResultOutputStreamedItemIds.has(params.id)
+    ) {
+      return;
+    }
+    this.toolResultSummaryItemIds.add(params.id);
+    this.emitToolResultMessage({
+      itemId: params.id,
+      text: formatToolSummary(params.name, meta),
+    });
+  }
+
+  private emitTranscriptToolResultProgress(params: ToolTranscriptResultInput): void {
+    if (
+      this.transcriptToolProgressSuppressedIds.has(params.id) ||
+      !shouldEmitTranscriptToolProgress(
+        params.name,
+        this.toolTranscriptArgumentsById.get(params.id),
+      )
+    ) {
+      return;
+    }
+    if (!this.transcriptToolProgressCallIds.has(params.id)) {
+      this.emitTranscriptToolCallProgress({
+        id: params.id,
+        name: params.name,
+        arguments: {},
+      });
+    }
+    if (
+      !this.params.onToolResult ||
+      !this.shouldEmitToolOutput() ||
+      this.toolResultOutputItemIds.has(params.id) ||
+      this.toolResultOutputStreamedItemIds.has(params.id)
+    ) {
+      return;
+    }
+    const text = params.text?.trim();
+    if (!text) {
+      return;
+    }
+    this.emitToolResultMessage({
+      itemId: params.id,
+      text: formatToolOutput(params.name, undefined, text),
+      finalOutput: true,
+      isError: params.isError,
     });
   }
 
@@ -852,7 +1389,10 @@ export class CodexAppServerEventProjector {
         continue;
       }
       const text = this.assistantTextByItem.get(itemId)?.trim();
-      if (text) {
+      if (this.assistantPhaseByItem.get(itemId) === "commentary") {
+        continue;
+      }
+      if (text && !this.toolProgressTexts.has(text)) {
         return text;
       }
     }
@@ -871,6 +1411,7 @@ export class CodexAppServerEventProjector {
   }
 
   private createAssistantMessage(text: string): AssistantMessage {
+    const attribution = resolveCodexLocalRuntimeAttribution(this.params);
     const usage: Usage = this.tokenUsage
       ? {
           input: this.tokenUsage.input ?? 0,
@@ -889,8 +1430,8 @@ export class CodexAppServerEventProjector {
     return {
       role: "assistant",
       content: [{ type: "text", text }],
-      api: this.params.model.api ?? "openai-codex-responses",
-      provider: this.params.provider,
+      api: attribution.api ?? "openai-codex-responses",
+      provider: attribution.provider,
       model: this.params.modelId,
       usage,
       stopReason: this.aborted ? "aborted" : this.promptError ? "error" : "stop",
@@ -900,16 +1441,64 @@ export class CodexAppServerEventProjector {
   }
 
   private createAssistantMirrorMessage(title: string, text: string): AssistantMessage {
+    const attribution = resolveCodexLocalRuntimeAttribution(this.params);
     return {
       role: "assistant",
       content: [{ type: "text", text: `${title}:\n${text}` }],
-      api: this.params.model.api ?? "openai-codex-responses",
-      provider: this.params.provider,
+      api: attribution.api ?? "openai-codex-responses",
+      provider: attribution.provider,
       model: this.params.modelId,
       usage: ZERO_USAGE,
       stopReason: "stop",
       timestamp: Date.now(),
     };
+  }
+
+  private createToolCallMessage(params: ToolTranscriptCallInput): AgentMessage {
+    const args = normalizeToolTranscriptArguments(params.arguments);
+    const attribution = resolveCodexLocalRuntimeAttribution(this.params);
+    return {
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: params.id,
+          name: params.name,
+          arguments: args,
+          input: args,
+        },
+      ],
+      api: attribution.api ?? "openai-codex-responses",
+      provider: attribution.provider,
+      model: this.params.modelId,
+      usage: ZERO_USAGE,
+      stopReason: "toolUse",
+      timestamp: Date.now(),
+    } as unknown as AgentMessage;
+  }
+
+  private createToolResultMessage(params: ToolTranscriptResultInput): AgentMessage {
+    const text = truncateToolTranscriptText(params.text?.trim() || toolResultStatusText(params));
+    return {
+      role: "toolResult",
+      toolCallId: params.id,
+      toolName: params.name,
+      isError: params.isError,
+      content: [
+        {
+          type: "toolResult",
+          id: params.id,
+          name: params.name,
+          toolName: params.name,
+          toolCallId: params.id,
+          toolUseId: params.id,
+          tool_use_id: params.id,
+          content: text,
+          text,
+        },
+      ],
+      timestamp: Date.now(),
+    } as unknown as AgentMessage;
   }
 
   private isNotificationForTurn(params: JsonObject): boolean {
@@ -1168,6 +1757,38 @@ function shouldSynthesizeToolProgressForItem(item: CodexThreadItem): boolean {
   }
 }
 
+function isMutatingNativeToolItem(item: CodexThreadItem): boolean {
+  return item.type === "commandExecution" || item.type === "fileChange";
+}
+
+function nativeToolActionFingerprint(item: CodexThreadItem): string | undefined {
+  if (item.type === "commandExecution" && typeof item.command === "string") {
+    return JSON.stringify({
+      type: item.type,
+      command: item.command,
+      cwd: typeof item.cwd === "string" ? item.cwd : "",
+    });
+  }
+  if (item.type === "fileChange") {
+    return JSON.stringify({
+      type: item.type,
+      changes: itemFileChanges(item),
+    });
+  }
+  return undefined;
+}
+
+function isNativePostToolUseRelayItem(item: CodexThreadItem): boolean {
+  switch (item.type) {
+    case "commandExecution":
+    case "fileChange":
+    case "mcpToolCall":
+      return true;
+    default:
+      return false;
+  }
+}
+
 function shouldSuppressChannelProgressForItem(item: CodexThreadItem): boolean {
   if (shouldSynthesizeToolProgressForItem(item)) {
     return true;
@@ -1183,6 +1804,11 @@ function itemToolArgs(item: CodexThreadItem): Record<string, unknown> | undefine
     return sanitizeCodexAgentEventRecord({
       command: item.command,
       ...(typeof item.cwd === "string" ? { cwd: item.cwd } : {}),
+    });
+  }
+  if (item.type === "fileChange") {
+    return sanitizeCodexAgentEventRecord({
+      changes: itemFileChanges(item),
     });
   }
   if (item.type === "webSearch" && typeof item.query === "string") {
@@ -1208,7 +1834,7 @@ function itemToolResult(item: CodexThreadItem): { result?: Record<string, unknow
     return {
       result: sanitizeCodexAgentEventRecord({
         status: item.status,
-        changes: item.changes.map((change) => ({ path: change.path, kind: change.kind })),
+        changes: itemFileChanges(item),
       }),
     };
   }
@@ -1226,6 +1852,26 @@ function itemToolResult(item: CodexThreadItem): { result?: Record<string, unknow
     return { result: sanitizeCodexAgentEventRecord({ status: "completed" }) };
   }
   return {};
+}
+
+function itemFileChanges(item: CodexThreadItem): Array<{ path: string; kind: string }> {
+  return Array.isArray(item.changes)
+    ? item.changes.map((change) => ({ path: change.path, kind: change.kind }))
+    : [];
+}
+
+function itemToolError(
+  item: CodexThreadItem,
+  status: ReturnType<typeof itemStatus>,
+  outputTextByItem?: ReadonlyMap<string, string>,
+): string | undefined {
+  if (status === "blocked") {
+    return "codex native tool blocked";
+  }
+  if (status !== "failed") {
+    return undefined;
+  }
+  return itemOutputText(item, outputTextByItem) ?? "codex native tool failed";
 }
 
 function itemMeta(
@@ -1252,9 +1898,12 @@ function itemMeta(
   return undefined;
 }
 
-function itemOutputText(item: CodexThreadItem): string | undefined {
+function itemOutputText(
+  item: CodexThreadItem,
+  outputTextByItem?: ReadonlyMap<string, string>,
+): string | undefined {
   if (item.type === "commandExecution") {
-    return item.aggregatedOutput?.trim() || undefined;
+    return item.aggregatedOutput?.trim() || outputTextByItem?.get(item.id)?.trim() || undefined;
   }
   if (item.type === "dynamicToolCall") {
     return collectDynamicToolContentText(item.contentItems).trim() || undefined;
@@ -1264,6 +1913,64 @@ function itemOutputText(item: CodexThreadItem): string | undefined {
       return stringifyJsonValue(item.error);
     }
     return item.result ? stringifyJsonValue(item.result) : undefined;
+  }
+  return undefined;
+}
+
+function itemTranscriptResultText(
+  item: CodexThreadItem,
+  outputTextByItem?: ReadonlyMap<string, string>,
+): string | undefined {
+  const output = itemOutputText(item, outputTextByItem);
+  if (output) {
+    return output;
+  }
+  const result = itemToolResult(item).result;
+  return result ? stringifyJsonValue(result) : itemStatus(item);
+}
+
+function appendToolOutputDeltaText(
+  outputTextByItem: Map<string, string>,
+  itemId: string,
+  delta: string,
+): void {
+  const current = outputTextByItem.get(itemId) ?? "";
+  if (current.length >= TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS) {
+    return;
+  }
+  const remaining = TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS - current.length;
+  const next = current + (delta.length > remaining ? delta.slice(0, remaining) : delta);
+  outputTextByItem.set(itemId, next);
+}
+
+function normalizeToolTranscriptArguments(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  return value as Record<string, unknown>;
+}
+
+function isActivityLogCommandProgress(toolName: string, args: unknown): boolean {
+  if (toolName !== "bash" && toolName !== "exec" && toolName !== "shell") {
+    return false;
+  }
+  const command = readToolCommandText(args);
+  return Boolean(command && command.includes("log_activity.sh"));
+}
+
+function readToolCommandText(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  for (const key of ["command", "cmd", "shellCommand", "script"]) {
+    const text = record[key];
+    if (typeof text === "string" && text) {
+      return text;
+    }
   }
   return undefined;
 }
@@ -1281,6 +1988,17 @@ function collectDynamicToolContentText(contentItems: CodexThreadItem["contentIte
       return text ? [text] : [];
     })
     .join("\n");
+}
+
+function truncateToolTranscriptText(text: string): string {
+  if (text.length <= TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS) {
+    return text;
+  }
+  return `${text.slice(0, TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS)}\n...(truncated)...`;
+}
+
+function toolResultStatusText(params: ToolTranscriptResultInput): string {
+  return params.isError ? `${params.name} failed` : `${params.name} completed`;
 }
 
 function stringifyJsonValue(value: unknown): string | undefined {

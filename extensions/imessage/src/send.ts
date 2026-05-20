@@ -4,15 +4,17 @@ import {
   type MessageReceiptPartKind,
   type MessageReceiptSourceResult,
 } from "openclaw/plugin-sdk/channel-message";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
-import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
-import { resolveOutboundAttachmentFromUrl } from "openclaw/plugin-sdk/media-runtime";
+import { kindFromMime, resolveOutboundAttachmentFromUrl } from "openclaw/plugin-sdk/media-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
-import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
-import { stripInlineDirectiveTagsForDelivery } from "openclaw/plugin-sdk/text-runtime";
+import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
+import { stripInlineDirectiveTagsForDelivery } from "openclaw/plugin-sdk/text-chunking";
 import { resolveIMessageAccount, type ResolvedIMessageAccount } from "./accounts.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "./client.js";
+import { extractMarkdownFormatRuns } from "./markdown-format.js";
+import { rememberIMessageReplyCache } from "./monitor-reply-cache.js";
+import { rememberPersistedIMessageEcho } from "./monitor/persisted-echo-cache.js";
 import { formatIMessageChatTarget, type IMessageService, parseIMessageTarget } from "./targets.js";
 
 type IMessageSendOpts = {
@@ -45,6 +47,7 @@ type IMessageSendOpts = {
 type IMessageSendResult = {
   messageId: string;
   sentText: string;
+  echoText?: string;
   receipt: MessageReceipt;
 };
 
@@ -91,13 +94,13 @@ function resolveMessageId(result: Record<string, unknown> | null | undefined): s
   return raw ? raw.trim() : null;
 }
 
-function resolveDeliveredIMessageText(text: string, mediaContentType?: string): string {
+function resolveOutboundEchoText(text: string, mediaContentType?: string): string | undefined {
   if (text.trim()) {
     return text;
   }
   const kind = kindFromMime(mediaContentType ?? undefined);
   if (!kind) {
-    return text;
+    return undefined;
   }
   return kind === "image" ? "<media:image>" : `<media:${kind}>`;
 }
@@ -140,6 +143,22 @@ function createIMessageSendReceipt(params: {
   return createMessageReceiptFromOutboundResults(receiptParams);
 }
 
+function resolveOutboundEchoScope(params: {
+  accountId: string;
+  target: ReturnType<typeof parseIMessageTarget>;
+}): string | null {
+  if (params.target.kind === "chat_id") {
+    return `${params.accountId}:${formatIMessageChatTarget(params.target.chatId)}`;
+  }
+  if (params.target.kind === "chat_guid") {
+    return `${params.accountId}:chat_guid:${params.target.chatGuid}`;
+  }
+  if (params.target.kind === "chat_identifier") {
+    return `${params.accountId}:chat_identifier:${params.target.chatIdentifier}`;
+  }
+  return `${params.accountId}:imessage:${params.target.to}`;
+}
+
 export async function sendMessageIMessage(
   to: string,
   text: string,
@@ -168,6 +187,7 @@ export async function sendMessageIMessage(
         : 16 * 1024 * 1024;
   let message = text ?? "";
   let filePath: string | undefined;
+  let mediaContentType: string | undefined;
 
   if (opts.mediaUrl?.trim()) {
     const resolveAttachmentFn = opts.resolveAttachmentImpl ?? resolveOutboundAttachmentFromUrl;
@@ -176,7 +196,7 @@ export async function sendMessageIMessage(
       readFile: opts.mediaReadFile,
     });
     filePath = resolved.path;
-    message = resolveDeliveredIMessageText(message, resolved.contentType ?? undefined);
+    mediaContentType = resolved.contentType ?? undefined;
   }
 
   if (!message.trim() && !filePath) {
@@ -194,6 +214,18 @@ export async function sendMessageIMessage(
   if (!message.trim() && !filePath) {
     throw new Error("iMessage send requires text or media");
   }
+  // Extract markdown bold/italic/underline/strikethrough into typed-run
+  // ranges that the imsg bridge applies via attributedBody. macOS 15+
+  // recipients render the runs natively; earlier macOS recipients still
+  // see the marker-stripped text without literal asterisks.
+  const formatted = message.trim()
+    ? extractMarkdownFormatRuns(message)
+    : { text: message, ranges: [] };
+  message = formatted.text;
+  if (!message.trim() && !filePath) {
+    throw new Error("iMessage send requires text or media");
+  }
+  const echoText = resolveOutboundEchoText(message, filePath ? mediaContentType : undefined);
   const resolvedReplyToId = sanitizeReplyToId(opts.replyToId);
   const params: Record<string, unknown> = {
     text: message,
@@ -202,6 +234,9 @@ export async function sendMessageIMessage(
   };
   if (resolvedReplyToId) {
     params.reply_to = resolvedReplyToId;
+  }
+  if (formatted.ranges.length > 0) {
+    params.formatting = formatted.ranges;
   }
   if (filePath) {
     params.file = filePath;
@@ -229,9 +264,38 @@ export async function sendMessageIMessage(
     });
     const resolvedId = resolveMessageId(result);
     const messageId = resolvedId ?? (result?.ok ? "ok" : "unknown");
+    const echoScope = resolveOutboundEchoScope({ accountId: account.accountId, target });
+    if (echoScope) {
+      rememberPersistedIMessageEcho({
+        scope: echoScope,
+        text: echoText,
+        messageId: resolvedId ?? undefined,
+      });
+    }
+    // Record the outbound message in the reply cache with isFromMe=true so
+    // edit/unsend actions can verify the agent actually sent the message
+    // before dispatching. Inbound recording (in monitor/inbound-processing)
+    // sets isFromMe=false, so the cache distinguishes own-sent from received.
+    if (resolvedId) {
+      rememberIMessageReplyCache({
+        accountId: account.accountId,
+        messageId: resolvedId,
+        chatGuid: target.kind === "chat_guid" ? target.chatGuid : undefined,
+        chatIdentifier:
+          target.kind === "chat_identifier"
+            ? target.chatIdentifier
+            : target.kind === "handle"
+              ? `${target.service === "sms" ? "SMS" : "iMessage"};-;${target.to}`
+              : undefined,
+        chatId: target.kind === "chat_id" ? target.chatId : undefined,
+        timestamp: Date.now(),
+        isFromMe: true,
+      });
+    }
     return {
       messageId,
       sentText: message,
+      ...(echoText ? { echoText } : {}),
       receipt: createIMessageSendReceipt({
         messageId,
         target,

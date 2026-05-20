@@ -39,25 +39,25 @@ export const mockedGlobalHookRunner = {
   hasHooks: vi.fn((_hookName: string) => false),
   runBeforeAgentReply: vi.fn(
     async (
-      _event: { cleanedBody: string },
+      _eventValue: { cleanedBody: string },
       _ctx: PluginHookAgentContext,
     ): Promise<PluginHookBeforeAgentReplyResult | undefined> => undefined,
   ),
   runBeforeAgentStart: vi.fn(
     async (
-      _event: { prompt: string; messages?: unknown[] },
+      _eventValue: { prompt: string; messages?: unknown[] },
       _ctx: PluginHookAgentContext,
     ): Promise<PluginHookBeforeAgentStartResult | undefined> => undefined,
   ),
   runBeforePromptBuild: vi.fn(
     async (
-      _event: { prompt: string; messages: unknown[] },
+      _eventValue: { prompt: string; messages: unknown[] },
       _ctx: PluginHookAgentContext,
     ): Promise<PluginHookBeforePromptBuildResult | undefined> => undefined,
   ),
   runBeforeModelResolve: vi.fn(
     async (
-      _event: { prompt: string },
+      _eventValue: { prompt: string },
       _ctx: PluginHookAgentContext,
     ): Promise<PluginHookBeforeModelResolveResult | undefined> => undefined,
   ),
@@ -77,6 +77,7 @@ export const mockedContextEngine = {
 export const mockedContextEngineCompact = mockedContextEngine.compact;
 export const mockedCompactDirect = mockedContextEngine.compact;
 export const mockedResolveContextEngine = vi.fn(async () => mockedContextEngine);
+export const mockedResolveContextEngineOwnerPluginId = vi.fn(() => undefined);
 export const mockedBuildAgentRuntimePlan = vi.fn(() => ({}));
 export const mockedRunPostCompactionSideEffects = vi.fn(async () => {});
 export const mockedEnsureRuntimePluginsLoaded = vi.fn<(params?: unknown) => void>();
@@ -220,8 +221,13 @@ export const mockedGetApiKeyForModel = vi.fn(
   }),
 );
 export const mockedEnsureAuthProfileStore = vi.fn(() => ({}));
-export const mockedEnsureAuthProfileStoreWithoutExternalProfiles = vi.fn(() => ({}));
-export const mockedResolveAuthProfileOrder = vi.fn(() => [] as string[]);
+export const mockedEnsureAuthProfileStoreWithoutExternalProfiles = vi.fn(
+  (_agentDir?: string, _options?: { allowKeychainPrompt?: boolean }) => ({}),
+);
+export const mockedResolveAuthProfileOrder = vi.fn<(_params?: unknown) => string[]>(
+  (_params?: unknown) => [],
+);
+export const mockedMarkAuthProfileSuccess = vi.fn(async () => {});
 export const mockedShouldPreferExplicitConfigApiKeyAuth = vi.fn(() => false);
 
 export const overflowBaseRunParams = {
@@ -406,6 +412,8 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   mockedEnsureAuthProfileStoreWithoutExternalProfiles.mockReturnValue({});
   mockedResolveAuthProfileOrder.mockReset();
   mockedResolveAuthProfileOrder.mockReturnValue([]);
+  mockedMarkAuthProfileSuccess.mockReset();
+  mockedMarkAuthProfileSuccess.mockResolvedValue(undefined);
   mockedShouldPreferExplicitConfigApiKeyAuth.mockReset();
   mockedShouldPreferExplicitConfigApiKeyAuth.mockReturnValue(false);
   mockedRunPostCompactionSideEffects.mockReset();
@@ -420,6 +428,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
 
   vi.doMock("../../plugins/hook-runner-global.js", () => ({
     getGlobalHookRunner: vi.fn(() => mockedGlobalHookRunner),
+    initializeGlobalHookRunner: vi.fn(),
   }));
 
   vi.doMock("../../context-engine/init.js", () => ({
@@ -427,10 +436,15 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   }));
   vi.doMock("../../context-engine/registry.js", () => ({
     resolveContextEngine: mockedResolveContextEngine,
+    resolveContextEngineOwnerPluginId: mockedResolveContextEngineOwnerPluginId,
   }));
 
   vi.doMock("../runtime-plugins.js", () => ({
     ensureRuntimePluginsLoaded: mockedEnsureRuntimePluginsLoaded,
+  }));
+
+  vi.doMock("../harness/runtime-plugin.js", () => ({
+    ensureSelectedAgentHarnessPlugin: vi.fn(async () => {}),
   }));
 
   vi.doMock("../runtime-plan/build.js", () => ({
@@ -448,8 +462,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   vi.doMock("../auth-profiles.js", () => ({
     isProfileInCooldown: vi.fn(() => false),
     markAuthProfileFailure: vi.fn(async () => {}),
-    markAuthProfileGood: vi.fn(async () => {}),
-    markAuthProfileUsed: vi.fn(async () => {}),
+    markAuthProfileSuccess: mockedMarkAuthProfileSuccess,
     resolveProfilesUnavailableReason: vi.fn(() => undefined),
   }));
 
@@ -541,6 +554,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
 
   vi.doMock("../../process/command-queue.js", () => ({
     enqueueCommandInLane: vi.fn((_lane: string, task: () => unknown) => task()),
+    clearCommandLane: vi.fn(() => 0),
   }));
 
   vi.doMock("../../utils/message-channel.js", () => ({
@@ -562,6 +576,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
 
   vi.doMock("./lanes.js", () => ({
     resolveSessionLane: vi.fn(() => "session-lane"),
+    resolveEmbeddedSessionLane: vi.fn(() => "session-lane"),
     resolveGlobalLane: vi.fn(() => "global-lane"),
   }));
 

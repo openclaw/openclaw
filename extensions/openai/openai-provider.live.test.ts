@@ -1,4 +1,4 @@
-import { getModel, type Api, type Model } from "@mariozechner/pi-ai";
+import { getModel, type Api, type Model } from "@earendil-works/pi-ai";
 import OpenAI from "openai";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it } from "vitest";
@@ -109,11 +109,14 @@ function resolveLiveModelCase(modelId: string): LiveModelCase {
 }
 
 function resolveLiveModelCases(raw?: string): LiveModelCase[] {
-  const requested = raw
-    ?.split(",")
-    .map((value) => value.trim())
-    .filter(Boolean);
-  const modelIds = requested?.length ? requested : [...DEFAULT_LIVE_MODEL_IDS];
+  const requested: string[] = [];
+  for (const value of raw?.split(",") ?? []) {
+    const trimmed = value.trim();
+    if (trimmed.length > 0) {
+      requested.push(trimmed);
+    }
+  }
+  const modelIds = requested.length ? requested : [...DEFAULT_LIVE_MODEL_IDS];
   return [...new Set(modelIds)].map((modelId) => resolveLiveModelCase(modelId));
 }
 
@@ -166,13 +169,11 @@ describeLive("buildOpenAIProvider live", () => {
         model: resolved,
       });
 
-      expect(normalized).toMatchObject({
-        provider: "openai",
-        id: liveCase.modelId,
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-        reasoning: liveCase.reasoning,
-      });
+      expect(normalized?.provider).toBe("openai");
+      expect(normalized?.id).toBe(liveCase.modelId);
+      expect(normalized?.api).toBe("openai-responses");
+      expect(normalized?.baseUrl).toBe("https://api.openai.com/v1");
+      expect(normalized?.reasoning).toEqual(liveCase.reasoning);
 
       const client = new OpenAI({
         apiKey: OPENAI_API_KEY,

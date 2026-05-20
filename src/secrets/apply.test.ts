@@ -21,7 +21,7 @@ vi.mock("./runtime.js", () => ({
 }));
 
 let runSecretsApply: typeof import("./apply.js").runSecretsApply;
-let applyTesting: typeof import("./apply.js").__testing;
+let applyTesting: typeof import("./apply.js").testing;
 let clearSecretsRuntimeSnapshot: typeof import("./runtime.js").clearSecretsRuntimeSnapshot;
 
 const OPENAI_API_KEY_ENV_REF = {
@@ -249,7 +249,7 @@ describe("secrets apply", () => {
   let fixture: ApplyFixture;
 
   beforeAll(async () => {
-    ({ __testing: applyTesting, runSecretsApply } = await import("./apply.js"));
+    ({ testing: applyTesting, runSecretsApply } = await import("./apply.js"));
     ({ clearSecretsRuntimeSnapshot } = await import("./runtime.js"));
   });
 
@@ -374,7 +374,12 @@ describe("secrets apply", () => {
     expect(dryRunSkipped.mode).toBe("dry-run");
     expect(dryRunSkipped.skippedExecRefs).toBe(1);
     expect(dryRunSkipped.checks.resolvabilityComplete).toBe(false);
-    await expect(fs.stat(execLogPath)).rejects.toMatchObject({ code: "ENOENT" });
+    try {
+      await fs.stat(execLogPath);
+      throw new Error("Expected exec log stat to fail");
+    } catch (error) {
+      expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+    }
 
     const dryRunAllowed = await runSecretsApply({
       plan,
@@ -385,7 +390,7 @@ describe("secrets apply", () => {
     expect(dryRunAllowed.mode).toBe("dry-run");
     expect(dryRunAllowed.skippedExecRefs).toBe(0);
     const callLog = await fs.readFile(execLogPath, "utf8");
-    expect(callLog.split("\n").filter((line) => line.trim().length > 0).length).toBeGreaterThan(0);
+    expect(callLog.split("\n").some((line) => line.trim().length > 0)).toBe(true);
   });
 
   it("ignores unrelated auth-profile store refs during allowExec dry-run preflight", async () => {
@@ -407,13 +412,10 @@ describe("secrets apply", () => {
 
     const plan = createOpenAiExecProviderPlan();
 
-    await expect(
-      runSecretsApply({ plan, env: fixture.env, write: false, allowExec: true }),
-    ).resolves.toMatchObject({
-      mode: "dry-run",
-      skippedExecRefs: 0,
-      checks: { resolvabilityComplete: true },
-    });
+    const result = await runSecretsApply({ plan, env: fixture.env, write: false, allowExec: true });
+    expect(result.mode).toBe("dry-run");
+    expect(result.skippedExecRefs).toBe(0);
+    expect(result.checks.resolvabilityComplete).toBe(true);
   });
 
   it("ignores unrelated auth-profile store refs during no-op write apply", async () => {
@@ -447,12 +449,11 @@ describe("secrets apply", () => {
       },
     });
 
-    await expect(runSecretsApply({ plan, env: fixture.env, write: true })).resolves.toMatchObject({
-      mode: "write",
-      changed: false,
-      changedFiles: [],
-      checks: { resolvabilityComplete: true },
-    });
+    const result = await runSecretsApply({ plan, env: fixture.env, write: true });
+    expect(result.mode).toBe("write");
+    expect(result.changed).toBe(false);
+    expect(result.changedFiles).toStrictEqual([]);
+    expect(result.checks.resolvabilityComplete).toBe(true);
   });
 
   it("rejects write mode for exec plans unless allowExec is set", async () => {

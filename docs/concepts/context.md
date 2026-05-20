@@ -22,6 +22,7 @@ Context is _not the same thing_ as "memory": memory can be stored on disk and re
 - `/status` → quick "how full is my window?" view + session settings.
 - `/context list` → what's injected + rough sizes (per file + totals).
 - `/context detail` → deeper breakdown: per-file, per-tool schema sizes, per-skill entry sizes, and system prompt size.
+- `/context map` → WinDirStat-style treemap image of the current session's tracked context contributors.
 - `/usage tokens` → append per-reply usage footer to normal replies.
 - `/compact` → summarize older history into a compact entry to free window space.
 
@@ -74,6 +75,17 @@ Top tools (schema size):
 … (+N more tools)
 ```
 
+### `/context map`
+
+Sends an image generated from the latest cached run report. Before a normal message has produced a run report in the session, `/context map` returns an unavailable message instead of rendering an estimate. Rectangle area is proportional to tracked prompt characters:
+
+- injected workspace files
+- base system prompt text
+- skill prompt entries
+- tool JSON schemas
+
+`/context list`, `/context detail`, and `/context json` can still inspect an on-demand estimate when no run report is cached.
+
 ## What counts toward the context window
 
 Everything the model receives counts, including:
@@ -112,7 +124,7 @@ By default, OpenClaw injects a fixed set of workspace files (if present):
 
 Large files are truncated per-file using `agents.defaults.bootstrapMaxChars` (default `12000` chars). OpenClaw also enforces a total bootstrap injection cap across files with `agents.defaults.bootstrapTotalMaxChars` (default `60000` chars). `/context` shows **raw vs injected** sizes and whether truncation happened.
 
-When truncation occurs, the runtime can inject an in-prompt warning block under Project Context. Configure this with `agents.defaults.bootstrapPromptTruncationWarning` (`off`, `once`, `always`; default `once`).
+When truncation occurs, the runtime can inject an in-prompt warning block under Project Context. Configure this with `agents.defaults.bootstrapPromptTruncationWarning` (`off`, `once`, `always`; default `always`).
 
 ## Skills: injected vs loaded on-demand
 

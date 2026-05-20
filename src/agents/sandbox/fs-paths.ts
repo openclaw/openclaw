@@ -1,3 +1,4 @@
+import os from "node:os";
 import path from "node:path";
 import { isPathInside } from "../../infra/path-guards.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
@@ -6,7 +7,11 @@ import type { SandboxFsBridgeContext } from "./backend-handle.types.js";
 import { splitSandboxBindSpec } from "./bind-spec.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
 import { resolveSandboxHostPathViaExistingAncestor } from "./host-paths.js";
-import { isPathInsideContainerRoot, normalizeContainerPath } from "./path-utils.js";
+import {
+  isPathInsideContainerRoot,
+  normalizeContainerPath,
+  relativePathEscapesContainerRoot,
+} from "./path-utils.js";
 
 export type SandboxFsMount = {
   hostRoot: string;
@@ -97,6 +102,56 @@ export function buildSandboxFsMounts(sandbox: SandboxFsBridgeContext): SandboxFs
   return dedupeMounts(mounts);
 }
 
+export function resolveWritableSandboxBindHostRoots(
+  binds: readonly string[] | undefined,
+): string[] {
+  const parsedBinds = parseSandboxBindMounts(binds);
+  const readonlyRoots = parsedBinds.filter((bind) => !bind.writable).map((bind) => bind.hostRoot);
+  const roots: string[] = [];
+  const seen = new Set<string>();
+  for (const parsed of parsedBinds) {
+    if (
+      !parsed.writable ||
+      seen.has(parsed.hostRoot) ||
+      readonlyRoots.some((root) => isHostPathWithinOrEqual(parsed.hostRoot, root))
+    ) {
+      continue;
+    }
+    seen.add(parsed.hostRoot);
+    roots.push(parsed.hostRoot);
+  }
+  return roots;
+}
+
+export function hasSandboxBindContainerPathAliases(binds: readonly string[] | undefined): boolean {
+  for (const parsed of parseSandboxBindMounts(binds)) {
+    if (parsed.hostRoot !== parsed.containerRoot) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function hasSandboxBindReadonlyHostShadows(binds: readonly string[] | undefined): boolean {
+  const parsedBinds = parseSandboxBindMounts(binds);
+  const writableRoots = parsedBinds.filter((bind) => bind.writable).map((bind) => bind.hostRoot);
+  const readonlyRoots = parsedBinds.filter((bind) => !bind.writable).map((bind) => bind.hostRoot);
+  return writableRoots.some((writableRoot) =>
+    readonlyRoots.some((readonlyRoot) => isHostPathWithinOrEqual(writableRoot, readonlyRoot)),
+  );
+}
+
+function parseSandboxBindMounts(binds: readonly string[] | undefined): ParsedBindMount[] {
+  const parsed: ParsedBindMount[] = [];
+  for (const bind of binds ?? []) {
+    const mount = parseSandboxBindMount(bind);
+    if (mount) {
+      parsed.push(mount);
+    }
+  }
+  return parsed;
+}
+
 export function resolveSandboxFsPathWithMounts(params: {
   filePath: string;
   cwd: string;
@@ -151,13 +206,39 @@ export function resolveSandboxFsPathWithMounts(params: {
     };
   }
 
-  // Preserve legacy error wording for out-of-sandbox paths.
-  resolveSandboxPath({
-    filePath: input,
-    cwd: params.cwd,
-    root: params.defaultWorkspaceRoot,
+  const escapeMessage = formatSandboxRootEscapeMessage({
+    input,
+    defaultWorkspaceRoot: params.defaultWorkspaceRoot,
+    defaultContainerRoot: params.defaultContainerRoot,
   });
-  throw new Error(`Path escapes sandbox root (${params.defaultWorkspaceRoot}): ${input}`);
+  try {
+    resolveSandboxPath({
+      filePath: input,
+      cwd: params.cwd,
+      root: params.defaultWorkspaceRoot,
+    });
+  } catch {
+    throw new Error(escapeMessage);
+  }
+  throw new Error(escapeMessage);
+}
+
+function formatSandboxRootEscapeMessage(params: {
+  input: string;
+  defaultWorkspaceRoot: string;
+  defaultContainerRoot: string;
+}): string {
+  const containerRoot = normalizeContainerPath(params.defaultContainerRoot);
+  const workspaceRoot = shortenHomePath(path.resolve(params.defaultWorkspaceRoot));
+  return `Path escapes sandbox root (${workspaceRoot}; container root ${containerRoot}): ${params.input}. Use a path under ${containerRoot}/ instead.`;
+}
+
+function shortenHomePath(value: string): string {
+  const home = os.homedir();
+  if (value === home || value.startsWith(`${home}${path.sep}`)) {
+    return `~${value.slice(home.length)}`;
+  }
+  return value;
 }
 
 function compareMountsByContainerPath(a: SandboxFsMount, b: SandboxFsMount): number {
@@ -232,6 +313,11 @@ function isPathInsideHost(root: string, target: string): boolean {
   return isPathInside(canonicalRoot, canonicalTarget);
 }
 
+function isHostPathWithinOrEqual(root: string, target: string): boolean {
+  const relative = path.relative(path.resolve(root), path.resolve(target));
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
 function toHostSegments(relativePosix: string): string[] {
   return relativePosix.split("/").filter(Boolean);
 }
@@ -244,7 +330,7 @@ function toDisplayRelative(params: {
   if (!rel) {
     return "";
   }
-  if (!rel.startsWith("..") && !path.posix.isAbsolute(rel)) {
+  if (!relativePathEscapesContainerRoot(rel)) {
     return rel;
   }
   return params.containerPath;

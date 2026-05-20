@@ -39,6 +39,17 @@ vi.mock("./slash-state.js", () => ({
   activateSlashCommands,
 }));
 
+function requireFirstMockCall<TArgs extends unknown[]>(
+  mock: { mock: { calls: TArgs[] } },
+  label: string,
+): TArgs {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`expected ${label}`);
+  }
+  return call;
+}
+
 describe("mattermost monitor slash", () => {
   let registerMattermostMonitorSlashCommands: typeof import("./monitor-slash.js").registerMattermostMonitorSlashCommands;
 
@@ -94,13 +105,14 @@ describe("mattermost monitor slash", () => {
     registerSlashCommands
       .mockResolvedValueOnce([{ token: "token-1", trigger: "ping" }])
       .mockResolvedValueOnce([{ token: "token-2", trigger: "oc_skill" }]);
+    const client = {} as never;
     const runtime = {
       log: vi.fn(),
       error: vi.fn(),
     };
 
     await registerMattermostMonitorSlashCommands({
-      client: {} as never,
+      client,
       cfg: { gateway: { port: 18789 } } as never,
       runtime: runtime as never,
       account: { config: { commands: {} }, accountId: "default" } as never,
@@ -109,36 +121,45 @@ describe("mattermost monitor slash", () => {
     });
 
     expect(registerSlashCommands).toHaveBeenCalledTimes(2);
-    expect(registerSlashCommands.mock.calls[0]?.[0]).toMatchObject({
+    const [firstRegistration] = requireFirstMockCall(
+      registerSlashCommands,
+      "first Mattermost slash command registration",
+    );
+    expect(firstRegistration).toEqual({
+      client,
       teamId: "team-1",
       creatorUserId: "bot-user",
       callbackUrl: "https://openclaw.test/slash",
+      commands: [
+        { trigger: "ping", description: "ping" },
+        {
+          trigger: "oc_skill",
+          description: "Skill run",
+          autoComplete: true,
+          autoCompleteHint: "[args]",
+          originalName: "skill",
+        },
+        {
+          trigger: "oc_ping",
+          description: "Already prefixed",
+          autoComplete: true,
+          autoCompleteHint: "[args]",
+          originalName: "oc_ping",
+        },
+      ],
+      log: firstRegistration.log,
     });
-    expect(registerSlashCommands.mock.calls[0]?.[0].commands).toEqual([
-      { trigger: "ping", description: "ping" },
-      {
-        trigger: "oc_skill",
-        description: "Skill run",
-        autoComplete: true,
-        autoCompleteHint: "[args]",
-        originalName: "skill",
-      },
-      {
-        trigger: "oc_ping",
-        description: "Already prefixed",
-        autoComplete: true,
-        autoCompleteHint: "[args]",
-        originalName: "oc_ping",
-      },
-    ]);
-    expect(activateSlashCommands).toHaveBeenCalledWith(
-      expect.objectContaining({
-        commandTokens: ["token-1", "token-2"],
-        triggerMap: new Map([
-          ["oc_skill", "skill"],
-          ["oc_ping", "oc_ping"],
-        ]),
-      }),
+    expect(typeof firstRegistration.log).toBe("function");
+    const [activation] = requireFirstMockCall(
+      activateSlashCommands,
+      "Mattermost slash command activation",
+    );
+    expect(activation?.commandTokens).toStrictEqual(["token-1", "token-2"]);
+    expect(activation?.triggerMap).toStrictEqual(
+      new Map([
+        ["oc_skill", "skill"],
+        ["oc_ping", "oc_ping"],
+      ]),
     );
     expect(runtime.log).toHaveBeenCalledWith(
       "mattermost: slash commands registered (2 commands across 2 teams, callback=https://openclaw.test/slash)",
@@ -169,9 +190,7 @@ describe("mattermost monitor slash", () => {
     });
 
     expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "slash commands callbackUrl resolved to http://127.0.0.1:18789/slash",
-      ),
+      "mattermost: slash commands callbackUrl resolved to http://127.0.0.1:18789/slash (loopback) while baseUrl is https://chat.example.com. This MAY be unreachable depending on your deployment. If native slash commands don't work, set channels.mattermost.commands.callbackUrl to a URL reachable from the Mattermost server (e.g. your public reverse proxy URL).",
     );
     expect(runtime.error).toHaveBeenCalledWith(
       "mattermost: failed to register slash commands for team team-2: Error: boom",

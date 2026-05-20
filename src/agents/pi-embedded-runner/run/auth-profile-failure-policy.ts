@@ -6,7 +6,7 @@ export function resolveAuthProfileFailureReason(params: {
   failoverReason: FailoverReason | null;
   policy?: AuthProfileFailurePolicy;
 }): AuthProfileFailureReason | null {
-  // Helper-local runs, transport timeouts, and request-shape ("format") rejections
+  // Helper-local runs, transport/server failures, empty responses, and request-shape ("format") rejections
   // should not poison shared provider auth health. A `format` failure means the
   // provider rejected the request payload (e.g. an assistant-prefill 400 from a
   // strict provider when a session transcript ends with a stream-error placeholder
@@ -19,6 +19,8 @@ export function resolveAuthProfileFailureReason(params: {
     params.policy === "local" ||
     !params.failoverReason ||
     params.failoverReason === "timeout" ||
+    params.failoverReason === "server_error" ||
+    params.failoverReason === "empty_response" ||
     params.failoverReason === "format"
   ) {
     return null;

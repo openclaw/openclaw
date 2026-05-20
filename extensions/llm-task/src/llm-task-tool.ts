@@ -1,12 +1,13 @@
 import path from "node:path";
-import Ajv from "ajv";
 import { buildModelAliasIndex, resolveModelRefFromString } from "openclaw/plugin-sdk/agent-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  type JsonSchemaObject,
+  validateJsonSchemaValue,
+} from "openclaw/plugin-sdk/json-schema-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type } from "typebox";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "../api.js";
 import type { OpenClawPluginApi } from "../api.js";
-
-const AjvCtor = Ajv as unknown as typeof import("ajv").default;
 
 function stripCodeFences(s: string): string {
   const trimmed = s.trim();
@@ -105,6 +106,29 @@ type LlmTaskParams = {
 
 type ThinkingPolicy = ReturnType<OpenClawPluginApi["runtime"]["agent"]["resolveThinkingPolicy"]>;
 
+export const llmTaskToolDefinition = {
+  name: "llm-task",
+  label: "LLM Task",
+  description:
+    "Run a generic JSON-only LLM task and return schema-validated JSON. Designed for orchestration from Lobster workflows via openclaw.invoke.",
+  parameters: Type.Object({
+    prompt: Type.String({ description: "Task instruction for the LLM." }),
+    input: Type.Optional(Type.Unknown({ description: "Optional input payload for the task." })),
+    schema: Type.Optional(
+      Type.Unknown({ description: "Optional JSON Schema to validate the returned JSON." }),
+    ),
+    provider: Type.Optional(
+      Type.String({ description: "Provider override (e.g. openai-codex, anthropic)." }),
+    ),
+    model: Type.Optional(Type.String({ description: "Model id override." })),
+    thinking: Type.Optional(Type.String({ description: "Thinking level override." })),
+    authProfileId: Type.Optional(Type.String({ description: "Auth profile override." })),
+    temperature: Type.Optional(Type.Number({ description: "Best-effort temperature override." })),
+    maxTokens: Type.Optional(Type.Number({ description: "Best-effort maxTokens override." })),
+    timeoutMs: Type.Optional(Type.Number({ description: "Timeout for the LLM run." })),
+  }),
+};
+
 function formatThinkingPolicy(policy: ThinkingPolicy): string {
   return policy.levels.map((level) => level.label).join(", ");
 }
@@ -118,26 +142,7 @@ function supportsThinkingPolicyLevel(
 
 export function createLlmTaskTool(api: OpenClawPluginApi) {
   return {
-    name: "llm-task",
-    label: "LLM Task",
-    description:
-      "Run a generic JSON-only LLM task and return schema-validated JSON. Designed for orchestration from Lobster workflows via openclaw.invoke.",
-    parameters: Type.Object({
-      prompt: Type.String({ description: "Task instruction for the LLM." }),
-      input: Type.Optional(Type.Unknown({ description: "Optional input payload for the task." })),
-      schema: Type.Optional(
-        Type.Unknown({ description: "Optional JSON Schema to validate the returned JSON." }),
-      ),
-      provider: Type.Optional(
-        Type.String({ description: "Provider override (e.g. openai-codex, anthropic)." }),
-      ),
-      model: Type.Optional(Type.String({ description: "Model id override." })),
-      thinking: Type.Optional(Type.String({ description: "Thinking level override." })),
-      authProfileId: Type.Optional(Type.String({ description: "Auth profile override." })),
-      temperature: Type.Optional(Type.Number({ description: "Best-effort temperature override." })),
-      maxTokens: Type.Optional(Type.Number({ description: "Best-effort maxTokens override." })),
-      timeoutMs: Type.Optional(Type.Number({ description: "Timeout for the LLM run." })),
-    }),
+    ...llmTaskToolDefinition,
 
     async execute(_id: string, params: LlmTaskParams) {
       const prompt = typeof params.prompt === "string" ? params.prompt : "";
@@ -293,17 +298,14 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
 
           const schema = params.schema;
           if (schema && typeof schema === "object" && !Array.isArray(schema)) {
-            const ajv = new AjvCtor({ allErrors: true, strict: false });
-            const validate = ajv.compile(schema);
-            const ok = validate(parsed);
-            if (!ok) {
-              const msg =
-                validate.errors
-                  ?.map(
-                    (e: { instancePath?: string; message?: string }) =>
-                      `${e.instancePath || "<root>"} ${e.message || "invalid"}`,
-                  )
-                  .join("; ") ?? "invalid";
+            const validation = validateJsonSchemaValue({
+              schema: schema as JsonSchemaObject,
+              cacheKey: "llm-task.result",
+              value: parsed,
+              cache: false,
+            });
+            if (!validation.ok) {
+              const msg = validation.errors.map((error) => error.text).join("; ") || "invalid";
               throw new Error(`LLM JSON did not match schema: ${msg}`);
             }
           }

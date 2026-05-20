@@ -46,7 +46,7 @@ const providerConfig = {
     extensionId: "openai",
     secretEnv: "OPENAI_API_KEY",
     authChoice: "openai-api-key",
-    model: "openai/gpt-5.4",
+    model: "openai/gpt-5.5",
     baseUrl: "https://api.openai.com/v1",
     timeoutSeconds: CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS,
   },
@@ -99,6 +99,7 @@ function buildReleaseProviderConfigOverride(providerMeta) {
   }
   return {
     ...(typeof providerMeta.baseUrl === "string" ? { baseUrl: providerMeta.baseUrl } : {}),
+    ...(providerMeta.extensionId === "openai" ? { agentRuntime: { id: "pi" } } : {}),
     models: [],
     ...(typeof providerMeta.timeoutSeconds === "number"
       ? { timeoutSeconds: providerMeta.timeoutSeconds }
@@ -121,9 +122,9 @@ export const CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS =
 export const CROSS_OS_GATEWAY_READY_TIMEOUT_MS = 3 * 60_000;
 export const CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS = 5 * 60_000;
 export const CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE = "minimal";
-export const CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS = 25 * 60;
+export const CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS = 10 * 60;
 export const CROSS_OS_WINDOWS_PACKAGED_UPGRADE_WRAPPER_TIMEOUT_MS =
-  (CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS + 5 * 60) * 1000;
+  (CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS + 2 * 60) * 1000;
 export const CROSS_OS_COMMAND_HEARTBEAT_SECONDS = parsePositiveIntegerEnv(
   "OPENCLAW_CROSS_OS_COMMAND_HEARTBEAT_SECONDS",
   60,
@@ -558,7 +559,7 @@ async function prepareCandidate(params) {
 
   const buildEnv = {
     ...process.env,
-    NODE_OPTIONS: "--max-old-space-size=6144",
+    NODE_OPTIONS: "--max-old-space-size=8192",
   };
 
   logPhase("prepare", "pnpm-install");
@@ -1447,7 +1448,7 @@ function buildInstallerEnv(lane, providerMeta, providerSecretValue) {
     OPENCLAW_NO_ONBOARD: "1",
     OPENCLAW_NO_PROMPT: "1",
     CI: "1",
-    NODE_OPTIONS: "--max-old-space-size=6144",
+    NODE_OPTIONS: "--max-old-space-size=8192",
     [providerMeta.secretEnv]: providerSecretValue,
   };
 }
@@ -3093,7 +3094,7 @@ function buildReleaseAgentTurnArgs(sessionId) {
     "--message",
     "Reply with exact ASCII text OK only.",
     "--thinking",
-    "minimal",
+    "off",
     "--timeout",
     String(CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS),
     "--json",

@@ -4,7 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { startQaLabServer, type QaLabServerStartParams } from "./lab-server.js";
+import { readQaJsonBody } from "./bus-server.js";
+import {
+  startQaLabServer,
+  writeQaLabServerError,
+  type QaLabServerStartParams,
+} from "./lab-server.js";
 
 vi.mock("@openclaw/qa-channel/api.js", async () => await import("../../qa-channel/api.js"));
 
@@ -30,6 +35,15 @@ const captureMock = vi.hoisted(() => {
         return acc;
       }, {}),
     ).map(([value, count]) => ({ value, count }));
+  const countMatching = <T>(values: T[], predicate: (value: T) => boolean) => {
+    let count = 0;
+    for (const value of values) {
+      if (predicate(value)) {
+        count += 1;
+      }
+    }
+    return count;
+  };
 
   const store = {
     upsertSession(session: Record<string, unknown>) {
@@ -41,7 +55,7 @@ const captureMock = vi.hoisted(() => {
     listSessions(limit: number) {
       return sessions.slice(0, limit).map((session) =>
         Object.assign({}, session, {
-          eventCount: events.filter((event) => event.sessionId === session.id).length,
+          eventCount: countMatching(events, (event) => event.sessionId === session.id),
         }),
       );
     },
@@ -54,7 +68,7 @@ const captureMock = vi.hoisted(() => {
       return {
         sessionId,
         totalEvents: selected.length,
-        unlabeledEventCount: metas.filter((meta) => !meta.provider && !meta.model).length,
+        unlabeledEventCount: countMatching(metas, (meta) => !meta.provider && !meta.model),
         providers: countValues(metas.map((meta) => meta.provider as string | undefined)),
         apis: countValues(metas.map((meta) => meta.api as string | undefined)),
         models: countValues(metas.map((meta) => meta.model as string | undefined)),
@@ -175,39 +189,65 @@ async function fetchWithRetry(input: string, init?: RequestInit, attempts = 3) {
 }
 
 async function waitForRunnerCatalog(baseUrl: string, timeoutMs = 5_000) {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    const response = await fetchWithRetry(`${baseUrl}/api/bootstrap`);
-    const bootstrap = (await response.json()) as {
-      runnerCatalog: {
+  let catalog:
+    | {
         status: "loading" | "ready" | "failed";
         real: Array<{ key: string; name: string }>;
+      }
+    | undefined;
+  await vi.waitFor(
+    async () => {
+      const response = await fetchWithRetry(`${baseUrl}/api/bootstrap`);
+      const bootstrap = (await response.json()) as {
+        runnerCatalog: {
+          status: "loading" | "ready" | "failed";
+          real: Array<{ key: string; name: string }>;
+        };
       };
-    };
-    if (bootstrap.runnerCatalog.status !== "loading") {
-      return bootstrap.runnerCatalog;
-    }
-    await sleep(10);
+      if (bootstrap.runnerCatalog.status === "loading") {
+        throw new Error("runner catalog still loading");
+      }
+      catalog = bootstrap.runnerCatalog;
+    },
+    { interval: 1, timeout: timeoutMs },
+  );
+  if (!catalog) {
+    throw new Error("runner catalog stayed loading");
   }
-  throw new Error("runner catalog stayed loading");
+  return catalog;
 }
 
 async function waitForFileContent(filePath: string, expected: string, timeoutMs = 5_000) {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    try {
-      const content = await readFile(filePath, "utf8");
-      if (content === expected) {
-        return content;
+  let content: string | undefined;
+  await vi.waitFor(
+    async () => {
+      try {
+        content = await readFile(filePath, "utf8");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+          throw error;
+        }
       }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw error;
+      if (content !== expected) {
+        throw new Error(`file did not reach expected content: ${filePath}`);
       }
-    }
-    await sleep(10);
+    },
+    { interval: 1, timeout: timeoutMs },
+  );
+  if (content === undefined) {
+    throw new Error(`file did not reach expected content: ${filePath}`);
   }
-  throw new Error(`file did not reach expected content: ${filePath}`);
+  return content;
+}
+
+async function expectFileMissing(filePath: string): Promise<void> {
+  try {
+    await readFile(filePath, "utf8");
+  } catch (error) {
+    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+    return;
+  }
+  throw new Error(`Expected file to be missing: ${filePath}`);
 }
 
 async function createQaLabRepoRootFixture(params?: {
@@ -261,8 +301,7 @@ describe("qa-lab server", () => {
       port: 0,
       outputPath,
       repoRoot,
-      controlUiUrl: "http://127.0.0.1:18789/",
-      controlUiToken: "qa-token",
+      controlUiUrl: "http://127.0.0.1:18789/?token=qa-token&panel=chat#token=fragment-token",
       embeddedGateway: "disabled",
     });
     cleanups.push(async () => {
@@ -281,14 +320,21 @@ describe("qa-lab server", () => {
     };
     expect(bootstrap.defaults.conversationId).toBe("qa-operator");
     expect(bootstrap.defaults.senderId).toBe("qa-operator");
-    expect(bootstrap.controlUiUrl).toBe("http://127.0.0.1:18789/");
-    expect(bootstrap.controlUiEmbeddedUrl).toBe("http://127.0.0.1:18789/#token=qa-token");
+    expect(bootstrap.controlUiUrl).toBe("http://127.0.0.1:18789/?panel=chat");
+    expect(bootstrap.controlUiEmbeddedUrl).toBe("http://127.0.0.1:18789/?panel=chat");
     expect(bootstrap.kickoffTask).toContain("Lobster Invaders");
     expect(bootstrap.scenarios.length).toBeGreaterThanOrEqual(10);
-    expect(bootstrap.scenarios.some((scenario) => scenario.id === "dm-chat-baseline")).toBe(true);
+    expect(bootstrap.scenarios.map((scenario) => scenario.id)).toContain("dm-chat-baseline");
     expect(bootstrap.runner.status).toBe("idle");
     expect(bootstrap.runner.selection.providerMode).toBe("live-frontier");
     expect(bootstrap.runner.selection.scenarioIds).toHaveLength(bootstrap.scenarios.length);
+
+    const startupStatus = (await (
+      await fetchWithRetry(`${lab.baseUrl}/api/capture/startup-status`)
+    ).json()) as {
+      status: { gateway: { url: string } };
+    };
+    expect(startupStatus.status.gateway.url).toBe("http://127.0.0.1:18789/?panel=chat");
 
     const messageResponse = await fetch(`${lab.baseUrl}/api/inbound/message`, {
       method: "POST",
@@ -309,9 +355,41 @@ describe("qa-lab server", () => {
     const snapshot = (await stateResponse.json()) as {
       messages: Array<{ direction: string; text: string }>;
     };
-    expect(snapshot.messages.some((message) => message.text === "hello from test")).toBe(true);
+    expect(snapshot.messages.map((message) => message.text)).toContain("hello from test");
 
-    await expect(readFile(outputPath, "utf8")).rejects.toThrow();
+    await expectFileMissing(outputPath);
+  });
+
+  it("returns controlled errors for oversized JSON body reads", async () => {
+    const req = {
+      headers: { "content-length": String(1024 * 1024 + 1) },
+      destroyed: false,
+      destroy() {
+        this.destroyed = true;
+      },
+    };
+    const res = {
+      statusCode: 0,
+      body: "",
+      writeHead(statusCode: number) {
+        this.statusCode = statusCode;
+      },
+      end(payload: string) {
+        this.body = payload;
+      },
+    };
+
+    let error: unknown;
+    try {
+      await readQaJsonBody(req as never);
+    } catch (caught) {
+      error = caught;
+    }
+
+    writeQaLabServerError(res as never, error);
+
+    expect(res.statusCode).toBe(413);
+    expect(JSON.parse(res.body)).toEqual({ error: "Payload too large" });
   });
 
   it("anchors direct self-check runs under the explicit repo root by default", async () => {
@@ -352,8 +430,8 @@ describe("qa-lab server", () => {
     ).json()) as {
       messages: Array<{ text: string }>;
     };
-    expect(autoSnapshot.messages.some((message) => message.text.includes("QA mission:"))).toBe(
-      true,
+    expect(autoSnapshot.messages.map((message) => message.text).join("\n")).toContain(
+      "QA mission:",
     );
 
     const manualLab = await startQaLabServerForTest({
@@ -375,13 +453,15 @@ describe("qa-lab server", () => {
     ).json()) as {
       messages: Array<{ text: string }>;
     };
-    expect(
-      manualSnapshot.messages.some((message) => message.text.includes("Lobster Invaders")),
-    ).toBe(true);
+    expect(manualSnapshot.messages.map((message) => message.text).join("\n")).toContain(
+      "Lobster Invaders",
+    );
   });
 
   it("proxies control-ui paths through /control-ui", async () => {
+    const authorizations: Array<string | undefined> = [];
     const upstream = createServer((req, res) => {
+      authorizations.push(req.headers.authorization);
       if ((req.url ?? "/") === "/healthz") {
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify({ ok: true, status: "live" }));
@@ -416,7 +496,7 @@ describe("qa-lab server", () => {
       advertiseHost: "127.0.0.1",
       advertisePort: 43124,
       controlUiProxyTarget: `http://127.0.0.1:${address.port}/`,
-      controlUiToken: "proxy-token",
+      controlUiProxyToken: "proxy-token",
     });
     cleanups.push(async () => {
       await lab.stop();
@@ -427,9 +507,7 @@ describe("qa-lab server", () => {
       controlUiEmbeddedUrl: string | null;
     };
     expect(bootstrap.controlUiUrl).toBe("http://127.0.0.1:43124/control-ui/");
-    expect(bootstrap.controlUiEmbeddedUrl).toBe(
-      "http://127.0.0.1:43124/control-ui/#token=proxy-token",
-    );
+    expect(bootstrap.controlUiEmbeddedUrl).toBe("http://127.0.0.1:43124/control-ui/");
 
     const healthResponse = await fetchWithRetry(`${lab.listenUrl}/control-ui/healthz`);
     expect(healthResponse.status).toBe(200);
@@ -440,6 +518,7 @@ describe("qa-lab server", () => {
     expect(rootResponse.headers.get("x-frame-options")).toBeNull();
     expect(rootResponse.headers.get("content-security-policy")).toContain("frame-ancestors 'self'");
     expect(await rootResponse.text()).toContain("Control UI");
+    expect(authorizations).toEqual(["Bearer proxy-token", "Bearer proxy-token"]);
   });
 
   it("serves the built QA UI bundle when available", async () => {
@@ -496,14 +575,8 @@ describe("qa-lab server", () => {
 
     const runnerCatalog = await waitForRunnerCatalog(lab.baseUrl);
     expect(runnerCatalog.status).toBe("ready");
-    expect(runnerCatalog.real).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          key: "anthropic/qa-temp-model",
-          name: "QA Temp Model",
-        }),
-      ]),
-    );
+    const tempModel = runnerCatalog.real.find((model) => model.key === "anthropic/qa-temp-model");
+    expect(tempModel?.name).toBe("QA Temp Model");
   });
 
   it("does not eagerly load the runner model catalog before bootstrap is requested", async () => {
@@ -547,8 +620,7 @@ describe("qa-lab server", () => {
       await lab.stop();
     });
 
-    await sleep(25);
-    await expect(readFile(markerPath, "utf8")).rejects.toThrow();
+    await expectFileMissing(markerPath);
 
     const bootstrapResponse = await fetchWithRetry(`${lab.baseUrl}/api/bootstrap`);
     expect(bootstrapResponse.status).toBe(200);
@@ -636,7 +708,7 @@ describe("qa-lab server", () => {
     const snapshot = (await (await fetchWithRetry(`${lab.baseUrl}/api/state`)).json()) as {
       messages: Array<{ direction: string }>;
     };
-    expect(snapshot.messages.filter((message) => message.direction === "outbound")).toHaveLength(0);
+    expect(snapshot.messages.filter((message) => message.direction === "outbound")).toEqual([]);
   });
 
   it("exposes structured outcomes and can attach control-ui after startup", async () => {
@@ -677,14 +749,13 @@ describe("qa-lab server", () => {
       ],
     });
     lab.setControlUi({
-      controlUiUrl: "http://127.0.0.1:18789/",
-      controlUiToken: "late-token",
+      controlUiUrl: "http://127.0.0.1:18789/?password=late-password#token=late-token",
     });
 
     const bootstrap = (await (await fetchWithRetry(`${lab.baseUrl}/api/bootstrap`)).json()) as {
       controlUiEmbeddedUrl: string | null;
     };
-    expect(bootstrap.controlUiEmbeddedUrl).toBe("http://127.0.0.1:18789/#token=late-token");
+    expect(bootstrap.controlUiEmbeddedUrl).toBe("http://127.0.0.1:18789/");
 
     const outcomes = (await (await fetchWithRetry(`${lab.baseUrl}/api/outcomes`)).json()) as {
       run: {
@@ -799,29 +870,22 @@ describe("qa-lab server", () => {
     const sessions = (await (
       await fetchWithRetry(`${lab.baseUrl}/api/capture/sessions`)
     ).json()) as { sessions: Array<{ id: string }> };
-    expect(sessions.sessions.some((session) => session.id === "qa-capture-session")).toBe(true);
+    expect(sessions.sessions.map((session) => session.id)).toContain("qa-capture-session");
 
     const events = (await (
       await fetchWithRetry(`${lab.baseUrl}/api/capture/events?sessionId=qa-capture-session`)
     ).json()) as {
       events: Array<{ flowId: string; provider?: string; model?: string; captureOrigin?: string }>;
     };
-    expect(events.events.some((event) => event.flowId === "flow-1")).toBe(true);
-    expect(events.events).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          flowId: "flow-1",
-          provider: "openai",
-          model: "gpt-5.5",
-          captureOrigin: "shared-fetch",
-        }),
-        expect.objectContaining({
-          flowId: "flow-3",
-          provider: "ollama",
-          model: "kimi-k2.5:cloud",
-        }),
-      ]),
-    );
+    expect(events.events.map((event) => event.flowId)).toContain("flow-1");
+    const flow1 = events.events.find((event) => event.flowId === "flow-1");
+    expect(flow1?.provider).toBe("openai");
+    expect(flow1?.model).toBe("gpt-5.5");
+    expect(flow1?.captureOrigin).toBe("shared-fetch");
+
+    const flow3 = events.events.find((event) => event.flowId === "flow-3");
+    expect(flow3?.provider).toBe("ollama");
+    expect(flow3?.model).toBe("kimi-k2.5:cloud");
 
     const coverage = (await (
       await fetchWithRetry(`${lab.baseUrl}/api/capture/coverage?sessionId=qa-capture-session`)
@@ -836,32 +900,27 @@ describe("qa-lab server", () => {
     };
     expect(coverage.coverage.totalEvents).toBe(3);
     expect(coverage.coverage.unlabeledEventCount).toBe(0);
-    expect(coverage.coverage.providers).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ value: "openai", count: 2 }),
-        expect.objectContaining({ value: "ollama", count: 1 }),
-      ]),
+    expect(coverage.coverage.providers.find((provider) => provider.value === "openai")?.count).toBe(
+      2,
     );
-    expect(coverage.coverage.models).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ value: "gpt-5.5", count: 2 }),
-        expect.objectContaining({ value: "kimi-k2.5:cloud", count: 1 }),
-      ]),
+    expect(coverage.coverage.providers.find((provider) => provider.value === "ollama")?.count).toBe(
+      1,
     );
-    expect(coverage.coverage.localPeers).toEqual(
-      expect.arrayContaining([expect.objectContaining({ value: "127.0.0.1:11434", count: 1 })]),
+    expect(coverage.coverage.models.find((model) => model.value === "gpt-5.5")?.count).toBe(2);
+    expect(coverage.coverage.models.find((model) => model.value === "kimi-k2.5:cloud")?.count).toBe(
+      1,
     );
+    expect(
+      coverage.coverage.localPeers.find((peer) => peer.value === "127.0.0.1:11434")?.count,
+    ).toBe(1);
 
     const query = (await (
       await fetchWithRetry(
         `${lab.baseUrl}/api/capture/query?sessionId=qa-capture-session&preset=double-sends`,
       )
     ).json()) as { rows: Array<{ host: string; duplicateCount: number }> };
-    expect(query.rows).toEqual([
-      expect.objectContaining({
-        host: "api.example.com",
-        duplicateCount: 2,
-      }),
-    ]);
+    expect(query.rows).toHaveLength(1);
+    expect(query.rows[0]?.host).toBe("api.example.com");
+    expect(query.rows[0]?.duplicateCount).toBe(2);
   });
 });

@@ -74,6 +74,14 @@
         }
       ]
     },
+    "runtimeWorkspaceRoots": {
+      "description": "Thread-scoped runtime workspace roots used to materialize `:workspace_roots`.",
+      "default": [],
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/AbsolutePathBuf"
+      }
+    },
     "sandbox": {
       "description": "Legacy sandbox policy retained for compatibility. Experimental clients should prefer `permissionProfile` when they need exact runtime permissions.",
       "allOf": [
@@ -83,13 +91,9 @@
       ]
     },
     "serviceTier": {
-      "anyOf": [
-        {
-          "$ref": "#/definitions/ServiceTier"
-        },
-        {
-          "type": "null"
-        }
+      "type": [
+        "string",
+        "null"
       ]
     },
     "thread": {
@@ -118,41 +122,8 @@
         "id": {
           "description": "Identifier from `default_permissions` or the implicit built-in default, such as `:workspace` or a user-defined `[permissions.<id>]` profile.",
           "type": "string"
-        },
-        "modifications": {
-          "description": "Bounded user-requested modifications applied on top of the named profile, if any.",
-          "default": [],
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/ActivePermissionProfileModification"
-          }
         }
       }
-    },
-    "ActivePermissionProfileModification": {
-      "oneOf": [
-        {
-          "description": "Additional concrete directory that should be writable.",
-          "type": "object",
-          "required": [
-            "path",
-            "type"
-          ],
-          "properties": {
-            "path": {
-              "$ref": "#/definitions/AbsolutePathBuf"
-            },
-            "type": {
-              "type": "string",
-              "enum": [
-                "additionalWritableRoot"
-              ],
-              "title": "AdditionalWritableRootActivePermissionProfileModificationType"
-            }
-          },
-          "title": "AdditionalWritableRootActivePermissionProfileModification"
-        }
-      ]
     },
     "AgentPath": {
       "type": "string"
@@ -1273,13 +1244,6 @@
         }
       ]
     },
-    "ServiceTier": {
-      "type": "string",
-      "enum": [
-        "fast",
-        "flex"
-      ]
-    },
     "SessionSource": {
       "oneOf": [
         {
@@ -1429,6 +1393,7 @@
         "id",
         "modelProvider",
         "preview",
+        "sessionId",
         "source",
         "status",
         "turns",
@@ -1511,6 +1476,10 @@
         },
         "preview": {
           "description": "Usually the first user message in the thread, if available.",
+          "type": "string"
+        },
+        "sessionId": {
+          "description": "Session id shared by threads that belong to the same session tree.",
           "type": "string"
         },
         "source": {

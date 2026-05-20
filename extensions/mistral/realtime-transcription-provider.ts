@@ -7,7 +7,7 @@ import {
   type RealtimeTranscriptionWebSocketTransport,
 } from "openclaw/plugin-sdk/realtime-transcription";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type MistralRealtimeTranscriptionEncoding =
   | "pcm_s16le"
@@ -273,7 +273,8 @@ export function buildMistralRealtimeTranscriptionProvider(): RealtimeTranscripti
   };
 }
 
-export const __testing = {
+export const testing = {
   normalizeProviderConfig,
   toMistralRealtimeWsUrl,
 };
+export { testing as __testing };

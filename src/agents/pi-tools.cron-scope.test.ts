@@ -30,6 +30,12 @@ import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import { createOpenClawCodingTools } from "./pi-tools.js";
 
+function firstOpenClawToolsOptions(): { cronSelfRemoveOnlyJobId?: string } | undefined {
+  return mocks.createOpenClawToolsOptions.mock.calls[0]?.[0] as
+    | { cronSelfRemoveOnlyJobId?: string }
+    | undefined;
+}
+
 describe("createOpenClawCodingTools cron scope", () => {
   beforeEach(() => {
     mocks.createOpenClawToolsOptions.mockClear();
@@ -44,11 +50,7 @@ describe("createOpenClawCodingTools cron scope", () => {
     });
 
     expect(tools.map((tool) => tool.name)).toContain("cron");
-    expect(mocks.createOpenClawToolsOptions).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cronSelfRemoveOnlyJobId: "job-current",
-      }),
-    );
+    expect(firstOpenClawToolsOptions()?.cronSelfRemoveOnlyJobId).toBe("job-current");
   });
 
   it("does not scope ordinary owner cron sessions", () => {
@@ -58,10 +60,6 @@ describe("createOpenClawCodingTools cron scope", () => {
       senderIsOwner: true,
     });
 
-    expect(mocks.createOpenClawToolsOptions).toHaveBeenCalledWith(
-      expect.not.objectContaining({
-        cronSelfRemoveOnlyJobId: expect.any(String),
-      }),
-    );
+    expect(firstOpenClawToolsOptions()?.cronSelfRemoveOnlyJobId).toBeUndefined();
   });
 });

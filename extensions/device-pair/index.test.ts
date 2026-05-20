@@ -19,7 +19,7 @@ const pluginApiMocks = vi.hoisted(() => ({
   renderQrPngDataUrl: vi.fn(async () => "data:image/png;base64,ZmFrZXBuZw=="),
   resolveGatewayPort: vi.fn(() => 18789),
   resolvePreferredOpenClawTmpDir: vi.fn(() => path.join(os.tmpdir(), "openclaw-device-pair-tests")),
-  writeQrPngTempFile: vi.fn(async (_data: string, opts: { tmpRoot: string }) => {
+  writeQrPngTempFile: vi.fn(async (dataValue: string, opts: { tmpRoot: string }) => {
     const dirPath = await fs.mkdtemp(path.join(opts.tmpRoot, "device-pair-qr-"));
     const filePath = path.join(dirPath, "pair-qr.png");
     await fs.writeFile(filePath, "fakepng");
@@ -63,6 +63,17 @@ import {
   resolveTailnetHostWithRunner,
 } from "./api.js";
 import registerDevicePair from "./index.js";
+
+async function expectPathMissing(targetPath: string): Promise<void> {
+  let error: unknown;
+  try {
+    await fs.access(targetPath);
+  } catch (caught) {
+    error = caught;
+  }
+  expect(error).toBeInstanceOf(Error);
+  expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+}
 
 afterAll(() => {
   vi.doUnmock("./api.js");
@@ -131,6 +142,13 @@ function requireText(result: { text?: unknown } | null | undefined): string {
     throw new Error("pair command did not return a text response");
   }
   return result.text;
+}
+
+function requireMediaUrl(opts: { mediaUrl?: string }): string {
+  if (!opts.mediaUrl) {
+    throw new Error("pair command did not send a media URL");
+  }
+  return opts.mediaUrl;
 }
 
 function createChannelRuntime(
@@ -479,11 +497,23 @@ describe("device-pair /pair qr", () => {
     expect(caption).toContain("Scan this QR code with the OpenClaw iOS app:");
     expect(caption).toContain("IMPORTANT: After pairing finishes, run /pair cleanup.");
     expect(caption).toContain("If this QR code leaks, run /pair cleanup immediately.");
-    expect(opts.mediaUrl).toMatch(/pair-qr\.png$/);
-    expect(opts.mediaLocalRoots).toEqual([path.dirname(opts.mediaUrl!)]);
-    expect(opts).toMatchObject(testCase.expectedOpts);
+    const mediaUrl = requireMediaUrl(opts);
+    expect(mediaUrl).toMatch(/pair-qr\.png$/);
+    expect(opts).toEqual({
+      cfg: {
+        gateway: {
+          auth: {
+            mode: "token",
+            token: "gateway-token",
+          },
+        },
+      },
+      mediaUrl,
+      mediaLocalRoots: [path.dirname(mediaUrl)],
+      ...testCase.expectedOpts,
+    });
     expect(sentPng).toBe("fakepng");
-    await expect(fs.access(opts.mediaUrl!)).rejects.toThrow();
+    await expectPathMissing(mediaUrl);
     expect(text).toContain("QR code sent above.");
     expect(text).toContain("IMPORTANT: Run /pair cleanup after pairing finishes.");
   });
