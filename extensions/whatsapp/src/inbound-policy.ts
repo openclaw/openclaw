@@ -11,7 +11,11 @@ import type {
 } from "openclaw/plugin-sdk/config-contracts";
 import { resolveDefaultGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import { resolveGroupSessionKey } from "openclaw/plugin-sdk/session-store-runtime";
-import { resolveWhatsAppAccount, type ResolvedWhatsAppAccount } from "./accounts.js";
+import {
+  resolveWhatsAppAccount,
+  type ResolvedWhatsAppAccount,
+  type WhatsAppDmPolicy,
+} from "./accounts.js";
 import { getSelfIdentity, getSenderIdentity } from "./identity.js";
 import type { WebInboundMessage } from "./inbound/types.js";
 import { resolveWhatsAppRuntimeGroupPolicy } from "./runtime-group-policy.js";
@@ -19,11 +23,12 @@ import { isSelfChatMode, normalizeE164 } from "./text-runtime.js";
 
 export type ResolvedWhatsAppInboundPolicy = {
   account: ResolvedWhatsAppAccount;
-  dmPolicy: DmPolicy;
+  dmPolicy: WhatsAppDmPolicy;
   groupPolicy: GroupPolicy;
   configuredAllowFrom: string[];
   dmAllowFrom: string[];
   groupAllowFrom: string[];
+  manualFrom: string[];
   isSelfChat: boolean;
   providerMissingFallbackApplied: boolean;
   isSamePhone: (value?: string | null) => boolean;
@@ -85,6 +90,7 @@ export function resolveWhatsAppInboundPolicy(params: {
   });
   const configuredAllowFrom = account.allowFrom ?? [];
   const dmPolicy = account.dmPolicy ?? "pairing";
+  const manualFrom = Array.isArray(account.manualFrom) ? account.manualFrom : [];
   const dmAllowFrom =
     configuredAllowFrom.length > 0 ? configuredAllowFrom : params.selfE164 ? [params.selfE164] : [];
   const configuredGroupAllowFrom =
@@ -114,6 +120,7 @@ export function resolveWhatsAppInboundPolicy(params: {
     configuredAllowFrom,
     dmAllowFrom,
     groupAllowFrom,
+    manualFrom,
     isSelfChat: account.selfChatMode ?? isSelfChatMode(params.selfE164, configuredAllowFrom),
     providerMissingFallbackApplied,
     isSamePhone,
@@ -148,6 +155,8 @@ export async function resolveWhatsAppIngressAccess(params: {
     dmSenderId: params.dmSenderId,
   });
   const dmAllowFrom = [...params.policy.dmAllowFrom, ...samePhoneDmAllowFrom];
+  const sdkDmPolicy: DmPolicy =
+    params.policy.dmPolicy === "open-except" ? "open" : params.policy.dmPolicy;
   return await resolveStableChannelMessageIngress({
     channelId: "whatsapp",
     accountId: params.policy.account.accountId,
@@ -165,7 +174,7 @@ export async function resolveWhatsAppIngressAccess(params: {
       kind: params.isGroup ? "group" : "direct",
       id: params.conversationId,
     },
-    dmPolicy: params.policy.dmPolicy,
+    dmPolicy: sdkDmPolicy,
     groupPolicy: params.policy.groupPolicy,
     policy: {
       groupAllowFromFallbackToAllowFrom: false,

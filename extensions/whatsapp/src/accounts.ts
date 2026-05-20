@@ -20,6 +20,8 @@ import { hasWebCredsSync } from "./creds-files.js";
 
 export { listWhatsAppAccountIds, resolveDefaultWhatsAppAccountId } from "./account-ids.js";
 
+export type WhatsAppDmPolicy = DmPolicy | "open-except";
+
 export type ResolvedWhatsAppAccount = {
   accountId: string;
   name?: string;
@@ -31,9 +33,10 @@ export type ResolvedWhatsAppAccount = {
   isLegacyAuthDir: boolean;
   selfChatMode?: boolean;
   allowFrom?: string[];
+  manualFrom?: string[];
   groupAllowFrom?: string[];
   groupPolicy?: GroupPolicy;
-  dmPolicy?: DmPolicy;
+  dmPolicy?: WhatsAppDmPolicy;
   historyLimit?: number;
   textChunkLimit?: number;
   chunkMode?: "length" | "newline";
@@ -143,6 +146,7 @@ export function resolveWhatsAppAccount(params: {
     selfChatMode: merged.selfChatMode,
     dmPolicy: merged.dmPolicy,
     allowFrom: merged.allowFrom,
+    manualFrom: merged.manualFrom,
     groupAllowFrom: merged.groupAllowFrom,
     groupPolicy: merged.groupPolicy,
     historyLimit: merged.historyLimit,
