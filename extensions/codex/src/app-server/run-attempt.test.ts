@@ -2406,6 +2406,71 @@ describe("runCodexAppServerAttempt", () => {
     expect(harness.requests.filter((entry) => entry.method === "thread/resume")).toHaveLength(2);
   });
 
+  it("keeps the persistent dynamic schema stable across heartbeat-only turns", async () => {
+    testing.setOpenClawCodingToolsFactoryForTests((options) => [
+      createRuntimeDynamicTool("message"),
+      createRuntimeDynamicTool("web_search"),
+      ...(options?.enableHeartbeatTool === true
+        ? [createRuntimeDynamicTool("heartbeat_respond")]
+        : []),
+    ]);
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "thread/resume") {
+        return threadStartResult("thread-1");
+      }
+      return undefined;
+    });
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const createRunParams = (trigger?: EmbeddedRunAttemptParams["trigger"]) => {
+      const params = createParams(sessionFile, workspaceDir);
+      params.disableTools = false;
+      params.runtimePlan = createCodexRuntimePlanFixture();
+      if (trigger) {
+        params.trigger = trigger;
+        params.toolsAllow = ["heartbeat_respond"];
+      }
+      return params;
+    };
+
+    const normalRun = runCodexAppServerAttempt(createRunParams(), {
+      pluginConfig: { appServer: { mode: "yolo" } },
+    });
+    await harness.waitForMethod("turn/start", 120_000);
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await normalRun;
+
+    const heartbeatRun = runCodexAppServerAttempt(createRunParams("heartbeat"), {
+      pluginConfig: { appServer: { mode: "yolo" } },
+    });
+    await vi.waitFor(
+      () => {
+        expect(harness.requests.filter((entry) => entry.method === "turn/start")).toHaveLength(2);
+      },
+      { interval: 1, timeout: 120_000 },
+    );
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await heartbeatRun;
+
+    const nextNormalRun = runCodexAppServerAttempt(createRunParams(), {
+      pluginConfig: { appServer: { mode: "yolo" } },
+    });
+    await vi.waitFor(
+      () => {
+        expect(harness.requests.filter((entry) => entry.method === "turn/start")).toHaveLength(3);
+      },
+      { interval: 1, timeout: 120_000 },
+    );
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await nextNormalRun;
+
+    expect(
+      harness.requests
+        .map((entry) => entry.method)
+        .filter((method) => method === "thread/start" || method === "thread/resume"),
+    ).toEqual(["thread/start", "thread/start", "thread/resume"]);
+  });
+
   it("disables Codex native tool surfaces when runtime toolsAllow is empty", async () => {
     testing.setOpenClawCodingToolsFactoryForTests(() => [
       createRuntimeDynamicTool("message"),
