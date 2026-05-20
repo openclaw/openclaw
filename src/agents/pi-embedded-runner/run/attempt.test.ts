@@ -37,6 +37,7 @@ import {
   wrapStreamFnRepairMalformedToolCallArguments,
   wrapStreamFnSanitizeMalformedToolCalls,
   wrapStreamFnTrimToolCallNames,
+  testing as attemptTesting,
 } from "./attempt.js";
 import { buildEmbeddedAttemptToolRunContext } from "./attempt.tool-run-context.js";
 
@@ -279,6 +280,121 @@ describe("buildToolSearchRunPlan", () => {
 });
 
 describe("normalizeMessagesForLlmBoundary", () => {
+  it("strips inbound metadata from historical user turns before model replay", () => {
+    const historicalEnvelope =
+      'Conversation info (untrusted metadata):\n```json\n{"channel":"telegram","chatType":"dm"}\n```\n\nSender (untrusted metadata):\n```json\n{"id":"user-1"}\n```\n\nActual historical ask';
+    const input = [
+      {
+        role: "user",
+        content: [{ type: "text", text: historicalEnvelope }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Historical answer" }],
+        timestamp: 2,
+      },
+    ];
+
+    const output = normalizeMessagesForLlmBoundary(
+      input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+    ) as unknown as Array<{ content?: Array<{ text?: string }> }>;
+
+    expect(output[0]?.content?.[0]?.text).toBe("Actual historical ask");
+    expect(JSON.stringify(output)).not.toContain("Conversation info");
+    expect(JSON.stringify(output)).not.toContain("Sender (untrusted metadata)");
+    expect(JSON.stringify(input)).toContain("Conversation info");
+  });
+
+  it("strips inbound metadata from string historical user turns", () => {
+    const input = [
+      {
+        role: "user",
+        content:
+          'Conversation info (untrusted metadata):\n```json\n{"channel":"telegram"}\n```\n\nPlain historical ask',
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Historical answer" }],
+        timestamp: 2,
+      },
+    ];
+
+    const output = normalizeMessagesForLlmBoundary(
+      input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+    ) as unknown as Array<{ content?: string }>;
+
+    expect(output[0]?.content).toBe("Plain historical ask");
+  });
+
+  it("preserves inbound metadata on the current user turn", () => {
+    const historicalEnvelope =
+      'Conversation info (untrusted metadata):\n```json\n{"channel":"discord"}\n```\n\nOld ask';
+    const currentEnvelope =
+      'Conversation info (untrusted metadata):\n```json\n{"channel":"discord","has_reply_context":true}\n```\n\nReply target of current user message (untrusted, for context):\n```json\n{"body":"quoted status body"}\n```\n\nCurrent ask';
+    const input = [
+      {
+        role: "user",
+        content: [{ type: "text", text: historicalEnvelope }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Historical answer" }],
+        timestamp: 2,
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: currentEnvelope }],
+        timestamp: 3,
+      },
+    ];
+
+    const output = normalizeMessagesForLlmBoundary(
+      input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+    ) as unknown as Array<{ content?: Array<{ text?: string }> }>;
+
+    expect(output[0]?.content?.[0]?.text).toBe("Old ask");
+    expect(output[2]?.content?.[0]?.text).toContain(
+      "Reply target of current user message (untrusted, for context):",
+    );
+    expect(output[2]?.content?.[0]?.text).toContain("quoted status body");
+  });
+
+  it("preserves current user inbound metadata through tool-result continuation", () => {
+    const currentEnvelope =
+      'Conversation info (untrusted metadata):\n```json\n{"channel":"discord","has_reply_context":true}\n```\n\nReply target of current user message (untrusted, for context):\n```json\n{"body":"quoted status body"}\n```\n\nCurrent ask';
+    const input = [
+      {
+        role: "user",
+        content: [{ type: "text", text: currentEnvelope }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [{ type: "text", text: "tool output" }],
+        timestamp: 3,
+      },
+    ];
+
+    const output = normalizeMessagesForLlmBoundary(
+      input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+    ) as unknown as Array<{ content?: Array<{ text?: string }> }>;
+
+    expect(output[0]?.content?.[0]?.text).toContain(
+      "Reply target of current user message (untrusted, for context):",
+    );
+    expect(output[0]?.content?.[0]?.text).toContain("quoted status body");
+  });
+
   it("strips tool result details before provider conversion", () => {
     const input = [
       {
@@ -875,6 +991,7 @@ describe("resolveEmbeddedAgentStreamFn", () => {
         provider: "demo-provider",
         id: "demo-model",
       } as never,
+      authProfileId: "demo-provider:oauth",
       authStorage: {
         getApiKey: vi.fn(async () => "demo-runtime-key"),
       },
@@ -886,7 +1003,32 @@ describe("resolveEmbeddedAgentStreamFn", () => {
       {},
     );
     expect(requireRecord(streamOptions, "stream options").apiKey).toBe("demo-runtime-key");
+    expect(requireRecord(streamOptions, "stream options").authProfileId).toBe(
+      "demo-provider:oauth",
+    );
     expect(providerStreamFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses only the runtime-forwarded auth profile for stream provenance", () => {
+    expect(
+      attemptTesting.resolveAttemptStreamAuthProfileId({
+        authProfileId: "openai-codex:raw-session-profile",
+        runtimePlan: {
+          auth: {
+            forwardedAuthProfileId: "openai-codex:forwarded-profile",
+          },
+        } as never,
+      }),
+    ).toBe("openai-codex:forwarded-profile");
+
+    expect(
+      attemptTesting.resolveAttemptStreamAuthProfileId({
+        authProfileId: "openai:non-forwarded-profile",
+        runtimePlan: {
+          auth: {},
+        } as never,
+      }),
+    ).toBeUndefined();
   });
 
   it("strips the internal cache boundary before provider-owned stream calls", async () => {
@@ -1134,7 +1276,8 @@ describe("wrapStreamFnTrimToolCallNames", () => {
 
     const stream = await invokeWrappedStream(baseFn, new Set(["read", "write", "exec"]));
 
-    for await (const _item of stream) {
+    for await (const item of stream) {
+      void item;
       // drain
     }
     await stream.result();
@@ -1163,7 +1306,8 @@ describe("wrapStreamFnTrimToolCallNames", () => {
 
     const stream = await invokeWrappedStream(baseFn, new Set(["read", "write", "exec"]));
 
-    for await (const _item of stream) {
+    for await (const item of stream) {
+      void item;
       // drain
     }
     const result = await stream.result();
@@ -1259,7 +1403,8 @@ describe("wrapStreamFnTrimToolCallNames", () => {
       unknownToolThreshold: 1,
     });
 
-    for await (const _item of stream) {
+    for await (const item of stream) {
+      void item;
       // drain
     }
     const result = (await stream.result()) as {
@@ -1294,7 +1439,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     await firstStream.result();
 
     const secondStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
-    for await (const _item of secondStream) {
+    for await (const item of secondStream) {
       // drain
     }
     const secondResult = (await secondStream.result()) as {
@@ -1329,7 +1474,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     await firstStream.result();
 
     const secondStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
-    for await (const _item of secondStream) {
+    for await (const item of secondStream) {
       // drain
     }
     const secondResult = (await secondStream.result()) as {
@@ -1376,7 +1521,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     });
 
     const firstStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
-    for await (const _item of firstStream) {
+    for await (const item of firstStream) {
       // drain
     }
     await firstStream.result();
@@ -1426,7 +1571,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     });
 
     const firstStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
-    for await (const _item of firstStream) {
+    for await (const item of firstStream) {
       // drain
     }
     await firstStream.result();
@@ -1490,7 +1635,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     await firstStream.result();
 
     const secondStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
-    for await (const _item of secondStream) {
+    for await (const item of secondStream) {
       // drain
     }
     await secondStream.result();
@@ -1529,7 +1674,8 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     );
 
     const stream = await invokeWrappedStream(baseFn, new Set(["read", "write", "exec"]));
-    for await (const _item of stream) {
+    for await (const item of stream) {
+      void item;
       // drain
     }
     const result = await stream.result();
@@ -1576,7 +1722,8 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     );
 
     const stream = await invokeWrappedStream(baseFn, new Set(["read", "write"]));
-    for await (const _item of stream) {
+    for await (const item of stream) {
+      void item;
       // drain
     }
     await stream.result();
@@ -1795,7 +1942,8 @@ describe("wrapStreamFnTrimToolCallNames", () => {
 
     const stream = await invokeWrappedStream(baseFn);
 
-    for await (const _item of stream) {
+    for await (const item of stream) {
+      void item;
       // drain
     }
     const result = (await stream.result()) as {
@@ -1847,7 +1995,8 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     );
 
     const stream = await invokeWrappedStream(baseFn);
-    for await (const _item of stream) {
+    for await (const item of stream) {
+      void item;
       // drain
     }
     const result = await stream.result();
@@ -3073,7 +3222,8 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
     );
 
     const stream = await invokeWrappedStream(baseFn);
-    for await (const _item of stream) {
+    for await (const item of stream) {
+      void item;
       // drain
     }
     const result = await stream.result();
@@ -3115,7 +3265,8 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
     );
 
     const stream = await invokeWrappedStream(baseFn);
-    for await (const _item of stream) {
+    for await (const item of stream) {
+      void item;
       // drain
     }
     const result = await stream.result();
@@ -3162,7 +3313,8 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
     );
 
     const stream = await invokeWrappedStream(baseFn);
-    for await (const _item of stream) {
+    for await (const item of stream) {
+      void item;
       // drain
     }
     const result = await stream.result();
@@ -3199,7 +3351,8 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
     );
 
     const stream = await invokeWrappedStream(baseFn);
-    for await (const _item of stream) {
+    for await (const item of stream) {
+      void item;
       // drain
     }
 
@@ -3225,7 +3378,8 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
     );
 
     const stream = await invokeWrappedStream(baseFn);
-    for await (const _item of stream) {
+    for await (const item of stream) {
+      void item;
       // drain
     }
 
@@ -3257,7 +3411,8 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
     );
 
     const stream = await invokeWrappedStream(baseFn);
-    for await (const _item of stream) {
+    for await (const item of stream) {
+      void item;
       // drain
     }
 
@@ -3302,7 +3457,8 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
     );
 
     const stream = await invokeWrappedStream(baseFn);
-    for await (const _item of stream) {
+    for await (const item of stream) {
+      void item;
       // drain
     }
 
@@ -3341,7 +3497,8 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
     );
 
     const stream = await invokeWrappedStream(baseFn);
-    for await (const _item of stream) {
+    for await (const item of stream) {
+      void item;
       // drain
     }
 
@@ -3378,7 +3535,8 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
     );
 
     const stream = await invokeWrappedStream(baseFn);
-    for await (const _item of stream) {
+    for await (const item of stream) {
+      void item;
       // drain
     }
 

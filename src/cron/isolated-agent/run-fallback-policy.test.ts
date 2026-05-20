@@ -100,7 +100,7 @@ describe("resolveCronFallbacksOverride", () => {
     ).toEqual(["openai-codex/gpt-5.2", "zai/glm-5"]);
   });
 
-  it("keeps default subagent fallbacks ahead of the agent primary fallback policy", () => {
+  it("keeps a selected agent primary model strict ahead of default subagent fallbacks", () => {
     expect(
       resolveCronFallbacksOverride({
         cfg: {
@@ -130,7 +130,7 @@ describe("resolveCronFallbacksOverride", () => {
           message: "summarize",
         }),
       }),
-    ).toEqual(["openai-codex/gpt-5.2"]);
+    ).toStrictEqual([]);
   });
 
   it("keeps explicit empty subagent fallbacks as a fallback override", () => {
@@ -188,6 +188,61 @@ describe("resolveCronFallbacksOverride", () => {
         }),
       }),
     ).toBeUndefined();
+  });
+
+  it("treats string subagent model selection as strict when no fallbacks are configured", () => {
+    expect(
+      resolveCronFallbacksOverride({
+        cfg: {
+          agents: {
+            defaults: {
+              model: {
+                primary: "anthropic/claude-opus-4-6",
+                fallbacks: ["openai/gpt-5.4"],
+              },
+              subagents: {
+                model: "kimi/kimi-code",
+              },
+            },
+          },
+        },
+        agentId: "main",
+        useSubagentFallbacks: true,
+        job: makeJob({
+          kind: "agentTurn",
+          message: "summarize",
+        }),
+      }),
+    ).toStrictEqual([]);
+  });
+
+  it("keeps payload model overrides on the configured model fallback policy", () => {
+    expect(
+      resolveCronFallbacksOverride({
+        cfg: {
+          agents: {
+            defaults: {
+              model: {
+                primary: "anthropic/claude-opus-4-6",
+                fallbacks: ["openai/gpt-5.4"],
+              },
+              subagents: {
+                model: {
+                  primary: "kimi/kimi-code",
+                  fallbacks: ["openai-codex/gpt-5.4", "zai/glm-5"],
+                },
+              },
+            },
+          },
+        },
+        agentId: "main",
+        job: makeJob({
+          kind: "agentTurn",
+          message: "summarize",
+          model: "google/gemini-3-pro",
+        }),
+      }),
+    ).toEqual(["openai/gpt-5.4"]);
   });
 
   it("leaves the default model path to the fallback runner when no payload model is set", () => {

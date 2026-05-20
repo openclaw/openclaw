@@ -36,6 +36,7 @@ import {
   readStringParam,
   readStringValue,
   resolveBrowserConfig,
+  resolveRuntimeImageSanitization,
   resolveExistingPathsWithinRoot,
   resolveNodeIdFromList,
   resolveProfile,
@@ -70,7 +71,7 @@ const browserToolDeps = {
   untrackSessionBrowserTab,
 };
 
-export const __testing = {
+export const testing = {
   setDepsForTest(
     overrides: Partial<{
       browserAct: typeof browserAct;
@@ -770,6 +771,7 @@ export function createBrowserTool(opts?: {
             label: "browser:screenshot",
             path: result.path,
             details: result,
+            imageSanitization: resolveRuntimeImageSanitization(),
           });
         }
         case "navigate": {
@@ -867,6 +869,7 @@ export function createBrowserTool(opts?: {
         case "dialog": {
           const accept = Boolean(params.accept);
           const promptText = readStringValue(params.promptText);
+          const dialogId = readStringValue(params.dialogId);
           const { targetId, timeoutMs } = readOptionalTargetAndTimeout(params);
           if (proxyRequest) {
             const result = await proxyRequest({
@@ -876,6 +879,7 @@ export function createBrowserTool(opts?: {
               body: {
                 accept,
                 promptText,
+                dialogId,
                 targetId,
                 timeoutMs,
               },
@@ -885,6 +889,7 @@ export function createBrowserTool(opts?: {
           const result = await browserToolDeps.browserArmDialog(baseUrl, {
             accept,
             promptText,
+            dialogId,
             targetId,
             timeoutMs,
             profile,
@@ -911,3 +916,4 @@ export function createBrowserTool(opts?: {
     },
   };
 }
+export { testing as __testing };

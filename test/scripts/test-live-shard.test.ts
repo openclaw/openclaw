@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import fs, { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   LIVE_TEST_SHARDS,
@@ -6,9 +6,19 @@ import {
   collectAllLiveTestFiles,
   selectLiveShardFiles,
 } from "../../scripts/test-live-shard.mjs";
+import { expectNoReaddirSyncDuring } from "../../src/test-utils/fs-scan-assertions.js";
 
 describe("scripts/test-live-shard", () => {
   const allFiles = collectAllLiveTestFiles();
+
+  it("discovers live tests without scanning source roots in-process", () => {
+    expectNoReaddirSyncDuring(() => {
+      const files = collectAllLiveTestFiles();
+
+      expect(files.length).toBeGreaterThan(0);
+      expect(files.every((file) => file.endsWith(".live.test.ts"))).toBe(true);
+    });
+  });
 
   it("covers every native live test and tracks provider-filtered release fanout", () => {
     const selected = RELEASE_LIVE_TEST_SHARDS.flatMap((shard) =>

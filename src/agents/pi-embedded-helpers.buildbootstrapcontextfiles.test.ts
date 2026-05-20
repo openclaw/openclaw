@@ -99,6 +99,26 @@ describe("buildBootstrapContextFiles", () => {
     expect(result?.content).toContain("[...truncated, read HEARTBEAT.md for full content...]");
     expect(result?.content.length).toBeLessThanOrEqual(maxChars);
   });
+  it("keeps policy digest lines from oversized AGENTS.md middle content", () => {
+    const requiredScopedInstruction =
+      "- Required scoped instruction: read scoped AGENTS.md before editing subtree work.";
+    const content = [
+      "# Root policy",
+      "A".repeat(900),
+      "## Scoped policy",
+      requiredScopedInstruction,
+      "B".repeat(700),
+      "tail marker",
+    ].join("\n");
+    const [result] = buildBootstrapContextFiles([makeFile({ content })], {
+      maxChars: 600,
+    });
+
+    expect(result?.content.length).toBeLessThanOrEqual(600);
+    expect(result?.content).toContain("[Policy digest from AGENTS.md]");
+    expect(result?.content).toContain(requiredScopedInstruction);
+    expect(result?.content).toContain("[...truncated, read AGENTS.md for full content...]");
+  });
   it("keeps bootstrap bytes in tiny per-file budgets when the marker is longer than the limit", () => {
     const maxChars = 64;
     const content = `HEAD-${"a".repeat(1_000)}-TAIL`;
@@ -293,10 +313,9 @@ describe("bootstrap limit resolvers", () => {
 });
 
 describe("resolveBootstrapPromptTruncationWarningMode", () => {
-  it("defaults to once", () => {
-    expect(resolveBootstrapPromptTruncationWarningMode()).toBe(
-      DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE,
-    );
+  it("defaults to always", () => {
+    expect(resolveBootstrapPromptTruncationWarningMode()).toBe("always");
+    expect(DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE).toBe("always");
   });
 
   it("accepts explicit valid modes", () => {
@@ -305,6 +324,11 @@ describe("resolveBootstrapPromptTruncationWarningMode", () => {
         agents: { defaults: { bootstrapPromptTruncationWarning: "off" } },
       } as OpenClawConfig),
     ).toBe("off");
+    expect(
+      resolveBootstrapPromptTruncationWarningMode({
+        agents: { defaults: { bootstrapPromptTruncationWarning: "once" } },
+      } as OpenClawConfig),
+    ).toBe("once");
     expect(
       resolveBootstrapPromptTruncationWarningMode({
         agents: { defaults: { bootstrapPromptTruncationWarning: "always" } },

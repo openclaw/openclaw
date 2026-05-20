@@ -1,4 +1,5 @@
 import { normalizeChatType } from "../../channels/chat-type.js";
+import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SessionSendPolicyDecision } from "../../sessions/send-policy.js";
 import {
@@ -10,6 +11,7 @@ import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 
 export type SourceReplyDeliveryModeContext = {
   ChatType?: string;
+  InboundEventKind?: InboundEventKind;
   CommandAuthorized?: boolean;
   CommandBody?: string;
   CommandSource?: "text" | "native";
@@ -18,6 +20,15 @@ export type SourceReplyDeliveryModeContext = {
 
 export function isExplicitSourceReplyCommand(ctx: SourceReplyDeliveryModeContext): boolean {
   return isExplicitCommandTurn(resolveCommandTurnContext(ctx));
+}
+
+function isUnauthorizedTextSlashCommand(ctx: SourceReplyDeliveryModeContext): boolean {
+  const commandTurn = resolveCommandTurnContext(ctx);
+  return (
+    commandTurn.kind === "text-slash" &&
+    !commandTurn.authorized &&
+    (commandTurn.commandName !== undefined || commandTurn.body?.trim().startsWith("/") === true)
+  );
 }
 
 export function resolveSourceReplyDeliveryMode(params: {
@@ -31,6 +42,9 @@ export function resolveSourceReplyDeliveryMode(params: {
   if (params.strictMessageToolOnly === true) {
     return "message_tool_only";
   }
+  if (params.ctx.InboundEventKind === "room_event") {
+    return "message_tool_only";
+  }
   if (
     params.requested &&
     (params.requested !== "message_tool_only" || params.messageToolAvailable !== false)
@@ -41,11 +55,17 @@ export function resolveSourceReplyDeliveryMode(params: {
     return "automatic";
   }
   const chatType = normalizeChatType(params.ctx.ChatType);
+  if (
+    (chatType === "group" || chatType === "channel") &&
+    isUnauthorizedTextSlashCommand(params.ctx)
+  ) {
+    return "message_tool_only";
+  }
   let mode: SourceReplyDeliveryMode;
   if (chatType === "group" || chatType === "channel") {
     const configuredMode =
       params.cfg.messages?.groupChat?.visibleReplies ?? params.cfg.messages?.visibleReplies;
-    mode = configuredMode === "automatic" ? "automatic" : "message_tool_only";
+    mode = configuredMode === "message_tool" ? "message_tool_only" : "automatic";
   } else {
     const configuredMode = params.cfg.messages?.visibleReplies ?? params.defaultVisibleReplies;
     mode = configuredMode === "message_tool" ? "message_tool_only" : "automatic";

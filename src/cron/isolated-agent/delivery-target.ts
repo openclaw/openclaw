@@ -52,7 +52,7 @@ async function resolveOutboundTargetWithRuntime(
       return loaded;
     }
     const { resolveOutboundTarget } = await loadTargetsRuntime();
-    return resolveOutboundTarget(params);
+    return resolveOutboundTarget({ ...params, allowBootstrap: true });
   } catch (err) {
     return {
       ok: false as const,

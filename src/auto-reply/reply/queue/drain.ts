@@ -156,15 +156,15 @@ function collectQueuedImages(items: FollowupRun[]): Pick<FollowupRun, "images" |
 
 type FollowupRuntimeMetadata = Pick<
   FollowupRun,
-  | "currentTurnKind"
-  | "currentTurnContext"
+  | "currentInboundEventKind"
+  | "currentInboundContext"
   | "abortSignal"
   | "deliveryCorrelations"
   | "queuedLifecycle"
 >;
 
 function hasCurrentTurnRuntimeMetadata(item: FollowupRun): boolean {
-  return item.currentTurnKind === "room_event" || Boolean(item.currentTurnContext);
+  return item.currentInboundEventKind === "room_event" || Boolean(item.currentInboundContext);
 }
 
 function hasRuntimeOnlyFollowupMetadata(item: FollowupRun): boolean {
@@ -217,8 +217,8 @@ function collectRuntimeMetadata(
   const deliveryCorrelations = items.flatMap((item) => item.deliveryCorrelations ?? []);
   const lifecycleSource = singletonOwner ?? items.find((item) => item.queuedLifecycle);
   return {
-    currentTurnKind: currentTurnSource?.currentTurnKind,
-    currentTurnContext: currentTurnSource?.currentTurnContext,
+    currentInboundEventKind: currentTurnSource?.currentInboundEventKind,
+    currentInboundContext: currentTurnSource?.currentInboundContext,
     abortSignal,
     deliveryCorrelations: deliveryCorrelations.length > 0 ? deliveryCorrelations : undefined,
     queuedLifecycle:
@@ -267,7 +267,7 @@ async function dropAbortedFollowups(
 ): Promise<number> {
   let dropped = 0;
   for (let index = items.length - 1; index >= 0; index -= 1) {
-    const item = items[index]!;
+    const item = items[index];
     if (isFollowupRunAborted(item)) {
       await runFollowup(item);
       completeFollowupRunLifecycle(item);
@@ -332,6 +332,9 @@ export function scheduleFollowupDrain(
           const isCrossChannel =
             hasCrossChannelItems(queue.items, resolveCrossChannelKey) ||
             queue.items.some(hasRuntimeOnlyFollowupMetadata);
+          if (collectState.forceIndividualCollect && !isCrossChannel && queue.items.length > 1) {
+            collectState.forceIndividualCollect = false;
+          }
 
           const collectDrainResult = await drainCollectQueueStep({
             collectState,

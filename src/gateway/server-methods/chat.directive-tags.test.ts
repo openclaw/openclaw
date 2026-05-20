@@ -39,6 +39,7 @@ const mockState = vi.hoisted(() => ({
       mediaUrl?: string;
       mediaUrls?: string[];
       spokenText?: string;
+      ttsSupplement?: { spokenText: string };
       audioAsVoice?: boolean;
       trustedLocalMedia?: boolean;
       replyToId?: string;
@@ -659,6 +660,30 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.dispatchBlockedByBeforeAgentRun = false;
   });
 
+  it("persists non-agent delivery mirrors with the chat send idempotency key", async () => {
+    createTranscriptFixture("openclaw-chat-send-final-idem-");
+    mockState.finalText = "mirror text";
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-final-mirror",
+      expectBroadcast: false,
+    });
+
+    const persistedAssistant = readTranscriptJsonLines(mockState.transcriptPath)
+      .map((entry) => entry.message)
+      .find(
+        (message): message is Record<string, unknown> =>
+          Boolean(message) &&
+          typeof message === "object" &&
+          (message as { role?: unknown }).role === "assistant",
+      );
+    expect(persistedAssistant?.idempotencyKey).toBe("idem-final-mirror");
+  });
+
   it("registers tool-event recipients for clients advertising tool-events capability", async () => {
     createTranscriptFixture("openclaw-chat-send-tool-events-");
     mockState.finalText = "ok";
@@ -798,6 +823,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           mediaUrls: [audioPath],
           trustedLocalMedia: true,
           audioAsVoice: true,
+          ttsSupplement: { spokenText: "This text is already in the model transcript." },
         },
       },
     ];
@@ -2902,6 +2928,62 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(mockState.lastDispatchImages).toBeUndefined();
     // Marker replaces the implicit "relative-path no-op" coupling in
     // get-reply.ts with an explicit skip contract.
+    expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
+  });
+
+  it("routes image-named generic container bytes as non-image media paths for chat.send", async () => {
+    createTranscriptFixture("openclaw-chat-send-spoofed-image-container-");
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      modelProvider: "test-provider",
+      model: "vision-model",
+    };
+    mockState.modelCatalog = [
+      {
+        provider: "test-provider",
+        id: "vision-model",
+        name: "Vision model",
+        input: ["text", "image"],
+      },
+    ];
+    mockState.savedMediaResults = [
+      { path: "/home/user/.openclaw/media/inbound/fake.zip", contentType: "application/zip" },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+    const zip = Buffer.from("PK\u0003\u0004zip-archive-bytes").toString("base64");
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-spoofed-image-container",
+      message: "inspect this",
+      requestParams: {
+        attachments: [
+          {
+            type: "image",
+            mimeType: "image/png",
+            fileName: "fake.png",
+            content: zip,
+          },
+        ],
+      },
+      expectBroadcast: false,
+    });
+
+    expect(mockState.savedMediaCalls).toEqual([
+      {
+        contentType: "application/zip",
+        subdir: "inbound",
+        size: mockState.savedMediaCalls[0]?.size ?? 0,
+      },
+    ]);
+    expect(mockState.lastDispatchCtx?.MediaPaths).toEqual([
+      "/home/user/.openclaw/media/inbound/fake.zip",
+    ]);
+    expect(mockState.lastDispatchCtx?.MediaTypes).toEqual(["application/zip"]);
+    expect(mockState.lastDispatchImages).toBeUndefined();
+    expect(mockState.lastDispatchCtx?.Body).not.toContain("media://");
     expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
   });
 
