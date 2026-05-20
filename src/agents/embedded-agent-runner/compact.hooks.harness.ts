@@ -87,6 +87,7 @@ export const resolveSessionAgentIdsMock = vi.fn(
     sessionAgentId: resolveHarnessSessionAgentId(params),
   }),
 );
+export const resolveRunModelFallbacksOverrideMock = vi.fn(() => undefined as string[] | undefined);
 export const estimateTokensMock = vi.fn((_message?: unknown) => 10);
 export const resolveAgentHarnessPolicyMock = vi.fn(() => ({ runtime: "openclaw" }));
 export const resolveContextWindowInfoMock = vi.fn(() => ({ tokens: 128_000 }));
@@ -440,6 +441,8 @@ export function resetCompactHooksHarnessMocks(): void {
   });
   resolveCompactionTimeoutMsMock.mockReset();
   resolveCompactionTimeoutMsMock.mockReturnValue(30_000);
+  resolveRunModelFallbacksOverrideMock.mockReset();
+  resolveRunModelFallbacksOverrideMock.mockReturnValue(undefined);
 
   resolveModelMock.mockReset();
   resolveModelMock.mockReturnValue({
@@ -854,7 +857,7 @@ export async function loadCompactHooksHarness(): Promise<{
     resolveAgentDir: vi.fn((_cfg: unknown, agentId: string) => `/tmp/agents/${agentId}/agent`),
     resolveDefaultAgentDir: vi.fn(() => "/tmp/agents/main/agent"),
     resolveDefaultAgentId: vi.fn(() => "main"),
-    resolveRunModelFallbacksOverride: vi.fn(() => undefined),
+    resolveRunModelFallbacksOverride: resolveRunModelFallbacksOverrideMock,
     resolveSessionAgentId: resolveSessionAgentIdMock,
     resolveSessionAgentIds: resolveSessionAgentIdsMock,
   }));

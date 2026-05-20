@@ -376,10 +376,12 @@ function hasExplicitCompactionModel(
 function resolveCompactionFallbacksOverride(
   params: CompactEmbeddedAgentSessionParams,
 ): string[] | undefined {
+  const agentId = resolveCompactionAgentId(params);
   return (
     params.modelFallbacksOverride ??
     resolveRunModelFallbacksOverride({
       cfg: params.config,
+      agentId,
       sessionKey: params.sessionKey,
     })
   );
