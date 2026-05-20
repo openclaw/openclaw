@@ -3,6 +3,7 @@ import { waitForFollowupQueueDrain } from "./drain-all.js";
 import { FOLLOWUP_QUEUES, type FollowupQueueState } from "./state.js";
 
 function createMockQueue(overrides: Partial<FollowupQueueState> = {}): FollowupQueueState {
+  const { summarySources, ...queueOverrides } = overrides;
   return {
     items: [],
     draining: false,
@@ -13,7 +14,9 @@ function createMockQueue(overrides: Partial<FollowupQueueState> = {}): FollowupQ
     dropPolicy: "summarize",
     droppedCount: 0,
     summaryLines: [],
-    ...overrides,
+    summarySources: [],
+    ...queueOverrides,
+    ...(summarySources === undefined ? {} : { summarySources }),
   };
 }
 

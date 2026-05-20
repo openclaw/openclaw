@@ -104,7 +104,7 @@ export function createDiscordMessageRunQueue(
           job,
           lifecycleSignal,
           replayGuard,
-          testing: params.__testing,
+          testing: params.testing,
         });
       });
     },
