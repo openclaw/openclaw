@@ -32,7 +32,7 @@ describe("root package override guardrails", () => {
 
     expect(manifest.dependencies).not.toHaveProperty(packageName);
     expect(npmOverride).toBeUndefined();
-    expect(pnpmOverride).toBe("3.1045.0");
+    expect(pnpmOverride).toBe("3.1048.0");
   });
 
   it("pins the node-domexception alias exactly in npm and pnpm overrides", () => {
