@@ -59,15 +59,15 @@ async function withRetryOnFileChanged<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
-export async function readJson<T>(filePath: string): Promise<T | null> {
+export async function readJson<T>(filePath: string): Promise<T> {
   try {
-    return await withRetryOnFileChanged(() => readJsonImpl<T>(filePath) as Promise<T | null>);
+    return await withRetryOnFileChanged(() => readJsonImpl<T>(filePath));
   } catch (err) {
     throw err instanceof JsonFileReadError ? err : new JsonFileReadError(filePath, "read", err);
   }
 }
 
-export async function readJsonFileStrict<T>(filePath: string): Promise<T | null> {
+export async function readJsonFileStrict<T>(filePath: string): Promise<T> {
   return readJson<T>(filePath);
 }
 
