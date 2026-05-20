@@ -662,6 +662,24 @@ describe("createLaneTextDeliverer", () => {
     expect(harness.sendPayload).toHaveBeenNthCalledWith(2, { text: " again" });
   });
 
+  it("does not mark streamed finals as delivered when a follow-up chunk send fails", async () => {
+    const harness = createHarness({
+      answerMessageId: 999,
+      draftMaxChars: 5,
+      splitFinalTextForStream: () => ["Hello", " world"],
+    });
+    harness.sendPayload.mockRejectedValueOnce(new Error("telegram send failed"));
+
+    await expect(deliverFinalAnswer(harness, "Hello world")).rejects.toThrow(
+      "telegram send failed",
+    );
+
+    expect(harness.answer?.update).toHaveBeenCalledWith("Hello");
+    expect(harness.sendPayload).toHaveBeenCalledTimes(1);
+    expect(harness.sendPayload).toHaveBeenCalledWith({ text: " world" });
+    expect(harness.markDelivered).not.toHaveBeenCalled();
+  });
+
   it("retains the streamed message when stop may have landed without a message id", async () => {
     const answer = createTestDraftStream();
     answer.sendMayHaveLanded.mockReturnValue(true);

@@ -348,7 +348,6 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       return undefined;
     }
 
-    params.markDelivered();
     let buttonsAttached = false;
     if (buttons) {
       try {
@@ -367,9 +366,11 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         }
         await params.sendPayload(followUpPayload(payload, chunk));
       }
+      params.markDelivered();
       return result("preview-finalized", { content: text, messageId, buttonsAttached });
     }
 
+    params.markDelivered();
     return result("preview-updated");
   };
 
