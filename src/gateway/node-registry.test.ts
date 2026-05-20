@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import { NodeRegistry, serializeEventPayload } from "./node-registry.js";
+import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
 function makeClient(
@@ -504,6 +505,26 @@ describe("gateway/node-registry", () => {
       '{"type":"event","event":"chat","payload":{"foo":"bar"}}',
       '{"type":"event","event":"heartbeat"}',
     ]);
+  });
+
+  it("rejects raw event sends when the node socket buffer is saturated", () => {
+    const registry = new NodeRegistry();
+    const socket = {
+      bufferedAmount: MAX_BUFFERED_BYTES + 1,
+      send: vi.fn(),
+      close: vi.fn(),
+    };
+    registry.register(
+      makeClient("conn-1", "node-1", [], {
+        socket: socket as unknown as GatewayWsClient["socket"],
+      }),
+      {},
+    );
+    const payload = serializeEventPayload({ foo: "bar" });
+
+    expect(registry.sendEventRaw("node-1", "chat", payload)).toBe(false);
+    expect(socket.send).not.toHaveBeenCalled();
+    expect(socket.close).toHaveBeenCalledWith(1008, "slow consumer");
   });
 
   it("refreshes effective live surface within the declared surface", () => {
