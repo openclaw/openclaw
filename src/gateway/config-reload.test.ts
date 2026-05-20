@@ -168,7 +168,7 @@ describe("buildGatewayReloadPlan", () => {
     {
       pluginId: "browser",
       pluginName: "Browser",
-      registration: { restartPrefixes: ["browser"] },
+      registration: { hotPrefixes: ["browser.profiles", "browser.defaultProfile"] },
       source: "test",
     },
   ];
@@ -188,11 +188,38 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartReasons).toContain("gateway.port");
   });
 
-  it("restarts the gateway for browser plugin config changes", () => {
+  it("restarts the gateway for service-level browser plugin config changes", () => {
     const plan = buildGatewayReloadPlan(["browser.enabled"]);
     expect(plan.restartGateway).toBe(true);
     expect(plan.restartReasons).toContain("browser.enabled");
     expect(plan.hotReasons).toStrictEqual([]);
+  });
+
+  it("hot-reloads browser.profiles config changes without a gateway restart", () => {
+    const plan = buildGatewayReloadPlan([
+      "browser.profiles.sandbox.cdpUrl",
+      "browser.profiles.sandbox.userDataDir",
+    ]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartReasons).toStrictEqual([]);
+    expect(plan.hotReasons).toEqual([
+      "browser.profiles.sandbox.cdpUrl",
+      "browser.profiles.sandbox.userDataDir",
+    ]);
+  });
+
+  it("hot-reloads browser.defaultProfile changes without a gateway restart", () => {
+    const plan = buildGatewayReloadPlan(["browser.defaultProfile"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.hotReasons).toEqual(["browser.defaultProfile"]);
+    expect(plan.restartReasons).toStrictEqual([]);
+  });
+
+  it("still restarts the gateway when browser changes mix profile and service paths", () => {
+    const plan = buildGatewayReloadPlan(["browser.profiles.sandbox.cdpUrl", "browser.cdpUrl"]);
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toContain("browser.cdpUrl");
+    expect(plan.hotReasons).toContain("browser.profiles.sandbox.cdpUrl");
   });
 
   it("restarts the Gmail watcher for hooks.gmail changes", () => {
