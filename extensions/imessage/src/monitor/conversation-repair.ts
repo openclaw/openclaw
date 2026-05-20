@@ -151,7 +151,7 @@ export async function repairIMessageConversationAnchor(
         Array.isArray(entry.participants) &&
         entry.participants.every((p) => typeof p === "string")
       ) {
-        repaired.participants = entry.participants as string[];
+        repaired.participants = entry.participants;
       }
 
       if (isIMessageAnchorless(repaired)) {
