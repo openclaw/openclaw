@@ -6,6 +6,7 @@ import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.ui.design.ClawEmptyState
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawScaffold
+import ai.openclaw.app.ui.design.ClawSeparatedColumn
 import ai.openclaw.app.ui.design.ClawTextField
 import ai.openclaw.app.ui.design.ClawTheme
 import androidx.compose.foundation.BorderStroke
@@ -31,7 +32,6 @@ import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined.MicNone
 import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -171,13 +171,8 @@ private data class V2CommandSessionRow(
 @Composable
 private fun V2CommandActionList(rows: List<V2CommandItem>) {
   ClawPanel(contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
-    Column {
-      rows.forEachIndexed { index, row ->
-        V2CommandActionRow(row = row)
-        if (index != rows.lastIndex) {
-          HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
-        }
-      }
+    ClawSeparatedColumn(items = rows) { row ->
+      V2CommandActionRow(row = row)
     }
   }
 }
@@ -217,13 +212,8 @@ private fun V2CommandSessionList(
   onOpen: (String) -> Unit,
 ) {
   ClawPanel(contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
-    Column {
-      rows.forEachIndexed { index, row ->
-        V2CommandSessionListRow(row = row, onClick = { onOpen(row.key) })
-        if (index != rows.lastIndex) {
-          HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
-        }
-      }
+    ClawSeparatedColumn(items = rows) { row ->
+      V2CommandSessionListRow(row = row, onClick = { onOpen(row.key) })
     }
   }
 }
