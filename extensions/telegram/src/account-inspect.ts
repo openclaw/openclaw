@@ -38,9 +38,18 @@ function inspectTokenFile(pathValue: unknown): {
   if (!tokenFile) {
     return null;
   }
-  const token = tryReadSecretFileSync(tokenFile, "Telegram bot token", {
-    rejectSymlink: true,
-  });
+  let token: string | undefined;
+  try {
+    token = tryReadSecretFileSync(tokenFile, "Telegram bot token", {
+      rejectSymlink: true,
+    });
+  } catch {
+    return {
+      token: "",
+      tokenSource: "tokenFile",
+      tokenStatus: "configured_unavailable",
+    };
+  }
   return {
     token: token ?? "",
     tokenSource: "tokenFile",

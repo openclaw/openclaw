@@ -101,9 +101,9 @@ describe("resolveTelegramToken", () => {
     fs.symlinkSync(tokenFile, tokenLink);
 
     const cfg = { channels: { telegram: { tokenFile: tokenLink } } } as OpenClawConfig;
-    const res = resolveTelegramToken(cfg);
-    expect(res.token).toBe("");
-    expect(res.source).toBe("none");
+    expect(() => resolveTelegramToken(cfg)).toThrow(
+      /channels\.telegram\.tokenFile.*must not be a symlink/,
+    );
   });
 
   it("does not fall back to config when tokenFile is missing", () => {
