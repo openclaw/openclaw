@@ -190,6 +190,9 @@ function buildMinimaxMusicProvider(providerId: string): MusicGenerationProvider 
         prompt: buildPrompt(req),
         ...(req.instrumental === true ? { is_instrumental: true } : {}),
         ...(lyrics ? { lyrics } : req.instrumental === true ? {} : { lyrics_optimizer: true }),
+        ...(typeof req.durationSeconds === "number" && Number.isFinite(req.durationSeconds)
+          ? { duration: Math.max(1, Math.round(req.durationSeconds)) }
+          : {}),
         output_format: "url",
         audio_setting: {
           sample_rate: 44_100,
