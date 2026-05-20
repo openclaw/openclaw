@@ -785,4 +785,22 @@ describe("secrets audit", () => {
       ),
     ).toBe(false);
   });
+
+  it("ignores unrelated config sidecar files during backup audit", async () => {
+    const sidecarPath = `${fixture.configPath}.sha256`;
+    await fs.writeFile(sidecarPath, "not-json", "utf8");
+
+    const report = await runSecretsAudit({ env: fixture.env });
+
+    expect(report.filesScanned).not.toContain(sidecarPath);
+    expect(
+      hasFinding(
+        report,
+        (entry) =>
+          entry.code === "REF_UNRESOLVED" &&
+          entry.file === sidecarPath &&
+          entry.jsonPath === "<root>",
+      ),
+    ).toBe(false);
+  });
 });

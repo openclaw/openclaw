@@ -96,12 +96,24 @@ export function listConfigBackupPaths(configPath: string): string[] {
     if (!entry.isFile()) {
       continue;
     }
-    if (entry.name.startsWith(`${configBase}.`) && entry.name !== configBase) {
+    if (isConfigBackupFileName(entry.name, configBase)) {
       paths.add(path.join(configDir, entry.name));
     }
   }
 
   return [...paths];
+}
+
+function isConfigBackupFileName(fileName: string, configBase: string): boolean {
+  if (fileName === `${configBase}.bak` || fileName === `${configBase}.pre-update`) {
+    return true;
+  }
+  const numberedBackupPrefix = `${configBase}.bak.`;
+  if (!fileName.startsWith(numberedBackupPrefix)) {
+    return false;
+  }
+  const suffix = fileName.slice(numberedBackupPrefix.length);
+  return /^\d+$/.test(suffix);
 }
 
 export type ReadJsonObjectOptions = {
