@@ -11,6 +11,8 @@ function createMockContext(overrides?: {
   onToolResult?: ReturnType<typeof vi.fn>;
   toolResultFormat?: "markdown" | "plain";
   builtinToolNames?: ReadonlySet<string>;
+  trustedCoreToolNames?: ReadonlySet<string>;
+  trustedBundledPluginToolNames?: ReadonlySet<string>;
 }): EmbeddedPiSubscribeContext {
   const onToolResult = overrides?.onToolResult ?? vi.fn();
   return {
@@ -42,6 +44,8 @@ function createMockContext(overrides?: {
     },
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
     builtinToolNames: overrides?.builtinToolNames,
+    trustedCoreToolNames: overrides?.trustedCoreToolNames,
+    trustedBundledPluginToolNames: overrides?.trustedBundledPluginToolNames,
     shouldEmitToolResult: vi.fn(() => false),
     shouldEmitToolOutput: vi.fn(() => overrides?.shouldEmitToolOutput ?? false),
     emitToolSummary: vi.fn(),
@@ -263,7 +267,11 @@ describe("handleToolExecutionEnd media emission", () => {
 
   it("does NOT emit local media for MCP-provenance results", async () => {
     const onToolResult = vi.fn();
-    const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult });
+    const ctx = createMockContext({
+      shouldEmitToolOutput: false,
+      onToolResult,
+      builtinToolNames: new Set(["browser"]),
+    });
 
     await emitMcpMediaToolResult(ctx, "/tmp/secret.png");
 

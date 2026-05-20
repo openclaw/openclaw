@@ -434,13 +434,23 @@ async function collectEmittedToolOutputMediaUrls(
   toolName: string,
   outputText: string,
   result: unknown,
+  builtinToolNames?: ReadonlySet<string>,
+  trustedBundledPluginToolNames?: ReadonlySet<string>,
+  trustedCoreToolNames?: ReadonlySet<string>,
 ): Promise<string[]> {
   const { splitMediaFromOutput } = await loadMediaParse();
   const mediaUrls = splitMediaFromOutput(outputText).mediaUrls ?? [];
   if (mediaUrls.length === 0) {
     return [];
   }
-  return filterToolResultMediaUrls(toolName, mediaUrls, result);
+  return filterToolResultMediaUrls(
+    toolName,
+    mediaUrls,
+    result,
+    builtinToolNames,
+    trustedBundledPluginToolNames,
+    trustedCoreToolNames,
+  );
 }
 
 function readExecApprovalPendingDetails(result: unknown): {
@@ -609,7 +619,14 @@ async function emitToolResultOutput(params: {
   const outputText = extractToolResultText(sanitizedResult);
   const mediaReply = isToolError ? undefined : extractToolResultMediaArtifact(result);
   const mediaUrls = mediaReply
-    ? filterToolResultMediaUrls(rawToolName, mediaReply.mediaUrls, result, ctx.builtinToolNames)
+    ? filterToolResultMediaUrls(
+        rawToolName,
+        mediaReply.mediaUrls,
+        result,
+        ctx.builtinToolNames,
+        ctx.trustedBundledPluginToolNames,
+        ctx.trustedCoreToolNames,
+      )
     : [];
   const shouldEmitOutput =
     !shouldSuppressStructuredMediaToolOutput({
@@ -627,6 +644,9 @@ async function emitToolResultOutput(params: {
           rawToolName,
           outputText,
           result,
+          ctx.builtinToolNames,
+          ctx.trustedBundledPluginToolNames,
+          ctx.trustedCoreToolNames,
         );
       }
     }

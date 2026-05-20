@@ -2155,15 +2155,16 @@ export async function runEmbeddedAttempt(
         cwd: effectiveWorkspace,
       });
 
+      const pluginMetadataSnapshot = getCurrentPluginMetadataSnapshot({
+        config: params.config,
+        env: process.env,
+        workspaceDir: effectiveWorkspace,
+      });
       const settingsManager = createPreparedEmbeddedPiSettingsManager({
         cwd: effectiveWorkspace,
         agentDir,
         cfg: params.config,
-        pluginMetadataSnapshot: getCurrentPluginMetadataSnapshot({
-          config: params.config,
-          env: process.env,
-          workspaceDir: effectiveWorkspace,
-        }),
+        pluginMetadataSnapshot,
         contextTokenBudget: params.contextTokenBudget,
       });
       const piAutoCompactionGuardArgs = {
@@ -2249,6 +2250,20 @@ export async function runEmbeddedAttempt(
         uncompactedEffectiveTools.flatMap((tool) => {
           const name = (tool.name ?? "").trim();
           return name ? [name] : [];
+        }),
+      );
+      const trustedBundledPluginToolNames = new Set(
+        uncompactedEffectiveTools.flatMap((tool) => {
+          const name = (tool.name ?? "").trim();
+          const pluginId = getPluginToolMeta(
+            tool as Parameters<typeof getPluginToolMeta>[0],
+          )?.pluginId;
+          if (!name || !pluginId) {
+            return [];
+          }
+          return pluginMetadataSnapshot?.byPluginId.get(pluginId)?.origin === "bundled"
+            ? [name]
+            : [];
         }),
       );
       // Admission-time conflict check only against non-plugin core tools, to
@@ -3200,6 +3215,8 @@ export async function runEmbeddedAttempt(
           sessionId: params.sessionId,
           agentId: sessionAgentId,
           builtinToolNames,
+          trustedCoreToolNames: coreBuiltinToolNames,
+          trustedBundledPluginToolNames,
           internalEvents: params.internalEvents,
         }),
       );

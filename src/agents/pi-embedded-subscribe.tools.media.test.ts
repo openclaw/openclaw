@@ -1,3 +1,4 @@
+import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   extractToolResultMediaArtifact,
@@ -6,7 +7,43 @@ import {
   isToolResultMediaTrusted,
 } from "./pi-embedded-subscribe.tools.js";
 
+function readBundledManifestToolNames(): string[] {
+  const extensionsDir = new URL("../../extensions/", import.meta.url);
+  return readdirSync(extensionsDir, { withFileTypes: true }).flatMap((entry) => {
+    if (!entry.isDirectory()) {
+      return [];
+    }
+    const manifestUrl = new URL(`${entry.name}/openclaw.plugin.json`, extensionsDir);
+    try {
+      const manifest = JSON.parse(readFileSync(manifestUrl, "utf8")) as {
+        contracts?: { tools?: unknown };
+      };
+      return Array.isArray(manifest.contracts?.tools)
+        ? manifest.contracts.tools.filter((tool): tool is string => typeof tool === "string")
+        : [];
+    } catch {
+      return [];
+    }
+  });
+}
+
 describe("extractToolResultMediaPaths", () => {
+  it("keeps plugin contract registry out of the media trust hot path", () => {
+    const source = readFileSync(
+      new URL("./pi-embedded-subscribe.tools.ts", import.meta.url),
+      "utf8",
+    );
+    expect(source).not.toContain("../plugins/contracts/registry");
+  });
+
+  it("keeps the static bundled plugin media allowlist aligned with manifests", () => {
+    const toolNames = readBundledManifestToolNames();
+    expect(toolNames).toContain("firecrawl_search");
+    for (const toolName of toolNames) {
+      expect(isToolResultMediaTrusted(toolName)).toBe(true);
+    }
+  });
+
   it("returns empty array for null/undefined", () => {
     expect(extractToolResultMediaPaths(null)).toStrictEqual([]);
     expect(extractToolResultMediaPaths(undefined)).toStrictEqual([]);
@@ -340,8 +377,9 @@ describe("extractToolResultMediaPaths", () => {
     expect(isToolResultMediaTrusted("video_generate")).toBe(true);
   });
 
-  it("trusts bundled plugin tool local MEDIA paths", () => {
-    expect(isToolResultMediaTrusted("music_generate")).toBe(true);
+  it("trusts bundled plugin tool names from the static media allowlist", () => {
+    expect(isToolResultMediaTrusted("firecrawl_search")).toBe(true);
+    expect(isToolResultMediaTrusted("firecrawl_search", undefined, new Set())).toBe(false);
   });
 
   it("blocks trusted-media aliases that are not exact registered built-ins", () => {
@@ -358,6 +396,8 @@ describe("extractToolResultMediaPaths", () => {
       filterToolResultMediaUrls(
         "web_search",
         ["/tmp/screenshot.png"],
+        undefined,
+        new Set(["web_search"]),
         undefined,
         new Set(["web_search"]),
       ),
@@ -382,27 +422,74 @@ describe("extractToolResultMediaPaths", () => {
     ).toEqual(["/tmp/reply.opus"]);
   });
 
-  it("keeps local media for bundled plugin tool names registered in this run", () => {
-    // music_generate is a bundled-plugin trusted tool; when the runner
-    // registers it for this run, its raw name must be allowed through the
-    // exact-name gate just like a core built-in.
+  it("keeps local media for plugin tool names registered in this run", () => {
     expect(
       filterToolResultMediaUrls(
-        "music_generate",
-        ["/tmp/song.mp3"],
+        "firecrawl_search",
+        ["/tmp/search.json"],
         undefined,
-        new Set(["music_generate"]),
+        new Set(["firecrawl_search"]),
+        new Set(["firecrawl_search"]),
       ),
-    ).toEqual(["/tmp/song.mp3"]);
+    ).toEqual(["/tmp/search.json"]);
+  });
+
+  it("strips local media for active non-bundled plugin overrides of bundled tool names", () => {
+    expect(
+      filterToolResultMediaUrls(
+        "firecrawl_search",
+        ["/etc/passwd"],
+        undefined,
+        new Set(["firecrawl_search"]),
+        new Set(),
+      ),
+    ).toStrictEqual([]);
+  });
+
+  it("strips local media for plugin overrides of overlapping core and bundled names", () => {
+    expect(
+      filterToolResultMediaUrls(
+        "browser",
+        ["/etc/passwd"],
+        undefined,
+        new Set(["browser"]),
+        new Set(),
+        new Set(),
+      ),
+    ).toStrictEqual([]);
+  });
+
+  it("keeps local media for active bundled plugin tools with overlapping core names", () => {
+    expect(
+      filterToolResultMediaUrls(
+        "browser",
+        ["/tmp/screenshot.png"],
+        undefined,
+        new Set(["browser"]),
+        new Set(["browser"]),
+        new Set(),
+      ),
+    ).toEqual(["/tmp/screenshot.png"]);
   });
 
   it("strips local media for plugin-name collisions when the plugin is not registered", () => {
     expect(
       filterToolResultMediaUrls(
-        "Music_Generate",
+        "Firecrawl_Search",
         ["/etc/passwd"],
         undefined,
-        new Set(["music_generate"]),
+        new Set(["firecrawl_search"]),
+      ),
+    ).toStrictEqual([]);
+  });
+
+  it("does not trust unvetted plugin tool local MEDIA paths just because they are registered", () => {
+    expect(
+      filterToolResultMediaUrls(
+        "path_plugin_tool",
+        ["/etc/passwd"],
+        undefined,
+        new Set(["path_plugin_tool"]),
       ),
     ).toStrictEqual([]);
   });
@@ -438,12 +525,17 @@ describe("extractToolResultMediaPaths", () => {
 
   it("does not trust local MEDIA paths for MCP-provenance results", () => {
     expect(
-      filterToolResultMediaUrls("browser", ["/tmp/screenshot.png"], {
-        details: {
-          mcpServer: "probe",
-          mcpTool: "browser",
+      filterToolResultMediaUrls(
+        "browser",
+        ["/tmp/screenshot.png"],
+        {
+          details: {
+            mcpServer: "probe",
+            mcpTool: "browser",
+          },
         },
-      }),
+        new Set(["browser"]),
+      ),
     ).toStrictEqual([]);
   });
 

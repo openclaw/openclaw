@@ -2,7 +2,6 @@ import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.
 import { normalizeTargetForProvider } from "../infra/outbound/target-normalization.js";
 import { redactSensitiveFieldValue, redactToolPayloadText } from "../logging/redact.js";
 import { splitMediaFromOutput } from "../media/parse.js";
-import { pluginRegistrationContractRegistry } from "../plugins/contracts/registry.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -217,7 +216,6 @@ export function extractToolResultText(result: unknown): string | undefined {
 }
 
 // Core tool names that are allowed to emit local MEDIA: paths.
-// Plugin/MCP tools are intentionally excluded to prevent untrusted file reads.
 const TRUSTED_TOOL_RESULT_MEDIA = new Set([
   "agents_list",
   "apply_patch",
@@ -249,9 +247,56 @@ const TRUSTED_TOOL_RESULT_MEDIA = new Set([
   "x_search",
   "write",
 ]);
-const TRUSTED_BUNDLED_PLUGIN_MEDIA_TOOLS = new Set(
-  pluginRegistrationContractRegistry.flatMap((entry) => entry.toolNames),
-);
+// Static bundled-plugin contract tool names. Keep this out of the plugin
+// contract registry hot path.
+const TRUSTED_BUNDLED_PLUGIN_MEDIA_TOOLS = new Set([
+  "browser",
+  "canvas",
+  "code_execution",
+  "diffs",
+  "dir_fetch",
+  "dir_list",
+  "feishu_app_scopes",
+  "feishu_bitable_create_app",
+  "feishu_bitable_create_field",
+  "feishu_bitable_create_record",
+  "feishu_bitable_get_meta",
+  "feishu_bitable_get_record",
+  "feishu_bitable_list_fields",
+  "feishu_bitable_list_records",
+  "feishu_bitable_update_record",
+  "feishu_chat",
+  "feishu_doc",
+  "feishu_drive",
+  "feishu_perm",
+  "feishu_wiki",
+  "file_fetch",
+  "file_write",
+  "firecrawl_scrape",
+  "firecrawl_search",
+  "google_meet",
+  "llm-task",
+  "lobster",
+  "memory_forget",
+  "memory_get",
+  "memory_recall",
+  "memory_search",
+  "memory_store",
+  "qqbot_channel_api",
+  "qqbot_remind",
+  "skill_workshop",
+  "tavily_extract",
+  "tavily_search",
+  "tlon",
+  "voice_call",
+  "wiki_apply",
+  "wiki_get",
+  "wiki_lint",
+  "wiki_search",
+  "wiki_status",
+  "x_search",
+  "zalouser",
+]);
 const HTTP_URL_RE = /^https?:\/\//i;
 
 function readToolResultDetails(result: unknown): Record<string, unknown> | undefined {
@@ -277,20 +322,43 @@ function isExternalToolResult(result: unknown): boolean {
   return typeof details.mcpServer === "string" || typeof details.mcpTool === "string";
 }
 
-export function isToolResultMediaTrusted(toolName?: string, result?: unknown): boolean {
+export function isToolResultMediaTrusted(
+  toolName?: string,
+  result?: unknown,
+  trustedBundledPluginToolNames?: ReadonlySet<string>,
+  trustedCoreToolNames?: ReadonlySet<string>,
+): boolean {
   if (!toolName || isExternalToolResult(result)) {
     return false;
   }
   const normalized = normalizeToolName(toolName);
-  return (
-    TRUSTED_TOOL_RESULT_MEDIA.has(normalized) || TRUSTED_BUNDLED_PLUGIN_MEDIA_TOOLS.has(normalized)
-  );
+  const coreTrusted =
+    TRUSTED_TOOL_RESULT_MEDIA.has(normalized) &&
+    (trustedCoreToolNames === undefined ||
+      isExactRegisteredToolName(toolName, trustedCoreToolNames));
+  const bundledPluginTrusted =
+    TRUSTED_BUNDLED_PLUGIN_MEDIA_TOOLS.has(normalized) &&
+    (trustedBundledPluginToolNames === undefined ||
+      isExactRegisteredToolName(toolName, trustedBundledPluginToolNames));
+  return coreTrusted || bundledPluginTrusted;
 }
 
-function isTrustedOwnedTtsLocalMedia(toolName: string | undefined, result: unknown): boolean {
+function isExactRegisteredToolName(
+  toolName: string | undefined,
+  builtinToolNames?: ReadonlySet<string>,
+): boolean {
+  const registeredName = toolName?.trim();
+  return Boolean(registeredName && builtinToolNames?.has(registeredName));
+}
+
+function isTrustedOwnedTtsLocalMedia(
+  toolName: string | undefined,
+  result: unknown,
+  trustedCoreToolNames?: ReadonlySet<string>,
+): boolean {
   if (
     !toolName ||
-    !isToolResultMediaTrusted(toolName, result) ||
+    !isToolResultMediaTrusted(toolName, result, undefined, trustedCoreToolNames) ||
     normalizeToolName(toolName) !== "tts"
   ) {
     return false;
@@ -307,12 +375,21 @@ export function filterToolResultMediaUrls(
   mediaUrls: string[],
   result?: unknown,
   builtinToolNames?: ReadonlySet<string>,
+  trustedBundledPluginToolNames?: ReadonlySet<string>,
+  trustedCoreToolNames?: ReadonlySet<string>,
 ): string[] {
   if (mediaUrls.length === 0) {
     return mediaUrls;
   }
-  const trustedOwnedTtsLocalMedia = isTrustedOwnedTtsLocalMedia(toolName, result);
-  if (isToolResultMediaTrusted(toolName, result)) {
+  const trustedOwnedTtsLocalMedia = isTrustedOwnedTtsLocalMedia(
+    toolName,
+    result,
+    trustedCoreToolNames,
+  );
+  if (
+    trustedOwnedTtsLocalMedia ||
+    isToolResultMediaTrusted(toolName, result, trustedBundledPluginToolNames, trustedCoreToolNames)
+  ) {
     // When the current run provides its exact registered tool names (core
     // built-ins plus bundled/trusted plugin tools), require the raw emitted
     // tool name to match one of them before allowing local MEDIA: paths.
@@ -323,8 +400,7 @@ export function filterToolResultMediaUrls(
     // survive runs whose exact built-in set omitted the raw tts name.
     if (builtinToolNames !== undefined) {
       if (!trustedOwnedTtsLocalMedia) {
-        const registeredName = toolName?.trim();
-        if (!registeredName || !builtinToolNames.has(registeredName)) {
+        if (!isExactRegisteredToolName(toolName, builtinToolNames)) {
           return mediaUrls.filter((url) => HTTP_URL_RE.test(url.trim()));
         }
       }
