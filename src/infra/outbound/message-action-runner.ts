@@ -98,6 +98,8 @@ export type MessageActionRunnerGateway = {
   mode: GatewayClientMode;
 };
 
+const INTERNAL_SOURCE_REPLY_SINK = "internal-ui" as const;
+
 let messageActionGatewayRuntimePromise: Promise<
   typeof import("./message.gateway.runtime.js")
 > | null = null;
@@ -717,10 +719,10 @@ async function handleInternalSourceReplySendAction(
   const payload = {
     status: "ok",
     deliveryStatus: dryRun ? "dry_run" : "sent",
-    channel: INTERNAL_MESSAGE_CHANNEL,
+    channel: INTERNAL_SOURCE_REPLY_SINK,
     target: "current-run",
     sourceReplyDeliveryMode: input.sourceReplyDeliveryMode,
-    ...(dryRun ? {} : { sourceReplySink: "internal-ui" as const }),
+    ...(dryRun ? {} : { sourceReplySink: INTERNAL_SOURCE_REPLY_SINK }),
     sourceReply: sourceReply.payload,
     ...(sourceReply.message ? { message: sourceReply.message } : {}),
     ...(sourceReply.mediaUrl ? { mediaUrl: sourceReply.mediaUrl } : {}),

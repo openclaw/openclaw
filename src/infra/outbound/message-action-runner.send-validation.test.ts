@@ -110,6 +110,7 @@ describe("runMessageAction send validation", () => {
       payload: {
         status: "ok",
         deliveryStatus: "sent",
+        channel: "internal-ui",
         sourceReplySink: "internal-ui",
         sourceReply: {
           text: "hello from codex",
