@@ -178,13 +178,26 @@ prompt surface that matches their lifetime:
 - `BOOTSTRAP.md` (only on brand-new workspaces)
 - `MEMORY.md` when present
 
-On the native Codex harness, OpenClaw avoids repeating stable workspace files
-in every user turn. Codex loads `AGENTS.md` through its own project-doc
-discovery. `SOUL.md`, `IDENTITY.md`, `TOOLS.md`, and `USER.md` are forwarded as
-Codex developer instructions. `HEARTBEAT.md` content is not injected; heartbeat
-turns get a collaboration-mode note pointing to the file when it exists and is
-non-empty. `MEMORY.md` and active `BOOTSTRAP.md` content keep the normal
-turn-context role for now.
+On the native Codex harness, Codex loads `AGENTS.md` and
+`AGENTS.override.md` through its own project-doc discovery. OpenClaw does not
+duplicate those files in its prompt text. The remaining workspace files follow
+`plugins.entries.codex.config.workspacePromptSurface`:
+
+- `per_turn_context` (default) keeps `SOUL.md`, `IDENTITY.md`, `TOOLS.md`,
+  `USER.md`, `MEMORY.md`, and active `BOOTSTRAP.md` in current-turn context.
+  This is the quality-first/legacy behavior and gives user edits immediate
+  effect.
+- `thread_developer` moves only `SOUL.md`, `IDENTITY.md`, `TOOLS.md`, and
+  `USER.md` to Codex thread developer instructions for token efficiency and
+  higher priority. `MEMORY.md` and active `BOOTSTRAP.md` remain turn context.
+
+`HEARTBEAT.md` content is not injected in either mode; heartbeat turns get a
+collaboration-mode note pointing to the file when it exists and is non-empty.
+When non-empty `SOUL.md` content is delivered through either Codex workspace
+prompt surface, the default Codex `personalityMode: "soul_when_present"`
+disables Codex's named native personality overlay so the workspace soul can be
+the active personality source. Empty placeholder files keep Codex's native
+personality behavior.
 
 On non-Codex harnesses, bootstrap files continue to be composed into the
 OpenClaw prompt according to their existing gates. `HEARTBEAT.md` is omitted on

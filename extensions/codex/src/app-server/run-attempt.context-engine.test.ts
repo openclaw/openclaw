@@ -502,6 +502,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       threadId: "thread-old",
       cwd: workspaceDir,
       dynamicToolsFingerprint: "[]",
+      workspacePromptSurface: "per_turn_context",
       contextEngine: {
         schemaVersion: 1,
         engineId: "lossless-claw",
@@ -589,6 +590,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       threadId: "thread-old",
       cwd: workspaceDir,
       dynamicToolsFingerprint: "[]",
+      workspacePromptSurface: "per_turn_context",
       contextEngine: {
         schemaVersion: 1,
         engineId: "lossless-claw",
@@ -651,6 +653,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       threadId: "thread-old",
       cwd: workspaceDir,
       dynamicToolsFingerprint: "[]",
+      workspacePromptSurface: "per_turn_context",
       contextEngine: {
         schemaVersion: 1,
         engineId: "lossless-claw",
@@ -722,6 +725,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       threadId: "thread-old",
       cwd: workspaceDir,
       dynamicToolsFingerprint: "[]",
+      workspacePromptSurface: "per_turn_context",
       contextEngine: {
         schemaVersion: 1,
         engineId: "lossless-claw",
@@ -852,6 +856,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       threadId: "thread-old",
       cwd: workspaceDir,
       dynamicToolsFingerprint: "[]",
+      workspacePromptSurface: "per_turn_context",
       contextEngine: {
         schemaVersion: 1,
         engineId: "lossless-claw",

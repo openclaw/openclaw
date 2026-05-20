@@ -58,6 +58,9 @@ describe("codex app-server session binding", () => {
       cwd: tempDir,
       model: "gpt-5.4-codex",
       modelProvider: "openai",
+      personality: "none",
+      workspacePromptSurface: "thread_developer",
+      workspacePromptFingerprint: "workspace-v1",
       dynamicToolsFingerprint: "tools-v1",
       userMcpServersFingerprint: "user-mcp-v1",
     });
@@ -70,6 +73,9 @@ describe("codex app-server session binding", () => {
     expect(binding?.cwd).toBe(tempDir);
     expect(binding?.model).toBe("gpt-5.4-codex");
     expect(binding?.modelProvider).toBe("openai");
+    expect(binding?.personality).toBe("none");
+    expect(binding?.workspacePromptSurface).toBe("thread_developer");
+    expect(binding?.workspacePromptFingerprint).toBe("workspace-v1");
     expect(binding?.dynamicToolsFingerprint).toBe("tools-v1");
     expect(binding?.userMcpServersFingerprint).toBe("user-mcp-v1");
     const bindingStat = await fs.stat(resolveCodexAppServerBindingPath(sessionFile));

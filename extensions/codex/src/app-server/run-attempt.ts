@@ -80,11 +80,14 @@ import { ensureCodexComputerUse } from "./computer-use.js";
 import {
   isCodexAppServerApprovalPolicyAllowedByRequirements,
   readCodexPluginConfig,
+  resolveCodexPersonalityOverride,
   resolveCodexPluginsPolicy,
   resolveCodexAppServerRuntimeOptions,
+  resolveCodexWorkspacePromptSurface,
   withMcpElicitationsApprovalPolicy,
   type CodexAppServerRuntimeOptions,
   type CodexPluginConfig,
+  type CodexWorkspacePromptSurface,
 } from "./config.js";
 import {
   projectContextEngineAssemblyForCodex,
@@ -196,7 +199,12 @@ const CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS = 5 * 60_000;
 const CODEX_NATIVE_HOOK_RELAY_RENEW_INTERVAL_MS = 60_000;
 const CODEX_STEER_ALL_DEBOUNCE_MS = 500;
 const LOG_FIELD_MAX_LENGTH = 160;
-const CODEX_NATIVE_PROJECT_DOC_BASENAMES = new Set(["agents.md"]);
+const CODEX_NATIVE_PROJECT_DOC_FILENAMES = ["AGENTS.override.md", "AGENTS.md"] as const;
+const CODEX_NATIVE_PROJECT_DOC_MAX_BYTES_DEFAULT = 32 * 1024;
+const CODEX_NATIVE_PROJECT_DOC_BASENAMES = new Set(
+  CODEX_NATIVE_PROJECT_DOC_FILENAMES.map((fileName) => fileName.toLowerCase()),
+);
+const CODEX_NATIVE_PROJECT_ROOT_MARKERS = [".git"] as const;
 const CODEX_WORKSPACE_DEVELOPER_CONTEXT_BASENAMES = new Set([
   "identity.md",
   "soul.md",
@@ -227,12 +235,14 @@ type CodexBootstrapFile = CodexBootstrapContext["bootstrapFiles"][number];
 type CodexSystemPromptReport = NonNullable<EmbeddedRunAttemptResult["systemPromptReport"]>;
 type CodexToolReportEntry = CodexSystemPromptReport["tools"]["entries"][number];
 type CodexWorkspaceBootstrapContext = CodexBootstrapContext & {
+  nativeProjectDocFiles?: EmbeddedContextFile[];
   promptContextFiles?: EmbeddedContextFile[];
   developerInstructionFiles?: EmbeddedContextFile[];
   heartbeatReferenceFiles?: EmbeddedContextFile[];
   promptContext?: string;
   developerInstructions?: string;
   heartbeatCollaborationInstructions?: string;
+  workspacePromptFingerprint?: string;
 };
 
 let openClawCodingToolsFactoryForTests: OpenClawCodingToolsFactory | undefined;
@@ -918,6 +928,9 @@ export async function runCodexAppServerAttempt(
     disableTools: params.disableTools,
     toolsAllow: params.toolsAllow,
   });
+  const threadConfig = mergeCodexThreadConfigs(
+    bundleMcpThreadConfig?.configPatch as JsonObject | undefined,
+  );
   const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(params, sandbox);
   for (const diagnostic of bundleMcpThreadConfig.diagnostics) {
     embeddedAgentLog.warn(`bundle-mcp: ${diagnostic.pluginId}: ${diagnostic.message}`);
@@ -1008,16 +1021,35 @@ export async function runCodexAppServerAttempt(
     historyMessages =
       (await readMirroredSessionHistoryMessages(activeSessionFile)) ?? historyMessages;
   }
+  const workspacePromptSurface = resolveCodexWorkspacePromptSurface(pluginConfig);
   const workspaceBootstrapContext = await buildCodexWorkspaceBootstrapContext({
     params,
     resolvedWorkspace,
     effectiveWorkspace,
     sessionKey: sandboxSessionKey,
     sessionAgentId,
+    workspacePromptSurface,
+    codexHome: appServer.start.env?.CODEX_HOME ?? resolveCodexAppServerHomeDir(agentDir),
+    threadConfig,
+  });
+  const shouldInjectOpenClawPromptContext = shouldInjectCodexOpenClawPromptContext(params);
+  const hasSoulContext = hasDeliveredCodexSoulContext(
+    workspaceBootstrapContext,
+    shouldInjectOpenClawPromptContext,
+  );
+  const codexPersonality = resolveCodexPersonalityOverride({
+    pluginConfig,
+    hasSoulContext,
   });
   const baseDeveloperInstructions = joinPresentSections(
     buildDeveloperInstructions(params, {
       dynamicTools: toolBridge.specs,
+      includeOpenClawTurnContextBridge:
+        shouldInjectOpenClawPromptContext && Boolean(workspaceBootstrapContext.promptContext),
+      useSoulPromptContextForPersonality:
+        workspacePromptSurface === "per_turn_context" &&
+        hasSoulContext &&
+        codexPersonality === "none",
     }),
     workspaceBootstrapContext.developerInstructions,
   );
@@ -1200,9 +1232,6 @@ export async function runCodexAppServerAttempt(
       : options.nativeHookRelay?.enabled === false
         ? buildCodexNativeHookRelayDisabledConfig()
         : undefined;
-    const threadConfig = mergeCodexThreadConfigs(
-      bundleMcpThreadConfig?.configPatch as JsonObject | undefined,
-    );
     const nativeToolSurfaceRestricted = !nativeToolSurfaceEnabled;
     const pluginThreadConfigRequired =
       nativeToolSurfaceRestricted || shouldBuildCodexPluginThreadConfig(pluginConfig);
@@ -1283,6 +1312,9 @@ export async function runCodexAppServerAttempt(
               dynamicTools: toolBridge.specs,
               appServer: pluginAppServer,
               developerInstructions: promptBuild.developerInstructions,
+              personality: codexPersonality,
+              workspacePromptSurface,
+              workspacePromptFingerprint: workspaceBootstrapContext.workspacePromptFingerprint,
               config: threadConfig,
               finalConfigPatch: nativeHookRelayConfig,
               nativeCodeModeEnabled: nativeToolSurfaceEnabled,
@@ -4282,6 +4314,9 @@ async function buildCodexWorkspaceBootstrapContext(params: {
   effectiveWorkspace: string;
   sessionKey: string;
   sessionAgentId: string;
+  workspacePromptSurface: CodexWorkspacePromptSurface;
+  codexHome?: string;
+  threadConfig?: JsonObject;
 }): Promise<CodexWorkspaceBootstrapContext> {
   try {
     const bootstrapContext = await resolveBootstrapContextForRun({
@@ -4301,14 +4336,30 @@ async function buildCodexWorkspaceBootstrapContext(params: {
         targetWorkspaceDir: params.effectiveWorkspace,
       }),
     );
-    const promptContextFiles = selectCodexWorkspacePromptContextFiles(contextFiles);
+    const nativeProjectDocFiles = await loadCodexNativeProjectDocFiles({
+      resolvedWorkspace: params.resolvedWorkspace,
+      effectiveWorkspace: params.effectiveWorkspace,
+      codexHome: params.codexHome,
+      threadConfig: params.threadConfig,
+    });
+    const promptContextFiles = selectCodexWorkspacePromptContextFiles(
+      contextFiles,
+      params.workspacePromptSurface,
+      nativeProjectDocFiles,
+    );
     const developerInstructionFiles = shouldInjectCodexOpenClawPromptContext(params.params)
-      ? selectCodexWorkspaceDeveloperInstructionFiles(contextFiles)
+      ? selectCodexWorkspaceDeveloperInstructionFiles(contextFiles, params.workspacePromptSurface)
       : [];
     const heartbeatReferenceFiles = selectCodexWorkspaceHeartbeatReferenceFiles(contextFiles);
+    const workspacePromptFingerprint = fingerprintCodexWorkspacePromptContext({
+      developerInstructionFiles,
+      nativeProjectDocFiles,
+      workspacePromptSurface: params.workspacePromptSurface,
+    });
     return {
       ...bootstrapContext,
       contextFiles,
+      nativeProjectDocFiles,
       promptContextFiles,
       developerInstructionFiles,
       heartbeatReferenceFiles,
@@ -4316,6 +4367,7 @@ async function buildCodexWorkspaceBootstrapContext(params: {
       developerInstructions: renderCodexWorkspaceDeveloperInstructions(developerInstructionFiles),
       heartbeatCollaborationInstructions:
         renderCodexWorkspaceHeartbeatReference(heartbeatReferenceFiles),
+      workspacePromptFingerprint,
     };
   } catch (error) {
     embeddedAgentLog.warn("failed to load codex workspace bootstrap instructions", { error });
@@ -4360,6 +4412,7 @@ function buildCodexSystemPromptReport(params: {
       bootstrapFiles: params.workspaceBootstrapContext.bootstrapFiles,
       injectedFiles: params.workspaceBootstrapContext.promptContextFiles ?? [],
       developerInstructionFiles: params.workspaceBootstrapContext.developerInstructionFiles ?? [],
+      nativeProjectDocFiles: params.workspaceBootstrapContext.nativeProjectDocFiles ?? [],
     }),
     skills: {
       promptChars: skillsPrompt.length,
@@ -4427,18 +4480,21 @@ function buildCodexBootstrapInjectionStats(params: {
   bootstrapFiles: CodexBootstrapFile[];
   injectedFiles: EmbeddedContextFile[];
   developerInstructionFiles?: EmbeddedContextFile[];
+  nativeProjectDocFiles?: EmbeddedContextFile[];
 }): CodexSystemPromptReport["injectedWorkspaceFiles"] {
   const injectedIndex = indexCodexContextFileContent(params.injectedFiles);
   const developerInstructionIndex = indexCodexContextFileContent(
     params.developerInstructionFiles ?? [],
   );
+  const nativeProjectDocIndex = indexCodexContextFileContent(params.nativeProjectDocFiles ?? []);
   return params.bootstrapFiles.map((file) => {
     const pathValue = readNonEmptyString(file.path) ?? file.name;
     const baseName = getCodexContextFileBasename(pathValue || file.name);
     const rawChars = file.missing ? 0 : (file.content ?? "").trimEnd().length;
     const injected =
       readCodexIndexedContextFileContent(injectedIndex, pathValue, file.name) ??
-      readCodexIndexedContextFileContent(developerInstructionIndex, pathValue, file.name);
+      readCodexIndexedContextFileContent(developerInstructionIndex, pathValue, file.name) ??
+      readCodexIndexedContextFileContent(nativeProjectDocIndex, pathValue, file.name);
     let injectedChars = injected?.length ?? 0;
     let truncated = !file.missing && injectedChars < rawChars;
     if (injected === undefined) {
@@ -4551,14 +4607,13 @@ function prependCodexOpenClawPromptContext(prompt: string, context: string | und
 }
 
 function renderCodexWorkspaceBootstrapPromptContext(
-  contextFiles: EmbeddedContextFile[],
+  files: EmbeddedContextFile[],
 ): string | undefined {
-  const files = selectCodexWorkspacePromptContextFiles(contextFiles);
   if (files.length === 0) {
     return undefined;
   }
   const lines = [
-    "OpenClaw loaded these user-editable workspace files for the current turn. Codex loads AGENTS.md natively. SOUL.md, IDENTITY.md, TOOLS.md, and USER.md are provided separately as Codex developer instructions. HEARTBEAT.md is handled by heartbeat collaboration-mode guidance. Those files are not repeated here.",
+    "OpenClaw loaded these user-editable workspace files for the current turn. Codex loads AGENTS.md and AGENTS.override.md natively. HEARTBEAT.md is handled by heartbeat collaboration-mode guidance and is not repeated here.",
     "",
     "# Project Context",
     "",
@@ -4573,14 +4628,27 @@ function renderCodexWorkspaceBootstrapPromptContext(
 
 function selectCodexWorkspacePromptContextFiles(
   contextFiles: EmbeddedContextFile[],
+  workspacePromptSurface: CodexWorkspacePromptSurface,
+  nativeProjectDocFiles: EmbeddedContextFile[] = [],
 ): EmbeddedContextFile[] {
+  const nativeProjectDocPaths = new Set(
+    nativeProjectDocFiles.map((file) => normalizeCodexContextFilePath(file.path)),
+  );
   return contextFiles
     .filter((file) => {
       const baseName = getCodexContextFileBasename(file.path);
+      const nativeProjectDocFile = nativeProjectDocPaths.has(
+        normalizeCodexContextFilePath(file.path),
+      );
+      const threadDeveloperFile =
+        workspacePromptSurface === "thread_developer" &&
+        baseName &&
+        CODEX_WORKSPACE_DEVELOPER_CONTEXT_BASENAMES.has(baseName);
       return (
         baseName &&
         !CODEX_NATIVE_PROJECT_DOC_BASENAMES.has(baseName) &&
-        !CODEX_WORKSPACE_DEVELOPER_CONTEXT_BASENAMES.has(baseName) &&
+        !nativeProjectDocFile &&
+        !threadDeveloperFile &&
         baseName !== CODEX_HEARTBEAT_CONTEXT_BASENAME &&
         !isMissingCodexBootstrapContextFile(file)
       );
@@ -4590,7 +4658,11 @@ function selectCodexWorkspacePromptContextFiles(
 
 function selectCodexWorkspaceDeveloperInstructionFiles(
   contextFiles: EmbeddedContextFile[],
+  workspacePromptSurface: CodexWorkspacePromptSurface,
 ): EmbeddedContextFile[] {
+  if (workspacePromptSurface !== "thread_developer") {
+    return [];
+  }
   return contextFiles
     .filter((file) => {
       const baseName = getCodexContextFileBasename(file.path);
@@ -4620,6 +4692,394 @@ function renderCodexWorkspaceDeveloperInstructions(
     lines.push(`### ${file.path}`, "", file.content, "");
   }
   return lines.join("\n").trim();
+}
+
+function hasDeliveredCodexSoulContext(
+  context: CodexWorkspaceBootstrapContext,
+  shouldInjectOpenClawPromptContext: boolean,
+): boolean {
+  return [
+    ...(shouldInjectOpenClawPromptContext ? (context.promptContextFiles ?? []) : []),
+    ...(context.developerInstructionFiles ?? []),
+  ].some(
+    (file) =>
+      getCodexContextFileBasename(file.path) === "soul.md" &&
+      !isMissingCodexBootstrapContextFile(file) &&
+      file.content.trim().length > 0,
+  );
+}
+
+function fingerprintCodexWorkspacePromptContext(params: {
+  developerInstructionFiles: EmbeddedContextFile[];
+  nativeProjectDocFiles?: EmbeddedContextFile[];
+  workspacePromptSurface: CodexWorkspacePromptSurface;
+}): string | undefined {
+  const trackedFiles = [
+    ...(params.nativeProjectDocFiles ?? []),
+    ...params.developerInstructionFiles,
+  ]
+    .filter((file) => !isMissingCodexBootstrapContextFile(file))
+    .map((file) => ({
+      path: file.path,
+      content: file.content,
+      missing: isMissingCodexBootstrapContextFile(file),
+    }))
+    .filter(
+      (file, index, files) =>
+        files.findIndex(
+          (candidate) =>
+            normalizeCodexContextFilePath(candidate.path) ===
+            normalizeCodexContextFilePath(file.path),
+        ) === index,
+    )
+    .toSorted((left, right) => left.path.localeCompare(right.path));
+  if (trackedFiles.length === 0 && params.workspacePromptSurface === "per_turn_context") {
+    return undefined;
+  }
+  return createHash("sha256")
+    .update(JSON.stringify({ surface: params.workspacePromptSurface, files: trackedFiles }))
+    .digest("hex");
+}
+
+async function loadCodexNativeProjectDocFiles(params: {
+  resolvedWorkspace: string;
+  effectiveWorkspace: string;
+  codexHome?: string;
+  threadConfig?: JsonObject;
+}): Promise<EmbeddedContextFile[]> {
+  const config = await loadCodexNativeProjectDocConfig({
+    codexHome: params.codexHome,
+    threadConfig: params.threadConfig,
+  });
+  if (config.projectDocMaxBytes === 0) {
+    return [];
+  }
+  const searchDirs = await collectCodexNativeProjectDocSearchDirs({
+    cwd: params.resolvedWorkspace,
+    projectRootMarkers: config.projectRootMarkers,
+  });
+  const files: EmbeddedContextFile[] = [];
+  let remainingProjectDocBytes = config.projectDocMaxBytes;
+  for (const directory of searchDirs) {
+    if (remainingProjectDocBytes === 0) {
+      break;
+    }
+    const selected = await loadFirstCodexNativeProjectDocFile({
+      directory,
+      candidateFilenames: config.candidateFilenames,
+    });
+    if (!selected) {
+      continue;
+    }
+    let contentBytes = selected.contentBytes;
+    if (remainingProjectDocBytes !== undefined && contentBytes.length > remainingProjectDocBytes) {
+      contentBytes = contentBytes.subarray(0, remainingProjectDocBytes);
+    }
+    const content = contentBytes.toString("utf8");
+    if (!content.trim()) {
+      continue;
+    }
+    if (remainingProjectDocBytes !== undefined) {
+      remainingProjectDocBytes = Math.max(0, remainingProjectDocBytes - contentBytes.length);
+    }
+    files.push(
+      remapCodexContextFilePath({
+        file: { path: selected.path, content },
+        sourceWorkspaceDir: params.resolvedWorkspace,
+        targetWorkspaceDir: params.effectiveWorkspace,
+      }),
+    );
+  }
+  return files.toSorted(compareCodexContextFiles);
+}
+
+type CodexNativeProjectDocConfig = {
+  candidateFilenames: readonly string[];
+  projectRootMarkers: readonly string[];
+  projectDocMaxBytes?: number;
+};
+
+async function loadCodexNativeProjectDocConfig(params: {
+  codexHome?: string;
+  threadConfig?: JsonObject;
+}): Promise<CodexNativeProjectDocConfig> {
+  const codexConfig = await readCodexHomeProjectDocConfig(params.codexHome);
+  const projectDocMaxBytes =
+    readNonNegativeInteger(params.threadConfig?.project_doc_max_bytes) ??
+    codexConfig.projectDocMaxBytes ??
+    CODEX_NATIVE_PROJECT_DOC_MAX_BYTES_DEFAULT;
+  const fallbackFilenames =
+    readStringArray(params.threadConfig?.project_doc_fallback_filenames) ??
+    codexConfig.projectDocFallbackFilenames ??
+    [];
+  const projectRootMarkers =
+    readStringArray(params.threadConfig?.project_root_markers) ??
+    codexConfig.projectRootMarkers ??
+    CODEX_NATIVE_PROJECT_ROOT_MARKERS;
+  return {
+    candidateFilenames: uniqueNonEmptyStrings([
+      ...CODEX_NATIVE_PROJECT_DOC_FILENAMES,
+      ...fallbackFilenames,
+    ]),
+    projectRootMarkers: uniqueNonEmptyStrings(projectRootMarkers),
+    ...(projectDocMaxBytes !== undefined ? { projectDocMaxBytes } : {}),
+  };
+}
+
+async function readCodexHomeProjectDocConfig(codexHome: string | undefined): Promise<{
+  projectDocFallbackFilenames?: string[];
+  projectRootMarkers?: string[];
+  projectDocMaxBytes?: number;
+}> {
+  if (!codexHome?.trim()) {
+    return {};
+  }
+  const configPath = path.join(codexHome, "config.toml");
+  let content: string;
+  try {
+    content = await fs.readFile(configPath, "utf8");
+  } catch (error) {
+    if (isFileNotFoundError(error)) {
+      return {};
+    }
+    embeddedAgentLog.warn("failed to read codex config for native project-doc fingerprint", {
+      path: configPath,
+      error,
+    });
+    return {};
+  }
+  return {
+    projectDocFallbackFilenames: parseTopLevelTomlStringArray(
+      content,
+      "project_doc_fallback_filenames",
+    ),
+    projectRootMarkers: parseTopLevelTomlStringArray(content, "project_root_markers"),
+    projectDocMaxBytes: parseTopLevelTomlNonNegativeInteger(content, "project_doc_max_bytes"),
+  };
+}
+
+async function collectCodexNativeProjectDocSearchDirs(params: {
+  cwd: string;
+  projectRootMarkers: readonly string[];
+}): Promise<string[]> {
+  const cwd = await resolveRealPathIfPossible(params.cwd);
+  if (params.projectRootMarkers.length === 0) {
+    return [cwd];
+  }
+  const projectRoot = await findCodexNativeProjectRoot({
+    cwd,
+    projectRootMarkers: params.projectRootMarkers,
+  });
+  return collectPathFromRootToLeaf(projectRoot ?? cwd, cwd);
+}
+
+async function findCodexNativeProjectRoot(params: {
+  cwd: string;
+  projectRootMarkers: readonly string[];
+}): Promise<string | undefined> {
+  for (const directory of collectPathAncestors(params.cwd)) {
+    for (const marker of params.projectRootMarkers) {
+      if (!marker.trim()) {
+        continue;
+      }
+      const markerPath = path.join(directory, marker);
+      try {
+        await fs.stat(markerPath);
+        return directory;
+      } catch (error) {
+        if (isFileNotFoundError(error)) {
+          continue;
+        }
+        embeddedAgentLog.warn("failed to inspect codex project-root marker", {
+          path: markerPath,
+          error,
+        });
+        return undefined;
+      }
+    }
+  }
+  return undefined;
+}
+
+async function loadFirstCodexNativeProjectDocFile(params: {
+  directory: string;
+  candidateFilenames: readonly string[];
+}): Promise<{ path: string; contentBytes: Buffer } | undefined> {
+  for (const fileName of params.candidateFilenames) {
+    const sourcePath = path.join(params.directory, fileName);
+    let stats;
+    try {
+      stats = await fs.stat(sourcePath);
+    } catch (error) {
+      if (isFileNotFoundError(error)) {
+        continue;
+      }
+      embeddedAgentLog.warn("failed to inspect codex native project doc for fingerprint", {
+        path: sourcePath,
+        error,
+      });
+      continue;
+    }
+    if (!stats.isFile()) {
+      continue;
+    }
+    try {
+      return { path: sourcePath, contentBytes: await fs.readFile(sourcePath) };
+    } catch (error) {
+      if (isFileNotFoundError(error)) {
+        continue;
+      }
+      embeddedAgentLog.warn("failed to read codex native project doc for fingerprint", {
+        path: sourcePath,
+        error,
+      });
+    }
+  }
+  return undefined;
+}
+
+async function resolveRealPathIfPossible(pathValue: string): Promise<string> {
+  try {
+    return await fs.realpath(pathValue);
+  } catch {
+    return pathValue;
+  }
+}
+
+function collectPathAncestors(pathValue: string): string[] {
+  const ancestors: string[] = [];
+  let current = path.resolve(pathValue);
+  while (true) {
+    ancestors.push(current);
+    const parent = path.dirname(current);
+    if (parent === current) {
+      return ancestors;
+    }
+    current = parent;
+  }
+}
+
+function collectPathFromRootToLeaf(root: string, leaf: string): string[] {
+  const resolvedRoot = path.resolve(root);
+  const resolvedLeaf = path.resolve(leaf);
+  const relative = path.relative(resolvedRoot, resolvedLeaf);
+  if (!relative) {
+    return [resolvedRoot];
+  }
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    return [resolvedLeaf];
+  }
+  const dirs = [resolvedRoot];
+  let current = resolvedRoot;
+  for (const part of relative.split(path.sep)) {
+    if (!part) {
+      continue;
+    }
+    current = path.join(current, part);
+    dirs.push(current);
+  }
+  return dirs;
+}
+
+function parseTopLevelTomlStringArray(content: string, key: string): string[] | undefined {
+  const topLevelContent = stripTomlLineComments(content).slice(0, firstTomlTableOffset(content));
+  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = topLevelContent.match(
+    new RegExp(`(?:^|\\n)\\s*${escapedKey}\\s*=\\s*\\[([\\s\\S]*?)\\]`),
+  );
+  if (!match) {
+    return undefined;
+  }
+  const arrayBody = match[1] ?? "";
+  const stringMatches = [...arrayBody.matchAll(/"([^"\\]*(?:\\.[^"\\]*)*)"|'([^']*)'/g)];
+  if (stringMatches.length === 0 && arrayBody.trim().length > 0) {
+    return undefined;
+  }
+  return stringMatches.map((entry) => entry[1] ?? entry[2] ?? "");
+}
+
+function parseTopLevelTomlNonNegativeInteger(content: string, key: string): number | undefined {
+  const topLevelContent = stripTomlLineComments(content).slice(0, firstTomlTableOffset(content));
+  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = topLevelContent.match(new RegExp(`(?:^|\\n)\\s*${escapedKey}\\s*=\\s*([0-9]+)\\b`));
+  return match ? readNonNegativeInteger(Number(match[1])) : undefined;
+}
+
+function firstTomlTableOffset(content: string): number {
+  const match = content.match(/^\s*\[[^\]\n]/m);
+  return match?.index ?? content.length;
+}
+
+function stripTomlLineComments(value: string): string {
+  let output = "";
+  let quote: '"' | "'" | undefined;
+  let escaped = false;
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index] ?? "";
+    if (quote) {
+      output += char;
+      if (quote === '"' && escaped) {
+        escaped = false;
+        continue;
+      }
+      if (quote === '"' && char === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (char === quote) {
+        quote = undefined;
+      }
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      output += char;
+      continue;
+    }
+    if (char === "#") {
+      while (index < value.length && value[index] !== "\n") {
+        index += 1;
+      }
+      if (value[index] === "\n") {
+        output += "\n";
+      }
+      continue;
+    }
+    output += char;
+  }
+  return output;
+}
+
+function uniqueNonEmptyStrings(values: readonly string[]): string[] {
+  const out: string[] = [];
+  for (const value of values) {
+    const trimmed = value.trim();
+    if (trimmed && !out.includes(trimmed)) {
+      out.push(trimmed);
+    }
+  }
+  return out;
+}
+
+function readStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const strings = value.filter((entry): entry is string => typeof entry === "string");
+  return strings.length === value.length ? strings : undefined;
+}
+
+function readNonNegativeInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
+}
+
+function isFileNotFoundError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error.code === "ENOENT" || error.code === "ENOTDIR")
+  );
 }
 
 function selectCodexWorkspaceHeartbeatReferenceFiles(

@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
+import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import { createServer } from "node:net";
 import os from "node:os";
@@ -88,6 +89,13 @@ type CapturedAgentEvent = {
   sessionKey?: string;
 };
 
+type CodexBindingProofSummary = {
+  file: string;
+  threadId: string;
+  workspacePromptFingerprint: string;
+  workspacePromptSurface?: string;
+};
+
 function resolveLiveTimeoutMs(raw: string | undefined, fallback: number): number {
   const parsed = raw ? Number(raw) : Number.NaN;
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
@@ -171,6 +179,48 @@ async function createLiveWorkspace(tempDir: string): Promise<string> {
     ].join("\n"),
   );
   return workspace;
+}
+
+async function findCodexBindingSidecars(root: string): Promise<string[]> {
+  const results: string[] = [];
+  async function walk(dir: string): Promise<void> {
+    let entries: Dirent[];
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await walk(fullPath);
+      } else if (entry.isFile() && entry.name.endsWith(".codex-app-server.json")) {
+        results.push(fullPath);
+      }
+    }
+  }
+  await walk(root);
+  return results.toSorted();
+}
+
+async function readOnlyCodexBindingProofSummary(root: string): Promise<CodexBindingProofSummary> {
+  const files = await findCodexBindingSidecars(root);
+  expect(files).toHaveLength(1);
+  const file = files[0];
+  const parsed = JSON.parse(await fs.readFile(file, "utf8")) as {
+    threadId?: unknown;
+    workspacePromptFingerprint?: unknown;
+    workspacePromptSurface?: unknown;
+  };
+  expect(typeof parsed.threadId).toBe("string");
+  expect(typeof parsed.workspacePromptFingerprint).toBe("string");
+  return {
+    file,
+    threadId: parsed.threadId as string,
+    workspacePromptFingerprint: parsed.workspacePromptFingerprint as string,
+    workspacePromptSurface:
+      typeof parsed.workspacePromptSurface === "string" ? parsed.workspacePromptSurface : undefined,
+  };
 }
 
 async function removeLiveTempDir(dir: string): Promise<void> {
@@ -1150,6 +1200,171 @@ describeLive("gateway live (Codex harness)", () => {
           ]);
         resetTaskRegistryForTests({ persist: false });
         resetTaskFlowRegistryForTests({ persist: false });
+        restoreEnv(previousEnv);
+        await removeLiveTempDir(tempDir);
+      }
+    },
+    CODEX_HARNESS_TIMEOUT_MS,
+  );
+
+  it(
+    "honors Codex native project_doc_max_bytes when reusing or rotating app-server bindings",
+    async () => {
+      const modelKey = process.env.OPENCLAW_LIVE_CODEX_HARNESS_MODEL ?? DEFAULT_CODEX_MODEL;
+      const { clearRuntimeConfigSnapshot } = await import("../config/config.js");
+      const { startGatewayServer } = await import("./server.js");
+
+      const previousEnv = snapshotEnv();
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-codex-project-doc-"));
+      const stateDir = path.join(tempDir, "state");
+      const workspace = await createLiveWorkspace(tempDir);
+      const configPath = path.join(tempDir, "openclaw.json");
+      const token = `test-${randomUUID()}`;
+      const port = await getFreeGatewayPort();
+
+      clearRuntimeConfigSnapshot();
+      process.env.OPENCLAW_AGENT_RUNTIME = "codex";
+      if (CODEX_HARNESS_AUTH_MODE !== "api-key") {
+        delete process.env.OPENAI_BASE_URL;
+        delete process.env.OPENAI_API_KEY;
+      } else if (!process.env.OPENAI_BASE_URL?.trim()) {
+        delete process.env.OPENAI_BASE_URL;
+      }
+      process.env.OPENCLAW_CONFIG_PATH = configPath;
+      process.env.OPENCLAW_GATEWAY_TOKEN = token;
+      process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = "1";
+      process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
+      process.env.OPENCLAW_SKIP_CHANNELS = "1";
+      process.env.OPENCLAW_SKIP_CRON = "1";
+      process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+
+      await fs.mkdir(stateDir, { recursive: true });
+      const codexHome = path.join(stateDir, "agents", "dev", "agent", "codex-home");
+      await fs.mkdir(codexHome, { recursive: true });
+      await writeLiveGatewayConfig({
+        configPath,
+        modelKey,
+        port,
+        token,
+        workspace,
+        codexAppServerMode: "yolo",
+      });
+      const deviceIdentity = await ensurePairedTestGatewayClientIdentity({
+        displayName: "vitest-codex-project-doc-live",
+      });
+      logCodexLiveStep("config-written", { configPath, modelKey, port });
+
+      const server = await startGatewayServer(port, {
+        bind: "loopback",
+        auth: { mode: "token", token },
+        controlUiEnabled: false,
+      });
+      const client = await connectTestGatewayClient({
+        url: `ws://127.0.0.1:${port}`,
+        token,
+        deviceIdentity,
+        timeoutMs: GATEWAY_CONNECT_TIMEOUT_MS,
+        requestTimeoutMs: CODEX_HARNESS_REQUEST_TIMEOUT_MS,
+        clientDisplayName: "vitest-codex-project-doc-live",
+      });
+      logCodexLiveStep("client-connected");
+
+      try {
+        const sessionKey = "agent:dev:live-codex-project-doc-budget";
+        const defaultVisibleBudgetContent = "A".repeat(32 * 1024);
+        await fs.writeFile(
+          path.join(workspace, "AGENTS.md"),
+          `${defaultVisibleBudgetContent}hidden default v1.`,
+        );
+        const defaultFirstToken = `CODEX-PROJECT-DEFAULT-${randomBytes(3)
+          .toString("hex")
+          .toUpperCase()}`;
+        await requestAgentText({
+          client,
+          expectedToken: defaultFirstToken,
+          message: `Reply with exactly ${defaultFirstToken} and nothing else.`,
+          sessionKey,
+        });
+        const defaultFirstBinding = await readOnlyCodexBindingProofSummary(stateDir);
+
+        await fs.writeFile(
+          path.join(workspace, "AGENTS.md"),
+          `${defaultVisibleBudgetContent}hidden default v2.`,
+        );
+        const defaultHiddenToken = `CODEX-PROJECT-DEFAULT-HIDDEN-${randomBytes(3)
+          .toString("hex")
+          .toUpperCase()}`;
+        await requestAgentText({
+          client,
+          expectedToken: defaultHiddenToken,
+          message: `Reply with exactly ${defaultHiddenToken} and nothing else.`,
+          sessionKey,
+        });
+        const defaultHiddenBinding = await readOnlyCodexBindingProofSummary(stateDir);
+
+        expect(defaultHiddenBinding.threadId).toBe(defaultFirstBinding.threadId);
+        expect(defaultHiddenBinding.workspacePromptFingerprint).toBe(
+          defaultFirstBinding.workspacePromptFingerprint,
+        );
+
+        await fs.writeFile(path.join(codexHome, "config.toml"), "project_doc_max_bytes = 8\n");
+        await fs.writeFile(path.join(workspace, "AGENTS.md"), "VISIBLE\nhidden v1\n");
+        const firstToken = `CODEX-PROJECT-DOC-${randomBytes(3).toString("hex").toUpperCase()}`;
+        await requestAgentText({
+          client,
+          expectedToken: firstToken,
+          message: `Reply with exactly ${firstToken} and nothing else.`,
+          sessionKey,
+        });
+        const firstBinding = await readOnlyCodexBindingProofSummary(stateDir);
+
+        await fs.writeFile(path.join(workspace, "AGENTS.md"), "VISIBLE\nhidden v2\n");
+        const hiddenToken = `CODEX-PROJECT-HIDDEN-${randomBytes(3).toString("hex").toUpperCase()}`;
+        await requestAgentText({
+          client,
+          expectedToken: hiddenToken,
+          message: `Reply with exactly ${hiddenToken} and nothing else.`,
+          sessionKey,
+        });
+        const hiddenBinding = await readOnlyCodexBindingProofSummary(stateDir);
+
+        await fs.writeFile(path.join(workspace, "AGENTS.md"), "VISIBLF\nhidden v3\n");
+        const visibleToken = `CODEX-PROJECT-VISIBLE-${randomBytes(3)
+          .toString("hex")
+          .toUpperCase()}`;
+        await requestAgentText({
+          client,
+          expectedToken: visibleToken,
+          message: `Reply with exactly ${visibleToken} and nothing else.`,
+          sessionKey,
+        });
+        const visibleBinding = await readOnlyCodexBindingProofSummary(stateDir);
+
+        expect(hiddenBinding.threadId).toBe(firstBinding.threadId);
+        expect(hiddenBinding.workspacePromptFingerprint).toBe(
+          firstBinding.workspacePromptFingerprint,
+        );
+        expect(visibleBinding.threadId).not.toBe(hiddenBinding.threadId);
+        expect(visibleBinding.workspacePromptFingerprint).not.toBe(
+          hiddenBinding.workspacePromptFingerprint,
+        );
+
+        logCodexLiveStep("project-doc-budget-binding-proof", {
+          defaultHiddenEditKeptThread:
+            defaultHiddenBinding.threadId === defaultFirstBinding.threadId,
+          hiddenEditKeptThread: hiddenBinding.threadId === firstBinding.threadId,
+          visibleEditRotatedThread: visibleBinding.threadId !== hiddenBinding.threadId,
+          defaultFirst: defaultFirstBinding,
+          defaultHidden: defaultHiddenBinding,
+          first: firstBinding,
+          hidden: hiddenBinding,
+          visible: visibleBinding,
+        });
+      } finally {
+        clearRuntimeConfigSnapshot();
+        await client.stopAndWait();
+        await server.close();
         restoreEnv(previousEnv);
         await removeLiveTempDir(tempDir);
       }

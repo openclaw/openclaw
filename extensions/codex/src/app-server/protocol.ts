@@ -70,6 +70,8 @@ export type CodexDynamicToolSpec = JsonObject & {
   inputSchema: JsonValue;
 };
 
+export type CodexPersonality = "none" | "friendly" | "pragmatic";
+
 export type CodexThreadStartParams = JsonObject & {
   input?: CodexUserInput[];
   cwd?: string;
@@ -81,6 +83,7 @@ export type CodexThreadStartParams = JsonObject & {
   serviceTier?: CodexServiceTier | null;
   dynamicTools?: CodexDynamicToolSpec[] | null;
   developerInstructions?: string;
+  personality?: CodexPersonality;
   experimentalRawEvents?: boolean;
   persistExtendedHistory?: boolean;
 };
@@ -89,6 +92,7 @@ export type CodexThreadResumeParams = JsonObject & {
   threadId: string;
   model?: string;
   modelProvider?: string | null;
+  personality?: CodexPersonality;
 };
 
 export type CodexThreadStartResponse = {

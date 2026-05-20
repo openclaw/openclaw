@@ -28,14 +28,49 @@ native Codex turn receives Codex app-server developer instructions, while an
 explicit PI compatibility route keeps the normal OpenClaw/PI system prompt even
 when it uses Codex-flavored OpenAI auth or transport.
 
-Native Codex keeps Codex-owned base/model/personality instructions and
-project-doc behavior according to the active Codex thread config. Lightweight
-OpenClaw runs still preserve their existing project-doc suppression. OpenClaw
-developer instructions cover OpenClaw runtime concerns such as source-channel
-delivery, OpenClaw dynamic tools, ACP delegation, adapter context, and the
-active agent workspace profile files. OpenClaw skill catalogs plus `MEMORY.md`
-and active `BOOTSTRAP.md` content are projected as turn input reference context
-for native Codex.
+Native Codex keeps Codex-owned base/model instructions and project-doc behavior
+according to the active Codex thread config. OpenClaw adds a narrow developer
+bridge for OpenClaw runtime concerns such as source-channel delivery,
+OpenClaw dynamic tools, ACP delegation, and adapter context. Workspace profile
+files then follow the configured `workspacePromptSurface`.
+
+```mermaid
+flowchart TD
+  A["Codex base/model instructions"] --> B["Codex native personality"]
+  B --> C["OpenClaw developer bridge"]
+  C --> D{"workspacePromptSurface"}
+  D -->|"per_turn_context (default)"| E["SOUL / IDENTITY / TOOLS / USER<br/>fresh current-turn context"]
+  D -->|"thread_developer"| F["SOUL / IDENTITY / TOOLS / USER<br/>Codex thread developer instructions"]
+  E --> G["Current user request"]
+  F --> G
+  H["AGENTS.md / AGENTS.override.md"] --> I["Codex native project-doc loader"]
+  I --> G
+  J["HEARTBEAT.md"] --> K["heartbeat collaboration-mode pointer"]
+```
+
+`per_turn_context` is the quality-first default. It preserves the legacy
+behavior where edits to `SOUL.md`, `IDENTITY.md`, `TOOLS.md`, `USER.md`,
+`MEMORY.md`, and active `BOOTSTRAP.md` are visible on the next turn without
+requiring native Codex thread rotation. If non-empty `SOUL.md` content is
+delivered and `personalityMode` is left at the default `soul_when_present`,
+OpenClaw disables Codex's named native personality overlay and the bridge points
+personality, tone, and agent voice at `SOUL.md`.
+
+`thread_developer` is the token-efficient/high-priority mode. It moves only
+`SOUL.md`, `IDENTITY.md`, `TOOLS.md`, and `USER.md` into Codex thread
+developer instructions. `MEMORY.md`, active `BOOTSTRAP.md`, and skills remain
+turn context. Because native Codex may ignore `thread/resume` developer
+overrides for already-loaded threads, OpenClaw fingerprints the selected
+workspace prompt surface and starts a fresh native Codex thread when the mode or
+tracked file contents change.
+
+`AGENTS.md` and `AGENTS.override.md` stay native Codex project docs rather than
+OpenClaw prompt text. OpenClaw also fingerprints their root workspace file
+content and rotates the native Codex binding when that content changes, so
+already-running OpenClaw sessions do not depend on Codex live-reloading project
+docs. Lightweight cron turns still preserve the exact user command by skipping
+extra OpenClaw bootstrap text, but they no longer force
+`project_doc_max_bytes: 0`; native Codex project docs remain enabled.
 
 ## Thread bindings and model changes
 
