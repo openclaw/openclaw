@@ -940,10 +940,10 @@ describe("package artifact reuse", () => {
     expect(releaseWorkflow).toContain('verify_args+=(--plugins "${PLUGINS}")');
     expect(releaseWorkflow).toContain("openclaw-release-postpublish-evidence");
     expect(releaseWorkflow).toContain("Failed child job summary");
-    expect(releaseWorkflow).toContain("final verification waits for ClawHub");
-    expect(releaseWorkflow).toContain(
-      '[[ "${WAIT_FOR_CLAWHUB}" == "true" || "${PUBLISH_OPENCLAW_NPM}" == "true" ]]',
-    );
+    expect(releaseWorkflow).toContain("Workflow completion waits for ClawHub");
+    expect(releaseWorkflow).toContain("Workflow completion does not wait for ClawHub");
+    expect(releaseWorkflow).toContain('[[ "${WAIT_FOR_CLAWHUB}" == "true" ]]');
+    expect(releaseWorkflow).toContain("--skip-clawhub");
     expect(releaseWorkflow.lastIndexOf("create_or_update_github_release")).toBeLessThan(
       releaseWorkflow.indexOf('if [[ -n "${clawhub_pid}" ]] && ! wait "${clawhub_pid}"'),
     );
