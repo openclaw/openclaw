@@ -184,6 +184,25 @@ RUN --mount=type=cache,id=openclaw-mt-apt-cache,target=/var/cache/apt,sharing=lo
 # Verify gh resolved (cheap fail-fast at build time).
 RUN command -v gh && gh --version
 
+# Install the official Hugging Face client (`huggingface_hub` Python pkg
+# bundles the `hf` CLI as of v0.36+). Required so the in-tenant agent
+# can `hf repos create <namespace>/<name>` (and friends) and use the
+# Python SDK directly, once the user pastes a write-scoped HF PAT at
+# /settings/connections — the token is staged as the `HF_TOKEN` Fly
+# secret by api/routers/connections.py and the CLI/SDK read it on
+# next machine restart. fleet-task rockie-workspace#351.
+#
+# Debian's system-managed Python (PEP 668) refuses an unscoped
+# `pip install` outside a venv. `--break-system-packages` is the
+# documented escape hatch for container images where the global
+# site-packages IS the venv.
+RUN python3 -m pip install --no-cache-dir --break-system-packages \
+      'huggingface_hub>=0.36.0'
+
+# Verify both `hf` and the SDK resolved (cheap fail-fast at build time).
+RUN command -v hf && hf --version && \
+    python3 -c "import huggingface_hub; print('huggingface_hub', huggingface_hub.__version__)"
+
 # Install official claude and codex CLIs globally via npm.
 # Both are published as npm packages; @anthropic-ai/claude-code is the
 # canonical name for the Claude Code CLI and @openai/codex is the canonical
