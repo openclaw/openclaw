@@ -742,9 +742,19 @@ export function splitMediaFromOutput(
   const audioTagResult = parseAudioTag(cleanedText);
   const hasAudioAsVoice = audioTagResult.audioAsVoice;
   if (audioTagResult.hadTag) {
-    cleanedText = audioTagResult.text
+    const afterTag = audioTagResult.text;
+    // Re-check whether the first surviving content line is code-indented
+    // after audio tag removal; if so, preserve its leading whitespace.
+    const afterTagLines = afterTag.split("\n");
+    const firstAfterIdx = afterTagLines.findIndex((l) => l.trim().length > 0);
+    const firstAfterIsCode =
+      firstAfterIdx >= 0 && /^(?:[ ]{4,}|\t)/.test(afterTagLines[firstAfterIdx]);
+    const audioNormRegex = firstAfterIsCode
+      ? /^(?:[ \t]*\n)*/
+      : /^(?:[ \t]*\n)*(?:[ \t]{0,3}(?=\S))?/;
+    cleanedText = afterTag
       .replace(/\n{2,}/g, "\n")
-      .replace(/^(?:[ \t]*\n)*(?:[ \t]{0,3}(?=\S))?/, "")
+      .replace(audioNormRegex, "")
       .trimEnd();
   }
 
