@@ -162,7 +162,9 @@ const STALE_SOCKET_ERROR_CODES = new Set(["EPIPE", "ECONNRESET", "UND_ERR_SOCKET
 
 function extractErrorCode(err: unknown): string | undefined {
   const direct = (err as { code?: string })?.code;
-  if (direct) return direct;
+  if (direct) {
+    return direct;
+  }
   const cause = (err as { cause?: unknown })?.cause;
   return cause ? ((cause as { code?: string })?.code ?? undefined) : undefined;
 }
@@ -186,7 +188,9 @@ async function fetchQdrantJson<T>(
     try {
       response = await attempt();
     } catch (err: unknown) {
-      if (!isStaleSocketError(err)) throw err;
+      if (!isStaleSocketError(err)) {
+        throw err;
+      }
       response = await attempt();
     }
   } catch (err: unknown) {
