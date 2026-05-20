@@ -74,6 +74,29 @@ describe("createFailoverDecisionLogger: model_failover hook emission", () => {
     expect(event.status).toBeUndefined();
   });
 
+  it("publishes the selected fallback target when provided by the outer fallback loop", () => {
+    const runModelFailover = vi.fn().mockResolvedValue(undefined);
+    const hookRunner = makeHookRunner(runModelFailover);
+
+    const logger = createFailoverDecisionLogger({ ...BASE_INPUT, hookRunner });
+    logger("fallback_model", {
+      status: 429,
+      targetProvider: "anthropic",
+      targetModel: "claude-sonnet-4-6",
+    });
+
+    expect(runModelFailover).toHaveBeenCalledTimes(1);
+    const [event] = runModelFailover.mock.calls[0];
+    expect(event).toMatchObject({
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      sourceProvider: "openai-codex",
+      sourceModel: "gpt-5.4",
+      decision: "fallback_model",
+      status: 429,
+    });
+  });
+
   it("does not emit model_failover hook when hookRunner is not provided", () => {
     const runModelFailover = vi.fn();
 

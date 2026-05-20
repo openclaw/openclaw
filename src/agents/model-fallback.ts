@@ -161,6 +161,8 @@ export function isFallbackSummaryError(err: unknown): err is FallbackSummaryErro
 
 export type ModelFallbackRunOptions = {
   allowTransientCooldownProbe?: boolean;
+  /** Next fallback candidate selected by the outer fallback loop, when one exists. */
+  nextCandidate?: ModelCandidate;
 };
 
 type ModelFallbackRuntimeContext = {
@@ -1230,6 +1232,8 @@ export async function runWithModelFallback<T>(
     classifyResult?: ModelFallbackResultClassifier<T>;
     skipAuthProfileRuntime?: boolean;
     abortSignal?: AbortSignal;
+    /** Pass the next fallback candidate into the run callback options for runtime-level telemetry. */
+    exposeNextCandidateToRun?: boolean;
   } & ModelManifestNormalizationContext,
 ): Promise<ModelFallbackRunResult<T>> {
   const candidates = resolveModelCandidateChain({
@@ -1515,11 +1519,19 @@ export async function runWithModelFallback<T>(
       }
     }
 
+    const nextCandidate = candidates[i + 1];
+    const attemptOptions =
+      runOptions || (params.exposeNextCandidateToRun && nextCandidate)
+        ? {
+            ...runOptions,
+            ...(params.exposeNextCandidateToRun && nextCandidate ? { nextCandidate } : {}),
+          }
+        : undefined;
     const attemptRun = await runFallbackAttempt({
       run: params.run,
       ...candidate,
       attempts,
-      options: runOptions,
+      options: attemptOptions,
       classifyResult: params.classifyResult,
       attempt: i + 1,
       total: candidates.length,

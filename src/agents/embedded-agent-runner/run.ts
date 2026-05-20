@@ -1292,10 +1292,14 @@ export async function runEmbeddedAgent(
         nextAttemptPromptOverride = MID_TURN_PRECHECK_CONTINUATION_PROMPT;
         suppressNextUserMessagePersistence = true;
       };
+      const nextModelFallbackCandidate = params.nextModelFallbackCandidate;
       const maybeEscalateRateLimitProfileFallback = (paramsLocal: {
         failoverProvider: string;
         failoverModel: string;
-        logFallbackDecision: (decision: "fallback_model", extra?: { status?: number }) => void;
+        logFallbackDecision: (
+          decision: "fallback_model",
+          extra?: { status?: number; targetProvider?: string; targetModel?: string },
+        ) => void;
       }) => {
         rateLimitProfileRotations += 1;
         if (rateLimitProfileRotations <= rateLimitProfileRotationLimit || !fallbackConfigured) {
@@ -1305,7 +1309,11 @@ export async function runEmbeddedAgent(
         log.warn(
           `rate-limit profile rotation cap reached for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)} after ${rateLimitProfileRotations} rotations; escalating to model fallback`,
         );
-        paramsLocal.logFallbackDecision("fallback_model", { status });
+        paramsLocal.logFallbackDecision("fallback_model", {
+          status,
+          targetProvider: nextModelFallbackCandidate?.provider,
+          targetModel: nextModelFallbackCandidate?.model,
+        });
         throw new FailoverError(
           "The AI service is temporarily rate-limited. Please try again in a moment.",
           {
@@ -2718,7 +2726,11 @@ export async function runEmbeddedAgent(
                 stage: "prompt",
                 ...(typeof status === "number" ? { status } : {}),
               });
-              logPromptFailoverDecision("fallback_model", { status });
+              logPromptFailoverDecision("fallback_model", {
+                status,
+                targetProvider: nextModelFallbackCandidate?.provider,
+                targetModel: nextModelFallbackCandidate?.model,
+              });
               await maybeBackoffBeforeOverloadFailover(promptFailoverReason);
               throw (
                 normalizedPromptFailover ??
@@ -2892,6 +2904,7 @@ export async function runEmbeddedAgent(
             maybeEscalateRateLimitProfileFallback,
             maybeBackoffBeforeOverloadFailover,
             advanceAuthProfile: advanceAttemptAuthProfile,
+            nextFallbackCandidate: nextModelFallbackCandidate,
           });
           overloadProfileRotations = assistantFailoverOutcome.overloadProfileRotations;
           if (assistantFailoverOutcome.action === "retry") {
