@@ -643,6 +643,7 @@ function resolveEffectiveCurrentChannelContext(options?: MessageToolOptions): {
   const sessionDeliveryChannel = normalizeMessageChannel(sessionDelivery?.channel);
   const preferSessionDeliveryContext =
     normalizeMessageChannel(currentChannelProvider) === "webchat" &&
+    !normalizeOptionalString(currentChannelId) &&
     sessionDeliveryChannel !== undefined &&
     sessionDeliveryChannel !== "webchat" &&
     Boolean(sessionDelivery?.to);

@@ -256,6 +256,28 @@ describe("agent-runner-utils", () => {
     expect(resolved.embeddedContext.messageTo).toBe("268300329");
   });
 
+  it("pins message-tool-only internal UI runs to the current run", () => {
+    const run = makeRun({
+      sessionKey: "agent:main:imessage:direct:+15551234567",
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+
+    const resolved = buildEmbeddedRunContexts({
+      run,
+      sessionCtx: {
+        Provider: "webchat",
+        Surface: "webchat",
+        OriginatingChannel: "webchat",
+        ExplicitDeliverRoute: false,
+      },
+      hasRepliedRef: undefined,
+      provider: "openai",
+    });
+
+    expect(resolved.embeddedContext.currentChannelProvider).toBe("webchat");
+    expect(resolved.embeddedContext.currentChannelId).toBe("current-run");
+  });
+
   it("uses telegram plugin threading context for native commands", () => {
     hoisted.getChannelPluginMock.mockReturnValue({
       threading: {

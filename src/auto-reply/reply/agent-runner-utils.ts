@@ -20,6 +20,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
+import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import type { TemplateContext } from "../templating.js";
 import {
@@ -195,6 +196,22 @@ function buildEmbeddedContextFromTemplate(params: {
   hasRepliedRef: { value: boolean } | undefined;
 }) {
   const config = params.run.config;
+  const threadingContext = buildThreadingToolContext({
+    sessionCtx: params.sessionCtx,
+    config,
+    hasRepliedRef: params.hasRepliedRef,
+  });
+  const currentSurface =
+    normalizeMessageChannel(params.sessionCtx.Provider) ??
+    normalizeMessageChannel(params.sessionCtx.Surface);
+  const originatingChannel = normalizeMessageChannel(params.sessionCtx.OriginatingChannel);
+  const shouldPinInternalSourceReplyContext =
+    params.run.sourceReplyDeliveryMode === "message_tool_only" &&
+    params.sessionCtx.ExplicitDeliverRoute !== true &&
+    currentSurface === INTERNAL_MESSAGE_CHANNEL &&
+    (!originatingChannel || originatingChannel === INTERNAL_MESSAGE_CHANNEL) &&
+    normalizeMessageChannel(threadingContext.currentChannelProvider) === INTERNAL_MESSAGE_CHANNEL &&
+    !normalizeOptionalString(threadingContext.currentChannelId);
   return {
     sessionId: params.run.sessionId,
     sessionKey: params.run.sessionKey,
@@ -212,11 +229,8 @@ function buildEmbeddedContextFromTemplate(params: {
     messageThreadId: params.sessionCtx.MessageThreadId ?? undefined,
     memberRoleIds: normalizeMemberRoleIds(params.sessionCtx.MemberRoleIds),
     // Provider threading context for tool auto-injection
-    ...buildThreadingToolContext({
-      sessionCtx: params.sessionCtx,
-      config,
-      hasRepliedRef: params.hasRepliedRef,
-    }),
+    ...threadingContext,
+    ...(shouldPinInternalSourceReplyContext ? { currentChannelId: "current-run" } : {}),
   };
 }
 

@@ -536,6 +536,35 @@ describe("message tool secret scoping", () => {
     expect(Array.from(secretResolveCall.targetIds ?? [])).toEqual(["channels.telegram.botToken"]);
   });
 
+  it("keeps an explicit internal current-run context instead of inferring session delivery", async () => {
+    mockSendResult({ channel: "webchat", to: "current-run" });
+
+    const input = await executeSend({
+      action: { message: "hi" },
+      toolOptions: {
+        config: {
+          channels: {
+            imessage: {
+              accountKey: { source: "env", provider: "default", id: "IMESSAGE_ACCOUNT_KEY" },
+            },
+          },
+        } as never,
+        sourceReplyDeliveryMode: "message_tool_only",
+        currentChannelProvider: "webchat",
+        currentChannelId: "current-run",
+        agentSessionKey: "agent:main:imessage:direct:+15551234567",
+      },
+    });
+
+    expect(input?.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(input?.toolContext?.currentChannelProvider).toBe("webchat");
+    expect(input?.toolContext?.currentChannelId).toBe("current-run");
+    expect(input?.params).toEqual({ action: "send", message: "hi" });
+
+    const secretResolveCall = latestSecretResolveCall();
+    expect(Array.from(secretResolveCall.targetIds ?? [])).toEqual([]);
+  });
+
   it("preserves direct session keys as explicit user targets when ambient channel drifted to webchat", async () => {
     mockSendResult({ channel: "discord", to: "user:123456789" });
 
