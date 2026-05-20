@@ -116,6 +116,19 @@ When no `plugins.slots.contextEngine` is set (or it's set to `"legacy"`), this e
 
 ## Plugin engines
 
+### OpenViking
+
+OpenViking is a context engine plugin for remote archive-backed context, memory
+recall, and resource search:
+
+<CardGroup cols={1}>
+<Card title="OpenViking context engine" icon="network" href="/concepts/context-engine-openviking">
+Use an OpenViking server for context assembly, archive-backed compaction,
+automatic recall, and searchable resources without taking over
+`plugins.slots.memory`.
+</Card>
+</CardGroup>
+
 A plugin can register a context engine using the plugin API:
 
 ```ts
@@ -301,7 +314,7 @@ The slot is exclusive at run time - only one registered context engine is resolv
 
 - [Compaction](/concepts/compaction) - summarizing long conversations
 - [Context](/concepts/context) - how context is built for agent turns
-- [OpenViking memory](/concepts/memory-openviking) - remote memory through a context-engine plugin
+- [OpenViking context engine](/concepts/context-engine-openviking) - remote archives and recall through a context-engine plugin
 - [Plugin Architecture](/plugins/architecture) - registering context engine plugins
 - [Plugin manifest](/plugins/manifest) - plugin manifest fields
 - [Plugins](/tools/plugin) - plugin overview

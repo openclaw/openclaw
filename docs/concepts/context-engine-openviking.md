@@ -1,31 +1,32 @@
 ---
-summary: "Remote OpenViking memory, archives, resources, and context assembly through the OpenViking context-engine plugin"
-title: "OpenViking memory"
+summary: "Remote memory, archives, resources, and recall through the OpenViking context-engine plugin"
+title: "OpenViking context engine"
+sidebarTitle: "OpenViking"
 read_when:
-  - You want OpenViking as an optional OpenClaw memory backend
+  - You want OpenViking as an optional OpenClaw context engine
   - You want remote long-term memory, session archives, and resource search
-  - You are choosing between builtin memory, QMD, Honcho, LanceDB, and OpenViking
+  - You are deciding whether OpenViking should replace the legacy context engine
 ---
 
-[OpenViking](https://github.com/volcengine/OpenViking) adds a remote memory and
-context database to OpenClaw. It stores conversation history in an OpenViking
-server, extracts long-term user and agent memories, searches imported resources,
-and feeds relevant context back into OpenClaw before model calls.
+[OpenViking](https://github.com/volcengine/OpenViking) is an OpenClaw
+**context engine** plugin with the id `openviking`. It replaces OpenClaw's
+default context assembly path with a remote OpenViking-backed engine that stores
+conversation history, extracts long-term user and agent memories, searches
+imported resources, and feeds relevant context back into OpenClaw before model
+calls.
 
-OpenViking is installed as an OpenClaw **context engine** plugin with the id
-`openviking`. That is an important distinction:
+That placement is important:
 
 - `plugins.slots.contextEngine = "openviking"` selects OpenViking for context
   assembly, archive-backed compaction, and post-turn capture.
-- `plugins.slots.memory` is still the active memory-tool slot. You can leave
-  `memory-core` enabled for local Markdown memory, or configure another memory
+- `plugins.slots.memory` is still the active memory plugin slot. You can leave
+  `memory-core` enabled for local Markdown memory, or select another memory
   plugin separately.
 - The OpenViking server runs outside OpenClaw. The plugin is a remote HTTP
   client; it does not start or supervise the server.
 
-Use OpenViking when you want OpenClaw memory to live in a remote service,
-support multiple agents or OpenClaw instances, and combine conversation memory
-with searchable resources and skills.
+Use OpenViking when you want remote context assembly, archive-backed
+compaction, and long-term recall across agents or OpenClaw instances.
 
 ## What it provides
 
@@ -273,16 +274,21 @@ openclaw openviking status
 Use `/add-resource`, `/add-skill`, and `/memory-search` from a chat session when
 you want manual imports without asking the model to choose a tool call.
 
-## OpenViking vs other memory backends
+## Relationship to memory backends
 
-| Capability                     | Builtin / QMD                              | Honcho                         | OpenViking                                                            |
-| ------------------------------ | ------------------------------------------ | ------------------------------ | --------------------------------------------------------------------- |
-| Primary storage                | Local Markdown index or local sidecar      | Honcho service                 | OpenViking server                                                     |
-| OpenClaw slot                  | `plugins.slots.memory` or builtin config   | Plugin tools and service       | `plugins.slots.contextEngine`                                         |
-| Session archive and compaction | OpenClaw local summaries                   | Service-backed memory          | OpenViking archive summaries plus active messages                     |
-| Automatic recall               | Builtin/QMD search, optional Active Memory | Honcho tools                   | Context-engine assemble injection                                     |
-| Resource or repo search        | QMD extra paths                            | Not the main focus             | OpenViking resources and skills                                       |
-| Best fit                       | Local-first memory and search              | User modeling and observations | Remote memory, archives, multi-agent context, and RAG-style resources |
+OpenViking is not selected through `plugins.slots.memory`. It can still provide
+long-term memory behavior because a context engine controls the prompt that the
+model actually sees.
+
+| Capability                     | Memory backends                           | OpenViking context engine                            |
+| ------------------------------ | ----------------------------------------- | ---------------------------------------------------- |
+| OpenClaw slot                  | `plugins.slots.memory`                    | `plugins.slots.contextEngine`                        |
+| Primary job                    | Search, store, and expose memory tools    | Assemble context, compact history, and inject recall |
+| Local Markdown memory workflow | Owned by `memory-core`                    | Can run alongside it                                 |
+| Session archive and compaction | OpenClaw summaries or backend-specific    | OpenViking archive summaries plus active messages    |
+| Automatic recall path          | Memory prompt sections and memory tools   | Context-engine `assemble()` injection                |
+| Resource or repo search        | Backend-specific, for example QMD paths   | OpenViking resources and skills                      |
+| Best fit                       | Local-first memory and explicit retrieval | Remote archives, multi-agent context, and RAG        |
 
 OpenViking can run alongside the builtin memory plugin. Keep local Markdown
 memory when you want OpenClaw's `MEMORY.md` and `memory/*.md` workflow, and use
@@ -335,7 +341,7 @@ Set it back to `legacy` if needed.
 
 ## Related
 
-- [Builtin memory engine](/concepts/memory-builtin)
-- [QMD memory engine](/concepts/memory-qmd)
-- [Honcho memory](/concepts/memory-honcho)
-- [Memory LanceDB](/plugins/memory-lancedb)
+- [Context engine](/concepts/context-engine)
+- [Compaction](/concepts/compaction)
+- [Memory overview](/concepts/memory)
+- [Plugin Architecture](/plugins/architecture)

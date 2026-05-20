@@ -8,8 +8,20 @@
     "target": "OpenViking"
   },
   {
-    "source": "OpenViking memory",
-    "target": "OpenViking 记忆"
+    "source": "OpenViking context engine",
+    "target": "OpenViking 上下文引擎"
+  },
+  {
+    "source": "Context engine",
+    "target": "上下文引擎"
+  },
+  {
+    "source": "Compaction",
+    "target": "压缩"
+  },
+  {
+    "source": "Plugin Architecture",
+    "target": "插件架构"
   },
   {
     "source": "iMessage",

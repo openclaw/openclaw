@@ -165,6 +165,10 @@
       "destination": "/concepts/context-engine"
     },
     {
+      "source": "/concepts/memory-openviking",
+      "destination": "/concepts/context-engine-openviking"
+    },
+    {
       "source": "/cron",
       "destination": "/automation/cron-jobs"
     },
@@ -1128,6 +1132,7 @@
                   "concepts/system-prompt",
                   "concepts/context",
                   "concepts/context-engine",
+                  "concepts/context-engine-openviking",
                   "concepts/agent-workspace",
                   "concepts/soul",
                   "concepts/oauth",
@@ -1152,7 +1157,6 @@
                       "concepts/memory-builtin",
                       "concepts/memory-qmd",
                       "concepts/memory-honcho",
-                      "concepts/memory-openviking",
                       "concepts/memory-search",
                       "concepts/active-memory",
                       "concepts/commitments",

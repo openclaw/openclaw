@@ -76,7 +76,8 @@ The agent has two tools for working with memory:
 
 Both tools are provided by the active memory plugin (default: `memory-core`).
 Other plugins can register additional memory-related tools without owning the
-active memory slot. For example, the OpenViking context-engine plugin adds
+active memory slot. For example, the
+[OpenViking context engine](/concepts/context-engine-openviking) adds
 OpenViking recall, archive, resource, and skill tools while still leaving
 `plugins.slots.memory` separate.
 
@@ -135,11 +136,13 @@ multi-agent awareness. Plugin install.
 Bundled LanceDB-backed memory with OpenAI-compatible embeddings, auto-recall,
 auto-capture, and local Ollama embedding support.
 </Card>
-<Card title="OpenViking" icon="network" href="/concepts/memory-openviking">
-Remote memory and context database with archive-backed compaction, automatic
-recall, resource search, and multi-agent routing.
-</Card>
 </CardGroup>
+
+OpenViking is related, but it is selected through
+`plugins.slots.contextEngine`, not `plugins.slots.memory`. See
+[OpenViking context engine](/concepts/context-engine-openviking) if you want a
+remote OpenViking server to own context assembly, archive-backed compaction, and
+automatic recall while local Markdown memory remains available.
 
 ## Knowledge wiki layer
 
@@ -250,7 +253,7 @@ openclaw memory index --force   # Rebuild the index
 - [QMD memory engine](/concepts/memory-qmd): advanced local-first sidecar.
 - [Honcho memory](/concepts/memory-honcho): AI-native cross-session memory.
 - [Memory LanceDB](/plugins/memory-lancedb): LanceDB-backed plugin with OpenAI-compatible embeddings.
-- [OpenViking memory](/concepts/memory-openviking): remote memory, archives, and resource search.
+- [OpenViking context engine](/concepts/context-engine-openviking): remote archives, recall, and resource search through context assembly.
 - [Memory Wiki](/plugins/memory-wiki): compiled knowledge vault and wiki-native tools.
 - [Memory search](/concepts/memory-search): search pipeline, providers, and tuning.
 - [Dreaming](/concepts/dreaming): background promotion from short-term recall to long-term memory.
@@ -264,5 +267,5 @@ openclaw memory index --force   # Rebuild the index
 - [Builtin memory engine](/concepts/memory-builtin)
 - [Honcho memory](/concepts/memory-honcho)
 - [Memory LanceDB](/plugins/memory-lancedb)
-- [OpenViking memory](/concepts/memory-openviking)
+- [OpenViking context engine](/concepts/context-engine-openviking)
 - [Commitments](/concepts/commitments)
