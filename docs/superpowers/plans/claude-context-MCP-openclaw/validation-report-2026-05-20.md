@@ -182,3 +182,48 @@ Why it remains red:
 - [ ] V4.1 — V4.6 all PASS
 - [x] No leaked secret-bearing config dumps in conversation, logs, or screenshots during validation
 - [x] Implementation plan file (`claude-context-openclaw-implementation.md`) updated with a short validation-complete note
+
+## Final closure (post-fix)
+
+### Additional fix applied after the post-debug appendix
+
+- Embedded-run bundled-tool policy was patched so explicit `gateway.tools.deny` entries now apply to bundle-MCP tools in live Discord/embedded runs.
+- Regression coverage was added to `src/agents/pi-embedded-runner/effective-tool-policy.test.ts`.
+- Targeted Testbox proof passed for the new regression.
+
+### Final re-validation snapshot
+
+| Area | Result | Note |
+|---|---|---|
+| Embedded-run write-tool deny enforcement | PASS | Live Discord prompt `Call index_codebase...` returned `Error: index_codebase tool is not available.` with no `claude-context__index_codebase` tool call executed. |
+| Control UI root | PASS | `GET /` on `http://127.0.0.1:18789/` returned `200` after `pnpm ui:build` and gateway restart. |
+| QMD live lexical proof | PASS | Live Discord prompt `Use qmd search to find notes mentioning "QMD status mismatch"` returned `project-docs/audits/2026-05-10-openclaw-qmd-migration-preflight.md`. |
+| Qdrant live semantic proof | PASS | Live Discord prompt `Use qdrant-find to find notes about "Backup Protocol"` returned a semantic hit immediately. |
+| QMD direct state using MCP XDG paths | PASS | Direct CLI against the MCP server's configured `XDG_CACHE_HOME` / `XDG_CONFIG_HOME` reported `894 files indexed` across active collections. |
+
+### Final verdict
+
+**Final overall verdict:** `PASS`
+
+Rationale:
+
+- The original rollout-caused failures are resolved.
+- Host-path visibility is fixed.
+- Live claude-context reads work on the Discord embedded-run surface.
+- Live embedded-run deny enforcement now blocks claude-context write tools as intended.
+- Control UI serves again after rebuilding local assets.
+- QMD and Qdrant both proved live retrieval on their intended surfaces.
+
+Historical notes that remain true but are no longer blockers:
+
+- The raw one-line stdio probe for `claude-context-mcp` is still a poor health check compared with an SDK client handshake.
+- Direct `tools.invoke` remains a different surface from embedded-run bundle-MCP tools, so it should not be used as a proxy for live agent MCP availability.
+
+### Final sign-off checklist
+
+- [x] V1.1 — V1.4 rollout health is acceptable for this environment
+- [x] V2.1 — V2.3 tool-surface and deny behavior are understood and safe on the live embedded-run surface
+- [x] V3.1 — V3.3 live claude-context reads work against `/home/ubuntu/godwind-team-docker/openclaw`
+- [x] V4.1 — V4.6 memory/search/control-ui stack is green after corrected-surface revalidation
+- [x] No leaked secret-bearing config dumps in conversation, logs, or screenshots during validation
+- [x] Implementation plan file (`claude-context-openclaw-implementation.md`) updated with final validation closure

@@ -436,7 +436,8 @@ Hand off to the post-implementation validation plan at `docs/superpowers/plans/c
 
 - Post-rollout validation and follow-up debug were run from the companion validation plan and debug plan v2.
 - Compose fix committed: `adc920740066572d9f4552cd200656610ccab57a` — `infra(gateway): mirror host repo path into container`.
-- Outcome: live claude-context reads now work against `/home/ubuntu/godwind-team-docker/openclaw` on the Discord embedded-run surface.
-- Remaining blocker: live embedded runs can still execute `claude-context__index_codebase` even after `gateway.tools.deny` was corrected to the live tool names.
-- Final status: rollout remains open pending a separate OpenClaw fix for denylist enforcement on bundle-MCP tools in embedded runs.
+- Embedded-run deny fix committed separately after validation showed the live bundle-MCP policy gap.
+- Outcome: live claude-context reads work against `/home/ubuntu/godwind-team-docker/openclaw` on the Discord embedded-run surface, and live embedded runs now block `claude-context__index_codebase` via `gateway.tools.deny`.
+- Control UI assets were rebuilt locally (`pnpm ui:build`) and the gateway root now serves successfully again on this host.
+- Final status: rollout is green on the target host after the deny-enforcement patch and final re-validation.
 - See `docs/superpowers/plans/claude-context-MCP-openclaw/validation-report-2026-05-20.md` for the full validation record and post-debug appendix.
