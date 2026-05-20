@@ -360,6 +360,42 @@ describe("deliverOutboundPayloads", () => {
     expect(results).toEqual([{ channel: "matrix", messageId: "m1", roomId: "!room:example" }]);
   });
 
+  it("sanitizes assistant thinking tags before channel send", async () => {
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
+
+    await deliverMatrixPayload({
+      sendMatrix,
+      payload: { text: "<think>hidden</think>Visible" },
+    });
+
+    expect(sendMatrix).toHaveBeenCalledTimes(1);
+    expect(requireMatrixSendCall(sendMatrix)[1]).toBe("Visible");
+  });
+
+  it("drops reasoning-only assistant payloads before channel send", async () => {
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
+
+    const results = await deliverMatrixPayload({
+      sendMatrix,
+      payload: { text: "Reasoning:\n_private step_" },
+    });
+
+    expect(results).toEqual([]);
+    expect(sendMatrix).not.toHaveBeenCalled();
+  });
+
+  it("delivers only the answer for mixed reasoning and final assistant payloads", async () => {
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
+
+    await deliverMatrixPayload({
+      sendMatrix,
+      payload: { text: "Reasoning:\n_private step_\n\nFinal answer:\nVisible" },
+    });
+
+    expect(sendMatrix).toHaveBeenCalledTimes(1);
+    expect(requireMatrixSendCall(sendMatrix)[1]).toBe("Visible");
+  });
+
   it("reports unsupported durable final delivery when required capabilities are missing", async () => {
     setActivePluginRegistry(
       createTestRegistry([

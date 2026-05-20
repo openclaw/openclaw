@@ -1,6 +1,7 @@
 import type { TypingCallbacks } from "../../channels/typing.js";
 import type { HumanDelayConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { sanitizeAssistantForDelivery } from "../../infra/outbound/assistant-delivery-sanitizer.js";
 import { generateSecureInt } from "../../infra/secure-random.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
@@ -172,6 +173,13 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
       }
       return false;
     }
+    const deliverySanitized =
+      kind === "tool"
+        ? normalized
+        : sanitizeAssistantForDelivery(normalized, { role: "assistant" });
+    if (!deliverySanitized) {
+      return false;
+    }
     queuedCounts[kind] += 1;
     pending += 1;
 
@@ -190,9 +198,9 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
             await sleep(delayMs);
           }
         }
-        let deliverPayload: ReplyPayload | null = normalized;
+        let deliverPayload: ReplyPayload | null = deliverySanitized;
         if (options.beforeDeliver) {
-          deliverPayload = await options.beforeDeliver(normalized, { kind });
+          deliverPayload = await options.beforeDeliver(deliverySanitized, { kind });
           if (!deliverPayload) {
             cancelledCounts[kind] += 1;
             return;
