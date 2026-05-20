@@ -273,6 +273,32 @@ describe("routeReply", () => {
     });
   });
 
+  it("preserves explicit hook-cancelled delivery suppression", async () => {
+    mocks.deliverOutboundPayloads.mockImplementationOnce(async (params) => {
+      params.onPayloadDeliveryOutcome?.({
+        index: 0,
+        status: "suppressed",
+        reason: "cancelled_by_message_sending_hook",
+        hookEffect: { cancelReason: "review hold" },
+      });
+      return [];
+    });
+
+    const res = await routeReply({
+      payload: { text: "hi" },
+      channel: "telegram",
+      to: "telegram:123",
+      cfg: {} as never,
+    });
+
+    expect(res.ok).toBe(true);
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledOnce();
+    expectLastDeliveryFields({
+      channel: "telegram",
+      to: "telegram:123",
+    });
+  });
+
   it("passes policySessionKey through to outbound delivery targets", async () => {
     const cfg = {
       agents: {
