@@ -17,6 +17,8 @@ import { probeFeishu as probeFeishuImpl } from "./probe.js";
 import {
   addReactionFeishu as addReactionFeishuImpl,
   listReactionsFeishu as listReactionsFeishuImpl,
+  removeOwnReactionFeishu as removeOwnReactionFeishuImpl,
+  removeOwnReactionsFeishu as removeOwnReactionsFeishuImpl,
   removeReactionFeishu as removeReactionFeishuImpl,
 } from "./reactions.js";
 import {
@@ -36,6 +38,8 @@ export const feishuChannelRuntime = {
   probeFeishu: probeFeishuImpl,
   addReactionFeishu: addReactionFeishuImpl,
   listReactionsFeishu: listReactionsFeishuImpl,
+  removeOwnReactionFeishu: removeOwnReactionFeishuImpl,
+  removeOwnReactionsFeishu: removeOwnReactionsFeishuImpl,
   removeReactionFeishu: removeReactionFeishuImpl,
   getChatInfo: getChatInfoImpl,
   getChatMembers: getChatMembersImpl,

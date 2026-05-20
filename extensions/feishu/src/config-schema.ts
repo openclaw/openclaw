@@ -117,6 +117,7 @@ const FeishuToolsConfigSchema = z
     drive: z.boolean().optional(), // Cloud storage operations (default: true)
     perm: z.boolean().optional(), // Permission management (default: false, sensitive)
     scopes: z.boolean().optional(), // App scopes diagnostic (default: true)
+    reactions: z.boolean().optional(), // Native reaction tool (default: false; opt-in)
   })
   .strict()
   .optional();

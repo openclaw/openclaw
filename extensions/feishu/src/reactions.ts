@@ -2,12 +2,59 @@ import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 
-type FeishuReaction = {
+export type FeishuReaction = {
   reactionId: string;
   emojiType: string;
   operatorType: "app" | "user";
   operatorId: string;
 };
+
+type FeishuReactionApiItem = {
+  reaction_id?: string;
+  reaction_type?: { emoji_type?: string };
+  operator?: {
+    operator_id?: string;
+    operator_type?: string;
+  };
+  operator_type?: string;
+  operator_id?: string | { app_id?: string; open_id?: string; user_id?: string; union_id?: string };
+};
+
+function normalizeOperatorId(value: FeishuReactionApiItem["operator_id"]): string {
+  if (typeof value === "string") {
+    return value.trim();
+  }
+  return (
+    value?.app_id?.trim() ??
+    value?.open_id?.trim() ??
+    value?.user_id?.trim() ??
+    value?.union_id?.trim() ??
+    ""
+  );
+}
+
+function normalizeReactionItem(item: FeishuReactionApiItem): FeishuReaction {
+  const operatorType = item.operator?.operator_type ?? item.operator_type;
+  const operatorId = item.operator?.operator_id ?? item.operator_id;
+  return {
+    reactionId: item.reaction_id ?? "",
+    emojiType: item.reaction_type?.emoji_type ?? "",
+    operatorType: operatorType === "app" ? "app" : "user",
+    operatorId: normalizeOperatorId(operatorId),
+  };
+}
+
+export function isFeishuReactionOwnedByApp(
+  reaction: Pick<FeishuReaction, "operatorType" | "operatorId">,
+  appId?: string,
+): boolean {
+  const normalizedAppId = appId?.trim();
+  return (
+    Boolean(normalizedAppId) &&
+    reaction.operatorType === "app" &&
+    reaction.operatorId === normalizedAppId
+  );
+}
 
 function resolveConfiguredFeishuClient(params: { cfg: ClawdbotConfig; accountId?: string }) {
   const account = resolveFeishuRuntimeAccount(params);
@@ -101,23 +148,66 @@ export async function listReactionsFeishu(params: {
     code?: number;
     msg?: string;
     data?: {
-      items?: Array<{
-        reaction_id?: string;
-        reaction_type?: { emoji_type?: string };
-        operator_type?: string;
-        operator_id?: { open_id?: string; user_id?: string; union_id?: string };
-      }>;
+      items?: FeishuReactionApiItem[];
     };
   };
 
   assertFeishuReactionApiSuccess(response, "list reactions");
 
   const items = response.data?.items ?? [];
-  return items.map((item) => ({
-    reactionId: item.reaction_id ?? "",
-    emojiType: item.reaction_type?.emoji_type ?? "",
-    operatorType: item.operator_type === "app" ? "app" : "user",
-    operatorId:
-      item.operator_id?.open_id ?? item.operator_id?.user_id ?? item.operator_id?.union_id ?? "",
-  }));
+  return items.map(normalizeReactionItem);
+}
+
+export async function removeOwnReactionFeishu(params: {
+  cfg: ClawdbotConfig;
+  messageId: string;
+  emojiType: string;
+  accountId?: string;
+  appId?: string;
+}): Promise<FeishuReaction | undefined> {
+  const matches = await listReactionsFeishu({
+    cfg: params.cfg,
+    messageId: params.messageId,
+    emojiType: params.emojiType,
+    accountId: params.accountId,
+  });
+  const ownReaction = matches.find((reaction) =>
+    isFeishuReactionOwnedByApp(reaction, params.appId),
+  );
+  if (!ownReaction) {
+    return undefined;
+  }
+  await removeReactionFeishu({
+    cfg: params.cfg,
+    messageId: params.messageId,
+    reactionId: ownReaction.reactionId,
+    accountId: params.accountId,
+  });
+  return ownReaction;
+}
+
+export async function removeOwnReactionsFeishu(params: {
+  cfg: ClawdbotConfig;
+  messageId: string;
+  accountId?: string;
+  appId?: string;
+}): Promise<number> {
+  const reactions = await listReactionsFeishu({
+    cfg: params.cfg,
+    messageId: params.messageId,
+    accountId: params.accountId,
+  });
+  let removed = 0;
+  for (const reaction of reactions.filter((entry) =>
+    isFeishuReactionOwnedByApp(entry, params.appId),
+  )) {
+    await removeReactionFeishu({
+      cfg: params.cfg,
+      messageId: params.messageId,
+      reactionId: reaction.reactionId,
+      accountId: params.accountId,
+    });
+    removed += 1;
+  }
+  return removed;
 }
