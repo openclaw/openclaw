@@ -229,13 +229,11 @@ describe("channel registry pinning", () => {
     expect(adapter).toBe(outboundAdapter);
   });
 
-  it("loadChannelOutboundAdapter does not fall back to active registry when pinned entry has no outbound", async () => {
-    // Regression test for #84568: the unstable active registry was used as a
-    // fallback for outbound resolution. After a post-boot registry replacement
-    // (config-schema load, plugin status query, cron job, health-monitor, etc.)
-    // the active registry may no longer contain the outbound adapter, causing
-    // "Outbound not configured for channel: discord". The pinned registry is
-    // the only safe source for outbound adapter resolution.
+  it("loadChannelOutboundAdapter does not fall back to active registry when pinned entry exists", async () => {
+    // Regression test for #84568: when the pinned registry has an entry for a
+    // channel (even without an outbound adapter), the active registry must NOT
+    // be consulted. The active registry is unstable and may lack the outbound
+    // adapter after a post-boot registry replacement.
     const startup = createEmptyPluginRegistry();
     startup.channels = [
       {
@@ -261,10 +259,33 @@ describe("channel registry pinning", () => {
     pinActivePluginChannelRegistry(startup);
     setActivePluginRegistry(replacement);
 
-    // Must NOT fall back to the unstable active registry.
-    // The pinned registry entry has no outbound → return undefined.
+    // Pinned has discord (without outbound) → must NOT fall back to active.
     const adapter = await loadChannelOutboundAdapter("discord");
     expect(adapter).toBeUndefined();
+  });
+
+  it("loadChannelOutboundAdapter resolves dynamically registered channels from active registry", async () => {
+    // Channels registered after startup (e.g. discordVoice, registered when a
+    // voice connection is established) do not exist in the pinned registry.
+    // They should be resolved from the active registry.
+    const outboundAdapter = { send: async () => ({ messageId: "1" }) };
+    const startup = createEmptyPluginRegistry();
+    const replacement = createEmptyPluginRegistry();
+    replacement.channels = [
+      {
+        pluginId: "discordVoice",
+        plugin: { id: "discordVoice", meta: {}, outbound: outboundAdapter },
+        source: "runtime",
+      },
+    ] as never;
+
+    setActivePluginRegistry(startup);
+    pinActivePluginChannelRegistry(startup);
+    setActivePluginRegistry(replacement);
+
+    // Pinned has no discordVoice → falls through to active → found.
+    const adapter = await loadChannelOutboundAdapter("discordVoice");
+    expect(adapter).toBe(outboundAdapter);
   });
 
   it("keeps pinned channel registry agent-event subscriptions live after active registry replacement", () => {
