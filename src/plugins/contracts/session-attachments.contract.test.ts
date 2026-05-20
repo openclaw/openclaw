@@ -367,7 +367,7 @@ describe("plugin session attachments", () => {
       ).resolves.toEqual({
         ok: false,
         error:
-          'session attachments require bundled origin or contracts.sessionAttachments:["active-session"] with trusted official install or allowConversationAccess=true',
+          'session attachments require bundled origin or contracts.sessionAttachments:["active-session"] with trusted official install',
       });
       await expect(
         sendBundledSessionAttachment({
@@ -399,7 +399,7 @@ describe("plugin session attachments", () => {
     });
   });
 
-  it("allows operator-approved external active-session presentations without files", async () => {
+  it("allows trusted external active-session presentations without files", async () => {
     await withSessionStore(async ({ storePath }) => {
       await writeSessionEntry(storePath);
       mockSuccessfulAttachmentDelivery();
@@ -419,7 +419,7 @@ describe("plugin session attachments", () => {
       };
       const result = await sendPluginSessionAttachment({
         origin: "workspace",
-        allowConversationAccess: true,
+        trustedOfficialInstall: true,
         contracts: { sessionAttachments: ["active-session"] },
         sessionKey: MAIN_SESSION_KEY,
         text: "Plan approval requested.",
@@ -438,6 +438,27 @@ describe("plugin session attachments", () => {
     });
   });
 
+  it("does not treat generic conversation access as an attachment trust grant", async () => {
+    await withSessionStore(async ({ storePath, filePath }) => {
+      await writeSessionEntry(storePath);
+
+      await expect(
+        sendPluginSessionAttachment({
+          origin: "workspace",
+          allowConversationAccess: true,
+          contracts: { sessionAttachments: ["active-session"] },
+          sessionKey: MAIN_SESSION_KEY,
+          files: [{ path: filePath }],
+        }),
+      ).resolves.toEqual({
+        ok: false,
+        error:
+          'session attachments require bundled origin or contracts.sessionAttachments:["active-session"] with trusted official install',
+      });
+      expect(workflowMocks.sendMessage).not.toHaveBeenCalled();
+    });
+  });
+
   it("rejects external active-session contracts without a trust grant", async () => {
     await withSessionStore(async ({ storePath, filePath }) => {
       await writeSessionEntry(storePath);
@@ -452,7 +473,7 @@ describe("plugin session attachments", () => {
       ).resolves.toEqual({
         ok: false,
         error:
-          'session attachments require bundled origin or contracts.sessionAttachments:["active-session"] with trusted official install or allowConversationAccess=true',
+          'session attachments require bundled origin or contracts.sessionAttachments:["active-session"] with trusted official install',
       });
       expect(workflowMocks.sendMessage).not.toHaveBeenCalled();
     });

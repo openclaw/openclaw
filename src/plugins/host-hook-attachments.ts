@@ -201,7 +201,6 @@ async function validateAttachmentFiles(
 function canSendSessionAttachment(params: {
   origin?: PluginOrigin;
   trustedOfficialInstall?: boolean;
-  allowConversationAccess?: boolean;
   contracts?: Pick<PluginManifestContracts, "sessionAttachments">;
 }): boolean {
   if (params.origin === "bundled") {
@@ -210,10 +209,7 @@ function canSendSessionAttachment(params: {
   const declaresActiveSessionAttachment = (params.contracts?.sessionAttachments ?? []).includes(
     ACTIVE_SESSION_ATTACHMENT_CONTRACT,
   );
-  return (
-    declaresActiveSessionAttachment &&
-    (params.trustedOfficialInstall === true || params.allowConversationAccess === true)
-  );
+  return declaresActiveSessionAttachment && params.trustedOfficialInstall === true;
 }
 
 function resolveAttachmentFilePath(params: {
@@ -262,7 +258,7 @@ export async function sendPluginSessionAttachment(
     return {
       ok: false,
       error:
-        'session attachments require bundled origin or contracts.sessionAttachments:["active-session"] with trusted official install or allowConversationAccess=true',
+        'session attachments require bundled origin or contracts.sessionAttachments:["active-session"] with trusted official install',
     };
   }
   const sessionKey = normalizeOptionalString(params.sessionKey);
