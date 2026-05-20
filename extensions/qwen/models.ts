@@ -37,7 +37,7 @@ export const QWEN_MODEL_CATALOG: ReadonlyArray<ModelDefinitionConfig> = [
   {
     id: QWEN_36_PLUS_MODEL_ID,
     name: QWEN_36_PLUS_MODEL_ID,
-    reasoning: false,
+    reasoning: true,
     input: ["text", "image"],
     cost: QWEN_DEFAULT_COST,
     contextWindow: 1_000_000,
@@ -131,9 +131,7 @@ export function isQwen36PlusSupportedBaseUrl(baseUrl: string | undefined): boole
 export function buildQwenModelCatalogForBaseUrl(
   baseUrl: string | undefined,
 ): ReadonlyArray<ModelDefinitionConfig> {
-  return isQwen36PlusSupportedBaseUrl(baseUrl)
-    ? QWEN_MODEL_CATALOG
-    : QWEN_MODEL_CATALOG.filter((model) => model.id !== QWEN_36_PLUS_MODEL_ID);
+  return QWEN_MODEL_CATALOG;
 }
 
 export function isNativeQwenBaseUrl(baseUrl: string | undefined): boolean {
@@ -200,3 +198,4 @@ export const isNativeModelStudioBaseUrl = isNativeQwenBaseUrl;
 export const applyModelStudioNativeStreamingUsageCompat = applyQwenNativeStreamingUsageCompat;
 export const buildModelStudioModelDefinition = buildQwenModelDefinition;
 export const buildModelStudioDefaultModelDefinition = buildQwenDefaultModelDefinition;
+
