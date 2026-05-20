@@ -143,6 +143,14 @@ function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
     wikiMemoryPalaceError: null,
     wikiMemoryPalace: {
       totalItems: 2,
+      totalPages: 12,
+      pageCounts: {
+        source: 8,
+        entity: 1,
+        concept: 0,
+        synthesis: 2,
+        report: 1,
+      },
       totalClaims: 3,
       totalQuestions: 1,
       totalContradictions: 1,
@@ -398,7 +406,10 @@ describe("dreaming view", () => {
     setDreamDiarySubTab("palace");
     const container = renderInto(buildProps());
     expect(compactText(container.querySelector(".dreams-diary__date"))).toBe(
-      "Syntheses · 1 pages · 2 claims · 1 questions · 1 contradictions",
+      "Vault · 12 pages · 3 claim rows · 1 open question",
+    );
+    expect(compactText(container.querySelector(".dreams-diary__para"))).toBe(
+      "Syntheses: 1 page · 2 claim rows · 1 open question · 1 contradiction. Full vault breakdown: 8 sources, 1 entity, 0 concepts, 2 syntheses, 1 report.",
     );
     const insight = container.querySelector(".dreams-diary__insight-card");
     expect(insight?.querySelector(".dreams-diary__insight-title")?.textContent).toBe(

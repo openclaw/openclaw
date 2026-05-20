@@ -41,6 +41,8 @@ type MemoryWikiPalaceCluster = {
 
 type MemoryWikiPalaceStatus = {
   totalItems: number;
+  totalPages: number;
+  pageCounts: Record<WikiPageKind, number>;
   totalClaims: number;
   totalQuestions: number;
   totalContradictions: number;
@@ -89,6 +91,13 @@ export async function listMemoryWikiPalace(
   config: ResolvedMemoryWikiConfig,
 ): Promise<MemoryWikiPalaceStatus> {
   const pages = await readQueryableWikiPages(config.vault.path);
+  const pageCounts = Object.fromEntries(PALACE_KIND_ORDER.map((kind) => [kind, 0])) as Record<
+    WikiPageKind,
+    number
+  >;
+  for (const page of pages) {
+    pageCounts[page.kind] += 1;
+  }
   const items = pages
     .map((page) => {
       const parsed = parseWikiMarkdown(page.raw);
@@ -140,6 +149,8 @@ export async function listMemoryWikiPalace(
 
   return {
     totalItems: items.length,
+    totalPages: pages.length,
+    pageCounts,
     totalClaims: items.reduce((sum, item) => sum + item.claimCount, 0),
     totalQuestions: items.reduce((sum, item) => sum + item.questionCount, 0),
     totalContradictions: items.reduce((sum, item) => sum + item.contradictionCount, 0),

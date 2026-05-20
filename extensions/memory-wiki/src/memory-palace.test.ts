@@ -16,6 +16,7 @@ describe("listMemoryWikiPalace", () => {
 
     await fs.mkdir(path.join(rootDir, "syntheses"), { recursive: true });
     await fs.mkdir(path.join(rootDir, "entities"), { recursive: true });
+    await fs.mkdir(path.join(rootDir, "sources"), { recursive: true });
     await fs.writeFile(
       path.join(rootDir, "syntheses", "travel-system.md"),
       renderWikiMarkdown({
@@ -54,10 +55,33 @@ describe("listMemoryWikiPalace", () => {
       }),
       "utf8",
     );
+    await fs.writeFile(
+      path.join(rootDir, "sources", "chatgpt-travel.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          id: "source.chatgpt.travel",
+          title: "Travel chat export",
+          updatedAt: "2026-04-08T08:00:00.000Z",
+        },
+        body: ["# Travel chat export", "", "Raw source import without extracted claims.", ""].join(
+          "\n",
+        ),
+      }),
+      "utf8",
+    );
 
     const result = await listMemoryWikiPalace(config);
 
     expect(result.totalItems).toBe(2);
+    expect(result.totalPages).toBe(3);
+    expect(result.pageCounts).toMatchObject({
+      source: 1,
+      entity: 1,
+      concept: 0,
+      synthesis: 1,
+      report: 0,
+    });
     expect(result.totalClaims).toBe(3);
     expect(result.totalQuestions).toBe(1);
     expect(result.totalContradictions).toBe(1);

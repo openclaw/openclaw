@@ -151,6 +151,8 @@ export type WikiMemoryPalaceCluster = {
 
 export type WikiMemoryPalace = {
   totalItems: number;
+  totalPages: number;
+  pageCounts: Record<WikiMemoryPalaceItem["kind"], number>;
   totalClaims: number;
   totalQuestions: number;
   totalContradictions: number;
@@ -192,6 +194,8 @@ type WikiImportInsightsPayload = {
 
 type WikiMemoryPalacePayload = {
   totalItems?: unknown;
+  totalPages?: unknown;
+  pageCounts?: unknown;
   totalClaims?: unknown;
   totalQuestions?: unknown;
   totalContradictions?: unknown;
@@ -625,11 +629,24 @@ function normalizeWikiMemoryPalace(raw: unknown): WikiMemoryPalace {
         .map((entry) => normalizeWikiMemoryPalaceCluster(entry))
         .filter((entry): entry is WikiMemoryPalaceCluster => entry !== null)
     : [];
+  const pageCountsRecord = asRecord(record?.pageCounts);
+  const pageCounts = {
+    source: normalizeFiniteInt(pageCountsRecord?.source, 0),
+    entity: normalizeFiniteInt(pageCountsRecord?.entity, 0),
+    concept: normalizeFiniteInt(pageCountsRecord?.concept, 0),
+    synthesis: normalizeFiniteInt(pageCountsRecord?.synthesis, 0),
+    report: normalizeFiniteInt(pageCountsRecord?.report, 0),
+  };
+  const fallbackTotalPages = Object.values(pageCounts).reduce((sum, count) => sum + count, 0);
+  const fallbackTotalItems = clusters.reduce((sum, cluster) => sum + cluster.itemCount, 0);
+  const totalItems = normalizeFiniteInt(record?.totalItems, fallbackTotalItems);
   return {
-    totalItems: normalizeFiniteInt(
-      record?.totalItems,
-      clusters.reduce((sum, cluster) => sum + cluster.itemCount, 0),
+    totalItems,
+    totalPages: normalizeFiniteInt(
+      record?.totalPages,
+      fallbackTotalPages > 0 ? fallbackTotalPages : totalItems,
     ),
+    pageCounts,
     totalClaims: normalizeFiniteInt(
       record?.totalClaims,
       clusters.reduce((sum, cluster) => sum + cluster.claimCount, 0),

@@ -356,6 +356,14 @@ describe("memory-wiki gateway methods", () => {
     const { api, registerGatewayMethod } = createPluginApi();
     vi.mocked(listMemoryWikiPalace).mockResolvedValue({
       totalItems: 3,
+      totalPages: 12,
+      pageCounts: {
+        source: 8,
+        entity: 1,
+        concept: 0,
+        synthesis: 2,
+        report: 1,
+      },
       totalClaims: 4,
       totalQuestions: 1,
       totalContradictions: 1,
@@ -400,6 +408,14 @@ describe("memory-wiki gateway methods", () => {
     expect(listMemoryWikiPalace).toHaveBeenCalledWith(config);
     expect(readRespondPayload(respond)).toEqual({
       totalItems: 3,
+      totalPages: 12,
+      pageCounts: {
+        source: 8,
+        entity: 1,
+        concept: 0,
+        synthesis: 2,
+        report: 1,
+      },
       totalClaims: 4,
       totalQuestions: 1,
       totalContradictions: 1,

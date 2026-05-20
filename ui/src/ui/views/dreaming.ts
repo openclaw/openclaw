@@ -494,6 +494,21 @@ function formatKindLabel(kind: "entity" | "concept" | "source" | "synthesis" | "
   return kind;
 }
 
+function formatCountLabel(count: number, singular: string, plural = `${singular}s`): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function formatMemoryWikiPageBreakdown(palace: WikiMemoryPalace): string {
+  const { pageCounts } = palace;
+  return [
+    formatCountLabel(pageCounts.source, "source"),
+    formatCountLabel(pageCounts.entity, "entity", "entities"),
+    formatCountLabel(pageCounts.concept, "concept"),
+    formatCountLabel(pageCounts.synthesis, "synthesis", "syntheses"),
+    formatCountLabel(pageCounts.report, "report"),
+  ].join(", ");
+}
+
 function formatImportBadge(item: {
   digestStatus: "available" | "withheld";
   riskLevel: "low" | "medium" | "high" | "unknown";
@@ -1160,16 +1175,19 @@ function renderMemoryPalaceSection(props: DreamingProps) {
     <article class="dreams-diary__entry" key="palace-${cluster.key}">
       <div class="dreams-diary__accent"></div>
       <div class="dreams-diary__date">
-        ${cluster.label} · ${cluster.itemCount} pages
-        ${cluster.claimCount > 0 ? html`· ${cluster.claimCount} claims` : nothing}
-        ${cluster.questionCount > 0 ? html`· ${cluster.questionCount} questions` : nothing}
-        ${cluster.contradictionCount > 0
-          ? html`· ${cluster.contradictionCount} contradictions`
-          : nothing}
+        Vault · ${formatCountLabel(palace?.totalPages ?? palace?.totalItems ?? 0, "page")} ·
+        ${formatCountLabel(palace?.totalClaims ?? 0, "claim row")} ·
+        ${formatCountLabel(palace?.totalQuestions ?? 0, "open question")}
       </div>
       <div class="dreams-diary__prose">
         <p class="dreams-diary__para">
-          Compiled wiki pages currently grouped under ${cluster.label.toLowerCase()}.
+          ${cluster.label}: ${formatCountLabel(cluster.itemCount, "page")} ·
+          ${formatCountLabel(cluster.claimCount, "claim row")} ·
+          ${formatCountLabel(cluster.questionCount, "open question")}
+          ${cluster.contradictionCount > 0
+            ? html`· ${formatCountLabel(cluster.contradictionCount, "contradiction")}`
+            : nothing}.
+          Full vault breakdown: ${palace ? formatMemoryWikiPageBreakdown(palace) : "not available"}.
           ${cluster.updatedAt ? ` Latest update ${formatCompactDateTime(cluster.updatedAt)}.` : ""}
         </p>
       </div>

@@ -422,6 +422,14 @@ describe("dreaming controller", () => {
     };
     request.mockResolvedValue({
       totalItems: 2,
+      totalPages: 12,
+      pageCounts: {
+        source: 8,
+        entity: 1,
+        concept: 0,
+        synthesis: 2,
+        report: 1,
+      },
       totalClaims: 3,
       totalQuestions: 1,
       totalContradictions: 1,
@@ -455,6 +463,8 @@ describe("dreaming controller", () => {
 
     expect(request).toHaveBeenCalledWith("wiki.palace", {});
     expect(state.wikiMemoryPalace?.totalItems).toBe(2);
+    expect(state.wikiMemoryPalace?.totalPages).toBe(12);
+    expect(state.wikiMemoryPalace?.pageCounts.synthesis).toBe(2);
     expect(state.wikiMemoryPalace?.totalClaims).toBe(3);
     expect(state.wikiMemoryPalace?.clusters).toHaveLength(1);
     expect(state.wikiMemoryPalace?.clusters[0]?.key).toBe("synthesis");
@@ -494,6 +504,7 @@ describe("dreaming controller", () => {
 
     expect(request).toHaveBeenCalledWith("wiki.palace", {});
     expect(state.wikiMemoryPalace?.totalItems).toBe(1);
+    expect(state.wikiMemoryPalace?.totalPages).toBe(1);
     expect(state.wikiMemoryPalace?.totalClaims).toBe(2);
     expect(state.wikiMemoryPalaceError).toBeNull();
     expect(state.wikiMemoryPalaceLoading).toBe(false);
@@ -509,6 +520,14 @@ describe("dreaming controller", () => {
     };
     state.wikiMemoryPalace = {
       totalItems: 1,
+      totalPages: 1,
+      pageCounts: {
+        source: 0,
+        entity: 0,
+        concept: 0,
+        synthesis: 1,
+        report: 0,
+      },
       totalClaims: 1,
       totalQuestions: 0,
       totalContradictions: 0,
@@ -546,6 +565,14 @@ describe("dreaming controller", () => {
     };
     state.wikiMemoryPalace = {
       totalItems: 1,
+      totalPages: 1,
+      pageCounts: {
+        source: 0,
+        entity: 0,
+        concept: 0,
+        synthesis: 1,
+        report: 0,
+      },
       totalClaims: 1,
       totalQuestions: 0,
       totalContradictions: 0,
