@@ -371,6 +371,50 @@ function rollbackFallbackSelectionStateIfUnchanged(
   return updated;
 }
 
+function entryMatchesAutoFallbackSelectionForRun(params: {
+  entry: SessionEntry | undefined;
+  run: Pick<FollowupRun["run"], "provider" | "model">;
+}): boolean {
+  const { entry, run } = params;
+  if (!entry) {
+    return false;
+  }
+  const recoveredAutoFallbackOverride =
+    entry.modelOverrideSource === undefined && hasSessionAutoModelFallbackProvenance(entry);
+  if (entry.modelOverrideSource !== "auto" && !recoveredAutoFallbackOverride) {
+    return false;
+  }
+  const originProvider = normalizeOptionalString(entry.modelOverrideFallbackOriginProvider);
+  const originModel = normalizeOptionalString(entry.modelOverrideFallbackOriginModel);
+  return originProvider === run.provider && originModel === run.model;
+}
+
+function isEphemeralFallbackAttempt(attempt: RuntimeFallbackAttempt): boolean {
+  const reason = normalizeLowercaseStringOrEmpty(attempt.reason);
+  const error = normalizeLowercaseStringOrEmpty(attempt.error);
+  return (
+    reason === "timeout" ||
+    error.includes("client closed") ||
+    error.includes("operation aborted") ||
+    error.includes("reply operation aborted") ||
+    error.includes("aborted for restart") ||
+    error.includes("gateway is restarting") ||
+    error.includes("llm request timed out")
+  );
+}
+
+function shouldClearAutoFallbackSelectionAfterEphemeralFallback(params: {
+  run: Pick<FollowupRun["run"], "provider" | "model">;
+  provider: string;
+  model: string;
+  attempts: readonly RuntimeFallbackAttempt[];
+}): boolean {
+  if (params.provider === params.run.provider && params.model === params.run.model) {
+    return false;
+  }
+  return params.attempts.length > 0 && params.attempts.every(isEphemeralFallbackAttempt);
+}
+
 /**
  * Build a human-friendly rate-limit message from a FallbackSummaryError.
  * Includes a countdown when the soonest cooldown expiry is known.
@@ -1445,6 +1489,42 @@ export async function runAgentTurnWithFallback(params: {
       store[params.sessionKey!] = persistedEntry;
     });
   };
+  const clearAutoFallbackSelectionForCurrentRun = async (): Promise<void> => {
+    if (!params.sessionKey || !params.activeSessionStore) {
+      return;
+    }
+    const activeSessionEntry =
+      params.activeSessionStore[params.sessionKey] ?? params.getActiveSessionEntry();
+    if (!activeSessionEntry) {
+      return;
+    }
+    if (
+      !entryMatchesAutoFallbackSelectionForRun({
+        entry: activeSessionEntry,
+        run: params.followupRun.run,
+      })
+    ) {
+      return;
+    }
+    clearAutoFallbackPrimaryProbeSelection(activeSessionEntry);
+    params.activeSessionStore[params.sessionKey] = activeSessionEntry;
+    if (!params.storePath) {
+      return;
+    }
+    await updateSessionStore(params.storePath, (store) => {
+      const persistedEntry = store[params.sessionKey!];
+      if (
+        !entryMatchesAutoFallbackSelectionForRun({
+          entry: persistedEntry,
+          run: params.followupRun.run,
+        })
+      ) {
+        return;
+      }
+      clearAutoFallbackPrimaryProbeSelection(persistedEntry);
+      store[params.sessionKey!] = persistedEntry;
+    });
+  };
 
   while (true) {
     try {
@@ -2171,6 +2251,16 @@ export async function runAgentTurnWithFallback(params: {
             code: attempt.code || undefined,
           }))
         : [];
+      if (
+        shouldClearAutoFallbackSelectionAfterEphemeralFallback({
+          run: params.followupRun.run,
+          provider: fallbackProvider,
+          model: fallbackModel,
+          attempts: fallbackAttempts,
+        })
+      ) {
+        await clearAutoFallbackSelectionForCurrentRun();
+      }
       await clearRecoveredAutoFallbackPrimaryProbe({
         provider: fallbackProvider,
         model: fallbackModel,
@@ -2272,6 +2362,7 @@ export async function runAgentTurnWithFallback(params: {
       const isTransientHttp = isTransientHttpError(message);
 
       if (isReplyOperationRestartAbort(params.replyOperation)) {
+        await clearAutoFallbackSelectionForCurrentRun();
         return {
           kind: "final",
           payload: markAgentRunFailureReplyPayload({
@@ -2281,6 +2372,7 @@ export async function runAgentTurnWithFallback(params: {
       }
 
       if (isReplyOperationUserAbort(params.replyOperation)) {
+        await clearAutoFallbackSelectionForCurrentRun();
         return {
           kind: "final",
           payload: {
@@ -2291,6 +2383,7 @@ export async function runAgentTurnWithFallback(params: {
 
       const restartLifecycleError = resolveRestartLifecycleError(err);
       if (restartLifecycleError instanceof GatewayDrainingError) {
+        await clearAutoFallbackSelectionForCurrentRun();
         params.replyOperation?.fail("gateway_draining", restartLifecycleError);
         return {
           kind: "final",
@@ -2301,6 +2394,7 @@ export async function runAgentTurnWithFallback(params: {
       }
 
       if (restartLifecycleError instanceof CommandLaneClearedError) {
+        await clearAutoFallbackSelectionForCurrentRun();
         params.replyOperation?.fail("command_lane_cleared", restartLifecycleError);
         return {
           kind: "final",
