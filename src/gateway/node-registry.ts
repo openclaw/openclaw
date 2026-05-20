@@ -153,9 +153,38 @@ export class NodeRegistry {
   private pendingInvokes = new Map<string, PendingInvoke>();
   private authorizedSystemRunEvents = new Map<string, AuthorizedSystemRunEvent>();
 
+  private clearConnectionRuntimeState(connId: string, reason: string): void {
+    for (const [id, pending] of this.pendingInvokes.entries()) {
+      if (pending.connId !== connId) {
+        continue;
+      }
+      clearTimeout(pending.timer);
+      pending.reject(new Error(`${reason} (${pending.command})`));
+      this.pendingInvokes.delete(id);
+    }
+    for (const [key, event] of this.authorizedSystemRunEvents) {
+      if (event.connId === connId) {
+        this.authorizedSystemRunEvents.delete(key);
+      }
+    }
+  }
+
   register(client: GatewayWsClient, opts: { remoteIp?: string | undefined }) {
     const connect = client.connect;
     const nodeId = connect.device?.id ?? connect.client.id;
+    const previousNodeIdForConn = this.nodesByConn.get(client.connId);
+    if (previousNodeIdForConn && previousNodeIdForConn !== nodeId) {
+      const previousSession = this.nodesById.get(previousNodeIdForConn);
+      if (previousSession?.connId === client.connId) {
+        this.nodesById.delete(previousNodeIdForConn);
+      }
+      this.clearConnectionRuntimeState(client.connId, "node connection superseded");
+    }
+    const previousSessionForNode = this.nodesById.get(nodeId);
+    if (previousSessionForNode && previousSessionForNode.connId !== client.connId) {
+      this.nodesByConn.delete(previousSessionForNode.connId);
+      this.clearConnectionRuntimeState(previousSessionForNode.connId, "node reconnected");
+    }
     const caps = Array.isArray(connect.caps) ? connect.caps : [];
     const declaredCaps = Array.isArray((connect as { declaredCaps?: string[] }).declaredCaps)
       ? ((connect as { declaredCaps?: string[] }).declaredCaps ?? [])
@@ -220,19 +249,7 @@ export class NodeRegistry {
     if (unregistersCurrentNode) {
       this.nodesById.delete(nodeId);
     }
-    for (const [id, pending] of this.pendingInvokes.entries()) {
-      if (pending.connId !== connId) {
-        continue;
-      }
-      clearTimeout(pending.timer);
-      pending.reject(new Error(`node disconnected (${pending.command})`));
-      this.pendingInvokes.delete(id);
-    }
-    for (const [key, event] of this.authorizedSystemRunEvents) {
-      if (event.connId === connId) {
-        this.authorizedSystemRunEvents.delete(key);
-      }
-    }
+    this.clearConnectionRuntimeState(connId, "node disconnected");
     return unregistersCurrentNode ? nodeId : null;
   }
 

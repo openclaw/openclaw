@@ -481,7 +481,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       clearHandshakeTimer: () => clearTimeout(handshakeTimer),
       getClient: () => client,
       setClient: (next) => {
-        if (closed) {
+        if (closed || client) {
           return false;
         }
         releasePreauthBudget();

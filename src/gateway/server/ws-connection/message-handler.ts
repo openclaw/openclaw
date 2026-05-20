@@ -1880,8 +1880,18 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     }
   };
 
+  let messageQueue: Promise<void> = Promise.resolve();
   socket.on("message", (data) => {
-    void runWithDiagnosticTraceContext(createDiagnosticTraceContext(), () => handleMessage(data));
+    const trace = createDiagnosticTraceContext();
+    messageQueue = messageQueue
+      .catch(() => undefined)
+      .then(() => runWithDiagnosticTraceContext(trace, () => handleMessage(data)))
+      .catch((err) => {
+        logGateway.error(`message handler failed: ${formatForLog(err)}`);
+        if (!getClient()) {
+          close();
+        }
+      });
   });
 }
 

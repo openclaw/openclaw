@@ -137,6 +137,26 @@ describe("gateway/node-registry", () => {
     await expect(oldDisconnected).resolves.toBeInstanceOf(Error);
   });
 
+  it("replaces a node registered on the same connection", async () => {
+    const registry = new NodeRegistry();
+    const frames: string[] = [];
+
+    registry.register(makeClient("conn-1", "node-1", frames), {});
+    const oldInvoke = registry.invoke({
+      nodeId: "node-1",
+      command: "system.run",
+      timeoutMs: 1_000,
+    });
+    const oldDisconnected = oldInvoke.catch((err: unknown) => err);
+    const nextSession = registry.register(makeClient("conn-1", "node-2"), {});
+
+    expect(registry.get("node-1")).toBeUndefined();
+    expect(registry.get("node-2")).toBe(nextSession);
+    await expect(oldDisconnected).resolves.toBeInstanceOf(Error);
+    expect(registry.unregister("conn-1")).toBe("node-2");
+    expect(registry.get("node-2")).toBeUndefined();
+  });
+
   it("matches pending system.run events to the issuing connection", async () => {
     const registry = new NodeRegistry();
     const frames: string[] = [];
