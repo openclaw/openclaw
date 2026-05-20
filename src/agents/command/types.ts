@@ -5,7 +5,7 @@ import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
-import type { ExecElevatedDefaults } from "../bash-tools.exec-types.js";
+import type { ExecElevatedDefaults, ExecToolDefaults } from "../bash-tools.exec-types.js";
 import type { AgentStreamParams, ClientToolDefinition } from "./shared-types.js";
 
 /** Image content block for Claude API multimodal messages. */
@@ -83,7 +83,9 @@ export type AgentCommandOpts = {
   runContext?: AgentRunContext;
   /** Internal trusted exec approval follow-up elevated defaults. */
   bashElevated?: ExecElevatedDefaults;
-  /** Trusted sender identity bit for command/channel-action auth; defaults true for local CLI calls. */
+  /** Internal trusted exec defaults resolved from directives or session state. */
+  execOverrides?: Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
+  /** Whether this caller is authorized for owner-only tools (defaults true for local CLI calls). */
   senderIsOwner?: boolean;
   /** Whether this caller is authorized to use provider/model per-run overrides. */
   allowModelOverride?: boolean;

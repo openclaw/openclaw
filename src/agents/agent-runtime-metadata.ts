@@ -22,6 +22,7 @@ export function resolveModelAgentRuntimeMetadata(params: {
   provider?: string;
   model?: string;
   sessionKey?: string;
+  execHost?: string;
   /**
    * True when the loaded session entry has persisted ACP metadata. ACP-shaped
    * keys without this marker can be bridge sessions that use the configured
@@ -46,6 +47,7 @@ export function resolveModelAgentRuntimeMetadata(params: {
     config: params.cfg,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
+    execHost: params.execHost,
   });
   const meta: AgentRuntimeMetadata = {
     id: policy.runtime,

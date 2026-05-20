@@ -1944,6 +1944,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       provider: resolvedDisplayModel.provider,
       model: resolvedDisplayModel.model,
       sessionKey: target.canonicalKey ?? key,
+      execHost: applied.entry?.execHost,
       acpRuntime: applied.entry?.acp != null,
       acpBackend: applied.entry?.acp?.backend,
     });
@@ -2301,6 +2302,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           agentHarnessId: entry?.sessionId === sessionId ? entry.agentHarnessId : undefined,
           thinkLevel: normalizeThinkLevel(entry?.thinkingLevel),
           reasoningLevel: normalizeReasoningLevel(entry?.reasoningLevel),
+          execOverrides: entry?.execHost ? { host: entry.execHost } : undefined,
           bashElevated: {
             enabled: false,
             allowed: false,

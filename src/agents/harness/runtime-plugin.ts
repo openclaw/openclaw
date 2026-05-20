@@ -94,6 +94,7 @@ export async function ensureSelectedAgentHarnessPlugin(params: {
   config?: OpenClawConfig;
   agentId?: string;
   sessionKey?: string;
+  execHost?: string;
   agentHarnessRuntimeOverride?: string;
   workspaceDir: string;
 }): Promise<void> {
@@ -104,6 +105,7 @@ export async function ensureSelectedAgentHarnessPlugin(params: {
     config: params.config,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
+    execHost: params.execHost,
   });
   const runtime =
     runtimeOverride && runtimeOverride !== "auto" && runtimeOverride !== "default"

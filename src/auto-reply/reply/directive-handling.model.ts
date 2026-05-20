@@ -37,7 +37,7 @@ function isMissingAuthLabel(auth: { label: string; source: string }): boolean {
 }
 
 function resolveStatusHarnessRuntime(params: {
-  sessionEntry?: Pick<SessionEntry, "agentHarnessId" | "agentRuntimeOverride">;
+  sessionEntry?: Pick<SessionEntry, "agentHarnessId" | "agentRuntimeOverride" | "execHost">;
   defaultRuntime: string;
 }): string {
   void params.sessionEntry;
@@ -53,7 +53,7 @@ async function resolveStatusAuthLabel(params: {
   activeAgentId: string;
   authMode: ModelAuthDetailMode;
   workspaceDir?: string;
-  sessionEntry?: Pick<SessionEntry, "agentHarnessId" | "agentRuntimeOverride">;
+  sessionEntry?: Pick<SessionEntry, "agentHarnessId" | "agentRuntimeOverride" | "execHost">;
 }): Promise<string> {
   const auth = await resolveAuthLabel(
     params.provider,
@@ -73,6 +73,7 @@ async function resolveStatusAuthLabel(params: {
     modelId: params.modelId,
     config: params.cfg,
     agentId: params.activeAgentId,
+    execHost: params.sessionEntry?.execHost,
   });
   const harnessRuntime = resolveStatusHarnessRuntime({
     sessionEntry: params.sessionEntry,
@@ -319,7 +320,7 @@ export async function maybeHandleModelDirectiveInfo(params: {
   workspaceDir?: string;
   surface?: string;
   sessionEntry?: Pick<SessionEntry, "modelProvider" | "model"> &
-    Partial<Pick<SessionEntry, "agentHarnessId" | "agentRuntimeOverride">>;
+    Partial<Pick<SessionEntry, "agentHarnessId" | "agentRuntimeOverride" | "execHost">>;
 }): Promise<ReplyPayload | undefined> {
   if (!params.directives.hasModelDirective) {
     return undefined;

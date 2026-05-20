@@ -988,6 +988,7 @@ async function agentCommandInternal(
       modelId: model,
       agentId: sessionAgentId,
       sessionKey,
+      execHost: sessionEntry?.execHost,
       workspaceDir,
     });
 
@@ -1004,6 +1005,7 @@ async function agentCommandInternal(
           config: cfg,
           agentId: sessionAgentId,
           sessionKey,
+          execHost: entry.execHost,
         });
         const acceptedAuthProviders = listOpenAIAuthProfileProvidersForAgentRuntime({
           provider: providerForAuthProfileValidation,
@@ -1241,6 +1243,7 @@ async function agentCommandInternal(
           agentDir,
           agentId: sessionAgentId,
           sessionKey: sessionKey ?? sessionId,
+          execHost: sessionEntryForAttempt?.execHost,
           prepareAgentHarnessRuntime: async ({ provider, model, agentHarnessRuntimeOverride }) => {
             await ensureSelectedAgentHarnessPlugin({
               config: cfg,
@@ -1248,6 +1251,7 @@ async function agentCommandInternal(
               modelId: model,
               agentId: sessionAgentId,
               sessionKey,
+              execHost: sessionEntryForAttempt?.execHost,
               agentHarnessRuntimeOverride,
               workspaceDir,
             });

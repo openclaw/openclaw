@@ -76,6 +76,7 @@ export function resolveAvailableAgentHarnessPolicy(params: {
   config?: OpenClawConfig;
   agentId?: string;
   sessionKey?: string;
+  execHost?: string;
   env?: NodeJS.ProcessEnv;
 }): AgentHarnessPolicy {
   return applyAgentHarnessAvailabilityPolicy(resolveConfiguredAgentHarnessPolicy(params));
@@ -112,6 +113,7 @@ export function selectAgentHarness(params: {
   config?: OpenClawConfig;
   agentId?: string;
   sessionKey?: string;
+  execHost?: string;
   agentHarnessId?: string;
   agentHarnessRuntimeOverride?: string;
 }): AgentHarness {
@@ -124,6 +126,7 @@ function selectAgentHarnessDecision(params: {
   config?: OpenClawConfig;
   agentId?: string;
   sessionKey?: string;
+  execHost?: string;
   agentHarnessId?: string;
   agentHarnessRuntimeOverride?: string;
 }): AgentHarnessSelectionDecision {
@@ -219,6 +222,7 @@ export async function runAgentHarnessAttempt(
     config: params.config,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
+    execHost: params.execOverrides?.host,
     agentHarnessId: params.agentHarnessId,
     agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
   });
@@ -447,6 +451,7 @@ export async function maybeCompactAgentHarnessSession(
     modelId: params.model,
     config: params.config,
     sessionKey: params.sessionKey,
+    execHost: params.execOverrides?.host,
   });
   if (!harness.compact) {
     if (harness.id !== "pi") {

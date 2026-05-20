@@ -332,6 +332,7 @@ export async function createModelSelectionState(params: {
       config: cfg,
       agentId: params.agentId,
       sessionKey,
+      execHost: sessionEntry.execHost,
     });
     const acceptedAuthProviders = listOpenAIAuthProfileProvidersForAgentRuntime({
       provider,

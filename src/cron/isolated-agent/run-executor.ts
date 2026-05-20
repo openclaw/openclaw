@@ -1,3 +1,4 @@
+import type { ExecToolDefaults } from "../../agents/bash-tools.exec-types.js";
 import type { BootstrapContextMode } from "../../agents/bootstrap-files.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import type { SkillSnapshot } from "../../agents/skills.js";
@@ -37,6 +38,25 @@ import { isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
 type AgentTurnPayload = Extract<CronJob["payload"], { kind: "agentTurn" }> | null;
 type CronPromptRunResult = Awaited<ReturnType<typeof runCliAgent>>;
+type CronExecOverrides = Pick<
+  ExecToolDefaults,
+  "host" | "notifyOnExit" | "notifyOnExitEmptySuccess"
+>;
+
+function resolveCronExecOverrides(params: {
+  sessionEntry: MutableCronSession["sessionEntry"];
+  suppressExecNotifyOnExit?: boolean;
+}): CronExecOverrides | undefined {
+  const overrides: CronExecOverrides = {};
+  if (params.sessionEntry.execHost) {
+    overrides.host = params.sessionEntry.execHost as CronExecOverrides["host"];
+  }
+  if (params.suppressExecNotifyOnExit) {
+    overrides.notifyOnExit = false;
+    overrides.notifyOnExitEmptySuccess = false;
+  }
+  return Object.keys(overrides).length > 0 ? overrides : undefined;
+}
 type CronEmbeddedRuntime = typeof import("./run-embedded.runtime.js");
 type CronSubagentRegistryRuntime = typeof import("./run-subagent-registry.runtime.js");
 
@@ -165,6 +185,7 @@ export function createCronPromptExecutor(params: {
           modelId: model,
           agentId: params.agentId,
           sessionKey: params.runSessionKey,
+          execHost: params.cronSession.sessionEntry.execHost,
           agentHarnessRuntimeOverride,
           workspaceDir: params.workspaceDir,
         });
@@ -267,12 +288,10 @@ export function createCronPromptExecutor(params: {
           bootstrapContextMode,
           bootstrapContextRunKind: "cron",
           toolsAllow: params.agentPayload?.toolsAllow,
-          execOverrides: params.suppressExecNotifyOnExit
-            ? {
-                notifyOnExit: false,
-                notifyOnExitEmptySuccess: false,
-              }
-            : undefined,
+          execOverrides: resolveCronExecOverrides({
+            sessionEntry: params.cronSession.sessionEntry,
+            suppressExecNotifyOnExit: params.suppressExecNotifyOnExit,
+          }),
           sourceReplyDeliveryMode,
           runId: params.cronSession.sessionEntry.sessionId,
           requireExplicitMessageTarget: params.sourceDelivery.messageTool.requireExplicitTarget,

@@ -107,6 +107,7 @@ export async function compactEmbeddedPiSession(
       config: params.config,
       agentId: agentIds.sessionAgentId,
       sessionKey: params.sessionKey,
+      execHost: params.execOverrides?.host,
     });
     contextTokenBudget = resolveContextWindowInfo({
       cfg: params.config,

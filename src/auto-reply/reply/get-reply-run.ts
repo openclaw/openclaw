@@ -913,6 +913,7 @@ export async function runPreparedReply(
         config: cfg,
         agentId,
         sessionKey: runtimePolicySessionKey,
+        execHost: execOverrides?.host,
       });
   const resolveAcceptedAuthProfileProviders = () =>
     agentHarnessPolicy

@@ -58,6 +58,12 @@ export type CompactEmbeddedPiSessionParams = {
   thinkLevel?: ThinkLevel;
   reasoningLevel?: ReasoningLevel;
   bashElevated?: ExecElevatedDefaults;
+  execOverrides?: {
+    host?: string;
+    security?: string;
+    ask?: string;
+    node?: string;
+  };
   customInstructions?: string;
   tokenBudget?: number;
   force?: boolean;

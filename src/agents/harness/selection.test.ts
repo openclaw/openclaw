@@ -289,6 +289,107 @@ describe("runAgentHarnessAttempt", () => {
     expect(piRunAttempt).not.toHaveBeenCalled();
   });
 
+  it("keeps implicit OpenAI model runs on PI when exec host is pinned to node", async () => {
+    registerSuccessfulCodexHarness();
+    const config = {
+      tools: {
+        exec: {
+          host: "node",
+          node: "clawdad",
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(resolveAgentHarnessPolicy({ provider: "openai", modelId: "gpt-5.4", config })).toEqual({
+      runtime: "pi",
+      runtimeSource: "implicit",
+    });
+
+    const result = await runAgentHarnessAttempt({
+      ...createAttemptParams(config),
+      provider: "openai",
+      modelId: "gpt-5.4",
+    });
+
+    expect(result.sessionIdUsed).toBe("pi");
+    expect(piRunAttempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps implicit OpenAI model runs on PI for session-level node exec overrides", async () => {
+    registerSuccessfulCodexHarness();
+
+    expect(
+      resolveAgentHarnessPolicy({
+        provider: "openai",
+        modelId: "gpt-5.4",
+        execHost: "node",
+      }),
+    ).toEqual({
+      runtime: "pi",
+      runtimeSource: "implicit",
+    });
+
+    const result = await runAgentHarnessAttempt({
+      ...createAttemptParams(),
+      provider: "openai",
+      modelId: "gpt-5.4",
+      execOverrides: { host: "node" },
+    });
+
+    expect(result.sessionIdUsed).toBe("pi");
+    expect(piRunAttempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps implicit OpenAI model runs on PI for sandbox exec placements", async () => {
+    registerSuccessfulCodexHarness();
+
+    expect(
+      resolveAgentHarnessPolicy({
+        provider: "openai",
+        modelId: "gpt-5.4",
+        execHost: "sandbox",
+      }),
+    ).toEqual({
+      runtime: "pi",
+      runtimeSource: "implicit",
+    });
+
+    const result = await runAgentHarnessAttempt({
+      ...createAttemptParams(),
+      provider: "openai",
+      modelId: "gpt-5.4",
+      execOverrides: { host: "sandbox" },
+    });
+
+    expect(result.sessionIdUsed).toBe("pi");
+    expect(piRunAttempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps implicit OpenAI Codex provider runs on PI for node exec placements", async () => {
+    registerSuccessfulCodexHarness();
+
+    expect(
+      resolveAgentHarnessPolicy({
+        provider: "openai-codex",
+        modelId: "gpt-5.5",
+        execHost: "node",
+      }),
+    ).toEqual({
+      runtime: "pi",
+      runtimeSource: "implicit",
+    });
+
+    const result = await runAgentHarnessAttempt({
+      ...createAttemptParams(),
+      provider: "openai-codex",
+      modelId: "gpt-5.5",
+      execOverrides: { host: "node" },
+    });
+
+    expect(result.sessionIdUsed).toBe("pi");
+    expect(piRunAttempt).toHaveBeenCalledTimes(1);
+  });
+
   it("falls back to PI when the implicit OpenAI Codex harness is unavailable", async () => {
     expect(resolveAgentHarnessPolicy({ provider: "openai", modelId: "gpt-5.4" })).toEqual({
       runtime: "codex",

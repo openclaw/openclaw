@@ -258,6 +258,7 @@ function resolveFollowupContextConfigProvider(params: {
       params.sessionKey ??
       params.followupRun.run.runtimePolicySessionKey ??
       params.followupRun.run.sessionKey,
+    execHost: params.followupRun.run.execOverrides?.host ?? matchingSessionEntry?.execHost,
   });
   return resolveContextConfigProviderForRuntime({
     provider,
@@ -758,6 +759,9 @@ export async function runPreflightCompactionIfNeeded(params: {
     agentHarnessId:
       entry.sessionId === params.followupRun.run.sessionId ? entry.agentHarnessId : undefined,
     thinkLevel: params.followupRun.run.thinkLevel,
+    execOverrides:
+      params.followupRun.run.execOverrides ??
+      (entry.execHost ? { host: entry.execHost } : undefined),
     bashElevated: params.followupRun.run.bashElevated,
     trigger: "budget",
     currentTokenCount: tokenCountForCompaction ?? freshPersistedTokens,
@@ -1077,6 +1081,7 @@ export async function runMemoryFlushIfNeeded(params: {
             params.runtimePolicySessionKey ??
             params.followupRun.run.runtimePolicySessionKey ??
             params.sessionKey,
+          execHost: params.followupRun.run.execOverrides?.host,
           agentHarnessRuntimeOverride,
           workspaceDir: params.followupRun.run.workspaceDir,
         });

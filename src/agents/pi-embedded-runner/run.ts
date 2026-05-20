@@ -608,6 +608,7 @@ export async function runEmbeddedPiAgent(
         config: params.config,
         agentId: params.agentId,
         sessionKey: params.sessionKey,
+        execHost: params.execOverrides?.host,
         agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
         workspaceDir: resolvedWorkspace,
       });
@@ -617,6 +618,7 @@ export async function runEmbeddedPiAgent(
         config: params.config,
         agentId: params.agentId,
         sessionKey: params.sessionKey,
+        execHost: params.execOverrides?.host,
         agentHarnessId: params.agentHarnessId,
         agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
       });

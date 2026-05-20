@@ -450,6 +450,7 @@ export async function compactEmbeddedPiSessionDirect(
           modelId: model,
           agentId: fallbackAgentId,
           sessionKey: fallbackSessionKey,
+          execHost: params.execOverrides?.host,
           agentHarnessRuntimeOverride,
           workspaceDir: params.workspaceDir,
         });
@@ -676,6 +677,7 @@ async function compactEmbeddedPiSessionDirectOnce(
       config: params.config,
       agentId: effectiveSkillAgentId,
       sessionKey: params.sessionKey,
+      execHost: params.execOverrides?.host,
     });
     const ctxInfo = resolveContextWindowInfo({
       cfg: params.config,

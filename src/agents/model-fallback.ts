@@ -101,6 +101,7 @@ type ModelFallbackRuntimeContext = {
   cfg?: OpenClawConfig;
   agentId?: string;
   sessionKey?: string;
+  execHost?: string;
   resolveAgentHarnessRuntimeOverride?: (provider: string, model: string) => string | undefined;
   prepareAgentHarnessRuntime?: (params: {
     provider: string;
@@ -368,6 +369,7 @@ async function assertModelFallbackCandidateHarnessAvailable(
     config: params.cfg,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
+    execHost: params.execHost,
   });
   const agentRuntime = agentRuntimeOverride ?? harnessPolicy.runtime;
   const agentRuntimeSource = agentRuntimeOverride ? "model" : harnessPolicy.runtimeSource;
@@ -911,6 +913,7 @@ export async function runWithModelFallback<T>(
     sessionId?: string;
     agentId?: string;
     sessionKey?: string;
+    execHost?: string;
     resolveAgentHarnessRuntimeOverride?: (provider: string, model: string) => string | undefined;
     prepareAgentHarnessRuntime?: (params: {
       provider: string;

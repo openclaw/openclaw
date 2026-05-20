@@ -146,6 +146,7 @@ async function resolveStatusHarnessId(params: {
       config: params.cfg,
       agentId: params.agentId,
       sessionKey: params.sessionKey,
+      execHost: params.sessionEntry?.execHost,
       agentHarnessId: params.sessionEntry?.agentHarnessId,
     });
     const id = normalizeOptionalLowercaseString(selected.id);

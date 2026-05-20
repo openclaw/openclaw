@@ -1626,6 +1626,7 @@ export async function runAgentTurnWithFallback(params: {
             modelId: model,
             agentId: params.followupRun.run.agentId,
             sessionKey: params.followupRun.run.runtimePolicySessionKey ?? params.sessionKey,
+            execHost: params.followupRun.run.execOverrides?.host,
             agentHarnessRuntimeOverride,
             workspaceDir: params.followupRun.run.workspaceDir,
           });
@@ -1840,6 +1841,7 @@ export async function runAgentTurnWithFallback(params: {
                 config: runtimeConfig,
                 agentId: params.followupRun.run.agentId,
                 sessionKey: params.followupRun.run.runtimePolicySessionKey ?? params.sessionKey,
+                execHost: params.followupRun.run.execOverrides?.host,
               });
           const embeddedRunProvider = resolveOpenAIRuntimeProviderForPi({
             provider,

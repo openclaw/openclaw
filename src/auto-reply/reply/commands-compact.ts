@@ -89,6 +89,7 @@ function resolveManualCompactContextTokenBudget(params: {
   model?: string;
   agentId: string;
   sessionKey: string;
+  execHost?: string;
   liveContextTokens?: number;
   persistedContextTokens?: number;
 }): number | undefined {
@@ -111,6 +112,7 @@ function resolveManualCompactContextTokenBudget(params: {
     config: params.cfg,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
+    execHost: params.execHost,
   });
   const contextConfigProvider = resolveContextConfigProviderForRuntime({
     provider,
@@ -223,6 +225,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     model: params.model,
     agentId: sessionAgentId,
     sessionKey: params.sessionKey,
+    execHost: targetSessionEntry.execHost,
     liveContextTokens: params.contextTokens,
     persistedContextTokens: targetSessionEntry.contextTokens,
   });
@@ -257,6 +260,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     agentHarnessId:
       targetSessionEntry.sessionId === sessionId ? targetSessionEntry.agentHarnessId : undefined,
     thinkLevel: params.resolvedThinkLevel ?? (await params.resolveDefaultThinkingLevel()),
+    execOverrides: targetSessionEntry.execHost ? { host: targetSessionEntry.execHost } : undefined,
     bashElevated: {
       enabled: false,
       allowed: false,

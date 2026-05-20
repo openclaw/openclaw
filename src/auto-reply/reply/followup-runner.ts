@@ -549,6 +549,7 @@ export function createFollowupRunner(params: {
               modelId: model,
               agentId: run.agentId,
               sessionKey: run.runtimePolicySessionKey ?? replySessionKey,
+              execHost: run.execOverrides?.host,
               agentHarnessRuntimeOverride,
               workspaceDir: run.workspaceDir,
             });

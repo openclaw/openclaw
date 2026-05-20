@@ -255,6 +255,7 @@ async function resolveRuntimeModel(params: {
         config: params.cfg,
         agentId: params.agentId,
         sessionKey: params.sessionKey,
+        execHost: params.sessionEntry?.execHost,
       }).runtime,
       config: params.cfg,
     }),
@@ -322,6 +323,7 @@ export async function runBtwSideQuestion(
     config: params.cfg,
     agentId: sessionAgentId,
     sessionKey: params.sessionKey,
+    execHost: params.sessionEntry.execHost,
   });
   if (harness.runSideQuestion) {
     const { model, authProfileId, authProfileIdSource } = await resolveRuntimeModel({

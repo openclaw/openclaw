@@ -41,7 +41,7 @@ const MODELS_ADD_DEPRECATED_TEXT =
   "⚠️ /models add is deprecated. Use /models to browse providers and /model to switch models.";
 
 type ModelsCommandSessionEntry = Partial<
-  Pick<SessionEntry, "authProfileOverride" | "modelProvider" | "model">
+  Pick<SessionEntry, "authProfileOverride" | "modelProvider" | "model" | "execHost">
 >;
 
 export type ModelsProviderData = {
@@ -397,6 +397,7 @@ function resolveProviderLabel(params: {
     config: params.cfg,
     provider: params.provider,
     agentId: params.agentId,
+    execHost: params.sessionEntry?.execHost,
   });
   const acceptedProviderIds = listOpenAIAuthProfileProvidersForAgentRuntime({
     provider: params.provider,

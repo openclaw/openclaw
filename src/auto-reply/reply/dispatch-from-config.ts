@@ -545,6 +545,7 @@ const resolveHarnessSourceVisibleRepliesDefault = (params: {
         config: params.cfg,
         agentId: params.sessionAgentId,
         sessionKey: params.sessionKey,
+        execHost: params.entry?.execHost,
         agentHarnessRuntimeOverride,
       });
       return harness.deliveryDefaults?.sourceVisibleReplies;

@@ -1836,6 +1836,7 @@ export function buildGatewaySessionRow(params: {
     provider: rowModelProvider,
     model: rowModel,
     sessionKey: key,
+    execHost: entry?.execHost,
     acpRuntime: entry?.acp != null,
     acpBackend: entry?.acp?.backend,
   });

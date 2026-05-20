@@ -20,6 +20,7 @@ import { sanitizeForLog } from "../../terminal/ansi.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import { ensureAuthProfileStore } from "../auth-profiles/store.js";
+import type { ExecToolDefaults } from "../bash-tools.exec-types.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../bootstrap-budget.js";
 import { runCliAgent } from "../cli-runner.js";
 import { getCliSessionBinding, setCliSessionBinding } from "../cli-session.js";
@@ -82,6 +83,21 @@ const ACP_TRANSCRIPT_USAGE = {
     total: 0,
   },
 } as const;
+
+type AgentExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
+
+function resolveSessionExecOverrides(
+  sessionEntry: SessionEntry | undefined,
+): AgentExecOverrides | undefined {
+  const host = sessionEntry?.execHost as AgentExecOverrides["host"] | undefined;
+  const security = sessionEntry?.execSecurity as AgentExecOverrides["security"] | undefined;
+  const ask = sessionEntry?.execAsk as AgentExecOverrides["ask"] | undefined;
+  const node = sessionEntry?.execNode;
+  if (!host && !security && !ask && !node) {
+    return undefined;
+  }
+  return { host, security, ask, node };
+}
 
 type TranscriptUsage = {
   input?: number;
@@ -404,6 +420,8 @@ export function runAgentAttempt(params: {
   onUserMessagePersisted?: (message: Extract<AgentMessage, { role: "user" }>) => void;
 }) {
   const isRawModelRun = params.opts.modelRun === true || params.opts.promptMode === "none";
+  const execOverrides =
+    params.opts.execOverrides ?? resolveSessionExecOverrides(params.sessionEntry);
   const claudeCliFallbackPrelude =
     !isRawModelRun &&
     params.isFallbackRetry &&
@@ -445,6 +463,7 @@ export function runAgentAttempt(params: {
         config: params.cfg,
         agentId: params.sessionAgentId,
         sessionKey: params.sessionKey ?? params.sessionId,
+        execHost: execOverrides?.host,
       });
   const harnessAuthSelection = resolveHarnessAuthProfileSelection({
     config: params.cfg,
@@ -666,6 +685,7 @@ export function runAgentAttempt(params: {
     fastMode: params.fastMode,
     verboseLevel: params.resolvedVerboseLevel,
     bashElevated: params.opts.bashElevated,
+    execOverrides,
     timeoutMs: params.timeoutMs,
     runId: params.runId,
     lane: params.opts.lane,
