@@ -527,6 +527,85 @@ describe("gateway server cron", () => {
     }
   });
 
+  test("cron.add preserves legacy top-level array stores (#60799)", async () => {
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-legacy-array-",
+      cronEnabled: false,
+    });
+    const storePath = testState.cronStorePath;
+    expect(typeof storePath).toBe("string");
+    const now = Date.parse("2026-05-20T08:00:00.000Z");
+    await fs.writeFile(
+      storePath as string,
+      JSON.stringify(
+        [
+          {
+            id: "gw-legacy-alpha",
+            name: "gateway legacy alpha",
+            enabled: true,
+            createdAtMs: now - 120_000,
+            updatedAtMs: now - 120_000,
+            schedule: { kind: "every", everyMs: 3_600_000 },
+            sessionTarget: "main",
+            wakeMode: "next-heartbeat",
+            payload: { kind: "systemEvent", text: "alpha" },
+            state: { nextRunAtMs: now + 3_600_000 },
+          },
+          {
+            id: "gw-legacy-beta",
+            name: "gateway legacy beta",
+            enabled: true,
+            createdAtMs: now - 60_000,
+            updatedAtMs: now - 60_000,
+            schedule: { kind: "every", everyMs: 7_200_000 },
+            sessionTarget: "main",
+            wakeMode: "next-heartbeat",
+            payload: { kind: "systemEvent", text: "beta" },
+            state: { nextRunAtMs: now + 7_200_000 },
+          },
+        ],
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    const cronState = await createDirectCronState();
+
+    try {
+      const addRes = await directCronReq(cronState, "cron.add", {
+        name: "gateway new after upgrade",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 10_800_000 },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "new" },
+      });
+      const newJobId = expectCronJobIdFromResponse(addRes);
+
+      const persisted = JSON.parse(await fs.readFile(storePath as string, "utf-8")) as {
+        version?: unknown;
+        jobs?: Array<Record<string, unknown>>;
+      };
+      expect(persisted.version).toBe(1);
+      expect(persisted.jobs?.map((job) => job.id)).toEqual([
+        "gw-legacy-alpha",
+        "gw-legacy-beta",
+        newJobId,
+      ]);
+
+      const listRes = await directCronReq(cronState, "cron.list", { includeDisabled: true });
+      expect(listRes.ok).toBe(true);
+      const listedJobs = (listRes.payload as { jobs?: Array<Record<string, unknown>> } | null)
+        ?.jobs;
+      expect(listedJobs?.map((job) => job.id)).toEqual(
+        expect.arrayContaining(["gw-legacy-alpha", "gw-legacy-beta", newJobId]),
+      );
+      expect(listedJobs).toHaveLength(3);
+    } finally {
+      await cleanupCronTestRun({ cronState, prevSkipCron });
+    }
+  });
+
   test("handles cron patch merge and validation semantics", { timeout: 45_000 }, async () => {
     const { prevSkipCron } = await setupCronTestRun({
       tempPrefix: "openclaw-gw-cron-patch-",
