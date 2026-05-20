@@ -149,7 +149,11 @@ import {
   type CodexAppServerThreadBinding,
 } from "./session-binding.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
-import { clearSharedCodexAppServerClientIfCurrent } from "./shared-client.js";
+import {
+  createIsolatedCodexAppServerClient,
+  retainSharedCodexAppServerClient,
+  retireSharedCodexAppServerClient,
+} from "./shared-client.js";
 import {
   areCodexDynamicToolFingerprintsCompatible,
   buildDeveloperInstructions,
@@ -799,6 +803,7 @@ export async function runCodexAppServerAttempt(
   } = {},
 ): Promise<EmbeddedRunAttemptResult> {
   const attemptStartedAt = Date.now();
+  const hasCustomClientFactory = options.clientFactory !== undefined;
   const attemptClientFactory = options.clientFactory ?? defaultCodexAppServerClientFactory;
   const pluginConfig = readCodexPluginConfig(options.pluginConfig);
   const configuredAppServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
@@ -1162,6 +1167,8 @@ export async function runCodexAppServerAttempt(
   });
   let client: CodexAppServerClient;
   let thread: CodexAppServerThreadLifecycleBinding;
+  let clientIsolated = false;
+  let releaseSharedClientLease: (() => void) | undefined;
   let trajectoryEndRecorded = false;
   let nativeHookRelay: NativeHookRelayRegistrationHandle | undefined;
   let startupClientForCleanup: CodexAppServerClient | undefined;
@@ -1254,18 +1261,33 @@ export async function runCodexAppServerAttempt(
             approvalPolicy: withMcpElicitationsApprovalPolicy(appServer.approvalPolicy),
           }
         : appServer;
-    ({ client, thread } = await withCodexStartupTimeout({
+    ({
+      client,
+      thread,
+      isolated: clientIsolated,
+    } = await withCodexStartupTimeout({
       timeoutMs: startupTimeoutMs,
       signal: runAbortController.signal,
       operation: async () => {
         let attemptedClient: CodexAppServerClient | undefined;
+        let attemptedClientIsolated = false;
+        let isolateAfterStartupClose = false;
         const startupAttempt = async () => {
-          const startupClient = await attemptClientFactory(
-            appServer.start,
-            startupAuthProfileId,
-            agentDir,
-            params.config,
-          );
+          const useIsolatedRetry = isolateAfterStartupClose && !hasCustomClientFactory;
+          attemptedClientIsolated = useIsolatedRetry;
+          const startupClient = useIsolatedRetry
+            ? await createIsolatedCodexAppServerClient({
+                startOptions: appServer.start,
+                authProfileId: startupAuthProfileId,
+                agentDir,
+                config: params.config,
+              })
+            : await attemptClientFactory(
+                appServer.start,
+                startupAuthProfileId,
+                agentDir,
+                params.config,
+              );
           attemptedClient = startupClient;
           startupClientForCleanup = startupClient;
           await ensureCodexComputerUse({
@@ -1312,7 +1334,7 @@ export async function runCodexAppServerAttempt(
             }) satisfies Parameters<typeof startOrResumeThread>[0];
           restartContextEngineCodexThread = () => startOrResumeThread(buildThreadLifecycleParams());
           const startupThread = await startOrResumeThread(buildThreadLifecycleParams());
-          return { client: startupClient, thread: startupThread };
+          return { client: startupClient, thread: startupThread, isolated: useIsolatedRetry };
         };
         for (
           let attempt = 1;
@@ -1329,30 +1351,58 @@ export async function runCodexAppServerAttempt(
               throw error;
             }
             const failedClient = attemptedClient;
-            const clearedSharedClient = clearSharedCodexAppServerClientIfCurrent(failedClient);
+            const retirement = retireCodexAppServerClient(failedClient);
             if (startupClientForCleanup === failedClient) {
               startupClientForCleanup = undefined;
             }
             attemptedClient = undefined;
+            isolateAfterStartupClose = true;
             if (attempt >= CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS) {
+              emitCodexAppServerEvent(params, {
+                stream: "codex_app_server.lifecycle",
+                data: {
+                  phase: "startup_retries_exhausted",
+                  attempt,
+                  maxAttempts: CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS,
+                  failureClass: "app_server_client_closed",
+                  isolatedRetry: attemptedClientIsolated,
+                  ...retirement,
+                },
+              });
               embeddedAgentLog.warn(
                 "codex app-server connection closed during startup; retries exhausted",
                 {
                   attempt,
                   maxAttempts: CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS,
-                  clearedSharedClient,
+                  isolatedRetry: attemptedClientIsolated,
+                  ...retirement,
                   error: formatErrorMessage(error),
                 },
               );
               throw error;
             }
+            emitCodexAppServerEvent(params, {
+              stream: "codex_app_server.lifecycle",
+              data: {
+                phase: "startup_retry",
+                attempt,
+                nextAttempt: attempt + 1,
+                maxAttempts: CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS,
+                failureClass: "app_server_client_closed",
+                nextAttemptIsolated: !hasCustomClientFactory,
+                isolatedRetry: attemptedClientIsolated,
+                ...retirement,
+              },
+            });
             embeddedAgentLog.warn(
               "codex app-server connection closed during startup; restarting app-server and retrying",
               {
                 attempt,
                 nextAttempt: attempt + 1,
                 maxAttempts: CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS,
-                clearedSharedClient,
+                nextAttemptIsolated: !hasCustomClientFactory,
+                isolatedRetry: attemptedClientIsolated,
+                ...retirement,
                 error: formatErrorMessage(error),
               },
             );
@@ -1361,6 +1411,9 @@ export async function runCodexAppServerAttempt(
         throw new Error("codex app-server startup retry loop exited unexpectedly");
       },
     }));
+    releaseSharedClientLease = clientIsolated
+      ? () => client.close()
+      : retainSharedCodexAppServerClient(client);
     startupClientForCleanup = undefined;
     emitCodexAppServerEvent(params, {
       stream: "codex_app_server.lifecycle",
@@ -1368,8 +1421,9 @@ export async function runCodexAppServerAttempt(
     });
   } catch (error) {
     nativeHookRelay?.unregister();
-    clearSharedCodexAppServerClientIfCurrent(startupClientForCleanup);
+    retireCodexAppServerClient(startupClientForCleanup);
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
+    releaseSharedClientLease?.();
     throw error;
   }
   trajectoryRecorder?.recordEvent("session.started", {
@@ -2601,10 +2655,21 @@ export async function runCodexAppServerAttempt(
       timeoutMs: shouldRetireClient ? CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS : undefined,
     });
     if (shouldRetireClient) {
-      retireCodexAppServerClientAfterTimedOutTurn(client, {
+      const retirement = retireCodexAppServerClientAfterTimedOutTurn(client, {
         threadId: thread.threadId,
         turnId: activeTurnId,
         reason: String(runAbortController.signal.reason ?? "timeout"),
+      });
+      emitCodexAppServerEvent(params, {
+        stream: "codex_app_server.lifecycle",
+        data: {
+          phase: "turn_timeout_client_retired",
+          threadId: thread.threadId,
+          turnId: activeTurnId,
+          reason: String(runAbortController.signal.reason ?? "timeout"),
+          timeoutMs: params.timeoutMs,
+          ...retirement,
+        },
       });
     }
     resolveCompletion?.();
@@ -2805,6 +2870,7 @@ export async function runCodexAppServerAttempt(
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
     steeringQueue?.cancel();
     clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
+    releaseSharedClientLease?.();
   }
 }
 
@@ -3245,6 +3311,19 @@ function interruptCodexTurnBestEffort(
   }
 }
 
+function retireCodexAppServerClient(client: CodexAppServerClient | undefined): {
+  clearedSharedClient: boolean;
+  closedNonCurrentClient: boolean;
+  deferredSharedClientRetirement: boolean;
+} {
+  const retirement = retireSharedCodexAppServerClient(client);
+  return {
+    clearedSharedClient: retirement.clearedSharedClient,
+    closedNonCurrentClient: !retirement.clearedSharedClient && retirement.closedClient,
+    deferredSharedClientRetirement: retirement.deferredSharedClientRetirement,
+  };
+}
+
 function retireCodexAppServerClientAfterTimedOutTurn(
   client: CodexAppServerClient,
   params: {
@@ -3252,20 +3331,19 @@ function retireCodexAppServerClientAfterTimedOutTurn(
     turnId: string;
     reason: string;
   },
-): void {
-  const clearedSharedClient = clearSharedCodexAppServerClientIfCurrent(client);
-  if (!clearedSharedClient) {
-    const close = (client as { close?: () => void }).close;
-    if (typeof close === "function") {
-      close.call(client);
-    }
-  }
+): {
+  clearedSharedClient: boolean;
+  closedNonCurrentClient: boolean;
+  deferredSharedClientRetirement: boolean;
+} {
+  const retirement = retireCodexAppServerClient(client);
   embeddedAgentLog.warn("codex app-server client retired after timed-out turn", {
     threadId: params.threadId,
     turnId: params.turnId,
     reason: params.reason,
-    clearedSharedClient,
+    ...retirement,
   });
+  return retirement;
 }
 
 type DynamicToolBuildParams = {

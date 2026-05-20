@@ -20,11 +20,15 @@ type SharedCodexAppServerClientEntry = {
 
 type SharedCodexAppServerClientState = {
   clients: Map<string, SharedCodexAppServerClientEntry>;
+  leases?: WeakMap<CodexAppServerClient, number>;
+  retireWhenIdle?: WeakSet<CodexAppServerClient>;
 };
 
 type LegacySharedCodexAppServerClientState = Partial<SharedCodexAppServerClientEntry> & {
   key?: string;
   clients?: unknown;
+  leases?: WeakMap<CodexAppServerClient, number>;
+  retireWhenIdle?: WeakSet<CodexAppServerClient>;
 };
 
 const SHARED_CODEX_APP_SERVER_CLIENT_STATE = Symbol.for("openclaw.codexAppServerClientState");
@@ -46,7 +50,11 @@ function getSharedCodexAppServerClientState(): SharedCodexAppServerClientState {
       clearSharedClientEntryIfCurrent(legacyKey, closedClient),
     );
   }
-  const nextState: SharedCodexAppServerClientState = { clients };
+  const nextState: SharedCodexAppServerClientState = {
+    clients,
+    leases: legacyState?.leases,
+    retireWhenIdle: legacyState?.retireWhenIdle,
+  };
   globalState[SHARED_CODEX_APP_SERVER_CLIENT_STATE] = nextState;
   return nextState;
 }
@@ -190,12 +198,16 @@ export async function createIsolatedCodexAppServerClient(options?: {
 export function resetSharedCodexAppServerClientForTests(): void {
   const state = getSharedCodexAppServerClientState();
   state.clients.clear();
+  state.leases = new WeakMap();
+  state.retireWhenIdle = new WeakSet();
 }
 
 export function clearSharedCodexAppServerClient(): void {
   const state = getSharedCodexAppServerClientState();
   const clients = collectSharedClients(state);
   state.clients.clear();
+  state.leases = new WeakMap();
+  state.retireWhenIdle = new WeakSet();
   for (const client of clients) {
     client.close();
   }
@@ -211,6 +223,8 @@ export function clearSharedCodexAppServerClientIfCurrent(
   for (const [key, entry] of state.clients) {
     if (entry.client === client) {
       state.clients.delete(key);
+      state.leases?.delete(client);
+      state.retireWhenIdle?.delete(client);
       client.close();
       return true;
     }
@@ -232,11 +246,89 @@ export async function clearSharedCodexAppServerClientIfCurrentAndWait(
   for (const [key, entry] of state.clients) {
     if (entry.client === client) {
       state.clients.delete(key);
+      state.leases?.delete(client);
+      state.retireWhenIdle?.delete(client);
       await client.closeAndWait(options);
       return true;
     }
   }
   return false;
+}
+
+export function retainSharedCodexAppServerClient(
+  client: CodexAppServerClient | undefined,
+): () => void {
+  if (!client) {
+    return () => undefined;
+  }
+  const state = getSharedCodexAppServerClientState();
+  if (!hasSharedClientEntry(state, client)) {
+    return () => undefined;
+  }
+  state.leases ??= new WeakMap();
+  state.retireWhenIdle ??= new WeakSet();
+  state.leases.set(client, (state.leases.get(client) ?? 0) + 1);
+  let released = false;
+  return () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    const currentCount = state.leases?.get(client) ?? 0;
+    if (currentCount <= 1) {
+      state.leases?.delete(client);
+      if (state.retireWhenIdle?.has(client)) {
+        state.retireWhenIdle.delete(client);
+        closeCodexAppServerClientIfAvailable(client);
+      }
+      return;
+    }
+    state.leases?.set(client, currentCount - 1);
+  };
+}
+
+export function retireSharedCodexAppServerClient(client: CodexAppServerClient | undefined): {
+  clearedSharedClient: boolean;
+  closedClient: boolean;
+  deferredSharedClientRetirement: boolean;
+} {
+  if (!client) {
+    return {
+      clearedSharedClient: false,
+      closedClient: false,
+      deferredSharedClientRetirement: false,
+    };
+  }
+  const state = getSharedCodexAppServerClientState();
+  const leaseCount = state.leases?.get(client) ?? 0;
+  const deferClose = leaseCount > 0;
+  const clearedSharedClient = deleteSharedClientEntries(state, client);
+  if (deferClose) {
+    state.retireWhenIdle ??= new WeakSet();
+    state.retireWhenIdle.add(client);
+    return {
+      clearedSharedClient,
+      closedClient: false,
+      deferredSharedClientRetirement: true,
+    };
+  }
+  state.leases?.delete(client);
+  state.retireWhenIdle?.delete(client);
+  const closedClient = closeCodexAppServerClientIfAvailable(client);
+  return {
+    clearedSharedClient,
+    closedClient,
+    deferredSharedClientRetirement: false,
+  };
+}
+
+function closeCodexAppServerClientIfAvailable(client: CodexAppServerClient): boolean {
+  const close = (client as { close?: () => void }).close;
+  if (typeof close !== "function") {
+    return false;
+  }
+  close.call(client);
+  return true;
 }
 
 export async function clearSharedCodexAppServerClientAndWait(options?: {
@@ -246,6 +338,8 @@ export async function clearSharedCodexAppServerClientAndWait(options?: {
   const state = getSharedCodexAppServerClientState();
   const clients = collectSharedClients(state);
   state.clients.clear();
+  state.leases = new WeakMap();
+  state.retireWhenIdle = new WeakSet();
   await Promise.all(clients.map((client) => client.closeAndWait(options)));
 }
 
@@ -267,6 +361,10 @@ function clearSharedClientEntry(key: string, entry: SharedCodexAppServerClientEn
     return;
   }
   state.clients.delete(key);
+  if (entry.client) {
+    state.leases?.delete(entry.client);
+    state.retireWhenIdle?.delete(entry.client);
+  }
   entry.client?.close();
 }
 
@@ -275,7 +373,35 @@ function clearSharedClientEntryIfCurrent(key: string, client: CodexAppServerClie
   const entry = state.clients.get(key);
   if (entry?.client === client) {
     state.clients.delete(key);
+    state.leases?.delete(client);
+    state.retireWhenIdle?.delete(client);
   }
+}
+
+function hasSharedClientEntry(
+  state: SharedCodexAppServerClientState,
+  client: CodexAppServerClient,
+): boolean {
+  for (const entry of state.clients.values()) {
+    if (entry.client === client) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function deleteSharedClientEntries(
+  state: SharedCodexAppServerClientState,
+  client: CodexAppServerClient,
+): boolean {
+  let deleted = false;
+  for (const [key, entry] of state.clients) {
+    if (entry.client === client) {
+      state.clients.delete(key);
+      deleted = true;
+    }
+  }
+  return deleted;
 }
 
 function collectSharedClients(state: SharedCodexAppServerClientState): CodexAppServerClient[] {
