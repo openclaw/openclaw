@@ -766,7 +766,7 @@ async function resolveExtraBootstrapPatternPaths(
     try {
       const matches: string[] = [];
       for await (const match of fs.glob(pattern, { cwd: workspaceDir })) {
-        matches.push(String(match));
+        matches.push(match);
       }
       return matches;
     } catch {
