@@ -17,6 +17,7 @@ import {
   logMessageQueued,
   logSessionStateChange,
 } from "../../logging/diagnostic.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   ACTIVE_EMBEDDED_RUNS,
@@ -100,6 +101,110 @@ export function formatEmbeddedPiQueueFailureSummary(
   const errorPart = outcome.errorMessage ? ` error=${outcome.errorMessage}` : "";
   return `queue_message_failed reason=${outcome.reason} sessionId=${outcome.sessionId} gatewayHealth=${outcome.gatewayHealth}${errorPart}`;
 }
+
+function resolveSessionKeyForActiveRun(sessionId: string): string | undefined {
+  for (const [sessionKey, activeSessionId] of ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY) {
+    if (activeSessionId === sessionId) {
+      return sessionKey;
+    }
+  }
+  return undefined;
+}
+
+function readQueueDepth(handle: EmbeddedPiQueueHandle): number {
+  const value = handle.getQueueDepth?.();
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0;
+}
+
+async function runEmbeddedQueueBeforeEnqueueHooks(params: {
+  sessionId: string;
+  handle: EmbeddedPiQueueHandle;
+  text: string;
+}): Promise<
+  | {
+      status: "ok";
+      text: string;
+      depthBefore: number;
+      sessionKey?: string;
+    }
+  | {
+      status: "blocked";
+      depthBefore: number;
+      reason?: string;
+      sessionKey?: string;
+    }
+> {
+  const hookRunner = getGlobalHookRunner();
+  const depthBefore = readQueueDepth(params.handle);
+  const sessionKey = resolveSessionKeyForActiveRun(params.sessionId);
+  if (!hookRunner?.hasHooks("queue_before_enqueue")) {
+    return { status: "ok", text: params.text, depthBefore, sessionKey };
+  }
+
+  const result = await hookRunner.runQueueBeforeEnqueue(
+    {
+      queueKey: sessionKey ?? params.sessionId,
+      queueMode: "steer",
+      depthBefore,
+      prompt: params.text,
+      sessionId: params.sessionId,
+      ...(sessionKey ? { sessionKey } : {}),
+      originatingChannel: "embedded_run",
+    },
+    {
+      sessionId: params.sessionId,
+      sessionKey,
+      channelId: "embedded_run",
+    },
+  );
+  if (result?.block === true) {
+    return {
+      status: "blocked",
+      depthBefore,
+      sessionKey,
+      reason: result.blockReason,
+    };
+  }
+  return {
+    status: "ok",
+    text: normalizeOptionalString(result?.prompt) ?? params.text,
+    depthBefore,
+    sessionKey,
+  };
+}
+
+function runEmbeddedQueueAfterEnqueueHooks(params: {
+  sessionId: string;
+  handle: EmbeddedPiQueueHandle;
+  text: string;
+  depthBefore: number;
+  enqueued: boolean;
+  sessionKey?: string;
+}): void {
+  const hookRunner = getGlobalHookRunner();
+  if (!hookRunner?.hasHooks("queue_after_enqueue")) {
+    return;
+  }
+  void hookRunner.runQueueAfterEnqueue(
+    {
+      queueKey: params.sessionKey ?? params.sessionId,
+      queueMode: "steer",
+      depthBefore: params.depthBefore,
+      depthAfter: readQueueDepth(params.handle),
+      enqueued: params.enqueued,
+      prompt: params.text,
+      sessionId: params.sessionId,
+      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+      originatingChannel: "embedded_run",
+    },
+    {
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      channelId: "embedded_run",
+    },
+  );
+}
+
 function setActiveRunSessionKey(sessionKey: string | undefined, sessionId: string): void {
   const normalizedSessionKey = sessionKey?.trim();
   if (!normalizedSessionKey) {
@@ -181,10 +286,39 @@ export async function queueEmbeddedPiMessageWithOutcomeAsync(
     return prepared.outcome;
   }
   try {
+    const queueHookResult = await runEmbeddedQueueBeforeEnqueueHooks({
+      sessionId,
+      handle: prepared.handle,
+      text,
+    });
+    if (queueHookResult.status === "blocked") {
+      runEmbeddedQueueAfterEnqueueHooks({
+        sessionId,
+        handle: prepared.handle,
+        text,
+        depthBefore: queueHookResult.depthBefore,
+        enqueued: false,
+        sessionKey: queueHookResult.sessionKey,
+      });
+      return createQueueFailureOutcome(
+        sessionId,
+        "runtime_rejected",
+        queueHookResult.reason ?? "blocked by queue_before_enqueue hook",
+      );
+    }
+    text = queueHookResult.text;
     const enqueuedAtMs = Date.now();
     await prepared.handle.queueMessage(text, options ?? { steeringMode: "all" });
     const deliveredAtMs = options?.waitForTranscriptCommit ? Date.now() : undefined;
     logMessageQueued({ sessionId, source: "pi-embedded-runner" });
+    runEmbeddedQueueAfterEnqueueHooks({
+      sessionId,
+      handle: prepared.handle,
+      text,
+      depthBefore: queueHookResult.depthBefore,
+      enqueued: true,
+      sessionKey: queueHookResult.sessionKey,
+    });
     return {
       queued: true,
       sessionId,

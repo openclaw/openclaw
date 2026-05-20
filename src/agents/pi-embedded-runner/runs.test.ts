@@ -1,10 +1,11 @@
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { diagnosticLogger } from "../../logging/diagnostic.js";
 import {
   testing as replyRunTesting,
   createReplyOperation,
 } from "../../auto-reply/reply/reply-run-registry.js";
+import { diagnosticLogger } from "../../logging/diagnostic.js";
+import * as hookRunnerGlobal from "../../plugins/hook-runner-global.js";
 import {
   testing,
   abortAndDrainEmbeddedPiRun,
@@ -192,6 +193,102 @@ describe("pi-embedded runner run registry", () => {
     });
     expect(formatEmbeddedPiQueueFailureSummary(outcome)).toBe(
       "queue_message_failed reason=runtime_rejected sessionId=session-rejected gatewayHealth=live error=cannot steer a compact turn",
+    );
+  });
+
+  it("runs queue hooks for async active embedded steering", async () => {
+    const queueMessage = vi.fn(async () => {});
+    const beforeHook = vi.fn(async () => ({ prompt: "rewritten follow-up" }));
+    const afterHook = vi.fn(async () => {});
+    vi.spyOn(hookRunnerGlobal, "getGlobalHookRunner").mockReturnValue({
+      hasHooks: (hookName: string) =>
+        hookName === "queue_before_enqueue" || hookName === "queue_after_enqueue",
+      runQueueBeforeEnqueue: beforeHook,
+      runQueueAfterEnqueue: afterHook,
+    } as never);
+
+    setActiveEmbeddedRun(
+      "session-hooked",
+      {
+        ...createRunHandle(),
+        getQueueDepth: () => 2,
+        queueMessage,
+      },
+      "agent:main:hooked",
+    );
+
+    const outcome = await queueEmbeddedPiMessageWithOutcomeAsync("session-hooked", "original");
+
+    expect(outcome.queued).toBe(true);
+    expect(queueMessage).toHaveBeenCalledWith("rewritten follow-up", { steeringMode: "all" });
+    expect(beforeHook).toHaveBeenCalledWith(
+      expect.objectContaining({
+        queueKey: "agent:main:hooked",
+        queueMode: "steer",
+        depthBefore: 2,
+        prompt: "original",
+        sessionId: "session-hooked",
+        sessionKey: "agent:main:hooked",
+        originatingChannel: "embedded_run",
+      }),
+      expect.objectContaining({
+        sessionId: "session-hooked",
+        sessionKey: "agent:main:hooked",
+        channelId: "embedded_run",
+      }),
+    );
+    expect(afterHook).toHaveBeenCalledWith(
+      expect.objectContaining({
+        queueKey: "agent:main:hooked",
+        queueMode: "steer",
+        depthBefore: 2,
+        depthAfter: 2,
+        enqueued: true,
+        prompt: "rewritten follow-up",
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("blocks async active embedded steering from queue_before_enqueue hooks", async () => {
+    const queueMessage = vi.fn(async () => {});
+    const afterHook = vi.fn(async () => {});
+    vi.spyOn(hookRunnerGlobal, "getGlobalHookRunner").mockReturnValue({
+      hasHooks: (hookName: string) =>
+        hookName === "queue_before_enqueue" || hookName === "queue_after_enqueue",
+      runQueueBeforeEnqueue: vi.fn(async () => ({
+        block: true,
+        blockReason: "policy denied",
+      })),
+      runQueueAfterEnqueue: afterHook,
+    } as never);
+
+    setActiveEmbeddedRun(
+      "session-blocked",
+      {
+        ...createRunHandle(),
+        queueMessage,
+      },
+      "agent:main:blocked",
+    );
+
+    const outcome = await queueEmbeddedPiMessageWithOutcomeAsync("session-blocked", "original");
+
+    expect(outcome).toEqual({
+      queued: false,
+      sessionId: "session-blocked",
+      reason: "runtime_rejected",
+      gatewayHealth: "live",
+      errorMessage: "policy denied",
+    });
+    expect(queueMessage).not.toHaveBeenCalled();
+    expect(afterHook).toHaveBeenCalledWith(
+      expect.objectContaining({
+        queueKey: "agent:main:blocked",
+        enqueued: false,
+        prompt: "original",
+      }),
+      expect.any(Object),
     );
   });
 

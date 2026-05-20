@@ -3317,6 +3317,7 @@ export async function runEmbeddedAttempt(
           }
           await steerActiveSessionWithOptionalDeliveryWait(activeSession, text, options);
         },
+        getQueueDepth: () => getPiSteeringQueueMessages(activeSession.agent)?.length,
         isStreaming: () => activeSession.isStreaming,
         isCompacting: () => subscription.isCompacting(),
         supportsTranscriptCommitWait: true,
