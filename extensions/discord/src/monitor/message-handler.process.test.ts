@@ -2272,6 +2272,48 @@ describe("processDiscordMessage draft streaming", () => {
     expectPreviewEditContent("done");
   });
 
+  it("keeps finalized progress previews when later tool warning finals are delivered", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await params?.replyOptions?.onItemEvent?.({ progressText: "exec done" });
+      await params?.dispatcher.sendFinalReply({ text: "delivery survived" });
+      await params?.dispatcher.sendFinalReply({
+        text: "⚠️ 🛠️ `run openclaw definitely-not-a-real-subcommand (agent)` failed",
+        isError: true,
+      } as never);
+      return { queuedFinal: true, counts: { final: 2, tool: 0, block: 0 } };
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            label: "Shelling",
+          },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update).toHaveBeenCalledWith("Shelling\n\n🛠️ Exec\n• exec done");
+    expectPreviewEditContent("delivery survived");
+    expect(draftStream.clear).not.toHaveBeenCalled();
+    expect(draftStream.messageId()).toBe("preview-1");
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+    expect(firstMockArg(deliverDiscordReply, "deliverDiscordReply")).toMatchObject({
+      replies: [
+        {
+          text: "⚠️ 🛠️ `run openclaw definitely-not-a-real-subcommand (agent)` failed",
+          isError: true,
+        },
+      ],
+    });
+  });
+
   it("uses raw tool-progress detail in Discord progress drafts", async () => {
     const draftStream = createMockDraftStreamForTest();
 
