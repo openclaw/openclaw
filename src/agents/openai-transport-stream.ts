@@ -84,6 +84,7 @@ const loggedOpenAIStrictToolDowngradeDiagnosticKeys = new Set<string>();
 
 type ReplayableResponseOutputMessage = Omit<ResponseOutputMessage, "id"> & { id?: string };
 type ReplayableResponseReasoningItem = Omit<ResponseReasoningItem, "id"> & { id?: string };
+type ResponsesClientLike = ReturnType<typeof createOpenAIResponsesClient>;
 
 type BaseStreamOptions = {
   temperature?: number;
@@ -717,6 +718,85 @@ function summarizeOpenAITransportError(error: unknown): string {
     `causeCode=${safeDebugValue(cause?.code)}`,
     `message=${error instanceof Error ? error.message : safeDebugValue(error)}`,
   ].join(" ");
+}
+
+function isInvalidEncryptedContentError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  const record = error as { code?: unknown; message?: unknown };
+  if (record.code === "invalid_encrypted_content") {
+    return true;
+  }
+  return typeof record.message === "string" && record.message.includes("invalid_encrypted_content");
+}
+
+function stripEncryptedContentFields(value: unknown): { value: unknown; changed: boolean } {
+  if (!value || typeof value !== "object") {
+    return { value, changed: false };
+  }
+  if (Array.isArray(value)) {
+    let changed = false;
+    const next = value.map((item) => {
+      const stripped = stripEncryptedContentFields(item);
+      changed ||= stripped.changed;
+      return stripped.value;
+    });
+    return changed ? { value: next, changed: true } : { value, changed: false };
+  }
+
+  let changed = false;
+  const next: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    if (key === "encrypted_content") {
+      changed = true;
+      continue;
+    }
+    const stripped = stripEncryptedContentFields(child);
+    changed ||= stripped.changed;
+    next[key] = stripped.value;
+  }
+  return changed ? { value: next, changed: true } : { value, changed: false };
+}
+
+function stripResponsesRequestEncryptedContent(
+  params: OpenAIResponsesRequestParams,
+): OpenAIResponsesRequestParams {
+  const stripped = stripEncryptedContentFields(params.input);
+  if (!stripped.changed) {
+    return params;
+  }
+  return {
+    ...params,
+    input: stripped.value as ResponseInput,
+  };
+}
+
+async function createResponsesStreamWithEncryptedContentRetry(params: {
+  client: ResponsesClientLike;
+  request: OpenAIResponsesRequestParams;
+  requestOptions: unknown;
+  model: Model<Api>;
+}): Promise<AsyncIterable<unknown>> {
+  try {
+    return (await params.client.responses.create(
+      params.request as never,
+      params.requestOptions as never,
+    )) as unknown as AsyncIterable<unknown>;
+  } catch (error) {
+    const retryRequest = stripResponsesRequestEncryptedContent(params.request);
+    if (!isInvalidEncryptedContentError(error) || retryRequest === params.request) {
+      throw error;
+    }
+    log.warn(
+      `[responses] retrying without encrypted reasoning content provider=${params.model.provider} ` +
+        `api=${params.model.api} model=${params.model.id}`,
+    );
+    return (await params.client.responses.create(
+      retryRequest as never,
+      params.requestOptions as never,
+    )) as unknown as AsyncIterable<unknown>;
+  }
 }
 
 export function resolveAzureOpenAIApiVersion(env = process.env): string {
@@ -1513,10 +1593,12 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
             `baseUrl=${formatModelTransportDebugBaseUrl(model.baseUrl)} timeoutMs=${safeDebugValue(requestOptions?.timeout)} ` +
             `apiKey=${apiKey ? "present" : "missing"} ${summarizeResponsesPayload(params)}`,
         );
-        const responseStream = (await client.responses.create(
-          params as never,
+        const responseStream = await createResponsesStreamWithEncryptedContentRetry({
+          client,
+          request: params,
           requestOptions,
-        )) as unknown as AsyncIterable<unknown>;
+          model,
+        });
         emitModelTransportDebug(
           log,
           `[responses] headers provider=${model.provider} api=${model.api} model=${model.id} ` +
@@ -3219,6 +3301,7 @@ export const testing = {
   formatModelTransportDebugBaseUrl,
   buildResponsesFailedNoDetailsObservation,
   normalizeResponsesFailedEvent,
+  stripResponsesRequestEncryptedContent,
   summarizeResponsesFailedNoDetailsObservation,
   summarizeResponsesPayload,
   summarizeResponsesTools,

@@ -2275,12 +2275,16 @@ describe("openai transport stream", () => {
         id?: string;
         call_id?: string;
         phase?: string;
+        encrypted_content?: string;
       }>;
     };
 
-    expect(
-      params.input?.reduce((count, item) => count + (item.type === "reasoning" ? 1 : 0), 0),
-    ).toBe(1);
+    const reasoningItem = params.input?.find((item) => item.type === "reasoning");
+    expectRecordFields(reasoningItem, {
+      type: "reasoning",
+      id: "rs_prior",
+      encrypted_content: "ciphertext",
+    });
     const assistantMessage = params.input?.find(
       (item) => item.type === "message" && item.role === "assistant",
     );
@@ -2296,6 +2300,44 @@ describe("openai transport stream", () => {
       id: "fc_prior",
       call_id: "call_abc",
     });
+  });
+
+  it("strips nested encrypted reasoning content from retry payloads without changing ids", () => {
+    const params = {
+      model: "gpt-5.5",
+      stream: true,
+      input: [
+        {
+          type: "reasoning",
+          id: "rs_prior",
+          encrypted_content: "ciphertext",
+          summary: [{ type: "summary_text", text: "checked" }],
+          nested: { encrypted_content: "nested-ciphertext", keep: "value" },
+        },
+        {
+          type: "function_call",
+          id: "fc_prior",
+          call_id: "call_abc",
+          name: "price_lookup",
+          arguments: "{}",
+        },
+      ],
+    };
+
+    const stripped = testing.stripResponsesRequestEncryptedContent(
+      params as never,
+    ) as typeof params;
+
+    expect(stripped).not.toBe(params);
+    expect(stripped.input[0]).toMatchObject({
+      type: "reasoning",
+      id: "rs_prior",
+      summary: [{ type: "summary_text", text: "checked" }],
+      nested: { keep: "value" },
+    });
+    expect(stripped.input[0]).not.toHaveProperty("encrypted_content");
+    expect(stripped.input[0].nested).not.toHaveProperty("encrypted_content");
+    expect(stripped.input[1]).toEqual(params.input[1]);
   });
 
   it("normalizes overlong Copilot Responses replay tool ids before dispatch", () => {
