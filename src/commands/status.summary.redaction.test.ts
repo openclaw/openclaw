@@ -5,10 +5,13 @@ import type { SessionStatus, StatusSummary } from "./status.types.js";
 function createRecentSessionRow(): SessionStatus {
   return {
     key: "main",
+    configuredModel: "gpt-5",
     kind: "direct" as const,
     sessionId: "sess-1",
+    selectedModel: "gpt-5",
     updatedAt: 1,
     age: 2,
+    modelSelectionReason: "default",
     totalTokens: 3,
     totalTokensFresh: true,
     remainingTokens: 4,
