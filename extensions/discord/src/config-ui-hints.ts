@@ -229,6 +229,10 @@ export const discordChannelConfigUiHints = {
     label: "Discord Realtime Consult Policy",
     help: "Use always to strongly prefer the OpenClaw agent brain for substantive realtime turns. agent-proxy defaults to always.",
   },
+  "voice.realtime.bootstrapContextFiles": {
+    label: "Discord Realtime Bootstrap Context Files",
+    help: "Agent profile bootstrap files included in realtime provider instructions for direct voice identity/persona grounding. Defaults to IDENTITY.md, USER.md, and SOUL.md; set [] to disable.",
+  },
   "voice.realtime.bargeIn": {
     label: "Discord Realtime Barge-In",
     help: "Allow Discord speaker-start events to interrupt active realtime playback. Set true to keep manual interruption when provider input-audio interruption is disabled for echo control.",

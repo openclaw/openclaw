@@ -13,6 +13,7 @@ const {
   createAudioResourceMock,
   resolveAgentRouteMock,
   agentCommandMock,
+  resolveRealtimeBootstrapContextInstructionsMock,
   transcribeAudioFileMock,
   textToSpeechStreamMock,
   textToSpeechMock,
@@ -130,6 +131,9 @@ const {
         _runtime?: unknown,
       ): Promise<{ payloads?: Array<{ text?: string }> }> => ({ payloads: [] }),
     ),
+    resolveRealtimeBootstrapContextInstructionsMock: vi.fn<
+      (...args: unknown[]) => Promise<string | undefined>
+    >(async () => undefined),
     transcribeAudioFileMock: vi.fn(async () => ({ text: "hello from voice" })),
     textToSpeechStreamMock: vi.fn(
       async (): Promise<unknown> => ({ success: false, error: "stream unavailable" }),
@@ -185,6 +189,16 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", async () => {
   return {
     ...actual,
     agentCommandFromIngress: agentCommandMock,
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/realtime-bootstrap-context", async () => {
+  const actual = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/realtime-bootstrap-context")
+  >("openclaw/plugin-sdk/realtime-bootstrap-context");
+  return {
+    ...actual,
+    resolveRealtimeBootstrapContextInstructions: resolveRealtimeBootstrapContextInstructionsMock,
   };
 });
 
@@ -300,6 +314,8 @@ describe("DiscordVoiceManager", () => {
     resolveAgentRouteMock.mockReturnValue({ agentId: "agent-1", sessionKey: "discord:g1:c1" });
     agentCommandMock.mockReset();
     agentCommandMock.mockResolvedValue({ payloads: [] });
+    resolveRealtimeBootstrapContextInstructionsMock.mockReset();
+    resolveRealtimeBootstrapContextInstructionsMock.mockResolvedValue(undefined);
     transcribeAudioFileMock.mockReset();
     transcribeAudioFileMock.mockResolvedValue({ text: "hello from voice" });
     textToSpeechStreamMock.mockReset();
@@ -2873,6 +2889,45 @@ describe("DiscordVoiceManager", () => {
       "memory_search",
       "memory_get",
     ]);
+  });
+
+  it("adds default bootstrap profile context to realtime voice instructions", async () => {
+    resolveAgentRouteMock.mockReturnValue({
+      agentId: "main",
+      sessionKey: "agent:main:discord:channel:1001",
+    });
+    resolveRealtimeBootstrapContextInstructionsMock.mockResolvedValue(
+      "OpenClaw realtime voice profile context:\n\n### IDENTITY.md\nName: Wilfred",
+    );
+    const manager = createManager({
+      groupPolicy: "open",
+      voice: {
+        enabled: true,
+        mode: "bidi",
+        realtime: {
+          provider: "openai",
+          consultPolicy: "always",
+        },
+      },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+
+    expect(resolveRealtimeBootstrapContextInstructionsMock).toHaveBeenCalledWith({
+      config: {},
+      agentId: "main",
+      sessionKey: "agent:main:discord:channel:1001",
+      files: undefined,
+      warn: expect.any(Function),
+    });
+    const bridgeParams = lastRealtimeBridgeParams() as
+      | {
+          instructions?: string;
+        }
+      | undefined;
+    expect(bridgeParams?.instructions).toContain("OpenClaw realtime voice profile context");
+    expect(bridgeParams?.instructions).toContain("Name: Wilfred");
+    expect(bridgeParams?.instructions).toContain("Call openclaw_agent_consult");
   });
 
   it("routes bidi realtime consults through a configured voice agent session target", async () => {

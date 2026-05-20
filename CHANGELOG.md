@@ -7,10 +7,12 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - Discord: let voice sessions follow configured Discord users into voice channels, with allowed-channel checks, multi-user handoff, bounded reconciliation, and DAVE recovery preservation. (#84264) Thanks @fuller-stack-dev.
+- Discord/voice: include bounded `IDENTITY.md`, `USER.md`, and `SOUL.md` profile context in realtime voice session instructions by default, with `voice.realtime.bootstrapContextFiles: []` available to disable it. (#84499) Thanks @fuller-stack-dev.
 - Dependencies: bump the bundled Codex harness to `@openai/codex` `0.132.0` and refresh the app-server model-list docs for the new catalog.
 - CLI/policy: add the bundled Policy plugin for policy-backed channel conformance checks, doctor lint findings, and opt-in workspace repair. (#80407) Thanks @giodl73-repo.
 - Agents/config: allow `agents.list[].experimental.localModelLean` so lean local-model mode can be enabled for one configured agent instead of globally.
 - Providers/xAI: add device-code OAuth login so remote and headless setups can authorize xAI without a localhost browser callback. (#84005) Thanks @fuller-stack-dev.
+- Providers/OpenRouter: honor provider-level `params.provider` routing policy for OpenRouter requests, with model and agent params overriding the defaults. Thanks @amknight.
 
 ### Fixes
 
@@ -67,6 +69,7 @@ Docs: https://docs.openclaw.ai
 - Agents/compaction: bound plugin-owned CLI transcript compaction with the host safety timeout so a hung context engine can no longer stall post-turn cleanup. (#84083) Thanks @100yenadmin.
 - Control UI/usage: truncate long context skill, tool, and file names in the usage panel while keeping the full name available on hover. (#42197) Thanks @Rain120.
 - Codex: respect explicit `models auth order set` and `config.auth.order` precedence over stale `lastGood` in `/codex account`, and show `no working credential` when every explicit-order profile is ineligible instead of marking a lower-ranked profile as active. Fixes #84386. (#84412) Thanks @openperf.
+- Agents: honor `messages.suppressToolErrors` for mutating tool failures so configured chat surfaces do not receive separate warning payloads. (#81561) Thanks @moeedahmed.
 
 ## 2026.5.19
 
