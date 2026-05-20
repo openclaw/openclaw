@@ -68,7 +68,51 @@ const imageToolProviderDeps = {
   resolveDefaultMediaModel,
 };
 
-export const __testing = {
+function hasExplicitDefaultPrimaryModel(cfg?: OpenClawConfig): boolean {
+  const model = cfg?.agents?.defaults?.model;
+  if (typeof model === "string") {
+    return model.trim().length > 0;
+  }
+  return typeof model?.primary === "string" && model.primary.trim().length > 0;
+}
+
+function modelRefProvider(candidate: string | null | undefined): string | undefined {
+  const trimmed = candidate?.trim();
+  if (!trimmed?.includes("/")) {
+    return undefined;
+  }
+  return trimmed.slice(0, trimmed.indexOf("/")).trim();
+}
+
+function isExecutionAliasCandidateForProvider(
+  candidate: string | null | undefined,
+  provider: string,
+): boolean {
+  const candidateProvider = modelRefProvider(candidate);
+  return Boolean(
+    candidateProvider &&
+    candidateProvider !== normalizeMediaProviderId(candidateProvider) &&
+    normalizeMediaProviderId(candidateProvider) === normalizeMediaProviderId(provider),
+  );
+}
+
+function isCanonicalCandidateShadowedByExecutionAlias(
+  candidate: string | null | undefined,
+  candidates: readonly (string | null | undefined)[],
+): boolean {
+  const candidateProvider = modelRefProvider(candidate);
+  if (!candidateProvider || candidateProvider !== normalizeMediaProviderId(candidateProvider)) {
+    return false;
+  }
+  if (!isMinimaxVlmProvider(candidateProvider)) {
+    return false;
+  }
+  return candidates.some((shadowCandidate) =>
+    isExecutionAliasCandidateForProvider(shadowCandidate, candidateProvider),
+  );
+}
+
+export const testing = {
   decodeDataUrl,
   coerceImageAssistantText,
   hasImageReasoningOnlyResponse,
@@ -148,6 +192,7 @@ export function resolveImageModelConfigForTool(params: {
       workspaceDir: params.workspaceDir,
       providerId: primary.provider,
       capability: "image",
+      includeConfiguredImageModels: !isMinimaxVlmProvider(primary.provider),
     });
     if (providerDefault) {
       return [`${primary.provider}/${providerDefault}`];
@@ -158,7 +203,7 @@ export function resolveImageModelConfigForTool(params: {
     return [];
   })();
 
-  const autoCandidates = imageToolProviderDeps
+  const rawAutoCandidates = imageToolProviderDeps
     .resolveAutoMediaKeyProviders({
       cfg: params.cfg,
       workspaceDir: params.workspaceDir,
@@ -170,15 +215,33 @@ export function resolveImageModelConfigForTool(params: {
         workspaceDir: params.workspaceDir,
         providerId,
         capability: "image",
+        includeConfiguredImageModels: !isMinimaxVlmProvider(providerId),
       });
       return modelId ? `${providerId}/${modelId}` : null;
     });
+  const autoCandidates = rawAutoCandidates.filter(
+    (candidate) =>
+      !isCanonicalCandidateShadowedByExecutionAlias(candidate, [
+        ...primaryCandidates,
+        ...rawAutoCandidates,
+      ]),
+  );
+  const defaultPrimaryIsImplicit = !hasExplicitDefaultPrimaryModel(params.cfg);
+  const primaryAliasCandidates = defaultPrimaryIsImplicit
+    ? autoCandidates.filter((candidate) =>
+        isExecutionAliasCandidateForProvider(candidate, primary.provider),
+      )
+    : [];
+  const remainingAutoCandidates =
+    primaryAliasCandidates.length === 0
+      ? autoCandidates
+      : autoCandidates.filter((candidate) => !primaryAliasCandidates.includes(candidate));
 
   return buildToolModelConfigFromCandidates({
     explicit,
     agentDir: params.agentDir,
     authStore: params.authStore,
-    candidates: [...primaryCandidates, ...autoCandidates],
+    candidates: [...primaryAliasCandidates, ...primaryCandidates, ...remainingAutoCandidates],
   });
 }
 
@@ -435,10 +498,10 @@ export function createImageTool(options?: {
   // If model has native vision, images in the prompt are auto-injected
   // so this tool is only needed when image wasn't provided in the prompt
   const description = options?.modelHasVision
-    ? "Analyze one or more images with a vision model. Use image for a single path/URL, or images for multiple (up to 20). Only use this tool when images were NOT already provided in the user's message. Images mentioned in the prompt are automatically visible to you."
+    ? "Analyze images with vision model. Use image for one path/URL, images for max 20. Only use this tool when images were NOT already provided; prompt images already visible."
     : explicitImageModelConfig
-      ? "Analyze one or more images with the configured image model (agents.defaults.imageModel). Use image for a single path/URL, or images for multiple (up to 20). Provide a prompt describing what to analyze."
-      : "Analyze one or more images with an available vision model. Use image for a single path/URL, or images for multiple (up to 20). Provide a prompt describing what to analyze.";
+      ? "Analyze images with configured image model. Use image for one path/URL, images for max 20. Prompt says what to inspect."
+      : "Analyze images with available vision model. Use image for one path/URL, images for max 20. Prompt says what to inspect.";
 
   return {
     label: "Image",
@@ -446,10 +509,10 @@ export function createImageTool(options?: {
     description,
     parameters: Type.Object({
       prompt: Type.Optional(Type.String()),
-      image: Type.Optional(Type.String({ description: "Single image path or URL." })),
+      image: Type.Optional(Type.String({ description: "One image path/URL." })),
       images: Type.Optional(
         Type.Array(Type.String(), {
-          description: "Multiple image paths or URLs (up to maxImages, default 20).",
+          description: "Image paths/URLs; maxImages default 20.",
         }),
       ),
       model: Type.Optional(Type.String()),
@@ -686,3 +749,4 @@ export function createImageTool(options?: {
     },
   };
 }
+export { testing as __testing };

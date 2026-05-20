@@ -29,6 +29,7 @@ import {
 } from "./bot-message-context.session.js";
 import type { BuildTelegramMessageContextParams } from "./bot-message-context.types.js";
 import {
+  buildTelegramInboundOriginTarget,
   buildTypingThreadParams,
   extractTelegramForumFlag,
   resolveTelegramForumFlag,
@@ -159,6 +160,7 @@ export const buildTelegramMessageContext = async ({
     chatType: msg.chat.type,
     isGroup,
     isForum: extractTelegramForumFlag(msg.chat),
+    isTopicMessage: msg.is_topic_message,
     getChat: getChatApi,
   });
   const threadSpec = resolveTelegramThreadSpec({
@@ -443,6 +445,7 @@ export const buildTelegramMessageContext = async ({
     direction: "inbound",
   });
 
+  const originatingTo = buildTelegramInboundOriginTarget(chatId, threadSpec);
   const bodyResult = await resolveTelegramInboundBody({
     cfg,
     primaryCtx,
@@ -455,6 +458,7 @@ export const buildTelegramMessageContext = async ({
     senderUsername,
     resolvedThreadId,
     replyThreadId,
+    originatingTo,
     routeAgentId: route.agentId,
     sessionKey,
     effectiveGroupAllow,

@@ -349,6 +349,15 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
       },
     ]);
     expect(result.meta.livenessState).toBe("blocked");
+    expect(warnMessages().join("\n")).toContain(
+      "strict-agentic execution contract triggered: runId=run-strict-agentic-auto-activated",
+    );
+    expect(warnMessages().join("\n")).toContain(
+      "provider=openai-codex/gpt-5.4 harness=codex contract=strict-agentic configured=unspecified",
+    );
+    expect(mockedLog.info.mock.calls.map(([message]) => String(message)).join("\n")).not.toContain(
+      "strict-agentic execution contract active",
+    );
   });
 
   it("respects explicit default contract opt-out on GPT-5 openai runs", async () => {
@@ -1350,6 +1359,34 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expect(retryInstruction).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
   });
 
+  it("retries signed reasoning-only Bedrock Converse turns with a visible-answer continuation", () => {
+    const retryInstruction = resolveReasoningOnlyRetryInstruction({
+      provider: "amazon-bedrock",
+      modelId: "openai.gpt-oss-120b-1:0",
+      modelApi: "bedrock-converse-stream",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "amazon-bedrock",
+          model: "openai.gpt-oss-120b-1:0",
+          content: [
+            {
+              type: "thinking",
+              thinking: "internal reasoning",
+              thinkingSignature: "bedrock-reasoning-signature",
+            },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(retryInstruction).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
+  });
+
   it("does not apply planning-only or ack fast paths to Ollama runs", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "ollama",
@@ -1860,6 +1897,30 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
 
     expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
     expect(DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT).toBe(1);
+  });
+
+  it("retries generic empty Bedrock Converse turns without visible text", () => {
+    const retryInstruction = resolveEmptyResponseRetryInstruction({
+      provider: "amazon-bedrock",
+      modelId: "openai.gpt-oss-120b-1:0",
+      modelApi: "bedrock-converse-stream",
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "amazon-bedrock",
+          model: "openai.gpt-oss-120b-1:0",
+          content: [{ type: "text", text: "" }],
+          usage: { input: 950, output: 103, totalTokens: 1053 },
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
   });
 
   it("treats clean empty assistant turns as silent only when the caller allows it", () => {

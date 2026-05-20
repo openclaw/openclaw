@@ -1,11 +1,14 @@
 import { isProxylineDispatcher } from "@openclaw/proxyline/dispatcher-brand";
 import { hasEnvHttpProxyAgentConfigured, resolveEnvHttpProxyAgentOptions } from "./proxy-env.js";
+import { addActiveManagedProxyTlsOptions } from "./proxy/managed-proxy-undici.js";
 import {
   createUndiciAutoSelectFamilyConnectOptions,
   resolveUndiciAutoSelectFamily,
   withTemporaryUndiciAutoSelectFamily,
 } from "./undici-family-policy.js";
 import {
+  createHttp1Agent,
+  createHttp1EnvHttpProxyAgent,
   loadUndiciGlobalDispatcherDeps,
   type UndiciGlobalDispatcherDeps,
 } from "./undici-runtime.js";
@@ -20,7 +23,7 @@ const HTTP1_ONLY_DISPATCHER_OPTIONS = Object.freeze({
  * can read the global dispatcher timeout without relying on Undici's
  * non-public `.options` field.
  */
-export let _globalUndiciStreamTimeoutMs: number | undefined;
+export let globalUndiciStreamTimeoutMs: number | undefined;
 
 let lastAppliedTimeoutKey: string | null = null;
 let lastAppliedProxyBootstrapKey: string | null = null;
@@ -153,7 +156,7 @@ function resolveEnvProxyDispatcherOptions(): ConstructorParameters<
   UndiciGlobalDispatcherDeps["EnvHttpProxyAgent"]
 >[0] {
   return {
-    ...resolveEnvHttpProxyAgentOptions(),
+    ...addActiveManagedProxyTlsOptions(resolveEnvHttpProxyAgentOptions()),
     ...HTTP1_ONLY_DISPATCHER_OPTIONS,
   } as ConstructorParameters<UndiciGlobalDispatcherDeps["EnvHttpProxyAgent"]>[0];
 }
@@ -207,7 +210,7 @@ export function ensureGlobalUndiciEnvProxyDispatcher(): void {
     return;
   }
   const runtime = loadUndiciGlobalDispatcherDeps();
-  const { EnvHttpProxyAgent, setGlobalDispatcher } = runtime;
+  const { setGlobalDispatcher } = runtime;
   const proxyOptions = resolveEnvProxyDispatcherOptions();
   const nextBootstrapKey = resolveEnvProxyBootstrapKey(proxyOptions);
   const currentKind = resolveCurrentDispatcherKind(runtime);
@@ -226,7 +229,7 @@ export function ensureGlobalUndiciEnvProxyDispatcher(): void {
     return;
   }
   try {
-    setGlobalDispatcher(new EnvHttpProxyAgent(proxyOptions));
+    setGlobalDispatcher(createHttp1EnvHttpProxyAgent(proxyOptions));
     lastAppliedProxyBootstrapKey = nextBootstrapKey;
   } catch {
     // Best-effort bootstrap only.
@@ -260,22 +263,15 @@ function applyGlobalDispatcherStreamTimeouts(params: {
       );
     } else if (kind === "env-proxy") {
       const proxyOptions = {
-        ...resolveEnvHttpProxyAgentOptions(),
+        ...addActiveManagedProxyTlsOptions(resolveEnvHttpProxyAgentOptions()),
         bodyTimeout: timeoutMs,
         headersTimeout: timeoutMs,
         ...(connect ? { connect } : {}),
         ...HTTP1_ONLY_DISPATCHER_OPTIONS,
       } as ConstructorParameters<UndiciGlobalDispatcherDeps["EnvHttpProxyAgent"]>[0];
-      runtime.setGlobalDispatcher(new runtime.EnvHttpProxyAgent(proxyOptions));
+      runtime.setGlobalDispatcher(createHttp1EnvHttpProxyAgent(proxyOptions, timeoutMs));
     } else {
-      runtime.setGlobalDispatcher(
-        new runtime.Agent({
-          bodyTimeout: timeoutMs,
-          headersTimeout: timeoutMs,
-          ...(connect ? { connect } : {}),
-          ...HTTP1_ONLY_DISPATCHER_OPTIONS,
-        }),
-      );
+      runtime.setGlobalDispatcher(createHttp1Agent(connect ? { connect } : undefined, timeoutMs));
     }
     lastAppliedTimeoutKey = nextKey;
   } catch {
@@ -288,7 +284,7 @@ export function ensureGlobalUndiciStreamTimeouts(opts?: { timeoutMs?: number }):
   if (timeoutMs === null) {
     return;
   }
-  _globalUndiciStreamTimeoutMs = timeoutMs;
+  globalUndiciStreamTimeoutMs = timeoutMs;
   if (!hasEnvHttpProxyAgentConfigured()) {
     lastAppliedTimeoutKey = null;
     return;
@@ -315,7 +311,7 @@ export function ensureGlobalUndiciDispatcherStreamTimeouts(opts?: { timeoutMs?: 
   if (timeoutMs === null) {
     return;
   }
-  _globalUndiciStreamTimeoutMs = timeoutMs;
+  globalUndiciStreamTimeoutMs = timeoutMs;
   const runtime = loadUndiciGlobalDispatcherDeps();
   const current = resolveCurrentDispatcherInfo(runtime);
   if (current === null) {
@@ -332,7 +328,7 @@ export function ensureGlobalUndiciDispatcherStreamTimeouts(opts?: { timeoutMs?: 
 export function resetGlobalUndiciStreamTimeoutsForTests(): void {
   lastAppliedTimeoutKey = null;
   lastAppliedProxyBootstrapKey = null;
-  _globalUndiciStreamTimeoutMs = undefined;
+  globalUndiciStreamTimeoutMs = undefined;
 }
 
 /**
@@ -348,8 +344,8 @@ export function forceResetGlobalDispatcher(opts?: { preserveProxylineManaged?: b
     }
     lastAppliedProxyBootstrapKey = null;
     try {
-      const { Agent, setGlobalDispatcher } = loadUndiciGlobalDispatcherDeps();
-      setGlobalDispatcher(new Agent(HTTP1_ONLY_DISPATCHER_OPTIONS));
+      const { setGlobalDispatcher } = loadUndiciGlobalDispatcherDeps();
+      setGlobalDispatcher(createHttp1Agent());
     } catch {
       // Best-effort reset only.
     }
@@ -357,7 +353,7 @@ export function forceResetGlobalDispatcher(opts?: { preserveProxylineManaged?: b
   }
   try {
     const runtime = loadUndiciGlobalDispatcherDeps();
-    const { EnvHttpProxyAgent, setGlobalDispatcher } = runtime;
+    const { setGlobalDispatcher } = runtime;
     const proxyOptions = resolveEnvProxyDispatcherOptions();
     if (opts?.preserveProxylineManaged) {
       const current = resolveCurrentDispatcherInfo(runtime);
@@ -366,7 +362,7 @@ export function forceResetGlobalDispatcher(opts?: { preserveProxylineManaged?: b
         return;
       }
     }
-    setGlobalDispatcher(new EnvHttpProxyAgent(proxyOptions));
+    setGlobalDispatcher(createHttp1EnvHttpProxyAgent(proxyOptions));
     lastAppliedProxyBootstrapKey = resolveEnvProxyBootstrapKey(proxyOptions);
   } catch {
     // Best-effort reset only.

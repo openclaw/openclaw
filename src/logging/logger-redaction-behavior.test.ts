@@ -9,7 +9,7 @@ import {
 } from "../infra/diagnostic-trace-context.js";
 import { getChildLogger, getLogger, resetLogger, setLoggerOverride } from "../logging.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
-import { __test__ as loggerTest } from "./logger.js";
+import { testApi as loggerTest } from "./logger.js";
 import { createDiagnosticLogRecordCapture } from "./test-helpers/diagnostic-log-capture.js";
 
 const secret = "sk-testsecret1234567890abcd";

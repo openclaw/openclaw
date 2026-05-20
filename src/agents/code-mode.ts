@@ -6,6 +6,7 @@ import type { AgentToolUpdateCallback } from "@earendil-works/pi-agent-core";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveAgentConfig } from "./agent-scope-config.js";
 import type { HookContext } from "./pi-tools.before-tool-call.js";
 import { optionalStringEnum } from "./schema/typebox.js";
 import {
@@ -121,16 +122,25 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
-function readCodeModeRawConfig(config?: OpenClawConfig): Record<string, unknown> {
-  const tools = isRecord(config?.tools) ? config.tools : undefined;
-  const codeMode = tools?.codeMode;
+function normalizeCodeModeRawConfig(value: unknown): Record<string, unknown> | undefined {
+  const codeMode = value;
   if (codeMode === true) {
     return { enabled: true };
   }
   if (codeMode === false) {
     return { enabled: false };
   }
-  return isRecord(codeMode) ? codeMode : {};
+  return isRecord(codeMode) ? codeMode : undefined;
+}
+
+function readCodeModeRawConfig(config?: OpenClawConfig, agentId?: string): Record<string, unknown> {
+  const tools = isRecord(config?.tools) ? config.tools : undefined;
+  const globalRaw = normalizeCodeModeRawConfig(tools?.codeMode) ?? {};
+  const agentRaw =
+    config && agentId
+      ? normalizeCodeModeRawConfig(resolveAgentConfig(config, agentId)?.tools?.codeMode)
+      : undefined;
+  return agentRaw ? { ...globalRaw, ...agentRaw } : globalRaw;
 }
 
 function readBoolean(value: unknown, fallback: boolean): boolean {
@@ -155,8 +165,8 @@ function readLanguages(value: unknown): CodeModeLanguage[] {
   return languages.length > 0 ? [...new Set(languages)] : ["javascript", "typescript"];
 }
 
-export function resolveCodeModeConfig(config?: OpenClawConfig): CodeModeConfig {
-  const raw = readCodeModeRawConfig(config);
+export function resolveCodeModeConfig(config?: OpenClawConfig, agentId?: string): CodeModeConfig {
+  const raw = readCodeModeRawConfig(config, agentId);
   const maxSearchLimit = clampInteger(
     readPositiveInteger(raw.maxSearchLimit, DEFAULT_MAX_SEARCH_LIMIT),
     1,
@@ -634,7 +644,10 @@ async function runExec(params: {
   onUpdate?: AgentToolUpdateCallback<unknown>;
 }) {
   removeExpiredRuns();
-  const config = resolveCodeModeConfig(params.ctx.runtimeConfig ?? params.ctx.config);
+  const config = resolveCodeModeConfig(
+    params.ctx.runtimeConfig ?? params.ctx.config,
+    params.ctx.agentId,
+  );
   if (!config.enabled) {
     throw new ToolInputError("code mode is disabled.");
   }
@@ -813,11 +826,15 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
     name: CODE_MODE_EXEC_TOOL_NAME,
     label: "exec",
     description:
-      "Run JavaScript or TypeScript in OpenClaw code mode. Use ALL_TOOLS and tools.search/describe/call inside the code to discover and call enabled tools.",
+      'Run JavaScript or TypeScript in OpenClaw code mode. Node.js modules and `require`/`import` are NOT available; for any shell, file, network, or external action, use enabled catalog tools allowed by policy from inside your code: `tools.search(query)` to find catalog entries, `tools.describe(entry.id)` for the input schema, then `tools.call(entry.id, args)`. The `language` field accepts only "javascript" or "typescript"; do not pass "bash", "shell", or other values.',
     parameters: Type.Object({
-      code: Type.String({ description: "JavaScript or TypeScript source to run." }),
+      code: Type.String({
+        description:
+          "JavaScript or TypeScript source to run. The `tools` object (search/describe/call) and `ALL_TOOLS` are available in scope; Node built-in modules are not.",
+      }),
       language: optionalStringEnum(["javascript", "typescript"] as const, {
-        description: "Source language. Defaults to javascript.",
+        description:
+          'Source language. Must be "javascript" or "typescript". Defaults to javascript.',
       }),
     }),
     execute: async (
@@ -875,7 +892,7 @@ export function applyCodeModeCatalog(params: {
   catalogRef?: ToolSearchCatalogRef;
   toolHookContext?: HookContext;
 }) {
-  const config = resolveCodeModeConfig(params.config);
+  const config = resolveCodeModeConfig(params.config, params.agentId);
   if (!config.enabled) {
     return applyToolCatalogCompaction({
       ...params,
@@ -911,11 +928,11 @@ export function addClientToolsToCodeModeCatalog(params: {
 }) {
   return addClientToolsToToolCatalog({
     ...params,
-    enabled: resolveCodeModeConfig(params.config).enabled,
+    enabled: resolveCodeModeConfig(params.config, params.agentId).enabled,
   });
 }
 
-export const __testing = {
+export const testing = {
   activeRuns,
   resumingRunIds,
   codeModeWorkerUrl,
@@ -923,3 +940,4 @@ export const __testing = {
   resolveCodeModeConfig,
   getTypescriptRuntimePromise: () => typescriptRuntimePromise,
 };
+export { testing as __testing };

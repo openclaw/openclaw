@@ -209,14 +209,14 @@ declare global {
 }
 
 function applyNativeControlAuth(host: SettingsHost) {
-  const nativeAuth = window.__OPENCLAW_NATIVE_CONTROL_AUTH__;
+  const nativeAuth = window["__OPENCLAW_NATIVE_CONTROL_AUTH__"];
   if (!nativeAuth) {
     return;
   }
   try {
-    delete window.__OPENCLAW_NATIVE_CONTROL_AUTH__;
+    delete window["__OPENCLAW_NATIVE_CONTROL_AUTH__"];
   } catch {
-    window.__OPENCLAW_NATIVE_CONTROL_AUTH__ = undefined;
+    window["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = undefined;
   }
 
   const gatewayUrl = normalizeOptionalString(nativeAuth.gatewayUrl);
@@ -390,6 +390,19 @@ async function refreshAgentsTab(host: SettingsHost, app: SettingsAppHost) {
   }
 }
 
+function loadConfigSchemaAfterPrimary(
+  host: SettingsHost,
+  app: SettingsAppHost,
+  primaryRefresh: Promise<unknown>,
+) {
+  void primaryRefresh.then(
+    () => {
+      void loadConfigSchema(app).finally(() => host.requestUpdate?.());
+    },
+    () => undefined,
+  );
+}
+
 export async function refreshActiveTab(host: SettingsHost) {
   const app = host as unknown as SettingsAppHost;
   const refreshRun = beginControlUiRefresh(host, host.tab);
@@ -401,8 +414,11 @@ export async function refreshActiveTab(host: SettingsHost) {
       case "automation":
       case "infrastructure":
       case "aiAgents":
-        void loadConfigSchema(app).finally(() => host.requestUpdate?.());
-        await loadConfig(app);
+        {
+          const primaryRefresh = loadConfig(app);
+          loadConfigSchemaAfterPrimary(host, app, primaryRefresh);
+          await primaryRefresh;
+        }
         break;
       case "overview":
         await loadOverview(host);
@@ -472,7 +488,7 @@ export function inferBasePath() {
   if (typeof window === "undefined") {
     return "";
   }
-  const configured = window.__OPENCLAW_CONTROL_UI_BASE_PATH__;
+  const configured = window["__OPENCLAW_CONTROL_UI_BASE_PATH__"];
   const normalizedConfigured = normalizeOptionalString(configured);
   if (normalizedConfigured) {
     return normalizeBasePath(normalizedConfigured);
@@ -687,7 +703,11 @@ export function syncUrlWithTab(host: SettingsHost, tab: Tab, replace: boolean) {
   updateBrowserHistory(url, replace);
 }
 
-export function syncUrlWithSessionKey(_host: SettingsHost, sessionKey: string, replace: boolean) {
+export function syncUrlWithSessionKey(
+  _hostValue: SettingsHost,
+  sessionKey: string,
+  replace: boolean,
+) {
   const href = typeof window === "undefined" ? undefined : window.location?.href;
   if (!href) {
     return;
@@ -906,8 +926,9 @@ function buildAttentionItems(host: SettingsAppHost) {
 
 export async function loadChannelsTab(host: SettingsHost) {
   const app = host as unknown as SettingsAppHost;
-  void loadConfigSchema(app).finally(() => host.requestUpdate?.());
-  await Promise.all([loadChannels(app, false), loadConfig(app)]);
+  const primaryRefresh = Promise.all([loadChannels(app, false), loadConfig(app)]);
+  loadConfigSchemaAfterPrimary(host, app, primaryRefresh);
+  await primaryRefresh;
 }
 
 export async function loadCron(host: SettingsHost) {

@@ -21,8 +21,8 @@ type JsonSchema = {
   additionalProperties?: boolean | JsonSchema;
 };
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(__dirname, "..");
+const scriptDir = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(scriptDir, "..");
 const outPaths = [
   path.join(
     repoRoot,
@@ -46,7 +46,7 @@ const DEFAULTED_OPTIONAL_INIT_PARAMS: Record<string, Set<string>> = {
   ArtifactsListParams: new Set(["agentId"]),
   ArtifactsGetParams: new Set(["agentId"]),
   ArtifactsDownloadParams: new Set(["agentId"]),
-  MessageActionParams: new Set(["inboundEventKind"]),
+  MessageActionParams: new Set(["inboundTurnKind"]),
   CronRunLogEntry: new Set(["failureNotificationDelivery"]),
 };
 

@@ -8,6 +8,8 @@ sidebarTitle: "Groups"
 
 OpenClaw treats group chats consistently across surfaces: Discord, iMessage, Matrix, Microsoft Teams, Signal, Slack, Telegram, WhatsApp, Zalo.
 
+For always-on rooms that should provide quiet context unless the agent explicitly sends a visible message, see [Ambient room events](/channels/ambient-room-events).
+
 ## Beginner intro (2 minutes)
 
 OpenClaw "lives" on your own messaging accounts. There is no separate WhatsApp bot user. If **you** are in a group, OpenClaw can see that group and respond there.
@@ -41,30 +43,21 @@ always-on group chatter -> user request, or room event when configured
 
 ## Visible replies
 
-For group/channel rooms, OpenClaw defaults to `messages.groupChat.visibleReplies: "message_tool"`.
-`openclaw doctor --fix` writes this default into configured-channel configs that omit it.
-That means the agent still processes the turn and can update memory/session state, and it should speak visibly with `message(action=send)` when it has a room reply. If the model misses that tool and returns substantive final text, OpenClaw keeps that final text private instead of posting it to the room.
+For normal group/channel requests, OpenClaw defaults to `messages.groupChat.visibleReplies: "automatic"`. Final assistant text posts through the legacy visible reply path unless you opt the room into message-tool-only output.
 
-This default depends on a model/runtime that reliably calls tools. If logs show
-assistant text but `didSendViaMessagingTool: false`, the model answered
-privately instead of calling the message tool. The room stays silent, and the
-gateway verbose log records the suppressed final payload metadata. That is not
-a Discord/Slack/Telegram send failure, but a tool-discipline signal. Use a
-tool-call-reliable model for group/channel sessions, or set
-`messages.groupChat.visibleReplies: "automatic"` when you want all visible group
-replies to use the legacy final-reply path.
+Use `messages.groupChat.visibleReplies: "message_tool"` when a shared room should let the agent decide when to speak by calling `message(action=send)`. This works best for group rooms backed by latest-generation, tool-reliable models such as GPT 5.5. If the model misses that tool and returns substantive final text, OpenClaw keeps that final text private instead of posting it to the room.
 
 If the message tool is unavailable under the active tool policy, OpenClaw falls
 back to automatic visible replies instead of silently suppressing the response.
 `openclaw doctor` warns about this mismatch.
 
-For direct chats and any other source event, use `messages.visibleReplies: "message_tool"` to apply the same tool-only visible-reply behavior globally. Harnesses can also choose this as their unset default; the Codex harness does this for Codex-mode direct chats. `messages.groupChat.visibleReplies` remains the more specific override for group/channel rooms.
+For direct chats and any other source event, use `messages.visibleReplies: "message_tool"` to apply the same tool-only visible-reply behavior globally. Some harnesses, including Codex, also default direct/source chats to message-tool delivery when this is unset. Set `messages.visibleReplies: "automatic"` to force the old automatic final-reply path. `messages.groupChat.visibleReplies` remains the more specific override for group/channel rooms.
 
 This replaces the old pattern of forcing the model to answer `NO_REPLY` for most lurk-mode turns. In tool-only mode, doing nothing visible simply means not calling the message tool.
 
 Typing indicators are still sent for direct group requests. Ambient always-on room events, when enabled, stay strict and quiet unless the agent calls the message tool.
 
-To submit unmentioned always-on group chatter as quiet room context instead of user requests:
+To submit unmentioned always-on group chatter as quiet room context instead of user requests, use [Ambient room events](/channels/ambient-room-events):
 
 ```json5
 {
@@ -78,13 +71,15 @@ To submit unmentioned always-on group chatter as quiet room context instead of u
 
 The default is `unmentionedInbound: "user_request"`.
 
-To restore legacy automatic final replies for group/channel requests:
+Mentioned messages, commands, abort requests, and DMs stay user requests.
+
+To require visible output to go through the message tool for group/channel requests:
 
 ```json5
 {
   messages: {
     groupChat: {
-      visibleReplies: "automatic",
+      visibleReplies: "message_tool",
     },
   },
 }
@@ -367,7 +362,7 @@ Replying to a bot message counts as an implicit mention when the channel support
     - Allowlisting a group or sender does not disable mention gating; set that group's `requireMention` to `false` when all messages should trigger.
     - Automatic group chat prompt context carries the resolved silent-reply instruction every turn; workspace files should not duplicate `NO_REPLY` mechanics.
     - Groups where automatic silent replies are allowed treat clean empty or reasoning-only model turns as silent, equivalent to `NO_REPLY`. Direct chats never receive `NO_REPLY` guidance, and message-tool-only group replies stay quiet by not calling `message(action=send)`.
-    - Ambient always-on group chatter uses user-request semantics by default. Set `messages.groupChat.unmentionedInbound: "room_event"` to submit it as quiet context instead.
+    - Ambient always-on group chatter uses user-request semantics by default. Set `messages.groupChat.unmentionedInbound: "room_event"` to submit it as quiet context instead. See [Ambient room events](/channels/ambient-room-events) for setup examples.
     - Room events are not stored as fake user requests, and private assistant text from no-message-tool room events is not replayed as chat history.
     - Discord defaults live in `channels.discord.guilds."*"` (overridable per guild/channel).
     - Group history context is wrapped uniformly across channels. Mention-gated groups keep pending skipped messages; always-on groups may also retain recent processed room messages when the channel supports it. Use `messages.groupChat.historyLimit` for the global default and `channels.<channel>.historyLimit` (or `channels.<channel>.accounts.*.historyLimit`) for overrides. Set `0` to disable.

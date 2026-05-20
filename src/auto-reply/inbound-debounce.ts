@@ -302,6 +302,23 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     return { flushed: flushed ? 1 : 0 };
   };
 
+  const cancelKey = (key: string): boolean => {
+    const buffer = buffers.get(key);
+    if (!buffer) {
+      return false;
+    }
+    if (buffers.get(key) === buffer) {
+      buffers.delete(key);
+    }
+    if (buffer.timeout) {
+      clearTimeout(buffer.timeout);
+      buffer.timeout = null;
+    }
+    buffer.items = [];
+    releaseBuffer(buffer);
+    return true;
+  };
+
   const scheduleFlush = (key: string, buffer: DebounceBuffer<T>) => {
     if (buffer.timeout) {
       clearTimeout(buffer.timeout);
@@ -465,5 +482,5 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
   };
   INBOUND_DEBOUNCERS.set(registryKey, handle);
 
-  return { enqueue, flushKey, flushKeyWithCount, flushAll, unregister };
+  return { enqueue, flushKey, flushKeyWithCount, flushAll, unregister, cancelKey };
 }

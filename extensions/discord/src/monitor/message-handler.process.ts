@@ -35,7 +35,11 @@ import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime
 import { resolveChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import {
+  buildTtsSupplementMediaPayload,
+  getReplyPayloadTtsSupplement,
+  resolveSendableOutboundReplyParts,
+} from "openclaw/plugin-sdk/reply-payload";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   loadSessionStore,
@@ -546,17 +550,22 @@ export async function processDiscordMessage(
             return;
           }
         }
-        if (
+        const shouldFinalizeDraftPreview =
           draftStream &&
           isFinal &&
-          (!draftPreview.isProgressMode || draftPreview.hasProgressDraftStarted)
-        ) {
+          (!draftPreview.isProgressMode || draftPreview.hasProgressDraftStarted) &&
+          !payload.isError;
+        if (shouldFinalizeDraftPreview) {
           const reply = resolveSendableOutboundReplyParts(effectivePayload);
           const hasMedia = reply.hasMedia;
-          const previewFinalText = draftPreview.resolvePreviewFinalText(finalText);
+          const ttsSupplement = getReplyPayloadTtsSupplement(effectivePayload);
+          const previewSourceText = finalText ?? ttsSupplement?.spokenText;
+          const previewFinalText = draftPreview.resolvePreviewFinalText(previewSourceText);
+          const previewReplyToId = replyReference.peek();
           const hasExplicitReplyDirective =
             Boolean(effectivePayload.replyToTag || effectivePayload.replyToCurrent) ||
-            (typeof finalText === "string" && /\[\[\s*reply_to(?:_current|\s*:)/i.test(finalText));
+            (typeof previewSourceText === "string" &&
+              /\[\[\s*reply_to(?:_current|\s*:)/i.test(previewSourceText));
 
           const result = await deliverWithFinalizableLivePreviewAdapter({
             kind: info.kind,
@@ -572,7 +581,7 @@ export async function processDiscordMessage(
               buildFinalEdit: () => {
                 if (
                   draftPreview.finalizedViaPreviewMessage ||
-                  hasMedia ||
+                  (hasMedia && !ttsSupplement) ||
                   typeof previewFinalText !== "string" ||
                   hasExplicitReplyDirective ||
                   payload.isError
@@ -601,6 +610,41 @@ export async function processDiscordMessage(
                 replyReference.markSent();
                 observer?.onFinalReplyDelivered?.();
               },
+              buildSupplementalPayload: () =>
+                ttsSupplement ? buildTtsSupplementMediaPayload(effectivePayload) : undefined,
+              deliverSupplemental: async (supplementalPayload) => {
+                if (isProcessAborted(abortSignal)) {
+                  return false;
+                }
+                const supplementalReplyToId =
+                  previewReplyToId ??
+                  replyReference.peek() ??
+                  (replyToMode === "all"
+                    ? typeof message.id === "string" && message.id
+                      ? message.id
+                      : ctxPayload.MessageSid
+                    : undefined);
+                await deliverDiscordReply({
+                  cfg,
+                  replies: [supplementalPayload],
+                  target: deliverTarget,
+                  token,
+                  accountId,
+                  rest: deliveryRest,
+                  runtime,
+                  replyToId: supplementalReplyToId,
+                  replyToMode,
+                  textLimit,
+                  maxLinesPerMessage,
+                  tableMode,
+                  chunkMode,
+                  sessionKey: ctxPayload.SessionKey,
+                  threadBindings,
+                  mediaLocalRoots,
+                  kind: info.kind,
+                });
+                return true;
+              },
               logPreviewEditFailure: (err) => {
                 logVerbose(
                   `discord: preview final edit failed; falling back to standard send (${String(err)})`,
@@ -611,11 +655,17 @@ export async function processDiscordMessage(
               if (isProcessAborted(abortSignal)) {
                 return false;
               }
+              const fallbackPayload =
+                ttsSupplement &&
+                ttsSupplement.visibleTextAlreadyDelivered !== true &&
+                !effectivePayload.text?.trim()
+                  ? { ...effectivePayload, text: ttsSupplement.spokenText }
+                  : effectivePayload;
               const replyToId = replyReference.use();
               notifyFinalReplyStart();
               await deliverDiscordReply({
                 cfg,
-                replies: [effectivePayload],
+                replies: [fallbackPayload],
                 target: deliverTarget,
                 token,
                 accountId,
@@ -630,6 +680,7 @@ export async function processDiscordMessage(
                 sessionKey: ctxPayload.SessionKey,
                 threadBindings,
                 mediaLocalRoots,
+                kind: info.kind,
               });
               return true;
             },
@@ -668,6 +719,7 @@ export async function processDiscordMessage(
           sessionKey: ctxPayload.SessionKey,
           threadBindings,
           mediaLocalRoots,
+          kind: info.kind,
         });
         replyReference.markSent();
         if (isFinal) {
@@ -757,9 +809,10 @@ export async function processDiscordMessage(
                 (typeof resolvedBlockStreamingEnabled === "boolean"
                   ? !resolvedBlockStreamingEnabled
                   : undefined)),
-            onPartialReply: draftPreview.draftStream
-              ? (payload) => draftPreview.updateFromPartial(payload.text)
-              : undefined,
+            onPartialReply:
+              draftPreview.draftStream && !draftPreview.isProgressMode
+                ? (payload) => draftPreview.updateFromPartial(payload.text)
+                : undefined,
             onAssistantMessageStart: draftPreview.draftStream
               ? () => draftPreview.handleAssistantMessageBoundary()
               : undefined,

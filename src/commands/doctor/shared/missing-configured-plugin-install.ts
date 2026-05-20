@@ -1,7 +1,6 @@
 import { existsSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import path from "node:path";
-import { collectConfiguredAgentHarnessRuntimes } from "../../../agents/harness-runtimes.js";
 import {
   listExplicitlyDisabledChannelIdsForConfig,
   listPotentialConfiguredChannelIds,
@@ -10,7 +9,7 @@ import { listChannelPluginCatalogEntries } from "../../../channels/plugins/catal
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import { parseClawHubPluginSpec } from "../../../infra/clawhub-spec.js";
-import { parseRegistryNpmSpec } from "../../../infra/npm-registry-spec.js";
+import { isOpenClawOrgNpmSpec, parseRegistryNpmSpec } from "../../../infra/npm-registry-spec.js";
 import {
   normalizeUpdateChannel,
   resolveRegistryUpdateChannel,
@@ -49,6 +48,10 @@ import { resolveWebSearchInstallCatalogEntry } from "../../../plugins/web-search
 import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
 import { resolveUserPath } from "../../../utils.js";
 import { VERSION } from "../../../version.js";
+import {
+  collectConfiguredRuntimePluginIds,
+  CONFIGURED_RUNTIME_PLUGIN_INSTALL_CANDIDATES,
+} from "./configured-runtime-plugin-installs.js";
 import { asObjectRecord } from "./object.js";
 import {
   isLegacyPackageUpdateDoctorPass,
@@ -70,22 +73,6 @@ type BundledPluginPackageDescriptor = {
   packageName?: string;
 };
 
-const RUNTIME_PLUGIN_INSTALL_CANDIDATES: readonly DownloadableInstallCandidate[] = [
-  {
-    pluginId: "acpx",
-    label: "ACPX Runtime",
-    npmSpec: "@openclaw/acpx",
-    trustedSourceLinkedOfficialInstall: true,
-  },
-  // Runtime-only configs do not have a provider/channel integration catalog entry.
-  {
-    pluginId: "codex",
-    label: "Codex",
-    npmSpec: "@openclaw/codex",
-    trustedSourceLinkedOfficialInstall: true,
-  },
-];
-
 const MISSING_CHANNEL_CONFIG_DESCRIPTOR_DIAGNOSTIC = "without channelConfigs metadata";
 const REPAIRABLE_PACKAGE_ENTRY_DIAGNOSTIC_MARKERS = [
   "extension entry escapes package directory",
@@ -93,10 +80,18 @@ const REPAIRABLE_PACKAGE_ENTRY_DIAGNOSTIC_MARKERS = [
   "requires compiled runtime output",
 ] as const;
 
-function shouldFallbackClawHubToNpm(result: { ok: false; code?: string }): boolean {
+function shouldFallbackClawHubToNpm(params: {
+  result: { ok: false; code?: string };
+  npmSpec?: string;
+}): boolean {
+  if (!isOpenClawOrgNpmSpec(params.npmSpec)) {
+    return false;
+  }
   return (
-    result.code === CLAWHUB_INSTALL_ERROR_CODE.PACKAGE_NOT_FOUND ||
-    result.code === CLAWHUB_INSTALL_ERROR_CODE.VERSION_NOT_FOUND
+    params.result.code === CLAWHUB_INSTALL_ERROR_CODE.PACKAGE_NOT_FOUND ||
+    params.result.code === CLAWHUB_INSTALL_ERROR_CODE.VERSION_NOT_FOUND ||
+    params.result.code === CLAWHUB_INSTALL_ERROR_CODE.ARTIFACT_DOWNLOAD_UNAVAILABLE ||
+    params.result.code === CLAWHUB_INSTALL_ERROR_CODE.ARTIFACT_UNAVAILABLE
   );
 }
 
@@ -123,7 +118,7 @@ function addConfiguredAgentRuntimePluginIds(
   cfg: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
 ): void {
-  for (const runtime of collectConfiguredAgentHarnessRuntimes(cfg, env ?? process.env, {
+  for (const runtime of collectConfiguredRuntimePluginIds(cfg, env ?? process.env, {
     includeEnvRuntime: false,
     includeLegacyAgentRuntimes: false,
   })) {
@@ -150,16 +145,6 @@ function collectConfiguredPluginIds(cfg: OpenClawConfig, env?: NodeJS.ProcessEnv
     if (installEntry?.pluginId) {
       ids.add(installEntry.pluginId);
     }
-  }
-  const acp = asObjectRecord(cfg.acp);
-  const acpBackend = typeof acp?.backend === "string" ? acp.backend.trim().toLowerCase() : "";
-  if (
-    (acpBackend === "acpx" ||
-      acp?.enabled === true ||
-      asObjectRecord(acp?.dispatch)?.enabled === true) &&
-    (!acpBackend || acpBackend === "acpx")
-  ) {
-    ids.add("acpx");
   }
   addConfiguredAgentRuntimePluginIds(ids, cfg, env);
   return ids;
@@ -364,7 +349,7 @@ function collectDownloadableInstallCandidates(params: {
     });
   }
 
-  for (const entry of RUNTIME_PLUGIN_INSTALL_CANDIDATES) {
+  for (const entry of CONFIGURED_RUNTIME_PLUGIN_INSTALL_CANDIDATES) {
     if (!configuredPluginIds.has(entry.pluginId) && !params.missingPluginIds.has(entry.pluginId)) {
       continue;
     }
@@ -764,6 +749,7 @@ function recordClawHubPackageName(value: string | undefined): string | undefined
 async function installCandidate(params: {
   candidate: DownloadableInstallCandidate;
   records: Record<string, PluginInstallRecord>;
+  env: NodeJS.ProcessEnv;
   updateChannel?: UpdateChannel;
   mode?: "install" | "update";
   preferNpm?: boolean;
@@ -774,7 +760,7 @@ async function installCandidate(params: {
   failedPluginId?: string;
 }> {
   const { candidate } = params;
-  const extensionsDir = resolveDefaultPluginExtensionsDir();
+  const extensionsDir = resolveDefaultPluginExtensionsDir(params.env);
   const changes: string[] = [];
   const clawhubSpecs = candidate.clawhubSpec
     ? resolveClawHubInstallSpecsForUpdateChannel({
@@ -790,6 +776,16 @@ async function installCandidate(params: {
     : null;
   const clawhubInstallSpec = clawhubSpecs?.installSpec ?? candidate.clawhubSpec;
   const npmInstallSpec = npmSpecs?.installSpec ?? candidate.npmSpec;
+  const npmDir = resolveDefaultPluginNpmDir(params.env);
+  const existingClawHubPackagePath = clawhubInstallSpec
+    ? resolveExistingCandidateClawHubPackagePath({
+        candidate,
+        extensionsDir,
+      })
+    : null;
+  const existingNpmPackagePath = npmInstallSpec
+    ? resolveExistingCandidateNpmPackagePath({ candidate, npmDir })
+    : null;
   const shouldTryClawHub =
     clawhubInstallSpec &&
     !(params.preferNpm && npmInstallSpec) &&
@@ -799,7 +795,7 @@ async function installCandidate(params: {
       spec: clawhubInstallSpec,
       extensionsDir,
       expectedPluginId: candidate.pluginId,
-      mode: params.mode ?? "install",
+      mode: params.mode === "update" || existingClawHubPackagePath ? "update" : "install",
     });
     if (clawhubResult.ok) {
       const pluginId = clawhubResult.pluginId;
@@ -817,7 +813,10 @@ async function installCandidate(params: {
         warnings: [],
       };
     }
-    if (!npmInstallSpec || !shouldFallbackClawHubToNpm(clawhubResult)) {
+    if (
+      !npmInstallSpec ||
+      !shouldFallbackClawHubToNpm({ result: clawhubResult, npmSpec: npmInstallSpec })
+    ) {
       return {
         records: params.records,
         changes: [],
@@ -841,16 +840,31 @@ async function installCandidate(params: {
       failedPluginId: candidate.pluginId,
     };
   }
-  const result = await installPluginFromNpmSpec({
+  const npmInstallMode = params.mode === "update" || existingNpmPackagePath ? "update" : "install";
+  let result = await installPluginFromNpmSpec({
     spec: npmInstallSpec,
     extensionsDir,
+    npmDir,
     expectedPluginId: candidate.pluginId,
     expectedIntegrity: candidate.expectedIntegrity,
     ...(candidate.trustedSourceLinkedOfficialInstall
       ? { trustedSourceLinkedOfficialInstall: true }
       : {}),
-    mode: params.mode ?? "install",
+    mode: npmInstallMode,
   });
+  if (!result.ok && npmInstallMode === "install" && isPluginAlreadyExistsError(result.error)) {
+    result = await installPluginFromNpmSpec({
+      spec: npmInstallSpec,
+      extensionsDir,
+      npmDir,
+      expectedPluginId: candidate.pluginId,
+      expectedIntegrity: candidate.expectedIntegrity,
+      ...(candidate.trustedSourceLinkedOfficialInstall
+        ? { trustedSourceLinkedOfficialInstall: true }
+        : {}),
+      mode: "update",
+    });
+  }
   if (!result.ok) {
     return {
       records: params.records,
@@ -880,6 +894,39 @@ async function installCandidate(params: {
     ],
     warnings: [],
   };
+}
+
+function isPluginAlreadyExistsError(error: string): boolean {
+  return /\bplugin already exists:/.test(error);
+}
+
+function resolveExistingCandidateNpmPackagePath(params: {
+  candidate: DownloadableInstallCandidate;
+  npmDir: string;
+}): string | null {
+  const npmName = params.candidate.npmSpec
+    ? parseRegistryNpmSpec(params.candidate.npmSpec)?.name
+    : undefined;
+  if (!npmName) {
+    return null;
+  }
+  const packagePath = resolveNpmPackageInstallPath({
+    packageName: npmName,
+    npmRoot: params.npmDir,
+  });
+  return existsSync(packagePath) ? packagePath : null;
+}
+
+function resolveExistingCandidateClawHubPackagePath(params: {
+  candidate: DownloadableInstallCandidate;
+  extensionsDir: string;
+}): string | null {
+  try {
+    const packagePath = resolvePluginInstallDir(params.candidate.pluginId, params.extensionsDir);
+    return existsSync(packagePath) ? packagePath : null;
+  } catch {
+    return null;
+  }
 }
 
 export type RepairMissingPluginInstallsResult = {
@@ -1178,6 +1225,7 @@ async function repairMissingPluginInstalls(params: {
     const installed = await installCandidate({
       candidate,
       records: nextRecords,
+      env,
       updateChannel,
       mode: shouldReplaceBrokenOfficialInstall ? "update" : "install",
       preferNpm: preferNpmInstalls,

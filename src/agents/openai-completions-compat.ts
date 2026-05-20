@@ -17,7 +17,7 @@ type OpenAICompletionsCompatDefaults = {
   supportsReasoningEffort: boolean;
   supportsUsageInStreaming: boolean;
   maxTokensField: "max_completion_tokens" | "max_tokens";
-  thinkingFormat: "openai" | "openrouter" | "deepseek" | "zai";
+  thinkingFormat: "openai" | "openrouter" | "deepseek" | "together" | "zai";
   visibleReasoningDetailTypes: string[];
   supportsStrictMode: boolean;
   requiresReasoningContentOnAssistantMessages: boolean;
@@ -57,6 +57,9 @@ export function resolveOpenAICompletionsCompatDefaults(
   const isDeepSeek =
     endpointClass === "deepseek-native" ||
     (isDefaultRoute && isDefaultRouteProvider(input.provider, "deepseek"));
+  const isTogether =
+    knownProviderFamily === "together" ||
+    (isDefaultRoute && isDefaultRouteProvider(input.provider, "together"));
   const isXiaomi =
     endpointClass === "xiaomi-native" ||
     (isDefaultRoute && isDefaultRouteProvider(input.provider, "xiaomi"));
@@ -77,6 +80,7 @@ export function resolveOpenAICompletionsCompatDefaults(
     endpointClass === "chutes-native" ||
     endpointClass === "mistral-public" ||
     knownProviderFamily === "mistral" ||
+    isTogether ||
     (isDefaultRoute && isDefaultRouteProvider(provider, "chutes"));
   return {
     supportsStore:
@@ -84,6 +88,7 @@ export function resolveOpenAICompletionsCompatDefaults(
     supportsDeveloperRole: !isNonStandard && !isMoonshotLike && !usesConfiguredNonOpenAIEndpoint,
     supportsReasoningEffort:
       !isZai &&
+      !isTogether &&
       knownProviderFamily !== "mistral" &&
       endpointClass !== "xai-native" &&
       !usesExplicitProxyLikeEndpoint,
@@ -99,9 +104,11 @@ export function resolveOpenAICompletionsCompatDefaults(
         ? "deepseek"
         : isZai
           ? "zai"
-          : isOpenRouterLike
-            ? "openrouter"
-            : "openai",
+          : isTogether
+            ? "together"
+            : isOpenRouterLike
+              ? "openrouter"
+              : "openai",
     visibleReasoningDetailTypes: isOpenRouterLike ? ["response.output_text", "response.text"] : [],
     supportsStrictMode: !isZai && !usesConfiguredNonOpenAIEndpoint,
     requiresReasoningContentOnAssistantMessages: isDeepSeek || isXiaomi,

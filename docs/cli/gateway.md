@@ -127,7 +127,9 @@ Inline `--password` can be exposed in local process listings. Prefer `--password
 - Set `OPENCLAW_GATEWAY_STARTUP_TRACE=1` to log phase timings during Gateway startup, including per-phase `eventLoopMax` delay and plugin lookup-table timings for installed-index, manifest registry, startup planning, and owner-map work.
 - Set `OPENCLAW_GATEWAY_RESTART_TRACE=1` to log restart-scoped `restart trace:` lines for restart signal handling, active-work drain, shutdown phases, next start, ready timing, and memory metrics.
 - Set `OPENCLAW_DIAGNOSTICS=timeline` with `OPENCLAW_DIAGNOSTICS_TIMELINE_PATH=<path>` to write a best-effort JSONL startup diagnostics timeline for external QA harnesses. You can also enable the flag with `diagnostics.flags: ["timeline"]` in config; the path is still env-provided. Add `OPENCLAW_DIAGNOSTICS_EVENT_LOOP=1` to include event-loop samples.
-- Run `pnpm test:startup:gateway -- --runs 5 --warmup 1` to benchmark Gateway startup. The benchmark records first process output, `/healthz`, `/readyz`, startup trace timings, event-loop delay, and plugin lookup-table timing details.
+- Run `pnpm build` first, then `pnpm test:startup:gateway -- --runs 5 --warmup 1` to benchmark Gateway startup against the built CLI entry. The benchmark records first process output, `/healthz`, `/readyz`, startup trace timings, event-loop delay, and plugin lookup-table timing details.
+- Run `pnpm build` first, then `pnpm test:restart:gateway -- --case skipChannels --runs 1 --restarts 5` to benchmark in-process Gateway restart against the built CLI entry on macOS or Linux. The restart benchmark uses SIGUSR1, enables both startup and restart traces in the child process, and records next `/healthz`, next `/readyz`, downtime, ready timing, CPU, RSS, and restart trace metrics.
+- Treat `/healthz` as liveness and `/readyz` as usable readiness. Trace lines and benchmark output are for owner attribution; do not treat one trace span or one sample as a complete performance conclusion.
 
 ## Query a running Gateway
 

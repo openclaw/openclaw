@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { GatewayServer } from "../../gateway/server.impl.js";
 import type { GatewayBonjourBeacon } from "../../infra/bonjour-discovery.js";
 import { pickBeaconHost, pickGatewayPort } from "./discover.js";
 
@@ -277,12 +278,32 @@ function createRuntimeWithExitSignal(exitCallOrder?: string[]) {
   return { runtime, exited };
 }
 
-type GatewayCloseFn = (...args: unknown[]) => Promise<void>;
+type GatewayCloseFn = GatewayServer["close"];
 type LoopRuntime = {
   log: (...args: unknown[]) => void;
   error: (...args: unknown[]) => void;
   exit: (code: number) => void;
 };
+
+function createCloseMock() {
+  return vi.fn<GatewayCloseFn>(async (_opts) => {});
+}
+
+function expectRestartCloseCall(
+  close: ReturnType<typeof createCloseMock>,
+  maxDrainTimeoutMs: number,
+) {
+  expect(close).toHaveBeenCalledWith(
+    expect.objectContaining({
+      reason: "gateway restarting",
+      restartExpectedMs: 1500,
+      drainTimeoutMs: expect.any(Number),
+    }),
+  );
+  const closeArgs = close.mock.calls[0]?.[0];
+  expect(closeArgs?.drainTimeoutMs).toBeLessThanOrEqual(maxDrainTimeoutMs);
+  expect(closeArgs?.drainTimeoutMs).toBeGreaterThanOrEqual(0);
+}
 
 function createSignaledStart(close: GatewayCloseFn) {
   let resolveStarted: (() => void) | null = null;
@@ -332,7 +353,7 @@ async function waitForLoopCondition(predicate: () => boolean, message: string) {
 }
 
 async function createSignaledLoopHarness(exitCallOrder?: string[]) {
-  const close = vi.fn(async () => {});
+  const close = createCloseMock();
   const { start, started } = createSignaledStart(close);
   const { runtime, exited } = createRuntimeWithExitSignal(exitCallOrder);
   const { loopPromise } = await runLoopWithStart({ start, runtime });
@@ -389,8 +410,8 @@ describe("runGatewayLoop", () => {
     getActiveTaskCount.mockReturnValueOnce(1).mockReturnValue(0);
 
     await withIsolatedSignals(async ({ captureSignal }) => {
-      const closeFirst = vi.fn(async () => {});
-      const closeSecond = vi.fn(async () => {});
+      const closeFirst = createCloseMock();
+      const closeSecond = createCloseMock();
       const { runtime, exited } = createRuntimeWithExitSignal();
       let resolveSecond: (() => void) | null = null;
       const startedSecond = new Promise<void>((resolve) => {
@@ -419,10 +440,7 @@ describe("runGatewayLoop", () => {
       expect(consumeGatewayRestartIntentPayloadSync).toHaveBeenCalledOnce();
       expect(markGatewayDraining).toHaveBeenCalledOnce();
       expect(waitForActiveTasks).toHaveBeenCalledWith(90_000);
-      expect(closeFirst).toHaveBeenCalledWith({
-        reason: "gateway restarting",
-        restartExpectedMs: 1500,
-      });
+      expectRestartCloseCall(closeFirst, 90_000);
       await startedSecond;
       expect(start).toHaveBeenCalledTimes(2);
       await new Promise<void>((resolve) => setImmediate(resolve));
@@ -451,6 +469,27 @@ describe("runGatewayLoop", () => {
       await new Promise<void>((resolve) => setImmediate(resolve));
 
       expect(waitForActiveTasks).toHaveBeenCalledWith(2_500);
+      expect(start).toHaveBeenCalledTimes(2);
+
+      sigint();
+      await expect(exited).resolves.toBe(0);
+    });
+  });
+
+  it("caps reply drain time for unbounded SIGTERM restarts", async () => {
+    vi.clearAllMocks();
+    consumeGatewayRestartIntentPayloadSync.mockReturnValueOnce({ waitMs: 0 });
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const { close, start, exited } = await createSignaledLoopHarness();
+      const sigterm = captureSignal("SIGTERM");
+      const sigint = captureSignal("SIGINT");
+
+      sigterm();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expectRestartCloseCall(close, 15_000);
       expect(start).toHaveBeenCalledTimes(2);
 
       sigint();
@@ -501,10 +540,7 @@ describe("runGatewayLoop", () => {
       expect(gatewayLog.warn).toHaveBeenCalledWith(
         "failed to mark interrupted main sessions for restart recovery: Error: store read-only",
       );
-      expect(close).toHaveBeenCalledWith({
-        reason: "gateway restarting",
-        restartExpectedMs: 1500,
-      });
+      expectRestartCloseCall(close, 90_000);
       expect(start).toHaveBeenCalledTimes(2);
 
       sigint();
@@ -595,12 +631,12 @@ describe("runGatewayLoop", () => {
       waitForActiveEmbeddedRuns.mockResolvedValueOnce({ drained: true });
 
       type StartServer = () => Promise<{
-        close: (opts: { reason: string; restartExpectedMs: number | null }) => Promise<void>;
+        close: GatewayCloseFn;
       }>;
 
-      const closeFirst = vi.fn(async () => {});
-      const closeSecond = vi.fn(async () => {});
-      const closeThird = vi.fn(async () => {});
+      const closeFirst = createCloseMock();
+      const closeSecond = createCloseMock();
+      const closeThird = createCloseMock();
       const { runtime, exited } = createRuntimeWithExitSignal();
 
       const start = vi.fn<StartServer>();
@@ -667,10 +703,7 @@ describe("runGatewayLoop", () => {
       });
       expect(markGatewayDraining).toHaveBeenCalledTimes(1);
       expect(gatewayLog.warn).toHaveBeenCalledWith(DRAIN_TIMEOUT_LOG);
-      expect(closeFirst).toHaveBeenCalledWith({
-        reason: "gateway restarting",
-        restartExpectedMs: 1500,
-      });
+      expectRestartCloseCall(closeFirst, 1_234);
       expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledTimes(1);
       expect(resetAllLanes).toHaveBeenCalledTimes(1);
       expect(resetGatewayRestartStateForInProcessRestart).toHaveBeenCalledTimes(1);
@@ -680,10 +713,7 @@ describe("runGatewayLoop", () => {
 
       await startedThird;
       await new Promise<void>((resolve) => setImmediate(resolve));
-      expect(closeSecond).toHaveBeenCalledWith({
-        reason: "gateway restarting",
-        restartExpectedMs: 1500,
-      });
+      expectRestartCloseCall(closeSecond, 1_234);
       expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledTimes(2);
       expect(markGatewayDraining).toHaveBeenCalledTimes(2);
       expect(resetAllLanes).toHaveBeenCalledTimes(2);
@@ -709,8 +739,8 @@ describe("runGatewayLoop", () => {
     });
 
     await withIsolatedSignals(async ({ captureSignal }) => {
-      const closeFirst = vi.fn(async () => {});
-      const closeSecond = vi.fn(async () => {});
+      const closeFirst = createCloseMock();
+      const closeSecond = createCloseMock();
       const { runtime, exited } = createRuntimeWithExitSignal();
       let releaseFirstStart!: () => void;
       const firstStartMayReturn = new Promise<void>((resolve) => {
@@ -757,10 +787,7 @@ describe("runGatewayLoop", () => {
           "expected queued SIGUSR1 to trigger the second gateway start",
         );
         await startedSecond;
-        expect(closeFirst).toHaveBeenCalledWith({
-          reason: "gateway restarting",
-          restartExpectedMs: 1500,
-        });
+        expectRestartCloseCall(closeFirst, 90_000);
         expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledTimes(1);
         expect(markGatewayDraining).toHaveBeenCalledTimes(1);
         expect(resetAllLanes).toHaveBeenCalledTimes(1);
@@ -897,8 +924,8 @@ describe("runGatewayLoop", () => {
     });
 
     await withIsolatedSignals(async ({ captureSignal }) => {
-      const closeFirst = vi.fn(async () => {});
-      const closeThird = vi.fn(async () => {});
+      const closeFirst = createCloseMock();
+      const closeThird = createCloseMock();
       const { runtime, exited } = createRuntimeWithExitSignal();
       let sigusr1: (() => void) | null = null;
       let resolveThirdStart: (() => void) | null = null;
@@ -937,10 +964,7 @@ describe("runGatewayLoop", () => {
           "expected queued SIGUSR1 to advance past failed restart startup",
         );
         await startedThird;
-        expect(closeFirst).toHaveBeenCalledWith({
-          reason: "gateway restarting",
-          restartExpectedMs: 1500,
-        });
+        expectRestartCloseCall(closeFirst, 90_000);
         expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledTimes(2);
         expect(markGatewayDraining).toHaveBeenCalledTimes(2);
         expect(resetAllLanes).toHaveBeenCalledTimes(2);
@@ -966,8 +990,8 @@ describe("runGatewayLoop", () => {
     });
 
     await withIsolatedSignals(async ({ captureSignal }) => {
-      const closeFirst = vi.fn(async () => {});
-      const closeThird = vi.fn(async () => {});
+      const closeFirst = createCloseMock();
+      const closeThird = createCloseMock();
       const { runtime, exited } = createRuntimeWithExitSignal();
       let resolveThirdStart: (() => void) | null = null;
       const startedThird = new Promise<void>((resolve) => {
@@ -1008,10 +1032,7 @@ describe("runGatewayLoop", () => {
           "expected post-failure SIGUSR1 to retry gateway startup",
         );
         await startedThird;
-        expect(closeFirst).toHaveBeenCalledWith({
-          reason: "gateway restarting",
-          restartExpectedMs: 1500,
-        });
+        expectRestartCloseCall(closeFirst, 90_000);
         expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledTimes(2);
         expect(markGatewayDraining).toHaveBeenCalledTimes(2);
         expect(resetAllLanes).toHaveBeenCalledTimes(2);

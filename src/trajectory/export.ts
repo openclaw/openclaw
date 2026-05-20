@@ -866,6 +866,10 @@ function buildArtifactsCapture(params: {
     promptError:
       runtimeArtifacts?.promptError ?? runtimeEnd?.promptError ?? runtimeCompletion?.promptError,
     promptErrorSource: runtimeArtifacts?.promptErrorSource ?? runtimeCompletion?.promptErrorSource,
+    terminalError:
+      runtimeArtifacts?.terminalError ??
+      runtimeEnd?.terminalError ??
+      runtimeCompletion?.terminalError,
     usage: runtimeArtifacts?.usage ?? runtimeCompletion?.usage,
     promptCache: runtimeArtifacts?.promptCache ?? runtimeCompletion?.promptCache,
     compactionCount: runtimeArtifacts?.compactionCount ?? runtimeCompletion?.compactionCount,

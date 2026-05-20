@@ -33,7 +33,11 @@ function isProductionCodeFile(relativePath: string): boolean {
 }
 
 function listGitCodeFiles(root: string): string[] | null {
-  return listGitTrackedFiles({ repoRoot, pathspecs: root })?.filter(isProductionCodeFile) ?? null;
+  return (
+    listGitTrackedFiles({ repoRoot, pathspecs: root })
+      ?.filter(isProductionCodeFile)
+      .filter((relativePath) => fs.existsSync(path.join(repoRoot, relativePath))) ?? null
+  );
 }
 
 function walkCodeFiles(dir: string, files: string[] = []): string[] {
@@ -163,6 +167,7 @@ describe("production lint suppressions", () => {
       "src/test-utils/bundled-plugin-public-surface.ts|typescript/no-unnecessary-type-parameters|2",
       "src/test-utils/vitest-mock-fn.ts|typescript/no-explicit-any|1",
       "src/utils.ts|typescript/no-unnecessary-type-parameters|1",
+      "src/version.ts|eslint/no-underscore-dangle|1",
       "ui/src/ui/views/overview-log-tail.ts|no-control-regex|1",
     ]);
   });

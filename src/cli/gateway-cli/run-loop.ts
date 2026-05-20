@@ -22,6 +22,7 @@ const RESTART_DRAIN_STILL_PENDING_WARN_MS = 30_000;
 const FOLLOWUP_DRAIN_TIMEOUT_MS = 5_000;
 const CHANNEL_RUN_QUEUE_DRAIN_TIMEOUT_MS = 5_000;
 const INBOUND_DEBOUNCE_FLUSH_TIMEOUT_MS = 10_000;
+const RESTART_CLOSE_REPLY_DRAIN_SHUTDOWN_RESERVE_MS = 10_000;
 const UPDATE_RESPAWN_HEALTH_TIMEOUT_MS = 10_000;
 const UPDATE_RESPAWN_HEALTH_POLL_MS = 200;
 
@@ -407,6 +408,10 @@ export async function runGatewayLoop(params: {
       const restartDrainTimeoutMs = isRestart
         ? await resolveRestartDrainTimeoutMs(restartIntent)
         : 0;
+      const restartDrainDeadlineAt =
+        isRestart && restartDrainTimeoutMs !== undefined
+          ? Date.now() + restartDrainTimeoutMs
+          : undefined;
       if (!isRestart) {
         armForceExitTimer(SHUTDOWN_TIMEOUT_MS);
       } else if (restartDrainTimeoutMs !== undefined) {
@@ -431,6 +436,15 @@ export async function runGatewayLoop(params: {
         if (isRestart && restartDrainTimeoutMs === undefined) {
           armForceExitTimer(SHUTDOWN_TIMEOUT_MS);
         }
+      };
+      const resolveRestartCloseDrainTimeoutMs = () => {
+        if (!isRestart) {
+          return null;
+        }
+        if (restartDrainTimeoutMs === undefined) {
+          return Math.max(0, SHUTDOWN_TIMEOUT_MS - RESTART_CLOSE_REPLY_DRAIN_SHUTDOWN_RESERVE_MS);
+        }
+        return Math.max(0, (restartDrainDeadlineAt ?? Date.now()) - Date.now());
       };
 
       try {
@@ -639,9 +653,11 @@ export async function runGatewayLoop(params: {
         }
 
         armCloseForceExitTimerForIndefiniteRestart();
+        const closeDrainTimeoutMs = resolveRestartCloseDrainTimeoutMs();
         await server?.close({
           reason: isRestart ? "gateway restarting" : "gateway stopping",
           restartExpectedMs: isRestart ? 1500 : null,
+          ...(closeDrainTimeoutMs !== null ? { drainTimeoutMs: closeDrainTimeoutMs } : {}),
         });
       } catch (err) {
         gatewayLog.error(`shutdown error: ${String(err)}`);
