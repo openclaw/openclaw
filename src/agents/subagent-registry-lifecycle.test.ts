@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CallGatewayOptions } from "../gateway/call.js";
+import {
+  buildAnnounceIdFromChildRun,
+  buildAnnounceIdempotencyKey,
+} from "./announce-idempotency.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -154,6 +158,15 @@ function hasDeliveredTaskStatusUpdate(runId: string): boolean {
   });
 }
 
+function buildExpectedAnnounceIdempotencyKey(entry: SubagentRunRecord): string {
+  return buildAnnounceIdempotencyKey(
+    buildAnnounceIdFromChildRun({
+      childSessionKey: entry.childSessionKey,
+      childRunId: entry.runId,
+    }),
+  );
+}
+
 function createLifecycleController({
   entry,
   runs = new Map([[entry.runId, entry]]),
@@ -186,6 +199,7 @@ function createLifecycleController({
 
 async function runNoReplyMirrorScenario(params: {
   timestamp: number;
+  text?: string;
   idempotencyKey?: string;
   idempotencyKeyForEntry?: (entry: SubagentRunRecord) => string;
 }): Promise<SubagentRunRecord> {
@@ -194,10 +208,11 @@ async function runNoReplyMirrorScenario(params: {
     expectsCompletionMessage: true,
     retainAttachmentsOnKeep: true,
   });
+  const text = params.text ?? "final completion reply";
   const idempotencyKey =
     params.idempotencyKeyForEntry?.(entry) ??
     params.idempotencyKey ??
-    `announce:v1:${entry.childSessionKey}:${entry.runId}:internal-source-reply:0`;
+    `${buildExpectedAnnounceIdempotencyKey(entry)}:internal-source-reply:0`;
   const runSubagentAnnounceFlow = vi.fn(
     async (announceParams: {
       onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
@@ -216,7 +231,7 @@ async function runNoReplyMirrorScenario(params: {
         role: "assistant",
         provider: "openclaw",
         model: "delivery-mirror",
-        content: "final completion reply",
+        content: text,
         timestamp: params.timestamp,
         idempotencyKey,
       },
@@ -225,6 +240,7 @@ async function runNoReplyMirrorScenario(params: {
 
   await createLifecycleController({
     entry,
+    captureSubagentCompletionReply: vi.fn(async () => text),
     persist: vi.fn(),
     runSubagentAnnounceFlow,
   }).completeSubagentRun({
@@ -992,6 +1008,34 @@ describe("subagent registry lifecycle hardening", () => {
 
     vi.clearAllMocks();
     gatewayMocks.callGateway.mockResolvedValue({});
+    const longMirrorEntry = await runNoReplyMirrorScenario({
+      timestamp: 12_345,
+      text: "long completion reply ".repeat(500),
+    });
+
+    await vi.waitFor(() => expect(longMirrorEntry.cleanupCompletedAt).toBeTypeOf("number"));
+    expect(longMirrorEntry.completionDeliveredAt).toBe(12_345);
+    expect(gatewayMocks.callGateway).toHaveBeenCalledWith({
+      method: "chat.history",
+      params: { sessionKey: longMirrorEntry.requesterSessionKey, limit: 25, maxChars: 128 * 1024 },
+      timeoutMs: 5_000,
+    });
+
+    vi.clearAllMocks();
+    gatewayMocks.callGateway.mockResolvedValue({});
+    const messageToolAnnounceEntry = await runNoReplyMirrorScenario({
+      timestamp: 12_345,
+      idempotencyKeyForEntry: (candidate) =>
+        `${buildExpectedAnnounceIdempotencyKey(candidate)}:message-tool:internal-source-reply:0`,
+    });
+
+    await vi.waitFor(() =>
+      expect(messageToolAnnounceEntry.cleanupCompletedAt).toBeTypeOf("number"),
+    );
+    expect(messageToolAnnounceEntry.completionDeliveredAt).toBe(12_345);
+
+    vi.clearAllMocks();
+    gatewayMocks.callGateway.mockResolvedValue({});
     const childRunMirrorEntry = await runNoReplyMirrorScenario({
       timestamp: 12_345,
       idempotencyKeyForEntry: (candidate) => `${candidate.runId}:message-tool:1`,
@@ -1032,7 +1076,12 @@ describe("subagent registry lifecycle hardening", () => {
     gatewayMocks.callGateway.mockResolvedValue({});
     const sameWindowSiblingEntry = await runNoReplyMirrorScenario({
       timestamp: 12_345,
-      idempotencyKey: "announce:v1:agent:main:subagent:sibling:run-sibling:internal-source-reply:0",
+      idempotencyKey: `${buildAnnounceIdempotencyKey(
+        buildAnnounceIdFromChildRun({
+          childSessionKey: "agent:main:subagent:sibling",
+          childRunId: "run-sibling",
+        }),
+      )}:internal-source-reply:0`,
     });
 
     await vi.waitFor(() => expect(sameWindowSiblingEntry.deliverySuspendedAt).toBeTypeOf("number"));
