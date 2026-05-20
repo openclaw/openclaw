@@ -241,7 +241,7 @@ describe("buildMemoryFlushPlan", () => {
     expect(plan?.prompt).not.toContain("Default prompt");
   });
 
-  it("does not inherit memoryFlush or reserve floor when per-agent compaction is empty", () => {
+  it("inherits memoryFlush and reserve floor when per-agent compaction is empty", () => {
     const plan = buildMemoryFlushPlan({
       cfg: {
         agents: {
@@ -263,16 +263,16 @@ describe("buildMemoryFlushPlan", () => {
       agentId: "main",
     });
 
-    expect(plan?.model).toBeUndefined();
-    expect(plan?.softThresholdTokens).toBe(DEFAULT_MEMORY_FLUSH_SOFT_TOKENS);
-    expect(plan?.forceFlushTranscriptBytes).toBe(DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES);
-    expect(plan?.reserveTokensFloor).toBe(20_000);
-    expect(plan?.prompt).toContain(DEFAULT_MEMORY_FLUSH_PROMPT[0]);
-    expect(plan?.prompt).not.toContain("Default prompt");
-    expect(plan?.systemPrompt).not.toContain("Default system prompt");
+    expect(plan?.model).toBe("ollama/qwen3:8b");
+    expect(plan?.softThresholdTokens).toBe(123);
+    expect(plan?.forceFlushTranscriptBytes).toBe(3 * 1024 * 1024);
+    expect(plan?.reserveTokensFloor).toBe(12_345);
+    expect(plan?.prompt).toContain("Default prompt");
+    expect(plan?.systemPrompt).toContain("Default system prompt");
+    expect(plan?.prompt).not.toContain("Pre-compaction memory flush.");
   });
 
-  it("does not inherit memoryFlush or reserve floor when per-agent compaction is partial", () => {
+  it("inherits memoryFlush and reserve floor when per-agent compaction is partial", () => {
     const plan = buildMemoryFlushPlan({
       cfg: {
         agents: {
@@ -292,10 +292,51 @@ describe("buildMemoryFlushPlan", () => {
       agentId: "main",
     });
 
-    expect(plan?.model).toBeUndefined();
-    expect(plan?.softThresholdTokens).toBe(DEFAULT_MEMORY_FLUSH_SOFT_TOKENS);
-    expect(plan?.forceFlushTranscriptBytes).toBe(DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES);
-    expect(plan?.reserveTokensFloor).toBe(20_000);
+    expect(plan?.model).toBe("ollama/qwen3:8b");
+    expect(plan?.softThresholdTokens).toBe(123);
+    expect(plan?.forceFlushTranscriptBytes).toBe(3 * 1024 * 1024);
+    expect(plan?.reserveTokensFloor).toBe(12_345);
+  });
+
+  it("deep-merges partial per-agent memoryFlush overrides", () => {
+    const plan = buildMemoryFlushPlan({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              reserveTokensFloor: 12_345,
+              memoryFlush: {
+                model: "ollama/qwen3:8b",
+                softThresholdTokens: 123,
+                forceFlushTranscriptBytes: "3mb",
+                prompt: "Default prompt",
+                systemPrompt: "Default system prompt",
+              },
+            },
+          },
+          list: [
+            {
+              id: "main",
+              compaction: {
+                memoryFlush: {
+                  softThresholdTokens: 456,
+                  prompt: "Agent prompt",
+                },
+              },
+            },
+          ],
+        },
+      },
+      agentId: "main",
+    });
+
+    expect(plan?.model).toBe("ollama/qwen3:8b");
+    expect(plan?.softThresholdTokens).toBe(456);
+    expect(plan?.forceFlushTranscriptBytes).toBe(3 * 1024 * 1024);
+    expect(plan?.reserveTokensFloor).toBe(12_345);
+    expect(plan?.prompt).toContain("Agent prompt");
+    expect(plan?.prompt).not.toContain("Default prompt");
+    expect(plan?.systemPrompt).toContain("Default system prompt");
   });
 
   it("honors per-agent disable overrides", () => {
