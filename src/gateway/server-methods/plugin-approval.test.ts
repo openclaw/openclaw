@@ -246,11 +246,7 @@ describe("createPluginApprovalHandlers", () => {
         evidenceHash: "sha256:evidence",
         target: "oc://TOOLS.md/tools/deploy",
       });
-      const broadcastRequest = requireRecord(
-        broadcastCall(opts).payload.request,
-        "broadcast request",
-      );
-      expect(broadcastRequest.metadata).toEqual({
+      expect(broadcastCall(opts).payload.request.metadata).toEqual({
         policyHash: "sha256:policy",
         evidenceHash: "sha256:evidence",
         target: "oc://TOOLS.md/tools/deploy",
