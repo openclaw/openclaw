@@ -776,8 +776,15 @@ async function cancelQueuedSteeringMessage(
 
 export const testing = {
   cancelQueuedSteeringMessage,
+  resolveAttemptStreamAuthProfileId,
   steerAndWaitForTranscriptCommit,
 };
+
+function resolveAttemptStreamAuthProfileId(
+  params: Pick<EmbeddedRunAttemptParams, "authProfileId" | "runtimePlan">,
+): string | undefined {
+  return params.runtimePlan?.auth.forwardedAuthProfileId;
+}
 
 async function steerAndWaitForTranscriptCommit(
   activeSession: EmbeddedPiActiveSessionSteerTarget,
@@ -2649,6 +2656,7 @@ export async function runEmbeddedAttempt(
         signal: runAbortController.signal,
         model: params.model,
         resolvedApiKey: params.resolvedApiKey,
+        authProfileId: resolveAttemptStreamAuthProfileId(params),
         authStorage: params.authStorage,
       });
       const providerTextTransforms = resolveProviderTextTransforms({
@@ -3177,6 +3185,7 @@ export async function runEmbeddedAttempt(
           toolResultFormat: params.toolResultFormat,
           shouldEmitToolResult: params.shouldEmitToolResult,
           shouldEmitToolOutput: params.shouldEmitToolOutput,
+          sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
           onToolResult: params.onToolResult,
           onReasoningStream: params.onReasoningStream,
           onReasoningEnd: params.onReasoningEnd,

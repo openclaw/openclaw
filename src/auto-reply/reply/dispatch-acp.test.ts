@@ -513,7 +513,7 @@ describe("tryDispatchAcpReply", () => {
     expect(managerMocks.runTurn).toHaveBeenCalledTimes(1);
     const text = runTurnCall().text;
     expect(text).toContain("Source channel delivery is private by default");
-    expect(text).toContain("message(action=send)");
+    expect(text).toContain('call `message` with `action="send"` before ending');
     expect(text).toContain("The target defaults to the current source channel");
     expect(text).toContain("reply privately unless you send explicitly");
   });

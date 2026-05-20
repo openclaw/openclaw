@@ -24,7 +24,7 @@ describe("resolveGatewayScopedTools", () => {
 
     const messageTool = result.tools.find((tool) => tool.name === "message");
     expect(messageTool?.description).toContain(
-      "visible replies to the current source conversation",
+      "if visible output is needed in the current source conversation",
     );
   });
 
