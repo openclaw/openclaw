@@ -1228,28 +1228,25 @@ describe("exec approvals", () => {
     expect(calls).toContain("exec.approval.request");
   });
 
-  it("runs a skill wrapper chain without prompting when the wrapper is allowlisted", async () => {
+  it("runs a direct skill wrapper command without prompting when the wrapper is allowlisted", async () => {
     if (process.platform === "win32") {
       return;
     }
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-wrapper-"));
     try {
-      const skillDir = path.join(tempDir, ".openclaw", "skills", "gog");
-      const skillPath = path.join(skillDir, "SKILL.md");
       const binDir = path.join(tempDir, "bin");
       const wrapperPath = path.join(binDir, "gog-wrapper");
-      await fs.mkdir(skillDir, { recursive: true });
       await fs.mkdir(binDir, { recursive: true });
-      await fs.writeFile(skillPath, "# gog skill\n");
       await fs.writeFile(wrapperPath, "#!/bin/sh\necho '{\"events\":[]}'\n");
       await fs.chmod(wrapperPath, 0o755);
+      const trustedWrapperPath = await fs.realpath(wrapperPath);
 
       await writeExecApprovalsConfig({
         version: 1,
         defaults: { security: "allowlist", ask: "off", askFallback: "deny" },
         agents: {
           main: {
-            allowlist: [{ pattern: wrapperPath }],
+            allowlist: [{ pattern: trustedWrapperPath }],
           },
         },
       });
@@ -1265,7 +1262,7 @@ describe("exec approvals", () => {
       });
 
       const result = await tool.execute("call-skill-wrapper", {
-        command: `cat ${JSON.stringify(skillPath)} && printf '\\n---CMD---\\n' && ${JSON.stringify(wrapperPath)} calendar events primary --today --json`,
+        command: `${JSON.stringify(wrapperPath)} calendar events primary --today --json`,
         workdir: tempDir,
       });
 
