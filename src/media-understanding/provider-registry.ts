@@ -22,10 +22,26 @@ function mergeProviderIntoRegistry(
         nativeDocumentInputs: provider.nativeDocumentInputs ?? existing.nativeDocumentInputs,
       }
     : provider;
-  registry.set(normalizedKey, merged);
+  registry.set(normalizedKey, hydrateModelBackedMediaProvider(merged));
 }
 
-export { normalizeMediaProviderId } from "./provider-id.js";
+function hydrateModelBackedMediaProvider(
+  provider: MediaUnderstandingProvider,
+): MediaUnderstandingProvider {
+  if (!provider.capabilities?.includes("image")) {
+    return provider;
+  }
+  if (provider.describeImage && provider.describeImages) {
+    return provider;
+  }
+  return {
+    ...provider,
+    describeImage: provider.describeImage ?? describeImageWithModel,
+    describeImages: provider.describeImages ?? describeImagesWithModel,
+  };
+}
+
+export { normalizeMediaExecutionProviderId, normalizeMediaProviderId } from "./provider-id.js";
 
 export function buildMediaUnderstandingRegistry(
   overrides?: Record<string, MediaUnderstandingProvider>,

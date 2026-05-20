@@ -33,6 +33,10 @@ import {
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import {
+  CODEX_NATIVE_SUBAGENT_STALE_ERROR,
+  isChildlessCodexNativeSubagentTask,
+} from "./codex-native-subagent-task.js";
+import {
   getDetachedTaskLifecycleRuntime,
   tryRecoverTaskBeforeMarkLost,
 } from "./detached-task-runtime.js";
@@ -59,6 +63,7 @@ import type { TaskRecord, TaskRegistrySummary, TaskStatus } from "./task-registr
 
 const log = createSubsystemLogger("tasks/task-registry-maintenance");
 const TASK_RECONCILE_GRACE_MS = 5 * 60_000;
+const CHILDLESS_CODEX_NATIVE_RECONCILE_GRACE_MS = 30 * 60_000;
 const TASK_RETENTION_MS = 7 * 24 * 60 * 60_000;
 const TASK_SWEEP_INTERVAL_MS = 60_000;
 
@@ -290,7 +295,10 @@ function isTerminalTask(task: TaskRecord): boolean {
 
 function hasLostGraceExpired(task: TaskRecord, now: number): boolean {
   const referenceAt = task.lastEventAt ?? task.startedAt ?? task.createdAt;
-  return now - referenceAt >= TASK_RECONCILE_GRACE_MS;
+  const graceMs = isChildlessCodexNativeSubagentTask(task)
+    ? CHILDLESS_CODEX_NATIVE_RECONCILE_GRACE_MS
+    : TASK_RECONCILE_GRACE_MS;
+  return now - referenceAt >= graceMs;
 }
 
 function parseCronExecutionId(task: TaskRecord): CronExecutionId | undefined {
@@ -440,6 +448,10 @@ function hasActiveCliRun(task: TaskRecord): boolean {
   return false;
 }
 
+function hasCliRunIdentity(task: TaskRecord): boolean {
+  return [task.sourceId, task.runId].some((candidate) => Boolean(candidate?.trim()));
+}
+
 function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupContext): boolean {
   if (task.runtime === "cron") {
     if (!taskRegistryMaintenanceRuntime.isCronRuntimeAuthoritative()) {
@@ -452,10 +464,13 @@ function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupConte
   if (task.runtime === "cli" && hasActiveCliRun(task)) {
     return true;
   }
+  if (task.runtime === "cli" && hasCliRunIdentity(task)) {
+    return false;
+  }
 
   const childSessionKey = task.childSessionKey?.trim();
   if (!childSessionKey) {
-    return true;
+    return !isChildlessCodexNativeSubagentTask(task);
   }
   if (task.runtime === "acp") {
     const acpEntry = taskRegistryMaintenanceRuntime.readAcpSessionEntry({
@@ -484,6 +499,9 @@ function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupConte
 }
 
 function resolveTaskLostError(task: TaskRecord, context?: BackingSessionLookupContext): string {
+  if (isChildlessCodexNativeSubagentTask(task)) {
+    return CODEX_NATIVE_SUBAGENT_STALE_ERROR;
+  }
   if (task.runtime === "subagent") {
     const entry = findTaskSessionEntry(task, context);
     if (entry && isSubagentRecoveryWedgedEntry(entry)) {
@@ -839,7 +857,7 @@ configureTaskAuditTaskProvider(reconcileInspectableTasks);
 
 export type ActiveTaskRestartBlocker = {
   taskId: string;
-  status: Extract<TaskStatus, "queued" | "running">;
+  status: Extract<TaskStatus, "running">;
   runtime: TaskRecord["runtime"];
   runId?: string;
   label?: string;
@@ -849,13 +867,23 @@ export type ActiveTaskRestartBlocker = {
 function isActiveTaskRestartBlockerStatus(
   status: TaskStatus,
 ): status is ActiveTaskRestartBlocker["status"] {
-  return status === "queued" || status === "running";
+  return status === "running";
+}
+
+function isTaskRestartBlocker(task: TaskRecord): task is TaskRecord & {
+  status: ActiveTaskRestartBlocker["status"];
+} {
+  // A task that is merely queued has not started user work yet; durable queued
+  // work can survive a gateway restart and should not indefinitely block one.
+  // Likewise, stale records that still say "running" but already have endedAt
+  // are registry inconsistencies, not live restart blockers.
+  return isActiveTaskRestartBlockerStatus(task.status) && !task.endedAt;
 }
 
 export function getInspectableActiveTaskRestartBlockers(): ActiveTaskRestartBlocker[] {
   const blockers: ActiveTaskRestartBlocker[] = [];
   for (const task of reconcileInspectableTasks()) {
-    if (!isActiveTaskRestartBlockerStatus(task.status)) {
+    if (!isTaskRestartBlocker(task)) {
       continue;
     }
     const blocker: ActiveTaskRestartBlocker = {

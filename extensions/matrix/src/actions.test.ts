@@ -95,9 +95,17 @@ describe("matrixMessageActions", () => {
     expect(discovery.mediaSourceParams).toEqual({
       "set-profile": ["avatarUrl", "avatarPath"],
     });
-    expect(properties.displayName).toBeDefined();
-    expect(properties.avatarUrl).toBeDefined();
-    expect(properties.avatarPath).toBeDefined();
+    expect(Object.keys(properties).toSorted()).toEqual([
+      "avatarPath",
+      "avatarUrl",
+      "avatar_path",
+      "avatar_url",
+      "displayName",
+      "display_name",
+    ]);
+    expect(properties.displayName).toHaveProperty("type", "string");
+    expect(properties.avatarUrl).toHaveProperty("type", "string");
+    expect(properties.avatarPath).toHaveProperty("type", "string");
   });
 
   it("hides self-profile updates for non-owner discovery", () => {
@@ -193,7 +201,7 @@ describe("matrixMessageActions", () => {
     }
     const actions = discovery.actions;
 
-    expect(actions).toEqual([]);
+    expect(actions).toStrictEqual([]);
   });
 
   it("honors the selected Matrix account during discovery", () => {

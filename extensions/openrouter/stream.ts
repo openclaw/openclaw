@@ -1,10 +1,11 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { OPENROUTER_THINKING_STREAM_HOOKS } from "openclaw/plugin-sdk/provider-stream-family";
 import {
   createDeepSeekV4OpenAICompatibleThinkingWrapper,
+  type DeepSeekV4ReasoningEffort,
+  type DeepSeekV4ThinkingLevel,
   createPayloadPatchStreamWrapper,
-  stripTrailingAssistantPrefillMessages,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { isOpenRouterDeepSeekV4ModelId } from "./models.js";
@@ -55,6 +56,31 @@ function shouldPatchDeepSeekV4OpenRouterPayload(model: Parameters<StreamFn>[0]):
   );
 }
 
+function assistantMessageHasOpenAIToolCalls(message: Record<string, unknown>): boolean {
+  return Array.isArray(message.tool_calls) && message.tool_calls.length > 0;
+}
+
+function resolveOpenRouterDeepSeekV4ReasoningEffort(
+  thinkingLevel: DeepSeekV4ThinkingLevel,
+): DeepSeekV4ReasoningEffort {
+  switch (thinkingLevel) {
+    case "minimal":
+    case "low":
+    case "medium":
+    case "high":
+    case "xhigh":
+      return thinkingLevel;
+    case "max":
+      return "xhigh";
+    case "adaptive":
+      return "medium";
+    case "off":
+    case undefined:
+      return "high";
+  }
+  return "high";
+}
+
 function isEnabledReasoningValue(value: unknown): boolean {
   if (value === undefined || value === null || value === false) {
     return false;
@@ -70,6 +96,46 @@ function isOpenRouterReasoningPayloadEnabled(payload: Record<string, unknown>): 
   return (
     isEnabledReasoningValue(payload.reasoning) || isEnabledReasoningValue(payload.reasoning_effort)
   );
+}
+
+function assistantMessageHasAnthropicToolUse(message: Record<string, unknown>): boolean {
+  if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
+    return true;
+  }
+  const content = message.content;
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  return content.some(
+    (block) =>
+      block &&
+      typeof block === "object" &&
+      ((block as { type?: unknown }).type === "tool_use" ||
+        (block as { type?: unknown }).type === "toolCall"),
+  );
+}
+
+function stripTrailingAssistantPrefillMessages(payload: Record<string, unknown>): number {
+  if (!Array.isArray(payload.messages)) {
+    return 0;
+  }
+
+  let stripped = 0;
+  while (payload.messages.length > 0) {
+    const finalMessage = payload.messages[payload.messages.length - 1];
+    if (!finalMessage || typeof finalMessage !== "object") {
+      break;
+    }
+
+    const message = finalMessage as Record<string, unknown>;
+    if (message.role !== "assistant" || assistantMessageHasAnthropicToolUse(message)) {
+      break;
+    }
+
+    payload.messages.pop();
+    stripped += 1;
+  }
+  return stripped;
 }
 
 function injectOpenRouterRouting(
@@ -125,6 +191,9 @@ function createOpenRouterDeepSeekV4ThinkingWrapper(
     baseStreamFn,
     thinkingLevel,
     shouldPatchModel: shouldPatchDeepSeekV4OpenRouterPayload,
+    resolveReasoningEffort: resolveOpenRouterDeepSeekV4ReasoningEffort,
+    shouldBackfillAssistantReasoningContent: (message) =>
+      !assistantMessageHasOpenAIToolCalls(message),
   });
 }
 
@@ -156,12 +225,3 @@ export function wrapOpenRouterProviderStream(
     createOpenRouterDeepSeekV4ThinkingWrapper(wrappedStreamFn, ctx.thinkingLevel),
   );
 }
-
-export const __testing = {
-  isOpenRouterDeepSeekV4ModelId,
-  isOpenRouterAnthropicModelId,
-  isOpenRouterReasoningPayloadEnabled,
-  isVerifiedOpenRouterRoute,
-  shouldPatchDeepSeekV4OpenRouterPayload,
-  shouldPatchAnthropicOpenRouterPayload,
-};

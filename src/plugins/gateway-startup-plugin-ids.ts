@@ -39,6 +39,11 @@ export type GatewayStartupPluginPlan = {
 };
 
 type NormalizedPluginsConfig = ReturnType<typeof normalizePluginsConfigWithRegistry>;
+type GenerationProviderContractKey =
+  | "imageGenerationProviders"
+  | "videoGenerationProviders"
+  | "musicGenerationProviders";
+type ConfiguredGenerationProviderIds = Record<GenerationProviderContractKey, ReadonlySet<string>>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -209,6 +214,201 @@ function manifestOwnsConfiguredSpeechProvider(params: {
   });
 }
 
+function collectConfiguredWebSearchProviderIds(config: OpenClawConfig): ReadonlySet<string> {
+  const search = config.tools?.web?.search;
+  if (search?.enabled === false || typeof search?.provider !== "string") {
+    return new Set();
+  }
+  const providerId = normalizeOptionalLowercaseString(search.provider);
+  return providerId ? new Set([providerId]) : new Set();
+}
+
+function manifestOwnsConfiguredWebSearchProvider(params: {
+  manifest: PluginManifestRecord | undefined;
+  configuredWebSearchProviderIds: ReadonlySet<string>;
+}): boolean {
+  if (params.configuredWebSearchProviderIds.size === 0) {
+    return false;
+  }
+  return (params.manifest?.contracts?.webSearchProviders ?? []).some((providerId) => {
+    const normalized = normalizeOptionalLowercaseString(providerId);
+    return normalized ? params.configuredWebSearchProviderIds.has(normalized) : false;
+  });
+}
+
+function listModelProviderRefs(value: unknown): string[] {
+  if (typeof value === "string") {
+    return [value];
+  }
+  if (!isRecord(value)) {
+    return [];
+  }
+  const refs: string[] = [];
+  if (typeof value.primary === "string") {
+    refs.push(value.primary);
+  }
+  if (Array.isArray(value.fallbacks)) {
+    for (const fallback of value.fallbacks) {
+      if (typeof fallback === "string") {
+        refs.push(fallback);
+      }
+    }
+  }
+  return refs;
+}
+
+function collectModelProviderIds(value: unknown): ReadonlySet<string> {
+  return new Set(
+    listModelProviderRefs(value)
+      .map((ref) => {
+        const slashIndex = ref.indexOf("/");
+        return slashIndex > 0 ? normalizeOptionalLowercaseString(ref.slice(0, slashIndex)) : "";
+      })
+      .filter((providerId): providerId is string => Boolean(providerId)),
+  );
+}
+
+function collectConfiguredGenerationProviderIds(
+  config: OpenClawConfig,
+): ConfiguredGenerationProviderIds {
+  const defaults = config.agents?.defaults;
+  return {
+    imageGenerationProviders: collectModelProviderIds(defaults?.imageGenerationModel),
+    videoGenerationProviders: collectModelProviderIds(defaults?.videoGenerationModel),
+    musicGenerationProviders: collectModelProviderIds(defaults?.musicGenerationModel),
+  };
+}
+
+function manifestOwnsConfiguredGenerationProvider(params: {
+  manifest: PluginManifestRecord | undefined;
+  configuredGenerationProviderIds: ConfiguredGenerationProviderIds;
+}): boolean {
+  for (const contractKey of [
+    "imageGenerationProviders",
+    "videoGenerationProviders",
+    "musicGenerationProviders",
+  ] as const) {
+    const configuredProviderIds = params.configuredGenerationProviderIds[contractKey];
+    if (configuredProviderIds.size === 0) {
+      continue;
+    }
+    if (
+      (params.manifest?.contracts?.[contractKey] ?? []).some((providerId) => {
+        const normalized = normalizeOptionalLowercaseString(providerId);
+        return normalized ? configuredProviderIds.has(normalized) : false;
+      })
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function canStartConfiguredGenerationProviderPlugin(params: {
+  plugin: InstalledPluginIndexRecord;
+  manifest: PluginManifestRecord | undefined;
+  config: OpenClawConfig;
+  pluginsConfig: ReturnType<typeof normalizePluginsConfigWithRegistry>;
+  activationSource: {
+    plugins: ReturnType<typeof normalizePluginsConfigWithRegistry>;
+    rootConfig?: OpenClawConfig;
+  };
+  configuredGenerationProviderIds: ConfiguredGenerationProviderIds;
+  platform?: NodeJS.Platform;
+}): boolean {
+  if (
+    !manifestOwnsConfiguredGenerationProvider({
+      manifest: params.manifest,
+      configuredGenerationProviderIds: params.configuredGenerationProviderIds,
+    })
+  ) {
+    return false;
+  }
+  if (!params.pluginsConfig.enabled || !params.activationSource.plugins.enabled) {
+    return false;
+  }
+  if (
+    params.pluginsConfig.deny.includes(params.plugin.pluginId) ||
+    params.activationSource.plugins.deny.includes(params.plugin.pluginId)
+  ) {
+    return false;
+  }
+  if (
+    params.pluginsConfig.entries[params.plugin.pluginId]?.enabled === false ||
+    params.activationSource.plugins.entries[params.plugin.pluginId]?.enabled === false
+  ) {
+    return false;
+  }
+  const activationState = resolveEffectivePluginActivationState({
+    id: params.plugin.pluginId,
+    origin: params.plugin.origin,
+    config: params.pluginsConfig,
+    rootConfig: params.config,
+    enabledByDefault: isPluginEnabledByDefaultForPlatform(params.plugin, params.platform),
+    activationSource: params.activationSource,
+  });
+  return (
+    activationState.enabled &&
+    (params.plugin.origin === "bundled" || activationState.explicitlyEnabled)
+  );
+}
+
+function canStartRequiredAgentHarnessPlugin(params: {
+  plugin: InstalledPluginIndexRecord;
+  pluginsConfig: ReturnType<typeof normalizePluginsConfigWithRegistry>;
+  activationSource: {
+    plugins: ReturnType<typeof normalizePluginsConfigWithRegistry>;
+    rootConfig?: OpenClawConfig;
+  };
+  config: OpenClawConfig;
+  requiredAgentHarnessRuntimes: ReadonlySet<string>;
+  platform?: NodeJS.Platform;
+}): boolean {
+  if (
+    !params.plugin.startup.agentHarnesses.some((runtime) =>
+      params.requiredAgentHarnessRuntimes.has(runtime),
+    )
+  ) {
+    return false;
+  }
+  if (!params.pluginsConfig.enabled || !params.activationSource.plugins.enabled) {
+    return false;
+  }
+  if (
+    params.pluginsConfig.deny.includes(params.plugin.pluginId) ||
+    params.activationSource.plugins.deny.includes(params.plugin.pluginId)
+  ) {
+    return false;
+  }
+  if (
+    params.pluginsConfig.entries[params.plugin.pluginId]?.enabled === false ||
+    params.activationSource.plugins.entries[params.plugin.pluginId]?.enabled === false
+  ) {
+    return false;
+  }
+  if (
+    params.pluginsConfig.allow.length > 0 &&
+    !params.pluginsConfig.allow.includes(params.plugin.pluginId)
+  ) {
+    return false;
+  }
+  if (
+    params.activationSource.plugins.allow.length > 0 &&
+    !params.activationSource.plugins.allow.includes(params.plugin.pluginId)
+  ) {
+    return false;
+  }
+  const activationState = resolveEffectivePluginActivationState({
+    id: params.plugin.pluginId,
+    origin: params.plugin.origin,
+    config: params.pluginsConfig,
+    rootConfig: params.config,
+    enabledByDefault: isPluginEnabledByDefaultForPlatform(params.plugin, params.platform),
+    activationSource: params.activationSource,
+  });
+  return activationState.enabled || params.plugin.origin === "bundled";
+}
+
 function canStartConfiguredSpeechProviderPlugin(params: {
   plugin: InstalledPluginIndexRecord;
   manifest: PluginManifestRecord | undefined;
@@ -253,6 +453,52 @@ function canStartConfiguredSpeechProviderPlugin(params: {
     activationSource: params.activationSource,
   });
   return activationState.enabled && activationState.explicitlyEnabled;
+}
+
+function canStartConfiguredWebSearchProviderPlugin(params: {
+  plugin: InstalledPluginIndexRecord;
+  manifest: PluginManifestRecord | undefined;
+  config: OpenClawConfig;
+  pluginsConfig: ReturnType<typeof normalizePluginsConfigWithRegistry>;
+  activationSource: {
+    plugins: ReturnType<typeof normalizePluginsConfigWithRegistry>;
+    rootConfig?: OpenClawConfig;
+  };
+  configuredWebSearchProviderIds: ReadonlySet<string>;
+  platform?: NodeJS.Platform;
+}): boolean {
+  if (
+    !manifestOwnsConfiguredWebSearchProvider({
+      manifest: params.manifest,
+      configuredWebSearchProviderIds: params.configuredWebSearchProviderIds,
+    })
+  ) {
+    return false;
+  }
+  if (!params.pluginsConfig.enabled || !params.activationSource.plugins.enabled) {
+    return false;
+  }
+  if (
+    params.pluginsConfig.deny.includes(params.plugin.pluginId) ||
+    params.activationSource.plugins.deny.includes(params.plugin.pluginId)
+  ) {
+    return false;
+  }
+  if (
+    params.pluginsConfig.entries[params.plugin.pluginId]?.enabled === false ||
+    params.activationSource.plugins.entries[params.plugin.pluginId]?.enabled === false
+  ) {
+    return false;
+  }
+  const activationState = resolveEffectivePluginActivationState({
+    id: params.plugin.pluginId,
+    origin: params.plugin.origin,
+    config: params.pluginsConfig,
+    rootConfig: params.config,
+    enabledByDefault: isPluginEnabledByDefaultForPlatform(params.plugin, params.platform),
+    activationSource: params.activationSource,
+  });
+  return activationState.enabled;
 }
 
 function canStartConfiguredRootPlugin(params: {
@@ -507,11 +753,18 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
     rootConfig: activationSourceConfig,
   };
   const requiredAgentHarnessRuntimes = new Set(
-    collectConfiguredAgentHarnessRuntimes(activationSourceConfig, params.env),
+    collectConfiguredAgentHarnessRuntimes(activationSourceConfig, params.env, {
+      includeEnvRuntime: false,
+      includeLegacyAgentRuntimes: false,
+    }),
   );
   const startupDreamingPluginIds = resolveGatewayStartupDreamingPluginIds(params.config);
   const manifestLookup = createManifestRegistryLookup(params.manifestRegistry);
   const configuredSpeechProviderIds = collectConfiguredSpeechProviderIds(activationSourceConfig);
+  const configuredWebSearchProviderIds =
+    collectConfiguredWebSearchProviderIds(activationSourceConfig);
+  const configuredGenerationProviderIds =
+    collectConfiguredGenerationProviderIds(activationSourceConfig);
   const normalizePluginId = createPluginRegistryIdNormalizer(params.index, {
     manifestRegistry: params.manifestRegistry,
   });
@@ -545,17 +798,16 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
         });
       }
       if (
-        plugin.startup.agentHarnesses.some((runtime) => requiredAgentHarnessRuntimes.has(runtime))
-      ) {
-        const activationState = resolveEffectivePluginActivationState({
-          id: plugin.pluginId,
-          origin: plugin.origin,
-          config: pluginsConfig,
-          rootConfig: params.config,
-          enabledByDefault: isPluginEnabledByDefaultForPlatform(plugin, params.platform),
+        canStartRequiredAgentHarnessPlugin({
+          plugin,
+          pluginsConfig,
           activationSource,
-        });
-        return activationState.enabled;
+          config: params.config,
+          requiredAgentHarnessRuntimes,
+          platform: params.platform,
+        })
+      ) {
+        return true;
       }
       if (
         canStartConfiguredRootPlugin({
@@ -576,6 +828,32 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
           pluginsConfig,
           activationSource,
           configuredSpeechProviderIds,
+          platform: params.platform,
+        })
+      ) {
+        return true;
+      }
+      if (
+        canStartConfiguredWebSearchProviderPlugin({
+          plugin,
+          manifest,
+          config: params.config,
+          pluginsConfig,
+          activationSource,
+          configuredWebSearchProviderIds,
+          platform: params.platform,
+        })
+      ) {
+        return true;
+      }
+      if (
+        canStartConfiguredGenerationProviderPlugin({
+          plugin,
+          manifest,
+          config: params.config,
+          pluginsConfig,
+          activationSource,
+          configuredGenerationProviderIds,
           platform: params.platform,
         })
       ) {

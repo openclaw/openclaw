@@ -1,5 +1,12 @@
-import { describe, expect, it } from "vitest";
-import { buildAttemptSystemPrompt } from "./attempt-system-prompt.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+let buildAttemptSystemPrompt: typeof import("./attempt-system-prompt.js").buildAttemptSystemPrompt;
+
+beforeEach(async () => {
+  vi.resetModules();
+  vi.doUnmock("../system-prompt.js");
+  ({ buildAttemptSystemPrompt } = await import("./attempt-system-prompt.js"));
+});
 
 const baseProviderTransform = {
   provider: "openai",
@@ -11,11 +18,16 @@ const baseProviderTransform = {
   },
 };
 
+const transformProviderSystemPrompt: Parameters<
+  typeof buildAttemptSystemPrompt
+>[0]["transformProviderSystemPrompt"] = ({ context }) => context.systemPrompt;
+
 describe("buildAttemptSystemPrompt", () => {
   it("preserves bootstrap Project Context when a system prompt override is configured", () => {
     const result = buildAttemptSystemPrompt({
       isRawModelRun: false,
       systemPromptOverrideText: "Custom override prompt.",
+      transformProviderSystemPrompt,
       embeddedSystemPrompt: {
         workspaceDir: "/tmp/openclaw",
         reasoningTagHint: false,
@@ -46,6 +58,7 @@ describe("buildAttemptSystemPrompt", () => {
     });
 
     expect(result.systemPrompt).toContain("Custom override prompt.");
+    expect(result.systemPrompt).toContain("Current model identity: openai/gpt-5.5.");
     expect(result.systemPrompt).toContain("## Bootstrap Pending");
     expect(result.systemPrompt).toContain("BOOTSTRAP.md is included below in Project Context");
     expect(result.systemPrompt).toContain("## Bootstrap Context Notice");
@@ -56,9 +69,43 @@ describe("buildAttemptSystemPrompt", () => {
     expect(result.systemPrompt).not.toContain("USER.md");
   });
 
+  it("preserves runtime extra system prompt context when a system prompt override is configured", () => {
+    const result = buildAttemptSystemPrompt({
+      isRawModelRun: false,
+      systemPromptOverrideText: "Custom override prompt.",
+      transformProviderSystemPrompt,
+      embeddedSystemPrompt: {
+        workspaceDir: "/tmp/openclaw",
+        reasoningTagHint: false,
+        runtimeInfo: {
+          host: "test-host",
+          os: "Darwin",
+          arch: "arm64",
+          node: "v22.0.0",
+          model: "openai/gpt-5.5",
+        },
+        tools: [],
+        modelAliasLines: [],
+        userTimezone: "UTC",
+        promptMode: "minimal",
+        extraSystemPrompt:
+          "# Subagent Context\n\n## Your Role\n- You were created to handle: RUN_MODE_TASK_77950",
+        bootstrapMode: "full",
+        contextFiles: [],
+      },
+      providerTransform: baseProviderTransform,
+    });
+
+    expect(result.systemPrompt).toContain("Custom override prompt.");
+    expect(result.systemPrompt).toContain("Current model identity: openai/gpt-5.5.");
+    expect(result.systemPrompt).toContain("## Subagent Context");
+    expect(result.systemPrompt).toContain("RUN_MODE_TASK_77950");
+  });
+
   it("omits system prompts for raw model probes", () => {
     const result = buildAttemptSystemPrompt({
       isRawModelRun: true,
+      transformProviderSystemPrompt,
       embeddedSystemPrompt: {
         workspaceDir: "/tmp/openclaw",
         reasoningTagHint: false,

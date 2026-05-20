@@ -1,12 +1,12 @@
 {
   "name": "@openclaw/openai-provider",
-  "version": "2026.5.4",
+  "version": "2026.5.19",
   "private": true,
   "description": "OpenClaw OpenAI provider plugins",
   "type": "module",
   "dependencies": {
-    "@mariozechner/pi-ai": "0.71.1",
-    "ws": "^8.20.0"
+    "@earendil-works/pi-ai": "0.75.1",
+    "ws": "8.20.1"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

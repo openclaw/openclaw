@@ -3,7 +3,9 @@ import { t } from "../i18n/index.ts";
 import { refreshChat } from "./app-chat.ts";
 import {
   startLogsPolling,
+  startNodesPolling,
   stopLogsPolling,
+  stopNodesPolling,
   startDebugPolling,
   stopDebugPolling,
 } from "./app-polling.ts";
@@ -63,6 +65,7 @@ import {
   type Tab,
 } from "./navigation.ts";
 import {
+  normalizeTextScale,
   saveLocalUserIdentity,
   saveSettings,
   type LocalUserIdentity,
@@ -106,6 +109,7 @@ type SettingsHost = {
   controlUiTabPaintSeq?: number;
   controlUiOverviewRefreshSeq?: number;
   controlUiCronRefreshSeq?: number;
+  sessionsChangedReloadTimer?: number | ReturnType<typeof globalThis.setTimeout> | null;
   dreamingStatusLoading: boolean;
   dreamingStatusError: string | null;
   dreamingStatus: import("./controllers/dreaming.js").DreamingStatus | null;
@@ -149,6 +153,7 @@ type SettingsAppHost = SettingsHost &
 export function applySettings(host: SettingsHost, next: UiSettings) {
   const normalized = {
     ...next,
+    textScale: normalizeTextScale(next.textScale),
     lastActiveSessionKey:
       normalizeOptionalString(next.lastActiveSessionKey) ??
       normalizeOptionalString(next.sessionKey) ??
@@ -162,7 +167,8 @@ export function applySettings(host: SettingsHost, next: UiSettings) {
     host.themeMode = next.themeMode;
     applyResolvedTheme(host, resolveTheme(next.theme, next.themeMode));
   }
-  applyBorderRadius(next.borderRadius);
+  applyBorderRadius(normalized.borderRadius);
+  applyTextScale(normalized.textScale);
   host.applySessionKey = host.settings.lastActiveSessionKey;
 }
 
@@ -192,7 +198,45 @@ function applySessionSelection(host: SettingsHost, session: string) {
 /** Set to true when the token is read from a query string (?token=) instead of a URL fragment. */
 export let warnQueryToken = false;
 
+declare global {
+  interface Window {
+    __OPENCLAW_NATIVE_CONTROL_AUTH__?: {
+      gatewayUrl?: string | null;
+      token?: string | null;
+      password?: string | null;
+    };
+  }
+}
+
+function applyNativeControlAuth(host: SettingsHost) {
+  const nativeAuth = window["__OPENCLAW_NATIVE_CONTROL_AUTH__"];
+  if (!nativeAuth) {
+    return;
+  }
+  try {
+    delete window["__OPENCLAW_NATIVE_CONTROL_AUTH__"];
+  } catch {
+    window["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = undefined;
+  }
+
+  const gatewayUrl = normalizeOptionalString(nativeAuth.gatewayUrl);
+  const token = normalizeOptionalString(nativeAuth.token);
+  const password = normalizeOptionalString(nativeAuth.password);
+  const nextSettings = {
+    ...host.settings,
+    ...(gatewayUrl ? { gatewayUrl } : {}),
+    ...(token ? { token } : {}),
+  };
+  if (gatewayUrl || (token && token !== host.settings.token)) {
+    applySettings(host, nextSettings);
+  }
+  if (password && password !== host.password) {
+    host.password = password;
+  }
+}
+
 export function applySettingsFromUrl(host: SettingsHost) {
+  applyNativeControlAuth(host);
   if (!window.location.search && !window.location.hash) {
     return;
   }
@@ -346,6 +390,19 @@ async function refreshAgentsTab(host: SettingsHost, app: SettingsAppHost) {
   }
 }
 
+function loadConfigSchemaAfterPrimary(
+  host: SettingsHost,
+  app: SettingsAppHost,
+  primaryRefresh: Promise<unknown>,
+) {
+  void primaryRefresh.then(
+    () => {
+      void loadConfigSchema(app).finally(() => host.requestUpdate?.());
+    },
+    () => undefined,
+  );
+}
+
 export async function refreshActiveTab(host: SettingsHost) {
   const app = host as unknown as SettingsAppHost;
   const refreshRun = beginControlUiRefresh(host, host.tab);
@@ -357,8 +414,11 @@ export async function refreshActiveTab(host: SettingsHost) {
       case "automation":
       case "infrastructure":
       case "aiAgents":
-        await loadConfigSchema(app);
-        await loadConfig(app);
+        {
+          const primaryRefresh = loadConfig(app);
+          loadConfigSchemaAfterPrimary(host, app, primaryRefresh);
+          await primaryRefresh;
+        }
         break;
       case "overview":
         await loadOverview(host);
@@ -397,13 +457,16 @@ export async function refreshActiveTab(host: SettingsHost) {
           loadWikiMemoryPalace(app),
         ]);
         break;
-      case "chat":
+      case "chat": {
+        const modelAuthRefresh = loadModelAuthStatusState(app).catch(() => undefined);
         await refreshChat(host as unknown as Parameters<typeof refreshChat>[0]);
         scheduleChatScroll(
           host as unknown as Parameters<typeof scheduleChatScroll>[0],
           !host.chatHasAutoScrolled,
         );
+        void modelAuthRefresh;
         break;
+      }
       case "debug":
         await loadDebug(app);
         host.eventLog = host.eventLogBuffer;
@@ -425,7 +488,7 @@ export function inferBasePath() {
   if (typeof window === "undefined") {
     return "";
   }
-  const configured = window.__OPENCLAW_CONTROL_UI_BASE_PATH__;
+  const configured = window["__OPENCLAW_CONTROL_UI_BASE_PATH__"];
   const normalizedConfigured = normalizeOptionalString(configured);
   if (normalizedConfigured) {
     return normalizeBasePath(normalizedConfigured);
@@ -447,6 +510,7 @@ export function syncThemeWithSettings(host: SettingsHost) {
   }
   applyResolvedTheme(host, resolveTheme(host.theme, host.themeMode));
   applyBorderRadius(host.settings.borderRadius ?? 50);
+  applyTextScale(host.settings.textScale);
   syncSystemThemeListener(host);
 }
 
@@ -469,6 +533,15 @@ export function applyBorderRadius(value: number) {
   root.style.setProperty("--radius-xl", `${Math.round(BASE_RADII.xl * scale)}px`);
   root.style.setProperty("--radius-full", `${Math.round(BASE_RADII.full * scale)}px`);
   root.style.setProperty("--radius", `${Math.round(BASE_RADII.default * scale)}px`);
+}
+
+export function applyTextScale(value: unknown) {
+  if (typeof document === "undefined") {
+    return;
+  }
+  const root = document.documentElement;
+  const scale = normalizeTextScale(value) / 100;
+  root.style.setProperty("--control-ui-text-scale", scale.toFixed(2));
 }
 
 export function applyResolvedTheme(host: SettingsHost, resolved: ResolvedTheme) {
@@ -549,11 +622,23 @@ export function setTabFromRoute(host: SettingsHost, next: Tab) {
   applyTabSelection(host, next, { refreshPolicy: "connected" });
 }
 
-function updateBrowserHistory(url: URL, replace: boolean) {
-  if (replace) {
-    return window.history.replaceState({}, "", url.toString());
+function clearPendingSessionsChangedReload(host: SettingsHost) {
+  if (host.sessionsChangedReloadTimer == null) {
+    return;
   }
-  return window.history.pushState({}, "", url.toString());
+  globalThis.clearTimeout(host.sessionsChangedReloadTimer);
+  host.sessionsChangedReloadTimer = null;
+}
+
+function updateBrowserHistory(url: URL, replace: boolean) {
+  const history = typeof window === "undefined" ? undefined : window.history;
+  if (!history) {
+    return;
+  }
+  if (replace) {
+    return history.replaceState({}, "", url.toString());
+  }
+  return history.pushState({}, "", url.toString());
 }
 
 function applyTabSelection(
@@ -565,6 +650,7 @@ function applyTabSelection(
   host.tab = next;
   if (prev !== next) {
     scheduleControlUiTabVisibleTiming(host, prev, next);
+    clearPendingSessionsChangedReload(host);
   }
 
   // Cleanup chat module state when navigating away from chat
@@ -577,6 +663,9 @@ function applyTabSelection(
   }
   (next === "logs" ? startLogsPolling : stopLogsPolling)(
     host as unknown as Parameters<typeof startLogsPolling>[0],
+  );
+  (next === "nodes" ? startNodesPolling : stopNodesPolling)(
+    host as unknown as Parameters<typeof startNodesPolling>[0],
   );
   (next === "debug" ? startDebugPolling : stopDebugPolling)(
     host as unknown as Parameters<typeof startDebugPolling>[0],
@@ -592,12 +681,14 @@ function applyTabSelection(
 }
 
 export function syncUrlWithTab(host: SettingsHost, tab: Tab, replace: boolean) {
-  if (typeof window === "undefined") {
+  const href = typeof window === "undefined" ? undefined : window.location?.href;
+  const pathname = typeof window === "undefined" ? undefined : window.location?.pathname;
+  if (!href || !pathname) {
     return;
   }
   const targetPath = normalizePath(pathForTab(tab, host.basePath));
-  const currentPath = normalizePath(window.location.pathname);
-  const url = new URL(window.location.href);
+  const currentPath = normalizePath(pathname);
+  const url = new URL(href);
 
   if (tab === "chat" && host.sessionKey) {
     url.searchParams.set("session", host.sessionKey);
@@ -612,7 +703,11 @@ export function syncUrlWithTab(host: SettingsHost, tab: Tab, replace: boolean) {
   updateBrowserHistory(url, replace);
 }
 
-export function syncUrlWithSessionKey(host: SettingsHost, sessionKey: string, replace: boolean) {
+export function syncUrlWithSessionKey(
+  _hostValue: SettingsHost,
+  sessionKey: string,
+  replace: boolean,
+) {
   const href = typeof window === "undefined" ? undefined : window.location?.href;
   if (!href) {
     return;
@@ -831,7 +926,9 @@ function buildAttentionItems(host: SettingsAppHost) {
 
 export async function loadChannelsTab(host: SettingsHost) {
   const app = host as unknown as SettingsAppHost;
-  await Promise.all([loadChannels(app, true), loadConfigSchema(app), loadConfig(app)]);
+  const primaryRefresh = Promise.all([loadChannels(app, false), loadConfig(app)]);
+  loadConfigSchemaAfterPrimary(host, app, primaryRefresh);
+  await primaryRefresh;
 }
 
 export async function loadCron(host: SettingsHost) {

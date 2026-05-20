@@ -1,6 +1,6 @@
 import { resolveCommandAuthorizedFromAuthorizers } from "openclaw/plugin-sdk/command-auth-native";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import type { Guild } from "../internal/discord.js";
 import {
@@ -15,6 +15,7 @@ import {
 export async function authorizeDiscordVoiceIngress(params: {
   cfg: OpenClawConfig;
   discordConfig: DiscordAccountConfig;
+  accountId?: string;
   groupPolicy?: "open" | "disabled" | "allowlist";
   useAccessGroups?: boolean;
   guild?: Guild<true> | Guild | null;
@@ -114,11 +115,12 @@ export async function authorizeDiscordVoiceIngress(params: {
       ]
     : [{ configured: hasAccessRestrictions, allowed: memberAllowed }];
 
-  return resolveCommandAuthorizedFromAuthorizers({
+  const commandAuthorized = resolveCommandAuthorizedFromAuthorizers({
     useAccessGroups,
     authorizers,
     modeWhenAccessGroupsOff: "configured",
-  })
+  });
+  return commandAuthorized
     ? { ok: true, channelConfig }
     : { ok: false, message: "You are not authorized to use this command." };
 }

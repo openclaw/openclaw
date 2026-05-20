@@ -1,12 +1,5 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  createAgentToAgentPolicy,
-  createSessionVisibilityChecker,
-  createSessionVisibilityGuard,
-  listSpawnedSessionKeys,
-  resolveEffectiveSessionToolsVisibility,
-  resolveSandboxSessionToolsVisibility,
-} from "../../plugin-sdk/session-visibility.js";
+import { resolveSandboxSessionToolsVisibility } from "../../plugin-sdk/session-visibility.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-resolution.js";
@@ -15,6 +8,7 @@ export {
   createAgentToAgentPolicy,
   createSessionVisibilityChecker,
   createSessionVisibilityGuard,
+  createSessionVisibilityRowChecker,
   listSpawnedSessionKeys,
   resolveEffectiveSessionToolsVisibility,
 } from "../../plugin-sdk/session-visibility.js";

@@ -1,43 +1,26 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { updateSessionStore, type SessionEntry } from "../config/sessions.js";
 import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
 import { addTestHook, createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
+import { patchPluginSessionExtension } from "../plugins/host-hook-state.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { PluginHookRegistration } from "../plugins/types.js";
-
-type ToolDefinitionAdapterModule = typeof import("./pi-tool-definition-adapter.js");
-type PiToolsAbortModule = typeof import("./pi-tools.abort.js");
-type BeforeToolCallModule = typeof import("./pi-tools.before-tool-call.js");
-
-type ToClientToolDefinitions = ToolDefinitionAdapterModule["toClientToolDefinitions"];
-type ToToolDefinitions = ToolDefinitionAdapterModule["toToolDefinitions"];
-type WrapToolWithAbortSignal = PiToolsAbortModule["wrapToolWithAbortSignal"];
-type BeforeToolCallTesting = BeforeToolCallModule["__testing"];
-type ConsumeAdjustedParamsForToolCall = BeforeToolCallModule["consumeAdjustedParamsForToolCall"];
-type WrapToolWithBeforeToolCallHook = BeforeToolCallModule["wrapToolWithBeforeToolCallHook"];
-
-let toClientToolDefinitions!: ToClientToolDefinitions;
-let toToolDefinitions!: ToToolDefinitions;
-let wrapToolWithAbortSignal!: WrapToolWithAbortSignal;
-let beforeToolCallTesting!: BeforeToolCallTesting;
-let consumeAdjustedParamsForToolCall!: ConsumeAdjustedParamsForToolCall;
-let wrapToolWithBeforeToolCallHook!: WrapToolWithBeforeToolCallHook;
-
-beforeEach(async () => {
-  if (!wrapToolWithBeforeToolCallHook) {
-    ({ toClientToolDefinitions, toToolDefinitions } =
-      await import("./pi-tool-definition-adapter.js"));
-    ({ wrapToolWithAbortSignal } = await import("./pi-tools.abort.js"));
-    ({
-      __testing: beforeToolCallTesting,
-      consumeAdjustedParamsForToolCall,
-      wrapToolWithBeforeToolCallHook,
-    } = await import("./pi-tools.before-tool-call.js"));
-  }
-});
+import { toClientToolDefinitions, toToolDefinitions } from "./pi-tool-definition-adapter.js";
+import { wrapToolWithAbortSignal } from "./pi-tools.abort.js";
+import {
+  testing as beforeToolCallTesting,
+  consumeAdjustedParamsForToolCall,
+  isToolWrappedWithBeforeToolCallHook,
+  wrapToolWithBeforeToolCallHook,
+} from "./pi-tools.before-tool-call.js";
 
 type BeforeToolCallHandlerMock = ReturnType<typeof vi.fn>;
 
@@ -46,6 +29,20 @@ type BeforeToolCallHookInstall = {
   priority?: number;
   handler: BeforeToolCallHandlerMock;
 };
+
+function collectMatching<T, U>(
+  items: readonly T[],
+  predicate: (item: T) => boolean,
+  map: (item: T) => U,
+): U[] {
+  const matches: U[] = [];
+  for (const item of items) {
+    if (predicate(item)) {
+      matches.push(map(item));
+    }
+  }
+  return matches;
+}
 
 function installBeforeToolCallHook(params?: {
   enabled?: boolean;
@@ -315,6 +312,58 @@ describe("before_tool_call hook deduplication (#15502)", () => {
 
     expect(beforeToolCallHook).toHaveBeenCalledTimes(1);
   });
+
+  it("passes hook context for unwrapped tool definitions", async () => {
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    const baseTool = { name: "exec", execute, description: "exec", parameters: {} } as any;
+    const [def] = toToolDefinitions([baseTool], {
+      agentId: "code-agent",
+      sessionKey: "agent:code-agent:main",
+      sessionId: "session-code",
+      runId: "run-code",
+      channelId: "channel-code",
+    });
+    const extensionContext = {} as Parameters<typeof def.execute>[4];
+
+    await def.execute(
+      "call-code-exec",
+      { code: "echo hi" },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(beforeToolCallHook).toHaveBeenCalledTimes(1);
+    expect(beforeToolCallHook).toHaveBeenCalledWith(
+      {
+        toolName: "exec",
+        params: { code: "echo hi" },
+        runId: "run-code",
+        toolCallId: "call-code-exec",
+      },
+      {
+        toolName: "exec",
+        agentId: "code-agent",
+        sessionKey: "agent:code-agent:main",
+        sessionId: "session-code",
+        runId: "run-code",
+        toolCallId: "call-code-exec",
+        channelId: "channel-code",
+      },
+    );
+  });
+
+  it("preserves the hook marker when abort wrapping a hooked tool", () => {
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    const baseTool = { name: "Bash", execute, description: "bash", parameters: {} } as any;
+    const wrapped = wrapToolWithBeforeToolCallHook(baseTool, {
+      agentId: "main",
+      sessionKey: "main",
+    });
+    const withAbort = wrapToolWithAbortSignal(wrapped, new AbortController().signal);
+
+    expect(isToolWrappedWithBeforeToolCallHook(withAbort)).toBe(true);
+  });
 });
 
 describe("before_tool_call hook integration for client tools", () => {
@@ -353,7 +402,7 @@ describe("before_tool_call hook integration for client tools", () => {
   });
 
   it("preserves client tool source order when hooks resolve out of order", async () => {
-    let releaseFirstHook!: () => void;
+    let releaseFirstHook: (() => void) | undefined;
     const firstHookGate = new Promise<void>((resolve) => {
       releaseFirstHook = resolve;
     });
@@ -439,16 +488,106 @@ describe("before_tool_call hook integration for client tools", () => {
       { name: "second_tool", completed: true },
     ]);
 
+    if (!releaseFirstHook) {
+      throw new Error("Expected first before-tool-call hook release callback to be initialized");
+    }
     releaseFirstHook();
     await firstRun;
 
-    expect(slots.filter((slot) => slot.completed).map((slot) => slot.name)).toEqual([
-      "first_tool",
-      "second_tool",
-    ]);
+    expect(
+      collectMatching(
+        slots,
+        (slot) => slot.completed,
+        (slot) => slot.name,
+      ),
+    ).toEqual(["first_tool", "second_tool"]);
     expect(slots.map((slot) => slot.params)).toEqual([
       { value: "first", marker: "first_tool" },
       { value: "second", marker: "second_tool" },
     ]);
+  });
+
+  it("lets trusted policies read session extensions for client tools when config is provided", async () => {
+    resetGlobalHookRunner();
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-client-tool-policy-"));
+    const storePath = path.join(stateDir, "sessions.json");
+    const config = { session: { store: storePath } };
+    const seen: unknown[] = [];
+    const registry = createEmptyPluginRegistry();
+    registry.sessionExtensions = [
+      {
+        pluginId: "policy-plugin",
+        pluginName: "Policy Plugin",
+        source: "test",
+        extension: {
+          namespace: "policy",
+          description: "policy state",
+        },
+      },
+    ];
+    registry.trustedToolPolicies = [
+      {
+        pluginId: "policy-plugin",
+        pluginName: "Policy Plugin",
+        source: "test",
+        policy: {
+          id: "client-tool-session-extension-policy",
+          description: "client tool session extension policy",
+          evaluate(eventValue, ctx) {
+            seen.push(ctx.getSessionExtension?.("policy"));
+            return undefined;
+          },
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+    try {
+      await updateSessionStore(storePath, (store) => {
+        store["agent:main:client"] = {
+          sessionId: "session-client",
+          updatedAt: Date.now(),
+        } as SessionEntry;
+      });
+      await expect(
+        patchPluginSessionExtension({
+          cfg: config as never,
+          sessionKey: "agent:main:client",
+          pluginId: "policy-plugin",
+          namespace: "policy",
+          value: { gate: "client" },
+        }),
+      ).resolves.toEqual({
+        ok: true,
+        key: "agent:main:client",
+        value: { gate: "client" },
+      });
+
+      const [tool] = toClientToolDefinitions(
+        [
+          {
+            type: "function",
+            function: {
+              name: "client_tool",
+              description: "Client tool",
+              parameters: { type: "object", properties: {} },
+            },
+          },
+        ],
+        undefined,
+        {
+          agentId: "main",
+          sessionKey: "agent:main:client",
+          sessionId: "session-client",
+          config: config as never,
+        },
+      );
+      const extensionContext = {} as Parameters<typeof tool.execute>[4];
+      await tool.execute("client-call-policy", {}, undefined, undefined, extensionContext);
+
+      expect(seen).toEqual([{ gate: "client" }]);
+    } finally {
+      setActivePluginRegistry(createEmptyPluginRegistry());
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
   });
 });

@@ -2,7 +2,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { runCommandWithTimeout } from "../process/exec.js";
+import { runCommandWithTimeout, type CommandOptions } from "../process/exec.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { installPackageDir } from "./install-package-dir.js";
 
@@ -16,14 +16,24 @@ vi.mock("../process/exec.js", async () => {
 
 async function listMatchingDirs(root: string, prefix: string): Promise<string[]> {
   const entries = await fs.readdir(root, { withFileTypes: true });
-  return entries
-    .filter((entry) => entry.isDirectory() && entry.name.startsWith(prefix))
-    .map((entry) => entry.name);
+  const names: string[] = [];
+  for (const entry of entries) {
+    if (entry.isDirectory() && entry.name.startsWith(prefix)) {
+      names.push(entry.name);
+    }
+  }
+  return names;
 }
 
 async function listMatchingEntries(root: string, prefix: string): Promise<string[]> {
   const entries = await fs.readdir(root, { withFileTypes: true });
-  return entries.filter((entry) => entry.name.startsWith(prefix)).map((entry) => entry.name);
+  const names: string[] = [];
+  for (const entry of entries) {
+    if (entry.name.startsWith(prefix)) {
+      names.push(entry.name);
+    }
+  }
+  return names;
 }
 
 function normalizeDarwinTmpPath(filePath: string): string {
@@ -44,6 +54,42 @@ function normalizeComparablePath(filePath: string): string {
   const basename =
     process.platform === "win32" ? path.basename(resolved).toLowerCase() : path.basename(resolved);
   return path.join(comparableParent, basename);
+}
+
+function createFsError(code: string, message = code): NodeJS.ErrnoException {
+  return Object.assign(new Error(message), { code });
+}
+
+async function expectMissingPath(filePath: string): Promise<void> {
+  try {
+    await fs.stat(filePath);
+  } catch (error) {
+    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+    return;
+  }
+  throw new Error(`Expected missing path: ${filePath}`);
+}
+
+function expectRunCommandCallForArgv(
+  expectedArgv: string[],
+  predicate?: (options: CommandOptions) => boolean,
+): CommandOptions {
+  const calls = vi.mocked(runCommandWithTimeout).mock.calls as [
+    string[],
+    number | CommandOptions,
+  ][];
+  for (const [argv, optionsOrTimeout] of calls.toReversed()) {
+    if (
+      JSON.stringify(argv) !== JSON.stringify(expectedArgv) ||
+      typeof optionsOrTimeout === "number"
+    ) {
+      continue;
+    }
+    if (!predicate || predicate(optionsOrTimeout)) {
+      return optionsOrTimeout;
+    }
+  }
+  throw new Error(`Expected runCommandWithTimeout call: ${expectedArgv.join(" ")}`);
 }
 
 async function rebindInstallBasePath(params: {
@@ -207,6 +253,49 @@ describe("installPackageDir", () => {
     await expect(fs.readdir(backupRoot)).resolves.toHaveLength(0);
   });
 
+  it("publishes the staged install through the copy fallback when rename crosses devices", async () => {
+    await fixtureRootTracker.setup();
+    const fixtureRoot = await fixtureRootTracker.make("case");
+    const sourceDir = path.join(fixtureRoot, "source");
+    const installBaseDir = path.join(fixtureRoot, "plugins");
+    const targetDir = path.join(installBaseDir, "demo");
+    await fs.mkdir(sourceDir, { recursive: true });
+    await fs.writeFile(path.join(sourceDir, "marker.txt"), "new");
+
+    const realRename = fs.rename.bind(fs);
+    let exdevMoves = 0;
+    vi.spyOn(fs, "rename").mockImplementation(async (...args: Parameters<typeof fs.rename>) => {
+      const [from, to] = args;
+      const fromPath = String(from);
+      if (
+        exdevMoves === 0 &&
+        path.basename(fromPath).startsWith(".openclaw-install-stage-") &&
+        normalizeComparablePath(String(to)) === normalizeComparablePath(targetDir)
+      ) {
+        exdevMoves += 1;
+        throw createFsError("EXDEV", "cross-device link not permitted");
+      }
+      return await realRename(...args);
+    });
+
+    const result = await installPackageDir({
+      sourceDir,
+      targetDir,
+      mode: "install",
+      timeoutMs: 1_000,
+      copyErrorPrefix: "failed to copy plugin",
+      hasDeps: false,
+      depsLogMessage: "Installing deps…",
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(exdevMoves).toBe(1);
+    await expect(fs.readFile(path.join(targetDir, "marker.txt"), "utf8")).resolves.toBe("new");
+    await expect(
+      listMatchingDirs(installBaseDir, ".openclaw-install-stage-"),
+    ).resolves.toHaveLength(0);
+  });
+
   it("aborts without outside writes when the install base is rebound before publish", async () => {
     await fixtureRootTracker.setup();
     const fixtureRoot = await fixtureRootTracker.make("case");
@@ -238,11 +327,7 @@ describe("installPackageDir", () => {
       },
     });
 
-    await expect(
-      fs.stat(path.join(outsideInstallRoot, "demo", "marker.txt")),
-    ).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expectMissingPath(path.join(outsideInstallRoot, "demo", "marker.txt"));
     expect(warnings).toContain(
       "Install base directory changed during install; aborting staged publish.",
     );
@@ -255,33 +340,40 @@ describe("installPackageDir", () => {
       await createReboundInstallFixture({ fixtureRoot, withExistingInstall: true });
 
     const warnings: string[] = [];
-    const result = await withInstallBaseReboundOnRealpathCall({
-      installBaseDir,
-      preservedDir: preservedInstallRoot,
-      outsideTarget: outsideInstallRoot,
-      rebindAtCall: 8,
-      run: async () =>
-        await installPackageDir({
-          sourceDir,
-          targetDir,
-          mode: "update",
-          timeoutMs: 1_000,
-          copyErrorPrefix: "failed to copy plugin",
-          hasDeps: false,
-          depsLogMessage: "Installing deps…",
-          logger: { warn: (message) => warnings.push(message) },
-        }),
+    const installBasePath = normalizeComparablePath(installBaseDir);
+    const realStat = fs.stat.bind(fs);
+    let installBaseStatCalls = 0;
+    vi.spyOn(fs, "stat").mockImplementation(async (...args: Parameters<typeof fs.stat>) => {
+      if (normalizeComparablePath(String(args[0])) === installBasePath) {
+        installBaseStatCalls += 1;
+        if (installBaseStatCalls === 3) {
+          await rebindInstallBasePath({
+            installBaseDir,
+            preservedDir: preservedInstallRoot,
+            outsideTarget: outsideInstallRoot,
+          });
+        }
+      }
+      return await realStat(...args);
+    });
+
+    const result = await installPackageDir({
+      sourceDir,
+      targetDir,
+      mode: "update",
+      timeoutMs: 1_000,
+      copyErrorPrefix: "failed to copy plugin",
+      hasDeps: false,
+      depsLogMessage: "Installing deps…",
+      logger: { warn: (message) => warnings.push(message) },
     });
 
     expect(result).toEqual({ ok: true });
+    expect(installBaseStatCalls).toBe(3);
     expect(warnings).toContain(
       "Install base directory changed before backup cleanup; leaving backup in place.",
     );
-    await expect(
-      fs.stat(path.join(outsideInstallRoot, "demo", "marker.txt")),
-    ).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expectMissingPath(path.join(outsideInstallRoot, "demo", "marker.txt"));
     const backupRoot = path.join(preservedInstallRoot, ".openclaw-install-backups");
     await expect(fs.readdir(backupRoot)).resolves.toHaveLength(1);
   });
@@ -324,12 +416,14 @@ describe("installPackageDir", () => {
     });
 
     expect(result).toEqual({ ok: true });
-    expect(vi.mocked(runCommandWithTimeout)).toHaveBeenCalledWith(
-      ["npm", "install", "--omit=dev", "--loglevel=error", "--ignore-scripts"],
-      expect.objectContaining({
-        cwd: expect.stringContaining(".openclaw-install-stage-"),
-      }),
-    );
+    const installOptions = expectRunCommandCallForArgv([
+      "npm",
+      "install",
+      "--omit=dev",
+      "--loglevel=error",
+      "--ignore-scripts",
+    ]);
+    expect(installOptions.cwd).toContain(".openclaw-install-stage-");
   });
 
   it("hides the staged project .npmrc while npm install runs and restores it afterward", async () => {
@@ -354,12 +448,12 @@ describe("installPackageDir", () => {
 
     vi.mocked(runCommandWithTimeout).mockImplementation(async (_argv, optionsOrTimeout) => {
       const cwd = typeof optionsOrTimeout === "number" ? undefined : optionsOrTimeout.cwd;
-      expect(cwd).toBeTruthy();
-      await expect(fs.stat(path.join(cwd ?? "", ".npmrc"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
+      if (cwd === undefined) {
+        throw new Error("expected package install cwd");
+      }
+      await expectMissingPath(path.join(cwd, ".npmrc"));
       await expect(
-        listMatchingEntries(cwd ?? "", ".openclaw-install-hidden-npmrc-"),
+        listMatchingEntries(cwd, ".openclaw-install-hidden-npmrc-"),
       ).resolves.toHaveLength(1);
       return {
         stdout: "",
@@ -432,28 +526,19 @@ describe("installPackageDir", () => {
     });
 
     expect(result).toEqual({ ok: true });
-    expect(vi.mocked(runCommandWithTimeout)).toHaveBeenCalledWith(
+    const installOptions = expectRunCommandCallForArgv(
       ["npm", "install", "--omit=dev", "--loglevel=error", "--ignore-scripts"],
-      expect.objectContaining({
-        env: expect.objectContaining({
-          npm_config_global: "false",
-          npm_config_location: "project",
-          npm_config_package_lock: "false",
-          npm_config_save: "false",
-        }),
-      }),
+      (options) => options.env?.npm_config_global === "false",
     );
-    expect(vi.mocked(runCommandWithTimeout)).toHaveBeenCalledWith(
-      expect.any(Array),
-      expect.objectContaining({
-        env: expect.not.objectContaining({
-          NPM_CONFIG_GLOBAL: expect.any(String),
-          NPM_CONFIG_LOCATION: expect.any(String),
-          NPM_CONFIG_PREFIX: expect.any(String),
-          npm_config_prefix: expect.any(String),
-        }),
-      }),
-    );
+    const env = installOptions.env ?? {};
+    expect(env.npm_config_global).toBe("false");
+    expect(env.npm_config_location).toBe("project");
+    expect(env.npm_config_package_lock).toBe("false");
+    expect(env.npm_config_save).toBe("false");
+    expect("NPM_CONFIG_GLOBAL" in env).toBe(false);
+    expect("NPM_CONFIG_LOCATION" in env).toBe(false);
+    expect("NPM_CONFIG_PREFIX" in env).toBe(false);
+    expect("npm_config_prefix" in env).toBe(false);
   });
 
   it("surfaces npm stderr when dependency install fails", async () => {

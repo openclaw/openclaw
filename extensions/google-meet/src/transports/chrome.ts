@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
@@ -41,11 +41,12 @@ const chromeTransportDeps: {
   callGatewayFromCli,
 };
 
-export const __testing = {
+export const testing = {
   setDepsForTest(deps: { callGatewayFromCli?: typeof callGatewayFromCli } | null) {
     chromeTransportDeps.callGatewayFromCli = deps?.callGatewayFromCli ?? callGatewayFromCli;
   },
   meetStatusScriptForTest: meetStatusScript,
+  parseMeetBrowserStatusForTest: parseMeetBrowserStatus,
 };
 
 function isGoogleMeetTalkBackMode(mode: GoogleMeetMode): boolean {
@@ -232,7 +233,7 @@ function parseMeetBrowserStatus(result: unknown): GoogleMeetChromeHealth | undef
   if (typeof raw !== "string" || !raw.trim()) {
     return undefined;
   }
-  const parsed = JSON.parse(raw) as {
+  let parsed: {
     inCall?: boolean;
     micMuted?: boolean;
     lobbyWaiting?: boolean;
@@ -254,6 +255,11 @@ function parseMeetBrowserStatus(result: unknown): GoogleMeetChromeHealth | undef
     title?: string;
     notes?: string[];
   };
+  try {
+    parsed = JSON.parse(raw) as typeof parsed;
+  } catch {
+    throw new Error("Google Meet browser status JSON is malformed.");
+  }
   return {
     inCall: parsed.inCall,
     micMuted: parsed.micMuted,
@@ -753,10 +759,11 @@ async function openMeetWithBrowserRequest(params: {
       };
       break;
     }
-    if (Date.now() <= deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 750));
+    const remainingWaitMs = deadline - Date.now();
+    if (remainingWaitMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, Math.min(750, remainingWaitMs)));
     }
-  } while (Date.now() <= deadline);
+  } while (Date.now() < deadline);
   return { launched: true, browser };
 }
 
@@ -1055,3 +1062,4 @@ export async function launchChromeMeetOnNode(params: {
     browser: browserControl.browser ?? result.browser,
   };
 }
+export { testing as __testing };

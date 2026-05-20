@@ -9,6 +9,7 @@ import { toSanitizedMarkdownHtml } from "../markdown.ts";
 import { openExternalUrlSafe } from "../open-external-url.ts";
 import type { SidebarContent } from "../sidebar-content.ts";
 import { detectTextDirection } from "../text-direction.ts";
+import { resolveToolDisplay } from "../tool-display.ts";
 import type {
   MessageContentItem,
   MessageGroup,
@@ -391,7 +392,7 @@ export function renderMessageGroup(
     basePath?: string;
     localMediaPreviewRoots?: readonly string[];
     assistantAttachmentAuthToken?: string | null;
-    canvasHostUrl?: string | null;
+    canvasPluginSurfaceUrl?: string | null;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
     contextWindow?: number | null;
@@ -456,7 +457,7 @@ export function renderMessageGroup(
               isToolExpanded: opts.isToolExpanded,
               onToggleToolExpanded: opts.onToggleToolExpanded,
               onRequestUpdate: opts.onRequestUpdate,
-              canvasHostUrl: opts.canvasHostUrl,
+              canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
               basePath: opts.basePath,
               localMediaPreviewRoots: opts.localMediaPreviewRoots,
               assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
@@ -612,6 +613,8 @@ function renderMessageMeta(meta: GroupMeta | null) {
 }
 
 const SKIP_DELETE_CONFIRM_KEY = "openclaw:skipDeleteConfirm";
+const DELETE_CONFIRM_VIEWPORT_MARGIN_PX = 8;
+const DELETE_CONFIRM_TRIGGER_GAP_PX = 6;
 
 type DeleteConfirmSide = "left" | "right";
 
@@ -632,6 +635,63 @@ function dismissDeleteConfirm(element: Element) {
     return;
   }
   element.remove();
+}
+
+function resolveViewportBounds() {
+  const viewport = window.visualViewport;
+  const left = viewport?.offsetLeft ?? 0;
+  const top = viewport?.offsetTop ?? 0;
+  const width = viewport?.width ?? window.innerWidth ?? document.documentElement.clientWidth;
+  const height = viewport?.height ?? window.innerHeight ?? document.documentElement.clientHeight;
+
+  return {
+    bottom: top + height,
+    left,
+    right: left + width,
+    top,
+  };
+}
+
+function clampDeleteConfirmPosition(value: number, min: number, max: number) {
+  if (max < min) {
+    return min;
+  }
+  return Math.min(Math.max(value, min), max);
+}
+
+function placeDeleteConfirmPopover(
+  trigger: HTMLElement,
+  popover: HTMLElement,
+  side: DeleteConfirmSide,
+) {
+  const triggerRect = trigger.getBoundingClientRect();
+  const popoverRect = popover.getBoundingClientRect();
+  const viewport = resolveViewportBounds();
+  const margin = DELETE_CONFIRM_VIEWPORT_MARGIN_PX;
+  const gap = DELETE_CONFIRM_TRIGGER_GAP_PX;
+  const viewportWidth = viewport.right - viewport.left;
+  const viewportHeight = viewport.bottom - viewport.top;
+  const popoverWidth = Math.min(popoverRect.width, viewportWidth - margin * 2);
+  const popoverHeight = Math.min(popoverRect.height, viewportHeight - margin * 2);
+  const spaceAbove = triggerRect.top - viewport.top - margin - gap;
+  const spaceBelow = viewport.bottom - triggerRect.bottom - margin - gap;
+  const placeBelow = spaceAbove < popoverHeight && spaceBelow >= spaceAbove;
+  const desiredLeft = side === "left" ? triggerRect.right - popoverWidth : triggerRect.left;
+  const left = clampDeleteConfirmPosition(
+    desiredLeft,
+    viewport.left + margin,
+    viewport.right - margin - popoverWidth,
+  );
+  const desiredTop = placeBelow ? triggerRect.bottom + gap : triggerRect.top - gap - popoverHeight;
+  const top = clampDeleteConfirmPosition(
+    desiredTop,
+    viewport.top + margin,
+    viewport.bottom - margin - popoverHeight,
+  );
+
+  popover.style.left = `${Math.round(left)}px`;
+  popover.style.top = `${Math.round(top)}px`;
+  popover.dataset.placement = placeBelow ? "below" : "above";
 }
 
 function renderDeleteButton(onDelete: () => void, side: DeleteConfirmSide) {
@@ -667,6 +727,7 @@ function renderDeleteButton(onDelete: () => void, side: DeleteConfirmSide) {
             </div>
           `;
           wrap.appendChild(popover);
+          placeDeleteConfirmPopover(btn, popover, side);
 
           const cancel = popover.querySelector(".chat-delete-confirm__cancel")!;
           const yes = popover.querySelector(".chat-delete-confirm__yes")!;
@@ -704,6 +765,7 @@ function renderDeleteButton(onDelete: () => void, side: DeleteConfirmSide) {
 
           requestAnimationFrame(() => {
             if (!dismissed && popover.isConnected) {
+              placeDeleteConfirmPopover(btn, popover, side);
               document.addEventListener("click", closeOnOutside, true);
             }
           });
@@ -1285,7 +1347,7 @@ function renderInlineToolCards(
     onOpenSidebar?: (content: SidebarContent) => void;
     isToolExpanded?: (toolCardId: string) => boolean;
     onToggleToolExpanded?: (toolCardId: string) => void;
-    canvasHostUrl?: string | null;
+    canvasPluginSurfaceUrl?: string | null;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
   },
@@ -1299,7 +1361,7 @@ function renderInlineToolCards(
             ? () => opts.onToggleToolExpanded?.(`${opts.messageKey}:toolcard:${index}`)
             : () => undefined,
           onOpenSidebar: opts.onOpenSidebar,
-          canvasHostUrl: opts.canvasHostUrl,
+          canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
           embedSandboxMode: opts.embedSandboxMode ?? "scripts",
           allowExternalEmbedUrls: opts.allowExternalEmbedUrls ?? false,
         }),
@@ -1381,7 +1443,7 @@ function renderGroupedMessage(
     isToolExpanded?: (toolCardId: string) => boolean;
     onToggleToolExpanded?: (toolCardId: string) => void;
     onRequestUpdate?: () => void;
-    canvasHostUrl?: string | null;
+    canvasPluginSurfaceUrl?: string | null;
     basePath?: string;
     localMediaPreviewRoots?: readonly string[];
     assistantAttachmentAuthToken?: string | null;
@@ -1435,6 +1497,7 @@ function renderGroupedMessage(
   const markdown = markdownBase;
   const canCopyMarkdown = role === "assistant" && Boolean(markdown?.trim());
   const canExpand = role === "assistant" && Boolean(onOpenSidebar && markdown?.trim());
+  const hasActions = canCopyMarkdown || canExpand;
 
   // Detect pure-JSON messages and render as collapsible block
   const jsonResult = markdown && !opts.isStreaming ? detectJson(markdown) : null;
@@ -1443,6 +1506,7 @@ function renderGroupedMessage(
   const bubbleClasses = [
     "chat-bubble",
     isToolMessage ? "chat-bubble--tool-shell" : "",
+    hasActions ? "has-copy" : "",
     opts.isStreaming ? "streaming" : "",
     "fade-in",
   ]
@@ -1465,21 +1529,31 @@ function renderGroupedMessage(
   const toolMessageDisclosureId = `toolmsg:${messageKey}`;
   const toolMessageExpanded = opts.isToolMessageExpanded?.(toolMessageDisclosureId) ?? false;
   const toolNames = [...new Set(toolCards.map((c) => c.name))];
-  const toolSummaryLabel =
-    toolNames.length <= 3
+  const singleToolCard = toolCards.length === 1 ? toolCards[0] : null;
+  const singleToolDisplay = singleToolCard
+    ? resolveToolDisplay({
+        name: singleToolCard.name,
+        args: singleToolCard.args,
+        detailMode: "explain",
+      })
+    : null;
+  const toolSummaryLabel = singleToolDisplay?.detail
+    ? singleToolCard?.outputText?.trim()
+      ? "output"
+      : undefined
+    : toolNames.length <= 3
       ? toolNames.join(", ")
       : `${toolNames.slice(0, 2).join(", ")} +${toolNames.length - 2} more`;
   const toolPreview =
     markdown && !toolSummaryLabel ? markdown.trim().replace(/\s+/g, " ").slice(0, 120) : "";
-  const singleToolCard = toolCards.length === 1 ? toolCards[0] : null;
   const toolMessageLabel =
-    singleToolCard && !markdown && !hasImages
-      ? singleToolCard.outputText?.trim()
-        ? "Tool output"
-        : "Tool call"
-      : "Tool output";
+    singleToolDisplay?.detail && !markdown && !hasImages
+      ? singleToolDisplay.detail
+      : singleToolDisplay && !markdown && !hasImages
+        ? singleToolDisplay.label
+        : "Tool output";
+  const toolMessageIcon = singleToolDisplay ? icons[singleToolDisplay.icon] : icons.zap;
 
-  const hasActions = canCopyMarkdown || canExpand;
   const duplicateCount = Math.max(1, Math.floor(opts.duplicateCount ?? 1));
 
   return html`
@@ -1504,7 +1578,7 @@ function renderGroupedMessage(
                 aria-expanded=${String(toolMessageExpanded)}
                 @click=${() => opts.onToggleToolMessageExpanded?.(toolMessageDisclosureId)}
               >
-                <span class="chat-tool-msg-summary__icon">${icons.zap}</span>
+                <span class="chat-tool-msg-summary__icon">${toolMessageIcon}</span>
                 <span class="chat-tool-msg-summary__label">${toolMessageLabel}</span>
                 ${toolSummaryLabel
                   ? html`<span class="chat-tool-msg-summary__names">${toolSummaryLabel}</span>`
@@ -1551,7 +1625,7 @@ function renderGroupedMessage(
                           ? renderExpandedToolCardContent(
                               singleToolCard,
                               onOpenSidebar,
-                              opts.canvasHostUrl,
+                              opts.canvasPluginSurfaceUrl,
                               opts.embedSandboxMode ?? "scripts",
                               opts.allowExternalEmbedUrls ?? false,
                             )
@@ -1560,7 +1634,7 @@ function renderGroupedMessage(
                               onOpenSidebar,
                               isToolExpanded: opts.isToolExpanded,
                               onToggleToolExpanded: opts.onToggleToolExpanded,
-                              canvasHostUrl: opts.canvasHostUrl,
+                              canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
                               embedSandboxMode: opts.embedSandboxMode ?? "scripts",
                               allowExternalEmbedUrls: opts.allowExternalEmbedUrls ?? false,
                             })
@@ -1589,7 +1663,7 @@ function renderGroupedMessage(
                   (block) => html`${renderToolPreview(block.preview, "chat_message", {
                     onOpenSidebar,
                     rawText: block.rawText ?? null,
-                    canvasHostUrl: opts.canvasHostUrl,
+                    canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
                     embedSandboxMode: opts.embedSandboxMode ?? "scripts",
                   })}
                   ${block.rawText ? renderRawOutputToggle(block.rawText) : nothing}`,
@@ -1614,7 +1688,7 @@ function renderGroupedMessage(
                   onOpenSidebar,
                   isToolExpanded: opts.isToolExpanded,
                   onToggleToolExpanded: opts.onToggleToolExpanded,
-                  canvasHostUrl: opts.canvasHostUrl,
+                  canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
                   embedSandboxMode: opts.embedSandboxMode ?? "scripts",
                   allowExternalEmbedUrls: opts.allowExternalEmbedUrls ?? false,
                 })

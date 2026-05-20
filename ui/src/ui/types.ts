@@ -19,6 +19,8 @@ export type ChannelsStatusSnapshot = {
   channels: Record<string, unknown>;
   channelAccounts: Record<string, ChannelAccountSnapshot[]>;
   channelDefaultAccountId: Record<string, string>;
+  partial?: boolean;
+  warnings?: string[];
 };
 
 export type ChannelUiMetaEntry = {
@@ -592,6 +594,9 @@ export type CronJobState = {
   lastDelivered?: boolean;
   lastDeliveryStatus?: CronDeliveryStatus;
   lastDeliveryError?: string;
+  lastFailureNotificationDelivered?: boolean;
+  lastFailureNotificationDeliveryStatus?: CronDeliveryStatus;
+  lastFailureNotificationDeliveryError?: string;
   lastFailureAlertAtMs?: number;
 };
 

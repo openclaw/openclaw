@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   acquireFileLock,
   drainFileLockStateForTest,
+  FILE_LOCK_STALE_ERROR_CODE,
   FILE_LOCK_TIMEOUT_ERROR_CODE,
   resetFileLockStateForTest,
 } from "./file-lock.js";
@@ -43,15 +44,114 @@ describe("acquireFileLock", () => {
       "utf8",
     );
 
-    await expect(acquireFileLock(filePath, options)).rejects.toSatisfy((error) => {
-      expect(error).toMatchObject({
-        code: FILE_LOCK_TIMEOUT_ERROR_CODE,
-      });
-      expect((error as { lockPath?: string }).lockPath).toBeTruthy();
-      expect((error as { lockPath?: string }).lockPath).toMatch(/oauth-refresh\.lock$/);
-      return true;
-    });
+    let caught: { code?: string; lockPath?: string } | undefined;
+    try {
+      await acquireFileLock(filePath, options);
+    } catch (error) {
+      caught = error as { code?: string; lockPath?: string };
+    }
+    expect(caught?.code).toBe(FILE_LOCK_TIMEOUT_ERROR_CODE);
+    expect(caught?.lockPath ? path.relative(await fs.realpath(tempDir), caught.lockPath) : "").toBe(
+      "oauth-refresh.lock",
+    );
   }, 5_000);
+
+  it("removes a reported stale lock when its owner pid is dead", async () => {
+    const filePath = path.join(tempDir, "auth-profiles.json");
+    const lockPath = `${filePath}.lock`;
+    const options = {
+      retries: {
+        retries: 0,
+        factor: 1,
+        minTimeout: 1,
+        maxTimeout: 1,
+      },
+      stale: 10,
+    } as const;
+
+    const deadPid = -1;
+    await fs.writeFile(
+      lockPath,
+      JSON.stringify({ pid: deadPid, createdAt: new Date(Date.now() - 60_000).toISOString() }),
+      "utf8",
+    );
+
+    const lock = await acquireFileLock(filePath, options);
+    try {
+      await expect(fs.realpath(lock.lockPath)).resolves.toBe(await fs.realpath(lockPath));
+      await expect(fs.readFile(lockPath, "utf8")).resolves.toContain(`"pid"`);
+    } finally {
+      await lock.release();
+    }
+  });
+
+  it("keeps a reported stale lock when its payload is not readable", async () => {
+    const filePath = path.join(tempDir, "payload-pending");
+    const lockPath = `${filePath}.lock`;
+    const options = {
+      retries: {
+        retries: 0,
+        factor: 1,
+        minTimeout: 1,
+        maxTimeout: 1,
+      },
+      stale: 10,
+    } as const;
+
+    await fs.writeFile(lockPath, "{", "utf8");
+
+    let caught: { lockPath?: string } | undefined;
+    await expect(
+      (async () => {
+        try {
+          await acquireFileLock(filePath, options);
+        } catch (err) {
+          caught = err as { lockPath?: string };
+          throw err;
+        }
+      })(),
+    ).rejects.toMatchObject({
+      code: FILE_LOCK_TIMEOUT_ERROR_CODE,
+    });
+    await expect(fs.realpath(caught?.lockPath ?? "")).resolves.toBe(await fs.realpath(lockPath));
+    await expect(fs.readFile(lockPath, "utf8")).resolves.toBe("{");
+  });
+
+  it("keeps a reported stale lock when its owner pid is alive", async () => {
+    const filePath = path.join(tempDir, "live-owner");
+    const lockPath = `${filePath}.lock`;
+    const options = {
+      retries: {
+        retries: 0,
+        factor: 1,
+        minTimeout: 1,
+        maxTimeout: 1,
+      },
+      stale: 10,
+    } as const;
+
+    await fs.writeFile(
+      lockPath,
+      JSON.stringify({ pid: process.pid, createdAt: new Date(Date.now() - 60_000).toISOString() }),
+      "utf8",
+    );
+
+    let caught: { lockPath?: string } | undefined;
+    await expect(
+      (async () => {
+        try {
+          await acquireFileLock(filePath, options);
+        } catch (err) {
+          caught = err as { lockPath?: string };
+          throw err;
+        }
+      })(),
+    ).rejects.toMatchObject({
+      code: FILE_LOCK_TIMEOUT_ERROR_CODE,
+    });
+    await expect(fs.realpath(caught?.lockPath ?? "")).resolves.toBe(await fs.realpath(lockPath));
+    await expect(fs.readFile(lockPath, "utf8")).resolves.toContain(`"pid":${process.pid}`);
+  });
 
   it("closes an opened lock handle when writing the owner payload fails", async () => {
     const filePath = path.join(tempDir, "write-fails");

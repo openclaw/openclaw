@@ -5,19 +5,18 @@ let currentRefLocator: Record<string, unknown> | null = null;
 let pageState: {
   console: unknown[];
   armIdUpload: number;
-  armIdDialog: number;
   armIdDownload: number;
   downloadWaiterDepth: number;
 } = {
   console: [],
   armIdUpload: 0,
-  armIdDialog: 0,
   armIdDownload: 0,
   downloadWaiterDepth: 0,
 };
 
 const sessionMocks = vi.hoisted(() => ({
   assertPageNavigationCompletedSafely: vi.fn(async () => {}),
+  closeBlockedNavigationTarget: vi.fn(async () => {}),
   getPageForTargetId: vi.fn(async () => {
     if (!currentPage) {
       throw new Error("missing page");
@@ -33,7 +32,23 @@ const sessionMocks = vi.hoisted(() => ({
       page: { goto: (url: string, init: { timeout: number }) => Promise<unknown> };
     }) => (await opts.page.goto(opts.url, { timeout: opts.timeoutMs })) ?? null,
   ),
+  // Match by name so mocked errors are recognized without importing real classes.
+  isPolicyDenyNavigationError: vi.fn((err: unknown) => {
+    if (!(err instanceof Error)) {
+      return false;
+    }
+    return err.name === "SsrFBlockedError" || err.name === "InvalidBrowserNavigationUrlError";
+  }),
   restoreRoleRefsForTarget: vi.fn(() => {}),
+  respondToObservedDialogOnPage: vi.fn(async () => {
+    throw new Error("No dialog is pending.");
+  }),
+  armObservedDialogResponseOnPage: vi.fn(() => {}),
+  createObservedDialogAbortSignalForPage: vi.fn((opts?: { parentSignal?: AbortSignal }) => ({
+    signal: opts?.parentSignal ?? new AbortController().signal,
+    cleanup: vi.fn(() => {}),
+  })),
+  isBrowserObservedDialogBlockedError: vi.fn(() => false),
   storeRoleRefsForTarget: vi.fn(() => {}),
   refLocator: vi.fn(() => {
     if (!currentRefLocator) {
@@ -81,7 +96,6 @@ export function installPwToolsCoreTestHooks() {
     pageState = {
       console: [],
       armIdUpload: 0,
-      armIdDialog: 0,
       armIdDownload: 0,
       downloadWaiterDepth: 0,
     };

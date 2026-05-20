@@ -35,7 +35,7 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
     label: "Subagents",
     name: "subagents",
     description:
-      "List, kill, or steer spawned sub-agents for this requester session. Use this for sub-agent orchestration.",
+      "List/kill/steer spawned subagents for requester session. If sessions_yield exists, use it for completion; do not poll wait loops.",
     parameters: SubagentsToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;

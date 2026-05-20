@@ -1,14 +1,20 @@
 import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
-import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { matchRootFileOpenFailure } from "../infra/boundary-file-read.js";
+import { readRootStructuredFileSync } from "../infra/json-files.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import { isRecord } from "../utils.js";
 import type { PluginBundleFormat } from "./manifest-types.js";
-import { DEFAULT_PLUGIN_ENTRY_CANDIDATES, PLUGIN_MANIFEST_FILENAME } from "./manifest.js";
+import type { PluginManifestActivation } from "./manifest.js";
+import {
+  DEFAULT_PLUGIN_ENTRY_CANDIDATES,
+  normalizeManifestActivation,
+  PLUGIN_MANIFEST_FILENAME,
+} from "./manifest.js";
 
 export const CODEX_BUNDLE_MANIFEST_RELATIVE_PATH = ".codex-plugin/plugin.json";
 export const CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH = ".claude-plugin/plugin.json";
@@ -24,6 +30,7 @@ export type BundlePluginManifest = {
   // Only include hook roots that OpenClaw can execute via HOOK.md + handler files.
   hooks: string[];
   bundleFormat: PluginBundleFormat;
+  activation?: PluginManifestActivation;
   capabilities: string[];
 };
 
@@ -98,15 +105,17 @@ function loadBundleManifestFile(params: {
   allowMissing?: boolean;
 }): BundleManifestFileLoadResult {
   const manifestPath = path.join(params.rootDir, params.manifestRelativePath);
-  const opened = openBoundaryFileSync({
-    absolutePath: manifestPath,
-    rootPath: params.rootDir,
+  const result = readRootStructuredFileSync<Record<string, unknown>>({
+    rootDir: params.rootDir,
     ...(params.rootRealPath !== undefined ? { rootRealPath: params.rootRealPath } : {}),
+    relativePath: params.manifestRelativePath,
     boundaryLabel: "plugin root",
     rejectHardlinks: params.rejectHardlinks,
+    parse: (raw) => JSON5.parse(raw),
+    validate: isRecord,
   });
-  if (!opened.ok) {
-    return matchBoundaryFileOpenFailure(opened, {
+  if (!result.ok && result.reason === "open") {
+    return matchRootFileOpenFailure(result.failure, {
       path: () => {
         if (params.allowMissing) {
           return { ok: true, raw: {}, manifestPath };
@@ -120,21 +129,17 @@ function loadBundleManifestFile(params: {
       }),
     });
   }
-  try {
-    const raw = JSON5.parse(fs.readFileSync(opened.fd, "utf-8")) as unknown;
-    if (!isRecord(raw)) {
-      return { ok: false, error: "plugin manifest must be an object", manifestPath };
-    }
-    return { ok: true, raw, manifestPath };
-  } catch (err) {
+  if (!result.ok) {
     return {
       ok: false,
-      error: `failed to parse plugin manifest: ${String(err)}`,
+      error:
+        result.reason === "invalid"
+          ? "plugin manifest must be an object"
+          : `failed to parse plugin manifest: ${result.error}`,
       manifestPath,
     };
-  } finally {
-    fs.closeSync(opened.fd);
   }
+  return { ok: true, raw: result.value, manifestPath };
 }
 
 function resolveCodexSkillDirs(raw: Record<string, unknown>, rootDir: string): string[] {
@@ -374,6 +379,7 @@ export function loadBundleManifest(params: {
         settingsFiles: [],
         hooks,
         bundleFormat: "codex",
+        activation: normalizeManifestActivation(raw.activation),
         capabilities: buildCodexCapabilities(raw, params.rootDir),
       },
       manifestPath: loaded.manifestPath,
@@ -392,6 +398,7 @@ export function loadBundleManifest(params: {
         settingsFiles: [],
         hooks: [],
         bundleFormat: "cursor",
+        activation: normalizeManifestActivation(raw.activation),
         capabilities: buildCursorCapabilities(raw, params.rootDir),
       },
       manifestPath: loaded.manifestPath,
@@ -409,6 +416,7 @@ export function loadBundleManifest(params: {
       settingsFiles: resolveClaudeSettingsFiles(raw, params.rootDir),
       hooks: resolveClaudeHookPaths(raw, params.rootDir),
       bundleFormat: "claude",
+      activation: normalizeManifestActivation(raw.activation),
       capabilities: buildClaudeCapabilities(raw, params.rootDir),
     },
     manifestPath: loaded.manifestPath,

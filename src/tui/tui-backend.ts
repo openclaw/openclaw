@@ -1,4 +1,6 @@
 import type {
+  CommandEntry,
+  CommandsListParams,
   SessionsListParams,
   SessionsPatchParams,
   SessionsPatchResult,
@@ -62,6 +64,12 @@ export type TuiSessionList = {
       space?: string;
       subject?: string;
       chatType?: string;
+      origin?: {
+        label?: string;
+        provider?: string;
+        surface?: string;
+      };
+      lastChannel?: string;
       lastProvider?: string;
       lastTo?: string;
       lastAccountId?: string;
@@ -113,4 +121,5 @@ export type TuiBackend = {
   resetSession: (key: string, reason?: "new" | "reset") => Promise<unknown>;
   getGatewayStatus: () => Promise<unknown>;
   listModels: () => Promise<TuiModelChoice[]>;
+  listCommands?: (opts?: CommandsListParams) => Promise<CommandEntry[]>;
 };

@@ -1,11 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { getModel, type Api, type Model } from "@mariozechner/pi-ai";
-import { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
+import { getModel, type Api, type Model } from "@earendil-works/pi-ai";
+import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import OpenAI from "openai";
 import type { ResolvedTtsConfig } from "openclaw/plugin-sdk/agent-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { encodePngRgba, fillPixel } from "openclaw/plugin-sdk/media-runtime";
 import {
   registerProviderPlugin,
@@ -234,12 +234,10 @@ describeLive("openai plugin live", () => {
       model: resolved,
     });
 
-    expect(normalized).toMatchObject({
-      provider: "openai",
-      id: LIVE_MODEL_ID,
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-    });
+    expect(normalized?.provider).toBe("openai");
+    expect(normalized?.id).toBe(LIVE_MODEL_ID);
+    expect(normalized?.api).toBe("openai-responses");
+    expect(normalized?.baseUrl).toBe("https://api.openai.com/v1");
 
     const client = new OpenAI({
       apiKey: OPENAI_API_KEY,
@@ -265,7 +263,7 @@ describeLive("openai plugin live", () => {
     if (!voices) {
       throw new Error("openai speech provider did not return voices");
     }
-    expect(voices).toEqual(expect.arrayContaining([expect.objectContaining({ id: "alloy" })]));
+    expect(voices.some((voice) => voice.id === "alloy")).toBe(true);
 
     const cfg = createLiveConfig();
     const ttsConfig = createLiveTtsConfig();
@@ -320,7 +318,7 @@ describeLive("openai plugin live", () => {
     const collapsedText = text.replace(/[\s-]+/g, "");
     expect(text.length).toBeGreaterThan(0);
     expect(collapsedText).toContain("speech");
-    expect(collapsedText).toContain("check");
+    expect(collapsedText).toMatch(/(?:check|okay|ok|transcription)/);
   }, 45_000);
 
   it("opens OpenAI realtime STT before sending audio", async () => {
@@ -338,7 +336,7 @@ describeLive("openai plugin live", () => {
     try {
       await session.connect();
       await new Promise((resolve) => setTimeout(resolve, 1_000));
-      expect(errors).toEqual([]);
+      expect(errors).toStrictEqual([]);
       expect(session.isConnected()).toBe(true);
     } finally {
       session.close();

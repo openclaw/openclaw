@@ -61,27 +61,36 @@ export function registerProxyCli(program: Command) {
     .description("Validate the operator-managed network proxy")
     .option("--json", "Print machine-readable JSON")
     .option("--proxy-url <url>", "Proxy URL to validate instead of config/env")
+    .option("--proxy-ca-file <path>", "CA bundle file for verifying an HTTPS proxy endpoint")
     .option(
       "--allowed-url <url>",
       "Destination expected to succeed through the proxy",
       collectOption,
     )
     .option("--denied-url <url>", "Destination expected to be blocked by the proxy", collectOption)
+    .option("--apns-reachable", "Also verify sandbox APNs HTTP/2 is reachable through the proxy")
+    .option("--apns-authority <url>", "APNs authority to probe with --apns-reachable")
     .option("--timeout-ms <ms>", "Per-request timeout in milliseconds", parseOptionalNumber)
     .action(
       async (opts: {
         json?: boolean;
         proxyUrl?: string;
+        proxyCaFile?: string;
         allowedUrl?: string[];
         deniedUrl?: string[];
+        apnsReachable?: boolean;
+        apnsAuthority?: string;
         timeoutMs?: number;
       }) => {
         const runtime = await loadProxyCliRuntime();
         await runtime.runProxyValidateCommand({
           json: opts.json,
           proxyUrl: opts.proxyUrl,
+          proxyCaFile: opts.proxyCaFile,
           allowedUrls: opts.allowedUrl,
           deniedUrls: opts.deniedUrl,
+          apnsReachability: opts.apnsReachable,
+          apnsAuthority: opts.apnsAuthority,
           timeoutMs: opts.timeoutMs,
         });
       },

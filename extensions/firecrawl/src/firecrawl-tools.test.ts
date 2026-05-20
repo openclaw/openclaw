@@ -1,6 +1,6 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_FIRECRAWL_BASE_URL,
   DEFAULT_FIRECRAWL_MAX_AGE_MS,
@@ -35,7 +35,8 @@ describe("firecrawl tools", () => {
   let createFirecrawlWebFetchProvider: typeof import("./firecrawl-fetch-provider.js").createFirecrawlWebFetchProvider;
   let createFirecrawlSearchTool: typeof import("./firecrawl-search-tool.js").createFirecrawlSearchTool;
   let createFirecrawlScrapeTool: typeof import("./firecrawl-scrape-tool.js").createFirecrawlScrapeTool;
-  let firecrawlClientTesting: typeof import("./firecrawl-client.js").__testing;
+  let firecrawlClientTesting: typeof import("./firecrawl-client.js").testing;
+  let runActualFirecrawlSearch: typeof import("./firecrawl-client.js").runFirecrawlSearch;
   let runActualFirecrawlScrape: typeof import("./firecrawl-client.js").runFirecrawlScrape;
   let ssrfMock: { mockRestore: () => void } | undefined;
 
@@ -45,8 +46,11 @@ describe("firecrawl tools", () => {
     ({ createFirecrawlWebSearchProvider } = await import("./firecrawl-search-provider.js"));
     ({ createFirecrawlSearchTool } = await import("./firecrawl-search-tool.js"));
     ({ createFirecrawlScrapeTool } = await import("./firecrawl-scrape-tool.js"));
-    ({ __testing: firecrawlClientTesting, runFirecrawlScrape: runActualFirecrawlScrape } =
-      await vi.importActual<typeof import("./firecrawl-client.js")>("./firecrawl-client.js"));
+    ({
+      testing: firecrawlClientTesting,
+      runFirecrawlSearch: runActualFirecrawlSearch,
+      runFirecrawlScrape: runActualFirecrawlScrape,
+    } = await vi.importActual<typeof import("./firecrawl-client.js")>("./firecrawl-client.js"));
   });
 
   beforeEach(() => {
@@ -65,6 +69,12 @@ describe("firecrawl tools", () => {
     ssrfMock?.mockRestore();
     ssrfMock = undefined;
     global.fetch = priorFetch;
+    vi.unstubAllEnvs();
+  });
+
+  afterAll(() => {
+    vi.doUnmock("./firecrawl-client.js");
+    vi.resetModules();
   });
 
   it("exposes selection metadata and enables the plugin in config", () => {
@@ -76,7 +86,29 @@ describe("firecrawl tools", () => {
 
     expect(provider.id).toBe("firecrawl");
     expect(provider.credentialPath).toBe("plugins.entries.firecrawl.config.webSearch.apiKey");
-    expect(applied.plugins?.entries?.firecrawl?.enabled).toBe(true);
+    expect(
+      provider.getConfiguredCredentialFallback?.({
+        plugins: {
+          entries: {
+            firecrawl: {
+              config: {
+                webFetch: {
+                  apiKey: { source: "env", provider: "default", id: "FIRECRAWL_API_KEY" },
+                },
+              },
+            },
+          },
+        },
+      } as never),
+    ).toEqual({
+      path: "plugins.entries.firecrawl.config.webFetch.apiKey",
+      value: { source: "env", provider: "default", id: "FIRECRAWL_API_KEY" },
+    });
+    const pluginEntry = applied.plugins?.entries?.firecrawl;
+    if (!pluginEntry) {
+      throw new Error("expected Firecrawl plugin entry");
+    }
+    expect(pluginEntry.enabled).toBe(true);
   });
 
   it("parses scrape payloads into wrapped external-content results", () => {
@@ -208,10 +240,10 @@ describe("firecrawl tools", () => {
     expect(authHeader).toBe("Bearer firecrawl-test-key");
   });
 
-  it("blocks private and non-http scrape targets before Firecrawl requests", async () => {
-    expect(() =>
+  it("blocks private and non-http scrape targets before Firecrawl requests", () => {
+    expect(
       firecrawlClientTesting.assertFirecrawlScrapeTargetAllowed("https://example.com/page"),
-    ).not.toThrow();
+    ).toBeUndefined();
 
     for (const blockedUrl of [
       "http://localhost/admin",
@@ -342,7 +374,11 @@ describe("firecrawl tools", () => {
 
     expect(provider.id).toBe("firecrawl");
     expect(provider.credentialPath).toBe("plugins.entries.firecrawl.config.webFetch.apiKey");
-    expect(applied.plugins?.entries?.firecrawl?.enabled).toBe(true);
+    const pluginEntry = applied.plugins?.entries?.firecrawl;
+    if (!pluginEntry) {
+      throw new Error("expected Firecrawl fetch plugin entry");
+    }
+    expect(pluginEntry.enabled).toBe(true);
   });
 
   it("passes proxy and storeInCache through the fetch provider tool", async () => {
@@ -399,19 +435,16 @@ describe("firecrawl tools", () => {
       categories: ["research"],
       scrapeResults: true,
     });
-    expect(result).toMatchObject({
-      details: {
-        ok: true,
-        params: {
-          cfg: { env: "test" },
-          query: "web search",
-          count: 6,
-          timeoutSeconds: 12,
-          sources: ["web", "news"],
-          categories: ["research"],
-          scrapeResults: true,
-        },
-      },
+    const details = result.details as { ok?: boolean; params?: unknown };
+    expect(details.ok).toBe(true);
+    expect(details.params).toEqual({
+      cfg: { env: "test" },
+      query: "web search",
+      count: 6,
+      timeoutSeconds: 12,
+      sources: ["web", "news"],
+      categories: ["research"],
+      scrapeResults: true,
     });
   });
 
@@ -441,21 +474,18 @@ describe("firecrawl tools", () => {
       storeInCache: false,
       timeoutSeconds: 22,
     });
-    expect(result).toMatchObject({
-      details: {
-        ok: true,
-        params: {
-          cfg: { env: "test" },
-          url: "https://docs.openclaw.ai",
-          extractMode: "markdown",
-          maxChars: 1500,
-          onlyMainContent: false,
-          maxAgeMs: 5000,
-          proxy: "stealth",
-          storeInCache: false,
-          timeoutSeconds: 22,
-        },
-      },
+    const details = result.details as { ok?: boolean; params?: unknown };
+    expect(details.ok).toBe(true);
+    expect(details.params).toEqual({
+      cfg: { env: "test" },
+      url: "https://docs.openclaw.ai",
+      extractMode: "markdown",
+      maxChars: 1500,
+      onlyMainContent: false,
+      maxAgeMs: 5000,
+      proxy: "stealth",
+      storeInCache: false,
+      timeoutSeconds: 22,
     });
   });
 
@@ -718,7 +748,68 @@ describe("firecrawl tools", () => {
     );
 
     expect(fetchSpy).toHaveBeenCalledTimes(1);
-    expect(result).toMatchObject({ success: true });
+    expect(result.success).toBe(true);
+  });
+
+  it("reports malformed Firecrawl search JSON with a stable provider error", async () => {
+    global.fetch = vi.fn(
+      async () =>
+        new Response("{ nope", {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    ) as typeof fetch;
+
+    await expect(
+      runActualFirecrawlSearch({
+        cfg: {
+          plugins: {
+            entries: {
+              firecrawl: {
+                config: {
+                  webSearch: {
+                    apiKey: "firecrawl-key",
+                    baseUrl: "https://api.firecrawl.dev",
+                  },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        query: "openclaw malformed search",
+      }),
+    ).rejects.toThrow("Firecrawl Search API error: malformed JSON response");
+  });
+
+  it("reports malformed Firecrawl scrape JSON with a stable provider error", async () => {
+    global.fetch = vi.fn(
+      async () =>
+        new Response("{ nope", {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    ) as typeof fetch;
+
+    await expect(
+      runActualFirecrawlScrape({
+        cfg: {
+          plugins: {
+            entries: {
+              firecrawl: {
+                config: {
+                  webFetch: {
+                    apiKey: "firecrawl-key",
+                    baseUrl: "https://api.firecrawl.dev",
+                  },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        url: "https://example.com/firecrawl-malformed-scrape",
+        extractMode: "markdown",
+      }),
+    ).rejects.toThrow("Firecrawl fetch failed: malformed JSON response");
   });
 
   it("respects positive numeric overrides for scrape and cache behavior", () => {

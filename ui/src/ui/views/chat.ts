@@ -30,6 +30,7 @@ import { PinnedMessages } from "../chat/pinned-messages.ts";
 import { getPinnedMessageSummary } from "../chat/pinned-summary.ts";
 import type { RealtimeTalkStatus } from "../chat/realtime-talk.ts";
 import { renderChatRunControls } from "../chat/run-controls.ts";
+import type { ChatRunUiStatus } from "../chat/run-lifecycle.ts";
 import { getOrCreateSessionCacheValue } from "../chat/session-cache.ts";
 import { renderSideResult } from "../chat/side-result-render.ts";
 import type { ChatSideResult } from "../chat/side-result.ts";
@@ -41,7 +42,11 @@ import {
   type SlashCommandCategory,
   type SlashCommandDef,
 } from "../chat/slash-commands.ts";
-import { renderCompactionIndicator, renderFallbackIndicator } from "../chat/status-indicators.ts";
+import {
+  renderChatRunStatusIndicator,
+  renderCompactionIndicator,
+  renderFallbackIndicator,
+} from "../chat/status-indicators.ts";
 import { getExpandedToolCards, syncToolCardExpansionState } from "../chat/tool-expansion-state.ts";
 import type { EmbedSandboxMode } from "../embed-sandbox.ts";
 import { icons } from "../icons.ts";
@@ -53,6 +58,23 @@ import { resolveLocalUserName } from "../user-identity.ts";
 import { renderMarkdownSidebar } from "./markdown-sidebar.ts";
 import "../components/resizable-divider.ts";
 
+const COMPOSER_CHROME_INTERACTIVE_SELECTOR = [
+  "a[href]",
+  "button",
+  "input",
+  "select",
+  "textarea",
+  "summary",
+  "[contenteditable='true']",
+  "[role='button']",
+  "[role='listbox']",
+  "[role='option']",
+].join(",");
+
+function hasTerminalRunStatus(status: ChatRunUiStatus | null | undefined): boolean {
+  return status?.phase === "done" || status?.phase === "interrupted";
+}
+
 export type ChatProps = {
   sessionKey: string;
   onSessionKeyChange: (next: string) => void;
@@ -62,6 +84,7 @@ export type ChatProps = {
   loading: boolean;
   sending: boolean;
   canAbort?: boolean;
+  runStatus?: ChatRunUiStatus | null;
   compactionStatus?: CompactionStatus | null;
   fallbackStatus?: FallbackStatus | null;
   messages: unknown[];
@@ -77,6 +100,17 @@ export type ChatProps = {
   realtimeTalkStatus?: RealtimeTalkStatus;
   realtimeTalkDetail?: string | null;
   realtimeTalkTranscript?: string | null;
+  realtimeTalkOptionsOpen?: boolean;
+  realtimeTalkOptions?: {
+    provider: string;
+    model: string;
+    voice: string;
+    transport: string;
+    vadThreshold: string;
+    silenceDurationMs: string;
+    prefixPaddingMs: string;
+    reasoningEffort: string;
+  };
   connected: boolean;
   canSend: boolean;
   disabledReason: string | null;
@@ -87,7 +121,7 @@ export type ChatProps = {
   sidebarContent?: SidebarContent | null;
   sidebarError?: string | null;
   splitRatio?: number;
-  canvasHostUrl?: string | null;
+  canvasPluginSurfaceUrl?: string | null;
   embedSandboxMode?: EmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
   assistantName: string;
@@ -111,6 +145,10 @@ export type ChatProps = {
   onCompact?: () => void | Promise<void>;
   onOpenSessionCheckpoints?: () => void | Promise<void>;
   onToggleRealtimeTalk?: () => void;
+  onToggleRealtimeTalkOptions?: () => void;
+  onRealtimeTalkOptionsChange?: (
+    next: Partial<NonNullable<ChatProps["realtimeTalkOptions"]>>,
+  ) => void;
   onDismissError?: () => void;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
@@ -152,6 +190,143 @@ function getDeletedMessages(sessionKey: string): DeletedMessages {
     sessionKey,
     () => new DeletedMessages(sessionKey),
   );
+}
+
+function renderRealtimeTalkOptions(props: ChatProps) {
+  const options = props.realtimeTalkOptions;
+  const onChange = props.onRealtimeTalkOptionsChange;
+  if (!props.realtimeTalkOptionsOpen || !options || !onChange) {
+    return nothing;
+  }
+  const update = (key: keyof NonNullable<ChatProps["realtimeTalkOptions"]>) => (event: Event) => {
+    const value = (event.currentTarget as HTMLInputElement | HTMLSelectElement).value;
+    onChange({ [key]: value });
+  };
+  const isDefaultSensitivity = options.vadThreshold === "";
+  const isPresetSensitivity = ["0.65", "0.5", "0.35"].includes(options.vadThreshold);
+  const isCustomSensitivity = !isDefaultSensitivity && !isPresetSensitivity;
+  const sensitivityValue = isDefaultSensitivity
+    ? ""
+    : isPresetSensitivity
+      ? options.vadThreshold
+      : "__custom";
+  const updateSensitivity = (event: Event) => {
+    const value = (event.currentTarget as HTMLSelectElement).value;
+    if (value !== "__custom") {
+      onChange({ vadThreshold: value });
+    }
+  };
+  return html`
+    <div class="agent-chat__talk-options" aria-label="Talk options">
+      <div class="agent-chat__talk-options-primary">
+        <label>
+          <span>Voice</span>
+          <select .value=${options.voice} @change=${update("voice")}>
+            <option value="">Default</option>
+            ${[
+              "alloy",
+              "ash",
+              "ballad",
+              "coral",
+              "echo",
+              "sage",
+              "shimmer",
+              "verse",
+              "marin",
+              "cedar",
+            ].map((voice) => html`<option value=${voice}>${voice}</option>`)}
+          </select>
+        </label>
+        <label>
+          <span>Model</span>
+          <input
+            .value=${options.model}
+            @input=${update("model")}
+            placeholder="Auto"
+            spellcheck="false"
+          />
+        </label>
+        <label>
+          <span>Sensitivity</span>
+          <select @change=${updateSensitivity}>
+            <option value="" ?selected=${sensitivityValue === ""}>Default</option>
+            <option value="0.65" ?selected=${sensitivityValue === "0.65"}>Low</option>
+            <option value="0.5" ?selected=${sensitivityValue === "0.5"}>Medium</option>
+            <option value="0.35" ?selected=${sensitivityValue === "0.35"}>High</option>
+            ${isCustomSensitivity
+              ? html`<option value="__custom" selected>Custom</option>`
+              : nothing}
+          </select>
+        </label>
+      </div>
+      <details class="agent-chat__talk-options-advanced">
+        <summary>Advanced</summary>
+        <div class="agent-chat__talk-options-grid">
+          <label>
+            <span>Provider</span>
+            <select .value=${options.provider} @change=${update("provider")}>
+              <option value="">Auto</option>
+              <option value="openai">OpenAI</option>
+              <option value="google">Google</option>
+            </select>
+          </label>
+          <label>
+            <span>Transport</span>
+            <select .value=${options.transport} @change=${update("transport")}>
+              <option value="">Auto</option>
+              <option value="webrtc">WebRTC</option>
+              <option value="gateway-relay">Gateway relay</option>
+              <option value="provider-websocket">Provider WebSocket</option>
+            </select>
+          </label>
+          <label>
+            <span>Reasoning</span>
+            <select .value=${options.reasoningEffort} @change=${update("reasoningEffort")}>
+              <option value="">Default</option>
+              <option value="minimal">Minimal</option>
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+            </select>
+          </label>
+          <label>
+            <span>Exact VAD</span>
+            <input
+              type="number"
+              min="0"
+              max="1"
+              step="0.05"
+              .value=${options.vadThreshold}
+              @input=${update("vadThreshold")}
+              placeholder="0.5"
+            />
+          </label>
+          <label>
+            <span>Pause before send</span>
+            <input
+              type="number"
+              min="1"
+              step="50"
+              .value=${options.silenceDurationMs}
+              @input=${update("silenceDurationMs")}
+              placeholder="500"
+            />
+          </label>
+          <label>
+            <span>Lead-in</span>
+            <input
+              type="number"
+              min="0"
+              step="50"
+              .value=${options.prefixPaddingMs}
+              @input=${update("prefixPaddingMs")}
+              placeholder="300"
+            />
+          </label>
+        </div>
+      </details>
+    </div>
+  `;
 }
 
 interface ChatEphemeralState {
@@ -197,6 +372,23 @@ export const cleanupChatModuleState = resetChatViewState;
 function adjustTextareaHeight(el: HTMLTextAreaElement) {
   el.style.height = "auto";
   el.style.height = `${Math.min(el.scrollHeight, 150)}px`;
+}
+
+function focusComposerFromChrome(event: MouseEvent, connected: boolean) {
+  if (!connected || event.defaultPrevented) {
+    return;
+  }
+  const target = event.target;
+  const currentTarget = event.currentTarget;
+  if (!(target instanceof Element) || !(currentTarget instanceof HTMLElement)) {
+    return;
+  }
+  if (target.closest(COMPOSER_CHROME_INTERACTIVE_SELECTOR)) {
+    return;
+  }
+  currentTarget
+    .querySelector<HTMLTextAreaElement>(".agent-chat__composer-combobox > textarea")
+    ?.focus({ preventScroll: true });
 }
 
 function restoreHistoryCaret(target: HTMLTextAreaElement, direction: "up" | "down") {
@@ -791,6 +983,8 @@ export function renderChat(props: ChatProps) {
   const canCompose = props.connected;
   const isBusy = props.sending || props.stream !== null;
   const canAbort = Boolean(props.canAbort && props.onAbort);
+  const showAbortableUi = canAbort && !hasTerminalRunStatus(props.runStatus);
+  const composerRunStatus = showAbortableUi ? { phase: "in-progress" as const } : props.runStatus;
   const compactBusy =
     props.compactionStatus?.phase === "active" || props.compactionStatus?.phase === "retrying";
   const activeSession = props.sessions?.sessions?.find((row) => row.key === props.sessionKey);
@@ -807,13 +1001,14 @@ export function renderChat(props: ChatProps) {
 
   const placeholder = props.connected
     ? hasAttachments
-      ? "Add a message or paste more images..."
-      : `Message ${props.assistantName || "agent"} (Enter to send)`
-    : "Connect to the gateway to start chatting...";
+      ? t("chat.composer.placeholderWithAttachments")
+      : t("chat.composer.placeholder", { name: props.assistantName || "agent" })
+    : t("chat.composer.placeholderDisconnected");
 
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const splitRatio = props.splitRatio ?? 0.6;
   const sidebarOpen = Boolean(props.sidebarOpen && props.onCloseSidebar);
+  const displayStream = props.stream ?? null;
 
   const handleCodeBlockCopy = (e: Event) => {
     const btn = (e.target as HTMLElement).closest(".code-block-copy");
@@ -835,7 +1030,7 @@ export function renderChat(props: ChatProps) {
     messages: props.messages,
     toolMessages: props.toolMessages,
     streamSegments: props.streamSegments,
-    stream: props.stream,
+    stream: displayStream,
     streamStartedAt: props.streamStartedAt,
     showToolCalls: props.showToolCalls,
     searchOpen: vs.searchOpen,
@@ -982,7 +1177,7 @@ export function renderChat(props: ChatProps) {
                 basePath: props.basePath,
                 localMediaPreviewRoots: props.localMediaPreviewRoots ?? [],
                 assistantAttachmentAuthToken: props.assistantAttachmentAuthToken ?? null,
-                canvasHostUrl: props.canvasHostUrl,
+                canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
                 embedSandboxMode: props.embedSandboxMode ?? "scripts",
                 allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
                 contextWindow:
@@ -1187,11 +1382,11 @@ export function renderChat(props: ChatProps) {
                 .label=${t("nav.resize")}
                 @resize=${(e: CustomEvent) => props.onSplitRatioChange?.(e.detail.splitRatio)}
               ></resizable-divider>
-              <div class="chat-sidebar">
+              <div class="chat-sidebar" @click=${handleCodeBlockCopy}>
                 ${renderMarkdownSidebar({
                   content: props.sidebarContent ?? null,
                   error: props.sidebarError ?? null,
-                  canvasHostUrl: props.canvasHostUrl,
+                  canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
                   embedSandboxMode: props.embedSandboxMode ?? "scripts",
                   allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
                   onClose: props.onCloseSidebar!,
@@ -1212,7 +1407,7 @@ export function renderChat(props: ChatProps) {
 
       ${renderChatQueue({
         queue: props.queue,
-        canAbort: props.canAbort,
+        canAbort: showAbortableUi,
         onQueueSteer: props.onQueueSteer,
         onQueueRemove: props.onQueueRemove,
       })}
@@ -1221,7 +1416,7 @@ export function renderChat(props: ChatProps) {
       ${renderCompactionIndicator(props.compactionStatus)}
       ${renderContextNotice(activeSession, props.sessions?.defaults?.contextTokens ?? null, {
         compactBusy,
-        compactDisabled: !props.connected || isBusy || Boolean(props.canAbort),
+        compactDisabled: !props.connected || isBusy || showAbortableUi,
         onCompact: props.onCompact,
       })}
       ${props.showNewMessages
@@ -1233,7 +1428,10 @@ export function renderChat(props: ChatProps) {
         : nothing}
 
       <!-- Input bar -->
-      <div class="agent-chat__input">
+      <div
+        class="agent-chat__input"
+        @click=${(event: MouseEvent) => focusComposerFromChrome(event, props.connected)}
+      >
         ${renderSlashMenu(requestUpdate, props)} ${renderAttachmentPreview(props)}
 
         <input
@@ -1244,6 +1442,7 @@ export function renderChat(props: ChatProps) {
           @change=${(e: Event) => handleFileSelect(e, props)}
         />
 
+        ${renderRealtimeTalkOptions(props)}
         ${props.realtimeTalkActive || props.realtimeTalkDetail || props.realtimeTalkTranscript
           ? html`
               <div class="agent-chat__stt-interim agent-chat__talk-status">
@@ -1291,11 +1490,12 @@ export function renderChat(props: ChatProps) {
               @click=${() => {
                 document.querySelector<HTMLInputElement>(".agent-chat__file-input")?.click();
               }}
-              title="Attach file"
-              aria-label="Attach file"
+              title=${t("chat.composer.attachFile")}
+              aria-label=${t("chat.composer.attachFile")}
               ?disabled=${!props.connected}
             >
               ${icons.paperclip}
+              <span class="agent-chat__control-label">${t("chat.composer.attachFile")}</span>
             </button>
 
             ${props.onToggleRealtimeTalk
@@ -1305,19 +1505,40 @@ export function renderChat(props: ChatProps) {
                       ? "agent-chat__input-btn--talk"
                       : ""}"
                     @click=${props.onToggleRealtimeTalk}
-                    title=${props.realtimeTalkActive ? "Stop Talk" : "Start Talk"}
-                    aria-label=${props.realtimeTalkActive ? "Stop Talk" : "Start Talk"}
+                    title=${props.realtimeTalkActive
+                      ? t("chat.composer.stopTalk")
+                      : t("chat.composer.startTalk")}
+                    aria-label=${props.realtimeTalkActive
+                      ? t("chat.composer.stopTalk")
+                      : t("chat.composer.startTalk")}
                     ?disabled=${!props.connected}
                   >
                     ${props.realtimeTalkActive ? icons.volume2 : icons.radio}
+                    <span class="agent-chat__control-label"
+                      >${props.realtimeTalkActive
+                        ? t("chat.composer.stopTalk")
+                        : t("chat.composer.startTalk")}</span
+                    >
+                  </button>
+                  <button
+                    class="agent-chat__input-btn ${props.realtimeTalkOptionsOpen
+                      ? "agent-chat__input-btn--active"
+                      : ""}"
+                    @click=${props.onToggleRealtimeTalkOptions}
+                    title="Talk options"
+                    aria-label="Talk options"
+                    ?disabled=${!props.connected || props.realtimeTalkActive}
+                  >
+                    ${icons.settings}
                   </button>
                 `
               : nothing}
             ${tokens ? html`<span class="agent-chat__token-count">${tokens}</span>` : nothing}
+            ${renderChatRunStatusIndicator(composerRunStatus)}
           </div>
 
           ${renderChatRunControls({
-            canAbort,
+            canAbort: showAbortableUi,
             connected: props.connected,
             draft: props.draft,
             hasMessages: props.messages.length > 0,
