@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { resolveCronPayloadOutcome } from "./isolated-agent/helpers.js";
 
 describe("resolveCronPayloadOutcome", () => {
@@ -37,6 +38,51 @@ describe("resolveCronPayloadOutcome", () => {
 
     expect(result.hasFatalErrorPayload).toBe(false);
     expect(result.summary).toBe("Write completed successfully.");
+  });
+
+  it("keeps non-terminal tool warnings diagnostic when final assistant output succeeded", () => {
+    const toolWarning = setReplyPayloadMetadata(
+      {
+        text: "⚠️ Exec failed",
+        isError: true,
+      },
+      { nonTerminalToolErrorWarning: true },
+    );
+
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text: "Queued 3 topics." }, toolWarning],
+      finalAssistantVisibleText: "Queued 3 topics.",
+      preferFinalAssistantVisibleText: true,
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(false);
+    expect(result.embeddedRunError).toBeUndefined();
+    expect(result.summary).toBe("Queued 3 topics.");
+    expect(result.outputText).toBe("Queued 3 topics.");
+    expect(result.deliveryPayloads).toEqual([{ text: "Queued 3 topics." }]);
+  });
+
+  it("keeps marked middleware warnings diagnostic after structured cron output", () => {
+    const mediaPayload = { mediaUrl: "file:///tmp/cron-report.png" };
+    const toolWarning = setReplyPayloadMetadata(
+      {
+        text: "⚠️ Exec failed",
+        isError: true,
+      },
+      { nonTerminalToolErrorWarning: true },
+    );
+
+    const result = resolveCronPayloadOutcome({
+      payloads: [mediaPayload, toolWarning],
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(false);
+    expect(result.embeddedRunError).toBeUndefined();
+    expect(result.summary).toBeUndefined();
+    expect(result.outputText).toBeUndefined();
+    expect(result.synthesizedText).toBeUndefined();
+    expect(result.deliveryPayloads).toEqual([mediaPayload]);
+    expect(result.deliveryPayloadHasStructuredContent).toBe(true);
   });
 
   it("treats trailing message delivery warnings as non-fatal when final assistant text exists", () => {
