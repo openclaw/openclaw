@@ -66,6 +66,12 @@ Docker is **optional**. Use it only if you want a containerized gateway or to va
     default; if you switch the container config to password auth, use that
     password instead.
 
+    To retrieve the configured token without exposing it in setup logs:
+
+    ```bash
+    sed -n 's/^OPENCLAW_GATEWAY_TOKEN=//p' .env
+    ```
+
     Need the URL again?
 
     ```bash

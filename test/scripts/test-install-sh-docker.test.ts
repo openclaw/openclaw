@@ -1,4 +1,7 @@
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const SCRIPT_PATH = "scripts/test-install-sh-docker.sh";
@@ -10,6 +13,14 @@ const BUN_GLOBAL_ASSERTIONS_PATH = "scripts/e2e/lib/bun-global-install/assertion
 const INSTALL_SMOKE_WORKFLOW_PATH = ".github/workflows/install-smoke.yml";
 const RELEASE_CHECKS_WORKFLOW_PATH = ".github/workflows/openclaw-release-checks.yml";
 const LIVE_E2E_WORKFLOW_PATH = ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml";
+
+function extractShellFunction(script: string, name: string) {
+  const match = script.match(new RegExp(`^${name}\\(\\) \\{[\\s\\S]*?^\\}`, "m"));
+  if (!match) {
+    throw new Error(`Missing shell function: ${name}`);
+  }
+  return match[0];
+}
 
 describe("test-install-sh-docker", () => {
   it("defaults local Apple Silicon smoke runs to native arm64 while keeping CI on amd64", () => {
@@ -118,6 +129,40 @@ describe("test-install-sh-docker", () => {
       'BUILD_ARGS+=(--build-arg "OPENCLAW_IMAGE_PIP_PACKAGES=${OPENCLAW_IMAGE_PIP_PACKAGES}")',
     );
     expect(podmanSetup).not.toContain("OPENCLAW_DOCKER_PIP_PACKAGES");
+  });
+
+  it("redacts the gateway token from Docker setup logs", () => {
+    const script = readFileSync(DOCKER_SETUP_PATH, "utf8");
+    const token = "super-secret-token-123";
+    const fingerprintFunction = extractShellFunction(script, "format_gateway_token_fingerprint");
+    const fingerprint = spawnSync(
+      "/bin/bash",
+      ["-c", `${fingerprintFunction}\nformat_gateway_token_fingerprint "$1"`, "--", token],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          PATH: dirname(process.execPath),
+        },
+      },
+    );
+
+    expect(fingerprint.status).toBe(0);
+    expect(fingerprint.stdout.trim()).toBe(
+      `sha256:${createHash("sha256").update(token).digest("hex").slice(0, 12)} (${token.length} chars)`,
+    );
+    expect(fingerprint.stdout).not.toContain(token);
+    expect(script).toContain('MASKED_GATEWAY_TOKEN="$(format_gateway_token_fingerprint "$OPENCLAW_GATEWAY_TOKEN")"');
+    expect(script).toContain('echo "Gateway token fingerprint: $MASKED_GATEWAY_TOKEN"');
+    expect(script).toContain('echo "Token fingerprint: $MASKED_GATEWAY_TOKEN"');
+    expect(script).toContain('echo "Token file: $ENV_FILE"');
+    expect(script).toContain("sed -n 's/^OPENCLAW_GATEWAY_TOKEN=//p'");
+    expect(script).toContain('${COMPOSE_HINT} exec openclaw-gateway node dist/index.js health --token');
+    expect(script).not.toContain('echo "Gateway token: $OPENCLAW_GATEWAY_TOKEN"');
+    expect(script).not.toContain('echo "Token: $OPENCLAW_GATEWAY_TOKEN"');
+    expect(script).not.toContain(
+      'echo "  ${COMPOSE_HINT} exec openclaw-gateway node dist/index.js health --token "$OPENCLAW_GATEWAY_TOKEN""',
+    );
   });
 
   it("allows repository branch history and release tags for secret-backed Docker release checks", () => {

@@ -108,6 +108,36 @@ read_env_gateway_token() {
   fi
 }
 
+format_gateway_token_fingerprint() {
+  local token="$1"
+  local digest=""
+  local length="${#token}"
+
+  if [[ -z "$token" ]]; then
+    printf '<unset>'
+    return 0
+  fi
+
+  if command -v openssl >/dev/null 2>&1; then
+    digest="$(printf '%s' "$token" | openssl dgst -sha256 -r 2>/dev/null || true)"
+    digest="${digest%% *}"
+  elif command -v shasum >/dev/null 2>&1; then
+    digest="$(printf '%s' "$token" | shasum -a 256 2>/dev/null || true)"
+    digest="${digest%% *}"
+  elif command -v python3 >/dev/null 2>&1; then
+    digest="$(printf '%s' "$token" | python3 -c 'import hashlib, sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')"
+  elif command -v node >/dev/null 2>&1; then
+    digest="$(printf '%s' "$token" | node -e 'const crypto = require("node:crypto"); const fs = require("node:fs"); process.stdout.write(crypto.createHash("sha256").update(fs.readFileSync(0)).digest("hex"));')"
+  fi
+
+  if [[ -n "$digest" ]]; then
+    printf 'sha256:%s (%s chars)' "${digest:0:12}" "$length"
+    return 0
+  fi
+
+  printf '[set; %s chars]' "$length"
+}
+
 sync_gateway_config() {
   local allowed_origin_json=""
   local current_allowed_origins=""
@@ -346,6 +376,7 @@ PY
   fi
 fi
 export OPENCLAW_GATEWAY_TOKEN
+MASKED_GATEWAY_TOKEN="$(format_gateway_token_fingerprint "$OPENCLAW_GATEWAY_TOKEN")"
 
 COMPOSE_FILES=("$COMPOSE_FILE")
 COMPOSE_ARGS=()
@@ -572,7 +603,7 @@ else
   else
     echo "Bonjour/mDNS advertising: explicitly enabled (OPENCLAW_DISABLE_BONJOUR=$OPENCLAW_DISABLE_BONJOUR)."
   fi
-  echo "Gateway token: $OPENCLAW_GATEWAY_TOKEN"
+  echo "Gateway token fingerprint: $MASKED_GATEWAY_TOKEN"
   echo "Tailscale exposure: Off (use host-level tailnet/Tailscale setup separately)."
   echo "Install Gateway daemon: No (managed by Docker Compose)"
   echo ""
@@ -711,8 +742,10 @@ echo "Gateway running with host port mapping."
 echo "Access from tailnet devices via the host's tailnet IP."
 echo "Config: $OPENCLAW_CONFIG_DIR"
 echo "Workspace: $OPENCLAW_WORKSPACE_DIR"
-echo "Token: $OPENCLAW_GATEWAY_TOKEN"
+echo "Token fingerprint: $MASKED_GATEWAY_TOKEN"
+echo "Token file: $ENV_FILE"
 echo ""
 echo "Commands:"
 echo "  ${COMPOSE_HINT} logs -f openclaw-gateway"
-echo "  ${COMPOSE_HINT} exec openclaw-gateway node dist/index.js health --token \"$OPENCLAW_GATEWAY_TOKEN\""
+echo "  sed -n 's/^OPENCLAW_GATEWAY_TOKEN=//p' \"$ENV_FILE\""
+echo "  OPENCLAW_GATEWAY_TOKEN=\"\$(sed -n 's/^OPENCLAW_GATEWAY_TOKEN=//p' \"$ENV_FILE\")\" && ${COMPOSE_HINT} exec openclaw-gateway node dist/index.js health --token \"\$OPENCLAW_GATEWAY_TOKEN\""
