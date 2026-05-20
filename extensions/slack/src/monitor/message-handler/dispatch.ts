@@ -625,6 +625,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       });
   let streamSession: SlackStreamSession | null = null;
   let nativeProgressStreamStartPromise: Promise<SlackStreamSession | null> | null = null;
+  let nativeProgressStreamThreadTs: string | undefined;
   let streamFailed = false;
   let usedReplyThreadTs: string | undefined;
   let usedBlockReplyThreadTs: string | undefined;
@@ -785,7 +786,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       await deliverNormally({
         payload: params.payload,
         kind: params.kind,
-        forcedThreadTs: streamSession?.threadTs,
+        forcedThreadTs: streamSession?.threadTs ?? nativeProgressStreamThreadTs,
       });
       return;
     }
@@ -800,7 +801,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         await deliverNormally({
           payload: params.payload,
           kind: params.kind,
-          forcedThreadTs: streamSession?.threadTs,
+          forcedThreadTs: streamSession?.threadTs ?? nativeProgressStreamThreadTs,
         });
         return;
       }
@@ -1294,6 +1295,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       streamFailed = true;
       return;
     }
+    nativeProgressStreamThreadTs = streamThreadTs;
     const startPromise = (async () => {
       const session = await startSlackStream({
         client: ctx.app.client,
