@@ -11,25 +11,26 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { readRegularFileSync } from "openclaw/plugin-sdk/security-runtime";
 import { formatErrorMessage } from "./format.js";
 import { debugLog, debugError, debugWarn } from "./log.js";
 import { normalizeLowercaseStringOrEmpty as normalizeLowercase } from "./string-normalize.js";
 
 type SilkWasm = typeof import("silk-wasm");
-let _silkWasmPromise: Promise<SilkWasm | null> | null = null;
+let silkWasmPromise: Promise<SilkWasm | null> | null = null;
 
 /** Lazy-load the silk-wasm module (singleton cache; returns null on failure). */
 function loadSilkWasm(): Promise<SilkWasm | null> {
-  if (_silkWasmPromise) {
-    return _silkWasmPromise;
+  if (silkWasmPromise) {
+    return silkWasmPromise;
   }
-  _silkWasmPromise = import("silk-wasm").catch((err) => {
+  silkWasmPromise = import("silk-wasm").catch((err) => {
     debugWarn(
       `[audio-convert] silk-wasm not available; SILK encode/decode disabled (${formatErrorMessage(err)})`,
     );
     return null;
   });
-  return _silkWasmPromise;
+  return silkWasmPromise;
 }
 
 /** Wrap raw PCM s16le data into a standard WAV file. */
@@ -81,11 +82,13 @@ export async function convertSilkToWav(
   inputPath: string,
   outputDir?: string,
 ): Promise<{ wavPath: string; duration: number } | null> {
-  if (!fs.existsSync(inputPath)) {
+  let fileBuf: Buffer;
+  try {
+    fileBuf = readRegularFileSync({ filePath: inputPath }).buffer;
+  } catch {
     return null;
   }
 
-  const fileBuf = fs.readFileSync(inputPath);
   const strippedBuf = stripAmrHeader(fileBuf);
   const rawData = new Uint8Array(
     strippedBuf.buffer,
@@ -188,11 +191,13 @@ export async function audioFileToSilkBase64(
   filePath: string,
   directUploadFormats?: string[],
 ): Promise<string | null> {
-  if (!fs.existsSync(filePath)) {
+  let buf: Buffer;
+  try {
+    buf = readRegularFileSync({ filePath }).buffer;
+  } catch {
     return null;
   }
 
-  const buf = fs.readFileSync(filePath);
   if (buf.length === 0) {
     debugError(`[audio-convert] file is empty: ${filePath}`);
     return null;

@@ -17,13 +17,21 @@ function createJsonResponse(body: unknown, init?: { status?: number }) {
   });
 }
 
+function fetchCall(fetchMock: ReturnType<typeof vi.fn<typeof fetch>>, index: number) {
+  const call = fetchMock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected fetch call ${index}`);
+  }
+  return call;
+}
+
 describe("loginOpenAICodexDeviceCode", () => {
   it("requests a device code, polls for authorization, and exchanges OAuth tokens", async () => {
     vi.useFakeTimers();
     vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
     try {
       const fetchMock = vi
-        .fn()
+        .fn<typeof fetch>()
         .mockResolvedValueOnce(
           createJsonResponse({
             device_auth_id: "device-auth-123",
@@ -74,45 +82,35 @@ describe("loginOpenAICodexDeviceCode", () => {
       await vi.advanceTimersByTimeAsync(1);
       const credentials = await credentialsPromise;
 
-      expect(fetchMock).toHaveBeenNthCalledWith(
-        1,
-        "https://auth.openai.com/api/accounts/deviceauth/usercode",
-        expect.objectContaining({
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            originator: "openclaw",
-            version: "2026.3.22",
-            "User-Agent": "openclaw/2026.3.22",
-          },
-        }),
-      );
-      expect(fetchMock).toHaveBeenNthCalledWith(
-        2,
-        "https://auth.openai.com/api/accounts/deviceauth/token",
-        expect.objectContaining({
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            originator: "openclaw",
-            version: "2026.3.22",
-            "User-Agent": "openclaw/2026.3.22",
-          },
-        }),
-      );
-      expect(fetchMock).toHaveBeenNthCalledWith(
-        4,
-        "https://auth.openai.com/oauth/token",
-        expect.objectContaining({
-          method: "POST",
-          headers: {
-            "Content-Type": "application/x-www-form-urlencoded",
-            originator: "openclaw",
-            version: "2026.3.22",
-            "User-Agent": "openclaw/2026.3.22",
-          },
-        }),
-      );
+      const userCodeRequest = fetchCall(fetchMock, 0);
+      expect(userCodeRequest[0]).toBe("https://auth.openai.com/api/accounts/deviceauth/usercode");
+      expect(userCodeRequest[1]?.method).toBe("POST");
+      expect(userCodeRequest[1]?.headers).toEqual({
+        "Content-Type": "application/json",
+        originator: "openclaw",
+        version: "2026.3.22",
+        "User-Agent": "openclaw/2026.3.22",
+      });
+
+      const deviceTokenRequest = fetchCall(fetchMock, 1);
+      expect(deviceTokenRequest[0]).toBe("https://auth.openai.com/api/accounts/deviceauth/token");
+      expect(deviceTokenRequest[1]?.method).toBe("POST");
+      expect(deviceTokenRequest[1]?.headers).toEqual({
+        "Content-Type": "application/json",
+        originator: "openclaw",
+        version: "2026.3.22",
+        "User-Agent": "openclaw/2026.3.22",
+      });
+
+      const oauthTokenRequest = fetchCall(fetchMock, 3);
+      expect(oauthTokenRequest[0]).toBe("https://auth.openai.com/oauth/token");
+      expect(oauthTokenRequest[1]?.method).toBe("POST");
+      expect(oauthTokenRequest[1]?.headers).toEqual({
+        "Content-Type": "application/x-www-form-urlencoded",
+        originator: "openclaw",
+        version: "2026.3.22",
+        "User-Agent": "openclaw/2026.3.22",
+      });
       expect(onVerification).toHaveBeenCalledWith({
         verificationUrl: "https://auth.openai.com/codex/device",
         userCode: "CODE-12345",
@@ -121,10 +119,9 @@ describe("loginOpenAICodexDeviceCode", () => {
       expect(onProgress).toHaveBeenNthCalledWith(1, "Requesting device code…");
       expect(onProgress).toHaveBeenNthCalledWith(2, "Waiting for device authorization…");
       expect(onProgress).toHaveBeenNthCalledWith(3, "Exchanging device code…");
-      expect(credentials).toMatchObject({
-        access: expect.any(String),
-        refresh: "refresh-token-123",
-      });
+      expect(typeof credentials.access).toBe("string");
+      expect(credentials.access.length).toBeGreaterThan(0);
+      expect(credentials.refresh).toBe("refresh-token-123");
       expect(credentials).not.toHaveProperty("accountId");
       expect(credentials.expires).toBeGreaterThan(Date.now());
     } finally {
@@ -168,7 +165,9 @@ describe("loginOpenAICodexDeviceCode", () => {
       onVerification: async () => {},
     });
 
-    expect(expectedExpiry).toBeDefined();
+    if (expectedExpiry === undefined) {
+      throw new Error("expected device-code expiry to be calculated");
+    }
     expect(credentials.expires).toBe(expectedExpiry);
   });
 

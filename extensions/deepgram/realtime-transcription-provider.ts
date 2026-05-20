@@ -6,7 +6,7 @@ import {
   type RealtimeTranscriptionSessionCreateRequest,
 } from "openclaw/plugin-sdk/realtime-transcription";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { DEFAULT_DEEPGRAM_AUDIO_BASE_URL, DEFAULT_DEEPGRAM_AUDIO_MODEL } from "./audio.js";
 
 type DeepgramRealtimeTranscriptionEncoding = "linear16" | "mulaw" | "alaw";
@@ -250,6 +250,7 @@ export function buildDeepgramRealtimeTranscriptionProvider(): RealtimeTranscript
     id: "deepgram",
     label: "Deepgram Realtime Transcription",
     aliases: ["deepgram-realtime", "nova-3-streaming"],
+    defaultModel: DEFAULT_DEEPGRAM_AUDIO_MODEL,
     autoSelectOrder: 35,
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
     isConfigured: ({ providerConfig }) =>
@@ -275,7 +276,8 @@ export function buildDeepgramRealtimeTranscriptionProvider(): RealtimeTranscript
   };
 }
 
-export const __testing = {
+export const testing = {
   normalizeProviderConfig,
   toDeepgramRealtimeWsUrl,
 };
+export { testing as __testing };

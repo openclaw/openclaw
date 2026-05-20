@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveUserTimezone } from "../../agents/date-time.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { openBoundaryFile } from "../../infra/boundary-file-read.js";
+import { openRootFile } from "../../infra/boundary-file-read.js";
 
 const STARTUP_MEMORY_FILE_MAX_BYTES = 16_384;
 const STARTUP_MEMORY_FILE_MAX_CHARS = 1_200;
@@ -205,7 +205,7 @@ async function readStartupMemoryFile(params: {
   maxFileBytes: number;
 }): Promise<string | null> {
   const absolutePath = path.join(params.workspaceDir, params.relativePath);
-  const opened = await openBoundaryFile({
+  const opened = await openRootFile({
     absolutePath,
     rootPath: params.workspaceDir,
     boundaryLabel: "workspace root",
@@ -265,10 +265,7 @@ async function listStartupMemoryPathsByDate(params: {
         })),
       ),
     );
-    const sluggedStatsByStamp = new Map<
-      string,
-      Array<{ name: string; stat: Awaited<ReturnType<typeof fs.promises.stat>> }>
-    >();
+    const sluggedStatsByStamp = new Map<string, Array<{ name: string; stat: fs.Stats }>>();
     for (const result of sluggedNameResults) {
       if (result.status !== "fulfilled") {
         continue;
@@ -287,7 +284,7 @@ async function listStartupMemoryPathsByDate(params: {
       uniqueStamps.map((stamp) => {
         const newestSluggedNames = (sluggedStatsByStamp.get(stamp) ?? [])
           .toSorted((left, right) => {
-            const mtimeDiff = Number(right.stat.mtimeMs) - Number(left.stat.mtimeMs);
+            const mtimeDiff = right.stat.mtimeMs - left.stat.mtimeMs;
             if (mtimeDiff !== 0) {
               return mtimeDiff;
             }

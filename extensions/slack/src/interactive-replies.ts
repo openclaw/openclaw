@@ -1,6 +1,6 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDefaultSlackAccountId, resolveSlackAccount } from "./accounts.js";
 
 const SLACK_BUTTON_MAX_ITEMS = 5;
@@ -162,6 +162,9 @@ function resolveInteractiveRepliesFromCapabilities(capabilities: unknown): boole
   return false;
 }
 
+/**
+ * @deprecated Only needed for legacy Slack reply directives. New producers should emit presentation payloads.
+ */
 export function isSlackInteractiveRepliesEnabled(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -173,6 +176,9 @@ export function isSlackInteractiveRepliesEnabled(params: {
   return resolveInteractiveRepliesFromCapabilities(account.config.capabilities);
 }
 
+/**
+ * @deprecated Slack reply directives are legacy. New producers should emit presentation payloads.
+ */
 export function compileSlackInteractiveReplies(payload: ReplyPayload): ReplyPayload {
   const text = payload.text;
   if (!text) {
@@ -230,6 +236,9 @@ export function compileSlackInteractiveReplies(payload: ReplyPayload): ReplyPayl
   };
 }
 
+/**
+ * @deprecated Legacy Slack directive fallback. New producers should emit presentation payloads.
+ */
 export function parseSlackOptionsLine(payload: ReplyPayload): ReplyPayload {
   const text = payload.text;
   if (!text || payload.interactive?.blocks?.length || hasSlackBlocks(payload)) {

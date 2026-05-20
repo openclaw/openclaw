@@ -31,7 +31,7 @@ describe("config pruning defaults", () => {
     expect(cfg.agents?.defaults?.contextPruning?.mode).toBeUndefined();
   });
 
-  it("enables cache-ttl pruning + 1h heartbeat for Anthropic OAuth", async () => {
+  it("enables cache-ttl pruning + 1h heartbeat for Anthropic OAuth", () => {
     const cfg = applyAnthropicDefaultsForTest({
       auth: {
         profiles: {
@@ -44,7 +44,34 @@ describe("config pruning defaults", () => {
     expectAnthropicPruningDefaults(cfg, "1h");
   });
 
-  it("enables cache-ttl pruning + 1h cache TTL for Anthropic API keys", async () => {
+  it("backfills raw and canonical Claude CLI policies for selected Anthropic CLI auth", () => {
+    const cfg = applyAnthropicDefaultsForTest({
+      auth: {
+        order: { anthropic: ["anthropic:claude-cli"] },
+        profiles: {
+          "anthropic:claude-cli": { provider: "claude-cli", mode: "oauth" },
+        },
+      },
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/opus-4.7" },
+          models: {
+            "anthropic/opus-4.7": { params: { maxTokens: 1200 } },
+          },
+        },
+      },
+    });
+
+    expect(cfg.agents?.defaults?.models?.["anthropic/opus-4.7"]).toEqual({
+      params: { maxTokens: 1200 },
+      agentRuntime: { id: "claude-cli" },
+    });
+    expect(cfg.agents?.defaults?.models?.["anthropic/claude-opus-4-7"]).toEqual({
+      agentRuntime: { id: "claude-cli" },
+    });
+  });
+
+  it("enables cache-ttl pruning + 1h cache TTL for Anthropic API keys", () => {
     const cfg = applyAnthropicDefaultsForTest({
       auth: {
         profiles: {
@@ -64,7 +91,7 @@ describe("config pruning defaults", () => {
     ).toBe("short");
   });
 
-  it("adds cacheRetention defaults for dated Anthropic primary model refs", async () => {
+  it("adds cacheRetention defaults for dated Anthropic primary model refs", () => {
     const cfg = applyAnthropicDefaultsForTest({
       auth: {
         profiles: {
@@ -84,7 +111,7 @@ describe("config pruning defaults", () => {
     ).toBe("short");
   });
 
-  it("adds default cacheRetention for Anthropic Claude models on Bedrock", async () => {
+  it("adds default cacheRetention for Anthropic Claude models on Bedrock", () => {
     const cfg = applyAnthropicDefaultsForTest({
       auth: {
         profiles: {
@@ -104,7 +131,7 @@ describe("config pruning defaults", () => {
     ).toBe("short");
   });
 
-  it("does not add default cacheRetention for non-Anthropic Bedrock models", async () => {
+  it("does not add default cacheRetention for non-Anthropic Bedrock models", () => {
     const cfg = applyAnthropicDefaultsForTest({
       auth: {
         profiles: {
@@ -124,7 +151,7 @@ describe("config pruning defaults", () => {
     ).toBeUndefined();
   });
 
-  it("does not override explicit contextPruning mode", async () => {
+  it("does not override explicit contextPruning mode", () => {
     const cfg = applyAnthropicDefaultsForTest({
       auth: {
         profiles: {

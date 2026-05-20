@@ -2,6 +2,8 @@ import {
   QA_AGENTIC_PARITY_SCENARIO_TITLES,
   QA_AGENTIC_PARITY_TOOL_BACKED_SCENARIO_TITLES,
 } from "./agentic-parity.js";
+import type { RuntimeId, RuntimeParityDrift, RuntimeParityResult } from "./runtime-parity.js";
+import { isRuntimeParityResultPass, runtimeParityCellStatus } from "./runtime-parity.js";
 
 type QaParityReportStep = {
   name: string;
@@ -29,6 +31,7 @@ type QaParityRunBlock = {
   primaryModelName?: string;
   providerMode?: string;
   scenarioIds?: readonly string[] | null;
+  runtimePair?: [RuntimeId, RuntimeId] | null;
 };
 
 export type QaParitySuiteSummary = {
@@ -40,6 +43,42 @@ export type QaParitySuiteSummary = {
   };
   /** Self-describing run metadata — see PR L #64789 for the writer side. */
   run?: QaParityRunBlock;
+};
+
+type QaRuntimeParitySuiteScenario = QaParityReportScenario & {
+  runtimeParity?: RuntimeParityResult;
+};
+
+export type QaRuntimeParitySuiteSummary = Omit<QaParitySuiteSummary, "scenarios"> & {
+  scenarios: QaRuntimeParitySuiteScenario[];
+};
+
+type QaRuntimeParityScenarioReport = {
+  name: string;
+  status: "pass" | "fail";
+  drift: RuntimeParityDrift | "missing";
+  driftDetails?: string;
+  piStatus: "pass" | "fail" | "missing";
+  codexStatus: "pass" | "fail" | "missing";
+  piTokens: number;
+  codexTokens: number;
+  piToolCalls: number;
+  codexToolCalls: number;
+};
+
+export type QaRuntimeParityReport = {
+  runtimePair: [RuntimeId, RuntimeId];
+  comparedAt: string;
+  providerMode?: string;
+  primaryModel?: string;
+  totalScenarios: number;
+  passedScenarios: number;
+  failedScenarios: number;
+  driftCounts: Record<RuntimeParityDrift, number>;
+  scenarios: QaRuntimeParityScenarioReport[];
+  pass: boolean;
+  failures: string[];
+  notes: string[];
 };
 
 type QaAgenticParityMetrics = {
@@ -195,6 +234,43 @@ export function computeQaAgenticParityMetrics(
 
 function formatPercent(value: number) {
   return `${(value * 100).toFixed(1)}%`;
+}
+
+function buildRuntimeParityDriftCounts(): Record<RuntimeParityDrift, number> {
+  return {
+    none: 0,
+    "text-only": 0,
+    "tool-call-shape": 0,
+    "tool-result-shape": 0,
+    structural: 0,
+    "failure-mode": 0,
+  };
+}
+
+function isLiveProviderMode(providerMode: string | undefined) {
+  return providerMode?.startsWith("live-") === true;
+}
+
+function describeLiveUsageFailure(scenarioName: string, scenario: QaRuntimeParityScenarioReport) {
+  const missing = [
+    scenario.piTokens > 0 ? undefined : `${scenario.piStatus === "pass" ? "pi" : "pi failed"}=0`,
+    scenario.codexTokens > 0
+      ? undefined
+      : `${scenario.codexStatus === "pass" ? "codex" : "codex failed"}=0`,
+  ].filter((entry): entry is string => !!entry);
+  if (missing.length === 0) {
+    return undefined;
+  }
+  return `${scenarioName} missing live assistant-message usage (${missing.join(", ")}).`;
+}
+
+function normalizeRuntimePair(
+  pair: [RuntimeId, RuntimeId] | null | undefined,
+): [RuntimeId, RuntimeId] {
+  if (pair?.[0] && pair?.[1]) {
+    return pair;
+  }
+  return ["pi", "codex"];
 }
 
 function requiredCoverageStatus(
@@ -488,7 +564,7 @@ export function renderQaAgenticParityMarkdownReport(comparison: QaAgenticParityC
   // Title is parametrized from the candidate / baseline labels so reports
   // for any candidate/baseline pair (not only gpt-5.5 vs opus 4.6) render
   // with an accurate header. The default CLI labels are still
-  // openai/gpt-5.5 vs anthropic/claude-opus-4-6, but the helper works for
+  // openai/gpt-5.5 vs anthropic/claude-opus-4-7, but the helper works for
   // any parity comparison a caller configures.
   const lines = [
     `# OpenClaw Agentic Parity Report — ${comparison.candidateLabel} vs ${comparison.baselineLabel}`,
@@ -533,6 +609,147 @@ export function renderQaAgenticParityMarkdownReport(comparison: QaAgenticParityC
 
   lines.push("## Notes", "");
   for (const note of comparison.notes) {
+    lines.push(`- ${note}`);
+  }
+  lines.push("");
+
+  return lines.join("\n");
+}
+
+export function buildQaRuntimeParityReport(params: {
+  summary: QaRuntimeParitySuiteSummary;
+  comparedAt?: string;
+}): QaRuntimeParityReport {
+  const runtimePair = normalizeRuntimePair(params.summary.run?.runtimePair);
+  const providerMode = params.summary.run?.providerMode;
+  const requiresLiveUsage = isLiveProviderMode(providerMode);
+  const driftCounts = buildRuntimeParityDriftCounts();
+  const failures: string[] = [];
+  const scenarios: QaRuntimeParityScenarioReport[] = params.summary.scenarios.map((scenario) => {
+    const parity = scenario.runtimeParity;
+    if (!parity) {
+      failures.push(`Missing runtime parity capture for ${scenario.name}.`);
+      return {
+        name: scenario.name,
+        status: scenario.status === "pass" ? "pass" : "fail",
+        drift: "missing",
+        driftDetails: scenario.details,
+        piStatus: "missing",
+        codexStatus: "missing",
+        piTokens: 0,
+        codexTokens: 0,
+        piToolCalls: 0,
+        codexToolCalls: 0,
+      } satisfies QaRuntimeParityScenarioReport;
+    }
+    driftCounts[parity.drift] += 1;
+    const piCell = parity.cells.pi;
+    const codexCell = parity.cells.codex;
+    const piStatus = runtimeParityCellStatus(piCell);
+    const codexStatus = runtimeParityCellStatus(codexCell);
+    const parityStatus = isRuntimeParityResultPass(parity) ? "pass" : "fail";
+    const reportScenario = {
+      name: scenario.name,
+      status: parityStatus,
+      drift: parity.drift,
+      driftDetails: parity.driftDetails,
+      piStatus,
+      codexStatus,
+      piTokens: piCell.usage.totalTokens,
+      codexTokens: codexCell.usage.totalTokens,
+      piToolCalls: piCell.toolCalls.length,
+      codexToolCalls: codexCell.toolCalls.length,
+    } satisfies QaRuntimeParityScenarioReport;
+    if (parityStatus === "fail") {
+      failures.push(
+        `${scenario.name} drift=${parity.drift}${parity.driftDetails ? ` (${parity.driftDetails})` : ""}.`,
+      );
+    }
+    const usageFailure = requiresLiveUsage
+      ? describeLiveUsageFailure(scenario.name, reportScenario)
+      : undefined;
+    if (usageFailure) {
+      failures.push(usageFailure);
+      return { ...reportScenario, status: "fail" };
+    }
+    return reportScenario;
+  });
+
+  const totalScenarios = params.summary.counts?.total ?? scenarios.length;
+  const passedScenarios = scenarios.filter((scenario) => scenario.status === "pass").length;
+  const failedScenarios = scenarios.filter((scenario) => scenario.status === "fail").length;
+
+  return {
+    runtimePair,
+    comparedAt: params.comparedAt ?? new Date().toISOString(),
+    providerMode,
+    primaryModel: params.summary.run?.primaryModel,
+    totalScenarios,
+    passedScenarios,
+    failedScenarios,
+    driftCounts,
+    scenarios,
+    pass: failures.length === 0 && failedScenarios === 0,
+    failures,
+    notes: [
+      "Runtime parity fails runtime, transport, and failure-mode drift; structural and tool-shape drift is recorded as advisory when both runtimes complete.",
+      "Token totals here are assistant-message usage captured from the normalized transcript, not provider transport payloads.",
+    ],
+  };
+}
+
+export function renderQaRuntimeParityMarkdownReport(report: QaRuntimeParityReport): string {
+  const lines = [
+    `# OpenClaw Runtime Parity Report — ${report.runtimePair[0]} vs ${report.runtimePair[1]}`,
+    "",
+    `- Compared at: ${report.comparedAt}`,
+    `- Provider mode: ${report.providerMode ?? "unknown"}`,
+    `- Primary model: ${report.primaryModel ?? "unknown"}`,
+    `- Verdict: ${report.pass ? "pass" : "fail"}`,
+    "",
+    "## Aggregate Metrics",
+    "",
+    "| Metric | Value |",
+    "| --- | ---: |",
+    `| Total scenarios | ${report.totalScenarios} |`,
+    `| Passed scenarios | ${report.passedScenarios} |`,
+    `| Failed scenarios | ${report.failedScenarios} |`,
+    `| No drift | ${report.driftCounts.none} |`,
+    `| Text-only drift | ${report.driftCounts["text-only"]} |`,
+    `| Tool-call-shape drift | ${report.driftCounts["tool-call-shape"]} |`,
+    `| Tool-result-shape drift | ${report.driftCounts["tool-result-shape"]} |`,
+    `| Structural drift | ${report.driftCounts.structural} |`,
+    `| Failure-mode drift | ${report.driftCounts["failure-mode"]} |`,
+    "",
+  ];
+
+  if (report.failures.length > 0) {
+    lines.push("## Gate Failures", "");
+    for (const failure of report.failures) {
+      lines.push(`- ${failure}`);
+    }
+    lines.push("");
+  }
+
+  lines.push("## Scenario Comparison", "");
+  for (const scenario of report.scenarios) {
+    lines.push(`### ${scenario.name}`, "");
+    lines.push(`- status: ${scenario.status}`);
+    lines.push(`- drift: ${scenario.drift}`);
+    lines.push(
+      `- pi: ${scenario.piStatus} (${scenario.piToolCalls} tool calls, ${scenario.piTokens} tokens)`,
+    );
+    lines.push(
+      `- codex: ${scenario.codexStatus} (${scenario.codexToolCalls} tool calls, ${scenario.codexTokens} tokens)`,
+    );
+    if (scenario.driftDetails) {
+      lines.push(`- details: ${scenario.driftDetails}`);
+    }
+    lines.push("");
+  }
+
+  lines.push("## Notes", "");
+  for (const note of report.notes) {
     lines.push(`- ${note}`);
   }
   lines.push("");

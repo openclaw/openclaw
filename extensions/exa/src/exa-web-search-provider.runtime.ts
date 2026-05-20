@@ -20,7 +20,7 @@ import {
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const EXA_SEARCH_ENDPOINT = "https://api.exa.ai/search";
 const EXA_SEARCH_TYPES = ["auto", "neural", "fast", "deep", "deep-reasoning", "instant"] as const;
@@ -65,6 +65,14 @@ type ExaSearchResult = {
 type ExaSearchResponse = {
   results?: unknown;
 };
+
+async function readExaSearchResults(response: Response): Promise<ExaSearchResult[]> {
+  try {
+    return normalizeExaResults(await response.json());
+  } catch (cause) {
+    throw new Error("Exa API returned malformed JSON", { cause });
+  }
+}
 
 function normalizeExaFreshness(value: string | undefined): ExaFreshness | undefined {
   const trimmed = normalizeOptionalLowercaseString(value);
@@ -400,11 +408,7 @@ async function runExaSearch(params: {
         const detail = await res.text();
         throw new Error(`Exa API error (${res.status}): ${detail || res.statusText}`);
       }
-      try {
-        return normalizeExaResults(await res.json());
-      } catch (error) {
-        throw new Error(`Exa API returned invalid JSON: ${String(error)}`, { cause: error });
-      }
+      return readExaSearchResults(res);
     },
   );
 }
@@ -585,7 +589,7 @@ export async function executeExaWebSearchProviderTool(
   return payload;
 }
 
-export const __testing = {
+export const testing = {
   normalizeExaResults,
   normalizeExaFreshness,
   parseExaContents,
@@ -596,4 +600,6 @@ export const __testing = {
   resolveExaSearchCount,
   resolveExaSearchEndpoint,
   resolveFreshnessStartDate,
+  readExaSearchResults,
 } as const;
+export { testing as __testing };

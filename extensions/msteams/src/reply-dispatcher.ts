@@ -1,11 +1,12 @@
 import {
-  formatChannelProgressDraftLine,
+  buildChannelProgressDraftLine,
+  buildChannelProgressDraftLineForEntry,
   resolveChannelPreviewStreamMode,
   resolveChannelStreamingBlockEnabled,
 } from "openclaw/plugin-sdk/channel-streaming";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  createChannelReplyPipeline,
+  createChannelMessageReplyPipeline,
   logTypingFailure,
   resolveChannelMediaMaxBytes,
   type OpenClawConfig,
@@ -117,7 +118,7 @@ export function createMSTeamsReplyDispatcher(params: {
       }
     : async () => {};
 
-  const { onModelSelected, typingCallbacks, ...replyPipeline } = createChannelReplyPipeline({
+  const { onModelSelected, typingCallbacks, ...replyPipeline } = createChannelMessageReplyPipeline({
     cfg: params.cfg,
     agentId: params.agentId,
     channel: "msteams",
@@ -384,7 +385,8 @@ export function createMSTeamsReplyDispatcher(params: {
               detailMode?: "explain" | "raw";
             }) => {
               await streamController.pushProgressLine(
-                formatChannelProgressDraftLine(
+                buildChannelProgressDraftLineForEntry(
+                  msteamsCfg,
                   {
                     event: "tool",
                     name: payload.name,
@@ -397,6 +399,7 @@ export function createMSTeamsReplyDispatcher(params: {
               );
             },
             onItemEvent: async (payload: {
+              itemId?: string;
               kind?: string;
               progressText?: string;
               meta?: string;
@@ -407,8 +410,9 @@ export function createMSTeamsReplyDispatcher(params: {
               status?: string;
             }) => {
               await streamController.pushProgressLine(
-                formatChannelProgressDraftLine({
+                buildChannelProgressDraftLineForEntry(msteamsCfg, {
                   event: "item",
+                  itemId: payload.itemId,
                   itemKind: payload.kind,
                   title: payload.title,
                   name: payload.name,
@@ -430,7 +434,7 @@ export function createMSTeamsReplyDispatcher(params: {
                 return;
               }
               await streamController.pushProgressLine(
-                formatChannelProgressDraftLine({
+                buildChannelProgressDraftLine({
                   event: "plan",
                   phase: payload.phase,
                   title: payload.title,
@@ -450,7 +454,7 @@ export function createMSTeamsReplyDispatcher(params: {
                 return;
               }
               await streamController.pushProgressLine(
-                formatChannelProgressDraftLine({
+                buildChannelProgressDraftLine({
                   event: "approval",
                   phase: payload.phase,
                   title: payload.title,
@@ -471,7 +475,7 @@ export function createMSTeamsReplyDispatcher(params: {
                 return;
               }
               await streamController.pushProgressLine(
-                formatChannelProgressDraftLine({
+                buildChannelProgressDraftLine({
                   event: "command-output",
                   phase: payload.phase,
                   title: payload.title,
@@ -494,7 +498,7 @@ export function createMSTeamsReplyDispatcher(params: {
                 return;
               }
               await streamController.pushProgressLine(
-                formatChannelProgressDraftLine({
+                buildChannelProgressDraftLine({
                   event: "patch",
                   phase: payload.phase,
                   title: payload.title,

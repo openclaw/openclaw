@@ -7,11 +7,35 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import * as tar from "tar";
 
-function normalizeStringList(value) {
+function readPackageStringList(packageLabel, fieldName, value) {
   if (!Array.isArray(value)) {
-    return [];
+    return { entries: [], errors: [] };
   }
-  return value.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean);
+  const entries = [];
+  const errors = [];
+  for (const [index, entry] of value.entries()) {
+    const normalized = typeof entry === "string" ? entry.trim() : "";
+    if (!normalized) {
+      errors.push(`${packageLabel} package.json ${fieldName}[${index}] must be a non-empty string`);
+      continue;
+    }
+    entries.push(normalized);
+  }
+  return { entries, errors };
+}
+
+function readOptionalPackageString(packageLabel, fieldName, value) {
+  if (value === undefined || value === null) {
+    return { entry: "", errors: [] };
+  }
+  const entry = typeof value === "string" ? value.trim() : "";
+  if (!entry) {
+    return {
+      entry: "",
+      errors: [`${packageLabel} package.json ${fieldName} must be a non-empty string`],
+    };
+  }
+  return { entry, errors: [] };
 }
 
 function normalizePackagePath(value) {
@@ -48,6 +72,14 @@ function listBuiltRuntimeEntryCandidates(entryPath) {
   ].filter((candidate) => candidate !== normalized);
 }
 
+function hasPackedFile(packageFiles, entryPath) {
+  return packageFiles.has(normalizePackagePath(entryPath));
+}
+
+function missingCompiledRuntimeError(packageLabel, entry, candidates) {
+  return `${packageLabel} requires compiled runtime output for TypeScript entry ${entry}: expected ${candidates.join(", ")}`;
+}
+
 function formatPackageLabel(packageJson, fallbackSpec) {
   const packageName = typeof packageJson.name === "string" ? packageJson.name.trim() : "";
   const packageVersion = typeof packageJson.version === "string" ? packageJson.version.trim() : "";
@@ -61,13 +93,40 @@ export function collectPluginNpmPublishedRuntimeErrors(params) {
   const packageJson = params.packageJson ?? {};
   const packageFiles = new Set([...params.files].map(normalizePackagePath));
   const packageLabel = formatPackageLabel(packageJson, params.spec);
-  const extensions = normalizeStringList(packageJson.openclaw?.extensions);
-  const runtimeExtensions = normalizeStringList(packageJson.openclaw?.runtimeExtensions);
   const errors = [];
-
-  if (extensions.length === 0) {
+  const extensionsResult = readPackageStringList(
+    packageLabel,
+    "openclaw.extensions",
+    packageJson.openclaw?.extensions,
+  );
+  const runtimeExtensionsResult = readPackageStringList(
+    packageLabel,
+    "openclaw.runtimeExtensions",
+    packageJson.openclaw?.runtimeExtensions,
+  );
+  const setupEntryResult = readOptionalPackageString(
+    packageLabel,
+    "openclaw.setupEntry",
+    packageJson.openclaw?.setupEntry,
+  );
+  const runtimeSetupEntryResult = readOptionalPackageString(
+    packageLabel,
+    "openclaw.runtimeSetupEntry",
+    packageJson.openclaw?.runtimeSetupEntry,
+  );
+  errors.push(
+    ...extensionsResult.errors,
+    ...runtimeExtensionsResult.errors,
+    ...setupEntryResult.errors,
+    ...runtimeSetupEntryResult.errors,
+  );
+  if (errors.length > 0) {
     return errors;
   }
+  const extensions = extensionsResult.entries;
+  const runtimeExtensions = runtimeExtensionsResult.entries;
+  const setupEntry = setupEntryResult.entry;
+  const runtimeSetupEntry = runtimeSetupEntryResult.entry;
 
   if (runtimeExtensions.length > 0 && runtimeExtensions.length !== extensions.length) {
     errors.push(
@@ -79,7 +138,7 @@ export function collectPluginNpmPublishedRuntimeErrors(params) {
   for (const [index, entry] of extensions.entries()) {
     const runtimeEntry = runtimeExtensions[index];
     if (runtimeEntry) {
-      if (!packageFiles.has(normalizePackagePath(runtimeEntry))) {
+      if (!hasPackedFile(packageFiles, runtimeEntry)) {
         errors.push(`${packageLabel} runtime extension entry not found: ${runtimeEntry}`);
       }
       continue;
@@ -90,13 +149,40 @@ export function collectPluginNpmPublishedRuntimeErrors(params) {
     }
 
     const candidates = listBuiltRuntimeEntryCandidates(entry);
-    if (candidates.some((candidate) => packageFiles.has(normalizePackagePath(candidate)))) {
+    if (candidates.some((candidate) => hasPackedFile(packageFiles, candidate))) {
       continue;
     }
 
+    errors.push(missingCompiledRuntimeError(packageLabel, entry, candidates));
+  }
+
+  if (runtimeSetupEntry && !setupEntry) {
     errors.push(
-      `${packageLabel} requires compiled runtime output for TypeScript entry ${entry}: expected ${candidates.join(", ")}`,
+      `${packageLabel} package.json openclaw.runtimeSetupEntry requires openclaw.setupEntry`,
     );
+    return errors;
+  }
+
+  if (setupEntry) {
+    if (runtimeSetupEntry) {
+      if (!hasPackedFile(packageFiles, runtimeSetupEntry)) {
+        errors.push(`${packageLabel} runtime setup entry not found: ${runtimeSetupEntry}`);
+      }
+      return errors;
+    }
+
+    const candidates = listBuiltRuntimeEntryCandidates(setupEntry);
+    if (candidates.length > 0) {
+      if (candidates.some((candidate) => hasPackedFile(packageFiles, candidate))) {
+        return errors;
+      }
+      errors.push(missingCompiledRuntimeError(packageLabel, setupEntry, candidates));
+      return errors;
+    }
+
+    if (!hasPackedFile(packageFiles, setupEntry)) {
+      errors.push(`${packageLabel} setup entry not found: ${setupEntry}`);
+    }
   }
 
   return errors;
@@ -124,8 +210,8 @@ function sleep(ms) {
 }
 
 async function packPublishedPackage(spec, destinationDir) {
-  const attempts = Number.parseInt(process.env.OPENCLAW_PLUGIN_NPM_VERIFY_ATTEMPTS ?? "6", 10);
-  const delayMs = Number.parseInt(process.env.OPENCLAW_PLUGIN_NPM_VERIFY_DELAY_MS ?? "5000", 10);
+  const attempts = Number.parseInt(process.env.OPENCLAW_PLUGIN_NPM_VERIFY_ATTEMPTS ?? "90", 10);
+  const delayMs = Number.parseInt(process.env.OPENCLAW_PLUGIN_NPM_VERIFY_DELAY_MS ?? "10000", 10);
   let lastError;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
@@ -133,6 +219,9 @@ async function packPublishedPackage(spec, destinationDir) {
     } catch (error) {
       lastError = error;
       if (attempt < attempts) {
+        console.error(
+          `npm pack ${spec} not visible yet (attempt ${attempt}/${attempts}); retrying in ${delayMs}ms...`,
+        );
         await sleep(delayMs);
       }
     }

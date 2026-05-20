@@ -22,25 +22,6 @@
   line-height: 1.15;
 }
 
-.usage-page-header {
-  display: grid;
-  gap: 4px;
-}
-
-.usage-page-title {
-  font-size: 22px;
-  font-weight: 700;
-  letter-spacing: -0.025em;
-  color: var(--text-strong);
-}
-
-.usage-page-subtitle {
-  max-width: 720px;
-  color: var(--muted);
-  font-size: 13px;
-  line-height: 1.5;
-}
-
 .usage-section-title {
   margin: 0;
 }
@@ -354,6 +335,16 @@
   width: 100%;
   padding: 8px 12px;
   font-size: 12px;
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .usage-date-input,
+  .usage-select,
+  .usage-query-input,
+  .usage-filters-inline select,
+  .usage-filters-inline input[type="text"] {
+    font-size: 16px;
+  }
 }
 
 .usage-query-input::placeholder {
@@ -807,6 +798,13 @@ details.usage-filter-select summary::-webkit-details-marker,
   font-size: 13px;
 }
 
+.context-breakdown-item .mono {
+  max-width: 80%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .usage-list-item:last-child,
 .usage-error-row:last-child,
 .context-breakdown-item:last-child {
@@ -1043,6 +1041,11 @@ details.usage-filter-select summary::-webkit-details-marker,
   transform: translateY(-1px);
 }
 
+.daily-bar-wrapper:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  outline-offset: 3px;
+}
+
 .daily-bar--stacked {
   display: flex;
   flex-direction: column;
@@ -1086,6 +1089,17 @@ details.usage-filter-select summary::-webkit-details-marker,
 .daily-bar-wrapper:hover .daily-bar-tooltip {
   opacity: 1;
   transform: translate(-50%, 0);
+}
+
+.daily-bar-tooltip--floating {
+  position: fixed;
+  left: 0;
+  top: 0;
+  bottom: auto;
+  transform: none;
+  max-width: min(220px, calc(100vw - 16px));
+  opacity: 1;
+  z-index: 1000;
 }
 
 .cost-breakdown-bar {
@@ -1309,6 +1323,12 @@ details.usage-filter-select summary::-webkit-details-marker,
   margin-left: 8px;
   color: var(--muted);
   font-size: 11px;
+}
+
+.usage-lineage-note {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: -6px;
 }
 
 .session-detail-stats {

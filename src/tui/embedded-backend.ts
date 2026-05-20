@@ -60,11 +60,14 @@ type LocalRunState = {
   sessionKey: string;
   controller: AbortController;
   buffer: string;
+  lastBroadcastText?: string;
   isBtw: boolean;
   question?: string;
   finalSent: boolean;
   registered: boolean;
 };
+
+const LIFECYCLE_ERROR_RETRY_GRACE_MS = 15_000;
 
 const silentRuntime = {
   log: (..._args: unknown[]) => undefined,
@@ -104,6 +107,16 @@ function timeoutSecondsFromMs(timeoutMs?: number): string | undefined {
   return String(Math.max(0, Math.ceil(timeoutMs / 1000)));
 }
 
+function resolveDeltaPayload(text: string, previousText: string | undefined) {
+  if (previousText === undefined) {
+    return { deltaText: text };
+  }
+  if (!text.startsWith(previousText)) {
+    return { deltaText: text, replace: true as const };
+  }
+  return { deltaText: text.slice(previousText.length) };
+}
+
 export class EmbeddedTuiBackend implements TuiBackend {
   readonly connection = { url: "local embedded" };
 
@@ -118,6 +131,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
   private previousRuntimeLog?: typeof defaultRuntime.log;
   private previousRuntimeError?: typeof defaultRuntime.error;
   private seq = 0;
+  private readonly pendingLifecycleErrors = new Map<string, ReturnType<typeof setTimeout>>();
 
   start() {
     if (this.unsubscribe) {
@@ -144,6 +158,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     for (const run of this.runs.values()) {
       run.controller.abort();
     }
+    this.clearPendingLifecycleErrors();
     this.runs.clear();
     defaultRuntime.log = this.previousRuntimeLog ?? defaultRuntime.log;
     defaultRuntime.error = this.previousRuntimeError ?? defaultRuntime.error;
@@ -358,6 +373,32 @@ export class EmbeddedTuiBackend implements TuiBackend {
     });
   }
 
+  private clearPendingLifecycleError(runId: string) {
+    const pending = this.pendingLifecycleErrors.get(runId);
+    if (!pending) {
+      return;
+    }
+    clearTimeout(pending);
+    this.pendingLifecycleErrors.delete(runId);
+  }
+
+  private clearPendingLifecycleErrors() {
+    for (const pending of this.pendingLifecycleErrors.values()) {
+      clearTimeout(pending);
+    }
+    this.pendingLifecycleErrors.clear();
+  }
+
+  private scheduleChatError(runId: string, run: LocalRunState, errorMessage?: string) {
+    this.clearPendingLifecycleError(runId);
+    const timer = setTimeout(() => {
+      this.pendingLifecycleErrors.delete(runId);
+      this.emitChatError(runId, run, errorMessage);
+    }, LIFECYCLE_ERROR_RETRY_GRACE_MS);
+    timer.unref?.();
+    this.pendingLifecycleErrors.set(runId, timer);
+  }
+
   private emitChatDelta(runId: string, run: LocalRunState) {
     const projected = projectLiveAssistantBufferedText(run.buffer.trim(), {
       suppressLeadFragments: true,
@@ -366,11 +407,17 @@ export class EmbeddedTuiBackend implements TuiBackend {
     if (!text || projected.suppress) {
       return;
     }
+    const deltaPayload = resolveDeltaPayload(text, run.lastBroadcastText);
+    if (!deltaPayload.deltaText && !deltaPayload.replace) {
+      return;
+    }
     run.registered = true;
+    run.lastBroadcastText = text;
     this.emit("chat", {
       runId,
       sessionKey: run.sessionKey,
       state: "delta",
+      ...deltaPayload,
       message: {
         role: "assistant",
         content: [{ type: "text", text }],
@@ -380,11 +427,13 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   private emitChatFinal(runId: string, run: LocalRunState, stopReason?: string) {
+    this.clearPendingLifecycleError(runId);
     if (run.finalSent) {
       return;
     }
     run.finalSent = true;
     run.registered = true;
+    run.lastBroadcastText = undefined;
     const projected = projectLiveAssistantBufferedText(run.buffer.trim(), {
       suppressLeadFragments: false,
     });
@@ -408,11 +457,13 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   private emitChatAborted(runId: string, run: LocalRunState) {
+    this.clearPendingLifecycleError(runId);
     if (run.finalSent) {
       return;
     }
     run.finalSent = true;
     run.registered = true;
+    run.lastBroadcastText = undefined;
     this.emit("chat", {
       runId,
       sessionKey: run.sessionKey,
@@ -421,11 +472,13 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   private emitChatError(runId: string, run: LocalRunState, errorMessage?: string) {
+    this.clearPendingLifecycleError(runId);
     if (run.finalSent) {
       return;
     }
     run.finalSent = true;
     run.registered = true;
+    run.lastBroadcastText = undefined;
     this.emit("chat", {
       runId,
       sessionKey: run.sessionKey,
@@ -439,10 +492,12 @@ export class EmbeddedTuiBackend implements TuiBackend {
       return;
     }
     run.registered = true;
+    run.lastBroadcastText = "";
     this.emit("chat", {
       runId,
       sessionKey: run.sessionKey,
       state: "delta",
+      deltaText: "",
       message: {
         role: "assistant",
         content: [{ type: "text", text: "" }],
@@ -455,6 +510,12 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const run = this.runs.get(evt.runId);
     if (!run) {
       return;
+    }
+
+    const lifecyclePhase =
+      evt.stream === "lifecycle" && typeof evt.data?.phase === "string" ? evt.data.phase : "";
+    if (evt.stream !== "lifecycle" || lifecyclePhase !== "error") {
+      this.clearPendingLifecycleError(evt.runId);
     }
 
     if (evt.stream !== "assistant") {
@@ -490,7 +551,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       return;
     }
 
-    const phase = typeof evt.data?.phase === "string" ? evt.data.phase : "";
+    const phase = lifecyclePhase;
     const aborted = evt.data?.aborted === true || run.controller.signal.aborted;
     if (phase === "end") {
       if (aborted) {
@@ -511,7 +572,8 @@ export class EmbeddedTuiBackend implements TuiBackend {
         return;
       }
       const errorMessage = typeof evt.data?.error === "string" ? evt.data.error : undefined;
-      this.emitChatError(evt.runId, run, errorMessage);
+      run.buffer = "";
+      this.scheduleChatError(evt.runId, run, errorMessage);
     }
   }
 

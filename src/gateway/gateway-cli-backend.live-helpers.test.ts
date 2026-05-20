@@ -88,16 +88,15 @@ describe("gateway cli backend live helpers", () => {
       token: "gateway-token",
     });
 
-    expect(client).toBeTruthy();
-    expect(gatewayClientState.lastOptions).toMatchObject({
-      url: "ws://127.0.0.1:18789",
-      token: "gateway-token",
-      clientName: GATEWAY_CLIENT_NAMES.TEST,
-      clientDisplayName: "vitest-live",
-      clientVersion: "dev",
-      mode: GATEWAY_CLIENT_MODES.TEST,
-      connectChallengeTimeoutMs: 45_000,
-    });
+    expect(client.start).toBeTypeOf("function");
+    expect(client.stopAndWait).toBeTypeOf("function");
+    expect(gatewayClientState.lastOptions?.url).toBe("ws://127.0.0.1:18789");
+    expect(gatewayClientState.lastOptions?.token).toBe("gateway-token");
+    expect(gatewayClientState.lastOptions?.clientName).toBe(GATEWAY_CLIENT_NAMES.TEST);
+    expect(gatewayClientState.lastOptions?.clientDisplayName).toBe("vitest-live");
+    expect(gatewayClientState.lastOptions?.clientVersion).toBe("dev");
+    expect(gatewayClientState.lastOptions?.mode).toBe(GATEWAY_CLIENT_MODES.TEST);
+    expect(gatewayClientState.lastOptions?.connectChallengeTimeoutMs).toBe(45_000);
     expect(gatewayClientState.lastOptions).not.toHaveProperty("requestTimeoutMs");
   });
 
@@ -115,22 +114,21 @@ describe("gateway cli backend live helpers", () => {
     expect(shouldRunCliModelSwitchProbe("codex-cli", "codex-cli/gpt-5.5")).toBe(false);
   });
 
-  it("configures legacy CLI model refs as canonical provider models plus CLI runtime", async () => {
+  it("rejects removed Codex CLI refs for live CLI backend selection", async () => {
     const { resolveCliBackendLiveModelSelection } =
       await import("./gateway-cli-backend.live-helpers.js");
 
-    expect(
+    expect(() =>
       resolveCliBackendLiveModelSelection({
         rawModel: "codex-cli/gpt-5.4",
         defaultProvider: "claude-cli",
       }),
-    ).toEqual({
-      providerId: "codex-cli",
-      cliModelKey: "codex-cli/gpt-5.4",
-      configModelKey: "openai/gpt-5.4",
-      configModelSwitchTarget: undefined,
-      agentRuntime: { id: "codex-cli" },
-    });
+    ).toThrow(/codex-cli\/\.\.\. is no longer supported/u);
+  });
+
+  it("configures legacy CLI model refs as canonical provider models plus CLI runtime", async () => {
+    const { resolveCliBackendLiveModelSelection } =
+      await import("./gateway-cli-backend.live-helpers.js");
 
     expect(
       resolveCliBackendLiveModelSelection({

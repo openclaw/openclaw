@@ -4,6 +4,7 @@ import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   collectClawHubPublishablePluginPackages,
+  collectClawHubOpenClawOwnerErrors,
   collectClawHubVersionGateErrors,
   collectPluginClawHubReleasePathsFromGitRange,
   collectPluginClawHubReleasePlan,
@@ -49,7 +50,7 @@ describe("resolveChangedClawHubPublishablePluginPackages", () => {
         plugins: publishablePlugins,
         changedPaths: ["pnpm-lock.yaml"],
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 });
 
@@ -60,7 +61,7 @@ describe("collectClawHubPublishablePluginPackages", () => {
     });
 
     expect(() => collectClawHubPublishablePluginPackages(repoDir)).toThrow(
-      "openclaw.compat.pluginApi is required for external code plugins published to ClawHub.",
+      "openclaw.compat.pluginApi is required for external code plugin packages.",
     );
   });
 
@@ -145,12 +146,13 @@ describe("OpenClaw dual-published plugin metadata", () => {
         };
       };
 
-      expect(packageJson.openclaw?.install).toMatchObject({
+      expect(packageJson.openclaw?.install).toEqual({
         clawhubSpec: `clawhub:${plugin.packageName}`,
         defaultChoice: "npm",
+        minHostVersion: ">=2026.4.25",
         npmSpec: plugin.packageName,
       });
-      expect(packageJson.openclaw?.release).toMatchObject({
+      expect(packageJson.openclaw?.release).toEqual({
         publishToClawHub: true,
         publishToNpm: true,
       });
@@ -244,7 +246,7 @@ describe("collectClawHubVersionGateErrors", () => {
       gitRange: { baseRef, headRef },
     });
 
-    expect(errors).toEqual([]);
+    expect(errors).toStrictEqual([]);
   });
 
   it("does not require a version bump for shared release-tooling changes", () => {
@@ -257,7 +259,7 @@ describe("collectClawHubVersionGateErrors", () => {
       gitRange: { baseRef, headRef },
     });
 
-    expect(errors).toEqual([]);
+    expect(errors).toStrictEqual([]);
   });
 });
 
@@ -321,10 +323,15 @@ describe("collectPluginClawHubReleasePlan", () => {
       registryBaseUrl: "https://clawhub.ai",
     });
 
-    expect(plan.candidates).toEqual([]);
+    expect(plan.candidates).toStrictEqual([]);
     expect(plan.skippedPublished).toHaveLength(1);
-    expect(plan.skippedPublished[0]).toMatchObject({
+    expect(plan.skippedPublished[0]).toEqual({
+      alreadyPublished: true,
+      channel: "stable",
+      extensionId: "demo-plugin",
+      packageDir: "extensions/demo-plugin",
       packageName: "@openclaw/demo-plugin",
+      publishTag: "latest",
       version: "2026.4.1",
     });
   });
@@ -359,6 +366,50 @@ describe("collectPluginClawHubReleasePlan", () => {
     });
 
     expect(plan.candidates.map((plugin) => plugin.packageName)).toEqual(["@openclaw/demo-plugin"]);
+  });
+});
+
+describe("collectClawHubOpenClawOwnerErrors", () => {
+  it("requires OpenClaw-scoped release candidates to already belong to the OpenClaw publisher", async () => {
+    const errors = await collectClawHubOpenClawOwnerErrors({
+      plugins: [
+        { packageName: "@openclaw/demo-plugin" },
+        { packageName: "@openclaw/missing-plugin" },
+        { packageName: "@other/safe-plugin" },
+      ],
+      registryBaseUrl: "https://clawhub.ai",
+      fetchImpl: async (url) => {
+        const pathname = new URL(url instanceof Request ? url.url : url).pathname;
+        if (pathname.includes("%40openclaw%2Fmissing-plugin")) {
+          return new Response("not found", { status: 404 });
+        }
+        return new Response(
+          JSON.stringify({
+            owner: { handle: "steipete" },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      },
+    });
+
+    expect(errors).toEqual([
+      "@openclaw/demo-plugin: ClawHub package owner must be @openclaw; got @steipete.",
+      "@openclaw/missing-plugin: ClawHub package row must already exist under @openclaw before OpenClaw release publish.",
+    ]);
+  });
+
+  it("passes when OpenClaw-scoped release candidates belong to the OpenClaw publisher", async () => {
+    const errors = await collectClawHubOpenClawOwnerErrors({
+      plugins: [{ packageName: "@openclaw/demo-plugin" }],
+      registryBaseUrl: "https://clawhub.ai",
+      fetchImpl: async () =>
+        new Response(JSON.stringify({ owner: { handle: "openclaw" } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    });
+
+    expect(errors).toStrictEqual([]);
   });
 });
 

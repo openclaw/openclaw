@@ -25,8 +25,16 @@ export const msTeamsChannelConfigUiHints = {
     label: "MS Teams Progress Max Lines",
     help: "Maximum number of compact progress lines to keep below the progress title (default: 8).",
   },
+  "streaming.progress.maxLineChars": {
+    label: "MS Teams Progress Max Line Chars",
+    help: "Maximum characters per compact progress line before truncation (default: 120). Prose cuts at word boundaries; commands and paths keep useful suffixes.",
+  },
   "streaming.progress.toolProgress": {
     label: "MS Teams Progress Tool Lines",
     help: "Show compact tool/progress lines in progress mode (default: true). Set false to keep only the title until final delivery.",
+  },
+  "streaming.progress.commandText": {
+    label: "MS Teams Progress Command Text",
+    help: 'Command/exec detail in progress lines: "raw" preserves released behavior; "status" shows only the tool label.',
   },
 } satisfies Record<string, ChannelConfigUiHint>;

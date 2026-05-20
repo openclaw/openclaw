@@ -73,6 +73,10 @@ export const telegramChannelConfigUiHints = {
     label: "Telegram Draft Tool Progress",
     help: "Show tool/progress activity in the live draft preview message (default: true when preview streaming is active). Set false to keep tool updates out of the edited Telegram preview.",
   },
+  "streaming.preview.commandText": {
+    label: "Telegram Draft Command Text",
+    help: 'Command/exec detail in preview tool-progress lines: "raw" preserves released behavior; "status" shows only the tool label.',
+  },
   "streaming.progress.label": {
     label: "Telegram Progress Label",
     help: 'Initial progress draft title. Use "auto" for built-in single-word labels, a custom string, or false to hide the title.',
@@ -85,9 +89,17 @@ export const telegramChannelConfigUiHints = {
     label: "Telegram Progress Max Lines",
     help: "Maximum number of compact progress lines to keep below the draft label (default: 8).",
   },
+  "streaming.progress.maxLineChars": {
+    label: "Telegram Progress Max Line Chars",
+    help: "Maximum characters per compact progress line before truncation (default: 120). Prose cuts at word boundaries; commands and paths keep useful suffixes.",
+  },
   "streaming.progress.toolProgress": {
     label: "Telegram Progress Tool Lines",
     help: "Show compact tool/progress lines in progress draft mode (default: true). Set false to keep only the label until final delivery.",
+  },
+  "streaming.progress.commandText": {
+    label: "Telegram Progress Command Text",
+    help: 'Command/exec detail in progress draft lines: "raw" preserves released behavior; "status" shows only the tool label.',
   },
   "retry.attempts": {
     label: "Telegram Retry Attempts",

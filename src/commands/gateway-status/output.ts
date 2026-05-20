@@ -21,6 +21,23 @@ export type GatewayStatusWarning = {
 const noReachableGatewayDiagnostic =
   "No gateway answered any probe and Bonjour discovery returned no local gateways. Run `openclaw gateway status --deep --require-rpc` to inspect service state, config paths, listener owners, and logs; include `ss -ltnp` or `lsof -nP -iTCP:<port> -sTCP:LISTEN` for the configured port when filing a report.";
 
+function readModelPricingDegradedDetail(health: unknown): string | null {
+  if (!health || typeof health !== "object") {
+    return null;
+  }
+  const modelPricing = (health as { modelPricing?: unknown }).modelPricing;
+  if (!modelPricing || typeof modelPricing !== "object") {
+    return null;
+  }
+  const record = modelPricing as { state?: unknown; detail?: unknown };
+  if (record.state !== "degraded") {
+    return null;
+  }
+  return typeof record.detail === "string" && record.detail.trim()
+    ? record.detail.trim()
+    : "pricing bootstrap or refresh failed";
+}
+
 export function pickPrimaryProbedTarget(probed: GatewayStatusProbedTarget[]) {
   const reachable = probed.filter((entry) => isProbeReachable(entry.probe));
   return (
@@ -103,6 +120,17 @@ export function buildGatewayStatusWarnings(params: {
     warnings.push({
       code: "probe_detail_failed",
       message: `Gateway accepted the WebSocket connection, but follow-up read diagnostics failed${detail}`,
+      targetIds: [result.target.id],
+    });
+  }
+  for (const result of reachable) {
+    const detail = readModelPricingDegradedDetail(result.probe.health);
+    if (!detail) {
+      continue;
+    }
+    warnings.push({
+      code: "model_pricing_degraded",
+      message: `Model pricing warning: optional pricing refresh degraded: ${detail}`,
       targetIds: [result.target.id],
     });
   }

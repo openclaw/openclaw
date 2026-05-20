@@ -4,6 +4,12 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const execFileMock = vi.hoisted(() => vi.fn());
+const existsSyncMock = vi.hoisted(() => vi.fn(() => false));
+
+vi.mock("node:fs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:fs")>()),
+  existsSync: existsSyncMock,
+}));
 
 vi.mock("node:child_process", async () => {
   const { mockNodeChildProcessExecFile } = await import("openclaw/plugin-sdk/test-node-mocks");
@@ -60,6 +66,18 @@ const createWritableStreamMock = () => {
     stdout: { write } as unknown as NodeJS.WritableStream,
   };
 };
+
+function requireFirstWrite(write: ReturnType<typeof vi.fn>): string {
+  const [call] = write.mock.calls;
+  if (!call) {
+    throw new Error("expected systemd status write");
+  }
+  const [value] = call;
+  if (value === undefined) {
+    throw new Error("expected systemd status write");
+  }
+  return String(value);
+}
 
 function pathLikeToString(pathname: unknown): string {
   if (typeof pathname === "string") {
@@ -123,8 +141,13 @@ const assertRestartSuccess = async (env: NodeJS.ProcessEnv) => {
   const { write, stdout } = createWritableStreamMock();
   await restartSystemdService({ stdout, env });
   expect(write).toHaveBeenCalledTimes(1);
-  expect(String(write.mock.calls[0]?.[0])).toContain("Restarted systemd service");
+  expect(requireFirstWrite(write)).toContain("Restarted systemd service");
 };
+
+beforeEach(() => {
+  existsSyncMock.mockReset();
+  existsSyncMock.mockReturnValue(false);
+});
 
 describe("systemd availability", () => {
   beforeEach(() => {
@@ -136,6 +159,25 @@ describe("systemd availability", () => {
       cb(null, "", "");
     });
     await expect(isSystemdUserServiceAvailable()).resolves.toBe(true);
+  });
+
+  it("repairs missing user bus environment when the runtime bus exists", async () => {
+    mockEffectiveUid(1000);
+    existsSyncMock.mockReturnValue(true);
+    execFileMock.mockImplementation((_cmd, args, opts, cb) => {
+      assertUserSystemctlArgs(args, "status");
+      expect(opts.env.XDG_RUNTIME_DIR).toBe("/run/user/1000");
+      expect(opts.env.DBUS_SESSION_BUS_ADDRESS).toBe("unix:path=/run/user/1000/bus");
+      cb(null, "", "");
+    });
+
+    await expect(
+      isSystemdUserServiceAvailable({
+        USER: "debian",
+        XDG_RUNTIME_DIR: undefined,
+        DBUS_SESSION_BUS_ADDRESS: undefined,
+      }),
+    ).resolves.toBe(true);
   });
 
   it("returns false when systemd user bus is unavailable", async () => {
@@ -1085,6 +1127,7 @@ describe("systemd service install and uninstall", () => {
 
   it("uses the sudo-u target user for install activation machine-scope retry", async () => {
     await withNodeSystemdFixture(async ({ env }) => {
+      mockEffectiveUid(1000);
       const installEnv = { ...env, USER: "openclaw", SUDO_USER: "admin" };
       execFileMock
         .mockImplementationOnce((_cmd, args, _opts, cb) => {
@@ -1187,8 +1230,14 @@ describe("systemd service install and uninstall", () => {
       const { write, stdout } = createWritableStreamMock();
       await uninstallSystemdService({ env, stdout });
 
-      await expect(fs.access(unitPath)).rejects.toMatchObject({ code: "ENOENT" });
-      expect(String(write.mock.calls[0]?.[0])).toContain("Removed systemd service");
+      let accessError: NodeJS.ErrnoException | undefined;
+      try {
+        await fs.access(unitPath);
+      } catch (error) {
+        accessError = error as NodeJS.ErrnoException;
+      }
+      expect(accessError?.code).toBe("ENOENT");
+      expect(requireFirstWrite(write)).toContain("Removed systemd service");
       expect(execFileMock).toHaveBeenCalledTimes(2);
     });
   });
@@ -1216,7 +1265,7 @@ describe("systemd service control", () => {
     await stopSystemdService({ stdout, env: {} });
 
     expect(write).toHaveBeenCalledTimes(1);
-    expect(String(write.mock.calls[0]?.[0])).toContain("Stopped systemd service");
+    expect(requireFirstWrite(write)).toContain("Stopped systemd service");
   });
 
   it("allows stop when systemd status is degraded but available", async () => {

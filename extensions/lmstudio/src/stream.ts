@@ -1,5 +1,5 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import { createAssistantMessageEventStream, streamSimple } from "@mariozechner/pi-ai";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import { createAssistantMessageEventStream, streamSimple } from "@earendil-works/pi-ai";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { ssrfPolicyFromHttpBaseUrlAllowedHostname } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -77,7 +77,7 @@ function isPreloadCoolingDown(preloadKey: string, now: number): PreloadCooldownE
 }
 
 /** Test-only hook for clearing preload cooldown state between cases. */
-export function __resetLmstudioPreloadCooldownForTest(): void {
+export function resetLmstudioPreloadCooldownForTest(): void {
   preloadCooldown.clear();
   preloadInFlight.clear();
 }
@@ -156,7 +156,14 @@ function couldStillBePlainTextToolCall(text: string): boolean {
     return false;
   }
   const trimmed = text.trimStart();
-  return trimmed.length === 0 || trimmed.startsWith("[");
+  return (
+    trimmed.length === 0 ||
+    trimmed.startsWith("[") ||
+    trimmed.startsWith("<|channel|>") ||
+    trimmed.startsWith("commentary") ||
+    trimmed.startsWith("analysis") ||
+    trimmed.startsWith("final")
+  );
 }
 
 function createLmstudioToolCallBlock(parsed: {

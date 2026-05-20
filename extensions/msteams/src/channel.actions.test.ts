@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { msteamsPlugin } from "./channel.js";
 
@@ -452,7 +452,9 @@ describe("msteamsPlugin message actions", () => {
       } as OpenClawConfig,
     });
     const schema = discovery?.schema;
-    expect(schema).toBeTruthy();
+    if (!schema) {
+      throw new Error("expected msteams message tool schema");
+    }
     const properties = Array.isArray(schema)
       ? schema[0]?.properties
       : (schema as { properties: Record<string, unknown> })?.properties;
@@ -543,6 +545,59 @@ describe("msteamsPlugin message actions", () => {
         channel: "msteams",
         messageId: "msg-card-1",
         conversationId: "conv-card-1",
+      },
+    });
+  });
+
+  it("downgrades select blocks when sending presentation cards", async () => {
+    await expectSuccessfulAction({
+      mockFn: sendAdaptiveCardMSTeamsMock,
+      mockResult: {
+        messageId: "msg-card-select-1",
+        conversationId: "conv-card-select-1",
+      },
+      action: "send",
+      actionParams: {
+        to: targetChannelId,
+        presentation: {
+          blocks: [
+            {
+              type: "select",
+              placeholder: "Pick a lane",
+              options: [
+                { label: "Canary", value: "canary" },
+                { label: "Stable", value: "stable" },
+              ],
+            },
+          ],
+        },
+      },
+      runtimeParams: {
+        to: targetChannelId,
+        card: {
+          type: "AdaptiveCard",
+          version: "1.4",
+          body: [
+            {
+              type: "TextBlock",
+              text: "Pick a lane:\n- Canary\n- Stable",
+              wrap: true,
+              isSubtle: true,
+              size: "Small",
+            },
+          ],
+        },
+      },
+      details: {
+        ok: true,
+        channel: "msteams",
+        messageId: "msg-card-select-1",
+      },
+      contentDetails: {
+        ok: true,
+        channel: "msteams",
+        messageId: "msg-card-select-1",
+        conversationId: "conv-card-select-1",
       },
     });
   });

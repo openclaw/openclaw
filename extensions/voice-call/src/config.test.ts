@@ -67,7 +67,7 @@ describe("validateProviderConfig", () => {
         } else {
           fromConfig.plivo = { authId: "MA123", authToken: "secret" };
         }
-        expect(validateProviderConfig(fromConfig)).toMatchObject({ valid: true, errors: [] });
+        expect(validateProviderConfig(fromConfig)).toEqual({ valid: true, errors: [] });
 
         clearProviderEnv();
         if (provider === "twilio") {
@@ -83,7 +83,7 @@ describe("validateProviderConfig", () => {
           process.env.PLIVO_AUTH_TOKEN = "secret";
         }
         const fromEnv = resolveVoiceCallConfig(createBaseConfig(provider));
-        expect(validateProviderConfig(fromEnv)).toMatchObject({ valid: true, errors: [] });
+        expect(validateProviderConfig(fromEnv)).toEqual({ valid: true, errors: [] });
       }
     });
   });
@@ -101,7 +101,7 @@ describe("validateProviderConfig", () => {
       });
 
       expect(config.twilio?.authToken).toEqual(envRef("TWILIO_AUTH_TOKEN"));
-      expect(validateProviderConfig(config)).toMatchObject({ valid: true, errors: [] });
+      expect(validateProviderConfig(config)).toEqual({ valid: true, errors: [] });
       expect(() => resolveTwilioAuthToken(config)).toThrow(
         'plugins.entries.voice-call.config.twilio.authToken: unresolved SecretRef "env:default:TWILIO_AUTH_TOKEN"',
       );
@@ -116,7 +116,7 @@ describe("validateProviderConfig", () => {
       const result = validateProviderConfig(config);
 
       expect(result.valid).toBe(true);
-      expect(result.errors).toEqual([]);
+      expect(result.errors).toStrictEqual([]);
     });
 
     it("resolves the Twilio from number from environment", () => {
@@ -130,7 +130,7 @@ describe("validateProviderConfig", () => {
       });
 
       expect(config.fromNumber).toBe("+15550001234");
-      expect(validateProviderConfig(config)).toMatchObject({ valid: true, errors: [] });
+      expect(validateProviderConfig(config)).toEqual({ valid: true, errors: [] });
     });
 
     it("fails validation when required twilio credentials are missing", () => {
@@ -184,12 +184,12 @@ describe("validateProviderConfig", () => {
         connectionId: "CONN456",
         publicKey: "public-key",
       };
-      expect(validateProviderConfig(withPublicKey)).toMatchObject({ valid: true, errors: [] });
+      expect(validateProviderConfig(withPublicKey)).toEqual({ valid: true, errors: [] });
 
       const skippedVerification = createBaseConfig("telnyx");
       skippedVerification.skipSignatureVerification = true;
       skippedVerification.telnyx = { apiKey: "KEY123", connectionId: "CONN456" };
-      expect(validateProviderConfig(skippedVerification)).toMatchObject({
+      expect(validateProviderConfig(skippedVerification)).toEqual({
         valid: true,
         errors: [],
       });
@@ -219,7 +219,7 @@ describe("validateProviderConfig", () => {
       const result = validateProviderConfig(config);
 
       expect(result.valid).toBe(true);
-      expect(result.errors).toEqual([]);
+      expect(result.errors).toStrictEqual([]);
     });
   });
 
@@ -250,10 +250,35 @@ describe("validateProviderConfig", () => {
         "plugins.entries.voice-call.config.realtime.enabled and plugins.entries.voice-call.config.streaming.enabled cannot both be true",
       );
     });
+
+    it("accepts realtime.enabled with provider=telnyx", () => {
+      const config = createBaseConfig("telnyx");
+      config.realtime.enabled = true;
+      config.inboundPolicy = "allowlist";
+
+      const result = validateProviderConfig(config);
+
+      expect(result.errors).not.toContain(
+        'plugins.entries.voice-call.config.provider must be "twilio" or "telnyx" when realtime.enabled is true',
+      );
+    });
+
+    it("rejects realtime.enabled with providers that do not support it yet", () => {
+      const config = createBaseConfig("plivo");
+      config.realtime.enabled = true;
+      config.inboundPolicy = "allowlist";
+
+      const result = validateProviderConfig(config);
+
+      expect(result.valid).toBe(false);
+      expect(result.errors).toContain(
+        'plugins.entries.voice-call.config.provider must be "twilio" or "telnyx" when realtime.enabled is true',
+      );
+    });
   });
 });
 
-describe("resolveVoiceCallConfig", () => {
+describe("resolveVoiceCallConfig session routing", () => {
   it("enables the pre-answer stale call reaper by default", () => {
     const config = resolveVoiceCallConfig({ enabled: true, provider: "mock" });
 
@@ -385,9 +410,10 @@ describe("normalizeVoiceCallConfig", () => {
     expect(normalized.serve.path).toBe("/voice/webhook");
     expect(normalized.streaming.streamPath).toBe("/custom-stream");
     expect(normalized.streaming.provider).toBeUndefined();
-    expect(normalized.streaming.providers).toEqual({});
+    expect(normalized.streaming.providers).toStrictEqual({});
     expect(normalized.realtime.streamPath).toBe("/voice/stream/realtime");
     expect(normalized.realtime.toolPolicy).toBe("safe-read-only");
+    expect(normalized.realtime.consultPolicy).toBe("auto");
     expect(normalized.realtime.fastContext).toEqual({
       enabled: false,
       timeoutMs: 800,
@@ -395,9 +421,19 @@ describe("normalizeVoiceCallConfig", () => {
       sources: ["memory", "sessions"],
       fallbackToConsult: false,
     });
+    expect(normalized.realtime.consultThinkingLevel).toBeUndefined();
+    expect(normalized.realtime.consultFastMode).toBeUndefined();
+    expect(normalized.realtime.agentContext).toEqual({
+      enabled: false,
+      maxChars: 6000,
+      includeIdentity: true,
+      includeSystemPrompt: true,
+      includeWorkspaceFiles: true,
+      files: ["SOUL.md", "IDENTITY.md", "USER.md"],
+    });
     expect(normalized.realtime.instructions).toContain("openclaw_agent_consult");
     expect(normalized.tunnel.provider).toBe("none");
-    expect(normalized.webhookSecurity.allowedHosts).toEqual([]);
+    expect(normalized.webhookSecurity.allowedHosts).toStrictEqual([]);
   });
 
   it("derives the realtime stream path from a custom webhook path", () => {
@@ -442,7 +478,7 @@ describe("normalizeVoiceCallConfig", () => {
   });
 });
 
-describe("resolveVoiceCallConfig", () => {
+describe("resolveVoiceCallConfig realtime settings", () => {
   it("preserves configured realtime instructions without env indirection", () => {
     const resolved = resolveVoiceCallConfig({
       enabled: true,
@@ -455,7 +491,34 @@ describe("resolveVoiceCallConfig", () => {
 
     expect(resolved.realtime.instructions).toBe("Stay concise.");
     expect(resolved.realtime.toolPolicy).toBe("safe-read-only");
+    expect(resolved.realtime.consultPolicy).toBe("auto");
     expect(resolved.realtime.provider).toBeUndefined();
+  });
+
+  it("preserves configured realtime consult overrides", () => {
+    const resolved = resolveVoiceCallConfig({
+      enabled: true,
+      provider: "mock",
+      realtime: {
+        consultThinkingLevel: "low",
+        consultFastMode: true,
+      },
+    });
+
+    expect(resolved.realtime.consultThinkingLevel).toBe("low");
+    expect(resolved.realtime.consultFastMode).toBe(true);
+  });
+
+  it("rejects invalid realtime consult thinking levels", () => {
+    expect(() =>
+      resolveVoiceCallConfig({
+        enabled: true,
+        provider: "mock",
+        realtime: {
+          consultThinkingLevel: "turbo",
+        },
+      } as never),
+    ).toThrow(/Invalid option/);
   });
 
   it("leaves responseModel unset so voice responses can inherit runtime defaults", () => {

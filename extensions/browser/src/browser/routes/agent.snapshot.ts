@@ -248,6 +248,26 @@ async function saveBrowserMediaResponse(params: {
   });
 }
 
+function hasObservableBrowserState(state: unknown): boolean {
+  if (!state || typeof state !== "object") {
+    return false;
+  }
+  const dialogs = (state as { dialogs?: { pending?: unknown[]; recent?: unknown[] } }).dialogs;
+  return Boolean(dialogs?.pending?.length || dialogs?.recent?.length);
+}
+
+function hasPendingDialogs(state: unknown): boolean {
+  if (!state || typeof state !== "object") {
+    return false;
+  }
+  const dialogs = (state as { dialogs?: { pending?: unknown[] } }).dialogs;
+  return Boolean(dialogs?.pending?.length);
+}
+
+function browserStateResponseFields(state: unknown): { browserState?: unknown } {
+  return hasObservableBrowserState(state) ? { browserState: state } : {};
+}
+
 export function registerBrowserAgentSnapshotRoutes(
   app: BrowserRouteRegistrar,
   ctx: BrowserRouteContext,
@@ -318,6 +338,7 @@ export function registerBrowserAgentSnapshotRoutes(
         ctx,
         targetId,
         feature: "pdf",
+        enforceCurrentUrlAllowed: true,
         run: async ({ cdpUrl, tab, pw }) => {
           const pdf = await pw.pdfViaPlaywright({
             cdpUrl,
@@ -361,17 +382,18 @@ export function registerBrowserAgentSnapshotRoutes(
         res,
         ctx,
         targetId,
+        enforceCurrentUrlAllowed: true,
         run: async ({ profileCtx, tab, cdpUrl }) => {
           if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
             const ssrfPolicyOpts = browserNavigationPolicyForProfile(ctx, profileCtx);
-            if (element) {
-              return jsonError(res, 400, EXISTING_SESSION_LIMITS.snapshot.screenshotElement);
-            }
             if (ssrfPolicyOpts.ssrfPolicy) {
               await assertBrowserNavigationResultAllowed({
                 url: tab.url,
                 ...ssrfPolicyOpts,
               });
+            }
+            if (element) {
+              return jsonError(res, 400, EXISTING_SESSION_LIMITS.snapshot.screenshotElement);
             }
             if (labels) {
               const snapshot = await takeChromeMcpSnapshot({
@@ -522,11 +544,26 @@ export function registerBrowserAgentSnapshotRoutes(
 
       try {
         const tab = await profileCtx.ensureTabAvailable(targetId || undefined);
+        const usesChromeMcp = getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp;
+        const ssrfPolicyOpts = browserNavigationPolicyForProfile(ctx, profileCtx);
+        let observedBrowserState: unknown;
+        if (!usesChromeMcp && pwModule) {
+          await assertBrowserNavigationResultAllowed({
+            url: tab.url,
+            ...ssrfPolicyOpts,
+          });
+          observedBrowserState = await pwModule
+            .getObservedBrowserStateViaPlaywright({
+              cdpUrl: profileCtx.profile.cdpUrl,
+              targetId: tab.targetId,
+              ssrfPolicy: ctx.state().resolved.ssrfPolicy,
+            })
+            .catch(() => undefined);
+        }
         if ((plan.labels || plan.mode === "efficient") && plan.format === "aria") {
           return jsonError(res, 400, "labels/mode=efficient require format=ai");
         }
-        if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
-          const ssrfPolicyOpts = browserNavigationPolicyForProfile(ctx, profileCtx);
+        if (usesChromeMcp) {
           if (plan.selectorValue || plan.frameSelectorValue) {
             return jsonError(res, 400, EXISTING_SESSION_LIMITS.snapshot.snapshotSelector);
           }
@@ -626,6 +663,17 @@ export function registerBrowserAgentSnapshotRoutes(
             ...builtWithUrls,
           });
         }
+        if (hasPendingDialogs(observedBrowserState)) {
+          return res.json({
+            ok: true,
+            format: plan.format,
+            targetId: tab.targetId,
+            url: tab.url,
+            blockedByDialog: true,
+            ...browserStateResponseFields(observedBrowserState),
+            ...(plan.format === "aria" ? { nodes: [] } : { snapshot: "", refs: {} }),
+          });
+        }
         if (plan.format === "ai") {
           const roleSnapshotArgs = {
             cdpUrl: profileCtx.profile.cdpUrl,
@@ -713,6 +761,7 @@ export function registerBrowserAgentSnapshotRoutes(
               format: plan.format,
               targetId: tab.targetId,
               url: tab.url,
+              ...browserStateResponseFields(observedBrowserState),
               labels: true,
               labelsCount: labeled.labels,
               labelsSkipped: labeled.skipped,
@@ -727,6 +776,7 @@ export function registerBrowserAgentSnapshotRoutes(
             format: plan.format,
             targetId: tab.targetId,
             url: tab.url,
+            ...browserStateResponseFields(observedBrowserState),
             ...snap,
           });
         }
@@ -769,6 +819,7 @@ export function registerBrowserAgentSnapshotRoutes(
           format: plan.format,
           targetId: tab.targetId,
           url: tab.url,
+          ...browserStateResponseFields(observedBrowserState),
           ...resolved,
         });
       } catch (err) {

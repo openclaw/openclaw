@@ -17,12 +17,17 @@ export function shouldSkipPluginCommandRegistration(params: {
   primary: string | null;
   hasBuiltinPrimary: boolean;
 }): boolean {
-  if (params.hasBuiltinPrimary) {
-    return true;
-  }
   const invocation = resolveCliArgvInvocation(params.argv);
   if (params.primary === "help") {
     return invocation.hasHelpOrVersion && invocation.commandPath.length <= 1;
+  }
+  if (invocation.hasHelpOrVersion) {
+    return (
+      !params.primary || params.hasBuiltinPrimary || isReservedNonPluginCommandRoot(params.primary)
+    );
+  }
+  if (params.hasBuiltinPrimary) {
+    return true;
   }
   if (!params.primary) {
     return invocation.hasHelpOrVersion;

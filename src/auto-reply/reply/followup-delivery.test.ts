@@ -1,6 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery.js";
+
+vi.mock("../../channels/plugins/index.js", () => ({
+  getChannelPlugin: () => undefined,
+}));
 
 const baseConfig = {} as OpenClawConfig;
 
@@ -11,7 +15,7 @@ describe("resolveFollowupDeliveryPayloads", () => {
         cfg: baseConfig,
         payloads: [{ text: "HEARTBEAT_OK" }],
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("keeps media payloads when stripping heartbeat ack text", () => {
@@ -30,7 +34,7 @@ describe("resolveFollowupDeliveryPayloads", () => {
         payloads: [{ text: "hello world!" }],
         sentTexts: ["hello world!"],
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("drops media payloads already sent via messaging tool", () => {
@@ -103,7 +107,7 @@ describe("resolveFollowupDeliveryPayloads", () => {
           { tool: "discord", provider: "discord", to: "channel:C2" },
         ],
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("dedupes final media only against message-tool media sent to the same route", () => {
@@ -170,7 +174,7 @@ describe("resolveFollowupDeliveryPayloads", () => {
         sentTexts: ["hello world!"],
         sentTargets: [{ tool: "slack", provider: "slack", to: "channel:C1", text: "hello world!" }],
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("delivers distinct replies when originating channel resolves the provider", () => {

@@ -41,6 +41,13 @@ tool with the `react` action. Reaction behavior varies by channel and transport.
 
   </Accordion>
 
+  <Accordion title="Nextcloud Talk">
+    - Adding reactions only: `emoji` is required and must be non-empty.
+    - Reaction removal is not supported yet; calls with `remove: true` (or empty `emoji`) are rejected with a clear error rather than silently no-oping.
+    - Requires the Talk bot to be registered with the `reaction` feature (see [Nextcloud Talk channel docs](/channels/nextcloud-talk)).
+
+  </Accordion>
+
   <Accordion title="Telegram">
     - Empty `emoji` removes the bot's reactions.
     - `remove: true` also removes reactions but still requires a non-empty `emoji` for tool validation.
@@ -50,6 +57,7 @@ tool with the `react` action. Reaction behavior varies by channel and transport.
   <Accordion title="WhatsApp">
     - Empty `emoji` removes the bot reaction.
     - `remove: true` maps to empty emoji internally (still requires `emoji` in the tool call).
+    - WhatsApp has one bot reaction slot per message; status reaction updates replace that slot rather than stacking multiple emoji.
 
   </Accordion>
 
@@ -67,6 +75,12 @@ tool with the `react` action. Reaction behavior varies by channel and transport.
 
   <Accordion title="Signal">
     - Inbound reaction notifications are controlled by `channels.signal.reactionNotifications`: `"off"` disables them, `"own"` (default) emits events when users react to bot messages, and `"all"` emits events for all reactions.
+
+  </Accordion>
+
+  <Accordion title="iMessage">
+    - Outbound reactions are iMessage tapbacks (`love`, `like`, `dislike`, `laugh`, `emphasize`, and `question`).
+    - Inbound tapback notifications are controlled by `channels.imessage.reactionNotifications`: `"off"` disables them, `"own"` (default) emits events when users react to bot-authored messages, and `"all"` emits events for all tapbacks from authorized senders.
 
   </Accordion>
 </AccordionGroup>

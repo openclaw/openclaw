@@ -8,6 +8,8 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 
 const runEmbeddedPiAgentMock = vi.fn();
+const runCliAgentMock = vi.fn();
+const runWithModelFallbackMock = vi.fn();
 const compactEmbeddedPiSessionMock = vi.fn();
 const routeReplyMock = vi.fn();
 const isRoutableChannelMock = vi.fn();
@@ -44,6 +46,76 @@ function debugFollowupTest(message: string): void {
     return;
   }
   process.stderr.write(`[followup-runner.test] ${message}\n`);
+}
+
+function joinPromptSections(...sections: Array<string | undefined>): string {
+  const promptSections: string[] = [];
+  for (const section of sections) {
+    if (section) {
+      promptSections.push(section);
+    }
+  }
+  return promptSections.join("\n\n");
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label} to be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireMockCallArg(
+  mock: { mock: { calls: unknown[][] } },
+  index: number,
+): Record<string, unknown> {
+  const call = mock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected mock call ${index}`);
+  }
+  return requireRecord(call[0], `mock call ${index} arg`);
+}
+
+function requireLastMockCallArg(
+  mock: { mock: { calls: unknown[][] } },
+  label: string,
+): Record<string, unknown> {
+  const calls = mock.mock.calls;
+  const call = calls[calls.length - 1];
+  if (!call) {
+    throw new Error(`expected ${label} mock call`);
+  }
+  return requireRecord(call[0], `${label} mock call arg`);
+}
+
+function expectBlockReplyText(onBlockReply: { mock: { calls: unknown[][] } }, text: string): void {
+  expect(
+    onBlockReply.mock.calls.some(
+      (call) => requireRecord(call[0], "block reply payload").text === text,
+    ),
+  ).toBe(true);
+}
+
+function expectNoBlockReplyText(
+  onBlockReply: { mock: { calls: unknown[][] } },
+  text: string,
+): void {
+  expect(
+    onBlockReply.mock.calls.some(
+      (call) => requireRecord(call[0], "block reply payload").text === text,
+    ),
+  ).toBe(false);
+}
+
+function expectNoBlockReplyTextIncludes(
+  onBlockReply: { mock: { calls: unknown[][] } },
+  fragment: string,
+): void {
+  expect(
+    onBlockReply.mock.calls.some((call) =>
+      String(requireRecord(call[0], "block reply payload").text).includes(fragment),
+    ),
+  ).toBe(false);
 }
 
 function registerFollowupTestSessionStore(
@@ -245,10 +317,9 @@ async function persistRunSessionUsageForFollowupTest(
 async function loadFreshFollowupRunnerModuleForTest() {
   vi.resetModules();
   vi.doUnmock("../../config/config.js");
-  vi.doMock(
-    "../../agents/model-fallback.js",
-    async () => await import("../../test-utils/model-fallback.mock.js"),
-  );
+  vi.doMock("../../agents/model-fallback.js", () => ({
+    runWithModelFallback: (params: unknown) => runWithModelFallbackMock(params),
+  }));
   vi.doMock("../../agents/session-write-lock.js", () => ({
     acquireSessionWriteLock: vi.fn(async () => ({
       release: async () => {},
@@ -265,9 +336,16 @@ async function loadFreshFollowupRunnerModuleForTest() {
     runEmbeddedPiAgent: (params: unknown) => runEmbeddedPiAgentMock(params),
     waitForEmbeddedPiRunEnd: vi.fn(async () => undefined),
   }));
+  vi.doMock("../../agents/cli-runner.js", () => ({
+    runCliAgent: (params: unknown) => runCliAgentMock(params),
+  }));
   vi.doMock("./queue.js", () => ({
     clearFollowupQueue: clearFollowupQueueForFollowupTest,
+    completeFollowupRunLifecycle: (run: Pick<FollowupRun, "queuedLifecycle">) =>
+      run.queuedLifecycle?.onComplete?.(),
     enqueueFollowupRun: enqueueFollowupRunForFollowupTest,
+    isFollowupRunAborted: (run: Pick<FollowupRun, "abortSignal">) =>
+      run.abortSignal?.aborted === true,
     refreshQueuedFollowupSession: refreshQueuedFollowupSessionForFollowupTest,
   }));
   vi.doMock("./session-run-accounting.js", () => ({
@@ -366,6 +444,23 @@ beforeAll(async () => {
 beforeEach(() => {
   clearRuntimeConfigSnapshot?.();
   runEmbeddedPiAgentMock.mockReset();
+  runCliAgentMock.mockReset();
+  runWithModelFallbackMock.mockReset();
+  runWithModelFallbackMock.mockImplementation(
+    async (params: {
+      provider: string;
+      model: string;
+      run: (
+        provider: string,
+        model: string,
+        options?: { allowTransientCooldownProbe?: boolean },
+      ) => Promise<unknown>;
+    }) => ({
+      result: await params.run(params.provider, params.model),
+      provider: params.provider,
+      model: params.model,
+    }),
+  );
   compactEmbeddedPiSessionMock.mockReset();
   runPreflightCompactionIfNeededMock.mockReset();
   resolveCommandSecretRefsViaGatewayMock.mockReset();
@@ -411,13 +506,17 @@ afterEach(() => {
   if (!FOLLOWUP_DEBUG) {
     return;
   }
-  const handles = (process as NodeJS.Process & { _getActiveHandles?: () => unknown[] })
-    ._getActiveHandles?.()
-    .map((handle) => handle?.constructor?.name ?? typeof handle);
+  const processWithDebugHandles = process as NodeJS.Process & {
+    _getActiveHandles?: () => unknown[];
+    _getActiveRequests?: () => unknown[];
+  };
+  const handles = processWithDebugHandles["_getActiveHandles"]?.().map(
+    (handle) => handle?.constructor?.name ?? typeof handle,
+  );
   debugFollowupTest(`active handles: ${JSON.stringify(handles ?? [])}`);
-  const requests = (process as NodeJS.Process & { _getActiveRequests?: () => unknown[] })
-    ._getActiveRequests?.()
-    .map((request) => request?.constructor?.name ?? typeof request);
+  const requests = processWithDebugHandles["_getActiveRequests"]?.().map(
+    (request) => request?.constructor?.name ?? typeof request,
+  );
   debugFollowupTest(`active requests: ${JSON.stringify(requests ?? [])}`);
 });
 
@@ -459,7 +558,279 @@ function createAsyncReplySpy() {
   return vi.fn(async () => {});
 }
 
+describe("createFollowupRunner auto fallback primary probes", () => {
+  it("clears queued auto fallback pins after a successful primary probe", async () => {
+    const sessionKey = "probe-clear";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+      providerOverride: "openai",
+      modelOverride: "gpt-5.4",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "anthropic",
+      modelOverrideFallbackOriginModel: "claude",
+    };
+    const sessionStore = { [sessionKey]: sessionEntry };
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: { agentMeta: { provider: "anthropic", model: "claude" } },
+    });
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultModel: "anthropic/claude",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          sessionKey,
+          provider: "anthropic",
+          model: "claude",
+          autoFallbackPrimaryProbe: {
+            provider: "anthropic",
+            model: "claude",
+            fallbackProvider: "openai",
+            fallbackModel: "gpt-5.4",
+          },
+        },
+      }),
+    );
+
+    const call = requireLastMockCallArg(runEmbeddedPiAgentMock, "run embedded pi agent");
+    expect(call.provider).toBe("anthropic");
+    expect(call.model).toBe("claude");
+    expect(sessionEntry.providerOverride).toBeUndefined();
+    expect(sessionEntry.modelOverride).toBeUndefined();
+    expect(sessionEntry.modelOverrideSource).toBeUndefined();
+    expect(sessionEntry.modelOverrideFallbackOriginProvider).toBeUndefined();
+    expect(sessionEntry.modelOverrideFallbackOriginModel).toBeUndefined();
+  });
+
+  it("rechecks queued probe throttle and keeps fallback auth when probe is not due", async () => {
+    const sessionKey = "probe-skip";
+    const probe = {
+      provider: "anthropic",
+      model: "claude",
+      fallbackProvider: "openai",
+      fallbackModel: "gpt-5.4",
+      fallbackAuthProfileId: "openai:fallback",
+      fallbackAuthProfileIdSource: "auto" as const,
+    };
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+      providerOverride: "openai",
+      modelOverride: "gpt-5.4",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "anthropic",
+      modelOverrideFallbackOriginModel: "claude",
+      authProfileOverride: "openai:fallback",
+      authProfileOverrideSource: "auto",
+    };
+    const sessionStore = { [sessionKey]: sessionEntry };
+    const { markAutoFallbackPrimaryProbe } = await import("../../agents/agent-scope.js");
+    markAutoFallbackPrimaryProbe({ probe, sessionKey });
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: { agentMeta: { provider: "openai", model: "gpt-5.4" } },
+    });
+    runPreflightCompactionIfNeededMock.mockImplementationOnce(
+      async (params: { followupRun: FollowupRun; sessionEntry?: SessionEntry }) => {
+        expect(params.followupRun.run.provider).toBe("openai");
+        expect(params.followupRun.run.model).toBe("gpt-5.4");
+        expect(params.followupRun.run.autoFallbackPrimaryProbe).toBeUndefined();
+        return params.sessionEntry;
+      },
+    );
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultModel: "anthropic/claude",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          sessionKey,
+          provider: "anthropic",
+          model: "claude",
+          authProfileId: "anthropic:primary",
+          authProfileIdSource: "auto",
+          autoFallbackPrimaryProbe: probe,
+        },
+      }),
+    );
+
+    const call = requireLastMockCallArg(runEmbeddedPiAgentMock, "run embedded pi agent");
+    expect(call.provider).toBe("openai");
+    expect(call.model).toBe("gpt-5.4");
+    expect(call.authProfileId).toBe("openai:fallback");
+    expect(call.authProfileIdSource).toBe("auto");
+    expect(sessionEntry.providerOverride).toBe("openai");
+    expect(sessionEntry.modelOverride).toBe("gpt-5.4");
+    expect(sessionEntry.modelOverrideSource).toBe("auto");
+  });
+});
+
 describe("createFollowupRunner runtime config", () => {
+  it("routes queued followups through CLI runtime dispatch when the model selects a CLI backend", async () => {
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": { command: "claude" },
+          },
+          models: {
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    };
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-cli-followup",
+      updatedAt: Date.now(),
+      cliSessionBindings: {
+        "claude-cli": {
+          sessionId: "cli-session-1",
+        },
+      },
+    };
+    const sessionStore = { main: sessionEntry };
+    runCliAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {
+        agentMeta: {
+          provider: "claude-cli",
+          model: "claude-opus-4-7",
+        },
+      },
+    });
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      defaultModel: "anthropic/claude-opus-4-7",
+    });
+
+    await runner(
+      createQueuedRun({
+        originatingChannel: "telegram",
+        run: {
+          config: runtimeConfig,
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+          messageProvider: "telegram",
+        },
+      }),
+    );
+
+    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
+    const call = requireLastMockCallArg(runCliAgentMock, "run cli agent");
+    expect(call.provider).toBe("claude-cli");
+    expect(call.model).toBe("claude-opus-4-7");
+    expect(call.config).toBe(runtimeConfig);
+    expect(call.cliSessionId).toBe("cli-session-1");
+    expect(call.messageChannel).toBe("telegram");
+  });
+
+  it("defers queued CLI attempt terminal lifecycle events until fallback settles", async () => {
+    const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+      "../../infra/agent-events.js",
+    );
+    const lifecyclePhases: string[] = [];
+    const unsubscribe = realAgentEvents.onAgentEvent((evt) => {
+      if (evt.stream !== "lifecycle") {
+        return;
+      }
+      const phase = typeof evt.data.phase === "string" ? evt.data.phase : undefined;
+      if (phase) {
+        lifecyclePhases.push(phase);
+      }
+    });
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": { command: "claude" },
+          },
+          models: {
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    };
+    runWithModelFallbackMock.mockImplementationOnce(
+      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => {
+        await expect(params.run("anthropic", "claude-opus-4-7")).rejects.toThrow("cli failed");
+        return {
+          result: await params.run("openai", "gpt-5.4"),
+          provider: "openai",
+          model: "gpt-5.4",
+        };
+      },
+    );
+    runCliAgentMock.mockRejectedValueOnce(new Error("cli failed"));
+    runEmbeddedPiAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
+      realAgentEvents.emitAgentEvent({
+        runId: params.runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: Date.now() },
+      });
+      realAgentEvents.emitAgentEvent({
+        runId: params.runId,
+        stream: "lifecycle",
+        data: { phase: "end", endedAt: Date.now() },
+      });
+      return {
+        payloads: [{ text: "fallback ok" }],
+        meta: {},
+      };
+    });
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey: "main",
+      defaultModel: "anthropic/claude-opus-4-7",
+    });
+
+    try {
+      await runner(
+        createQueuedRun({
+          originatingChannel: "telegram",
+          originatingTo: "chat-1",
+          run: {
+            config: runtimeConfig,
+            provider: "anthropic",
+            model: "claude-opus-4-7",
+            messageProvider: "telegram",
+          },
+        }),
+      );
+    } finally {
+      unsubscribe();
+    }
+
+    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    const embeddedCall = requireLastMockCallArg(runEmbeddedPiAgentMock, "run embedded pi agent");
+    expect(embeddedCall.suppressAssistantErrorPersistence).toBe(false);
+    expect(lifecyclePhases).toEqual(["start", "start", "end"]);
+  });
+
   it("uses the active runtime snapshot for queued embedded followup runs", async () => {
     const sourceConfig: OpenClawConfig = {
       models: {
@@ -509,12 +880,134 @@ describe("createFollowupRunner runtime config", () => {
       }),
     );
 
-    const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as
-      | {
-          config?: unknown;
-        }
-      | undefined;
-    expect(call?.config).toBe(runtimeConfig);
+    const call = requireLastMockCallArg(runEmbeddedPiAgentMock, "run embedded pi agent");
+    expect(call.config).toBe(runtimeConfig);
+  });
+
+  it("skips aborted queued room-event followups", async () => {
+    const abortController = new AbortController();
+    abortController.abort();
+    const onBlockReply = vi.fn(async () => {});
+    const typing = createMockTypingController();
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing,
+      typingMode: "instant",
+      defaultModel: "openai/gpt-5.4",
+    });
+
+    await runner(
+      createQueuedRun({
+        currentInboundEventKind: "room_event",
+        abortSignal: abortController.signal,
+        run: {
+          provider: "openai",
+          model: "gpt-5.4",
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      }),
+    );
+
+    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(typing.markRunComplete).toHaveBeenCalledTimes(1);
+    expect(typing.markDispatchIdle).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes queued room-event abort signals into followup agent runs", async () => {
+    const abortController = new AbortController();
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {},
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "openai/gpt-5.4",
+    });
+
+    await runner(
+      createQueuedRun({
+        currentInboundEventKind: "room_event",
+        abortSignal: abortController.signal,
+        run: {
+          provider: "openai",
+          model: "gpt-5.4",
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      }),
+    );
+
+    const call = requireLastMockCallArg(runEmbeddedPiAgentMock, "run embedded pi agent");
+    expect(call.abortSignal).toBe(abortController.signal);
+  });
+
+  it("does not inherit source abort signals for queued user followups", async () => {
+    const sourceAbortController = new AbortController();
+    sourceAbortController.abort();
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {},
+    });
+    const runner = createFollowupRunner({
+      opts: { abortSignal: sourceAbortController.signal },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "openai/gpt-5.4",
+    });
+
+    await runner(
+      createQueuedRun({
+        currentInboundEventKind: "user_request",
+        run: {
+          provider: "openai",
+          model: "gpt-5.4",
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      }),
+    );
+
+    const call = requireLastMockCallArg(runEmbeddedPiAgentMock, "run embedded pi agent");
+    expect(call.abortSignal).toBeUndefined();
+  });
+
+  it("keeps queued delivery correlations active during followup agent runs", async () => {
+    const events: string[] = [];
+    runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
+      events.push("run");
+      return {
+        payloads: [],
+        meta: {},
+      };
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "openai/gpt-5.4",
+    });
+
+    await runner(
+      createQueuedRun({
+        currentInboundEventKind: "room_event",
+        deliveryCorrelations: [
+          {
+            begin: () => {
+              events.push("begin");
+              return () => {
+                events.push("end");
+              };
+            },
+          },
+        ],
+        run: {
+          provider: "openai",
+          model: "gpt-5.4",
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      }),
+    );
+
+    expect(events).toEqual(["begin", "run", "end"]);
   });
 
   it("resolves queued embedded followups before preflight helpers read config", async () => {
@@ -567,17 +1060,9 @@ describe("createFollowupRunner runtime config", () => {
     await runner(queued);
 
     expect(queued.run.config).toBe(runtimeConfig);
-    expect(runPreflightCompactionIfNeededMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cfg: runtimeConfig,
-      }),
-    );
-    const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as
-      | {
-          config?: unknown;
-        }
-      | undefined;
-    expect(call?.config).toBe(runtimeConfig);
+    expect(requireMockCallArg(runPreflightCompactionIfNeededMock, 0).cfg).toBe(runtimeConfig);
+    const call = requireLastMockCallArg(runEmbeddedPiAgentMock, "run embedded pi agent");
+    expect(call.config).toBe(runtimeConfig);
   });
 
   it("passes queued origin scope into queued execution-config resolution", async () => {
@@ -637,14 +1122,278 @@ describe("createFollowupRunner runtime config", () => {
       }),
     );
 
-    const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as
-      | {
-          images?: unknown;
-          imageOrder?: unknown;
-        }
-      | undefined;
-    expect(call?.images).toBe(images);
-    expect(call?.imageOrder).toBe(imageOrder);
+    const call = requireLastMockCallArg(runEmbeddedPiAgentMock, "run embedded pi agent");
+    expect(call.images).toBe(images);
+    expect(call.imageOrder).toBe(imageOrder);
+  });
+});
+
+describe("createFollowupRunner progress forwarding", () => {
+  it("forwards queued follow-up tool progress and verbose tool result payloads", async () => {
+    const onToolStart = vi.fn(async () => {});
+    const queued = createQueuedRun({
+      originatingChannel: "discord",
+      originatingTo: "channel:C1",
+      originatingAccountId: "acct-1",
+      originatingThreadId: "thread-1",
+      run: {
+        messageProvider: "discord",
+        sourceReplyDeliveryMode: "message_tool_only",
+        verboseLevel: "on",
+      },
+    });
+
+    runEmbeddedPiAgentMock.mockImplementationOnce(
+      async (args: {
+        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
+        onToolResult?: (payload: { text: string }) => Promise<void>;
+        shouldEmitToolResult?: () => boolean;
+        shouldEmitToolOutput?: () => boolean;
+        toolProgressDetail?: "explain" | "raw";
+      }) => {
+        expect(args.shouldEmitToolResult?.()).toBe(true);
+        expect(args.shouldEmitToolOutput?.()).toBe(false);
+        expect(args.toolProgressDetail).toBe("raw");
+        await args.onAgentEvent?.({
+          stream: "tool",
+          data: {
+            phase: "start",
+            name: "exec",
+            args: { command: "echo queued-progress" },
+          },
+        });
+        await args.onToolResult?.({ text: "🛠️ Exec: echo queued-progress" });
+        return { payloads: [], meta: { agentMeta: {} } };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      opts: { onToolStart },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "claude",
+      toolProgressDetail: "raw",
+    });
+
+    await runner(queued);
+
+    expect(onToolStart).toHaveBeenCalledWith({
+      name: "exec",
+      phase: "start",
+      args: { command: "echo queued-progress" },
+      detailMode: "raw",
+    });
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        to: "channel:C1",
+        accountId: "acct-1",
+        threadId: "thread-1",
+        mirror: false,
+        payload: expect.objectContaining({ text: "🛠️ Exec: echo queued-progress" }),
+      }),
+    );
+  });
+
+  it("drains fire-and-forget queued tool progress before final delivery", async () => {
+    const queued = createQueuedRun({
+      originatingChannel: "discord",
+      originatingTo: "channel:C1",
+      originatingAccountId: "acct-1",
+      originatingThreadId: "thread-1",
+      run: {
+        messageProvider: "discord",
+        verboseLevel: "on",
+      },
+    });
+    let releaseProgressRoute: (() => void) | undefined;
+    const progressRouteStarted = new Promise<void>((resolve) => {
+      routeReplyMock.mockImplementationOnce(
+        async () =>
+          await new Promise<{ ok: true }>((release) => {
+            releaseProgressRoute = () => {
+              release({ ok: true });
+            };
+            resolve();
+          }),
+      );
+    });
+
+    runEmbeddedPiAgentMock.mockImplementationOnce(
+      async (args: { onToolResult?: (payload: { text: string }) => Promise<void> }) => {
+        void args.onToolResult?.({ text: "🛠️ Exec: echo queued-progress" });
+        return { payloads: [{ text: "final reply" }], meta: { agentMeta: {} } };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "claude",
+    });
+
+    const runPromise = runner(queued);
+    await progressRouteStarted;
+    await Promise.resolve();
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    expect(requireMockCallArg(routeReplyMock, 0).payload).toEqual(
+      expect.objectContaining({ text: "🛠️ Exec: echo queued-progress" }),
+    );
+    expect(requireMockCallArg(routeReplyMock, 0).mirror).toBe(false);
+
+    releaseProgressRoute?.();
+    await runPromise;
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(2);
+    expect(requireMockCallArg(routeReplyMock, 1).payload).toEqual(
+      expect.objectContaining({ text: "final reply" }),
+    );
+    expect(requireMockCallArg(routeReplyMock, 1).mirror).toBeUndefined();
+  });
+
+  it("preserves queued verbose progress when default tool progress is suppressed", async () => {
+    const onToolStart = vi.fn(async () => {});
+    const onCommandOutput = vi.fn(async () => {});
+    const queued = createQueuedRun({
+      originatingChannel: "discord",
+      originatingTo: "channel:C1",
+      originatingAccountId: "acct-1",
+      originatingThreadId: "thread-1",
+      run: {
+        messageProvider: "discord",
+        sourceReplyDeliveryMode: "message_tool_only",
+        verboseLevel: "on",
+      },
+    });
+
+    runEmbeddedPiAgentMock.mockImplementationOnce(
+      async (args: {
+        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
+        onToolResult?: (payload: { text: string }) => Promise<void>;
+        shouldEmitToolResult?: () => boolean;
+        shouldEmitToolOutput?: () => boolean;
+      }) => {
+        expect(args.shouldEmitToolResult?.()).toBe(true);
+        expect(args.shouldEmitToolOutput?.()).toBe(false);
+        await args.onAgentEvent?.({
+          stream: "tool",
+          data: {
+            phase: "start",
+            name: "exec",
+            args: { command: "echo queued-suppressed-preview" },
+          },
+        });
+        await args.onAgentEvent?.({
+          stream: "command_output",
+          data: { phase: "chunk", output: "queued output" },
+        });
+        await args.onToolResult?.({ text: "🛠️ Exec: echo queued-suppressed-preview" });
+        return { payloads: [], meta: { agentMeta: {} } };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      opts: { suppressDefaultToolProgressMessages: true, onToolStart, onCommandOutput },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "claude",
+      toolProgressDetail: "raw",
+    });
+
+    await runner(queued);
+
+    expect(onToolStart).toHaveBeenCalledWith({
+      name: "exec",
+      phase: "start",
+      args: { command: "echo queued-suppressed-preview" },
+      detailMode: "raw",
+    });
+    expect(onCommandOutput).toHaveBeenCalledWith(
+      expect.objectContaining({ phase: "chunk", output: "queued output" }),
+    );
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        to: "channel:C1",
+        accountId: "acct-1",
+        threadId: "thread-1",
+        mirror: false,
+        payload: expect.objectContaining({ text: "🛠️ Exec: echo queued-suppressed-preview" }),
+      }),
+    );
+  });
+
+  it("suppresses queued follow-up progress when verbose progress is disabled", async () => {
+    const storePath = path.join(
+      await fs.mkdtemp(path.join(tmpdir(), "openclaw-followup-progress-off-")),
+      "sessions.json",
+    );
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { main: sessionEntry };
+    const onToolStart = vi.fn(async () => {});
+    const onItemEvent = vi.fn(async () => {});
+    const onCommandOutput = vi.fn(async () => {});
+    registerFollowupTestSessionStore(storePath, sessionStore);
+
+    runEmbeddedPiAgentMock.mockImplementationOnce(
+      async (args: {
+        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
+        shouldEmitToolResult?: () => boolean;
+        shouldEmitToolOutput?: () => boolean;
+      }) => {
+        expect(args.shouldEmitToolResult?.()).toBe(false);
+        expect(args.shouldEmitToolOutput?.()).toBe(false);
+        await args.onAgentEvent?.({
+          stream: "tool",
+          data: { phase: "start", name: "exec", args: { command: "echo hidden" } },
+        });
+        await args.onAgentEvent?.({
+          stream: "item",
+          data: { phase: "start", itemId: "item-1", title: "hidden item" },
+        });
+        await args.onAgentEvent?.({
+          stream: "command_output",
+          data: { phase: "chunk", output: "hidden output" },
+        });
+        await args.onAgentEvent?.({
+          stream: "compaction",
+          data: { phase: "end", completed: true },
+        });
+        return { payloads: [{ text: "final" }], meta: { agentMeta: {} } };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      opts: { onToolStart, onItemEvent, onCommandOutput },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+      defaultModel: "claude",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          messageProvider: "discord",
+          sourceReplyDeliveryMode: "message_tool_only",
+          verboseLevel: "off",
+        },
+      }),
+    );
+
+    expect(onToolStart).not.toHaveBeenCalled();
+    expect(onItemEvent).not.toHaveBeenCalled();
+    expect(onCommandOutput).not.toHaveBeenCalled();
+    expect(sessionStore.main.compactionCount).toBe(1);
   });
 });
 
@@ -688,7 +1437,7 @@ describe("createFollowupRunner compaction", () => {
 
     await runner(queued);
 
-    expect(onBlockReply).toHaveBeenCalled();
+    expect(onBlockReply).toHaveBeenCalledTimes(2);
     const firstCall = (onBlockReply.mock.calls as unknown as Array<Array<{ text?: string }>>)[0];
     expect(firstCall?.[0]?.text).toContain("Auto-compaction complete");
     expect(sessionStore.main.compactionCount).toBe(1);
@@ -740,7 +1489,7 @@ describe("createFollowupRunner compaction", () => {
 
     await runner(queued);
 
-    expect(onBlockReply).toHaveBeenCalled();
+    expect(onBlockReply).toHaveBeenCalledTimes(2);
     const firstCall = (onBlockReply.mock.calls as unknown as Array<Array<{ text?: string }>>)[0];
     expect(firstCall?.[0]?.text).toContain("Auto-compaction complete");
     expect(sessionStore.main.compactionCount).toBe(2);
@@ -794,7 +1543,7 @@ describe("createFollowupRunner compaction", () => {
         sessionFile: path.join(path.dirname(storePath), "session.jsonl"),
       },
     });
-    const queueSettings: QueueSettings = { mode: "queue" };
+    const queueSettings: QueueSettings = { mode: "followup" };
     enqueueFollowupRun("main", queuedNext, queueSettings);
 
     const current = createQueuedRun({
@@ -931,13 +1680,11 @@ describe("createFollowupRunner compaction", () => {
           sessionFile: transcriptPath,
           workspaceDir,
         });
-        params.followupRun.run.extraSystemPrompt = [
+        params.followupRun.run.extraSystemPrompt = joinPromptSections(
           params.followupRun.run.extraSystemPrompt,
           "Post-compaction context refresh",
           "Read AGENTS.md before replying.",
-        ]
-          .filter(Boolean)
-          .join("\n\n");
+        );
         const updatedEntry =
           params.sessionEntry ??
           (params.sessionKey && params.sessionStore
@@ -1056,16 +1803,10 @@ describe("createFollowupRunner bootstrap warning dedupe", () => {
 
     await runner(baseQueuedRun());
 
-    const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as
-      | {
-          allowGatewaySubagentBinding?: boolean;
-          bootstrapPromptWarningSignaturesSeen?: string[];
-          bootstrapPromptWarningSignature?: string;
-        }
-      | undefined;
-    expect(call?.allowGatewaySubagentBinding).toBe(true);
-    expect(call?.bootstrapPromptWarningSignaturesSeen).toEqual(["sig-a", "sig-b"]);
-    expect(call?.bootstrapPromptWarningSignature).toBe("sig-b");
+    const call = requireLastMockCallArg(runEmbeddedPiAgentMock, "run embedded pi agent");
+    expect(call.allowGatewaySubagentBinding).toBe(true);
+    expect(call.bootstrapPromptWarningSignaturesSeen).toEqual(["sig-a", "sig-b"]);
+    expect(call.bootstrapPromptWarningSignature).toBe("sig-b");
   });
 });
 
@@ -1166,14 +1907,11 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     });
 
     expect(onBlockReply).not.toHaveBeenCalled();
-    expect(persistSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        storePath,
-        sessionKey,
-        modelUsed: "claude-opus-4-6",
-        providerUsed: "anthropic",
-      }),
-    );
+    const persistCall = requireMockCallArg(persistSpy, 0);
+    expect(persistCall.storePath).toBe(storePath);
+    expect(persistCall.sessionKey).toBe(sessionKey);
+    expect(persistCall.modelUsed).toBe("claude-opus-4-6");
+    expect(persistCall.providerUsed).toBe("anthropic");
     expect(sessionStore[sessionKey]?.totalTokens).toBe(400);
     expect(sessionStore[sessionKey]?.model).toBe("claude-opus-4-6");
     // Accumulated usage is still stored for usage/cost tracking.
@@ -1226,13 +1964,10 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       ),
     ).resolves.toBeUndefined();
 
-    expect(persistSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        storePath,
-        sessionKey,
-        cfg,
-      }),
-    );
+    const persistCall = requireMockCallArg(persistSpy, 0);
+    expect(persistCall.storePath).toBe(storePath);
+    expect(persistCall.sessionKey).toBe(sessionKey);
+    expect(persistCall.cfg).toBe(cfg);
     persistSpy.mockRestore();
   });
 
@@ -1284,12 +2019,8 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       ),
     ).resolves.toBeUndefined();
 
-    expect(persistSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        providerUsed: "anthropic",
-      }),
-    );
-    expect(persistSpy.mock.calls[0]?.[0]?.usageIsContextSnapshot).toBeUndefined();
+    expect(requireMockCallArg(persistSpy, 0).providerUsed).toBe("anthropic");
+    expect(requireMockCallArg(persistSpy, 0).usageIsContextSnapshot).toBeUndefined();
     persistSpy.mockRestore();
   });
 
@@ -1309,18 +2040,11 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
 
     expect(routeReplyMock).toHaveBeenCalledTimes(2);
     expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(onBlockReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        isError: true,
-        text: expect.stringContaining("could not deliver it to the originating channel"),
-      }),
-    );
-    expect(onBlockReply).not.toHaveBeenCalledWith(
-      expect.objectContaining({ text: "hello world!" }),
-    );
-    expect(onBlockReply).not.toHaveBeenCalledWith(
-      expect.objectContaining({ text: "second payload" }),
-    );
+    const reply = requireMockCallArg(onBlockReply, 0);
+    expect(reply.isError).toBe(true);
+    expect(String(reply.text)).toContain("could not deliver it to the originating channel");
+    expectNoBlockReplyText(onBlockReply, "hello world!");
+    expectNoBlockReplyText(onBlockReply, "second payload");
   });
 
   it("does not emit cross-channel route-failure notice when a later payload routes", async () => {
@@ -1340,11 +2064,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     });
 
     expect(routeReplyMock).toHaveBeenCalledTimes(2);
-    expect(onBlockReply).not.toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: expect.stringContaining("could not deliver it to the originating channel"),
-      }),
-    );
+    expectNoBlockReplyTextIncludes(onBlockReply, "could not deliver it to the originating channel");
   });
 
   it("uses dispatcher when origin routing metadata is incomplete", async () => {
@@ -1359,7 +2079,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
 
     expect(routeReplyMock).not.toHaveBeenCalled();
     expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(onBlockReply).toHaveBeenCalledWith(expect.objectContaining({ text: "hello world!" }));
+    expectBlockReplyText(onBlockReply, "hello world!");
   });
 
   it("keeps message-tool-only queued followup finals private", async () => {
@@ -1377,12 +2097,9 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       } as FollowupRun,
     });
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sourceReplyDeliveryMode: "message_tool_only",
-        forceMessageTool: true,
-      }),
-    );
+    const runArg = requireMockCallArg(runEmbeddedPiAgentMock, 0);
+    expect(runArg.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(runArg.forceMessageTool).toBe(true);
     expect(routeReplyMock).not.toHaveBeenCalled();
     expect(onBlockReply).not.toHaveBeenCalled();
   });
@@ -1403,19 +2120,15 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
 
     expect(routeReplyMock).not.toHaveBeenCalled();
     expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(onBlockReply).toHaveBeenCalledWith(expect.objectContaining({ text: "hello world!" }));
-    expect(resolveProviderFollowupFallbackRouteMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "anthropic",
-        context: expect.objectContaining({
-          provider: "anthropic",
-          modelId: "claude",
-          originRoutable: true,
-          dispatcherAvailable: true,
-          payload: expect.objectContaining({ text: "hello world!" }),
-        }),
-      }),
-    );
+    expectBlockReplyText(onBlockReply, "hello world!");
+    const routeArg = requireMockCallArg(resolveProviderFollowupFallbackRouteMock, 0);
+    expect(routeArg.provider).toBe("anthropic");
+    const context = requireRecord(routeArg.context, "provider fallback context");
+    expect(context.provider).toBe("anthropic");
+    expect(context.modelId).toBe("claude");
+    expect(context.originRoutable).toBe(true);
+    expect(context.dispatcherAvailable).toBe(true);
+    expect(requireRecord(context.payload, "provider fallback payload").text).toBe("hello world!");
   });
 
   it("lets provider followup route hooks drop payloads explicitly", async () => {
@@ -1451,8 +2164,8 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     await runner(createQueuedRun({ originatingChannel: undefined, originatingTo: undefined }));
 
     expect(routeReplyMock).not.toHaveBeenCalled();
-    expect(typing.markRunComplete).toHaveBeenCalled();
-    expect(typing.markDispatchIdle).toHaveBeenCalled();
+    expect(typing.markRunComplete).toHaveBeenCalledTimes(1);
+    expect(typing.markDispatchIdle).toHaveBeenCalledTimes(1);
   });
 
   it("suppresses JSON NO_REPLY followups without origin or dispatcher delivery", async () => {
@@ -1470,8 +2183,8 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     await runner(createQueuedRun({ originatingChannel: undefined, originatingTo: undefined }));
 
     expect(routeReplyMock).not.toHaveBeenCalled();
-    expect(typing.markRunComplete).toHaveBeenCalled();
-    expect(typing.markDispatchIdle).toHaveBeenCalled();
+    expect(typing.markRunComplete).toHaveBeenCalledTimes(1);
+    expect(typing.markDispatchIdle).toHaveBeenCalledTimes(1);
   });
 
   it("keeps NO_REPLY followups with media deliverable", async () => {
@@ -1493,12 +2206,9 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
 
     expect(routeReplyMock).not.toHaveBeenCalled();
     expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(onBlockReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: DELIVERY_NO_REPLY_RUNTIME_CONTRACT.silentText,
-        mediaUrl: "file:///tmp/followup.png",
-      }),
-    );
+    const reply = requireMockCallArg(onBlockReply, 0);
+    expect(reply.text).toBe(DELIVERY_NO_REPLY_RUNTIME_CONTRACT.silentText);
+    expect(reply.mediaUrl).toBe("file:///tmp/followup.png");
   });
 
   it("falls back to dispatcher when successful output has no complete origin route", async () => {
@@ -1513,9 +2223,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
 
     expect(routeReplyMock).not.toHaveBeenCalled();
     expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(onBlockReply).toHaveBeenCalledWith(
-      expect.objectContaining({ text: DELIVERY_NO_REPLY_RUNTIME_CONTRACT.dispatcherText }),
-    );
+    expectBlockReplyText(onBlockReply, DELIVERY_NO_REPLY_RUNTIME_CONTRACT.dispatcherText);
   });
 
   it("falls back to dispatcher when same-channel origin routing fails", async () => {
@@ -1537,9 +2245,9 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       } as FollowupRun,
     });
 
-    expect(routeReplyMock).toHaveBeenCalled();
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
     expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(onBlockReply).toHaveBeenCalledWith(expect.objectContaining({ text: "hello world!" }));
+    expectBlockReplyText(onBlockReply, "hello world!");
   });
 
   it("routes followups with originating account/thread metadata", async () => {
@@ -1554,14 +2262,11 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       } as FollowupRun,
     });
 
-    expect(routeReplyMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "discord",
-        to: "channel:C1",
-        accountId: "work",
-        threadId: "1739142736.000100",
-      }),
-    );
+    const routeArg = requireMockCallArg(routeReplyMock, 0);
+    expect(routeArg.channel).toBe("discord");
+    expect(routeArg.to).toBe("channel:C1");
+    expect(routeArg.accountId).toBe("work");
+    expect(routeArg.threadId).toBe("1739142736.000100");
     expect(onBlockReply).not.toHaveBeenCalled();
   });
 });
@@ -1586,8 +2291,8 @@ describe("createFollowupRunner typing cleanup", () => {
   }
 
   function expectTypingCleanup(typing: ReturnType<typeof createMockTypingController>) {
-    expect(typing.markRunComplete).toHaveBeenCalled();
-    expect(typing.markDispatchIdle).toHaveBeenCalled();
+    expect(typing.markRunComplete).toHaveBeenCalledTimes(1);
+    expect(typing.markDispatchIdle).toHaveBeenCalledTimes(1);
   }
 
   it("calls both markRunComplete and markDispatchIdle on NO_REPLY", async () => {
@@ -1633,7 +2338,7 @@ describe("createFollowupRunner typing cleanup", () => {
 
     await runner(baseQueuedRun());
 
-    expect(onBlockReply).toHaveBeenCalled();
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
     expectTypingCleanup(typing);
   });
 });
@@ -1664,7 +2369,167 @@ describe("createFollowupRunner agentDir forwarding", () => {
     });
 
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as { agentDir?: string };
-    expect(call?.agentDir).toBe(agentDir);
+    const call = requireLastMockCallArg(runEmbeddedPiAgentMock, "run embedded pi agent");
+    expect(call.agentDir).toBe(agentDir);
+  });
+});
+
+describe("createFollowupRunner queued user message idempotency across fallback", () => {
+  it("suppresses queued user message persistence after first fallback candidate persists it", async () => {
+    runEmbeddedPiAgentMock.mockClear();
+    runWithModelFallbackMock.mockReset();
+    runWithModelFallbackMock.mockImplementationOnce(
+      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => {
+        await expect(params.run("anthropic", "claude-opus-4-7")).rejects.toThrow("upstream 500");
+        return {
+          result: await params.run("openai", "gpt-5.4"),
+          provider: "openai",
+          model: "gpt-5.4",
+        };
+      },
+    );
+    runEmbeddedPiAgentMock.mockImplementationOnce(
+      async (args: {
+        onUserMessagePersisted?: (message: {
+          role: "user";
+          content: Array<{ type: "text"; text: string }>;
+        }) => void;
+      }) => {
+        args.onUserMessagePersisted?.({
+          role: "user",
+          content: [{ type: "text", text: "queued message" }],
+        });
+        throw new Error("upstream 500");
+      },
+    );
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-7",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+          suppressNextUserMessagePersistence: false,
+        },
+      }),
+    );
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(2);
+    const firstAttempt = requireMockCallArg(runEmbeddedPiAgentMock, 0);
+    const secondAttempt = requireMockCallArg(runEmbeddedPiAgentMock, 1);
+    expect(firstAttempt.suppressNextUserMessagePersistence).toBe(false);
+    expect(secondAttempt.suppressNextUserMessagePersistence).toBe(true);
+  });
+
+  it("only persists assistant error stub on the first fallback candidate", async () => {
+    runEmbeddedPiAgentMock.mockClear();
+    runWithModelFallbackMock.mockReset();
+    runWithModelFallbackMock.mockImplementationOnce(
+      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => {
+        await expect(params.run("anthropic", "claude-opus-4-7")).rejects.toThrow("upstream 500");
+        await expect(params.run("anthropic", "claude-opus-4-6")).rejects.toThrow("upstream 500");
+        return {
+          result: await params.run("openai", "gpt-5.4"),
+          provider: "openai",
+          model: "gpt-5.4",
+        };
+      },
+    );
+    runEmbeddedPiAgentMock.mockImplementationOnce(
+      async (args: {
+        onAssistantErrorMessagePersisted?: (message: {
+          role: "assistant";
+          content: string;
+          stopReason: "error";
+        }) => void;
+      }) => {
+        args.onAssistantErrorMessagePersisted?.({
+          role: "assistant",
+          content: "[assistant turn failed before producing content]",
+          stopReason: "error",
+        });
+        throw new Error("upstream 500");
+      },
+    );
+    runEmbeddedPiAgentMock.mockRejectedValueOnce(new Error("upstream 500"));
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-7",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+        },
+      }),
+    );
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(3);
+    const firstAttempt = requireMockCallArg(runEmbeddedPiAgentMock, 0);
+    const secondAttempt = requireMockCallArg(runEmbeddedPiAgentMock, 1);
+    const thirdAttempt = requireMockCallArg(runEmbeddedPiAgentMock, 2);
+    expect(firstAttempt.suppressAssistantErrorPersistence).toBe(false);
+    expect(secondAttempt.suppressAssistantErrorPersistence).toBe(true);
+    expect(thirdAttempt.suppressAssistantErrorPersistence).toBe(true);
+  });
+
+  it("does not suppress when no fallback candidate persisted the queued message", async () => {
+    runEmbeddedPiAgentMock.mockClear();
+    runWithModelFallbackMock.mockReset();
+    runWithModelFallbackMock.mockImplementationOnce(
+      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => {
+        await expect(params.run("anthropic", "claude-opus-4-7")).rejects.toThrow("upstream early");
+        return {
+          result: await params.run("openai", "gpt-5.4"),
+          provider: "openai",
+          model: "gpt-5.4",
+        };
+      },
+    );
+    runEmbeddedPiAgentMock.mockRejectedValueOnce(new Error("upstream early"));
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-7",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+          suppressNextUserMessagePersistence: false,
+        },
+      }),
+    );
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(2);
+    const firstAttempt = requireMockCallArg(runEmbeddedPiAgentMock, 0);
+    const secondAttempt = requireMockCallArg(runEmbeddedPiAgentMock, 1);
+    expect(firstAttempt.suppressNextUserMessagePersistence).toBe(false);
+    expect(secondAttempt.suppressNextUserMessagePersistence).toBe(false);
+    expect(secondAttempt.suppressAssistantErrorPersistence).toBe(false);
   });
 });

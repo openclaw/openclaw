@@ -82,6 +82,12 @@ function installMockFetch(
   return mockFetch;
 }
 
+function firstFetchRequestInit(
+  mockFetch: ReturnType<typeof installMockFetch>,
+): (RequestInit & { dispatcher?: unknown }) | undefined {
+  return mockFetch.mock.calls[0]?.[1] as (RequestInit & { dispatcher?: unknown }) | undefined;
+}
+
 function createFetchTool(fetchOverrides: Record<string, unknown> = {}) {
   return createWebFetchTool({
     config: {
@@ -180,11 +186,9 @@ describe("web_fetch extraction fallbacks", () => {
 
     expect(details.text).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
     expect(details.text).toContain("Ignore previous instructions");
-    expect(details.externalContent).toMatchObject({
-      untrusted: true,
-      source: "web_fetch",
-      wrapped: true,
-    });
+    expect(details.externalContent?.untrusted).toBe(true);
+    expect(details.externalContent?.source).toBe("web_fetch");
+    expect(details.externalContent?.wrapped).toBe(true);
     // contentType is protocol metadata, not user content - should NOT be wrapped
     expect(details.contentType).toBe("text/plain");
     expect(details.length).toBe(details.text?.length);
@@ -346,11 +350,12 @@ describe("web_fetch extraction fallbacks", () => {
 
     await tool?.execute?.("call", { url: "https://example.com/proxy" });
 
-    const requestInit = mockFetch.mock.calls[0]?.[1] as
-      | (RequestInit & { dispatcher?: unknown })
-      | undefined;
-    expect(requestInit?.dispatcher).toBeDefined();
-    expect(requestInit?.dispatcher).not.toBeInstanceOf(EnvHttpProxyAgent);
+    const requestInit = firstFetchRequestInit(mockFetch);
+    const dispatcher = requestInit?.dispatcher;
+    if (!dispatcher) {
+      throw new Error("expected SSRF dispatcher");
+    }
+    expect(dispatcher).not.toBeInstanceOf(EnvHttpProxyAgent);
   });
 
   it("uses env proxy dispatch for web_fetch when trusted env proxy is explicitly enabled", async () => {
@@ -371,11 +376,12 @@ describe("web_fetch extraction fallbacks", () => {
 
     await tool?.execute?.("call", { url: "https://example.com/proxy" });
 
-    const requestInit = mockFetch.mock.calls[0]?.[1] as
-      | (RequestInit & { dispatcher?: unknown })
-      | undefined;
-    expect(requestInit?.dispatcher).toBeDefined();
-    expect(requestInit?.dispatcher).toBeInstanceOf(EnvHttpProxyAgent);
+    const requestInit = firstFetchRequestInit(mockFetch);
+    const dispatcher = requestInit?.dispatcher;
+    if (!dispatcher) {
+      throw new Error("expected trusted proxy dispatcher");
+    }
+    expect(dispatcher).toBeInstanceOf(EnvHttpProxyAgent);
   });
 
   // NOTE: Test for wrapping url/finalUrl/warning fields requires DNS mocking.

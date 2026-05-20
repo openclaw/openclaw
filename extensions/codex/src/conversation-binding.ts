@@ -10,8 +10,11 @@ import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
 import {
   codexSandboxPolicyForTurn,
   resolveCodexAppServerRuntimeOptions,
+  type CodexAppServerApprovalPolicy,
+  type CodexAppServerSandboxMode,
 } from "./app-server/config.js";
 import {
+  type CodexServiceTier,
   type CodexThreadResumeResponse,
   type CodexThreadStartResponse,
   type CodexTurnStartResponse,
@@ -26,20 +29,23 @@ import {
   type CodexAppServerAuthProfileLookup,
 } from "./app-server/session-binding.js";
 import { getSharedCodexAppServerClient } from "./app-server/shared-client.js";
+import { formatCodexDisplayText } from "./command-formatters.js";
 import {
   createCodexConversationBindingData,
   readCodexConversationBindingData,
   readCodexConversationBindingDataRecord,
   resolveCodexDefaultWorkspaceDir,
-  type CodexConversationBindingData,
+  type CodexAppServerConversationBindingData,
 } from "./conversation-binding-data.js";
 import { trackCodexConversationActiveTurn } from "./conversation-control.js";
 import { createCodexConversationTurnCollector } from "./conversation-turn-collector.js";
 import { buildCodexConversationTurnInput } from "./conversation-turn-input.js";
+import { resumeCodexCliSessionOnNode } from "./node-cli-sessions.js";
 
 const DEFAULT_BOUND_TURN_TIMEOUT_MS = 20 * 60_000;
 
 export {
+  createCodexCliNodeConversationBindingData,
   readCodexConversationBindingData,
   resolveCodexDefaultWorkspaceDir,
 } from "./conversation-binding-data.js";
@@ -47,17 +53,26 @@ export {
 type CodexConversationRunOptions = {
   pluginConfig?: unknown;
   timeoutMs?: number;
+  resumeCodexCliSessionOnNode?: ResumeCodexCliSessionOnNodeFn;
 };
+
+type ResumeCodexCliSessionOnNodeFn = (
+  params: Omit<Parameters<typeof resumeCodexCliSessionOnNode>[0], "runtime">,
+) => ReturnType<typeof resumeCodexCliSessionOnNode>;
 
 type CodexConversationStartParams = {
   pluginConfig?: unknown;
   config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
   sessionFile: string;
   workspaceDir?: string;
+  agentDir?: string;
   threadId?: string;
   model?: string;
   modelProvider?: string;
   authProfileId?: string;
+  approvalPolicy?: CodexAppServerApprovalPolicy;
+  sandbox?: CodexAppServerSandboxMode;
+  serviceTier?: CodexServiceTier;
 };
 
 type BoundTurnResult = {
@@ -80,15 +95,17 @@ function getGlobalState(): CodexConversationGlobalState {
 
 export async function startCodexConversationThread(
   params: CodexConversationStartParams,
-): Promise<CodexConversationBindingData> {
+): Promise<CodexAppServerConversationBindingData> {
   const workspaceDir =
     params.workspaceDir?.trim() || resolveCodexDefaultWorkspaceDir(params.pluginConfig);
+  const agentDir = params.agentDir?.trim();
+  const agentLookup = buildAgentLookup({ agentDir, config: params.config });
   const existingBinding = await readCodexAppServerBinding(params.sessionFile, {
-    config: params.config,
+    ...agentLookup,
   });
   const authProfileId = resolveCodexAppServerAuthProfileIdForAgent({
     authProfileId: params.authProfileId ?? existingBinding?.authProfileId,
-    config: params.config,
+    ...agentLookup,
   });
   if (params.threadId?.trim()) {
     await attachExistingThread({
@@ -96,9 +113,13 @@ export async function startCodexConversationThread(
       sessionFile: params.sessionFile,
       threadId: params.threadId.trim(),
       workspaceDir,
+      ...(agentDir ? { agentDir } : {}),
       model: params.model,
       modelProvider: params.modelProvider,
       authProfileId,
+      approvalPolicy: params.approvalPolicy,
+      sandbox: params.sandbox,
+      serviceTier: params.serviceTier,
       config: params.config,
     });
   } else {
@@ -106,15 +127,20 @@ export async function startCodexConversationThread(
       pluginConfig: params.pluginConfig,
       sessionFile: params.sessionFile,
       workspaceDir,
+      ...(agentDir ? { agentDir } : {}),
       model: params.model,
       modelProvider: params.modelProvider,
       authProfileId,
+      approvalPolicy: params.approvalPolicy,
+      sandbox: params.sandbox,
+      serviceTier: params.serviceTier,
       config: params.config,
     });
   }
   return createCodexConversationBindingData({
     sessionFile: params.sessionFile,
     workspaceDir,
+    ...(agentDir ? { agentDir } : {}),
   });
 }
 
@@ -130,13 +156,44 @@ export async function handleCodexConversationInboundClaim(
   if (event.commandAuthorized !== true) {
     return { handled: true };
   }
-  const prompt = (event.bodyForAgent ?? event.content ?? "").trim();
+  const prompt = event.bodyForAgent?.trim() || event.content?.trim() || "";
   if (!prompt) {
     return { handled: true };
   }
+  if (data.kind === "codex-cli-node-session") {
+    const resume = options.resumeCodexCliSessionOnNode;
+    if (!resume) {
+      return {
+        handled: true,
+        reply: {
+          text: "Codex CLI node binding is unavailable because Gateway node runtime is not attached.",
+        },
+      };
+    }
+    try {
+      const result = await enqueueBoundTurn(`${data.nodeId}:${data.sessionId}`, async () => {
+        const resumed = await resume({
+          nodeId: data.nodeId,
+          sessionId: data.sessionId,
+          prompt,
+          cwd: data.cwd,
+          timeoutMs: options.timeoutMs,
+        });
+        return { reply: { text: resumed.text.trim() || "Codex completed without a text reply." } };
+      });
+      return { handled: true, reply: result.reply };
+    } catch (error) {
+      return {
+        handled: true,
+        reply: {
+          text: `Codex CLI node turn failed: ${formatCodexDisplayText(formatErrorMessage(error))}`,
+        },
+      };
+    }
+  }
   try {
     const result = await enqueueBoundTurn(data.sessionFile, () =>
-      runBoundTurn({
+      runBoundTurnWithMissingThreadRecovery({
         data,
         prompt,
         event,
@@ -149,7 +206,7 @@ export async function handleCodexConversationInboundClaim(
     return {
       handled: true,
       reply: {
-        text: `Codex app-server turn failed: ${formatErrorMessage(error)}`,
+        text: `Codex app-server turn failed: ${formatCodexDisplayText(formatErrorMessage(error))}`,
       },
     };
   }
@@ -162,7 +219,7 @@ export async function handleCodexConversationBindingResolved(
     return;
   }
   const data = readCodexConversationBindingDataRecord(event.request.data ?? {});
-  if (!data) {
+  if (!data || data.kind !== "codex-app-server-session") {
     return;
   }
   await clearCodexAppServerBinding(data.sessionFile);
@@ -173,21 +230,29 @@ async function attachExistingThread(params: {
   sessionFile: string;
   threadId: string;
   workspaceDir: string;
+  agentDir?: string;
   model?: string;
   modelProvider?: string;
   authProfileId?: string;
+  approvalPolicy?: CodexAppServerApprovalPolicy;
+  sandbox?: CodexAppServerSandboxMode;
+  serviceTier?: CodexServiceTier;
   config?: CodexAppServerAuthProfileLookup["config"];
 }): Promise<void> {
-  const runtime = resolveCodexAppServerRuntimeOptions({ pluginConfig: params.pluginConfig });
+  const runtime = resolveCodexAppServerRuntimeOptions({
+    pluginConfig: params.pluginConfig,
+  });
+  const agentLookup = buildAgentLookup({ agentDir: params.agentDir, config: params.config });
   const modelProvider = resolveThreadRequestModelProvider({
     authProfileId: params.authProfileId,
     modelProvider: params.modelProvider,
-    config: params.config,
+    ...agentLookup,
   });
   const client = await getSharedCodexAppServerClient({
     startOptions: runtime.start,
     timeoutMs: runtime.requestTimeoutMs,
     authProfileId: params.authProfileId,
+    ...agentLookup,
   });
   const response: CodexThreadResumeResponse = await client.request(
     CODEX_CONTROL_METHODS.resumeThread,
@@ -195,15 +260,19 @@ async function attachExistingThread(params: {
       threadId: params.threadId,
       ...(params.model ? { model: params.model } : {}),
       ...(modelProvider ? { modelProvider } : {}),
-      approvalPolicy: runtime.approvalPolicy,
+      approvalPolicy: params.approvalPolicy ?? runtime.approvalPolicy,
       approvalsReviewer: runtime.approvalsReviewer,
-      sandbox: runtime.sandbox,
-      ...(runtime.serviceTier ? { serviceTier: runtime.serviceTier } : {}),
+      sandbox: params.sandbox ?? runtime.sandbox,
+      ...((params.serviceTier ?? runtime.serviceTier)
+        ? { serviceTier: params.serviceTier ?? runtime.serviceTier }
+        : {}),
       persistExtendedHistory: true,
     },
     { timeoutMs: runtime.requestTimeoutMs },
   );
   const thread = response.thread;
+  const runtimeApprovalPolicy =
+    typeof runtime.approvalPolicy === "string" ? runtime.approvalPolicy : undefined;
   await writeCodexAppServerBinding(
     params.sessionFile,
     {
@@ -212,16 +281,16 @@ async function attachExistingThread(params: {
       authProfileId: params.authProfileId,
       model: response.model ?? params.model,
       modelProvider: normalizeCodexAppServerBindingModelProvider({
-        config: params.config,
         authProfileId: params.authProfileId,
         modelProvider: response.modelProvider ?? params.modelProvider,
+        ...agentLookup,
       }),
-      approvalPolicy: runtime.approvalPolicy,
-      sandbox: runtime.sandbox,
-      serviceTier: runtime.serviceTier,
+      approvalPolicy: params.approvalPolicy ?? runtimeApprovalPolicy,
+      sandbox: params.sandbox ?? runtime.sandbox,
+      serviceTier: params.serviceTier ?? runtime.serviceTier,
     },
     {
-      config: params.config,
+      ...agentLookup,
     },
   );
 }
@@ -230,21 +299,29 @@ async function createThread(params: {
   pluginConfig?: unknown;
   sessionFile: string;
   workspaceDir: string;
+  agentDir?: string;
   model?: string;
   modelProvider?: string;
   authProfileId?: string;
+  approvalPolicy?: CodexAppServerApprovalPolicy;
+  sandbox?: CodexAppServerSandboxMode;
+  serviceTier?: CodexServiceTier;
   config?: CodexAppServerAuthProfileLookup["config"];
 }): Promise<void> {
-  const runtime = resolveCodexAppServerRuntimeOptions({ pluginConfig: params.pluginConfig });
+  const runtime = resolveCodexAppServerRuntimeOptions({
+    pluginConfig: params.pluginConfig,
+  });
+  const agentLookup = buildAgentLookup({ agentDir: params.agentDir, config: params.config });
   const modelProvider = resolveThreadRequestModelProvider({
     authProfileId: params.authProfileId,
     modelProvider: params.modelProvider,
-    config: params.config,
+    ...agentLookup,
   });
   const client = await getSharedCodexAppServerClient({
     startOptions: runtime.start,
     timeoutMs: runtime.requestTimeoutMs,
     authProfileId: params.authProfileId,
+    ...agentLookup,
   });
   const response: CodexThreadStartResponse = await client.request(
     "thread/start",
@@ -252,10 +329,12 @@ async function createThread(params: {
       cwd: params.workspaceDir,
       ...(params.model ? { model: params.model } : {}),
       ...(modelProvider ? { modelProvider } : {}),
-      approvalPolicy: runtime.approvalPolicy,
+      approvalPolicy: params.approvalPolicy ?? runtime.approvalPolicy,
       approvalsReviewer: runtime.approvalsReviewer,
-      sandbox: runtime.sandbox,
-      ...(runtime.serviceTier ? { serviceTier: runtime.serviceTier } : {}),
+      sandbox: params.sandbox ?? runtime.sandbox,
+      ...((params.serviceTier ?? runtime.serviceTier)
+        ? { serviceTier: params.serviceTier ?? runtime.serviceTier }
+        : {}),
       developerInstructions:
         "This Codex thread is bound to an OpenClaw conversation. Answer normally; OpenClaw will deliver your final response back to the conversation.",
       experimentalRawEvents: true,
@@ -263,6 +342,8 @@ async function createThread(params: {
     },
     { timeoutMs: runtime.requestTimeoutMs },
   );
+  const runtimeApprovalPolicy =
+    typeof runtime.approvalPolicy === "string" ? runtime.approvalPolicy : undefined;
   await writeCodexAppServerBinding(
     params.sessionFile,
     {
@@ -271,29 +352,32 @@ async function createThread(params: {
       authProfileId: params.authProfileId,
       model: response.model ?? params.model,
       modelProvider: normalizeCodexAppServerBindingModelProvider({
-        config: params.config,
         authProfileId: params.authProfileId,
         modelProvider: response.modelProvider ?? params.modelProvider,
+        ...agentLookup,
       }),
-      approvalPolicy: runtime.approvalPolicy,
-      sandbox: runtime.sandbox,
-      serviceTier: runtime.serviceTier,
+      approvalPolicy: params.approvalPolicy ?? runtimeApprovalPolicy,
+      sandbox: params.sandbox ?? runtime.sandbox,
+      serviceTier: params.serviceTier ?? runtime.serviceTier,
     },
     {
-      config: params.config,
+      ...agentLookup,
     },
   );
 }
 
 async function runBoundTurn(params: {
-  data: CodexConversationBindingData;
+  data: CodexAppServerConversationBindingData;
   prompt: string;
   event: PluginHookInboundClaimEvent;
   pluginConfig?: unknown;
   timeoutMs?: number;
 }): Promise<BoundTurnResult> {
-  const runtime = resolveCodexAppServerRuntimeOptions({ pluginConfig: params.pluginConfig });
-  const binding = await readCodexAppServerBinding(params.data.sessionFile);
+  const runtime = resolveCodexAppServerRuntimeOptions({
+    pluginConfig: params.pluginConfig,
+  });
+  const agentLookup = buildAgentLookup({ agentDir: params.data.agentDir });
+  const binding = await readCodexAppServerBinding(params.data.sessionFile, agentLookup);
   const threadId = binding?.threadId;
   if (!threadId) {
     throw new Error("bound Codex conversation has no thread binding");
@@ -303,6 +387,7 @@ async function runBoundTurn(params: {
     startOptions: runtime.start,
     timeoutMs: runtime.requestTimeoutMs,
     authProfileId: binding.authProfileId,
+    ...agentLookup,
   });
   const collector = createCodexConversationTurnCollector(threadId);
   const notificationCleanup = client.addNotificationHandler((notification) =>
@@ -349,7 +434,10 @@ async function runBoundTurn(params: {
       "turn/start",
       {
         threadId,
-        input: buildCodexConversationTurnInput({ prompt: params.prompt, event: params.event }),
+        input: buildCodexConversationTurnInput({
+          prompt: params.prompt,
+          event: params.event,
+        }),
         cwd: binding.cwd || params.data.workspaceDir,
         approvalPolicy: binding.approvalPolicy ?? runtime.approvalPolicy,
         approvalsReviewer: runtime.approvalsReviewer,
@@ -388,6 +476,41 @@ async function runBoundTurn(params: {
   }
 }
 
+async function runBoundTurnWithMissingThreadRecovery(params: {
+  data: CodexAppServerConversationBindingData;
+  prompt: string;
+  event: PluginHookInboundClaimEvent;
+  pluginConfig?: unknown;
+  timeoutMs?: number;
+}): Promise<BoundTurnResult> {
+  try {
+    return await runBoundTurn(params);
+  } catch (error) {
+    if (!isCodexThreadNotFoundError(error)) {
+      throw error;
+    }
+    const agentLookup = buildAgentLookup({ agentDir: params.data.agentDir });
+    const binding = await readCodexAppServerBinding(params.data.sessionFile, agentLookup);
+    await startCodexConversationThread({
+      pluginConfig: params.pluginConfig,
+      sessionFile: params.data.sessionFile,
+      workspaceDir: binding?.cwd || params.data.workspaceDir,
+      ...agentLookup,
+      model: binding?.model,
+      modelProvider: binding?.modelProvider,
+      authProfileId: binding?.authProfileId,
+      approvalPolicy: binding?.approvalPolicy,
+      sandbox: binding?.sandbox,
+      serviceTier: binding?.serviceTier,
+    });
+    return await runBoundTurn(params);
+  }
+}
+
+function isCodexThreadNotFoundError(error: unknown): boolean {
+  return /\bthread not found:/iu.test(formatErrorMessage(error));
+}
+
 function enqueueBoundTurn<T>(key: string, run: () => Promise<T>): Promise<T> {
   const state = getGlobalState();
   const previous = state.queues.get(key) ?? Promise.resolve();
@@ -410,6 +533,7 @@ function enqueueBoundTurn<T>(key: string, run: () => Promise<T>): Promise<T> {
 function resolveThreadRequestModelProvider(params: {
   authProfileId?: string;
   modelProvider?: string;
+  agentDir?: string;
   config?: CodexAppServerAuthProfileLookup["config"];
 }): string | undefined {
   const modelProvider = params.modelProvider?.trim();
@@ -423,4 +547,15 @@ function resolveThreadRequestModelProvider(params: {
     return undefined;
   }
   return modelProvider.toLowerCase() === "openai-codex" ? "openai" : modelProvider;
+}
+
+function buildAgentLookup(params: {
+  agentDir?: string;
+  config?: CodexAppServerAuthProfileLookup["config"];
+}): Pick<CodexAppServerAuthProfileLookup, "agentDir" | "config"> {
+  const agentDir = params.agentDir?.trim();
+  return {
+    ...(agentDir ? { agentDir } : {}),
+    ...(params.config ? { config: params.config } : {}),
+  };
 }

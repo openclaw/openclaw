@@ -70,7 +70,7 @@ const browserToolDeps = {
   untrackSessionBrowserTab,
 };
 
-export const __testing = {
+export const testing = {
   setDepsForTest(
     overrides: Partial<{
       browserAct: typeof browserAct;
@@ -316,15 +316,25 @@ async function callBrowserProxy(params: {
       idempotencyKey: crypto.randomUUID(),
     },
   );
-  const parsed =
-    payload?.payload ??
-    (typeof payload?.payloadJSON === "string" && payload.payloadJSON
-      ? (JSON.parse(payload.payloadJSON) as BrowserProxyResult)
-      : null);
+  const parsed = unwrapBrowserProxyPayload(payload);
   if (!parsed || typeof parsed !== "object" || !("result" in parsed)) {
     throw new Error("browser proxy failed");
   }
   return parsed;
+}
+
+function unwrapBrowserProxyPayload(payload: { payload?: unknown; payloadJSON?: unknown } | null) {
+  if (payload?.payload !== undefined) {
+    return payload.payload;
+  }
+  if (typeof payload?.payloadJSON !== "string" || !payload.payloadJSON.trim()) {
+    return null;
+  }
+  try {
+    return JSON.parse(payload.payloadJSON) as BrowserProxyResult;
+  } catch {
+    return null;
+  }
 }
 
 async function persistProxyFiles(files: BrowserProxyFile[] | undefined) {
@@ -857,6 +867,7 @@ export function createBrowserTool(opts?: {
         case "dialog": {
           const accept = Boolean(params.accept);
           const promptText = readStringValue(params.promptText);
+          const dialogId = readStringValue(params.dialogId);
           const { targetId, timeoutMs } = readOptionalTargetAndTimeout(params);
           if (proxyRequest) {
             const result = await proxyRequest({
@@ -866,6 +877,7 @@ export function createBrowserTool(opts?: {
               body: {
                 accept,
                 promptText,
+                dialogId,
                 targetId,
                 timeoutMs,
               },
@@ -875,6 +887,7 @@ export function createBrowserTool(opts?: {
           const result = await browserToolDeps.browserArmDialog(baseUrl, {
             accept,
             promptText,
+            dialogId,
             targetId,
             timeoutMs,
             profile,
@@ -901,3 +914,4 @@ export function createBrowserTool(opts?: {
     },
   };
 }
+export { testing as __testing };

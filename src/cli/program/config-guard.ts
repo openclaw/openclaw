@@ -30,7 +30,15 @@ async function getConfigSnapshot() {
   if (process.env.VITEST === "true") {
     return readConfigFileSnapshot();
   }
-  configSnapshotPromise ??= readConfigFileSnapshot();
+  if (!configSnapshotPromise) {
+    const pendingSnapshot = readConfigFileSnapshot();
+    configSnapshotPromise = pendingSnapshot;
+    pendingSnapshot.catch(() => {
+      if (configSnapshotPromise === pendingSnapshot) {
+        configSnapshotPromise = null;
+      }
+    });
+  }
   return configSnapshotPromise;
 }
 
@@ -112,7 +120,7 @@ export async function ensureConfigReady(params: {
   const heading = (value: string) => colorize(rich, theme.heading, value);
   const commandText = (value: string) => colorize(rich, theme.command, value);
 
-  params.runtime.error(heading("Config invalid"));
+  params.runtime.error(heading("OpenClaw config is invalid"));
   params.runtime.error(`${muted("File:")} ${muted(shortenHomePath(snapshot.path))}`);
   if (issues.length > 0) {
     params.runtime.error(muted("Problem:"));
@@ -124,13 +132,20 @@ export async function ensureConfigReady(params: {
   }
   params.runtime.error("");
   params.runtime.error(
-    `${muted("Run:")} ${commandText(formatCliCommand("openclaw doctor --fix"))}`,
+    `${muted("Fix:")} ${commandText(formatCliCommand("openclaw doctor --fix"))}`,
+  );
+  params.runtime.error(
+    `${muted("Inspect:")} ${commandText(formatCliCommand("openclaw config validate"))}`,
+  );
+  params.runtime.error(
+    muted("Status, health, logs, and doctor commands still run with invalid config."),
   );
   if (!allowInvalid) {
     params.runtime.exit(1);
   }
 }
 
-export const __test__ = {
+export const testApi = {
   resetConfigGuardStateForTests,
 };
+export { testApi as __test__ };
