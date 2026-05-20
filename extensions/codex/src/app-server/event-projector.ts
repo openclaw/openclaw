@@ -8,6 +8,7 @@ import {
   formatToolProgressOutput,
   inferToolMetaFromArgs,
   isMessagingTool,
+  isMessagingToolSendAction,
   normalizeUsage,
   runAgentHarnessAfterCompactionHook,
   runAgentHarnessAfterToolCallHook,
@@ -113,6 +114,7 @@ const TRANSCRIPT_PROGRESS_SUPPRESSED_TOOL_NAMES = new Set([
 export type CodexToolPlanAnnouncementInput = {
   toolName?: string | null;
   meta?: string | null;
+  args?: JsonObject;
 };
 
 export function buildCodexToolPlanAnnouncementText(
@@ -142,6 +144,9 @@ export function buildCodexToolPlanAnnouncementText(
     return meta
       ? `I'll search ${meta}, then answer here.`
       : "I'll run the web search, then answer here.";
+  }
+  if (isCodexMessagingToolName(normalizedToolName)) {
+    return "I'll check the chat state, then answer here.";
   }
   return tool
     ? `I'll run the ${tool} step, then report the result here.`
@@ -192,6 +197,15 @@ function isCodexEditToolName(toolName: string): boolean {
 function isCodexMessagingToolName(toolName: string | undefined): boolean {
   const normalizedToolName = toolName?.trim().toLowerCase();
   return Boolean(normalizedToolName && isMessagingTool(normalizedToolName));
+}
+
+function isCodexSourceReplyMessagingToolSend(details: CodexToolPlanAnnouncementInput): boolean {
+  const normalizedToolName = details.toolName?.trim().toLowerCase();
+  return Boolean(
+    normalizedToolName === "message" &&
+    details.args &&
+    isMessagingToolSendAction(normalizedToolName, details.args),
+  );
 }
 
 function normalizeCodexToolPlanAnnouncementInput(
@@ -274,6 +288,8 @@ export class CodexAppServerEventProjector {
   private latestPlanAnnouncementText: string | undefined;
   private latestPlanAnnouncementFromExplanation = false;
   private toolPlanAnnouncementSent = false;
+  private toolPlanAnnouncementDeliveryPending = false;
+  private deferredToolPlanAnnouncementInput: string | CodexToolPlanAnnouncementInput | undefined;
   private assistantStarted = false;
   private reasoningStarted = false;
   private reasoningEnded = false;
@@ -505,12 +521,33 @@ export class CodexAppServerEventProjector {
     input: string | CodexToolPlanAnnouncementInput | undefined,
   ): Promise<void> {
     const details = normalizeCodexToolPlanAnnouncementInput(input);
+    if (isCodexMessagingToolName(details.toolName ?? undefined)) {
+      if (!details.args) {
+        return;
+      }
+      if (
+        details.toolName &&
+        isMessagingToolSendAction(details.toolName.trim().toLowerCase(), details.args)
+      ) {
+        if (
+          this.params.sourceReplyDeliveryMode === "message_tool_only" &&
+          isCodexSourceReplyMessagingToolSend(details)
+        ) {
+          this.toolPlanAnnouncementDeliveryPending = true;
+        }
+        return;
+      }
+      // Non-send messaging actions, such as reading a channel, still need the
+      // normal pre-tool acknowledgement before work continues.
+    }
+    if (this.toolPlanAnnouncementDeliveryPending) {
+      this.deferredToolPlanAnnouncementInput ??= details;
+      return;
+    }
     if (
       this.toolPlanAnnouncementSent ||
       this.params.silentExpected === true ||
-      this.params.sourceReplyDeliveryMode === "message_tool_only" ||
-      !this.params.onBlockReply ||
-      isCodexMessagingToolName(details.toolName ?? undefined)
+      !this.params.onBlockReply
     ) {
       return;
     }
@@ -525,6 +562,35 @@ export class CodexAppServerEventProjector {
       await this.params.onBlockReplyFlush?.();
     } catch (error) {
       embeddedAgentLog.debug("codex tool plan announcement delivery failed", { error });
+    }
+  }
+
+  markToolPlanAnnouncementDelivered(): void {
+    this.toolPlanAnnouncementDeliveryPending = false;
+    this.deferredToolPlanAnnouncementInput = undefined;
+    this.toolPlanAnnouncementSent = true;
+  }
+
+  async completeToolPlanAnnouncementDeliveryForTool(params: {
+    input: string | CodexToolPlanAnnouncementInput | undefined;
+    delivered: boolean;
+  }): Promise<void> {
+    const details = normalizeCodexToolPlanAnnouncementInput(params.input);
+    if (!isCodexSourceReplyMessagingToolSend(details)) {
+      return;
+    }
+    if (!this.toolPlanAnnouncementDeliveryPending) {
+      return;
+    }
+    if (params.delivered) {
+      this.markToolPlanAnnouncementDelivered();
+      return;
+    }
+    this.toolPlanAnnouncementDeliveryPending = false;
+    const deferredInput = this.deferredToolPlanAnnouncementInput;
+    this.deferredToolPlanAnnouncementInput = undefined;
+    if (deferredInput !== undefined) {
+      await this.announceToolPlanForTool(deferredInput);
     }
   }
 

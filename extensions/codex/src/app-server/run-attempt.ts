@@ -2107,9 +2107,11 @@ export async function runCodexAppServerAttempt(
       markCurrentTurnRequestProgress();
       turnCrossedToolHandoff = true;
       const toolProgressDetailMode = resolveCodexToolProgressDetailMode(params.toolProgressDetail);
-      await projector?.announceToolPlanForTool({
+      const toolPlanAnnouncementInput = {
         toolName: call.tool,
-      });
+        ...(isJsonObject(call.arguments) ? { args: call.arguments } : {}),
+      };
+      await projector?.announceToolPlanForTool(toolPlanAnnouncementInput);
       pendingOpenClawDynamicToolCompletionIds.add(call.callId);
       trajectoryRecorder?.recordEvent("tool.call", {
         threadId: call.threadId,
@@ -2171,6 +2173,10 @@ export async function runCodexAppServerAttempt(
         }
       });
       try {
+        const sourceReplyPayloadCountBefore =
+          toolBridge.telemetry.messagingToolSourceReplyPayloads.length;
+        const messagingToolSentTargetCountBefore =
+          toolBridge.telemetry.messagingToolSentTargets.length;
         const response = await handleDynamicToolCallWithTimeout({
           call,
           toolBridge,
@@ -2186,6 +2192,21 @@ export async function runCodexAppServerAttempt(
             });
           },
         });
+        if (
+          toolBridge.telemetry.messagingToolSourceReplyPayloads.length >
+            sourceReplyPayloadCountBefore ||
+          toolBridge.telemetry.messagingToolSentTargets.length > messagingToolSentTargetCountBefore
+        ) {
+          await projector?.completeToolPlanAnnouncementDeliveryForTool({
+            input: toolPlanAnnouncementInput,
+            delivered: true,
+          });
+        } else {
+          await projector?.completeToolPlanAnnouncementDeliveryForTool({
+            input: toolPlanAnnouncementInput,
+            delivered: false,
+          });
+        }
         const protocolResponse = toCodexDynamicToolProtocolResponse(response);
         trajectoryRecorder?.recordEvent("tool.result", {
           threadId: call.threadId,
@@ -2237,6 +2258,10 @@ export async function runCodexAppServerAttempt(
         }
         return protocolResponse as JsonValue;
       } catch (error) {
+        await projector?.completeToolPlanAnnouncementDeliveryForTool({
+          input: toolPlanAnnouncementInput,
+          delivered: false,
+        });
         if (
           !terminalDiagnosticObserved &&
           !hasPendingDynamicToolTerminalDiagnostic({

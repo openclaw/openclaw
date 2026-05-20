@@ -481,12 +481,93 @@ describe("CodexAppServerEventProjector", () => {
       onBlockReply,
     });
 
-    await projector.announceToolPlanForTool("message");
+    await projector.announceToolPlanForTool({ toolName: "message", args: { action: "send" } });
 
     expect(onBlockReply).not.toHaveBeenCalled();
   });
 
-  it("does not automatically announce when the message tool owns source delivery", async () => {
+  it("does not let ordinary messaging sends suppress later automatic announcements", async () => {
+    const onBlockReply = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      onBlockReply,
+    });
+
+    const messageSend = { toolName: "message", args: { action: "send" } };
+    await projector.announceToolPlanForTool(messageSend);
+    await projector.completeToolPlanAnnouncementDeliveryForTool({
+      input: messageSend,
+      delivered: true,
+    });
+    await projector.announceToolPlanForTool("web_search");
+
+    expect(onBlockReply).toHaveBeenCalledWith({
+      text: "I'll run the web search, then answer here.",
+    });
+  });
+
+  it("does not duplicate automatic fallback after confirmed source reply delivery", async () => {
+    const onBlockReply = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      sourceReplyDeliveryMode: "message_tool_only",
+      onBlockReply,
+    });
+
+    const messageSend = { toolName: "message", args: { action: "send" } };
+    await projector.announceToolPlanForTool(messageSend);
+    await projector.completeToolPlanAnnouncementDeliveryForTool({
+      input: messageSend,
+      delivered: true,
+    });
+    await projector.announceToolPlanForTool("web_search");
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("uses fallback automatic announcements after unconfirmed messaging sends", async () => {
+    const onBlockReply = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      sourceReplyDeliveryMode: "message_tool_only",
+      onBlockReply,
+    });
+
+    const messageSend = { toolName: "message", args: { action: "send" } };
+    await projector.announceToolPlanForTool(messageSend);
+    await projector.announceToolPlanForTool("web_search");
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+    await projector.completeToolPlanAnnouncementDeliveryForTool({
+      input: messageSend,
+      delivered: false,
+    });
+
+    expect(onBlockReply).toHaveBeenCalledWith({
+      text: "I'll run the web search, then answer here.",
+    });
+  });
+
+  it("uses fallback automatic announcements before non-send messaging tool actions", async () => {
+    const onBlockReply = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      sourceReplyDeliveryMode: "message_tool_only",
+      onBlockReply,
+    });
+
+    await projector.announceToolPlanForTool({ toolName: "message", args: { action: "read" } });
+
+    expect(onBlockReply).toHaveBeenCalledWith({
+      text: "I'll check the chat state, then answer here.",
+    });
+    expect(projector.buildResult(buildEmptyToolTelemetry()).replayMetadata).toEqual({
+      hadPotentialSideEffects: true,
+      replaySafe: false,
+    });
+  });
+
+  it("keeps plan explanation automatic delivery owned by message tool when source delivery is message-tool-only", async () => {
     const onBlockReply = vi.fn();
     const onAgentEvent = vi.fn();
     const projector = await createProjector({
@@ -502,16 +583,6 @@ describe("CodexAppServerEventProjector", () => {
         plan: [{ step: "query monitoring state", status: "in_progress" }],
       }),
     );
-    await projector.handleNotification(
-      forCurrentTurn("item/started", {
-        item: {
-          type: "webSearch",
-          id: "search-1",
-          query: "monitoring",
-          status: "inProgress",
-        },
-      }),
-    );
 
     expect(onBlockReply).not.toHaveBeenCalled();
     expect(findAgentEvent(onAgentEvent, { stream: "plan" }).data.steps).toEqual([
@@ -523,7 +594,7 @@ describe("CodexAppServerEventProjector", () => {
     });
   });
 
-  it("does not use fallback automatic announcements in message-tool-only turns", async () => {
+  it("uses fallback automatic announcements in message-tool-only turns when Codex skips message first", async () => {
     const onBlockReply = vi.fn();
     const projector = await createProjector({
       ...(await createParams()),
@@ -533,7 +604,13 @@ describe("CodexAppServerEventProjector", () => {
 
     await projector.announceToolPlanForTool("web_search");
 
-    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(onBlockReply).toHaveBeenCalledWith({
+      text: "I'll run the web search, then answer here.",
+    });
+    expect(projector.buildResult(buildEmptyToolTelemetry()).replayMetadata).toEqual({
+      hadPotentialSideEffects: true,
+      replaySafe: false,
+    });
   });
 
   it("projects assistant deltas and usage into embedded attempt results", async () => {
