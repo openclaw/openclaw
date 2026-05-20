@@ -216,7 +216,8 @@ data for supported recent bot messages while the bot remains in the chat.
 
 Group-message management actions such as `list`, `delete`, and `recall` may
 require the Feishu/Lark app scope `im:message.group_msg` in addition to
-`im:message:update` and `im:message:readonly`.
+`im:message:recall` for delete/recall and `im:message:readonly` for read/list
+operations.
 
 ---
 
