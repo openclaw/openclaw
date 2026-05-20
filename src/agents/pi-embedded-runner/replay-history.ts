@@ -658,6 +658,12 @@ function isSameModelSnapshot(a: ModelSnapshotEntry, b: ModelSnapshotEntry): bool
   );
 }
 
+const SIGNED_THINKING_PROVIDERS = new Set(["anthropic", "amazon-bedrock", "anthropic-vertex"]);
+
+function providerRequiresSignedThinking(provider?: string | null): boolean {
+  return SIGNED_THINKING_PROVIDERS.has(provider ?? "");
+}
+
 /**
  * Applies the generic replay-history cleanup pipeline before provider-owned
  * replay hooks run.
@@ -723,11 +729,16 @@ export async function sanitizeSessionHistory(params: {
       ...resolveImageSanitizationLimits(params.config),
     },
   );
-  const validatedThinkingSignatures = policy.preserveSignatures
-    ? stripInvalidThinkingSignatures(sanitizedImages, {
-        preserveLatestAssistant: params.preserveLatestAssistantThinking ?? true,
-      })
-    : sanitizedImages;
+  // Some recovery paths supply a narrow policy with preserveSignatures disabled.
+  // Native signed-thinking providers still cannot replay missing/blank
+  // signatures once the assistant turn is no longer latest in the outbound
+  // request.
+  const validatedThinkingSignatures =
+    providerRequiresSignedThinking(params.provider) || policy.preserveSignatures
+      ? stripInvalidThinkingSignatures(sanitizedImages, {
+          preserveLatestAssistant: params.preserveLatestAssistantThinking ?? true,
+        })
+      : sanitizedImages;
   const droppedReasoning = policy.dropReasoningFromHistory
     ? dropReasoningFromHistory(validatedThinkingSignatures)
     : validatedThinkingSignatures;

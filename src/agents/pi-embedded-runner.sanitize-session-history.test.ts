@@ -2007,4 +2007,181 @@ describe("sanitizeSessionHistory", () => {
     const types = getAssistantContentTypes(result);
     expect(types).toContain("thinking");
   });
+
+  it("strips unsigned thinking blocks for anthropic api even when preserveSignatures is false", async () => {
+    setNonGoogleModelApi();
+
+    const messages = castAgentMessages([
+      makeUserMessage("analyze"),
+      makeAssistantMessage([
+        { type: "thinking", thinking: "no signature" },
+        { type: "thinking", thinking: "empty sig", thinkingSignature: "" },
+        { type: "thinking", thinking: "blank sig", thinkingSignature: "   " },
+        { type: "thinking", thinking: "valid", thinkingSignature: "sig_abc" },
+        { type: "text", text: "result" },
+      ]),
+    ]);
+
+    const result = await sanitizeAnthropicHistory({
+      messages,
+      modelApi: "anthropic-messages",
+      preserveLatestAssistantThinking: false,
+      policy: {
+        sanitizeMode: "full",
+        sanitizeToolCallIds: true,
+        toolCallIdMode: "strict",
+        preserveNativeAnthropicToolUseIds: false,
+        repairToolUseResultPairing: true,
+        preserveSignatures: false,
+        sanitizeThinkingSignatures: false,
+        dropThinkingBlocks: false,
+        applyGoogleTurnOrdering: false,
+        validateGeminiTurns: false,
+        validateAnthropicTurns: true,
+        allowSyntheticToolResults: false,
+      },
+    });
+
+    const assistant = getAssistantMessage(result);
+    const content = assistant.content;
+    const thinkingBlocks = content.filter(
+      (b: { type: string }) => b.type === "thinking" || b.type === "redacted_thinking",
+    );
+    const textBlocks = content.filter((b: { type: string }) => b.type === "text");
+
+    // Only the valid signed thinking block should survive
+    expect(thinkingBlocks).toHaveLength(1);
+    expect((thinkingBlocks[0] as { thinkingSignature?: string }).thinkingSignature).toBe("sig_abc");
+    expect(textBlocks).toHaveLength(1);
+    expect((textBlocks[0] as { text?: string }).text).toBe("result");
+  });
+
+  it("preserves unsigned thinking blocks for kimi coding with anthropic-messages transport", async () => {
+    setNonGoogleModelApi();
+
+    const messages = castAgentMessages([
+      makeUserMessage("analyze"),
+      makeAssistantMessage([
+        { type: "thinking", thinking: "unsigned kimi reasoning" },
+        { type: "text", text: "result" },
+      ]),
+    ]);
+
+    // Kimi uses anthropic-messages transport but does not require signed thinking.
+    // Its provider-level preserveSignatures is false and should stay gated.
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "anthropic-messages",
+      provider: "kimi",
+      modelId: "kimi-for-coding",
+      sessionManager: makeMockSessionManager(),
+      sessionId: TEST_SESSION_ID,
+      policy: {
+        sanitizeMode: "full",
+        sanitizeToolCallIds: true,
+        toolCallIdMode: "strict",
+        preserveNativeAnthropicToolUseIds: false,
+        repairToolUseResultPairing: true,
+        preserveSignatures: false,
+        sanitizeThinkingSignatures: false,
+        dropThinkingBlocks: false,
+        dropReasoningFromHistory: false,
+        applyGoogleTurnOrdering: false,
+        validateGeminiTurns: false,
+        validateAnthropicTurns: false,
+        allowSyntheticToolResults: false,
+      },
+    });
+
+    const assistant = getAssistantMessage(result);
+    const thinkingBlocks = assistant.content.filter((b: { type: string }) => b.type === "thinking");
+    expect(thinkingBlocks).toHaveLength(1);
+    expect((thinkingBlocks[0] as { thinking?: string }).thinking).toBe("unsigned kimi reasoning");
+  });
+
+  it("preserves unsigned thinking blocks for github copilot claude with anthropic-messages transport", async () => {
+    setNonGoogleModelApi();
+
+    const messages = castAgentMessages([
+      makeUserMessage("analyze"),
+      makeAssistantMessage([
+        { type: "thinking", thinking: "unsigned copilot reasoning" },
+        { type: "text", text: "result" },
+      ]),
+    ]);
+
+    // GitHub Copilot Claude uses anthropic-messages transport but does not
+    // require signed thinking. Its provider-level preserveSignatures is false.
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "anthropic-messages",
+      provider: "github-copilot",
+      modelId: "claude-opus-4.6",
+      sessionManager: makeMockSessionManager(),
+      sessionId: TEST_SESSION_ID,
+      policy: {
+        sanitizeMode: "full",
+        sanitizeToolCallIds: true,
+        toolCallIdMode: "strict",
+        preserveNativeAnthropicToolUseIds: false,
+        repairToolUseResultPairing: true,
+        preserveSignatures: false,
+        sanitizeThinkingSignatures: false,
+        dropThinkingBlocks: false,
+        dropReasoningFromHistory: false,
+        applyGoogleTurnOrdering: false,
+        validateGeminiTurns: false,
+        validateAnthropicTurns: false,
+        allowSyntheticToolResults: false,
+      },
+    });
+
+    const assistant = getAssistantMessage(result);
+    const thinkingBlocks = assistant.content.filter((b: { type: string }) => b.type === "thinking");
+    expect(thinkingBlocks).toHaveLength(1);
+    expect((thinkingBlocks[0] as { thinking?: string }).thinking).toBe(
+      "unsigned copilot reasoning",
+    );
+  });
+
+  it("strips unsigned thinking for bedrock-converse-stream even when preserveSignatures is false", async () => {
+    setNonGoogleModelApi();
+
+    const messages = castAgentMessages([
+      makeUserMessage("analyze"),
+      makeAssistantMessage([
+        { type: "thinking", thinking: "no sig" },
+        { type: "thinking", thinking: "signed", thinkingSignature: "sig_bedrock" },
+        { type: "text", text: "done" },
+      ]),
+    ]);
+
+    const result = await sanitizeAnthropicHistory({
+      messages,
+      provider: "amazon-bedrock",
+      modelApi: "bedrock-converse-stream",
+      preserveLatestAssistantThinking: false,
+      policy: {
+        sanitizeMode: "full",
+        sanitizeToolCallIds: true,
+        toolCallIdMode: "strict",
+        preserveNativeAnthropicToolUseIds: false,
+        repairToolUseResultPairing: true,
+        preserveSignatures: false,
+        sanitizeThinkingSignatures: false,
+        dropThinkingBlocks: false,
+        applyGoogleTurnOrdering: false,
+        validateGeminiTurns: false,
+        validateAnthropicTurns: true,
+        allowSyntheticToolResults: false,
+      },
+    });
+
+    const assistant = getAssistantMessage(result);
+    const thinkingBlocks = assistant.content.filter((b: { type: string }) => b.type === "thinking");
+    expect(thinkingBlocks).toHaveLength(1);
+    expect((thinkingBlocks[0] as { thinkingSignature?: string }).thinkingSignature).toBe(
+      "sig_bedrock",
+    );
+  });
 });
