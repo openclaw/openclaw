@@ -865,12 +865,12 @@ describe("scripts/changed-lanes", () => {
     expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:all");
   });
 
-  it("keeps app lint explicit when Linux Testbox lacks SwiftLint", () => {
+  it("skips app lint when non-macOS changed gates lack SwiftLint", () => {
     const result = detectChangedLanes([
       "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
     ]);
     const plan = createChangedCheckPlan(result, {
-      env: { OPENCLAW_TESTBOX_REMOTE_RUN: "1", PATH: "/usr/bin" },
+      env: { PATH: "/usr/bin" },
       platform: "linux",
       swiftlintAvailable: false,
     });
@@ -881,20 +881,33 @@ describe("scripts/changed-lanes", () => {
     expect(plan.commands.map((command) => command.args[0])).not.toContain("lint:apps");
     expect(plan.commands).toContainEqual(
       expect.objectContaining({
-        name: "lint apps (swiftlint unavailable in Testbox)",
+        name: "lint apps (swiftlint unavailable)",
         bin: "node",
       }),
     );
   });
 
-  it("runs app lint when SwiftLint is available in Testbox", () => {
+  it("runs app lint when SwiftLint is available on non-macOS changed gates", () => {
     const result = detectChangedLanes([
       "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
     ]);
     const plan = createChangedCheckPlan(result, {
-      env: { OPENCLAW_TESTBOX_REMOTE_RUN: "1", PATH: "/usr/bin" },
+      env: { PATH: "/usr/bin" },
       platform: "linux",
       swiftlintAvailable: true,
+    });
+
+    expect(plan.commands.map((command) => command.args[0])).toContain("lint:apps");
+  });
+
+  it("runs app lint on macOS even when SwiftLint is not on this PATH", () => {
+    const result = detectChangedLanes([
+      "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
+    ]);
+    const plan = createChangedCheckPlan(result, {
+      env: { PATH: "/usr/bin" },
+      platform: "darwin",
+      swiftlintAvailable: false,
     });
 
     expect(plan.commands.map((command) => command.args[0])).toContain("lint:apps");
