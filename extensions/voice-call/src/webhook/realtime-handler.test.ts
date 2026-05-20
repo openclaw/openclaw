@@ -969,8 +969,6 @@ describe("RealtimeCallHandler path routing", () => {
         const [args, callId, context] = requireFirstMockCall(consult.mock.calls, "consult");
         expect(args).toEqual({
           question: "Create a smoke test file for me.",
-          context:
-            "The realtime provider produced a final user transcript without invoking openclaw_agent_consult, so OpenClaw is forcing the consult because consultPolicy is always.",
         });
         expect(callId).toBe("call-1");
         expect(context).toEqual({});

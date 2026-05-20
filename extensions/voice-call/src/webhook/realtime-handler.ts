@@ -1092,8 +1092,6 @@ export class RealtimeCallHandler {
         params.handler(
           {
             question: params.question,
-            context:
-              "The realtime provider produced a final user transcript without invoking openclaw_agent_consult, so OpenClaw is forcing the consult because consultPolicy is always.",
           },
           params.callId,
           {},

@@ -1093,10 +1093,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     try {
       const promise = this.runAgentTurn({
         context,
-        message: [
-          question,
-          "Context: The realtime model produced a final user transcript without calling openclaw_agent_consult. OpenClaw is forcing the consult because consultPolicy is always.",
-        ].join("\n\n"),
+        message: question,
       });
       this.setRecentAgentProxyConsultPromise(pending.recent, promise);
       const text = await promise;
