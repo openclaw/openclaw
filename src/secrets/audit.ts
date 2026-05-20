@@ -33,6 +33,7 @@ import {
   listAgentModelsJsonPaths,
   listAuthProfileStorePaths,
   listLegacyAuthJsonPaths,
+  listSecretBearingBackupPaths,
   parseEnvAssignmentValue,
   readJsonObjectIfExists,
 } from "./storage-scan.js";
@@ -264,6 +265,8 @@ function collectAuthStoreSecrets(params: {
   authStorePath: string;
   collector: AuditCollector;
   defaults?: SecretDefaults;
+  includeRefs?: boolean;
+  includeShadowing?: boolean;
 }): void {
   if (!fs.existsSync(params.authStorePath)) {
     return;
@@ -293,14 +296,18 @@ function collectAuthStoreSecrets(params: {
       });
       const authoredValueRef = coerceSecretRef(entry.value, params.defaults);
       if (ref) {
-        params.collector.refAssignments.push({
-          file: params.authStorePath,
-          path: `profiles.${entry.profileId}.${entry.valueField}`,
-          ref,
-          expected: "string",
-          provider: entry.provider,
-        });
-        trackAuthProviderState(params.collector, entry.provider, entry.kind);
+        if (params.includeRefs ?? true) {
+          params.collector.refAssignments.push({
+            file: params.authStorePath,
+            path: `profiles.${entry.profileId}.${entry.valueField}`,
+            ref,
+            expected: "string",
+            provider: entry.provider,
+          });
+          if (params.includeShadowing ?? true) {
+            trackAuthProviderState(params.collector, entry.provider, entry.kind);
+          }
+        }
       }
       if (authoredValueRef) {
         continue;
@@ -318,7 +325,9 @@ function collectAuthStoreSecrets(params: {
           provider: entry.provider,
           profileId: entry.profileId,
         });
-        trackAuthProviderState(params.collector, entry.provider, entry.kind);
+        if (params.includeShadowing ?? true) {
+          trackAuthProviderState(params.collector, entry.provider, entry.kind);
+        }
       }
       continue;
     }
@@ -332,7 +341,9 @@ function collectAuthStoreSecrets(params: {
         provider: entry.provider,
         profileId: entry.profileId,
       });
-      trackAuthProviderState(params.collector, entry.provider, "oauth");
+      if (params.includeShadowing ?? true) {
+        trackAuthProviderState(params.collector, entry.provider, "oauth");
+      }
     }
   }
 }
@@ -376,6 +387,7 @@ function collectAuthJsonResidue(params: { stateDir: string; collector: AuditColl
 function collectModelsJsonSecrets(params: {
   modelsJsonPath: string;
   collector: AuditCollector;
+  includeUnresolvedRefs?: boolean;
 }): void {
   if (!fs.existsSync(params.modelsJsonPath)) {
     return;
@@ -405,14 +417,16 @@ function collectModelsJsonSecrets(params: {
     }
     const apiKey = providerValue.apiKey;
     if (coerceSecretRef(apiKey)) {
-      addFinding(params.collector, {
-        code: "REF_UNRESOLVED",
-        severity: "error",
-        file: params.modelsJsonPath,
-        jsonPath: `providers.${providerId}.apiKey`,
-        message: "models.json contains an unresolved SecretRef object; regenerate models.json.",
-        provider: providerId,
-      });
+      if (params.includeUnresolvedRefs ?? true) {
+        addFinding(params.collector, {
+          code: "REF_UNRESOLVED",
+          severity: "error",
+          file: params.modelsJsonPath,
+          jsonPath: `providers.${providerId}.apiKey`,
+          message: "models.json contains an unresolved SecretRef object; regenerate models.json.",
+          provider: providerId,
+        });
+      }
     } else if (isNonEmptyString(apiKey) && !isNonSecretApiKeyMarker(apiKey)) {
       addFinding(params.collector, {
         code: "PLAINTEXT_FOUND",
@@ -431,15 +445,17 @@ function collectModelsJsonSecrets(params: {
     for (const [headerKey, headerValue] of Object.entries(headers)) {
       const headerPath = `providers.${providerId}.headers.${headerKey}`;
       if (coerceSecretRef(headerValue)) {
-        addFinding(params.collector, {
-          code: "REF_UNRESOLVED",
-          severity: "error",
-          file: params.modelsJsonPath,
-          jsonPath: headerPath,
-          message:
-            "models.json contains an unresolved SecretRef object for provider headers; regenerate models.json.",
-          provider: providerId,
-        });
+        if (params.includeUnresolvedRefs ?? true) {
+          addFinding(params.collector, {
+            code: "REF_UNRESOLVED",
+            severity: "error",
+            file: params.modelsJsonPath,
+            jsonPath: headerPath,
+            message:
+              "models.json contains an unresolved SecretRef object for provider headers; regenerate models.json.",
+            provider: providerId,
+          });
+        }
         continue;
       }
       if (!isNonEmptyString(headerValue)) {
@@ -672,22 +688,51 @@ export async function runSecretsAudit(
   };
 
   if (snapshot.valid) {
+    const authStorePaths = listAuthProfileStorePaths(config, stateDir);
+    const modelsJsonPaths = listAgentModelsJsonPaths(config, stateDir, env);
     collectConfigSecrets({
       config,
       configPath,
       collector,
     });
-    for (const authStorePath of listAuthProfileStorePaths(config, stateDir)) {
+    for (const authStorePath of authStorePaths) {
       collectAuthStoreSecrets({
         authStorePath,
         collector,
         defaults,
       });
     }
-    for (const modelsJsonPath of listAgentModelsJsonPaths(config, stateDir, env)) {
+    for (const modelsJsonPath of modelsJsonPaths) {
       collectModelsJsonSecrets({
         modelsJsonPath,
         collector,
+      });
+    }
+    const backupPaths = listSecretBearingBackupPaths({
+      envPath,
+      authStorePaths,
+      modelsJsonPaths,
+    });
+    for (const envBackupPath of backupPaths.envBackups) {
+      collectEnvPlaintext({
+        envPath: envBackupPath,
+        collector,
+      });
+    }
+    for (const authStoreBackupPath of backupPaths.authStoreBackups) {
+      collectAuthStoreSecrets({
+        authStorePath: authStoreBackupPath,
+        collector,
+        defaults,
+        includeRefs: false,
+        includeShadowing: false,
+      });
+    }
+    for (const modelsJsonBackupPath of backupPaths.modelsJsonBackups) {
+      collectModelsJsonSecrets({
+        modelsJsonPath: modelsJsonBackupPath,
+        collector,
+        includeUnresolvedRefs: false,
       });
     }
     const unresolvedRefResult = await collectUnresolvedRefFindings({

@@ -77,6 +77,47 @@ export function listAgentModelsJsonPaths(
   return [...paths];
 }
 
+function listSiblingBackupPaths(filePath: string): string[] {
+  const dir = path.dirname(filePath);
+  const base = path.basename(filePath);
+  if (!fs.existsSync(dir)) {
+    return [];
+  }
+  const out: string[] = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (!entry.isFile()) {
+      continue;
+    }
+    if (entry.name === base) {
+      continue;
+    }
+    const isBackup =
+      entry.name === `${base}.bak` ||
+      (entry.name.startsWith(`${base}.`) && /\.bak(?:\.|$)/.test(entry.name));
+    if (isBackup) {
+      out.push(path.join(dir, entry.name));
+    }
+  }
+  return out.toSorted();
+}
+
+export function listSecretBearingBackupPaths(params: {
+  envPath: string;
+  authStorePaths: string[];
+  modelsJsonPaths: string[];
+}): {
+  envBackups: string[];
+  authStoreBackups: string[];
+  modelsJsonBackups: string[];
+} {
+  const unique = (paths: string[]) => [...new Set(paths)].toSorted();
+  return {
+    envBackups: unique(listSiblingBackupPaths(params.envPath)),
+    authStoreBackups: unique(params.authStorePaths.flatMap(listSiblingBackupPaths)),
+    modelsJsonBackups: unique(params.modelsJsonPaths.flatMap(listSiblingBackupPaths)),
+  };
+}
+
 export type ReadJsonObjectOptions = {
   maxBytes?: number;
   requireRegularFile?: boolean;
