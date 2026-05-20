@@ -618,6 +618,7 @@ class GatewaySession(
           val allowedOperatorScopes =
             setOf(
               "operator.approvals",
+              "operator.pairing",
               "operator.read",
               "operator.write",
             )

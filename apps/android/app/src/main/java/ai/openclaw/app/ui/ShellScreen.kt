@@ -7,6 +7,7 @@ import ai.openclaw.app.GatewayNodesDevicesSummary
 import ai.openclaw.app.GatewaySkillSummary
 import ai.openclaw.app.HomeDestination
 import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.NodeRuntime
 import ai.openclaw.app.ui.chat.ChatScreen
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import ai.openclaw.app.ui.design.ClawEmptyState
@@ -50,10 +51,12 @@ import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined.MicNone
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -94,6 +97,7 @@ fun ShellScreen(
     var returnToOverviewFromSettings by rememberSaveable { mutableStateOf(false) }
     var commandOpen by rememberSaveable { mutableStateOf(false) }
     val requestedHomeDestination by viewModel.requestedHomeDestination.collectAsState()
+    val pendingTrust by viewModel.pendingGatewayTrust.collectAsState()
 
     LaunchedEffect(requestedHomeDestination) {
       val destination = requestedHomeDestination ?: return@LaunchedEffect
@@ -221,8 +225,47 @@ fun ShellScreen(
           },
         )
       }
+
+      pendingTrust?.let { prompt ->
+        GatewayTrustDialog(
+          prompt = prompt,
+          onAccept = viewModel::acceptGatewayTrustPrompt,
+          onDecline = viewModel::declineGatewayTrustPrompt,
+        )
+      }
     }
   }
+}
+
+@Composable
+private fun GatewayTrustDialog(
+  prompt: NodeRuntime.GatewayTrustPrompt,
+  onAccept: () -> Unit,
+  onDecline: () -> Unit,
+) {
+  val message =
+    if (prompt.previousFingerprintSha256.isNullOrBlank()) {
+      "Verify the certificate fingerprint before trusting this gateway.\n\n${prompt.fingerprintSha256}"
+    } else {
+      "The gateway certificate changed. Continue only if you expected this.\n\nOld SHA-256:\n${prompt.previousFingerprintSha256}\n\nNew SHA-256:\n${prompt.fingerprintSha256}"
+    }
+
+  AlertDialog(
+    onDismissRequest = onDecline,
+    containerColor = ClawTheme.colors.surfaceRaised,
+    title = { Text("Trust this gateway?", style = ClawTheme.type.section, color = ClawTheme.colors.text) },
+    text = { Text(message, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted) },
+    confirmButton = {
+      TextButton(onClick = onAccept) {
+        Text("Trust")
+      }
+    },
+    dismissButton = {
+      TextButton(onClick = onDecline) {
+        Text("Cancel")
+      }
+    },
+  )
 }
 
 @Composable

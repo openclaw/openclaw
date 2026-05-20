@@ -145,7 +145,7 @@ fun VoiceScreen(
       sending = micIsSending,
       statusText = activeStatus,
       gatewayStatus = gatewayStatus,
-      onCancel = { viewModel.setMicEnabled(false) },
+      onCancel = { viewModel.cancelMicCapture() },
       onSend = { viewModel.setMicEnabled(false) },
       onOpenVoiceSettings = onOpenVoiceSettings,
     )

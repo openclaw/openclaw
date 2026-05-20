@@ -8,6 +8,7 @@ import ai.openclaw.app.LocationMode
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NotificationPackageFilterMode
 import ai.openclaw.app.chat.ChatPendingToolCall
+import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.node.DeviceNotificationListenerService
 import ai.openclaw.app.ui.design.ClawDetailRow
 import ai.openclaw.app.ui.design.ClawIconBadge
@@ -200,14 +201,8 @@ private fun CronJobsSettingsScreen(
   val cronStatus by viewModel.cronStatus.collectAsState()
   val cronJobs by viewModel.cronJobs.collectAsState()
   val cronRefreshing by viewModel.cronRefreshing.collectAsState()
-  val cronSaving by viewModel.cronSaving.collectAsState()
   val cronErrorText by viewModel.cronErrorText.collectAsState()
   val isConnected by viewModel.isConnected.collectAsState()
-  var showEditor by remember { mutableStateOf(false) }
-  var jobName by remember { mutableStateOf("") }
-  var jobMessage by remember { mutableStateOf("") }
-  var scheduleKind by remember { mutableStateOf("Every") }
-  var scheduleValue by remember { mutableStateOf("1h") }
 
   LaunchedEffect(isConnected) {
     if (isConnected) {
@@ -224,38 +219,9 @@ private fun CronJobsSettingsScreen(
           SettingsMetric("Next Wake", formatCronWake(cronStatus.nextWakeAtMs)),
         ),
     )
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-      ClawSecondaryButton(text = if (cronRefreshing) "Refreshing" else "Refresh", onClick = viewModel::refreshCronJobs, enabled = isConnected && !cronRefreshing, modifier = Modifier.weight(1f))
-      ClawPrimaryButton(text = if (showEditor) "Close" else "New Job", onClick = { showEditor = !showEditor }, enabled = isConnected, modifier = Modifier.weight(1f))
-    }
-    if (showEditor) {
-      CronJobEditorPanel(
-        name = jobName,
-        onNameChange = { jobName = it },
-        message = jobMessage,
-        onMessageChange = { jobMessage = it },
-        scheduleKind = scheduleKind,
-        onScheduleKindChange = {
-          scheduleKind = it
-          scheduleValue =
-            when (it) {
-              "Once" -> "+30m"
-              "Cron" -> "0 9 * * *"
-              else -> "1h"
-            }
-        },
-        scheduleValue = scheduleValue,
-        onScheduleValueChange = { scheduleValue = it },
-        saving = cronSaving,
-        onSave = {
-          viewModel.createCronJob(
-            name = jobName,
-            message = jobMessage,
-            scheduleKind = scheduleKind,
-            scheduleValue = scheduleValue,
-          )
-        },
-      )
+    ClawSecondaryButton(text = if (cronRefreshing) "Refreshing" else "Refresh", onClick = viewModel::refreshCronJobs, enabled = isConnected && !cronRefreshing, modifier = Modifier.fillMaxWidth())
+    ClawPanel {
+      Text(text = "Android shows scheduled work status. Create and edit schedules from the desktop app.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
     }
     cronErrorText?.let { errorText ->
       ClawPanel {
@@ -271,51 +237,13 @@ private fun CronJobsSettingsScreen(
         ClawPanel {
           Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Text(text = "No scheduled jobs.", style = ClawTheme.type.section, color = ClawTheme.colors.text)
-            Text(text = "Create recurring OpenClaw work here or from the WebUI.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+            Text(text = "Create recurring OpenClaw work from the desktop app.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
           }
         }
       else -> CronJobsPanel(jobs = cronJobs)
     }
   }
 }
-
-@Composable
-private fun CronJobEditorPanel(
-  name: String,
-  onNameChange: (String) -> Unit,
-  message: String,
-  onMessageChange: (String) -> Unit,
-  scheduleKind: String,
-  onScheduleKindChange: (String) -> Unit,
-  scheduleValue: String,
-  onScheduleValueChange: (String) -> Unit,
-  saving: Boolean,
-  onSave: () -> Unit,
-) {
-  val canSave = !saving && name.isNotBlank() && message.isNotBlank() && scheduleValue.isNotBlank()
-  ClawPanel {
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-      Text(text = "New Job", style = ClawTheme.type.section, color = ClawTheme.colors.text)
-      ClawTextField(value = name, onValueChange = onNameChange, placeholder = "Name")
-      ClawTextField(value = message, onValueChange = onMessageChange, placeholder = "Message OpenClaw should run", minLines = 3)
-      ClawSegmentedControl(
-        options = listOf("Every", "Once", "Cron"),
-        selected = scheduleKind,
-        onSelect = onScheduleKindChange,
-        modifier = Modifier.fillMaxWidth(),
-      )
-      ClawTextField(value = scheduleValue, onValueChange = onScheduleValueChange, placeholder = cronSchedulePlaceholder(scheduleKind))
-      ClawPrimaryButton(text = if (saving) "Saving" else "Save Job", onClick = onSave, enabled = canSave, modifier = Modifier.fillMaxWidth())
-    }
-  }
-}
-
-private fun cronSchedulePlaceholder(scheduleKind: String): String =
-  when (scheduleKind) {
-    "Once" -> "+30m or 2026-05-19T18:00:00Z"
-    "Cron" -> "0 9 * * *"
-    else -> "15m, 1h, or 1d"
-  }
 
 @Composable
 private fun AgentsSettingsScreen(
@@ -726,6 +654,19 @@ private fun GatewaySettingsScreen(
   val statusText by viewModel.statusText.collectAsState()
   val serverName by viewModel.serverName.collectAsState()
   val remoteAddress by viewModel.remoteAddress.collectAsState()
+  val manualHost by viewModel.manualHost.collectAsState()
+  val manualPort by viewModel.manualPort.collectAsState()
+  val manualTls by viewModel.manualTls.collectAsState()
+  val savedBootstrapToken by viewModel.gatewayBootstrapToken.collectAsState()
+  val savedGatewayToken by viewModel.gatewayToken.collectAsState()
+  var setupCode by remember { mutableStateOf("") }
+  var hostInput by remember(manualHost) { mutableStateOf(manualHost.ifBlank { "127.0.0.1" }) }
+  var portInput by remember(manualPort) { mutableStateOf(manualPort.toString()) }
+  var tlsInput by remember(manualTls) { mutableStateOf(manualTls) }
+  var tokenInput by remember { mutableStateOf("") }
+  var bootstrapTokenInput by remember { mutableStateOf("") }
+  var passwordInput by remember { mutableStateOf("") }
+  var validationText by remember { mutableStateOf<String?>(null) }
 
   SettingsDetailFrame(title = "Gateway", subtitle = "Connection between this phone and OpenClaw.", icon = Icons.Default.Cloud, onBack = onBack) {
     SettingsMetricPanel(
@@ -741,6 +682,78 @@ private fun GatewaySettingsScreen(
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
       ClawPrimaryButton(text = "Reconnect", onClick = viewModel::refreshGatewayConnection, modifier = Modifier.weight(1f))
       ClawSecondaryButton(text = "Disconnect", onClick = viewModel::disconnect, modifier = Modifier.weight(1f))
+    }
+    ClawPanel {
+      Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(text = "Connection Setup", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+        ClawTextField(value = setupCode, onValueChange = { setupCode = it }, placeholder = "Setup code")
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+          ClawTextField(value = hostInput, onValueChange = { hostInput = it }, placeholder = "Host", modifier = Modifier.weight(1f))
+          ClawTextField(value = portInput, onValueChange = { portInput = it }, placeholder = "Port", modifier = Modifier.weight(0.55f))
+        }
+        ClawSegmentedControl(
+          options = listOf("Local", "TLS"),
+          selected = if (tlsInput) "TLS" else "Local",
+          onSelect = { selected -> tlsInput = selected == "TLS" },
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+          ClawTextField(value = tokenInput, onValueChange = { tokenInput = it }, placeholder = "Token", modifier = Modifier.weight(1f))
+          ClawTextField(value = bootstrapTokenInput, onValueChange = { bootstrapTokenInput = it }, placeholder = "Bootstrap", modifier = Modifier.weight(1f))
+        }
+        ClawTextField(value = passwordInput, onValueChange = { passwordInput = it }, placeholder = "Password")
+        validationText?.let {
+          Text(text = it, style = ClawTheme.type.caption, color = ClawTheme.colors.warning)
+        }
+        ClawPrimaryButton(
+          text = "Save & Connect",
+          onClick = {
+            val setup = setupCode.trim().takeIf { it.isNotEmpty() }?.let(::decodeGatewaySetupCode)
+            val endpointConfig =
+              if (setup != null) {
+                parseGatewayEndpointResult(setup.url).config
+              } else {
+                composeGatewayManualUrl(hostInput, portInput, tlsInput)?.let { parseGatewayEndpointResult(it).config }
+              }
+            if (endpointConfig == null) {
+              validationText = "Enter a valid setup code or gateway address."
+              return@ClawPrimaryButton
+            }
+            val bootstrapToken =
+              setup
+                ?.bootstrapToken
+                ?.trim()
+                .orEmpty()
+                .ifEmpty { bootstrapTokenInput.trim().ifEmpty { savedBootstrapToken } }
+            val token =
+              setup
+                ?.token
+                ?.trim()
+                .orEmpty()
+                .ifEmpty { tokenInput.trim().ifEmpty { if (bootstrapToken.isBlank()) savedGatewayToken else "" } }
+            val password =
+              setup
+                ?.password
+                ?.trim()
+                .orEmpty()
+                .ifEmpty { passwordInput.trim() }
+            validationText = null
+            viewModel.setManualEnabled(true)
+            viewModel.setManualHost(endpointConfig.host)
+            viewModel.setManualPort(endpointConfig.port)
+            viewModel.setManualTls(endpointConfig.tls)
+            viewModel.setGatewayBootstrapToken(bootstrapToken)
+            viewModel.setGatewayToken(token)
+            viewModel.setGatewayPassword(password)
+            viewModel.connect(
+              GatewayEndpoint.manual(host = endpointConfig.host, port = endpointConfig.port),
+              token = token.ifEmpty { null },
+              bootstrapToken = bootstrapToken.ifEmpty { null },
+              password = password.ifEmpty { null },
+            )
+          },
+          modifier = Modifier.fillMaxWidth(),
+        )
+      }
     }
   }
 }

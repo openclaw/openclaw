@@ -247,7 +247,11 @@ private fun providerSetupSubtitle(
 
 internal fun modelProviderReady(status: String): Boolean {
   val normalized = status.trim().lowercase()
-  return normalized == "ok" || normalized == "ready" || normalized == "healthy" || normalized == "configured"
+  return normalized == "ok" ||
+    normalized == "ready" ||
+    normalized == "healthy" ||
+    normalized == "configured" ||
+    normalized == "static"
 }
 
 private fun sortedModelGroups(models: List<GatewayModelSummary>): List<Pair<String, List<GatewayModelSummary>>> =

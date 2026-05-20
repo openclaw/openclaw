@@ -233,6 +233,7 @@ class ChatController(
       true
     } catch (err: Throwable) {
       clearPendingRun(runId)
+      removeOptimisticMessage(runId)
       _errorText.value = err.message
       false
     }
@@ -374,7 +375,13 @@ class ChatController(
         if (state == "error") {
           _errorText.value = payload["errorMessage"].asStringOrNull() ?: "Chat failed"
         }
-        if (runId != null) clearPendingRun(runId) else clearPendingRuns()
+        if (runId != null) {
+          clearPendingRun(runId)
+          optimisticMessagesByRunId.remove(runId)
+        } else {
+          clearPendingRuns()
+          optimisticMessagesByRunId.clear()
+        }
         pendingToolCallsById.clear()
         publishPendingToolCalls()
         _streamingAssistantText.value = null
@@ -476,6 +483,7 @@ class ChatController(
           }
         if (!stillPending) return@launch
         clearPendingRun(runId)
+        removeOptimisticMessage(runId)
         _errorText.value = "Timed out waiting for a reply; try again or refresh."
       }
   }
@@ -493,10 +501,16 @@ class ChatController(
       job.cancel()
     }
     pendingRunTimeoutJobs.clear()
+    optimisticMessagesByRunId.clear()
     synchronized(pendingRuns) {
       pendingRuns.clear()
       _pendingRunCount.value = 0
     }
+  }
+
+  private fun removeOptimisticMessage(runId: String) {
+    val message = optimisticMessagesByRunId.remove(runId) ?: return
+    _messages.value = _messages.value.filterNot { it.id == message.id }
   }
 
   private fun parseHistory(
@@ -631,11 +645,19 @@ internal fun mergeOptimisticMessages(
 ): List<ChatMessage> {
   if (optimistic.isEmpty()) return incoming
 
-  val incomingKeys = incoming.mapNotNull(::messageIdentityKey).toSet()
+  val unmatchedIncoming = incoming.toMutableList()
   val missingOptimistic =
     optimistic.filter { message ->
-      val key = messageIdentityKey(message) ?: return@filter false
-      key !in incomingKeys
+      val matchIndex =
+        unmatchedIncoming.indexOfFirst { incomingMessage ->
+          incomingMessageConsumesOptimistic(incomingMessage, message)
+        }
+      if (matchIndex >= 0) {
+        unmatchedIncoming.removeAt(matchIndex)
+        false
+      } else {
+        true
+      }
     }
   if (missingOptimistic.isEmpty()) return incoming
 
@@ -643,10 +665,28 @@ internal fun mergeOptimisticMessages(
 }
 
 internal fun messageIdentityKey(message: ChatMessage): String? {
+  val contentKey = messageContentIdentityKey(message) ?: return null
+  val timestamp = message.timestampMs?.toString().orEmpty()
+  if (timestamp.isEmpty() && contentKey.isEmpty()) return null
+  return listOf(contentKey, timestamp).joinToString(separator = "|")
+}
+
+private fun optimisticMessageIdentityKey(message: ChatMessage): String? = messageContentIdentityKey(message)
+
+private fun incomingMessageConsumesOptimistic(
+  incoming: ChatMessage,
+  optimistic: ChatMessage,
+): Boolean {
+  if (optimisticMessageIdentityKey(incoming) != optimisticMessageIdentityKey(optimistic)) return false
+  val incomingTimestamp = incoming.timestampMs ?: return false
+  val optimisticTimestamp = optimistic.timestampMs ?: return true
+  return incomingTimestamp >= optimisticTimestamp
+}
+
+private fun messageContentIdentityKey(message: ChatMessage): String? {
   val role = message.role.trim().lowercase()
   if (role.isEmpty()) return null
 
-  val timestamp = message.timestampMs?.toString().orEmpty()
   val contentFingerprint =
     message.content.joinToString(separator = "\u001E") { part ->
       listOf(
@@ -664,8 +704,7 @@ internal fun messageIdentityKey(message: ChatMessage): String? {
       ).joinToString(separator = "\u001F")
     }
 
-  if (timestamp.isEmpty() && contentFingerprint.isEmpty()) return null
-  return listOf(role, timestamp, contentFingerprint).joinToString(separator = "|")
+  return listOf(role, contentFingerprint).joinToString(separator = "|")
 }
 
 private fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject
