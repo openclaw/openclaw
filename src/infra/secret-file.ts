@@ -1,5 +1,8 @@
 import "./fs-safe-defaults.js";
-import { readSecretFileSync as readSecretFileSyncImpl } from "@openclaw/fs-safe/secret";
+import {
+  readSecretFileSync as readSecretFileSyncImpl,
+  tryReadSecretFileSync as tryReadSecretFileSyncImpl,
+} from "@openclaw/fs-safe/secret";
 import { resolveUserPath } from "../utils.js";
 
 export {
@@ -7,10 +10,21 @@ export {
   PRIVATE_SECRET_DIR_MODE,
   PRIVATE_SECRET_FILE_MODE,
   readSecretFileSync,
-  tryReadSecretFileSync,
   type SecretFileReadOptions,
 } from "@openclaw/fs-safe/secret";
 export { writeSecretFileAtomic as writePrivateSecretFileAtomic } from "@openclaw/fs-safe/secret";
+
+export function tryReadSecretFileSync(
+  filePath: string | undefined,
+  label: string,
+  options: Parameters<typeof tryReadSecretFileSyncImpl>[2] = {},
+): string | undefined {
+  try {
+    return tryReadSecretFileSyncImpl(filePath, label, options);
+  } catch {
+    return undefined;
+  }
+}
 
 export type SecretFileReadResult =
   | {
