@@ -45,11 +45,18 @@ describe("sub-cli descriptors", () => {
   it("includes qa in the exported descriptor list when private QA is enabled", async () => {
     process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI = "1";
 
-    const { SUB_CLI_DESCRIPTORS, getSubCliEntries } = await importSubCliDescriptors();
+    const {
+      SUB_CLI_DESCRIPTORS,
+      getSubCliCommandsWithSubcommands,
+      getSubCliEntries,
+      getSubCliParentDefaultHelpCommands,
+    } = await importSubCliDescriptors();
 
     expect(SUB_CLI_DESCRIPTORS.map((descriptor) => descriptor.name)).toEqual(
       getSubCliEntries().map((descriptor) => descriptor.name),
     );
     expect(SUB_CLI_DESCRIPTORS.map((descriptor) => descriptor.name)).toContain("qa");
+    expect(getSubCliCommandsWithSubcommands()).toContain("qa");
+    expect(getSubCliParentDefaultHelpCommands()).not.toContain("qa");
   });
 });
