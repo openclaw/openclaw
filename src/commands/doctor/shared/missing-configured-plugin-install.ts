@@ -815,6 +815,7 @@ async function installCandidate(params: {
     const clawhubResult = await installPluginFromClawHub({
       spec: clawhubInstallSpec,
       extensionsDir,
+      env: params.env,
       expectedPluginId: candidate.pluginId,
       mode: params.mode === "update" || existingClawHubPackagePath ? "update" : "install",
     });
@@ -1135,7 +1136,7 @@ async function repairMissingPluginInstalls(params: {
     configChannel: normalizeUpdateChannel(params.cfg.update?.channel),
     currentVersion: VERSION,
   });
-  const preferNpmInstalls = isLegacyPackageUpdateDoctorPass(env) || isPostCoreConvergencePass(env);
+  const preferNpmInstalls = isLegacyPackageUpdateDoctorPass(env);
   let nextRecords = records;
 
   for (const [pluginId, record] of Object.entries(records)) {

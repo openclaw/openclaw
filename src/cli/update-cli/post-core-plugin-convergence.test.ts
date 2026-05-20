@@ -13,6 +13,7 @@ vi.mock("./plugin-payload-validation.js", () => ({
 }));
 
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { VERSION } from "../../version.js";
 import {
   convergenceWarningsToOutcomes,
   filterRecordsToActive,
@@ -41,6 +42,22 @@ describe("runPostCorePluginConvergence", () => {
       cfg,
       env: {
         OPENCLAW_UPDATE_IN_PROGRESS: "1",
+        OPENCLAW_COMPATIBILITY_HOST_VERSION: VERSION,
+        OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
+      },
+    });
+  });
+
+  it("uses the candidate runtime version over a stale inherited host version", async () => {
+    const cfg = { plugins: { entries: {} } } as unknown as OpenClawConfig;
+    await runPostCorePluginConvergence({
+      cfg,
+      env: { OPENCLAW_COMPATIBILITY_HOST_VERSION: "2026.5.12" },
+    });
+    expect(mocks.repairMissingConfiguredPluginInstalls).toHaveBeenCalledWith({
+      cfg,
+      env: {
+        OPENCLAW_COMPATIBILITY_HOST_VERSION: VERSION,
         OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
       },
     });
@@ -97,6 +114,7 @@ describe("runPostCorePluginConvergence", () => {
     expect(mocks.repairMissingConfiguredPluginInstalls).toHaveBeenCalledWith({
       cfg,
       env: {
+        OPENCLAW_COMPATIBILITY_HOST_VERSION: VERSION,
         OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
       },
       baselineRecords: baseline,
@@ -222,6 +240,7 @@ describe("runPostCorePluginConvergence", () => {
     expect(mocks.runPluginPayloadSmokeCheck).toHaveBeenCalledWith({
       records,
       env: {
+        OPENCLAW_COMPATIBILITY_HOST_VERSION: VERSION,
         OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
       },
     });

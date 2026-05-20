@@ -95,6 +95,7 @@ import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { stylePromptMessage } from "../../terminal/prompt-style.js";
 import { theme } from "../../terminal/theme.js";
 import { resolveUserPath } from "../../utils.js";
+import { VERSION } from "../../version.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { formatCliCommand } from "../command-format.js";
 import { installCompletion } from "../completion-runtime.js";
@@ -2886,10 +2887,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       return;
     }
 
-    const postCoreHostVersion = await readPackageVersion(root);
-    if (postCoreHostVersion) {
-      process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = postCoreHostVersion;
-    }
+    process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = (await readPackageVersion(root)) ?? VERSION;
 
     let postCoreConfigSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
     const preUpdateSourceConfig = await readPostCorePreUpdateSourceConfig({

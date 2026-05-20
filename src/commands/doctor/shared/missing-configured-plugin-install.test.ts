@@ -1209,9 +1209,8 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     });
   });
 
-  it("prefers npm over ClawHub during post-core repair", async () => {
+  it("passes the post-core compatibility host version to ClawHub repair", async () => {
     const npmRoot = makeTempDir();
-    const packageDir = path.join(npmRoot, "node_modules", "@openclaw", "whatsapp");
     mocks.resolveDefaultPluginNpmDir.mockReturnValue(npmRoot);
     mocks.listChannelPluginCatalogEntries.mockReturnValue([
       {
@@ -1225,20 +1224,23 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       },
     ]);
     mocks.installPluginFromClawHub.mockResolvedValue({
-      ok: false,
-      error: 'Plugin "@openclaw/whatsapp" requires plugin API >=2026.5.18.',
-    });
-    mocks.installPluginFromNpmSpec.mockResolvedValue({
       ok: true,
       pluginId: "whatsapp",
-      targetDir: packageDir,
+      targetDir: "/tmp/openclaw-plugins/whatsapp",
       version: "1.2.3",
-      npmResolution: {
-        name: "@openclaw/whatsapp",
+      clawhub: {
+        source: "clawhub",
+        clawhubUrl: "https://clawhub.ai",
+        clawhubPackage: "@openclaw/whatsapp",
+        clawhubFamily: "code-plugin",
+        clawhubChannel: "official",
         version: "1.2.3",
-        resolvedSpec: "@openclaw/whatsapp@1.2.3",
-        integrity: "sha512-whatsapp",
+        integrity: "sha256-whatsapp",
         resolvedAt: "2026-05-01T00:00:00.000Z",
+        clawpackSha256: "2".repeat(64),
+        clawpackSpecVersion: 1,
+        clawpackManifestSha256: "3".repeat(64),
+        clawpackSize: 1234,
       },
     });
 
@@ -1256,18 +1258,27 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         },
       },
       env: {
+        OPENCLAW_COMPATIBILITY_HOST_VERSION: "2026.5.19",
         OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
       },
     });
 
-    expect(mocks.installPluginFromClawHub).not.toHaveBeenCalled();
-    expectRecordFields(mockCallArg(mocks.installPluginFromNpmSpec), {
-      spec: expectedNpmInstallSpec("@openclaw/whatsapp"),
-      npmDir: npmRoot,
+    expectRecordFields(mockCallArg(mocks.installPluginFromClawHub), {
+      spec: "clawhub:@openclaw/whatsapp",
+      env: {
+        OPENCLAW_COMPATIBILITY_HOST_VERSION: "2026.5.19",
+        OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
+      },
       mode: "install",
     });
+    expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
     expect(result.warnings).toEqual([]);
-    expect(result.records.whatsapp?.installPath).toBe(packageDir);
+    expectRecordFields(result.records.whatsapp, {
+      source: "clawhub",
+      spec: "clawhub:@openclaw/whatsapp",
+      installPath: "/tmp/openclaw-plugins/whatsapp",
+      clawhubPackage: "@openclaw/whatsapp",
+    });
   });
 
   it("repairs missing external payload during post-core convergence even with OPENCLAW_UPDATE_IN_PROGRESS=1", async () => {
