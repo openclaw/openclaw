@@ -1454,6 +1454,17 @@ describe("message tool description", () => {
     expect(target?.description).toContain("Telegram chat id/@username");
   });
 
+  it("describes channel as the messaging provider name", () => {
+    const tool = createMessageTool({
+      config: {} as never,
+    });
+    const properties = getToolProperties(tool);
+    const channel = properties.channel as { description?: string } | undefined;
+
+    expect(channel?.description).toContain("Messaging provider name");
+    expect(channel?.description).toContain("not a channel or conversation ID");
+  });
+
   it("hides iMessage group actions for DM targets", () => {
     setActivePluginRegistry(
       createTestRegistry([{ pluginId: "imessage", source: "test", plugin: imessagePlugin }]),

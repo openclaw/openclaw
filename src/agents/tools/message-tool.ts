@@ -139,7 +139,12 @@ function sanitizePresentationTextFields(value: unknown): unknown {
 
 function buildRoutingSchema() {
   return {
-    channel: Type.Optional(Type.String()),
+    channel: Type.Optional(
+      Type.String({
+        description:
+          "Messaging provider name (e.g. slack, discord), not a channel or conversation ID.",
+      }),
+    ),
     target: Type.Optional(channelTargetSchema()),
     targets: Type.Optional(channelTargetsSchema()),
     accountId: Type.Optional(Type.String()),
