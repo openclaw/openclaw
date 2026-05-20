@@ -200,6 +200,33 @@ describe("approval and confirmation modals", () => {
     expect(handleExecApprovalDecision).not.toHaveBeenCalled();
   });
 
+  it("renders only the requested decision buttons for plugin approvals", async () => {
+    const active: ExecApprovalRequest = {
+      id: "plugin-approval-1",
+      kind: "plugin",
+      request: {
+        command: "Resume Codex CLI session",
+        allowedDecisions: ["allow-once", "deny"],
+      },
+      pluginTitle: "Resume Codex CLI session",
+      pluginDescription: "Resume an existing local Codex CLI session.",
+      pluginSeverity: "critical",
+      pluginId: "codex",
+      createdAtMs: Date.now(),
+      expiresAtMs: Date.now() + 60_000,
+    };
+
+    render(renderExecApprovalPrompt(createExecState({ execApprovalQueue: [active] })), container);
+
+    await getRenderedDialog();
+
+    expect(
+      Array.from(container.querySelectorAll(".exec-approval-actions button")).map((button) =>
+        button.textContent?.trim(),
+      ),
+    ).toEqual(["Allow once", "Deny"]);
+  });
+
   it("renders exec approval chrome from the active locale", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-29T00:00:00.000Z"));

@@ -28,6 +28,7 @@ describe("parsePluginApprovalRequested", () => {
       pluginId: "sage",
       agentId: "agent-1",
       sessionKey: "sess-1",
+      allowedDecisions: ["allow-once", "deny", "allow-once", "not-a-decision"],
     },
   };
 
@@ -41,6 +42,7 @@ describe("parsePluginApprovalRequested", () => {
     expect(result?.request.command).toBe("Dangerous command detected");
     expect(result?.request.agentId).toBe("agent-1");
     expect(result?.request.sessionKey).toBe("sess-1");
+    expect(result?.request.allowedDecisions).toEqual(["allow-once", "deny"]);
     expect(result?.createdAtMs).toBe(1000);
     expect(result?.expiresAtMs).toBe(120_000);
   });
