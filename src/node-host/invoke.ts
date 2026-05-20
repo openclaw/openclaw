@@ -5,10 +5,13 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { GatewayClient } from "../gateway/client.js";
 import {
+  analyzeArgvCommand,
+  analyzeShellCommand,
   ensureExecApprovals,
   mergeExecApprovalsSocketDefaults,
   normalizeExecApprovals,
   readExecApprovalsSnapshot,
+  resolveAllowAlwaysPatternCoverage,
   saveExecApprovals,
   type ExecAsk,
   type ExecApprovalsFile,
@@ -20,6 +23,7 @@ import {
   type ExecHostRequest,
   type ExecHostResponse,
 } from "../infra/exec-host.js";
+import { extractShellWrapperCommand } from "../infra/exec-wrapper-resolution.js";
 import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
 import {
   decodeWindowsOutputBuffer,
@@ -57,6 +61,49 @@ type SystemExecApprovalsSetParams = {
   file: ExecApprovalsFile;
   baseHash?: string | null;
 };
+
+function buildSystemRunAllowAlwaysCoverage(params: {
+  argv: string[];
+  rawCommand?: string | null;
+  cwd: string | null | undefined;
+  env: Record<string, string> | undefined;
+  strictInlineEval?: boolean;
+}) {
+  const cwd = params.cwd ?? undefined;
+  const shellWrapper = extractShellWrapperCommand(params.argv, params.rawCommand);
+  if (shellWrapper.isWrapper) {
+    if (!shellWrapper.command) {
+      return { complete: false, patterns: [] };
+    }
+    const analysis = analyzeShellCommand({
+      command: shellWrapper.command,
+      cwd,
+      env: params.env,
+      platform: process.platform,
+    });
+    if (!analysis.ok) {
+      return { complete: false, patterns: [] };
+    }
+    return resolveAllowAlwaysPatternCoverage({
+      segments: analysis.segments,
+      cwd,
+      env: params.env,
+      platform: process.platform,
+      strictInlineEval: params.strictInlineEval,
+    });
+  }
+  const analysis = analyzeArgvCommand({ argv: params.argv, cwd, env: params.env });
+  if (!analysis.ok) {
+    return { complete: false, patterns: [] };
+  }
+  return resolveAllowAlwaysPatternCoverage({
+    segments: analysis.segments,
+    cwd,
+    env: params.env,
+    platform: process.platform,
+    strictInlineEval: params.strictInlineEval,
+  });
+}
 
 type ExecApprovalsSnapshot = {
   path: string;
@@ -451,6 +498,7 @@ export async function handleInvoke(
         cwd?: unknown;
         agentId?: unknown;
         sessionKey?: unknown;
+        strictInlineEval?: unknown;
       }>(frame.paramsJSON);
       const prepared = buildSystemRunApprovalPlan(params);
       if (!prepared.ok) {
@@ -471,6 +519,13 @@ export async function handleInvoke(
           security: execPolicy.security,
           ask: execPolicy.ask,
         },
+        allowAlwaysCoverage: buildSystemRunAllowAlwaysCoverage({
+          argv: prepared.plan.argv,
+          rawCommand: typeof params.rawCommand === "string" ? params.rawCommand : null,
+          cwd: prepared.plan.cwd,
+          env: sanitizeEnv(undefined),
+          strictInlineEval: params.strictInlineEval === true,
+        }),
       });
     } catch (err) {
       await sendInvalidRequestResult(client, frame, err);

@@ -1,9 +1,44 @@
+import fs from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
 import type { SkillBinsProvider } from "./invoke-types.js";
 import { handleInvoke } from "./invoke.js";
 
 describe("node host invoke", () => {
+  it.runIf(process.platform !== "win32")(
+    "reports current allow-always coverage for prepared shell-wrapped system.run commands",
+    async () => {
+      const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
+      const skillBins: SkillBinsProvider = { current: async () => [] };
+
+      await handleInvoke(
+        {
+          id: "invoke-prepare",
+          nodeId: "node-1",
+          command: "system.run.prepare",
+          paramsJSON: JSON.stringify({
+            command: ["/bin/sh", "-lc", "/bin/echo ok"],
+            rawCommand: "/bin/echo ok",
+          }),
+        },
+        { request } as unknown as GatewayClient,
+        skillBins,
+      );
+
+      const result = request.mock.calls[0]?.[1] as { payloadJSON?: string } | undefined;
+      const payload = JSON.parse(result?.payloadJSON ?? "{}") as {
+        allowAlwaysCoverage?: {
+          complete?: boolean;
+          patterns?: Array<{ pattern?: string }>;
+        };
+      };
+      expect(payload.allowAlwaysCoverage?.complete).toBe(true);
+      expect(payload.allowAlwaysCoverage?.patterns?.[0]?.pattern).toBe(
+        fs.realpathSync("/bin/echo"),
+      );
+    },
+  );
+
   it("wraps malformed paramsJSON for built-in commands", async () => {
     const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
     const skillBins: SkillBinsProvider = { current: async () => [] };
