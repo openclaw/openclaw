@@ -161,6 +161,12 @@ Policy config lives under `plugins.entries.policy.config`.
 Set `plugins.entries.policy.config.enabled` to `false` to disable policy checks
 for a workspace while leaving the plugin installed.
 
+`expectedHash` and `expectedAttestationHash` are enforcement inputs only when
+OpenClaw config is controlled by a trusted operator, gateway, or supervisor. If
+the governed workspace can edit its own OpenClaw config, those values are
+advisory audit locks: they can still detect drift, but they do not by
+themselves create a boundary against that workspace.
+
 Tool metadata requirements are authored in `policy.jsonc` with
 `tools.requireMetadata`, for example `["risk", "sensitivity", "owner"]`.
 
@@ -251,15 +257,18 @@ these form the audit tuple for this policy check.
 
 If a later gateway or supervisor uses policy to block, approve, or annotate a
 runtime action, it should record the attestation hash from the last clean policy
-check. `checkedAt` stays in JSON output for audit logs, but is not part of the
-stable attestation hash.
+check in a config source the governed workspace cannot silently rewrite.
+`checkedAt` stays in JSON output for audit logs, but is not part of the stable
+attestation hash.
 
 Use this lifecycle when accepting policy state:
 
 1. Author or review `policy.jsonc`.
 2. Run `openclaw policy check --json`.
-3. If the result is clean, record `attestation.policy.hash` as `expectedHash`.
-4. Record `attestation.attestationHash` as `expectedAttestationHash`.
+3. If the result is clean, record `attestation.policy.hash` as `expectedHash`
+   in trusted OpenClaw config.
+4. Record `attestation.attestationHash` as `expectedAttestationHash` in trusted
+   OpenClaw config.
 5. Re-run `openclaw doctor --lint` in CI or release gates.
 
 `policy diff` compares two saved `policy check --json` outputs to explain what
@@ -272,9 +281,11 @@ approval requests: policy path/hash, configured expected hash when present, the
 accepted attestation hash when present, the current policy evidence hash, and
 the target tool reference. Gateway approval request, list, and resolve events
 preserve that metadata so supervisors can audit the decision against the policy
-and workspace state that produced it. If the current attestation no longer
-matches `expectedAttestationHash`, the runtime gate fails closed before asking
-for approval and reports both the current and expected attestation hashes.
+and workspace state that produced it. If trusted config supplies
+`expectedAttestationHash` and the current attestation no longer matches it, the
+runtime gate fails closed before asking for approval and reports both the
+current and expected attestation hashes. If the governed workspace owns the
+config value, treat this as drift detection rather than a security boundary.
 
 If policy rules change intentionally, update both accepted hashes from a clean
 check. If workspace settings change intentionally but policy stays the same,
@@ -445,8 +456,8 @@ The runtime gate:
 
 - blocks tool calls if the enabled policy artifact is missing or does not match
   `expectedHash`;
-- blocks tool calls if `expectedAttestationHash` is configured and the current
-  policy evidence no longer matches the accepted clean policy check;
+- blocks tool calls if trusted config supplies `expectedAttestationHash` and the
+  current policy evidence no longer matches the accepted clean policy check;
 - blocks governed tool calls whose required metadata is missing or invalid;
 - asks for approval for governed tools marked `risk:critical` or
   `IRREVERSIBLE_EXTERNAL`;

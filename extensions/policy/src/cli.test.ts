@@ -1,7 +1,6 @@
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { clearHealthChecksForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { clearConfigCache } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { policyCheckCommand, policyDiffCommand, policyWatchCommand } from "./cli.js";

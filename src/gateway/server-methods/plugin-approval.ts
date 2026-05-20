@@ -75,7 +75,6 @@ export function createPluginApprovalHandlers(
         turnSourceTo?: string | null;
         turnSourceAccountId?: string | null;
         turnSourceThreadId?: string | number | null;
-        metadata?: unknown;
         timeoutMs?: number;
         twoPhase?: boolean;
       };
