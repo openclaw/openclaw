@@ -1616,6 +1616,9 @@ export async function runAgentTurnWithFallback(params: {
             provider,
             entry: params.getActiveSessionEntry(),
           });
+          const selectedAuthProfile = resolveRunAuthProfile(candidateRun, provider, {
+            config: runtimeConfig,
+          });
           const cliExecutionProvider =
             sessionRuntimeOverride === "pi"
               ? provider
@@ -1627,6 +1630,7 @@ export async function runAgentTurnWithFallback(params: {
                   cfg: runtimeConfig,
                   agentId: params.followupRun.run.agentId,
                   modelId: model,
+                  authProfileId: selectedAuthProfile.authProfileId,
                 }) ??
                 provider);
 
