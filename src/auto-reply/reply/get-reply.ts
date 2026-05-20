@@ -77,6 +77,41 @@ function resolveHeartbeatAckMaxChars(cfg: OpenClawConfig, agentId: string): numb
   );
 }
 
+async function clearPendingFinalDeliveryForSession(params: {
+  sessionEntry: Record<string, unknown>;
+  sessionKey?: string;
+  sessionStore?: Record<string, unknown>;
+  storePath?: string;
+}) {
+  const { sessionEntry, sessionKey, sessionStore, storePath } = params;
+  sessionEntry.pendingFinalDelivery = undefined;
+  sessionEntry.pendingFinalDeliveryText = undefined;
+  sessionEntry.pendingFinalDeliveryCreatedAt = undefined;
+  sessionEntry.pendingFinalDeliveryLastAttemptAt = undefined;
+  sessionEntry.pendingFinalDeliveryAttemptCount = undefined;
+  sessionEntry.pendingFinalDeliveryLastError = undefined;
+  sessionEntry.pendingFinalDeliveryContext = undefined;
+  if (sessionKey && sessionStore) {
+    sessionStore[sessionKey] = sessionEntry;
+  }
+  if (sessionKey && storePath) {
+    const { updateSessionStoreEntry } = await import("../../config/sessions.js");
+    await updateSessionStoreEntry({
+      storePath,
+      sessionKey,
+      update: async () => ({
+        pendingFinalDelivery: undefined,
+        pendingFinalDeliveryText: undefined,
+        pendingFinalDeliveryCreatedAt: undefined,
+        pendingFinalDeliveryLastAttemptAt: undefined,
+        pendingFinalDeliveryAttemptCount: undefined,
+        pendingFinalDeliveryLastError: undefined,
+        pendingFinalDeliveryContext: undefined,
+      }),
+    });
+  }
+}
+
 const sessionResetModelRuntimeLoader = createLazyImportLoader(
   () => import("./session-reset-model.runtime.js"),
 );
@@ -417,64 +452,53 @@ export async function getReplyFromConfig(
     // If it's a user message, we deliver the lost reply first, then continue.
     // For now, let's just return the lost reply if it's a heartbeat.
     if (opts?.isHeartbeat) {
-      const heartbeatPending = classifyHeartbeatPendingFinalDelivery(
-        text,
-        resolveHeartbeatAckMaxChars(cfg, agentId),
-      );
-      if (heartbeatPending.shouldClear) {
-        sessionEntry.pendingFinalDelivery = undefined;
-        sessionEntry.pendingFinalDeliveryText = undefined;
-        sessionEntry.pendingFinalDeliveryCreatedAt = undefined;
-        sessionEntry.pendingFinalDeliveryLastAttemptAt = undefined;
-        sessionEntry.pendingFinalDeliveryAttemptCount = undefined;
-        sessionEntry.pendingFinalDeliveryLastError = undefined;
-        sessionEntry.pendingFinalDeliveryContext = undefined;
-        if (sessionKey && sessionStore) {
-          sessionStore[sessionKey] = sessionEntry;
-        }
-        if (sessionKey && storePath) {
-          const { updateSessionStoreEntry } = await import("../../config/sessions.js");
-          await updateSessionStoreEntry({
-            storePath,
-            sessionKey,
-            update: async () => ({
-              pendingFinalDelivery: undefined,
-              pendingFinalDeliveryText: undefined,
-              pendingFinalDeliveryCreatedAt: undefined,
-              pendingFinalDeliveryLastAttemptAt: undefined,
-              pendingFinalDeliveryAttemptCount: undefined,
-              pendingFinalDeliveryLastError: undefined,
-              pendingFinalDeliveryContext: undefined,
-            }),
-          });
-        }
+      if (opts.skipHeartbeatPendingFinalDeliveryReplay) {
+        await clearPendingFinalDeliveryForSession({
+          sessionEntry,
+          sessionKey,
+          sessionStore,
+          storePath,
+        });
       } else {
-        const updatedAt = Date.now();
-        const attemptCount = (sessionEntry.pendingFinalDeliveryAttemptCount ?? 0) + 1;
-        sessionEntry.pendingFinalDeliveryLastAttemptAt = updatedAt;
-        sessionEntry.pendingFinalDeliveryAttemptCount = attemptCount;
-        sessionEntry.pendingFinalDeliveryLastError = null;
-        const replayText = sanitizePendingFinalDeliveryText(heartbeatPending.replayText);
-        sessionEntry.pendingFinalDeliveryText = replayText;
-        sessionEntry.updatedAt = updatedAt;
-        if (sessionKey && sessionStore) {
-          sessionStore[sessionKey] = sessionEntry;
-        }
-        if (sessionKey && storePath) {
-          const { updateSessionStoreEntry } = await import("../../config/sessions.js");
-          await updateSessionStoreEntry({
-            storePath,
+        const heartbeatPending = classifyHeartbeatPendingFinalDelivery(
+          text,
+          resolveHeartbeatAckMaxChars(cfg, agentId),
+        );
+        if (heartbeatPending.shouldClear) {
+          await clearPendingFinalDeliveryForSession({
+            sessionEntry,
             sessionKey,
-            update: async () => ({
-              pendingFinalDeliveryText: replayText,
-              pendingFinalDeliveryLastAttemptAt: updatedAt,
-              pendingFinalDeliveryAttemptCount: attemptCount,
-              pendingFinalDeliveryLastError: null,
-              updatedAt,
-            }),
+            sessionStore,
+            storePath,
           });
+        } else {
+          const updatedAt = Date.now();
+          const attemptCount = (sessionEntry.pendingFinalDeliveryAttemptCount ?? 0) + 1;
+          sessionEntry.pendingFinalDeliveryLastAttemptAt = updatedAt;
+          sessionEntry.pendingFinalDeliveryAttemptCount = attemptCount;
+          sessionEntry.pendingFinalDeliveryLastError = null;
+          const replayText = sanitizePendingFinalDeliveryText(heartbeatPending.replayText);
+          sessionEntry.pendingFinalDeliveryText = replayText;
+          sessionEntry.updatedAt = updatedAt;
+          if (sessionKey && sessionStore) {
+            sessionStore[sessionKey] = sessionEntry;
+          }
+          if (sessionKey && storePath) {
+            const { updateSessionStoreEntry } = await import("../../config/sessions.js");
+            await updateSessionStoreEntry({
+              storePath,
+              sessionKey,
+              update: async () => ({
+                pendingFinalDeliveryText: replayText,
+                pendingFinalDeliveryLastAttemptAt: updatedAt,
+                pendingFinalDeliveryAttemptCount: attemptCount,
+                pendingFinalDeliveryLastError: null,
+                updatedAt,
+              }),
+            });
+          }
+          return { text: replayText };
         }
-        return { text: replayText };
       }
     }
   }

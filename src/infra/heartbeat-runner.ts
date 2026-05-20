@@ -1724,6 +1724,7 @@ export async function runHeartbeatOnce(opts: {
       heartbeat?.lightContext === true ? "lightweight" : undefined;
     const replyOpts = {
       isHeartbeat: true,
+      ...(delivery.channel === "none" ? { skipHeartbeatPendingFinalDeliveryReplay: true } : {}),
       ...(heartbeatModelOverride ? { heartbeatModelOverride } : {}),
       suppressToolErrorWarnings,
       ...(usesHeartbeatResponseTool ? { enableHeartbeatTool: true, forceHeartbeatTool: true } : {}),

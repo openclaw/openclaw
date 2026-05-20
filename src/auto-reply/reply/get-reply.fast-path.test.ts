@@ -204,6 +204,49 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(vi.mocked(runPreparedReplyMock)).toHaveBeenCalledOnce();
   });
 
+  it("skips stale pending delivery replay for internal-only heartbeats", async () => {
+    vi.stubEnv("OPENCLAW_ALLOW_SLOW_REPLY_TESTS", "1");
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-heartbeat-pending-"));
+    const cfg = {
+      agents: {
+        defaults: {
+          model: "openai/gpt-4o",
+          workspace: home,
+        },
+      },
+      session: { store: path.join(home, "sessions.json") },
+    } as OpenClawConfig;
+
+    const sessionEntry = {
+      pendingFinalDelivery: true,
+      pendingFinalDeliveryText: "stale heartbeat reply",
+      pendingFinalDeliveryAttemptCount: 2,
+    };
+    mocks.initSessionState.mockResolvedValueOnce(
+      createGetReplySessionState({
+        storePath: undefined,
+        sessionEntry,
+      }),
+    );
+    mocks.resolveReplyDirectives.mockResolvedValueOnce({
+      kind: "reply",
+      reply: { text: "fresh heartbeat reply" },
+    });
+
+    await expect(
+      getReplyFromConfig(
+        buildGetReplyCtx(),
+        { isHeartbeat: true, skipHeartbeatPendingFinalDeliveryReplay: true },
+        cfg,
+      ),
+    ).resolves.toEqual({ text: "fresh heartbeat reply" });
+
+    expect(vi.mocked(runPreparedReplyMock)).not.toHaveBeenCalled();
+    expect(sessionEntry.pendingFinalDelivery).toBeUndefined();
+    expect(sessionEntry.pendingFinalDeliveryText).toBeUndefined();
+    expect(sessionEntry.pendingFinalDeliveryAttemptCount).toBeUndefined();
+  });
+
   it("passes image model overrides as one-turn selections to prepared replies", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-image-model-directives-"));
     const cfg = markCompleteReplyConfig({
