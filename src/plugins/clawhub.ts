@@ -47,7 +47,9 @@ export const CLAWHUB_INSTALL_ERROR_CODE = {
   PRIVATE_PACKAGE: "private_package",
   INCOMPATIBLE_PLUGIN_API: "incompatible_plugin_api",
   INCOMPATIBLE_GATEWAY: "incompatible_gateway",
+  ARTIFACT_UNAVAILABLE: "artifact_unavailable",
   MISSING_ARCHIVE_INTEGRITY: "missing_archive_integrity",
+  ARTIFACT_DOWNLOAD_UNAVAILABLE: "artifact_download_unavailable",
   ARCHIVE_INTEGRITY_MISMATCH: "archive_integrity_mismatch",
 } as const;
 
@@ -265,29 +267,47 @@ function normalizeArtifactResolverFiles(
   return files as NonNullable<ClawHubPackageVersion["version"]>["files"];
 }
 
+type ClawHubResolvedArtifactWire = {
+  artifactKind?: string | null;
+  kind?: string | null;
+  artifactSha256?: string | null;
+  sha256?: string | null;
+  npmIntegrity?: string | null;
+  npmShasum?: string | null;
+  downloadUrl?: string | null;
+};
+
 function resolveTopLevelNpmPackArtifact(
   artifact: ClawHubResolvedArtifact | null | undefined,
 ): ClawHubPackageArtifactSummary | null {
-  if (artifact?.artifactKind !== "npm-pack") {
+  const wire = artifact as ClawHubResolvedArtifactWire | null | undefined;
+  const artifactKind = wire?.artifactKind ?? wire?.kind;
+  if (artifactKind !== "npm-pack") {
+    return null;
+  }
+  if (typeof wire?.npmIntegrity !== "string") {
     return null;
   }
   return {
     kind: "npm-pack",
     format: "tgz",
-    sha256: artifact.artifactSha256 ?? null,
-    npmIntegrity: artifact.npmIntegrity,
-    npmShasum: artifact.npmShasum ?? null,
-    downloadUrl: artifact.downloadUrl ?? null,
+    sha256: wire.artifactSha256 ?? wire.sha256 ?? null,
+    npmIntegrity: wire.npmIntegrity,
+    npmShasum: wire.npmShasum ?? null,
+    downloadUrl: wire.downloadUrl ?? null,
   };
 }
 
 function resolveTopLevelLegacyArchiveVerification(
   artifact: ClawHubResolvedArtifact | null | undefined,
 ): ClawHubArchiveVerification | null {
-  if (artifact?.artifactKind !== "legacy-zip" || typeof artifact.artifactSha256 !== "string") {
+  const wire = artifact as ClawHubResolvedArtifactWire | null | undefined;
+  const artifactKind = wire?.artifactKind ?? wire?.kind;
+  const artifactSha256 = wire?.artifactSha256 ?? wire?.sha256;
+  if (artifactKind !== "legacy-zip" || typeof artifactSha256 !== "string") {
     return null;
   }
-  const integrity = normalizeClawHubSha256Integrity(artifact.artifactSha256);
+  const integrity = normalizeClawHubSha256Integrity(artifactSha256);
   return integrity ? { kind: "archive-integrity", integrity } : null;
 }
 
@@ -545,7 +565,7 @@ async function readLimitedClawHubArchiveEntry<T>(
     onEnd: () => T;
   },
 ): Promise<T | ClawHubInstallFailure> {
-  const hintedSize = (entry as JSZipObjectWithSize)._data?.uncompressedSize;
+  const hintedSize = (entry as JSZipObjectWithSize)["_data"]?.uncompressedSize;
   if (
     typeof hintedSize === "number" &&
     Number.isFinite(hintedSize) &&
@@ -731,7 +751,7 @@ async function verifyClawHubArchiveFiles(params: {
       extractedBytes += bytes;
       return extractedBytes <= DEFAULT_MAX_EXTRACTED_BYTES;
     };
-    for (const entry of Object.values(zip.files)) {
+    for (const entry of Object.values(zip.files as Record<string, JSZip.JSZipObject>)) {
       entryCount += 1;
       if (entryCount > DEFAULT_MAX_ENTRIES) {
         return buildClawHubInstallFailure(
@@ -793,7 +813,12 @@ async function verifyClawHubArchiveFiles(params: {
       }
       actualFiles.delete(file.path);
     }
-    const unexpectedFile = [...actualFiles.keys()].toSorted()[0];
+    let unexpectedFile: string | undefined;
+    for (const file of actualFiles.keys()) {
+      if (unexpectedFile === undefined || file < unexpectedFile) {
+        unexpectedFile = file;
+      }
+    }
     if (unexpectedFile) {
       return buildClawHubInstallFailure(
         `ClawHub archive contents do not match files[] metadata for "${params.packageName}@${params.packageVersion}": unexpected file "${unexpectedFile}".`,
@@ -1093,7 +1118,7 @@ export async function installPluginFromClawHub(
         packageName: canonicalPackageName,
         version: versionState.version,
       }),
-      CLAWHUB_INSTALL_ERROR_CODE.MISSING_ARCHIVE_INTEGRITY,
+      CLAWHUB_INSTALL_ERROR_CODE.ARTIFACT_UNAVAILABLE,
     );
   }
   logClawHubPackageSummary({
@@ -1124,6 +1149,14 @@ export async function installPluginFromClawHub(
             version: versionState.version,
           })
         : formatErrorMessage(error),
+      expectedClawPackSha256 &&
+        error instanceof ClawHubRequestError &&
+        error.status === 404 &&
+        error.requestPath.endsWith("/artifact/download")
+        ? CLAWHUB_INSTALL_ERROR_CODE.ARTIFACT_DOWNLOAD_UNAVAILABLE
+        : error instanceof ClawHubRequestError
+          ? CLAWHUB_INSTALL_ERROR_CODE.ARTIFACT_UNAVAILABLE
+          : undefined,
     );
   }
   try {

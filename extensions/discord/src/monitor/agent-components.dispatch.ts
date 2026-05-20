@@ -5,10 +5,10 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { runInboundReplyTurn } from "openclaw/plugin-sdk/inbound-reply-dispatch";
+import { logError } from "openclaw/plugin-sdk/logging-core";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import { createNonExitingRuntime, logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { logError } from "openclaw/plugin-sdk/text-runtime";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { createDiscordRestClient } from "../client.js";
 import { resolveDiscordConversationIdentity } from "../conversation-identity.js";
@@ -36,19 +36,11 @@ import { buildDirectLabel, buildGuildLabel } from "./reply-context.js";
 import { deliverDiscordReply } from "./reply-delivery.js";
 
 let conversationRuntimePromise: Promise<typeof import("./agent-components.runtime.js")> | undefined;
-let replyPipelineRuntimePromise:
-  | Promise<typeof import("openclaw/plugin-sdk/channel-reply-pipeline")>
-  | undefined;
 let typingRuntimePromise: Promise<typeof import("./typing.js")> | undefined;
 
 async function loadConversationRuntime() {
   conversationRuntimePromise ??= import("./agent-components.runtime.js");
   return await conversationRuntimePromise;
-}
-
-async function loadReplyPipelineRuntime() {
-  replyPipelineRuntimePromise ??= import("openclaw/plugin-sdk/channel-reply-pipeline");
-  return await replyPipelineRuntimePromise;
 }
 
 async function loadTypingRuntime() {
@@ -119,6 +111,7 @@ export async function dispatchDiscordComponentEvent(params: {
   const sessionKey = params.routeOverrides?.sessionKey ?? route.sessionKey;
   const agentId = params.routeOverrides?.agentId ?? route.agentId;
   const accountId = params.routeOverrides?.accountId ?? route.accountId;
+  const inboundLastRouteSessionKey = sessionKey;
   const fromLabel = buildDiscordComponentConversationLabel({
     interactionCtx,
     interaction,
@@ -163,7 +156,7 @@ export async function dispatchDiscordComponentEvent(params: {
         },
       })
     : null;
-  const commandAuthorized = resolveComponentCommandAuthorized({
+  const commandAuthorized = await resolveComponentCommandAuthorized({
     ctx,
     interactionCtx,
     channelConfig,
@@ -231,6 +224,12 @@ export async function dispatchDiscordComponentEvent(params: {
     Surface: "discord" as const,
     WasMentioned: true,
     CommandAuthorized: commandAuthorized,
+    CommandTurn: {
+      kind: "text-slash" as const,
+      source: "text" as const,
+      authorized: commandAuthorized,
+      body: eventText,
+    },
     CommandSource: "text" as const,
     MessageSid: interaction.rawData.id,
     Timestamp: timestamp,
@@ -241,13 +240,6 @@ export async function dispatchDiscordComponentEvent(params: {
 
   const deliverTarget = `channel:${interactionCtx.channelId}`;
   const typingChannelId = interactionCtx.channelId;
-  const { createChannelReplyPipeline } = await loadReplyPipelineRuntime();
-  const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
-    cfg: ctx.cfg,
-    agentId,
-    channel: "discord",
-    accountId,
-  });
   const tableMode = resolveMarkdownTableMode({
     cfg: ctx.cfg,
     channel: "discord",
@@ -283,83 +275,84 @@ export async function dispatchDiscordComponentEvent(params: {
         raw: interaction,
       }),
       resolveTurn: () => ({
+        cfg: ctx.cfg,
         channel: "discord",
         accountId,
+        agentId,
         routeSessionKey: sessionKey,
         storePath,
         ctxPayload,
         recordInboundSession,
+        dispatchReplyWithBufferedBlockDispatcher,
         record: {
           updateLastRoute: interactionCtx.isDirectMessage
             ? {
-                sessionKey: route.mainSessionKey,
+                sessionKey: inboundLastRouteSessionKey,
                 channel: "discord",
                 to:
                   resolveDiscordComponentOriginatingTo(interactionCtx) ??
                   `user:${interactionCtx.userId}`,
                 accountId,
-                mainDmOwnerPin: pinnedMainDmOwner
-                  ? {
-                      ownerRecipient: pinnedMainDmOwner,
-                      senderRecipient: interactionCtx.userId,
-                      onSkip: ({ ownerRecipient, senderRecipient }) => {
-                        logVerbose(
-                          `discord: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
-                        );
-                      },
-                    }
-                  : undefined,
+                mainDmOwnerPin:
+                  inboundLastRouteSessionKey === route.mainSessionKey && pinnedMainDmOwner
+                    ? {
+                        ownerRecipient: pinnedMainDmOwner,
+                        senderRecipient: interactionCtx.userId,
+                        onSkip: ({ ownerRecipient, senderRecipient }) => {
+                          logVerbose(
+                            `discord: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
+                          );
+                        },
+                      }
+                    : undefined,
               }
             : undefined,
           onRecordError: (err) => {
             logVerbose(`discord: failed updating component session meta: ${String(err)}`);
           },
         },
-        runDispatch: () =>
-          dispatchReplyWithBufferedBlockDispatcher({
-            ctx: ctxPayload,
-            cfg: ctx.cfg,
-            replyOptions: { onModelSelected },
-            dispatcherOptions: {
-              ...replyPipeline,
-              humanDelay: resolveHumanDelayConfig(ctx.cfg, agentId),
-              deliver: async (payload) => {
-                const replyToId = replyReference.use();
-                await deliverDiscordReply({
-                  cfg: ctx.cfg,
-                  replies: [payload],
-                  target: deliverTarget,
-                  token,
-                  accountId,
-                  rest: interaction.client.rest,
-                  runtime,
-                  replyToId,
-                  replyToMode,
-                  textLimit,
-                  maxLinesPerMessage: resolveDiscordMaxLinesPerMessage({
-                    cfg: ctx.cfg,
-                    discordConfig: ctx.discordConfig,
-                    accountId,
-                  }),
-                  tableMode,
-                  chunkMode: resolveChunkMode(ctx.cfg, "discord", accountId),
-                  mediaLocalRoots,
-                });
-                replyReference.markSent();
-              },
-              onReplyStart: async () => {
-                try {
-                  const { sendTyping } = await loadTypingRuntime();
-                  await sendTyping({ rest: feedbackRest, channelId: typingChannelId });
-                } catch (err) {
-                  logVerbose(`discord: typing failed for component reply: ${String(err)}`);
-                }
-              },
-              onError: (err) => {
-                logError(`discord component dispatch failed: ${String(err)}`);
-              },
-            },
-          }),
+        delivery: {
+          deliver: async (payload, info) => {
+            const replyToId = replyReference.use();
+            await deliverDiscordReply({
+              cfg: ctx.cfg,
+              replies: [payload],
+              target: deliverTarget,
+              token,
+              accountId,
+              rest: interaction.client.rest,
+              runtime,
+              replyToId,
+              replyToMode,
+              textLimit,
+              maxLinesPerMessage: resolveDiscordMaxLinesPerMessage({
+                cfg: ctx.cfg,
+                discordConfig: ctx.discordConfig,
+                accountId,
+              }),
+              tableMode,
+              chunkMode: resolveChunkMode(ctx.cfg, "discord", accountId),
+              mediaLocalRoots,
+              kind: info.kind,
+            });
+            replyReference.markSent();
+          },
+          onError: (err) => {
+            logError(`discord component dispatch failed: ${String(err)}`);
+          },
+        },
+        replyPipeline: {},
+        dispatcherOptions: {
+          humanDelay: resolveHumanDelayConfig(ctx.cfg, agentId),
+          onReplyStart: async () => {
+            try {
+              const { sendTyping } = await loadTypingRuntime();
+              await sendTyping({ rest: feedbackRest, channelId: typingChannelId });
+            } catch (err) {
+              logVerbose(`discord: typing failed for component reply: ${String(err)}`);
+            }
+          },
+        },
       }),
     },
   });

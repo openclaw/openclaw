@@ -7,11 +7,14 @@ import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { WizardSession } from "../../wizard/session.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
-import type { ExecApprovalManager } from "../exec-approval-manager.js";
+import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
+import type { GatewayMethodRegistryView } from "../methods/descriptor.js";
 import type { NodeRegistry } from "../node-registry.js";
+import type { PluginNodeCapabilitySurface } from "../plugin-node-capability.js";
 import type { ConnectParams, ErrorShape, RequestFrame } from "../protocol/index.js";
 import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "../server-broadcast-types.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
+import type { BufferedAgentEvent } from "../server-chat-state.js";
 import type { DedupeEntry } from "../server-shared.js";
 import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
 
@@ -21,12 +24,13 @@ export type GatewayClient = {
   connect: ConnectParams;
   connId?: string;
   clientIp?: string;
-  canvasHostUrl?: string;
-  canvasCapability?: string;
-  canvasCapabilityExpiresAtMs?: number;
+  pluginSurfaceUrls?: Record<string, string>;
+  pluginNodeCapabilitySurfaces?: Record<string, PluginNodeCapabilitySurface>;
+  pluginNodeCapabilities?: Record<string, { capability: string; expiresAtMs: number }>;
   isDeviceTokenAuth?: boolean;
   internal?: {
     allowModelOverride?: boolean;
+    approvalRuntime?: boolean;
     pluginRuntimeOwnerId?: string;
   };
 };
@@ -62,8 +66,13 @@ export type GatewayRequestContext = {
   nodeSubscribe: (nodeId: string, sessionKey: string) => void;
   nodeUnsubscribe: (nodeId: string, sessionKey: string) => void;
   nodeUnsubscribeAll: (nodeId: string) => void;
-  hasConnectedMobileNode: () => boolean;
+  hasConnectedTalkNode: () => boolean;
   hasExecApprovalClients?: (excludeConnId?: string) => boolean;
+  getApprovalClientConnIds?: <TPayload>(params?: {
+    excludeConnId?: string;
+    filter?: (client: GatewayClient, record?: ExecApprovalRecord<TPayload>) => boolean;
+    record?: ExecApprovalRecord<TPayload>;
+  }) => ReadonlySet<string>;
   disconnectClientsForDevice?: (deviceId: string, opts?: { role?: string }) => void;
   disconnectClientsUsingSharedGatewayAuth?: () => void;
   enforceSharedGatewayAuthGenerationForConfigWrite?: (nextConfig: OpenClawConfig) => void;
@@ -74,6 +83,9 @@ export type GatewayRequestContext = {
   chatRunBuffers: Map<string, string>;
   chatDeltaSentAt: Map<string, number>;
   chatDeltaLastBroadcastLen: Map<string, number>;
+  chatDeltaLastBroadcastText: Map<string, string>;
+  agentDeltaSentAt: Map<string, number>;
+  bufferedAgentEvents: Map<string, BufferedAgentEvent>;
   addChatRun: (sessionId: string, entry: { sessionKey: string; clientRunId: string }) => void;
   removeChatRun: (
     sessionId: string,
@@ -124,6 +136,7 @@ export type GatewayRequestOptions = {
   isWebchatConnect: (params: ConnectParams | null | undefined) => boolean;
   respond: RespondFn;
   context: GatewayRequestContext;
+  methodRegistry?: GatewayMethodRegistryView;
 };
 
 export type GatewayRequestHandlerOptions = {

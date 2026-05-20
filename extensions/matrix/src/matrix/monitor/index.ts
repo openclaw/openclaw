@@ -79,8 +79,15 @@ function resolveMatrixStreamingMode(streaming: MatrixConfig["streaming"]): Matri
   if (streaming === "quiet") {
     return "quiet";
   }
+  if (streaming === "progress") {
+    return "progress";
+  }
   if (isMatrixStreamingConfig(streaming)) {
-    if (streaming.mode === "partial" || streaming.mode === "quiet") {
+    if (
+      streaming.mode === "partial" ||
+      streaming.mode === "quiet" ||
+      streaming.mode === "progress"
+    ) {
       return streaming.mode;
     }
   }
@@ -91,6 +98,9 @@ function resolveMatrixPreviewToolProgress(streaming: MatrixConfig["streaming"]):
   if (!isMatrixStreamingConfig(streaming)) {
     return true;
   }
+  if (resolveMatrixStreamingMode(streaming) === "progress") {
+    return streaming.progress?.toolProgress ?? streaming.preview?.toolProgress ?? true;
+  }
   return streaming.preview?.toolProgress ?? true;
 }
 
@@ -100,7 +110,7 @@ function resolveMatrixPreviewToolProgressEnabled(streaming: MatrixConfig["stream
   );
 }
 
-export const __testing = {
+export const testing = {
   resolveMatrixPreviewToolProgress,
   resolveMatrixPreviewToolProgressEnabled,
   resolveMatrixStreamingMode,
@@ -343,6 +353,16 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
           roomInfo: await getRoomInfo(roomId, { includeAliases: true }),
           rooms: roomsConfig,
         }),
+      ...(dmSessionScope === "per-room"
+        ? {
+            canPromoteUnmappedStrictRoom: async (roomId) =>
+              shouldPromoteRecentInviteRoom({
+                roomId,
+                roomInfo: await getRoomInfo(roomId, { includeAliases: true }),
+                rooms: roomsConfig,
+              }),
+          }
+        : {}),
       shouldKeepLocallyPromotedDirectRoom: async (roomId) => {
         try {
           const roomInfo = await getRoomInfo(roomId, { includeAliases: true });
@@ -368,6 +388,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       core,
       cfg,
       accountId: effectiveAccountId,
+      accountConfig,
       runtime,
       logger,
       logVerboseMessage,
@@ -516,3 +537,4 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     throw err;
   }
 }
+export { testing as __testing };

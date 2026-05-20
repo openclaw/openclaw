@@ -1,5 +1,5 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type {
   TranscriptRewriteReplacement,
   TranscriptRewriteRequest,
@@ -11,7 +11,7 @@ import { getRawSessionAppendMessage } from "../session-raw-append-message.js";
 import {
   acquireSessionWriteLock,
   type SessionWriteLockAcquireTimeoutConfig,
-  resolveSessionWriteLockAcquireTimeoutMs,
+  resolveSessionWriteLockOptions,
 } from "../session-write-lock.js";
 import { log } from "./logger.js";
 import {
@@ -366,7 +366,7 @@ export async function rewriteTranscriptEntriesInSessionFile(params: {
   try {
     sessionLock = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
-      timeoutMs: resolveSessionWriteLockAcquireTimeoutMs(params.config),
+      ...resolveSessionWriteLockOptions(params.config),
     });
     const state = await readTranscriptFileState(params.sessionFile);
     const result = rewriteTranscriptEntriesInState({

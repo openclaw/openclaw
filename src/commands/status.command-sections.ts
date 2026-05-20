@@ -168,8 +168,13 @@ export function buildStatusMemoryValue(
   const colorByTone = (tone: Tone, text: string) =>
     tone === "ok" ? params.ok(text) : tone === "warn" ? params.warn(text) : params.muted(text);
   if (params.memory.vector) {
-    const state = params.resolveMemoryVectorState(params.memory.vector);
-    const label = state.state === "disabled" ? "vector off" : `vector ${state.state}`;
+    const vector =
+      params.memory.backend === "builtin" && params.memory.vector.storeAvailable !== undefined
+        ? { ...params.memory.vector, available: params.memory.vector.storeAvailable }
+        : params.memory.vector;
+    const state = params.resolveMemoryVectorState(vector);
+    const prefix = params.memory.backend === "builtin" ? "vector store" : "vector";
+    const label = state.state === "disabled" ? `${prefix} off` : `${prefix} ${state.state}`;
     parts.push(colorByTone(state.tone, label));
   }
   if (params.memory.fts) {
@@ -268,6 +273,15 @@ export function buildStatusHealthRows(params: {
       Detail: formatEventLoopHealthDetail(params.health.eventLoop),
     });
   }
+  if (params.health.modelPricing?.state === "degraded") {
+    rows.push({
+      Item: "Model pricing",
+      Status: params.warn("WARN"),
+      Detail: `optional pricing refresh degraded${
+        params.health.modelPricing.detail ? `: ${params.health.modelPricing.detail}` : ""
+      }`,
+    });
+  }
   for (const line of params.formatHealthChannelLines(params.health, { accountMode: "all" })) {
     const colon = line.indexOf(":");
     if (colon === -1) {
@@ -315,22 +329,14 @@ export function buildStatusSessionsRows(params: {
   muted: (value: string) => string;
 }) {
   if (params.recent.length === 0) {
-    return [
-      {
-        Key: params.muted("no sessions yet"),
-        Kind: "",
-        Age: "",
-        Model: "",
-        Tokens: "",
-        ...(params.verbose ? { Cache: "" } : {}),
-      },
-    ];
+    return [];
   }
   return params.recent.map((sess) => ({
     Key: params.shortenText(sess.key, 32),
     Kind: sess.kind,
     Age: sess.updatedAt && sess.age != null ? params.formatTimeAgo(sess.age) : "no activity",
     Model: sess.model ?? "unknown",
+    Runtime: sess.runtime ?? "unknown",
     Tokens: params.formatTokensCompact(sess),
     ...(params.verbose
       ? { Cache: params.formatPromptCacheCompact(sess) || params.muted("—") }

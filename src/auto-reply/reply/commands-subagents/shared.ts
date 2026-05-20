@@ -17,6 +17,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../../../shared/string-coerce.js";
+import { isNativeCommandTurn, resolveCommandTurnContext } from "../../command-turn-context.js";
 import { resolveCommandSurfaceChannel, resolveChannelAccountId } from "../channel-context.js";
 import { extractMessageText, type ChatMessage } from "../commands-subagents-text.js";
 import type { CommandHandler, CommandHandlerResult } from "../commands-types.js";
@@ -32,8 +33,6 @@ export type { ChatMessage } from "../commands-subagents-text.js";
 
 export const COMMAND = "/subagents";
 export const COMMAND_KILL = "/kill";
-export const COMMAND_STEER = "/steer";
-const COMMAND_TELL = "/tell";
 const COMMAND_FOCUS = "/focus";
 const COMMAND_UNFOCUS = "/unfocus";
 const COMMAND_AGENTS = "/agents";
@@ -93,6 +92,7 @@ function resolveSubagentTarget(
     token,
     recentWindowMinutes: RECENT_WINDOW_MINUTES,
     label: (entry) => formatRunLabel(entry),
+    aliases: (entry) => (entry.taskName ? [entry.taskName] : []),
     isActive: (entry) =>
       !entry.endedAt ||
       Math.max(
@@ -132,7 +132,7 @@ export function resolveRequesterSessionKey(
   const commandTarget = normalizeOptionalString(params.ctx.CommandTargetSessionKey);
   const commandSession = normalizeOptionalString(params.sessionKey);
   const shouldPreferCommandTarget =
-    opts?.preferCommandTarget ?? params.ctx.CommandSource === "native";
+    opts?.preferCommandTarget ?? isNativeCommandTurn(resolveCommandTurnContext(params.ctx));
   const raw = shouldPreferCommandTarget
     ? commandTarget || commandSession
     : commandSession || commandTarget;
@@ -171,17 +171,13 @@ export function resolveHandledPrefix(normalized: string): string | null {
     ? COMMAND
     : normalized.startsWith(COMMAND_KILL)
       ? COMMAND_KILL
-      : normalized.startsWith(COMMAND_STEER)
-        ? COMMAND_STEER
-        : normalized.startsWith(COMMAND_TELL)
-          ? COMMAND_TELL
-          : normalized.startsWith(COMMAND_FOCUS)
-            ? COMMAND_FOCUS
-            : normalized.startsWith(COMMAND_UNFOCUS)
-              ? COMMAND_UNFOCUS
-              : normalized.startsWith(COMMAND_AGENTS)
-                ? COMMAND_AGENTS
-                : null;
+      : normalized.startsWith(COMMAND_FOCUS)
+        ? COMMAND_FOCUS
+        : normalized.startsWith(COMMAND_UNFOCUS)
+          ? COMMAND_UNFOCUS
+          : normalized.startsWith(COMMAND_AGENTS)
+            ? COMMAND_AGENTS
+            : null;
 }
 
 export function resolveSubagentsAction(params: {
@@ -209,7 +205,7 @@ export function resolveSubagentsAction(params: {
   if (params.handledPrefix === COMMAND_AGENTS) {
     return "agents";
   }
-  return "steer";
+  return null;
 }
 
 type FocusTargetResolution = {
@@ -291,8 +287,6 @@ export function buildSubagentsHelp() {
     "- /session idle <duration|off>",
     "- /session max-age <duration|off>",
     "- /kill <id|#|all>",
-    "- /steer <id|#> <message>",
-    "- /tell <id|#> <message>",
     "",
     "Ids: use the list index (#), runId/session prefix, label, or full session key.",
   ].join("\n");

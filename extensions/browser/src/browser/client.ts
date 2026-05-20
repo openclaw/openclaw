@@ -11,6 +11,10 @@ import type { BrowserDoctorReport } from "./doctor.js";
 export type { BrowserStatus, BrowserTab, BrowserTransport } from "./client.types.js";
 export type { BrowserDoctorCheck, BrowserDoctorReport } from "./doctor.js";
 
+const BROWSER_STATUS_REQUEST_TIMEOUT_MS = 7_500;
+const BROWSER_DOCTOR_REQUEST_TIMEOUT_MS = 7_500;
+const BROWSER_DEEP_DOCTOR_REQUEST_TIMEOUT_MS = 10_000;
+
 export type ProfileStatus = {
   name: string;
   transport?: BrowserTransport;
@@ -40,6 +44,8 @@ export type SnapshotResult =
       targetId: string;
       url: string;
       nodes: SnapshotAriaNode[];
+      blockedByDialog?: boolean;
+      browserState?: unknown;
     }
   | {
       ok: true;
@@ -60,6 +66,8 @@ export type SnapshotResult =
       labelsSkipped?: number;
       imagePath?: string;
       imageType?: "png" | "jpeg";
+      blockedByDialog?: boolean;
+      browserState?: unknown;
     };
 
 export async function browserStatus(
@@ -71,7 +79,7 @@ export async function browserStatus(
     timeoutMs:
       typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
         ? Math.max(1, Math.floor(opts.timeoutMs))
-        : 1500,
+        : BROWSER_STATUS_REQUEST_TIMEOUT_MS,
   });
 }
 
@@ -88,7 +96,9 @@ export async function browserDoctor(
   }
   const q = params.size ? `?${params.toString()}` : "";
   return await fetchBrowserJson<BrowserDoctorReport>(withBaseUrl(baseUrl, `/doctor${q}`), {
-    timeoutMs: opts?.deep ? 10000 : 3000,
+    timeoutMs: opts?.deep
+      ? BROWSER_DEEP_DOCTOR_REQUEST_TIMEOUT_MS
+      : BROWSER_DOCTOR_REQUEST_TIMEOUT_MS,
   });
 }
 

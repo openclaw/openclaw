@@ -45,16 +45,15 @@ afterEach(() => {
 });
 
 function parseGitHubOutput(output: string): Record<string, string> {
-  return Object.fromEntries(
-    output
-      .trim()
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => {
-        const separator = line.indexOf("=");
-        return [line.slice(0, separator), line.slice(separator + 1)];
-      }),
-  );
+  const parsed: Record<string, string> = {};
+  for (const line of output.trim().split("\n")) {
+    if (!line) {
+      continue;
+    }
+    const separator = line.indexOf("=");
+    parsed[line.slice(0, separator)] = line.slice(separator + 1);
+  }
+  return parsed;
 }
 
 describe("detectChangedScope", () => {
@@ -145,17 +144,17 @@ describe("detectChangedScope", () => {
   });
 
   it("does not force macOS for generated protocol model-only changes", () => {
-    expect(detectChangedScope(["apps/macos/Sources/OpenClawProtocol/GatewayModels.swift"])).toEqual(
-      {
-        runNode: false,
-        runMacos: false,
-        runAndroid: false,
-        runWindows: false,
-        runSkillsPython: false,
-        runChangedSmoke: false,
-        runControlUiI18n: false,
-      },
-    );
+    expect(
+      detectChangedScope(["apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift"]),
+    ).toEqual({
+      runNode: false,
+      runMacos: false,
+      runAndroid: false,
+      runWindows: false,
+      runSkillsPython: false,
+      runChangedSmoke: false,
+      runControlUiI18n: false,
+    });
   });
 
   it("enables node lane for non-native non-doc files by fallback", () => {
@@ -301,10 +300,28 @@ describe("detectChangedScope", () => {
       runChangedSmoke: false,
       runControlUiI18n: false,
     });
+    expect(detectChangedScope(["scripts/install.ps1"])).toEqual({
+      runNode: true,
+      runMacos: false,
+      runAndroid: false,
+      runWindows: true,
+      runSkillsPython: false,
+      runChangedSmoke: true,
+      runControlUiI18n: false,
+    });
   });
 
   it("runs changed-smoke for install and packaging surfaces", () => {
     expect(detectChangedScope(["scripts/install.sh"])).toEqual({
+      runNode: true,
+      runMacos: false,
+      runAndroid: false,
+      runWindows: false,
+      runSkillsPython: false,
+      runChangedSmoke: true,
+      runControlUiI18n: false,
+    });
+    expect(detectChangedScope(["scripts/install-cli.sh"])).toEqual({
       runNode: true,
       runMacos: false,
       runAndroid: false,
@@ -457,6 +474,14 @@ describe("detectChangedScope", () => {
       runFastInstallSmoke: true,
       runFullInstallSmoke: true,
     });
+    expect(detectInstallSmokeScope(["scripts/install-cli.sh"])).toEqual({
+      runFastInstallSmoke: true,
+      runFullInstallSmoke: true,
+    });
+    expect(detectInstallSmokeScope(["scripts/install.ps1"])).toEqual({
+      runFastInstallSmoke: true,
+      runFullInstallSmoke: true,
+    });
     expect(detectInstallSmokeScope(["Dockerfile"])).toEqual({
       runFastInstallSmoke: true,
       runFullInstallSmoke: true,
@@ -579,7 +604,14 @@ describe("detectChangedScope", () => {
         ? `HEAD & echo injected > "${markerPath}" & rem`
         : `HEAD; touch "${markerPath}" #`;
 
-    expect(() => listChangedPaths(injectedBase, "HEAD")).toThrow();
+    let error: unknown;
+    try {
+      listChangedPaths(injectedBase, "HEAD");
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain(injectedBase);
     expect(fs.existsSync(markerPath)).toBe(false);
   });
 

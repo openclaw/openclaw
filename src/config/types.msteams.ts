@@ -1,5 +1,6 @@
 import type {
   BlockStreamingCoalesceConfig,
+  ChannelPreviewStreamingConfig,
   ContextVisibilityMode,
   DmPolicy,
   GroupPolicy,
@@ -8,7 +9,7 @@ import type {
 import type {
   ChannelHealthMonitorConfig,
   ChannelHeartbeatVisibilityConfig,
-} from "./types.channels.js";
+} from "./types.channel-health.js";
 import type { DmConfig } from "./types.messages.js";
 import type { SecretInput } from "./types.secrets.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
@@ -131,6 +132,8 @@ export type MSTeamsConfig = {
   textChunkLimit?: number;
   /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
   chunkMode?: "length" | "newline";
+  /** Preview/progress streaming config for visible in-progress replies. */
+  streaming?: ChannelPreviewStreamingConfig;
   /** Send native Teams typing indicator before replies. Default: true for groups/channels; DMs use informative stream status. */
   typingIndicator?: boolean;
   /** Enable progressive block-by-block message delivery instead of a single reply. */
@@ -191,9 +194,3 @@ export type MSTeamsConfig = {
   /** Bot Framework OAuth SSO (signin/tokenExchange + signin/verifyState) settings. */
   sso?: MSTeamsSsoConfig;
 };
-
-declare module "./types.channels.js" {
-  interface ChannelsConfig {
-    msteams?: MSTeamsConfig;
-  }
-}

@@ -1,5 +1,6 @@
 import type {
   ChannelPreviewStreamingConfig,
+  ChannelStreamingPreviewConfig,
   ContextVisibilityMode,
   DmPolicy,
   GroupPolicy,
@@ -11,7 +12,7 @@ import type {
 import type {
   ChannelHealthMonitorConfig,
   ChannelHeartbeatVisibilityConfig,
-} from "./types.channels.js";
+} from "./types.channel-health.js";
 import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
@@ -61,6 +62,17 @@ export type TelegramNetworkConfig = {
 export type TelegramInlineButtonsScope = "off" | "dm" | "group" | "all" | "allowlist";
 export type TelegramStreamingMode = "off" | "partial" | "block" | "progress";
 export type TelegramExecApprovalTarget = "dm" | "channel" | "both";
+
+export type TelegramStreamingPreviewConfig = ChannelStreamingPreviewConfig & {
+  /** Use Telegram-native ephemeral draft UI for DM preview tool progress. */
+  nativeToolProgress?: boolean;
+  /** Telegram sender/user IDs allowed to use native DM preview tool progress. */
+  nativeToolProgressAllowFrom?: Array<string | number>;
+};
+
+export type TelegramPreviewStreamingConfig = Omit<ChannelPreviewStreamingConfig, "preview"> & {
+  preview?: TelegramStreamingPreviewConfig;
+};
 
 export type TelegramExecApprovalConfig = {
   /** Enable mode for Telegram exec approvals on this account. Default: auto when approvers can be resolved; false disables. */
@@ -148,10 +160,12 @@ export type TelegramAccountConfig = {
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
   /** Streaming + chunking settings. Prefer this nested shape over legacy flat keys. */
-  streaming?: ChannelPreviewStreamingConfig;
+  streaming?: TelegramPreviewStreamingConfig;
   mediaMaxMb?: number;
   /** Telegram API client timeout in seconds (grammY ApiClientOptions). */
   timeoutSeconds?: number;
+  /** Buffer window for Telegram media groups/albums before dispatching them as one inbound message. Default: 500ms. */
+  mediaGroupFlushMs?: number;
   /** Telegram polling watchdog threshold in milliseconds. Default: 120000. */
   pollingStallThresholdMs?: number;
   /** Retry policy for outbound Telegram API calls. */
@@ -321,9 +335,3 @@ export type TelegramConfig = {
   /** Optional default account id when multiple accounts are configured. */
   defaultAccount?: string;
 } & TelegramAccountConfig;
-
-declare module "./types.channels.js" {
-  interface ChannelsConfig {
-    telegram?: TelegramConfig;
-  }
-}

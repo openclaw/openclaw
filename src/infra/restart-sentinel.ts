@@ -3,7 +3,7 @@ import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
-import { writeJsonAtomic } from "./json-files.js";
+import { writeJson } from "./json-files.js";
 
 export type RestartSentinelLog = {
   stdoutTail?: string | null;
@@ -22,6 +22,7 @@ export type RestartSentinelStep = {
 export type RestartSentinelStats = {
   mode?: string;
   root?: string;
+  handoffId?: string;
   before?: Record<string, unknown> | null;
   after?: Record<string, unknown> | null;
   steps?: RestartSentinelStep[];
@@ -84,7 +85,7 @@ export async function writeRestartSentinel(
 ) {
   const filePath = resolveRestartSentinelPath(env);
   const data: RestartSentinel = { version: 1, payload };
-  await writeJsonAtomic(filePath, data, { trailingNewline: true, ensureDirMode: 0o700 });
+  await writeJson(filePath, data, { trailingNewline: true, dirMode: 0o700 });
   return filePath;
 }
 
@@ -142,10 +143,12 @@ export async function markUpdateRestartSentinelFailure(
     if (payload.kind !== "update") {
       return null;
     }
+    const payloadWithoutContinuation = { ...payload };
+    delete payloadWithoutContinuation.continuation;
     const stats = payload.stats ? { ...payload.stats } : {};
     stats.reason = reason;
     return {
-      ...payload,
+      ...payloadWithoutContinuation,
       status: "error",
       stats,
     };

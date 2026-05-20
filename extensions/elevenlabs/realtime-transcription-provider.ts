@@ -7,7 +7,7 @@ import {
   type RealtimeTranscriptionWebSocketTransport,
 } from "openclaw/plugin-sdk/realtime-transcription";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveElevenLabsApiKeyWithProfileFallback } from "./config-api.js";
 import { normalizeElevenLabsBaseUrl } from "./shared.js";
 
@@ -243,6 +243,7 @@ export function buildElevenLabsRealtimeTranscriptionProvider(): RealtimeTranscri
     id: "elevenlabs",
     label: "ElevenLabs Realtime Transcription",
     aliases: ["elevenlabs-realtime", "scribe-v2-realtime"],
+    defaultModel: ELEVENLABS_REALTIME_DEFAULT_MODEL,
     autoSelectOrder: 40,
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
     isConfigured: ({ providerConfig }) =>
@@ -276,7 +277,8 @@ export function buildElevenLabsRealtimeTranscriptionProvider(): RealtimeTranscri
   };
 }
 
-export const __testing = {
+export const testing = {
   normalizeProviderConfig,
   toElevenLabsRealtimeWsUrl,
 };
+export { testing as __testing };

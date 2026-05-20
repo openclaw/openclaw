@@ -3,6 +3,7 @@ import path from "node:path";
 import type { OpenClawConfig } from "../config/types.js";
 import type { PluginCompatCode } from "./compat/registry.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
+import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import type { PluginCandidate } from "./discovery.js";
 import type { PluginInstallSourceInfo } from "./install-source-info.js";
 import { describePluginInstallSource } from "./install-source-info.js";
@@ -17,7 +18,7 @@ import type {
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import type { PluginPackageChannel } from "./manifest.js";
-import { safeRealpathSync } from "./path-safety.js";
+import { isPathInsideWithRealpath, safeRealpathSync } from "./path-safety.js";
 import { hasKind } from "./slots.js";
 
 function sortUnique(values: readonly string[] | undefined): readonly string[] {
@@ -82,7 +83,10 @@ function resolvePackageJsonPath(candidate: PluginCandidate | undefined): string 
   }
   const packageDir = safeRealpathSync(candidate.packageDir) ?? path.resolve(candidate.packageDir);
   const packageJsonPath = path.join(packageDir, "package.json");
-  return fs.existsSync(packageJsonPath) ? packageJsonPath : undefined;
+  const rootDir = safeRealpathSync(candidate.rootDir) ?? path.resolve(candidate.rootDir);
+  return fs.existsSync(packageJsonPath) && isPathInsideWithRealpath(rootDir, packageJsonPath)
+    ? packageJsonPath
+    : undefined;
 }
 
 function resolvePackageJsonRelativePath(rootDir: string, packageJsonPath: string): string {
@@ -226,7 +230,7 @@ export function buildInstalledPluginIndexRecords(params: {
       origin: record.origin,
       config: normalizedConfig,
       rootConfig: params.config,
-      enabledByDefault: record.enabledByDefault,
+      enabledByDefault: isPluginEnabledByDefaultForPlatform(record),
     }).enabled;
     const indexRecord: InstalledPluginIndexRecord = {
       pluginId: record.id,
@@ -248,6 +252,9 @@ export function buildInstalledPluginIndexRecords(params: {
     }
     if (record.enabledByDefault === true) {
       indexRecord.enabledByDefault = true;
+    }
+    if (record.enabledByDefaultOnPlatforms?.length) {
+      indexRecord.enabledByDefaultOnPlatforms = [...record.enabledByDefaultOnPlatforms];
     }
     if (record.syntheticAuthRefs?.length) {
       indexRecord.syntheticAuthRefs = [...record.syntheticAuthRefs];

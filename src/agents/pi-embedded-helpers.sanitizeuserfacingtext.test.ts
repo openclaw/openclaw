@@ -20,6 +20,29 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText("Hi <final>there</final>!")).toBe("Hi there!");
   });
 
+  it("strips self-closing and attributed final tags", () => {
+    expect(sanitizeUserFacingText("<final/>Hello")).toBe("Hello");
+    expect(sanitizeUserFacingText("<final data-model='gemini'>Hello</final>")).toBe("Hello");
+    expect(sanitizeUserFacingText('<final reason="gemma">Hello</final>')).toBe("Hello");
+    expect(sanitizeUserFacingText("<final data-model=openrouter/google/gemini>Hello</final>")).toBe(
+      "Hello",
+    );
+  });
+
+  it("does not strip custom or malformed final-like tags", () => {
+    expect(sanitizeUserFacingText("<final-result>Hello</final-result>")).toBe(
+      "<final-result>Hello</final-result>",
+    );
+    expect(sanitizeUserFacingText('<final reason="a>b">Hello')).toBe('<final reason="a>b">Hello');
+    expect(sanitizeUserFacingText("<final / nottag>Hello")).toBe("<final / nottag>Hello");
+    expect(sanitizeUserFacingText(`<final ${" ".repeat(10_000)}`)).toBe(
+      `<final ${" ".repeat(10_000)}`,
+    );
+    expect(sanitizeUserFacingText(`<final ${" ".repeat(10_000)}= >Hello`)).toBe(
+      `<final ${" ".repeat(10_000)}= >Hello`,
+    );
+  });
+
   it.each(["202 results found", "400 days left"])(
     "does not clobber normal numeric prefix: %s",
     (text) => {
@@ -280,6 +303,113 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText(input)).toBe("Before\n\nAfter");
   });
 
+  it("strips workflow function response wrappers before user-facing delivery", () => {
+    const input = [
+      "Before",
+      "<function_response>",
+      'Searching for: "what skills matter most in the age of AI"',
+      "...",
+      "</function_response>",
+      "After",
+    ].join("\n");
+
+    expect(sanitizeUserFacingText(input)).toBe("Before\n\nAfter");
+  });
+
+  it("strips function response wrappers adjacent to stripped function calls", () => {
+    const input = [
+      '<function_calls><invoke name="exec">internal</invoke></function_calls><function_response>',
+      'Searching for: "what skills matter most in the age of AI"',
+      "</function_response>",
+      "After",
+    ].join("\n");
+
+    expect(sanitizeUserFacingText(input)).toBe("After");
+  });
+
+  it("strips function response wrappers adjacent to inline stripped function calls", () => {
+    const input = [
+      'Checking. <function_calls><invoke name="exec">internal</invoke></function_calls><function_response>',
+      'Searching for: "what skills matter most in the age of AI"',
+      "</function_response>",
+      "After",
+    ].join("\n");
+
+    expect(sanitizeUserFacingText(input)).toBe("Checking. \nAfter");
+  });
+
+  it("strips compact function response wrappers after newline-separated function calls", () => {
+    const input = [
+      'Checking. <function_calls><invoke name="exec">internal</invoke></function_calls>',
+      "<function_response>ok</function_response>",
+      "After",
+    ].join("\n");
+
+    expect(sanitizeUserFacingText(input)).toBe("Checking. \n\nAfter");
+  });
+
+  it("strips compact dangling function response wrappers adjacent to function calls", () => {
+    const input =
+      'Checking. <function_calls><invoke name="exec">internal</invoke></function_calls><function_response>raw output';
+
+    expect(sanitizeUserFacingText(input)).toBe("Checking. ");
+  });
+
+  it("strips same-line function response payloads with leading spaces", () => {
+    const input =
+      '<function_calls><invoke name="exec">internal</invoke></function_calls><function_response> raw output</function_response>\nAfter';
+
+    expect(sanitizeUserFacingText(input)).toBe("After");
+  });
+
+  it("strips same-line function response payloads that start like prose", () => {
+    const input =
+      '<function_calls><invoke name="exec">internal</invoke></function_calls><function_response> is enabled</function_response>\nAfter';
+
+    expect(sanitizeUserFacingText(input)).toBe("After");
+  });
+
+  it("strips adjacent function response payloads that match explanation wording", () => {
+    const input =
+      '<function_calls><invoke name="exec">internal</invoke></function_calls><function_response> response wrapper secret</function_response>\nAfter';
+
+    expect(sanitizeUserFacingText(input)).toBe("After");
+  });
+
+  it("strips dangling same-line function response payloads with leading spaces", () => {
+    const input =
+      'Checking. <function_calls><invoke name="exec">internal</invoke></function_calls><function_response> raw output';
+
+    expect(sanitizeUserFacingText(input)).toBe("Checking. ");
+  });
+
+  it("strips chained function response wrappers adjacent to stripped function calls", () => {
+    const input = [
+      'Checking. <function_calls><invoke name="exec">internal</invoke></function_calls><function_response>',
+      "first result",
+      "</function_response><function_response>",
+      "second result",
+      "</function_response>",
+      "After",
+    ].join("\n");
+
+    expect(sanitizeUserFacingText(input)).toBe("Checking. \nAfter");
+  });
+
+  it("strips compact chained function response wrappers adjacent to stripped function calls", () => {
+    const input =
+      'Checking. <function_calls><invoke name="exec">internal</invoke></function_calls><function_response>first</function_response><function_response>second</function_response>\nAfter';
+
+    expect(sanitizeUserFacingText(input)).toBe("Checking. \nAfter");
+  });
+
+  it("strips compact function response wrappers before same-line visible replies", () => {
+    const input =
+      'Checking. <function_calls><invoke name="exec">internal</invoke></function_calls><function_response>raw</function_response> Done.';
+
+    expect(sanitizeUserFacingText(input)).toBe("Checking.  Done.");
+  });
+
   it("preserves literal tool-call tag examples in user-facing prose", () => {
     const input = "Use `<tool_call>` to describe the XML tag in docs.";
     expect(sanitizeUserFacingText(input)).toBe(input);
@@ -506,7 +636,7 @@ describe("stripThoughtSignatures", () => {
     ]);
   });
   it("handles empty array", () => {
-    expect(stripThoughtSignatures([])).toEqual([]);
+    expect(stripThoughtSignatures([])).toStrictEqual([]);
   });
   it("handles null/undefined blocks in array", () => {
     const input = [null, undefined, { type: "text", text: "hello" }];
@@ -638,7 +768,7 @@ describe("downgradeOpenAIReasoningBlocks", () => {
       },
     ];
 
-    expect(downgradeOpenAIReasoningBlocks(input as any)).toEqual([]);
+    expect(downgradeOpenAIReasoningBlocks(input as any)).toStrictEqual([]);
   });
 
   it("keeps non-reasoning thinking signatures", () => {
@@ -797,6 +927,13 @@ describe("isMessagingToolDuplicate", () => {
       input: "Hello, this is a test message!",
       sentTexts: ['I sent the message: "Hello, this is a test message!"'],
       expected: true,
+    },
+    {
+      input: "v2ex hot topics delivered to telegram",
+      sentTexts: [
+        "1. some article title\n2. another title\nv2ex hot topics delivered to telegram\n3. yet another",
+      ],
+      expected: false,
     },
     {
       input: "This is completely different content.",

@@ -258,7 +258,7 @@ lives on the [First-run FAQ](/help/faq-first-run).
     openclaw cron runs --id <jobId> --limit 50
     ```
 
-    Docs: [Cron jobs](/automation/cron-jobs), [Automation & Tasks](/automation).
+    Docs: [Cron jobs](/automation/cron-jobs), [Automation](/automation).
 
   </Accordion>
 
@@ -324,16 +324,19 @@ lives on the [First-run FAQ](/help/faq-first-run).
     openclaw skills install <skill-slug>
     openclaw skills install <skill-slug> --version <version>
     openclaw skills install <skill-slug> --force
+    openclaw skills install <skill-slug> --global
     openclaw skills update --all
+    openclaw skills update --all --global
     openclaw skills list --eligible
     openclaw skills check
     ```
 
     Native `openclaw skills install` writes into the active workspace `skills/`
-    directory. Install the separate `clawhub` CLI only if you want to publish or
-    sync your own skills. For shared installs across agents, put the skill under
-    `~/.openclaw/skills` and use `agents.defaults.skills` or
-    `agents.list[].skills` if you want to narrow which agents can see it.
+    directory by default. Add `--global` to install into the shared managed
+    skills directory for all local agents. Install the separate `clawhub` CLI
+    only if you want to publish or sync your own skills. Use
+    `agents.defaults.skills` or `agents.list[].skills` if you want to narrow
+    which agents can see shared skills.
 
   </Accordion>
 
@@ -344,7 +347,7 @@ lives on the [First-run FAQ](/help/faq-first-run).
     - **Heartbeat** for "main session" periodic checks.
     - **Isolated jobs** for autonomous agents that post summaries or deliver to chats.
 
-    Docs: [Cron jobs](/automation/cron-jobs), [Automation & Tasks](/automation),
+    Docs: [Cron jobs](/automation/cron-jobs), [Automation](/automation),
     [Heartbeat](/gateway/heartbeat).
 
   </Accordion>
@@ -409,7 +412,7 @@ lives on the [First-run FAQ](/help/faq-first-run).
     openclaw skills update --all
     ```
 
-    Native installs land in the active workspace `skills/` directory. For shared skills across agents, place them in `~/.openclaw/skills/<name>/SKILL.md`. If only some agents should see a shared install, configure `agents.defaults.skills` or `agents.list[].skills`. Some skills expect binaries installed via Homebrew; on Linux that means Linuxbrew (see the Homebrew Linux FAQ entry above). See [Skills](/tools/skills), [Skills config](/tools/skills-config), and [ClawHub](/tools/clawhub).
+    Native installs land in the active workspace `skills/` directory. For shared skills across all local agents, use `openclaw skills install <slug> --global` (or place them manually in `~/.openclaw/skills/<name>/SKILL.md`). If only some agents should see a shared install, configure `agents.defaults.skills` or `agents.list[].skills`. Some skills expect binaries installed via Homebrew; on Linux that means Linuxbrew (see the Homebrew Linux FAQ entry above). See [Skills](/tools/skills), [Skills config](/tools/skills-config), and [ClawHub](/tools/clawhub).
 
   </Accordion>
 
@@ -451,7 +454,7 @@ lives on the [First-run FAQ](/help/faq-first-run).
     include system packages, Homebrew, or bundled browsers. For a fuller setup:
 
     - Persist `/home/node` with `OPENCLAW_HOME_VOLUME` so caches survive.
-    - Bake system deps into the image with `OPENCLAW_DOCKER_APT_PACKAGES`.
+    - Bake system deps into the image with `OPENCLAW_IMAGE_APT_PACKAGES`.
     - Install Playwright browsers via the bundled CLI:
       `node /app/node_modules/playwright-core/cli.js install chromium`
     - Set `PLAYWRIGHT_BROWSERS_PATH` and ensure the path is persisted.
@@ -695,7 +698,7 @@ lives on the [First-run FAQ](/help/faq-first-run).
   </Accordion>
 
   <Accordion title="Why do I need a token on localhost now?">
-    OpenClaw enforces gateway auth by default, including loopback. In the normal default path that means token auth: if no explicit auth path is configured, gateway startup resolves to token mode and auto-generates one, saving it to `gateway.auth.token`, so **local WS clients must authenticate**. This blocks other local processes from calling the Gateway.
+    OpenClaw enforces gateway auth by default, including loopback. In the normal default path that means token auth: if no explicit auth path is configured, gateway startup resolves to token mode and generates a runtime-only token for that startup, so **local WS clients must authenticate**. Configure `gateway.auth.token`, `gateway.auth.password`, `OPENCLAW_GATEWAY_TOKEN`, or `OPENCLAW_GATEWAY_PASSWORD` explicitly when clients need a stable secret across restarts. This blocks other local processes from calling the Gateway.
 
     If you prefer a different auth path, you can explicitly choose password mode (or, for identity-aware reverse proxies, `trusted-proxy`). If you **really** want open loopback, set `gateway.auth.mode: "none"` explicitly in your config. Doctor can generate a token for you any time: `openclaw doctor --generate-gateway-token`.
 
@@ -804,15 +807,15 @@ lives on the [First-run FAQ](/help/faq-first-run).
 
     - OpenClaw-owned config writes validate the full post-change config before writing.
     - Invalid or destructive OpenClaw-owned writes are rejected and saved as `openclaw.json.rejected.*`.
-    - If a direct edit breaks startup or hot reload, the Gateway restores the last-known-good config and saves the rejected file as `openclaw.json.clobbered.*`.
-    - The main agent receives a boot warning after recovery so it does not blindly write the bad config again.
+    - If a direct edit breaks startup or hot reload, Gateway fails closed or skips the reload; it does not rewrite `openclaw.json`.
+    - `openclaw doctor --fix` owns repair and can restore last-known-good while saving the rejected file as `openclaw.json.clobbered.*`.
 
     Recover:
 
-    - Check `openclaw logs --follow` for `Config auto-restored from last-known-good`, `Config write rejected:`, or `config reload restored last-known-good config`.
+    - Check `openclaw logs --follow` for `Invalid config at`, `Config write rejected:`, or `config reload skipped (invalid config)`.
     - Inspect the newest `openclaw.json.clobbered.*` or `openclaw.json.rejected.*` beside the active config.
-    - Keep the active restored config if it works, then copy only the intended keys back with `openclaw config set` or `config.patch`.
-    - Run `openclaw config validate` and `openclaw doctor`.
+    - Run `openclaw config validate` and `openclaw doctor --fix`.
+    - Copy only the intended keys back with `openclaw config set` or `config.patch`.
     - If you have no last-known-good or rejected payload, restore from backup, or re-run `openclaw doctor` and reconfigure channels/models.
     - If this was unexpected, file a bug and include your last known config or any backup.
     - A local coding agent can often reconstruct a working config from logs or history.
@@ -825,7 +828,7 @@ lives on the [First-run FAQ](/help/faq-first-run).
     - Use `config.patch` for partial RPC edits; keep `config.apply` for full-config replacement only.
     - If you are using the owner-only `gateway` tool from an agent run, it will still reject writes to `tools.exec.ask` / `tools.exec.security` (including legacy `tools.bash.*` aliases that normalize to the same protected exec paths).
 
-    Docs: [Config](/cli/config), [Configure](/cli/configure), [Gateway troubleshooting](/gateway/troubleshooting#gateway-restored-last-known-good-config), [Doctor](/gateway/doctor).
+    Docs: [Config](/cli/config), [Configure](/cli/configure), [Gateway troubleshooting](/gateway/troubleshooting#gateway-rejected-invalid-config), [Doctor](/gateway/doctor).
 
   </Accordion>
 
@@ -988,7 +991,7 @@ lives on the [First-run FAQ](/help/faq-first-run).
     to the gateway (iOS/Android nodes, or macOS "node mode" in the menubar app). For headless node
     hosts and CLI control, see [Node host CLI](/cli/node).
 
-    A full restart is required for `gateway`, `discovery`, and `canvasHost` changes.
+    A full restart is required for `gateway`, `discovery`, and hosted plugin surface changes.
 
   </Accordion>
 
@@ -1459,7 +1462,7 @@ lives on the [Models FAQ](/help/faq-models).
     - On `AUTH_TOKEN_MISMATCH`, trusted clients can attempt one bounded retry with a cached device token when the gateway returns retry hints (`canRetryWithDeviceToken=true`, `recommendedNextStep=retry_with_device_token`).
     - That cached-token retry now reuses the cached approved scopes stored with the device token. Explicit `deviceToken` / explicit `scopes` callers still keep their requested scope set instead of inheriting cached scopes.
     - Outside that retry path, connect auth precedence is explicit shared token/password first, then explicit `deviceToken`, then stored device token, then bootstrap token.
-    - Bootstrap token scope checks are role-prefixed. The built-in bootstrap operator allowlist only satisfies operator requests; node or other non-operator roles still need scopes under their own role prefix.
+    - Built-in setup-code bootstrap is node-only. After approval, it returns a node device token with `scopes: []` and does not return a handed-off operator token.
 
     Fix:
 
@@ -1560,7 +1563,7 @@ lives on the [Models FAQ](/help/faq-models).
 
     Service/supervisor logs (when the gateway runs via launchd/systemd):
 
-    - macOS: `$OPENCLAW_STATE_DIR/logs/gateway.log` and `gateway.err.log` (default: `~/.openclaw/logs/...`; profiles use `~/.openclaw-<profile>/logs/...`)
+    - macOS launchd stdout: `~/Library/Logs/openclaw/gateway.log` (profiles use `gateway-<profile>.log`; stderr is suppressed)
     - Linux: `journalctl --user -u openclaw-gateway[-<profile>].service -n 200 --no-pager`
     - Windows: `schtasks /Query /TN "OpenClaw Gateway (<profile>)" /V /FO LIST`
 
@@ -1941,16 +1944,14 @@ lives on the [Models FAQ](/help/faq-models).
   </Accordion>
 
   <Accordion title='Why does it feel like the bot "ignores" rapid-fire messages?'>
-    Queue mode controls how new messages interact with an in-flight run. Use `/queue` to change modes:
+    Mid-run prompts are steered into the active run by default. Use `/queue` to choose active-run behavior:
 
-    - `steer` - queue all pending steering for the next model boundary in the current run
-    - `queue` - legacy one-at-a-time steering
-    - `followup` - run messages one at a time
-    - `collect` - batch messages and reply once
-    - `steer-backlog` - steer now, then process backlog
+    - `steer` - guide the active run at the next model boundary
+    - `followup` - queue messages and run them one at a time after the current run ends
+    - `collect` - queue compatible messages and reply once after the current run ends
     - `interrupt` - abort current run and start fresh
 
-    Default mode is `steer`. You can add options like `debounce:0.5s cap:25 drop:summarize` for followup modes. See [Command queue](/concepts/queue) and [Steering queue](/concepts/queue-steering).
+    Default mode is `steer`. You can add options like `debounce:0.5s cap:25 drop:summarize` for queued modes. See [Command queue](/concepts/queue) and [Steering queue](/concepts/queue-steering).
 
   </Accordion>
 </AccordionGroup>

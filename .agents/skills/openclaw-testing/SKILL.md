@@ -19,9 +19,16 @@ or validating a change without wasting hours.
 Prove the touched surface first. Do not reflexively run the whole suite.
 
 1. Inspect the diff and classify the touched surface:
-   - source: `pnpm changed:lanes --json`, then `pnpm check:changed`
-   - tests only: `pnpm test:changed`
-   - one failing file: `pnpm test <path-or-filter> -- --reporter=verbose`
+   - normal source checkout, source change: `pnpm changed:lanes --json`, then `pnpm check:changed`
+   - normal source checkout, tests only: `pnpm test:changed`
+   - normal source checkout, one failing file: `pnpm test <path-or-filter> -- --reporter=verbose`
+   - Codex worktree or linked/sparse checkout, one/few explicit files: `node scripts/run-vitest.mjs <path-or-filter>`
+   - Codex worktree or linked/sparse checkout, changed gates or anything broad:
+     use the Crabbox wrapper with the provider that matches the proof surface.
+     For maintainer heavy `pnpm` gates, that is usually delegated Blacksmith
+     Testbox through Crabbox, e.g. `node scripts/crabbox-wrapper.mjs run
+--provider blacksmith-testbox ... -- pnpm check:changed`. For direct AWS
+     Crabbox proof, omit `--provider` and let `.crabbox.yaml` choose AWS.
    - workflow-only: `git diff --check`, workflow syntax/lint (`actionlint` when available)
    - docs-only: `pnpm docs:list`, docs formatter/lint only if docs tooling changed or requested
 2. Reproduce narrowly before fixing.
@@ -36,14 +43,24 @@ Prove the touched surface first. Do not reflexively run the whole suite.
 - Prefer GitHub Actions for release/Docker proof when the workflow already has the prepared image and secrets.
 - Use `scripts/committer "<msg>" <paths...>` when committing; stage only your files.
 - If deps are missing, run `pnpm install`, retry once, then report the first actionable error.
-- For Blacksmith Testbox proof, reuse only an id warmed and claimed in this
-  operator session. `blacksmith testbox list` is diagnostics only; a listed id
-  can have a local key and still carry stale rsync state from another lane.
-  After warmup, run `pnpm testbox:claim --id <id>`, then prefer
-  `pnpm testbox:run --id <id> -- "<command>"` for OpenClaw gates so stale
-  org-visible ids fail fast before syncing. Claims older than 12 hours are
-  stale unless `OPENCLAW_TESTBOX_CLAIM_TTL_MINUTES` is explicitly set for long
-  work.
+- In a Codex worktree or linked/sparse checkout, do not run direct local
+  `pnpm test*`, `pnpm check*`, `pnpm crabbox:run`, or `scripts/committer` until
+  you have verified pnpm will not reconcile or reinstall dependencies. Use
+  `node scripts/run-vitest.mjs` for tiny local proof, `node
+scripts/crabbox-wrapper.mjs` for Testbox, and `git commit --no-verify` only
+  after the relevant remote or node-wrapper proof is already clean.
+- For remote proof, use the Crabbox wrapper first, but name the actual backend.
+  Direct AWS Crabbox uses `provider=aws` and `cbx_...` ids. Delegated
+  Blacksmith Testbox through Crabbox uses `provider=blacksmith-testbox`,
+  `syncDelegated=true`, and `tbx_...` ids. Both satisfy "remote proof" when the
+  requested proof surface allows either.
+- Do not infer "no Testbox is running" from plain `blacksmith testbox list`.
+  Use `blacksmith testbox list --all` or `blacksmith testbox status <tbx_id>`
+  before reporting cloud state.
+- Reuse only an id/slug created in this operator session unless explicitly
+  coordinating with another lane. If Testbox queues, fails capacity, or cannot
+  allocate, report the blocker or switch to direct AWS Crabbox only when that
+  still proves the requested surface.
 
 ## Local Test Shortcuts
 
@@ -58,6 +75,14 @@ OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test <path-or-filter>
 
 Use targeted file paths whenever possible. Avoid raw `vitest`; use the repo
 `pnpm test` wrapper so project routing, workers, and setup stay correct.
+When the checkout is a Codex worktree, prefer the direct node harness instead:
+
+```bash
+node scripts/run-vitest.mjs <path-or-filter>
+```
+
+That keeps the test scoped without giving pnpm a chance to run dependency
+status checks or install reconciliation in a linked worktree.
 
 ## Command Semantics
 
@@ -106,6 +131,8 @@ gh run view <run-id> --job <job-id> --log
 - Check exact SHA. Ignore newer unrelated `main` unless asked.
 - For cancelled same-branch runs, confirm whether a newer run superseded it.
 - Fetch full logs only for failed or relevant jobs.
+- Prefer `gh run view <run-id> --json jobs` over PR rollup while debugging; rollup can be stale/noisy.
+- For `prompt:snapshots:check` failures, treat Linux Node 24 as CI truth. If macOS passes but CI drifts, reproduce in a Linux Node 24 container or Testbox, commit that generated output, then rerun.
 
 ## GitHub Release Workflows
 
@@ -554,6 +581,13 @@ timing, timeout state, image kind, and log file path. The summary also includes
 top-level phase timings for preflight, image build, package prep, lane pools,
 and cleanup. Use `pnpm test:docker:timings <summary.json>` to rank slow lanes
 and phases before deciding whether a broader rerun is justified.
+
+Skill install proof: use `pnpm test:docker:skill-install` or targeted
+`docker_lanes=skill-install` for live ClawHub skill-install validation. The
+lane installs the package tarball in a bare runner, keeps
+`skills.install.allowUploadedArchives=false`, resolves the current live slug
+from `openclaw skills search`, installs it, and verifies `.clawhub` origin/lock
+metadata. Prefer this checked-in script over inline heredoc Testbox recipes.
 
 ## Cheap Docker Reruns
 

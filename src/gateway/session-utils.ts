@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { resolveAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
+import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import {
   listAgentIds,
   resolveAgentConfig,
@@ -56,7 +56,7 @@ import {
   type SessionScope,
 } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
 import {
   DEFAULT_AGENT_ID,
@@ -79,9 +79,9 @@ import {
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
 import { normalizeSessionDeliveryFields } from "../utils/delivery-context.shared.js";
+import type { ModelCostConfig } from "../utils/usage-format.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
 import {
-  canonicalizeSpawnedByForAgent,
   resolveSessionStoreAgentId,
   resolveSessionStoreKey,
   resolveStoredSessionKeyForAgentStore,
@@ -168,7 +168,7 @@ function resolveIdentityAvatarUrl(
     return undefined;
   }
   try {
-    const opened = openBoundaryFileSync({
+    const opened = openRootFileSync({
       absolutePath: resolvedCandidate,
       rootPath: workspaceRoot,
       rootRealPath: workspaceRoot,
@@ -256,20 +256,52 @@ function resolveNonNegativeNumber(value: number | null | undefined): number | un
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
-function resolveLatestCompactionCheckpoint(
+type SessionCompactionCheckpointEntry = NonNullable<SessionEntry["compactionCheckpoints"]>[number];
+
+function isProjectableCompactionCheckpoint(
+  value: unknown,
+): value is SessionCompactionCheckpointEntry {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const checkpoint = value as {
+    checkpointId?: unknown;
+    createdAt?: unknown;
+    reason?: unknown;
+  };
+  return (
+    Boolean(normalizeOptionalString(checkpoint.checkpointId)) &&
+    typeof checkpoint.createdAt === "number" &&
+    Number.isFinite(checkpoint.createdAt) &&
+    (checkpoint.reason === "manual" ||
+      checkpoint.reason === "auto-threshold" ||
+      checkpoint.reason === "overflow-retry" ||
+      checkpoint.reason === "timeout-retry")
+  );
+}
+
+function resolveProjectableCompactionCheckpoints(
   entry?: Pick<SessionEntry, "compactionCheckpoints"> | null,
-): NonNullable<SessionEntry["compactionCheckpoints"]>[number] | undefined {
+): SessionCompactionCheckpointEntry[] {
   const checkpoints = entry?.compactionCheckpoints;
   if (!Array.isArray(checkpoints) || checkpoints.length === 0) {
-    return undefined;
+    return [];
   }
-  return checkpoints.reduce((latest, checkpoint) =>
-    !latest || checkpoint.createdAt > latest.createdAt ? checkpoint : latest,
+  return checkpoints.filter(isProjectableCompactionCheckpoint);
+}
+
+function resolveLatestCompactionCheckpoint(
+  checkpoints: readonly SessionCompactionCheckpointEntry[],
+): SessionCompactionCheckpointEntry | undefined {
+  return checkpoints.reduce<SessionCompactionCheckpointEntry | undefined>(
+    (latest, checkpoint) =>
+      !latest || checkpoint.createdAt > latest.createdAt ? checkpoint : latest,
+    undefined,
   );
 }
 
 function buildCompactionCheckpointPreview(
-  checkpoint: NonNullable<SessionEntry["compactionCheckpoints"]>[number] | undefined,
+  checkpoint: SessionCompactionCheckpointEntry | undefined,
 ): GatewaySessionRow["latestCompactionCheckpoint"] {
   if (!checkpoint) {
     return undefined;
@@ -295,6 +327,24 @@ function buildCompactionCheckpointPreview(
   };
 }
 
+function resolveModelCostConfigCached(
+  provider: string | undefined,
+  model: string | undefined,
+  cfg: OpenClawConfig,
+  rowContext?: SessionListRowContext,
+): ModelCostConfig | undefined {
+  if (!rowContext) {
+    return resolveModelCostConfig({ provider, model, config: cfg });
+  }
+  const key = createSessionRowModelCacheKey(provider, model);
+  if (rowContext.modelCostConfigByModelRef.has(key)) {
+    return rowContext.modelCostConfigByModelRef.get(key);
+  }
+  const value = resolveModelCostConfig({ provider, model, config: cfg });
+  rowContext.modelCostConfigByModelRef.set(key, value);
+  return value;
+}
+
 function resolveEstimatedSessionCostUsd(params: {
   cfg: OpenClawConfig;
   provider?: string;
@@ -304,6 +354,7 @@ function resolveEstimatedSessionCostUsd(params: {
     "estimatedCostUsd" | "inputTokens" | "outputTokens" | "cacheRead" | "cacheWrite"
   >;
   explicitCostUsd?: number;
+  rowContext?: SessionListRowContext;
 }): number | undefined {
   const explicitCostUsd = resolveNonNegativeNumber(
     params.explicitCostUsd ?? params.entry?.estimatedCostUsd,
@@ -323,11 +374,12 @@ function resolveEstimatedSessionCostUsd(params: {
   ) {
     return undefined;
   }
-  const cost = resolveModelCostConfig({
-    provider: params.provider,
-    model: params.model,
-    config: params.cfg,
-  });
+  const cost = resolveModelCostConfigCached(
+    params.provider,
+    params.model,
+    params.cfg,
+    params.rowContext,
+  );
   if (!cost) {
     return undefined;
   }
@@ -372,6 +424,20 @@ function shouldKeepStoreOnlyChildLink(entry: SessionEntry, now: number): boolean
 type SessionListRowContext = {
   subagentRuns: ReturnType<typeof buildSubagentRunReadIndex>;
   storeChildSessionsByKey: Map<string, string[]>;
+  selectedModelByOverrideRef: Map<string, ReturnType<typeof resolveSessionModelRef>>;
+  // Per-list memoization for deterministic resolvers that scale linearly with
+  // session count but only depend on (provider, model[, agentId]). Sessions
+  // in a single list typically share a small set of those tuples, so caching
+  // here collapses the work to O(unique tuples) per call.
+  thinkingMetadataByModelRef: Map<
+    string,
+    {
+      levels: ReturnType<typeof listThinkingLevelOptions>;
+      defaultLevel: ReturnType<typeof resolveGatewaySessionThinkingDefault>;
+    }
+  >;
+  displayModelIdentityByKey: Map<string, { provider?: string; model?: string }>;
+  modelCostConfigByModelRef: Map<string, ModelCostConfig | undefined>;
 };
 
 function resolveRuntimeChildSessionKeys(
@@ -488,7 +554,95 @@ function buildSessionListRowContext(params: {
   return {
     subagentRuns,
     storeChildSessionsByKey: buildStoreChildSessionIndex(params.store, params.now, subagentRuns),
+    selectedModelByOverrideRef: new Map(),
+    thinkingMetadataByModelRef: new Map(),
+    displayModelIdentityByKey: new Map(),
+    modelCostConfigByModelRef: new Map(),
   };
+}
+
+function createSessionRowModelCacheKey(provider: string | undefined, model: string | undefined) {
+  return `${normalizeLowercaseStringOrEmpty(provider)}\0${normalizeOptionalString(model) ?? ""}`;
+}
+
+function resolveSessionSelectedModelRef(params: {
+  cfg: OpenClawConfig;
+  entry?: SessionEntry;
+  agentId: string;
+  rowContext?: SessionListRowContext;
+  allowPluginNormalization?: boolean;
+}): ReturnType<typeof resolveSessionModelRef> | null {
+  const override = normalizeStoredOverrideModel({
+    providerOverride: params.entry?.providerOverride,
+    modelOverride: params.entry?.modelOverride,
+  });
+  if (!override.modelOverride) {
+    return null;
+  }
+  if (!params.rowContext) {
+    return resolveSessionModelRef(params.cfg, params.entry, params.agentId, {
+      allowPluginNormalization: params.allowPluginNormalization,
+    });
+  }
+  const key = [
+    normalizeAgentId(params.agentId),
+    override.providerOverride ?? "",
+    override.modelOverride,
+  ].join("\0");
+  const cached = params.rowContext.selectedModelByOverrideRef.get(key);
+  if (cached) {
+    return cached;
+  }
+  const selected = resolveSessionModelRef(params.cfg, params.entry, params.agentId, {
+    allowPluginNormalization: params.allowPluginNormalization,
+  });
+  params.rowContext.selectedModelByOverrideRef.set(key, selected);
+  return selected;
+}
+
+function resolveSessionRowThinkingMetadata(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  provider: string;
+  model: string;
+  modelCatalog?: ModelCatalogEntry[];
+  rowContext?: SessionListRowContext;
+}): {
+  levels: ReturnType<typeof listThinkingLevelOptions>;
+  defaultLevel: ReturnType<typeof resolveGatewaySessionThinkingDefault>;
+} {
+  if (!params.rowContext) {
+    return {
+      levels: listThinkingLevelOptions(params.provider, params.model, params.modelCatalog),
+      defaultLevel: resolveGatewaySessionThinkingDefault({
+        cfg: params.cfg,
+        provider: params.provider,
+        model: params.model,
+        agentId: params.agentId,
+        modelCatalog: params.modelCatalog,
+      }),
+    };
+  }
+  const key = `${normalizeAgentId(params.agentId)}\0${createSessionRowModelCacheKey(
+    params.provider,
+    params.model,
+  )}`;
+  const cached = params.rowContext.thinkingMetadataByModelRef.get(key);
+  if (cached) {
+    return cached;
+  }
+  const metadata = {
+    levels: listThinkingLevelOptions(params.provider, params.model, params.modelCatalog),
+    defaultLevel: resolveGatewaySessionThinkingDefault({
+      cfg: params.cfg,
+      provider: params.provider,
+      model: params.model,
+      agentId: params.agentId,
+      modelCatalog: params.modelCatalog,
+    }),
+  };
+  params.rowContext.thinkingMetadataByModelRef.set(key, metadata);
+  return metadata;
 }
 
 function mergeChildSessionKeys(
@@ -529,6 +683,7 @@ function resolveTranscriptUsageFallback(params: {
   fallbackProvider?: string;
   fallbackModel?: string;
   maxTranscriptBytes?: number;
+  rowContext?: SessionListRowContext;
 }): {
   estimatedCostUsd?: number;
   totalTokens?: number;
@@ -575,6 +730,7 @@ function resolveTranscriptUsageFallback(params: {
       cacheRead: snapshot.cacheRead,
       cacheWrite: snapshot.cacheWrite,
     },
+    rowContext: params.rowContext,
   });
   return {
     modelProvider,
@@ -606,12 +762,13 @@ export function resolveDeletedAgentIdFromSessionKey(
   return agentId;
 }
 
-export function loadSessionEntry(sessionKey: string) {
+export function loadSessionEntry(sessionKey: string, opts?: { agentId?: string }) {
   const cfg = getRuntimeConfig();
   const key = normalizeOptionalString(sessionKey) ?? "";
   const target = resolveGatewaySessionStoreTarget({
     cfg,
     key,
+    ...(opts?.agentId ? { agentId: opts.agentId } : {}),
   });
   const storePath = target.storePath;
   const store = loadSessionStore(storePath);
@@ -885,6 +1042,7 @@ export function listAgentsForGateway(cfg: OpenClawConfig): {
     if (!entry?.id) {
       continue;
     }
+    const configuredName = normalizeOptionalString(entry.name);
     const identity = entry.identity
       ? {
           name: normalizeOptionalString(entry.identity.name),
@@ -899,7 +1057,7 @@ export function listAgentsForGateway(cfg: OpenClawConfig): {
         }
       : undefined;
     configuredById.set(normalizeAgentId(entry.id), {
-      name: normalizeOptionalString(entry.name),
+      name: configuredName ?? identity?.name,
       identity,
     });
   }
@@ -918,13 +1076,21 @@ export function listAgentsForGateway(cfg: OpenClawConfig): {
   const agents = agentIds.map((id) => {
     const meta = configuredById.get(id);
     const model = resolveGatewayAgentModel(cfg, id);
+    const resolvedModel = resolveDefaultModelForAgent({ cfg, agentId: id });
     return Object.assign(
       {
         id,
         name: meta?.name,
         identity: meta?.identity,
         workspace: resolveAgentWorkspaceDir(cfg, id),
-        agentRuntime: resolveAgentRuntimeMetadata(cfg, id),
+        agentRuntime: resolveModelAgentRuntimeMetadata({
+          cfg,
+          agentId: id,
+          provider: resolvedModel.provider,
+          model: resolvedModel.model,
+          sessionKey: resolveAgentMainSessionKey({ cfg, agentId: id }),
+          acpRuntime: false,
+        }),
       },
       model ? { model } : {},
     );
@@ -1107,6 +1273,7 @@ function resolveExplicitDeletedLegacyMainStoreTarget(params: {
 export function resolveGatewaySessionStoreTarget(params: {
   cfg: OpenClawConfig;
   key: string;
+  agentId?: string;
   scanLegacyKeys?: boolean;
   store?: Record<string, SessionEntry>;
 }): {
@@ -1129,7 +1296,11 @@ export function resolveGatewaySessionStoreTarget(params: {
     cfg: params.cfg,
     sessionKey: key,
   });
-  const agentId = resolveSessionStoreAgentId(params.cfg, canonicalKey);
+  const requestedAgentId = normalizeOptionalString(params.agentId);
+  const agentId =
+    canonicalKey === "global" && requestedAgentId
+      ? normalizeAgentId(requestedAgentId)
+      : resolveSessionStoreAgentId(params.cfg, canonicalKey);
   const { storePath, store } = resolveGatewaySessionStoreLookup({
     cfg: params.cfg,
     key,
@@ -1197,11 +1368,13 @@ export function resolveGatewaySessionThinkingDefault(params: {
 export function getSessionDefaults(
   cfg: OpenClawConfig,
   modelCatalog?: ModelCatalogEntry[],
+  options?: { allowPluginNormalization?: boolean },
 ): GatewaySessionsDefaults {
   const resolved = resolveConfiguredModelRef({
     cfg,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
+    allowPluginNormalization: options?.allowPluginNormalization,
   });
   const contextTokens =
     cfg.agents?.defaults?.contextTokens ??
@@ -1229,26 +1402,46 @@ export function resolveSessionModelRef(
     | SessionEntry
     | Pick<SessionEntry, "model" | "modelProvider" | "modelOverride" | "providerOverride">,
   agentId?: string,
+  options?: { allowPluginNormalization?: boolean },
 ): { provider: string; model: string } {
-  const resolved = agentId
-    ? resolveDefaultModelForAgent({ cfg, agentId })
-    : resolveConfiguredModelRef({
-        cfg,
-        defaultProvider: DEFAULT_PROVIDER,
-        defaultModel: DEFAULT_MODEL,
-      });
-
   const normalizedOverride = normalizeStoredOverrideModel({
     providerOverride: entry?.providerOverride,
     modelOverride: entry?.modelOverride,
   });
+  if (normalizedOverride.providerOverride && normalizedOverride.modelOverride) {
+    return resolvePersistedSelectedModelRef({
+      defaultProvider: normalizedOverride.providerOverride,
+      overrideProvider: normalizedOverride.providerOverride,
+      overrideModel: normalizedOverride.modelOverride,
+      allowPluginNormalization: options?.allowPluginNormalization,
+    })!;
+  }
+  const runtimeProvider = normalizeOptionalString(entry?.modelProvider);
+  const runtimeModel = normalizeOptionalString(entry?.model);
+  if (runtimeProvider && runtimeModel) {
+    return { provider: runtimeProvider, model: runtimeModel };
+  }
+
+  const resolved = agentId
+    ? resolveDefaultModelForAgent({
+        cfg,
+        agentId,
+        allowPluginNormalization: options?.allowPluginNormalization,
+      })
+    : resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: DEFAULT_PROVIDER,
+        defaultModel: DEFAULT_MODEL,
+        allowPluginNormalization: options?.allowPluginNormalization,
+      });
 
   const persisted = resolvePersistedSelectedModelRef({
     defaultProvider: resolved.provider || DEFAULT_PROVIDER,
-    runtimeProvider: entry?.modelProvider,
-    runtimeModel: entry?.model,
+    runtimeProvider,
+    runtimeModel,
     overrideProvider: normalizedOverride.providerOverride,
     overrideModel: normalizedOverride.modelOverride,
+    allowPluginNormalization: options?.allowPluginNormalization,
   });
   if (persisted) {
     return persisted;
@@ -1336,6 +1529,7 @@ export function resolveSessionModelIdentityRef(
     | Pick<SessionEntry, "model" | "modelProvider" | "modelOverride" | "providerOverride">,
   agentId?: string,
   fallbackModelRef?: string,
+  options?: { allowPluginNormalization?: boolean },
 ): { provider?: string; model: string } {
   const runtimeModel = entry?.model?.trim();
   const runtimeProvider = entry?.modelProvider?.trim();
@@ -1351,7 +1545,9 @@ export function resolveSessionModelIdentityRef(
       return { provider: inferredProvider, model: runtimeModel };
     }
     if (runtimeModel.includes("/")) {
-      const parsedRuntime = parseModelRef(runtimeModel, DEFAULT_PROVIDER);
+      const parsedRuntime = parseModelRef(runtimeModel, DEFAULT_PROVIDER, {
+        allowPluginNormalization: options?.allowPluginNormalization,
+      });
       if (parsedRuntime) {
         return { provider: parsedRuntime.provider, model: parsedRuntime.model };
       }
@@ -1361,7 +1557,9 @@ export function resolveSessionModelIdentityRef(
   }
   const fallbackRef = fallbackModelRef?.trim();
   if (fallbackRef) {
-    const parsedFallback = parseModelRef(fallbackRef, DEFAULT_PROVIDER);
+    const parsedFallback = parseModelRef(fallbackRef, DEFAULT_PROVIDER, {
+      allowPluginNormalization: options?.allowPluginNormalization,
+    });
     if (parsedFallback) {
       return { provider: parsedFallback.provider, model: parsedFallback.model };
     }
@@ -1374,8 +1572,34 @@ export function resolveSessionModelIdentityRef(
     }
     return { model: fallbackRef };
   }
-  const resolved = resolveSessionModelRef(cfg, entry, agentId);
+  const resolved = resolveSessionModelRef(cfg, entry, agentId, {
+    allowPluginNormalization: options?.allowPluginNormalization,
+  });
   return { provider: resolved.provider, model: resolved.model };
+}
+
+function resolveSessionDisplayModelIdentityRefCached(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  provider?: string;
+  model?: string;
+  rowContext?: SessionListRowContext;
+}): { provider?: string; model?: string } {
+  const ctx = params.rowContext;
+  if (!ctx) {
+    return resolveSessionDisplayModelIdentityRef(params);
+  }
+  const key = `${params.agentId}\u0000${createSessionRowModelCacheKey(
+    params.provider,
+    params.model,
+  )}`;
+  const cached = ctx.displayModelIdentityByKey.get(key);
+  if (cached) {
+    return cached;
+  }
+  const value = resolveSessionDisplayModelIdentityRef(params);
+  ctx.displayModelIdentityByKey.set(key, value);
+  return value;
 }
 
 export function resolveSessionDisplayModelIdentityRef(params: {
@@ -1515,14 +1739,19 @@ export function buildGatewaySessionRow(params: {
           ? resolveSessionRuntimeMs(subagentRun, now)
           : undefined))
     : undefined;
-  const selectedModel = entry?.modelOverride?.trim()
-    ? resolveSessionModelRef(cfg, entry, sessionAgentId)
-    : null;
+  const selectedModel = resolveSessionSelectedModelRef({
+    cfg,
+    entry,
+    agentId: sessionAgentId,
+    rowContext,
+    allowPluginNormalization: !lightweight,
+  });
   const resolvedModel = resolveSessionModelIdentityRef(
     cfg,
     entry,
     sessionAgentId,
     subagentRun?.model,
+    { allowPluginNormalization: !lightweight },
   );
   const runtimeModelPresent =
     Boolean(entry?.model?.trim()) || Boolean(entry?.modelProvider?.trim());
@@ -1530,11 +1759,13 @@ export function buildGatewaySessionRow(params: {
     resolvePositiveNumber(resolveFreshSessionTotalTokens(entry)) === undefined;
   const needsTranscriptContextTokens = resolvePositiveNumber(entry?.contextTokens) === undefined;
   const needsTranscriptEstimatedCostUsd =
+    !skipTranscriptUsage &&
     resolveEstimatedSessionCostUsd({
       cfg,
       provider: resolvedModel.provider,
       model: resolvedModel.model ?? DEFAULT_MODEL,
       entry,
+      rowContext,
     }) === undefined;
   const transcriptUsage =
     !skipTranscriptUsage &&
@@ -1547,6 +1778,7 @@ export function buildGatewaySessionRow(params: {
           fallbackProvider: resolvedModel.provider,
           fallbackModel: resolvedModel.model ?? DEFAULT_MODEL,
           maxTranscriptBytes: params.transcriptUsageMaxBytes,
+          rowContext: params.rowContext,
         })
       : null;
   const preferLiveSubagentModelIdentity =
@@ -1579,22 +1811,35 @@ export function buildGatewaySessionRow(params: {
         params.storeChildSessionsByKey.get(key),
       )
     : resolveChildSessionKeys(key, store, now, rowContext?.subagentRuns);
+  const compactionCheckpoints = resolveProjectableCompactionCheckpoints(entry);
+  const compactionCheckpointCount = Array.isArray(entry?.compactionCheckpoints)
+    ? compactionCheckpoints.length
+    : undefined;
   const latestCompactionCheckpoint = buildCompactionCheckpointPreview(
-    resolveLatestCompactionCheckpoint(entry),
+    resolveLatestCompactionCheckpoint(compactionCheckpoints),
   );
-  const agentRuntime = resolveAgentRuntimeMetadata(cfg, sessionAgentId);
   const selectedOrRuntimeModelProvider = selectedModel?.provider ?? modelProvider;
   const selectedOrRuntimeModel = selectedModel?.model ?? model;
   const rowModelIdentity = lightweight
     ? { provider: selectedOrRuntimeModelProvider, model: selectedOrRuntimeModel }
-    : resolveSessionDisplayModelIdentityRef({
+    : resolveSessionDisplayModelIdentityRefCached({
         cfg,
         agentId: sessionAgentId,
         provider: selectedOrRuntimeModelProvider,
         model: selectedOrRuntimeModel,
+        rowContext: params.rowContext,
       });
   const rowModelProvider = rowModelIdentity.provider;
   const rowModel = rowModelIdentity.model;
+  const agentRuntime = resolveModelAgentRuntimeMetadata({
+    cfg,
+    agentId: sessionAgentId,
+    provider: rowModelProvider,
+    model: rowModel,
+    sessionKey: key,
+    acpRuntime: entry?.acp != null,
+    acpBackend: entry?.acp?.backend,
+  });
   const estimatedCostUsd = lightweight
     ? resolveNonNegativeNumber(entry?.estimatedCostUsd)
     : (resolveEstimatedSessionCostUsd({
@@ -1602,6 +1847,7 @@ export function buildGatewaySessionRow(params: {
         provider: rowModelProvider,
         model: rowModel,
         entry,
+        rowContext: params.rowContext,
       }) ?? resolveNonNegativeNumber(transcriptUsage?.estimatedCostUsd));
   const contextTokens = lightweight
     ? resolvePositiveNumber(entry?.contextTokens)
@@ -1635,11 +1881,16 @@ export function buildGatewaySessionRow(params: {
 
   const thinkingProvider = rowModelProvider ?? DEFAULT_PROVIDER;
   const thinkingModel = rowModel ?? DEFAULT_MODEL;
-  const thinkingLevels = listThinkingLevelOptions(
-    thinkingProvider,
-    thinkingModel,
-    params.modelCatalog,
-  );
+  const thinkingMetadata = resolveSessionRowThinkingMetadata({
+    cfg,
+    agentId: sessionAgentId,
+    provider: thinkingProvider,
+    model: thinkingModel,
+    modelCatalog: params.modelCatalog,
+    rowContext,
+  });
+  const thinkingLevels = thinkingMetadata.levels;
+  const thinkingDefault = thinkingMetadata.defaultLevel;
   const pluginExtensions =
     !lightweight && entry ? projectPluginSessionExtensionsSync({ sessionKey: key, entry }) : [];
 
@@ -1669,15 +1920,7 @@ export function buildGatewaySessionRow(params: {
     thinkingLevel: entry?.thinkingLevel,
     thinkingLevels,
     thinkingOptions: thinkingLevels.map((level) => level.label),
-    thinkingDefault: lightweight
-      ? entry?.thinkingLevel
-      : resolveGatewaySessionThinkingDefault({
-          cfg,
-          provider: thinkingProvider,
-          model: thinkingModel,
-          agentId: sessionAgentId,
-          modelCatalog: params.modelCatalog,
-        }),
+    thinkingDefault,
     fastMode: entry?.fastMode,
     verboseLevel: entry?.verboseLevel,
     traceLevel: entry?.traceLevel,
@@ -1707,7 +1950,7 @@ export function buildGatewaySessionRow(params: {
     lastTo: deliveryFields.lastTo ?? entry?.lastTo,
     lastAccountId: deliveryFields.lastAccountId ?? entry?.lastAccountId,
     lastThreadId: deliveryFields.lastThreadId ?? entry?.lastThreadId,
-    compactionCheckpointCount: entry?.compactionCheckpoints?.length,
+    compactionCheckpointCount,
     latestCompactionCheckpoint,
     pluginExtensions: pluginExtensions.length > 0 ? pluginExtensions : undefined,
   };
@@ -1768,8 +2011,14 @@ export function loadGatewaySessionRow(
  */
 const SESSIONS_LIST_YIELD_BATCH_SIZE = 10;
 const SESSIONS_LIST_TOP_N_LIMIT = 200;
+const SESSIONS_LIST_DEFAULT_LIMIT = 100;
 
 type SessionEntryPair = [string, SessionEntry];
+type SessionEntrySelection = {
+  entries: SessionEntryPair[];
+  totalCount: number;
+  limitApplied?: number;
+};
 
 function compareSessionEntryPairsByUpdatedAt(a: SessionEntryPair, b: SessionEntryPair): number {
   return (b[1]?.updatedAt ?? 0) - (a[1]?.updatedAt ?? 0);
@@ -1777,9 +2026,10 @@ function compareSessionEntryPairsByUpdatedAt(a: SessionEntryPair, b: SessionEntr
 
 function resolveSessionsListLimit(
   opts: import("./protocol/index.js").SessionsListParams,
+  defaultLimit?: number,
 ): number | undefined {
   if (typeof opts.limit !== "number" || !Number.isFinite(opts.limit)) {
-    return undefined;
+    return defaultLimit;
   }
   return Math.max(1, Math.floor(opts.limit));
 }
@@ -1816,12 +2066,12 @@ function sortAndLimitSessionEntries(
   return limit === undefined ? sorted : sorted.slice(0, limit);
 }
 
-export function filterAndSortSessionEntries(params: {
+function filterSessionEntries(params: {
   store: Record<string, SessionEntry>;
   opts: import("./protocol/index.js").SessionsListParams;
   now: number;
   rowContext?: SessionListRowContext;
-}): [string, SessionEntry][] {
+}): SessionEntryPair[] {
   const { store, opts, now } = params;
   const rowContext = params.rowContext;
   const includeGlobal = opts.includeGlobal === true;
@@ -1914,7 +2164,33 @@ export function filterAndSortSessionEntries(params: {
     entries = entries.filter(([, entry]) => (entry?.updatedAt ?? 0) >= cutoff);
   }
 
-  return sortAndLimitSessionEntries(entries, resolveSessionsListLimit(opts));
+  return entries;
+}
+
+function selectSessionEntries(params: {
+  store: Record<string, SessionEntry>;
+  opts: import("./protocol/index.js").SessionsListParams;
+  now: number;
+  rowContext?: SessionListRowContext;
+  defaultLimit?: number;
+}): SessionEntrySelection {
+  const filtered = filterSessionEntries(params);
+  const limit = resolveSessionsListLimit(params.opts, params.defaultLimit);
+  const entries = sortAndLimitSessionEntries(filtered, limit);
+  return {
+    entries,
+    totalCount: filtered.length,
+    limitApplied: limit,
+  };
+}
+
+export function filterAndSortSessionEntries(params: {
+  store: Record<string, SessionEntry>;
+  opts: import("./protocol/index.js").SessionsListParams;
+  now: number;
+  rowContext?: SessionListRowContext;
+}): [string, SessionEntry][] {
+  return selectSessionEntries(params).entries;
 }
 
 export function listSessionsFromStore(params: {
@@ -1937,12 +2213,14 @@ export function listSessionsFromStore(params: {
   const includeLastMessage = opts.includeLastMessage === true;
   const hasSpawnedByFilter = typeof opts.spawnedBy === "string" && opts.spawnedBy.length > 0;
 
-  const entries = filterAndSortSessionEntries({
+  const selection = selectSessionEntries({
     store,
     opts,
     now,
     rowContext: hasSpawnedByFilter ? getRowContext() : undefined,
+    defaultLimit: SESSIONS_LIST_DEFAULT_LIMIT,
   });
+  const { entries, totalCount, limitApplied } = selection;
 
   const sessions = entries.map(([key, entry], index) => {
     const includeTranscriptFields = index < sessionListTranscriptFieldRows;
@@ -1966,7 +2244,10 @@ export function listSessionsFromStore(params: {
     ts: now,
     path: storePath,
     count: sessions.length,
-    defaults: getSessionDefaults(cfg, params.modelCatalog),
+    totalCount,
+    limitApplied,
+    hasMore: sessions.length < totalCount,
+    defaults: getSessionDefaults(cfg, params.modelCatalog, { allowPluginNormalization: false }),
     sessions,
   };
 }
@@ -2001,12 +2282,14 @@ export async function listSessionsFromStoreAsync(params: {
   const includeLastMessage = opts.includeLastMessage === true;
   const hasSpawnedByFilter = typeof opts.spawnedBy === "string" && opts.spawnedBy.length > 0;
 
-  const entries = filterAndSortSessionEntries({
+  const selection = selectSessionEntries({
     store,
     opts,
     now,
     rowContext: hasSpawnedByFilter ? getRowContext() : undefined,
+    defaultLimit: SESSIONS_LIST_DEFAULT_LIMIT,
   });
+  const { entries, totalCount, limitApplied } = selection;
 
   const sessions: GatewaySessionRow[] = [];
   for (let i = 0; i < entries.length; i++) {
@@ -2062,7 +2345,10 @@ export async function listSessionsFromStoreAsync(params: {
     ts: now,
     path: storePath,
     count: sessions.length,
-    defaults: getSessionDefaults(cfg, params.modelCatalog),
+    totalCount,
+    limitApplied,
+    hasMore: sessions.length < totalCount,
+    defaults: getSessionDefaults(cfg, params.modelCatalog, { allowPluginNormalization: false }),
     sessions,
   };
 }

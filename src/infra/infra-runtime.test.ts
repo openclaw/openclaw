@@ -7,7 +7,7 @@ import {
 } from "../config/config.js";
 import { makeNetworkInterfacesSnapshot } from "../test-helpers/network-interfaces.js";
 import {
-  __testing,
+  testing,
   consumeGatewaySigusr1RestartAuthorization,
   emitGatewayRestart,
   isGatewaySigusr1RestartExternallyAllowed,
@@ -58,6 +58,16 @@ function withoutSigusr1Listeners(fn: () => void): void {
   }
 }
 
+function countSigusr1Emits(calls: readonly unknown[][]): number {
+  let count = 0;
+  for (const args of calls) {
+    if (args[0] === "SIGUSR1") {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 function withRestartSupervisorEnabled(fn: () => void): void {
   const originalVitest = process.env.VITEST;
   const originalNodeEnv = process.env.NODE_ENV;
@@ -82,7 +92,7 @@ function withRestartSupervisorEnabled(fn: () => void): void {
 describe("infra runtime", () => {
   function setupRestartSignalSuite() {
     beforeEach(() => {
-      __testing.resetSigusr1State();
+      testing.resetSigusr1State();
       relaunchGatewayScheduledTaskMock.mockReset();
       relaunchGatewayScheduledTaskMock.mockReturnValue({ ok: true, method: "schtasks" });
       cleanStaleGatewayProcessesSyncMock.mockReset();
@@ -94,7 +104,7 @@ describe("infra runtime", () => {
     });
 
     afterEach(async () => {
-      __testing.resetSigusr1State();
+      testing.resetSigusr1State();
       clearRuntimeConfigSnapshot();
       clearConfigCache();
       await vi.runOnlyPendingTimersAsync();
@@ -417,10 +427,10 @@ describe("infra runtime", () => {
         expect(second.cooldownMsApplied).toBe(30_000);
 
         await vi.advanceTimersByTimeAsync(29_999);
-        expect(emitSpy.mock.calls.filter((args) => args[0] === "SIGUSR1").length).toBe(1);
+        expect(countSigusr1Emits(emitSpy.mock.calls)).toBe(1);
 
         await vi.advanceTimersByTimeAsync(1);
-        expect(emitSpy.mock.calls.filter((args) => args[0] === "SIGUSR1").length).toBe(2);
+        expect(countSigusr1Emits(emitSpy.mock.calls)).toBe(2);
       } finally {
         process.removeListener("SIGUSR1", handler);
       }
@@ -447,7 +457,7 @@ describe("infra runtime", () => {
         expect(forced.cooldownMsApplied).toBe(0);
 
         await vi.advanceTimersByTimeAsync(0);
-        expect(emitSpy.mock.calls.filter((args) => args[0] === "SIGUSR1").length).toBe(2);
+        expect(countSigusr1Emits(emitSpy.mock.calls)).toBe(2);
         expect(peekGatewaySigusr1RestartReason()).toBe("update.run");
       } finally {
         process.removeListener("SIGUSR1", handler);

@@ -48,12 +48,14 @@ export type ProviderEndpointClass =
   | "mistral-public"
   | "moonshot-native"
   | "modelstudio-native"
+  | "nvidia-native"
   | "openai-public"
   | "openai-codex"
   | "opencode-native"
   | "azure-openai"
   | "openrouter"
   | "xai-native"
+  | "xiaomi-native"
   | "zai-native"
   | "google-generative-ai"
   | "google-vertex"
@@ -123,6 +125,8 @@ function readCompatBoolean(
 
 const OPENCLAW_ATTRIBUTION_PRODUCT = "OpenClaw";
 const OPENCLAW_ATTRIBUTION_ORIGINATOR = "openclaw";
+const OPENROUTER_ATTRIBUTION_CATEGORIES =
+  "cli-agent,cloud-agent,programming-app,creative-writing,writing-assistant,general-chat,personal-agent";
 
 const LOCAL_ENDPOINT_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
 const OPENAI_RESPONSES_APIS = new Set([
@@ -141,12 +145,14 @@ const MANIFEST_PROVIDER_ENDPOINT_CLASSES = new Set<ProviderEndpointClass>([
   "mistral-public",
   "moonshot-native",
   "modelstudio-native",
+  "nvidia-native",
   "openai-public",
   "openai-codex",
   "opencode-native",
   "azure-openai",
   "openrouter",
   "xai-native",
+  "xiaomi-native",
   "zai-native",
   "google-generative-ai",
   "google-vertex",
@@ -473,7 +479,24 @@ function buildOpenRouterAttributionPolicy(
     headers: {
       "HTTP-Referer": "https://openclaw.ai",
       "X-OpenRouter-Title": identity.product,
-      "X-OpenRouter-Categories": "cli-agent",
+      "X-OpenRouter-Categories": OPENROUTER_ATTRIBUTION_CATEGORIES,
+    },
+  };
+}
+
+function buildNvidiaAttributionPolicy(
+  env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
+): ProviderAttributionPolicy {
+  return {
+    provider: "nvidia",
+    enabledByDefault: true,
+    verification: "vendor-documented",
+    hook: "request-headers",
+    reviewNote:
+      "NVIDIA NIM billing invoke-origin attribution header. Applied only on verified NVIDIA routes.",
+    ...resolveProviderAttributionIdentity(env),
+    headers: {
+      "X-BILLING-INVOKE-ORIGIN": OPENCLAW_ATTRIBUTION_PRODUCT,
     },
   };
 }
@@ -518,6 +541,26 @@ function buildOpenAICodexAttributionPolicy(
   };
 }
 
+function buildXaiAttributionPolicy(
+  env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
+): ProviderAttributionPolicy {
+  const identity = resolveProviderAttributionIdentity(env);
+  return {
+    provider: "xai",
+    enabledByDefault: true,
+    verification: "vendor-hidden-api-spec",
+    hook: "request-headers",
+    reviewNote:
+      "xAI api.x.ai accepts a standard openclaw User-Agent. Companion originator/version headers mirror the OpenAI attribution shape for consistency; they are not validated against an xAI-specific spec and are expected to be ignored by xAI's OpenAI-compatible surface.",
+    ...identity,
+    headers: {
+      originator: OPENCLAW_ATTRIBUTION_ORIGINATOR,
+      version: identity.version,
+      "User-Agent": formatOpenClawUserAgent(identity.version),
+    },
+  };
+}
+
 function buildSdkHookOnlyPolicy(
   provider: string,
   hook: ProviderAttributionHook,
@@ -539,8 +582,10 @@ export function listProviderAttributionPolicies(
 ): ProviderAttributionPolicy[] {
   return [
     buildOpenRouterAttributionPolicy(env),
+    buildNvidiaAttributionPolicy(env),
     buildOpenAIAttributionPolicy(env),
     buildOpenAICodexAttributionPolicy(env),
+    buildXaiAttributionPolicy(env),
     buildSdkHookOnlyPolicy(
       "anthropic",
       "default-headers",
@@ -610,6 +655,7 @@ export function resolveProviderRequestPolicy(
   const usesOpenAICodexAttributionHost = endpointClass === "openai-codex";
   const usesVerifiedOpenAIAttributionHost =
     usesOpenAIPublicAttributionHost || usesOpenAICodexAttributionHost;
+  const usesXaiNativeAttributionHost = endpointClass === "xai-native";
   const usesExplicitProxyLikeEndpoint = usesConfiguredBaseUrl && !usesKnownNativeOpenAIEndpoint;
 
   let attributionProvider: string | undefined;
@@ -623,22 +669,34 @@ export function resolveProviderRequestPolicy(
     if (endpointClass === "openrouter" || endpointClass === "default") {
       attributionProvider = "openrouter";
     }
+  } else if (provider === "xai" && policy?.enabledByDefault) {
+    // Default (unset baseUrl) maps to api.x.ai; custom baseUrls are treated as proxies and withheld.
+    if (usesXaiNativeAttributionHost || endpointClass === "default") {
+      attributionProvider = "xai";
+    }
+  }
+  if (!attributionProvider && endpointClass === "nvidia-native") {
+    attributionProvider = "nvidia";
   }
 
-  const attributionHeaders = attributionProvider
-    ? resolveProviderAttributionHeaders(attributionProvider, env)
+  const attributionPolicy = attributionProvider
+    ? resolveProviderAttributionPolicy(attributionProvider, env)
+    : undefined;
+  const attributionHeaders = attributionPolicy?.enabledByDefault
+    ? attributionPolicy.headers
     : undefined;
 
   return {
     provider: provider || undefined,
-    policy,
+    policy: attributionPolicy ?? policy,
     endpointClass,
     usesConfiguredBaseUrl,
     knownProviderFamily: resolveKnownProviderFamily(provider || undefined),
     attributionProvider,
     attributionHeaders,
     allowsHiddenAttribution:
-      attributionProvider !== undefined && policy?.verification === "vendor-hidden-api-spec",
+      attributionProvider !== undefined &&
+      attributionPolicy?.verification === "vendor-hidden-api-spec",
     usesKnownNativeOpenAIEndpoint,
     usesKnownNativeOpenAIRoute:
       endpointClass === "default" ? provider === "openai" : usesKnownNativeOpenAIEndpoint,
@@ -672,12 +730,14 @@ export function resolveProviderRequestCapabilities(
     endpointClass === "mistral-public" ||
     endpointClass === "moonshot-native" ||
     endpointClass === "modelstudio-native" ||
+    endpointClass === "nvidia-native" ||
     endpointClass === "openai-public" ||
     endpointClass === "openai-codex" ||
     endpointClass === "opencode-native" ||
     endpointClass === "azure-openai" ||
     endpointClass === "openrouter" ||
     endpointClass === "xai-native" ||
+    endpointClass === "xiaomi-native" ||
     endpointClass === "zai-native" ||
     endpointClass === "google-generative-ai" ||
     endpointClass === "google-vertex";

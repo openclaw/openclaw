@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildCustomThemeStyles,
   importCustomThemeFromUrl,
@@ -8,6 +8,10 @@ import {
   syncCustomThemeStyleTag,
 } from "./custom-theme.ts";
 import type { ImportedCustomTheme } from "./custom-theme.ts";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 function createTweakcnPayload() {
   return {
@@ -97,6 +101,18 @@ function createResponse(
   } as unknown as Response;
 }
 
+function firstFetchCall(
+  fetchImpl: typeof fetch,
+): [string, { headers?: unknown; redirect?: unknown; signal?: unknown }] {
+  const call = vi.mocked(fetchImpl).mock.calls[0] as
+    | [string, { headers?: unknown; redirect?: unknown; signal?: unknown }]
+    | undefined;
+  if (!call) {
+    throw new Error("expected fetch call");
+  }
+  return call;
+}
+
 describe("custom theme import helpers", () => {
   it("normalizes tweakcn share links and raw registry links", () => {
     expect(
@@ -162,7 +178,7 @@ describe("custom theme import helpers", () => {
     expect(imported.light.bg).toBe("oklch(0.98 0.01 120)");
     expect(imported.dark.bg).toBe("oklch(0.12 0.04 265)");
     expect(imported.light["font-body"]).toBe("Inter, system-ui, sans-serif");
-    expect(imported.dark["accent-hover"]).toContain("color-mix");
+    expect(imported.dark["accent-hover"]).toBe("color-mix(in srgb, var(--accent) 82%, white 18%)");
   });
 
   it("fetches tweakcn themes with bounded no-redirect requests", async () => {
@@ -175,14 +191,16 @@ describe("custom theme import helpers", () => {
     );
 
     expect(imported.label).toBe("Light Green");
-    expect(fetchImpl).toHaveBeenCalledWith(
-      "https://tweakcn.com/r/themes/cmlhfpjhw000004l4f4ax3m7z",
-      expect.objectContaining({
-        headers: { accept: "application/json" },
-        redirect: "error",
-        signal: expect.any(AbortSignal),
-      }),
-    );
+    const fetchMock = vi.mocked(fetchImpl);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [fetchUrl, fetchOptions] = firstFetchCall(fetchImpl);
+    expect(fetchUrl).toBe("https://tweakcn.com/r/themes/cmlhfpjhw000004l4f4ax3m7z");
+    expect(fetchOptions.signal).toBeInstanceOf(AbortSignal);
+    expect(fetchOptions).toEqual({
+      headers: { accept: "application/json" },
+      redirect: "error",
+      signal: fetchOptions.signal,
+    });
   });
 
   it("rejects oversized tweakcn theme responses before parsing", async () => {
@@ -277,11 +295,16 @@ describe("custom theme import helpers", () => {
 
   it("builds stable CSS blocks for custom dark and light themes", () => {
     const css = buildCustomThemeStyles(createImportedTheme());
+    const selectorAndBackgroundLines = css
+      .split("\n")
+      .filter((line) => line.startsWith(":root") || line.trim().startsWith("--bg:"));
 
-    expect(css).toContain(':root[data-theme="custom"]');
-    expect(css).toContain(':root[data-theme="custom-light"]');
-    expect(css).toContain("--bg: oklch(0.12 0.04 265);");
-    expect(css).toContain("--bg: oklch(0.98 0.01 120);");
+    expect(selectorAndBackgroundLines).toEqual([
+      ':root[data-theme="custom"] {',
+      "  --bg: oklch(0.12 0.04 265);",
+      ':root[data-theme="custom-light"] {',
+      "  --bg: oklch(0.98 0.01 120);",
+    ]);
   });
 
   it("throws when stored custom theme tokens are missing", () => {
@@ -295,7 +318,11 @@ describe("custom theme import helpers", () => {
   it("parses stored imported themes and rejects malformed records", () => {
     const imported = createImportedTheme();
 
-    expect(parseImportedCustomTheme(imported)?.themeId).toBe("cmlhfpjhw000004l4f4ax3m7z");
+    const parsed = parseImportedCustomTheme(imported);
+    if (!parsed) {
+      throw new Error("Expected imported custom theme to parse");
+    }
+    expect(parsed.themeId).toBe("cmlhfpjhw000004l4f4ax3m7z");
     expect(parseImportedCustomTheme({ ...imported, light: {} })).toBeNull();
   });
 
@@ -310,10 +337,12 @@ describe("custom theme import helpers", () => {
     } as unknown as Document;
     vi.stubGlobal("document", documentStub);
 
-    syncCustomThemeStyleTag(createImportedTheme());
+    const theme = createImportedTheme();
+    syncCustomThemeStyleTag(theme);
 
     expect(appendChild).toHaveBeenCalledWith(style);
-    expect(style.textContent).toContain(':root[data-theme="custom"]');
+    expect(style.id).toBe("openclaw-custom-theme");
+    expect(style.textContent).toBe(buildCustomThemeStyles(theme));
 
     vi.stubGlobal("document", {
       head: documentStub.head,

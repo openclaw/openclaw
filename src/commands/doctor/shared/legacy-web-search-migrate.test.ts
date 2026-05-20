@@ -1,28 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
-
-vi.mock("../../../plugins/plugin-metadata-snapshot.js", () => ({
-  loadPluginMetadataSnapshot: () => ({
-    plugins: [
-      {
-        id: "brave",
-        origin: "bundled",
-        contracts: { webSearchProviders: ["brave"] },
-      },
-      {
-        id: "xai",
-        origin: "bundled",
-        contracts: { webSearchProviders: ["grok"] },
-      },
-      {
-        id: "moonshot",
-        origin: "bundled",
-        contracts: { webSearchProviders: ["kimi"] },
-      },
-    ],
-  }),
-}));
-
 import {
   listLegacyWebSearchConfigPaths,
   migrateLegacyWebSearchConfig,
@@ -83,6 +60,73 @@ describe("legacy web search config", () => {
       "Moved tools.web.search.grok → plugins.entries.xai.config.webSearch.",
       "Moved tools.web.search.kimi → plugins.entries.moonshot.config.webSearch.",
     ]);
+  });
+
+  it("preserves unrelated record-valued web search config", () => {
+    const res = migrateLegacyWebSearchConfig<OpenClawConfig>({
+      tools: {
+        web: {
+          search: {
+            apiKey: "brave-key",
+            customSearch: {
+              endpoint: "https://search.example.test",
+              mode: "strict",
+            },
+            openaiCodex: {
+              enabled: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.config.tools?.web?.search).toEqual({
+      customSearch: {
+        endpoint: "https://search.example.test",
+        mode: "strict",
+      },
+      openaiCodex: {
+        enabled: true,
+      },
+    });
+    expect(res.config.plugins?.entries?.brave).toEqual({
+      enabled: true,
+      config: {
+        webSearch: {
+          apiKey: "brave-key",
+        },
+      },
+    });
+  });
+
+  it("drops dangerous record keys while preserving unrelated web search config", () => {
+    const res = migrateLegacyWebSearchConfig<OpenClawConfig>({
+      tools: {
+        web: {
+          search: {
+            apiKey: "brave-key",
+            ["__proto__"]: {
+              polluted: true,
+            },
+            constructor: {
+              polluted: true,
+            },
+            customSearch: {
+              endpoint: "https://search.example.test",
+            },
+            prototype: {
+              polluted: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.config.tools?.web?.search).toEqual({
+      customSearch: {
+        endpoint: "https://search.example.test",
+      },
+    });
   });
 
   it("lists legacy paths for metadata-owned provider config", () => {

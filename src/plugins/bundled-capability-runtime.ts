@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
-import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   withBundledPluginEnablementCompat,
@@ -8,7 +8,7 @@ import {
 } from "./bundled-compat.js";
 import { resolveBundledPluginRepoEntryPath } from "./bundled-plugin-metadata.js";
 import { createCapturedPluginRegistration } from "./captured-registration.js";
-import { discoverOpenClawPlugins } from "./discovery.js";
+import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
 import type { PluginLoadOptions } from "./loader.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import { unwrapDefaultModuleExport } from "./module-export.js";
@@ -165,7 +165,6 @@ function createCapabilityPluginRecord(params: {
     migrationProviderIds: [],
     memoryEmbeddingProviderIds: [],
     agentHarnessIds: [],
-    gatewayMethods: [],
     cliCommands: [],
     services: [],
     gatewayDiscoveryServiceIds: [],
@@ -197,6 +196,7 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
   pluginIds: readonly string[];
   env?: PluginLoadOptions["env"];
   pluginSdkResolution?: PluginSdkResolutionPreference;
+  discovery?: PluginDiscoveryResult;
 }) {
   const env = params.env ?? process.env;
   const pluginIds = new Set(params.pluginIds);
@@ -233,9 +233,7 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
     });
   };
 
-  const discovery = discoverOpenClawPlugins({
-    env,
-  });
+  const discovery = params.discovery ?? discoverOpenClawPlugins({ env });
   const manifestRegistry = loadPluginManifestRegistry({
     config: buildBundledCapabilityRuntimeConfig(params.pluginIds, env),
     env,
@@ -277,7 +275,7 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
       workspaceDir: candidate.workspaceDir,
     });
 
-    const opened = openBoundaryFileSync({
+    const opened = openRootFileSync({
       absolutePath: record.source,
       rootPath: record.source === candidate.source ? candidate.rootDir : repoRoot,
       boundaryLabel: record.source === candidate.source ? "plugin root" : "repo root",

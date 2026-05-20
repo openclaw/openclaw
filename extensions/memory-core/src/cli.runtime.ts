@@ -46,6 +46,7 @@ import {
 } from "./dreaming-repair.js";
 import { asRecord } from "./dreaming-shared.js";
 import { resolveShortTermPromotionDreamingConfig } from "./dreaming.js";
+import { formatMemoryVectorDegradedWriteReason } from "./memory/manager-vector-warning.js";
 import { previewGroundedRemMarkdown } from "./rem-evidence.js";
 import { previewRemHarness } from "./rem-harness.js";
 import {
@@ -126,7 +127,7 @@ function resolveMemoryPluginConfig(cfg: OpenClawConfig): Record<string, unknown>
   return asRecord(entry?.config) ?? {};
 }
 
-const DAILY_MEMORY_FILE_NAME_RE = /^(\d{4}-\d{2}-\d{2})\.md$/;
+const DAILY_MEMORY_FILE_NAME_RE = /^(\d{4}-\d{2}-\d{2})(?:-[^/]+)?\.md$/i;
 
 async function listHistoricalDailyFiles(inputPath: string): Promise<string[]> {
   const resolvedPath = path.resolve(inputPath);
@@ -320,6 +321,10 @@ function formatExtraPaths(workspaceDir: string, extraPaths: string[]): string[] 
 function extractIsoDayFromPath(filePath: string): string | null {
   const match = path.basename(filePath).match(DAILY_MEMORY_FILE_NAME_RE);
   return match?.[1] ?? null;
+}
+
+function normalizeRelativePath(baseDir: string, filePath: string): string {
+  return path.relative(baseDir, filePath).replace(/\\/g, "/");
 }
 
 function groundedMarkdownToDiaryLines(markdown: string): string[] {
@@ -676,14 +681,30 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
         let indexError: string | undefined;
         const syncFn = manager.sync ? manager.sync.bind(manager) : undefined;
         if (deep) {
-          await withProgress({ label: "Checking memory…", total: 2 }, async (progress) => {
-            progress.setLabel("Probing vector…");
-            await manager.probeVectorAvailability();
-            progress.tick();
-            progress.setLabel("Probing embeddings…");
-            embeddingProbe = await manager.probeEmbeddingAvailability();
-            progress.tick();
-          });
+          const initialStatus = manager.status();
+          const hasVectorStoreProbe =
+            initialStatus.backend === "builtin" &&
+            typeof manager.probeVectorStoreAvailability === "function";
+          await withProgress(
+            { label: "Checking memory…", total: hasVectorStoreProbe ? 3 : 2 },
+            async (progress) => {
+              progress.setLabel(hasVectorStoreProbe ? "Probing vector store…" : "Probing vectors…");
+              if (hasVectorStoreProbe) {
+                await manager.probeVectorStoreAvailability?.();
+              } else {
+                await manager.probeVectorAvailability();
+              }
+              progress.tick();
+              progress.setLabel("Probing embeddings…");
+              embeddingProbe = await manager.probeEmbeddingAvailability();
+              progress.tick();
+              if (hasVectorStoreProbe) {
+                progress.setLabel("Checking semantic vectors…");
+                await manager.probeVectorAvailability();
+                progress.tick();
+              }
+            },
+          );
           if (opts.index && syncFn) {
             await withProgressTotals(
               {
@@ -856,20 +877,31 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
       lines.push(`${label("Fallback")} ${warn(status.fallback.from)}`);
     }
     if (status.vector) {
-      const vectorState = status.vector.enabled
-        ? status.vector.available === undefined
-          ? "unknown"
-          : status.vector.available
-            ? "ready"
-            : "unavailable"
-        : "disabled";
-      const vectorColor =
-        vectorState === "ready"
-          ? theme.success
-          : vectorState === "unavailable"
-            ? theme.warn
-            : theme.muted;
-      lines.push(`${label("Vector")} ${colorize(rich, vectorColor, vectorState)}`);
+      const formatVectorState = (available: boolean | undefined) =>
+        status.vector?.enabled
+          ? available === undefined
+            ? "unknown"
+            : available
+              ? "ready"
+              : "unavailable"
+          : "disabled";
+      const formatVectorLine = (lineLabel: string, state: string) => {
+        const vectorColor =
+          state === "ready" ? theme.success : state === "unavailable" ? theme.warn : theme.muted;
+        lines.push(`${label(lineLabel)} ${colorize(rich, vectorColor, state)}`);
+      };
+      if (status.backend === "builtin") {
+        const storeState = formatVectorState(status.vector.storeAvailable);
+        formatVectorLine("Vector store", storeState);
+        if (status.vector.semanticAvailable !== undefined) {
+          formatVectorLine("Semantic vectors", formatVectorState(status.vector.semanticAvailable));
+        }
+      } else {
+        const vectorState = formatVectorState(
+          status.vector.semanticAvailable ?? status.vector.available,
+        );
+        formatVectorLine("Vector", vectorState);
+      }
       if (status.vector.dims) {
         lines.push(`${label("Vector dims")} ${info(String(status.vector.dims))}`);
       }
@@ -1115,16 +1147,34 @@ export async function runMemoryIndex(opts: MemoryCommandOptions) {
           if (qmdIndexSummary) {
             defaultRuntime.log(qmdIndexSummary);
           }
-          const postIndexStatus = manager.status();
+          let postIndexStatus = manager.status();
+          let semanticVectorAvailable = postIndexStatus.vector?.semanticAvailable;
+          const vectorStoreAvailable =
+            postIndexStatus.vector?.storeAvailable ?? postIndexStatus.vector?.available;
+          if (
+            postIndexStatus.backend === "builtin" &&
+            (postIndexStatus.vector?.enabled ?? false) &&
+            semanticVectorAvailable === undefined &&
+            vectorStoreAvailable !== false &&
+            typeof manager.probeVectorAvailability === "function"
+          ) {
+            semanticVectorAvailable = await manager.probeVectorAvailability();
+            postIndexStatus = manager.status();
+            semanticVectorAvailable =
+              postIndexStatus.vector?.semanticAvailable ?? semanticVectorAvailable;
+          }
           const vectorEnabled = postIndexStatus.vector?.enabled ?? false;
-          const vectorAvailable = postIndexStatus.vector?.available;
+          const vectorAvailable =
+            semanticVectorAvailable ??
+            postIndexStatus.vector?.semanticAvailable ??
+            postIndexStatus.vector?.available ??
+            postIndexStatus.vector?.storeAvailable;
           const vectorLoadErr = postIndexStatus.vector?.loadError;
           if (vectorEnabled && vectorAvailable === false) {
-            const errDetail = vectorLoadErr ? `: ${vectorLoadErr}` : "";
             // Indexing still persisted chunks/FTS state; keep the command successful but
             // emit a stderr warning so operators and scripts can detect degraded recall.
             defaultRuntime.error(
-              `Memory index WARNING (${agentId}): chunks_vec not updated — sqlite-vec unavailable${errDetail}. Vector recall degraded.`,
+              `Memory index WARNING (${agentId}): chunks_vec not updated — ${formatMemoryVectorDegradedWriteReason(vectorLoadErr)}. Vector recall degraded.`,
             );
           } else {
             defaultRuntime.log(`Memory index updated (${agentId}).`);
@@ -1798,10 +1848,14 @@ export async function runMemoryRemBackfill(opts: MemoryRemBackfillOptions) {
           workspaceDir: scratchDir,
           inputPaths: workspaceSourceFiles,
         });
-        const sourcePathByDay = new Map(
-          sourceFiles
-            .map((sourcePath) => [extractIsoDayFromPath(sourcePath), sourcePath] as const)
-            .filter((entry): entry is [string, string] => Boolean(entry[0])),
+        const sourcePathByScratchRelativePath = new Map(
+          workspaceSourceFiles.map(
+            (scratchPath, index) =>
+              [
+                normalizeRelativePath(scratchDir, scratchPath),
+                sourceFiles[index] ?? scratchPath,
+              ] as const,
+          ),
         );
         const entries = grounded.files
           .map((file) => {
@@ -1811,7 +1865,7 @@ export async function runMemoryRemBackfill(opts: MemoryRemBackfillOptions) {
             }
             return {
               isoDay,
-              sourcePath: sourcePathByDay.get(isoDay) ?? file.path,
+              sourcePath: sourcePathByScratchRelativePath.get(file.path) ?? file.path,
               bodyLines: groundedMarkdownToDiaryLines(file.renderedMarkdown),
             };
           })

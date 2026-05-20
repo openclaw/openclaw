@@ -67,6 +67,7 @@ export type CronState = {
   cronStatus: CronStatus | null;
   cronError: string | null;
   cronForm: CronFormState;
+  cronFormCollapsed: boolean;
   cronFieldErrors: CronFieldErrors;
   cronEditingJobId: string | null;
   cronRunsJobId: string | null;
@@ -643,7 +644,8 @@ function buildFailureAlert(form: CronFormState, existingChannel?: string) {
   return patch;
 }
 
-export async function addCronJob(state: CronState) {
+export async function addCronJob(state: CronState): Promise<boolean> {
+  let saved = false;
   await withCronBusy(state, async (client) => {
     const form = normalizeCronFormState(state.cronForm);
     if (form !== state.cronForm) {
@@ -729,7 +731,9 @@ export async function addCronJob(state: CronState) {
     }
     await loadCronJobsPage(state);
     await loadCronStatus(state);
+    saved = true;
   });
+  return saved;
 }
 
 export async function toggleCronJob(state: CronState, job: CronJob, enabled: boolean) {

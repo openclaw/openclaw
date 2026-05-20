@@ -86,8 +86,8 @@ openclaw doctor
 
 ### Control UI (web)
 
-The Control UI’s **Logs** tab tails the same file using `logs.tail`.
-See [/web/control-ui](/web/control-ui) for how to open it.
+The Control UI's **Logs** tab tails the same file using `logs.tail`.
+See [Control UI](/web/control-ui) for how to open it.
 
 ### Channel-only logs
 
@@ -115,6 +115,11 @@ available:
 
 OpenClaw preserves the original structured log arguments alongside these fields
 so existing parsers that read numbered tslog argument keys keep working.
+
+Talk, realtime voice, and managed-room activity emits bounded lifecycle log
+records through this same file-log pipeline. These records include event type,
+mode, transport, provider, and size/timing measurements when available, but omit
+transcript text, audio payloads, turn ids, call ids, and provider item ids.
 
 ### Console output
 
@@ -170,6 +175,39 @@ You can override both via the **`OPENCLAW_LOG_LEVEL`** environment variable (e.g
 `--verbose` only affects console output and WS log verbosity; it does not change
 file log levels.
 
+### Targeted model transport diagnostics
+
+When debugging provider calls, use targeted environment flags instead of raising
+all logs to `debug`:
+
+```bash
+OPENCLAW_DEBUG_MODEL_TRANSPORT=1 openclaw gateway
+OPENCLAW_DEBUG_MODEL_PAYLOAD=tools OPENCLAW_DEBUG_SSE=events openclaw gateway
+```
+
+Available flags:
+
+- `OPENCLAW_DEBUG_MODEL_TRANSPORT=1`: emit request start, fetch response, SDK
+  headers, first streaming event, stream completion, and transport errors at
+  `info` level.
+- `OPENCLAW_DEBUG_MODEL_PAYLOAD=summary`: include a bounded request payload
+  summary in model request logs.
+- `OPENCLAW_DEBUG_MODEL_PAYLOAD=tools`: include all model-facing tool names in
+  the payload summary.
+- `OPENCLAW_DEBUG_MODEL_PAYLOAD=full-redacted`: include a redacted, capped JSON
+  payload snapshot. Use only while debugging; secrets are redacted but prompts
+  and message text may still be present.
+- `OPENCLAW_DEBUG_SSE=events`: emit first-event and stream-completion timing.
+- `OPENCLAW_DEBUG_SSE=peek`: also emit the first five redacted SSE event
+  payloads, capped per event.
+- `OPENCLAW_DEBUG_CODE_MODE=1`: emit code-mode model-surface diagnostics,
+  including when native provider tools are hidden because code mode owns the
+  tool surface.
+
+These flags log through normal OpenClaw logging, so `openclaw logs --follow`
+and the Control UI Logs tab show them. Without the flags, the same diagnostics
+remain available at `debug` level.
+
 ### Trace correlation
 
 File logs are JSONL. When a log call carries a valid diagnostic trace context,
@@ -183,6 +221,9 @@ the request trace when they do not pass an explicit trace context. Agent run and
 model-call traces become children of the active request trace, so local logs,
 diagnostic snapshots, OTEL spans, and trusted provider `traceparent` headers can
 be joined by `traceId` without logging raw request or model content.
+
+Talk lifecycle log records also flow to OTLP logs when OpenTelemetry log export
+is enabled, using the same bounded attributes as file logs.
 
 ### Model call size and timing
 

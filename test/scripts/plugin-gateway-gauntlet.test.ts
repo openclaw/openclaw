@@ -53,28 +53,43 @@ describe("plugin gateway gauntlet helpers", () => {
     );
     await writeManifest(
       "beta",
-      "openclaw.plugin.json5",
-      `{ id: "beta", commandAliases: ["dreaming"], onboardingScopes: ["memory"] }`,
+      "openclaw.plugin.json",
+      JSON.stringify({ id: "beta", commandAliases: ["dreaming"], onboardingScopes: ["memory"] }),
     );
 
     const matrix = discoverBundledPluginManifests(repoRoot);
 
     expect(matrix.map((entry) => entry.id)).toEqual(["alpha", "beta"]);
-    expect(matrix[0]).toMatchObject({
-      id: "alpha",
-      dir: path.join("extensions", "alpha"),
-      manifestPath: path.join("extensions", "alpha", "openclaw.plugin.json"),
-      enabledByDefault: true,
-      providers: ["openai"],
+    expect(matrix[0]).toEqual({
+      activation: {},
       authMethods: ["oauth"],
-      onboardingScopes: ["models"],
+      channels: [],
+      cliCommandAliases: [{ name: "alpha", kind: "runtime-slash", cliCommand: "plugins" }],
+      commandAliases: [{ name: "alpha", kind: "runtime-slash", cliCommand: "plugins" }],
+      dir: path.join("extensions", "alpha"),
+      enabledByDefault: true,
       hasConfigSchema: true,
       hasRequiredConfigFields: true,
-      cliCommandAliases: [{ name: "alpha", kind: "runtime-slash", cliCommand: "plugins" }],
+      id: "alpha",
+      manifestPath: path.join("extensions", "alpha", "openclaw.plugin.json"),
+      name: "alpha",
+      onboardingScopes: ["models"],
+      providers: ["openai"],
+      runtimeSlashAliases: [{ name: "alpha", kind: "runtime-slash", cliCommand: "plugins" }],
+      skills: [],
     });
     expect(matrix[1].runtimeSlashAliases).toEqual([
       { name: "dreaming", kind: "runtime-slash", cliCommand: null },
     ]);
+  });
+
+  it("skips source-only plugin dirs that are excluded from the built runtime", async () => {
+    await writeManifest("qqbot", "openclaw.plugin.json", JSON.stringify({ id: "qqbot" }));
+    await writeManifest("telegram", "openclaw.plugin.json", JSON.stringify({ id: "telegram" }));
+
+    const matrix = discoverBundledPluginManifests(repoRoot);
+
+    expect(matrix.map((entry) => entry.id)).toEqual(["telegram"]);
   });
 
   it("selects plugin shards after explicit id filtering", () => {
@@ -193,7 +208,7 @@ describe("plugin gateway gauntlet helpers", () => {
       },
     );
 
-    expect(observations).toEqual([]);
+    expect(observations).toStrictEqual([]);
   });
 
   it("flags QA gateway regressions relative to an explicit baseline", () => {

@@ -228,7 +228,7 @@ export type DoctorMemoryRemHarnessErrorPayload = {
 };
 
 function extractIsoDayFromPath(filePath: string): string | null {
-  const match = filePath.replaceAll("\\", "/").match(/(\d{4}-\d{2}-\d{2})\.md$/i);
+  const match = filePath.replaceAll("\\", "/").match(/(\d{4}-\d{2}-\d{2})(?:-[^/]+)?\.md$/i);
   return match?.[1] ?? null;
 }
 
@@ -250,7 +250,7 @@ async function listWorkspaceDailyFiles(memoryDir: string): Promise<string[]> {
     throw err;
   }
   return entries
-    .filter((name) => /^\d{4}-\d{2}-\d{2}\.md$/i.test(name))
+    .filter((name) => /^\d{4}-\d{2}-\d{2}(?:-[^/]+)?\.md$/i.test(name))
     .map((name) => path.join(memoryDir, name))
     .toSorted((left, right) => left.localeCompare(right));
 }
@@ -459,7 +459,25 @@ function trimDreamingEntries(
   entries: DoctorMemoryDreamingEntryPayload[],
   compare: (a: DoctorMemoryDreamingEntryPayload, b: DoctorMemoryDreamingEntryPayload) => number,
 ): DoctorMemoryDreamingEntryPayload[] {
-  return entries.toSorted(compare).slice(0, DREAMING_ENTRY_LIST_LIMIT);
+  const selected: DoctorMemoryDreamingEntryPayload[] = [];
+  for (const entry of entries) {
+    let insertAt = selected.length;
+    for (let index = 0; index < selected.length; index += 1) {
+      if (compare(entry, selected[index]) < 0) {
+        insertAt = index;
+        break;
+      }
+    }
+    if (insertAt < DREAMING_ENTRY_LIST_LIMIT) {
+      selected.splice(insertAt, 0, entry);
+      if (selected.length > DREAMING_ENTRY_LIST_LIMIT) {
+        selected.pop();
+      }
+    } else if (selected.length < DREAMING_ENTRY_LIST_LIMIT) {
+      selected.push(entry);
+    }
+  }
+  return selected;
 }
 
 async function loadDreamingStoreStats(
