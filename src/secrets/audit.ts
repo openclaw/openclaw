@@ -32,6 +32,7 @@ import { isNonEmptyString, isRecord } from "./shared.js";
 import {
   listAgentModelsJsonPaths,
   listAuthProfileStorePaths,
+  listConfigBackupPaths,
   listLegacyAuthJsonPaths,
   parseEnvAssignmentValue,
   readJsonObjectIfExists,
@@ -256,6 +257,37 @@ function collectConfigSecrets(params: {
       jsonPath: target.path,
       message: `${target.path} is stored as plaintext.`,
       provider: target.providerId,
+    });
+  }
+}
+
+function collectConfigBackupSecrets(params: {
+  configPath: string;
+  collector: AuditCollector;
+}): void {
+  for (const backupPath of listConfigBackupPaths(params.configPath)) {
+    params.collector.filesScanned.add(backupPath);
+    const parsedResult = readJsonObjectIfExists(backupPath, {
+      requireRegularFile: true,
+      maxBytes: MAX_AUDIT_MODELS_JSON_BYTES,
+    });
+    if (parsedResult.error) {
+      addFinding(params.collector, {
+        code: "REF_UNRESOLVED",
+        severity: "error",
+        file: backupPath,
+        jsonPath: "<root>",
+        message: `Invalid JSON in config backup: ${parsedResult.error}`,
+      });
+      continue;
+    }
+    if (!parsedResult.value) {
+      continue;
+    }
+    collectConfigSecrets({
+      config: parsedResult.value as OpenClawConfig,
+      configPath: backupPath,
+      collector: params.collector,
     });
   }
 }
@@ -714,6 +746,10 @@ export async function runSecretsAudit(
 
   collectEnvPlaintext({
     envPath,
+    collector,
+  });
+  collectConfigBackupSecrets({
+    configPath,
     collector,
   });
   collectAuthJsonResidue({

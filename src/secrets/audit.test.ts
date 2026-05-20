@@ -277,6 +277,35 @@ describe("secrets audit", () => {
     expectFindingCode(report, "REF_UNRESOLVED");
   });
 
+  it("reports plaintext secrets left in adjacent config backups", async () => {
+    const backupPath = `${fixture.configPath}.bak`;
+    await writeJsonFile(backupPath, {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-completions",
+            apiKey: "sk-openai-backup-plaintext",
+            models: [{ id: "gpt-5", name: "gpt-5" }],
+          },
+        },
+      },
+    });
+
+    const report = await runSecretsAudit({ env: fixture.env });
+
+    expect(report.filesScanned).toContain(backupPath);
+    expect(
+      hasFinding(
+        report,
+        (entry) =>
+          entry.code === "PLAINTEXT_FOUND" &&
+          entry.file === backupPath &&
+          entry.jsonPath === "models.providers.openai.apiKey",
+      ),
+    ).toBe(true);
+  });
+
   it("skips exec ref resolution during audit unless explicitly allowed", async () => {
     if (process.platform === "win32") {
       return;

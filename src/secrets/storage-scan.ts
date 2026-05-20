@@ -77,6 +77,33 @@ export function listAgentModelsJsonPaths(
   return [...paths];
 }
 
+export function listConfigBackupPaths(configPath: string): string[] {
+  const resolvedConfigPath = resolveUserPath(configPath);
+  const configDir = path.dirname(resolvedConfigPath);
+  const configBase = path.basename(resolvedConfigPath);
+  const paths = new Set<string>();
+
+  const adjacentBackup = `${resolvedConfigPath}.bak`;
+  if (fs.existsSync(adjacentBackup)) {
+    paths.add(adjacentBackup);
+  }
+
+  if (!fs.existsSync(configDir)) {
+    return [...paths];
+  }
+
+  for (const entry of fs.readdirSync(configDir, { withFileTypes: true })) {
+    if (!entry.isFile()) {
+      continue;
+    }
+    if (entry.name.startsWith(`${configBase}.`) && entry.name !== configBase) {
+      paths.add(path.join(configDir, entry.name));
+    }
+  }
+
+  return [...paths];
+}
+
 export type ReadJsonObjectOptions = {
   maxBytes?: number;
   requireRegularFile?: boolean;
