@@ -394,6 +394,35 @@ describe("CodexAppServerEventProjector", () => {
     });
   });
 
+  it("refreshes streamed step-only plan announcements until the first tool starts", async () => {
+    const onBlockReply = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      onBlockReply,
+    });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/plan/delta", { itemId: "plan-1", delta: "Inspect code" }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/plan/delta", { itemId: "plan-1", delta: "\nRun focused tests" }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-1",
+          command: "pnpm test",
+          status: "inProgress",
+        },
+      }),
+    );
+
+    expect(onBlockReply).toHaveBeenCalledWith({
+      text: "Plan: Inspect code; Run focused tests.",
+    });
+  });
+
   it("keeps Codex plan announcement copy exact, short, and redacted", () => {
     const messages = [
       buildCodexPlanAnnouncementText([
@@ -453,6 +482,56 @@ describe("CodexAppServerEventProjector", () => {
     });
 
     await projector.announceToolPlanForTool("message");
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("does not automatically announce when the message tool owns source delivery", async () => {
+    const onBlockReply = vi.fn();
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      sourceReplyDeliveryMode: "message_tool_only",
+      onBlockReply,
+      onAgentEvent,
+    });
+
+    await projector.handleNotification(
+      forCurrentTurn("turn/plan/updated", {
+        explanation: "I'll check Beszel and Uptime Kuma health now.",
+        plan: [{ step: "query monitoring state", status: "in_progress" }],
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: {
+          type: "webSearch",
+          id: "search-1",
+          query: "monitoring",
+          status: "inProgress",
+        },
+      }),
+    );
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(findAgentEvent(onAgentEvent, { stream: "plan" }).data.steps).toEqual([
+      "query monitoring state (in_progress)",
+    ]);
+    expect(projector.buildResult(buildEmptyToolTelemetry()).replayMetadata).toEqual({
+      hadPotentialSideEffects: false,
+      replaySafe: true,
+    });
+  });
+
+  it("does not use fallback automatic announcements in message-tool-only turns", async () => {
+    const onBlockReply = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      sourceReplyDeliveryMode: "message_tool_only",
+      onBlockReply,
+    });
+
+    await projector.announceToolPlanForTool("web_search");
 
     expect(onBlockReply).not.toHaveBeenCalled();
   });

@@ -15,8 +15,10 @@ function createAttemptParams(params: {
   authProfileProviders?: Record<string, string>;
   bootstrapContextMode?: "full" | "lightweight";
   bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
+  disableMessageTool?: boolean;
   images?: EmbeddedRunAttemptParams["images"];
   silentExpected?: boolean;
+  sourceReplyDeliveryMode?: EmbeddedRunAttemptParams["sourceReplyDeliveryMode"];
 }): EmbeddedRunAttemptParams {
   const authProfileProviders =
     params.authProfileProviders ??
@@ -33,7 +35,13 @@ function createAttemptParams(params: {
       ? { bootstrapContextRunKind: params.bootstrapContextRunKind }
       : {}),
     ...(params.images ? { images: params.images } : {}),
+    ...(params.disableMessageTool !== undefined
+      ? { disableMessageTool: params.disableMessageTool }
+      : {}),
     ...(params.silentExpected !== undefined ? { silentExpected: params.silentExpected } : {}),
+    ...(params.sourceReplyDeliveryMode
+      ? { sourceReplyDeliveryMode: params.sourceReplyDeliveryMode }
+      : {}),
     authProfileStore: {
       version: 1,
       profiles: Object.fromEntries(
@@ -78,6 +86,19 @@ describe("Codex app-server native code mode config", () => {
     expect(instructions).toContain("SOUL.md");
     expect(instructions).toContain("Beszel and Uptime Kuma");
     expect(instructions).toContain("Do not say generic things");
+  });
+
+  it("routes tool-start acknowledgements through the message tool for message-tool-only turns", () => {
+    const instructions = buildDeveloperInstructions(
+      createAttemptParams({
+        provider: "openai",
+        sourceReplyDeliveryMode: "message_tool_only",
+      }),
+    );
+
+    expect(instructions).toContain("To send a visible message, use the `message` tool.");
+    expect(instructions).toContain("make your first tool call `message`");
+    expect(instructions).toContain("with that exact acknowledgement");
   });
 
   it("omits tool-start acknowledgement instructions for silent turns", () => {

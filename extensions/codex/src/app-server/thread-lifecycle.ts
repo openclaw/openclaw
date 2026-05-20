@@ -853,7 +853,7 @@ export function buildDeveloperInstructions(
     buildDeferredDynamicToolManifest(options.dynamicTools),
     "Use Codex native `spawn_agent` for Codex subagents. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation.",
     buildVisibleReplyInstruction(params, options.dynamicTools),
-    buildToolPlanAnnouncementInstruction(params),
+    buildToolPlanAnnouncementInstruction(params, options.dynamicTools),
     nativeCommandGuidance,
     params.extraSystemPrompt,
   ];
@@ -862,16 +862,25 @@ export function buildDeveloperInstructions(
 
 function buildToolPlanAnnouncementInstruction(
   params: EmbeddedRunAttemptParams,
+  dynamicTools: readonly CodexDynamicToolSpec[] | undefined,
 ): string | undefined {
   if (params.silentExpected === true) {
     return undefined;
   }
+  const messageToolOnly =
+    params.sourceReplyDeliveryMode === "message_tool_only" &&
+    isMessageToolAvailable(params, dynamicTools);
   return [
     "When the chat turn will need tools, make your first plan update include a chat-ready acknowledgement in the plan explanation before the first tool call.",
     "Write it as the exact short message OpenClaw should send back to the same chat: specific to the user's request, naming the concrete systems/resources involved, and in the voice/style from SOUL.md and the active workspace instructions.",
+    messageToolOnly
+      ? "Because visible replies use the `message` tool in this turn, make your first tool call `message` with that exact acknowledgement, then immediately proceed with the rest of the work."
+      : undefined,
     'Keep it to one or two sentences. Do not say generic things like "I\'ll use the necessary tools" or "I\'ll continue with the request."',
     'Example: if the user asks to check what is unhealthy in Beszel and Uptime Kuma, a good explanation is: "I\'ll check your Beszel and Uptime Kuma instances to make sure nothing looks dead or dying."',
-  ].join(" ");
+  ]
+    .filter((part): part is string => Boolean(part))
+    .join(" ");
 }
 
 function buildDeferredDynamicToolManifest(
@@ -895,13 +904,22 @@ function buildVisibleReplyInstruction(
   params: EmbeddedRunAttemptParams,
   dynamicTools: readonly CodexDynamicToolSpec[] | undefined,
 ): string {
-  const messageToolAvailable = dynamicTools
-    ? dynamicTools.some((tool) => tool.name.trim() === "message")
-    : params.disableMessageTool !== true;
-  if (params.sourceReplyDeliveryMode === "message_tool_only" && messageToolAvailable) {
+  if (
+    params.sourceReplyDeliveryMode === "message_tool_only" &&
+    isMessageToolAvailable(params, dynamicTools)
+  ) {
     return "To send a visible message, use the `message` tool.";
   }
   return "To send a visible reply, use the active Codex delivery path.";
+}
+
+function isMessageToolAvailable(
+  params: EmbeddedRunAttemptParams,
+  dynamicTools: readonly CodexDynamicToolSpec[] | undefined,
+): boolean {
+  return dynamicTools
+    ? dynamicTools.some((tool) => tool.name.trim() === "message")
+    : params.disableMessageTool !== true;
 }
 
 function buildUserInput(

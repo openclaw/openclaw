@@ -4329,6 +4329,110 @@ describe("dispatchReplyFromConfig", () => {
     expect(errorEvent?.error).toBe("Error: dispatch failed");
   });
 
+  it("releases inbound dedupe when dispatch fails after an unsent explanation-only plan update", async () => {
+    setNoAbort();
+    const cfg = {
+      diagnostics: { enabled: true },
+      agents: { defaults: { verboseDefault: "on" } },
+    } as OpenClawConfig;
+    const ctx = buildTestCtx({
+      Provider: "whatsapp",
+      OriginatingChannel: "whatsapp",
+      OriginatingTo: "whatsapp:+15555550127",
+      To: "whatsapp:+15555550127",
+      AccountId: "default",
+      MessageSid: "msg-dup-plan-error",
+      SessionKey: "agent:main:whatsapp:direct:+15555550127",
+      CommandBody: "hello",
+      RawBody: "hello",
+      Body: "hello",
+    });
+    const firstDispatcher = createDispatcher();
+    const replyResolver = vi
+      .fn<
+        (_ctx: MsgContext, _opts?: GetReplyOptions, _cfg?: OpenClawConfig) => Promise<ReplyPayload>
+      >()
+      .mockImplementationOnce(async (_ctx, opts) => {
+        await opts?.onPlanUpdate?.({
+          phase: "update",
+          explanation: "Inspect code, patch it, run tests.",
+        });
+        throw new Error("provider failed after unsent plan");
+      })
+      .mockResolvedValueOnce({ text: "retry succeeds" });
+
+    await expect(
+      dispatchReplyFromConfig({
+        ctx,
+        cfg,
+        dispatcher: firstDispatcher,
+        replyResolver,
+      }),
+    ).rejects.toThrow("provider failed after unsent plan");
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher: createDispatcher(),
+      replyResolver,
+    });
+
+    expect(firstDispatcher.sendToolResult).not.toHaveBeenCalled();
+    expect(replyResolver).toHaveBeenCalledTimes(2);
+  });
+
+  it("poisons inbound dedupe when routed plan progress is sent before dispatch fails", async () => {
+    setNoAbort();
+    mocks.routeReply.mockClear();
+    const cfg = {
+      diagnostics: { enabled: true },
+      agents: { defaults: { verboseDefault: "on" } },
+    } as OpenClawConfig;
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      AccountId: "acc-1",
+      MessageSid: "msg-dup-routed-plan-error",
+      SessionKey: "agent:main:slack:channel:ops-room",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:999",
+      To: "slack:ops-room",
+      CommandBody: "hello",
+      RawBody: "hello",
+      Body: "hello",
+    });
+    const replyResolver = vi
+      .fn<
+        (_ctx: MsgContext, _opts?: GetReplyOptions, _cfg?: OpenClawConfig) => Promise<ReplyPayload>
+      >()
+      .mockImplementationOnce(async (_ctx, opts) => {
+        await opts?.onPlanUpdate?.({
+          phase: "update",
+          steps: ["check routed destination"],
+        });
+        throw new Error("provider failed after routed plan");
+      })
+      .mockResolvedValueOnce({ text: "retry should not run" });
+
+    await expect(
+      dispatchReplyFromConfig({
+        ctx,
+        cfg,
+        dispatcher: createDispatcher(),
+        replyResolver,
+      }),
+    ).rejects.toThrow("provider failed after routed plan");
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher: createDispatcher(),
+      replyResolver,
+    });
+
+    expect(mocks.routeReply).toHaveBeenCalledTimes(1);
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+  });
+
   it("poisons inbound dedupe when dispatch fails after a block reply", async () => {
     setNoAbort();
     const ctx = buildTestCtx({

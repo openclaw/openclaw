@@ -272,6 +272,7 @@ export class CodexAppServerEventProjector {
   private readonly afterToolCallObservedItemIds = new Set<string>();
   private latestPlanAnnouncementSteps: string[] = [];
   private latestPlanAnnouncementText: string | undefined;
+  private latestPlanAnnouncementFromExplanation = false;
   private toolPlanAnnouncementSent = false;
   private assistantStarted = false;
   private reasoningStarted = false;
@@ -507,6 +508,7 @@ export class CodexAppServerEventProjector {
     if (
       this.toolPlanAnnouncementSent ||
       this.params.silentExpected === true ||
+      this.params.sourceReplyDeliveryMode === "message_tool_only" ||
       !this.params.onBlockReply ||
       isCodexMessagingToolName(details.toolName ?? undefined)
     ) {
@@ -995,7 +997,10 @@ export class CodexAppServerEventProjector {
       explanation: params.explanation,
       steps,
     });
-    if (explanation || !this.latestPlanAnnouncementText) {
+    if (explanation) {
+      this.latestPlanAnnouncementText = nextAnnouncementText;
+      this.latestPlanAnnouncementFromExplanation = true;
+    } else if (!this.latestPlanAnnouncementFromExplanation && !this.toolPlanAnnouncementSent) {
       this.latestPlanAnnouncementText = nextAnnouncementText;
     }
     await this.announceToolPlanForPlanExplanation(explanation ? nextAnnouncementText : undefined);
@@ -1016,6 +1021,7 @@ export class CodexAppServerEventProjector {
       !text ||
       this.toolPlanAnnouncementSent ||
       this.params.silentExpected === true ||
+      this.params.sourceReplyDeliveryMode === "message_tool_only" ||
       !this.params.onBlockReply
     ) {
       return;

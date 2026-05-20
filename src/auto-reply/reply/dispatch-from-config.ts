@@ -1670,25 +1670,27 @@ export async function dispatchReplyFromConfig(
     const sendPlanUpdate = async (payload: {
       explanation?: string;
       steps?: string[];
-    }): Promise<void> => {
+    }): Promise<boolean> => {
       if (
         shouldSuppressProgressDelivery() ||
         !shouldEmitVerboseProgress() ||
         !shouldSendVerboseProgressMessages
       ) {
-        return;
+        return false;
       }
       const text = formatPlanUpdateText(payload);
       if (!text) {
-        return;
+        return false;
       }
       const replyPayload: ReplyPayload = { text };
       if (shouldRouteToOriginating) {
         await sendPayloadAsync(replyPayload, undefined, false);
-        return;
+        markInboundDedupeReplayUnsafe();
+        return true;
       }
       markInboundDedupeReplayUnsafe();
       dispatcher.sendToolResult(replyPayload);
+      return true;
     };
     const summarizeApprovalLabel = (payload: {
       status?: string;
@@ -1921,8 +1923,11 @@ export async function dispatchReplyFromConfig(
                 return;
               }
               markProgress();
-              markInboundDedupeReplayUnsafe();
-              if (shouldForwardProgressCallback({ forwardWhenSourceDeliverySuppressed: true })) {
+              if (
+                shouldForwardProgressCallback({ forwardWhenSourceDeliverySuppressed: true }) &&
+                onPlanUpdateFromReplyOptions
+              ) {
+                markInboundDedupeReplayUnsafe();
                 await onPlanUpdateFromReplyOptions?.(payload);
               }
               if (isDispatchOperationAborted()) {
