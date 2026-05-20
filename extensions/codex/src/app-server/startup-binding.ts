@@ -5,6 +5,7 @@ import {
   embeddedAgentLog,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { resolveAgentCompactionConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveCodexAppServerHomeDir } from "./auth-bridge.js";
 import { isJsonObject, type JsonValue } from "./protocol.js";
 import { clearCodexAppServerBinding, type CodexAppServerThreadBinding } from "./session-binding.js";
@@ -235,13 +236,15 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
   agentDir: string;
   codexHome?: string;
   config: EmbeddedRunAttemptParams["config"] | undefined;
+  sessionAgentId?: string | null;
   contextEngineActive?: boolean;
 }): Promise<CodexAppServerThreadBinding | undefined> {
   const binding = params.binding;
   if (!binding?.threadId) {
     return binding;
   }
-  if (params.config?.agents?.defaults?.compaction?.truncateAfterCompaction !== true) {
+  const compactionConfig = resolveAgentCompactionConfig(params.config, params.sessionAgentId);
+  if (compactionConfig?.truncateAfterCompaction !== true) {
     return binding;
   }
   if (params.contextEngineActive === true && hasContextEngineThreadBootstrapProjection(binding)) {
@@ -257,9 +260,7 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
     return binding;
   }
   const sessionRecord = await readCodexSessionRecordForSessionFile(params.sessionFile);
-  const maxBytes = parseCodexAppServerByteLimit(
-    params.config?.agents?.defaults?.compaction?.maxActiveTranscriptBytes,
-  );
+  const maxBytes = parseCodexAppServerByteLimit(compactionConfig.maxActiveTranscriptBytes);
   const rolloutFiles = await listCodexAppServerRolloutFilesForThread(
     params.agentDir,
     binding.threadId,

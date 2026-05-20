@@ -444,6 +444,7 @@ export async function runCodexAppServerAttempt(
     agentDir,
     codexHome: appServer.start.env?.CODEX_HOME,
     config: params.config,
+    sessionAgentId,
     contextEngineActive: isActiveHarnessContextEngine(params.contextEngine),
   });
   preDynamicStartupStages.mark("rotate-binding");
