@@ -32,6 +32,12 @@ function makeEnv(overrides: Record<string, string | undefined> = {}) {
   if (!Object.hasOwn(overrides, "OPENCLAW_LOCAL_CHECK_MODE")) {
     delete env.OPENCLAW_LOCAL_CHECK_MODE;
   }
+  if (!Object.hasOwn(overrides, "OPENCLAW_HEAVY_CHECK_LOCK_DIR")) {
+    delete env.OPENCLAW_HEAVY_CHECK_LOCK_DIR;
+  }
+  if (!Object.hasOwn(overrides, "OPENCLAW_HEAVY_CHECK_LOCK_SCOPE")) {
+    delete env.OPENCLAW_HEAVY_CHECK_LOCK_SCOPE;
+  }
   return env;
 }
 
@@ -326,10 +332,10 @@ describe("local-heavy-check-runtime", () => {
     ).toBe(true);
   });
 
-  it("reclaims stale local heavy-check locks from dead pids", () => {
+  it("reclaims stale machine-wide local heavy-check locks from dead pids", () => {
     const cwd = createTempDir("openclaw-local-heavy-check-");
-    const commonDir = path.join(cwd, ".git");
-    const lockDir = path.join(commonDir, "openclaw-local-checks", "heavy-check.lock");
+    const locksDir = path.join(cwd, "machine-locks");
+    const lockDir = path.join(locksDir, "heavy-check.lock");
     fs.mkdirSync(lockDir, { recursive: true });
     fs.writeFileSync(
       path.join(lockDir, "owner.json"),
@@ -343,7 +349,7 @@ describe("local-heavy-check-runtime", () => {
 
     const release = acquireLocalHeavyCheckLockSync({
       cwd,
-      env: makeEnv(),
+      env: makeEnv({ OPENCLAW_HEAVY_CHECK_LOCK_DIR: locksDir }),
       toolName: "oxlint",
     });
 
@@ -353,6 +359,24 @@ describe("local-heavy-check-runtime", () => {
 
     release();
     expect(fs.existsSync(lockDir)).toBe(false);
+  });
+
+  it("uses the git-common heavy-check lock when explicitly requested", () => {
+    const cwd = createTempDir("openclaw-local-heavy-check-common-");
+    const commonLockDir = path.join(cwd, ".git", "openclaw-local-checks", "heavy-check.lock");
+
+    const release = acquireLocalHeavyCheckLockSync({
+      cwd,
+      env: makeEnv({ OPENCLAW_HEAVY_CHECK_LOCK_SCOPE: "common" }),
+      toolName: "oxlint",
+    });
+
+    const owner = JSON.parse(fs.readFileSync(path.join(commonLockDir, "owner.json"), "utf8"));
+    expect(owner.tool).toBe("oxlint");
+    expect(fs.existsSync(commonLockDir)).toBe(true);
+
+    release();
+    expect(fs.existsSync(commonLockDir)).toBe(false);
   });
 
   it("uses a worktree-local heavy-check lock when explicitly requested", () => {
@@ -387,8 +411,7 @@ describe("local-heavy-check-runtime", () => {
 
   it("cleans up stale legacy test locks when acquiring the shared heavy-check lock", () => {
     const cwd = createTempDir("openclaw-local-heavy-check-legacy-");
-    const commonDir = path.join(cwd, ".git");
-    const locksDir = path.join(commonDir, "openclaw-local-checks");
+    const locksDir = path.join(cwd, "machine-locks");
     const legacyLockDir = path.join(locksDir, "test.lock");
     const heavyCheckLockDir = path.join(locksDir, "heavy-check.lock");
     fs.mkdirSync(legacyLockDir, { recursive: true });
@@ -404,7 +427,7 @@ describe("local-heavy-check-runtime", () => {
 
     const release = acquireLocalHeavyCheckLockSync({
       cwd,
-      env: makeEnv(),
+      env: makeEnv({ OPENCLAW_HEAVY_CHECK_LOCK_DIR: locksDir }),
       toolName: "oxlint",
     });
 
