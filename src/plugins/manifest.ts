@@ -815,7 +815,10 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
   const webSearchProviders = normalizeTrimmedStringList(value.webSearchProviders);
   const migrationProviders = normalizeTrimmedStringList(value.migrationProviders);
   const gatewayMethodDispatch = normalizeTrimmedStringList(value.gatewayMethodDispatch);
-  const tools = normalizeTrimmedStringList(value.tools);
+  // contracts.tools accepts either a list of tool names or the boolean `true`,
+  // which is shorthand for "allow any tool name this plugin registers"
+  // (mapped to a wildcard `*`). See issue #80621.
+  const tools = value.tools === true ? ["*"] : normalizeTrimmedStringList(value.tools);
   const contracts = {
     ...(embeddedExtensionFactories.length > 0 ? { embeddedExtensionFactories } : {}),
     ...(agentToolResultMiddleware.length > 0 ? { agentToolResultMiddleware } : {}),

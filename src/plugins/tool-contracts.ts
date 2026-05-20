@@ -22,5 +22,9 @@ export function findUndeclaredPluginToolNames(params: {
   toolNames: readonly string[];
 }): string[] {
   const declared = new Set(normalizePluginToolNames(params.declaredNames));
+  // `*` is the wildcard shorthand for `contracts.tools: true` and allows any tool name.
+  if (declared.has("*")) {
+    return [];
+  }
   return normalizePluginToolNames(params.toolNames).filter((name) => !declared.has(name));
 }
