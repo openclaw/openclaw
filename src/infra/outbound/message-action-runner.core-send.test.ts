@@ -271,7 +271,9 @@ describe("runMessageAction core send routing", () => {
       dryRun: false,
     });
 
-    expect(result.kind).toBe("send");
+    if (result.kind !== "send") {
+      throw new Error(`expected send result, got ${result.kind}`);
+    }
     expect(sendText).toHaveBeenCalledOnce();
     expect(result.to).toBe("channel:C123");
   });
