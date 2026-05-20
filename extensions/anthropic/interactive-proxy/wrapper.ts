@@ -403,6 +403,13 @@ async function main(): Promise<void> {
 
   const sessionId = extractSessionId(claudeArgs);
 
+  // Last time anything was written to stdout — used by the heartbeat timer
+  // (armed further below) to detect tool-execution silence (claude held
+  // stdout closed for >30s). MUST be declared BEFORE the first emit() call
+  // below: emit() writes to this variable, and a `let` in TDZ throws
+  // ReferenceError when the function body fires.
+  let lastEmitTime = Date.now();
+
   // Emit init record
   emit(JSON.stringify({ type: "init", session_id: sessionId }));
 
@@ -425,9 +432,6 @@ async function main(): Promise<void> {
   // overlapping with the real turn) are dropped without touching turn
   // state. Reset on every new message_start that the wrapper does accept.
   let activeReqId = -1;
-  // Last time anything was written to stdout — used by the heartbeat timer
-  // to detect tool-execution silence (claude held stdout closed for >30s).
-  let lastEmitTime = Date.now();
 
   function emit(jsonl: string): void {
     lastEmitTime = Date.now();
