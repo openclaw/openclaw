@@ -13,8 +13,7 @@ import type { TemplateContext } from "../templating.js";
 const MAX_UNTRUSTED_JSON_STRING_CHARS = 2_000;
 const MAX_UNTRUSTED_HISTORY_ENTRIES = 20;
 const MAX_UNTRUSTED_TRANSCRIPT_FIELD_CHARS = 500;
-const MESSAGE_TOOL_DELIVERY_HINT =
-  'Delivery: if this turn needs visible output in the current source conversation, call `message` with `action="send"` before ending. Normal final assistant text is private in this mode.';
+const MESSAGE_TOOL_DELIVERY_HINT = "Delivery: to send a message, use the `message` tool.";
 
 type InboundUserContextPrefixOptions = {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
