@@ -45,6 +45,12 @@ export type AcpConfig = {
   defaultAgent?: string;
   allowedAgents?: string[];
   maxConcurrentSessions?: number;
+  /**
+   * Strip provider-credential env vars (ANTHROPIC_API_KEY, OPENAI_API_KEY,
+   * etc.) from spawned ACP harness processes so each harness authenticates with
+   * its own mechanism instead of inheriting the gateway's creds. Default true.
+   */
+  scrubProviderEnv?: boolean;
   stream?: AcpStreamConfig;
   runtime?: AcpRuntimeConfig;
 };

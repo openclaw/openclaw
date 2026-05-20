@@ -1155,7 +1155,11 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
 
     expect(leaseStore.store.save).not.toHaveBeenCalled();
-    expect(launchCommands).toEqual([LOCAL_NODE_MODULES_CODEX_COMMAND]);
+    // The codex harness launch command is scrubbed of OpenAI provider creds so
+    // codex falls back to its own auth; the underlying command is unchanged.
+    expect(launchCommands).toEqual([
+      `env -u OPENAI_API_KEY -u OPENAI_AUTH_TOKEN ${LOCAL_NODE_MODULES_CODEX_COMMAND}`,
+    ]);
   });
 
   it("keeps reusable persistent ACP launch commands stable across ensures", async () => {
@@ -1201,7 +1205,11 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       mode: "persistent",
     });
 
-    expect(resolvedCommands).toEqual([CODEX_ACP_WRAPPER_COMMAND]);
+    // Reuse identity is the raw command, so the persistent session is reused
+    // (no new lease); the resolved spawn command carries the stable cred scrub.
+    expect(resolvedCommands).toEqual([
+      `env -u OPENAI_API_KEY -u OPENAI_AUTH_TOKEN ${CODEX_ACP_WRAPPER_COMMAND}`,
+    ]);
     expect(leaseStore.store.save).not.toHaveBeenCalled();
   });
 

@@ -24,6 +24,7 @@ import {
   createAcpxProcessLeaseId,
   hashAcpxProcessCommand,
   withAcpxLeaseEnvironment,
+  withScrubbedProviderEnv,
   type AcpxProcessLease,
   type AcpxProcessLeaseStore,
 } from "./process-lease.js";
@@ -32,6 +33,7 @@ import {
   isOpenClawLeaseAwareAcpxProcessCommand,
   type AcpxProcessCleanupDeps,
 } from "./process-reaper.js";
+import { resolveAcpProviderEnvScrubKeys } from "./provider-env-scrub.js";
 
 type AcpSessionStore = AcpRuntimeOptions["sessionStore"];
 type AcpSessionRecord = Parameters<AcpSessionStore["save"]>[0];
@@ -41,6 +43,11 @@ type OpenClawAcpxRuntimeOptions = AcpRuntimeOptions & {
   openclawWrapperRoot?: string;
   openclawGatewayInstanceId?: string;
   openclawProcessLeaseStore?: AcpxProcessLeaseStore;
+  /**
+   * When false, disables stripping provider-credential env vars from spawned
+   * ACP harnesses (maps to `acp.scrubProviderEnv: false`). Defaults to on.
+   */
+  openclawScrubProviderEnv?: boolean;
 };
 type AcpxRuntimeTestOptions = Record<string, unknown> & {
   openclawProcessCleanup?: AcpxProcessCleanupDeps;
@@ -403,8 +410,27 @@ function unwrapEnvCommand(parts: string[]): string[] {
     return parts;
   }
   let index = 1;
-  while (index < parts.length && isEnvAssignment(parts[index])) {
-    index += 1;
+  while (index < parts.length) {
+    const part = parts[index];
+    if (isEnvAssignment(part)) {
+      index += 1;
+      continue;
+    }
+    // `env -u NAME` / `env --unset NAME` strip a variable; skip the flag and
+    // its argument so the underlying command is still classified correctly.
+    if (part === "-u" || part === "--unset") {
+      index += 2;
+      continue;
+    }
+    if (part.startsWith("--unset=")) {
+      index += 1;
+      continue;
+    }
+    if (part === "-i" || part === "--ignore-environment" || part === "-") {
+      index += 1;
+      continue;
+    }
+    break;
   }
   return parts.slice(index);
 }
@@ -594,20 +620,23 @@ function createModelScopedAgentRegistry(params: {
   agentRegistry: AcpAgentRegistry;
   scope: AsyncLocalStorage<CodexAcpModelOverride | undefined>;
   leaseCommand: (command: string | undefined) => string | undefined;
+  scrubProviderEnvFromCommand: (
+    agentName: string,
+    command: string | undefined,
+  ) => string | undefined;
 }): AcpAgentRegistry {
   return {
     resolve(agentName: string): string | undefined {
       const command = params.agentRegistry.resolve(agentName);
       const override = params.scope.getStore();
-      if (
+      const leased =
         !override ||
         normalizeAgentName(agentName) !== CODEX_ACP_AGENT_ID ||
         typeof command !== "string" ||
         !isCodexAcpCommand(command)
-      ) {
-        return params.leaseCommand(command);
-      }
-      return params.leaseCommand(appendCodexAcpConfigOverrides(command, override));
+          ? params.leaseCommand(command)
+          : params.leaseCommand(appendCodexAcpConfigOverrides(command, override));
+      return params.scrubProviderEnvFromCommand(agentName, leased);
     },
     list(): string[] {
       return params.agentRegistry.list();
@@ -664,6 +693,7 @@ export class AcpxRuntime implements AcpRuntime {
   private readonly processLeaseStore: AcpxProcessLeaseStore | undefined;
   private readonly launchLeaseScope = new AsyncLocalStorage<AcpxLaunchLeaseContext | undefined>();
   private readonly cwd: string;
+  private readonly scrubProviderEnv: boolean;
 
   constructor(options: OpenClawAcpxRuntimeOptions, testOptions?: AcpxRuntimeTestOptions) {
     const { openclawProcessCleanup, ...delegateTestOptions } = testOptions ?? {};
@@ -672,6 +702,7 @@ export class AcpxRuntime implements AcpRuntime {
     this.gatewayInstanceId = options.openclawGatewayInstanceId;
     this.processLeaseStore = options.openclawProcessLeaseStore;
     this.cwd = options.cwd;
+    this.scrubProviderEnv = options.openclawScrubProviderEnv !== false;
     this.sessionStore = createResetAwareSessionStore(options.sessionStore, {
       gatewayInstanceId: this.gatewayInstanceId,
       leaseStore: this.processLeaseStore,
@@ -682,6 +713,8 @@ export class AcpxRuntime implements AcpRuntime {
       agentRegistry: this.agentRegistry,
       scope: this.codexAcpModelOverrideScope,
       leaseCommand: (command) => this.commandWithLaunchLease(command),
+      scrubProviderEnvFromCommand: (agentName, command) =>
+        this.scrubProviderEnvFromCommand(agentName, command),
     });
     const sharedOptions = {
       ...options,
@@ -742,6 +775,25 @@ export class AcpxRuntime implements AcpRuntime {
       agentName: readAgentFromHandle(handle),
       agentRegistry: this.agentRegistry,
     });
+  }
+
+  // Strip the harness's provider-credential env vars from its launch command
+  // so it uses its own auth instead of inheriting the gateway's creds. Keyed on
+  // the ACP agent id; the OpenClaw bridge keeps the full env (our own runtime).
+  private scrubProviderEnvFromCommand(
+    agentName: string,
+    command: string | undefined,
+  ): string | undefined {
+    if (!command || !this.scrubProviderEnv) {
+      return command;
+    }
+    if (isOpenClawBridgeCommand(command)) {
+      return command;
+    }
+    const unsetKeys = resolveAcpProviderEnvScrubKeys(agentName, {
+      scrubProviderEnv: this.scrubProviderEnv,
+    });
+    return withScrubbedProviderEnv({ command, unsetKeys });
   }
 
   private commandWithLaunchLease(command: string | undefined): string | undefined {

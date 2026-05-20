@@ -51,6 +51,8 @@ type AcpxRuntimeFactoryParams = {
   processLeaseStore: AcpxProcessLeaseStore;
   wrapperRoot: string;
   logger?: PluginLogger;
+  /** From `acp.scrubProviderEnv`; defaults to on when undefined. */
+  scrubProviderEnv?: boolean;
 };
 
 type CreateAcpxRuntimeServiceParams = {
@@ -229,6 +231,7 @@ function createLazyDefaultRuntime(params: AcpxRuntimeFactoryParams): AcpxRuntime
         openclawGatewayInstanceId: params.gatewayInstanceId,
         openclawProcessLeaseStore: params.processLeaseStore,
         openclawWrapperRoot: params.wrapperRoot,
+        openclawScrubProviderEnv: params.scrubProviderEnv,
         sessionStore: module.createFileSessionStore({
           stateDir: params.pluginConfig.stateDir,
         }),
@@ -557,6 +560,7 @@ export function createAcpxRuntimeService(
               processLeaseStore,
               wrapperRoot,
               logger: ctx.logger,
+              scrubProviderEnv: ctx.config.acp?.scrubProviderEnv,
             })
           : createLazyDefaultRuntime({
               pluginConfig,
@@ -564,6 +568,7 @@ export function createAcpxRuntimeService(
               processLeaseStore,
               wrapperRoot,
               logger: ctx.logger,
+              scrubProviderEnv: ctx.config.acp?.scrubProviderEnv,
             }),
       );
       runtime = startedRuntime;

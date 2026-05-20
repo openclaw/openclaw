@@ -195,6 +195,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Allowlist of ACP target agent ids permitted for ACP runtime sessions. Empty means no additional allowlist restriction.",
   "acp.maxConcurrentSessions":
     "Maximum concurrently active ACP sessions across this gateway process.",
+  "acp.scrubProviderEnv":
+    "Strip provider credential env vars (ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, etc.) from spawned ACP harness processes so each harness authenticates with its own mechanism instead of inheriting the gateway's creds (default: true). Keep enabled to avoid auth-path collisions such as Claude Code rejecting an OAuth token passed via ANTHROPIC_API_KEY; disable only when a custom harness must inherit the gateway provider credentials.",
   "acp.stream":
     "ACP streaming projection controls for chunk sizing, metadata visibility, and deduped delivery behavior.",
   "acp.stream.coalesceIdleMs":

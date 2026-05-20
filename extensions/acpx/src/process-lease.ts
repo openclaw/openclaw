@@ -177,3 +177,46 @@ export function withAcpxLeaseEnvironment(params: {
     appendAcpxLeaseArgs(params),
   ].join(" ");
 }
+
+/**
+ * Returns `command` decorated so the launched harness process does not inherit
+ * the named provider-credential env vars, mirroring the user-confirmed
+ * workaround `env -u ANTHROPIC_API_KEY claude`.
+ *
+ * On POSIX we prepend `env -u <NAME> ...`. If `command` already starts with an
+ * `env ...` invocation (for example from {@link withAcpxLeaseEnvironment}), the
+ * `-u` flags are merged into that single `env` call rather than nesting a
+ * second one — and they precede any `NAME=value` assignments, as POSIX `env`
+ * requires.
+ *
+ * On Windows the harness is launched without an `env` shim (see
+ * {@link withAcpxLeaseEnvironment}) and `env -u` is not portable to cmd, so
+ * this is a no-op there.
+ */
+export function withScrubbedProviderEnv(params: {
+  command: string;
+  unsetKeys: readonly string[];
+  platform?: NodeJS.Platform;
+}): string {
+  const seen = new Set<string>();
+  const keys: string[] = [];
+  for (const key of params.unsetKeys) {
+    const normalized = key.trim();
+    if (normalized && !seen.has(normalized)) {
+      seen.add(normalized);
+      keys.push(normalized);
+    }
+  }
+  if (keys.length === 0) {
+    return params.command;
+  }
+  if ((params.platform ?? process.platform) === "win32") {
+    return params.command;
+  }
+  const unsetFlags = keys.map((key) => `-u ${key}`).join(" ");
+  const existingEnvPrefix = /^env\s+/.exec(params.command);
+  if (existingEnvPrefix) {
+    return `env ${unsetFlags} ${params.command.slice(existingEnvPrefix[0].length)}`;
+  }
+  return `env ${unsetFlags} ${params.command}`;
+}
