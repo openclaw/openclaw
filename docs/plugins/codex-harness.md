@@ -25,7 +25,9 @@ OpenClaw starts Codex app-server threads with Codex native code mode enabled
 while leaving code-mode-only off by default. That keeps Codex native workspace
 and code capabilities available while OpenClaw dynamic tools continue through
 the app-server `item/tool/call` bridge. Restricted tool policies still disable
-native code mode entirely.
+native code mode entirely. This Codex-native feature is separate from
+[OpenClaw code mode](/reference/code-mode), which is an opt-in QuickJS-WASI
+runtime for generic OpenClaw runs with a different `exec` input shape.
 
 For the broader model/provider/runtime split, start with
 [Agent runtimes](/concepts/agent-runtimes). The short version is:
