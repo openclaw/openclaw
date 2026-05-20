@@ -911,6 +911,67 @@ describe("DiscordVoiceManager", () => {
     expect(client.rest.get).toHaveBeenCalledTimes(24);
   });
 
+  it("keeps followed voice state when reconciliation hits a transient REST failure", async () => {
+    const client = createClient();
+    const manager = createManager(
+      {
+        guilds: { g1: {} },
+        voice: {
+          enabled: true,
+          mode: "stt-tts",
+          followUsers: ["u-owner"],
+        },
+      },
+      client,
+    );
+
+    await manager.handleVoiceStateUpdate({
+      guild_id: "g1",
+      user_id: "u-owner",
+      channel_id: "1001",
+    } as never);
+    client.rest.get.mockRejectedValue(new Error("Discord API failed (500): fetch failed"));
+
+    await manager.autoJoin();
+
+    expectConnectedStatus(manager, "1001");
+    expect(updateVoiceStateMock).not.toHaveBeenCalled();
+    await manager.destroy();
+  });
+
+  it("does not reconnect from an in-flight followed user reconciliation after destroy", async () => {
+    const client = createClient();
+    let resolveVoiceState: (state: unknown) => void = () => {};
+    client.rest.get.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveVoiceState = resolve;
+        }),
+    );
+    const manager = createManager(
+      {
+        guilds: { g1: {} },
+        voice: {
+          enabled: true,
+          mode: "stt-tts",
+          followUsers: ["u-owner"],
+        },
+      },
+      client,
+    );
+
+    const autoJoinPromise = manager.autoJoin();
+    await vi.waitFor(() => {
+      expect(client.rest.get).toHaveBeenCalled();
+    });
+    await manager.destroy();
+    resolveVoiceState({ guild_id: "g1", user_id: "u-owner", channel_id: "1001" });
+    await autoJoinPromise;
+
+    expect(joinVoiceChannelMock).not.toHaveBeenCalled();
+    expect(manager.status()).toEqual([]);
+  });
+
   it("pages followed user reconciliation when the user list exceeds the REST budget", async () => {
     const client = createClient();
     client.rest.get.mockImplementation(async (path: string) => {

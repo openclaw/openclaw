@@ -195,6 +195,14 @@ function isFatalAutoJoinFailure(message: string): boolean {
   );
 }
 
+function isUnknownDiscordVoiceStateError(err: unknown): boolean {
+  const status =
+    err && typeof err === "object" && "status" in err && typeof err.status === "number"
+      ? err.status
+      : undefined;
+  return status === 404 || /unknown voice state/i.test(formatErrorMessage(err));
+}
+
 function startAutoJoin(manager: Pick<DiscordVoiceManager, "autoJoin">) {
   void manager
     .autoJoin()
@@ -270,6 +278,7 @@ export class DiscordVoiceManager {
   private followUsersReconcileGuildCursor = 0;
   private followUsersReconcileBotGuildCursor = 0;
   private readonly followUsersReconcileUserCursors = new Map<string, number>();
+  private destroyed = false;
 
   constructor(
     private params: {
@@ -312,7 +321,7 @@ export class DiscordVoiceManager {
   }
 
   async autoJoin(): Promise<void> {
-    if (!this.voiceEnabled) {
+    if (!this.voiceEnabled || this.destroyed) {
       return;
     }
     if (this.autoJoinTask) {
@@ -402,6 +411,12 @@ export class DiscordVoiceManager {
     params: { guildId: string; channelId: string },
     options?: { preserveFollowState?: boolean },
   ): Promise<VoiceOperationResult> {
+    if (this.destroyed) {
+      return {
+        ok: false,
+        message: "Discord voice manager is stopped.",
+      };
+    }
     if (!this.voiceEnabled) {
       return {
         ok: false,
@@ -832,7 +847,7 @@ export class DiscordVoiceManager {
     channelId: string | undefined;
     userId: string;
   }): Promise<void> {
-    if (!this.voiceEnabled) {
+    if (!this.voiceEnabled || this.destroyed) {
       return;
     }
     const { guildId, channelId, userId } = params;
@@ -892,6 +907,7 @@ export class DiscordVoiceManager {
   }
 
   async destroy(): Promise<void> {
+    this.destroyed = true;
     if (this.followUsersReconcileTimer) {
       clearInterval(this.followUsersReconcileTimer);
       this.followUsersReconcileTimer = null;
@@ -942,7 +958,7 @@ export class DiscordVoiceManager {
   }
 
   private async reconcileFollowedUsers(reason: string): Promise<void> {
-    if (this.followUserIds.size === 0) {
+    if (this.followUserIds.size === 0 || this.destroyed) {
       return;
     }
     if (this.followUsersReconcileTask) {
@@ -955,6 +971,9 @@ export class DiscordVoiceManager {
   }
 
   private async runFollowedUsersReconcile(reason: string): Promise<void> {
+    if (this.destroyed) {
+      return;
+    }
     const guildIds = this.resolveFollowGuildIds();
     if (guildIds.length === 0) {
       logVoiceVerbose(
@@ -973,11 +992,23 @@ export class DiscordVoiceManager {
           plan.guildId,
           userId,
         ).catch((err) => {
+          if (!isUnknownDiscordVoiceStateError(err)) {
+            logger.warn(
+              `discord voice: follow user reconcile skipped transient voice state error guild=${plan.guildId} user=${userId} reason=${reason}: ${formatErrorMessage(err)}`,
+            );
+            return "transient-error" as const;
+          }
           logVoiceVerbose(
             `follow user reconcile reason=${reason}: no voice state guild ${plan.guildId} user ${userId}: ${formatErrorMessage(err)}`,
           );
           return undefined;
         });
+        if (this.destroyed) {
+          return;
+        }
+        if (voiceState === "transient-error") {
+          continue;
+        }
         const channelId = voiceState?.channel_id?.trim();
         await this.handleFollowedUserVoiceStateUpdate({
           guildId: plan.guildId,
@@ -986,6 +1017,9 @@ export class DiscordVoiceManager {
         });
       }
       if (plan.checkBotVoiceState) {
+        if (this.destroyed) {
+          return;
+        }
         await this.disconnectStaleFollowedBotVoiceState({ guildId: plan.guildId, reason });
       }
     }
@@ -1171,6 +1205,9 @@ export class DiscordVoiceManager {
     guildId: string;
     reason: string;
   }): Promise<void> {
+    if (this.destroyed) {
+      return;
+    }
     const { guildId, reason } = params;
     if (Array.from(this.followedUserChannels.values()).some((entry) => entry.guildId === guildId)) {
       return;
@@ -1193,11 +1230,20 @@ export class DiscordVoiceManager {
       guildId,
       this.botUserId,
     ).catch((err) => {
+      if (!isUnknownDiscordVoiceStateError(err)) {
+        logger.warn(
+          `discord voice: follow reconcile skipped transient bot voice state error guild=${guildId} reason=${reason}: ${formatErrorMessage(err)}`,
+        );
+        return "transient-error" as const;
+      }
       logVoiceVerbose(
         `follow user reconcile reason=${reason}: no bot voice state guild ${guildId}: ${formatErrorMessage(err)}`,
       );
       return undefined;
     });
+    if (this.destroyed || botVoiceState === "transient-error") {
+      return;
+    }
     const botChannelId = botVoiceState?.channel_id?.trim();
     if (!botChannelId) {
       return;
