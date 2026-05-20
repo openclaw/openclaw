@@ -293,35 +293,15 @@ export function resolveCronPayloadOutcome(params: {
       : synthesizedText
         ? [{ text: synthesizedText }]
         : [];
-  const denialSignal = resolveCronDenialSignal([
-    { field: "summary", text: summary },
-    { field: "outputText", text: outputText },
-    { field: "synthesizedText", text: synthesizedText },
-    { field: "fallbackSummary", text: fallbackSummary },
-    { field: "fallbackOutputText", text: fallbackOutputText },
-    ...params.payloads
-      .map((payload, index) => ({ payload, index }))
-      .filter(({ payload }) => !isNonTerminalToolErrorWarning(payload))
-      .map(({ payload, index }) => ({
-        field: `payloads[${index}].text`,
-        text: payload?.text,
-      })),
-  ]);
   const failureSignal = normalizeCronFailureSignal(params.failureSignal);
   const runLevelError = formatCronRunLevelError(params.runLevelError);
   const hasFatalErrorPayload =
-    hasFatalStructuredErrorPayload ||
-    failureSignal !== undefined ||
-    denialSignal !== undefined ||
-    runLevelError !== undefined;
+    hasFatalStructuredErrorPayload || failureSignal !== undefined || runLevelError !== undefined;
   const structuredErrorText = hasFatalStructuredErrorPayload
     ? (lastErrorPayloadText ?? "cron isolated run returned an error payload")
     : undefined;
   const shouldUseRunLevelErrorPayload =
-    runLevelError !== undefined &&
-    structuredErrorText === undefined &&
-    failureSignal === undefined &&
-    denialSignal === undefined;
+    runLevelError !== undefined && structuredErrorText === undefined && failureSignal === undefined;
   const fatalDeliveryText =
     structuredErrorText ??
     failureSignal?.message ??
@@ -343,9 +323,7 @@ export function resolveCronPayloadOutcome(params: {
       ? structuredErrorText
       : failureSignal
         ? formatCronFailureSignal(failureSignal)
-        : denialSignal
-          ? formatCronDenialSignal(denialSignal)
-          : runLevelError,
+        : runLevelError,
     pendingPresentationWarningError: hasPendingPresentationWarning
       ? lastErrorPayloadText
       : undefined,

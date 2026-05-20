@@ -1,32 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
-import { detectCronDenialToken, resolveCronPayloadOutcome } from "./isolated-agent/helpers.js";
-
-describe("detectCronDenialToken", () => {
-  it("matches host denial markers case-sensitively", () => {
-    expect(detectCronDenialToken("SYSTEM_RUN_DENIED: approval blocked")).toBe("SYSTEM_RUN_DENIED");
-    expect(detectCronDenialToken("INVALID_REQUEST: denied")).toBe("INVALID_REQUEST");
-    expect(detectCronDenialToken("system_run_denied: approval blocked")).toBeUndefined();
-    expect(detectCronDenialToken("invalid_request: denied")).toBeUndefined();
-  });
-
-  it("matches model-narrated denial phrases case-insensitively", () => {
-    expect(detectCronDenialToken("Approval Cannot Safely Bind this runtime command")).toBe(
-      "approval cannot safely bind",
-    );
-    expect(detectCronDenialToken("The runtime denied the operation.")).toBe("runtime denied");
-    expect(detectCronDenialToken("I could not run the script.")).toBe("could not run");
-    expect(detectCronDenialToken("The command did not run to completion.")).toBe("did not run");
-    expect(detectCronDenialToken("The request was denied by policy.")).toBe("was denied");
-  });
-
-  it("ignores empty and non-token text", () => {
-    expect(detectCronDenialToken(undefined)).toBeUndefined();
-    expect(
-      detectCronDenialToken("The denied claim was reviewed, then the job succeeded."),
-    ).toBeUndefined();
-  });
-});
+import { resolveCronPayloadOutcome } from "./isolated-agent/helpers.js";
 
 describe("resolveCronPayloadOutcome", () => {
   it("uses the last non-empty non-error payload as summary and output", () => {
