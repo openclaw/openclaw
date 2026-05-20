@@ -535,24 +535,19 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
         typeof scope?.pluginId === "string" && scope.pluginId.trim()
           ? scope.pluginId.trim()
           : undefined;
-      const pluginOwnedCleanupOptions = pluginId
-        ? {
-            pluginRuntimeOwnerId: pluginId,
-            ...(!hasAdminScope(scope?.client)
-              ? {
-                  forceSyntheticClient: true,
-                  syntheticScopes: [ADMIN_SCOPE],
-                }
-              : {}),
-          }
-        : undefined;
+      const cleanupOptions = {
+        ...(pluginId ? { pluginRuntimeOwnerId: pluginId } : {}),
+        ...(!hasAdminScope(scope?.client)
+          ? { forceSyntheticClient: true, syntheticScopes: [ADMIN_SCOPE] }
+          : {}),
+      };
       await dispatchGatewayMethod(
         "sessions.delete",
         {
           key: params.sessionKey,
           deleteTranscript: params.deleteTranscript ?? true,
         },
-        pluginOwnedCleanupOptions,
+        Object.keys(cleanupOptions).length > 0 ? cleanupOptions : undefined,
       );
     },
   };
