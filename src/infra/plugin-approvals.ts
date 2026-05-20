@@ -1,10 +1,19 @@
 import type { ExecApprovalDecision } from "./exec-approvals.js";
 
+type PluginApprovalJsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | PluginApprovalJsonValue[]
+  | { [key: string]: PluginApprovalJsonValue };
+
 export type PluginApprovalRequestPayload = {
   pluginId?: string | null;
   title: string;
   description: string;
   severity?: "info" | "warning" | "critical" | null;
+  metadata?: PluginApprovalJsonValue;
   toolName?: string | null;
   toolCallId?: string | null;
   allowedDecisions?: readonly ExecApprovalDecision[] | null;
