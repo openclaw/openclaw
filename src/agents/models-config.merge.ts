@@ -66,7 +66,9 @@ const VISION_CAPABLE_ID_PATTERNS: readonly RegExp[] = [
 ];
 
 function explicitEntryLooksVisionCapable(id: string): boolean {
-  if (!id) return false;
+  if (!id) {
+    return false;
+  }
   return VISION_CAPABLE_ID_PATTERNS.some((re) => re.test(id));
 }
 
@@ -81,7 +83,7 @@ function applyInputDefaultForExplicitOnlyEntry(
   if (!explicitEntryLooksVisionCapable(id)) {
     return entry;
   }
-  return { ...entry, input: ["text", "image"] } as ModelDefinitionConfig;
+  return { ...entry, input: ["text", "image"] };
 }
 
 export function mergeProviderModels(
