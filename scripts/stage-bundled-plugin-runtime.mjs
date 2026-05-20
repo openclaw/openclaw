@@ -75,31 +75,54 @@ function writeJsonFile(targetPath, value) {
 
 function ensureOpenClawExtensionAlias(params) {
   const pluginSdkDir = path.join(params.repoRoot, "dist", "plugin-sdk");
-  if (!fs.existsSync(pluginSdkDir)) {
-    return;
+  const aliasDir = path.join(params.distExtensionsRoot, "node_modules", "openclaw");
+
+  if (fs.existsSync(pluginSdkDir)) {
+    const pluginSdkAliasPath = path.join(aliasDir, "plugin-sdk");
+    fs.mkdirSync(aliasDir, { recursive: true });
+    writeJsonFile(path.join(aliasDir, "package.json"), {
+      name: "openclaw",
+      type: "module",
+      exports: {
+        "./plugin-sdk": "./plugin-sdk/index.js",
+        "./plugin-sdk/*": "./plugin-sdk/*.js",
+      },
+    });
+    removePathIfExists(pluginSdkAliasPath);
+    fs.mkdirSync(pluginSdkAliasPath, { recursive: true });
+    for (const dirent of fs.readdirSync(pluginSdkDir, { withFileTypes: true })) {
+      if (!dirent.isFile() || path.extname(dirent.name) !== ".js") {
+        continue;
+      }
+      writeRuntimeModuleWrapper(
+        path.join(pluginSdkDir, dirent.name),
+        path.join(pluginSdkAliasPath, dirent.name),
+      );
+    }
   }
 
-  const aliasDir = path.join(params.distExtensionsRoot, "node_modules", "openclaw");
-  const pluginSdkAliasPath = path.join(aliasDir, "plugin-sdk");
-  fs.mkdirSync(aliasDir, { recursive: true });
-  writeJsonFile(path.join(aliasDir, "package.json"), {
-    name: "openclaw",
-    type: "module",
-    exports: {
-      "./plugin-sdk": "./plugin-sdk/index.js",
-      "./plugin-sdk/*": "./plugin-sdk/*.js",
-    },
-  });
-  removePathIfExists(pluginSdkAliasPath);
-  fs.mkdirSync(pluginSdkAliasPath, { recursive: true });
-  for (const dirent of fs.readdirSync(pluginSdkDir, { withFileTypes: true })) {
-    if (!dirent.isFile() || path.extname(dirent.name) !== ".js") {
-      continue;
-    }
-    writeRuntimeModuleWrapper(
-      path.join(pluginSdkDir, dirent.name),
-      path.join(pluginSdkAliasPath, dirent.name),
+  const ocPathDir = path.join(params.distExtensionsRoot, "oc-path");
+  const ocPathApiPath = path.join(ocPathDir, "api.js");
+  if (fs.existsSync(ocPathApiPath)) {
+    const ocPathAliasDir = path.join(
+      params.distExtensionsRoot,
+      "node_modules",
+      "@openclaw",
+      "oc-path",
     );
+    writeJsonFile(path.join(ocPathAliasDir, "package.json"), {
+      name: "@openclaw/oc-path",
+      type: "module",
+      exports: {
+        ".": "./index.js",
+        "./api.js": "./api.js",
+      },
+    });
+    writeRuntimeModuleWrapper(
+      path.join(ocPathDir, "index.js"),
+      path.join(ocPathAliasDir, "index.js"),
+    );
+    writeRuntimeModuleWrapper(ocPathApiPath, path.join(ocPathAliasDir, "api.js"));
   }
 }
 

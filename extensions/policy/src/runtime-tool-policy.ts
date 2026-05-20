@@ -126,7 +126,7 @@ export async function evaluatePolicyTrustedToolCall(
     };
   }
 
-  const tool = state.evidence.tools.find((entry) => entry.id === event.toolName);
+  const tool = (state.evidence.tools ?? []).find((entry) => entry.id === event.toolName);
   if (tool === undefined) {
     if (toolMetadataRequired(state)) {
       return {

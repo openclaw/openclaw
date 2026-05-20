@@ -17,7 +17,7 @@ export type PolicyAttestation = {
 
 export type PolicyEvidence = {
   readonly channels: readonly PolicyChannelEvidence[];
-  readonly tools: readonly PolicyToolEvidence[];
+  readonly tools?: readonly PolicyToolEvidence[];
 };
 
 export type PolicyChannelEvidence = {
@@ -98,10 +98,11 @@ export function collectPolicyEvidence(
   cfg: Record<string, unknown>,
   options: { readonly toolsRaw?: string } = {},
 ): PolicyEvidence {
-  return {
-    channels: scanPolicyChannels(cfg),
-    tools: options.toolsRaw === undefined ? [] : scanPolicyTools(options.toolsRaw),
-  };
+  const channels = scanPolicyChannels(cfg);
+  if (options.toolsRaw === undefined) {
+    return { channels };
+  }
+  return { channels, tools: scanPolicyTools(options.toolsRaw) };
 }
 
 export function scanPolicyChannels(cfg: Record<string, unknown>): readonly PolicyChannelEvidence[] {

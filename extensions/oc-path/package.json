@@ -6,7 +6,7 @@
   "type": "module",
   "exports": {
     ".": "./index.ts",
-    "./api.js": "./src/oc-path/index.ts"
+    "./api.js": "./api.ts"
   },
   "dependencies": {
     "commander": "14.0.3",
