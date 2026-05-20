@@ -703,7 +703,8 @@ export function filterBootstrapFilesForSession(
 }
 
 function hasGlobPattern(pattern: string): boolean {
-  return /[?*[\]{}]/u.test(pattern);
+  // Keep square brackets literal here; workspace paths commonly contain them.
+  return /[?*{}]/u.test(pattern);
 }
 
 function normalizeWorkspacePatternPath(value: string): string {
@@ -715,7 +716,7 @@ function normalizeWorkspacePatternPath(value: string): string {
 
 function resolveGlobWalkRoot(pattern: string): string {
   const normalized = normalizeWorkspacePatternPath(pattern);
-  const globIndex = normalized.search(/[?*[\]{}]/u);
+  const globIndex = normalized.search(/[?*{}]/u);
   if (globIndex === -1) {
     return normalized;
   }
