@@ -772,13 +772,8 @@ export function createBrowserTool(opts?: {
               });
           touchTrackedTab(readStringValue(result.targetId) ?? targetId);
           const screenshotPath = result.path;
-          console.log(
-            `[DEBUG-SCREENSHOT] result.path=${screenshotPath}, result.ok=${(result as any).ok}, keys=${Object.keys(result as any).join(",")}`,
-          );
           const screenshotCfg = browserToolDeps.getRuntimeConfig();
-          const visionEnabled = isBrowserVisionEnabled(screenshotCfg);
-          console.log(`[DEBUG-SCREENSHOT] visionEnabled=${visionEnabled}`);
-          if (visionEnabled) {
+          if (isBrowserVisionEnabled(screenshotCfg)) {
             try {
               const described = await describeBrowserImageWithVision(
                 {
@@ -833,11 +828,6 @@ export function createBrowserTool(opts?: {
               });
             }
           }
-          console.log(
-            `[DEBUG-SCREENSHOT] falling through to imageResultFromFile, path=${screenshotPath}`,
-          );
-          const fs = await import("node:fs");
-          console.log(`[DEBUG-SCREENSHOT] file exists=${fs.existsSync(screenshotPath)}`);
           return await browserToolDeps.imageResultFromFile({
             label: "browser:screenshot",
             path: screenshotPath,
