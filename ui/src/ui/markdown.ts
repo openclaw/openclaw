@@ -85,6 +85,8 @@ const MARKDOWN_CACHE_MAX_CHARS = 50_000;
 const INLINE_DATA_IMAGE_RE = /^data:image\/[a-z0-9.+-]+;base64,/i;
 const markdownCache = new Map<string, string>();
 const TAIL_LINK_BLUR_CLASS = "chat-link-tail-blur";
+const UNIX_ABSOLUTE_FILE_PATH_RE = /^\/(?:Users|home|var|tmp|private|opt|Volumes|mnt|srv)\//;
+const WINDOWS_ABSOLUTE_FILE_PATH_RE = /^[a-z]:[\\/]/i;
 
 // CJK character ranges for URL boundary detection (RFC 3986: CJK is not valid in raw URLs).
 // CJK Unified Ideographs, CJK Symbols/Punctuation, Fullwidth Forms, Hiragana, Katakana,
@@ -114,6 +116,11 @@ function setCachedMarkdown(key: string, value: string) {
   }
 }
 
+function isLocalAbsoluteFileHref(href: string): boolean {
+  const trimmed = href.trim();
+  return UNIX_ABSOLUTE_FILE_PATH_RE.test(trimmed) || WINDOWS_ABSOLUTE_FILE_PATH_RE.test(trimmed);
+}
+
 function installHooks() {
   if (hooksInstalled) {
     return;
@@ -126,6 +133,11 @@ function installHooks() {
     }
     const href = node.getAttribute("href");
     if (!href) {
+      return;
+    }
+
+    if (isLocalAbsoluteFileHref(href)) {
+      node.removeAttribute("href");
       return;
     }
 

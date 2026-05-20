@@ -182,6 +182,18 @@ describe("toSanitizedMarkdownHtml", () => {
   });
 
   describe("explicit protocol links", () => {
+    it("does not turn local absolute file paths into same-origin Gateway links", () => {
+      const html = toSanitizedMarkdownHtml(
+        "Download [example.docx](/Users/alice/.openclaw/data/output/example.docx)",
+      );
+      expect(html).toBe("<p>Download <a>example.docx</a></p>\n");
+    });
+
+    it("does not turn Windows absolute file paths into clickable links", () => {
+      const html = toSanitizedMarkdownHtml("Open [report.docx](C:\\Users\\alice\\report.docx)");
+      expect(html).toBe("<p>Open <a>report.docx</a></p>\n");
+    });
+
     it("links https:// URLs", () => {
       const html = toSanitizedMarkdownHtml("Visit https://example.com");
       expect(html).toBe(
