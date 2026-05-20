@@ -89,6 +89,26 @@ describe("parseMessageContent media placeholders", () => {
   });
 });
 
+describe("parseMessageContent interactive cards", () => {
+  it("extracts title and nested legacy text elements from card payloads", () => {
+    expect(
+      parseMessageContent(
+        JSON.stringify({
+          title: "saber",
+          elements: [
+            [
+              { tag: "img", image_key: "img_v3" },
+              { tag: "text", text: "请升级至最新版本客户端，以查看内容" },
+              { tag: "text", text: "" },
+            ],
+          ],
+        }),
+        "interactive",
+      ),
+    ).toBe("saber\n请升级至最新版本客户端，以查看内容");
+  });
+});
+
 describe("resolveBroadcastAgents", () => {
   it("returns agent list when broadcast config has the peerId", () => {
     const cfg: ClawdbotConfig = { broadcast: { oc_group123: ["susan", "main"] } };

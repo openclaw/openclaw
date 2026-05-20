@@ -393,6 +393,24 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   });
 
   it("streams auto mode plain final text when streaming is enabled", async () => {
+  it("keeps typing indicator while omitting reply metadata when skipReplyToInMessages is true", async () => {
+    const { options } = createDispatcherHarness({
+      replyToMessageId: "om_trigger",
+      skipReplyToInMessages: true,
+    });
+
+    await options.onReplyStart?.();
+    await options.deliver({ text: "plain text" }, { kind: "final" });
+
+    expectMockArgFields(addTypingIndicatorMock, "typing indicator params", {
+      messageId: "om_trigger",
+    });
+    expectLastMockArgFields(sendMessageFeishuMock, "send message params", {
+      replyToMessageId: undefined,
+    });
+  });
+
+  it("keeps auto mode plain text on non-streaming send path", async () => {
     const { options } = createDispatcherHarness();
     await options.deliver({ text: "plain text" }, { kind: "final" });
     await options.onIdle?.();

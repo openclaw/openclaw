@@ -208,10 +208,46 @@ describe("getMessageFeishu", () => {
       senderOpenId: undefined,
       senderType: undefined,
       content: "hello markdown\nhello div",
+      rawContent: expect.any(String),
       contentType: "interactive",
       createTime: undefined,
       threadId: undefined,
     });
+  });
+
+  it("extracts title and nested legacy text elements from interactive cards", async () => {
+    mockClientGet.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: "om_legacy_card",
+            chat_id: "oc_legacy_card",
+            msg_type: "interactive",
+            body: {
+              content: JSON.stringify({
+                title: "saber",
+                elements: [
+                  [
+                    { tag: "img", image_key: "img_v3" },
+                    { tag: "text", text: "请升级至最新版本客户端，以查看内容" },
+                    { tag: "text", text: "" },
+                  ],
+                ],
+              }),
+            },
+          },
+        ],
+      },
+    });
+
+    const result = await getMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_legacy_card",
+    });
+
+    expect(result.content).toBe("saber\n请升级至最新版本客户端，以查看内容");
+    expect(result.contentType).toBe("interactive");
   });
 
   it("falls through empty interactive card element arrays and locale variants", async () => {
@@ -261,6 +297,7 @@ describe("getMessageFeishu", () => {
       senderOpenId: undefined,
       senderType: undefined,
       content: "hello 2 tasks {{metadata}}",
+      rawContent: expect.any(String),
       contentType: "interactive",
       createTime: undefined,
       threadId: undefined,
@@ -305,6 +342,7 @@ describe("getMessageFeishu", () => {
       senderOpenId: undefined,
       senderType: undefined,
       content: "Card summary\n\n**fallback** body",
+      rawContent: expect.any(String),
       contentType: "interactive",
       createTime: undefined,
       threadId: undefined,
@@ -346,6 +384,7 @@ describe("getMessageFeishu", () => {
       senderOpenId: undefined,
       senderType: undefined,
       content: "Summary\n\npost body",
+      rawContent: expect.any(String),
       contentType: "post",
       createTime: undefined,
       threadId: undefined,
@@ -382,6 +421,7 @@ describe("getMessageFeishu", () => {
       senderOpenId: undefined,
       senderType: undefined,
       content: "[file message]",
+      rawContent: JSON.stringify({ file_key: "file_v3_123" }),
       contentType: "file",
       createTime: undefined,
       threadId: undefined,
@@ -414,6 +454,7 @@ describe("getMessageFeishu", () => {
       senderOpenId: undefined,
       senderType: undefined,
       content: "single payload",
+      rawContent: expect.any(String),
       contentType: "text",
       createTime: undefined,
       threadId: undefined,

@@ -250,6 +250,9 @@ function extractInteractiveElementText(
   element: unknown,
   variables: Map<string, string>,
 ): string | undefined {
+  if (Array.isArray(element)) {
+    return extractInteractiveElementsText(element, variables);
+  }
   if (!isRecord(element)) {
     return undefined;
   }
@@ -257,6 +260,12 @@ function extractInteractiveElementText(
   const text = isRecord(element.text) ? element.text : undefined;
 
   if (tag === "div" && typeof text?.content === "string") {
+    return applyCardTemplateVariables(text.content, variables);
+  }
+  if (tag === "text" && typeof element.text === "string") {
+    return applyCardTemplateVariables(element.text, variables);
+  }
+  if (tag === "text" && typeof text?.content === "string") {
     return applyCardTemplateVariables(text.content, variables);
   }
   if ((tag === "markdown" || tag === "lark_md") && typeof element.content === "string") {
@@ -311,17 +320,41 @@ function parseInteractivePostFallback(parsed: unknown): string | undefined {
   return textContent && textContent !== POST_FALLBACK_TEXT ? textContent : undefined;
 }
 
+function readInteractiveTitle(
+  parsed: Record<string, unknown>,
+  variables: Map<string, string>,
+): string | undefined {
+  if (typeof parsed.title === "string" && parsed.title.trim()) {
+    return applyCardTemplateVariables(parsed.title.trim(), variables);
+  }
+  const header = isRecord(parsed.header) ? parsed.header : undefined;
+  const title = isRecord(header?.title) ? header.title : undefined;
+  if (typeof title?.content === "string" && title.content.trim()) {
+    return applyCardTemplateVariables(title.content.trim(), variables);
+  }
+  return undefined;
+}
+
 function parseInteractiveCardContent(parsed: unknown): string {
   if (!isRecord(parsed)) {
     return INTERACTIVE_CARD_FALLBACK_TEXT;
   }
 
   const variables = readCardTemplateVariables(parsed);
+  const parts: string[] = [];
+  const title = readInteractiveTitle(parsed, variables);
+  if (title) {
+    parts.push(title);
+  }
   for (const elements of readInteractiveElementArrays(parsed)) {
     const text = extractInteractiveElementsText(elements, variables);
     if (text) {
-      return text;
+      parts.push(text);
     }
+  }
+  const combined = parts.join("\n").trim();
+  if (combined) {
+    return combined;
   }
 
   return parseInteractivePostFallback(parsed) ?? INTERACTIVE_CARD_FALLBACK_TEXT;
@@ -389,6 +422,7 @@ function parseFeishuMessageItem(
     senderOpenId: item.sender?.id_type === "open_id" ? item.sender?.id : undefined,
     senderType: item.sender?.sender_type,
     content: parseFeishuMessageContent(rawContent, msgType),
+    rawContent,
     contentType: msgType,
     createTime: parseStrictNonNegativeInteger(item.create_time),
     threadId: item.thread_id || undefined,

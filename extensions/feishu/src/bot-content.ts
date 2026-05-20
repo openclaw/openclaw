@@ -141,6 +141,9 @@ export function parseMessageContent(content: string, messageType: string): strin
     if (messageType === "text") {
       return parsed.text || "";
     }
+    if (messageType === "interactive") {
+      return parseInteractiveMessageContent(parsed);
+    }
     if (["image", "file", "audio", "video", "media", "sticker"].includes(messageType)) {
       if (messageType === "audio") {
         const speechToText =
@@ -175,6 +178,51 @@ export function parseMessageContent(content: string, messageType: string): strin
   } catch {
     return content;
   }
+}
+
+function collectInteractiveText(value: unknown, parts: string[]): void {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectInteractiveText(item, parts);
+    }
+    return;
+  }
+  if (!value || typeof value !== "object") {
+    return;
+  }
+  const record = value as Record<string, unknown>;
+  if (typeof record.title === "string" && record.title.trim()) {
+    parts.push(record.title.trim());
+  }
+  if (typeof record.text === "string" && record.text.trim()) {
+    parts.push(record.text.trim());
+  }
+  if (typeof record.content === "string" && record.content.trim()) {
+    parts.push(record.content.trim());
+  }
+  if (record.text && typeof record.text === "object") {
+    const text = record.text as Record<string, unknown>;
+    if (typeof text.content === "string" && text.content.trim()) {
+      parts.push(text.content.trim());
+    }
+  }
+  for (const key of ["header", "body", "elements", "i18n_elements"] as const) {
+    collectInteractiveText(record[key], parts);
+  }
+}
+
+function parseInteractiveMessageContent(parsed: unknown): string {
+  const parts: string[] = [];
+  collectInteractiveText(parsed, parts);
+  const seen = new Set<string>();
+  const unique = parts.filter((part) => {
+    if (seen.has(part)) {
+      return false;
+    }
+    seen.add(part);
+    return true;
+  });
+  return unique.join("\n").trim() || "[Interactive Card]";
 }
 
 function formatSubMessageContent(content: string, contentType: string): string {
