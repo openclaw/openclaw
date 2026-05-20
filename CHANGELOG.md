@@ -32,7 +32,6 @@ Docs: https://docs.openclaw.ai
 - Docker: keep the bundled Codex plugin in official release image keep lists so the default OpenAI agent harness remains available after Docker pruning. Fixes #83613. (#83626) Thanks @YuanHanzhong.
 - CLI/channels: preserve the first line of `openclaw channels logs` output when the rolling tail window starts exactly on a line boundary, mirroring the already-fixed `readLogSlice` behavior in `src/logging/log-tail.ts`.
 - Control UI: treat terminal session status as authoritative over stale active-run flags so completed terminal runs stop showing abort/live UI. (#84057)
-- Codex/message: tell message-tool-only Codex turns to send visible channel output with `message(action="send")` before ending, so direct replies do not stay private. Fixes #84129. (#84397) Thanks @joshavant.
 - CLI: preserve embedded equals signs in inline root option values instead of truncating after the second separator. (#83995) Thanks @ThiagoCAltoe.
 - Matrix/config: accept `messages.queue.byChannel.matrix` queue overrides and keep queue provider schema/type keys aligned for Matrix, Google Chat, and Mattermost. Thanks @bdjben.
 - CLI: format `openclaw acp client` failures through the shared error formatter so object-shaped errors stay readable instead of printing `[object Object]`. Fixes #83904. (#84080)
