@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ADMIN_SCOPE, READ_SCOPE, WRITE_SCOPE } from "../operator-scopes.js";
 import type { GatewayRequestHandler } from "../server-methods/types.js";
+import { CORE_GATEWAY_METHOD_SPECS } from "./core-descriptors.js";
 import {
   createGatewayMethodRegistry,
   createPluginGatewayMethodDescriptors,
@@ -88,6 +89,20 @@ describe("gateway method registry", () => {
 
     expect(registry.getScope("config.get")).toBe(READ_SCOPE);
     expect(registry.getScope("exec.approvals.get")).toBe("operator.approvals");
+  });
+
+  it("marks device.pair.approve, device.pair.remove, device.token.rotate, device.token.revoke as control-plane writes", () => {
+    const deviceWriteMethods = [
+      "device.pair.approve",
+      "device.pair.remove",
+      "device.token.rotate",
+      "device.token.revoke",
+    ];
+    for (const method of deviceWriteMethods) {
+      const descriptor = CORE_GATEWAY_METHOD_SPECS.find((d) => d.name === method);
+      expect(descriptor, `${method} should exist`).toBeDefined();
+      expect(descriptor?.controlPlaneWrite, `${method} should be controlPlaneWrite`).toBe(true);
+    }
   });
 
   it("defaults handler-only plugin registries to admin scope", () => {
