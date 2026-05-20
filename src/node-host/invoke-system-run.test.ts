@@ -1613,6 +1613,205 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     });
   });
 
+  it.runIf(process.platform !== "win32")(
+    "dispatches approved inline eval through the materialized script with a pinned interpreter realpath",
+    async () => {
+      const tmp = createFixtureDir("openclaw-inline-eval-dispatch-");
+      const binDir = path.join(tmp, "venv", "bin");
+      const baseDir = path.join(tmp, "base", "bin");
+      fs.mkdirSync(binDir, { recursive: true });
+      fs.mkdirSync(baseDir, { recursive: true });
+      const basePythonPath = createTempExecutable({ dir: baseDir, name: "python3" });
+      const pythonPath = path.join(binDir, "python3");
+      fs.symlinkSync(basePythonPath, pythonPath);
+
+      const command = [pythonPath, "-c", "import moviepy; print('video stack ok')"];
+      const prepared = buildSystemRunApprovalPlan({
+        command,
+        cwd: tmp,
+      });
+      expect(prepared.ok).toBe(true);
+      if (!prepared.ok) {
+        throw new Error("unreachable");
+      }
+      expect(prepared.plan.argv[0]).toBe(basePythonPath);
+
+      const { runCommand, sendInvokeResult } = await runSystemInvoke({
+        preferMacAppExecHost: false,
+        command,
+        rawCommand: prepared.plan.commandPreview,
+        systemRunPlan: prepared.plan,
+        cwd: prepared.plan.cwd ?? tmp,
+        approved: true,
+        security: "full",
+        ask: "off",
+      });
+
+      expect(runCommand).toHaveBeenCalledTimes(1);
+      const argv = requireFirstRunCommandArgs(runCommand);
+      expect(argv[0]).toBe(basePythonPath);
+      expect(argv[1]).toBe(prepared.plan.argv[1]);
+      expectInvokeOk(sendInvokeResult);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "preserves pinned interpreter realpaths for gateway-forwarded materialized inline eval plans",
+    async () => {
+      const tmp = createFixtureDir("openclaw-inline-eval-forwarded-dispatch-");
+      const binDir = path.join(tmp, "venv", "bin");
+      const baseDir = path.join(tmp, "base", "bin");
+      fs.mkdirSync(binDir, { recursive: true });
+      fs.mkdirSync(baseDir, { recursive: true });
+      const basePythonPath = createTempExecutable({ dir: baseDir, name: "python3" });
+      const pythonPath = path.join(binDir, "python3");
+      fs.symlinkSync(basePythonPath, pythonPath);
+
+      const command = [pythonPath, "-c", "import moviepy; print('video stack ok')"];
+      const prepared = buildSystemRunApprovalPlan({
+        command,
+        cwd: tmp,
+      });
+      expect(prepared.ok).toBe(true);
+      if (!prepared.ok) {
+        throw new Error("unreachable");
+      }
+      expect(prepared.plan.argv[0]).toBe(basePythonPath);
+
+      const { runCommand, sendInvokeResult } = await runSystemInvoke({
+        preferMacAppExecHost: false,
+        command: prepared.plan.argv,
+        rawCommand: prepared.plan.commandText,
+        systemRunPlan: prepared.plan,
+        cwd: prepared.plan.cwd ?? tmp,
+        approved: true,
+        security: "full",
+        ask: "off",
+      });
+
+      expect(runCommand).toHaveBeenCalledTimes(1);
+      const argv = requireFirstRunCommandArgs(runCommand);
+      expect(argv[0]).toBe(basePythonPath);
+      expect(argv[1]).toBe(prepared.plan.argv[1]);
+      expectInvokeOk(sendInvokeResult);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "forwards approved materialized inline eval plans to the mac exec host with matching command text",
+    async () => {
+      const tmp = createFixtureDir("openclaw-inline-eval-mac-host-dispatch-");
+      const pythonPath = createTempExecutable({ dir: tmp, name: "python3" });
+      const command = [pythonPath, "-c", "print('video stack ok')"];
+      const prepared = buildSystemRunApprovalPlan({
+        command,
+        cwd: tmp,
+      });
+      expect(prepared.ok).toBe(true);
+      if (!prepared.ok) {
+        throw new Error("unreachable");
+      }
+
+      const invoke = await runSystemInvoke({
+        preferMacAppExecHost: true,
+        command,
+        rawCommand: prepared.plan.commandPreview,
+        systemRunPlan: prepared.plan,
+        cwd: prepared.plan.cwd ?? tmp,
+        approved: true,
+        security: "full",
+        ask: "off",
+        runViaResponse: createMacExecHostSuccess(),
+      });
+
+      expect(invoke.runCommand).not.toHaveBeenCalled();
+      const macHostCall = requireMacExecHostCall(invoke.runViaMacAppExecHost);
+      expect(macHostCall.request?.command).toEqual(prepared.plan.argv);
+      expect(macHostCall.request?.rawCommand).toBe(prepared.plan.commandText);
+      expectInvokeOk(invoke.sendInvokeResult, { payloadContains: "app-ok" });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "does not materialize inline eval during non-approved direct execution",
+    async () => {
+      const tmp = createFixtureDir("openclaw-inline-eval-no-approval-");
+      const blockedParent = path.join(tmp, "blocked-parent");
+      fs.writeFileSync(blockedParent, "");
+      const oldStateDir = process.env.OPENCLAW_STATE_DIR;
+      process.env.OPENCLAW_STATE_DIR = path.join(blockedParent, "state");
+      try {
+        const { runCommand, sendInvokeResult } = await runSystemInvoke({
+          preferMacAppExecHost: false,
+          command: [process.execPath, "-e", "console.log('direct ok')"],
+          cwd: tmp,
+          security: "full",
+          ask: "off",
+        });
+
+        expect(runCommand).toHaveBeenCalledTimes(1);
+        expectInvokeOk(sendInvokeResult);
+      } finally {
+        if (oldStateDir === undefined) {
+          delete process.env.OPENCLAW_STATE_DIR;
+        } else {
+          process.env.OPENCLAW_STATE_DIR = oldStateDir;
+        }
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "does not trust materialized inline eval plan argv before approval",
+    async () => {
+      const tmp = createFixtureDir("openclaw-inline-eval-unapproved-plan-");
+      const binDir = path.join(tmp, "venv", "bin");
+      const baseDir = path.join(tmp, "base", "bin");
+      fs.mkdirSync(binDir, { recursive: true });
+      fs.mkdirSync(baseDir, { recursive: true });
+      const basePythonPath = createTempExecutable({ dir: baseDir, name: "python3" });
+      const pythonPath = path.join(binDir, "python3");
+      fs.symlinkSync(basePythonPath, pythonPath);
+
+      const command = [pythonPath, "-c", "print('strict approval required')"];
+      const prepared = buildSystemRunApprovalPlan({
+        command,
+        cwd: tmp,
+      });
+      expect(prepared.ok).toBe(true);
+      if (!prepared.ok) {
+        throw new Error("unreachable");
+      }
+      setRuntimeConfigSnapshot({
+        tools: {
+          exec: {
+            strictInlineEval: true,
+          },
+        },
+      });
+      try {
+        const { runCommand, sendInvokeResult, sendNodeEvent } = await runSystemInvoke({
+          preferMacAppExecHost: false,
+          command,
+          rawCommand: prepared.plan.commandPreview,
+          systemRunPlan: prepared.plan,
+          cwd: prepared.plan.cwd ?? tmp,
+          approved: false,
+          security: "full",
+          ask: "off",
+        });
+
+        expect(runCommand).not.toHaveBeenCalled();
+        expectExecDeniedEvent(sendNodeEvent);
+        expectInvokeErrorMessage(sendInvokeResult, {
+          message: "python3 -c requires explicit approval in strictInlineEval mode",
+        });
+      } finally {
+        clearRuntimeConfigSnapshot();
+      }
+    },
+  );
+
   it("denies ./sh wrapper spoof in allowlist on-miss mode before execution", async () => {
     const marker = path.join(os.tmpdir(), `openclaw-wrapper-spoof-${process.pid}-${Date.now()}`);
     const runCommand = vi.fn(async () => {
@@ -3159,6 +3358,58 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       clearRuntimeConfigSnapshot();
     }
   });
+
+  it.runIf(process.platform !== "win32")(
+    "does not persist allow-always approvals for forwarded materialized inline eval plans",
+    async () => {
+      setRuntimeConfigSnapshot({
+        tools: {
+          exec: {
+            strictInlineEval: true,
+          },
+        },
+      });
+      try {
+        await withTempApprovalsHome({
+          approvals: createAllowlistOnMissApprovals(),
+          run: async () => {
+            const tempDir = createFixtureDir("openclaw-inline-eval-forwarded-allow-always-");
+            const executablePath = createTempExecutable({
+              dir: tempDir,
+              name: "python3",
+            });
+            const prepared = buildSystemRunApprovalPlan({
+              command: [executablePath, "-c", "print('hi')"],
+              cwd: tempDir,
+            });
+            expect(prepared.ok).toBe(true);
+            if (!prepared.ok) {
+              throw new Error("unreachable");
+            }
+
+            const { runCommand, sendInvokeResult } = await runSystemInvoke({
+              preferMacAppExecHost: false,
+              command: prepared.plan.argv,
+              rawCommand: prepared.plan.commandText,
+              systemRunPlan: prepared.plan,
+              cwd: prepared.plan.cwd ?? tempDir,
+              security: "allowlist",
+              ask: "on-miss",
+              approvalDecision: "allow-always",
+              approved: true,
+              runCommand: vi.fn(async () => createLocalRunResult("inline-eval-ok")),
+            });
+
+            expect(runCommand).toHaveBeenCalledTimes(1);
+            expectInvokeOk(sendInvokeResult, { payloadContains: "inline-eval-ok" });
+            expect(loadExecApprovals().agents?.main?.allowlist ?? []).toStrictEqual([]);
+          },
+        });
+      } finally {
+        clearRuntimeConfigSnapshot();
+      }
+    },
+  );
 
   it("persists benign awk allow-always approvals in strict inline-eval mode without reopening inline carriers", async () => {
     setRuntimeConfigSnapshot({

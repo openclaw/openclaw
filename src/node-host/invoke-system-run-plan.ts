@@ -7,6 +7,8 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeNullableString,
 } from "@openclaw/normalization-core/string-coerce";
+import { resolveStateDir } from "../config/paths.js";
+import { detectInterpreterInlineEvalArgv } from "../infra/command-analysis/inline-eval.js";
 import type {
   SystemRunApprovalFileOperand,
   SystemRunApprovalPlan,
@@ -157,12 +159,244 @@ const NODE_OPTIONS_WITH_FILE_VALUE = new Set([
 const RUBY_UNSAFE_APPROVAL_FLAGS = new Set(["-I", "-r", "--require"]);
 const PERL_UNSAFE_APPROVAL_FLAGS = new Set(["-I", "-M", "-m"]);
 
+type MaterializedInlineEvalCommand = {
+  argv: string[];
+  scriptPath: string;
+};
+
+type InlineEvalInterpreterSnapshot = {
+  resolvedPath: string;
+  resolvedRealPath: string;
+};
+
 function normalizeOptionFlag(token: string): string {
   return normalizeLowercaseStringOrEmpty(parseInlineOptionToken(token).name);
 }
 
 function readTrimmedArgToken(argv: readonly string[], index: number): string {
   return normalizeNullableString(argv[index]) ?? "";
+}
+
+function resolveInlineEvalScriptExtension(normalizedExecutable: string): string | null {
+  if (/^(?:python|python\d+(?:\.\d+)*|pypy|pypy\d*)$/.test(normalizedExecutable)) {
+    return ".py";
+  }
+  if (normalizedExecutable === "node" || normalizedExecutable === "nodejs") {
+    return ".cjs";
+  }
+  return null;
+}
+
+function resolveMaterializableInlineEvalCodeIndex(argv: string[], flag: string): number | null {
+  if (argv.length !== 3) {
+    return null;
+  }
+  return readTrimmedArgToken(argv, 1) === flag ? 2 : null;
+}
+
+function renderMaterializedInlineEvalScript(params: {
+  normalizedExecutable: string;
+  flag: string;
+  code: string;
+  interpreter?: InlineEvalInterpreterSnapshot;
+}): string | null {
+  if (/^(?:python|python\d+(?:\.\d+)*|pypy|pypy\d*)$/.test(params.normalizedExecutable)) {
+    if (!params.interpreter) {
+      return null;
+    }
+    return [
+      "import os as __openclaw_inline_eval_os",
+      "",
+      `__openclaw_inline_eval_interpreter = ${JSON.stringify(params.interpreter.resolvedPath)}`,
+      `__openclaw_inline_eval_interpreter_realpath = ${JSON.stringify(
+        params.interpreter.resolvedRealPath,
+      )}`,
+      "if (",
+      "    __openclaw_inline_eval_os.path.realpath(__openclaw_inline_eval_interpreter)",
+      "    != __openclaw_inline_eval_interpreter_realpath",
+      "):",
+      "    raise SystemExit('SYSTEM_RUN_DENIED: inline-eval interpreter changed before execution')",
+      `__openclaw_inline_eval_code = ${JSON.stringify(params.code)}`,
+      "__openclaw_inline_eval_env = __openclaw_inline_eval_os.environ.copy()",
+      "__openclaw_inline_eval_env['__PYVENV_LAUNCHER__'] = __openclaw_inline_eval_interpreter",
+      "__openclaw_inline_eval_os.execve(",
+      "    __openclaw_inline_eval_interpreter_realpath,",
+      "    [__openclaw_inline_eval_interpreter, '-c', __openclaw_inline_eval_code],",
+      "    __openclaw_inline_eval_env,",
+      ")",
+      "",
+    ].join("\n");
+  }
+  if (params.normalizedExecutable === "node" || params.normalizedExecutable === "nodejs") {
+    return [
+      `const __openclawInlineEvalFlag = ${JSON.stringify(params.flag)};`,
+      `const __openclawInlineEvalCode = ${JSON.stringify(params.code)};`,
+      'if (typeof process.execve !== "function") {',
+      '  throw new Error("SYSTEM_RUN_DENIED: inline-eval exec replacement unavailable");',
+      "}",
+      "process.execve(",
+      "  process.execPath,",
+      "  [process.execPath, __openclawInlineEvalFlag, __openclawInlineEvalCode],",
+      "  process.env,",
+      ");",
+      "",
+    ].join("\n");
+  }
+  return null;
+}
+
+function ensureUserPrivateDirectory(dir: string): { ok: true } | { ok: false; message: string } {
+  try {
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const stat = fs.lstatSync(dir);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) {
+      return { ok: false, message: "SYSTEM_RUN_DENIED: inline-eval temp dir is unsafe" };
+    }
+    const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
+    if (uid !== undefined && typeof stat.uid === "number" && stat.uid !== uid) {
+      return { ok: false, message: "SYSTEM_RUN_DENIED: inline-eval temp dir owner mismatch" };
+    }
+    if ((stat.mode & 0o077) !== 0) {
+      fs.chmodSync(dir, 0o700);
+    }
+    return { ok: true };
+  } catch {
+    return { ok: false, message: "SYSTEM_RUN_DENIED: unable to prepare inline-eval temp dir" };
+  }
+}
+
+function writeMaterializedInlineEvalScriptSync(params: {
+  normalizedExecutable: string;
+  flag: string;
+  code: string;
+  extension: string;
+  interpreter?: InlineEvalInterpreterSnapshot;
+}): { ok: true; scriptPath: string } | { ok: false; message: string } {
+  const scriptBody = renderMaterializedInlineEvalScript({
+    normalizedExecutable: params.normalizedExecutable,
+    flag: params.flag,
+    code: params.code,
+    interpreter: params.interpreter,
+  });
+  if (scriptBody === null) {
+    return { ok: false, message: "SYSTEM_RUN_DENIED: unable to materialize inline-eval script" };
+  }
+  const tmpDir = path.join(resolveStateDir(), "tmp");
+  const tmp = ensureUserPrivateDirectory(tmpDir);
+  if (!tmp.ok) {
+    return tmp;
+  }
+  const inlineEvalDir = path.join(tmpDir, "inline-eval");
+  const dir = ensureUserPrivateDirectory(inlineEvalDir);
+  if (!dir.ok) {
+    return dir;
+  }
+
+  const digest = crypto
+    .createHash("sha256")
+    .update(
+      JSON.stringify({
+        version: 1,
+        interpreter: params.normalizedExecutable,
+        flag: params.flag,
+        extension: params.extension,
+        code: params.code,
+        interpreterSnapshot: params.interpreter,
+        runtimeWrapper: "cwd-eval-v1",
+      }),
+    )
+    .digest("hex");
+  const scriptPath = path.join(inlineEvalDir, `${digest}${params.extension}`);
+  const tmpScriptPath = path.join(
+    inlineEvalDir,
+    `.${digest}.${process.pid}.${crypto.randomUUID()}.tmp`,
+  );
+  try {
+    fs.writeFileSync(tmpScriptPath, scriptBody, { flag: "wx", mode: 0o600 });
+    fs.chmodSync(tmpScriptPath, 0o600);
+    fs.renameSync(tmpScriptPath, scriptPath);
+    fs.chmodSync(scriptPath, 0o600);
+    return { ok: true, scriptPath };
+  } catch {
+    try {
+      fs.rmSync(tmpScriptPath, { force: true });
+    } catch {
+      // Best effort cleanup only.
+    }
+    return { ok: false, message: "SYSTEM_RUN_DENIED: unable to materialize inline-eval script" };
+  }
+}
+
+export function isMaterializedInlineEvalApprovalPlan(
+  plan: SystemRunApprovalPlan | null | undefined,
+): boolean {
+  if (!plan?.commandPreview || !plan.mutableFileOperand) {
+    return false;
+  }
+  const scriptPath = plan.argv[plan.mutableFileOperand.argvIndex];
+  if (!scriptPath) {
+    return false;
+  }
+  let scriptRealPath: string;
+  try {
+    scriptRealPath = fs.realpathSync(scriptPath);
+  } catch {
+    return false;
+  }
+  if (scriptRealPath !== plan.mutableFileOperand.path) {
+    return false;
+  }
+  const normalizedScriptPath = path.normalize(scriptRealPath);
+  const inlineEvalSegment = `${path.sep}tmp${path.sep}inline-eval${path.sep}`;
+  return normalizedScriptPath.includes(inlineEvalSegment);
+}
+
+export function materializeInlineEvalForApprovalSync(
+  argv: string[],
+  cwd?: string,
+): { ok: true; command: MaterializedInlineEvalCommand | null } | { ok: false; message: string } {
+  if (process.platform === "win32") {
+    return { ok: true, command: null };
+  }
+  const hit = detectInterpreterInlineEvalArgv(argv);
+  if (!hit) {
+    return { ok: true, command: null };
+  }
+  const extension = resolveInlineEvalScriptExtension(hit.normalizedExecutable);
+  if (!extension || (hit.flag !== "-c" && hit.flag !== "-e" && hit.flag !== "--eval")) {
+    return { ok: true, command: null };
+  }
+  const codeIndex = resolveMaterializableInlineEvalCodeIndex(argv, hit.flag);
+  if (codeIndex === null) {
+    return { ok: true, command: null };
+  }
+  const code = argv[codeIndex] ?? "";
+  const resolution = resolveCommandResolutionFromArgv(argv, cwd);
+  const interpreter =
+    resolution?.execution.resolvedPath && resolution.execution.resolvedRealPath
+      ? {
+          resolvedPath: resolution.execution.resolvedPath,
+          resolvedRealPath: resolution.execution.resolvedRealPath,
+        }
+      : undefined;
+  const materialized = writeMaterializedInlineEvalScriptSync({
+    normalizedExecutable: hit.normalizedExecutable,
+    flag: hit.flag,
+    code,
+    extension,
+    interpreter,
+  });
+  if (!materialized.ok) {
+    return materialized;
+  }
+  const flagIndex = codeIndex - 1;
+  return {
+    ok: true,
+    command: {
+      argv: [...argv.slice(0, flagIndex), materialized.scriptPath, ...argv.slice(codeIndex + 1)],
+      scriptPath: materialized.scriptPath,
+    },
+  };
 }
 
 const POSIX_SHELL_OPTIONS_WITH_VALUE = new Set([
@@ -1139,9 +1373,17 @@ export function buildSystemRunApprovalPlan(params: {
       message: "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
     };
   }
+  const materializedInlineEval = materializeInlineEvalForApprovalSync(
+    command.argv,
+    normalizeNullableString(params.cwd) ?? undefined,
+  );
+  if (!materializedInlineEval.ok) {
+    return { ok: false, message: materializedInlineEval.message };
+  }
+  const approvalArgv = materializedInlineEval.command?.argv ?? command.argv;
   const hardening = hardenApprovedExecutionPaths({
     approvedByAsk: true,
-    argv: command.argv,
+    argv: approvalArgv,
     shellCommand: command.shellPayload,
     cwd: normalizeNullableString(params.cwd) ?? undefined,
   });
@@ -1150,9 +1392,11 @@ export function buildSystemRunApprovalPlan(params: {
   }
   const commandText = formatExecCommand(hardening.argv);
   const commandPreview =
-    command.previewText?.trim() && command.previewText.trim() !== commandText
-      ? command.previewText.trim()
-      : null;
+    materializedInlineEval.command !== null
+      ? command.commandText
+      : command.previewText?.trim() && command.previewText.trim() !== commandText
+        ? command.previewText.trim()
+        : null;
   const mutableFileOperand = resolveMutableFileOperandSnapshotSync({
     argv: hardening.argv,
     cwd: hardening.cwd,
