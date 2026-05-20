@@ -108,6 +108,7 @@ Docs: https://docs.openclaw.ai
 - Providers/DeepSeek: normalize MCP tool schemas with `anyOf`/`oneOf` unions before normal and compaction requests reach DeepSeek, preventing union-shaped parameters from being rejected. (#83766) Thanks @TurboTheTurtle.
 - Control UI: render live tool progress from session-scoped `session.tool` Gateway events so externally started runs show their tool cards in the active session. (#83734) Thanks @TurboTheTurtle.
 - Outbound: resolve send-capable channel plugins from the active runtime registry when the pinned startup registry only has setup metadata. (#83733) Thanks @TurboTheTurtle.
+- Discord: preserve streamed reply previews when recovered tool-warning finals are delivered before or after the assistant's final reply. (#84169) Thanks @neeravmakwana.
 - Control UI: keep the chat delete confirmation popover clamped inside the visible viewport on small screens. (#83804) Thanks @ThiagoCAltoe.
 - Browser: enforce current-tab URL allowlist checks for `/act` evaluate/batch actions and `/highlight` routes while leaving tab-management actions unblocked. (#78523)
 - CI: require real-behavior-proof verdict markers to come from the ClawSweeper GitHub App before accepting exact-head proof. (#83692)
