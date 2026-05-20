@@ -97,6 +97,77 @@ describe("plugin contract registry scoped retries", () => {
     expect(loadBundledCapabilityRuntimeRegistry).toHaveBeenCalledTimes(2);
   });
 
+  it("refreshes plugin discovery between scoped provider runtime retries", async () => {
+    const staleDiscovery = { candidates: [], diagnostics: [], marker: "before-install" };
+    const freshDiscovery = { candidates: [], diagnostics: [], marker: "after-install" };
+    const discoverOpenClawPlugins = vi
+      .fn()
+      .mockReturnValueOnce(staleDiscovery)
+      .mockReturnValueOnce(freshDiscovery);
+    const loadBundledCapabilityRuntimeRegistry = vi.fn(
+      (params: { discovery?: { marker?: string } }) =>
+        params.discovery === freshDiscovery
+          ? createMockRuntimeRegistry({
+              plugin: {
+                id: "arcee",
+                status: "loaded",
+                providerIds: ["arcee"],
+                webFetchProviderIds: [],
+                webSearchProviderIds: [],
+                migrationProviderIds: [],
+              },
+              providers: [
+                {
+                  pluginId: "arcee",
+                  provider: {
+                    id: "arcee",
+                    label: "Arcee",
+                    docsPath: "/providers/arcee",
+                    auth: [],
+                  } as ProviderPlugin,
+                },
+              ],
+            })
+          : createMockRuntimeRegistry({
+              plugin: {
+                id: "arcee",
+                status: "error",
+                error: "transient discovery miss",
+                providerIds: [],
+                webFetchProviderIds: [],
+                webSearchProviderIds: [],
+                migrationProviderIds: [],
+              },
+              diagnostics: [{ pluginId: "arcee", message: "transient discovery miss" }],
+            }),
+    );
+
+    vi.doMock("../discovery.js", () => ({
+      discoverOpenClawPlugins,
+    }));
+    vi.doMock("../bundled-capability-runtime.js", () => ({
+      loadBundledCapabilityRuntimeRegistry,
+    }));
+    vi.doMock("../provider-contract-public-artifacts.js", () => ({
+      resolveBundledExplicitProviderContractsFromPublicArtifacts: () => null,
+    }));
+
+    const { resolveProviderContractProvidersForPluginIds } = await import("./registry.js");
+
+    expect(
+      resolveProviderContractProvidersForPluginIds(["arcee"]).map((provider) => provider.id),
+    ).toEqual(["arcee"]);
+    expect(discoverOpenClawPlugins).toHaveBeenCalledTimes(2);
+    expect(loadBundledCapabilityRuntimeRegistry).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ discovery: staleDiscovery }),
+    );
+    expect(loadBundledCapabilityRuntimeRegistry).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ discovery: freshDiscovery }),
+    );
+  });
+
   it("retries web search provider loads after a transient plugin-scoped runtime error", async () => {
     const loadBundledCapabilityRuntimeRegistry = vi
       .fn()

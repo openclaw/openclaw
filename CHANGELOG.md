@@ -18,6 +18,7 @@ Docs: https://docs.openclaw.ai
 
 - Mac app: keep local packaging signed with a stable app identity for permission testing and fix Control UI production builds under current Vite/Highlight.js exports.
 - macOS app: update the embedded Peekaboo bridge to 3.2.1 so OpenClaw-hosted UI automation works with current Peekaboo CLI capture flows.
+- Plugins: refresh discovery between scoped contract runtime retries so newly installed plugins can be found after a transient stale snapshot.
 - Cron: deliver preferred final assistant output for successful scheduled runs when trailing plain tool warnings remain in diagnostics instead of marking the run failed.
 - fix(mattermost): fail closed on missing channel type [AI]. (#84091) Thanks @pgondhi987.
 - Recheck rebuilt system.run argv [AI]. (#84090) Thanks @pgondhi987.

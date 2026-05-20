@@ -256,10 +256,10 @@ function loadScopedCapabilityRuntimeRegistryEntries<T>(params: {
     plugin: BundledCapabilityRuntimeRegistry["plugins"][number],
   ) => readonly string[];
 }): T[] {
-  const discovery = discoverOpenClawPlugins({});
   let lastFailure: Error | undefined;
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
+    const discovery = discoverOpenClawPlugins({});
     const registry = loadBundledCapabilityRuntimeRegistry({
       pluginIds: [params.pluginId],
       pluginSdkResolution: "dist",
