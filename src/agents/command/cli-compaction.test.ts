@@ -981,6 +981,70 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(calls).toEqual(["ensure", "resolve"]);
   });
 
+  it("binds CLI post-compaction maintenance to the resolved legacy session agent", async () => {
+    const sessionKey = "legacy-topic-47";
+    const sessionId = "session-cli-legacy-agent";
+    const sessionFile = path.join(tmpDir, "session-cli-legacy-agent.jsonl");
+    await writeSessionFile({ sessionFile, sessionId });
+
+    const sessionEntry: SessionEntry = {
+      sessionId,
+      updatedAt: Date.now(),
+      sessionFile,
+      contextTokens: 1_000,
+      totalTokens: 950,
+      totalTokensFresh: true,
+    };
+    const compactCalls: Array<Parameters<ContextEngine["compact"]>[0]> = [];
+    const maintenance = vi.fn(
+      async (
+        _params: Parameters<
+          NonNullable<Parameters<typeof setCliCompactionTestDeps>[0]["runContextEngineMaintenance"]>
+        >[0],
+      ) => ({ changed: false, bytesFreed: 0, rewrittenEntries: 0 }),
+    );
+    setCliCompactionTestDeps({
+      resolveContextEngine: async () => buildContextEngine({ compactCalls }),
+      createPreparedEmbeddedPiSettingsManager: async () => ({
+        getCompactionReserveTokens: () => 200,
+        getCompactionKeepRecentTokens: () => 0,
+        applyOverrides: () => {},
+      }),
+      shouldPreemptivelyCompactBeforePrompt: () => ({
+        route: "fits",
+        shouldCompact: false,
+        estimatedPromptTokens: 600,
+        promptBudgetBeforeReserve: 800,
+        overflowTokens: 0,
+        toolResultReducibleChars: 0,
+        effectiveReserveTokens: 200,
+      }),
+      resolveLiveToolResultMaxChars: () => 20_000,
+      runContextEngineMaintenance: maintenance,
+    });
+
+    await runCliTurnCompactionLifecycle({
+      cfg: {} as OpenClawConfig,
+      sessionId,
+      sessionKey,
+      sessionEntry,
+      sessionAgentId: "lossless-agent",
+      workspaceDir: tmpDir,
+      agentDir: tmpDir,
+      provider: "claude-cli",
+      model: "opus",
+    });
+
+    expect(maintenance).toHaveBeenCalledTimes(1);
+    expect(maintenance.mock.calls[0]?.[0]).toMatchObject({
+      reason: "compaction",
+      sessionId,
+      sessionKey,
+      sessionFile,
+      agentId: "lossless-agent",
+    });
+  });
+
   it("bounds a hung CLI context-engine compaction and leaves resume state intact", async () => {
     const sessionKey = "agent:main:cli";
     const sessionId = "session-cli-timeout";

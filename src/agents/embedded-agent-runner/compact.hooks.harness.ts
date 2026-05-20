@@ -27,7 +27,6 @@ export const contextEngineCompactMock = vi.fn(async () => ({
     | { summary: string; tokensAfter: number }
     | undefined,
 }));
-
 export const hookRunner = {
   hasHooks: vi.fn<(hookName?: string) => boolean>(),
   runBeforeCompaction: vi.fn(async () => undefined),
@@ -177,6 +176,7 @@ export const applyExtraParamsToAgentMock = vi.fn(() => ({ effectiveExtraParams: 
 export const resolveAgentTransportOverrideMock: Mock<(params?: unknown) => string | undefined> =
   vi.fn(() => undefined);
 export const resolveSandboxContextMock = vi.fn(async () => null);
+export const resolveContextEngineCapabilitiesMock = vi.fn();
 export const maybeCompactAgentHarnessSessionMock: Mock<(params?: unknown) => Promise<unknown>> =
   vi.fn(async () => undefined);
 export const resolveCompactionTimeoutMsMock: Mock<
@@ -358,6 +358,7 @@ export function resetCompactSessionStateMocks(): void {
   resolveAgentTransportOverrideMock.mockReturnValue(undefined);
   resolveSandboxContextMock.mockReset();
   resolveSandboxContextMock.mockResolvedValue(null);
+  resolveContextEngineCapabilitiesMock.mockReset();
   maybeCompactAgentHarnessSessionMock.mockReset();
   maybeCompactAgentHarnessSessionMock.mockResolvedValue(undefined);
   resolveAgentHarnessPolicyMock.mockReset();
@@ -614,6 +615,19 @@ export async function loadCompactHooksHarness(): Promise<{
     resolveContextEngine: resolveContextEngineMock,
     resolveContextEngineOwnerPluginId: vi.fn(() => "lossless-claw"),
   }));
+
+  vi.doMock("./context-engine-capabilities.js", async () => {
+    const actual = await vi.importActual<typeof import("./context-engine-capabilities.js")>(
+      "./context-engine-capabilities.js",
+    );
+    return {
+      ...actual,
+      resolveContextEngineCapabilities: (params: unknown) => {
+        resolveContextEngineCapabilitiesMock(params);
+        return actual.resolveContextEngineCapabilities(params as never);
+      },
+    };
+  });
 
   vi.doMock("../../process/command-queue.js", () => ({
     enqueueCommandInLane: enqueueCommandInLaneMock,

@@ -406,6 +406,7 @@ export async function compactEmbeddedAgentSession(
             reason: "compaction",
             runtimeContext,
             config: params.config,
+            agentId: agentIds.sessionAgentId,
           });
         }
         if (engineOwnsCompaction && result.ok && result.compacted) {
