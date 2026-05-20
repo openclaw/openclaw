@@ -20,6 +20,7 @@ import {
 } from "../infra/shell-env.js";
 import { logInfo } from "../logger.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { beforeToolExecute } from "../safeops/beforeToolExecute.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -1283,7 +1284,7 @@ export function createExecTool(
       return describeExecTool({ agentId, hasCronTool: defaults?.hasCronTool === true });
     },
     parameters: execSchema,
-    execute: async (_toolCallId, args, signal, onUpdate) => {
+    execute: async (toolCallId, args, signal, onUpdate) => {
       const params = args as {
         command: string;
         workdir?: string;
@@ -1519,6 +1520,82 @@ export function createExecTool(
         );
       } else {
         applyPathPrepend(env, defaultPathPrepend);
+      }
+
+      const safeops = await beforeToolExecute(
+        {
+          tool: "exec",
+
+          action: "exec.command",
+
+          sessionId: defaults?.sessionKey ?? toolCallId,
+
+          workspace: workdir,
+
+          args: {
+            command: params.command,
+
+            workdir,
+
+            host,
+
+            security,
+
+            ask,
+
+            elevated: elevatedRequested,
+
+            pty: params.pty === true && !sandbox,
+
+            timeout: params.timeout,
+
+            background: backgroundRequested,
+
+            yieldMs: params.yieldMs,
+
+            node: params.node?.trim(),
+
+            envKeys: params.env ? Object.keys(params.env) : [],
+          },
+        },
+
+        {
+          agentId,
+
+          sessionId: defaults?.sessionKey ?? toolCallId,
+
+          workspace: workdir,
+        },
+      );
+
+      if (!safeops.proceed) {
+        return {
+          content: [
+            {
+              type: "text",
+
+              text: JSON.stringify(
+                {
+                  status: "blocked",
+
+                  tool: "exec",
+
+                  safeops: safeops.decision,
+                },
+
+                null,
+
+                2,
+              ),
+            },
+          ],
+
+          details: {
+            status: "blocked",
+
+            safeops: safeops.decision,
+          } as unknown as ExecToolDetails,
+        };
       }
 
       if (host === "node") {
