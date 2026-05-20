@@ -4255,6 +4255,43 @@ describe("runAgentTurnWithFallback", () => {
     expect(result.payload.text).not.toContain("retried once");
   });
 
+  it("does not retry Codex app-server bridge failures after an errored mutating tool completes", async () => {
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onAgentEvent?.({
+        stream: "tool",
+        data: {
+          phase: "start",
+          name: "apply_patch",
+          toolCallId: "tool-1",
+          args: { input: "*** Begin Patch\n*** End Patch\n" },
+        },
+      });
+      await params.onAgentEvent?.({
+        stream: "tool",
+        data: {
+          phase: "result",
+          name: "apply_patch",
+          toolCallId: "tool-1",
+          isError: true,
+          result: { success: false },
+        },
+      });
+      throw new Error("codex app-server client closed before turn completed");
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+    expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(result.kind).toBe("final");
+    if (result.kind !== "final") {
+      throw new Error("expected final reply");
+    }
+    expect(result.payload.text).toContain("Codex app-server connection closed");
+    expect(result.payload.text).toContain("Some output may already have been delivered");
+    expect(result.payload.text).not.toContain("retried once");
+  });
+
   it("does not retry Codex app-server bridge failures while a mutating tool is in flight", async () => {
     state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
       await params.onAgentEvent?.({
