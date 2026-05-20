@@ -352,6 +352,29 @@ describe("registerPolicyDoctorChecks", () => {
     expect(result.findings).toEqual([]);
   });
 
+  it("does not include unrelated TOOLS.md evidence in channel-only attestations", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const policy = { channels: { denyRules: [] } };
+    const policyHash = policyDocumentHash(policy);
+    const acceptedAttestationHash = createPolicyAttestation({
+      ok: true,
+      checkedAt: "2026-05-10T20:00:00.000Z",
+      policyPath: "policy.jsonc",
+      policyHash,
+      evidence: collectPolicyEvidence({}),
+      findings: [],
+    }).attestationHash;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(join(workspaceDir, "policy.jsonc"), JSON.stringify(policy), "utf-8");
+    await fs.writeFile(join(workspaceDir, "TOOLS.md"), "## Tools\n\n### deploy\n", "utf-8");
+
+    const result = await runPolicyChecks(
+      ctx(configPath, cfgWithPolicy({ expectedAttestationHash: acceptedAttestationHash })),
+    );
+
+    expect(result.findings).toEqual([]);
+  });
+
   it("reports configured channels denied by policy", async () => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
@@ -553,6 +576,31 @@ describe("registerPolicyDoctorChecks", () => {
         severity: "error",
         path: "policy.jsonc",
         target: "oc://policy.jsonc/tools/requireMetadata/#1",
+      }),
+    ]);
+  });
+
+  it("reports invalid requireMetadata entries against a configured policy path", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "workspace.policy.jsonc"),
+      JSON.stringify({ tools: { requireMetadata: ["unsupported"] } }),
+      "utf-8",
+    );
+
+    const result = await runDoctorLintChecks(
+      ctx(configPath, cfgWithPolicy({ path: "workspace.policy.jsonc" })),
+      {
+        checks: registerChecks(),
+      },
+    );
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/policy-jsonc-invalid",
+        path: "workspace.policy.jsonc",
+        target: "oc://workspace.policy.jsonc/tools/requireMetadata/#0",
       }),
     ]);
   });

@@ -48,6 +48,7 @@ type PolicyToolEvent = {
 type PolicyToolContext = {
   readonly agentId?: string;
   readonly toolName?: string;
+  readonly cwd?: string;
   readonly workspaceDir?: string;
 };
 
@@ -72,7 +73,11 @@ export function registerPolicyTrustedToolPolicy(
           deps.resolveWorkspaceDir ??
           ((cfg, context) => {
             const agentId = context.agentId ?? resolveDefaultAgentId(cfg);
-            return context.workspaceDir ?? api.runtime.agent.resolveAgentWorkspaceDir(cfg, agentId);
+            return (
+              context.cwd ??
+              context.workspaceDir ??
+              api.runtime.agent.resolveAgentWorkspaceDir(cfg, agentId)
+            );
           }),
       });
     },
@@ -96,7 +101,7 @@ export async function evaluatePolicyTrustedToolCall(
     return undefined;
   }
 
-  const workspaceDir = deps.cwd ?? deps.resolveWorkspaceDir?.(cfg, ctx);
+  const workspaceDir = deps.cwd ?? ctx.cwd ?? deps.resolveWorkspaceDir?.(cfg, ctx);
   if (workspaceDir === undefined) {
     return undefined;
   }
@@ -215,6 +220,18 @@ async function loadRuntimePolicyState(
   if (policyShapeError !== undefined) {
     return { policyPath, policyError: policyShapeError, evidence, settings };
   }
+  if (requiredToolMetadata(policy).size > 0) {
+    const toolEvidence = collectPolicyEvidence(cfg as Record<string, unknown>, {
+      toolsRaw: toolsRaw ?? "",
+    });
+    return {
+      policyPath,
+      policy,
+      policyHash: policyDocumentHash(policy),
+      evidence: toolEvidence,
+      settings,
+    };
+  }
   return {
     policyPath,
     policy,
@@ -236,7 +253,11 @@ function toolMetadataBlockReason(
   if (required.has("risk") && tool.risk === undefined) {
     return `Policy requires risk metadata for '${tool.id}', but TOOLS.md does not declare it.`;
   }
-  if (tool.risk !== undefined && !["low", "medium", "high", "critical"].includes(tool.risk)) {
+  if (
+    required.has("risk") &&
+    tool.risk !== undefined &&
+    !["low", "medium", "high", "critical"].includes(tool.risk)
+  ) {
     return `Policy requires known risk metadata for '${tool.id}', but TOOLS.md declares '${tool.risk}'.`;
   }
   if (required.has("sensitivity")) {

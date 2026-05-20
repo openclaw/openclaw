@@ -433,6 +433,7 @@ export type PluginHookToolContext = {
   sessionKey?: string;
   sessionId?: string;
   runId?: string;
+  cwd?: string;
   trace?: DiagnosticTraceContext;
   toolName: string;
   toolCallId?: string;

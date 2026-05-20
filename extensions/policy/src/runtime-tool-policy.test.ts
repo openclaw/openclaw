@@ -2,8 +2,11 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { policyDocumentHash } from "./policy-state.js";
-import { evaluatePolicyTrustedToolCall } from "./runtime-tool-policy.js";
+import { collectPolicyEvidence, policyDocumentHash, policyWorkspaceHash } from "./policy-state.js";
+import {
+  evaluatePolicyTrustedToolCall,
+  registerPolicyTrustedToolPolicy,
+} from "./runtime-tool-policy.js";
 
 let workspaceDir: string;
 
@@ -194,6 +197,23 @@ describe("policy trusted tool runtime", () => {
     });
   });
 
+  it("does not reject optional unknown risk when policy does not require risk", async () => {
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        tools: { requireMetadata: ["owner"] },
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(workspaceDir, "TOOLS.md"),
+      "## Tools\n\n### deploy risk:critcal owner:ops\n",
+      "utf-8",
+    );
+
+    await expect(evaluate("deploy")).resolves.toBeUndefined();
+  });
+
   it("requires approval for critical or irreversible tools", async () => {
     const policy = {
       tools: { requireMetadata: ["risk"] },
@@ -293,6 +313,24 @@ describe("policy trusted tool runtime", () => {
     });
   });
 
+  it("hashes missing TOOLS.md as empty tool evidence when metadata is required", async () => {
+    const policy = {
+      tools: { requireMetadata: ["risk"] },
+    };
+    await fs.writeFile(join(workspaceDir, "policy.jsonc"), JSON.stringify(policy), "utf-8");
+
+    await expect(evaluate("deploy")).resolves.toMatchObject({
+      requireApproval: {
+        metadata: {
+          workspace: {
+            scope: "policy",
+            hash: policyWorkspaceHash(collectPolicyEvidence({}, { toolsRaw: "" })),
+          },
+        },
+      },
+    });
+  });
+
   it("allows declared low-risk tools without a runtime decision", async () => {
     await fs.writeFile(
       join(workspaceDir, "policy.jsonc"),
@@ -308,5 +346,58 @@ describe("policy trusted tool runtime", () => {
     );
 
     await expect(evaluate("inspect")).resolves.toBeUndefined();
+  });
+
+  it("uses the active tool cwd before the default agent workspace", async () => {
+    const agentWorkspace = await fs.mkdtemp(join(tmpdir(), "policy-agent-runtime-"));
+    try {
+      await fs.writeFile(
+        join(workspaceDir, "policy.jsonc"),
+        JSON.stringify({ tools: { requireMetadata: ["risk"] } }),
+        "utf-8",
+      );
+      await fs.writeFile(
+        join(workspaceDir, "TOOLS.md"),
+        "## Tools\n\n### deploy risk:critical\n",
+        "utf-8",
+      );
+      await fs.writeFile(
+        join(agentWorkspace, "policy.jsonc"),
+        JSON.stringify({ tools: { requireMetadata: ["risk"] } }),
+        "utf-8",
+      );
+      await fs.writeFile(join(agentWorkspace, "TOOLS.md"), "## Tools\n\n### deploy\n", "utf-8");
+
+      let evaluate:
+        | ((
+            event: { toolName: string; params: Record<string, unknown> },
+            ctx: { toolName: string; cwd?: string },
+          ) => ReturnType<typeof evaluatePolicyTrustedToolCall>)
+        | undefined;
+      registerPolicyTrustedToolPolicy({
+        config: cfg(),
+        runtime: {
+          config: { current: () => cfg() },
+          agent: { resolveAgentWorkspaceDir: () => agentWorkspace },
+        },
+        registerTrustedToolPolicy(policy) {
+          evaluate = policy.evaluate as typeof evaluate;
+        },
+      });
+
+      await expect(
+        evaluate?.({ toolName: "deploy", params: {} }, { toolName: "deploy", cwd: workspaceDir }),
+      ).resolves.toMatchObject({
+        requireApproval: expect.objectContaining({
+          title: "Review policy-governed tool",
+          severity: "critical",
+          metadata: expect.objectContaining({
+            target: "oc://TOOLS.md/tools/deploy",
+          }),
+        }),
+      });
+    } finally {
+      await fs.rm(agentWorkspace, { recursive: true, force: true });
+    }
   });
 });
