@@ -1,4 +1,4 @@
-import type { Command } from "commander";
+import { InvalidArgumentError, type Command } from "commander";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   installSkillFromClawHub,
@@ -63,7 +63,15 @@ export function registerSkillsCli(program: Command) {
     .command("search")
     .description("Search ClawHub skills")
     .argument("[query...]", "Optional search query")
-    .option("--limit <n>", "Max results", (value) => Number.parseInt(value, 10))
+    .option("--limit <n>", "Max results", (value) => {
+      const parsed = Number.parseInt(value, 10);
+      if (!Number.isInteger(parsed) || String(parsed) !== value.trim() || parsed <= 0) {
+        throw new InvalidArgumentError(
+          `--limit must be a positive whole number (got: ${JSON.stringify(value)})`,
+        );
+      }
+      return parsed;
+    })
     .option("--json", "Output as JSON", false)
     .action(async (queryParts: string[], opts: { limit?: number; json?: boolean }) => {
       try {
