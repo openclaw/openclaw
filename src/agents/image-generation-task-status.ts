@@ -85,7 +85,7 @@ export function buildImageGenerationTasksStatusText(tasks: readonly TaskRecord[]
     return "No active image generation task is currently running for this session.";
   }
   if (tasks.length === 1) {
-    return buildImageGenerationTaskStatusText(tasks[0]!);
+    return buildImageGenerationTaskStatusText(tasks[0]);
   }
   const lines = [
     `${tasks.length} active image generation tasks are currently running for this session.`,
