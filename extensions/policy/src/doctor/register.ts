@@ -308,6 +308,7 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
     });
   }
   const policyFindings: HealthFinding[] = [
+    ...policyContainerShapeFindings(policy, policyFile.displayName, policyFile.ocDocName),
     ...channelFindings(policy, policyFile.displayName, policyFile.ocDocName, evidence),
     ...metadataRequirementFindings,
   ];
@@ -508,6 +509,83 @@ function toolMetadataRequirementFindings(
       fixHint: `Use supported metadata keys: ${SUPPORTED_TOOL_METADATA.join(", ")}.`,
     },
   ];
+}
+
+function policyContainerShapeFindings(
+  policy: unknown,
+  policyPath: string,
+  policyDocName: string,
+): readonly HealthFinding[] {
+  if (!isRecord(policy)) {
+    return [
+      policyShapeFinding(
+        policyPath,
+        `oc://${policyDocName}`,
+        `${policyPath} must contain a policy object.`,
+        `Fix ${policyPath} so the top-level policy is an object.`,
+      ),
+    ];
+  }
+  if (policy.tools !== undefined && !isRecord(policy.tools)) {
+    return [
+      policyShapeFinding(
+        policyPath,
+        `oc://${policyDocName}/tools`,
+        `${policyPath} tools must be an object.`,
+        `Fix ${policyPath} so tools is an object.`,
+      ),
+    ];
+  }
+  if (isRecord(policy.tools)) {
+    if (policy.tools.settings !== undefined && !isRecord(policy.tools.settings)) {
+      return [
+        policyShapeFinding(
+          policyPath,
+          `oc://${policyDocName}/tools/settings`,
+          `${policyPath} tools.settings must be an object.`,
+          `Fix ${policyPath} so tools.settings is an object.`,
+        ),
+      ];
+    }
+    if (policy.tools.entries !== undefined && !Array.isArray(policy.tools.entries)) {
+      return [
+        policyShapeFinding(
+          policyPath,
+          `oc://${policyDocName}/tools/entries`,
+          `${policyPath} tools.entries must be an array.`,
+          `Fix ${policyPath} so tools.entries is an array.`,
+        ),
+      ];
+    }
+  }
+  if (policy.channels !== undefined && !isRecord(policy.channels)) {
+    return [
+      policyShapeFinding(
+        policyPath,
+        `oc://${policyDocName}/channels`,
+        `${policyPath} channels must be an object.`,
+        `Fix ${policyPath} so channels is an object.`,
+      ),
+    ];
+  }
+  return [];
+}
+
+function policyShapeFinding(
+  policyPath: string,
+  target: string,
+  message: string,
+  fixHint: string,
+): HealthFinding {
+  return {
+    checkId: CHECK_IDS.policyInvalidFile,
+    severity: "error",
+    message,
+    source: "policy",
+    path: policyPath,
+    target,
+    fixHint,
+  };
 }
 
 function invalidChannelDenyRuleFindings(
@@ -903,5 +981,5 @@ function policyDisplayName(ctx: HealthCheckContext): string {
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

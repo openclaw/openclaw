@@ -218,6 +218,17 @@ If policy rules change intentionally, update both accepted hashes from a clean
 check. If workspace settings change intentionally but policy stays the same,
 only `expectedAttestationHash` usually changes.
 
+`openclaw policy watch` runs the same check repeatedly and reports when the
+current evidence no longer matches `expectedAttestationHash`:
+
+```bash
+openclaw policy watch --json
+```
+
+Use `--once` in CI or scripts that only need one drift evaluation. Without
+`--once`, the command polls every two seconds by default; use `--interval-ms` to
+choose a different interval.
+
 ## Findings
 
 Policy currently verifies:
@@ -343,9 +354,10 @@ hooks.
 
 ## Exit codes
 
-| Command        | `0`                           | `1`                                     | `2`                          |
-| -------------- | ----------------------------- | --------------------------------------- | ---------------------------- |
-| `policy check` | No findings at the threshold. | One or more findings met the threshold. | Argument or runtime failure. |
+| Command        | `0`                                      | `1`                                               | `2`                          |
+| -------------- | ---------------------------------------- | ------------------------------------------------- | ---------------------------- |
+| `policy check` | No findings at the threshold.            | One or more findings met the threshold.           | Argument or runtime failure. |
+| `policy watch` | No findings and accepted hash is current. | Findings exist or accepted attestation is stale. | Argument or runtime failure. |
 
 ## Related
 

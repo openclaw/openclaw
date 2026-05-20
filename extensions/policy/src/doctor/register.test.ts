@@ -204,6 +204,29 @@ describe("registerPolicyDoctorChecks", () => {
     ]);
   });
 
+  it.each([
+    ["top-level array", [], "oc://policy.jsonc"],
+    ["tools array", { tools: [] }, "oc://policy.jsonc/tools"],
+    ["tools settings array", { tools: { settings: [] } }, "oc://policy.jsonc/tools/settings"],
+    ["tools entries object", { tools: { entries: {} } }, "oc://policy.jsonc/tools/entries"],
+    ["channels array", { channels: [] }, "oc://policy.jsonc/channels"],
+  ])("reports malformed policy shape for %s", async (_label, policy, target) => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(join(workspaceDir, "policy.jsonc"), JSON.stringify(policy), "utf-8");
+
+    const result = await runPolicyChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/policy-jsonc-invalid",
+        severity: "error",
+        path: "policy.jsonc",
+        target,
+      }),
+    ]);
+  });
+
   it("reports a policy hash mismatch when expectedHash is configured", async () => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     await fs.writeFile(configPath, "{}", "utf-8");

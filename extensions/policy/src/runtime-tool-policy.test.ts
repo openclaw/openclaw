@@ -104,24 +104,48 @@ describe("policy trusted tool runtime", () => {
     });
   });
 
-  it("blocks when the enabled runtime policy file has invalid containers", async () => {
-    await fs.writeFile(
-      join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({ tools: { entries: {} } }),
-      "utf-8",
-    );
-    await fs.writeFile(
-      join(workspaceDir, "TOOLS.md"),
-      "## Tools\n\n### deploy risk:low\n",
-      "utf-8",
-    );
+  it.each([
+    [
+      "top-level array",
+      [],
+      "Policy tool runtime is enabled, but policy.jsonc does not contain an object.",
+    ],
+    [
+      "tools array",
+      { tools: [] },
+      "Policy tool runtime is enabled, but policy.jsonc has an invalid tools section.",
+    ],
+    [
+      "tools settings array",
+      { tools: { settings: [] } },
+      "Policy tool runtime is enabled, but policy.jsonc has an invalid tools.settings section.",
+    ],
+    [
+      "tools entries object",
+      { tools: { entries: {} } },
+      "Policy tool runtime is enabled, but policy.jsonc has an invalid tools.entries section.",
+    ],
+    [
+      "channels array",
+      { channels: [] },
+      "Policy tool runtime is enabled, but policy.jsonc has an invalid channels section.",
+    ],
+  ])(
+    "blocks when the enabled runtime policy file has invalid containers: %s",
+    async (_label, policy, blockReason) => {
+      await fs.writeFile(join(workspaceDir, "policy.jsonc"), JSON.stringify(policy), "utf-8");
+      await fs.writeFile(
+        join(workspaceDir, "TOOLS.md"),
+        "## Tools\n\n### deploy risk:low\n",
+        "utf-8",
+      );
 
-    await expect(evaluate("deploy")).resolves.toEqual({
-      block: true,
-      blockReason:
-        "Policy tool runtime is enabled, but policy.jsonc has an invalid tools.entries section.",
-    });
-  });
+      await expect(evaluate("deploy")).resolves.toEqual({
+        block: true,
+        blockReason,
+      });
+    },
+  );
 
   it("blocks when requireMetadata contains unsupported entries", async () => {
     await fs.writeFile(

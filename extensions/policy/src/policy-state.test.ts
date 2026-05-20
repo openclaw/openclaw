@@ -26,4 +26,12 @@ describe("scanPolicyChannels", () => {
       },
     ]);
   });
+
+  it("does not treat channel arrays as channel config maps", () => {
+    expect(
+      scanPolicyChannels({
+        channels: [{ enabled: true }],
+      }),
+    ).toEqual([]);
+  });
 });
