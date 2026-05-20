@@ -670,18 +670,6 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         return;
       }
 
-      unregisterUnhandledRejectionHandler = registerUnhandledRejectionHandler((reason) => {
-        const otlpError = findOtlpExporterError(reason);
-        if (!otlpError) {
-          return false;
-        }
-        const code = readErrorCode(otlpError) ?? "unknown";
-        ctx.logger.warn(
-          `diagnostics-otel: suppressed OTLP exporter unhandled rejection (code=${String(code)})`,
-        );
-        return true;
-      });
-
       const endpoint = normalizeEndpoint(
         otel.endpoint ?? process.env[OTEL_EXPORTER_OTLP_ENDPOINT_ENV],
       );
@@ -2551,6 +2539,18 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             `diagnostics-otel: event handler failed (${evt.type}): ${formatError(err)}`,
           );
         }
+      });
+
+      unregisterUnhandledRejectionHandler = registerUnhandledRejectionHandler((reason) => {
+        const otlpError = findOtlpExporterError(reason);
+        if (!otlpError) {
+          return false;
+        }
+        const code = readErrorCode(otlpError) ?? "unknown";
+        ctx.logger.warn(
+          `diagnostics-otel: suppressed OTLP exporter unhandled rejection (code=${String(code)})`,
+        );
+        return true;
       });
 
       emitForSignals(enabledSignals, {
