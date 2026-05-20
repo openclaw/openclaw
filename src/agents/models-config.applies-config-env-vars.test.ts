@@ -246,6 +246,51 @@ describe("models-config", () => {
     ]);
   });
 
+  it("strips apiKey fields from the models.json write payload", async () => {
+    const plan = await planOpenClawModelsJsonWithDeps(
+      {
+        cfg: {
+          models: {
+            providers: {
+              custom: {
+                baseUrl: "https://custom.example/v1",
+                api: "openai-completions",
+                apiKey: "sk-config-secret", // pragma: allowlist secret
+                models: [
+                  {
+                    id: "custom-model",
+                    name: "Custom model",
+                    input: ["text"],
+                    apiKey: "sk-model-secret", // pragma: allowlist secret
+                  },
+                ],
+              } as unknown as ProviderConfig,
+            },
+          },
+        },
+        agentDir: "/tmp/openclaw-models-config-env-vars-test",
+        env: {},
+        existingRaw: "",
+        existingParsed: null,
+      },
+      {
+        resolveImplicitProviders: async () => ({}),
+      },
+    );
+
+    expect(plan.action).toBe("write");
+    if (plan.action !== "write") {
+      throw new Error("Expected models.json write plan");
+    }
+    expect(plan.contents).not.toContain("sk-config-secret");
+    expect(plan.contents).not.toContain("sk-model-secret");
+    const parsed = JSON.parse(plan.contents) as {
+      providers?: Record<string, { apiKey?: unknown; models?: Array<{ apiKey?: unknown }> }>;
+    };
+    expect(parsed.providers?.custom?.apiKey).toBeUndefined();
+    expect(parsed.providers?.custom?.models?.[0]?.apiKey).toBeUndefined();
+  });
+
   it("uses config env.vars entries for implicit provider discovery without mutating process.env", async () => {
     await withTempEnv(["OPENROUTER_API_KEY", TEST_ENV_VAR], async () => {
       unsetEnv(["OPENROUTER_API_KEY", TEST_ENV_VAR]);

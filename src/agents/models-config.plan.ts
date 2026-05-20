@@ -16,6 +16,13 @@ import {
 } from "./models-config.providers.js";
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
+type ModelsJsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | ModelsJsonValue[]
+  | { [key: string]: ModelsJsonValue };
 export type ResolveImplicitProvidersForModelsJson = (params: {
   agentDir: string;
   config: OpenClawConfig;
@@ -105,6 +112,24 @@ function resolveProvidersForMode(params: {
   });
 }
 
+function stripApiKeysForModelsJson(value: unknown): ModelsJsonValue {
+  if (Array.isArray(value)) {
+    return value.map((entry) => stripApiKeysForModelsJson(entry));
+  }
+  if (!isRecord(value)) {
+    return value as ModelsJsonValue;
+  }
+
+  const next: Record<string, ModelsJsonValue> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (key === "apiKey") {
+      continue;
+    }
+    next[key] = stripApiKeysForModelsJson(entry);
+  }
+  return next;
+}
+
 export async function planOpenClawModelsJsonWithDeps(
   params: {
     cfg: OpenClawConfig;
@@ -178,7 +203,8 @@ export async function planOpenClawModelsJsonWithDeps(
       secretRefManagedProviders,
     }) ?? normalizedMergedProviders;
   const finalProviders = applyNativeStreamingUsageCompat(secretEnforcedProviders);
-  const nextContents = `${JSON.stringify({ providers: finalProviders }, null, 2)}\n`;
+  const modelsJsonProviders = stripApiKeysForModelsJson(finalProviders);
+  const nextContents = `${JSON.stringify({ providers: modelsJsonProviders }, null, 2)}\n`;
 
   if (params.existingRaw === nextContents) {
     return { action: "noop" };
