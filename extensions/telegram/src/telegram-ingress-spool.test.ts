@@ -242,7 +242,7 @@ describe("Telegram ingress spool", () => {
     });
   });
 
-  it("does not treat stale claims with reused pids as live-owned", () => {
+  it("does not treat current-pid claims from older process identities as live-owned", () => {
     const now = Date.now();
     expect(
       isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess({
@@ -254,7 +254,7 @@ describe("Telegram ingress spool", () => {
         claim: {
           processId: "other-process",
           processPid: process.pid,
-          claimedAt: now - TELEGRAM_SPOOLED_UPDATE_PROCESSING_STALE_MS - 1,
+          claimedAt: now,
         },
       }),
     ).toBe(false);

@@ -181,6 +181,7 @@ export function isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess(
   return Boolean(
     claim.claim &&
     claim.claim.processId !== TELEGRAM_SPOOLED_UPDATE_PROCESS_ID &&
+    claim.claim.processPid !== process.pid &&
     isFreshClaimOwner(claim.claim) &&
     processExists(claim.claim.processPid),
   );
