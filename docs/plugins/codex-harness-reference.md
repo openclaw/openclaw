@@ -256,6 +256,8 @@ available timeout in this order:
 
 - A positive per-call `timeoutMs` argument.
 - For `image_generate`, `agents.defaults.imageGenerationModel.timeoutMs`.
+- For `image_generate` without a configured timeout, the 120 second
+  image-generation default.
 - For the media-understanding `image` tool, `tools.media.image.timeoutSeconds`
   converted to milliseconds, or the 60 second media default.
 - The 30 second dynamic-tool default.
