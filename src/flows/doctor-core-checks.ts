@@ -341,85 +341,20 @@ function noteTextToFinding(params: {
   };
 }
 
-function inferCapturedNoteSeverity(text: string): HealthFinding["severity"] {
-  if (text.includes("CRITICAL")) {
-    return "error";
-  }
-  if (
-    text.includes("- Fix:") ||
-    text.includes("unavailable") ||
-    text.includes("not found") ||
-    text.includes("missing") ||
-    text.includes("not readable") ||
-    text.includes("not writable") ||
-    text.includes("readonly")
-  ) {
-    return "warning";
-  }
-  return "info";
-}
-
-function createNoteCollector(checkId: string): {
-  readonly findings: readonly HealthFinding[];
-  readonly noteFn: (message: unknown) => void;
-} {
-  const findings: HealthFinding[] = [];
-  const noteFn = (message: unknown): void => {
-    const text = noteMessageToText(message);
-    if (!text.trim()) {
-      return;
-    }
-    const severity = inferCapturedNoteSeverity(text);
-    if (severity === "info") {
-      return;
-    }
-    findings.push(
-      noteTextToFinding({
-        checkId,
-        severity,
-        text,
-      }),
-    );
-  };
-  return {
-    findings,
-    noteFn,
-  };
-}
-
-function noteMessageToText(message: unknown): string {
-  if (message instanceof Error) {
-    return message.message;
-  }
-  if (message == null) {
-    return "";
-  }
-  if (typeof message === "string") {
-    return message;
-  }
-  if (typeof message === "number" || typeof message === "boolean" || typeof message === "bigint") {
-    return String(message);
-  }
-  try {
-    return JSON.stringify(message) ?? "";
-  } catch {
-    return "";
-  }
-}
-
 const claudeCliCheck: HealthCheck = {
   id: "core/doctor/claude-cli",
   kind: "core",
-  description: "Claude CLI readiness is captured as structured findings.",
+  description: "Claude CLI readiness is reported through doctor presentation notes.",
   source: "doctor",
   async detect(ctx) {
     const { noteClaudeCliHealth } = await import("../commands/doctor-claude-cli.js");
-    const collector = createNoteCollector("core/doctor/claude-cli");
     noteClaudeCliHealth(ctx.cfg, {
-      noteFn: collector.noteFn,
+      noteFn: (message, title) => {
+        void ctx.doctor?.note?.(message, title);
+      },
       ...(ctx.cwd ? { workspaceDir: ctx.cwd } : {}),
     });
-    return collector.findings;
+    return [];
   },
 };
 
@@ -515,13 +450,16 @@ const gatewayPlatformNotesCheck: HealthCheck = {
 const browserCheck: HealthCheck = {
   id: "core/doctor/browser",
   kind: "core",
-  description: "Browser readiness is captured as structured findings.",
+  description: "Browser readiness is reported through doctor presentation notes.",
   source: "doctor",
   async detect(ctx) {
     const { noteChromeMcpBrowserReadiness } = await import("../commands/doctor-browser.js");
-    const collector = createNoteCollector("core/doctor/browser");
-    await noteChromeMcpBrowserReadiness(ctx.cfg, { noteFn: collector.noteFn });
-    return collector.findings;
+    await noteChromeMcpBrowserReadiness(ctx.cfg, {
+      noteFn: (message, title) => {
+        void ctx.doctor?.note?.(message, title);
+      },
+    });
+    return [];
   },
 };
 
@@ -719,22 +657,172 @@ function createWorkspaceSuggestionsCheck(deps: CoreHealthCheckDeps): HealthCheck
   return {
     id: "core/doctor/workspace-suggestions",
     kind: "core",
-    description:
-      "Workspace backup and memory-system suggestions are captured as structured findings.",
+    description: "Workspace backup and memory-system suggestions are reported as doctor notes.",
     source: "doctor",
     async detect(ctx) {
       const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));
       const notes = await deps.collectWorkspaceSuggestionNotes(workspaceDir);
-      return notes.map((text) =>
-        noteTextToFinding({
-          checkId: "core/doctor/workspace-suggestions",
-          severity: "info",
-          text,
-        }),
-      );
+      for (const note of notes) {
+        await ctx.doctor?.note?.(note, "Workspace");
+      }
+      return [];
     },
   };
 }
+
+const shellCompletionCheck: HealthCheck = {
+  id: "core/doctor/shell-completion",
+  kind: "core",
+  description: "Shell completion status is detected and repairable through cached completion.",
+  source: "doctor",
+  async detect(ctx) {
+    const { detectShellCompletionHealth } = await import("../commands/doctor-completion.js");
+    const options =
+      ctx.mode === "lint" ? { ...ctx.doctor?.options, nonInteractive: true } : ctx.doctor?.options;
+    return detectShellCompletionHealth(options);
+  },
+  async repair(ctx) {
+    if (ctx.dryRun === true) {
+      return {
+        changes: ["Would repair shell completion setup."],
+        effects: [
+          {
+            kind: "file",
+            action: "would-repair-shell-completion",
+            target: "shell completion profile/cache",
+            dryRunSafe: false,
+          },
+        ],
+      };
+    }
+    const { repairShellCompletionHealth } = await import("../commands/doctor-completion.js");
+    const result = await repairShellCompletionHealth({
+      options: ctx.doctor?.options,
+      deps: {
+        confirm: ctx.doctor?.confirm,
+      },
+    });
+    return {
+      status: result.status,
+      changes: result.changes,
+      warnings: result.warnings,
+    };
+  },
+};
+
+const startupChannelMaintenanceCheck: HealthCheck = {
+  id: "core/doctor/startup-channel-maintenance",
+  kind: "core",
+  description: "Channel plugin startup maintenance runs through structured doctor repair.",
+  source: "doctor",
+  async detect(ctx, scope) {
+    if (ctx.mode !== "fix" || scope?.findings !== undefined) {
+      return [];
+    }
+    return [
+      {
+        checkId: "core/doctor/startup-channel-maintenance",
+        severity: "info",
+        message: "Channel plugin startup maintenance should run during doctor repair.",
+      },
+    ];
+  },
+  async repair(ctx) {
+    if (ctx.dryRun === true) {
+      return {
+        changes: ["Would run channel plugin startup maintenance."],
+        effects: [
+          {
+            kind: "other",
+            action: "would-run-channel-startup-maintenance",
+            target: "channel plugin startup maintenance",
+            dryRunSafe: false,
+          },
+        ],
+      };
+    }
+    const { maybeRunDoctorStartupChannelMaintenance } =
+      await import("./doctor-startup-channel-maintenance.js");
+    await maybeRunDoctorStartupChannelMaintenance({
+      cfg: ctx.cfg,
+      env: ctx.env,
+      runtime: ctx.runtime,
+      shouldRepair: true,
+    });
+    return { changes: [] };
+  },
+};
+
+const systemdLingerCheck: HealthCheck = {
+  id: "core/doctor/systemd-linger",
+  kind: "core",
+  description: "systemd user linger status is detected and repairable for local Gateway.",
+  source: "doctor",
+  async detect(ctx) {
+    if (
+      ctx.doctor?.options?.nonInteractive === true ||
+      process.platform !== "linux" ||
+      resolveDoctorMode(ctx.cfg) !== "local"
+    ) {
+      return [];
+    }
+    const { resolveGatewayService } = await import("../daemon/service.js");
+    const service = resolveGatewayService();
+    let loaded = false;
+    try {
+      loaded = await service.isLoaded({ env: ctx.env ?? process.env });
+    } catch {
+      loaded = false;
+    }
+    if (!loaded) {
+      return [];
+    }
+    const { SYSTEMD_GATEWAY_LINGER_REASON, detectSystemdUserLingerFindings } =
+      await import("../commands/systemd-linger.js");
+    const findings = await detectSystemdUserLingerFindings({
+      env: ctx.env,
+      reason: SYSTEMD_GATEWAY_LINGER_REASON,
+    });
+    return findings.map(
+      (finding): HealthFinding => ({
+        checkId: "core/doctor/systemd-linger",
+        severity: "warning",
+        message: finding.message,
+        source: "systemd",
+        fixHint: finding.fixHint,
+      }),
+    );
+  },
+  async repair(ctx) {
+    if (ctx.dryRun === true) {
+      return {
+        changes: ["Would enable systemd lingering if it is disabled for the Gateway user."],
+        effects: [
+          {
+            kind: "service",
+            action: "would-enable-systemd-linger",
+            target: "systemd user linger",
+            dryRunSafe: false,
+          },
+        ],
+      };
+    }
+    const { SYSTEMD_GATEWAY_LINGER_REASON, repairSystemdUserLingerFinding } =
+      await import("../commands/systemd-linger.js");
+    const result = await repairSystemdUserLingerFinding({
+      runtime: ctx.runtime,
+      env: ctx.env,
+      confirm: ctx.doctor?.confirm,
+      reason: SYSTEMD_GATEWAY_LINGER_REASON,
+      requireConfirm: true,
+    });
+    return {
+      status: result.status,
+      changes: result.changes,
+      warnings: result.warnings,
+    };
+  },
+};
 
 function createConvertedWorkflowChecks(deps: CoreHealthCheckDeps): readonly HealthCheck[] {
   return [
@@ -743,11 +831,14 @@ function createConvertedWorkflowChecks(deps: CoreHealthCheckDeps): readonly Heal
     legacyStateCheck,
     legacyWhatsAppCrontabCheck,
     gatewayPlatformNotesCheck,
+    startupChannelMaintenanceCheck,
     createSecurityCheck(deps),
     browserCheck,
     openAIOAuthTlsCheck,
     hooksModelCheck,
+    systemdLingerCheck,
     bootstrapSizeCheck,
+    shellCompletionCheck,
     createWorkspaceSuggestionsCheck(deps),
   ];
 }

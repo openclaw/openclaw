@@ -20,6 +20,17 @@ const mocks = vi.hoisted(() => ({
   logConfigUpdated: vi.fn(),
   shortenHomePath: vi.fn((p: string) => p),
   formatCliCommand: vi.fn((cmd: string) => cmd),
+  resolveGatewayService: vi.fn(),
+  ensureSystemdUserLingerInteractive: vi.fn(),
+  detectSystemdUserLingerFindings: vi.fn(),
+  repairSystemdUserLingerFinding: vi.fn(),
+  maybeRunDoctorStartupChannelMaintenance: vi.fn(),
+  detectShellCompletionHealth: vi.fn(),
+  repairShellCompletionHealth: vi.fn(),
+  registerBundledHealthChecks: vi.fn(),
+  noteChromeMcpBrowserReadiness: vi.fn(),
+  detectLegacyClawdBrowserProfileResidue: vi.fn(),
+  maybeArchiveLegacyClawdBrowserProfileResidue: vi.fn(),
 }));
 
 vi.mock("../commands/doctor/shared/release-configured-plugin-installs.js", () => ({
@@ -30,9 +41,13 @@ vi.mock("../terminal/note.js", () => ({
   note: mocks.note,
 }));
 
-vi.mock("../version.js", () => ({
-  VERSION: "2026.5.2-test",
-}));
+vi.mock("../version.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../version.js")>();
+  return {
+    ...actual,
+    VERSION: "2026.5.2-test",
+  };
+});
 
 vi.mock("../config/config.js", () => ({
   CONFIG_PATH: "/tmp/fake-openclaw.json",
@@ -48,12 +63,47 @@ vi.mock("../config/logging.js", () => ({
   logConfigUpdated: mocks.logConfigUpdated,
 }));
 
-vi.mock("../utils.js", () => ({
-  shortenHomePath: mocks.shortenHomePath,
-}));
+vi.mock("../utils.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../utils.js")>();
+  return {
+    ...actual,
+    shortenHomePath: mocks.shortenHomePath,
+  };
+});
 
 vi.mock("../cli/command-format.js", () => ({
   formatCliCommand: mocks.formatCliCommand,
+}));
+
+vi.mock("../daemon/service.js", () => ({
+  resolveGatewayService: mocks.resolveGatewayService,
+}));
+
+vi.mock("../commands/systemd-linger.js", () => ({
+  SYSTEMD_GATEWAY_LINGER_REASON:
+    "Gateway runs as a systemd user service. Without lingering, systemd stops the user session on logout/idle and kills the Gateway.",
+  ensureSystemdUserLingerInteractive: mocks.ensureSystemdUserLingerInteractive,
+  detectSystemdUserLingerFindings: mocks.detectSystemdUserLingerFindings,
+  repairSystemdUserLingerFinding: mocks.repairSystemdUserLingerFinding,
+}));
+
+vi.mock("./doctor-startup-channel-maintenance.js", () => ({
+  maybeRunDoctorStartupChannelMaintenance: mocks.maybeRunDoctorStartupChannelMaintenance,
+}));
+
+vi.mock("./bundled-health-checks.js", () => ({
+  registerBundledHealthChecks: mocks.registerBundledHealthChecks,
+}));
+
+vi.mock("../commands/doctor-completion.js", () => ({
+  detectShellCompletionHealth: mocks.detectShellCompletionHealth,
+  repairShellCompletionHealth: mocks.repairShellCompletionHealth,
+}));
+
+vi.mock("../commands/doctor-browser.js", () => ({
+  noteChromeMcpBrowserReadiness: mocks.noteChromeMcpBrowserReadiness,
+  detectLegacyClawdBrowserProfileResidue: mocks.detectLegacyClawdBrowserProfileResidue,
+  maybeArchiveLegacyClawdBrowserProfileResidue: mocks.maybeArchiveLegacyClawdBrowserProfileResidue,
 }));
 
 function requireDoctorContribution(id: string) {
@@ -93,6 +143,47 @@ describe("doctor health contributions", () => {
       valid: true,
       config: {},
       issues: [],
+    });
+    mocks.resolveGatewayService.mockReset();
+    mocks.resolveGatewayService.mockReturnValue({
+      isLoaded: vi.fn(async () => true),
+    });
+    mocks.ensureSystemdUserLingerInteractive.mockReset();
+    mocks.ensureSystemdUserLingerInteractive.mockResolvedValue(undefined);
+    mocks.detectSystemdUserLingerFindings.mockReset();
+    mocks.detectSystemdUserLingerFindings.mockResolvedValue([
+      {
+        kind: "disabled",
+        user: "alice",
+        message: "Gateway needs lingering.",
+        fixHint: "Run manually: sudo loginctl enable-linger alice",
+      },
+    ]);
+    mocks.repairSystemdUserLingerFinding.mockReset();
+    mocks.repairSystemdUserLingerFinding.mockResolvedValue({
+      status: "repaired",
+      changes: ["Enabled systemd lingering for alice."],
+      warnings: [],
+    });
+    mocks.maybeRunDoctorStartupChannelMaintenance.mockReset();
+    mocks.maybeRunDoctorStartupChannelMaintenance.mockResolvedValue(undefined);
+    mocks.detectShellCompletionHealth.mockReset();
+    mocks.detectShellCompletionHealth.mockResolvedValue([]);
+    mocks.repairShellCompletionHealth.mockReset();
+    mocks.repairShellCompletionHealth.mockResolvedValue({
+      status: "repaired",
+      changes: ["Shell completion repaired."],
+      warnings: [],
+    });
+    mocks.registerBundledHealthChecks.mockReset();
+    mocks.noteChromeMcpBrowserReadiness.mockReset();
+    mocks.noteChromeMcpBrowserReadiness.mockResolvedValue(undefined);
+    mocks.detectLegacyClawdBrowserProfileResidue.mockReset();
+    mocks.detectLegacyClawdBrowserProfileResidue.mockResolvedValue(undefined);
+    mocks.maybeArchiveLegacyClawdBrowserProfileResidue.mockReset();
+    mocks.maybeArchiveLegacyClawdBrowserProfileResidue.mockResolvedValue({
+      changes: ["Archived legacy clawd managed browser profile residue."],
+      warnings: [],
     });
   });
 
@@ -198,15 +289,276 @@ describe("doctor health contributions", () => {
     expect(ids.indexOf("doctor:skills")).toBeLessThan(ids.indexOf("doctor:write-config"));
   });
 
-  it("runs structured repairs before legacy skill repairs and config writes", () => {
+  it("keeps converted structured repairs at their original contribution positions", () => {
     const ids = resolveDoctorHealthContributions().map((entry) => entry.id);
 
-    expect(ids.indexOf("doctor:structured-health-repairs")).toBeGreaterThan(-1);
-    expect(ids.indexOf("doctor:structured-health-repairs")).toBeLessThan(
-      ids.indexOf("doctor:skills"),
+    expect(ids).not.toContain("doctor:structured-health-repairs");
+    expect(ids.indexOf("doctor:startup-channel-maintenance")).toBeGreaterThan(
+      ids.indexOf("doctor:gateway-services"),
     );
-    expect(ids.indexOf("doctor:structured-health-repairs")).toBeLessThan(
-      ids.indexOf("doctor:write-config"),
+    expect(ids.indexOf("doctor:systemd-linger")).toBeGreaterThan(ids.indexOf("doctor:hooks-model"));
+    expect(ids.indexOf("doctor:shell-completion")).toBeGreaterThan(
+      ids.indexOf("doctor:bootstrap-size"),
+    );
+  });
+
+  it("runs multiple positional core repairs without registering bundled checks repeatedly", async () => {
+    mocks.detectShellCompletionHealth
+      .mockResolvedValueOnce([
+        {
+          checkId: "core/doctor/shell-completion",
+          severity: "warning",
+          message: "Shell completion cache is missing.",
+          path: "shellCompletion.zsh",
+        },
+      ])
+      .mockResolvedValueOnce([]);
+    const ctx = {
+      cfg: {
+        plugins: {
+          entries: {
+            policy: {
+              enabled: true,
+              config: { enabled: true },
+            },
+          },
+        },
+      },
+      configResult: { cfg: {}, sourceLastTouchedVersion: "2026.5.2-test" },
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: {},
+      env: { OPENCLAW_TEST: "1" },
+      cfgForPersistence: {},
+      configPath: "/tmp/fake-openclaw.json",
+    } as Parameters<ReturnType<typeof requireDoctorContribution>["run"]>[0];
+
+    await requireDoctorContribution("doctor:startup-channel-maintenance").run(ctx);
+    await requireDoctorContribution("doctor:shell-completion").run(ctx);
+
+    expect(mocks.registerBundledHealthChecks).not.toHaveBeenCalled();
+  });
+
+  it("runs structured systemd linger repair at the systemd contribution position", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    const contribution = requireDoctorContribution("doctor:systemd-linger");
+    const ctx = {
+      cfg: { gateway: { mode: "local" } },
+      configResult: { cfg: {}, sourceLastTouchedVersion: "2026.5.2-test" },
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: {},
+      env: {},
+      cfgForPersistence: { gateway: { mode: "local" } },
+      configPath: "/tmp/fake-openclaw.json",
+    } as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(mocks.repairSystemdUserLingerFinding).toHaveBeenCalledWith(
+      expect.objectContaining({
+        env: {},
+        requireConfirm: true,
+      }),
+    );
+  });
+
+  it("runs structured startup channel maintenance repair at its contribution position", async () => {
+    const contribution = requireDoctorContribution("doctor:startup-channel-maintenance");
+    const ctx = {
+      cfg: { channels: { matrix: { homeserver: "https://matrix.example.org" } } },
+      configResult: { cfg: {}, sourceLastTouchedVersion: "2026.5.2-test" },
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: {},
+      env: { OPENCLAW_TEST: "1" },
+      cfgForPersistence: { channels: { matrix: { homeserver: "https://matrix.example.org" } } },
+      configPath: "/tmp/fake-openclaw.json",
+    } as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(mocks.maybeRunDoctorStartupChannelMaintenance).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: ctx.cfg,
+        runtime: ctx.runtime,
+        shouldRepair: true,
+      }),
+    );
+  });
+
+  it("previews startup channel maintenance during positional dry-run without side effects", async () => {
+    const contribution = requireDoctorContribution("doctor:startup-channel-maintenance");
+    const ctx = {
+      cfg: { channels: { matrix: { homeserver: "https://matrix.example.org" } } },
+      configResult: { cfg: {}, sourceLastTouchedVersion: "2026.5.2-test" },
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: { dryRun: true, diff: true },
+      env: { OPENCLAW_TEST: "1" },
+      cfgForPersistence: { channels: { matrix: { homeserver: "https://matrix.example.org" } } },
+      configPath: "/tmp/fake-openclaw.json",
+    } as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(mocks.maybeRunDoctorStartupChannelMaintenance).not.toHaveBeenCalled();
+    expect(mocks.note).toHaveBeenCalledWith(
+      "Would run channel plugin startup maintenance.",
+      "Doctor changes",
+    );
+  });
+
+  it("runs structured browser residue repair at the browser contribution position", async () => {
+    const residue = {
+      legacyProfileDir: "/tmp/openclaw-home/browser/clawd",
+      legacyUserDataDir: "/tmp/openclaw-home/browser/clawd/user-data",
+      canonicalUserDataDir: "/tmp/openclaw-home/browser/openclaw/user-data",
+    };
+    mocks.detectLegacyClawdBrowserProfileResidue
+      .mockResolvedValueOnce(residue)
+      .mockResolvedValueOnce(residue)
+      .mockResolvedValueOnce(undefined);
+    const contribution = requireDoctorContribution("doctor:browser");
+    const ctx = {
+      cfg: { browser: { profiles: { openclaw: { color: "#FF4500" } } } },
+      configResult: { cfg: {}, sourceLastTouchedVersion: "2026.5.2-test" },
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: {},
+      env: {},
+      cfgForPersistence: { browser: { profiles: { openclaw: { color: "#FF4500" } } } },
+      configPath: "/tmp/openclaw-home/openclaw.json",
+    } as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(mocks.noteChromeMcpBrowserReadiness).toHaveBeenCalledWith(ctx.cfg);
+    expect(mocks.maybeArchiveLegacyClawdBrowserProfileResidue).toHaveBeenCalledWith(ctx.cfg, {
+      configDir: "/tmp/openclaw-home",
+    });
+  });
+
+  it("passes dry-run and diff into positional structured repairs before doctor exposes the flags", async () => {
+    const residue = {
+      legacyProfileDir: "/tmp/openclaw-home/browser/clawd",
+      legacyUserDataDir: "/tmp/openclaw-home/browser/clawd/user-data",
+      canonicalUserDataDir: "/tmp/openclaw-home/browser/openclaw/user-data",
+    };
+    mocks.detectLegacyClawdBrowserProfileResidue.mockResolvedValue(residue);
+    const contribution = requireDoctorContribution("doctor:browser");
+    const ctx = {
+      cfg: { browser: { profiles: { openclaw: { color: "#FF4500" } } } },
+      configResult: { cfg: {}, sourceLastTouchedVersion: "2026.5.2-test" },
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: { dryRun: true, diff: true },
+      env: {},
+      cfgForPersistence: { browser: { profiles: { openclaw: { color: "#FF4500" } } } },
+      configPath: "/tmp/openclaw-home/openclaw.json",
+    } as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(mocks.maybeArchiveLegacyClawdBrowserProfileResidue).not.toHaveBeenCalled();
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("Would archive legacy clawd managed browser profile residue."),
+      "Doctor changes",
+    );
+  });
+
+  it("runs structured shell completion repair at the shell contribution position", async () => {
+    mocks.detectShellCompletionHealth
+      .mockResolvedValueOnce([
+        {
+          checkId: "core/doctor/shell-completion",
+          severity: "warning",
+          message: "Shell completion cache is missing.",
+          path: "shellCompletion.zsh",
+        },
+      ])
+      .mockResolvedValueOnce([]);
+    const contribution = requireDoctorContribution("doctor:shell-completion");
+    const ctx = {
+      cfg: {},
+      configResult: { cfg: {}, sourceLastTouchedVersion: "2026.5.2-test" },
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: {},
+      env: {},
+      cfgForPersistence: {},
+      configPath: "/tmp/fake-openclaw.json",
+    } as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(mocks.repairShellCompletionHealth).toHaveBeenCalledWith({
+      options: ctx.options,
+      deps: {
+        confirm: expect.any(Function),
+      },
+    });
+  });
+
+  it("previews shell completion during positional dry-run without installing completion", async () => {
+    mocks.detectShellCompletionHealth.mockResolvedValueOnce([
+      {
+        checkId: "core/doctor/shell-completion",
+        severity: "warning",
+        message: "Shell completion cache is missing.",
+        path: "shellCompletion.zsh",
+      },
+    ]);
+    const contribution = requireDoctorContribution("doctor:shell-completion");
+    const ctx = {
+      cfg: {},
+      configResult: { cfg: {}, sourceLastTouchedVersion: "2026.5.2-test" },
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: { dryRun: true, diff: true },
+      env: {},
+      cfgForPersistence: {},
+      configPath: "/tmp/fake-openclaw.json",
+    } as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(mocks.repairShellCompletionHealth).not.toHaveBeenCalled();
+    expect(mocks.note).toHaveBeenCalledWith(
+      "Would repair shell completion setup.",
+      "Doctor changes",
+    );
+  });
+
+  it("previews systemd linger during positional dry-run without enabling linger", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    const contribution = requireDoctorContribution("doctor:systemd-linger");
+    const ctx = {
+      cfg: { gateway: { mode: "local" } },
+      configResult: { cfg: {}, sourceLastTouchedVersion: "2026.5.2-test" },
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: { dryRun: true, diff: true },
+      env: {},
+      cfgForPersistence: { gateway: { mode: "local" } },
+      configPath: "/tmp/fake-openclaw.json",
+    } as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(mocks.repairSystemdUserLingerFinding).not.toHaveBeenCalled();
+    expect(mocks.note).toHaveBeenCalledWith(
+      "Would enable systemd lingering if it is disabled for the Gateway user.",
+      "Doctor changes",
     );
   });
 

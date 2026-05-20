@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SkillStatusEntry } from "../agents/skills-status.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -77,6 +77,12 @@ function getCheck(checks: readonly HealthCheck[], id: string): HealthCheck {
   }
   return check;
 }
+
+const detectShellCompletionHealth = vi.hoisted(() => vi.fn(async () => []));
+
+vi.mock("../commands/doctor-completion.js", () => ({
+  detectShellCompletionHealth,
+}));
 
 describe("registerCoreHealthChecks", () => {
   beforeEach(() => {
@@ -269,7 +275,7 @@ describe("registerCoreHealthChecks", () => {
     );
   });
 
-  it("converts workspace suggestions into info findings", async () => {
+  it("emits workspace suggestions as doctor notes, not lint findings", async () => {
     const check = getCheck(
       createCoreHealthChecks(
         createDeps({
@@ -286,9 +292,10 @@ describe("registerCoreHealthChecks", () => {
       ),
       "core/doctor/workspace-suggestions",
     );
+    const note = vi.fn();
 
     const findings = await check.detect({
-      mode: "lint",
+      mode: "doctor",
       runtime,
       cfg: {
         agents: {
@@ -298,21 +305,104 @@ describe("registerCoreHealthChecks", () => {
         },
       },
       cwd: "/tmp/openclaw-test-workspace",
+      doctor: { note },
     });
 
-    expect(findings).toContainEqual(
-      expect.objectContaining({
-        checkId: "core/doctor/workspace-suggestions",
-        severity: "info",
-        message: "Tip: back up the workspace in a private git repo (GitHub or GitLab).",
-      }),
+    expect(findings).toEqual([]);
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("Tip: back up the workspace in a private git repo"),
+      "Workspace",
     );
-    expect(findings).toContainEqual(
-      expect.objectContaining({
-        checkId: "core/doctor/workspace-suggestions",
-        severity: "info",
-        message: "Memory system not found in workspace.",
-      }),
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("Memory system not found in workspace."),
+      "Workspace",
     );
+  });
+
+  it("suppresses workspace suggestion notes when no doctor note sink is provided", async () => {
+    const check = getCheck(
+      createCoreHealthChecks(
+        createDeps({
+          async collectWorkspaceSuggestionNotes(): Promise<readonly string[]> {
+            return ["Memory system not found in workspace."];
+          },
+        }),
+      ),
+      "core/doctor/workspace-suggestions",
+    );
+
+    await expect(
+      check.detect({
+        mode: "lint",
+        runtime: { log() {}, error() {}, exit() {} },
+        cfg: {
+          agents: {
+            defaults: {
+              workspace: "/tmp/openclaw-test-workspace",
+            },
+          },
+        },
+        cwd: "/tmp/openclaw-test-workspace",
+      }),
+    ).resolves.toEqual([]);
+  });
+
+  it("keeps optional shell completion installs out of doctor lint", async () => {
+    const check = CORE_HEALTH_CHECKS.find((entry) => entry.id === "core/doctor/shell-completion");
+
+    await check?.detect({
+      mode: "lint",
+      runtime: { log() {}, error() {}, exit() {} },
+      cfg: {},
+    });
+
+    expect(detectShellCompletionHealth).toHaveBeenCalledWith({ nonInteractive: true });
+  });
+
+  it("previews converted side-effect repairs as effects without fake diffs", async () => {
+    const runtime = { log() {}, error() {}, exit() {} };
+    const cases = [
+      {
+        id: "core/doctor/shell-completion",
+        expectedAction: "would-repair-shell-completion",
+      },
+      {
+        id: "core/doctor/startup-channel-maintenance",
+        expectedAction: "would-run-channel-startup-maintenance",
+      },
+      {
+        id: "core/doctor/systemd-linger",
+        expectedAction: "would-enable-systemd-linger",
+      },
+    ];
+
+    for (const entry of cases) {
+      const check = CORE_HEALTH_CHECKS.find((candidate) => candidate.id === entry.id);
+      const result = await check?.repair?.(
+        {
+          mode: "fix",
+          runtime,
+          cfg: {},
+          dryRun: true,
+          diff: true,
+        },
+        [
+          {
+            checkId: entry.id,
+            severity: "warning",
+            message: "needs repair",
+          },
+        ],
+      );
+
+      expect(result?.changes).toHaveLength(1);
+      expect(result?.effects).toContainEqual(
+        expect.objectContaining({
+          action: entry.expectedAction,
+          dryRunSafe: false,
+        }),
+      );
+      expect(result?.diffs ?? []).toEqual([]);
+    }
   });
 });

@@ -767,10 +767,14 @@ vi.mock("../tool-split.js", () => ({
   }),
 }));
 
-vi.mock("../utils.js", () => ({
-  describeUnknownError: (error: unknown) => formatErrorMessage(error),
-  mapThinkingLevel: () => undefined,
-}));
+vi.mock("../utils.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../utils.js")>();
+  return {
+    ...actual,
+    describeUnknownError: (error: unknown) => formatErrorMessage(error),
+    mapThinkingLevel: () => undefined,
+  };
+});
 
 vi.mock("./compaction-retry-aggregate-timeout.js", () => ({
   waitForCompactionRetryWithAggregateTimeout: async () => ({
