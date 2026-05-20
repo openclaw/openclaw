@@ -132,6 +132,7 @@ export const updateHandlers: GatewayRequestHandlers = {
               restartDelayMs,
               meta: sentinelMeta,
               handoffId,
+              supervisor,
             });
             handoff = {
               status: "started",

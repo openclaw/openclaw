@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resolveRestartSentinelPath } from "../../infra/restart-sentinel.js";
-import { SUPERVISOR_HINT_ENV_VARS } from "../../infra/supervisor-markers.js";
+import {
+  SUPERVISOR_HINT_ENV_VARS,
+  type RespawnSupervisor,
+} from "../../infra/supervisor-markers.js";
 import {
   CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
   type ControlPlaneUpdateSentinelMetaFile,
@@ -12,6 +15,12 @@ import { MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX } from "../../infra/update-m
 import type { UpdateRestartSentinelMeta } from "../../infra/update-restart-sentinel-payload.js";
 
 const PARENT_EXIT_GRACE_MS = 60_000;
+
+function sanitizeSystemdUnitName(id: string): string {
+  const sanitized = id.replace(/[^a-zA-Z0-9:._-]/gu, "-");
+  return sanitized || "handoff";
+}
+
 const SERVICE_IDENTITY_ENV_VARS = new Set<string>([
   "OPENCLAW_LAUNCHD_LABEL",
   "OPENCLAW_SYSTEMD_UNIT",
@@ -171,6 +180,25 @@ function markUpdateSentinelFailureIfPending(reason) {
   writeJsonFile(params.sentinelPath, { version: 1, payload });
 }
 
+function tryRestartGateway() {
+  if (!params.systemdUnit) {
+    appendLog("no systemd unit configured — cannot auto-restart gateway");
+    return;
+  }
+  appendLog("attempting to restart gateway via systemctl: " + params.systemdUnit);
+  try {
+    const { execSync } = require("node:child_process");
+    execSync("systemctl --user start " + params.systemdUnit, {
+      timeout: 30000,
+      stdio: "ignore",
+    });
+    appendLog("gateway restart command sent successfully");
+  } catch (restartErr) {
+    appendLog("gateway restart failed: " + String(restartErr));
+    appendLog("manual recovery required: run \`systemctl --user start " + params.systemdUnit + "\`");
+  }
+}
+
 (async () => {
   const deadline = Date.now() + params.parentExitTimeoutMs;
   while (isPidAlive(params.parentPid) && Date.now() < deadline) {
@@ -179,9 +207,17 @@ function markUpdateSentinelFailureIfPending(reason) {
   if (isPidAlive(params.parentPid)) {
     appendLog("gateway parent pid " + params.parentPid + " did not exit before handoff timeout");
     markUpdateSentinelFailureIfPending("managed-service-handoff-parent-timeout");
+    tryRestartGateway();
     cleanupSensitiveFiles();
     process.exitCode = 1;
     return;
+  }
+
+  try {
+    fs.mkdirSync(path.dirname(params.markerPath), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(params.markerPath, String(process.pid), { mode: 0o600 });
+  } catch {
+    // Best effort — the ExecStartPre guard is defense-in-depth only.
   }
 
   appendLog("starting managed update command: " + params.commandLabel);
@@ -212,6 +248,7 @@ function markUpdateSentinelFailureIfPending(reason) {
     if (exit && exit.error) {
       appendLog("managed update command failed to start: " + (exit.error && exit.error.stack ? exit.error.stack : String(exit.error)));
       markUpdateSentinelFailureIfPending("managed-service-handoff-spawn-failed");
+      tryRestartGateway();
       process.exitCode = 1;
       return;
     }
@@ -223,9 +260,11 @@ function markUpdateSentinelFailureIfPending(reason) {
     );
     if (exit && typeof exit.code === "number" && exit.code !== 0) {
       markUpdateSentinelFailureIfPending("managed-service-handoff-failed");
+      tryRestartGateway();
       process.exitCode = exit.code;
     } else if (exit && exit.signal) {
       markUpdateSentinelFailureIfPending("managed-service-handoff-failed");
+      tryRestartGateway();
       process.exitCode = 1;
     }
   } finally {
@@ -236,11 +275,22 @@ function markUpdateSentinelFailureIfPending(reason) {
         // Ignore close failures.
       }
     }
+    try {
+      fs.rmSync(params.markerPath, { force: true });
+    } catch {
+      // Best effort only.
+    }
     cleanupSensitiveFiles();
   }
 })().catch((err) => {
   appendLog("handoff failed: " + (err && err.stack ? err.stack : String(err)));
   markUpdateSentinelFailureIfPending("managed-service-handoff-helper-failed");
+  tryRestartGateway();
+  try {
+    fs.rmSync(params.markerPath, { force: true });
+  } catch {
+    // Best effort only.
+  }
   cleanupSensitiveFiles();
   process.exitCode = 1;
 });
@@ -329,6 +379,7 @@ export async function startManagedServiceUpdateHandoff(params: {
   execPath?: string;
   argv1?: string;
   parentPid?: number;
+  supervisor?: RespawnSupervisor | null;
 }): Promise<ManagedServiceUpdateHandoffResult> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX));
   const scriptPath = path.join(dir, "handoff.cjs");
@@ -346,6 +397,7 @@ export async function startManagedServiceUpdateHandoff(params: {
     version: 1,
     meta: params.meta,
   };
+  const markerPath = path.join(os.homedir(), ".openclaw", "update-in-progress");
   const helperParams = {
     parentPid: params.parentPid ?? process.pid,
     parentExitTimeoutMs: Math.max(0, params.restartDelayMs ?? 0) + PARENT_EXIT_GRACE_MS,
@@ -355,6 +407,11 @@ export async function startManagedServiceUpdateHandoff(params: {
     handoffId: params.handoffId,
     logPath,
     metaPath,
+    markerPath,
+    systemdUnit:
+      params.supervisor === "systemd"
+        ? (process.env.OPENCLAW_SYSTEMD_UNIT ?? null)
+        : null,
     sentinelPath: resolveRestartSentinelPath(),
     sensitivePaths: [scriptPath, paramsPath, metaPath],
   };
@@ -368,13 +425,63 @@ export async function startManagedServiceUpdateHandoff(params: {
     [CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]: metaPath,
     OPENCLAW_UPDATE_RUN_HANDOFF: "1",
   };
-  const child = spawn(params.execPath ?? process.execPath, [scriptPath, paramsPath], {
-    cwd: handoffCwd,
-    env,
-    detached: true,
-    stdio: "ignore",
-  });
+  const execPath = params.execPath ?? process.execPath;
+  let child: ReturnType<typeof spawn>;
+
+  if (params.supervisor === "systemd") {
+    // Launch in a transient scope unit to escape the gateway's cgroup;
+    // without this, KillMode=control-group kills the helper on restart.
+    child = spawn(
+      "systemd-run",
+      [
+        "--user",
+        "--scope",
+        "--unit",
+        `openclaw-update-${sanitizeSystemdUnitName(params.handoffId ?? "handoff")}`,
+        "--collect",
+        "--",
+        execPath,
+        scriptPath,
+        paramsPath,
+      ],
+      { cwd: handoffCwd, env, detached: true, stdio: "ignore" },
+    );
+  } else {
+    child = spawn(execPath, [scriptPath, paramsPath], {
+      cwd: handoffCwd,
+      env,
+      detached: true,
+      stdio: "ignore",
+    });
+  }
+
+  child.on("error", () => {});
   child.unref();
+
+  if (params.supervisor === "systemd" && !child.pid) {
+    throw new Error(
+      "systemd-run failed to launch update handoff — run `openclaw update --yes` manually",
+    );
+  }
+
+  if (params.supervisor === "systemd") {
+    // systemd-run --scope exits 0 quickly when the scope is created, or
+    // non-zero on failure (user session unavailable, D-Bus down, etc.).
+    // Wait briefly to catch launch failures before reporting handoff started.
+    const SYSTEMD_SCOPE_LAUNCH_TIMEOUT_MS = 5_000;
+    const exitCode = await new Promise<number | null>((resolve) => {
+      const timer = setTimeout(() => resolve(null), SYSTEMD_SCOPE_LAUNCH_TIMEOUT_MS);
+      child.on("close", (code: number | null) => {
+        clearTimeout(timer);
+        resolve(code ?? 1);
+      });
+    });
+    if (exitCode !== null && exitCode !== 0) {
+      throw new Error(
+        `systemd-run exited ${exitCode} — user session or D-Bus may be unavailable; run \`openclaw update --yes\` manually`,
+      );
+    }
+  }
 
   return {
     status: "started",

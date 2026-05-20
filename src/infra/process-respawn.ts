@@ -114,6 +114,12 @@ export function respawnGatewayProcessForUpdate(
         };
       }
     }
+    if (supervisor === "systemd") {
+      // Exit 80 is covered by RestartPreventExitStatus in the unit file,
+      // preventing systemd from restarting the gateway while the handoff
+      // helper (running in an independent scope) performs the update.
+      return { mode: "supervised", detail: "systemd-update-exit-80" };
+    }
     return { mode: "supervised" };
   }
   try {

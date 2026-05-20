@@ -367,6 +367,7 @@ describe("update.run restart scheduling", () => {
       expect.objectContaining({
         root: "/tmp/openclaw",
         handoffId: expect.any(String),
+        supervisor: "launchd",
         meta: expect.objectContaining({
           handoffId: expect.any(String),
         }),

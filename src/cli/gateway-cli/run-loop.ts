@@ -237,6 +237,10 @@ export async function runGatewayLoop(params: {
             setTimeout(resolve, LAUNCHD_SUPERVISED_RESTART_EXIT_DELAY_MS);
           });
         }
+        if (respawn.detail === "systemd-update-exit-80") {
+          exitProcess(80);
+          return;
+        }
         exitProcess(0);
         return;
       }

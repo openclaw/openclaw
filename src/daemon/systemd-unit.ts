@@ -69,19 +69,20 @@ export function buildSystemdUnit({
     descriptionLine,
     "After=network-online.target",
     "Wants=network-online.target",
-    "StartLimitBurst=5",
-    "StartLimitIntervalSec=60",
+    "StartLimitBurst=8",
+    "StartLimitIntervalSec=120",
     "",
     "[Service]",
     `ExecStart=${execStart}`,
+    "ExecStartPre=-/bin/sh -c 'test ! -f %h/.openclaw/update-in-progress || sleep 5'",
     "Restart=always",
     "RestartSec=5",
-    "RestartPreventExitStatus=78",
+    "RestartPreventExitStatus=78 80",
     "TimeoutStopSec=30",
     "TimeoutStartSec=30",
     "SuccessExitStatus=0 143",
-    // Keep service children in the same lifecycle so restarts do not leave
-    // orphan ACP/runtime workers behind.
+    // The update handoff helper escapes via systemd-run --scope, so
+    // control-group safely stops the gateway and all its child workers.
     "KillMode=control-group",
     workingDirLine,
     ...environmentFileLines,

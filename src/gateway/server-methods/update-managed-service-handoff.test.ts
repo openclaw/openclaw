@@ -9,12 +9,29 @@ import {
   MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX,
 } from "../../infra/update-managed-service-handoff-cleanup.js";
 
-const { spawnMock } = vi.hoisted(() => ({
-  spawnMock: vi.fn(() => ({
-    pid: 24680,
-    unref: vi.fn(),
-  })),
-}));
+const { spawnMock, mockChild } = vi.hoisted(() => {
+  type Listener = (...args: unknown[]) => void;
+  function mockChild(opts?: { pid?: number; exitCode?: number }) {
+    const pid = opts?.pid ?? 24680;
+    const exitCode = opts?.exitCode ?? 0;
+    const listeners: Record<string, Listener[]> = {};
+    const child = {
+      pid,
+      unref: vi.fn(),
+      on: vi.fn((event: string, cb: Listener) => {
+        (listeners[event] ??= []).push(cb);
+      }),
+    };
+    queueMicrotask(() => {
+      for (const cb of listeners["close"] ?? []) cb(exitCode, null);
+    });
+    return child;
+  }
+  return {
+    mockChild,
+    spawnMock: vi.fn(() => mockChild()),
+  };
+});
 
 vi.mock("node:child_process", () => ({
   spawn: spawnMock,
@@ -165,11 +182,17 @@ describe("managed service update handoff", () => {
       cwd?: string;
       metaPath?: string;
       sentinelPath?: string;
+      markerPath?: string;
+      systemdUnit?: string | null;
     };
     expect(helperParams.metaPath).toMatch(/sentinel-meta\.json$/u);
     expect(helperParams.sentinelPath).toMatch(/restart-sentinel\.json$/u);
     expect(options.cwd).toBe(os.homedir());
     expect(helperParams.cwd).toBe(os.homedir());
+    expect(helperParams.markerPath).toBe(
+      path.join(os.homedir(), ".openclaw", "update-in-progress"),
+    );
+    expect(helperParams.systemdUnit).toBeNull();
     expect(options.detached).toBe(true);
     expect(options.env.KEEP_ME).toBe("1");
     for (const [key, value] of Object.entries(serviceIdentityEnv)) {
@@ -230,6 +253,141 @@ describe("managed service update handoff", () => {
     await expect(fs.readFile(sentinelPath, "utf-8").then(JSON.parse)).resolves.toEqual(
       newerSentinel,
     );
+  });
+
+  it("spawns via systemd-run --user --scope when supervisor is systemd", async () => {
+    const { startManagedServiceUpdateHandoff } =
+      await import("./update-managed-service-handoff.js");
+
+    const result = await startManagedServiceUpdateHandoff({
+      root: "/tmp/openclaw",
+      timeoutMs: 1_800_000,
+      restartDelayMs: 500,
+      parentPid: 12345,
+      execPath: "/usr/local/bin/node",
+      argv1: "/opt/openclaw/openclaw.mjs",
+      handoffId: "test-handoff-123",
+      env: {},
+      meta: { sessionKey: "agent:test:webchat:dm:user-123" },
+      supervisor: "systemd",
+    });
+
+    expect(result.status).toBe("started");
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    const [bin, args, options] = spawnMock.mock.calls[0] as unknown as [
+      string,
+      string[],
+      { detached?: boolean; cwd?: string; env?: Record<string, string> },
+    ];
+    expect(bin).toBe("systemd-run");
+    expect(args).toEqual([
+      "--user",
+      "--scope",
+      "--unit",
+      "openclaw-update-test-handoff-123",
+      "--collect",
+      "--",
+      "/usr/local/bin/node",
+      expect.stringMatching(/handoff\.cjs$/u),
+      expect.stringMatching(/handoff\.json$/u),
+    ]);
+    expect(options.detached).toBe(true);
+    expect(options.cwd).toBe(os.homedir());
+
+    // env is passed via spawn options, not --setenv argv
+    expect(options.env).toBeDefined();
+    expect(args).not.toContain("--setenv");
+    expect(options.env?.[CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]).toBeDefined();
+    expect(options.env?.OPENCLAW_UPDATE_RUN_HANDOFF).toBe("1");
+
+    const paramsPath = args[args.indexOf("--") + 3] ?? "";
+    tempDirs.add(path.dirname(paramsPath));
+    const helperParams = JSON.parse(await fs.readFile(paramsPath, "utf-8")) as {
+      markerPath?: string;
+      systemdUnit?: string | null;
+    };
+    expect(helperParams.markerPath).toBe(
+      path.join(os.homedir(), ".openclaw", "update-in-progress"),
+    );
+    expect(helperParams.systemdUnit).toSatisfy(
+      (v: unknown) => v === null || typeof v === "string",
+    );
+  });
+
+  it("spawns via plain detached node when supervisor is not systemd", async () => {
+    const { startManagedServiceUpdateHandoff } =
+      await import("./update-managed-service-handoff.js");
+
+    await startManagedServiceUpdateHandoff({
+      root: "/tmp/openclaw",
+      timeoutMs: 1_800_000,
+      parentPid: 12345,
+      execPath: "/usr/local/bin/node",
+      argv1: "/opt/openclaw/openclaw.mjs",
+      env: {},
+      meta: { sessionKey: "agent:test:webchat:dm:user-123" },
+      supervisor: "launchd",
+    });
+
+    const [bin] = spawnMock.mock.calls[0] as unknown as [string, string[]];
+    expect(bin).toBe("/usr/local/bin/node");
+
+    spawnMock.mockClear();
+    await startManagedServiceUpdateHandoff({
+      root: "/tmp/openclaw",
+      timeoutMs: 1_800_000,
+      parentPid: 12345,
+      execPath: "/usr/local/bin/node",
+      argv1: "/opt/openclaw/openclaw.mjs",
+      env: {},
+      meta: { sessionKey: "agent:test:webchat:dm:user-123" },
+      supervisor: null,
+    });
+
+    const [bin2] = spawnMock.mock.calls[0] as unknown as [string, string[]];
+    expect(bin2).toBe("/usr/local/bin/node");
+  });
+
+  it("throws when systemd-run fails to spawn (ENOENT)", async () => {
+    spawnMock.mockReturnValueOnce({
+      pid: undefined,
+      unref: vi.fn(),
+      on: vi.fn(),
+    });
+    const { startManagedServiceUpdateHandoff } =
+      await import("./update-managed-service-handoff.js");
+
+    await expect(
+      startManagedServiceUpdateHandoff({
+        root: "/tmp/openclaw",
+        timeoutMs: 1_800_000,
+        parentPid: 12345,
+        execPath: "/usr/local/bin/node",
+        argv1: "/opt/openclaw/openclaw.mjs",
+        env: {},
+        meta: { sessionKey: "agent:test:webchat:dm:user-123" },
+        supervisor: "systemd",
+      }),
+    ).rejects.toThrow(/systemd-run failed/u);
+  });
+
+  it("throws when systemd-run exits non-zero (e.g. no user session)", async () => {
+    spawnMock.mockImplementationOnce(() => mockChild({ exitCode: 1 }));
+    const { startManagedServiceUpdateHandoff } =
+      await import("./update-managed-service-handoff.js");
+
+    await expect(
+      startManagedServiceUpdateHandoff({
+        root: "/tmp/openclaw",
+        timeoutMs: 1_800_000,
+        parentPid: 12345,
+        execPath: "/usr/local/bin/node",
+        argv1: "/opt/openclaw/openclaw.mjs",
+        env: {},
+        meta: { sessionKey: "agent:test:webchat:dm:user-123" },
+        supervisor: "systemd",
+      }),
+    ).rejects.toThrow(/systemd-run exited 1/u);
   });
 
   it("sweeps stale handoff temp directories while keeping fresh handoff logs", async () => {

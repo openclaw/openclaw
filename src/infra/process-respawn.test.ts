@@ -302,4 +302,13 @@ describe("respawnGatewayProcessForUpdate", () => {
     expect(result.mode).toBe("failed");
     expect(result.detail).toContain("spawn failed");
   });
+
+  it("returns systemd-update-exit-80 detail for systemd supervisor", () => {
+    clearSupervisorHints();
+    setPlatform("linux");
+    vi.stubEnv("OPENCLAW_SYSTEMD_UNIT", "openclaw-gateway.service");
+    const result = respawnGatewayProcessForUpdate();
+    expect(result.mode).toBe("supervised");
+    expect(result.detail).toBe("systemd-update-exit-80");
+  });
 });
