@@ -1,8 +1,10 @@
 package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.chat.ChatAgentEntry
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.OutgoingAttachment
+import ai.openclaw.app.resolveAgentIdFromMainSessionKey
 import ai.openclaw.app.ui.mobileAccent
 import ai.openclaw.app.ui.mobileAccentBorderStrong
 import ai.openclaw.app.ui.mobileBorderStrong
@@ -83,6 +85,7 @@ fun ChatSheetContent(viewModel: MainViewModel) {
   val streamingAssistantText by viewModel.chatStreamingAssistantText.collectAsState()
   val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
   val sessions by viewModel.chatSessions.collectAsState()
+  val agents by viewModel.chatAgents.collectAsState()
   val chatDraft by viewModel.chatDraft.collectAsState()
   val pendingAssistantAutoSend by viewModel.pendingAssistantAutoSend.collectAsState()
 
@@ -138,6 +141,12 @@ fun ChatSheetContent(viewModel: MainViewModel) {
         .padding(horizontal = 20.dp, vertical = 12.dp),
     verticalArrangement = Arrangement.spacedBy(8.dp),
   ) {
+    ChatAgentSelector(
+      agents = agents,
+      mainSessionKey = mainSessionKey,
+      onSelectAgent = { agentId -> viewModel.selectChatAgent(agentId) },
+    )
+
     ChatThreadSelector(
       sessionKey = sessionKey,
       sessions = sessions,
@@ -188,6 +197,43 @@ fun ChatSheetContent(viewModel: MainViewModel) {
           attachments.clear()
         },
       )
+    }
+  }
+}
+
+@Composable
+private fun ChatAgentSelector(
+  agents: List<ChatAgentEntry>,
+  mainSessionKey: String,
+  onSelectAgent: (String) -> Unit,
+) {
+  if (agents.size <= 1) return
+
+  val activeAgentId = resolveAgentIdFromMainSessionKey(mainSessionKey)
+
+  Row(
+    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+    horizontalArrangement = Arrangement.spacedBy(8.dp),
+  ) {
+    for (agent in agents.sortedBy { (it.name ?: it.id).lowercase() }) {
+      val active = agent.id == activeAgentId
+      Surface(
+        onClick = { onSelectAgent(agent.id) },
+        shape = RoundedCornerShape(14.dp),
+        color = if (active) mobileAccent else mobileCardSurface,
+        border = BorderStroke(1.dp, if (active) mobileAccentBorderStrong else mobileBorderStrong),
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp,
+      ) {
+        Text(
+          text = listOfNotNull(agent.emoji, agent.name ?: agent.id).joinToString(" "),
+          style = mobileCaption1.copy(fontWeight = if (active) FontWeight.Bold else FontWeight.SemiBold),
+          color = if (active) Color.White else mobileText,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+          modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+        )
+      }
     }
   }
 }

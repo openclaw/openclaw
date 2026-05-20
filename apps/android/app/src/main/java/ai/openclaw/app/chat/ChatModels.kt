@@ -29,6 +29,12 @@ data class ChatSessionEntry(
   val displayName: String? = null,
 )
 
+data class ChatAgentEntry(
+  val id: String,
+  val name: String? = null,
+  val emoji: String? = null,
+)
+
 data class ChatHistory(
   val sessionKey: String,
   val sessionId: String?,

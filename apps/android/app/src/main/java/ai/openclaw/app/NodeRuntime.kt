@@ -1,5 +1,6 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.chat.ChatAgentEntry
 import ai.openclaw.app.chat.ChatController
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatPendingToolCall
@@ -302,7 +303,9 @@ class NodeRuntime(
   val isForeground: StateFlow<Boolean> = _isForeground.asStateFlow()
 
   private var gatewayDefaultAgentId: String? = null
-  private var gatewayAgents: List<GatewayAgentSummary> = emptyList()
+  private var gatewayAgents: List<ChatAgentEntry> = emptyList()
+  private val _chatAgents = MutableStateFlow<List<ChatAgentEntry>>(emptyList())
+  val chatAgents: StateFlow<List<ChatAgentEntry>> = _chatAgents.asStateFlow()
   private var didAutoRequestCanvasRehydrate = false
   private val canvasRehydrateSeq = AtomicLong(0)
 
@@ -1425,6 +1428,18 @@ class NodeRuntime(
     chat.switchSession(sessionKey)
   }
 
+  fun selectChatAgent(agentId: String) {
+    val trimmed = agentId.trim()
+    if (trimmed.isEmpty()) return
+    val resolvedKey = resolveNodeMainSessionKey(trimmed)
+    talkMode.setMainSessionKey(resolvedKey)
+    if (_mainSessionKey.value != resolvedKey) {
+      _mainSessionKey.value = resolvedKey
+      updateHomeCanvasState()
+    }
+    chat.load(resolvedKey)
+  }
+
   fun abortChat() {
     chat.abort()
   }
@@ -1509,7 +1524,7 @@ class NodeRuntime(
               ?.get("emoji")
               .asStringOrNull()
               ?.trim()
-          GatewayAgentSummary(
+          ChatAgentEntry(
             id = id,
             name = name?.takeIf { it.isNotEmpty() },
             emoji = emoji?.takeIf { it.isNotEmpty() },
@@ -1518,6 +1533,7 @@ class NodeRuntime(
 
       gatewayDefaultAgentId = defaultAgentId.ifEmpty { null }
       gatewayAgents = agents
+      _chatAgents.value = agents
       syncMainSessionKey(resolveAgentIdFromMainSessionKey(mainKey) ?: gatewayDefaultAgentId)
       updateHomeCanvasState()
     } catch (_: Throwable) {
@@ -1642,7 +1658,7 @@ class NodeRuntime(
       }.sortedWith(compareByDescending<HomeCanvasAgentCard> { it.isActive }.thenBy { it.name.lowercase() })
   }
 
-  private fun homeCanvasBadge(agent: GatewayAgentSummary): String {
+  private fun homeCanvasBadge(agent: ChatAgentEntry): String {
     val emoji = normalized(agent.emoji)
     if (emoji != null) return emoji
     val initials =
@@ -1736,12 +1752,6 @@ private enum class HomeCanvasGatewayState {
   Error,
   Offline,
 }
-
-private data class GatewayAgentSummary(
-  val id: String,
-  val name: String?,
-  val emoji: String?,
-)
 
 @Serializable
 private data class HomeCanvasPayload(
