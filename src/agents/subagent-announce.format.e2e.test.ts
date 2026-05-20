@@ -78,6 +78,7 @@ function visibleAgentResponse(runId = "run-main") {
 function expectInputProvenance(
   params: Record<string, unknown> | undefined,
   sourceSessionKey: string,
+  sourceChannel?: string,
 ) {
   const inputProvenance = params?.inputProvenance;
   if (!inputProvenance || typeof inputProvenance !== "object") {
@@ -86,6 +87,9 @@ function expectInputProvenance(
   const provenance = inputProvenance as Record<string, unknown>;
   expect(provenance.kind).toBe("inter_session");
   expect(provenance.sourceSessionKey).toBe(sourceSessionKey);
+  if (sourceChannel !== undefined) {
+    expect(provenance.sourceChannel).toBe(sourceChannel);
+  }
   expect(provenance.sourceTool).toBe("subagent_announce");
 }
 
@@ -760,7 +764,7 @@ describe("subagent announce formatting", () => {
     expect(call?.params?.channel).toBe("discord");
     expect(call?.params?.to).toBe("channel:12345");
     expect(call?.params?.sessionKey).toBe("agent:main:main");
-    expectInputProvenance(call?.params, "agent:main:subagent:test");
+    expectInputProvenance(call?.params, "agent:main:subagent:test", "discord");
     expect(msg).toContain("final answer: 2");
     expect(msg).not.toContain("✅ Subagent");
   });
@@ -1941,6 +1945,38 @@ describe("subagent announce formatting", () => {
       deliver: false,
     });
     expect(getAgentCall().params?.sourceReplyDeliveryMode).toBe("message_tool_only");
+  });
+
+  it("uses requester session route as completion provenance when requester origin is absent", async () => {
+    sessionStore = {
+      "agent:main:main": {
+        sessionId: "requester-session-direct-route-from-session",
+        lastChannel: "whatsapp",
+        lastTo: "+1555",
+        lastAccountId: "acct-wa",
+      },
+    };
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:worker",
+      childRunId: "run-completion-session-route",
+      requesterSessionKey: "main",
+      requesterDisplayKey: "main",
+      expectsCompletionMessage: true,
+      ...defaultOutcomeAnnounce,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    expectAgentCallFields(getAgentCall(), {
+      sessionKey: "agent:main:main",
+      channel: "whatsapp",
+      to: "+1555",
+      accountId: "acct-wa",
+      deliver: true,
+    });
+    expectInputProvenance(getAgentCall().params, "agent:main:subagent:worker", "whatsapp");
   });
 
   it("returns failure for completion-mode when direct delivery fails and steering fallback is unavailable", async () => {

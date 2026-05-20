@@ -101,6 +101,9 @@ vi.mock("./subagent-announce-delivery.js", () => ({
     };
     directOrigin?: { channel?: string; to?: string; accountId?: string; threadId?: string };
     requesterSessionOrigin?: { provider?: string; channel?: string };
+    sourceSessionKey?: string;
+    sourceChannel?: string;
+    sourceTool?: string;
     bestEffortDeliver?: boolean;
   }) => {
     const store = loadSessionStoreMock("/tmp/sessions.json") as Record<string, unknown>;
@@ -136,6 +139,12 @@ vi.mock("./subagent-announce-delivery.js", () => ({
           effectiveOrigin?.channel !== "webchat" &&
           Boolean(effectiveOrigin?.channel && effectiveOrigin?.to),
         bestEffortDeliver: params.bestEffortDeliver,
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: params.sourceSessionKey,
+          sourceChannel: params.sourceChannel,
+          sourceTool: params.sourceTool ?? "subagent_announce",
+        },
         ...(params.requesterIsSubagent
           ? {}
           : {
@@ -440,6 +449,101 @@ describe("subagent announce seam flow", () => {
     expect(agentCall.params?.deliver).toBe(false);
     expect(agentCall.params?.bestEffortDeliver).toBe(true);
     expect(agentCall.params?.accountId).toBe("default");
+  });
+
+  it("uses normalized requester origin channel for completion provenance", async () => {
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:discord",
+      childRunId: "run-discord-direct-announce",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: {
+        channel: " Discord ",
+        to: "channel:123",
+        accountId: "default",
+      },
+      task: "deliver completion",
+      timeoutMs: 10,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "done",
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    expect(agentSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agent",
+        params: expect.objectContaining({
+          sessionKey: "agent:main:main",
+          deliver: true,
+          channel: "discord",
+          to: "channel:123",
+          accountId: "default",
+          inputProvenance: expect.objectContaining({
+            kind: "inter_session",
+            sourceSessionKey: "agent:main:subagent:discord",
+            sourceChannel: "discord",
+            sourceTool: "subagent_announce",
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("uses requester session route channel for completion provenance when origin is absent", async () => {
+    loadSessionStoreMock.mockImplementation(() => ({
+      "agent:main:main": {
+        sessionId: "requester-session-route",
+        updatedAt: Date.now(),
+        lastChannel: "whatsapp",
+        lastTo: "+1555",
+        lastAccountId: "acct-wa",
+      },
+    }));
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:worker",
+      childRunId: "run-session-route-direct-announce",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "deliver completion",
+      timeoutMs: 10,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "done",
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    expect(agentSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agent",
+        params: expect.objectContaining({
+          sessionKey: "agent:main:main",
+          deliver: true,
+          channel: "whatsapp",
+          to: "+1555",
+          accountId: "acct-wa",
+          inputProvenance: expect.objectContaining({
+            kind: "inter_session",
+            sourceSessionKey: "agent:main:subagent:worker",
+            sourceChannel: "whatsapp",
+            sourceTool: "subagent_announce",
+          }),
+        }),
+      }),
+    );
   });
 
   it("keeps nested subagent completion announces channel-less in session-only mode", async () => {
