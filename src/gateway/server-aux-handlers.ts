@@ -137,6 +137,9 @@ export function createGatewayAuxHandlers(params: {
               let sharedGatewaySessionGenerationChanged = false;
               const stoppedChannels: ChannelKind[] = [];
               const restartedChannels = new Set<ChannelKind>();
+              const revocationLogger = params.log.warn
+                ? { warn: (m: string) => params.log.warn!(m) }
+                : undefined;
               try {
                 const prepared = await params.activateRuntimeSecrets(
                   previousSnapshot.sourceConfig,
@@ -160,6 +163,7 @@ export function createGatewayAuxHandlers(params: {
                   disconnectStaleSharedGatewayAuthClients({
                     clients: params.clients,
                     expectedGeneration: nextSharedGatewaySessionGeneration,
+                    logger: revocationLogger,
                   });
                 }
                 if (plan.restartChannels.size > 0) {
@@ -209,6 +213,7 @@ export function createGatewayAuxHandlers(params: {
                   disconnectStaleSharedGatewayAuthClients({
                     clients: params.clients,
                     expectedGeneration: previousSharedGatewaySessionGeneration,
+                    logger: revocationLogger,
                   });
                 }
                 for (const channel of stoppedChannels) {

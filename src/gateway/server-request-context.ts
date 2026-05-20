@@ -4,7 +4,10 @@ import type { GatewayRequestContext, GatewayClient } from "./server-methods/type
 import { disconnectAllSharedGatewayAuthClients } from "./server-shared-auth-generation.js";
 
 type GatewayRequestContextClient = GatewayClient & {
-  socket: { close: (code: number, reason: string) => void };
+  socket: {
+    close: (code: number, reason: string) => void;
+    terminate?: () => void;
+  };
   usesSharedGatewayAuth?: boolean;
 };
 
@@ -141,13 +144,33 @@ export function createGatewayRequestContext(
         }
         try {
           gatewayClient.socket.close(4001, "device removed");
+          continue;
+        } catch (error) {
+          const message =
+            error instanceof Error
+              ? error.message
+              : typeof error === "string"
+                ? error
+                : "unknown error";
+          params.logGateway.warn(
+            `device removal: socket.close failed for deviceId=${deviceId} connId=${
+              gatewayClient.connId ?? "<unknown>"
+            }: ${message}; attempting terminate()`,
+          );
+        }
+        try {
+          gatewayClient.socket.terminate?.();
         } catch {
-          /* ignore */
+          // terminate is a last resort; there is no further escalation path.
         }
       }
     },
     disconnectClientsUsingSharedGatewayAuth: () => {
-      disconnectAllSharedGatewayAuthClients(params.clients);
+      disconnectAllSharedGatewayAuthClients(params.clients, {
+        logger: params.logGateway.warn
+          ? { warn: (m: string) => params.logGateway.warn(m) }
+          : undefined,
+      });
     },
     enforceSharedGatewayAuthGenerationForConfigWrite:
       params.enforceSharedGatewayAuthGenerationForConfigWrite,

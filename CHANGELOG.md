@@ -14,6 +14,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway/auth: replace bare `catch {}` blocks in the shared-gateway-auth and device revocation paths with `log.warn` + `socket.terminate()` fallback, so a failing `socket.close()` during revocation is logged with connection context and the client is force-killed instead of silently left connected.
 - Mac app: keep local packaging signed with a stable app identity for permission testing and fix Control UI production builds under current Vite/Highlight.js exports.
 - macOS app: update the embedded Peekaboo bridge to 3.2.1 so OpenClaw-hosted UI automation works with current Peekaboo CLI capture flows.
 - fix(mattermost): fail closed on missing channel type [AI]. (#84091) Thanks @pgondhi987.
