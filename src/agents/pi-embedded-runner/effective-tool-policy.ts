@@ -18,6 +18,7 @@ import {
 import {
   applyOwnerOnlyToolPolicy,
   mergeAlsoAllowPolicy,
+  normalizeToolName,
   resolveToolProfilePolicy,
 } from "../tool-policy.js";
 import type { AnyAgentTool } from "../tools/common.js";
@@ -159,10 +160,17 @@ export function applyFinalEffectiveToolPolicy(
     { policy: params.sandboxToolPolicy, label: "sandbox tools.allow" },
     { policy: subagentPolicy, label: "subagent tools.allow" },
   ].map((step) => Object.assign({}, step, { suppressUnavailableCoreToolWarning: true }));
-  return applyToolPolicyPipeline({
+  const policyFiltered = applyToolPolicyPipeline({
     tools: ownerFiltered,
     toolMeta: (tool) => getPluginToolMeta(tool),
     warn: params.warn,
     steps: pipelineSteps,
   });
+  const gatewayDeny = new Set(
+    (params.config?.gateway?.tools?.deny ?? []).map((name) => normalizeToolName(name)),
+  );
+  if (gatewayDeny.size === 0) {
+    return policyFiltered;
+  }
+  return policyFiltered.filter((tool) => !gatewayDeny.has(normalizeToolName(tool.name)));
 }

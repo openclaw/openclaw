@@ -165,4 +165,23 @@ describe("applyFinalEffectiveToolPolicy", () => {
 
     expect(filtered).toEqual([]);
   });
+
+  it("applies explicit gateway.tools.deny entries to bundled tools", () => {
+    const filtered = applyFinalEffectiveToolPolicy({
+      bundledTools: [
+        makeTool("claude-context__index_codebase"),
+        makeTool("claude-context__search_code"),
+      ],
+      config: {
+        gateway: {
+          tools: {
+            deny: ["claude-context__index_codebase"],
+          },
+        },
+      },
+      warn: () => {},
+    });
+
+    expect(filtered.map((tool) => tool.name)).toEqual(["claude-context__search_code"]);
+  });
 });
