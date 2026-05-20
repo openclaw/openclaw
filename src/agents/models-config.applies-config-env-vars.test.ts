@@ -246,7 +246,7 @@ describe("models-config", () => {
     ]);
   });
 
-  it("omits resolved plaintext apiKey values from planned models.json contents", async () => {
+  it("replaces resolved plaintext apiKey values with a non-secret marker in planned models.json contents", async () => {
     const plan = await planOpenClawModelsJsonWithDeps(
       {
         cfg: { models: { providers: {} } },
@@ -291,8 +291,69 @@ describe("models-config", () => {
     const parsed = JSON.parse(plan.contents) as {
       providers?: Record<string, { apiKey?: string }>;
     };
-    expect(parsed.providers?.custom?.apiKey).toBeUndefined();
+    // Custom provider's resolved plaintext key is replaced with a non-secret
+    // marker so pi-coding-agent's custom-provider validation (which requires
+    // an apiKey field) still accepts the generated file. The plaintext value
+    // must not appear anywhere in the serialized contents.
+    expect(parsed.providers?.custom?.apiKey).toBe("secretref-managed");
+    expect(plan.contents).not.toContain("sk-resolved-provider-key");
+    // Known env-var marker apiKeys (like "OPENAI_API_KEY") are not secrets
+    // and remain untouched so resolution still works at runtime.
     expect(parsed.providers?.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
+  });
+
+  it("replaces resolved plaintext apiKey values when merging into an existing models.json", async () => {
+    const existing = {
+      providers: {
+        custom: {
+          baseUrl: "https://custom.example/v1",
+          api: "openai-completions",
+          apiKey: "sk-previously-persisted-key", // pragma: allowlist secret
+          models: [],
+        },
+      },
+    };
+    const plan = await planOpenClawModelsJsonWithDeps(
+      {
+        cfg: { models: { mode: "merge", providers: {} } },
+        agentDir: "/tmp/openclaw-models-config-env-vars-test",
+        env: {},
+        existingRaw: `${JSON.stringify(existing, null, 2)}\n`,
+        existingParsed: existing,
+      },
+      {
+        resolveImplicitProviders: async () => ({
+          custom: {
+            baseUrl: "https://custom.example/v1",
+            api: "openai-completions",
+            apiKey: "sk-resolved-provider-key",
+            models: [
+              {
+                id: "custom-model",
+                name: "Custom Model",
+                input: ["text"],
+                reasoning: false,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 8192,
+                maxTokens: 2048,
+              },
+            ],
+          },
+        }),
+      },
+    );
+
+    expect(plan.action).toBe("write");
+    if (plan.action !== "write") {
+      throw new Error("Expected models.json write plan");
+    }
+
+    const parsed = JSON.parse(plan.contents) as {
+      providers?: Record<string, { apiKey?: string }>;
+    };
+    expect(parsed.providers?.custom?.apiKey).toBe("secretref-managed");
+    expect(plan.contents).not.toContain("sk-resolved-provider-key");
+    expect(plan.contents).not.toContain("sk-previously-persisted-key");
   });
 
   it("uses config env.vars entries for implicit provider discovery without mutating process.env", async () => {

@@ -6,7 +6,7 @@ import {
   mergeWithExistingProviderSecrets,
   type ExistingProviderConfig,
 } from "./models-config.merge.js";
-import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
+import { NON_ENV_SECRETREF_MARKER, isNonSecretApiKeyMarker } from "./model-auth-markers.js";
 import {
   applyNativeStreamingUsageCompat,
   enforceSourceManagedProviderSecrets,
@@ -115,9 +115,7 @@ function stripResolvedApiKeysForModelsJson(
   for (const [providerKey, provider] of Object.entries(providers)) {
     const apiKey = provider.apiKey;
     if (typeof apiKey === "string" && apiKey.trim() && !isNonSecretApiKeyMarker(apiKey)) {
-      const providerWithoutApiKey = { ...provider };
-      delete providerWithoutApiKey.apiKey;
-      sanitizedProviders[providerKey] = providerWithoutApiKey;
+      sanitizedProviders[providerKey] = { ...provider, apiKey: NON_ENV_SECRETREF_MARKER };
       changed = true;
       continue;
     }
