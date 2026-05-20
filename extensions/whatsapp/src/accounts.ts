@@ -20,6 +20,7 @@ import { hasWebCredsSync } from "./creds-files.js";
 
 export { listWhatsAppAccountIds, resolveDefaultWhatsAppAccountId } from "./account-ids.js";
 
+// Mirrors WhatsAppDmPolicy in src/config/types.whatsapp.ts — duplicated because plugin-sdk/config-contracts does not export it.
 export type WhatsAppDmPolicy = DmPolicy | "open-except";
 
 export type ResolvedWhatsAppAccount = {

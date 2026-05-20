@@ -159,6 +159,7 @@ function makePolicy(account: ReturnType<typeof makeAccount>) {
     configuredAllowFrom: [],
     dmAllowFrom: [],
     groupAllowFrom: [],
+    manualFrom: [],
     isSelfChat: false,
     providerMissingFallbackApplied: false,
     isSamePhone: () => false,
