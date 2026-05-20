@@ -156,6 +156,7 @@ function resolveManifestPluginSourcePath(params: {
 }
 
 export type PluginManifestContractListKey =
+  | "sessionAttachments"
   | "speechProviders"
   | "externalAuthProviders"
   | "mediaUnderstandingProviders"
@@ -370,6 +371,7 @@ function mergeManifestContracts(
   for (const key of [
     "embeddedExtensionFactories",
     "agentToolResultMiddleware",
+    "sessionAttachments",
     "externalAuthProviders",
     "memoryEmbeddingProviders",
     "speechProviders",

@@ -397,6 +397,12 @@ export type PluginManifestContracts = {
   embeddedExtensionFactories?: string[];
   agentToolResultMiddleware?: string[];
   /**
+   * Session workflow privileges owned by the plugin. Currently supports
+   * "active-session" to let trusted workflow plugins deliver attachments or
+   * rich presentations to the active session route.
+   */
+  sessionAttachments?: string[];
+  /**
    * Provider ids whose external auth profile hook can contribute runtime-only
    * credentials. Declaring this lets auth-store overlays load only the owning
    * plugin instead of every provider plugin.
@@ -798,6 +804,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
 
   const embeddedExtensionFactories = normalizeTrimmedStringList(value.embeddedExtensionFactories);
   const agentToolResultMiddleware = normalizeTrimmedStringList(value.agentToolResultMiddleware);
+  const sessionAttachments = normalizeTrimmedStringList(value.sessionAttachments);
   const externalAuthProviders = normalizeTrimmedStringList(value.externalAuthProviders);
   const memoryEmbeddingProviders = normalizeTrimmedStringList(value.memoryEmbeddingProviders);
   const speechProviders = normalizeTrimmedStringList(value.speechProviders);
@@ -819,6 +826,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
   const contracts = {
     ...(embeddedExtensionFactories.length > 0 ? { embeddedExtensionFactories } : {}),
     ...(agentToolResultMiddleware.length > 0 ? { agentToolResultMiddleware } : {}),
+    ...(sessionAttachments.length > 0 ? { sessionAttachments } : {}),
     ...(externalAuthProviders.length > 0 ? { externalAuthProviders } : {}),
     ...(memoryEmbeddingProviders.length > 0 ? { memoryEmbeddingProviders } : {}),
     ...(speechProviders.length > 0 ? { speechProviders } : {}),

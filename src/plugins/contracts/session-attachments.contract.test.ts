@@ -366,7 +366,8 @@ describe("plugin session attachments", () => {
         }),
       ).resolves.toEqual({
         ok: false,
-        error: "session attachments are restricted to bundled plugins",
+        error:
+          'session attachments require bundled origin or contracts.sessionAttachments:["active-session"] with trusted official install or allowConversationAccess=true',
       });
       await expect(
         sendBundledSessionAttachment({
@@ -375,6 +376,83 @@ describe("plugin session attachments", () => {
       ).resolves.toEqual({
         ok: false,
         error: "session has no active delivery route: agent:main:main",
+      });
+      expect(workflowMocks.sendMessage).not.toHaveBeenCalled();
+    });
+  });
+
+  it("allows trusted external plugins that declare the active-session attachment contract", async () => {
+    await withSessionStore(async ({ storePath, filePath }) => {
+      await writeSessionEntry(storePath);
+      mockSuccessfulAttachmentDelivery();
+
+      const result = await sendPluginSessionAttachment({
+        origin: "workspace",
+        trustedOfficialInstall: true,
+        contracts: { sessionAttachments: ["active-session"] },
+        sessionKey: MAIN_SESSION_KEY,
+        files: [{ path: filePath }],
+      });
+
+      expectTelegramAttachmentResult(result, 1);
+      expect(requireFirstSendMessageParams().mediaUrls).toEqual([filePath]);
+    });
+  });
+
+  it("allows operator-approved external active-session presentations without files", async () => {
+    await withSessionStore(async ({ storePath }) => {
+      await writeSessionEntry(storePath);
+      mockSuccessfulAttachmentDelivery();
+
+      const presentation = {
+        title: "Plan Approval",
+        tone: "warning" as const,
+        blocks: [
+          { type: "text" as const, text: "Review the plan." },
+          {
+            type: "buttons" as const,
+            buttons: [
+              { label: "Approve", value: "smarter-claw-plan:a:tok", style: "success" as const },
+            ],
+          },
+        ],
+      };
+      const result = await sendPluginSessionAttachment({
+        origin: "workspace",
+        allowConversationAccess: true,
+        contracts: { sessionAttachments: ["active-session"] },
+        sessionKey: MAIN_SESSION_KEY,
+        text: "Plan approval requested.",
+        presentation,
+      });
+
+      expectTelegramAttachmentResult(result, 0);
+      const sendParams = requireFirstSendMessageParams();
+      expect(sendParams.mediaUrls).toEqual([]);
+      expect(sendParams.payloads).toEqual([
+        {
+          text: "Plan approval requested.",
+          presentation,
+        },
+      ]);
+    });
+  });
+
+  it("rejects external active-session contracts without a trust grant", async () => {
+    await withSessionStore(async ({ storePath, filePath }) => {
+      await writeSessionEntry(storePath);
+
+      await expect(
+        sendPluginSessionAttachment({
+          origin: "workspace",
+          contracts: { sessionAttachments: ["active-session"] },
+          sessionKey: MAIN_SESSION_KEY,
+          files: [{ path: filePath }],
+        }),
+      ).resolves.toEqual({
+        ok: false,
+        error:
+          'session attachments require bundled origin or contracts.sessionAttachments:["active-session"] with trusted official install or allowConversationAccess=true',
       });
       expect(workflowMocks.sendMessage).not.toHaveBeenCalled();
     });

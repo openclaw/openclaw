@@ -1906,6 +1906,27 @@ describe("loadPluginManifestRegistry", () => {
     });
   });
 
+  it("preserves active-session attachment contracts from plugin manifests", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "workflow-plan-plugin",
+      contracts: {
+        sessionAttachments: ["active-session"],
+      },
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "workflow-plan-plugin",
+      rootDir: dir,
+      origin: "workspace",
+    });
+
+    expect(registry.plugins[0]?.contracts).toEqual({
+      sessionAttachments: ["active-session"],
+    });
+  });
+
   it("preserves channel env metadata from plugin manifests", () => {
     const dir = makeTempDir();
     writeManifest(dir, {

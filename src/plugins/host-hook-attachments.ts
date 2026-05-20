@@ -3,6 +3,7 @@ import { lstat } from "node:fs/promises";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolvePathFromInput } from "../agents/path-policy.js";
 import { resolveWorkspaceRoot } from "../agents/workspace-dir.js";
+import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import { extractDeliveryInfo } from "../config/sessions/delivery-info.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -16,9 +17,11 @@ import type {
   PluginSessionAttachmentParams,
   PluginSessionAttachmentResult,
 } from "./host-hooks.js";
+import type { PluginManifestContracts } from "./manifest.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 
 const DEFAULT_ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024;
+const ACTIVE_SESSION_ATTACHMENT_CONTRACT = "active-session";
 export const attachmentProbeFs = {
   open: (...args: Parameters<typeof fsPromises.open>) => fsPromises.open(...args),
 };
@@ -128,7 +131,7 @@ export function resolveAttachmentDelivery(params: {
 }
 
 async function validateAttachmentFiles(
-  files: PluginSessionAttachmentParams["files"],
+  files: NonNullable<PluginSessionAttachmentParams["files"]>,
   maxBytes: number,
   options?: {
     forceDocumentMime?: string;
@@ -195,6 +198,24 @@ async function validateAttachmentFiles(
   return paths;
 }
 
+function canSendSessionAttachment(params: {
+  origin?: PluginOrigin;
+  trustedOfficialInstall?: boolean;
+  allowConversationAccess?: boolean;
+  contracts?: Pick<PluginManifestContracts, "sessionAttachments">;
+}): boolean {
+  if (params.origin === "bundled") {
+    return true;
+  }
+  const declaresActiveSessionAttachment = (params.contracts?.sessionAttachments ?? []).includes(
+    ACTIVE_SESSION_ATTACHMENT_CONTRACT,
+  );
+  return (
+    declaresActiveSessionAttachment &&
+    (params.trustedOfficialInstall === true || params.allowConversationAccess === true)
+  );
+}
+
 function resolveAttachmentFilePath(params: {
   filePath: string;
   config?: OpenClawConfig;
@@ -229,17 +250,30 @@ export function resolveSessionAttachmentThreadId(params: {
 }
 
 export async function sendPluginSessionAttachment(
-  params: PluginSessionAttachmentParams & { config?: OpenClawConfig; origin?: PluginOrigin },
+  params: PluginSessionAttachmentParams & {
+    config?: OpenClawConfig;
+    origin?: PluginOrigin;
+    trustedOfficialInstall?: boolean;
+    allowConversationAccess?: boolean;
+    contracts?: Pick<PluginManifestContracts, "sessionAttachments">;
+  },
 ): Promise<PluginSessionAttachmentResult> {
-  if (params.origin !== "bundled") {
-    return { ok: false, error: "session attachments are restricted to bundled plugins" };
+  if (!canSendSessionAttachment(params)) {
+    return {
+      ok: false,
+      error:
+        'session attachments require bundled origin or contracts.sessionAttachments:["active-session"] with trusted official install or allowConversationAccess=true',
+    };
   }
   const sessionKey = normalizeOptionalString(params.sessionKey);
   if (!sessionKey) {
     return { ok: false, error: "sessionKey is required" };
   }
-  if (!Array.isArray(params.files) || params.files.length === 0) {
-    return { ok: false, error: "at least one attachment file is required" };
+  const files = Array.isArray(params.files) ? params.files : [];
+  const rawText = normalizeOptionalString(params.text) ?? "";
+  const hasPresentation = params.presentation !== undefined;
+  if (files.length === 0 && !rawText && !hasPresentation) {
+    return { ok: false, error: "at least one attachment file, text, or presentation is required" };
   }
   const maxBytes =
     typeof params.maxBytes === "number" && Number.isFinite(params.maxBytes)
@@ -271,13 +305,12 @@ export async function sendPluginSessionAttachment(
       error: `attachment delivery setup failed: ${formatErrorMessage(error)}`,
     };
   }
-  const rawText = normalizeOptionalString(params.text) ?? "";
   const resolvedDelivery = resolveAttachmentDelivery({
     channel: deliveryContext.channel,
     captionFormat: params.captionFormat,
     channelHints: params.channelHints,
   });
-  const validated = await validateAttachmentFiles(params.files, maxBytes, {
+  const validated = await validateAttachmentFiles(files, maxBytes, {
     forceDocumentMime: resolvedDelivery.forceDocumentMime,
     config: params.config,
     sessionKey,
@@ -294,14 +327,26 @@ export async function sendPluginSessionAttachment(
   let result: Awaited<ReturnType<SendMessage>>;
   try {
     const sendMessage = await loadSendMessage();
+    const content = resolvedDelivery.escapePlainHtmlCaption ? escapeHtmlText(rawText) : rawText;
+    const payloads: ReplyPayload[] | undefined =
+      hasPresentation || validated.length > 0
+        ? [
+            {
+              ...(content ? { text: content } : {}),
+              ...(validated.length > 0 ? { mediaUrls: validated } : {}),
+              ...(params.presentation ? { presentation: params.presentation } : {}),
+            },
+          ]
+        : undefined;
     result = await sendMessage({
       to: deliveryContext.to,
-      content: resolvedDelivery.escapePlainHtmlCaption ? escapeHtmlText(rawText) : rawText,
+      content,
       channel: deliveryContext.channel,
       accountId: deliveryContext.accountId,
       threadId: resolvedThreadId,
       requesterSessionKey: sessionKey,
       mediaUrls: validated,
+      ...(payloads ? { payloads } : {}),
       forceDocument: resolvedDelivery.forceDocumentMime ? true : params.forceDocument,
       bestEffort: false,
       cfg: params.config,
