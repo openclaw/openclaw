@@ -364,6 +364,9 @@ describe("createAcpReplyProjector", () => {
     expect(deliveries).toStrictEqual([]);
 
     await projector.onEvent({ type: "done" });
+    expect(deliveries).toStrictEqual([]);
+
+    await projector.flush(true);
     expect(deliveries).toHaveLength(3);
     expect(deliveries[0]).toEqual({
       kind: "tool",
@@ -768,5 +771,158 @@ describe("createAcpReplyProjector", () => {
     await projector.flush(true);
 
     expect(combinedBlockText(deliveries)).toBe("AB");
+  });
+
+  describe("final_only multi-completion accumulation", () => {
+    it("accumulates text across intermediate done events in final_only mode", async () => {
+      const { deliveries, projector } = createFinalOnlyStatusToolHarness();
+
+      await projector.onEvent({
+        type: "text_delta",
+        text: "Searching...",
+        tag: "agent_message_chunk",
+      });
+      await projector.onEvent({ type: "done" });
+      expect(deliveries).toStrictEqual([]);
+
+      await projector.onEvent({
+        type: "text_delta",
+        text: "Results: found 3 items",
+        tag: "agent_message_chunk",
+      });
+      await projector.onEvent({ type: "done" });
+      expect(deliveries).toStrictEqual([]);
+
+      await projector.flush(true);
+      const finals = deliveries.filter((d) => d.kind === "final");
+      expect(finals).toHaveLength(1);
+      expect(finals[0]!.text).toBe("Searching...Results: found 3 items");
+    });
+
+    it("flushes text on error even in final_only mode", async () => {
+      const { deliveries, projector } = createFinalOnlyStatusToolHarness();
+
+      await projector.onEvent({
+        type: "text_delta",
+        text: "Partial output",
+        tag: "agent_message_chunk",
+      });
+      await projector.onEvent({ type: "error", message: "something failed" });
+
+      const finals = deliveries.filter((d) => d.kind === "final");
+      expect(finals).toHaveLength(1);
+      expect(finals[0]!.text).toBe("Partial output");
+    });
+
+    it("live mode still flushes on intermediate done events", async () => {
+      const { deliveries, projector } = createProjectorHarness(
+        createLiveCfgOverrides({ coalesceIdleMs: 0, maxChunkChars: 512 }),
+      );
+
+      await projector.onEvent({
+        type: "text_delta",
+        text: "text1",
+        tag: "agent_message_chunk",
+      });
+      await projector.onEvent({ type: "done" });
+      const afterFirst = deliveries.length;
+      expect(afterFirst).toBeGreaterThan(0);
+
+      await projector.onEvent({
+        type: "text_delta",
+        text: "text2",
+        tag: "agent_message_chunk",
+      });
+      await projector.onEvent({ type: "done" });
+      expect(deliveries.length).toBeGreaterThan(afterFirst);
+    });
+
+    it("enforces maxOutputChars across intermediate done events", async () => {
+      const { deliveries, projector } = createProjectorHarness({
+        acp: {
+          enabled: true,
+          stream: {
+            coalesceIdleMs: 0,
+            maxChunkChars: 512,
+            deliveryMode: "final_only",
+            maxOutputChars: 20,
+            tagVisibility: { tool_call: true },
+          },
+        },
+      });
+
+      // First completion: 15 chars
+      await projector.onEvent({
+        type: "text_delta",
+        text: "First: 15 chars",
+        tag: "agent_message_chunk",
+      });
+      await projector.onEvent({ type: "done" });
+
+      // Second completion: would be 20 more chars but budget is only 5 remaining
+      await projector.onEvent({
+        type: "text_delta",
+        text: "Second has 20+ chars!",
+        tag: "agent_message_chunk",
+      });
+      await projector.onEvent({ type: "done" });
+
+      await projector.flush(true);
+      const finals = deliveries.filter((d) => d.kind === "final");
+      expect(finals).toHaveLength(1);
+      // Total text must not exceed maxOutputChars (20)
+      expect(finals[0]!.text!.length).toBeLessThanOrEqual(20);
+    });
+
+    it("preserves hidden-boundary separator across intermediate done events", async () => {
+      const { deliveries, projector } = createProjectorHarness({
+        acp: {
+          enabled: true,
+          stream: {
+            coalesceIdleMs: 0,
+            maxChunkChars: 512,
+            deliveryMode: "final_only",
+            hiddenBoundarySeparator: "paragraph",
+            tagVisibility: {
+              tool_call: false,
+            },
+          },
+        },
+      });
+
+      // Text before hidden tool call
+      await projector.onEvent({
+        type: "text_delta",
+        text: "Before tool.",
+        tag: "agent_message_chunk",
+      });
+      // Hidden tool_call event sets pendingHiddenBoundary
+      await projector.onEvent({
+        type: "tool_call",
+        tag: "tool_call",
+        text: "Running search",
+        toolCallId: "call_1",
+        toolName: "search",
+        status: "completed",
+      });
+      // Intermediate done
+      await projector.onEvent({ type: "done" });
+
+      // Next text should get a paragraph separator
+      await projector.onEvent({
+        type: "text_delta",
+        text: "After tool.",
+        tag: "agent_message_chunk",
+      });
+      await projector.onEvent({ type: "done" });
+
+      await projector.flush(true);
+      const finals = deliveries.filter((d) => d.kind === "final");
+      expect(finals).toHaveLength(1);
+      // Should contain a paragraph separator (\n\n) between the two text segments
+      expect(finals[0]!.text).toContain("Before tool.");
+      expect(finals[0]!.text).toContain("After tool.");
+      expect(finals[0]!.text).toMatch(/Before tool\.\n\nAfter tool\./);
+    });
   });
 });

@@ -261,21 +261,23 @@ export function createAcpReplyProjector(params: {
     }, liveIdleFlushMs);
   };
 
-  const resetTurnState = () => {
+  const resetTurnState = (opts?: { preserveAccumulated?: boolean }) => {
     clearLiveIdleTimer();
     blockReplyPipeline.stop();
     blockReplyPipeline = createTurnBlockReplyPipeline();
-    emittedOutputChars = 0;
-    truncationNoticeEmitted = false;
     lastStatusHash = undefined;
     lastToolHash = undefined;
     lastUsageTuple = undefined;
-    lastVisibleOutputTail = undefined;
-    pendingHiddenBoundary = false;
     liveBufferText = "";
-    finalOnlyOutputText = "";
-    pendingToolDeliveries.length = 0;
     toolLifecycleById.clear();
+    if (!opts?.preserveAccumulated) {
+      emittedOutputChars = 0;
+      truncationNoticeEmitted = false;
+      lastVisibleOutputTail = undefined;
+      pendingHiddenBoundary = false;
+      finalOnlyOutputText = "";
+      pendingToolDeliveries.length = 0;
+    }
   };
 
   const flushBufferedToolDeliveries = async (force: boolean) => {
@@ -498,8 +500,15 @@ export function createAcpReplyProjector(params: {
     }
 
     if (event.type === "done" || event.type === "error") {
-      await flush(true);
-      resetTurnState();
+      if (settings.deliveryMode === "final_only" && event.type === "done") {
+        // In final_only mode, skip flush on intermediate "done" events.
+        // Text keeps accumulating in finalOnlyOutputText across completions;
+        // the turn-level flush(true) in dispatch-acp.ts delivers everything.
+        resetTurnState({ preserveAccumulated: true });
+      } else {
+        await flush(true);
+        resetTurnState();
+      }
     }
   };
 
