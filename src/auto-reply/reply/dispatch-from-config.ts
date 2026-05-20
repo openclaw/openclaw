@@ -1626,6 +1626,7 @@ export async function dispatchReplyFromConfig(
 
     const toolStartStatusesSent = new Set<string>();
     let toolStartStatusCount = 0;
+    let lastSentPlanUpdateKey: string | undefined;
     const normalizeWorkingLabel = (label: string) => {
       const collapsed = label.replace(/\s+/g, " ").trim();
       if (collapsed.length <= 80) {
@@ -1633,10 +1634,21 @@ export async function dispatchReplyFromConfig(
       }
       return `${collapsed.slice(0, 77).trimEnd()}...`;
     };
+    const normalizePlanUpdateSteps = (steps: string[] | undefined) =>
+      (steps ?? []).map((step) => step.replace(/\s+/g, " ").trim()).filter(Boolean);
+    const stripPlanStatusSuffix = (step: string) =>
+      step.replace(
+        /\s+\((?:pending|in_?progress|running|completed|complete|done|failed|error|cancelled|canceled)\)$/i,
+        "",
+      );
+    const buildPlanUpdateKey = (steps: string[] | undefined) => {
+      const normalizedSteps = normalizePlanUpdateSteps(steps);
+      return normalizedSteps.length > 0
+        ? normalizedSteps.map(stripPlanStatusSuffix).join("\n")
+        : undefined;
+    };
     const formatPlanUpdateText = (payload: { steps?: string[] }) => {
-      const steps = (payload.steps ?? [])
-        .map((step) => step.replace(/\s+/g, " ").trim())
-        .filter(Boolean);
+      const steps = normalizePlanUpdateSteps(payload.steps);
       return steps.length > 0
         ? steps.map((step, index) => `${index + 1}. ${step}`).join("\n")
         : undefined;
@@ -1682,6 +1694,11 @@ export async function dispatchReplyFromConfig(
       if (!text) {
         return false;
       }
+      const planUpdateKey = buildPlanUpdateKey(payload.steps);
+      if (planUpdateKey && planUpdateKey === lastSentPlanUpdateKey) {
+        return false;
+      }
+      lastSentPlanUpdateKey = planUpdateKey;
       const replyPayload: ReplyPayload = { text };
       if (shouldRouteToOriginating) {
         await sendPayloadAsync(replyPayload, undefined, false);

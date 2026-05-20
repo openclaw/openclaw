@@ -1755,6 +1755,106 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
   });
 
+  it("does not resend verbose plan steps when only statuses change", async () => {
+    setNoAbort();
+    const cfg = {
+      ...emptyConfig,
+      agents: {
+        defaults: {
+          verboseDefault: "on",
+        },
+      },
+    } satisfies OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      ChatType: "direct",
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onPlanUpdate?.({
+        phase: "update",
+        explanation: "Check monitoring health.",
+        steps: [
+          "Check Beszel unhealthy systems (pending)",
+          "Check Uptime Kuma down monitors (pending)",
+        ],
+      });
+      await opts?.onPlanUpdate?.({
+        phase: "update",
+        explanation: "Check monitoring health.",
+        steps: [
+          "Check Beszel unhealthy systems (inProgress)",
+          "Check Uptime Kuma down monitors (pending)",
+        ],
+      });
+      await opts?.onPlanUpdate?.({
+        phase: "update",
+        explanation: "Check monitoring health.",
+        steps: [
+          "Check Beszel unhealthy systems (completed)",
+          "Check Uptime Kuma down monitors (completed)",
+        ],
+      });
+      return { text: "done" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendToolResult).toHaveBeenCalledOnce();
+    expect(firstToolResultPayload(dispatcher)?.text).toBe(
+      "1. Check Beszel unhealthy systems (pending)\n" +
+        "2. Check Uptime Kuma down monitors (pending)",
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
+  });
+
+  it("refreshes verbose plan steps when streamed plan content grows", async () => {
+    setNoAbort();
+    const cfg = {
+      ...emptyConfig,
+      agents: {
+        defaults: {
+          verboseDefault: "on",
+        },
+      },
+    } satisfies OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      ChatType: "direct",
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onPlanUpdate?.({
+        phase: "update",
+        steps: ["Inspect code"],
+      });
+      await opts?.onPlanUpdate?.({
+        phase: "update",
+        steps: ["Inspect code", "Run focused tests"],
+      });
+      return { text: "done" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(2);
+    expect(firstToolResultPayload(dispatcher)?.text).toBe("1. Inspect code");
+    expect((dispatcher.sendToolResult as ReturnType<typeof vi.fn>).mock.calls[1]?.[0]?.text).toBe(
+      "1. Inspect code\n2. Run focused tests",
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
+  });
+
   it("skips explanation-only plan progress when verbose is enabled", async () => {
     setNoAbort();
     const cfg = {
