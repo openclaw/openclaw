@@ -144,6 +144,20 @@ describe("readSecretFileSync", () => {
     const file = await pathValue();
     expect(tryReadSecretFileSync(file, label, options)).toBe(expected);
   });
+
+  it("throws from the non-throwing helper for rejected symlinks", async () => {
+    const link = await createSecretPath(async (dir) => {
+      const target = path.join(dir, "target.txt");
+      const symlink = path.join(dir, "secret-link.txt");
+      await fsPromises.writeFile(target, "top-secret\n", "utf8");
+      await fsPromises.symlink(target, symlink);
+      return symlink;
+    });
+
+    expect(() =>
+      tryReadSecretFileSync(link, "Telegram bot token", { rejectSymlink: true }),
+    ).toThrow("must not be a symlink");
+  });
 });
 
 describe("writePrivateSecretFileAtomic", () => {
