@@ -188,6 +188,12 @@ function firstAuthCheckerParams() {
 }
 
 describe("handleModelsCommand", () => {
+  it("ignores longer command names that only prefix-match /models", async () => {
+    const result = await handleModelsCommand(buildParams("/models-check openai"), true);
+
+    expect(result).toBeNull();
+  });
+
   it("shows a simple providers menu on text surfaces", async () => {
     const result = await handleModelsCommand(buildParams("/models"), true);
 

@@ -10,18 +10,25 @@ export type ParsedSlashCommand =
   | { ok: true; action: string; args: string }
   | { ok: false; message: string };
 
-function parseSlashCommandActionArgs(raw: string, slash: string): SlashCommandParseResult {
+export function sliceSlashCommandArgs(raw: string, slash: string): string | null {
   const trimmed = raw.trim();
   const slashLower = normalizeLowercaseStringOrEmpty(slash);
   if (!normalizeLowercaseStringOrEmpty(trimmed).startsWith(slashLower)) {
-    return { kind: "no-match" };
+    return null;
   }
   const charAfterSlash = trimmed.charAt(slash.length);
   if (charAfterSlash && !/[\s:]/.test(charAfterSlash)) {
-    return { kind: "no-match" };
+    return null;
   }
   const restOffset = charAfterSlash === ":" ? slash.length + 1 : slash.length;
-  const rest = trimmed.slice(restOffset).trim();
+  return trimmed.slice(restOffset).trim();
+}
+
+function parseSlashCommandActionArgs(raw: string, slash: string): SlashCommandParseResult {
+  const rest = sliceSlashCommandArgs(raw, slash);
+  if (rest === null) {
+    return { kind: "no-match" };
+  }
   if (!rest) {
     return { kind: "empty" };
   }

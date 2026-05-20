@@ -322,6 +322,18 @@ function buildAllowlistParams(
 }
 
 describe("handleAllowlistCommand", () => {
+  it("ignores longer command names that only prefix-match /allowlist", async () => {
+    const result = await handleAllowlistCommand(
+      buildAllowlistParams("/allowlist-check list dm", {
+        commands: { text: true },
+        channels: { telegram: { allowFrom: ["123"] } },
+      } as OpenClawConfig),
+      true,
+    );
+
+    expect(result).toBeNull();
+  });
+
   it("lists config and store allowFrom entries", async () => {
     readChannelAllowFromStoreMock.mockResolvedValueOnce(["456"]);
 
