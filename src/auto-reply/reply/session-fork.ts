@@ -5,8 +5,23 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
  * Default max parent token count beyond which thread/session parent forking is skipped.
  * This prevents new thread sessions from inheriting near-full parent context.
  * See #26905.
+ *
+ * Bumped from the original 100k default to 1M to match modern frontier-model
+ * context windows. Can be overridden via the OPENCLAW_PARENT_FORK_MAX_TOKENS
+ * environment variable (set to 0 to disable the cap entirely).
  */
-const DEFAULT_PARENT_FORK_MAX_TOKENS = 100_000;
+const DEFAULT_PARENT_FORK_MAX_TOKENS = 1_000_000;
+
+function resolveParentForkMaxTokens(): number {
+  const raw = process.env.OPENCLAW_PARENT_FORK_MAX_TOKENS;
+  if (raw !== undefined && raw !== "") {
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed) && parsed >= 0) {
+      return Math.floor(parsed);
+    }
+  }
+  return DEFAULT_PARENT_FORK_MAX_TOKENS;
+}
 const sessionForkRuntimeLoader = createLazyImportLoader(() => import("./session-fork.runtime.js"));
 
 export type ParentForkDecision =
@@ -41,7 +56,10 @@ export async function resolveParentForkDecision(params: {
   parentEntry: SessionEntry;
   storePath: string;
 }): Promise<ParentForkDecision> {
-  const maxTokens = DEFAULT_PARENT_FORK_MAX_TOKENS;
+  const maxTokens = resolveParentForkMaxTokens();
+  if (maxTokens === 0) {
+    return { status: "fork", maxTokens };
+  }
   const parentTokens = await resolveParentForkTokenCount({
     parentEntry: params.parentEntry,
     storePath: params.storePath,
