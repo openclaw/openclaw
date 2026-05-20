@@ -130,7 +130,7 @@ import {
   type AssistantDisplayContentBlock,
 } from "./chat-assistant-content.js";
 import {
-  createInternalSourceReplyBroadcaster,
+  createInternalSourceReplyProjector,
   isInternalSourceReplyPayload,
 } from "./chat-internal-source-reply.js";
 import { normalizeWebchatReplyMediaPathsForDisplay } from "./chat-reply-media.js";
@@ -2616,7 +2616,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           `webchat transcript append failed for media reply: ${appended.error ?? "unknown error"}`,
         );
       };
-      const internalSourceReplyBroadcaster = createInternalSourceReplyBroadcaster({
+      const internalSourceReplyProjector = createInternalSourceReplyProjector({
         cfg,
         sessionKey,
         agentId,
@@ -2648,7 +2648,7 @@ export const chatHandlers: GatewayRequestHandlers = {
             case "final":
               deliveredReplies.push({ payload, kind: info.kind });
               await appendWebchatAgentMediaTranscriptIfNeeded(payload);
-              await internalSourceReplyBroadcaster.broadcastIfNeeded({
+              await internalSourceReplyProjector.projectIfNeeded({
                 payload,
                 agentRunStarted,
               });

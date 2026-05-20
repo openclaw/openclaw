@@ -252,7 +252,7 @@ async function buildInternalChatAssistantMediaMessage(
   });
 }
 
-export function createInternalSourceReplyBroadcaster(params: {
+export function createInternalSourceReplyProjector(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId: string;
@@ -266,7 +266,7 @@ export function createInternalSourceReplyBroadcaster(params: {
   context: Pick<GatewayRequestContext, "logGateway">;
   resolveTranscriptPath: ResolveTranscriptPath;
 }) {
-  let broadcastCount = 0;
+  let projectionCount = 0;
 
   const rewriteMirrorContent = async (input: {
     transcriptPath: string;
@@ -337,7 +337,7 @@ export function createInternalSourceReplyBroadcaster(params: {
   };
 
   return {
-    async broadcastIfNeeded(input: { payload: ReplyPayload; agentRunStarted: boolean }) {
+    async projectIfNeeded(input: { payload: ReplyPayload; agentRunStarted: boolean }) {
       if (!input.agentRunStarted || !isInternalSourceReplyPayload(input.payload)) {
         return;
       }
@@ -410,8 +410,8 @@ export function createInternalSourceReplyBroadcaster(params: {
       if (!displayReply && !broadcastAssistantContent?.length) {
         return;
       }
-      const sourceReplyIndex = broadcastCount;
-      broadcastCount += 1;
+      const sourceReplyIndex = projectionCount;
+      projectionCount += 1;
       // The model run may already have emitted its final event; use a distinct
       // run id so TUI/WebChat clients do not discard this visible source reply.
       const sourceReplyRunId =
