@@ -183,11 +183,16 @@ async function migrateExistingModelsJsonOnlyProviderApiKeys(params: {
       copyToAgents: false,
       displayName: "Migrated from models.json",
     } as const;
-    await upsertAuthProfileWithLock({
+    const updatedStore = await upsertAuthProfileWithLock({
       agentDir: params.agentDir,
       profileId,
       credential,
     });
+    if (updatedStore === null) {
+      throw new Error(
+        `Failed to migrate existing models.json provider apiKey for ${providerKey}; keeping existing models.json unchanged`,
+      );
+    }
     store.profiles[profileId] = credential;
   }
 }

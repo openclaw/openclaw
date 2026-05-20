@@ -13,8 +13,12 @@ import { readGeneratedModelsJson } from "./models-config.test-utils.js";
 
 const planOpenClawModelsJsonMock = vi.fn();
 const writePrivateStoreTextWriteMock = vi.fn();
+const upsertAuthProfileWithLockMock = vi.fn();
 let actualPrivateFileStore:
   | typeof import("../infra/private-file-store.js").privateFileStore
+  | undefined;
+let actualUpsertAuthProfileWithLock:
+  | typeof import("./auth-profiles.js").upsertAuthProfileWithLock
   | undefined;
 
 installModelsConfigTestHooks();
@@ -119,6 +123,15 @@ beforeAll(async () => {
       },
     };
   });
+  vi.doMock("./auth-profiles.js", async () => {
+    const actual = await vi.importActual<typeof import("./auth-profiles.js")>("./auth-profiles.js");
+    actualUpsertAuthProfileWithLock = actual.upsertAuthProfileWithLock;
+    return {
+      ...actual,
+      upsertAuthProfileWithLock: (...args: Parameters<typeof actual.upsertAuthProfileWithLock>) =>
+        upsertAuthProfileWithLockMock(...args),
+    };
+  });
   ({ ensureOpenClawModelsJson } = await import("./models-config.js"));
   ({ clearCurrentPluginMetadataSnapshot, setCurrentPluginMetadataSnapshot } =
     await import("../plugins/current-plugin-metadata-snapshot.js"));
@@ -145,6 +158,12 @@ beforeEach(() => {
       action: "write",
       contents: `${JSON.stringify({ providers: params.cfg?.models?.providers ?? {} }, null, 2)}\n`,
     }));
+  upsertAuthProfileWithLockMock.mockReset().mockImplementation(async (...args) => {
+    if (!actualUpsertAuthProfileWithLock) {
+      throw new Error("auth profile upsert mock not initialized");
+    }
+    return await actualUpsertAuthProfileWithLock(...args);
+  });
 });
 
 describe("models-config write serialization", () => {
@@ -250,6 +269,57 @@ describe("models-config write serialization", () => {
         key: "sk-existing-models-json-only",
         copyToAgents: false,
       });
+    });
+  });
+
+  it("keeps existing models.json unchanged when api key migration cannot persist", async () => {
+    await withModelsTempHome(async (home) => {
+      const agentDir = path.join(home, "agent");
+      await fs.mkdir(agentDir, { recursive: true });
+      await fs.writeFile(
+        path.join(agentDir, "models.json"),
+        `${JSON.stringify(
+          {
+            providers: {
+              custom: {
+                baseUrl: "https://custom.example/v1",
+                api: "openai-completions",
+                apiKey: "sk-existing-models-json-only", // pragma: allowlist secret
+                models: [],
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      upsertAuthProfileWithLockMock.mockResolvedValueOnce(null);
+
+      await expect(
+        ensureOpenClawModelsJson(
+          {
+            models: {
+              mode: "merge",
+              providers: {
+                custom: {
+                  baseUrl: "https://custom.example/v1",
+                  api: "openai-completions",
+                  models: [],
+                },
+              },
+            },
+          },
+          agentDir,
+        ),
+      ).rejects.toThrow(/Failed to migrate existing models\.json provider apiKey for custom/);
+
+      expect(writePrivateStoreTextWriteMock).not.toHaveBeenCalled();
+      const modelsJson = JSON.parse(
+        await fs.readFile(path.join(agentDir, "models.json"), "utf8"),
+      ) as {
+        providers: Record<string, { apiKey?: string }>;
+      };
+      expect(modelsJson.providers.custom?.apiKey).toBe("sk-existing-models-json-only");
     });
   });
 
