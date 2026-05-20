@@ -64,6 +64,7 @@ export function createPluginApprovalHandlers(
         title: string;
         description: string;
         severity?: string | null;
+        metadata?: PluginApprovalRequestPayload["metadata"];
         toolName?: string | null;
         toolCallId?: string | null;
         allowedDecisions?: string[] | null;
@@ -90,6 +91,7 @@ export function createPluginApprovalHandlers(
         title: p.title,
         description: p.description,
         severity: (p.severity as PluginApprovalRequestPayload["severity"]) ?? null,
+        ...(p.metadata !== undefined ? { metadata: p.metadata } : {}),
         toolName: p.toolName ?? null,
         toolCallId: p.toolCallId ?? null,
         ...(Array.isArray(p.allowedDecisions)

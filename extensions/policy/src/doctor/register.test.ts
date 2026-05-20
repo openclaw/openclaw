@@ -121,7 +121,7 @@ describe("registerPolicyDoctorChecks", () => {
     expect(duplicateChecks).toEqual([]);
   });
 
-  it("reports a missing policy file when the policy extension is enabled", async () => {
+  it("reports a missing policy file when the Policy plugin is enabled", async () => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     await fs.writeFile(configPath, "{}", "utf-8");
 

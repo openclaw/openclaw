@@ -4,6 +4,7 @@ import {
   PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH,
   PLUGIN_APPROVAL_TITLE_MAX_LENGTH,
 } from "../../../infra/plugin-approvals.js";
+import { PluginJsonValueSchema } from "./plugins.js";
 import { NonEmptyString } from "./primitives.js";
 
 export const PluginApprovalRequestParamsSchema = Type.Object(
@@ -12,6 +13,7 @@ export const PluginApprovalRequestParamsSchema = Type.Object(
     title: Type.String({ minLength: 1, maxLength: PLUGIN_APPROVAL_TITLE_MAX_LENGTH }),
     description: Type.String({ minLength: 1, maxLength: PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH }),
     severity: Type.Optional(Type.String({ enum: ["info", "warning", "critical"] })),
+    metadata: Type.Optional(PluginJsonValueSchema),
     toolName: Type.Optional(Type.String()),
     toolCallId: Type.Optional(Type.String()),
     allowedDecisions: Type.Optional(

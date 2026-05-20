@@ -97,7 +97,7 @@ export function evaluatePolicy(ctx: HealthCheckContext): Promise<PolicyEvaluatio
 const policyMissingFileCheck: HealthCheck = {
   id: CHECK_IDS.policyMissingFile,
   kind: "plugin",
-  description: "The enabled policy extension has a policy file to verify.",
+  description: "The enabled Policy plugin has a policy file to verify.",
   source: "policy",
   async detect(ctx) {
     return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyMissingFile);
@@ -244,7 +244,7 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
     findings.push({
       checkId: CHECK_IDS.policyMissingFile,
       severity: "warning",
-      message: `${policyPath} is missing for the enabled policy extension.`,
+      message: `${policyPath} is missing for the enabled Policy plugin.`,
       source: "policy",
       path: policyPath,
       fixHint: `Restore ${policyPath} or add the policy artifact for this workspace.`,
@@ -300,12 +300,7 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
 
   const metadataRequirementFindings = toolMetadataRequirementFindings(policy, policyFile.ocDocName);
   const policyFindings: HealthFinding[] = [
-    ...channelFindings(
-      policy,
-      policyFile.displayName,
-      policyFile.ocDocName,
-      evidence,
-    ),
+    ...channelFindings(policy, policyFile.displayName, policyFile.ocDocName, evidence),
     ...metadataRequirementFindings,
   ];
   const requiredMetadata =
