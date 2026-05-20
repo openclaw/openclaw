@@ -80,6 +80,7 @@ const MODEL_STREAM_COOPERATIVE_YIELD_MAX_EVENTS = 64;
 const RESPONSE_FAILED_NO_DETAILS_MESSAGE = "Unknown error (no error details in response)";
 const MAX_OPENAI_STRICT_TOOL_DOWNGRADE_DIAGNOSTIC_KEYS = 256;
 const OPENAI_RESPONSES_REASONING_REPLAY_META_KEY = "__openclaw_replay";
+const OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY = "openclawReasoningReplay";
 const log = createSubsystemLogger("openai-transport");
 const loggedOpenAIStrictToolDowngradeDiagnosticKeys = new Set<string>();
 
@@ -92,6 +93,7 @@ type OpenAIResponsesReasoningReplayMetadata = {
   model: string;
   baseUrlHash?: string;
   sessionHash?: string;
+  authProfileHash?: string;
 };
 type ReplayableResponseReasoningItem = Omit<ResponseReasoningItem, "id"> & {
   id?: string;
@@ -107,6 +109,7 @@ type BaseStreamOptions = {
   apiKey?: string;
   cacheRetention?: "none" | "short" | "long";
   sessionId?: string;
+  authProfileId?: string;
   onPayload?: (payload: unknown, model: Model<Api>) => unknown;
   headers?: Record<string, string>;
   openclawCodeModeToolSurface?: boolean;
@@ -163,6 +166,7 @@ type OpenAIResponsesReplayContext = {
   model: string;
   baseUrlHash?: string;
   sessionHash?: string;
+  authProfileHash?: string;
 };
 
 type OpenAICompletionsOptions = BaseStreamOptions & {
@@ -800,7 +804,7 @@ function hashOptionalReplayContextValue(value: string | undefined): string | und
 
 function buildOpenAIResponsesReplayContext(
   model: Model<Api>,
-  options?: Pick<BaseStreamOptions, "sessionId">,
+  options?: Pick<BaseStreamOptions, "authProfileId" | "sessionId">,
 ): OpenAIResponsesReplayContext {
   return {
     provider: model.provider,
@@ -808,12 +812,13 @@ function buildOpenAIResponsesReplayContext(
     model: model.id,
     baseUrlHash: hashOptionalReplayContextValue(model.baseUrl),
     sessionHash: hashOptionalReplayContextValue(options?.sessionId),
+    authProfileHash: hashOptionalReplayContextValue(options?.authProfileId),
   };
 }
 
 function buildOpenAIResponsesReasoningReplayMetadata(
   model: Model<Api>,
-  options?: Pick<BaseStreamOptions, "sessionId">,
+  options?: Pick<BaseStreamOptions, "authProfileId" | "sessionId">,
 ): OpenAIResponsesReasoningReplayMetadata {
   return {
     v: 1,
@@ -825,7 +830,7 @@ function buildOpenAIResponsesReasoningReplayMetadata(
 function tagOpenAIResponsesReasoningReplayItem(
   item: Record<string, unknown>,
   model: Model<Api>,
-  options?: Pick<BaseStreamOptions, "sessionId">,
+  options?: Pick<BaseStreamOptions, "authProfileId" | "sessionId">,
 ): Record<string, unknown> {
   if (!("encrypted_content" in item)) {
     return item;
@@ -853,7 +858,8 @@ function isOpenAIResponsesReasoningReplayMetadata(
     typeof record.api === "string" &&
     typeof record.model === "string" &&
     (record.baseUrlHash === undefined || typeof record.baseUrlHash === "string") &&
-    (record.sessionHash === undefined || typeof record.sessionHash === "string")
+    (record.sessionHash === undefined || typeof record.sessionHash === "string") &&
+    (record.authProfileHash === undefined || typeof record.authProfileHash === "string")
   );
 }
 
@@ -867,20 +873,31 @@ function encryptedReasoningReplayMetadataMatches(
     metadata.api === context.api &&
     metadata.model === context.model &&
     metadata.baseUrlHash === context.baseUrlHash &&
-    metadata.sessionHash === context.sessionHash
+    metadata.sessionHash === context.sessionHash &&
+    metadata.authProfileHash === context.authProfileHash
   );
+}
+
+function readOpenAIResponsesReasoningReplayBlockMetadata(
+  block: Record<string, unknown>,
+): OpenAIResponsesReasoningReplayMetadata | undefined {
+  const value = block[OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY];
+  return isOpenAIResponsesReasoningReplayMetadata(value) ? value : undefined;
 }
 
 function prepareOpenAIResponsesReasoningItemForReplay(
   item: ReplayableResponseReasoningItem,
   context: OpenAIResponsesReplayContext,
+  blockMetadata?: OpenAIResponsesReasoningReplayMetadata,
 ): ReplayableResponseReasoningItem {
   const { [OPENAI_RESPONSES_REASONING_REPLAY_META_KEY]: rawMetadata, ...rest } =
     item as ReplayableResponseReasoningItem & Record<string, unknown>;
   if (!("encrypted_content" in rest)) {
     return rest as ReplayableResponseReasoningItem;
   }
-  const metadata = isOpenAIResponsesReasoningReplayMetadata(rawMetadata) ? rawMetadata : undefined;
+  const metadata =
+    blockMetadata ??
+    (isOpenAIResponsesReasoningReplayMetadata(rawMetadata) ? rawMetadata : undefined);
   if (encryptedReasoningReplayMetadataMatches(metadata, context)) {
     return rest as ReplayableResponseReasoningItem;
   }
@@ -958,6 +975,7 @@ function convertResponsesMessages(
     replayReasoningItems?: boolean;
     replayResponsesItemIds?: boolean;
     sessionId?: string;
+    authProfileId?: string;
   },
 ): ResponseInput {
   const messages: ResponseInput = [];
@@ -965,6 +983,7 @@ function convertResponsesMessages(
   const shouldReplayResponsesItemIds = options?.replayResponsesItemIds ?? true;
   const replayContext = buildOpenAIResponsesReplayContext(model, {
     sessionId: options?.sessionId,
+    authProfileId: options?.authProfileId,
   });
   const shouldNormalizeSameModelToolCallIds = model.provider === "github-copilot";
   const sanitizeIdPart = (part: string) => part.replace(/[^a-zA-Z0-9_-]/g, "_").replace(/_+$/, "");
@@ -1065,6 +1084,9 @@ function convertResponsesMessages(
             const replayableReasoningItem = prepareOpenAIResponsesReasoningItemForReplay(
               reasoningItem,
               replayContext,
+              readOpenAIResponsesReasoningReplayBlockMetadata(
+                block as unknown as Record<string, unknown>,
+              ),
             );
             if (!shouldReplayResponsesItemIds) {
               delete replayableReasoningItem.id;
@@ -1312,6 +1334,7 @@ async function processResponsesStream(
     firstEventTimeoutMs?: number;
     signal?: AbortSignal;
     sessionId?: string;
+    authProfileId?: string;
   },
 ) {
   let currentItem: Record<string, unknown> | null = null;
@@ -1416,11 +1439,14 @@ async function processResponsesStream(
               .join("\n\n")
           : "";
         currentBlock.thinking = summary;
-        currentBlock.thinkingSignature = JSON.stringify(
-          tagOpenAIResponsesReasoningReplayItem(item, model, {
-            sessionId: options?.sessionId,
-          }),
-        );
+        currentBlock.thinkingSignature = JSON.stringify(item);
+        if ("encrypted_content" in item) {
+          currentBlock[OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY] =
+            buildOpenAIResponsesReasoningReplayMetadata(model, {
+              authProfileId: options?.authProfileId,
+              sessionId: options?.sessionId,
+            });
+        }
         stream.push({
           type: "thinking_end",
           contentIndex: blockIndex(),
@@ -1654,6 +1680,7 @@ function createOpenAIResponsesClient(
 
 export function createOpenAIResponsesTransportStreamFn(): StreamFn {
   return (model, context, options) => {
+    const responsesOptions = options as OpenAIResponsesOptions | undefined;
     const eventStream = createAssistantMessageEventStream();
     const stream = eventStream as unknown as { push(event: unknown): void; end(): void };
     void (async () => {
@@ -1692,7 +1719,7 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
         let params = buildOpenAIResponsesParams(
           model,
           context,
-          options as OpenAIResponsesOptions,
+          responsesOptions,
           turnState?.metadata,
         );
         const nextParams = await options?.onPayload?.(params, model);
@@ -1735,9 +1762,10 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
         );
         stream.push({ type: "start", partial: output as never });
         await processResponsesStream(responseStream, output, stream, model, {
-          serviceTier: (options as OpenAIResponsesOptions | undefined)?.serviceTier,
+          serviceTier: responsesOptions?.serviceTier,
           applyServiceTierPricing,
           signal: options?.signal,
+          authProfileId: responsesOptions?.authProfileId,
           sessionId: options?.sessionId,
         });
         if (options?.signal?.aborted) {
@@ -1964,6 +1992,7 @@ export function buildOpenAIResponsesParams(
       supportsDeveloperRole,
       replayReasoningItems: true,
       replayResponsesItemIds: !isNativeCodexResponses,
+      authProfileId: options?.authProfileId,
       sessionId: options?.sessionId,
     },
   );
@@ -2056,6 +2085,7 @@ export function buildOpenAIResponsesParams(
 
 export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
   return (model, context, options) => {
+    const responsesOptions = options as OpenAIResponsesOptions | undefined;
     const eventStream = createAssistantMessageEventStream();
     const stream = eventStream as unknown as { push(event: unknown): void; end(): void };
     void (async () => {
@@ -2095,7 +2125,7 @@ export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
         let params = buildAzureOpenAIResponsesParams(
           model,
           context,
-          options as OpenAIResponsesOptions | undefined,
+          responsesOptions,
           deploymentName,
           turnState?.metadata,
         );
@@ -2139,6 +2169,7 @@ export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
         await processResponsesStream(responseStream, output, stream, model, {
           firstEventTimeoutMs: AZURE_RESPONSES_FIRST_EVENT_TIMEOUT_MS,
           signal: options?.signal,
+          authProfileId: responsesOptions?.authProfileId,
           sessionId: options?.sessionId,
         });
         if (options?.signal?.aborted) {

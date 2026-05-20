@@ -324,10 +324,17 @@ describe("openai transport stream", () => {
       output,
       { push: vi.fn() },
       model,
-      { sessionId: "session-123" },
+      { authProfileId: "openai-codex:oauth", sessionId: "session-123" },
     );
 
-    const thinkingBlock = output.content[0] as { thinkingSignature?: string };
+    const expectedReplayMetadata = testing.buildOpenAIResponsesReasoningReplayMetadata(model, {
+      authProfileId: "openai-codex:oauth",
+      sessionId: "session-123",
+    });
+    const thinkingBlock = output.content[0] as {
+      thinkingSignature?: string;
+      openclawReasoningReplay?: unknown;
+    };
     const replayItem = JSON.parse(thinkingBlock.thinkingSignature ?? "{}") as Record<
       string,
       unknown
@@ -336,10 +343,9 @@ describe("openai transport stream", () => {
       type: "reasoning",
       id: "rs_123",
       encrypted_content: "ciphertext",
-      __openclaw_replay: testing.buildOpenAIResponsesReasoningReplayMetadata(model, {
-        sessionId: "session-123",
-      }),
     });
+    expect(replayItem).not.toHaveProperty("__openclaw_replay");
+    expect(thinkingBlock.openclawReasoningReplay).toEqual(expectedReplayMetadata);
   });
 
   it("clamps Responses cached prompt usage at zero", async () => {
@@ -2308,16 +2314,17 @@ describe("openai transport stream", () => {
               {
                 type: "thinking",
                 thinking: "Need a tool.",
-                thinkingSignature: JSON.stringify(
-                  testing.tagOpenAIResponsesReasoningReplayItem(
-                    {
-                      type: "reasoning",
-                      id: "rs_prior",
-                      encrypted_content: "ciphertext",
-                    },
-                    model,
-                    { sessionId: "session-123" },
-                  ),
+                thinkingSignature: JSON.stringify({
+                  type: "reasoning",
+                  id: "rs_prior",
+                  encrypted_content: "ciphertext",
+                }),
+                openclawReasoningReplay: testing.buildOpenAIResponsesReasoningReplayMetadata(
+                  model,
+                  {
+                    authProfileId: "openai-codex:oauth",
+                    sessionId: "session-123",
+                  },
                 ),
               },
               {
@@ -2340,7 +2347,7 @@ describe("openai transport stream", () => {
         ],
         tools: [],
       } as never,
-      { sessionId: "session-123" },
+      { authProfileId: "openai-codex:oauth", sessionId: "session-123" },
     ) as {
       input?: Array<{
         type?: string;
@@ -2414,16 +2421,17 @@ describe("openai transport stream", () => {
               {
                 type: "thinking",
                 thinking: "Need a tool.",
-                thinkingSignature: JSON.stringify(
-                  testing.tagOpenAIResponsesReasoningReplayItem(
-                    {
-                      type: "reasoning",
-                      id: "rs_prior",
-                      encrypted_content: "ciphertext",
-                    },
-                    model,
-                    { sessionId: "different-session" },
-                  ),
+                thinkingSignature: JSON.stringify({
+                  type: "reasoning",
+                  id: "rs_prior",
+                  encrypted_content: "ciphertext",
+                }),
+                openclawReasoningReplay: testing.buildOpenAIResponsesReasoningReplayMetadata(
+                  model,
+                  {
+                    authProfileId: "openai-codex:oauth",
+                    sessionId: "different-session",
+                  },
                 ),
               },
             ],
@@ -2431,7 +2439,7 @@ describe("openai transport stream", () => {
         ],
         tools: [],
       } as never,
-      { sessionId: "session-123" },
+      { authProfileId: "openai-codex:oauth", sessionId: "session-123" },
     ) as {
       input?: Array<{
         type?: string;
@@ -2446,6 +2454,155 @@ describe("openai transport stream", () => {
       id: "rs_prior",
     });
     expect(reasoningItem).not.toHaveProperty("encrypted_content");
+  });
+
+  it("strips encrypted reasoning replay when the auth profile provenance changes", () => {
+    const model = {
+      id: "gpt-5.4",
+      name: "GPT-5.4",
+      api: "openai-codex-responses",
+      provider: "openai-codex",
+      baseUrl: "https://proxy.example.com/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-codex-responses">;
+
+    const params = buildOpenAIResponsesParams(
+      model,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            api: "openai-codex-responses",
+            provider: "openai-codex",
+            model: "gpt-5.4",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            timestamp: 1,
+            content: [
+              {
+                type: "thinking",
+                thinking: "Need a tool.",
+                thinkingSignature: JSON.stringify({
+                  type: "reasoning",
+                  id: "rs_prior",
+                  encrypted_content: "ciphertext",
+                }),
+                openclawReasoningReplay: testing.buildOpenAIResponsesReasoningReplayMetadata(
+                  model,
+                  {
+                    authProfileId: "openai-codex:old-oauth",
+                    sessionId: "session-123",
+                  },
+                ),
+              },
+            ],
+          },
+        ],
+        tools: [],
+      } as never,
+      { authProfileId: "openai-codex:new-oauth", sessionId: "session-123" },
+    ) as {
+      input?: Array<{
+        type?: string;
+        id?: string;
+        encrypted_content?: string;
+      }>;
+    };
+
+    const reasoningItem = params.input?.find((item) => item.type === "reasoning");
+    expectRecordFields(reasoningItem, {
+      type: "reasoning",
+      id: "rs_prior",
+    });
+    expect(reasoningItem).not.toHaveProperty("encrypted_content");
+  });
+
+  it("keeps embedded replay provenance as a compatibility fallback", () => {
+    const model = {
+      id: "gpt-5.4",
+      name: "GPT-5.4",
+      api: "openai-codex-responses",
+      provider: "openai-codex",
+      baseUrl: "https://proxy.example.com/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-codex-responses">;
+
+    const params = buildOpenAIResponsesParams(
+      model,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            api: "openai-codex-responses",
+            provider: "openai-codex",
+            model: "gpt-5.4",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            timestamp: 1,
+            content: [
+              {
+                type: "thinking",
+                thinking: "Need a tool.",
+                thinkingSignature: JSON.stringify(
+                  testing.tagOpenAIResponsesReasoningReplayItem(
+                    {
+                      type: "reasoning",
+                      id: "rs_prior",
+                      encrypted_content: "ciphertext",
+                    },
+                    model,
+                    {
+                      authProfileId: "openai-codex:oauth",
+                      sessionId: "session-123",
+                    },
+                  ),
+                ),
+              },
+            ],
+          },
+        ],
+        tools: [],
+      } as never,
+      { authProfileId: "openai-codex:oauth", sessionId: "session-123" },
+    ) as {
+      input?: Array<{
+        type?: string;
+        id?: string;
+        encrypted_content?: string;
+      }>;
+    };
+
+    const reasoningItem = params.input?.find((item) => item.type === "reasoning");
+    expectRecordFields(reasoningItem, {
+      type: "reasoning",
+      id: "rs_prior",
+      encrypted_content: "ciphertext",
+    });
+    expect(reasoningItem).not.toHaveProperty("__openclaw_replay");
   });
 
   it("strips nested encrypted reasoning content from retry payloads without changing ids", () => {
