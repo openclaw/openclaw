@@ -780,6 +780,63 @@ async function rotateOversizedCodexAppServerStartupBinding(params: {
   return binding;
 }
 
+export type CodexAppServerStartupCloseDiagnosticsParams = {
+  params: EmbeddedRunAttemptParams;
+  attempt: number;
+  maxAttempts: number;
+  nextAttempt?: number;
+  clearedSharedClient: boolean;
+  error: unknown;
+  startupAuthProfileId?: string;
+  sessionAgentId?: string;
+  effectiveWorkspace: string;
+  sandboxSessionKey: string;
+  startupBinding?: CodexAppServerThreadBinding;
+};
+
+function buildCodexAppServerStartupCloseDiagnostics({
+  params,
+  attempt,
+  maxAttempts,
+  nextAttempt,
+  clearedSharedClient,
+  error,
+  startupAuthProfileId,
+  sessionAgentId,
+  effectiveWorkspace,
+  sandboxSessionKey,
+  startupBinding,
+}: CodexAppServerStartupCloseDiagnosticsParams): Record<string, unknown> {
+  const observability = params.runtimePlan?.observability;
+  return {
+    attempt,
+    ...(nextAttempt ? { nextAttempt } : {}),
+    maxAttempts,
+    clearedSharedClient,
+    error: formatErrorMessage(error),
+    runId: params.runId,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    sandboxSessionKey,
+    ...(sessionAgentId ? { sessionAgentId } : {}),
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    provider: params.provider,
+    modelId: params.modelId,
+    ...(observability?.resolvedRef ? { resolvedRef: observability.resolvedRef } : {}),
+    ...(observability?.provider ? { resolvedProvider: observability.provider } : {}),
+    ...(observability?.modelId ? { resolvedModelId: observability.modelId } : {}),
+    ...(observability?.harnessId ? { harnessId: observability.harnessId } : {}),
+    ...(startupAuthProfileId ? { authProfileId: startupAuthProfileId } : {}),
+    ...(params.authProfileId ? { requestedAuthProfileId: params.authProfileId } : {}),
+    workspaceDir: params.workspaceDir,
+    effectiveWorkspace,
+    sessionFile: params.sessionFile,
+    ...(startupBinding?.threadId ? { previousThreadId: startupBinding.threadId } : {}),
+    ...(startupBinding?.model ? { previousThreadModel: startupBinding.model } : {}),
+    ...(startupBinding?.cwd ? { previousThreadCwd: startupBinding.cwd } : {}),
+  };
+}
+
 export async function runCodexAppServerAttempt(
   params: EmbeddedRunAttemptParams,
   options: {
@@ -1337,24 +1394,36 @@ export async function runCodexAppServerAttempt(
             if (attempt >= CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS) {
               embeddedAgentLog.warn(
                 "codex app-server connection closed during startup; retries exhausted",
-                {
+                buildCodexAppServerStartupCloseDiagnostics({
+                  params,
                   attempt,
                   maxAttempts: CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS,
                   clearedSharedClient,
-                  error: formatErrorMessage(error),
-                },
+                  error,
+                  startupAuthProfileId,
+                  sessionAgentId,
+                  effectiveWorkspace,
+                  sandboxSessionKey,
+                  startupBinding,
+                }),
               );
               throw error;
             }
             embeddedAgentLog.warn(
               "codex app-server connection closed during startup; restarting app-server and retrying",
-              {
+              buildCodexAppServerStartupCloseDiagnostics({
+                params,
                 attempt,
                 nextAttempt: attempt + 1,
                 maxAttempts: CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS,
                 clearedSharedClient,
-                error: formatErrorMessage(error),
-              },
+                error,
+                startupAuthProfileId,
+                sessionAgentId,
+                effectiveWorkspace,
+                sandboxSessionKey,
+                startupBinding,
+              }),
             );
           }
         }
@@ -4848,6 +4917,7 @@ export const testing = {
   rotateOversizedCodexAppServerStartupBinding,
   resolveCodexAppServerSandboxPolicyForOpenClawSandbox,
   resolveCodexAppServerForOpenClawToolPolicy,
+  buildCodexAppServerStartupCloseDiagnostics,
   resolveOpenClawCodingToolsSessionKeys,
   shouldEnableCodexAppServerNativeToolSurface,
   shouldForceMessageTool,
