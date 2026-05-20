@@ -6,6 +6,7 @@ import {
   mergeWithExistingProviderSecrets,
   type ExistingProviderConfig,
 } from "./models-config.merge.js";
+import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
 import {
   applyNativeStreamingUsageCompat,
   enforceSourceManagedProviderSecrets,
@@ -105,6 +106,28 @@ function resolveProvidersForMode(params: {
   });
 }
 
+function stripResolvedApiKeysForModelsJson(
+  providers: Record<string, ProviderConfig>,
+): Record<string, ProviderConfig> {
+  let changed = false;
+  const sanitizedProviders: Record<string, ProviderConfig> = {};
+
+  for (const [providerKey, provider] of Object.entries(providers)) {
+    const apiKey = provider.apiKey;
+    if (typeof apiKey === "string" && apiKey.trim() && !isNonSecretApiKeyMarker(apiKey)) {
+      const providerWithoutApiKey = { ...provider };
+      delete providerWithoutApiKey.apiKey;
+      sanitizedProviders[providerKey] = providerWithoutApiKey;
+      changed = true;
+      continue;
+    }
+
+    sanitizedProviders[providerKey] = provider;
+  }
+
+  return changed ? sanitizedProviders : providers;
+}
+
 export async function planOpenClawModelsJsonWithDeps(
   params: {
     cfg: OpenClawConfig;
@@ -177,7 +200,9 @@ export async function planOpenClawModelsJsonWithDeps(
       sourceSecretDefaults: params.sourceConfigForSecrets?.secrets?.defaults,
       secretRefManagedProviders,
     }) ?? normalizedMergedProviders;
-  const finalProviders = applyNativeStreamingUsageCompat(secretEnforcedProviders);
+  const finalProviders = stripResolvedApiKeysForModelsJson(
+    applyNativeStreamingUsageCompat(secretEnforcedProviders),
+  );
   const nextContents = `${JSON.stringify({ providers: finalProviders }, null, 2)}\n`;
 
   if (params.existingRaw === nextContents) {
