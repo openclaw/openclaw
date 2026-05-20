@@ -222,7 +222,7 @@ function getCommandPathInternal(
     if (!arg) {
       continue;
     }
-    if (arg === "--") {
+    if (arg === FLAG_TERMINATOR) {
       break;
     }
     if (opts.skipRootOptions) {
