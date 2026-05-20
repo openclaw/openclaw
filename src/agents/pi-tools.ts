@@ -918,14 +918,14 @@ export function createOpenClawCodingTools(options?: {
     ...(execTool ? [execTool as unknown as AnyAgentTool] : []),
     ...(processTool ? [processTool as unknown as AnyAgentTool] : []),
     // Channel docking: include channel-defined agent tools (login, etc.).
-    ...(includeCoreTools
+    ...(includeChannelTools
       ? listChannelAgentTools({
           cfg: options?.config,
           requesterSenderId: options?.senderId,
           senderIsOwner: options?.senderIsOwner,
         })
       : []),
-    ...(includeCoreTools
+    ...(includeOpenClawTools
       ? createOpenClawTools({
           sandboxBrowserBridgeUrl: sandbox?.browser?.bridgeUrl,
           allowHostBrowserControl: sandbox ? sandbox.browserAllowHostControl : true,
