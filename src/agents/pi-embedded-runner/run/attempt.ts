@@ -6,7 +6,7 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { createAgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
 import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
 import { buildHierarchyReinforcementMessage } from "../../../auto-reply/handoff-summarizer.js";
-import { filterHeartbeatPairs } from "../../../auto-reply/heartbeat-filter.js";
+import { filterHeartbeatTranscriptArtifacts } from "../../../auto-reply/heartbeat-filter.js";
 import { stripInboundMetadata } from "../../../auto-reply/reply/strip-inbound-meta.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { resolveStorePath } from "../../../config/sessions/paths.js";
@@ -96,6 +96,7 @@ import { isTimeoutError } from "../../failover-error.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-prompt.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import { stripHistoricalRuntimeContextCustomMessages } from "../../internal-runtime-context.js";
+import { filterLocalModelLeanTools, isLocalModelLeanEnabled } from "../../local-model-lean.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
 import { supportsModelTools } from "../../model-tool-support.js";
@@ -139,6 +140,7 @@ import {
   resolveSubagentToolPolicyForSession,
 } from "../../pi-tools.policy.js";
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
+import { resolveAgentPromptSurfaceForSessionKey } from "../../prompt-surface.js";
 import { describeProviderRequestRoutingSummary } from "../../provider-attribution.js";
 import { registerProviderStreamForModel } from "../../provider-stream.js";
 import { runAgentCleanupStep } from "../../run-cleanup-timeout.js";
@@ -217,6 +219,7 @@ import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";
 import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
 import { buildEmbeddedMessageActionDiscoveryInput } from "../message-action-discovery-input.js";
+import { createCodexNativeWebSearchWrapper } from "../openai-stream-wrappers.js";
 import {
   collectPromptCacheToolNames,
   beginPromptCacheObservation,
@@ -771,7 +774,7 @@ async function cancelQueuedSteeringMessage(
   return true;
 }
 
-export const __testing = {
+export const testing = {
   cancelQueuedSteeringMessage,
   steerAndWaitForTranscriptCommit,
 };
@@ -980,7 +983,7 @@ function sessionMessagesContainIdempotencyKey(
 }
 
 function flushSessionManagerFile(sessionManager: ReturnType<typeof guardSessionManager>): void {
-  (sessionManager as unknown as { _rewriteFile?: () => void })._rewriteFile?.();
+  (sessionManager as unknown as { _rewriteFile?: () => void })["_rewriteFile"]?.();
 }
 
 export function shouldRunLlmOutputHooksForAttempt(params: { promptErrorSource: string | null }) {
@@ -1033,7 +1036,7 @@ function removeTrailingMidTurnPrecheckAssistantError(params: {
     }
     return;
   }
-  if (typeof mutableSessionManager._rewriteFile !== "function") {
+  if (typeof mutableSessionManager["_rewriteFile"] !== "function") {
     log.warn(
       "[context-overflow-midturn-precheck] removed synthetic assistant error from active session but SessionManager rewrite hook is unavailable",
     );
@@ -1044,7 +1047,7 @@ function removeTrailingMidTurnPrecheckAssistantError(params: {
     mutableSessionManager.byId?.delete(lastEntry.id);
   }
   mutableSessionManager.leafId = lastEntry.parentId ?? null;
-  mutableSessionManager._rewriteFile();
+  mutableSessionManager["_rewriteFile"]();
 }
 
 export function resolveAttemptToolPolicyMessageProvider(params: {
@@ -1322,7 +1325,7 @@ export async function runEmbeddedAttempt(
       toolsAllow: toolsAllowWithForcedRuntimeTools,
     });
     const toolsEnabled = supportsModelTools(params.model);
-    const codeModeConfig = resolveCodeModeConfig(params.config);
+    const codeModeConfig = resolveCodeModeConfig(params.config, sessionAgentId);
     const codeModeControlsEnabledForRun =
       toolsEnabled &&
       params.disableTools !== true &&
@@ -1675,7 +1678,25 @@ export async function runEmbeddedAttempt(
       ownerOnlyToolAllowlist: params.ownerOnlyToolAllowlist,
       warn: (message) => log.warn(message),
     });
-    const uncompactedEffectiveTools = [...tools, ...filteredBundledTools];
+    const normalizedBundledTools =
+      filteredBundledTools.length > 0
+        ? normalizeAgentRuntimeTools({
+            runtimePlan: params.runtimePlan,
+            tools: filteredBundledTools,
+            provider: params.provider,
+            config: params.config,
+            workspaceDir: effectiveWorkspace,
+            env: process.env,
+            modelId: params.modelId,
+            modelApi: params.model.api,
+            model: params.model,
+          })
+        : filteredBundledTools;
+    const uncompactedEffectiveTools = filterLocalModelLeanTools({
+      tools: [...tools, ...normalizedBundledTools],
+      config: params.config,
+      agentId: sessionAgentId,
+    });
     let effectiveTools = uncompactedEffectiveTools;
     const catalogToolHookContext = {
       agentId: sessionAgentId,
@@ -1731,7 +1752,11 @@ export async function runEmbeddedAttempt(
           catalogRef: toolSearchCatalogRef,
           toolHookContext: catalogToolHookContext,
         });
-    effectiveTools = toolSearch.tools;
+    effectiveTools = filterLocalModelLeanTools({
+      tools: toolSearch.tools,
+      config: params.config,
+      agentId: sessionAgentId,
+    });
     if (toolSearch.compacted) {
       prepStages.mark(codeModeControlsEnabledForRun ? "code-mode" : "tool-search");
       log.info(
@@ -1877,6 +1902,7 @@ export async function runEmbeddedAttempt(
     const promptMode =
       params.promptMode ??
       (isRawModelRun ? "none" : resolvePromptModeForSession(params.sessionKey));
+    const promptSurface = resolveAgentPromptSurfaceForSessionKey(params.sessionKey);
 
     // When toolsAllow is set, use minimal prompt and strip skills catalog
     const effectivePromptMode = params.toolsAllow?.length ? ("minimal" as const) : promptMode;
@@ -1954,7 +1980,10 @@ export async function runEmbeddedAttempt(
           config: params.config,
           sandboxed: sandboxInfo?.enabled === true,
         }),
-        nativeCommandGuidanceLines: listRegisteredPluginAgentPromptGuidance(),
+        promptSurface,
+        nativeCommandGuidanceLines: listRegisteredPluginAgentPromptGuidance({
+          surface: promptSurface,
+        }),
         runtimeInfo,
         messageToolHints,
         sandboxInfo,
@@ -2078,8 +2107,12 @@ export async function runEmbeddedAttempt(
         suppressNextUserMessagePersistence: params.suppressNextUserMessagePersistence,
         suppressTranscriptOnlyAssistantPersistence:
           params.suppressTranscriptOnlyAssistantPersistence,
+        suppressAssistantErrorPersistence: params.suppressAssistantErrorPersistence,
         onUserMessagePersisted: (message) => {
           params.onUserMessagePersisted?.(message);
+        },
+        onAssistantErrorMessagePersisted: (message) => {
+          params.onAssistantErrorMessagePersisted?.(message);
         },
       });
       trackSessionManagerAccess(params.sessionFile);
@@ -2179,6 +2212,7 @@ export async function runEmbeddedAttempt(
       const { customTools } = splitSdkTools({
         tools: effectiveTools,
         sandboxEnabled: !!sandbox?.enabled,
+        toolHookContext: catalogToolHookContext,
       });
 
       // Add client tools (OpenResponses hosted tools) to customTools.
@@ -2520,6 +2554,10 @@ export async function runEmbeddedAttempt(
         agentId: sessionAgentId,
         messageProvider: params.messageProvider,
         messageChannel: params.messageChannel,
+        localModelLean: isLocalModelLeanEnabled({
+          config: params.config,
+          agentId: sessionAgentId,
+        }),
         toolCount: effectiveTools.length,
         clientToolCount: clientToolDefs.length,
       });
@@ -2641,6 +2679,16 @@ export async function runEmbeddedAttempt(
         resolvedTransport,
         { preparedExtraParams: effectiveExtraParams },
       );
+      if (codeModeControlsEnabledForRun) {
+        activeSession.agent.streamFn = createCodexNativeWebSearchWrapper(
+          activeSession.agent.streamFn,
+          {
+            config: params.config,
+            agentDir,
+            codeModeToolSurfaceEnabled: true,
+          },
+        );
+      }
       const effectivePromptCacheRetention = resolveCacheRetention(
         effectiveExtraParams,
         params.provider,
@@ -2985,7 +3033,7 @@ export async function runEmbeddedAttempt(
             params.config && sessionAgentId
               ? resolveHeartbeatSummaryForAgent(params.config, sessionAgentId)
               : undefined;
-          const heartbeatFiltered = filterHeartbeatPairs(
+          const heartbeatFiltered = filterHeartbeatTranscriptArtifacts(
             validated,
             heartbeatSummary?.ackMaxChars,
             heartbeatSummary?.prompt,
@@ -3004,7 +3052,7 @@ export async function runEmbeddedAttempt(
               })
             : truncated;
           cacheTrace?.recordStage("session:limited", { messages: limited });
-          if (limited.length > 0) {
+          if (limited.length > 0 || prior.length > 0) {
             activeSession.agent.state.messages = limited;
           }
         }
@@ -3570,11 +3618,7 @@ export async function runEmbeddedAttempt(
           effectivePrompt = annotateInterSessionPromptText(effectivePrompt, params.inputProvenance);
         }
         const effectiveTranscriptPrompt =
-          params.transcriptPrompt === undefined
-            ? undefined
-            : isRawModelRun
-              ? params.transcriptPrompt
-              : annotateInterSessionPromptText(params.transcriptPrompt, params.inputProvenance);
+          params.transcriptPrompt === undefined ? undefined : params.transcriptPrompt;
         const transcriptLeafId =
           (sessionManager.getLeafEntry() as { id?: string } | null | undefined)?.id ?? null;
         const heartbeatSummary =
@@ -3583,7 +3627,7 @@ export async function runEmbeddedAttempt(
             : undefined;
 
         try {
-          const filteredMessages = filterHeartbeatPairs(
+          const filteredMessages = filterHeartbeatTranscriptArtifacts(
             activeSession.messages,
             heartbeatSummary?.ackMaxChars,
             heartbeatSummary?.prompt,
@@ -3601,7 +3645,7 @@ export async function runEmbeddedAttempt(
               : "runtime-event",
           });
           const promptForModel = buildCurrentInboundPrompt({
-            context: promptSubmission.runtimeOnly ? undefined : params.currentInboundContext,
+            context: params.currentInboundContext,
             prompt: promptSubmission.prompt,
           });
           const runtimeSystemContext = promptSubmission.runtimeSystemContext?.trim();
@@ -4757,6 +4801,7 @@ export async function runEmbeddedAttempt(
         sessionId: params.sessionId,
         step: "pi-trajectory-flush",
         log,
+        getTimeoutDetails: () => trajectoryRecorder?.describeFlushState(),
         cleanup: async () => {
           await trajectoryRecorder?.flush();
         },
@@ -4831,3 +4876,4 @@ export async function runEmbeddedAttempt(
     restoreSkillEnv?.();
   }
 }
+export { testing as __testing };

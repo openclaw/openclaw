@@ -11,6 +11,7 @@ import ai.openclaw.app.protocol.OpenClawCameraCommand
 import ai.openclaw.app.protocol.OpenClawCapability
 import ai.openclaw.app.protocol.OpenClawLocationCommand
 import ai.openclaw.app.protocol.OpenClawMotionCommand
+import ai.openclaw.app.protocol.OpenClawPhotosCommand
 import ai.openclaw.app.protocol.OpenClawSmsCommand
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -368,6 +369,20 @@ class ConnectionManagerTest {
   }
 
   @Test
+  fun buildOperatorConnectOptions_requestsQrBootstrapHandoffScopes() {
+    val options = newManager().buildOperatorConnectOptions()
+
+    assertEquals(
+      listOf(
+        "operator.approvals",
+        "operator.read",
+        "operator.write",
+      ),
+      options.scopes,
+    )
+  }
+
+  @Test
   fun buildNodeConnectOptions_advertisesRequestableSmsSearchWithoutSmsCapability() {
     val options =
       newManager(
@@ -431,6 +446,7 @@ class ConnectionManagerTest {
         voiceWakeMode = VoiceWakeMode.Always,
         motionActivityAvailable = true,
         callLogAvailable = true,
+        photosAvailable = true,
         hasRecordAudioPermission = true,
       ).buildNodeConnectOptions()
 
@@ -438,10 +454,12 @@ class ConnectionManagerTest {
     assertTrue(options.commands.contains(OpenClawLocationCommand.Get.rawValue))
     assertTrue(options.commands.contains(OpenClawMotionCommand.Activity.rawValue))
     assertTrue(options.commands.contains(OpenClawCallLogCommand.Search.rawValue))
+    assertTrue(options.commands.contains(OpenClawPhotosCommand.Latest.rawValue))
     assertTrue(options.caps.contains(OpenClawCapability.Camera.rawValue))
     assertTrue(options.caps.contains(OpenClawCapability.Location.rawValue))
     assertTrue(options.caps.contains(OpenClawCapability.Motion.rawValue))
     assertTrue(options.caps.contains(OpenClawCapability.CallLog.rawValue))
+    assertTrue(options.caps.contains(OpenClawCapability.Photos.rawValue))
     assertTrue(options.caps.contains(OpenClawCapability.VoiceWake.rawValue))
   }
 
@@ -457,12 +475,13 @@ class ConnectionManagerTest {
   }
 
   @Test
-  fun buildNodeConnectOptions_omitsUnavailableCameraLocationAndCallLogSurfaces() {
+  fun buildNodeConnectOptions_omitsUnavailableCameraLocationCallLogAndPhotosSurfaces() {
     val options =
       newManager(
         cameraEnabled = false,
         locationMode = LocationMode.Off,
         callLogAvailable = false,
+        photosAvailable = false,
       ).buildNodeConnectOptions()
 
     assertFalse(options.commands.contains(OpenClawCameraCommand.List.rawValue))
@@ -470,9 +489,11 @@ class ConnectionManagerTest {
     assertFalse(options.commands.contains(OpenClawCameraCommand.Clip.rawValue))
     assertFalse(options.commands.contains(OpenClawLocationCommand.Get.rawValue))
     assertFalse(options.commands.contains(OpenClawCallLogCommand.Search.rawValue))
+    assertFalse(options.commands.contains(OpenClawPhotosCommand.Latest.rawValue))
     assertFalse(options.caps.contains(OpenClawCapability.Camera.rawValue))
     assertFalse(options.caps.contains(OpenClawCapability.Location.rawValue))
     assertFalse(options.caps.contains(OpenClawCapability.CallLog.rawValue))
+    assertFalse(options.caps.contains(OpenClawCapability.Photos.rawValue))
   }
 
   @Test
@@ -511,6 +532,7 @@ class ConnectionManagerTest {
     readSmsAvailable: Boolean = false,
     smsSearchPossible: Boolean = false,
     callLogAvailable: Boolean = false,
+    photosAvailable: Boolean = false,
     hasRecordAudioPermission: Boolean = false,
   ): ConnectionManager {
     val context = RuntimeEnvironment.getApplication()
@@ -531,6 +553,7 @@ class ConnectionManagerTest {
       readSmsAvailable = { readSmsAvailable },
       smsSearchPossible = { smsSearchPossible },
       callLogAvailable = { callLogAvailable },
+      photosAvailable = { photosAvailable },
       hasRecordAudioPermission = { hasRecordAudioPermission },
       manualTls = { false },
     )

@@ -573,8 +573,8 @@ export async function runSubagentAnnounceFlow(params: {
     params.onDeliveryResult?.(delivery);
     didAnnounce = delivery.delivered;
     if (!delivery.delivered && delivery.path === "direct" && delivery.error) {
-      defaultRuntime.error?.(
-        `Subagent completion direct announce failed for run ${params.childRunId}: ${delivery.error}`,
+      defaultRuntime.log(
+        `[warn] Subagent completion direct announce failed for run ${params.childRunId}: ${delivery.error}`,
       );
     }
   } catch (err) {
@@ -604,7 +604,7 @@ export async function runSubagentAnnounceFlow(params: {
   return didAnnounce;
 }
 
-export const __testing = {
+export const testing = {
   setDepsForTest(
     overrides?: Partial<SubagentAnnounceDeps> & {
       callGateway?: typeof callGateway;
@@ -633,3 +633,4 @@ export const __testing = {
       : defaultSubagentAnnounceDeps;
   },
 };
+export { testing as __testing };

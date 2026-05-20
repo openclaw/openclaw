@@ -550,11 +550,12 @@ export async function processDiscordMessage(
             return;
           }
         }
-        if (
+        const shouldFinalizeDraftPreview =
           draftStream &&
           isFinal &&
-          (!draftPreview.isProgressMode || draftPreview.hasProgressDraftStarted)
-        ) {
+          (!draftPreview.isProgressMode || draftPreview.hasProgressDraftStarted) &&
+          !payload.isError;
+        if (shouldFinalizeDraftPreview) {
           const reply = resolveSendableOutboundReplyParts(effectivePayload);
           const hasMedia = reply.hasMedia;
           const ttsSupplement = getReplyPayloadTtsSupplement(effectivePayload);
@@ -808,9 +809,10 @@ export async function processDiscordMessage(
                 (typeof resolvedBlockStreamingEnabled === "boolean"
                   ? !resolvedBlockStreamingEnabled
                   : undefined)),
-            onPartialReply: draftPreview.draftStream
-              ? (payload) => draftPreview.updateFromPartial(payload.text)
-              : undefined,
+            onPartialReply:
+              draftPreview.draftStream && !draftPreview.isProgressMode
+                ? (payload) => draftPreview.updateFromPartial(payload.text)
+                : undefined,
             onAssistantMessageStart: draftPreview.draftStream
               ? () => draftPreview.handleAssistantMessageBoundary()
               : undefined,

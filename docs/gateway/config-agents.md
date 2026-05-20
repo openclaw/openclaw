@@ -554,7 +554,7 @@ Replace the entire OpenClaw-assembled system prompt with a fixed string. Set at 
 
 ### `agents.defaults.promptOverlays`
 
-Provider-independent prompt overlays applied by model family. GPT-5-family model ids receive the shared behavior contract across providers; `personality` controls only the friendly interaction-style layer.
+Provider-independent prompt overlays applied by model family on OpenClaw-assembled prompt surfaces. GPT-5-family model ids receive the shared behavior contract across PI/provider routes; `personality` controls only the friendly interaction-style layer. Native Codex app-server routes keep Codex-owned base/model/personality instructions instead of this OpenClaw GPT-5 overlay.
 
 ```json5
 {
@@ -962,6 +962,7 @@ Transport is SSH into the OpenShell sandbox, but the plugin owns sandbox lifecyc
 **Containers default to `network: "none"`** — set to `"bridge"` (or a custom bridge network) if the agent needs outbound access.
 `"host"` is blocked. `"container:<id>"` is blocked by default unless you explicitly set
 `sandbox.docker.dangerouslyAllowContainerNamespaceJoin: true` (break-glass).
+Codex app-server turns in an active OpenClaw sandbox use this same egress setting for their native code-mode network access.
 
 **Inbound attachments** are staged into `media/inbound/*` in the active workspace.
 
@@ -1091,7 +1092,7 @@ for provider examples and precedence.
 - `runtime`: optional per-agent runtime descriptor. Use `type: "acp"` with `runtime.acp` defaults (`agent`, `backend`, `mode`, `cwd`) when the agent should default to ACP harness sessions.
 - `identity.avatar`: workspace-relative path, `http(s)` URL, or `data:` URI.
 - `identity` derives defaults: `ackReaction` from `emoji`, `mentionPatterns` from `name`/`emoji`.
-- `subagents.allowAgents`: allowlist of agent ids for explicit `sessions_spawn.agentId` targets (`["*"]` = any; default: same agent only). Include the requester id when self-targeted `agentId` calls should be allowed.
+- `subagents.allowAgents`: allowlist of agent ids for explicit `sessions_spawn.agentId` targets (`["*"]` = any configured target; default: same agent only). Include the requester id when self-targeted `agentId` calls should be allowed.
 - Sandbox inheritance guard: if the requester session is sandboxed, `sessions_spawn` rejects targets that would run unsandboxed.
 - `subagents.requireAgentId`: when true, block `sessions_spawn` calls that omit `agentId` (forces explicit profile selection; default: false).
 

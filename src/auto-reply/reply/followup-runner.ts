@@ -9,6 +9,7 @@ import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-bu
 import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
+import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection-cli.js";
@@ -418,7 +419,7 @@ export function createFollowupRunner(params: {
         sessionId: run.sessionId,
         sessionKey: replySessionKey ?? "",
         resetTriggered: false,
-        upstreamAbortSignal: queued.abortSignal ?? opts?.abortSignal,
+        upstreamAbortSignal: queued.abortSignal,
       });
       const runId = crypto.randomUUID();
       const shouldSurfaceToControlUi = isInternalMessageChannel(
@@ -528,15 +529,38 @@ export function createFollowupRunner(params: {
             startedAt: number;
           }
         | undefined;
+      let queuedUserMessagePersistedAcrossFallback = false;
+      let assistantErrorPersistedAcrossFallback = false;
       try {
         const outcomePlan = buildAgentRuntimeOutcomePlan();
         const fallbackResult = await runWithModelFallback<EmbeddedAgentRunResult>({
           ...resolveModelFallbackOptions(run, runtimeConfig),
           cfg: runtimeConfig,
           runId,
+          resolveAgentHarnessRuntimeOverride: (provider) =>
+            resolveSessionRuntimeOverrideForProvider({
+              provider,
+              entry: activeSessionEntry,
+            }),
+          prepareAgentHarnessRuntime: async ({ provider, model, agentHarnessRuntimeOverride }) => {
+            await ensureSelectedAgentHarnessPlugin({
+              config: runtimeConfig,
+              provider,
+              modelId: model,
+              agentId: run.agentId,
+              sessionKey: run.runtimePolicySessionKey ?? replySessionKey,
+              agentHarnessRuntimeOverride,
+              workspaceDir: run.workspaceDir,
+            });
+          },
           classifyResult: ({ result, provider, model }) =>
             outcomePlan.classifyRunResult({ result, provider, model }),
           run: async (provider, model, runOptions) => {
+            const suppressQueuedUserPersistenceForCandidate =
+              (run.suppressNextUserMessagePersistence ?? false) ||
+              queuedUserMessagePersistedAcrossFallback;
+            const suppressAssistantErrorPersistenceForCandidate =
+              assistantErrorPersistedAcrossFallback;
             const candidateRun = resolveRunForFallbackCandidate(provider, model);
             const activeProbe = run.autoFallbackPrimaryProbe;
             if (activeProbe && provider === activeProbe.provider && model === activeProbe.model) {
@@ -545,7 +569,7 @@ export function createFollowupRunner(params: {
                 sessionKey: replySessionKey,
               });
             }
-            const authProfile = resolveRunAuthProfile(candidateRun, provider, {
+            const selectedAuthProfile = resolveRunAuthProfile(candidateRun, provider, {
               config: runtimeConfig,
             });
             const sessionRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
@@ -563,6 +587,7 @@ export function createFollowupRunner(params: {
                     cfg: runtimeConfig,
                     agentId: run.agentId,
                     modelId: model,
+                    authProfileId: selectedAuthProfile.authProfileId,
                   }) ??
                   provider);
             let attemptCompactionCount = 0;
@@ -630,7 +655,7 @@ export function createFollowupRunner(params: {
                     agentAccountId: run.agentAccountId,
                     senderIsOwner: run.senderIsOwner,
                     disableTools: opts?.disableTools,
-                    abortSignal: queued.abortSignal ?? opts?.abortSignal,
+                    abortSignal: queued.abortSignal,
                   },
                   transformResult: (rawResult) =>
                     isRoomEventCliRun && rawResult.meta.agentMeta
@@ -694,15 +719,22 @@ export function createFollowupRunner(params: {
                 silentReplyPromptMode: run.silentReplyPromptMode,
                 sourceReplyDeliveryMode: run.sourceReplyDeliveryMode,
                 forceMessageTool: run.sourceReplyDeliveryMode === "message_tool_only",
-                suppressNextUserMessagePersistence: run.suppressNextUserMessagePersistence,
+                suppressNextUserMessagePersistence: suppressQueuedUserPersistenceForCandidate,
+                onUserMessagePersisted: () => {
+                  queuedUserMessagePersistedAcrossFallback = true;
+                },
                 suppressTranscriptOnlyAssistantPersistence:
                   run.suppressTranscriptOnlyAssistantPersistence,
+                suppressAssistantErrorPersistence: suppressAssistantErrorPersistenceForCandidate,
+                onAssistantErrorMessagePersisted: () => {
+                  assistantErrorPersistedAcrossFallback = true;
+                },
                 ownerNumbers: run.ownerNumbers,
                 enforceFinalTag: run.enforceFinalTag,
                 allowEmptyAssistantReplyAsSilent: run.allowEmptyAssistantReplyAsSilent,
                 provider,
                 model,
-                ...authProfile,
+                ...selectedAuthProfile,
                 thinkLevel: run.thinkLevel,
                 verboseLevel: run.verboseLevel,
                 reasoningLevel: run.reasoningLevel,
@@ -711,7 +743,7 @@ export function createFollowupRunner(params: {
                 bashElevated: run.bashElevated,
                 timeoutMs: run.timeoutMs,
                 runId,
-                abortSignal: queued.abortSignal ?? opts?.abortSignal,
+                abortSignal: queued.abortSignal,
                 images: queuedImages,
                 imageOrder: queuedImageOrder,
                 allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,

@@ -25,7 +25,7 @@ Bare package specs still install from npm during the launch cutover. Use the
 
 ## Requirements
 
-- Use Node 22 or newer and a package manager such as `npm` or `pnpm`.
+- Use Node 22.19 or newer and a package manager such as `npm` or `pnpm`.
 - Be familiar with TypeScript ESM modules.
 - For in-repo bundled plugin work, clone the repository and run `pnpm install`.
   Source-checkout plugin development is pnpm-only because OpenClaw loads bundled
