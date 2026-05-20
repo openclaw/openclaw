@@ -168,7 +168,7 @@ describe("buildGatewayReloadPlan", () => {
     {
       pluginId: "browser",
       pluginName: "Browser",
-      registration: { hotPrefixes: ["browser.profiles", "browser.defaultProfile"] },
+      registration: { hotPrefixes: ["browser.profiles"] },
       source: "test",
     },
   ];
@@ -208,11 +208,16 @@ describe("buildGatewayReloadPlan", () => {
     ]);
   });
 
-  it("hot-reloads browser.defaultProfile changes without a gateway restart", () => {
+  it("still restarts the gateway for browser.defaultProfile changes", () => {
+    // browser.defaultProfile is intentionally NOT in hotPrefixes: forProfile() in
+    // src/browser/server-context.ts resolves the default-profile name before the
+    // hot-reload refresh, so a hot reload here would leave the next implicit-profile
+    // request routed to the prior default. Keep restart behavior until forProfile()
+    // refreshes before selecting the default.
     const plan = buildGatewayReloadPlan(["browser.defaultProfile"]);
-    expect(plan.restartGateway).toBe(false);
-    expect(plan.hotReasons).toEqual(["browser.defaultProfile"]);
-    expect(plan.restartReasons).toStrictEqual([]);
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toContain("browser.defaultProfile");
+    expect(plan.hotReasons).toStrictEqual([]);
   });
 
   it("still restarts the gateway when browser changes mix profile and service paths", () => {

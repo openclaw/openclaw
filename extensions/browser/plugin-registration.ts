@@ -52,11 +52,12 @@ function createLazyBrowserTool(opts?: {
   };
 }
 
-// browser.profiles and browser.defaultProfile flow through resolved-config-refresh.ts and do
-// not require a gateway restart. Other browser.* paths still fall through to the planner's
-// default-restart branch via the no-rule path.
+// browser.profiles flows through resolved-config-refresh.ts and does not require a gateway
+// restart. Other browser.* paths (including browser.defaultProfile, which forProfile() resolves
+// before the request-time refresh) still fall through to the planner's default-restart branch
+// via the no-rule path.
 export const browserPluginReload = {
-  hotPrefixes: ["browser.profiles", "browser.defaultProfile"],
+  hotPrefixes: ["browser.profiles"],
 };
 
 export const browserPluginNodeHostCommands: OpenClawPluginNodeHostCommand[] = [

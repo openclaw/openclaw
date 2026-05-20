@@ -90,7 +90,7 @@ function registerBrowserAutoEnableProbe(): BrowserAutoEnableProbe {
 describe("browser plugin", () => {
   it("exposes static browser metadata on the plugin definition", () => {
     expect(browserPluginReload).toEqual({
-      hotPrefixes: ["browser.profiles", "browser.defaultProfile"],
+      hotPrefixes: ["browser.profiles"],
     });
     expect(browserPluginNodeHostCommands).toHaveLength(1);
     expect(browserPluginNodeHostCommands[0]?.command).toBe("browser.proxy");
