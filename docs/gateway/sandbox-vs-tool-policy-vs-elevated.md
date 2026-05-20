@@ -100,6 +100,9 @@ Available groups:
 - `group:agents`: `agents_list`, `update_plan`
 - `group:media`: `image`, `image_generate`, `music_generate`, `video_generate`, `tts`
 - `group:openclaw`: all built-in OpenClaw tools (excludes provider plugins)
+- `group:plugins`: all loaded plugin-owned tools, including configured MCP servers exposed through `bundle-mcp`
+
+For sandboxed MCP servers, the sandbox tool policy is a second allow gate. If `mcp.servers` is configured but sandboxed turns only show built-in tools, add `bundle-mcp`, `group:plugins`, or a server glob such as `outlook__*` to `tools.sandbox.tools.alsoAllow`, then restart/reload the gateway and recapture the tool list.
 
 ## Elevated: exec-only "run on host"
 

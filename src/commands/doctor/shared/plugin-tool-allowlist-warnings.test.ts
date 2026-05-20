@@ -88,6 +88,91 @@ describe("collectPluginToolAllowlistWarnings", () => {
     ]);
   });
 
+  it("warns when sandbox allowlist hides configured MCP servers", () => {
+    const warnings = collectPluginToolAllowlistWarnings({
+      cfg: {
+        agents: { defaults: { sandbox: { mode: "all" } } },
+        mcp: {
+          servers: {
+            gmail: { command: "node", args: ["gmail-server.js"] },
+            outlook: { command: "node", args: ["outlook-server.js"] },
+          },
+        },
+        tools: {
+          profile: "coding",
+          sandbox: {
+            tools: {
+              alsoAllow: [
+                "web_search",
+                "web_fetch",
+                "memory_search",
+                "memory_get",
+                "memory_recall",
+              ],
+            },
+          },
+        },
+      },
+      manifestRegistry,
+    });
+
+    expect(warnings).toEqual([
+      '- mcp.servers defines 2 MCP servers ("gmail", "outlook"), but tools.sandbox.tools.alsoAllow does not include "bundle-mcp", "group:plugins", or a matching "<server>__*" MCP tool pattern. Sandboxed agents will filter bundled MCP tools before provider requests. Add "bundle-mcp" to tools.sandbox.tools.alsoAllow (or use "group:plugins" / server globs) if those MCP tools should be visible; use tools.sandbox.tools.allow: [] only when you intentionally want no sandbox allow gate.',
+    ]);
+  });
+
+  it("does not warn for sandboxed MCP servers when bundle-mcp is explicitly allowed", () => {
+    const warnings = collectPluginToolAllowlistWarnings({
+      cfg: {
+        agents: { defaults: { sandbox: { mode: "all" } } },
+        mcp: { servers: { outlook: { command: "node", args: ["outlook-server.js"] } } },
+        tools: { sandbox: { tools: { alsoAllow: ["web_search", "bundle-mcp"] } } },
+      },
+      manifestRegistry,
+    });
+
+    expect(warnings).toStrictEqual([]);
+  });
+
+  it("does not warn for sandboxed MCP servers when a server glob is explicitly allowed", () => {
+    const warnings = collectPluginToolAllowlistWarnings({
+      cfg: {
+        agents: { defaults: { sandbox: { mode: "all" } } },
+        mcp: { servers: { outlook: { command: "node", args: ["outlook-server.js"] } } },
+        tools: { sandbox: { tools: { alsoAllow: ["outlook__*"] } } },
+      },
+      manifestRegistry,
+    });
+
+    expect(warnings).toStrictEqual([]);
+  });
+
+  it("does not warn for sandboxed MCP servers when sandbox allow is explicitly allow-all", () => {
+    const warnings = collectPluginToolAllowlistWarnings({
+      cfg: {
+        agents: { defaults: { sandbox: { mode: "all" } } },
+        mcp: { servers: { outlook: { command: "node", args: ["outlook-server.js"] } } },
+        tools: { sandbox: { tools: { allow: [] } } },
+      },
+      manifestRegistry,
+    });
+
+    expect(warnings).toStrictEqual([]);
+  });
+
+  it("does not warn about MCP sandbox allowlists when sandbox mode is off", () => {
+    const warnings = collectPluginToolAllowlistWarnings({
+      cfg: {
+        agents: { defaults: { sandbox: { mode: "off" } } },
+        mcp: { servers: { outlook: { command: "node", args: ["outlook-server.js"] } } },
+        tools: { sandbox: { tools: { alsoAllow: ["web_search"] } } },
+      },
+      manifestRegistry,
+    });
+
+    expect(warnings).toStrictEqual([]);
+  });
+
   it("does not warn when the owning plugin is allowed", () => {
     const warnings = collectPluginToolAllowlistWarnings({
       cfg: {
