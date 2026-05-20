@@ -816,7 +816,7 @@ describe("whatsapp inbound dispatch", () => {
     expect(rememberSentText).not.toHaveBeenCalled();
   });
 
-  it("suppresses error payload text", async () => {
+  it("delivers final error payload text so incomplete-turn errors reach users (#84569)", async () => {
     const deliverReply = vi.fn(async () => acceptedDeliveryResult());
     const rememberSentText = vi.fn();
 
@@ -825,7 +825,22 @@ describe("whatsapp inbound dispatch", () => {
     const deliver = getCapturedDeliver();
     expect(deliver).toBeTypeOf("function");
 
-    await deliver?.({ text: "provider exploded", isError: true }, { kind: "final" });
+    await deliver?.({ text: "incomplete turn error", isError: true }, { kind: "final" });
+
+    expect(deliverReply).toHaveBeenCalled();
+    expect(rememberSentText).toHaveBeenCalled();
+  });
+
+  it("still suppresses non-final error payloads", async () => {
+    const deliverReply = vi.fn(async () => acceptedDeliveryResult());
+    const rememberSentText = vi.fn();
+
+    await dispatchBufferedReply({ deliverReply, rememberSentText });
+
+    const deliver = getCapturedDeliver();
+    expect(deliver).toBeTypeOf("function");
+
+    await deliver?.({ text: "tool error", isError: true }, { kind: "tool" });
 
     expect(deliverReply).not.toHaveBeenCalled();
     expect(rememberSentText).not.toHaveBeenCalled();

@@ -163,19 +163,22 @@ describe("whatsappOutbound sendPayload", () => {
     expect(sendWhatsApp).not.toHaveBeenCalled();
   });
 
-  it("suppresses routed error payloads", async () => {
-    const sendWhatsApp = vi.fn();
+  it("delivers routed error payloads so incomplete-turn errors reach users (#84569)", async () => {
+    const sendWhatsApp = vi.fn().mockResolvedValue({
+      channel: "whatsapp",
+      messageId: "msg-error-001",
+    });
 
     const result = await whatsappOutbound.sendPayload!({
       cfg: {},
       to: "5511999999999@c.us",
       text: "",
-      payload: { text: "provider exploded", isError: true },
+      payload: { text: "incomplete turn error", isError: true },
       deps: { sendWhatsApp },
     });
 
-    expect(result).toEqual({ channel: "whatsapp", messageId: "" });
-    expect(sendWhatsApp).not.toHaveBeenCalled();
+    expect(sendWhatsApp).toHaveBeenCalled();
+    expect(result).toEqual({ channel: "whatsapp", messageId: "msg-error-001" });
   });
 
   it("sanitizes HTML-only text to whitespace-only payload", () => {

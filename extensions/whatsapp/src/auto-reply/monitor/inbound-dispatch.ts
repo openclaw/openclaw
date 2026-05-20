@@ -116,7 +116,9 @@ function resolveWhatsAppDeliverablePayload(
   if (payload.isReasoning === true || payload.isCompactionNotice === true) {
     return null;
   }
-  if (payload.isError === true) {
+  // Allow isError payloads with user-facing text through for final delivery.
+  // Incomplete-turn error messages (payloads=0) must reach the user (#84569).
+  if (payload.isError === true && info.kind !== "final") {
     return null;
   }
   if (info.kind === "tool") {
