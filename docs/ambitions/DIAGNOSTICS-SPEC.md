@@ -96,31 +96,36 @@ Directly adopted from Zero's classification. Agents use this to decide whether t
 
 Each subsystem owns a category prefix and a numeric range. This prevents collisions and makes codes self-documenting.
 
-| Category | Prefix  | Range   | Subsystem                                      |
-| -------- | ------- | ------- | ---------------------------------------------- |
-| COMMS    | `COMMS` | 001-099 | Ambitions Comms (server, bridges, inbox)       |
-| MEM      | `MEM`   | 001-099 | Memory system (embeddings, storage, search)    |
-| SEC      | `SEC`   | 001-099 | Security (firewall, audit, auth)               |
-| CORE     | `CORE`  | 001-099 | Core spec / continuity system                  |
-| TTS      | `TTS`   | 001-099 | Text-to-speech pipeline                        |
-| HOOK     | `HOOK`  | 001-099 | OpenClaw hooks (handoff, continuity, dreaming) |
-| PKG      | `PKG`   | 001-099 | Packaging / build / deployment                 |
-| PI       | `PI`    | 001-099 | Pi Core hardware / deployment                  |
+| Category | Prefix  | Range   | Subsystem                                                              |
+| -------- | ------- | ------- | ---------------------------------------------------------------------- |
+| COMMS    | `COMMS` | 001-099 | Ambitions Comms (server, bridges, inbox)                               |
+| MEM      | `MEM`   | 001-099 | Memory system (embeddings, storage, search)                            |
+| SEC      | `SEC`   | 001-099 | Security (firewall, audit, auth, identity)                             |
+| CORE     | `CORE`  | 001-099 | Core spec / continuity system                                          |
+| TTS      | `TTS`   | 001-099 | Text-to-speech pipeline                                                |
+| HOOK     | `HOOK`  | 001-099 | OpenClaw hooks (handoff, continuity, dreaming)                         |
+| PKG      | `PKG`   | 001-099 | Packaging / build / deployment                                         |
+| PI       | `PI`    | 001-099 | Pi Core hardware / deployment                                          |
+| MGT      | `MGT`   | 001-099 | Management (task coordination, business ops, calendar, project status) |
+| RES      | `RES`   | 001-099 | Resource / quota management (token usage, API limits)                  |
+| FRN      | `FRN`   | 001-099 | Forensics (evidence integrity, chain-of-custody, timeline analysis)    |
 
 ### 4.1 COMMS Codes (Draft)
 
-| Code     | Severity | Message                                      | Repair                                         |
-| -------- | -------- | -------------------------------------------- | ---------------------------------------------- |
-| COMMS001 | error    | Failed to connect to comms server            | `reconnect-server` (behavior-preserving)       |
-| COMMS002 | error    | Authentication token missing or invalid      | `check-token-env` (behavior-preserving)        |
-| COMMS003 | error    | Bridge service not responding                | `restart-bridge` (behavior-preserving)         |
-| COMMS004 | error    | Inbox read failed                            | `retry-inbox-read` (behavior-preserving)       |
-| COMMS005 | error    | Message send failed — channel not found      | `check-channel-name` (format-only)             |
-| COMMS006 | warning  | Inbox pointer corruption detected            | `reset-inbox-pointer` (behavior-preserving)    |
-| COMMS007 | error    | DM channel access denied — not a participant | `check-dm-permissions` (requires-human-review) |
-| COMMS008 | warning  | Bridge reconnected after disconnect          | none                                           |
-| COMMS009 | info     | Inbox rotation completed                     | none                                           |
-| COMMS010 | error    | WebSocket connection refused                 | `check-server-status` (behavior-preserving)    |
+| Code     | Severity | Message                                      | Repair                                             |
+| -------- | -------- | -------------------------------------------- | -------------------------------------------------- |
+| COMMS001 | error    | Failed to connect to comms server            | `reconnect-server` (behavior-preserving)           |
+| COMMS002 | error    | Authentication token missing or invalid      | `check-token-env` (behavior-preserving)            |
+| COMMS003 | error    | Bridge service not responding                | `restart-bridge` (behavior-preserving)             |
+| COMMS004 | error    | Inbox read failed                            | `retry-inbox-read` (behavior-preserving)           |
+| COMMS005 | error    | Message send failed — channel not found      | `check-channel-name` (format-only)                 |
+| COMMS006 | warning  | Inbox pointer corruption detected            | `reset-inbox-pointer` (behavior-preserving)        |
+| COMMS007 | error    | DM channel access denied — not a participant | `check-dm-permissions` (requires-human-review)     |
+| COMMS008 | warning  | Bridge reconnected after disconnect          | none                                               |
+| COMMS009 | info     | Inbox rotation completed                     | none                                               |
+| COMMS010 | error    | WebSocket connection refused                 | `check-server-status` (behavior-preserving)        |
+| COMMS011 | warning  | Rate limit exceeded — message throttled      | `backoff-retry` (behavior-preserving)              |
+| COMMS012 | error    | Message integrity check failed               | `verify-archive-integrity` (requires-human-review) |
 
 ### 4.2 MEM Codes (Draft)
 
@@ -134,12 +139,13 @@ Each subsystem owns a category prefix and a numeric range. This prevents collisi
 
 ### 4.3 SEC Codes (Draft)
 
-| Code   | Severity | Message                               | Repair                                         |
-| ------ | -------- | ------------------------------------- | ---------------------------------------------- |
-| SEC001 | error    | UFW rule violation — port blocked     | `check-ufw-rules` (target-changing)            |
-| SEC002 | warning  | Tailscale connection intermittent     | `check-tailscale-status` (behavior-preserving) |
-| SEC003 | error    | Webhook signature verification failed | `check-webhook-secret` (requires-human-review) |
-| SEC004 | warning  | Failed login attempt detected         | `review-auth-logs` (requires-human-review)     |
+| Code   | Severity | Message                                                | Repair                                         |
+| ------ | -------- | ------------------------------------------------------ | ---------------------------------------------- |
+| SEC001 | info     | UFW rule — port blocked (expected behavior)            | `check-ufw-rules` (format-only)                |
+| SEC002 | warning  | Tailscale connection intermittent                      | `check-tailscale-status` (behavior-preserving) |
+| SEC003 | error    | Webhook signature verification failed                  | `check-webhook-secret` (requires-human-review) |
+| SEC004 | warning  | Failed login attempts exceeded threshold (5 in 10 min) | `review-auth-logs` (requires-human-review)     |
+| SEC005 | error    | Agent identity mismatch — token vs claim               | `investigate-identity` (requires-human-review) |
 
 ---
 
@@ -169,25 +175,28 @@ This gives agents and humans the same output source. No separate parsing paths.
 
 Each repair ID maps to a known action. This registry lives in code and can be queried.
 
-| Repair ID                | Safety                | Action                                                            | Subsystem |
-| ------------------------ | --------------------- | ----------------------------------------------------------------- | --------- |
-| `reconnect-server`       | behavior-preserving   | Retry WebSocket connection to comms server                        | COMMS     |
-| `check-token-env`        | behavior-preserving   | Verify COMMS_API_TOKEN is set in environment                      | COMMS     |
-| `restart-bridge`         | behavior-preserving   | `sudo systemctl restart ambitions-comms-bridge@<agent>`           | COMMS     |
-| `retry-inbox-read`       | behavior-preserving   | Re-read inbox JSONL file                                          | COMMS     |
-| `check-channel-name`     | format-only           | Verify channel name is valid (team, security, management, @agent) | COMMS     |
-| `reset-inbox-pointer`    | behavior-preserving   | Reset inbox pointer to last known good position                   | COMMS     |
-| `check-dm-permissions`   | requires-human-review | Verify DM participant configuration                               | COMMS     |
-| `check-server-status`    | behavior-preserving   | Check if ambitions-comms service is running                       | COMMS     |
-| `check-model-path`       | behavior-preserving   | Verify ONNX model file exists at expected path                    | MEM       |
-| `rebuild-index`          | api-changing          | Delete and regenerate vector search index                         | MEM       |
-| `free-disk-space`        | requires-human-review | Free disk space or expand storage                                 | MEM       |
-| `adjust-threshold`       | format-only           | Adjust search score threshold in config                           | MEM       |
-| `check-onnx-deps`        | behavior-preserving   | Verify ONNX runtime dependencies are installed                    | MEM       |
-| `check-ufw-rules`        | target-changing       | Review and potentially modify UFW firewall rules                  | SEC       |
-| `check-tailscale-status` | behavior-preserving   | Check Tailscale connection and reconnect if needed                | SEC       |
-| `check-webhook-secret`   | requires-human-review | Verify webhook secret configuration                               | SEC       |
-| `review-auth-logs`       | requires-human-review | Review authentication logs for suspicious activity                | SEC       |
+| Repair ID                  | Safety                | Action                                                                               | Subsystem |
+| -------------------------- | --------------------- | ------------------------------------------------------------------------------------ | --------- |
+| `reconnect-server`         | behavior-preserving   | Retry WebSocket connection to comms server                                           | COMMS     |
+| `check-token-env`          | behavior-preserving   | Verify COMMS_API_TOKEN is set in environment                                         | COMMS     |
+| `restart-bridge`           | behavior-preserving   | `sudo systemctl restart ambitions-comms-bridge@<agent>`                              | COMMS     |
+| `retry-inbox-read`         | behavior-preserving   | Re-read inbox JSONL file                                                             | COMMS     |
+| `check-channel-name`       | format-only           | Verify channel name is valid (team, security, management, @agent)                    | COMMS     |
+| `reset-inbox-pointer`      | behavior-preserving   | Reset inbox pointer to last known good position                                      | COMMS     |
+| `check-dm-permissions`     | requires-human-review | Verify DM participant configuration                                                  | COMMS     |
+| `check-server-status`      | behavior-preserving   | Check if ambitions-comms service is running                                          | COMMS     |
+| `check-model-path`         | behavior-preserving   | Verify ONNX model file exists at expected path                                       | MEM       |
+| `rebuild-index`            | api-changing          | Delete and regenerate vector search index                                            | MEM       |
+| `free-disk-space`          | requires-human-review | Free disk space or expand storage                                                    | MEM       |
+| `adjust-threshold`         | format-only           | Adjust search score threshold in config                                              | MEM       |
+| `check-onnx-deps`          | behavior-preserving   | Verify ONNX runtime dependencies are installed                                       | MEM       |
+| `check-ufw-rules`          | format-only           | Review UFW firewall rules (informational, not action-required)                       | SEC       |
+| `check-tailscale-status`   | behavior-preserving   | Check Tailscale connection and reconnect if needed                                   | SEC       |
+| `check-webhook-secret`     | requires-human-review | Verify webhook secret configuration                                                  | SEC       |
+| `review-auth-logs`         | requires-human-review | Review authentication logs for suspicious activity (threshold: 5 failures in 10 min) | SEC       |
+| `investigate-identity`     | requires-human-review | Flag for Ghost/Gunn security review — token/claim mismatch                           | SEC       |
+| `backoff-retry`            | behavior-preserving   | Wait and retry after rate limit window                                               | COMMS     |
+| `verify-archive-integrity` | requires-human-review | Verify archive integrity via SHA-256 manifest — potential tamper signal              | COMMS     |
 
 ---
 
@@ -217,29 +226,51 @@ The continuity-logger and handoff-writer hooks should emit diagnostics when they
 
 ## 8. Future: Capability Manifests
 
-Phase 2 of Track 1. Per-agent capability manifests declaring what each agent can access:
+Phase 2 of Track 1. Per-agent capability manifests declaring what each agent can access.
+
+**Important (Gunn review):** Capabilities must be per-path, not broad categories. `pentest.safe` is too vague. Instead:
 
 ```json
 {
-  "agent": "emmi",
-  "capabilities": ["fs.read", "fs.write", "exec.safe", "network.local", "comms.all"]
+  "agent": "ghost",
+  "capabilities": [
+    "fs.read:/etc/ssl",
+    "fs.read:/var/log",
+    "network.tcp:443",
+    "network.tcp:8080",
+    "comms.security",
+    "audit.read"
+  ]
 }
 ```
 
-This will integrate with the diagnostic system — when an agent attempts an action outside its capabilities, the diagnostic will include the capability violation and the repair will point to the manifest.
+Explicit paths and ports. Narrow is safer than broad. Manifests must be read-only to agents and modifiable only by Ray (or through a `requires-human-review` repair). Threat modeling for manifest corruption and self-modification attacks is required before implementation (Ghost review).
 
 ---
 
 ## Implementation Order
 
 1. ✅ Define schema (this document)
-2. 🔜 Instrument comms system (server.js, send.js, reply.js, read-inbox.js)
-3. Add `--json` flag to comms CLI scripts
-4. Instrument memory system error paths
-5. Add diagnostics to OpenClaw hooks
-6. Draft capability manifests
-7. Integrate capability checks into diagnostic emission
+2. ✅ Instrument comms system (diagnostics.js + read-inbox.js, send.js, reply.js)
+3. ✅ Add `--json` flag to comms CLI scripts
+4. ✅ Team review — Ghost (security), Gunn (engineering), Hound (forensics), Anya (management)
+5. 🔜 Integrate team feedback into spec (COMMS011-012, SEC005, per-path capabilities, context schema validation)
+6. 🔜 Instrument memory system error paths (MEM codes)
+7. 🔜 Add diagnostics to OpenClaw hooks (HOOK codes)
+8. 🔜 Hound drafts FRN code range
+9. 🔜 Anya separates RES code range from MGT
+10. 🔜 Threat model capability manifests (Ghost review)
+11. 🔜 Draft capability manifests with per-path scoping
+12. 🔜 Integrate capability checks into diagnostic emission
 
 ---
 
 _This spec is a living document. As we instrument subsystems, we'll discover gaps and add codes. The code ranges are sparse on purpose — room to grow._
+
+**Team review notes (2026-05-19):**
+
+- Ghost: fix safety taxonomy is a security property. Requested COMMS011 (rate limit), COMMS012 (integrity check). Wants threat modeling before capability manifests.
+- Gunn: sudoers config must be limited to specific commands. Capabilities must be per-path, not broad. Context fields need schema validation to prevent exfiltration. SEC codes need threat scenarios.
+- Hound: FRN001-099 code range for forensics. Fix safety taxonomy maps to her authorization boundary.
+- Anya: 99-code MGT range drafted. Quota codes should be RES (own category). MGT096 identity mismatch should be SEC005. Ambiguous intent stays ad-hoc.
+- All four team members reviewed and contributed. Framework confirmed. These are hardening passes, not redesigns.
