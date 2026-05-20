@@ -908,6 +908,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     accountId,
     agentId,
   });
+  applySendPayloadPartsToActionParams(params, sendPayload);
 
   const replyToId = resolveAndApplyOutboundReplyToId(params, {
     channel,

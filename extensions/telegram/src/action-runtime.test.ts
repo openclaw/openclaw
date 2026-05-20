@@ -907,6 +907,41 @@ describe("handleTelegramAction", () => {
     ]);
   });
 
+  it("fans out mediaUrls for action sends and captions only the first item", async () => {
+    sendMessageTelegram
+      .mockResolvedValueOnce({ messageId: "img-1", chatId: "123" })
+      .mockResolvedValueOnce({ messageId: "img-2", chatId: "123" });
+
+    const result = await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "123456",
+        content: "Rendered images",
+        mediaUrls: ["https://example.com/a.png", "https://example.com/b.png"],
+        presentation: {
+          blocks: [{ type: "buttons", buttons: [{ label: "Open", value: "open" }] }],
+        },
+      },
+      telegramConfig({ capabilities: { inlineButtons: "all" } }),
+    );
+
+    expect(sendMessageTelegram).toHaveBeenCalledTimes(2);
+    const firstCall = mockCall(sendMessageTelegram, 0, "first media send");
+    expect(firstCall[0]).toBe("123456");
+    expect(firstCall[1]).toBe("Rendered images");
+    const firstOptions = requireRecord(firstCall[2], "first media options");
+    expect(firstOptions.mediaUrl).toBe("https://example.com/a.png");
+    expect(firstOptions.buttons).toEqual([[{ text: "Open", callback_data: "open" }]]);
+
+    const secondCall = mockCall(sendMessageTelegram, 1, "second media send");
+    expect(secondCall[0]).toBe("123456");
+    expect(secondCall[1]).toBe("");
+    const secondOptions = requireRecord(secondCall[2], "second media options");
+    expect(secondOptions.mediaUrl).toBe("https://example.com/b.png");
+    expect(secondOptions.buttons).toBeUndefined();
+    expect(resultDetails(result).messageId).toBe("img-2");
+  });
+
   it("pins action sends when delivery pin is requested", async () => {
     await handleTelegramAction(
       {

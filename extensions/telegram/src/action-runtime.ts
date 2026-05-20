@@ -144,7 +144,7 @@ function resolveTelegramButtonsFromParams(
 
 function readTelegramSendContent(params: {
   args: Record<string, unknown>;
-  mediaUrl?: string;
+  hasMedia: boolean;
   hasButtons: boolean;
   interactive?: unknown;
   presentation?: MessagePresentation;
@@ -165,16 +165,35 @@ function readTelegramSendContent(params: {
     explicitContent ??
     (presentationText?.trim() ? presentationText : undefined) ??
     (interactiveText?.trim() ? interactiveText : undefined);
-  if ((content == null || content.trim().length === 0) && !params.mediaUrl && params.hasButtons) {
+  if ((content == null || content.trim().length === 0) && !params.hasMedia && params.hasButtons) {
     const fallback = presentationText?.trim() ? presentationText : interactiveText;
     if (fallback?.trim()) {
       content = fallback;
     }
   }
-  if (content == null && !params.mediaUrl && !params.hasButtons) {
+  if (content == null && !params.hasMedia && !params.hasButtons) {
     throw new Error("content required.");
   }
   return content ?? "";
+}
+
+function readTelegramSendMediaUrls(params: Record<string, unknown>): string[] {
+  const urls: string[] = [];
+  const seen = new Set<string>();
+  const push = (value?: string | null) => {
+    const trimmed = value?.trim();
+    if (!trimmed || seen.has(trimmed)) {
+      return;
+    }
+    seen.add(trimmed);
+    urls.push(trimmed);
+  };
+  push(readStringParam(params, "mediaUrl"));
+  push(readStringParam(params, "media", { trim: false }));
+  for (const url of readStringArrayParam(params, "mediaUrls") ?? []) {
+    push(url);
+  }
+  return urls;
 }
 
 function normalizeTelegramDeliveryPin(params: Record<string, unknown>) {
@@ -350,16 +369,12 @@ export async function handleTelegramAction(
       throw new Error("Telegram sendMessage is disabled.");
     }
     const to = readStringParam(params, "to", { required: true });
-    const mediaUrl =
-      readStringParam(params, "mediaUrl") ??
-      readStringParam(params, "media", {
-        trim: false,
-      });
+    const mediaUrls = readTelegramSendMediaUrls(params);
     const presentation = normalizeMessagePresentation(params.presentation);
     const buttons = resolveTelegramButtonsFromParams(params, presentation);
     const content = readTelegramSendContent({
       args: params,
-      mediaUrl: mediaUrl ?? undefined,
+      hasMedia: mediaUrls.length > 0,
       hasButtons: Array.isArray(buttons) && buttons.length > 0,
       interactive: params.interactive,
       presentation,
@@ -401,15 +416,14 @@ export async function handleTelegramAction(
         "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
       );
     }
-    const result = await telegramActionRuntime.sendMessageTelegram(to, content, {
+    let result: Awaited<ReturnType<typeof telegramActionRuntime.sendMessageTelegram>> | undefined;
+    const baseSendOptions = {
       cfg,
       token,
       accountId: accountId ?? undefined,
-      mediaUrl: mediaUrl || undefined,
       mediaLocalRoots: options?.mediaLocalRoots,
       mediaReadFile: options?.mediaReadFile,
       gatewayClientScopes: options?.gatewayClientScopes,
-      buttons,
       replyToMessageId: replyToMessageId ?? undefined,
       messageThreadId: messageThreadId ?? undefined,
       quoteText: quoteText ?? undefined,
@@ -419,7 +433,24 @@ export async function handleTelegramAction(
         readBooleanParam(params, "forceDocument") ??
         readBooleanParam(params, "asDocument") ??
         false,
-    });
+    };
+    if (mediaUrls.length === 0) {
+      result = await telegramActionRuntime.sendMessageTelegram(to, content, {
+        ...baseSendOptions,
+        buttons,
+      });
+    } else {
+      for (const [index, mediaUrl] of mediaUrls.entries()) {
+        result = await telegramActionRuntime.sendMessageTelegram(to, index === 0 ? content : "", {
+          ...baseSendOptions,
+          mediaUrl,
+          ...(index === 0 ? { buttons } : {}),
+        });
+      }
+    }
+    if (!result) {
+      throw new Error("Telegram sendMessage did not return a result.");
+    }
     notifyVisibleOutboundSuccess(to, messageThreadId);
     await maybePinTelegramActionSend({
       args: params,
