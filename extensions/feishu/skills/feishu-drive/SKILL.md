@@ -62,6 +62,34 @@ In parent folder:
 { "action": "delete", "file_token": "ABC123", "type": "docx" }
 ```
 
+## Comment Strategy
+
+When using `feishu_drive` for document comments, choose the narrowest comment scope that matches the feedback.
+
+- Prefer **local comments** over whole-document comments when the feedback points to a specific paragraph, sentence, block, or nearby issue.
+- In review scenarios, do **not** collect many concrete findings into one whole-document comment if those findings can be anchored separately.
+- If there are multiple distinct problems in different places, create multiple local comments instead of one aggregated whole-document comment.
+- Use **reply_comment** when continuing an existing comment card. Do not open a new whole-document comment unless the user explicitly wants a new top-level summary.
+- Reserve **whole-document comments** for cross-cutting feedback, overall summaries, or cases where no stable local anchor exists.
+
+### Review Guidance
+
+- Line edit / wording / factual issue near a specific block: prefer a local comment.
+- One section has several tightly related issues: one local comment on that section is fine.
+- Many unrelated findings across the document: split into multiple local comments.
+- Final overall review summary: whole-document comment is acceptable only after the local findings are already anchored, or when the user explicitly asks for a single top-level summary.
+
+### Local vs Whole Comment
+
+- Local comment: `add_comment` with `block_id`
+- Whole-document comment: `add_comment` without `block_id`
+- Reply in existing thread: `reply_comment`
+
+### Important Scope Boundary
+
+- `feishu_drive.add_comment` local comments require `block_id`, and that anchor path is only available for `docx`.
+- For non-`docx` file types, do not pretend a local anchor exists if the tool cannot target one.
+
 ## File Types
 
 | Type       | Description             |
