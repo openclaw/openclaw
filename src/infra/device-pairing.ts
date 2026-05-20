@@ -10,16 +10,16 @@ import {
   resolveScopeOutsideRequestedRoles,
   roleScopesAllow,
 } from "../shared/operator-scope-compat.js";
+import { revokeDeviceBootstrapTokensForDevice } from "./device-bootstrap.js";
 import {
   createAsyncLock,
   pruneExpiredPending,
-  readDurableJsonFile,
+  readJsonIfExists,
   reconcilePendingPairingRequests,
   coercePairingStateRecord,
   resolvePairingPaths,
-  writeJsonAtomic,
+  writeJson,
 } from "./pairing-files.js";
-import { rejectPendingPairingRequest } from "./pairing-pending.js";
 import { generatePairingToken, verifyPairingToken } from "./pairing-token.js";
 
 export type DevicePairingPendingRequest = {
@@ -97,7 +97,13 @@ export type PairedDevice = {
 
 export type PairedDeviceMetadataPatch = Pick<
   PairedDevice,
-  "displayName" | "clientId" | "clientMode" | "remoteIp" | "lastSeenAtMs" | "lastSeenReason"
+  | "displayName"
+  | "platform"
+  | "clientId"
+  | "clientMode"
+  | "remoteIp"
+  | "lastSeenAtMs"
+  | "lastSeenReason"
 >;
 
 export type DevicePairingList = {
@@ -154,8 +160,8 @@ export function formatDevicePairingForbiddenMessage(result: DevicePairingForbidd
 async function loadState(baseDir?: string): Promise<DevicePairingStateFile> {
   const { pendingPath, pairedPath } = resolvePairingPaths(baseDir, "devices");
   const [pending, paired] = await Promise.all([
-    readDurableJsonFile<unknown>(pendingPath),
-    readDurableJsonFile<unknown>(pairedPath),
+    readJsonIfExists<unknown>(pendingPath),
+    readJsonIfExists<unknown>(pairedPath),
   ]);
   const state: DevicePairingStateFile = {
     pendingById: coercePairingStateRecord<DevicePairingPendingRequest>(pending),
@@ -174,16 +180,16 @@ async function persistState(
 ) {
   const { pendingPath, pairedPath } = resolvePairingPaths(baseDir, "devices");
   if (target === "pending") {
-    await writeJsonAtomic(pendingPath, state.pendingById);
+    await writeJson(pendingPath, state.pendingById);
     return;
   }
   if (target === "paired") {
-    await writeJsonAtomic(pairedPath, state.pairedByDeviceId);
+    await writeJson(pairedPath, state.pairedByDeviceId);
     return;
   }
   await Promise.all([
-    writeJsonAtomic(pendingPath, state.pendingById),
-    writeJsonAtomic(pairedPath, state.pairedByDeviceId),
+    writeJson(pendingPath, state.pendingById),
+    writeJson(pairedPath, state.pairedByDeviceId),
   ]);
 }
 
@@ -430,6 +436,27 @@ function resolveRoleScopedDeviceTokenScopes(role: string, scopes: string[] | und
   return normalized.filter((scope) => !scope.startsWith(OPERATOR_SCOPE_PREFIX));
 }
 
+function preserveRoleScopedApprovalScopes(role: string, scopes: string[] | undefined): string[] {
+  if (!Array.isArray(scopes)) {
+    return [];
+  }
+  const out = new Set<string>();
+  for (const scope of scopes) {
+    const trimmed = scope.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const belongsToRole =
+      role === OPERATOR_ROLE
+        ? trimmed.startsWith(OPERATOR_SCOPE_PREFIX)
+        : !trimmed.startsWith(OPERATOR_SCOPE_PREFIX);
+    if (belongsToRole) {
+      out.add(trimmed);
+    }
+  }
+  return [...out];
+}
+
 function resolveApprovedTokenScopes(params: {
   role: string;
   pending: DevicePairingPendingRequest;
@@ -437,9 +464,23 @@ function resolveApprovedTokenScopes(params: {
   approvedScopes?: string[];
   existing?: PairedDevice;
 }): string[] {
-  const requestedScopes = resolveRoleScopedDeviceTokenScopes(params.role, params.pending.scopes);
-  if (requestedScopes.length > 0) {
-    return requestedScopes;
+  const pendingScopes = resolveRoleScopedDeviceTokenScopes(params.role, params.pending.scopes);
+  if (pendingScopes.length > 0) {
+    const approvedBaseline = resolveRoleScopedDeviceTokenScopes(
+      params.role,
+      params.existing?.approvedScopes ?? params.existing?.scopes,
+    );
+    const requestedScopeDelta =
+      params.existingToken && approvedBaseline.length > 0
+        ? pendingScopes.filter((scope) => !approvedBaseline.includes(scope))
+        : pendingScopes;
+    if (requestedScopeDelta.length === 0 && params.existingToken) {
+      return resolveRoleScopedDeviceTokenScopes(params.role, params.existingToken.scopes);
+    }
+    return resolveRoleScopedDeviceTokenScopes(
+      params.role,
+      mergeScopes(params.existingToken?.scopes, requestedScopeDelta),
+    );
   }
   return resolveRoleScopedDeviceTokenScopes(
     params.role,
@@ -614,16 +655,21 @@ export async function approveDevicePairing(
       });
       nextTokenScopesByRole.set(roleForToken, nextScopes);
       if (roleForToken === OPERATOR_ROLE && nextScopes.length > 0) {
+        const callerRequiredScopes =
+          mergeScopes(
+            resolveRoleScopedDeviceTokenScopes(roleForToken, pending.scopes),
+            nextScopes,
+          ) ?? nextScopes;
         if (!options?.callerScopes) {
           return {
             status: "forbidden",
             reason: "caller-scopes-required",
-            scope: nextScopes[0],
+            scope: callerRequiredScopes[0],
           };
         }
         const missingScope = resolveMissingRequestedScope({
           role: OPERATOR_ROLE,
-          requestedScopes: nextScopes,
+          requestedScopes: callerRequiredScopes,
           allowedScopes: options.callerScopes,
         });
         if (missingScope) {
@@ -673,9 +719,6 @@ export async function approveBootstrapDevicePairing(
   bootstrapProfile: DeviceBootstrapProfile,
   baseDir?: string,
 ): Promise<ApproveDevicePairingResult> {
-  // QR bootstrap handoff is an explicit trust path: it can seed the bounded
-  // node/operator baseline from the verified bootstrap profile without routing
-  // operator scope approval through the generic interactive approval checker.
   const approvedRoles = mergeRoles(bootstrapProfile.roles) ?? [];
   const approvedScopes = resolveBootstrapProfileScopesForRoles(
     approvedRoles,
@@ -706,28 +749,26 @@ export async function approveBootstrapDevicePairing(
 
     const now = Date.now();
     const existing = state.pairedByDeviceId[pending.deviceId];
-    const roles = mergeRoles(
-      existing?.roles,
-      existing?.role,
-      pending.roles,
-      pending.role,
-      approvedRoles,
+    const grantedRoles = requestedRoles;
+    const grantedScopes = resolveBootstrapProfileScopesForRoles(grantedRoles, pending.scopes ?? []);
+    const grantedRoleSet = new Set(grantedRoles);
+    const preservedExistingScopes = (mergeRoles(existing?.roles, existing?.role) ?? []).flatMap(
+      (existingRole) =>
+        grantedRoleSet.has(existingRole)
+          ? []
+          : preserveRoleScopedApprovalScopes(
+              existingRole,
+              existing?.approvedScopes ?? existing?.scopes,
+            ),
     );
-    const nextApprovedScopes = mergeScopes(
-      existing?.approvedScopes ?? existing?.scopes,
-      pending.scopes,
-      approvedScopes,
-    );
-    const sanitizedApprovedScopes = resolveBootstrapProfileScopesForRoles(
-      approvedRoles,
-      nextApprovedScopes ?? [],
-    );
+    const roles = mergeRoles(existing?.roles, existing?.role, pending.roles, pending.role);
+    const nextApprovedScopes = mergeScopes(preservedExistingScopes, grantedScopes);
     const tokens = existing?.tokens ? { ...existing.tokens } : {};
-    for (const roleForToken of approvedRoles) {
+    for (const roleForToken of grantedRoles) {
       const existingToken = tokens[roleForToken];
       const tokenScopes =
         roleForToken === OPERATOR_ROLE
-          ? resolveBootstrapProfileScopesForRole(roleForToken, approvedScopes)
+          ? resolveBootstrapProfileScopesForRole(roleForToken, grantedScopes)
           : [];
       tokens[roleForToken] = buildDeviceAuthToken({
         role: roleForToken,
@@ -748,8 +789,8 @@ export async function approveBootstrapDevicePairing(
       clientMode: pending.clientMode,
       role: pending.role,
       roles,
-      scopes: sanitizedApprovedScopes,
-      approvedScopes: sanitizedApprovedScopes,
+      scopes: nextApprovedScopes,
+      approvedScopes: nextApprovedScopes,
       remoteIp: pending.remoteIp,
       tokens,
       createdAtMs: existing?.createdAtMs ?? now,
@@ -767,17 +808,19 @@ export async function rejectDevicePairing(
   baseDir?: string,
 ): Promise<{ requestId: string; deviceId: string } | null> {
   return await withLock(async () => {
-    return await rejectPendingPairingRequest<
-      DevicePairingPendingRequest,
-      DevicePairingStateFile,
-      "deviceId"
-    >({
-      requestId,
-      idKey: "deviceId",
-      loadState: () => loadState(baseDir),
-      persistState: (state) => persistState(state, baseDir, "pending"),
-      getId: (pending: DevicePairingPendingRequest) => pending.deviceId,
+    const state = await loadState(baseDir);
+    const pending = state.pendingById[requestId];
+    if (!pending) {
+      return null;
+    }
+    delete state.pendingById[requestId];
+    await persistState(state, baseDir, "pending");
+    await revokeDeviceBootstrapTokensForDevice({
+      deviceId: pending.deviceId,
+      publicKey: pending.publicKey,
+      baseDir,
     });
+    return { requestId, deviceId: pending.deviceId };
   });
 }
 
@@ -817,6 +860,9 @@ export async function updatePairedDeviceMetadata(
     const next = { ...existing };
     if ("displayName" in patch) {
       next.displayName = patch.displayName;
+    }
+    if ("platform" in patch) {
+      next.platform = patch.platform;
     }
     if ("clientId" in patch) {
       next.clientId = patch.clientId;

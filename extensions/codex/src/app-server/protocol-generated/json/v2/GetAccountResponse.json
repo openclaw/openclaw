@@ -2,7 +2,9 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "GetAccountResponse",
   "type": "object",
-  "required": ["requiresOpenaiAuth"],
+  "required": [
+    "requiresOpenaiAuth"
+  ],
   "properties": {
     "account": {
       "anyOf": [
@@ -23,11 +25,15 @@
       "oneOf": [
         {
           "type": "object",
-          "required": ["type"],
+          "required": [
+            "type"
+          ],
           "properties": {
             "type": {
               "type": "string",
-              "enum": ["apiKey"],
+              "enum": [
+                "apiKey"
+              ],
               "title": "ApiKeyAccountType"
             }
           },
@@ -35,7 +41,11 @@
         },
         {
           "type": "object",
-          "required": ["email", "planType", "type"],
+          "required": [
+            "email",
+            "planType",
+            "type"
+          ],
           "properties": {
             "email": {
               "type": "string"
@@ -45,7 +55,9 @@
             },
             "type": {
               "type": "string",
-              "enum": ["chatgpt"],
+              "enum": [
+                "chatgpt"
+              ],
               "title": "ChatgptAccountType"
             }
           },
@@ -53,11 +65,15 @@
         },
         {
           "type": "object",
-          "required": ["type"],
+          "required": [
+            "type"
+          ],
           "properties": {
             "type": {
               "type": "string",
-              "enum": ["amazonBedrock"],
+              "enum": [
+                "amazonBedrock"
+              ],
               "title": "AmazonBedrockAccountType"
             }
           },

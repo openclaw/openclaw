@@ -30,9 +30,21 @@ on:
         options:
           - aws
           - hetzner
+      crabbox_lease_id:
+        description: Optional existing Crabbox desktop/browser lease id or slug to reuse
+        required: false
+        type: string
+      hydrate_mode:
+        description: Remote workspace hydrate mode
+        required: false
+        default: source
+        type: choice
+        options:
+          - source
+          - prehydrated
 
 permissions:
-  contents: write
+  contents: read
   issues: write
   pull-requests: write
 
@@ -43,16 +55,20 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.x"
-  PNPM_VERSION: "10.33.0"
+  PNPM_VERSION: "11.0.8"
   OPENCLAW_BUILD_PRIVATE_QA: "1"
   OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
+  CRABBOX_REF: main
 
 jobs:
   authorize_actor:
     name: Authorize workflow actor
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
+    outputs:
+      authorized: ${{ steps.permission.outputs.authorized }}
     steps:
       - name: Require maintainer-level repository access
+        id: permission
         uses: actions/github-script@v8
         with:
           script: |
@@ -66,15 +82,19 @@ jobs:
             const permission = data.permission;
             core.info(`Actor ${context.actor} permission: ${permission}`);
             if (!allowed.has(permission)) {
-              core.setFailed(
+              core.notice(
                 `Workflow requires write/maintain/admin access. Actor "${context.actor}" has "${permission}".`,
               );
+              core.setOutput("authorized", "false");
+              return;
             }
+            core.setOutput("authorized", "true");
 
   validate_ref:
     name: Validate candidate ref
     needs: authorize_actor
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    if: needs.authorize_actor.outputs.authorized == 'true'
+    runs-on: ubuntu-24.04
     outputs:
       candidate_revision: ${{ steps.validate.outputs.candidate_revision }}
     steps:
@@ -128,7 +148,7 @@ jobs:
   run_slack_desktop:
     name: Run Slack desktop smoke
     needs: validate_ref
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 180
     environment: qa-live-shared
     steps:
@@ -148,6 +168,16 @@ jobs:
       - name: Build Mantis harness
         run: pnpm build
 
+      - name: Cache Mantis candidate pnpm store
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/share/pnpm/store
+            ~/.cache/pnpm
+          key: mantis-slack-pnpm-${{ runner.os }}-${{ env.NODE_VERSION }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            mantis-slack-pnpm-${{ runner.os }}-${{ env.NODE_VERSION }}-
+
       - name: Setup Go for Crabbox CLI
         uses: actions/setup-go@v6
         with:
@@ -160,7 +190,10 @@ jobs:
           set -euo pipefail
           install_dir="${RUNNER_TEMP}/crabbox"
           mkdir -p "$install_dir" "$HOME/.local/bin"
-          git clone --depth 1 https://github.com/openclaw/crabbox.git "$install_dir/src"
+          git init "$install_dir/src"
+          git -C "$install_dir/src" remote add origin https://github.com/openclaw/crabbox.git
+          git -C "$install_dir/src" fetch --depth 1 origin "$CRABBOX_REF"
+          git -C "$install_dir/src" checkout --detach FETCH_HEAD
           go build -C "$install_dir/src" -o "$HOME/.local/bin/crabbox" ./cmd/crabbox
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           "$HOME/.local/bin/crabbox" --version
@@ -177,7 +210,7 @@ jobs:
           worktree_root=".artifacts/qa-e2e/mantis/slack-desktop-smoke-worktrees"
           mkdir -p "$worktree_root"
           git worktree add --detach "$worktree_root/candidate" "$CANDIDATE_SHA"
-          pnpm --dir "$worktree_root/candidate" install --frozen-lockfile
+          pnpm --dir "$worktree_root/candidate" install --frozen-lockfile --prefer-offline
           pnpm --dir "$worktree_root/candidate" build
 
       - name: Run Slack desktop scenario
@@ -194,8 +227,10 @@ jobs:
           OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN: ${{ secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN }}
           CRABBOX_ACCESS_CLIENT_ID: ${{ secrets.CRABBOX_ACCESS_CLIENT_ID }}
           CRABBOX_ACCESS_CLIENT_SECRET: ${{ secrets.CRABBOX_ACCESS_CLIENT_SECRET }}
+          CRABBOX_LEASE_ID: ${{ inputs.crabbox_lease_id }}
           CRABBOX_PROVIDER: ${{ inputs.crabbox_provider }}
           KEEP_VM: ${{ inputs.keep_vm }}
+          HYDRATE_MODE: ${{ inputs.hydrate_mode }}
           SCENARIO_ID: ${{ inputs.scenario_id }}
         shell: bash
         run: |
@@ -222,6 +257,10 @@ jobs:
           output_rel=".artifacts/qa-e2e/mantis/slack-desktop-smoke"
           root="$candidate_repo/$output_rel"
           echo "output_dir=${root}" >> "$GITHUB_OUTPUT"
+          lease_args=()
+          if [[ -n "${CRABBOX_LEASE_ID:-}" ]]; then
+            lease_args=(--lease-id "$CRABBOX_LEASE_ID")
+          fi
           keep_args=()
           if [[ "$KEEP_VM" == "true" ]]; then
             keep_args=(--keep-lease)
@@ -241,11 +280,13 @@ jobs:
             --credential-source convex \
             --credential-role ci \
             --provider-mode live-frontier \
-            --model openai/gpt-5.4 \
-            --alt-model openai/gpt-5.4 \
+            --hydrate-mode "$HYDRATE_MODE" \
+            --model openai/gpt-5.5 \
+            --alt-model openai/gpt-5.5 \
             --fast \
             --scenario "$SCENARIO_ID" \
-            "${keep_args[@]}"
+            "${keep_args[@]}" \
+            "${lease_args[@]}"
           mantis_exit=$?
           set -e
 
@@ -256,7 +297,8 @@ jobs:
 
           if [[ -f "$root/slack-desktop-smoke.mp4" ]]; then
             if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then
-              sudo apt-get update && sudo apt-get install -y ffmpeg || true
+              sudo apt-get update -y >/tmp/mantis-slack-ffmpeg-apt.log 2>&1 || true
+              sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ffmpeg >>/tmp/mantis-slack-ffmpeg-apt.log 2>&1 || true
             fi
             if ! crabbox media preview \
               --input "$root/slack-desktop-smoke.mp4" \
@@ -271,10 +313,15 @@ jobs:
           fi
 
           status="$(jq -r '.status' "$root/mantis-slack-desktop-smoke-summary.json")"
+          screenshot_required=false
+          if [[ "$status" == "pass" ]]; then
+            screenshot_required=true
+          fi
           jq -n \
             --arg status "$status" \
             --arg candidate_sha "${{ needs.validate_ref.outputs.candidate_revision }}" \
             --arg scenario "$SCENARIO_ID" \
+            --argjson screenshot_required "$screenshot_required" \
             '{
               schemaVersion: 1,
               id: "slack-desktop-smoke",
@@ -286,7 +333,7 @@ jobs:
                 pass: ($status == "pass")
               },
               artifacts: [
-                { kind: "desktopScreenshot", lane: "candidate", label: "Slack desktop/VNC browser", path: "slack-desktop-smoke.png", targetPath: "slack-desktop.png", alt: "Slack Web desktop screenshot from the Mantis VM", width: 720, inline: true },
+                { kind: "desktopScreenshot", lane: "candidate", label: "Slack desktop/VNC browser", path: "slack-desktop-smoke.png", targetPath: "slack-desktop.png", alt: "Slack Web desktop screenshot from the Mantis VM", width: 720, inline: true, required: $screenshot_required },
                 { kind: "motionPreview", lane: "candidate", label: "Slack motion preview", path: "slack-desktop-smoke-preview.gif", targetPath: "slack-desktop-preview.gif", alt: "Animated Slack desktop preview", width: 720, inline: true, required: false },
                 { kind: "motionClip", lane: "candidate", label: "Slack change MP4", path: "slack-desktop-smoke-change.mp4", targetPath: "slack-desktop-change.mp4", required: false },
                 { kind: "fullVideo", lane: "candidate", label: "Slack desktop MP4", path: "slack-desktop-smoke.mp4", targetPath: "slack-desktop.mp4", required: false },
@@ -312,7 +359,7 @@ jobs:
       - name: Upload Mantis Slack desktop artifacts
         id: upload_artifact
         if: ${{ always() && steps.run_mantis.outputs.output_dir != '' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mantis-slack-desktop-smoke-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.run_mantis.outputs.output_dir }}
@@ -328,17 +375,22 @@ jobs:
           private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
-          permission-contents: write
           permission-issues: write
           permission-pull-requests: write
 
       - name: Comment PR with inline QA evidence
-        if: ${{ always() && inputs.pr_number != '' && steps.run_mantis.outputs.output_dir != '' }}
+        if: ${{ always() && inputs.pr_number != '' && steps.run_mantis.outputs.output_dir != '' && steps.upload_artifact.outputs.artifact-url != '' }}
         env:
           GH_TOKEN: ${{ steps.mantis_app_token.outputs.token }}
-          TARGET_PR: ${{ inputs.pr_number }}
           ARTIFACT_URL: ${{ steps.upload_artifact.outputs.artifact-url }}
+          MANTIS_ARTIFACT_R2_ACCESS_KEY_ID: ${{ secrets.MANTIS_ARTIFACT_R2_ACCESS_KEY_ID }}
+          MANTIS_ARTIFACT_R2_BUCKET: openclaw-crabbox-artifacts
+          MANTIS_ARTIFACT_R2_ENDPOINT: ${{ vars.MANTIS_ARTIFACT_R2_ENDPOINT }}
+          MANTIS_ARTIFACT_R2_PUBLIC_BASE_URL: https://artifacts.openclaw.ai
+          MANTIS_ARTIFACT_R2_REGION: auto
+          MANTIS_ARTIFACT_R2_SECRET_ACCESS_KEY: ${{ secrets.MANTIS_ARTIFACT_R2_SECRET_ACCESS_KEY }}
           REQUEST_SOURCE: workflow_dispatch
+          TARGET_PR: ${{ inputs.pr_number }}
         shell: bash
         run: |
           set -euo pipefail

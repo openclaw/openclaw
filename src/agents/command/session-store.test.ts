@@ -383,8 +383,12 @@ describe("updateSessionStoreAfterAgentRun", () => {
       });
 
       const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
-      expect(persisted?.acp).toBeDefined();
-      expect(staleInMemory[sessionKey]?.acp).toBeDefined();
+      expect(persisted?.acp?.backend).toBe("acpx");
+      expect(persisted?.acp?.agent).toBe("codex");
+      expect(persisted?.acp?.runtimeSessionName).toBe("runtime-1");
+      expect(persisted?.acp?.mode).toBe("persistent");
+      expect(persisted?.acp?.state).toBe("idle");
+      expect(staleInMemory[sessionKey]?.acp).toEqual(persisted?.acp);
     });
   });
 
@@ -433,14 +437,12 @@ describe("updateSessionStoreAfterAgentRun", () => {
       });
 
       const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
-      expect(persisted).toMatchObject({
-        status: "done",
-        startedAt: 1_000,
-        endedAt: 1_900,
-        runtimeMs: 900,
-        modelProvider: "openai",
-        model: "gpt-5.4",
-      });
+      expect(persisted?.status).toBe("done");
+      expect(persisted?.startedAt).toBe(1_000);
+      expect(persisted?.endedAt).toBe(1_900);
+      expect(persisted?.runtimeMs).toBe(900);
+      expect(persisted?.modelProvider).toBe("openai");
+      expect(persisted?.model).toBe("gpt-5.4");
       expect(staleInMemory[sessionKey]?.status).toBe("done");
     });
   });
@@ -675,6 +677,68 @@ describe("updateSessionStoreAfterAgentRun", () => {
       expect(sessionStore[sessionKey]?.outputTokens).toBe(20_000);
       expect(sessionStore[sessionKey]?.totalTokens).toBeUndefined();
       expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(false);
+    });
+  });
+
+  it("persists CLI lastCallUsage as the context snapshot (totalTokens)", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {
+        agents: {
+          defaults: {
+            cliBackends: {
+              "claude-cli": { command: "claude" },
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-cli-last-call-usage";
+      const sessionId = "test-cli-last-call-usage-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        contextTokensOverride: 1_000_000,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "claude-cli",
+        defaultModel: "claude-opus-4-7",
+        result: {
+          meta: {
+            durationMs: 1,
+            executionTrace: { runner: "cli" },
+            agentMeta: {
+              sessionId,
+              provider: "claude-cli",
+              model: "claude-opus-4-7",
+              usage: {
+                input: 6,
+                output: 25,
+                cacheRead: 50_000,
+                cacheWrite: 0,
+              },
+              lastCallUsage: {
+                input: 6,
+                output: 25,
+                cacheRead: 50_000,
+                cacheWrite: 0,
+              },
+            },
+          },
+        },
+      });
+
+      expect(sessionStore[sessionKey]?.totalTokens).toBe(50_006);
+      expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(true);
+      expect(loadSessionStore(storePath)[sessionKey]?.totalTokens).toBe(50_006);
+      expect(loadSessionStore(storePath)[sessionKey]?.totalTokensFresh).toBe(true);
     });
   });
 

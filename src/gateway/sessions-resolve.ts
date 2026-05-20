@@ -64,12 +64,11 @@ function isResolvedSessionKeyVisible(params: {
   if (typeof params.p.spawnedBy !== "string" || params.p.spawnedBy.trim().length === 0) {
     return true;
   }
-  return listSessionsFromStore({
-    cfg: params.cfg,
-    storePath: params.storePath,
+  return filterAndSortSessionEntries({
     store: params.store,
+    now: Date.now(),
     opts: resolveSessionVisibilityFilterOptions(params.p),
-  }).sessions.some((session) => session.key === params.key);
+  }).some(([key]) => key === params.key);
 }
 
 function findVisibleSessionIdMatches(params: {
@@ -166,7 +165,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
   }
 
   if (hasSessionId) {
-    const { store } = loadCombinedSessionStoreForGateway(cfg);
+    const { store } = loadCombinedSessionStoreForGateway(cfg, { agentId: p.agentId });
     const matches = findVisibleSessionIdMatches({ store, p, sessionId });
     const selection = resolveSessionIdMatchSelection(matches, sessionId);
     if (selection.kind === "none") {
@@ -200,7 +199,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
     };
   }
 
-  const { storePath, store } = loadCombinedSessionStoreForGateway(cfg);
+  const { storePath, store } = loadCombinedSessionStoreForGateway(cfg, { agentId: p.agentId });
   const list = listSessionsFromStore({
     cfg,
     storePath,

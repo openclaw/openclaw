@@ -4,11 +4,11 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
-  __resetGatewayModelPricingCacheForTest,
-  __setGatewayModelPricingForTest,
+  resetGatewayModelPricingCacheForTest,
+  setGatewayModelPricingForTest,
 } from "../gateway/model-pricing-cache-state.js";
 import {
-  __resetUsageFormatCachesForTest,
+  resetUsageFormatCachesForTest,
   estimateUsageCost,
   formatTokenCount,
   formatUsd,
@@ -16,15 +16,42 @@ import {
   type PricingTier,
 } from "./usage-format.js";
 
+type ModelCostConfig = NonNullable<ReturnType<typeof resolveModelCostConfig>>;
+
+function requireCostConfig(
+  cost: ReturnType<typeof resolveModelCostConfig>,
+  label: string,
+): ModelCostConfig {
+  if (!cost) {
+    throw new Error(`expected ${label} cost config`);
+  }
+  return cost;
+}
+
+function requireTieredPricing(
+  cost: ModelCostConfig,
+  label: string,
+): NonNullable<ModelCostConfig["tieredPricing"]> {
+  if (!cost.tieredPricing) {
+    throw new Error(`expected ${label} tiered pricing`);
+  }
+  return cost.tieredPricing;
+}
+
 describe("usage-format", () => {
   const originalAgentDir = process.env.OPENCLAW_AGENT_DIR;
+  const originalStateDir = process.env.OPENCLAW_STATE_DIR;
   let agentDir: string;
+  let stateDir: string;
 
   beforeEach(async () => {
-    agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-usage-format-"));
-    process.env.OPENCLAW_AGENT_DIR = agentDir;
-    __resetUsageFormatCachesForTest();
-    __resetGatewayModelPricingCacheForTest();
+    stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-usage-format-"));
+    agentDir = path.join(stateDir, "agents", "main", "agent");
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    delete process.env.OPENCLAW_AGENT_DIR;
+    await fs.mkdir(agentDir, { recursive: true });
+    resetUsageFormatCachesForTest();
+    resetGatewayModelPricingCacheForTest();
   });
 
   afterEach(async () => {
@@ -33,9 +60,14 @@ describe("usage-format", () => {
     } else {
       process.env.OPENCLAW_AGENT_DIR = originalAgentDir;
     }
-    __resetUsageFormatCachesForTest();
-    __resetGatewayModelPricingCacheForTest();
-    await fs.rm(agentDir, { recursive: true, force: true });
+    if (originalStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = originalStateDir;
+    }
+    resetUsageFormatCachesForTest();
+    resetGatewayModelPricingCacheForTest();
+    await fs.rm(stateDir, { recursive: true, force: true });
   });
 
   it("formats token counts", () => {
@@ -143,7 +175,7 @@ describe("usage-format", () => {
       "utf8",
     );
 
-    __setGatewayModelPricingForTest([
+    setGatewayModelPricingForTest([
       {
         provider: "demo-preferred",
         model: "demo-model",
@@ -181,7 +213,7 @@ describe("usage-format", () => {
       },
     } as unknown as OpenClawConfig;
 
-    __setGatewayModelPricingForTest([
+    setGatewayModelPricingForTest([
       {
         provider: "demo-config-provider",
         model: "demo-model",
@@ -204,7 +236,7 @@ describe("usage-format", () => {
   });
 
   it("falls back to cached gateway pricing when no configured cost exists", () => {
-    __setGatewayModelPricingForTest([
+    setGatewayModelPricingForTest([
       {
         provider: "demo-cached-provider",
         model: "demo-model",
@@ -483,18 +515,18 @@ describe("usage-format", () => {
       provider: "volcengine",
       model: "doubao-open-ended",
     });
-    expect(cost1).toBeDefined();
-    expect(cost1!.tieredPricing).toHaveLength(2);
-    expect(cost1!.tieredPricing![1].range).toEqual([32000, Infinity]);
+    const tiers1 = requireTieredPricing(requireCostConfig(cost1, "open-ended"), "open-ended");
+    expect(tiers1).toHaveLength(2);
+    expect(tiers1[1].range).toEqual([32000, Infinity]);
 
     // [32000, -1] should also be normalized to [32000, Infinity]
     const cost2 = resolveModelCostConfig({
       provider: "volcengine",
       model: "doubao-neg-one",
     });
-    expect(cost2).toBeDefined();
-    expect(cost2!.tieredPricing).toHaveLength(2);
-    expect(cost2!.tieredPricing![1].range).toEqual([32000, Infinity]);
+    const tiers2 = requireTieredPricing(requireCostConfig(cost2, "negative-end"), "negative-end");
+    expect(tiers2).toHaveLength(2);
+    expect(tiers2[1].range).toEqual([32000, Infinity]);
   });
 
   it("resolves tiered pricing from models.json", async () => {
@@ -538,15 +570,15 @@ describe("usage-format", () => {
       provider: "volcengine",
       model: "doubao-seed-2-0-pro",
     });
+    const tiers = requireTieredPricing(requireCostConfig(cost, "models.json"), "models.json");
 
-    expect(cost).toBeDefined();
-    expect(cost!.tieredPricing).toHaveLength(2);
-    expect(cost!.tieredPricing![0].range).toEqual([0, 32000]);
-    expect(cost!.tieredPricing![1].input).toBe(0.7);
+    expect(tiers).toHaveLength(2);
+    expect(tiers[0].range).toEqual([0, 32000]);
+    expect(tiers[1].input).toBe(0.7);
   });
 
   it("resolves tiered pricing from cached gateway (LiteLLM)", () => {
-    __setGatewayModelPricingForTest([
+    setGatewayModelPricingForTest([
       {
         provider: "volcengine",
         model: "doubao-seed",
@@ -579,8 +611,8 @@ describe("usage-format", () => {
       provider: "volcengine",
       model: "doubao-seed",
     });
+    const tiers = requireTieredPricing(requireCostConfig(cost, "cached gateway"), "cached gateway");
 
-    expect(cost).toBeDefined();
-    expect(cost!.tieredPricing).toHaveLength(2);
+    expect(tiers).toHaveLength(2);
   });
 });

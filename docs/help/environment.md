@@ -36,6 +36,38 @@ Two equivalent ways to set inline env vars (both are non-overriding):
 }
 ```
 
+The config `env` block accepts literal string values only. It does not expand
+`file:...` values; for example, `XAI_API_KEY: "file:secrets/xai-api-key.txt"`
+is passed to providers as that exact string.
+
+For file-backed provider keys, use a SecretRef on the credential field that
+supports it:
+
+```json5
+{
+  secrets: {
+    providers: {
+      xai_key_file: {
+        source: "file",
+        path: "~/.openclaw/secrets/xai-api-key.txt",
+        mode: "singleValue",
+      },
+    },
+  },
+  models: {
+    providers: {
+      xai: {
+        apiKey: { source: "file", provider: "xai_key_file", id: "value" },
+      },
+    },
+  },
+}
+```
+
+See [Secrets Management](/gateway/secrets) and the
+[SecretRef credential surface](/reference/secretref-credential-surface) for
+supported fields.
+
 ## Shell env import
 
 `env.shellEnv` runs your login shell and imports only **missing** expected keys:
@@ -100,6 +132,8 @@ OpenClaw supports two env-driven patterns:
 - SecretRef objects (`{ source: "env", provider: "default", id: "VAR" }`) for fields that support secrets references.
 
 Both resolve from process env at activation time. SecretRef details are documented in [Secrets Management](/gateway/secrets).
+The config `env` block itself does not resolve SecretRefs or `file:...`
+shorthand values.
 
 ## Path-related env vars
 
@@ -112,9 +146,13 @@ Both resolve from process env at activation time. SecretRef details are document
 
 ## Logging
 
-| Variable             | Purpose                                                                                                                                                                                      |
-| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `OPENCLAW_LOG_LEVEL` | Override log level for both file and console (e.g. `debug`, `trace`). Takes precedence over `logging.level` and `logging.consoleLevel` in config. Invalid values are ignored with a warning. |
+| Variable                         | Purpose                                                                                                                                                                                      |
+| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OPENCLAW_LOG_LEVEL`             | Override log level for both file and console (e.g. `debug`, `trace`). Takes precedence over `logging.level` and `logging.consoleLevel` in config. Invalid values are ignored with a warning. |
+| `OPENCLAW_DEBUG_MODEL_TRANSPORT` | Emit targeted model request/response timing diagnostics at `info` level without enabling global debug logs.                                                                                  |
+| `OPENCLAW_DEBUG_MODEL_PAYLOAD`   | Model payload diagnostics: `summary`, `tools`, or `full-redacted`. `full-redacted` is capped and redacted but may include prompt/message text.                                               |
+| `OPENCLAW_DEBUG_SSE`             | Streaming diagnostics: `events` for first/done timing, `peek` to include the first five redacted SSE events.                                                                                 |
+| `OPENCLAW_DEBUG_CODE_MODE`       | Code-mode model-surface diagnostics, including provider-tool hiding and exec/wait-only enforcement.                                                                                          |
 
 ### `OPENCLAW_HOME`
 

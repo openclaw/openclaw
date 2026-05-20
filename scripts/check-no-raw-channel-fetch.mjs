@@ -14,8 +14,6 @@ const sourceRoots = ["src/channels", "src/routing", "src/line", "extensions"];
 // Temporary allowlist for legacy callsites. New raw fetch callsites in channel/plugin runtime
 // code should be rejected and migrated to fetchWithSsrFGuard/shared channel helpers.
 const allowedRawFetchCallsites = new Set([
-  bundledPluginCallsite("bluebubbles", "src/test-harness.ts", 132),
-  bundledPluginCallsite("bluebubbles", "src/types.ts", 204),
   bundledPluginCallsite("browser", "src/browser/cdp.helpers.ts", 268),
   bundledPluginCallsite("browser", "src/browser/client-fetch.ts", 192),
   bundledPluginCallsite("chutes", "models.ts", 536),
@@ -27,8 +25,8 @@ const allowedRawFetchCallsites = new Set([
   bundledPluginCallsite("elevenlabs", "speech-provider.ts", 295),
   bundledPluginCallsite("elevenlabs", "tts.ts", 74),
   bundledPluginCallsite("feishu", "src/monitor.webhook.test-helpers.ts", 25),
-  bundledPluginCallsite("github-copilot", "login.ts", 69),
-  bundledPluginCallsite("github-copilot", "login.ts", 101),
+  bundledPluginCallsite("github-copilot", "login.ts", 80),
+  bundledPluginCallsite("github-copilot", "login.ts", 112),
   bundledPluginCallsite("googlechat", "src/auth.ts", 83),
   bundledPluginCallsite("huggingface", "models.ts", 143),
   bundledPluginCallsite("kilocode", "provider-models.ts", 130),

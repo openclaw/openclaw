@@ -14,7 +14,7 @@ import {
   describeWhatsAppMessageActions,
   resolveWhatsAppAgentReactionGuidance,
 } from "./channel-actions.js";
-import { whatsappChannelOutbound } from "./channel-outbound.js";
+import { whatsappChannelOutbound, whatsappMessageAdapter } from "./channel-outbound.js";
 import { whatsappCommandPolicy } from "./command-policy.js";
 import { formatWhatsAppConfigAllowFromEntries } from "./config-accessors.js";
 import {
@@ -127,6 +127,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
           hint: "<E.164|group JID|newsletter JID>",
         },
       },
+      message: whatsappMessageAdapter,
       directory: {
         self: async ({ cfg, accountId }) => {
           const account = resolveWhatsAppAccount({ cfg, accountId });
@@ -150,17 +151,31 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
       actions: {
         describeMessageTool: ({ cfg, accountId }) =>
           describeWhatsAppMessageActions({ cfg, accountId }),
-        supportsAction: ({ action }) => action === "react",
-        resolveExecutionMode: ({ action }) => (action === "react" ? "gateway" : "local"),
-        handleAction: async ({ action, params, cfg, accountId, requesterSenderId, toolContext }) =>
+        supportsAction: ({ action }) => action === "react" || action === "upload-file",
+        resolveExecutionMode: ({ action }) =>
+          action === "react" || action === "upload-file" ? "gateway" : "local",
+        handleAction: async ({
+          action,
+          params,
+          cfg,
+          accountId,
+          requesterSenderId,
+          mediaAccess,
+          mediaLocalRoots,
+          mediaReadFile,
+          toolContext,
+        }) =>
           await (
             await loadWhatsAppChannelReactAction()
-          ).handleWhatsAppReactAction({
+          ).handleWhatsAppMessageAction({
             action,
             params,
             cfg,
             accountId,
             requesterSenderId,
+            mediaAccess,
+            mediaLocalRoots,
+            mediaReadFile,
             toolContext,
           }),
       },

@@ -1,8 +1,8 @@
-import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { execNodeEvalSync, spawnNodeEvalSync } from "../../src/test-utils/node-process.js";
 
 const WRAPPERS = {
   linux: "scripts/e2e/parallels-linux-smoke.sh",
@@ -35,11 +35,18 @@ const TS_PATHS = {
 
 const OS_TS_PATHS = [TS_PATHS.linux, TS_PATHS.macos, TS_PATHS.windows];
 
+function countNonEmptyLines(value: string): number {
+  let count = 0;
+  for (const line of value.split("\n")) {
+    if (line) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 function runTsEval(source: string, env: Record<string, string> = {}) {
-  return execFileSync("node", ["--import", "tsx", "--input-type=module", "--eval", source], {
-    encoding: "utf8",
-    env: { ...process.env, ...env },
-  });
+  return execNodeEvalSync(source, { env: { ...process.env, ...env }, imports: ["tsx"] });
 }
 
 function resolveProviderAuth(
@@ -79,7 +86,7 @@ describe("Parallels smoke model selection", () => {
       } else {
         expect(wrapper, wrapperPath).toContain(TS_PATHS[platform as "linux" | "macos" | "windows"]);
       }
-      expect(wrapper.split("\n").filter(Boolean).length).toBeLessThanOrEqual(5);
+      expect(countNonEmptyLines(wrapper)).toBeLessThanOrEqual(5);
     }
   });
 
@@ -110,9 +117,11 @@ console.log(result);
 `;
     const batch = JSON.parse(runTsEval(source, { OPENAI_API_KEY: "sk-openai" })) as Array<{
       path: string;
+      value: unknown;
     }>;
 
     expect(batch.map((entry) => entry.path)).toContain('agents.defaults.models["openai/gpt-5.5"]');
+    expect(JSON.stringify(batch)).not.toContain("agentRuntime");
   });
 
   it("keeps snapshot, host, package, and quote helpers shared", () => {
@@ -233,6 +242,17 @@ console.log(resolveUbuntuVmName("Ubuntu missing"));
     expect(script).toContain("DPkg::Lock::Timeout=300");
   });
 
+  it("keeps Linux bad-plugin diagnostics gated for historical update baselines", () => {
+    const script = readFileSync(TS_PATHS.linux, "utf8");
+
+    expect(script).toContain('BAD_PLUGIN_DIAGNOSTIC_MIN_VERSION = "2026.5.7"');
+    expect(script).toContain("parseOpenClawPackageVersion");
+    expect(script).toContain("maybeInjectBadPluginFixture");
+    expect(script).toContain("maybeVerifyBadPluginDiagnostic");
+    expect(script).toContain("Skipping bad plugin diagnostic fixture");
+    expect(script).toContain("Skipping bad plugin diagnostic assertion");
+  });
+
   it("resolves provider defaults and explicit model overrides", () => {
     expect(resolveProviderAuth("openai", { env: { OPENAI_API_KEY: "sk-openai" } })).toEqual({
       apiKeyEnv: "OPENAI_API_KEY",
@@ -265,8 +285,11 @@ const result = resolveWindowsProviderAuth({
 });
 console.log(JSON.stringify(result));
 `;
-    expect(JSON.parse(runTsEval(source, { OPENAI_API_KEY: "sk-openai" }))).toMatchObject({
+    expect(JSON.parse(runTsEval(source, { OPENAI_API_KEY: "sk-openai" }))).toEqual({
       apiKeyEnv: "OPENAI_API_KEY",
+      apiKeyValue: "sk-openai",
+      authChoice: "openai-api-key",
+      authKeyFlag: "openai-api-key",
       modelId: "openai/gpt-5.5",
     });
 
@@ -277,38 +300,28 @@ console.log(JSON.stringify(result));
           OPENCLAW_PARALLELS_WINDOWS_OPENAI_MODEL: "openai/custom-windows",
         }),
       ),
-    ).toMatchObject({
+    ).toEqual({
+      apiKeyEnv: "OPENAI_API_KEY",
+      apiKeyValue: "sk-openai",
+      authChoice: "openai-api-key",
+      authKeyFlag: "openai-api-key",
       modelId: "openai/custom-windows",
     });
   });
 
   it("rejects invalid providers and missing keys before touching guests", () => {
-    const invalidProvider = spawnSync(
-      "node",
-      [
-        "--import",
-        "tsx",
-        "--input-type=module",
-        "--eval",
-        `import { parseProvider } from "./${TS_PATHS.common}"; parseProvider("bogus");`,
-      ],
-      { encoding: "utf8", env: process.env },
+    const invalidProvider = spawnNodeEvalSync(
+      `import { parseProvider } from "./${TS_PATHS.common}"; parseProvider("bogus");`,
+      { env: process.env, imports: ["tsx"] },
     );
     expect(invalidProvider.status).toBe(1);
     expect(invalidProvider.stderr).toContain("invalid --provider: bogus");
 
-    const missingKey = spawnSync(
-      "node",
-      [
-        "--import",
-        "tsx",
-        "--input-type=module",
-        "--eval",
-        `import { resolveProviderAuth } from "./${TS_PATHS.common}"; resolveProviderAuth({ provider: "openai", apiKeyEnv: "PARALLELS_TEST_MISSING_KEY" });`,
-      ],
+    const missingKey = spawnNodeEvalSync(
+      `import { resolveProviderAuth } from "./${TS_PATHS.common}"; resolveProviderAuth({ provider: "openai", apiKeyEnv: "PARALLELS_TEST_MISSING_KEY" });`,
       {
-        encoding: "utf8",
         env: { ...process.env, PARALLELS_TEST_MISSING_KEY: "" },
+        imports: ["tsx"],
       },
     );
     expect(missingKey.status).toBe(1);
@@ -332,7 +345,7 @@ console.log(JSON.stringify(result));
         expect(script, scriptPath).toContain("tools.profile");
       }
       expect(script, scriptPath).toContain("--thinking");
-      expect(script, scriptPath).toContain("minimal");
+      expect(script, scriptPath).toContain("off");
       expect(script, scriptPath).toContain("finalAssistant(Raw|Visible)Text");
     }
     expect(readFileSync(TS_PATHS.macos, "utf8")).toContain("modelProviderConfigBatchJson");
@@ -350,7 +363,7 @@ console.log(JSON.stringify(result));
     expect(npmUpdateScripts).toContain("posixAgentWorkspaceScript");
     expect(npmUpdateScripts).toContain("windowsAgentWorkspaceScript");
     expect(npmUpdateScripts).toContain("tools.profile");
-    expect(npmUpdateScripts).toContain("--thinking minimal");
+    expect(npmUpdateScripts).toContain("--thinking off");
     expect(npmUpdateScripts).toContain("finalAssistant(Raw|Visible)Text");
     expect(npmUpdateScripts).toContain("posixAssertAgentOkScript");
     expect(npmUpdateScripts).toContain("windowsAgentTurnConfigPatchScript");
@@ -481,7 +494,7 @@ console.log(JSON.stringify(result));
     ) as { status: number; stdout: string };
 
     expect(result.status).toBe(124);
-    expect(result.stdout).toEqual(expect.any(String));
+    expect(result.stdout).toBeTypeOf("string");
   });
 
   it("runs the Windows agent turn through the detached done-file runner", () => {
@@ -565,6 +578,10 @@ console.log(JSON.stringify({
     expect(powershell).toContain("providerTimeoutConfigJson");
     expect(powershell).toContain("models.providers.${providerId}");
     expect(powershell).toContain("agents.defaults.models${configPathMapKey(modelId)}");
+    expect(powershell).toContain("OPENCLAW_PARALLELS_AGENT_RUNTIME_POLICY_SUPPORTED");
+    expect(powershell).toContain('selectedModelEntry.agentRuntime = { id: "pi" }');
+    expect(powershell).toContain("delete selectedModelEntry.agentRuntime");
+    expect(powershell).toContain("delete providerEntry.agentRuntime");
     expect(powershell).toContain("configPathMapKey");
     expect(powershell).toContain('transport: "sse"');
     expect(powershell).toContain("Resolve-OpenClawCommand");

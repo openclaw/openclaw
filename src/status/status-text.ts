@@ -7,8 +7,12 @@ import {
   resolveSessionAgentId,
   resolveAgentModelFallbacksOverride,
 } from "../agents/agent-scope.js";
+import { resolveContextTokensForModel } from "../agents/context.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import { resolveModelAuthLabel } from "../agents/model-auth-label.js";
+import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
+import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
+import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../agents/openai-codex-routing.js";
 import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
@@ -81,6 +85,19 @@ function loadStatusQueueRuntime(): Promise<typeof import("./status-queue.runtime
   return runtimePromise;
 }
 
+function resolveStatusRuntimeContextTokens(params: {
+  cfg: OpenClawConfig;
+  provider: string;
+  model: string;
+}): number | undefined {
+  return resolveContextTokensForModel({
+    cfg: params.cfg,
+    provider: params.provider,
+    model: params.model,
+    allowAsyncLoad: false,
+  });
+}
+
 function shouldLoadUsageSummary(params: {
   provider?: string;
   selectedModelAuth?: string;
@@ -132,13 +149,13 @@ async function resolveStatusHarnessId(params: {
       agentHarnessId: params.sessionEntry?.agentHarnessId,
     });
     const id = normalizeOptionalLowercaseString(selected.id);
-    return id && id !== "pi" ? id : undefined;
+    return id || undefined;
   } catch {
     return undefined;
   }
 }
 
-function resolveStatusAuthProvider(params: {
+function resolveStatusRuntimeProvider(params: {
   provider: string;
   effectiveHarness?: string;
 }): string {
@@ -146,6 +163,9 @@ function resolveStatusAuthProvider(params: {
   const provider = normalizeOptionalLowercaseString(params.provider);
   if (harness === "codex" && provider === "openai") {
     return "openai-codex";
+  }
+  if (harness === "claude-cli" && provider === "anthropic") {
+    return "claude-cli";
   }
   return params.provider;
 }
@@ -212,13 +232,30 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
       sessionKey,
       sessionEntry,
     }));
-  const selectedModelAuth = Object.hasOwn(params, "modelAuthOverride")
+  const selectedStatusProvider = resolveStatusRuntimeProvider({
+    provider,
+    effectiveHarness,
+  });
+  const selectedAuthProviders = listOpenAIAuthProfileProvidersForAgentRuntime({
+    provider,
+    harnessRuntime: effectiveHarness,
+    config: cfg,
+  });
+  const activeProvider = modelRefs.active.provider || provider;
+  const activeStatusProvider = resolveStatusRuntimeProvider({
+    provider: activeProvider,
+    effectiveHarness,
+  });
+  const activeAuthProviders = listOpenAIAuthProfileProvidersForAgentRuntime({
+    provider: activeProvider,
+    harnessRuntime: effectiveHarness,
+    config: cfg,
+  });
+  let selectedModelAuth = Object.hasOwn(params, "modelAuthOverride")
     ? params.modelAuthOverride
     : resolveModelAuthLabel({
-        provider: resolveStatusAuthProvider({
-          provider,
-          effectiveHarness,
-        }),
+        provider: selectedStatusProvider,
+        acceptedProviderIds: selectedAuthProviders,
         cfg,
         sessionEntry,
         agentDir: statusAgentDir,
@@ -229,10 +266,8 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     ? params.activeModelAuthOverride
     : modelRefs.activeDiffers
       ? resolveModelAuthLabel({
-          provider: resolveStatusAuthProvider({
-            provider: modelRefs.active.provider,
-            effectiveHarness,
-          }),
+          provider: activeStatusProvider,
+          acceptedProviderIds: activeAuthProviders,
           cfg,
           sessionEntry,
           agentDir: statusAgentDir,
@@ -240,19 +275,27 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
           includeExternalProfiles: false,
         })
       : selectedModelAuth;
-  const currentUsageProvider = (() => {
-    try {
-      return resolveUsageProviderId(provider);
-    } catch {
-      return undefined;
-    }
-  })();
+  const runtimeAliasModelEquivalent = areRuntimeModelRefsEquivalent(
+    modelRefs.selected.label,
+    modelRefs.active.label,
+  );
+  if (
+    runtimeAliasModelEquivalent &&
+    normalizeOptionalLowercaseString(selectedModelAuth) === "unknown" &&
+    activeModelAuth &&
+    normalizeOptionalLowercaseString(activeModelAuth) !== "unknown"
+  ) {
+    selectedModelAuth = activeModelAuth;
+  }
+  const usageAuthLabel = modelRefs.activeDiffers ? activeModelAuth : selectedModelAuth;
+  const currentUsageProvider =
+    resolveUsageProviderId(activeStatusProvider) ?? resolveUsageProviderId(activeProvider);
   let usageLine: string | null = null;
   if (
     currentUsageProvider &&
     shouldLoadUsageSummary({
       provider: currentUsageProvider,
-      selectedModelAuth,
+      selectedModelAuth: usageAuthLabel,
     })
   ) {
     try {
@@ -338,10 +381,21 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
       sessionEntry,
     }).enabled;
   const agentFallbacksOverride = resolveAgentModelFallbacksOverride(cfg, statusAgentId);
+  const configuredDefaultRef = resolveDefaultModelForAgent({
+    cfg,
+    agentId: statusAgentId,
+    allowPluginNormalization: false,
+  });
+  const configuredDefaultModelLabel = `${configuredDefaultRef.provider}/${configuredDefaultRef.model}`;
   const { buildStatusMessage } = await loadStatusMessageRuntime();
   const explicitThinkingDefault =
     (agentConfig?.thinkingDefault as ThinkLevel | undefined) ??
     (agentDefaults.thinkingDefault as ThinkLevel | undefined);
+  const runtimeContextTokens = resolveStatusRuntimeContextTokens({
+    cfg,
+    provider: activeStatusProvider,
+    model: modelRefs.active.model || model,
+  });
   return buildStatusMessage({
     config: cfg,
     agent: {
@@ -358,10 +412,12 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
       elevatedDefault: agentDefaults.elevatedDefault,
     },
     agentId: statusAgentId,
+    configuredDefaultModelLabel,
     explicitConfiguredContextTokens:
       typeof agentDefaults.contextTokens === "number" && agentDefaults.contextTokens > 0
         ? agentDefaults.contextTokens
         : undefined,
+    runtimeContextTokens,
     sessionEntry,
     sessionKey,
     parentSessionKey,

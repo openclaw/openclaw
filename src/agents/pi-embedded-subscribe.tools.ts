@@ -10,11 +10,13 @@ import {
 } from "../shared/string-coerce.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
+import { isMessageToolSendActionName } from "./pi-embedded-messaging.js";
 import type { MessagingToolSend } from "./pi-embedded-messaging.types.js";
 import { normalizeToolName } from "./tool-policy.js";
 
 const TOOL_RESULT_MAX_CHARS = 8000;
 const TOOL_ERROR_MAX_CHARS = 400;
+const TOOL_DENIAL_ERROR_CODES = ["SYSTEM_RUN_DENIED", "INVALID_REQUEST"] as const;
 
 function truncateToolText(text: string): string {
   if (text.length <= TOOL_RESULT_MAX_CHARS) {
@@ -99,20 +101,80 @@ function extractDirectErrorField(value: unknown): string | undefined {
   );
 }
 
+function readErrorCodeField(value: unknown): string | undefined {
+  return typeof value === "string" ? normalizeOptionalString(value) : undefined;
+}
+
+function readDenialErrorCodeFromMessage(value: unknown): string | undefined {
+  const message = typeof value === "string" ? normalizeOptionalString(value) : undefined;
+  if (!message) {
+    return undefined;
+  }
+  for (const code of TOOL_DENIAL_ERROR_CODES) {
+    if (message === code || message.startsWith(`${code}:`)) {
+      return code;
+    }
+  }
+  return undefined;
+}
+
+function readNestedErrorCodeField(value: unknown): string | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  return (
+    readDenialErrorCodeFromMessage(record.message) ??
+    readDenialErrorCodeFromMessage(record.error) ??
+    readErrorCodeField(record.code) ??
+    readErrorCodeField(record.gatewayCode)
+  );
+}
+
+function extractDirectErrorCodeField(value: unknown): string | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  return (
+    readNestedErrorCodeField(record.error) ??
+    readNestedErrorCodeField(record.nodeError) ??
+    readErrorCodeField(record.code) ??
+    readErrorCodeField(record.gatewayCode)
+  );
+}
+
+function readRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+export function buildToolLifecycleErrorResult(error: unknown): {
+  details: Record<string, unknown>;
+} {
+  const errorRecord = readRecord(error);
+  const rawDetails = readRecord(errorRecord?.details);
+  const nodeError = readRecord(rawDetails?.nodeError);
+  const gatewayCode =
+    readErrorCodeField(errorRecord?.gatewayCode) ?? readErrorCodeField(errorRecord?.code);
+  const message = error instanceof Error ? error.message : String(error);
+  return {
+    details: {
+      status: "error",
+      error: message,
+      ...(gatewayCode ? { gatewayCode } : {}),
+      ...(nodeError ? { nodeError } : {}),
+    },
+  };
+}
+
 function extractAggregatedErrorField(value: unknown): string | undefined {
   if (!value || typeof value !== "object") {
     return undefined;
   }
   const record = value as Record<string, unknown>;
   return readErrorCandidate(record.aggregated);
-}
-
-function isHostDenialToolText(text: string): boolean {
-  const normalized = text.trim();
-  if (normalized.includes("SYSTEM_RUN_DENIED") || normalized.includes("INVALID_REQUEST")) {
-    return true;
-  }
-  return normalized.toLowerCase().includes("approval cannot safely bind");
 }
 
 function redactStringsDeep(value: unknown, seen = new WeakSet<object>()): unknown {
@@ -320,10 +382,12 @@ export function filterToolResultMediaUrls(
     // registered tool's media trust. TTS-generated local files carry a
     // separate trusted-media flag from the owned tool result, so they can
     // survive runs whose exact built-in set omitted the raw tts name.
-    if (builtinToolNames !== undefined && !trustedOwnedTtsLocalMedia) {
-      const registeredName = toolName?.trim();
-      if (!registeredName || !builtinToolNames.has(registeredName)) {
-        return mediaUrls.filter((url) => HTTP_URL_RE.test(url.trim()));
+    if (builtinToolNames !== undefined) {
+      if (!trustedOwnedTtsLocalMedia) {
+        const registeredName = toolName?.trim();
+        if (!registeredName || !builtinToolNames.has(registeredName)) {
+          return mediaUrls.filter((url) => HTTP_URL_RE.test(url.trim()));
+        }
       }
     }
     return mediaUrls;
@@ -362,16 +426,39 @@ function readToolResultDetailsMedia(
 
 function collectStructuredMediaUrls(media: Record<string, unknown>): string[] {
   const urls: string[] = [];
+  const pushString = (value: unknown) => {
+    if (typeof value !== "string") {
+      return;
+    }
+    const normalized = value.trim();
+    if (normalized) {
+      urls.push(normalized);
+    }
+  };
+  const pushAttachment = (value: unknown) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return;
+    }
+    const attachment = value as Record<string, unknown>;
+    pushString(attachment.media);
+    pushString(attachment.path);
+    pushString(attachment.url);
+    pushString(attachment.mediaUrl);
+    pushString(attachment.filePath);
+    pushString(attachment.fileUrl);
+  };
   if (typeof media.mediaUrl === "string" && media.mediaUrl.trim()) {
     urls.push(media.mediaUrl.trim());
   }
   if (Array.isArray(media.mediaUrls)) {
-    urls.push(
-      ...media.mediaUrls
-        .filter((value): value is string => typeof value === "string")
-        .map((value) => value.trim())
-        .filter(Boolean),
-    );
+    for (const value of media.mediaUrls) {
+      pushString(value);
+    }
+  }
+  if (Array.isArray(media.attachments)) {
+    for (const attachment of media.attachments) {
+      pushAttachment(attachment);
+    }
   }
   return Array.from(new Set(urls));
 }
@@ -472,6 +559,14 @@ export function isToolResultError(result: unknown): boolean {
   return normalized === "error" || normalized === "timeout";
 }
 
+export function extractToolErrorCode(result: unknown): string | undefined {
+  if (!result || typeof result !== "object") {
+    return undefined;
+  }
+  const record = result as Record<string, unknown>;
+  return extractDirectErrorCodeField(record.details) ?? extractDirectErrorCodeField(record);
+}
+
 export function isToolResultTimedOut(result: unknown): boolean {
   const normalizedStatus = readToolResultStatus(result);
   if (normalizedStatus === "timeout") {
@@ -508,9 +603,6 @@ export function extractToolErrorMessage(result: unknown): string | undefined {
     } catch {
       // Fall through to status/text fallback.
     }
-    if (isHostDenialToolText(text)) {
-      return normalizeToolErrorText(text);
-    }
   }
   const fromDetailsStatus = extractErrorField(record.details);
   if (fromDetailsStatus) {
@@ -539,7 +631,7 @@ export function extractMessagingToolSend(
   const action = normalizeOptionalString(args.action) ?? "";
   const accountId = normalizeOptionalString(args.accountId);
   if (toolName === "message") {
-    if (action !== "send" && action !== "thread-reply") {
+    if (!isMessageToolSendActionName(action)) {
       return undefined;
     }
     const toRaw = resolveMessageToolTarget(args);
@@ -552,7 +644,23 @@ export function extractMessagingToolSend(
     const providerId = providerHint ? normalizeChannelId(providerHint) : null;
     const provider = providerId ?? normalizeOptionalLowercaseString(providerHint) ?? "message";
     const to = normalizeTargetForProvider(provider, toRaw);
-    return to ? { tool: toolName, provider, accountId, to } : undefined;
+    const threadId = normalizeOptionalString(args.threadId);
+    const threadSuppressed = args.topLevel === true || args.threadId === null;
+    const threadImplicit =
+      !threadId &&
+      !threadSuppressed &&
+      Boolean(providerId && getChannelPlugin(providerId)?.threading?.resolveAutoThreadId);
+    return to
+      ? {
+          tool: toolName,
+          provider,
+          accountId,
+          to,
+          ...(threadId ? { threadId } : {}),
+          ...(threadImplicit ? { threadImplicit: true } : {}),
+          ...(threadSuppressed ? { threadSuppressed: true } : {}),
+        }
+      : undefined;
   }
   const providerId = normalizeChannelId(toolName);
   if (!providerId) {
@@ -564,12 +672,14 @@ export function extractMessagingToolSend(
     return undefined;
   }
   const to = normalizeTargetForProvider(providerId, extracted.to);
+  const threadId = normalizeOptionalString(extracted.threadId);
   return to
     ? {
         tool: toolName,
         provider: providerId,
         accountId: extracted.accountId ?? accountId,
         to,
+        ...(threadId ? { threadId } : {}),
       }
     : undefined;
 }

@@ -77,6 +77,8 @@ function createCronContext(currentJob?: CronJob) {
       update: vi.fn(async () => ({ id: "cron-1" })),
       getDefaultAgentId: vi.fn(() => "main"),
       getJob: vi.fn(() => currentJob),
+      wake: vi.fn(() => ({ ok: true }) as const),
+      readJob: vi.fn(async (id: string) => (id === currentJob?.id ? currentJob : undefined)),
     },
     logGateway: {
       info: vi.fn(),
@@ -89,6 +91,20 @@ async function invokeCronAdd(params: Record<string, unknown>) {
   const context = createCronContext();
   const respond = vi.fn();
   await cronHandlers["cron.add"]({
+    req: {} as never,
+    params: params as never,
+    respond: respond as never,
+    context: context as never,
+    client: null,
+    isWebchatConnect: () => false,
+  });
+  return { context, respond };
+}
+
+async function invokeCronGet(params: Record<string, unknown>, currentJob?: CronJob) {
+  const context = createCronContext(currentJob);
+  const respond = vi.fn();
+  await cronHandlers["cron.get"]({
     req: {} as never,
     params: params as never,
     respond: respond as never,
@@ -130,6 +146,58 @@ function createCronJob(overrides: Partial<CronJob> = {}): CronJob {
   };
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label} to be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireCronAddPayload(
+  context: ReturnType<typeof createCronContext>,
+): Record<string, unknown> {
+  const calls = context.cron.add.mock.calls as unknown as [unknown][];
+  return requireRecord(calls[0]?.[0], "cron.add payload");
+}
+
+function requireCronUpdatePatch(
+  context: ReturnType<typeof createCronContext>,
+): Record<string, unknown> {
+  const calls = context.cron.update.mock.calls as unknown as [unknown, unknown][];
+  return requireRecord(calls[0]?.[1], "cron.update patch");
+}
+
+function requireCronUpdateId(context: ReturnType<typeof createCronContext>): unknown {
+  const calls = context.cron.update.mock.calls as unknown as [unknown, unknown][];
+  return calls[0]?.[0];
+}
+
+function expectDeliveryFields(payload: Record<string, unknown>, expected: Record<string, unknown>) {
+  const delivery = requireRecord(payload.delivery, "delivery");
+  for (const [key, value] of Object.entries(expected)) {
+    expect(delivery[key]).toBe(value);
+  }
+}
+
+function expectResponseError(
+  respond: ReturnType<typeof vi.fn>,
+  expected: { code?: string; messageIncludes?: string },
+) {
+  const call = respond.mock.calls.at(0);
+  if (!call) {
+    throw new Error("expected response call");
+  }
+  expect(call[0]).toBe(false);
+  expect(call[1]).toBeUndefined();
+  const error = requireRecord(call[2], "response error");
+  if (expected.code) {
+    expect(error.code).toBe(expected.code);
+  }
+  if (expected.messageIncludes) {
+    expect(String(error.message)).toContain(expected.messageIncludes);
+  }
+}
+
 describe("cron method validation", () => {
   beforeEach(() => {
     getRuntimeConfig.mockReset().mockReturnValue({} as OpenClawConfig);
@@ -169,17 +237,31 @@ describe("cron method validation", () => {
       },
     });
 
-    expect(context.cron.add).toHaveBeenCalledWith(
-      expect.objectContaining({
-        delivery: expect.objectContaining({
-          mode: "announce",
-          channel: "telegram",
-          to: "-1001234567890",
-          threadId: 123,
-        }),
-      }),
-    );
+    expectDeliveryFields(requireCronAddPayload(context), {
+      mode: "announce",
+      channel: "telegram",
+      to: "-1001234567890",
+      threadId: 123,
+    });
     expect(respond).toHaveBeenCalledWith(true, { id: "cron-1" }, undefined);
+  });
+
+  it("returns a single cron job for cron.get", async () => {
+    const job = createCronJob({ id: "cron-42", name: "single job" });
+
+    const { context, respond } = await invokeCronGet({ id: "cron-42" }, job);
+
+    expect(context.cron.readJob).toHaveBeenCalledWith("cron-42");
+    expect(respond).toHaveBeenCalledWith(true, job, undefined);
+  });
+
+  it("returns INVALID_REQUEST when cron.get cannot find the job", async () => {
+    const { respond } = await invokeCronGet({ jobId: "missing" });
+
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "cron job not found: missing",
+    });
   });
 
   it("accepts threadId on announce delivery update params", async () => {
@@ -213,17 +295,13 @@ describe("cron method validation", () => {
       }),
     );
 
-    expect(context.cron.update).toHaveBeenCalledWith(
-      "cron-1",
-      expect.objectContaining({
-        delivery: expect.objectContaining({
-          mode: "announce",
-          channel: "telegram",
-          to: "-1001234567890",
-          threadId: "456",
-        }),
-      }),
-    );
+    expect(requireCronUpdateId(context)).toBe("cron-1");
+    expectDeliveryFields(requireCronUpdatePatch(context), {
+      mode: "announce",
+      channel: "telegram",
+      to: "-1001234567890",
+      threadId: "456",
+    });
     expect(respond).toHaveBeenCalledWith(true, { id: "cron-1" }, undefined);
   });
 
@@ -251,13 +329,7 @@ describe("cron method validation", () => {
     );
 
     expect(context.cron.update).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "INVALID_REQUEST",
-      }),
-    );
+    expectResponseError(respond, { code: "INVALID_REQUEST" });
   });
 
   it("rejects ambiguous announce delivery on add when multiple channels are configured", async () => {
@@ -293,13 +365,7 @@ describe("cron method validation", () => {
     });
 
     expect(context.cron.add).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        message: expect.stringContaining("delivery.channel is required"),
-      }),
-    );
+    expectResponseError(respond, { messageIncludes: "delivery.channel is required" });
   });
 
   it("accepts provider-prefixed announce target without delivery.channel when multiple channels are configured", async () => {
@@ -368,13 +434,7 @@ describe("cron method validation", () => {
     });
 
     expect(context.cron.add).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        message: expect.stringContaining("belongs to telegram, not slack"),
-      }),
-    );
+    expectResponseError(respond, { messageIncludes: "belongs to telegram, not slack" });
   });
 
   it("accepts provider-prefixed announce targets when delivery.channel uses a channel alias", async () => {
@@ -443,13 +503,7 @@ describe("cron method validation", () => {
     );
 
     expect(context.cron.update).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        message: expect.stringContaining("belongs to telegram, not slack"),
-      }),
-    );
+    expectResponseError(respond, { messageIncludes: "belongs to telegram, not slack" });
   });
 
   it("rejects underscored provider prefixes for a different explicit delivery channel", async () => {
@@ -482,13 +536,7 @@ describe("cron method validation", () => {
     });
 
     expect(context.cron.add).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        message: expect.stringContaining("belongs to synology-chat, not slack"),
-      }),
-    );
+    expectResponseError(respond, { messageIncludes: "belongs to synology-chat, not slack" });
   });
 
   it("rejects ambiguous announce delivery on update when multiple channels are configured", async () => {
@@ -524,13 +572,7 @@ describe("cron method validation", () => {
     );
 
     expect(context.cron.update).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        message: expect.stringContaining("delivery.channel is required"),
-      }),
-    );
+    expectResponseError(respond, { messageIncludes: "delivery.channel is required" });
   });
 
   it("rejects target ids mistakenly supplied as delivery.channel providers", async () => {
@@ -566,13 +608,7 @@ describe("cron method validation", () => {
     });
 
     expect(context.cron.add).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        message: expect.stringContaining("delivery.channel must be one of: slack"),
-      }),
-    );
+    expectResponseError(respond, { messageIncludes: "delivery.channel must be one of: slack" });
   });
 
   it("returns INVALID_REQUEST when cron.add throws a croner parse error (#74066)", async () => {
@@ -595,14 +631,7 @@ describe("cron method validation", () => {
       isWebchatConnect: () => false,
     });
 
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "INVALID_REQUEST",
-        message: expect.stringContaining("CronPattern"),
-      }),
-    );
+    expectResponseError(respond, { code: "INVALID_REQUEST", messageIncludes: "CronPattern" });
   });
 
   it("returns INVALID_REQUEST when cron.update throws a croner parse error (#74066)", async () => {
@@ -626,14 +655,7 @@ describe("cron method validation", () => {
       isWebchatConnect: () => false,
     });
 
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "INVALID_REQUEST",
-        message: expect.stringContaining("CronPattern"),
-      }),
-    );
+    expectResponseError(respond, { code: "INVALID_REQUEST", messageIncludes: "CronPattern" });
   });
 
   it("re-throws non-parse errors from cron.add instead of masking as INVALID_REQUEST", async () => {
@@ -658,5 +680,90 @@ describe("cron method validation", () => {
       }),
     ).rejects.toThrow("DB write failed");
     expect(respond).not.toHaveBeenCalled();
+  });
+
+  describe("wake", () => {
+    async function invokeWake(params: Record<string, unknown>) {
+      const context = createCronContext();
+      const respond = vi.fn();
+      await cronHandlers.wake({
+        req: {} as never,
+        params: params as never,
+        respond: respond as never,
+        context: context as never,
+        client: null,
+        isWebchatConnect: () => false,
+      });
+      return { context, respond };
+    }
+
+    it("forwards sessionKey to context.cron.wake when provided", async () => {
+      const { context, respond } = await invokeWake({
+        mode: "now",
+        text: "ping",
+        sessionKey: "agent:main:telegram:dm:42",
+      });
+      expect(context.cron.wake).toHaveBeenCalledWith({
+        mode: "now",
+        text: "ping",
+        sessionKey: "agent:main:telegram:dm:42",
+      });
+      expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    });
+
+    it("omits sessionKey when not provided", async () => {
+      const { context, respond } = await invokeWake({
+        mode: "next-heartbeat",
+        text: "ping",
+      });
+      expect(context.cron.wake).toHaveBeenCalledWith({
+        mode: "next-heartbeat",
+        text: "ping",
+      });
+      expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    });
+
+    it("rejects empty-string sessionKey at schema", async () => {
+      const { context, respond } = await invokeWake({
+        mode: "now",
+        text: "ping",
+        sessionKey: "",
+      });
+      expect(context.cron.wake).not.toHaveBeenCalled();
+      expectResponseError(respond, { code: "INVALID_REQUEST", messageIncludes: "sessionKey" });
+    });
+
+    it("treats whitespace-only sessionKey as omitted at the handler boundary", async () => {
+      const { context, respond } = await invokeWake({
+        mode: "now",
+        text: "ping",
+        sessionKey: "   ",
+      });
+      expect(context.cron.wake).toHaveBeenCalledWith({
+        mode: "now",
+        text: "ping",
+      });
+      expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    });
+
+    it("rejects non-string sessionKey at schema", async () => {
+      const { context, respond } = await invokeWake({
+        mode: "now",
+        text: "ping",
+        sessionKey: 42,
+      });
+      expect(context.cron.wake).not.toHaveBeenCalled();
+      expectResponseError(respond, { code: "INVALID_REQUEST", messageIncludes: "sessionKey" });
+    });
+
+    it("rejects subagent sessionKey targets before enqueueing", async () => {
+      const { context, respond } = await invokeWake({
+        mode: "now",
+        text: "ping",
+        sessionKey: "agent:main:subagent:worker",
+      });
+      expect(context.cron.wake).not.toHaveBeenCalled();
+      expectResponseError(respond, { code: "INVALID_REQUEST", messageIncludes: "sessionKey" });
+    });
   });
 });

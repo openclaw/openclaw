@@ -1,23 +1,22 @@
 #!/usr/bin/env node
-import { spawn } from "node:child_process";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { isRootHelpInvocation } from "./cli/argv.js";
 import { parseCliContainerArgs, resolveCliContainerTarget } from "./cli/container-target.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
+import type { RootHelpRenderOptions } from "./cli/program/root-help.js";
 import { normalizeWindowsArgv } from "./cli/windows-argv.js";
 import {
   enableOpenClawCompileCache,
   resolveEntryInstallRoot,
   respawnWithoutOpenClawCompileCacheIfNeeded,
 } from "./entry.compile-cache.js";
-import { buildCliRespawnPlan } from "./entry.respawn.js";
+import { buildCliRespawnPlan, runCliRespawnPlan } from "./entry.respawn.js";
 import { tryHandleRootVersionFastPath } from "./entry.version-fast-path.js";
 import { isTruthyEnvValue, normalizeEnv } from "./infra/env.js";
 import { isMainModule } from "./infra/is-main.js";
 import { ensureOpenClawExecMarkerOnProcess } from "./infra/openclaw-exec-env.js";
 import { installProcessWarningFilter } from "./infra/warning-filter.js";
-import { attachChildProcessBridge } from "./process/child-process-bridge.js";
 
 const ENTRY_WRAPPER_PAIRS = [
   { wrapperBasename: "openclaw.mjs", entryBasename: "entry.js" },
@@ -93,6 +92,7 @@ if (
     ensureOpenClawExecMarkerOnProcess();
     installProcessWarningFilter();
     normalizeEnv();
+
     enableOpenClawCompileCache({
       installRoot,
     });
@@ -113,29 +113,7 @@ if (
         return false;
       }
 
-      const child = spawn(plan.command, plan.argv, {
-        stdio: "inherit",
-        env: plan.env,
-      });
-
-      attachChildProcessBridge(child);
-
-      child.once("exit", (code, signal) => {
-        if (signal) {
-          process.exitCode = 1;
-          return;
-        }
-        process.exit(code ?? 1);
-      });
-
-      child.once("error", (error) => {
-        console.error(
-          "[openclaw] Failed to respawn CLI:",
-          error instanceof Error ? (error.stack ?? error.message) : error,
-        );
-        process.exit(1);
-      });
-
+      runCliRespawnPlan(plan);
       // Parent must not continue running the CLI.
       return true;
     }
@@ -180,7 +158,10 @@ export async function tryHandleRootHelpFastPath(
   argv: string[],
   deps: {
     outputPrecomputedRootHelpText?: () => boolean;
-    outputRootHelp?: () => void | Promise<void>;
+    outputRootHelp?: (options?: RootHelpRenderOptions) => void | Promise<void>;
+    loadRootHelpRenderOptionsForConfigSensitivePlugins?: (
+      env?: NodeJS.ProcessEnv,
+    ) => Promise<RootHelpRenderOptions | null>;
     onError?: (error: unknown) => void;
     env?: NodeJS.ProcessEnv;
   } = {},
@@ -201,17 +182,22 @@ export async function tryHandleRootHelpFastPath(
       process.exitCode = 1;
     });
   try {
-    if (deps.outputRootHelp) {
-      await deps.outputRootHelp();
-      return true;
+    const loadRootHelpRenderOptionsForConfigSensitivePlugins =
+      deps.loadRootHelpRenderOptionsForConfigSensitivePlugins ??
+      (await import("./cli/root-help-live-config.js"))
+        .loadRootHelpRenderOptionsForConfigSensitivePlugins;
+    const liveRootHelpOptions = await loadRootHelpRenderOptionsForConfigSensitivePlugins(deps.env);
+    if (!liveRootHelpOptions) {
+      const outputPrecomputedRootHelpText =
+        deps.outputPrecomputedRootHelpText ??
+        (await import("./cli/root-help-metadata.js")).outputPrecomputedRootHelpText;
+      if (outputPrecomputedRootHelpText()) {
+        return true;
+      }
     }
-    const outputPrecomputedRootHelpText =
-      deps.outputPrecomputedRootHelpText ??
-      (await import("./cli/root-help-metadata.js")).outputPrecomputedRootHelpText;
-    if (!outputPrecomputedRootHelpText()) {
-      const { outputRootHelp } = await import("./cli/program/root-help.js");
-      await outputRootHelp();
-    }
+    const outputRootHelp =
+      deps.outputRootHelp ?? (await import("./cli/program/root-help.js")).outputRootHelp;
+    await outputRootHelp(liveRootHelpOptions ?? undefined);
     return true;
   } catch (error) {
     handleError(error);
@@ -230,10 +216,14 @@ async function runMainOrRootHelp(argv: string[]): Promise<void> {
     );
     await runCli(argv);
   } catch (error) {
-    console.error(
-      "[openclaw] Failed to start CLI:",
-      error instanceof Error ? (error.stack ?? error.message) : error,
-    );
+    const { formatCliFailureLines } = await import("./cli/failure-output.js");
+    for (const line of formatCliFailureLines({
+      title: "Could not start the CLI.",
+      error,
+      argv,
+    })) {
+      console.error(line);
+    }
     process.exit(1);
   }
 }

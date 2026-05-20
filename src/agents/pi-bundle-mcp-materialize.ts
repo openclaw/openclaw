@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
@@ -11,6 +11,7 @@ import {
   TOOL_NAME_SEPARATOR,
 } from "./pi-bundle-mcp-names.js";
 import type { BundleMcpToolRuntime, SessionMcpRuntime } from "./pi-bundle-mcp-types.js";
+import { normalizeToolParameterSchema } from "./pi-tools-parameter-schema.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 function toAgentToolResult(params: {
@@ -110,7 +111,7 @@ export async function materializeBundleMcpToolsForRun(params: {
       name: safeToolName,
       label: tool.title ?? tool.toolName,
       description: tool.description || tool.fallbackDescription,
-      parameters: tool.inputSchema,
+      parameters: normalizeToolParameterSchema(tool.inputSchema),
       execute: async (_toolCallId: string, input: unknown) => {
         params.runtime.markUsed();
         const result = await params.runtime.callTool(tool.serverName, tool.toolName, input);

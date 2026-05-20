@@ -1,4 +1,4 @@
-import { type Context, complete } from "@mariozechner/pi-ai";
+import { type Context, complete } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -58,15 +58,15 @@ const PDF_MAX_PIXELS = 4_000_000;
 
 export const PdfToolSchema = Type.Object({
   prompt: Type.Optional(Type.String()),
-  pdf: Type.Optional(Type.String({ description: "Single PDF path or URL." })),
+  pdf: Type.Optional(Type.String({ description: "One PDF path/URL." })),
   pdfs: Type.Optional(
     Type.Array(Type.String(), {
-      description: "Multiple PDF paths or URLs (up to 10).",
+      description: "PDF paths/URLs; max 10.",
     }),
   ),
   pages: Type.Optional(
     Type.String({
-      description: 'Page range to process, e.g. "1-5", "1,3,5-7". Defaults to all pages.',
+      description: 'Pages, e.g. "1-5", "1,3,5-7"; default all.',
     }),
   ),
   model: Type.Optional(Type.String()),
@@ -90,7 +90,14 @@ function hasExplicitPdfToolModelConfig(config?: OpenClawConfig): boolean {
 // Build context for extraction fallback path
 // ---------------------------------------------------------------------------
 
-function buildPdfExtractionContext(prompt: string, extractions: PdfExtractedContent[]): Context {
+const CODEX_PDF_INSTRUCTIONS =
+  "Analyze the provided PDF content and answer the user's request accurately.";
+
+function buildPdfExtractionContext(
+  prompt: string,
+  extractions: PdfExtractedContent[],
+  model?: { api?: string },
+): Context {
   const content: Array<
     { type: "text"; text: string } | { type: "image"; data: string; mimeType: string }
   > = [];
@@ -110,7 +117,10 @@ function buildPdfExtractionContext(prompt: string, extractions: PdfExtractedCont
   // Add the user prompt
   content.push({ type: "text", text: prompt });
 
+  const systemPrompt = model?.api === "openai-codex-responses" ? CODEX_PDF_INSTRUCTIONS : undefined;
+
   return {
+    ...(systemPrompt ? { systemPrompt } : {}),
     messages: [{ role: "user", content, timestamp: Date.now() }],
   };
 }
@@ -217,7 +227,7 @@ async function runPdfPrompt(params: {
           text: e.text,
           images: [],
         }));
-        const context = buildPdfExtractionContext(params.prompt, textOnlyExtractions);
+        const context = buildPdfExtractionContext(params.prompt, textOnlyExtractions, model);
         const message = await complete(model, context, {
           apiKey,
           maxTokens: resolvePdfToolMaxTokens(model.maxTokens),
@@ -226,7 +236,7 @@ async function runPdfPrompt(params: {
         return { text, provider, model: modelId, native: false };
       }
 
-      const context = buildPdfExtractionContext(params.prompt, extractions);
+      const context = buildPdfExtractionContext(params.prompt, extractions, model);
       const message = await complete(model, context, {
         apiKey,
         maxTokens: resolvePdfToolMaxTokens(model.maxTokens),
@@ -304,7 +314,7 @@ export function createPdfTool(options?: {
       : DEFAULT_MAX_PAGES;
 
   const description =
-    "Analyze one or more PDF documents with a model. Supports native PDF analysis for Anthropic and Google models, with text/image extraction fallback for other providers. Use pdf for a single path/URL, or pdfs for multiple (up to 10). Provide a prompt describing what to analyze.";
+    "Analyze PDFs with model. Anthropic/Google native PDF when supported; else text/image extraction. Use pdf for one, pdfs for max 10; prompt says what to inspect.";
   const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(options?.config);
 
   return {

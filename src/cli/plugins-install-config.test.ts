@@ -115,7 +115,7 @@ describe("loadConfigForInstall", () => {
     );
 
     const result = await loadConfigForInstall(discordNpmRequest);
-    expect(readConfigFileSnapshotMock).toHaveBeenCalled();
+    expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(1);
     expect(collectChannelDoctorStaleConfigMutationsMock).toHaveBeenCalledWith(snapshotCfg);
     expect(result).toEqual({ config: snapshotCfg, baseHash: "abc" });
   });
@@ -142,10 +142,8 @@ describe("loadConfigForInstall", () => {
       throw new Error(request.error);
     }
 
-    expect(request.request).toMatchObject({
-      bundledPluginId: "discord",
-      allowInvalidConfigRecovery: true,
-    });
+    expect(request.request.bundledPluginId).toBe("discord");
+    expect(request.request.allowInvalidConfigRecovery).toBe(true);
     const result = await loadConfigForInstall(request.request);
     expect(collectChannelDoctorStaleConfigMutationsMock).toHaveBeenCalledWith(snapshotCfg);
     expect(result).toEqual({ config: snapshotCfg, baseHash: "abc" });
@@ -163,7 +161,7 @@ describe("loadConfigForInstall", () => {
           {
             path: "plugins",
             message:
-              "plugin: installed plugin package requires compiled runtime output for TypeScript entry index.ts: expected ./dist/index.js, ./dist/index.mjs, ./dist/index.cjs, index.js, index.mjs, index.cjs",
+              "plugin: installed plugin package requires compiled runtime output for TypeScript entry index.ts: expected ./dist/index.js, ./dist/index.mjs, ./dist/index.cjs, index.js, index.mjs, index.cjs. This is a plugin packaging issue, not a local config problem; update or reinstall the plugin after the publisher ships compiled JavaScript, or disable/uninstall the plugin until then. TypeScript source fallback is only supported for source checkouts and local development paths.",
           },
         ],
       }),
@@ -176,6 +174,42 @@ describe("loadConfigForInstall", () => {
       throw new Error(request.error);
     }
 
+    const result = await loadConfigForInstall(request.request);
+    expect(collectChannelDoctorStaleConfigMutationsMock).toHaveBeenCalledWith(snapshotCfg);
+    expect(result).toEqual({ config: snapshotCfg, baseHash: "abc" });
+  });
+
+  it("allows Brave official plugin reinstall recovery from source-only runtime shadows", async () => {
+    const snapshotCfg = {
+      plugins: { installs: { brave: { source: "clawhub", installPath: "/bad/brave" } } },
+    } as unknown as OpenClawConfig;
+    readConfigFileSnapshotMock.mockResolvedValue(
+      makeSnapshot({
+        parsed: { plugins: { installs: { brave: {} } } },
+        config: snapshotCfg,
+        issues: [
+          {
+            path: "plugins.entries.brave",
+            message:
+              "plugin brave: installed plugin package requires compiled runtime output for TypeScript entry index.ts: expected ./dist/index.js.",
+          },
+          {
+            path: "tools.web.search.provider",
+            message:
+              'web_search provider is not available: brave (install or enable plugin "brave", then run openclaw doctor --fix)',
+          },
+        ],
+      }),
+    );
+
+    const request = resolvePluginInstallRequestContext({
+      rawSpec: "@openclaw/brave-plugin",
+    });
+    if (!request.ok) {
+      throw new Error(request.error);
+    }
+
+    expect(request.request.allowInvalidConfigRecovery).toBe(true);
     const result = await loadConfigForInstall(request.request);
     expect(collectChannelDoctorStaleConfigMutationsMock).toHaveBeenCalledWith(snapshotCfg);
     expect(result).toEqual({ config: snapshotCfg, baseHash: "abc" });

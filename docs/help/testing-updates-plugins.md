@@ -88,9 +88,10 @@ Important lanes:
   local folder update skip behavior, local folders with preinstalled
   dependencies, `file:` package installs, git installs with CLI execution, git
   moving-ref updates, npm registry installs with hoisted transitive
-  dependencies, npm update no-ops, local ClawHub fixture installs and update
-  no-ops, marketplace update behavior, and Claude-bundle enable/inspect. Set
-  `OPENCLAW_PLUGINS_E2E_CLAWHUB=0` to keep the ClawHub block hermetic/offline.
+  dependencies, npm update no-ops, malformed npm package metadata rejection,
+  local ClawHub fixture installs and update no-ops, marketplace update behavior,
+  and Claude-bundle enable/inspect. Set `OPENCLAW_PLUGINS_E2E_CLAWHUB=0` to
+  keep the ClawHub block hermetic/offline.
 - `test:docker:plugin-lifecycle-matrix` installs the candidate package in a bare
   container, runs an npm plugin through install, inspect, disable, enable,
   explicit upgrade, explicit downgrade, and uninstall after deleting the plugin
@@ -172,7 +173,7 @@ targets the shipped npm package instead.
 Release checks call Package Acceptance with the package/update/restart/plugin set:
 
 ```text
-doctor-switch update-channel-switch upgrade-survivor published-upgrade-survivor update-restart-auth plugins-offline plugin-update
+doctor-switch update-channel-switch update-corrupt-plugin upgrade-survivor published-upgrade-survivor update-restart-auth plugins-offline plugin-update
 ```
 
 When release soak is enabled, they also pass:
@@ -183,10 +184,10 @@ published_upgrade_survivor_scenarios=reported-issues
 telegram_mode=mock-openai
 ```
 
-This keeps package migration, update channel switching, stale plugin dependency
-cleanup, offline plugin coverage, plugin update behavior, and Telegram package
-QA on the same resolved artifact without making the default release package gate
-walk every published release.
+This keeps package migration, update channel switching, corrupt managed-plugin
+tolerance, stale plugin dependency cleanup, offline plugin coverage, plugin
+update behavior, and Telegram package QA on the same resolved artifact without
+making the default release package gate walk every published release.
 
 `last-stable-4` resolves to the four latest stable npm-published OpenClaw
 releases. Release package acceptance pins `2026.4.23` as the first plugin-update

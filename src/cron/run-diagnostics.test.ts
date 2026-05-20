@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import {
   createCronRunDiagnosticsFromAgentResult,
   createCronRunDiagnosticsFromError,
@@ -21,7 +22,7 @@ describe("cron run diagnostics", () => {
 
     expect(diagnostics?.entries).toHaveLength(10);
     expect(diagnostics?.entries[0]?.message).toBe("entry 2");
-    expect(diagnostics?.entries.at(-1)?.message).toMatch(/…$/);
+    expect(diagnostics?.entries.at(-1)?.message.endsWith("…")).toBe(true);
     expect(diagnostics?.entries.at(-1)?.message).not.toContain("sk-1234567890abcdef");
     expect(diagnostics?.entries.at(-1)?.truncated).toBe(true);
     expect(diagnostics?.summary).toHaveLength(2_000);
@@ -47,7 +48,8 @@ describe("cron run diagnostics", () => {
 
     expect(diagnostics?.entries).toHaveLength(10);
     expect(diagnostics?.entries.map((entry) => entry.message)).not.toContain("tool warning 0");
-    expect(diagnostics?.entries.at(-1)).toMatchObject({
+    expect(diagnostics?.entries.at(-1)).toEqual({
+      ts: 11,
       source: "delivery",
       severity: "error",
       message: "delivery failed",
@@ -118,8 +120,11 @@ describe("cron run diagnostics", () => {
       "retry limit exceeded",
       "SYSTEM_RUN_DENIED",
     ]);
-    expect(diagnostics?.entries[1]).toMatchObject({
+    expect(diagnostics?.entries[1]).toEqual({
+      ts: 123,
       source: "exec",
+      severity: "warn",
+      message: "stdout\nstderr failure",
       toolName: "exec",
       exitCode: 2,
     });
@@ -145,27 +150,99 @@ describe("cron run diagnostics", () => {
     ).toBeUndefined();
   });
 
-  it("captures silent failed exec details with a fallback message", () => {
-    const diagnostics = createCronRunDiagnosticsFromAgentResult({
-      payloads: [
-        {
-          toolName: "exec",
-          details: {
-            status: "completed",
-            exitCode: 2,
-          },
-        },
-      ],
-    });
+  it("keeps non-terminal tool warnings as warning diagnostics for successful runs", () => {
+    const toolWarning = setReplyPayloadMetadata(
+      {
+        toolName: "exec",
+        text: "⚠️ Exec failed",
+        isError: true,
+      },
+      { nonTerminalToolErrorWarning: true },
+    );
+
+    const diagnostics = createCronRunDiagnosticsFromAgentResult(
+      {
+        payloads: [{ text: "Queued 3 topics." }, toolWarning],
+      },
+      { finalStatus: "ok", nowMs: () => 700 },
+    );
 
     expect(diagnostics?.entries).toEqual([
-      expect.objectContaining({
+      {
+        ts: 700,
+        source: "tool",
+        severity: "warn",
+        message: "⚠️ Exec failed",
+        toolName: "exec",
+      },
+    ]);
+    expect(diagnostics?.summary).toBe("⚠️ Exec failed");
+  });
+
+  it("downgrades recovered tool errors for successful runs", () => {
+    const diagnostics = createCronRunDiagnosticsFromAgentResult(
+      {
+        payloads: [
+          {
+            toolName: "exec",
+            text: "⚠️ 🛠️ jq -s '{total:length}' (agent) failed",
+            isError: true,
+            details: {
+              status: "failed",
+              exitCode: 1,
+              aggregated: "jq syntax error",
+            },
+          },
+        ],
+      },
+      { finalStatus: "ok", nowMs: () => 800 },
+    );
+
+    expect(diagnostics?.entries).toEqual([
+      {
+        ts: 800,
+        source: "exec",
+        severity: "warn",
+        message: "jq syntax error",
+        toolName: "exec",
+        exitCode: 1,
+      },
+      {
+        ts: 800,
+        source: "tool",
+        severity: "warn",
+        message: "⚠️ 🛠️ jq -s '{total:length}' (agent) failed",
+        toolName: "exec",
+      },
+    ]);
+    expect(diagnostics?.summary).toBe("⚠️ 🛠️ jq -s '{total:length}' (agent) failed");
+  });
+
+  it("captures silent failed exec details with a fallback message", () => {
+    const diagnostics = createCronRunDiagnosticsFromAgentResult(
+      {
+        payloads: [
+          {
+            toolName: "exec",
+            details: {
+              status: "completed",
+              exitCode: 2,
+            },
+          },
+        ],
+      },
+      { nowMs: () => 500 },
+    );
+
+    expect(diagnostics?.entries).toEqual([
+      {
+        ts: 500,
         source: "exec",
         severity: "warn",
         message: "exec failed with exit code 2",
         toolName: "exec",
         exitCode: 2,
-      }),
+      },
     ]);
   });
 });

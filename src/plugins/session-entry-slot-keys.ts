@@ -21,6 +21,8 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "spawnDepth",
   "subagentRole",
   "subagentControlScope",
+  "inheritedToolDeny",
+  "inheritedToolAllow",
   "subagentRecovery",
   "pluginOwnerId",
   "systemSent",
@@ -48,10 +50,14 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "execAsk",
   "execNode",
   "responseUsage",
+  "usageFamilyKey",
+  "usageFamilySessionIds",
   "providerOverride",
   "modelOverride",
   "agentRuntimeOverride",
   "modelOverrideSource",
+  "modelOverrideFallbackOriginProvider",
+  "modelOverrideFallbackOriginModel",
   "authProfileOverride",
   "authProfileOverrideSource",
   "authProfileOverrideCompactionCount",
@@ -73,6 +79,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "pendingFinalDeliveryLastError",
   "pendingFinalDeliveryText",
   "pendingFinalDeliveryContext",
+  "pendingFinalDeliveryIntentId",
   "totalTokensFresh",
   "estimatedCostUsd",
   "cacheRead",
@@ -100,6 +107,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "groupChannel",
   "space",
   "origin",
+  "route",
   "deliveryContext",
   "lastChannel",
   "lastTo",
@@ -109,6 +117,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "systemPromptReport",
   "pluginDebugEntries",
   "acp",
+  "quotaSuspension",
 ] as const satisfies ReadonlyArray<keyof SessionEntry | "__proto__" | "constructor" | "prototype">;
 
 type ReservedSessionEntrySlotKey = Extract<
@@ -117,7 +126,8 @@ type ReservedSessionEntrySlotKey = Extract<
 >;
 type MissingSessionEntryReservedSlotKeys = Exclude<keyof SessionEntry, ReservedSessionEntrySlotKey>;
 type AssertNever<T extends never> = T;
-type _AssertAllSessionEntryKeysAreReserved = AssertNever<MissingSessionEntryReservedSlotKeys>;
+export type _AssertAllSessionEntryKeysAreReserved =
+  AssertNever<MissingSessionEntryReservedSlotKeys>;
 
 const SESSION_ENTRY_RESERVED_SLOT_KEYS = new Set<string>(SESSION_ENTRY_RESERVED_SLOT_KEY_LIST);
 const OBJECT_PROTOTYPE_RESERVED_SLOT_KEYS = new Set<string>([

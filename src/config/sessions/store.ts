@@ -4,6 +4,7 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import { writeTextAtomic } from "../../infra/json-files.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
+  deliveryContextFromChannelRoute,
   deliveryContextFromSession,
   mergeDeliveryContext,
   normalizeDeliveryContext,
@@ -23,12 +24,15 @@ import {
 } from "./store-cache.js";
 import { normalizeStoreSessionKey, resolveSessionStoreEntry } from "./store-entry.js";
 import { loadSessionStore, normalizeSessionStore } from "./store-load.js";
+import { collectSessionMaintenancePreserveKeys } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   capEntryCount,
   getActiveSessionMaintenanceWarning,
+  pruneQuotaSuspensions,
   pruneStaleEntries,
   shouldRunSessionEntryMaintenance,
+  type QuotaSuspensionMaintenanceResult,
   type ResolvedSessionMaintenanceConfig,
   type SessionMaintenanceWarning,
 } from "./store-maintenance.js";
@@ -280,9 +284,7 @@ async function saveSessionStoreUnlocked(
         diskBudget,
       });
     } else {
-      const preserveSessionKeys = opts?.activeSessionKey
-        ? new Set([opts.activeSessionKey])
-        : undefined;
+      const preserveSessionKeys = collectSessionMaintenancePreserveKeys([opts?.activeSessionKey]);
       // Prune stale entries and cap total count before serializing.
       const removedSessionFiles = new Map<string, string | undefined>();
       const pruned = pruneStaleEntries(store, maintenance.pruneAfterMs, {
@@ -353,6 +355,7 @@ async function saveSessionStoreUnlocked(
         store,
         storePath,
         activeSessionKey: opts?.activeSessionKey,
+        preserveKeys: preserveSessionKeys,
         maintenance,
         warnOnly: false,
         log,
@@ -451,6 +454,28 @@ export async function updateSessionStore<T>(
   });
 }
 
+export async function runQuotaSuspensionMaintenance(params: {
+  storePath: string;
+  now?: number;
+  ttlMs?: number;
+  log?: boolean;
+}): Promise<QuotaSuspensionMaintenanceResult> {
+  if (!fs.existsSync(params.storePath)) {
+    return { resumed: [], cleared: 0 };
+  }
+  return await updateSessionStore(
+    params.storePath,
+    (store) =>
+      pruneQuotaSuspensions({
+        store,
+        now: params.now ?? Date.now(),
+        ttlMs: params.ttlMs,
+        log: params.log,
+      }),
+    { skipMaintenance: true },
+  );
+}
+
 function getErrorCode(error: unknown): string | null {
   if (!error || typeof error !== "object" || !("code" in error)) {
     return null;
@@ -499,7 +524,7 @@ async function writeSessionStoreAtomic(params: {
   store: Record<string, SessionEntry>;
   serialized: string;
 }): Promise<void> {
-  await writeTextAtomic(params.storePath, params.serialized, { mode: 0o600 });
+  await writeTextAtomic(params.storePath, params.serialized, { durable: false, mode: 0o600 });
   updateSessionStoreWriteCaches({
     storePath: params.storePath,
     store: params.store,
@@ -604,6 +629,7 @@ export async function updateLastRoute(params: {
   to?: string;
   accountId?: string;
   threadId?: string | number;
+  route?: SessionEntry["route"];
   deliveryContext?: DeliveryContext;
   ctx?: MsgContext;
   groupResolution?: import("./types.js").GroupKeyResolution | null;
@@ -625,7 +651,11 @@ export async function updateLastRoute(params: {
       accountId,
       threadId,
     });
-    const mergedInput = mergeDeliveryContext(explicitContext, inlineContext);
+    const routeContext = deliveryContextFromChannelRoute(params.route);
+    const mergedInput = mergeDeliveryContext(
+      routeContext,
+      mergeDeliveryContext(explicitContext, inlineContext),
+    );
     const explicitDeliveryContext = params.deliveryContext;
     const explicitThreadFromDeliveryContext =
       explicitDeliveryContext != null &&
@@ -636,6 +666,8 @@ export async function updateLastRoute(params: {
       explicitThreadFromDeliveryContext ??
       (threadId != null && threadId !== "" ? threadId : undefined);
     const explicitRouteProvided = Boolean(
+      routeContext?.channel ||
+      routeContext?.to ||
       explicitContext?.channel ||
       explicitContext?.to ||
       inlineContext?.channel ||
@@ -647,6 +679,7 @@ export async function updateLastRoute(params: {
       : deliveryContextFromSession(existing);
     const merged = mergeDeliveryContext(mergedInput, fallbackContext);
     const normalized = normalizeSessionDeliveryFields({
+      route: params.route,
       deliveryContext: {
         channel: merged?.channel,
         to: merged?.to,
@@ -663,6 +696,7 @@ export async function updateLastRoute(params: {
         })
       : null;
     const basePatch: Partial<SessionEntry> = {
+      route: normalized.route,
       deliveryContext: normalized.deliveryContext,
       lastChannel: normalized.lastChannel,
       lastTo: normalized.lastTo,

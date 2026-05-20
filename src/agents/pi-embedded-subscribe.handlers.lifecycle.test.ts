@@ -57,8 +57,28 @@ async function handleAgentEndAndReadWarnMeta(ctx: EmbeddedPiSubscribeContext) {
 
   const warn = vi.mocked(ctx.log.warn);
   expect(warn).toHaveBeenCalledTimes(1);
-  expect(warn.mock.calls[0]?.[0]).toBe("embedded run agent end");
-  return warn.mock.calls[0]?.[1];
+  const [message, meta] = firstMockCall(warn);
+  expect(message).toBe("embedded run agent end");
+  return readRecord(meta);
+}
+
+function readRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object") {
+    throw new Error("expected metadata record");
+  }
+  return value as Record<string, unknown>;
+}
+
+function firstMockCall(mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } }) {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error("expected first mock call");
+  }
+  return call;
+}
+
+function firstWarnMeta(ctx: EmbeddedPiSubscribeContext): Record<string, unknown> {
+  return readRecord(firstMockCall(vi.mocked(ctx.log.warn))[1]);
 }
 
 describe("handleAgentEnd", () => {
@@ -76,15 +96,14 @@ describe("handleAgentEnd", () => {
     ctx.state.livenessState = "working";
 
     const warnMeta = await handleAgentEndAndReadWarnMeta(ctx);
-    expect(warnMeta).toMatchObject({
-      event: "embedded_run_agent_end",
-      runId: "run-1",
-      error: "LLM request failed: connection refused by the provider endpoint.",
-      providerRuntimeFailureKind: "timeout",
-      rawErrorPreview: "connection refused",
-      consoleMessage:
-        "embedded run agent end: runId=run-1 isError=true model=unknown provider=unknown error=LLM request failed: connection refused by the provider endpoint. rawError=connection refused",
-    });
+    expect(warnMeta.event).toBe("embedded_run_agent_end");
+    expect(warnMeta.runId).toBe("run-1");
+    expect(warnMeta.error).toBe("LLM request failed: connection refused by the provider endpoint.");
+    expect(warnMeta.providerRuntimeFailureKind).toBe("timeout");
+    expect(warnMeta.rawErrorPreview).toBe("connection refused");
+    expect(warnMeta.consoleMessage).toBe(
+      "embedded run agent end: runId=run-1 isError=true model=unknown provider=unknown error=LLM request failed: connection refused by the provider endpoint. rawError=connection refused",
+    );
     expect(onAgentEvent).toHaveBeenCalledWith({
       stream: "lifecycle",
       data: {
@@ -106,16 +125,17 @@ describe("handleAgentEnd", () => {
     });
 
     const warnMeta = await handleAgentEndAndReadWarnMeta(ctx);
-    expect(warnMeta).toMatchObject({
-      event: "embedded_run_agent_end",
-      runId: "run-1",
-      error: "The AI service is temporarily overloaded. Please try again in a moment.",
-      failoverReason: "overloaded",
-      providerRuntimeFailureKind: "timeout",
-      providerErrorType: "overloaded_error",
-      consoleMessage:
-        'embedded run agent end: runId=run-1 isError=true model=claude-test provider=anthropic error=The AI service is temporarily overloaded. Please try again in a moment. rawError={"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
-    });
+    expect(warnMeta.event).toBe("embedded_run_agent_end");
+    expect(warnMeta.runId).toBe("run-1");
+    expect(warnMeta.error).toBe(
+      "The AI service is temporarily overloaded. Please try again in a moment.",
+    );
+    expect(warnMeta.failoverReason).toBe("overloaded");
+    expect(warnMeta.providerRuntimeFailureKind).toBe("timeout");
+    expect(warnMeta.providerErrorType).toBe("overloaded_error");
+    expect(warnMeta.consoleMessage).toBe(
+      'embedded run agent end: runId=run-1 isError=true model=claude-test provider=anthropic error=The AI service is temporarily overloaded. Please try again in a moment. rawError={"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+    );
   });
 
   it("sanitizes model and provider before writing consoleMessage", async () => {
@@ -130,12 +150,10 @@ describe("handleAgentEnd", () => {
 
     await handleAgentEnd(ctx);
 
-    const warn = vi.mocked(ctx.log.warn);
-    const meta = warn.mock.calls[0]?.[1];
-    expect(meta).toMatchObject({
-      consoleMessage:
-        "embedded run agent end: runId=run-1 isError=true model=claude sonnet 4 provider=anthropic]8;;https://evil.test error=LLM request failed: connection refused by the provider endpoint. rawError=connection refused",
-    });
+    const meta = firstWarnMeta(ctx);
+    expect(meta.consoleMessage).toBe(
+      "embedded run agent end: runId=run-1 isError=true model=claude sonnet 4 provider=anthropic]8;;https://evil.test error=LLM request failed: connection refused by the provider endpoint. rawError=connection refused",
+    );
     expect(meta?.consoleMessage).not.toContain("\n");
     expect(meta?.consoleMessage).not.toContain("\r");
     expect(meta?.consoleMessage).not.toContain("\t");
@@ -156,12 +174,10 @@ describe("handleAgentEnd", () => {
 
     await handleAgentEnd(ctx);
 
-    const warn = vi.mocked(ctx.log.warn);
-    expect(warn.mock.calls[0]?.[1]).toMatchObject({
-      event: "embedded_run_agent_end",
-      error: "x-api-key: ***",
-      rawErrorPreview: "x-api-key: ***",
-    });
+    const meta = firstWarnMeta(ctx);
+    expect(meta.event).toBe("embedded_run_agent_end");
+    expect(meta.error).toBe("x-api-key: ***");
+    expect(meta.rawErrorPreview).toBe("x-api-key: ***");
     expect(onAgentEvent).toHaveBeenCalledWith({
       stream: "lifecycle",
       data: {
@@ -184,11 +200,10 @@ describe("handleAgentEnd", () => {
 
     await handleAgentEnd(ctx);
 
-    expect(vi.mocked(ctx.log.warn).mock.calls[0]?.[1]).toMatchObject({
-      failoverReason: "auth",
-      providerRuntimeFailureKind: "auth_scope",
-      httpCode: "401",
-    });
+    const meta = firstWarnMeta(ctx);
+    expect(meta.failoverReason).toBe("auth");
+    expect(meta.providerRuntimeFailureKind).toBe("auth_scope");
+    expect(meta.httpCode).toBe("401");
   });
 
   it("omits raw HTML auth bodies from consoleMessage for HTML 403 auth failures", async () => {
@@ -203,14 +218,13 @@ describe("handleAgentEnd", () => {
 
     await handleAgentEnd(ctx);
 
-    const warnMeta = vi.mocked(ctx.log.warn).mock.calls[0]?.[1];
-    expect(warnMeta).toMatchObject({
-      providerRuntimeFailureKind: "auth_html_403",
-      rawErrorPreview: "403 <!DOCTYPE html><html><body>Access denied</body></html>",
-      error:
-        "Authentication failed with an HTML 403 response from the provider. Re-authenticate and verify your provider account access.",
-    });
-    const consoleMsg = typeof warnMeta?.consoleMessage === "string" ? warnMeta.consoleMessage : "";
+    const meta = firstWarnMeta(ctx);
+    expect(meta.providerRuntimeFailureKind).toBe("auth_html_403");
+    expect(meta.rawErrorPreview).toBe("403 <!DOCTYPE html><html><body>Access denied</body></html>");
+    expect(meta.error).toBe(
+      "Authentication failed with an HTML 403 response from the provider. Re-authenticate and verify your provider account access.",
+    );
+    const consoleMsg = typeof meta.consoleMessage === "string" ? meta.consoleMessage : "";
     expect(consoleMsg).not.toContain("rawError=");
     expect(consoleMsg).not.toContain("<html>");
   });
@@ -348,7 +362,7 @@ describe("handleAgentEnd", () => {
       mediaUrls: ["/tmp/reply.opus"],
       audioAsVoice: true,
     });
-    expect(ctx.state.pendingToolMediaUrls).toEqual([]);
+    expect(ctx.state.pendingToolMediaUrls).toStrictEqual([]);
     expect(ctx.state.pendingToolAudioAsVoice).toBe(false);
   });
 
@@ -372,11 +386,20 @@ describe("handleAgentEnd", () => {
 
     await handleAgentEnd(ctx);
 
-    const blockReplyOrder =
-      (vi.mocked(ctx.emitBlockReply).mock.invocationCallOrder[0] as number | undefined) ?? 0;
+    const blockReplyOrder = vi.mocked(ctx.emitBlockReply).mock.invocationCallOrder[0] as
+      | number
+      | undefined;
     const lifecycleOrder = onAgentEvent.mock.invocationCallOrder[0] as number | undefined;
 
-    expect(blockReplyOrder).toBeGreaterThan(0);
+    expect(ctx.emitBlockReply).toHaveBeenCalledTimes(1);
+    expect(ctx.emitBlockReply).toHaveBeenCalledWith({
+      mediaUrls: ["/tmp/reply.opus"],
+      audioAsVoice: true,
+    });
+    expect(blockReplyOrder).toBeTypeOf("number");
+    if (typeof blockReplyOrder !== "number") {
+      throw new Error("Expected orphaned media block reply call order.");
+    }
     expect(lifecycleOrder).toBeGreaterThan(blockReplyOrder);
     expect(onAgentEvent).toHaveBeenCalledWith({
       stream: "lifecycle",
@@ -594,7 +617,7 @@ describe("handleAgentEnd", () => {
     });
   });
 
-  it("emits lifecycle end when block reply flush throws", async () => {
+  it("emits lifecycle end when block reply flush throws", () => {
     const onAgentEvent = vi.fn();
     const ctx = createContext(undefined, { onAgentEvent });
     ctx.flushBlockReplyBuffer = vi.fn(() => {

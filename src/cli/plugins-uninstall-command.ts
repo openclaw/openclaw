@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { readConfigFileSnapshot } from "../config/config.js";
+import { assertConfigWriteAllowedInCurrentMode, readConfigFileSnapshot } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -19,11 +19,20 @@ export type PluginUninstallOptions = {
   dryRun?: boolean;
 };
 
+function isPromptInputClosedError(
+  error: unknown,
+  PromptInputClosedError: typeof import("./prompt.js").PromptInputClosedError,
+): error is InstanceType<typeof PromptInputClosedError> {
+  return error instanceof PromptInputClosedError;
+}
+
 export async function runPluginUninstallCommand(
   id: string,
   opts: PluginUninstallOptions = {},
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
+  assertConfigWriteAllowedInCurrentMode();
+
   const {
     loadInstalledPluginIndexInstallRecords,
     removePluginInstallRecordFromRecords,
@@ -44,7 +53,7 @@ export async function runPluginUninstallCommand(
   const { refreshPluginRegistryAfterConfigMutation } =
     await import("./plugins-registry-refresh.js");
   const { resolvePluginUninstallId } = await import("./plugins-uninstall-selection.js");
-  const { promptYesNo } = await import("./prompt.js");
+  const { PromptInputClosedError, promptYesNo } = await import("./prompt.js");
   const snapshot = await tracePluginLifecyclePhaseAsync(
     "config read",
     () => readConfigFileSnapshot(),
@@ -143,7 +152,19 @@ export async function runPluginUninstallCommand(
   }
 
   if (!opts.force) {
-    const confirmed = await promptYesNo(`Uninstall plugin "${pluginId}"?`);
+    let confirmed: boolean;
+    try {
+      confirmed = await promptYesNo(`Uninstall plugin "${pluginId}"?`);
+    } catch (error) {
+      if (isPromptInputClosedError(error, PromptInputClosedError)) {
+        runtime.error(
+          "Error: plugins uninstall requires confirmation input. Re-run in an interactive TTY or pass --force.",
+        );
+        runtime.exit(1);
+        return;
+      }
+      throw error;
+    }
     if (!confirmed) {
       runtime.log("Cancelled.");
       return;

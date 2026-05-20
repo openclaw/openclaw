@@ -1,6 +1,8 @@
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
+import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { readSessionStoreReadOnly } from "../config/sessions/store-read.js";
 import { resolveSessionTotalTokens, type SessionEntry } from "../config/sessions/types.js";
@@ -78,6 +80,19 @@ const buildFlags = (entry?: SessionEntry): string[] => {
   return flags;
 };
 
+function hasUserPinnedModelSelection(entry: SessionEntry | undefined): boolean {
+  if (!entry?.modelOverride) {
+    return false;
+  }
+  if (entry.modelOverrideSource === "user") {
+    return true;
+  }
+  if (entry.modelOverrideSource === "auto") {
+    return false;
+  }
+  return !hasSessionAutoModelFallbackProvenance(entry);
+}
+
 export function redactSensitiveStatusSummary(summary: StatusSummary): StatusSummary {
   return {
     ...summary,
@@ -111,6 +126,7 @@ export async function getStatusSummary(
     classifySessionKey,
     resolveConfiguredStatusModelRef,
     resolveContextTokensForModel,
+    resolveSessionRuntimeLabel,
     resolveSessionModelRef,
   } = await loadStatusSummaryRuntimeModule();
   const cfg = options.config ?? getRuntimeConfig();
@@ -191,8 +207,25 @@ export async function getStatusSummary(
       .map(([key, entry]) => {
         const updatedAt = entry?.updatedAt ?? null;
         const age = updatedAt ? now - updatedAt : null;
+        const parsedAgentId = parseAgentSessionKey(key)?.agentId;
+        const agentId = opts.agentIdOverride ?? parsedAgentId;
+        const configuredForSession = resolveConfiguredStatusModelRef({
+          cfg,
+          defaultProvider: DEFAULT_PROVIDER,
+          defaultModel: DEFAULT_MODEL,
+          agentId,
+        });
+        const configuredSessionModel = configuredForSession.model ?? DEFAULT_MODEL;
+        const configuredSessionModelLabel = `${configuredForSession.provider ?? DEFAULT_PROVIDER}/${configuredSessionModel}`;
         const resolvedModel = resolveSessionModelRef(cfg, entry, opts.agentIdOverride);
-        const model = resolvedModel.model ?? configModel ?? null;
+        const model = resolvedModel.model ?? configuredSessionModel ?? null;
+        const selectedModelLabel =
+          resolvedModel.provider && model ? `${resolvedModel.provider}/${model}` : model;
+        const modelSelectionDiffers =
+          selectedModelLabel != null &&
+          selectedModelLabel !== configuredSessionModelLabel &&
+          !areRuntimeModelRefsEquivalent(selectedModelLabel, configuredSessionModelLabel) &&
+          hasUserPinnedModelSelection(entry);
         const contextTokens =
           resolveContextTokensForModel({
             cfg,
@@ -211,8 +244,14 @@ export async function getStatusSummary(
           contextTokens && contextTokens > 0 && total !== undefined
             ? Math.min(999, Math.round((total / contextTokens) * 100))
             : null;
-        const parsedAgentId = parseAgentSessionKey(key)?.agentId;
-        const agentId = opts.agentIdOverride ?? parsedAgentId;
+        const runtime = resolveSessionRuntimeLabel({
+          cfg,
+          entry,
+          provider: resolvedModel.provider,
+          model: model ?? "",
+          agentId,
+          sessionKey: key,
+        });
 
         return {
           agentId,
@@ -238,6 +277,10 @@ export async function getStatusSummary(
           remainingTokens: remaining,
           percentUsed: pct,
           model,
+          configuredModel: configuredSessionModelLabel,
+          selectedModel: selectedModelLabel,
+          modelSelectionReason: modelSelectionDiffers ? "session override" : null,
+          runtime,
           contextTokens,
           flags: buildFlags(entry),
         } satisfies SessionStatus;

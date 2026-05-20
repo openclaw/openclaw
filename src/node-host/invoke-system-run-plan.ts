@@ -8,13 +8,15 @@ import type {
 import { resolveCommandResolutionFromArgv } from "../infra/exec-command-resolution.js";
 import { isInterpreterLikeSafeBin } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
+  isBlockedShellWrapperCommand,
   POSIX_SHELL_WRAPPERS,
   normalizeExecutableToken,
   unwrapKnownDispatchWrapperInvocation,
   unwrapKnownShellMultiplexerInvocation,
 } from "../infra/exec-wrapper-resolution.js";
-import { sameFileIdentity } from "../infra/file-identity.js";
+import { sameFileIdentity } from "../infra/fs-safe-advanced.js";
 import {
+  advancePosixInlineOptionScan,
   POSIX_INLINE_COMMAND_FLAGS,
   resolveInlineCommandMatch,
 } from "../infra/shell-inline-command.js";
@@ -155,8 +157,17 @@ const POSIX_SHELL_OPTIONS_WITH_VALUE = new Set([
   "--init-file",
   "--rcfile",
   "--startup-script",
+  "-O",
   "-o",
+  "+O",
+  "+o",
 ]);
+
+const POSIX_SHELLS_WITH_PLUS_OPTIONS = new Set(["ash", "bash", "dash", "ksh", "sh", "zsh"]);
+
+function isPosixShellOptionToken(token: string, supportsPlusOptions: boolean): boolean {
+  return token.startsWith("-") || (supportsPlusOptions && token.startsWith("+"));
+}
 
 const NPM_EXEC_OPTIONS_WITH_VALUE = new Set([
   "--cache",
@@ -579,10 +590,13 @@ function unwrapNpmExecInvocation(argv: string[]): string[] | null {
   return unwrapDirectPackageExecInvocation(["npx", ...tail]);
 }
 
-function resolvePosixShellScriptOperandIndex(argv: string[]): number | null {
+function resolvePosixShellScriptOperandIndex(argv: string[], executable: string): number | null {
+  const supportsPlusOptions = POSIX_SHELLS_WITH_PLUS_OPTIONS.has(executable);
   if (
     resolveInlineCommandMatch(argv, POSIX_INLINE_COMMAND_FLAGS, {
       allowCombinedC: true,
+      isOptionToken: (token) => isPosixShellOptionToken(token, supportsPlusOptions),
+      stopAtFirstNonOption: true,
     }).valueTokenIndex !== null
   ) {
     return null;
@@ -603,7 +617,7 @@ function resolvePosixShellScriptOperandIndex(argv: string[]): number | null {
     if (!afterDoubleDash && token === "-s") {
       return null;
     }
-    if (!afterDoubleDash && token.startsWith("-")) {
+    if (!afterDoubleDash && isPosixShellOptionToken(token, supportsPlusOptions)) {
       const flag = normalizeOptionFlag(token);
       if (POSIX_SHELL_OPTIONS_WITH_VALUE.has(flag)) {
         if (!token.includes("=")) {
@@ -611,6 +625,7 @@ function resolvePosixShellScriptOperandIndex(argv: string[]): number | null {
         }
         continue;
       }
+      i += advancePosixInlineOptionScan(token) - 1;
       continue;
     }
     return i;
@@ -865,7 +880,7 @@ function resolveMutableFileOperandIndex(argv: string[], cwd: string | undefined)
     return null;
   }
   if ((POSIX_SHELL_WRAPPERS as ReadonlySet<string>).has(executable)) {
-    const shellIndex = resolvePosixShellScriptOperandIndex(unwrapped.argv);
+    const shellIndex = resolvePosixShellScriptOperandIndex(unwrapped.argv, executable);
     return shellIndex === null ? null : unwrapped.baseIndex + shellIndex;
   }
   if (MUTABLE_ARGV1_INTERPRETER_PATTERNS.some((pattern) => pattern.test(executable))) {
@@ -1302,6 +1317,12 @@ export function buildSystemRunApprovalPlan(params: {
   }
   if (command.argv.length === 0) {
     return { ok: false, message: "command required" };
+  }
+  if (command.shellPayload === null && isBlockedShellWrapperCommand(command.argv)) {
+    return {
+      ok: false,
+      message: "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
+    };
   }
   const hardening = hardenApprovedExecutionPaths({
     approvedByAsk: true,

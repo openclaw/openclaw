@@ -182,11 +182,19 @@ export function parseConfigGetRouteArgs(argv: string[]) {
 export function parseConfigUnsetRouteArgs(argv: string[]) {
   const path = parseSinglePositional(argv, {
     commandPath: ["config", "unset"],
+    booleanFlags: ["--dry-run", "--allow-exec", "--json"],
   });
   if (!path) {
     return null;
   }
-  return { path };
+  return {
+    path,
+    cliOptions: {
+      dryRun: hasFlag(argv, "--dry-run"),
+      allowExec: hasFlag(argv, "--allow-exec"),
+      json: hasFlag(argv, "--json"),
+    },
+  };
 }
 
 export function parseModelsListRouteArgs(argv: string[]) {
@@ -251,19 +259,42 @@ export function parseModelsStatusRouteArgs(argv: string[]) {
 export function parseChannelsListRouteArgs(argv: string[]) {
   return {
     json: hasFlag(argv, "--json"),
-    usage: !hasFlag(argv, "--no-usage"),
+    all: hasFlag(argv, "--all"),
   };
 }
 
 export function parseChannelsStatusRouteArgs(argv: string[]) {
   const timeout = parseOptionalFlagValue(argv, "--timeout");
+  const channel = parseOptionalFlagValue(argv, "--channel");
   if (!timeout.ok) {
     return null;
   }
+  if (!channel.ok) {
+    return null;
+  }
   return {
+    channel: channel.value,
     json: hasFlag(argv, "--json"),
     probe: hasFlag(argv, "--probe"),
     timeout: timeout.value,
+  };
+}
+
+export function parsePluginsListRouteArgs(argv: string[]) {
+  if (!hasFlag(argv, "--json")) {
+    return null;
+  }
+  const positionals = getCommandPositionalsWithRootOptions(argv, {
+    commandPath: ["plugins", "list"],
+    booleanFlags: ["--json", "--enabled", "--verbose"],
+  });
+  if (!positionals || positionals.length !== 0) {
+    return null;
+  }
+  return {
+    json: true as const,
+    enabled: hasFlag(argv, "--enabled"),
+    verbose: hasFlag(argv, "--verbose"),
   };
 }
 

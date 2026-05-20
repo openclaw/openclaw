@@ -15,14 +15,16 @@ const requireApiKeyMock = vi.fn();
 const resolveSessionAuthProfileOverrideMock = vi.fn();
 const getActiveEmbeddedRunSnapshotMock = vi.fn();
 const resolveSessionAgentIdMock = vi.fn();
+const resolveSessionAgentIdsMock = vi.fn();
 const resolveAgentWorkspaceDirMock = vi.fn();
+const listAgentEntriesMock = vi.fn();
 const prepareProviderRuntimeAuthMock = vi.fn();
 const registerProviderStreamForModelMock = vi.fn();
 const diagDebugMock = vi.fn();
 
-vi.mock("@mariozechner/pi-ai", async () => {
+vi.mock("@earendil-works/pi-ai", async () => {
   const original =
-    await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
+    await vi.importActual<typeof import("@earendil-works/pi-ai")>("@earendil-works/pi-ai");
   return {
     ...original,
     streamSimple: (...args: unknown[]) => streamSimpleMock(...args),
@@ -36,7 +38,7 @@ vi.mock("node:fs/promises", () => ({
   readFile: (...args: unknown[]) => readFileMock(...args),
 }));
 
-vi.mock("@mariozechner/pi-coding-agent", () => ({
+vi.mock("@earendil-works/pi-coding-agent", () => ({
   buildSessionContext: (...args: unknown[]) => buildSessionContextMock(...args),
   generateSummary: vi.fn(async () => "summary"),
   migrateSessionEntries: (...args: unknown[]) => migrateSessionEntriesMock(...args),
@@ -66,6 +68,8 @@ vi.mock("./pi-embedded-runner/runs.js", () => ({
 }));
 
 vi.mock("./agent-scope.js", () => ({
+  listAgentEntries: (...args: unknown[]) => listAgentEntriesMock(...args),
+  resolveSessionAgentIds: (...args: unknown[]) => resolveSessionAgentIdsMock(...args),
   resolveSessionAgentId: (...args: unknown[]) => resolveSessionAgentIdMock(...args),
   resolveAgentWorkspaceDir: (...args: unknown[]) => resolveAgentWorkspaceDirMock(...args),
 }));
@@ -91,6 +95,7 @@ vi.mock("../logging/diagnostic.js", () => ({
 }));
 
 const { runBtwSideQuestion } = await import("./btw.js");
+const { clearAgentHarnesses, registerAgentHarness } = await import("./harness/registry.js");
 type RunBtwSideQuestionParams = Parameters<typeof runBtwSideQuestion>[0];
 
 const DEFAULT_AGENT_DIR = "/tmp/agent";
@@ -238,11 +243,81 @@ function mockActiveTranscript(messages: unknown[]) {
   });
 }
 
+function mockCall(
+  mockFn: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } },
+  callIndex = 0,
+): ReadonlyArray<unknown> {
+  const call = mockFn.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`Expected mock call ${callIndex + 1}`);
+  }
+  return call;
+}
+
+function mockArg(
+  mockFn: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } },
+  callIndex: number,
+  argIndex: number,
+): unknown {
+  return mockCall(mockFn, callIndex)[argIndex];
+}
+
 async function runMathSideQuestionAndCaptureContext() {
   mockDoneAnswer(MATH_ANSWER);
   await runMathSideQuestion();
-  const [, context] = streamSimpleMock.mock.calls[0] ?? [];
+  const context = mockArg(streamSimpleMock, 0, 1);
   return context;
+}
+
+function expectRecordFields(
+  record: unknown,
+  expected: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!record || typeof record !== "object") {
+    throw new Error("Expected record");
+  }
+  const actual = record as Record<string, unknown>;
+  for (const [key, value] of Object.entries(expected)) {
+    expect(actual[key]).toEqual(value);
+  }
+  return actual;
+}
+
+function streamContext(callIndex = 0): {
+  messages?: Array<Record<string, unknown>>;
+  systemPrompt?: unknown;
+} {
+  const call = streamSimpleMock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`Expected streamSimple call at index ${callIndex}`);
+  }
+  return (call[1] ?? {}) as {
+    messages?: Array<Record<string, unknown>>;
+    systemPrompt?: unknown;
+  };
+}
+
+function contextMessages(context: unknown): Array<Record<string, unknown>> {
+  const messages = (context as { messages?: Array<Record<string, unknown>> }).messages;
+  if (!messages) {
+    throw new Error("Expected BTW context messages");
+  }
+  return messages;
+}
+
+function expectTextBlockContains(block: unknown, text: string): void {
+  const record = expectRecordFields(block, { type: "text" });
+  expect(typeof record.text).toBe("string");
+  expect(record.text).toContain(text);
+}
+
+function firstTextBlockIncludes(message: Record<string, unknown>, text: string): boolean {
+  if (!Array.isArray(message.content)) {
+    return false;
+  }
+  const [block] = message.content;
+  const blockText = (block as { text?: unknown } | undefined)?.text;
+  return typeof blockText === "string" && blockText.includes(text);
 }
 
 function expectNoAssistantMessages(context: unknown) {
@@ -254,28 +329,24 @@ function expectNoAssistantMessages(context: unknown) {
 }
 
 function expectSanitizedAssistantContext(context: unknown, text: string) {
-  expect(context).toMatchObject({
-    messages: [
-      expect.objectContaining({ role: "user" }),
-      expect.objectContaining({
-        role: "assistant",
-        content: [{ type: "text", text }],
-      }),
-      expect.objectContaining({ role: "user" }),
-    ],
+  const messages = contextMessages(context);
+  expect(messages).toHaveLength(3);
+  expectRecordFields(messages[0], { role: "user" });
+  expectRecordFields(messages[1], {
+    role: "assistant",
+    content: [{ type: "text", text }],
   });
+  expectRecordFields(messages[2], { role: "user" });
 }
 
 function expectSeedOnlyUserContext(context: unknown) {
-  expect(context).toMatchObject({
-    messages: [
-      expect.objectContaining({
-        role: "user",
-        content: [{ type: "text", text: "seed" }],
-      }),
-      expect.objectContaining({ role: "user" }),
-    ],
+  const messages = contextMessages(context);
+  expect(messages).toHaveLength(2);
+  expectRecordFields(messages[0], {
+    role: "user",
+    content: [{ type: "text", text: "seed" }],
   });
+  expectRecordFields(messages[1], { role: "user" });
 }
 
 describe("runBtwSideQuestion", () => {
@@ -294,10 +365,13 @@ describe("runBtwSideQuestion", () => {
     resolveSessionAuthProfileOverrideMock.mockReset();
     getActiveEmbeddedRunSnapshotMock.mockReset();
     resolveSessionAgentIdMock.mockReset();
+    resolveSessionAgentIdsMock.mockReset();
     resolveAgentWorkspaceDirMock.mockReset();
+    listAgentEntriesMock.mockReset();
     prepareProviderRuntimeAuthMock.mockReset();
     registerProviderStreamForModelMock.mockReset();
     diagDebugMock.mockReset();
+    clearAgentHarnesses();
 
     readFileMock.mockResolvedValue("mock transcript");
     parseSessionEntriesMock.mockReturnValue([
@@ -328,7 +402,9 @@ describe("runBtwSideQuestion", () => {
     resolveSessionAuthProfileOverrideMock.mockResolvedValue("profile-1");
     getActiveEmbeddedRunSnapshotMock.mockReturnValue(undefined);
     resolveSessionAgentIdMock.mockReturnValue("main");
+    resolveSessionAgentIdsMock.mockReturnValue({ defaultAgentId: "main", sessionAgentId: "main" });
     resolveAgentWorkspaceDirMock.mockReturnValue("/tmp/workspace");
+    listAgentEntriesMock.mockReturnValue([]);
     prepareProviderRuntimeAuthMock.mockResolvedValue(undefined);
     registerProviderStreamForModelMock.mockReturnValue(undefined);
   });
@@ -417,13 +493,94 @@ describe("runBtwSideQuestion", () => {
     const result = await runSideQuestion();
 
     expect(result).toEqual({ text: "Final answer." });
-    expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledWith(
-      expect.any(Object),
-      DEFAULT_AGENT_DIR,
-      {
-        workspaceDir: "/tmp/workspace",
-      },
-    );
+    const ensureArgs = mockCall(ensureOpenClawModelsJsonMock);
+    expect(ensureArgs?.[1]).toBe(DEFAULT_AGENT_DIR);
+    expect(ensureArgs?.[2]).toEqual({ workspaceDir: "/tmp/workspace" });
+  });
+
+  it("routes Codex-selected BTW questions through the harness side-question hook", async () => {
+    const codexSideQuestionMock = vi.fn().mockResolvedValue({ text: "Codex side answer." });
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex test harness",
+      supports: () => ({ supported: true, priority: 100 }),
+      runAttempt: vi.fn(),
+      runSideQuestion: codexSideQuestionMock,
+    });
+    resolveModelWithRegistryMock.mockReturnValue({
+      provider: "openai",
+      id: "gpt-5.5",
+      api: "openai-responses",
+    });
+    resolveSessionAuthProfileOverrideMock.mockResolvedValue("openai-codex:work");
+
+    const result = await runSideQuestion({
+      provider: "openai",
+      model: "gpt-5.5",
+      sessionKey: DEFAULT_SESSION_KEY,
+    });
+
+    expect(result).toEqual({ text: "Codex side answer." });
+    expect(codexSideQuestionMock).toHaveBeenCalledTimes(1);
+    const [[sideQuestionParams]] = codexSideQuestionMock.mock.calls as unknown as Array<
+      [
+        {
+          provider?: string;
+          model?: string;
+          question?: string;
+          sessionId?: string;
+          agentId?: string;
+          workspaceDir?: string;
+          authProfileId?: string;
+        },
+      ]
+    >;
+    expect(sideQuestionParams.provider).toBe("openai");
+    expect(sideQuestionParams.model).toBe("gpt-5.5");
+    expect(sideQuestionParams.question).toBe(DEFAULT_QUESTION);
+    expect(sideQuestionParams.sessionId).toBe("session-1");
+    expect(sideQuestionParams.agentId).toBe("main");
+    expect(sideQuestionParams.workspaceDir).toBe("/tmp/workspace");
+    expect(sideQuestionParams.authProfileId).toBe("openai-codex:work");
+    expect(
+      (mockArg(codexSideQuestionMock, 0, 0) as { sessionFile?: string }).sessionFile,
+    ).toContain("session-1.jsonl");
+    expect(streamSimpleMock).not.toHaveBeenCalled();
+    expect(registerProviderStreamForModelMock).not.toHaveBeenCalled();
+  });
+
+  it("does not fall back to the direct provider call when Codex lacks BTW support", async () => {
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex test harness",
+      supports: () => ({ supported: true, priority: 100 }),
+      runAttempt: vi.fn(),
+    });
+
+    await expect(
+      runSideQuestion({
+        provider: "openai",
+        model: "gpt-5.5",
+        sessionKey: DEFAULT_SESSION_KEY,
+      }),
+    ).rejects.toThrow('Selected agent harness "codex" does not support /btw side questions.');
+    expect(streamSimpleMock).not.toHaveBeenCalled();
+    expect(registerProviderStreamForModelMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps the direct provider fallback for non-Codex harnesses without side-question hooks", async () => {
+    registerAgentHarness({
+      id: "custom",
+      label: "Custom test harness",
+      supports: () => ({ supported: true, priority: 100 }),
+      runAttempt: vi.fn(),
+    });
+    mockDoneAnswer("Direct fallback answer.");
+
+    const result = await runSideQuestion();
+
+    expect(result).toEqual({ text: "Direct fallback answer." });
+    expect(streamSimpleMock).toHaveBeenCalledTimes(1);
   });
 
   it("applies provider runtime auth before streaming github-copilot BTW questions", async () => {
@@ -452,29 +609,25 @@ describe("runBtwSideQuestion", () => {
     });
 
     expect(result).toEqual({ text: "Copilot answer." });
-    expect(prepareProviderRuntimeAuthMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "github-copilot",
-        workspaceDir: "/tmp/workspace",
-        context: expect.objectContaining({
-          provider: "github-copilot",
-          modelId: "gpt-5.4",
-          workspaceDir: "/tmp/workspace",
-          apiKey: "github-token",
-          authMode: "token",
-          profileId: "profile-1",
-        }),
-      }),
-    );
-    expect(streamSimpleMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "github-copilot",
-        id: "gpt-5.4",
-        baseUrl: "https://api.enterprise.githubcopilot.com",
-      }),
-      expect.anything(),
-      expect.objectContaining({ apiKey: "copilot-runtime-token" }),
-    );
+    const runtimeAuthParams = expectRecordFields(mockArg(prepareProviderRuntimeAuthMock, 0, 0), {
+      provider: "github-copilot",
+      workspaceDir: "/tmp/workspace",
+    });
+    expectRecordFields(runtimeAuthParams.context, {
+      provider: "github-copilot",
+      modelId: "gpt-5.4",
+      workspaceDir: "/tmp/workspace",
+      apiKey: "github-token",
+      authMode: "token",
+      profileId: "profile-1",
+    });
+    const [streamModel, , streamOptions] = mockCall(streamSimpleMock);
+    expectRecordFields(streamModel, {
+      provider: "github-copilot",
+      id: "gpt-5.4",
+      baseUrl: "https://api.enterprise.githubcopilot.com",
+    });
+    expectRecordFields(streamOptions, { apiKey: "copilot-runtime-token" });
   });
 
   it("uses the provider's stream fn when registered so provider URL construction runs (#68336)", async () => {
@@ -496,16 +649,14 @@ describe("runBtwSideQuestion", () => {
     const result = await runSideQuestion({ provider: "ollama", model: "glm-5.1" });
 
     expect(result).toEqual({ text: "Ollama Cloud answer." });
-    expect(registerProviderStreamForModelMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        model: expect.objectContaining({
-          provider: "ollama",
-          api: "openai-completions",
-          baseUrl: "https://ollama.com/",
-        }),
-        workspaceDir: "/tmp/workspace",
-      }),
-    );
+    const registerParams = expectRecordFields(mockArg(registerProviderStreamForModelMock, 0, 0), {
+      workspaceDir: "/tmp/workspace",
+    });
+    expectRecordFields(registerParams.model, {
+      provider: "ollama",
+      api: "openai-completions",
+      baseUrl: "https://ollama.com/",
+    });
     expect(providerStreamFn).toHaveBeenCalledTimes(1);
     expect(streamSimpleMock).not.toHaveBeenCalled();
   });
@@ -525,7 +676,7 @@ describe("runBtwSideQuestion", () => {
 
     await runSideQuestion();
 
-    const [, , options] = streamSimpleMock.mock.calls[0] ?? [];
+    const options = mockArg(streamSimpleMock, 0, 2);
     const onPayload = (options as { onPayload?: (payload: unknown) => void })?.onPayload;
     const payloadWithEmptyTools = { messages: [], tools: [] as unknown[] };
 
@@ -576,16 +727,8 @@ describe("runBtwSideQuestion", () => {
     const result = await runSideQuestion({ resolvedThinkLevel: "adaptive" });
 
     expect(result).toEqual({ text: "Final answer." });
-    expect(streamSimpleMock).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.anything(),
-      expect.objectContaining({ reasoning: undefined }),
-    );
-    expect(streamSimpleMock).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.anything(),
-      expect.not.objectContaining({ reasoning: expect.anything() }),
-    );
+    const options = mockArg(streamSimpleMock, 0, 2);
+    expect((options as { reasoning?: unknown } | undefined)?.reasoning).toBeUndefined();
   });
 
   it("fails when the current branch has no messages", async () => {
@@ -614,27 +757,21 @@ describe("runBtwSideQuestion", () => {
     const result = await runMathSideQuestion();
 
     expect(result).toEqual({ text: MATH_ANSWER });
-    expect(streamSimpleMock).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        systemPrompt: expect.stringContaining("ephemeral /btw side question"),
-        messages: expect.arrayContaining([
-          expect.objectContaining({ role: "user" }),
-          expect.objectContaining({
-            role: "user",
-            content: [
-              {
-                type: "text",
-                text: expect.stringContaining(
-                  `<btw_side_question>\n${MATH_QUESTION}\n</btw_side_question>`,
-                ),
-              },
-            ],
-          }),
-        ]),
-      }),
-      expect.anything(),
+    const context = streamContext();
+    expect(String(context.systemPrompt)).toContain("ephemeral /btw side question");
+    const messages = contextMessages(context);
+    expect(messages.some((message) => message.role === "user")).toBe(true);
+    const sideQuestionMessage = messages.find(
+      (message) =>
+        message.role === "user" &&
+        firstTextBlockIncludes(
+          message,
+          `<btw_side_question>\n${MATH_QUESTION}\n</btw_side_question>`,
+        ),
     );
+    if (!sideQuestionMessage) {
+      throw new Error("Expected BTW side question message");
+    }
   });
 
   it("uses the in-flight prompt as background only when there is no prior transcript context", async () => {
@@ -649,24 +786,11 @@ describe("runBtwSideQuestion", () => {
     const result = await runSideQuestion({ question: "what are we doing?" });
 
     expect(result).toEqual({ text: "You're building a tic-tac-toe game in Brainfuck." });
-    expect(streamSimpleMock).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        messages: [
-          expect.objectContaining({
-            role: "user",
-            content: [
-              {
-                type: "text",
-                text: expect.stringContaining(
-                  "<in_flight_main_task>\nbuild me a tic-tac-toe game in brainfuck\n</in_flight_main_task>",
-                ),
-              },
-            ],
-          }),
-        ],
-      }),
-      expect.anything(),
+    const [message] = contextMessages(streamContext());
+    expectRecordFields(message, { role: "user" });
+    expectTextBlockContains(
+      (message.content as Array<unknown>)[0],
+      "<in_flight_main_task>\nbuild me a tic-tac-toe game in brainfuck\n</in_flight_main_task>",
     );
   });
 
@@ -675,27 +799,21 @@ describe("runBtwSideQuestion", () => {
 
     await runSideQuestion({ question: "what is the distance to the sun?" });
 
-    const [, context] = streamSimpleMock.mock.calls[0] ?? [];
-    expect(context).toMatchObject({
-      systemPrompt: expect.stringContaining(
-        "Do not continue, resume, or complete any unfinished task",
-      ),
-    });
-    expect(context).toMatchObject({
-      messages: expect.arrayContaining([
-        expect.objectContaining({
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: expect.stringContaining(
-                "Ignore any unfinished task in the conversation while answering it.",
-              ),
-            },
-          ],
-        }),
-      ]),
-    });
+    const context = streamContext();
+    expect(String(context.systemPrompt)).toContain(
+      "Do not continue, resume, or complete any unfinished task",
+    );
+    const sideQuestionMessage = contextMessages(context).find(
+      (message) =>
+        message.role === "user" &&
+        firstTextBlockIncludes(
+          message,
+          "Ignore any unfinished task in the conversation while answering it.",
+        ),
+    );
+    if (!sideQuestionMessage) {
+      throw new Error("Expected isolated side question message");
+    }
   });
 
   it("branches away from an unresolved trailing user turn before building BTW context", async () => {
@@ -713,6 +831,7 @@ describe("runBtwSideQuestion", () => {
 
     const result = await runMathSideQuestion();
 
+    expect(buildSessionContextMock).toHaveBeenCalledTimes(1);
     expect(buildSessionContextMock).toHaveBeenCalledWith([assistantEntry]);
     expect(result).toEqual({ text: MATH_ANSWER });
   });
@@ -740,6 +859,7 @@ describe("runBtwSideQuestion", () => {
 
     const result = await runMathSideQuestion();
 
+    expect(buildSessionContextMock).toHaveBeenCalledTimes(1);
     expect(buildSessionContextMock).toHaveBeenCalledWith([userEntry, assistantEntry]);
     expect(result).toEqual({ text: MATH_ANSWER });
   });
@@ -762,10 +882,11 @@ describe("runBtwSideQuestion", () => {
 
     const result = await runMathSideQuestion();
 
+    expect(buildSessionContextMock).toHaveBeenCalledTimes(1);
     expect(buildSessionContextMock).toHaveBeenCalledWith([userEntry, assistantEntry]);
     expect(result).toEqual({ text: MATH_ANSWER });
     expect(diagDebugMock).toHaveBeenCalledWith(
-      expect.stringContaining("btw snapshot leaf unavailable: sessionId=session-1"),
+      "btw snapshot leaf unavailable: sessionId=session-1 leaf=assistant-gone",
     );
   });
 
@@ -775,7 +896,7 @@ describe("runBtwSideQuestion", () => {
     const result = await runMathSideQuestion();
 
     expect(result).toEqual({ text: MATH_ANSWER });
-    expect(buildSessionContextMock).toHaveBeenCalled();
+    expect(buildSessionContextMock).toHaveBeenCalledTimes(1);
   });
 
   it("does not log transcript persistence warnings because BTW no longer writes to disk", async () => {
@@ -784,9 +905,7 @@ describe("runBtwSideQuestion", () => {
     const result = await runMathSideQuestion();
 
     expect(result).toEqual({ text: MATH_ANSWER });
-    expect(diagDebugMock).not.toHaveBeenCalledWith(
-      expect.stringContaining("btw transcript persistence skipped"),
-    );
+    expect(diagDebugMock).not.toHaveBeenCalled();
   });
 
   it("excludes tool results from BTW context to avoid replaying raw tool output", async () => {
@@ -808,20 +927,15 @@ describe("runBtwSideQuestion", () => {
 
     await runMathSideQuestion();
 
-    const [, context] = streamSimpleMock.mock.calls[0] ?? [];
-    expect(context).toMatchObject({
-      messages: [
-        expect.objectContaining({ role: "user" }),
-        expect.objectContaining({ role: "assistant" }),
-        expect.objectContaining({ role: "user" }),
-      ],
-    });
-    expect((context as { messages?: Array<{ role?: string }> }).messages).not.toEqual(
-      expect.arrayContaining([expect.objectContaining({ role: "toolResult" })]),
-    );
+    const messages = contextMessages(streamContext());
+    expect(messages).toHaveLength(3);
+    expectRecordFields(messages[0], { role: "user" });
+    expectRecordFields(messages[1], { role: "assistant" });
+    expectRecordFields(messages[2], { role: "user" });
+    expect(messages.some((message) => message.role === "toolResult")).toBe(false);
   });
 
-  it("strips assistant tool calls from BTW context so no-tool side questions stay tool-free", async () => {
+  it("strips assistant tool calls from fallback BTW context so stale calls are not replayed", async () => {
     mockActiveTranscript([
       createUserTranscriptMessage(),
       createAssistantTranscriptMessage(
@@ -838,23 +952,19 @@ describe("runBtwSideQuestion", () => {
 
     await runMathSideQuestion();
 
-    const [, context] = streamSimpleMock.mock.calls[0] ?? [];
+    const context = streamContext();
     expectSanitizedAssistantContext(context, "Let me check.");
-    expect(
-      (context as { messages?: Array<{ role?: string; content?: Array<{ type?: string }> }> })
-        .messages,
-    ).not.toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          role: "assistant",
-          content: expect.arrayContaining([
-            expect.objectContaining({ type: "toolCall" }),
-            expect.objectContaining({ type: "toolUse" }),
-            expect.objectContaining({ type: "tool_call" }),
-          ]),
-        }),
-      ]),
+    const assistantMessages = contextMessages(context).filter(
+      (message) => message.role === "assistant",
     );
+    const assistantContentTypes = assistantMessages.flatMap((message) =>
+      Array.isArray(message.content)
+        ? message.content.map((block) => (block as { type?: unknown }).type)
+        : [],
+    );
+    expect(assistantContentTypes).not.toContain("toolCall");
+    expect(assistantContentTypes).not.toContain("toolUse");
+    expect(assistantContentTypes).not.toContain("tool_call");
   });
 
   it("drops assistant messages that contain only tool calls", async () => {
@@ -907,17 +1017,14 @@ describe("runBtwSideQuestion", () => {
     const context = await runMathSideQuestionAndCaptureContext();
 
     expectSanitizedAssistantContext(context, "Visible answer");
-    expect(
-      (context as { messages?: Array<{ role?: string; content?: Array<{ type?: string }> }> })
-        .messages,
-    ).not.toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          role: "assistant",
-          content: expect.arrayContaining([expect.objectContaining({ type: "thinking" })]),
-        }),
-      ]),
-    );
+    const assistantContentTypes = contextMessages(context)
+      .filter((message) => message.role === "assistant")
+      .flatMap((message) =>
+        Array.isArray(message.content)
+          ? message.content.map((block) => (block as { type?: unknown }).type)
+          : [],
+      );
+    expect(assistantContentTypes).not.toContain("thinking");
   });
 
   it("drops thinking-only assistant messages from BTW context", async () => {

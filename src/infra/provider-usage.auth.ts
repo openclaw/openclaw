@@ -367,14 +367,35 @@ export async function resolveProviderAuths(params: {
     env: params.env ?? process.env,
     agentDir: params.agentDir,
   };
-  const hasAuthProfileStoreSource = hasAnyAuthProfileStoreSource(params.agentDir);
   const authProfileSourceState: UsageAuthState = {
     ...stateBase,
     allowAuthProfileStore: true,
   };
+  const hasAuthProfileStoreSource = params.skipPluginAuthWithoutCredentialSource
+    ? hasAnyAuthProfileStoreSource(params.agentDir)
+    : false;
   const auths: ProviderAuth[] = [];
 
   for (const provider of params.providers) {
+    if (!params.skipPluginAuthWithoutCredentialSource) {
+      const pluginAuth = await resolveProviderUsageAuthViaPlugin({
+        state: authProfileSourceState,
+        provider,
+      });
+      if (pluginAuth) {
+        auths.push(pluginAuth);
+        continue;
+      }
+      const fallbackAuth = await resolveProviderUsageAuthFallback({
+        state: authProfileSourceState,
+        provider,
+      });
+      if (fallbackAuth) {
+        auths.push(fallbackAuth);
+      }
+      continue;
+    }
+
     const directCredentialState = { ...stateBase, allowAuthProfileStore: false };
     const credentialProviderIds = resolveUsageCredentialProviderIds({
       state: directCredentialState,
@@ -392,7 +413,6 @@ export async function resolveProviderAuths(params: {
         providerIds: credentialProviderIds,
       });
     const allowAuthProfileStore =
-      !params.skipPluginAuthWithoutCredentialSource ||
       hasDirectCredentialSource ||
       (hasAuthProfileStoreSource &&
         hasAuthProfileCredentialSource({
@@ -409,7 +429,7 @@ export async function resolveProviderAuths(params: {
     const hasPluginCredentialSource =
       hasDirectCredentialSource || allowAuthProfileStore || hasLegacyPiAgentCredentialSource;
 
-    if (!params.skipPluginAuthWithoutCredentialSource || hasPluginCredentialSource) {
+    if (hasPluginCredentialSource) {
       const pluginAuth = await resolveProviderUsageAuthViaPlugin({
         state,
         provider,

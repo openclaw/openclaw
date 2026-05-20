@@ -110,7 +110,7 @@ function resolveMatrixPreviewToolProgressEnabled(streaming: MatrixConfig["stream
   );
 }
 
-export const __testing = {
+export const testing = {
   resolveMatrixPreviewToolProgress,
   resolveMatrixPreviewToolProgressEnabled,
   resolveMatrixStreamingMode,
@@ -353,6 +353,16 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
           roomInfo: await getRoomInfo(roomId, { includeAliases: true }),
           rooms: roomsConfig,
         }),
+      ...(dmSessionScope === "per-room"
+        ? {
+            canPromoteUnmappedStrictRoom: async (roomId) =>
+              shouldPromoteRecentInviteRoom({
+                roomId,
+                roomInfo: await getRoomInfo(roomId, { includeAliases: true }),
+                rooms: roomsConfig,
+              }),
+          }
+        : {}),
       shouldKeepLocallyPromotedDirectRoom: async (roomId) => {
         try {
           const roomInfo = await getRoomInfo(roomId, { includeAliases: true });
@@ -527,3 +537,4 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     throw err;
   }
 }
+export { testing as __testing };
