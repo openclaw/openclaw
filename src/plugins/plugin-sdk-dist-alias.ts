@@ -20,9 +20,30 @@ function writeRuntimeModuleWrapper(sourcePath: string, targetPath: string): void
   fs.writeFileSync(targetPath, content, "utf8");
 }
 
+function ensureOpenClawOcPathAlias(distRoot: string): void {
+  const ocPathDir = path.join(distRoot, "extensions", "oc-path");
+  const ocPathApiPath = path.join(ocPathDir, "api.js");
+  if (!fs.existsSync(ocPathApiPath)) {
+    return;
+  }
+
+  const aliasDir = path.join(distRoot, "extensions", "node_modules", "@openclaw", "oc-path");
+  writeRuntimeJsonFile(path.join(aliasDir, "package.json"), {
+    name: "@openclaw/oc-path",
+    type: "module",
+    exports: {
+      ".": "./index.js",
+      "./api.js": "./api.js",
+    },
+  });
+  writeRuntimeModuleWrapper(path.join(ocPathDir, "index.js"), path.join(aliasDir, "index.js"));
+  writeRuntimeModuleWrapper(ocPathApiPath, path.join(aliasDir, "api.js"));
+}
+
 export function ensureOpenClawPluginSdkAlias(distRoot: string): void {
   const pluginSdkDir = path.join(distRoot, "plugin-sdk");
   if (!fs.existsSync(pluginSdkDir)) {
+    ensureOpenClawOcPathAlias(distRoot);
     return;
   }
 
@@ -53,4 +74,5 @@ export function ensureOpenClawPluginSdkAlias(distRoot: string): void {
       path.join(pluginSdkAliasDir, entry.name),
     );
   }
+  ensureOpenClawOcPathAlias(distRoot);
 }

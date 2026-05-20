@@ -545,7 +545,7 @@ function toolRiskFindings(
   policyDocName: string,
   evidence: PolicyEvidence,
 ): readonly HealthFinding[] {
-  return evidence.tools
+  return (evidence.tools ?? [])
     .filter((tool) => tool.risk === undefined)
     .map((tool): HealthFinding => {
       return {
@@ -568,7 +568,7 @@ function toolUnknownRiskFindings(
   policyDocName: string,
   evidence: PolicyEvidence,
 ): readonly HealthFinding[] {
-  return evidence.tools
+  return (evidence.tools ?? [])
     .filter(
       (tool) =>
         tool.risk !== undefined &&
@@ -594,7 +594,7 @@ function toolSensitivityFindings(
   policyDocName: string,
   evidence: PolicyEvidence,
 ): readonly HealthFinding[] {
-  return evidence.tools.flatMap((tool): HealthFinding[] => {
+  return (evidence.tools ?? []).flatMap((tool): HealthFinding[] => {
     if (tool.sensitivity === undefined) {
       return [
         {
@@ -639,7 +639,7 @@ function toolOwnerFindings(
   policyDocName: string,
   evidence: PolicyEvidence,
 ): readonly HealthFinding[] {
-  return evidence.tools
+  return (evidence.tools ?? [])
     .filter((tool) => tool.owner === undefined)
     .map((tool): HealthFinding => {
       return {
