@@ -149,25 +149,21 @@ function renderPendingDevice(req: PendingDevice, props: NodesProps, paired?: Pai
   const approval = resolvePendingDeviceApprovalState(req, paired);
   const repair = req.isRepair ? uiText(" · repair", " · sửa kết nối") : "";
   const ip = req.remoteIp ? ` · ${req.remoteIp}` : "";
+  const requestedLine = `${renderPendingApprovalNote(approval.kind)} · ${uiText("requested", "yêu cầu")} ${age}${repair}`;
+  const approvedLine = approval.approved
+    ? `${uiText("approved now:", "đã phê duyệt:")} ${formatAccessSummary(approval.approved)}`
+    : null;
   return html`
     <div class="list-item">
       <div class="list-main">
         <div class="list-title">${name}</div>
         <div class="list-sub">${req.deviceId}${ip}</div>
-        <div class="muted" style="margin-top: 6px;">
-          ${renderPendingApprovalNote(approval.kind)} · ${uiText("requested", "yêu cầu")}
-          ${age}${repair}
-        </div>
+        <div class="muted" style="margin-top: 6px;">${requestedLine}</div>
         <div class="muted" style="margin-top: 6px;">
           ${uiText("requested:", "yêu cầu:")} ${formatAccessSummary(approval.requested)}
         </div>
         ${approval.approved
-          ? html`
-              <div class="muted" style="margin-top: 6px;">
-                ${uiText("approved now:", "đã phê duyệt:")}
-                ${formatAccessSummary(approval.approved)}
-              </div>
-            `
+          ? html` <div class="muted" style="margin-top: 6px;">${approvedLine}</div> `
           : nothing}
       </div>
       <div class="list-meta">
