@@ -522,22 +522,6 @@ describe("talk realtime gateway relay", () => {
       "Briefly tell the person that you are checking with OpenClaw. Do not answer the request yet. Wait for the OpenClaw result before giving the actual answer.",
     );
 
-    submitTalkRealtimeRelayToolResult({
-      relaySessionId: session.relaySessionId,
-      connId: "conn-1",
-      callId,
-      result: { text: "Here is the checked answer." },
-    });
-    expect(bridge.sendUserMessage).toHaveBeenLastCalledWith(
-      [
-        "OpenClaw finished checking. Speak this result naturally and concisely.",
-        "Do not mention tool calls, JSON, or internal routing.",
-        "",
-        "Here is the checked answer.",
-      ].join("\n"),
-    );
-    expect(bridge.submitToolResult).not.toHaveBeenCalled();
-
     bridgeRequest?.onToolCall?.({
       itemId: "native-item",
       callId: "native-call",
@@ -547,10 +531,44 @@ describe("talk realtime gateway relay", () => {
     expect(bridge.submitToolResult).toHaveBeenLastCalledWith(
       "native-call",
       {
+        status: "working",
+        tool: "openclaw_agent_consult",
+        message:
+          "Tell the person briefly that you are checking, then wait for the final OpenClaw result before answering with the actual result.",
+      },
+      { willContinue: true },
+    );
+
+    submitTalkRealtimeRelayToolResult({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      callId,
+      result: { result: "Here is the checked answer." },
+    });
+    expect(bridge.submitToolResult).toHaveBeenLastCalledWith(
+      "native-call",
+      {
         status: "already_delivered",
         message: "OpenClaw already delivered this consult result internally. Do not repeat it.",
       },
       { suppressResponse: true },
+    );
+    expect(bridge.sendUserMessage).toHaveBeenLastCalledWith(
+      [
+        "OpenClaw finished checking. Speak this result naturally and concisely.",
+        "Do not mention tool calls, JSON, or internal routing.",
+        "",
+        "Here is the checked answer.",
+      ].join("\n"),
+    );
+    expect(
+      bridge.submitToolResult.mock.invocationCallOrder[
+        bridge.submitToolResult.mock.invocationCallOrder.length - 1
+      ],
+    ).toBeLessThan(
+      bridge.sendUserMessage.mock.invocationCallOrder[
+        bridge.sendUserMessage.mock.invocationCallOrder.length - 1
+      ] ?? 0,
     );
     expect(
       events.some((entry) => {

@@ -146,7 +146,12 @@ function readSpeakableToolResultText(result: unknown): string | undefined {
     return undefined;
   }
   const record = result as Record<string, unknown>;
-  const value = typeof record.text === "string" ? record.text : record.error;
+  const value =
+    typeof record.text === "string"
+      ? record.text
+      : typeof record.result === "string"
+        ? record.result
+        : record.error;
   if (typeof value !== "string") {
     return undefined;
   }
@@ -401,7 +406,6 @@ export function createTalkRealtimeRelaySession(
     { onEvent: recordTalkObservabilityEvent },
   );
   let relay: RelaySession | undefined;
-  let bridgeSession: RealtimeVoiceBridgeSession | undefined;
   const emit = (event: TalkRealtimeRelayEventPayload, talkEvent?: TalkEventInput) =>
     broadcastToOwner(params.context, params.connId, {
       ...event,
@@ -549,7 +553,6 @@ export function createTalkRealtimeRelaySession(
       );
     },
   });
-  bridgeSession = bridge;
   relay = {
     id: relaySessionId,
     connId: params.connId,
@@ -761,11 +764,11 @@ export function submitTalkRealtimeRelayToolResult(params: {
     } else {
       forcedConsult.completedAtMs = Date.now();
       const text = readSpeakableToolResultText(params.result);
-      if (text) {
-        session.bridge.sendUserMessage(buildForcedConsultSpeechPrompt(text));
-      }
       for (const nativeCallId of forcedConsult.nativeCallIds) {
         submitAlreadyDeliveredToolResult(session, nativeCallId, turnId);
+      }
+      if (text) {
+        session.bridge.sendUserMessage(buildForcedConsultSpeechPrompt(text));
       }
       scheduleForcedConsultCleanup(session, params.callId, forcedConsult);
     }
