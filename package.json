@@ -1833,6 +1833,7 @@
     "jscpd": "4.2.3",
     "jsdom": "29.1.1",
     "lit": "3.3.3",
+    "node-gyp": "12.3.0",
     "oxfmt": "0.51.0",
     "oxlint": "1.65.0",
     "oxlint-tsgolint": "0.23.0",
