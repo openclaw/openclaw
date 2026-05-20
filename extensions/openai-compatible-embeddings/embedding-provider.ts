@@ -27,7 +27,6 @@
  *   - apiKey:  Bearer token if the server enforces one (llama-server with
  *              --api-key, LocalAI with API_KEY, etc.). Plain string or a
  *              SecretInput reference. Omitted when the server is open.
- *   - headers: additional HTTP headers to attach to every request.
  *
  * The provider does not consult any global `models.providers.*` block.
  * It is fully self-contained so it never accidentally inherits real

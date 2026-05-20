@@ -378,6 +378,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/openai/**"
+"extensions: openai-compatible-embeddings":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/openai-compatible-embeddings/**"
 "extensions: codex":
   - changed-files:
       - any-glob-to-any-file:
