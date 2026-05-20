@@ -1152,6 +1152,7 @@
                       "concepts/memory-builtin",
                       "concepts/memory-qmd",
                       "concepts/memory-honcho",
+                      "concepts/memory-openviking",
                       "concepts/memory-search",
                       "concepts/active-memory",
                       "concepts/commitments",

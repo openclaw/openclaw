@@ -4,6 +4,14 @@
     "target": "OpenClaw"
   },
   {
+    "source": "OpenViking",
+    "target": "OpenViking"
+  },
+  {
+    "source": "OpenViking memory",
+    "target": "OpenViking 记忆"
+  },
+  {
     "source": "iMessage",
     "target": "iMessage"
   },
