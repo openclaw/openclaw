@@ -23,8 +23,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import {
+  resolveFullyUsableCompactionCheckpoints,
   resolveGatewaySessionStoreTarget,
-  resolveProjectableCompactionCheckpoints,
 } from "./session-utils.js";
 
 const log = createSubsystemLogger("gateway/session-compaction-checkpoints");
@@ -691,7 +691,7 @@ export async function listSessionCompactionCheckpointsWithFilesAsync(params: {
   sessionKey: string;
   storePath: string;
 }): Promise<SessionCompactionCheckpoint[]> {
-  const stored = resolveProjectableCompactionCheckpoints(params.entry);
+  const stored = resolveFullyUsableCompactionCheckpoints(params.entry);
   const discovered = await discoverSessionCompactionCheckpointsFromDisk({
     entry: params.entry,
     sessionKey: params.sessionKey,

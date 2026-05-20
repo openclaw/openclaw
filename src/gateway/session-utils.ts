@@ -273,10 +273,14 @@ function normalizeFileTimestampMs(value: number): number | undefined {
 
 type SessionCompactionCheckpointEntry = NonNullable<SessionEntry["compactionCheckpoints"]>[number];
 
+function isPlainObjectRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
 function isProjectableCompactionCheckpoint(
   value: unknown,
 ): value is SessionCompactionCheckpointEntry {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isPlainObjectRecord(value)) {
     return false;
   }
   const checkpoint = value as {
@@ -303,6 +307,35 @@ export function resolveProjectableCompactionCheckpoints(
     return [];
   }
   return checkpoints.filter(isProjectableCompactionCheckpoint);
+}
+
+export function isFullyUsableCompactionCheckpoint(
+  value: unknown,
+): value is SessionCompactionCheckpointEntry {
+  if (!isProjectableCompactionCheckpoint(value)) {
+    return false;
+  }
+  const checkpoint = value as {
+    preCompaction?: unknown;
+    postCompaction?: unknown;
+  };
+  if (
+    !isPlainObjectRecord(checkpoint.preCompaction) ||
+    !isPlainObjectRecord(checkpoint.postCompaction)
+  ) {
+    return false;
+  }
+  return Boolean(normalizeOptionalString(checkpoint.preCompaction.sessionFile));
+}
+
+export function resolveFullyUsableCompactionCheckpoints(
+  entry?: Pick<SessionEntry, "compactionCheckpoints"> | null,
+): SessionCompactionCheckpointEntry[] {
+  const checkpoints = entry?.compactionCheckpoints;
+  if (!Array.isArray(checkpoints) || checkpoints.length === 0) {
+    return [];
+  }
+  return checkpoints.filter(isFullyUsableCompactionCheckpoint);
 }
 
 function resolveLatestCompactionCheckpoint(
