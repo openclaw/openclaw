@@ -36,7 +36,10 @@ const validationMocks = vi.hoisted(() => ({
   ),
 }));
 
-vi.mock("./io.js", () => ioMocks);
+vi.mock("./io.js", async () => ({
+  ...(await vi.importActual<typeof import("./io.js")>("./io.js")),
+  ...ioMocks,
+}));
 vi.mock("./validation.js", () => validationMocks);
 
 function createSnapshot(params: {
@@ -669,6 +672,8 @@ describe("config mutate helpers", () => {
     const home = await suiteRootTracker.make("include-runtime-refresh-rollback");
     const configPath = path.join(home, ".openclaw", "openclaw.json");
     const pluginsPath = path.join(home, ".openclaw", "config", "plugins.json5");
+    const env = {} as NodeJS.ProcessEnv;
+    const envKey = "OPENCLAW_TEST_INCLUDE_ROLLBACK_ENV";
     await fs.mkdir(path.dirname(pluginsPath), { recursive: true });
     await fs.writeFile(
       configPath,
@@ -690,17 +695,21 @@ describe("config mutate helpers", () => {
         },
       },
     };
-    ioMocks.readConfigFileSnapshotForWrite.mockResolvedValue({
-      snapshot: createSnapshot({
-        hash: "hash-include-refresh-written",
-        path: configPath,
-        parsed: { plugins: { $include: "./config/plugins.json5" } },
-        sourceConfig: nextConfig,
-      }),
-      writeOptions: { expectedConfigPath: configPath },
+    ioMocks.readConfigFileSnapshotForWrite.mockImplementation(async () => {
+      env[envKey] = "written-env-value";
+      return {
+        snapshot: createSnapshot({
+          hash: "hash-include-refresh-written",
+          path: configPath,
+          parsed: { plugins: { $include: "./config/plugins.json5" } },
+          sourceConfig: nextConfig,
+        }),
+        writeOptions: { expectedConfigPath: configPath },
+      };
     });
 
     try {
+      delete env[envKey];
       setRuntimeConfigSnapshotRefreshHandler({
         preflight: () => true,
         refresh: () => {
@@ -712,14 +721,17 @@ describe("config mutate helpers", () => {
         replaceConfigFile({
           baseHash: snapshot.hash,
           snapshot,
+          io: { ...ioMocks, env },
           writeOptions: { expectedConfigPath: snapshot.path },
           nextConfig,
         }),
       ).rejects.toThrow(/runtime snapshot refresh failed: lost include secret/);
 
       await expect(fs.readFile(pluginsPath, "utf-8")).resolves.toBe(initialPluginsRaw);
+      expect(env[envKey]).toBeUndefined();
     } finally {
       setRuntimeConfigSnapshotRefreshHandler(null);
+      delete env[envKey];
     }
   });
 

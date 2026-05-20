@@ -13,6 +13,7 @@ import { INCLUDE_KEY } from "./includes.js";
 import { createInvalidConfigError, formatInvalidConfigDetails } from "./io.invalid-config.js";
 import {
   readConfigFileSnapshotForWrite,
+  restoreEnvChangesIfUnchanged,
   resolveConfigSnapshotHash,
   writeConfigFile,
   type ConfigWriteOptions,
@@ -75,6 +76,7 @@ export type ConfigReplaceResult = {
 };
 
 export type ConfigMutationIO = {
+  env?: NodeJS.ProcessEnv;
   readConfigFileSnapshotForWrite: typeof readConfigFileSnapshotForWrite;
   writeConfigFile: (
     cfg: OpenClawConfig,
@@ -360,6 +362,9 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
   const committedIncludeRaw = formatJsonFileValue(nextConfigRecord[key]);
   const committedIncludeHash = hashFileRaw(committedIncludeRaw);
   await writeJsonFileAtomic(includePath, nextConfigRecord[key]);
+  const writeEnv = params.io?.env ?? process.env;
+  const envBeforePostWriteRead = { ...writeEnv };
+  let envAfterPostWriteRead = envBeforePostWriteRead;
   try {
     if (
       params.writeOptions?.skipRuntimeSnapshotRefresh &&
@@ -369,9 +374,14 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
       return { persistedHash: null, persistedConfig: nextConfig };
     }
 
-    const refreshed = await (
-      params.io?.readConfigFileSnapshotForWrite ?? readConfigFileSnapshotForWrite
-    )(params.writeOptions?.skipPluginValidation ? { skipPluginValidation: true } : undefined);
+    let refreshed: Awaited<ReturnType<typeof readConfigFileSnapshotForWrite>>;
+    try {
+      refreshed = await (
+        params.io?.readConfigFileSnapshotForWrite ?? readConfigFileSnapshotForWrite
+      )(params.writeOptions?.skipPluginValidation ? { skipPluginValidation: true } : undefined);
+    } finally {
+      envAfterPostWriteRead = { ...writeEnv };
+    }
     const refreshedSnapshot = refreshed.snapshot;
     const persistedHash = resolveConfigSnapshotHash(refreshedSnapshot);
     if (!refreshedSnapshot.valid) {
@@ -419,11 +429,18 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
     return { persistedHash, persistedConfig: refreshedSnapshot.sourceConfig };
   } catch (error) {
     try {
-      await rollbackJsonFileWriteIfUnchanged({
+      const rolledBack = await rollbackJsonFileWriteIfUnchanged({
         filePath: includePath,
         previousRaw: previousIncludeRaw,
         committedHash: committedIncludeHash,
       });
+      if (rolledBack) {
+        restoreEnvChangesIfUnchanged({
+          env: writeEnv,
+          before: envBeforePostWriteRead,
+          after: envAfterPostWriteRead,
+        });
+      }
     } catch (rollbackError) {
       throw new Error(
         `${formatErrorMessage(error)} Rollback failed: ${formatErrorMessage(rollbackError)}`,

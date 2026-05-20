@@ -1245,7 +1245,7 @@ function snapshotEnv(env: NodeJS.ProcessEnv): Record<string, string | undefined>
   return { ...env };
 }
 
-function restoreEnvChangesIfUnchanged(params: {
+export function restoreEnvChangesIfUnchanged(params: {
   env: NodeJS.ProcessEnv;
   before: Record<string, string | undefined>;
   after: Record<string, string | undefined>;
@@ -2431,6 +2431,7 @@ export function createConfigIO(
 
   return {
     configPath,
+    env: deps.env,
     loadConfig,
     readBestEffortConfig,
     readSourceConfigBestEffort,
