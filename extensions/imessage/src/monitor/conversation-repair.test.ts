@@ -281,7 +281,7 @@ describe("repairIMessageConversationAnchor", () => {
     expect(result!.is_group).toBe(true);
   });
 
-  it("does not overwrite fields with invalid recovered values", async () => {
+  it("returns null when recovered fields are all invalid (still anchorless)", async () => {
     const msg = makeAnchorlessGroupLinkPreview();
     const entry = {
       id: 9500,
@@ -294,20 +294,17 @@ describe("repairIMessageConversationAnchor", () => {
       sender: "+15550001111",
     };
     const client = mockClient([{ id: 1, messages: [entry] }]);
+    const logs: string[] = [];
 
     const result = await repairIMessageConversationAnchor({
       message: msg,
       client: client as never,
+      runtime: { error: (m) => logs.push(m) },
     });
 
-    // Recovery found the GUID but recovered no valid fields — still returns
-    // the spread copy with original anchorless values.
-    expect(result).not.toBeNull();
-    expect(result!.chat_id).toBe(0);
-    expect(result!.chat_guid).toBe("");
-    expect(result!.chat_identifier).toBe("");
-    expect(result!.is_group).toBe(false);
-    expect(result!.participants).toBeNull();
+    // GUID found but no valid anchor fields recovered — fail-closed.
+    expect(result).toBeNull();
+    expect(logs.some((l) => l.includes("no valid anchor fields recovered"))).toBe(true);
   });
 
   it("respects chatsLimit parameter", async () => {

@@ -154,6 +154,13 @@ export async function repairIMessageConversationAnchor(
         repaired.participants = entry.participants as string[];
       }
 
+      if (isIMessageAnchorless(repaired)) {
+        runtime?.error?.(
+          `imessage: dropping anchorless message GUID=${guid} (found in history but no valid anchor fields recovered)`,
+        );
+        return null;
+      }
+
       runtime?.log?.(
         `imessage: recovered conversation for GUID=${guid}: chat_id=${repaired.chat_id}, is_group=${repaired.is_group}`,
       );
