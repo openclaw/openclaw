@@ -8,6 +8,8 @@ export const OAUTH_API_KEY_MARKER_PREFIX = "oauth:";
 export const OLLAMA_LOCAL_AUTH_MARKER = "ollama-local";
 /** @deprecated Bundled local-provider marker; do not use from third-party plugins. */
 export const CUSTOM_LOCAL_AUTH_MARKER = "custom-local";
+/** @deprecated Codex provider-owned marker; do not use from third-party plugins. */
+export const CODEX_APP_SERVER_AUTH_MARKER = "codex-app-server";
 export const GCP_VERTEX_CREDENTIALS_MARKER = "gcp-vertex-credentials";
 export const NON_ENV_SECRETREF_MARKER = "secretref-managed"; // pragma: allowlist secret
 export const SECRETREF_ENV_HEADER_MARKER_PREFIX = "secretref-env:"; // pragma: allowlist secret
@@ -17,9 +19,16 @@ const AWS_SDK_ENV_MARKERS = new Set([
   "AWS_ACCESS_KEY_ID",
   "AWS_PROFILE",
 ]);
+// Bundled-plugin markers also recognized through `nonSecretAuthMarkers` in the
+// codex plugin manifest. The hardcoded entry guarantees coverage when the
+// codex extension is installed under an origin that
+// `listOpenClawPluginManifestMetadata` filters out — most notably the
+// npm-global path (`<state>/extensions`, origin = "global") that real
+// deployments use. See #84376.
 const CORE_NON_SECRET_API_KEY_MARKERS = [
   CUSTOM_LOCAL_AUTH_MARKER,
   OLLAMA_LOCAL_AUTH_MARKER,
+  CODEX_APP_SERVER_AUTH_MARKER,
   NON_ENV_SECRETREF_MARKER,
 ] as const;
 let knownEnvApiKeyMarkersCache: Set<string> | undefined;

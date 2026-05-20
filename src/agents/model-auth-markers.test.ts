@@ -105,4 +105,19 @@ describe("model auth markers", () => {
     expect(isKnownEnvApiKeyMarker("OPENAI_API_KEY")).toBe(true);
     expect(isKnownEnvApiKeyMarker("AWS_PROFILE")).toBe(false);
   });
+
+  it("recognizes codex-app-server even when bundled-plugin manifest scan is disabled (#84376)", async () => {
+    // Mirrors the issue's npm-global deployment shape: the codex extension is
+    // installed under a non-bundled path, so `listOpenClawPluginManifestMetadata`
+    // either skips it or returns it with origin != "bundled". The hardcoded
+    // CORE entry is what guarantees the marker is recognized regardless of
+    // install topology.
+    await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+      await loadMarkerModules();
+      expect(isNonSecretApiKeyMarker("codex-app-server")).toBe(true);
+    });
+    // Re-load with bundled plugins re-enabled so the rest of the suite sees
+    // the normal manifest-driven set.
+    await withEnvAsync(cleanPluginManifestEnv(), loadMarkerModules);
+  });
 });
