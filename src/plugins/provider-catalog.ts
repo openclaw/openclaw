@@ -1,4 +1,9 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
+import {
+  isKnownEnvApiKeyMarker,
+  isNonSecretApiKeyMarker,
+  NON_ENV_SECRETREF_MARKER,
+} from "../agents/model-auth-markers.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -20,6 +25,14 @@ export function findCatalogTemplate(params: {
       ),
     )
     .find((entry) => entry !== undefined);
+}
+
+function sanitizeCatalogApiKeyMarker(apiKey: string): string {
+  const trimmed = apiKey.trim();
+  if (isKnownEnvApiKeyMarker(trimmed) || isNonSecretApiKeyMarker(trimmed)) {
+    return trimmed;
+  }
+  return NON_ENV_SECRETREF_MARKER;
 }
 
 export async function buildSingleProviderApiKeyCatalog(params: {
@@ -46,7 +59,7 @@ export async function buildSingleProviderApiKeyCatalog(params: {
     provider: {
       ...(await params.buildProvider()),
       ...(explicitBaseUrl ? { baseUrl: explicitBaseUrl } : {}),
-      apiKey,
+      apiKey: sanitizeCatalogApiKeyMarker(apiKey),
     },
   };
 }
@@ -66,7 +79,10 @@ export async function buildPairedProviderApiKeyCatalog(params: {
   const providers = await params.buildProviders();
   return {
     providers: Object.fromEntries(
-      Object.entries(providers).map(([id, provider]) => [id, { ...provider, apiKey }]),
+      Object.entries(providers).map(([id, provider]) => [
+        id,
+        { ...provider, apiKey: sanitizeCatalogApiKeyMarker(apiKey) },
+      ]),
     ),
   };
 }

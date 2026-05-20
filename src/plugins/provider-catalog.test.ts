@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { resolveUsableCustomProviderApiKey } from "../agents/model-auth.js";
+import { NON_ENV_SECRETREF_MARKER } from "../agents/model-auth-markers.js";
+import { planOpenClawModelsJsonWithDeps } from "../agents/models-config.plan.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import {
@@ -154,12 +157,21 @@ describe("buildSingleProviderApiKeyCatalog", () => {
       expected: null,
     },
     {
-      name: "adds api key to the built provider",
+      name: "adds a safe marker for raw api keys",
       ctx: createCatalogContext({
         apiKeys: { "test-provider": "secret-key" },
       }),
       expected: createSingleCatalogProvider({
-        apiKey: "secret-key",
+        apiKey: NON_ENV_SECRETREF_MARKER,
+      }),
+    },
+    {
+      name: "preserves env var api key markers",
+      ctx: createCatalogContext({
+        apiKeys: { "test-provider": "OPENAI_API_KEY" },
+      }),
+      expected: createSingleCatalogProvider({
+        apiKey: "OPENAI_API_KEY",
       }),
     },
     {
@@ -180,7 +192,7 @@ describe("buildSingleProviderApiKeyCatalog", () => {
       allowExplicitBaseUrl: true,
       expected: createSingleCatalogProvider({
         baseUrl: "https://override.example/v1/",
-        apiKey: "secret-key",
+        apiKey: NON_ENV_SECRETREF_MARKER,
       }),
     },
     {
@@ -201,7 +213,7 @@ describe("buildSingleProviderApiKeyCatalog", () => {
       allowExplicitBaseUrl: true,
       expected: createSingleCatalogProvider({
         baseUrl: "https://api.z.ai/custom",
-        apiKey: "secret-key",
+        apiKey: NON_ENV_SECRETREF_MARKER,
       }),
       providerId: "z-ai",
       buildProvider: () => createProviderConfig({ baseUrl: "https://default.example/zai" }),
@@ -224,7 +236,72 @@ describe("buildSingleProviderApiKeyCatalog", () => {
       ctx: createCatalogContext({
         apiKeys: { "test-provider": "secret-key" },
       }),
-      expected: createPairedCatalogProviders("secret-key"),
+      expected: createPairedCatalogProviders(NON_ENV_SECRETREF_MARKER),
     });
+  });
+
+  it("preserves env markers for each paired provider", async () => {
+    await expectPairedCatalogResult({
+      ctx: createCatalogContext({
+        apiKeys: { "test-provider": "OPENAI_API_KEY" },
+      }),
+      expected: createPairedCatalogProviders("OPENAI_API_KEY"),
+    });
+  });
+
+  it("keeps raw catalog credentials out of generated models.json while source config auth remains usable", async () => {
+    const rawApiKey = "sk-provider-catalog-proof-secret";
+    const catalogResult = await buildSingleProviderApiKeyCatalog({
+      ctx: createCatalogContext({
+        apiKeys: { "test-provider": rawApiKey },
+      }),
+      providerId: "test-provider",
+      buildProvider: () => createProviderConfig(),
+    });
+    if (!catalogResult || !("provider" in catalogResult)) {
+      throw new Error("expected provider catalog result");
+    }
+
+    const plan = await planOpenClawModelsJsonWithDeps(
+      {
+        cfg: {},
+        agentDir: "/tmp/openclaw-provider-catalog-proof",
+        env: {},
+        existingRaw: "",
+        existingParsed: null,
+      },
+      {
+        resolveImplicitProviders: async () => ({
+          "test-provider": catalogResult.provider,
+        }),
+      },
+    );
+
+    expect(plan.action).toBe("write");
+    if (plan.action !== "write") {
+      throw new Error(`expected models.json write plan, got ${plan.action}`);
+    }
+    expect(plan.contents).not.toContain(rawApiKey);
+    const parsed = JSON.parse(plan.contents) as {
+      providers: Record<string, { apiKey?: string }>;
+    };
+    expect(parsed.providers["test-provider"]?.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
+
+    const sourceAuth = resolveUsableCustomProviderApiKey({
+      cfg: {
+        models: {
+          providers: {
+            "test-provider": {
+              ...createProviderConfig(),
+              apiKey: rawApiKey,
+            },
+          },
+        },
+      },
+      provider: "test-provider",
+      env: {},
+    });
+    expect(sourceAuth?.apiKey).toBe(rawApiKey);
+    expect(sourceAuth?.source).toBe("models.json");
   });
 });

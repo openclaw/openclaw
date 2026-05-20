@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { NON_ENV_SECRETREF_MARKER } from "../agents/model-auth-markers.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { capturePluginRegistration } from "../plugins/captured-registration.js";
 import type { ProviderCatalogContext } from "../plugins/types.js";
@@ -111,7 +112,7 @@ describe("defineSingleProviderPluginEntry", () => {
     expect(catalog).toEqual({
       provider: {
         api: "openai-completions",
-        apiKey: "test-key",
+        apiKey: NON_ENV_SECRETREF_MARKER,
         baseUrl: "https://api.demo.test/v1",
         models: [createModel("default", "Default")],
       },
@@ -231,7 +232,7 @@ describe("defineSingleProviderPluginEntry", () => {
     expect(catalog).toEqual({
       provider: {
         api: "openai-completions",
-        apiKey: "test-key",
+        apiKey: NON_ENV_SECRETREF_MARKER,
         baseUrl: "https://override.test/v1",
         models: [createModel("router", "Router")],
       },
