@@ -3,6 +3,7 @@ import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
+import { listAgentEntries } from "../../agents/agent-scope-config.js";
 import {
   clearAutoFallbackPrimaryProbeSelection,
   entryMatchesAutoFallbackPrimaryProbe,
@@ -736,22 +737,51 @@ function resolveContextWindowForCompactionHint(params: {
   cfg: FollowupRun["run"]["config"];
   primaryProvider?: string;
   primaryModel?: string;
+  agentId?: string;
   activeSessionEntry?: SessionEntry;
 }): number | undefined {
+  let modelWindow: number | undefined;
   if (params.primaryProvider && params.primaryModel) {
-    const modelWindow = resolveContextTokensForModel({
+    const resolved = resolveContextTokensForModel({
       cfg: params.cfg,
       provider: params.primaryProvider,
       model: params.primaryModel,
       allowAsyncLoad: false,
     });
-    if (typeof modelWindow === "number" && modelWindow > 0) {
-      return modelWindow;
+    if (typeof resolved === "number" && resolved > 0) {
+      modelWindow = resolved;
     }
+  }
+  const agentCap = resolveAgentContextTokensCap(params.cfg, params.agentId);
+  if (typeof agentCap === "number" && agentCap > 0) {
+    return modelWindow !== undefined ? Math.min(agentCap, modelWindow) : agentCap;
+  }
+  if (modelWindow !== undefined) {
+    return modelWindow;
   }
   const sessionTokens = params.activeSessionEntry?.contextTokens;
   if (typeof sessionTokens === "number" && Number.isFinite(sessionTokens) && sessionTokens > 0) {
     return Math.floor(sessionTokens);
+  }
+  return undefined;
+}
+
+function resolveAgentContextTokensCap(
+  cfg: FollowupRun["run"]["config"],
+  agentId?: string,
+): number | undefined {
+  if (agentId) {
+    const entry = listAgentEntries(cfg).find(
+      (e) => e.id?.trim().toLowerCase() === agentId.trim().toLowerCase(),
+    );
+    const entryTokens = entry?.contextTokens;
+    if (typeof entryTokens === "number" && entryTokens > 0) {
+      return Math.floor(entryTokens);
+    }
+  }
+  const defaults = cfg?.agents?.defaults?.contextTokens;
+  if (typeof defaults === "number" && defaults > 0) {
+    return Math.floor(defaults);
   }
   return undefined;
 }
@@ -957,6 +987,7 @@ export function buildContextOverflowRecoveryText(params: {
     cfg: params.cfg,
     primaryProvider: params.primaryProvider,
     primaryModel: params.primaryModel,
+    agentId: params.agentId,
     activeSessionEntry: params.activeSessionEntry,
   });
   return (

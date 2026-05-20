@@ -601,6 +601,67 @@ describe("buildContextOverflowRecoveryText", () => {
     expect(text).not.toContain("reset our conversation");
   });
 
+  it("caps reserveTokensFloor hint by agent.defaults.contextTokens", () => {
+    const text = buildContextOverflowRecoveryText({
+      cfg: {
+        models: {
+          providers: {
+            openrouter: {
+              baseUrl: "https://openrouter.test",
+              models: [makeTestModel("qwen3.6-plus", 1_000_000)],
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            contextTokens: 100_000,
+          },
+        },
+      },
+      primaryProvider: "openrouter",
+      primaryModel: "qwen3.6-plus",
+    });
+
+    expect(text).toContain("reserveTokensFloor");
+    expect(text).toContain("35000");
+    expect(text).not.toContain("100000");
+    expect(text).not.toContain("heartbeat model bleed");
+  });
+
+  it("caps reserveTokensFloor hint by per-agent contextTokens over defaults", () => {
+    const text = buildContextOverflowRecoveryText({
+      cfg: {
+        models: {
+          providers: {
+            openrouter: {
+              baseUrl: "https://openrouter.test",
+              models: [makeTestModel("qwen3.6-plus", 1_000_000)],
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            contextTokens: 200_000,
+          },
+          list: [
+            {
+              id: "capped-agent",
+              contextTokens: 32_768,
+            },
+          ],
+        },
+      },
+      primaryProvider: "openrouter",
+      primaryModel: "qwen3.6-plus",
+      agentId: "capped-agent",
+    });
+
+    expect(text).toContain("reserveTokensFloor");
+    expect(text).toContain("20000");
+    expect(text).not.toContain("50000");
+    expect(text).not.toContain("heartbeat model bleed");
+  });
+
   it("points to heartbeat model bleed when the last runtime model matches configured heartbeat.model", () => {
     const text = buildContextOverflowRecoveryText({
       cfg: {
