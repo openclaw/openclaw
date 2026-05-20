@@ -48,6 +48,13 @@ function asBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
 }
 
+function asStringNumberArray(value: unknown): Array<string | number> | undefined {
+  return Array.isArray(value) &&
+    value.every((entry) => typeof entry === "string" || typeof entry === "number")
+    ? value
+    : undefined;
+}
+
 function asInteger(value: unknown): number | undefined {
   return typeof value === "number" && Number.isInteger(value) ? value : undefined;
 }
@@ -90,30 +97,30 @@ function asCommandTextMode(value: unknown): ChannelStreamingCommandTextMode | un
 }
 
 export const DEFAULT_PROGRESS_DRAFT_LABELS = [
-  "Thinking...",
-  "Shelling...",
-  "Scuttling...",
-  "Clawing...",
-  "Pinching...",
-  "Molting...",
-  "Bubbling...",
-  "Tiding...",
-  "Reefing...",
-  "Cracking...",
-  "Sifting...",
-  "Brining...",
-  "Nautiling...",
-  "Krilling...",
-  "Barnacling...",
-  "Lobstering...",
-  "Tidepooling...",
-  "Pearling...",
-  "Snapping...",
-  "Surfacing...",
+  "Working",
+  "Shelling",
+  "Scuttling",
+  "Clawing",
+  "Pinching",
+  "Molting",
+  "Bubbling",
+  "Tiding",
+  "Reefing",
+  "Cracking",
+  "Sifting",
+  "Brining",
+  "Nautiling",
+  "Krilling",
+  "Barnacling",
+  "Lobstering",
+  "Tidepooling",
+  "Pearling",
+  "Snapping",
+  "Surfacing",
 ] as const;
 
 export const DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS = 5_000;
-const DEFAULT_PROGRESS_DRAFT_MAX_LINE_CHARS = 72;
+const DEFAULT_PROGRESS_DRAFT_MAX_LINE_CHARS = 120;
 const MIN_TRUNCATED_FINAL_PREFIX_CHARS = 48;
 const MIN_TRUNCATED_FINAL_CONTINUATION_CHARS = 24;
 
@@ -640,6 +647,23 @@ export function resolveChannelStreamingPreviewCommandText(
   );
 }
 
+export function resolveChannelStreamingPreviewNativeToolProgress(
+  entry: StreamingCompatEntry | null | undefined,
+  defaultValue = false,
+): boolean {
+  const config = getChannelStreamingConfigObject(entry);
+  const preview = asObjectRecord(config?.preview);
+  return asBoolean(preview?.nativeToolProgress) ?? defaultValue;
+}
+
+export function resolveChannelStreamingPreviewNativeToolProgressAllowFrom(
+  entry: StreamingCompatEntry | null | undefined,
+): Array<string | number> | undefined {
+  const config = getChannelStreamingConfigObject(entry);
+  const preview = asObjectRecord(config?.preview);
+  return asStringNumberArray(preview?.nativeToolProgressAllowFrom);
+}
+
 export function resolveChannelStreamingSuppressDefaultToolProgressMessages(
   entry: StreamingCompatEntry | null | undefined,
   options?: {
@@ -747,6 +771,14 @@ export function resolveChannelProgressDraftMaxLines(
   return configured && configured > 0 ? configured : defaultValue;
 }
 
+export function resolveChannelProgressDraftMaxLineChars(
+  entry: StreamingCompatEntry | null | undefined,
+  defaultValue = DEFAULT_PROGRESS_DRAFT_MAX_LINE_CHARS,
+): number {
+  const configured = asInteger(resolveChannelProgressDraftConfig(entry).maxLineChars);
+  return configured && configured > 0 ? configured : defaultValue;
+}
+
 export function resolveChannelProgressDraftRender(
   entry: StreamingCompatEntry | null | undefined,
   defaultValue: ChannelProgressDraftRenderMode = "text",
@@ -781,6 +813,15 @@ function removeUnbalancedInlineBackticks(value: string): string {
     return value;
   }
   return value.trimStart().startsWith("`") ? value.replaceAll("`", "'") : value.replaceAll("`", "");
+}
+
+function compactPlainProgressLine(line: string, maxChars: number): string {
+  const head = sliceCodePoints(line, 0, maxChars - 1).trimEnd();
+  const boundary = head.search(/\s+\S*$/u);
+  if (boundary > Math.floor(maxChars * 0.6)) {
+    return `${head.slice(0, boundary).trimEnd()}…`;
+  }
+  return `${head}…`;
 }
 
 function compactChannelProgressDraftLine(line: string, maxChars: number): string {
@@ -825,9 +866,7 @@ function compactChannelProgressDraftLine(line: string, maxChars: number): string
     }
   }
 
-  return removeUnbalancedInlineBackticks(
-    `${sliceCodePoints(normalized, 0, maxChars - 1).trimEnd()}…`,
-  );
+  return removeUnbalancedInlineBackticks(compactPlainProgressLine(normalized, maxChars));
 }
 
 function getProgressDraftLineText(line: string | ChannelProgressDraftLine): string {
@@ -906,16 +945,18 @@ export function formatChannelProgressDraftText(params: {
   formatLine?: (line: string) => string;
   bullet?: string;
 }): string {
-  const label = resolveChannelProgressDraftLabel({
+  const rawLabel = resolveChannelProgressDraftLabel({
     entry: params.entry,
     seed: params.seed,
     random: params.random,
   });
+  const resolvedLabel = rawLabel;
   const maxLines = resolveChannelProgressDraftMaxLines(params.entry);
+  const maxLineChars = resolveChannelProgressDraftMaxLineChars(params.entry);
   const formatLine = params.formatLine ?? ((line: string) => line);
   const bullet = params.bullet ?? "•";
-  const rawLines: Array<string | ChannelProgressDraftLine | { draftLabel: string }> = label
-    ? [{ draftLabel: label }, ...params.lines]
+  const rawLines: Array<string | ChannelProgressDraftLine | { draftLabel: string }> = resolvedLabel
+    ? [{ draftLabel: resolvedLabel }, ...params.lines]
     : params.lines;
   const lines = rawLines
     .map((line) => {
@@ -925,14 +966,21 @@ export function formatChannelProgressDraftText(params: {
         : typeof line === "string"
           ? line
           : getProgressDraftLineText(line);
-      const text = compactChannelProgressDraftLine(rawText, DEFAULT_PROGRESS_DRAFT_MAX_LINE_CHARS);
+      const text = compactChannelProgressDraftLine(rawText, maxLineChars);
       return text ? { text, isLabelLine } : undefined;
     })
     .filter((line): line is { text: string; isLabelLine: boolean } => Boolean(line))
     .slice(-maxLines)
     .map(({ text, isLabelLine }) => {
       const formatted = isLabelLine ? text : formatLine(text);
-      return !isLabelLine && shouldPrefixProgressLine(text) ? `${bullet} ${formatted}` : formatted;
+      return {
+        text: !isLabelLine && shouldPrefixProgressLine(text) ? `${bullet} ${formatted}` : formatted,
+        isLabelLine,
+      };
     });
-  return lines.filter((line): line is string => Boolean(line)).join("\n");
+  const renderedLines = lines.map((line) => line.text).filter((line) => Boolean(line));
+  if (renderedLines.length > 1 && lines[0]?.isLabelLine) {
+    return `${renderedLines[0]}\n\n${renderedLines.slice(1).join("\n")}`;
+  }
+  return renderedLines.join("\n");
 }

@@ -281,8 +281,8 @@ jobs:
             --credential-role ci \
             --provider-mode live-frontier \
             --hydrate-mode "$HYDRATE_MODE" \
-            --model openai/gpt-5.4 \
-            --alt-model openai/gpt-5.4 \
+            --model openai/gpt-5.5 \
+            --alt-model openai/gpt-5.5 \
             --fast \
             --scenario "$SCENARIO_ID" \
             "${keep_args[@]}" \
@@ -359,7 +359,7 @@ jobs:
       - name: Upload Mantis Slack desktop artifacts
         id: upload_artifact
         if: ${{ always() && steps.run_mantis.outputs.output_dir != '' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mantis-slack-desktop-smoke-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.run_mantis.outputs.output_dir }}

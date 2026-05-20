@@ -739,11 +739,11 @@ describe("buildServiceEnvironment", () => {
       env: { HOME: "/Users/user", VOLTA_HOME: "/Users/user/.volta" },
       port: 18789,
       platform: "darwin",
-      extraPathDirs: ["/opt/homebrew/Cellar/node/22.16.0/bin"],
+      extraPathDirs: ["/opt/homebrew/Cellar/node/22.19.0/bin"],
     });
 
     expect(env.PATH).toBe(
-      "/opt/homebrew/Cellar/node/22.16.0/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+      "/opt/homebrew/Cellar/node/22.19.0/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
     );
   });
 });
@@ -838,6 +838,17 @@ describe("buildNodeServiceEnvironment", () => {
     expect(env.PATH?.split(path.posix.delimiter)[0]).toBe(
       "/home/user/.nvm/versions/node/v22.22.0/bin",
     );
+  });
+
+  it("marks Windows node tasks for hidden launcher startup", () => {
+    const env = buildNodeServiceEnvironment({
+      env: { HOME: "C:\\Users\\alice" },
+      platform: "win32",
+    });
+
+    expect(env.OPENCLAW_WINDOWS_TASK_NAME).toBe("OpenClaw Node");
+    expect(env.OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER).toBe("1");
+    expect(env.OPENCLAW_TASK_SCRIPT_NAME).toBe("node.cmd");
   });
 });
 

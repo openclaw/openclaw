@@ -14,6 +14,7 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { resolveStoredModelOverride } from "openclaw/plugin-sdk/command-auth-native";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
+import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
 import { buildCommandsMessagePaginated } from "openclaw/plugin-sdk/command-status";
 import type { DmPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
@@ -194,7 +195,7 @@ export const registerTelegramHandlers = ({
   };
 
   const mediaGroupBuffer = new Map<string, BufferedMediaGroupEntry>();
-  let mediaGroupProcessing: Promise<void> = Promise.resolve();
+  const mediaGroupProcessingByKey = new Map<string, Promise<void>>();
   const messageCache = createTelegramMessageCache({
     persistedPath: resolveTelegramMessageCachePath(
       telegramDeps.resolveStorePath(cfg.session?.store),
@@ -209,7 +210,21 @@ export const registerTelegramHandlers = ({
     timer: ReturnType<typeof setTimeout>;
   };
   const textFragmentBuffer = new Map<string, TextFragmentEntry>();
-  let textFragmentProcessing: Promise<void> = Promise.resolve();
+  const textFragmentProcessingByKey = new Map<string, Promise<void>>();
+
+  const queueBufferedProcessing = async (
+    processingByKey: Map<string, Promise<void>>,
+    key: string,
+    task: () => Promise<void>,
+  ) => {
+    const previous = processingByKey.get(key) ?? Promise.resolve();
+    const current = previous.then(task).catch(() => undefined);
+    processingByKey.set(key, current);
+    await current;
+    if (processingByKey.get(key) === current) {
+      processingByKey.delete(key);
+    }
+  };
 
   const debounceMs = resolveInboundDebounceMs({ cfg, channel: "telegram" });
   const FORWARD_BURST_DEBOUNCE_MS = 80;
@@ -764,6 +779,7 @@ export const registerTelegramHandlers = ({
       }
 
       const allMedia: TelegramMediaRef[] = [];
+      let skippedCount = 0;
       for (const { ctx } of entry.messages) {
         let media;
         try {
@@ -779,6 +795,7 @@ export const registerTelegramHandlers = ({
           runtime.log?.(
             warn(`media group: skipping photo that failed to fetch: ${String(mediaErr)}`),
           );
+          skippedCount++;
           continue;
         }
         if (media) {
@@ -787,7 +804,29 @@ export const registerTelegramHandlers = ({
             contentType: media.contentType,
             stickerMetadata: media.stickerMetadata,
           });
+        } else {
+          skippedCount++;
         }
+      }
+
+      if (skippedCount > 0) {
+        const total = entry.messages.length;
+        const wasOrWere = skippedCount === 1 ? "was" : "were";
+        await withTelegramApiErrorLogging({
+          operation: "sendMessage",
+          runtime,
+          fn: () =>
+            bot.api.sendMessage(
+              primaryEntry.msg.chat.id,
+              `⚠️ Received ${allMedia.length} of ${total} images — ${skippedCount} could not be fetched and ${wasOrWere} skipped.`,
+              {
+                reply_parameters: {
+                  message_id: primaryEntry.msg.message_id,
+                  allow_sending_without_reply: true,
+                },
+              },
+            ),
+        }).catch(() => {});
       }
 
       await processMessageWithReplyChain(
@@ -839,12 +878,9 @@ export const registerTelegramHandlers = ({
   };
 
   const queueTextFragmentFlush = async (entry: TextFragmentEntry) => {
-    textFragmentProcessing = textFragmentProcessing
-      .then(async () => {
-        await flushTextFragments(entry);
-      })
-      .catch(() => undefined);
-    await textFragmentProcessing;
+    await queueBufferedProcessing(textFragmentProcessingByKey, entry.key, async () => {
+      await flushTextFragments(entry);
+    });
   };
 
   const runTextFragmentFlush = async (entry: TextFragmentEntry) => {
@@ -1482,6 +1518,7 @@ export const registerTelegramHandlers = ({
     isForum: boolean;
     resolvedThreadId?: number;
     dmThreadId?: number;
+    dmPolicy: DmPolicy;
     storeAllowFrom: string[];
     senderId: string;
     effectiveGroupAllow: NormalizedAllowFrom;
@@ -1500,6 +1537,7 @@ export const registerTelegramHandlers = ({
       isForum,
       resolvedThreadId,
       dmThreadId,
+      dmPolicy,
       storeAllowFrom,
       senderId,
       effectiveGroupAllow,
@@ -1511,11 +1549,39 @@ export const registerTelegramHandlers = ({
       promptContextMinTimestampMs,
     } = params;
 
+    const messageText = getTelegramTextParts(msg).text;
+    const botUsername = ctx.me?.username;
+    const isAbortControlMessage = isAbortRequestText(messageText, { botUsername });
+    let abortControlAuthorized: Promise<boolean> | undefined;
+    const isAuthorizedAbortControlMessage = () => {
+      if (!isAbortControlMessage || !senderId) {
+        return Promise.resolve(false);
+      }
+      abortControlAuthorized ??= resolveTelegramCommandIngressAuthorization({
+        accountId,
+        cfg,
+        dmPolicy,
+        isGroup,
+        chatId,
+        resolvedThreadId,
+        senderId,
+        effectiveDmAllow,
+        effectiveGroupAllow,
+        ownerAccess: { ownerList: [], senderIsOwner: false },
+        eventKind: "message",
+        allowTextCommands: true,
+        hasControlCommand: true,
+        modeWhenAccessGroupsOff: "allow",
+        includeDmAllowForGroupCommands: false,
+      }).then((gate) => gate.authorized);
+      return abortControlAuthorized;
+    };
+
     // Text fragment handling - Telegram splits long pastes into multiple inbound messages (~4096 chars).
     // We buffer “near-limit” messages and append immediately-following parts.
     const text = typeof msg.text === "string" ? msg.text : undefined;
     const isCommandLike = (text ?? "").trim().startsWith("/");
-    if (text && !isCommandLike) {
+    if (text && !isCommandLike && !isAbortControlMessage) {
       const nowMs = Date.now();
       const senderId = msg.from?.id != null ? String(msg.from.id) : "unknown";
       // Use resolvedThreadId for forum groups, dmThreadId for DM topics
@@ -1558,12 +1624,7 @@ export const registerTelegramHandlers = ({
         // Not appendable (or limits exceeded): flush buffered entry first, then continue normally.
         clearTimeout(existing.timer);
         textFragmentBuffer.delete(key);
-        textFragmentProcessing = textFragmentProcessing
-          .then(async () => {
-            await flushTextFragments(existing);
-          })
-          .catch(() => undefined);
-        await textFragmentProcessing;
+        await queueTextFragmentFlush(existing);
       }
 
       const shouldStart = text.length >= TELEGRAM_TEXT_FRAGMENT_START_THRESHOLD_CHARS;
@@ -1578,12 +1639,23 @@ export const registerTelegramHandlers = ({
         scheduleTextFragmentFlush(entry);
         return;
       }
+    } else if (text && isAbortControlMessage && (await isAuthorizedAbortControlMessage())) {
+      const senderId = msg.from?.id != null ? String(msg.from.id) : "unknown";
+      const threadId = resolvedThreadId ?? dmThreadId;
+      const key = `text:${chatId}:${threadId ?? "main"}:${senderId}`;
+      const existing = textFragmentBuffer.get(key);
+      if (existing) {
+        clearTimeout(existing.timer);
+        textFragmentBuffer.delete(key);
+      }
     }
 
     // Media group handling - buffer multi-image messages
     const mediaGroupId = msg.media_group_id;
     if (mediaGroupId) {
-      const existing = mediaGroupBuffer.get(mediaGroupId);
+      const threadId = resolvedThreadId ?? dmThreadId;
+      const mediaGroupKey = `media:${chatId}:${threadId ?? "main"}:${mediaGroupId}`;
+      const existing = mediaGroupBuffer.get(mediaGroupKey);
       if (existing) {
         clearTimeout(existing.timer);
         existing.messages.push({ msg, ctx });
@@ -1592,13 +1664,10 @@ export const registerTelegramHandlers = ({
           promptContextMinTimestampMs,
         );
         existing.timer = setTimeout(async () => {
-          mediaGroupBuffer.delete(mediaGroupId);
-          mediaGroupProcessing = mediaGroupProcessing
-            .then(async () => {
-              await processMediaGroup(existing);
-            })
-            .catch(() => undefined);
-          await mediaGroupProcessing;
+          mediaGroupBuffer.delete(mediaGroupKey);
+          await queueBufferedProcessing(mediaGroupProcessingByKey, mediaGroupKey, async () => {
+            await processMediaGroup(existing);
+          });
         }, mediaGroupTimeoutMs);
       } else {
         const entry: BufferedMediaGroupEntry = {
@@ -1615,16 +1684,13 @@ export const registerTelegramHandlers = ({
           topicConfig,
           ...promptContextBoundaryOptions(promptContextMinTimestampMs),
           timer: setTimeout(async () => {
-            mediaGroupBuffer.delete(mediaGroupId);
-            mediaGroupProcessing = mediaGroupProcessing
-              .then(async () => {
-                await processMediaGroup(entry);
-              })
-              .catch(() => undefined);
-            await mediaGroupProcessing;
+            mediaGroupBuffer.delete(mediaGroupKey);
+            await queueBufferedProcessing(mediaGroupProcessingByKey, mediaGroupKey, async () => {
+              await processMediaGroup(entry);
+            });
           }, mediaGroupTimeoutMs),
         };
-        mediaGroupBuffer.set(mediaGroupId, entry);
+        mediaGroupBuffer.set(mediaGroupKey, entry);
       }
       return;
     }
@@ -1719,15 +1785,27 @@ export const registerTelegramHandlers = ({
           debounceLane,
         })
       : null;
+    if (senderId && (await isAuthorizedAbortControlMessage())) {
+      for (const lane of ["default", "forward"] as const) {
+        inboundDebouncer.cancelKey(
+          buildTelegramInboundDebounceKey({
+            accountId,
+            conversationKey,
+            senderId,
+            debounceLane: lane,
+          }),
+        );
+      }
+    }
     await inboundDebouncer.enqueue({
       ctx,
       msg,
       allMedia,
       storeAllowFrom,
       receivedAtMs: Date.now(),
-      debounceKey,
+      debounceKey: isAbortControlMessage ? null : debounceKey,
       debounceLane,
-      botUsername: ctx.me?.username,
+      botUsername,
       ...promptContextBoundaryOptions(promptContextMinTimestampMs),
     });
   };
@@ -1864,6 +1942,7 @@ export const registerTelegramHandlers = ({
         chatType: callbackMessage.chat.type,
         isGroup,
         isForum: callbackMessage.chat.is_forum,
+        isTopicMessage: callbackMessage.is_topic_message,
         getChat,
       });
       const senderId = callback.from?.id ? String(callback.from.id) : "";
@@ -2524,6 +2603,7 @@ export const registerTelegramHandlers = ({
       chatType: msg.chat.type,
       isGroup,
       isForum: msg.chat.is_forum,
+      isTopicMessage: msg.is_topic_message,
       getChat,
     });
     const normalizedMsg = withResolvedTelegramForumFlag(msg, isForum);
@@ -2632,6 +2712,7 @@ export const registerTelegramHandlers = ({
         isForum: event.isForum,
         resolvedThreadId,
         dmThreadId,
+        dmPolicy,
         storeAllowFrom,
         senderId: event.senderId,
         effectiveGroupAllow,
@@ -2658,6 +2739,7 @@ export const registerTelegramHandlers = ({
       chatType: msg.chat.type,
       isGroup,
       isForum: msg.chat.is_forum,
+      isTopicMessage: msg.is_topic_message,
       getChat,
     });
     const normalizedMsg = withResolvedTelegramForumFlag(msg, isForum);

@@ -51,6 +51,7 @@ let lastClientOptions: {
   clientName?: string;
   clientDisplayName?: string;
   mode?: string;
+  approvalRuntimeToken?: string;
   scopes?: string[];
   deviceIdentity?: unknown;
   onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
@@ -87,6 +88,7 @@ vi.mock("./client.js", () => ({
       clientName?: string;
       clientDisplayName?: string;
       mode?: string;
+      approvalRuntimeToken?: string;
       scopes?: string[];
       onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
       onClose?: (code: number, reason: string) => void;
@@ -134,7 +136,7 @@ vi.mock("./event-loop-ready.js", () => ({
 }));
 
 const {
-  __testing,
+  testing,
   buildGatewayConnectionDetails,
   callGateway,
   callGatewayCli,
@@ -214,7 +216,7 @@ function resetGatewayCallMocks() {
     cfg?: OpenClawConfig,
     env?: NodeJS.ProcessEnv,
   ) => number;
-  __testing.setDepsForTests({
+  testing.setDepsForTests({
     createGatewayClient: (opts) =>
       new StubGatewayClient(opts as ConstructorParameters<typeof StubGatewayClient>[0]) as never,
     getRuntimeConfig: loadConfigForTests,
@@ -272,7 +274,7 @@ describe("callGateway url resolution", () => {
 
   afterEach(() => {
     envSnapshot.restore();
-    __testing.resetDepsForTests();
+    testing.resetDepsForTests();
   });
 
   it.each([
@@ -628,6 +630,18 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.clientDisplayName).toBe("gateway:sessions.delete");
   });
 
+  it("passes approval runtime tokens to backend gateway clients", async () => {
+    setLocalLoopbackGatewayConfig();
+
+    await callGateway({
+      method: "exec.approval.waitDecision",
+      scopes: ["operator.approvals"],
+      approvalRuntimeToken: "runtime-token",
+    });
+
+    expect(lastClientOptions?.approvalRuntimeToken).toBe("runtime-token");
+  });
+
   it("does not synthesize display names for CLI calls", async () => {
     setLocalLoopbackGatewayConfig();
 
@@ -801,7 +815,7 @@ describe("buildGatewayConnectionDetails", () => {
     try {
       getRuntimeConfig.mockReturnValue({ gateway: { mode: "local", bind: "loopback" } });
       resolveGatewayPort.mockReturnValue(18800);
-      __testing.setDepsForTests({
+      testing.setDepsForTests({
         getRuntimeConfig: {} as never,
         resolveGatewayPort: () => 18789,
       });
@@ -1170,7 +1184,7 @@ describe("callGateway error details", () => {
     let stopFinished = false;
     let callResolved = false;
 
-    __testing.setDepsForTests({
+    testing.setDepsForTests({
       createGatewayClient: (opts) =>
         ({
           async request(
@@ -1234,7 +1248,7 @@ describe("callGateway error details", () => {
     let releaseStop: (() => void) | undefined;
     let stopStarted = false;
 
-    __testing.setDepsForTests({
+    testing.setDepsForTests({
       createGatewayClient: (opts) =>
         ({
           async request(

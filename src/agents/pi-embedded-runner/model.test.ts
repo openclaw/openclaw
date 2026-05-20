@@ -52,25 +52,6 @@ vi.mock("../model-suppression.js", () => {
     return undefined;
   }
 
-  const staleOpenAICodexModelIds = new Set([
-    "gpt-5.1",
-    "gpt-5.1-codex",
-    "gpt-5.1-codex-mini",
-    "gpt-5.1-codex-max",
-    "gpt-5.2",
-    "gpt-5.2-codex",
-    "gpt-5.2-pro",
-    "gpt-5.3",
-    "gpt-5.3-codex",
-    "gpt-5.3-chat-latest",
-  ]);
-
-  function isStaleOpenAICodexModel(provider?: string, id?: string): boolean {
-    return (
-      provider === "openai-codex" && staleOpenAICodexModelIds.has(id?.trim().toLowerCase() ?? "")
-    );
-  }
-
   return {
     shouldSuppressBuiltInModel: ({
       provider,
@@ -83,9 +64,6 @@ vi.mock("../model-suppression.js", () => {
       baseUrl?: string;
       config?: unknown;
     }) => {
-      if (isStaleOpenAICodexModel(provider, id)) {
-        return true;
-      }
       if (
         (provider === "openai" ||
           provider === "azure-openai-responses" ||
@@ -101,9 +79,6 @@ vi.mock("../model-suppression.js", () => {
       );
     },
     shouldUnconditionallySuppress: ({ provider, id }: { provider?: string; id?: string }) => {
-      if (isStaleOpenAICodexModel(provider, id)) {
-        return true;
-      }
       if (
         (provider === "openai" ||
           provider === "azure-openai-responses" ||
@@ -129,10 +104,6 @@ vi.mock("../model-suppression.js", () => {
         isQwenCodingPlanBaseUrl(resolveConfiguredQwenBaseUrl(config))
       ) {
         return "Unknown model: qwen/qwen3.6-plus. qwen3.6-plus is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go Qwen endpoint or choose qwen/qwen3.5-plus.";
-      }
-      if (isStaleOpenAICodexModel(provider, id)) {
-        const modelId = id?.trim().toLowerCase() ?? "";
-        return `Unknown model: openai-codex/${modelId}. ${modelId} is no longer supported for ChatGPT/Codex OAuth accounts. Use openai/gpt-5.5 through the Codex runtime.`;
       }
       if (
         (provider === "openai" ||
@@ -176,6 +147,7 @@ vi.mock("./openrouter-model-capabilities.js", () => ({
 }));
 
 import type { OpenClawConfig } from "../../config/config.js";
+import { COPILOT_INTEGRATION_ID, buildCopilotIdeHeaders } from "../copilot-dynamic-headers.js";
 import { getModelProviderLocalService } from "../provider-local-service.js";
 import { getModelProviderRequestTransport } from "../provider-request-config.js";
 import { buildForwardCompatTemplate } from "./model.forward-compat.test-support.js";
@@ -672,6 +644,25 @@ describe("resolveModel", () => {
     expect(model.api).toBe("openai-completions");
   });
 
+  it("does not synthesize unknown models from timeout-only provider overlays", () => {
+    const cfg = {
+      models: {
+        providers: {
+          openai: {
+            timeoutSeconds: 300,
+            baseUrl: "",
+            models: [],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("openai", "typo-model", "/tmp/agent", cfg);
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe("Unknown model: openai/typo-model");
+  });
+
   it("defaults baseUrl-only local custom fallback models to chat completions", () => {
     const cfg = {
       agents: {
@@ -926,6 +917,40 @@ describe("resolveModel", () => {
     });
   });
 
+  it("adds GitHub Copilot IDE headers to dynamic resolved model headers for Pi-native compaction", () => {
+    const result = resolveModelForTest("github-copilot", "gpt-5.5", "/tmp/agent");
+    const model = expectResolvedModel(result) as unknown as { headers?: Record<string, string> };
+
+    expect(model.headers).toEqual({
+      ...buildCopilotIdeHeaders(),
+      "Copilot-Integration-Id": COPILOT_INTEGRATION_ID,
+      "Openai-Organization": "github-copilot",
+    });
+  });
+
+  it("adds GitHub Copilot IDE headers to configured resolved model headers for Pi-native compaction", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "github-copilot": {
+            baseUrl: "https://api.githubcopilot.com",
+            api: "openai-responses",
+            models: [makeModel("gpt-5.5")],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("github-copilot", "gpt-5.5", "/tmp/agent", cfg);
+    const model = expectResolvedModel(result) as unknown as { headers?: Record<string, string> };
+
+    expect(model.headers).toEqual({
+      ...buildCopilotIdeHeaders(),
+      "Copilot-Integration-Id": COPILOT_INTEGRATION_ID,
+      "Openai-Organization": "github-copilot",
+    });
+  });
+
   it("includes provider headers in provider fallback model", () => {
     const cfg = {
       models: {
@@ -1129,6 +1154,33 @@ describe("resolveModel", () => {
     expect(result.error).toBeUndefined();
     expect((result.model as { requestTimeoutMs?: number } | undefined)?.requestTimeoutMs).toBe(
       300_000,
+    );
+  });
+
+  it("resolves provider request timeout metadata from built-in provider overlays", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "openai",
+      modelId: "gpt-5.5",
+      templateModel: {
+        ...makeModel("gpt-5.5"),
+        provider: "openai",
+      },
+    });
+    const cfg = {
+      models: {
+        providers: {
+          openai: {
+            timeoutSeconds: 600,
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("openai", "gpt-5.5", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect((result.model as { requestTimeoutMs?: number } | undefined)?.requestTimeoutMs).toBe(
+      600_000,
     );
   });
 
@@ -1562,6 +1614,31 @@ describe("resolveModel", () => {
     expect(result.model?.input).toEqual(["text", "image"]);
   });
 
+  it("repairs stale text-only Anthropic fallback rows for Claude vision models", () => {
+    const cfg = {
+      models: {
+        providers: {
+          anthropic: {
+            baseUrl: "https://api.anthropic.com",
+            api: "anthropic-messages",
+            models: [
+              {
+                ...makeModel("claude-sonnet-4-5"),
+                name: "claude-sonnet-4-5",
+                api: "anthropic-messages",
+                input: ["text"],
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("anthropic", "claude-sonnet-4-5", "/tmp/agent", cfg);
+
+    expect(result.model?.input).toEqual(["text", "image"]);
+  });
+
   it("repairs stale text-only Foundry discovered rows for GPT-family models", () => {
     const cfg = {
       models: {
@@ -1954,7 +2031,7 @@ describe("resolveModel", () => {
     });
   });
 
-  it("rejects stale exact openai-codex gpt-5.3-codex registry metadata", () => {
+  it("accepts available exact openai-codex gpt-5.3-codex registry metadata", () => {
     vi.mocked(discoverModels).mockReturnValue({
       find: vi.fn((provider: string, modelId: string) => {
         if (provider !== "openai-codex") {
@@ -1974,10 +2051,12 @@ describe("resolveModel", () => {
 
     const result = resolveModelForTest("openai-codex", "gpt-5.3-codex", "/tmp/agent");
 
-    expect(result.model).toBeUndefined();
-    expect(result.error).toBe(
-      "Unknown model: openai-codex/gpt-5.3-codex. gpt-5.3-codex is no longer supported for ChatGPT/Codex OAuth accounts. Use openai/gpt-5.5 through the Codex runtime.",
-    );
+    expect(result.error).toBeUndefined();
+    expectRecordFields(result.model, {
+      provider: "openai-codex",
+      id: "gpt-5.3-codex",
+      contextWindow: 272000,
+    });
   });
 
   it("canonicalizes the legacy openai-codex gpt-5.4-codex alias at runtime", () => {

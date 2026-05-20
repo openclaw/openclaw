@@ -23,7 +23,6 @@ import type { refreshLatestUpdateRestartSentinel } from "./server-restart-sentin
 import type { logGatewayStartup } from "./server-startup-log.js";
 import type { startGatewayTailscaleExposure } from "./server-tailscale.js";
 
-const SESSION_LOCK_STALE_MS = 30 * 60 * 1000;
 const ACP_BACKEND_READY_TIMEOUT_MS = 5_000;
 const ACP_BACKEND_READY_POLL_MS = 50;
 const PRIMARY_MODEL_PREWARM_TIMEOUT_MS = 5_000;
@@ -414,6 +413,7 @@ export async function startGatewaySidecars(params: {
   deps: CliDeps;
   startChannels: () => Promise<void>;
   prewarmPrimaryModel?: typeof prewarmConfiguredPrimaryModel;
+  onPluginServices?: (pluginServices: PluginServicesHandle | null) => void;
   log: { warn: (msg: string) => void };
   logHooks: {
     info: (msg: string) => void;
@@ -445,6 +445,31 @@ export async function startGatewaySidecars(params: {
       params.logHooks.error(`failed to load hooks: ${String(err)}`);
     }
   });
+
+  const pluginServicesPromise = measureStartup(
+    params.startupTrace,
+    "sidecars.plugin-services",
+    async () => {
+      try {
+        const { startPluginServices } = await import("../plugins/services.js");
+        return await startPluginServices({
+          registry: params.pluginRegistry,
+          config: params.cfg,
+          workspaceDir: params.defaultWorkspaceDir,
+          startupTrace: params.startupTrace,
+        });
+      } catch (err) {
+        params.log.warn(`plugin services failed to start: ${String(err)}`);
+        return null;
+      }
+    },
+  );
+  const pluginServicesReportPromise = params.onPluginServices
+    ? pluginServicesPromise.then((pluginServices) => {
+        params.onPluginServices?.(pluginServices);
+        return pluginServices;
+      })
+    : pluginServicesPromise;
 
   const skipChannels =
     isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
@@ -493,20 +518,7 @@ export async function startGatewaySidecars(params: {
     }, 250);
   }
 
-  let pluginServices: PluginServicesHandle | null = null;
-  await measureStartup(params.startupTrace, "sidecars.plugin-services", async () => {
-    try {
-      const { startPluginServices } = await import("../plugins/services.js");
-      pluginServices = await startPluginServices({
-        registry: params.pluginRegistry,
-        config: params.cfg,
-        workspaceDir: params.defaultWorkspaceDir,
-        startupTrace: params.startupTrace,
-      });
-    } catch (err) {
-      params.log.warn(`plugin services failed to start: ${String(err)}`);
-    }
-  });
+  const pluginServices = await pluginServicesReportPromise;
 
   if (params.cfg.acp?.enabled) {
     void (async () => {
@@ -563,7 +575,7 @@ export async function startGatewaySidecars(params: {
         for (const sessionsDir of sessionDirs) {
           const result = await cleanStaleLockFiles({
             sessionsDir,
-            staleMs: SESSION_LOCK_STALE_MS,
+            config: params.cfg,
             removeStale: true,
             log: { warn: (message) => params.log.warn(message) },
           });
@@ -733,6 +745,66 @@ const defaultGatewayPostAttachRuntimeDeps: GatewayPostAttachRuntimeDeps = {
     (await import("./server-tailscale.js")).startGatewayTailscaleExposure(...args),
 };
 
+function createDeferredGatewayUpdateCheck(params: {
+  startupTrace?: GatewayStartupTrace;
+  runtimeDeps: GatewayPostAttachRuntimeDeps;
+  cfg: OpenClawConfig;
+  log: {
+    info: (msg: string) => void;
+    warn: (msg: string) => void;
+  };
+  isNixMode: boolean;
+  broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
+}): { start: () => void; stop: () => void } {
+  let started = false;
+  let stopped = false;
+  let stopUpdateCheck: (() => void) | null = null;
+
+  const stop = () => {
+    stopped = true;
+    stopUpdateCheck?.();
+    stopUpdateCheck = null;
+  };
+
+  const start = () => {
+    if (started || stopped) {
+      return;
+    }
+    started = true;
+    setImmediate(() => {
+      if (stopped) {
+        return;
+      }
+      void measureStartup(params.startupTrace, "post-attach.update-check", () =>
+        params.runtimeDeps.scheduleGatewayUpdateCheck({
+          cfg: params.cfg,
+          log: params.log,
+          isNixMode: params.isNixMode,
+          onUpdateAvailableChange: (updateAvailable) => {
+            const payload: GatewayUpdateAvailableEventPayload = { updateAvailable };
+            params.broadcast(GATEWAY_EVENT_UPDATE_AVAILABLE, payload, { dropIfSlow: true });
+          },
+        }),
+      )
+        .then((nextStop) => {
+          if (stopped) {
+            nextStop();
+            return;
+          }
+          stopUpdateCheck = nextStop;
+        })
+        .catch((err) => {
+          if (stopped) {
+            return;
+          }
+          params.log.warn(`gateway update check failed to start: ${String(err)}`);
+        });
+    });
+  };
+
+  return { start, stop };
+}
+
 export async function startGatewayPostAttachRuntime(
   params: {
     minimalTestGateway: boolean;
@@ -805,7 +877,7 @@ export async function startGatewayPostAttachRuntime(
     await params.onStartupPluginsLoaded?.(loaded);
   }
 
-  await measureStartup(params.startupTrace, "post-attach.log", () =>
+  const startupLogPromise = measureStartup(params.startupTrace, "post-attach.log", () =>
     runtimeDeps.logGatewayStartup({
       cfg: params.cfgAtStart,
       bindHost: params.bindHost,
@@ -821,19 +893,16 @@ export async function startGatewayPostAttachRuntime(
     }),
   );
 
-  const stopGatewayUpdateCheckPromise = params.minimalTestGateway
-    ? Promise.resolve(() => {})
-    : measureStartup(params.startupTrace, "post-attach.update-check", () =>
-        runtimeDeps.scheduleGatewayUpdateCheck({
-          cfg: params.cfgAtStart,
-          log: params.log,
-          isNixMode: params.isNixMode,
-          onUpdateAvailableChange: (updateAvailable) => {
-            const payload: GatewayUpdateAvailableEventPayload = { updateAvailable };
-            params.broadcast(GATEWAY_EVENT_UPDATE_AVAILABLE, payload, { dropIfSlow: true });
-          },
-        }),
-      );
+  const updateCheck = params.minimalTestGateway
+    ? { start: () => {}, stop: () => {} }
+    : createDeferredGatewayUpdateCheck({
+        startupTrace: params.startupTrace,
+        runtimeDeps,
+        cfg: params.cfgAtStart,
+        log: params.log,
+        isNixMode: params.isNixMode,
+        broadcast: params.broadcast,
+      });
 
   const tailscaleCleanupPromise = params.minimalTestGateway
     ? Promise.resolve(null)
@@ -849,6 +918,14 @@ export async function startGatewayPostAttachRuntime(
             logTailscale: params.logTailscale,
           }),
         );
+
+  let pluginServicesReported = false;
+  let reportedPluginServices: PluginServicesHandle | null = null;
+  const reportPluginServices = (pluginServices: PluginServicesHandle | null) => {
+    pluginServicesReported = true;
+    reportedPluginServices = pluginServices;
+    params.onPluginServices?.(pluginServices);
+  };
 
   const sidecarsPromise = params.minimalTestGateway
     ? Promise.resolve({ pluginServices: null, pluginRegistry, postReadySidecars: [] })
@@ -866,6 +943,7 @@ export async function startGatewayPostAttachRuntime(
             logHooks: params.logHooks,
             logChannels: params.logChannels,
             startupTrace: params.startupTrace,
+            onPluginServices: reportPluginServices,
           }),
         );
         const loaderStatsAfter = getPluginModuleLoaderStats();
@@ -885,7 +963,9 @@ export async function startGatewayPostAttachRuntime(
         for (const method of STARTUP_UNAVAILABLE_GATEWAY_METHODS) {
           params.unavailableGatewayMethods.delete(method);
         }
-        params.onPluginServices?.(result.pluginServices);
+        if (!pluginServicesReported) {
+          reportPluginServices(result.pluginServices);
+        }
         params.onPostReadySidecars?.(result.postReadySidecars);
         params.onSidecarsReady?.();
         params.startupTrace?.detail("sidecars.ready", [
@@ -916,8 +996,9 @@ export async function startGatewayPostAttachRuntime(
       await new Promise<void>((resolve) => setImmediate(resolve));
       const hookRunner = await runtimeDeps.getGlobalHookRunner();
       if (hookRunner?.hasHooks("gateway_start")) {
-        void hookRunner
-          .runGatewayStart(
+        const { withPluginHttpRouteRegistry } = await import("../plugins/http-registry.js");
+        void withPluginHttpRouteRegistry(sidecarsResult.pluginRegistry, () =>
+          hookRunner.runGatewayStart(
             { port: params.port },
             {
               port: params.port,
@@ -927,10 +1008,10 @@ export async function startGatewayPostAttachRuntime(
                 params.getCronService?.() ??
                 (params.deps.cron as PluginHookGatewayCronService | undefined),
             },
-          )
-          .catch((err) => {
-            params.log.warn(`gateway_start hook failed: ${String(err)}`);
-          });
+          ),
+        ).catch((err) => {
+          params.log.warn(`gateway_start hook failed: ${String(err)}`);
+        });
       }
     })
     .catch((err) => {
@@ -938,27 +1019,30 @@ export async function startGatewayPostAttachRuntime(
     });
 
   if (params.deferSidecars !== true) {
-    const [stopGatewayUpdateCheck, tailscaleCleanup, sidecarsResult] = await Promise.all([
-      stopGatewayUpdateCheckPromise,
+    const [, tailscaleCleanup, sidecarsResult] = await Promise.all([
+      startupLogPromise,
       tailscaleCleanupPromise,
       sidecarsPromise,
     ]);
+    updateCheck.start();
     return {
-      stopGatewayUpdateCheck,
+      stopGatewayUpdateCheck: updateCheck.stop,
       tailscaleCleanup,
       pluginServices: sidecarsResult.pluginServices,
     };
   }
 
-  const [stopGatewayUpdateCheck, tailscaleCleanup] = await Promise.all([
-    stopGatewayUpdateCheckPromise,
-    tailscaleCleanupPromise,
-  ]);
+  const [, tailscaleCleanup] = await Promise.all([startupLogPromise, tailscaleCleanupPromise]);
+  updateCheck.start();
 
-  return { stopGatewayUpdateCheck, tailscaleCleanup, pluginServices: null };
+  return {
+    stopGatewayUpdateCheck: updateCheck.stop,
+    tailscaleCleanup,
+    pluginServices: reportedPluginServices,
+  };
 }
 
-export const __testing = {
+export const testing = {
   hasRestartSentinelFileFast,
   prewarmConfiguredPrimaryModel,
   prewarmConfiguredPrimaryModelWithTimeout,
@@ -968,3 +1052,4 @@ export const __testing = {
   shouldSkipStartupModelPrewarm,
   stopPostReadySidecarsAfterCloseStarted,
 };
+export { testing as __testing };
