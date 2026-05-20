@@ -403,13 +403,15 @@ export async function pushImageMessage(
   if (previewImageUrl) {
     await validateLineMediaUrl(previewImageUrl);
   }
-  if (previewImageUrl && previewImageUrl === originalContentUrl) {
+  if (!previewImageUrl || previewImageUrl === originalContentUrl) {
+    // createImageMessage defaults previewImageUrl to originalContentUrl
+    // when no explicit preview is supplied (and an explicit same-URL
+    // preview is handled identically). The shared URL must therefore
+    // satisfy the stricter preview cap.
     await precheckLineOutboundMediaSize(originalContentUrl, "preview");
   } else {
     await precheckLineOutboundMediaSize(originalContentUrl, "image");
-    if (previewImageUrl) {
-      await precheckLineOutboundMediaSize(previewImageUrl, "preview");
-    }
+    await precheckLineOutboundMediaSize(previewImageUrl, "preview");
   }
   return pushLineMessages(to, [createImageMessage(originalContentUrl, previewImageUrl)], opts, {
     verboseMessage: (chatId) => `line: pushed image to ${chatId}`,

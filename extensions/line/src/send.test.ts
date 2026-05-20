@@ -550,6 +550,36 @@ describe("LINE send helpers", () => {
     expect(replyMessageMock).not.toHaveBeenCalled();
   });
 
+  // Regression: pushImageMessage with no explicit previewImageUrl.
+  // createImageMessage defaults previewImageUrl to originalContentUrl, so a
+  // 3 MiB original URL passes the 10 MiB image cap but later fails on
+  // LINE's 1 MiB preview cap. pushImageMessage must apply the preview cap
+  // locally on the shared URL, with a single HEAD probe (dedupe preserved).
+  it("pushImageMessage rejects when originalContentUrl with no explicit preview exceeds the preview cap", async () => {
+    const between = 3 * 1024 * 1024; // under image cap, over preview cap
+    fetchWithSsrFGuardMock.mockReset();
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(null, {
+        status: 200,
+        headers: new Headers({ "content-length": String(between) }),
+      }),
+      finalUrl: "https://example.com/implicit-preview.jpg",
+      release: async () => undefined,
+    });
+
+    await expect(
+      sendModule.pushImageMessage(
+        "line:user:U777",
+        "https://example.com/implicit-preview.jpg",
+        undefined,
+        { cfg: LINE_TEST_CFG },
+      ),
+    ).rejects.toThrow(/LINE preview media must be ≤1048576 bytes \(got 3145728 bytes/);
+
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+    expect(pushMessageMock).not.toHaveBeenCalled();
+  });
+
   // Preview-cap regression — pushImageMessage must reject when an explicit
   // preview URL exceeds the LINE 1 MiB preview cap, and pushMessage must not
   // be reached even though the original content URL passes the 10 MiB cap.

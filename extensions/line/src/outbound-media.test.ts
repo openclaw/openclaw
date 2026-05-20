@@ -280,6 +280,25 @@ describe("resolveLineOutboundMedia", () => {
     expect(ssrfMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1);
   });
 
+  // Regression: image kind with no explicit previewImageUrl. Downstream
+  // buildLineMediaMessageObject defaults previewImageUrl to the mediaUrl,
+  // so a 5 MiB image URL passes the 10 MiB image cap but later fails on
+  // LINE's 1 MiB preview cap. The resolver must apply the preview cap
+  // locally on the shared URL.
+  it("rejects an image with no explicit previewImageUrl when mediaUrl exceeds the preview cap", async () => {
+    const between = 5 * 1024 * 1024; // under image cap, over preview cap
+    ssrfMocks.fetchWithSsrFGuard.mockReset();
+    ssrfMocks.fetchWithSsrFGuard.mockResolvedValueOnce(
+      buildGuardedHeadResult({ status: 200, contentLength: String(between) }),
+    );
+    await expect(
+      resolveLineOutboundMedia("https://example.com/implicit-preview.jpg", {
+        mediaKind: "image",
+      }),
+    ).rejects.toThrow(/LINE preview media must be ≤1048576 bytes \(got 5242880 bytes/);
+    expect(ssrfMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1);
+  });
+
   // T11
   it("rejects a video URL whose HEAD reports a payload larger than the LINE video cap", async () => {
     const oversized = LINE_OUTBOUND_MEDIA_MAX_BYTES.video + 1;

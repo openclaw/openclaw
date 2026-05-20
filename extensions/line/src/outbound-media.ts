@@ -196,9 +196,12 @@ export async function resolveLineOutboundMedia(
       (opts.trackingId?.trim() ? "video" : undefined) ??
       detectLineMediaKindFromUrl(trimmedUrl) ??
       "image";
-    if (previewImageUrl && previewImageUrl === trimmedUrl) {
-      // Same URL serves as both originalContentUrl and previewImageUrl;
-      // dedupe to one HEAD probe but evaluate against the stricter preview cap.
+    if (mediaKind === "image" && (!previewImageUrl || previewImageUrl === trimmedUrl)) {
+      // For image kind, buildLineMediaMessageObject defaults
+      // previewImageUrl to mediaUrl when no explicit preview is supplied
+      // (and an explicit same-URL preview is handled identically). The
+      // shared URL must therefore satisfy the stricter preview cap; one
+      // HEAD probe covers both LINE-side validations.
       await precheckLineOutboundMediaSize(trimmedUrl, "preview");
     } else {
       await precheckLineOutboundMediaSize(trimmedUrl, mediaKind);
