@@ -106,14 +106,48 @@ function resolveProvidersForMode(params: {
   });
 }
 
+function collectExistingUserOwnedApiKeys(existingParsed: unknown): ReadonlyMap<string, string> {
+  const userOwned = new Map<string, string>();
+  if (!isRecord(existingParsed) || !isRecord(existingParsed.providers)) {
+    return userOwned;
+  }
+  for (const [providerKey, entry] of Object.entries(existingParsed.providers)) {
+    if (!isRecord(entry)) {
+      continue;
+    }
+    const apiKey = entry.apiKey;
+    if (typeof apiKey !== "string" || !apiKey.trim()) {
+      continue;
+    }
+    // Existing apiKeys that are already non-secret markers don't need
+    // preservation tracking — leaving them alone falls out naturally from
+    // the marker check below. We only track non-marker (user-authored
+    // plaintext) values, which are the ones the sanitizer must not clobber.
+    if (isNonSecretApiKeyMarker(apiKey)) {
+      continue;
+    }
+    userOwned.set(providerKey, apiKey);
+  }
+  return userOwned;
+}
+
 function stripResolvedApiKeysForModelsJson(
   providers: Record<string, ProviderConfig>,
+  existingUserOwnedApiKeys: ReadonlyMap<string, string>,
 ): Record<string, ProviderConfig> {
   let changed = false;
   const sanitizedProviders: Record<string, ProviderConfig> = {};
 
   for (const [providerKey, provider] of Object.entries(providers)) {
     const apiKey = provider.apiKey;
+    // Preserve user-authored plaintext that already lived in models.json.
+    // mergeWithExistingProviderSecrets intentionally carries these forward,
+    // and replacing them with a non-usable marker would break custom
+    // providers whose only credential lives in the existing models.json.
+    if (typeof apiKey === "string" && existingUserOwnedApiKeys.get(providerKey) === apiKey) {
+      sanitizedProviders[providerKey] = provider;
+      continue;
+    }
     if (typeof apiKey === "string" && apiKey.trim() && !isNonSecretApiKeyMarker(apiKey)) {
       sanitizedProviders[providerKey] = { ...provider, apiKey: NON_ENV_SECRETREF_MARKER };
       changed = true;
@@ -198,8 +232,10 @@ export async function planOpenClawModelsJsonWithDeps(
       sourceSecretDefaults: params.sourceConfigForSecrets?.secrets?.defaults,
       secretRefManagedProviders,
     }) ?? normalizedMergedProviders;
+  const existingUserOwnedApiKeys = collectExistingUserOwnedApiKeys(params.existingParsed);
   const finalProviders = stripResolvedApiKeysForModelsJson(
     applyNativeStreamingUsageCompat(secretEnforcedProviders),
+    existingUserOwnedApiKeys,
   );
   const nextContents = `${JSON.stringify({ providers: finalProviders }, null, 2)}\n`;
 

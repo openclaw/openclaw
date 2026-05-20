@@ -302,13 +302,16 @@ describe("models-config", () => {
     expect(parsed.providers?.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
   });
 
-  it("replaces resolved plaintext apiKey values when merging into an existing models.json", async () => {
+  it("preserves user-authored existing models.json apiKey values in merge mode", async () => {
+    // Models.json that the user authored by hand. The custom provider's
+    // apiKey is the user's only credential for that provider; the sanitizer
+    // must not replace it with a non-usable marker on subsequent plan/writes.
     const existing = {
       providers: {
         custom: {
           baseUrl: "https://custom.example/v1",
           api: "openai-completions",
-          apiKey: "sk-previously-persisted-key", // pragma: allowlist secret
+          apiKey: "sk-user-authored-key", // pragma: allowlist secret
           models: [],
         },
       },
@@ -326,7 +329,8 @@ describe("models-config", () => {
           custom: {
             baseUrl: "https://custom.example/v1",
             api: "openai-completions",
-            apiKey: "sk-resolved-provider-key",
+            // No apiKey from implicit resolution — mergeWithExistingProviderSecrets
+            // is expected to carry the user's existing key forward.
             models: [
               {
                 id: "custom-model",
@@ -351,9 +355,69 @@ describe("models-config", () => {
     const parsed = JSON.parse(plan.contents) as {
       providers?: Record<string, { apiKey?: string }>;
     };
-    expect(parsed.providers?.custom?.apiKey).toBe("secretref-managed");
-    expect(plan.contents).not.toContain("sk-resolved-provider-key");
-    expect(plan.contents).not.toContain("sk-previously-persisted-key");
+    expect(parsed.providers?.custom?.apiKey).toBe("sk-user-authored-key");
+  });
+
+  it("replaces plaintext apiKey for a newly added provider in merge mode while preserving an existing provider's user-authored key", async () => {
+    const existing = {
+      providers: {
+        kept: {
+          baseUrl: "https://kept.example/v1",
+          api: "openai-completions",
+          apiKey: "sk-user-authored-key", // pragma: allowlist secret
+          models: [],
+        },
+      },
+    };
+    const plan = await planOpenClawModelsJsonWithDeps(
+      {
+        cfg: { models: { mode: "merge", providers: {} } },
+        agentDir: "/tmp/openclaw-models-config-env-vars-test",
+        env: {},
+        existingRaw: `${JSON.stringify(existing, null, 2)}\n`,
+        existingParsed: existing,
+      },
+      {
+        resolveImplicitProviders: async () => ({
+          kept: {
+            baseUrl: "https://kept.example/v1",
+            api: "openai-completions",
+            models: [],
+          },
+          // Newly resolved provider that did not exist in the user's
+          // models.json. Its plaintext apiKey is OpenClaw-resolved, not
+          // user-authored, and must be replaced with a non-secret marker.
+          newprov: {
+            baseUrl: "https://newprov.example/v1",
+            api: "openai-completions",
+            apiKey: "sk-resolved-new-provider-key",
+            models: [
+              {
+                id: "new-model",
+                name: "New Model",
+                input: ["text"],
+                reasoning: false,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 8192,
+                maxTokens: 2048,
+              },
+            ],
+          },
+        }),
+      },
+    );
+
+    expect(plan.action).toBe("write");
+    if (plan.action !== "write") {
+      throw new Error("Expected models.json write plan");
+    }
+
+    const parsed = JSON.parse(plan.contents) as {
+      providers?: Record<string, { apiKey?: string }>;
+    };
+    expect(parsed.providers?.kept?.apiKey).toBe("sk-user-authored-key");
+    expect(parsed.providers?.newprov?.apiKey).toBe("secretref-managed");
+    expect(plan.contents).not.toContain("sk-resolved-new-provider-key");
   });
 
   it("uses config env.vars entries for implicit provider discovery without mutating process.env", async () => {
