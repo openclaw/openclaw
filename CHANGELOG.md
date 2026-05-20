@@ -13,6 +13,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Mac app: keep local packaging signed with a stable app identity for permission testing and fix Control UI production builds under current Vite/Highlight.js exports.
 - fix(mattermost): fail closed on missing channel type [AI]. (#84091) Thanks @pgondhi987.
 - Recheck rebuilt system.run argv [AI]. (#84090) Thanks @pgondhi987.
 - CLI/cron: bound `openclaw cron show` job lookup pagination so non-advancing or unbounded `cron.list` responses fail instead of hanging the command. Fixes #83856. (#83989)

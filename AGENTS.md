@@ -172,6 +172,7 @@ Skills own workflows; root owns hard policy and routing.
 - "restart iOS/Android apps" = rebuild/reinstall/relaunch, not kill/launch.
 - SwiftUI: Observation (`@Observable`, `@Bindable`) over new `ObservableObject`.
 - Mac gateway: dev watch = `pnpm gateway:watch`; managed installs = `openclaw gateway restart/status --deep`; logs = `./scripts/clawlog.sh`. No launchd/ad-hoc tmux.
+- Mac app permission testing: stable app path + real signing identity required. No `--no-sign`, `SIGN_IDENTITY=-`, or raw debug binary; TCC prompts/listing won't stick.
 - Version bump surfaces live in `$openclaw-release-maintainer`.
 - Parallels: `$openclaw-parallels-smoke`; Discord roundtrip: `$parallels-discord-roundtrip`.
 - Crabbox/WebVNC human demos: keep remote desktop visible/windowed; no fullscreen remote browser unless video/capture-style output.
