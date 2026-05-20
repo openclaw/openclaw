@@ -642,7 +642,7 @@ class GatewaySessionInvokeTest {
         scope = CoroutineScope(sessionJob + Dispatchers.Default),
         identityStore = DeviceIdentityStore(app),
         deviceAuthStore = deviceAuthStore,
-        onConnected = { _, _, _ ->
+        onConnected = {
           if (!connected.isCompleted) connected.complete(Unit)
         },
         onDisconnected = { message ->
