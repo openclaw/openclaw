@@ -2391,11 +2391,6 @@ export function loadConfig(options?: { skipPluginValidation?: boolean }): OpenCl
   // First successful load becomes the process snapshot. Long-lived runtimes
   // should swap this snapshot via explicit reload/watcher paths instead of
   // reparsing openclaw.json on hot code paths.
-  //
-  // `skipPluginValidation` lets pure-client callers (e.g. the TUI talking to a
-  // remote gateway) load the config without triggering the plugin metadata
-  // snapshot, which is otherwise pulled in by plugin-aware config validation
-  // and is the dominant cost of cold startup.
   return loadPinnedRuntimeConfig(() =>
     createConfigIO(options?.skipPluginValidation ? { pluginValidation: "skip" } : {}).loadConfig(),
   );
