@@ -223,11 +223,11 @@ function resolveExplicitSlackProgressTitle(
 function resolveSlackNativeProgressTaskCards(
   entry: Parameters<typeof resolveChannelProgressDraftConfig>[0],
 ): boolean {
-  const progress = entry?.streaming;
-  if (!progress || typeof progress !== "object" || Array.isArray(progress)) {
+  const streaming = entry?.streaming;
+  if (!streaming || typeof streaming !== "object" || Array.isArray(streaming)) {
     return false;
   }
-  const progressConfig = progress.progress;
+  const progressConfig = (streaming as Record<string, unknown>).progress;
   return (
     Boolean(progressConfig) &&
     typeof progressConfig === "object" &&
@@ -1682,13 +1682,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   // Finalize the stream if one was started
   // -----------------------------------------------------------------------
   let streamFallbackDelivered = false;
-  if (nativeProgressStreamStartPromise) {
-    try {
-      await nativeProgressStreamStartPromise;
-    } catch {
-      streamFailed = true;
-    }
-  }
   const finalStream = streamSession as SlackStreamSession | null;
   if (finalStream && !finalStream.stopped) {
     try {
