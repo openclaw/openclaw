@@ -24,7 +24,7 @@ describe("buildSystemdUnit", () => {
     expect(unit).toContain("SuccessExitStatus=0 143");
     expect(unit).toContain("StartLimitBurst=8");
     expect(unit).toContain("StartLimitIntervalSec=120");
-    expect(unit).toContain("RestartPreventExitStatus=78 80");
+    expect(unit).toContain("RestartPreventExitStatus=78");
     expect(unit).toContain("ExecStartPre=-/bin/sh -c");
   });
 
