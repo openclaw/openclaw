@@ -6,6 +6,7 @@ import { afterAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type WebSocket from "ws";
 import { resetConfigRuntimeState } from "../config/config.js";
 import type { GuardedFetchOptions } from "../infra/net/fetch-guard.js";
+import { peekSystemEvents } from "../infra/system-events.js";
 import type { GatewayCronState } from "./server-cron.js";
 import {
   connectOk,
@@ -15,7 +16,6 @@ import {
   rpcReq,
   startServerWithClient,
   testState,
-  waitForSystemEvent,
 } from "./test-helpers.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() =>
@@ -431,7 +431,8 @@ describe("gateway server cron", () => {
       cronEnabled: false,
     });
 
-    const cronState = await createDirectCronState();
+    const cronEvents = createCronEventCollector();
+    const cronState = await createDirectCronState({ broadcast: cronEvents.broadcast });
 
     try {
       const addRes = await directCronReq(cronState, "cron.add", {
@@ -495,7 +496,11 @@ describe("gateway server cron", () => {
 
       const runRes = await cronState.cron.run(routeJobId, "force");
       expect(runRes).toEqual({ ok: true, ran: true });
-      const events = await waitForSystemEvent();
+      const routeFinished = await cronEvents.wait(
+        (payload) => payload.jobId === routeJobId && payload.action === "finished",
+      );
+      expect(typeof routeFinished.sessionKey).toBe("string");
+      const events = peekSystemEvents(routeFinished.sessionKey as string);
       expect(events.some((event) => event.includes("cron route check"))).toBe(true);
 
       const wrappedAtMs = Date.now() + 1000;
