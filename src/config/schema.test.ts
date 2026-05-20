@@ -225,11 +225,27 @@ describe("config schema", () => {
     const channelSchema = channelsProps?.matrix as Record<string, unknown> | undefined;
     const channelProps = channelSchema?.properties as Record<string, unknown> | undefined;
     expect(channelProps).toHaveProperty("accessToken");
+    const progressPropsFor = (channelId: string) => {
+      const channel = channelsProps?.[channelId] as Record<string, unknown> | undefined;
+      const properties = channel?.properties as Record<string, unknown> | undefined;
+      const streaming = properties?.streaming as Record<string, unknown> | undefined;
+      const streamingProperties = streaming?.properties as Record<string, unknown> | undefined;
+      const progress = streamingProperties?.progress as Record<string, unknown> | undefined;
+      return progress?.properties as Record<string, unknown> | undefined;
+    };
+    expect(progressPropsFor("slack")).toHaveProperty("nativeTaskCards");
+    expect(progressPropsFor("discord")).not.toHaveProperty("nativeTaskCards");
+    expect(progressPropsFor("telegram")).not.toHaveProperty("nativeTaskCards");
     expect(res.uiHints["channels.matrix"]?.label).toBe("Matrix");
     expect(res.uiHints["channels.matrix.accessToken"]?.sensitive).toBe(true);
     expect(res.uiHints["channels.matrix.streaming.progress.label"]?.label).toBe(
       "Matrix Progress Label",
     );
+    expect(res.uiHints["channels.slack.streaming.progress.nativeTaskCards"]?.label).toBe(
+      "Slack Native Progress Task Cards",
+    );
+    expect(res.uiHints["channels.discord.streaming.progress.nativeTaskCards"]).toBeUndefined();
+    expect(res.uiHints["channels.telegram.streaming.progress.nativeTaskCards"]).toBeUndefined();
     expect(res.uiHints["channels.discord.streaming.progress.toolProgress"]?.label).toBe(
       "Discord Progress Tool Lines",
     );
