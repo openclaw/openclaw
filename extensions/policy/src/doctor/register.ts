@@ -222,11 +222,7 @@ const policyToolsMissingOwnerCheck: HealthCheck = {
 async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEvaluation> {
   const settings = policySettings(ctx);
   const policyPath = policyDisplayName(ctx);
-  const toolsFile = await readWorkspaceFile(ctx, "TOOLS.md");
-  const evidence = collectPolicyEvidence(
-    ctx.cfg as Record<string, unknown>,
-    toolsFile === null ? {} : { toolsRaw: toolsFile.raw },
-  );
+  let evidence = collectPolicyEvidence(ctx.cfg as Record<string, unknown>);
   const findings: HealthFinding[] = [];
 
   if (!policyChecksEnabled(ctx, settings)) {
@@ -298,13 +294,23 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
     };
   }
 
-  const metadataRequirementFindings = toolMetadataRequirementFindings(policy, policyFile.ocDocName);
+  const metadataRequirementFindings = toolMetadataRequirementFindings(
+    policy,
+    policyFile.displayName,
+    policyFile.ocDocName,
+  );
+  const requiredMetadata =
+    metadataRequirementFindings.length === 0 ? requiredToolMetadata(policy) : new Set<string>();
+  if (requiredMetadata.size > 0) {
+    const toolsFile = await readWorkspaceFile(ctx, "TOOLS.md");
+    evidence = collectPolicyEvidence(ctx.cfg as Record<string, unknown>, {
+      toolsRaw: toolsFile?.raw ?? "",
+    });
+  }
   const policyFindings: HealthFinding[] = [
     ...channelFindings(policy, policyFile.displayName, policyFile.ocDocName, evidence),
     ...metadataRequirementFindings,
   ];
-  const requiredMetadata =
-    metadataRequirementFindings.length === 0 ? requiredToolMetadata(policy) : new Set<string>();
   if (requiredMetadata.has("risk")) {
     policyFindings.push(...toolRiskFindings(policyFile.ocDocName, evidence));
     policyFindings.push(...toolUnknownRiskFindings(policyFile.ocDocName, evidence));
@@ -461,6 +467,7 @@ function toAttestedFinding(finding: HealthFinding): Record<string, unknown> {
 
 function toolMetadataRequirementFindings(
   policy: unknown,
+  policyPath: string,
   policyDocName: string,
 ): readonly HealthFinding[] {
   if (!isRecord(policy) || !isRecord(policy.tools) || policy.tools.requireMetadata === undefined) {
@@ -471,9 +478,9 @@ function toolMetadataRequirementFindings(
       {
         checkId: CHECK_IDS.policyInvalidFile,
         severity: "error",
-        message: "policy.jsonc tools.requireMetadata must be an array of metadata keys.",
+        message: `${policyPath} tools.requireMetadata must be an array of metadata keys.`,
         source: "policy",
-        path: "policy.jsonc",
+        path: policyPath,
         target: `oc://${policyDocName}/tools/requireMetadata`,
         fixHint: `Use supported metadata keys: ${SUPPORTED_TOOL_METADATA.join(", ")}.`,
       },
@@ -494,9 +501,9 @@ function toolMetadataRequirementFindings(
     {
       checkId: CHECK_IDS.policyInvalidFile,
       severity: "error",
-      message: `policy.jsonc tools.requireMetadata[${invalidIndex}] must be a supported metadata key.`,
+      message: `${policyPath} tools.requireMetadata[${invalidIndex}] must be a supported metadata key.`,
       source: "policy",
-      path: "policy.jsonc",
+      path: policyPath,
       target: `oc://${policyDocName}/tools/requireMetadata/#${invalidIndex}`,
       fixHint: `Use supported metadata keys: ${SUPPORTED_TOOL_METADATA.join(", ")}.`,
     },
