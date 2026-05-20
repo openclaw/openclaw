@@ -2818,12 +2818,10 @@ main() {
 
     ui_stage "Preparing environment"
 
-    # Step 1: Homebrew (macOS only)
-    install_homebrew
-
-    # Step 2: Node.js
+    # Step 1: Node.js. On macOS, Homebrew is only needed when Node.js is missing or outdated.
     load_nvm_for_node_detection
     if ! check_node; then
+        install_homebrew
         install_node
     fi
     activate_supported_node_on_path || true

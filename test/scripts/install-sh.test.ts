@@ -50,9 +50,97 @@ describe("install.sh", () => {
     );
   });
 
+  it("skips Homebrew during macOS preparation when the active Node is already supported", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-macos-node-"));
+    const events = join(tmp, "events.log");
+
+    let result: ReturnType<typeof runInstallShell> | undefined;
+    let eventsText = "";
+    try {
+      result = runInstallShell(`
+        set -euo pipefail
+        source "${SCRIPT_PATH}"
+        HELP=0
+        DRY_RUN=0
+        INSTALL_METHOD=npm
+        detect_os_or_die() { OS=macos; }
+        bootstrap_gum_temp() { :; }
+        print_installer_banner() { :; }
+        print_gum_status() { :; }
+        detect_openclaw_checkout() { return 1; }
+        show_install_plan() { :; }
+        check_existing_openclaw() { return 1; }
+        ui_stage() { :; }
+        load_nvm_for_node_detection() { printf 'load_nvm_for_node_detection\\n' >> ${JSON.stringify(events)}; }
+        check_node() { printf 'check_node\\n' >> ${JSON.stringify(events)}; return 0; }
+        install_homebrew() { printf 'install_homebrew\\n' >> ${JSON.stringify(events)}; }
+        install_node() { printf 'install_node\\n' >> ${JSON.stringify(events)}; }
+        activate_supported_node_on_path() { :; }
+        ensure_default_node_active_shell() { return 0; }
+        check_git() { return 0; }
+        fix_npm_permissions() { :; }
+        install_openclaw() { printf 'install_openclaw\\n' >> ${JSON.stringify(events)}; exit 0; }
+        main
+      `);
+      eventsText = readFileSync(events, "utf8");
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+
+    expect(result?.status).toBe(0);
+    expect(result?.stdout).not.toContain("Need sudo access on macOS");
+    expect(eventsText).toBe(
+      ["load_nvm_for_node_detection", "check_node", "install_openclaw", ""].join("\n"),
+    );
+  });
+
+  it("installs Homebrew on macOS only when Node is missing or outdated", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-macos-brew-"));
+    const events = join(tmp, "events.log");
+
+    let result: ReturnType<typeof runInstallShell> | undefined;
+    let eventsText = "";
+    try {
+      result = runInstallShell(`
+        set -euo pipefail
+        source "${SCRIPT_PATH}"
+        HELP=0
+        DRY_RUN=0
+        INSTALL_METHOD=npm
+        detect_os_or_die() { OS=macos; }
+        bootstrap_gum_temp() { :; }
+        print_installer_banner() { :; }
+        print_gum_status() { :; }
+        detect_openclaw_checkout() { return 1; }
+        show_install_plan() { :; }
+        check_existing_openclaw() { return 1; }
+        ui_stage() { :; }
+        load_nvm_for_node_detection() { printf 'load_nvm_for_node_detection\\n' >> ${JSON.stringify(events)}; }
+        check_node() { printf 'check_node\\n' >> ${JSON.stringify(events)}; return 1; }
+        install_homebrew() { printf 'install_homebrew\\n' >> ${JSON.stringify(events)}; }
+        install_node() { printf 'install_node\\n' >> ${JSON.stringify(events)}; exit 0; }
+        main
+      `);
+      eventsText = readFileSync(events, "utf8");
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+
+    expect(result?.status).toBe(0);
+    expect(eventsText).toBe(
+      [
+        "load_nvm_for_node_detection",
+        "check_node",
+        "install_homebrew",
+        "install_node",
+        "",
+      ].join("\n"),
+    );
+  });
+
   it("loads nvm before checking Node.js so stale system Node does not win", () => {
     expect(script).toMatch(
-      /# Step 2: Node\.js\s+load_nvm_for_node_detection\s+if ! check_node; then/,
+      /# Step 1: Node\.js\. On macOS, Homebrew is only needed when Node\.js is missing or outdated\.\s+load_nvm_for_node_detection\s+if ! check_node; then\s+install_homebrew\s+install_node/,
     );
 
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-nvm-"));
