@@ -189,7 +189,10 @@ describe("codex cli node sessions", () => {
     }
     const invokeNode = vi.fn(async () => ({ ok: true as const, payload: { ok: true } }));
     const approvals = {
-      request: vi.fn(async () => ({ id: "approval-1", decision: "deny" as const })),
+      request: vi.fn(async (_request: Record<string, unknown>) => ({
+        id: "approval-1",
+        decision: "deny" as const,
+      })),
     };
 
     const result = await policy.handle({
@@ -220,8 +223,8 @@ describe("codex cli node sessions", () => {
         allowedDecisions: ["allow-once", "deny"],
       }),
     );
-    const [approvalRequest] = approvals.request.mock.calls[0] ?? [];
-    expect((approvalRequest as { timeoutMs?: unknown } | undefined)?.timeoutMs).toBeUndefined();
+    const approvalRequest = approvals.request.mock.calls[0]?.[0];
+    expect(approvalRequest?.timeoutMs).toBeUndefined();
   });
 
   it("does not treat allow-always as a valid Codex CLI resume approval", async () => {
