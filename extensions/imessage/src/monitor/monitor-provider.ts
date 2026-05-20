@@ -54,6 +54,7 @@ import { attachIMessageMonitorAbortHandler } from "./abort-handler.js";
 import { runIMessageCatchup } from "./catchup-bridge.js";
 import { advanceIMessageCatchupCursor, resolveCatchupConfig } from "./catchup.js";
 import { combineIMessagePayloads } from "./coalesce.js";
+import { repairIMessageConversationAnchor } from "./conversation-repair.js";
 import { createIMessageEchoCachingSend, deliverReplies } from "./deliver.js";
 import { createSentMessageCache } from "./echo-cache.js";
 import {
@@ -460,6 +461,19 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         : "";
     const bodyText = messageText || placeholder;
 
+    // Recover conversation anchor when the watch payload is malformed
+    // (e.g. group link-preview with chat_id=0 and empty chat_guid/
+    // chat_identifier). Fail-closed: if recovery cannot determine the real
+    // conversation, the message is dropped rather than routed to sender DM.
+    const repaired = await repairIMessageConversationAnchor({
+      message,
+      client: getActiveClient(),
+      runtime,
+    });
+    if (!repaired) {
+      return;
+    }
+
     const storeAllowFrom = await readChannelAllowFromStore(
       "imessage",
       process.env,
@@ -468,7 +482,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     const decision = await resolveIMessageInboundDecision({
       cfg,
       accountId: accountInfo.accountId,
-      message,
+      message: repaired,
       opts,
       messageText,
       bodyText,
