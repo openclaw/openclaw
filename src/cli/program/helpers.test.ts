@@ -2,6 +2,7 @@ import { Command } from "commander";
 import { describe, expect, it } from "vitest";
 import {
   collectOption,
+  parsePositiveIntegerOption,
   parsePositiveIntOrUndefined,
   parseStrictPositiveIntOrUndefined,
   resolveActionArgs,
@@ -52,6 +53,21 @@ describe("program helpers", () => {
   ])("parseStrictPositiveIntOrUndefined(%j)", ({ value, expected }) => {
     expect(parseStrictPositiveIntOrUndefined(value)).toBe(expected);
   });
+
+  it.each([
+    { value: "1", expected: 1 },
+    { value: " 25 ", expected: 25 },
+    { value: "9007199254740991", expected: Number.MAX_SAFE_INTEGER },
+  ])("parsePositiveIntegerOption(%j)", ({ value, expected }) => {
+    expect(parsePositiveIntegerOption(value)).toBe(expected);
+  });
+
+  it.each(["", "0", "-1", "1abc", "5.5", "1e3", "9007199254740992"])(
+    "rejects invalid positive integer option value %j",
+    (value) => {
+      expect(() => parsePositiveIntegerOption(value)).toThrow("Expected a positive integer.");
+    },
+  );
 
   it("resolveActionArgs returns args when command has arg array", () => {
     const command = new Command();

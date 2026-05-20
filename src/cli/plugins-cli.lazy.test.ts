@@ -8,6 +8,7 @@ describe("plugins cli lazy runtime boundary", () => {
 
   afterEach(() => {
     vi.doUnmock("./plugins-cli.runtime.js");
+    vi.doUnmock("./plugins-search-command.js");
     vi.resetModules();
   });
 
@@ -40,6 +41,35 @@ describe("plugins cli lazy runtime boundary", () => {
       },
     );
     expect(runtimeLoaded).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid plugins search limit before loading the search action", async () => {
+    let searchLoaded = false;
+    vi.doMock("./plugins-search-command.js", () => {
+      searchLoaded = true;
+      return {
+        runPluginsSearchCommand: vi.fn(),
+      };
+    });
+
+    const { registerPluginsCli } = await import("./plugins-cli.js");
+    const program = new Command();
+    program.exitOverride();
+    program.configureOutput({
+      writeErr: () => {},
+      writeOut: () => {},
+    });
+    registerPluginsCli(program);
+
+    await expect(
+      program.parseAsync(["plugins", "search", "calendar", "--limit", "1abc"], {
+        from: "user",
+      }),
+    ).rejects.toMatchObject({
+      code: "commander.invalidArgument",
+      exitCode: 1,
+    });
+    expect(searchLoaded).toBe(false);
   });
 
   it("loads the plugins runtime for runtime-backed actions", async () => {

@@ -289,6 +289,24 @@ describe("skills cli commands", () => {
     ).toBe(true);
   });
 
+  it("rejects invalid skill search limits before querying ClawHub", async () => {
+    const program = new Command();
+    program.exitOverride();
+    program.configureOutput({
+      writeErr: () => {},
+      writeOut: () => {},
+    });
+    registerSkillsCli(program);
+
+    await expect(
+      program.parseAsync(["skills", "search", "calendar", "--limit", "1abc"], { from: "user" }),
+    ).rejects.toMatchObject({
+      code: "commander.invalidArgument",
+      exitCode: 1,
+    });
+    expect(searchSkillsFromClawHubMock).not.toHaveBeenCalled();
+  });
+
   it("installs a skill from ClawHub into the active workspace", async () => {
     installSkillFromClawHubMock.mockResolvedValue({
       ok: true,
