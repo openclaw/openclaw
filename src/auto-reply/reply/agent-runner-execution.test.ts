@@ -601,6 +601,62 @@ describe("buildContextOverflowRecoveryText", () => {
     expect(text).not.toContain("reset our conversation");
   });
 
+  it("uses fallback model from session when primary model metadata is unavailable", () => {
+    const text = buildContextOverflowRecoveryText({
+      cfg: {
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "http://ollama.test",
+              models: [makeTestModel("qwen3.5-9b-32k:latest", 32_768)],
+            },
+          },
+        },
+      },
+      primaryProvider: "openrouter",
+      primaryModel: "unknown-model",
+      activeSessionEntry: {
+        sessionId: "session",
+        updatedAt: 1,
+        modelProvider: "ollama",
+        model: "qwen3.5-9b-32k:latest",
+        contextTokens: 200_000,
+      },
+    });
+
+    expect(text).toContain("reserveTokensFloor");
+    expect(text).toContain("20000");
+    expect(text).not.toContain("heartbeat model bleed");
+  });
+
+  it("uses fallback model context over session contextTokens numeric value", () => {
+    const text = buildContextOverflowRecoveryText({
+      cfg: {
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "http://ollama.test",
+              models: [makeTestModel("qwen3.5-9b-32k:latest", 32_768)],
+            },
+          },
+        },
+      },
+      primaryProvider: "openrouter",
+      primaryModel: "unknown-model",
+      activeSessionEntry: {
+        sessionId: "session",
+        updatedAt: 1,
+        modelProvider: "ollama",
+        model: "qwen3.5-9b-32k:latest",
+        contextTokens: 1_000_000,
+      },
+    });
+
+    expect(text).toContain("reserveTokensFloor");
+    expect(text).toContain("20000");
+    expect(text).not.toContain("heartbeat model bleed");
+  });
+
   it("caps reserveTokensFloor hint by agent.defaults.contextTokens", () => {
     const text = buildContextOverflowRecoveryText({
       cfg: {

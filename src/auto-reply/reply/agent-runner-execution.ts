@@ -752,6 +752,21 @@ function resolveContextWindowForCompactionHint(params: {
       modelWindow = resolved;
     }
   }
+  if (modelWindow === undefined) {
+    const sessionProvider = params.activeSessionEntry?.modelProvider;
+    const sessionModel = params.activeSessionEntry?.model;
+    if (sessionProvider && sessionModel) {
+      const resolved = resolveContextTokensForModel({
+        cfg: params.cfg,
+        provider: sessionProvider,
+        model: sessionModel,
+        allowAsyncLoad: false,
+      });
+      if (typeof resolved === "number" && resolved > 0) {
+        modelWindow = resolved;
+      }
+    }
+  }
   const agentCap = resolveAgentContextTokensCap(params.cfg, params.agentId);
   if (typeof agentCap === "number" && agentCap > 0) {
     return modelWindow !== undefined ? Math.min(agentCap, modelWindow) : agentCap;
