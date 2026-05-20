@@ -682,9 +682,55 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
   });
 }
 
-const CONTEXT_OVERFLOW_RESET_HINT =
-  "\n\nTo prevent this, increase your compaction buffer by setting " +
-  "`agents.defaults.compaction.reserveTokensFloor` to 20000 or higher in your config.";
+const DEFAULT_RESERVE_TOKENS_FLOOR = 20_000;
+
+export function computeContextAwareReserveTokensFloor(contextWindow: number | undefined): number {
+  if (typeof contextWindow !== "number" || contextWindow <= 0) {
+    return DEFAULT_RESERVE_TOKENS_FLOOR;
+  }
+  if (contextWindow >= 1_000_000) {
+    return 100_000;
+  }
+  if (contextWindow >= 200_000) {
+    return 50_000;
+  }
+  if (contextWindow >= 100_000) {
+    return 35_000;
+  }
+  return DEFAULT_RESERVE_TOKENS_FLOOR;
+}
+
+function resolveContextWindowForCompactionHint(params: {
+  cfg: FollowupRun["run"]["config"];
+  primaryProvider?: string;
+  primaryModel?: string;
+  activeSessionEntry?: SessionEntry;
+}): number | undefined {
+  if (params.primaryProvider && params.primaryModel) {
+    const modelWindow = resolveContextTokensForModel({
+      cfg: params.cfg,
+      provider: params.primaryProvider,
+      model: params.primaryModel,
+      allowAsyncLoad: false,
+    });
+    if (typeof modelWindow === "number" && modelWindow > 0) {
+      return modelWindow;
+    }
+  }
+  const sessionTokens = params.activeSessionEntry?.contextTokens;
+  if (typeof sessionTokens === "number" && Number.isFinite(sessionTokens) && sessionTokens > 0) {
+    return Math.floor(sessionTokens);
+  }
+  return undefined;
+}
+
+function buildContextOverflowResetHint(contextWindowTokens: number | undefined): string {
+  const reserveFloor = computeContextAwareReserveTokensFloor(contextWindowTokens);
+  return (
+    "\n\nTo prevent this, increase your compaction buffer by setting " +
+    `\`agents.defaults.compaction.reserveTokensFloor\` to ${reserveFloor} or higher in your config.`
+  );
+}
 
 type ModelRefLike = {
   provider: string;
@@ -840,6 +886,12 @@ export function buildContextOverflowRecoveryText(params: {
   const prefix = params.duringCompaction
     ? "⚠️ Context limit exceeded during compaction. I've reset our conversation to start fresh - please try again."
     : "⚠️ Context limit exceeded. I've reset our conversation to start fresh - please try again.";
+  const primaryContextWindow = resolveContextWindowForCompactionHint({
+    cfg: params.cfg,
+    primaryProvider: params.primaryProvider,
+    primaryModel: params.primaryModel,
+    activeSessionEntry: params.activeSessionEntry,
+  });
   return (
     prefix +
     (resolveHeartbeatBleedHint({
@@ -848,7 +900,7 @@ export function buildContextOverflowRecoveryText(params: {
       primaryProvider: params.primaryProvider,
       primaryModel: params.primaryModel,
       activeSessionEntry: params.activeSessionEntry,
-    }) ?? CONTEXT_OVERFLOW_RESET_HINT)
+    }) ?? buildContextOverflowResetHint(primaryContextWindow))
   );
 }
 
