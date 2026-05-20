@@ -276,4 +276,45 @@ describe("models-config", () => {
       expect(process.env[TEST_ENV_VAR]).toBe("from-host");
     });
   });
+
+  it("omits provider apiKey fields from generated models.json contents", async () => {
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          "custom-proxy": {
+            ...createImplicitOpenRouterProvider(),
+            apiKey: "CUSTOM_PROXY_API_KEY", // pragma: allowlist secret
+          },
+        },
+      },
+    };
+
+    const plan = await planOpenClawModelsJsonWithDeps(
+      {
+        cfg,
+        agentDir: "/tmp/openclaw-models-config-env-vars-test",
+        env: { OPENROUTER_API_KEY: "from-env" }, // pragma: allowlist secret
+        existingRaw: "",
+        existingParsed: null,
+      },
+      {
+        resolveImplicitProviders: async () => ({
+          openrouter: createImplicitOpenRouterProvider(),
+        }),
+      },
+    );
+
+    expect(plan.action).toBe("write");
+    if (plan.action !== "write") {
+      throw new Error("Expected models.json write plan");
+    }
+    const parsed = JSON.parse(plan.contents) as {
+      providers?: Record<string, { apiKey?: unknown; models?: Array<{ id?: string }> }>;
+    };
+
+    expect(parsed.providers?.["custom-proxy"]?.apiKey).toBeUndefined();
+    expect(parsed.providers?.openrouter?.apiKey).toBeUndefined();
+    expect(parsed.providers?.["custom-proxy"]?.models?.[0]?.id).toBe("openrouter/auto");
+    expect(parsed.providers?.openrouter?.models?.[0]?.id).toBe("openrouter/auto");
+  });
 });

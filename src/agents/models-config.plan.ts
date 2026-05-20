@@ -105,6 +105,25 @@ function resolveProvidersForMode(params: {
   });
 }
 
+function omitProviderApiKeysForModelsJson(
+  providers: Record<string, ProviderConfig>,
+): Record<string, ProviderConfig> {
+  let mutated = false;
+  const next: Record<string, ProviderConfig> = {};
+
+  for (const [providerId, provider] of Object.entries(providers)) {
+    if ("apiKey" in provider) {
+      const { apiKey: _apiKey, ...providerWithoutApiKey } = provider;
+      next[providerId] = providerWithoutApiKey;
+      mutated = true;
+      continue;
+    }
+    next[providerId] = provider;
+  }
+
+  return mutated ? next : providers;
+}
+
 export async function planOpenClawModelsJsonWithDeps(
   params: {
     cfg: OpenClawConfig;
@@ -178,7 +197,8 @@ export async function planOpenClawModelsJsonWithDeps(
       secretRefManagedProviders,
     }) ?? normalizedMergedProviders;
   const finalProviders = applyNativeStreamingUsageCompat(secretEnforcedProviders);
-  const nextContents = `${JSON.stringify({ providers: finalProviders }, null, 2)}\n`;
+  const modelsJsonProviders = omitProviderApiKeysForModelsJson(finalProviders);
+  const nextContents = `${JSON.stringify({ providers: modelsJsonProviders }, null, 2)}\n`;
 
   if (params.existingRaw === nextContents) {
     return { action: "noop" };
