@@ -146,12 +146,16 @@ export function hasBotMention(msg: Message, botUsername: string) {
     return true;
   }
   for (const ent of entities) {
-    if (ent.type !== "mention") {
-      continue;
-    }
-    const slice = text.slice(ent.offset, ent.offset + ent.length);
-    if (normalizeLowercaseStringOrEmpty(slice) === mention) {
-      return true;
+    if (ent.type === "mention") {
+      const slice = text.slice(ent.offset, ent.offset + ent.length);
+      if (normalizeLowercaseStringOrEmpty(slice) === mention) {
+        return true;
+      }
+    } else if (ent.type === "bot_command") {
+      const slice = text.slice(ent.offset, ent.offset + ent.length);
+      if (normalizeLowercaseStringOrEmpty(slice).endsWith(mention)) {
+        return true;
+      }
     }
   }
   return false;
