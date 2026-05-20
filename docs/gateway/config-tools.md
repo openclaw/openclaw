@@ -54,6 +54,8 @@ Configured MCP servers are exposed as plugin-owned tools under the `bundle-mcp` 
 - `group:plugins` for all loaded plugin-owned tools
 - exact MCP server globs such as `outlook__*` when you only want one server
 
+Server globs use the provider-safe MCP server prefix, not necessarily the raw `mcp.servers` key. Non-`[A-Za-z0-9_-]` characters become `-`, names that do not start with a letter get an `mcp-` prefix, and long or duplicate prefixes may be truncated or suffixed; for example, `mcp.servers["Outlook Graph"]` uses a glob like `outlook-graph__*`.
+
 ```json5
 {
   agents: { defaults: { sandbox: { mode: "all" } } },
@@ -72,7 +74,7 @@ Configured MCP servers are exposed as plugin-owned tools under the `bundle-mcp` 
 }
 ```
 
-Without that sandbox-layer entry, the MCP server can still load successfully while its tools are filtered before the provider request. Use `openclaw doctor` to catch this shape.
+Without that sandbox-layer entry, the MCP server can still load successfully while its tools are filtered before the provider request. Use `openclaw doctor` to catch this shape for OpenClaw-managed servers in `mcp.servers`. MCP servers loaded from bundled plugin manifests or Claude `.mcp.json` use the same sandbox gate, but this diagnostic does not enumerate those sources yet; use the same allowlist entries if their tools disappear in sandboxed turns.
 
 ### `tools.allow` / `tools.deny`
 
