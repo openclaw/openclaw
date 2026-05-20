@@ -184,6 +184,50 @@ function createLifecycleController({
   return createSubagentRegistryLifecycleController(params);
 }
 
+async function runNoReplyMirrorScenario(timestamp: number): Promise<SubagentRunRecord> {
+  const entry = createRunEntry({
+    endedAt: 4_000,
+    expectsCompletionMessage: true,
+    retainAttachmentsOnKeep: true,
+  });
+  const runSubagentAnnounceFlow = vi.fn(
+    async (announceParams: {
+      onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
+    }) => {
+      announceParams.onDeliveryResult?.({
+        delivered: false,
+        path: "direct",
+        error: "completion agent did not produce a visible reply",
+      });
+      return false;
+    },
+  );
+  gatewayMocks.callGateway.mockResolvedValueOnce({
+    messages: [
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: "final completion reply",
+        timestamp,
+      },
+    ],
+  });
+
+  await createLifecycleController({
+    entry,
+    persist: vi.fn(),
+    runSubagentAnnounceFlow,
+  }).completeSubagentRun({
+    runId: entry.runId,
+    endedAt: 4_000,
+    outcome: { status: "ok" },
+    reason: SUBAGENT_ENDED_REASON_COMPLETE,
+    triggerCleanup: true,
+  });
+  return entry;
+}
+
 describe("subagent registry lifecycle hardening", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -920,52 +964,8 @@ describe("subagent registry lifecycle hardening", () => {
     expect(persist).toHaveBeenCalled();
   });
 
-  it("credits a requester delivery mirror before retrying a NO_REPLY completion announce", async () => {
-    const persist = vi.fn();
-    const entry = createRunEntry({
-      endedAt: 4_000,
-      expectsCompletionMessage: true,
-      retainAttachmentsOnKeep: true,
-    });
-    const runSubagentAnnounceFlow = vi.fn(
-      async (announceParams: {
-        onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
-      }) => {
-        announceParams.onDeliveryResult?.({
-          delivered: false,
-          path: "direct",
-          error: "completion agent did not produce a visible reply",
-        });
-        return false;
-      },
-    );
-    gatewayMocks.callGateway.mockResolvedValueOnce({
-      messages: [
-        {
-          role: "assistant",
-          provider: "openclaw",
-          model: "delivery-mirror",
-          content: "final completion reply",
-          timestamp: 12_345,
-        },
-      ],
-    });
-
-    const controller = createLifecycleController({
-      entry,
-      persist,
-      runSubagentAnnounceFlow,
-    });
-
-    await expect(
-      controller.completeSubagentRun({
-        runId: entry.runId,
-        endedAt: 4_000,
-        outcome: { status: "ok" },
-        reason: SUBAGENT_ENDED_REASON_COMPLETE,
-        triggerCleanup: true,
-      }),
-    ).resolves.toBeUndefined();
+  it("credits only current-run requester delivery mirrors before retrying NO_REPLY", async () => {
+    const entry = await runNoReplyMirrorScenario(12_345);
 
     await vi.waitFor(() => expect(entry.cleanupCompletedAt).toBeTypeOf("number"));
     expect(gatewayMocks.callGateway).toHaveBeenCalledWith({
@@ -980,6 +980,33 @@ describe("subagent registry lifecycle hardening", () => {
     expect(entry.announceRetryCount).toBeUndefined();
     expect(hasDeliveredTaskStatusUpdate(entry.runId)).toBe(true);
     expect(helperMocks.logAnnounceGiveUp).not.toHaveBeenCalled();
+
+    vi.clearAllMocks();
+    taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId.mockReset();
+    gatewayMocks.callGateway.mockResolvedValue({});
+    const staleEntry = await runNoReplyMirrorScenario(1_999);
+
+    await vi.waitFor(() => expect(staleEntry.deliverySuspendedAt).toBeTypeOf("number"));
+    expect(staleEntry.completionDeliveredAt).toBeUndefined();
+    expect(staleEntry.completionAnnouncedAt).toBeUndefined();
+    expect(staleEntry.lastAnnounceDeliveryError).toBe(
+      "completion agent did not produce a visible reply",
+    );
+    expect(hasDeliveredTaskStatusUpdate(staleEntry.runId)).toBe(false);
+    expectFields(firstCallArg(taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId), {
+      runId: staleEntry.runId,
+      runtime: "subagent",
+      sessionKey: staleEntry.childSessionKey,
+      deliveryStatus: "failed",
+      error: "completion agent did not produce a visible reply",
+    });
+    expect(helperMocks.logAnnounceGiveUp).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: staleEntry.runId,
+        requesterSessionKey: staleEntry.requesterSessionKey,
+      }),
+      "retry-limit",
+    );
   });
 
   it("skips browser cleanup when steer restart suppresses cleanup flow", async () => {

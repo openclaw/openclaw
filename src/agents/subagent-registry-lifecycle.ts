@@ -168,6 +168,8 @@ export function createSubagentRegistryLifecycleController(params: {
     if (entry.expectsCompletionMessage !== true || expectedText == null) {
       return false;
     }
+    const mirrorNotBefore = entry.startedAt ?? entry.createdAt;
+    const mirrorNotAfter = Date.now() + 30_000;
     try {
       const history = await params.callGateway<{
         messages?: unknown[];
@@ -180,12 +182,16 @@ export function createSubagentRegistryLifecycleController(params: {
         if (!message || typeof message !== "object") {
           return false;
         }
-        const record = message as {
-          role?: unknown;
-          provider?: unknown;
-          model?: unknown;
-          content?: unknown;
-        };
+        const record = message as Record<string, unknown>;
+        const timestamp = record.timestamp;
+        if (
+          typeof timestamp !== "number" ||
+          !Number.isFinite(timestamp) ||
+          timestamp < mirrorNotBefore ||
+          timestamp > mirrorNotAfter
+        ) {
+          return false;
+        }
         const text = extractTextFromChatContent(record.content, { joinWith: "" });
         return (
           record.role === "assistant" &&
@@ -194,9 +200,8 @@ export function createSubagentRegistryLifecycleController(params: {
           text === expectedText
         );
       });
-      const deliveredAt = (mirror as { timestamp?: unknown } | undefined)?.timestamp;
-      if (typeof deliveredAt === "number") {
-        entry.completionDeliveredAt = deliveredAt;
+      if (mirror) {
+        entry.completionDeliveredAt = (mirror as { timestamp: number }).timestamp;
       }
       return Boolean(mirror);
     } catch {
