@@ -15,6 +15,7 @@ import {
   runQuotaSuspensionMaintenance,
   updateSessionStoreEntry,
 } from "../../../config/sessions/store.js";
+import { withOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
 import { resolveContextEngineOwnerPluginId } from "../../../context-engine/registry.js";
 import type { AssembleResult } from "../../../context-engine/types.js";
 import { emitTrustedDiagnosticEvent } from "../../../infra/diagnostic-events.js";
@@ -380,6 +381,7 @@ import {
 } from "./incomplete-turn.js";
 import { resolveLlmIdleTimeoutMs, streamWithIdleTimeout } from "./llm-idle-timeout.js";
 import { resolveMessageMergeStrategy } from "./message-merge-strategy.js";
+import { installMessageToolOnlyTerminalHook } from "./message-tool-terminal.js";
 import {
   MID_TURN_PRECHECK_ERROR_MESSAGE,
   isMidTurnPrecheckSignal,
@@ -2386,6 +2388,10 @@ export async function runEmbeddedAttempt(
         session: activeSession,
         withSessionWriteLock: (operation) => sessionLockController.withSessionWriteLock(operation),
       });
+      installMessageToolOnlyTerminalHook({
+        agent: activeSession.agent,
+        sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+      });
       prepStages.mark("agent-session");
       if (isRawModelRun) {
         // Raw model probes should measure exactly the requested prompt against
@@ -3171,7 +3177,15 @@ export async function runEmbeddedAttempt(
         prompt: string,
         options?: Parameters<typeof activeSession.prompt>[1],
       ): Promise<void> =>
-        abortable(trackPromptSettlePromise(activeSession.prompt(prompt, options)));
+        withOwnedSessionTranscriptWrites(
+          {
+            sessionFile: params.sessionFile,
+            sessionKey: params.sessionKey,
+            withSessionWriteLock: (operation) =>
+              sessionLockController.withSessionWriteLock(operation),
+          },
+          async () => abortable(trackPromptSettlePromise(activeSession.prompt(prompt, options))),
+        );
 
       const subscription = subscribeEmbeddedPiSession(
         buildEmbeddedSubscriptionParams({
