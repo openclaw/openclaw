@@ -19,10 +19,19 @@ enum DeviceInfoHelper {
         return "\(name) \(v.majorVersion).\(v.minorVersion).\(v.patchVersion)"
     }
 
-    /// Always "iOS X.Y.Z" for UI display (e.g. Settings), matching legacy behavior on iPad.
+    /// e.g. "iOS 18.0.0" or "iPadOS 18.0.0" by interface idiom. Used for UI display (e.g. Settings).
+    @MainActor
     static func platformStringForDisplay() -> String {
         let v = ProcessInfo.processInfo.operatingSystemVersion
-        return "iOS \(v.majorVersion).\(v.minorVersion).\(v.patchVersion)"
+        let name = switch UIDevice.current.userInterfaceIdiom {
+        case .pad:
+            "iPadOS"
+        case .phone:
+            "iOS"
+        default:
+            "iOS"
+        }
+        return "\(name) \(v.majorVersion).\(v.minorVersion).\(v.patchVersion)"
     }
 
     /// Device family for display: "iPad", "iPhone", or "iOS".
