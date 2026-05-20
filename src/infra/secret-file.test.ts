@@ -111,7 +111,7 @@ describe("readSecretFileSync", () => {
     await expectSecretFileError({ setup, expectedMessage, options });
   });
 
-  it("throws from the try helper for rejected files", async () => {
+  it("returns undefined from the try helper for rejected files", async () => {
     const file = await createSecretPath(async (dir) => {
       const target = path.join(dir, "target.txt");
       const link = path.join(dir, "secret-link.txt");
@@ -120,9 +120,9 @@ describe("readSecretFileSync", () => {
       return link;
     });
 
-    expect(() =>
-      tryReadSecretFileSync(file, "Telegram bot token", { rejectSymlink: true }),
-    ).toThrow(`Telegram bot token file at ${file} must not be a symlink.`);
+    expect(tryReadSecretFileSync(file, "Telegram bot token", { rejectSymlink: true })).toBe(
+      undefined,
+    );
   });
 
   it.each([

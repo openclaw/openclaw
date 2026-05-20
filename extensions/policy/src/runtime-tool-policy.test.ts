@@ -374,16 +374,23 @@ describe("policy trusted tool runtime", () => {
             ctx: { toolName: string; cwd?: string },
           ) => ReturnType<typeof evaluatePolicyTrustedToolCall>)
         | undefined;
-      registerPolicyTrustedToolPolicy({
+      const api = {
         config: cfg(),
         runtime: {
           config: { current: () => cfg() },
           agent: { resolveAgentWorkspaceDir: () => agentWorkspace },
         },
-        registerTrustedToolPolicy(policy) {
+        registerTrustedToolPolicy(
+          policy: Parameters<
+            Parameters<typeof registerPolicyTrustedToolPolicy>[0]["registerTrustedToolPolicy"]
+          >[0],
+        ) {
           evaluate = policy.evaluate as typeof evaluate;
         },
-      });
+      };
+      registerPolicyTrustedToolPolicy(
+        api as unknown as Parameters<typeof registerPolicyTrustedToolPolicy>[0],
+      );
 
       await expect(
         evaluate?.({ toolName: "deploy", params: {} }, { toolName: "deploy", cwd: workspaceDir }),
