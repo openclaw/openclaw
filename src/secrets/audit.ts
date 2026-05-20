@@ -6,7 +6,7 @@ import {
   isSecretRefHeaderValueMarker,
 } from "../agents/model-auth-markers.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
-import { resolveStateDir, type OpenClawConfig } from "../config/config.js";
+import { parseConfigJson5, resolveStateDir, type OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
 import { resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -104,6 +104,8 @@ type AuditCollector = {
 };
 
 const REF_RESOLVE_FALLBACK_CONCURRENCY = 8;
+const MAX_AUDIT_CONFIG_BACKUP_BYTES = 5 * 1024 * 1024;
+const MAX_AUDIT_CONFIG_BACKUP_FILES = 50;
 const MAX_AUDIT_MODELS_JSON_BYTES = 5 * 1024 * 1024;
 const ALWAYS_SENSITIVE_MODEL_PROVIDER_HEADER_NAMES = new Set([
   "authorization",
@@ -257,6 +259,99 @@ function collectConfigSecrets(params: {
       message: `${target.path} is stored as plaintext.`,
       provider: target.providerId,
     });
+  }
+}
+
+function listConfigBackupPaths(configPath: string): string[] {
+  const configDir = path.dirname(configPath);
+  const configName = path.basename(configPath);
+  if (!fs.existsSync(configDir)) {
+    return [];
+  }
+  const backupPaths: string[] = [];
+  for (const entry of fs.readdirSync(configDir, { withFileTypes: true })) {
+    if (!entry.isFile()) {
+      continue;
+    }
+    if (entry.name === configName) {
+      continue;
+    }
+    if (entry.name === `${configName}.bak` || entry.name.startsWith(`${configName}.`)) {
+      backupPaths.push(path.join(configDir, entry.name));
+    }
+  }
+  return backupPaths.toSorted().slice(0, MAX_AUDIT_CONFIG_BACKUP_FILES);
+}
+
+function readConfigBackupObject(filePath: string): {
+  value: Record<string, unknown> | null;
+  error?: string;
+} {
+  try {
+    const stats = fs.statSync(filePath);
+    if (!stats.isFile()) {
+      return { value: null, error: `Refusing to read non-regular file: ${filePath}` };
+    }
+    if (stats.size > MAX_AUDIT_CONFIG_BACKUP_BYTES) {
+      return {
+        value: null,
+        error: `Refusing to read oversized config backup (${stats.size} bytes): ${filePath}`,
+      };
+    }
+    const raw = fs.readFileSync(filePath, "utf8");
+    const parsed = parseConfigJson5(raw);
+    if (!parsed.ok) {
+      return { value: null, error: parsed.error };
+    }
+    return isRecord(parsed.parsed) ? { value: parsed.parsed } : { value: null };
+  } catch (err) {
+    return { value: null, error: formatErrorMessage(err) };
+  }
+}
+
+function collectConfigBackupSecrets(params: {
+  configPath: string;
+  collector: AuditCollector;
+}): void {
+  for (const backupPath of listConfigBackupPaths(params.configPath)) {
+    params.collector.filesScanned.add(backupPath);
+    const parsedResult = readConfigBackupObject(backupPath);
+    const parsed = parsedResult.value;
+    if (!parsed) {
+      continue;
+    }
+    const backupConfig = parsed as OpenClawConfig;
+    const defaults = backupConfig.secrets?.defaults;
+    for (const target of discoverConfigSecretTargets(backupConfig)) {
+      if (!target.entry.includeInAudit) {
+        continue;
+      }
+      const { ref } = resolveSecretInputRef({
+        value: target.value,
+        refValue: target.refValue,
+        defaults,
+      });
+      if (ref) {
+        continue;
+      }
+      if (
+        target.entry.id === "models.providers.*.headers.*" &&
+        !isLikelySensitiveModelProviderHeaderName(target.pathSegments.at(-1) ?? "")
+      ) {
+        continue;
+      }
+      if (!hasConfiguredPlaintextSecretValue(target.value, target.entry.expectedResolvedValue)) {
+        continue;
+      }
+      addFinding(params.collector, {
+        code: "PLAINTEXT_FOUND",
+        severity: "warn",
+        file: backupPath,
+        jsonPath: target.path,
+        message: `${target.path} is stored as plaintext in a config backup.`,
+        provider: target.providerId,
+      });
+    }
   }
 }
 
@@ -712,6 +807,10 @@ export async function runSecretsAudit(
     });
   }
 
+  collectConfigBackupSecrets({
+    configPath,
+    collector,
+  });
   collectEnvPlaintext({
     envPath,
     collector,

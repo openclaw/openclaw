@@ -72,6 +72,7 @@ Scan OpenClaw state for:
 - plaintext secret storage
 - unresolved refs
 - precedence drift (`auth-profiles.json` credentials shadowing `openclaw.json` refs)
+- config backup residues (`openclaw.json.*` and `openclaw.json.bak` plaintext secrets)
 - generated `agents/*/agent/models.json` residues (provider `apiKey` values and sensitive provider headers)
 - legacy residues (legacy auth store entries, OAuth reminders)
 
