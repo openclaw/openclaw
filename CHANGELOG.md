@@ -12,6 +12,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Agents/code mode: spell out the `exec` tool's JavaScript/TypeScript, no Node module, and catalog-bridge constraints in model-visible schema text so agents can use enabled tools without trial-and-error. (#84269) Thanks @Kaspre.
+- Codex: give `image_generate` dynamic-tool calls a 120s default watchdog when no per-call or configured image timeout is set, so image generation no longer falls back to the generic 30s bridge timeout. (#84254) Thanks @moritzmmayerhofer.
 - CLI/message: include a stable top-level `messageId` in `openclaw message --json` output when channel sends return one. (#84191) Thanks @100menotu001.
 - Gateway/agents: use an agent's `identity.name` in Gateway agent summaries when `agents.list[].name` is unset, so configured agent labels remain visible in clients. (#84355; refs #57835) Thanks @luoyanglang.
 - Plugins/hooks: apply a default 30-second timeout to `before_compaction` and `after_compaction` hooks so a hung plugin handler no longer blocks compaction completion. (#84153)

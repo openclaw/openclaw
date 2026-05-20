@@ -181,6 +181,7 @@ import { filterToolsForVisionInputs } from "./vision-tools.js";
 
 const CODEX_DYNAMIC_TOOL_TIMEOUT_MS = 30_000;
 const CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS = 600_000;
+const CODEX_DYNAMIC_IMAGE_GENERATION_TOOL_TIMEOUT_MS = 120_000;
 const CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS = 60_000;
 const CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS = 3;
 const CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS = 100;
@@ -3020,9 +3021,12 @@ function readConfiguredDynamicToolTimeoutMs(
   if (toolName === "image_generate") {
     const imageGenerationModel = config?.agents?.defaults?.imageGenerationModel;
     if (!imageGenerationModel || typeof imageGenerationModel !== "object") {
-      return undefined;
+      return CODEX_DYNAMIC_IMAGE_GENERATION_TOOL_TIMEOUT_MS;
     }
-    return readPositiveFiniteTimeoutMs(imageGenerationModel.timeoutMs);
+    return (
+      readPositiveFiniteTimeoutMs(imageGenerationModel.timeoutMs) ??
+      CODEX_DYNAMIC_IMAGE_GENERATION_TOOL_TIMEOUT_MS
+    );
   }
 
   if (toolName === "image") {

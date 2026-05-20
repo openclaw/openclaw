@@ -1903,6 +1903,22 @@ describe("runCodexAppServerAttempt", () => {
     ).toBe(180_000);
   });
 
+  it("uses a 120 second default for Codex image generation dynamic tool calls", () => {
+    expect(
+      testing.resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-image-generate-default",
+          namespace: null,
+          tool: "image_generate",
+          arguments: { prompt: "cat" },
+        },
+        config: undefined,
+      }),
+    ).toBe(120_000);
+  });
+
   it("uses the media image timeout for Codex image dynamic tool calls", () => {
     expect(
       testing.resolveDynamicToolCallTimeoutMs({
