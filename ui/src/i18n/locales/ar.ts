@@ -1431,6 +1431,7 @@ export const ar: TranslationMap = {
     uk: "Українська (الأوكرانية)",
     id: "Bahasa Indonesia (الإندونيسية)",
     pl: "Polski (البولندية)",
+    sv: "Svenska (السويدية)",
     th: "ไทย (التايلاندية)",
     vi: "Tiếng Việt (الفيتنامية)",
     nl: "Nederlands (الهولندية)",
