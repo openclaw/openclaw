@@ -195,6 +195,27 @@ describe("kimi tool-call markup wrapper", () => {
     await expect(stream.result()).resolves.toBe(finalMessage);
   });
 
+  it("does not change stopReason on non-assistant tool-call text", async () => {
+    const finalMessage = {
+      role: "user",
+      content: [{ type: "text", text: KIMI_TOOL_TEXT }],
+      stopReason: "stop",
+    };
+    const baseStreamFn = createResultStreamFn(finalMessage);
+
+    const wrapped = createKimiToolCallMarkupWrapper(baseStreamFn);
+    const stream = await callKimiStream(wrapped);
+
+    await expect(stream.result()).resolves.toEqual({
+      role: "user",
+      content: [
+        {
+          ...createReadToolCall(),
+        },
+      ],
+      stopReason: "stop",
+    });
+  });
   it("supports async stream functions", async () => {
     const finalMessage = createAssistantTextMessage(KIMI_TOOL_TEXT);
     const baseStreamFn: StreamFn = async (model, context, options) =>
