@@ -33,6 +33,11 @@ export function registerMessageSendCommand(message: Command, helpers: MessageCli
           "--silent",
           "Send message silently without notification (Telegram + Discord)",
           false,
+        )
+        .option(
+          "--timeout <ms>",
+          "Request timeout in milliseconds (default: 30000)",
+          "30000",
         ),
     )
     .action(async (opts) => {

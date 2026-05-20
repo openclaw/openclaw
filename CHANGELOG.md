@@ -4,6 +4,10 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Fixes
+
+- CLI/message: add `--timeout <ms>` to `openclaw message send` (default 30000) so delivery requests can no longer hang indefinitely. SIGTERM/SIGINT handlers in `executeGatewayRequestWithScopes` properly clean up listeners after request settles, allowing external supervisors like `timeout(1)` to interrupt stuck requests without leaking signal handlers. Fixes #75895. Thanks @EronFan.
+
 ### Changes
 
 - Agents/config: allow `agents.list[].experimental.localModelLean` so lean local-model mode can be enabled for one configured agent instead of globally.
