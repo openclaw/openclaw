@@ -38,11 +38,24 @@ const TURN_PREFIX_INSTRUCTIONS =
   " early progress, and any details needed to understand the retained suffix.";
 const MAX_TOOL_FAILURES = 8;
 const MAX_TOOL_FAILURE_CHARS = 240;
-const DEFAULT_RECENT_TURNS_PRESERVE = 3;
+// Default reduced 3 -> 1 (2026-05-20): verbatim preservation pressure on high-density
+// languages (e.g. Korean) caused compaction output to exceed vLLM max_model_len.
+// One recent turn is enough for continuity; older turns survive in the structured summary.
+const DEFAULT_RECENT_TURNS_PRESERVE = 1;
 const DEFAULT_QUALITY_GUARD_MAX_RETRIES = 1;
 const MAX_RECENT_TURNS_PRESERVE = 12;
 const MAX_QUALITY_GUARD_MAX_RETRIES = 3;
 const MAX_RECENT_TURN_TEXT_CHARS = 600;
+// Cumulative token cap across all preserved verbatim turns. Once reached, oldest preserved
+// turns are dropped first. Char-only caps were insufficient for CJK text (high token/char).
+const MAX_PRESERVED_TURNS_TOKENS = 800;
+// Hard ceiling on the share of the model context window the final compaction summary
+// may consume. Above this, verbatim/tool-failure sections are dropped in stages.
+const MAX_SUMMARY_SHARE = 0.25;
+// Fallback context window for budget calculation when no model context is available.
+const DEFAULT_CONTEXT_WINDOW_TOKENS_FOR_SUMMARY_BUDGET = 65536;
+const MIN_SUMMARY_SHARE = 0.1;
+const MAX_SUMMARY_SHARE_CLAMP = 0.5;
 const MAX_EXTRACTED_IDENTIFIERS = 12;
 const MAX_UNTRUSTED_INSTRUCTION_CHARS = 4000;
 const MAX_ASK_OVERLAP_TOKENS = 12;
@@ -71,11 +84,71 @@ function clampNonNegativeInt(value: unknown, fallback: number): number {
   return Math.max(0, Math.floor(normalized));
 }
 
+function readPositiveIntFromEnv(key: string): number | undefined {
+  const raw = process.env[key];
+  if (!raw) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return undefined;
+  }
+  return parsed;
+}
+
+function readFloatFromEnv(key: string): number | undefined {
+  const raw = process.env[key];
+  if (!raw) {
+    return undefined;
+  }
+  const parsed = Number.parseFloat(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return undefined;
+  }
+  return parsed;
+}
+
+function resolveDefaultRecentTurnsPreserve(): number {
+  const envValue = readPositiveIntFromEnv("OPENCLAW_RECENT_TURNS_PRESERVE");
+  return envValue ?? DEFAULT_RECENT_TURNS_PRESERVE;
+}
+
+function resolveMaxPreservedTurnsTokens(): number {
+  const envValue = readPositiveIntFromEnv("OPENCLAW_PRESERVED_TURNS_TOKENS");
+  return envValue ?? MAX_PRESERVED_TURNS_TOKENS;
+}
+
+function resolveMaxSummaryShare(): number {
+  const envValue = readFloatFromEnv("OPENCLAW_SUMMARY_MAX_SHARE");
+  const base = envValue ?? MAX_SUMMARY_SHARE;
+  return Math.min(MAX_SUMMARY_SHARE_CLAMP, Math.max(MIN_SUMMARY_SHARE, base));
+}
+
+function resolveFallbackContextWindow(): number {
+  const envValue = readPositiveIntFromEnv("OPENCLAW_CONTEXT_WINDOW");
+  return envValue && envValue > 0 ? envValue : DEFAULT_CONTEXT_WINDOW_TOKENS_FOR_SUMMARY_BUDGET;
+}
+
+// Lightweight token estimator for plain text. Uses CJK ratio to switch between
+// CJK-heavy (≈0.55 tokens/char) and ASCII-heavy (≈0.25 tokens/char) heuristics.
+// Intentionally independent from estimateMessagesTokens (which operates on
+// AgentMessage[] and adds per-message overhead) so we can budget the rendered
+// summary string directly.
+function estimateTextTokens(text: string): number {
+  if (!text) {
+    return 0;
+  }
+  // Hiragana/Katakana (3040-30FF), CJK Unified (3400-9FFF), Hangul (AC00-D7AF).
+  const cjkMatches = text.match(/[぀-ヿ㐀-鿿가-힯]/g);
+  const cjkCount = cjkMatches ? cjkMatches.length : 0;
+  const cjkRatio = text.length > 0 ? cjkCount / text.length : 0;
+  const tokensPerChar = cjkRatio > 0.3 ? 0.55 : 0.25;
+  return Math.ceil(text.length * tokensPerChar);
+}
+
 function resolveRecentTurnsPreserve(value: unknown): number {
-  return Math.min(
-    MAX_RECENT_TURNS_PRESERVE,
-    clampNonNegativeInt(value, DEFAULT_RECENT_TURNS_PRESERVE),
-  );
+  const fallback = resolveDefaultRecentTurnsPreserve();
+  return Math.min(MAX_RECENT_TURNS_PRESERVE, clampNonNegativeInt(value, fallback));
 }
 
 function resolveQualityGuardMaxRetries(value: unknown): number {
@@ -367,44 +440,81 @@ function splitPreservedRecentTurns(params: {
   return { summarizableMessages: repairedSummarizableMessages, preservedMessages };
 }
 
-function formatPreservedTurnsSection(messages: AgentMessage[]): string {
+function formatPreservedTurnsSection(
+  messages: AgentMessage[],
+  options?: { maxTokens?: number },
+): string {
   if (messages.length === 0) {
     return "";
   }
-  const lines = messages
-    .map((message) => {
-      let roleLabel: string;
-      if (message.role === "assistant") {
-        roleLabel = "Assistant";
-      } else if (message.role === "user") {
-        roleLabel = "User";
-      } else if (message.role === "toolResult") {
-        const toolName = (message as { toolName?: unknown }).toolName;
-        const safeToolName = typeof toolName === "string" && toolName.trim() ? toolName : "tool";
-        roleLabel = `Tool result (${safeToolName})`;
-      } else {
-        return null;
-      }
-      const text = extractMessageText(message);
-      const nonTextPlaceholder = formatNonTextPlaceholder(
-        (message as { content?: unknown }).content,
-      );
-      const rendered =
-        text && nonTextPlaceholder ? `${text}\n${nonTextPlaceholder}` : text || nonTextPlaceholder;
-      if (!rendered) {
-        return null;
-      }
-      const trimmed =
-        rendered.length > MAX_RECENT_TURN_TEXT_CHARS
-          ? `${rendered.slice(0, MAX_RECENT_TURN_TEXT_CHARS)}...`
-          : rendered;
-      return `- ${roleLabel}: ${trimmed}`;
-    })
-    .filter((line): line is string => Boolean(line));
-  if (lines.length === 0) {
+  const renderedLines: string[] = [];
+  for (const message of messages) {
+    let roleLabel: string;
+    if (message.role === "assistant") {
+      roleLabel = "Assistant";
+    } else if (message.role === "user") {
+      roleLabel = "User";
+    } else if (message.role === "toolResult") {
+      const toolName = (message as { toolName?: unknown }).toolName;
+      const safeToolName = typeof toolName === "string" && toolName.trim() ? toolName : "tool";
+      roleLabel = `Tool result (${safeToolName})`;
+    } else {
+      continue;
+    }
+    const text = extractMessageText(message);
+    const nonTextPlaceholder = formatNonTextPlaceholder((message as { content?: unknown }).content);
+    const rendered =
+      text && nonTextPlaceholder ? `${text}\n${nonTextPlaceholder}` : text || nonTextPlaceholder;
+    if (!rendered) {
+      continue;
+    }
+    const trimmed =
+      rendered.length > MAX_RECENT_TURN_TEXT_CHARS
+        ? `${rendered.slice(0, MAX_RECENT_TURN_TEXT_CHARS)}...`
+        : rendered;
+    renderedLines.push(`- ${roleLabel}: ${trimmed}`);
+  }
+  if (renderedLines.length === 0) {
     return "";
   }
-  return `\n\n## Recent turns preserved verbatim\n${lines.join("\n")}`;
+
+  const maxTokens = options?.maxTokens ?? resolveMaxPreservedTurnsTokens();
+  let droppedOlder = false;
+  let keptLines = renderedLines;
+  if (Number.isFinite(maxTokens) && maxTokens > 0) {
+    // Walk newest -> oldest so we keep the most recent turns when the budget is tight.
+    const tokensByLine = renderedLines.map((line) => estimateTextTokens(line));
+    const reversed: { line: string; tokens: number }[] = [];
+    for (let i = renderedLines.length - 1; i >= 0; i -= 1) {
+      reversed.push({
+        line: renderedLines[i],
+        tokens: tokensByLine[i],
+      });
+    }
+    const acceptedReversed: string[] = [];
+    let runningTokens = 0;
+    for (const item of reversed) {
+      if (runningTokens + item.tokens > maxTokens && acceptedReversed.length > 0) {
+        droppedOlder = true;
+        break;
+      }
+      acceptedReversed.push(item.line);
+      runningTokens += item.tokens;
+    }
+    if (acceptedReversed.length < renderedLines.length) {
+      droppedOlder = true;
+    }
+    keptLines = acceptedReversed.toReversed();
+  }
+
+  if (keptLines.length === 0) {
+    return "";
+  }
+  const headerLines = ["## Recent turns preserved verbatim"];
+  if (droppedOlder) {
+    headerLines.push("(older turns omitted due to token budget)");
+  }
+  return `\n\n${headerLines.join("\n")}\n${keptLines.join("\n")}`;
 }
 
 function wrapUntrustedInstructionBlock(label: string, text: string): string {
@@ -517,6 +627,21 @@ function appendSummarySection(summary: string, section: string): string {
     return section.trimStart();
   }
   return `${summary}${section}`;
+}
+
+function assembleFinalSummary(parts: {
+  base: string;
+  preservedTurns: string;
+  toolFailures: string;
+  fileOps: string;
+  workspace: string;
+}): string {
+  let result = parts.base;
+  result = appendSummarySection(result, parts.preservedTurns);
+  result = appendSummarySection(result, parts.toolFailures);
+  result = appendSummarySection(result, parts.fileOps);
+  result = appendSummarySection(result, parts.workspace);
+  return result;
 }
 
 function sanitizeExtractedIdentifier(value: string): string {
@@ -866,6 +991,9 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       const effectivePreviousSummary = droppedSummary ?? preparation.previousSummary;
 
       let summary = "";
+      // Tracked alongside `summary` so the post-summarize reduction stage can drop the
+      // verbatim preserved-turns section without re-running the LLM call.
+      let summaryHistoryOnly = "";
       let currentInstructions = structuredInstructions;
       const totalAttempts = qualityGuardEnabled ? qualityGuardMaxRetries + 1 : 1;
       let lastSuccessfulSummary: string | null = null;
@@ -930,6 +1058,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           throw attemptError;
         }
         lastSuccessfulSummary = summaryWithPreservedTurns;
+        summaryHistoryOnly = summaryWithoutPreservedTurns;
 
         const canRegenerate =
           messagesToSummarize.length > 0 ||
@@ -962,13 +1091,71 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           : `${structuredInstructions}\n\n${qualityFeedbackInstruction}`;
       }
 
-      summary = appendSummarySection(summary, toolFailureSection);
-      summary = appendSummarySection(summary, fileOpsSummary);
-
       // Append workspace critical context (Session Startup + Red Lines from AGENTS.md)
       const workspaceContext = await readWorkspaceContextForSummary();
-      if (workspaceContext) {
-        summary = appendSummarySection(summary, workspaceContext);
+
+      // Reassemble from segments so the post-summary reduction stage can drop the
+      // verbatim/tool-failure sections without re-running the LLM call. The base
+      // (`summaryHistoryOnly`) is the LLM history summary plus split-turn section,
+      // before `## Recent turns preserved verbatim` was appended.
+      const baseHistorySegment = summaryHistoryOnly || summary;
+      let activePreservedTurnsSection = preservedTurnsSection;
+      let activeToolFailureSection = toolFailureSection;
+      summary = assembleFinalSummary({
+        base: baseHistorySegment,
+        preservedTurns: activePreservedTurnsSection,
+        toolFailures: activeToolFailureSection,
+        fileOps: fileOpsSummary,
+        workspace: workspaceContext,
+      });
+
+      const effectiveContextWindow =
+        contextWindowTokens && contextWindowTokens > 0
+          ? contextWindowTokens
+          : resolveFallbackContextWindow();
+      const summaryShare = resolveMaxSummaryShare();
+      const summaryBudget = Math.max(1, Math.floor(effectiveContextWindow * summaryShare));
+      const appliedReductions: string[] = [];
+      let estimatedSummaryTokens = estimateTextTokens(summary);
+
+      const tryReduce = (action: "drop_verbatim" | "drop_tool_failures", mutate: () => void) => {
+        if (estimatedSummaryTokens <= summaryBudget) {
+          return;
+        }
+        const before = estimatedSummaryTokens;
+        mutate();
+        summary = assembleFinalSummary({
+          base: baseHistorySegment,
+          preservedTurns: activePreservedTurnsSection,
+          toolFailures: activeToolFailureSection,
+          fileOps: fileOpsSummary,
+          workspace: workspaceContext,
+        });
+        estimatedSummaryTokens = estimateTextTokens(summary);
+        appliedReductions.push(action);
+        log.warn(
+          `[compaction-safeguard] action=${action} est_before=${before} est_after=${estimatedSummaryTokens} budget=${summaryBudget}`,
+        );
+      };
+
+      // Step 1: drop verbatim preserved turns when the rendered summary blows the budget.
+      if (activePreservedTurnsSection) {
+        tryReduce("drop_verbatim", () => {
+          activePreservedTurnsSection = "";
+        });
+      }
+      // Step 2: drop the tool-failures section if still over budget.
+      if (estimatedSummaryTokens > summaryBudget && activeToolFailureSection) {
+        tryReduce("drop_tool_failures", () => {
+          activeToolFailureSection = "";
+        });
+      }
+      // Step 3: nothing left to drop without losing core compaction content.
+      if (estimatedSummaryTokens > summaryBudget) {
+        appliedReductions.push("noop_over_budget");
+        log.warn(
+          `[compaction-safeguard] action=noop_over_budget est=${estimatedSummaryTokens} budget=${summaryBudget} — summary still exceeds budget after reductions`,
+        );
       }
 
       return {
@@ -976,7 +1163,13 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           summary,
           firstKeptEntryId: preparation.firstKeptEntryId,
           tokensBefore: preparation.tokensBefore,
-          details: { readFiles, modifiedFiles },
+          details: {
+            readFiles,
+            modifiedFiles,
+            estimatedSummaryTokens,
+            summaryBudget,
+            appliedReductions,
+          },
         },
       };
     } catch (error) {
@@ -998,8 +1191,14 @@ export const __testing = {
   buildCompactionStructureInstructions,
   buildStructuredFallbackSummary,
   appendSummarySection,
+  assembleFinalSummary,
   resolveRecentTurnsPreserve,
   resolveQualityGuardMaxRetries,
+  resolveMaxPreservedTurnsTokens,
+  resolveMaxSummaryShare,
+  resolveDefaultRecentTurnsPreserve,
+  resolveFallbackContextWindow,
+  estimateTextTokens,
   extractOpaqueIdentifiers,
   auditSummaryQuality,
   computeAdaptiveChunkRatio,
@@ -1008,4 +1207,7 @@ export const __testing = {
   BASE_CHUNK_RATIO,
   MIN_CHUNK_RATIO,
   SAFETY_MARGIN,
+  MAX_PRESERVED_TURNS_TOKENS,
+  MAX_SUMMARY_SHARE,
+  DEFAULT_RECENT_TURNS_PRESERVE,
 } as const;

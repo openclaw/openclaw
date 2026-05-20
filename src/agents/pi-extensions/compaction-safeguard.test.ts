@@ -687,7 +687,10 @@ describe("compaction-safeguard recent-turn preservation", () => {
   });
 
   it("clamps preserve count into a safe range", () => {
-    expect(resolveRecentTurnsPreserve(undefined)).toBe(3);
+    // DEFAULT_RECENT_TURNS_PRESERVE was reduced 3 -> 1 to relieve high-density
+    // language (e.g. Korean) compaction output pressure on vLLM max_model_len.
+    delete process.env.OPENCLAW_RECENT_TURNS_PRESERVE;
+    expect(resolveRecentTurnsPreserve(undefined)).toBe(1);
     expect(resolveRecentTurnsPreserve(-1)).toBe(0);
     expect(resolveRecentTurnsPreserve(99)).toBe(12);
   });
@@ -1582,4 +1585,251 @@ describe("readWorkspaceContextForSummary", () => {
       });
     },
   );
+});
+
+const {
+  estimateTextTokens,
+  resolveMaxPreservedTurnsTokens,
+  resolveMaxSummaryShare,
+  resolveDefaultRecentTurnsPreserve,
+  MAX_PRESERVED_TURNS_TOKENS,
+  MAX_SUMMARY_SHARE,
+  DEFAULT_RECENT_TURNS_PRESERVE,
+} = __testing;
+
+function restoreCompactionGuardEnv() {
+  delete process.env.OPENCLAW_RECENT_TURNS_PRESERVE;
+  delete process.env.OPENCLAW_PRESERVED_TURNS_TOKENS;
+  delete process.env.OPENCLAW_SUMMARY_MAX_SHARE;
+  delete process.env.OPENCLAW_CONTEXT_WINDOW;
+}
+
+describe("compaction-safeguard verbatim token cap + summary budget", () => {
+  // T1: short preserved turns stay verbatim, no token-cap drop notice.
+  it("T1: preserves all turns when total tokens fit under the cap", () => {
+    restoreCompactionGuardEnv();
+    const messages: AgentMessage[] = [
+      { role: "user", content: "Quick question?", timestamp: 1 },
+      castAgentMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "Short reply." }],
+        timestamp: 2,
+      }),
+    ];
+    const section = formatPreservedTurnsSection(messages);
+    expect(section).toContain("## Recent turns preserved verbatim");
+    expect(section).not.toContain("(older turns omitted due to token budget)");
+    expect(section).toContain("- User: Quick question?");
+    expect(section).toContain("- Assistant: Short reply.");
+  });
+
+  // T2: large CJK turns trigger the cumulative token cap; oldest are dropped first.
+  it("T2: drops oldest preserved turns when cumulative tokens exceed the cap", () => {
+    restoreCompactionGuardEnv();
+    // 5 user/assistant pairs (10 messages), each ~360 Korean chars (~200 tokens each).
+    // Default cap = 800 tokens; expect aggressive drops.
+    const koreanFiller = "한글텍스트로채워진보존대상턴내용입니다".repeat(20).slice(0, 360);
+    const messages: AgentMessage[] = [];
+    for (let i = 0; i < 5; i += 1) {
+      messages.push({
+        role: "user",
+        content: `사용자질문${i}: ${koreanFiller}`,
+        timestamp: i * 2 + 1,
+      });
+      messages.push(
+        castAgentMessage({
+          role: "assistant",
+          content: [{ type: "text", text: `답변${i}: ${koreanFiller}` }],
+          timestamp: i * 2 + 2,
+        }),
+      );
+    }
+    const section = formatPreservedTurnsSection(messages);
+    expect(section).toContain("## Recent turns preserved verbatim");
+    expect(section).toContain("(older turns omitted due to token budget)");
+    // The most recent turn (index 4) must survive; the oldest (index 0) must be dropped.
+    expect(section).toContain("답변4");
+    expect(section).not.toContain("사용자질문0");
+  });
+
+  // T3: a single oversized turn still gets the char-cap suffix (regression guard).
+  it("T3: applies legacy char cap to a single oversized turn", () => {
+    restoreCompactionGuardEnv();
+    const huge = "a".repeat(900); // > MAX_RECENT_TURN_TEXT_CHARS (600)
+    const section = formatPreservedTurnsSection([{ role: "user", content: huge, timestamp: 1 }]);
+    expect(section).toContain("- User: ");
+    // Trimmed line ends with "..." after MAX_RECENT_TURN_TEXT_CHARS slice.
+    expect(section).toMatch(/a{600}\.\.\.$/m);
+  });
+
+  // T4: full summary exceeding budget triggers drop_verbatim reduction.
+  it("T4: drops the verbatim section when the final summary exceeds the budget", async () => {
+    restoreCompactionGuardEnv();
+    mockSummarizeInStages.mockReset();
+    // Generate large Korean summary text so estimateTextTokens (~0.55/char) puts it over budget.
+    const heavySummary = [
+      "## Decisions",
+      "한글로채워진결정사항텍스트입니다".repeat(120),
+      "## Open TODOs",
+      "한글요약개방항목내용입니다".repeat(120),
+      "## Constraints/Rules",
+      "제약사항한글내용".repeat(120),
+      "## Pending user asks",
+      "보류된사용자질문한글".repeat(120),
+      "## Exact identifiers",
+      "ABCDEF1234567890",
+    ].join("\n");
+    mockSummarizeInStages.mockResolvedValue(heavySummary);
+
+    const sessionManager = stubSessionManager();
+    // Small context window so budget = 10000 * 0.25 = 2500 tokens. heavySummary alone ≈ 2200+.
+    const model = createAnthropicModelFixture({ contextWindow: 10000 });
+    setCompactionSafeguardRuntime(sessionManager, {
+      model,
+      contextWindowTokens: 10000,
+      recentTurnsPreserve: 1,
+    });
+
+    const compactionHandler = createCompactionHandler();
+    const getApiKeyMock = vi.fn().mockResolvedValue("test-key");
+    const mockContext = createCompactionContext({ sessionManager, getApiKeyMock });
+
+    const recentKorean = "최근사용자질문한글텍스트".repeat(40);
+    const event = {
+      preparation: {
+        messagesToSummarize: [
+          { role: "user", content: "older context", timestamp: 1 },
+          castAgentMessage({
+            role: "assistant",
+            content: [{ type: "text", text: "older reply" }],
+            timestamp: 2,
+          }),
+          { role: "user", content: recentKorean, timestamp: 3 },
+          castAgentMessage({
+            role: "assistant",
+            content: [{ type: "text", text: `최근답변: ${recentKorean}` }],
+            timestamp: 4,
+          }),
+        ],
+        turnPrefixMessages: [],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 5000,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 1024 },
+        previousSummary: undefined,
+        isSplitTurn: false,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const result = (await compactionHandler(event, mockContext)) as {
+      cancel?: boolean;
+      compaction?: {
+        summary?: string;
+        details?: {
+          appliedReductions?: string[];
+          estimatedSummaryTokens?: number;
+          summaryBudget?: number;
+        };
+      };
+    };
+
+    expect(result.cancel).not.toBe(true);
+    const reductions = result.compaction?.details?.appliedReductions ?? [];
+    expect(reductions).toContain("drop_verbatim");
+    // After drop_verbatim, the verbatim header must no longer be present in the final summary.
+    expect(result.compaction?.summary).not.toContain("## Recent turns preserved verbatim");
+    expect(typeof result.compaction?.details?.estimatedSummaryTokens).toBe("number");
+    expect(typeof result.compaction?.details?.summaryBudget).toBe("number");
+  });
+
+  // T5: OPENCLAW_RECENT_TURNS_PRESERVE=0 suppresses the verbatim section entirely.
+  it("T5: env override OPENCLAW_RECENT_TURNS_PRESERVE=0 suppresses verbatim", () => {
+    restoreCompactionGuardEnv();
+    process.env.OPENCLAW_RECENT_TURNS_PRESERVE = "0";
+    try {
+      expect(resolveDefaultRecentTurnsPreserve()).toBe(0);
+      expect(resolveRecentTurnsPreserve(undefined)).toBe(0);
+      const split = splitPreservedRecentTurns({
+        messages: [
+          { role: "user", content: "hi", timestamp: 1 },
+          castAgentMessage({
+            role: "assistant",
+            content: [{ type: "text", text: "yo" }],
+            timestamp: 2,
+          }),
+        ],
+        recentTurnsPreserve: resolveRecentTurnsPreserve(undefined),
+      });
+      expect(split.preservedMessages).toHaveLength(0);
+      expect(formatPreservedTurnsSection(split.preservedMessages)).toBe("");
+    } finally {
+      restoreCompactionGuardEnv();
+    }
+  });
+
+  // T6: smaller env cap causes earlier drops.
+  it("T6: env override OPENCLAW_PRESERVED_TURNS_TOKENS=200 tightens the cap", () => {
+    restoreCompactionGuardEnv();
+    // Build 3 modest English turns; under the default cap (800) all should fit,
+    // but under a 200-token cap the oldest must be dropped.
+    const filler = "x".repeat(400); // ~100 tokens each at 0.25/char
+    const messages: AgentMessage[] = [
+      { role: "user", content: `q0 ${filler}`, timestamp: 1 },
+      castAgentMessage({
+        role: "assistant",
+        content: [{ type: "text", text: `a0 ${filler}` }],
+        timestamp: 2,
+      }),
+      { role: "user", content: `q1 ${filler}`, timestamp: 3 },
+    ];
+    const beforeSection = formatPreservedTurnsSection(messages);
+    expect(beforeSection).not.toContain("(older turns omitted due to token budget)");
+
+    process.env.OPENCLAW_PRESERVED_TURNS_TOKENS = "200";
+    try {
+      expect(resolveMaxPreservedTurnsTokens()).toBe(200);
+      const tightenedSection = formatPreservedTurnsSection(messages);
+      expect(tightenedSection).toContain("(older turns omitted due to token budget)");
+      // The newest line must survive.
+      expect(tightenedSection).toContain("q1 ");
+      // The oldest line must be gone.
+      expect(tightenedSection).not.toContain("q0 ");
+    } finally {
+      restoreCompactionGuardEnv();
+    }
+  });
+
+  // T7: DEFAULT_RECENT_TURNS_PRESERVE is now 1 (was 3 prior to 2026-05-20).
+  it("T7: DEFAULT_RECENT_TURNS_PRESERVE is 1", () => {
+    restoreCompactionGuardEnv();
+    expect(DEFAULT_RECENT_TURNS_PRESERVE).toBe(1);
+    expect(resolveDefaultRecentTurnsPreserve()).toBe(1);
+    expect(resolveRecentTurnsPreserve(undefined)).toBe(1);
+    // Sanity check on companion constants exposed via __testing.
+    expect(MAX_PRESERVED_TURNS_TOKENS).toBe(800);
+    expect(MAX_SUMMARY_SHARE).toBeCloseTo(0.25);
+    expect(estimateTextTokens("")).toBe(0);
+    // CJK heuristic: 100 Korean chars ≈ 55 tokens.
+    expect(estimateTextTokens("가".repeat(100))).toBeGreaterThanOrEqual(50);
+    // ASCII heuristic: 100 ASCII chars ≈ 25 tokens.
+    expect(estimateTextTokens("x".repeat(100))).toBeLessThanOrEqual(30);
+  });
+
+  it("clamps OPENCLAW_SUMMARY_MAX_SHARE to safe range", () => {
+    restoreCompactionGuardEnv();
+    process.env.OPENCLAW_SUMMARY_MAX_SHARE = "0.9";
+    try {
+      expect(resolveMaxSummaryShare()).toBeCloseTo(0.5);
+    } finally {
+      restoreCompactionGuardEnv();
+    }
+    process.env.OPENCLAW_SUMMARY_MAX_SHARE = "0.05";
+    try {
+      expect(resolveMaxSummaryShare()).toBeCloseTo(0.1);
+    } finally {
+      restoreCompactionGuardEnv();
+    }
+  });
 });
