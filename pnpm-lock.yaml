@@ -238,7 +238,7 @@ importers:
         specifier: 3.3.3
         version: 3.3.3
       node-gyp:
-        specifier: ^12.3.0
+        specifier: 12.3.0
         version: 12.3.0
       oxfmt:
         specifier: 0.51.0
