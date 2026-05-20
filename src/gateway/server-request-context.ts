@@ -10,7 +10,7 @@ type GatewayRequestContextClient = GatewayClient & {
   invalidatedReason?: string;
 };
 
-type GatewayRequestContextParams = {
+export type GatewayRequestContextParams = {
   deps: GatewayRequestContext["deps"];
   runtimeState: Pick<GatewayServerLiveState, "cronState">;
   getRuntimeConfig: GatewayRequestContext["getRuntimeConfig"];
