@@ -121,6 +121,7 @@ export const BUILD_ALL_PROFILES = {
     "runtime-postbuild",
     "build-stamp",
     "runtime-postbuild-stamp",
+    "copy-hook-metadata",
   ],
 };
 

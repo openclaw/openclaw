@@ -54,19 +54,29 @@ export function resolveSpawnedWorkspaceInheritance(params: {
   config: OpenClawConfig;
   targetAgentId?: string;
   requesterSessionKey?: string;
+  requesterWorkspaceDir?: string | null;
   explicitWorkspaceDir?: string | null;
 }): string | undefined {
   const explicit = normalizeOptionalString(params.explicitWorkspaceDir);
   if (explicit) {
     return explicit;
   }
-  // For cross-agent spawns, use the target agent's workspace instead of the requester's.
-  const agentId =
-    params.targetAgentId ??
-    (params.requesterSessionKey
-      ? parseAgentSessionKey(params.requesterSessionKey)?.agentId
-      : undefined);
-  return agentId ? resolveAgentWorkspaceDir(params.config, normalizeAgentId(agentId)) : undefined;
+  const requesterWorkspaceDir = normalizeOptionalString(params.requesterWorkspaceDir);
+  if (requesterWorkspaceDir) {
+    return requesterWorkspaceDir;
+  }
+
+  const requesterAgentId = params.requesterSessionKey
+    ? parseAgentSessionKey(params.requesterSessionKey)?.agentId
+    : undefined;
+  if (requesterAgentId) {
+    return resolveAgentWorkspaceDir(params.config, normalizeAgentId(requesterAgentId));
+  }
+
+  const targetAgentId = normalizeOptionalString(params.targetAgentId);
+  return targetAgentId
+    ? resolveAgentWorkspaceDir(params.config, normalizeAgentId(targetAgentId))
+    : undefined;
 }
 
 export function resolveIngressWorkspaceOverrideForSpawnedRun(

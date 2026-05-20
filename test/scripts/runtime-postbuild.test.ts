@@ -5,6 +5,7 @@ import { discoverStaticExtensionAssets } from "../../scripts/lib/static-extensio
 import {
   copyStaticExtensionAssets,
   listStaticExtensionAssetOutputs,
+  normalizeDistPermissions,
   rewriteRootRuntimeImportsToStableAliases,
   writeLegacyCliExitCompatChunks,
   writeLegacyRootRuntimeCompatAliases,
@@ -171,6 +172,24 @@ describe("runtime postbuild static assets", () => {
     expect(await fs.readFile(path.join(distDir, "install.runtime.js"), "utf8")).toBe(
       'export * from "./install.runtime-Aaa111.js";\n',
     );
+  });
+
+  it("normalizes dist file and directory permissions for bind-mounted runtime reads", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-");
+    const distDir = path.join(rootDir, "dist");
+    const nestedDir = path.join(distDir, "nested");
+    const filePath = path.join(nestedDir, "chunk.js");
+    await fs.mkdir(nestedDir, { recursive: true });
+    await fs.writeFile(filePath, "export const chunk = true;\n", "utf8");
+    await fs.chmod(distDir, 0o700);
+    await fs.chmod(nestedDir, 0o700);
+    await fs.chmod(filePath, 0o600);
+
+    await normalizeDistPermissions({ rootDir });
+
+    expect((await fs.stat(distDir)).mode & 0o777).toBe(0o755);
+    expect((await fs.stat(nestedDir)).mode & 0o777).toBe(0o755);
+    expect((await fs.stat(filePath)).mode & 0o777).toBe(0o644);
   });
 
   it("keeps stable aliases when one colliding root runtime chunk re-exports the implementation", async () => {

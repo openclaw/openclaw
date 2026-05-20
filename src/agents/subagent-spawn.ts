@@ -1055,10 +1055,8 @@ export async function spawnSubagentDirect(
     workspaceDir: resolveSpawnedWorkspaceInheritance({
       config: cfg,
       targetAgentId,
-      // For cross-agent spawns, ignore the caller's inherited workspace;
-      // let targetAgentId resolve the correct workspace instead.
-      explicitWorkspaceDir:
-        targetAgentId !== requesterAgentId ? undefined : toolSpawnMetadata.workspaceDir,
+      requesterSessionKey: requesterInternalKey,
+      explicitWorkspaceDir: toolSpawnMetadata.workspaceDir,
     }),
   });
   const spawnLineagePatchError = await patchChildSession({

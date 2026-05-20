@@ -154,6 +154,7 @@ describe("resolveBuildAllSteps", () => {
       "runtime-postbuild",
       "build-stamp",
       "runtime-postbuild-stamp",
+      "copy-hook-metadata",
     ]);
   });
 

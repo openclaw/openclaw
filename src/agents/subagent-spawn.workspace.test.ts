@@ -135,7 +135,7 @@ describe("spawnSubagentDirect workspace inheritance", () => {
     setupAcceptedSubagentGatewayMock(hoisted.callGatewayMock);
   });
 
-  it("uses the target agent workspace for cross-agent spawns", async () => {
+  it("inherits the requester workspace for cross-agent spawns", async () => {
     hoisted.configOverride = createConfigOverride({
       agents: {
         list: [
@@ -156,7 +156,7 @@ describe("spawnSubagentDirect workspace inheritance", () => {
 
     await expectAcceptedWorkspace({
       agentId: "ops",
-      expectedWorkspaceDir: "/tmp/workspace-ops",
+      expectedWorkspaceDir: "/tmp/requester-workspace",
     });
   });
 
@@ -164,6 +164,44 @@ describe("spawnSubagentDirect workspace inheritance", () => {
     await expectAcceptedWorkspace({
       agentId: "main",
       expectedWorkspaceDir: "/tmp/requester-workspace",
+    });
+  });
+
+  it("falls back to the requester agent workspace when no explicit workspace is provided", async () => {
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        list: [
+          {
+            id: "main",
+            workspace: "/tmp/workspace-main",
+            subagents: {
+              allowAgents: ["ops"],
+            },
+          },
+          {
+            id: "ops",
+            workspace: "/tmp/workspace-ops",
+          },
+        ],
+      },
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "inspect workspace",
+        agentId: "ops",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "telegram",
+        agentAccountId: "123",
+        agentTo: "456",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(getRegisteredRun()).toMatchObject({
+      workspaceDir: "/tmp/workspace-main",
     });
   });
 

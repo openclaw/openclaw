@@ -132,6 +132,14 @@ now compensates by having `memory-core` run a bounded maintenance worker on
 This maintenance path keeps the MCP-only QMD index fresher, but it does not
 change tool exposure and it does not turn native OpenClaw memory tools back on.
 
+For ordinary memory/history turns, OpenClaw also normalizes the first MCP
+`qmd__query` call in a run down to a cheap lexical-only pass with reranking
+disabled. If the model asks for mixed lexical + vector/HYDE QMD search on that
+first pass, OpenClaw keeps only the lexical query. If the model asks for a
+vector-only or HYDE-only first pass, OpenClaw rewrites it into a lexical query
+using the first available query text. Richer QMD follow-up queries can still
+run later in the same turn once the cheap first pass has completed.
+
 <Info>
 The first search may be slow -- QMD auto-downloads GGUF models (~2 GB) for
 reranking and query expansion on the first `qmd query` run.
@@ -297,6 +305,11 @@ semantic readiness checks to `vsearch` or `query` setups.
 
 **Search times out?** Increase `memory.qmd.limits.timeoutMs` (default: 4000ms).
 Set to `120000` for slower hardware.
+
+If your deployment uses MCP-only QMD and ordinary recall prompts still stall,
+verify that the first `qmd__query` in the run is staying lexical-only and that
+reranking is disabled on that pass. Richer QMD passes should happen later in
+the run, not on the initial memory lookup.
 
 **Empty results in group chats?** Check `memory.qmd.scope` -- the default only
 allows direct and channel sessions.

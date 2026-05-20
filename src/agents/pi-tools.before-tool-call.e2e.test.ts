@@ -1103,3 +1103,140 @@ describe("before_tool_call requireApproval handling", () => {
     expect(onResolution).toHaveBeenCalledWith("cancelled");
   });
 });
+
+describe("before_tool_call qmd normalization", () => {
+  let hookRunner: {
+    hasHooks: ReturnType<typeof vi.fn>;
+    runBeforeToolCall: ReturnType<typeof vi.fn>;
+  };
+
+  beforeEach(() => {
+    resetDiagnosticSessionStateForTest();
+    hookRunner = {
+      hasHooks: vi.fn().mockReturnValue(false),
+      runBeforeToolCall: vi.fn(),
+    };
+    mockGetGlobalHookRunner.mockReturnValue(hookRunner as any);
+  });
+
+  it("normalizes the first qmd query in a run to lexical-only without rerank", async () => {
+    const result = await runBeforeToolCallHook({
+      toolName: "qmd__query",
+      params: {
+        searches: [
+          { type: "lex", query: "Blacksmith CI workflow" },
+          { type: "vec", query: "what decisions were made about Blacksmith CI workflows" },
+        ],
+        limit: 5,
+      },
+      toolCallId: "qmd-1",
+      ctx: { agentId: "main", sessionKey: "main", runId: "run-1" },
+    });
+
+    expect(result).toEqual({
+      blocked: false,
+      params: {
+        searches: [{ type: "lex", query: "Blacksmith CI workflow" }],
+        limit: 5,
+        rerank: false,
+      },
+    });
+  });
+
+  it("preserves richer qmd follow-up queries after the first run-scoped call", async () => {
+    await runBeforeToolCallHook({
+      toolName: "qmd__query",
+      params: {
+        searches: [{ type: "lex", query: "Blacksmith CI workflow" }],
+      },
+      toolCallId: "qmd-first",
+      ctx: { agentId: "main", sessionKey: "main", runId: "run-1" },
+    });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "qmd__query",
+      params: {
+        searches: [
+          { type: "lex", query: "Blacksmith CI workflow" },
+          { type: "vec", query: "what decisions were made about Blacksmith CI workflows" },
+        ],
+      },
+      toolCallId: "qmd-second",
+      ctx: { agentId: "main", sessionKey: "main", runId: "run-1" },
+    });
+
+    expect(result).toEqual({
+      blocked: false,
+      params: {
+        searches: [
+          { type: "lex", query: "Blacksmith CI workflow" },
+          { type: "vec", query: "what decisions were made about Blacksmith CI workflows" },
+        ],
+      },
+    });
+  });
+
+  it("forces rerank off for lexical-only qmd queries", async () => {
+    const result = await runBeforeToolCallHook({
+      toolName: "qmd__query",
+      params: {
+        searches: [{ type: "lex", query: "2026-05-06-blacksmith-testbox-claude-code" }],
+      },
+      toolCallId: "qmd-lex-only",
+      ctx: { agentId: "main", sessionKey: "main", runId: "run-2" },
+    });
+
+    expect(result).toEqual({
+      blocked: false,
+      params: {
+        searches: [{ type: "lex", query: "2026-05-06-blacksmith-testbox-claude-code" }],
+        rerank: false,
+      },
+    });
+  });
+
+  it("rewrites a first vec-only qmd query into a lexical query", async () => {
+    const result = await runBeforeToolCallHook({
+      toolName: "qmd__query",
+      params: {
+        searches: [
+          { type: "vec", query: "what decisions were made about Blacksmith CI workflows" },
+        ],
+      },
+      toolCallId: "qmd-vec-only",
+      ctx: { agentId: "main", sessionKey: "main", runId: "run-3" },
+    });
+
+    expect(result).toEqual({
+      blocked: false,
+      params: {
+        searches: [
+          { type: "lex", query: "what decisions were made about Blacksmith CI workflows" },
+        ],
+        rerank: false,
+      },
+    });
+  });
+
+  it("rewrites a first hyde-only qmd query into a lexical query and overrides rerank", async () => {
+    const result = await runBeforeToolCallHook({
+      toolName: "qmd__query",
+      params: {
+        searches: [{ type: "hyde", query: "Blacksmith CI workflow decision record" }],
+        rerank: true,
+        limit: 3,
+      },
+      toolCallId: "qmd-hyde-only",
+      ctx: { agentId: "main", sessionKey: "main", runId: "run-4" },
+    });
+
+    expect(result).toEqual({
+      blocked: false,
+      params: {
+        searches: [{ type: "lex", query: "Blacksmith CI workflow decision record" }],
+        rerank: false,
+        limit: 3,
+      },
+    });
+  });
+});

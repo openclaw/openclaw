@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import bootstrapExtraFilesHook from "../hooks/bundled/bootstrap-extra-files/handler.js";
 import {
   clearInternalHooks,
   registerInternalHook,
@@ -157,6 +158,42 @@ describe("resolveBootstrapContextForRun", () => {
     );
 
     expect(extra?.content).toBe("extra");
+  });
+
+  it("keeps hook-injected retrieval policy files for subagent runs sharing the workspace", async () => {
+    registerInternalHook("agent:bootstrap", bootstrapExtraFilesHook);
+
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "root rules", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "durable memory", "utf8");
+    await fs.mkdir(path.join(workspaceDir, "retrieval"), { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceDir, "retrieval", "AGENTS.md"),
+      "code questions -> claude-context__search_code",
+      "utf8",
+    );
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      sessionKey: "agent:worker:subagent:lookup-1",
+      config: {
+        hooks: {
+          internal: {
+            entries: {
+              "bootstrap-extra-files": {
+                enabled: true,
+                paths: ["retrieval/AGENTS.md"],
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(
+      files.some((file) => file.path === path.join(workspaceDir, "retrieval", "AGENTS.md")),
+    ).toBe(true);
+    expect(files.some((file) => file.path === path.join(workspaceDir, "MEMORY.md"))).toBe(true);
   });
 
   it("keeps BOOTSTRAP.md available in shared injected context for non-attempt consumers", async () => {

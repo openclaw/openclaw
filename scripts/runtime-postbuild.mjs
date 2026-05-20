@@ -362,6 +362,45 @@ export function writeLegacyCliExitCompatChunks(params = {}) {
   }
 }
 
+export function normalizeDistPermissions(params = {}) {
+  const rootDir = params.rootDir ?? ROOT;
+  const fsImpl = params.fs ?? fs;
+  const distDir = path.join(rootDir, "dist");
+  if (!fsImpl.existsSync(distDir)) {
+    return;
+  }
+
+  const visit = (targetPath) => {
+    let entries = [];
+    try {
+      entries = fsImpl.readdirSync(targetPath, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const entryPath = path.join(targetPath, entry.name);
+      if (entry.isDirectory()) {
+        visit(entryPath);
+        try {
+          fsImpl.chmodSync(entryPath, 0o755);
+        } catch {}
+        continue;
+      }
+      if (!entry.isFile()) {
+        continue;
+      }
+      try {
+        fsImpl.chmodSync(entryPath, 0o644);
+      } catch {}
+    }
+  };
+
+  visit(distDir);
+  try {
+    fsImpl.chmodSync(distDir, 0o755);
+  } catch {}
+}
+
 export function runRuntimePostBuild(params = {}) {
   const timingsEnabled = params.timings ?? process.env.OPENCLAW_RUNTIME_POSTBUILD_TIMINGS !== "0";
   const runPhase = (label, action) => {
@@ -389,6 +428,7 @@ export function runRuntimePostBuild(params = {}) {
       ...params,
     }),
   );
+  runPhase("dist permission normalization", () => normalizeDistPermissions(params));
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

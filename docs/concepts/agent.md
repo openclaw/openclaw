@@ -35,6 +35,8 @@ Inside `agents.defaults.workspace`, OpenClaw expects these user-editable files:
 
 On the first turn of a new session, OpenClaw injects the contents of these files into the system prompt's Project Context.
 
+Native sub-agents reuse the requester's workspace bootstrap context by default, even when `sessions_spawn` targets another configured `agentId`. That child bootstrap set includes `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, and `MEMORY.md` when present. `HEARTBEAT.md` and `BOOTSTRAP.md` stay excluded from normal child bootstrap injection. Internal hooks can append extra workspace-scoped files on top of that filtered set.
+
 Blank files are skipped. Large files are trimmed and truncated with a marker so prompts stay lean (read the file for full content).
 
 If a file is missing, OpenClaw injects a single “missing file” marker line (and `openclaw setup` will create a safe default template).

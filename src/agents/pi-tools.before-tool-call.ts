@@ -71,6 +71,8 @@ const adjustedParamsByToolCallId = new Map<string, unknown>();
 const MAX_TRACKED_ADJUSTED_PARAMS = 1024;
 const LOOP_WARNING_BUCKET_SIZE = 10;
 const MAX_LOOP_WARNING_KEYS = 256;
+const QMD_QUERY_TOOL_NAME = "qmd__query";
+const QMD_QUERY_TEXT_KEYS = ["query", "text", "question", "prompt"] as const;
 
 /**
  * Error used when before_tool_call intentionally vetoes a tool call.
@@ -112,6 +114,108 @@ function mergeParamsWithApprovalOverrides(
     return approvalParams;
   }
   return originalParams;
+}
+
+function normalizeScopedRunId(runId?: string): string | undefined {
+  const trimmed = runId?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function hasPriorQmdQueryInScope(sessionState: SessionState | undefined, runId?: string): boolean {
+  const toolCallHistory = sessionState?.toolCallHistory;
+  if (!toolCallHistory?.length) {
+    return false;
+  }
+  const scopedRunId = normalizeScopedRunId(runId);
+  return toolCallHistory.some(
+    (record) =>
+      record.toolName === QMD_QUERY_TOOL_NAME && normalizeScopedRunId(record.runId) === scopedRunId,
+  );
+}
+
+function normalizeQmdQueryParams(
+  params: unknown,
+  sessionState: SessionState | undefined,
+  runId?: string,
+): unknown {
+  if (!isPlainObject(params) || !Array.isArray(params.searches)) {
+    return params;
+  }
+
+  const baseParams = params;
+  const searches = baseParams.searches as unknown[];
+  const lexicalSearches = searches.filter(
+    (search: unknown): search is Record<string, unknown> =>
+      isPlainObject(search) && search.type === "lex",
+  );
+  const hasLexicalSearches = lexicalSearches.length > 0;
+  const hasNonLexicalSearches = searches.some(
+    (search: unknown) =>
+      isPlainObject(search) && typeof search.type === "string" && search.type !== "lex",
+  );
+  const firstQmdCallInScope = !hasPriorQmdQueryInScope(sessionState, runId);
+
+  let normalizedParams: Record<string, unknown> | undefined;
+  let normalizedSearches: unknown[] = searches;
+
+  if (firstQmdCallInScope && hasLexicalSearches && hasNonLexicalSearches) {
+    normalizedSearches = lexicalSearches;
+    normalizedParams = {
+      ...baseParams,
+      searches: lexicalSearches,
+    };
+  }
+
+  if (firstQmdCallInScope && !hasLexicalSearches && hasNonLexicalSearches) {
+    const firstSearchWithQuery = searches.find((search: unknown) => {
+      if (!isPlainObject(search)) {
+        return false;
+      }
+      return QMD_QUERY_TEXT_KEYS.some((key) => {
+        const value = search[key];
+        return typeof value === "string" && value.trim().length > 0;
+      });
+    });
+    if (isPlainObject(firstSearchWithQuery)) {
+      const queryText = QMD_QUERY_TEXT_KEYS.map((key) => firstSearchWithQuery[key]).find(
+        (value): value is string => typeof value === "string" && value.trim().length > 0,
+      );
+      if (queryText) {
+        normalizedSearches = [{ type: "lex", query: queryText }];
+        normalizedParams = {
+          ...baseParams,
+          searches: normalizedSearches,
+        };
+      }
+    }
+  }
+
+  const lexicalOnlySearches =
+    normalizedSearches.length > 0 &&
+    normalizedSearches.every(
+      (search: unknown) =>
+        isPlainObject(search) && typeof search.type === "string" && search.type === "lex",
+    );
+  if (lexicalOnlySearches && baseParams.rerank !== false) {
+    normalizedParams = {
+      ...(normalizedParams ?? baseParams),
+      rerank: false,
+    };
+  }
+
+  return normalizedParams ?? params;
+}
+
+function normalizeToolParamsForUsagePolicy(params: {
+  toolName: string;
+  toolParams: unknown;
+  sessionState?: SessionState;
+  runId?: string;
+}): unknown {
+  if (params.toolName === QMD_QUERY_TOOL_NAME) {
+    return normalizeQmdQueryParams(params.toolParams, params.sessionState, params.runId);
+  }
+  return params.toolParams;
 }
 
 function isAbortSignalCancellation(err: unknown, signal?: AbortSignal): boolean {
@@ -424,7 +528,7 @@ export async function runBeforeToolCallHook(args: {
   approvalMode?: "request" | "report";
 }): Promise<HookOutcome> {
   const toolName = normalizeToolName(args.toolName || "tool");
-  const params = args.params;
+  let params = args.params;
 
   if (args.ctx?.sessionKey) {
     const { getDiagnosticSessionState, logToolLoopAction, detectToolCallLoop, recordToolCall } =
@@ -432,6 +536,12 @@ export async function runBeforeToolCallHook(args: {
     const sessionState = getDiagnosticSessionState({
       sessionKey: args.ctx.sessionKey,
       sessionId: args.ctx.sessionId,
+    });
+    params = normalizeToolParamsForUsagePolicy({
+      toolName,
+      toolParams: params,
+      sessionState,
+      runId: args.ctx.runId,
     });
 
     const loopScope = args.ctx.runId ? { runId: args.ctx.runId } : undefined;
@@ -491,6 +601,12 @@ export async function runBeforeToolCallHook(args: {
       args.ctx.loopDetection,
       loopScope,
     );
+  } else {
+    params = normalizeToolParamsForUsagePolicy({
+      toolName,
+      toolParams: params,
+      runId: args.ctx?.runId,
+    });
   }
 
   const hookRunner = getGlobalHookRunner();

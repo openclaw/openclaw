@@ -62,13 +62,13 @@ describe("resolveSpawnedWorkspaceInheritance", () => {
     expect(resolved).toBe("/tmp/explicit");
   });
 
-  it("prefers targetAgentId over requester session agent for cross-agent spawns", () => {
+  it("inherits the requester session workspace for cross-agent spawns by default", () => {
     const resolved = resolveSpawnedWorkspaceInheritance({
       config,
       targetAgentId: "ops",
       requesterSessionKey: "agent:main:subagent:parent",
     });
-    expect(resolved).toBe("/tmp/workspace-ops");
+    expect(resolved).toBe("/tmp/workspace-main");
   });
 
   it("falls back to requester session agent when targetAgentId is missing", () => {
@@ -77,6 +77,16 @@ describe("resolveSpawnedWorkspaceInheritance", () => {
       requesterSessionKey: "agent:main:subagent:parent",
     });
     expect(resolved).toBe("/tmp/workspace-main");
+  });
+
+  it("falls back to the target agent workspace when requester context is missing", () => {
+    const resolved = resolveSpawnedWorkspaceInheritance({
+      config,
+      targetAgentId: "ops",
+      requesterSessionKey: undefined,
+      explicitWorkspaceDir: undefined,
+    });
+    expect(resolved).toBe("/tmp/workspace-ops");
   });
 
   it("returns undefined for missing requester context", () => {

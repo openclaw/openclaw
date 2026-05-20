@@ -122,6 +122,13 @@ the current transcript.
 Use `fork` sparingly. It is for context-sensitive delegation, not a
 replacement for writing a clear task prompt.
 
+Native sub-agents also inherit the requester's workspace bootstrap snapshot by
+default, including `MEMORY.md` when present, even if the spawn targets another
+configured `agentId`. This keeps worker delegates on the same retrieval policy
+and memory notes as the requester unless the runtime explicitly overrides the
+inherited workspace. `HEARTBEAT.md` and `BOOTSTRAP.md` stay excluded from
+normal child bootstrap injection.
+
 ## Tool: `sessions_spawn`
 
 Starts a sub-agent run with `deliver: false` on the global `subagent` lane,
