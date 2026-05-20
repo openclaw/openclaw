@@ -804,6 +804,13 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         });
         return;
       }
+      if (useNativeProgressStreaming && !streamSession) {
+        await deliverNormally({
+          payload: params.payload,
+          kind: params.kind,
+        });
+        return;
+      }
       if (!streamSession) {
         const streamThreadTs = replyPlan.nextThreadTs();
         plannedThreadTs = streamThreadTs;
