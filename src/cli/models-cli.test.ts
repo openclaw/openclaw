@@ -256,7 +256,10 @@ describe("models cli", () => {
     expect(command).not.toHaveBeenCalled();
   });
 
-  it("rejects invalid --profile-id for paste-token", async () => {
+  it("rejects unsafe --profile-id (control chars) for paste-token", async () => {
+    // Profile IDs are arbitrary keys, so only genuinely-unsafe values (control/
+    // escape chars, reserved prototype names) are rejected. A plain space is a
+    // valid key and must NOT be rejected (see paste-token-accepts test below).
     await expect(
       runModelsCommand([
         "models",
@@ -265,7 +268,7 @@ describe("models cli", () => {
         "--provider",
         "anthropic",
         "--profile-id",
-        "bad id",
+        "bad\x1b[31mid",
       ]),
     ).rejects.toThrow(/process\.exit unexpectedly called with "1"/);
 

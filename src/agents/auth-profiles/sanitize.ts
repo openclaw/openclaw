@@ -33,15 +33,24 @@ export function sanitizeProfileIdForDisplay(id: string): string {
   );
 }
 
-/** Safe character set for profile IDs: letters, digits, `.`, `_`, `:`, `-`, `+`, `@`. */
-const MAX_PROFILE_ID_LENGTH = 128;
-const PROFILE_ID_PATTERN = /^[a-zA-Z0-9._:+\-@]{1,128}$/;
+// Generous upper bound to stop pathological multi-KB keys without rejecting any
+// realistic provider:label profile ID.
+const MAX_PROFILE_ID_LENGTH = 512;
 const RESERVED_PROFILE_IDS = new Set(["__proto__", "constructor", "prototype"]);
+// Control chars (C0/C1), DEL, and 8-bit CSI enable terminal/log injection when a
+// profile ID is echoed. These are the only characters that are genuinely unsafe
+// in an ID; everything else is a legitimate arbitrary object key.
+// eslint-disable-next-line no-control-regex -- intentional: must match control chars to reject them
+const PROFILE_ID_CONTROL_CHAR_PATTERN = /[\u0000-\u001f\u007f\u0080-\u009f]/;
 
 /**
- * Validate a profile ID string against a safe character set at the CLI input
- * boundary. Rejects control characters, ANSI sequences, and any character
- * outside the allowed set before the value reaches deeper auth logic.
+ * Validate a profile ID at the CLI input boundary. Auth profile IDs are
+ * arbitrary string keys in config and the store, so this only rejects the
+ * genuinely unsafe cases — empty, prototype-pollution reserved names, control/
+ * escape characters (terminal/log injection), and pathologically long values —
+ * while preserving the existing free-form ID contract so any pre-existing
+ * profile can still be targeted. Display output is separately sanitized via
+ * {@link sanitizeProfileIdForDisplay}.
  *
  * @returns null when valid, or a human-readable error string when invalid.
  */
@@ -55,8 +64,8 @@ export function validateProfileId(id: string): string | null {
   if (RESERVED_PROFILE_IDS.has(id)) {
     return `Profile ID '${id}' is reserved and may not be used.`;
   }
-  if (!PROFILE_ID_PATTERN.test(id)) {
-    return "Profile ID may only contain letters, digits, '.', '_', ':', '-', '+', and '@'.";
+  if (PROFILE_ID_CONTROL_CHAR_PATTERN.test(id)) {
+    return "Profile ID may not contain control or escape characters.";
   }
   return null;
 }

@@ -28,21 +28,26 @@ describe("validateProfileId", () => {
     expect(validateProfileId("openai-codex:user+alias@example.com")).toBeNull();
   });
 
+  it("preserves the arbitrary-key contract: accepts spaces and other characters", () => {
+    // Auth profile IDs are arbitrary string keys; pre-existing IDs with spaces
+    // or punctuation must remain targetable from the CLI.
+    expect(validateProfileId("has space")).toBeNull();
+    expect(validateProfileId("profile;weird&chars")).toBeNull();
+    expect(validateProfileId("legacy/id.with-slashes")).toBeNull();
+  });
+
   it("rejects empty IDs", () => {
     expect(validateProfileId("")).toBe("Profile ID must not be empty.");
   });
 
-  it("rejects IDs longer than 128 characters", () => {
-    const long = "a".repeat(129);
-    expect(validateProfileId(long)).toBe(`Profile ID must be at most 128 characters (got 129).`);
+  it("rejects pathologically long IDs (over 512 chars)", () => {
+    const long = "a".repeat(513);
+    expect(validateProfileId(long)).toBe(`Profile ID must be at most 512 characters (got 513).`);
   });
 
-  it("rejects IDs with spaces", () => {
-    expect(validateProfileId("has space")).toMatch(/may only contain/);
-  });
-
-  it("rejects IDs with shell metacharacters", () => {
-    expect(validateProfileId("profile;rm -rf /")).toMatch(/may only contain/);
+  it("accepts realistic long IDs (over the old 128 cap)", () => {
+    // Regression: the old 128-char grammar broke existing longer IDs.
+    expect(validateProfileId("openai-codex:" + "x".repeat(150))).toBeNull();
   });
 
   it("rejects reserved object-property profile IDs", () => {
@@ -51,7 +56,9 @@ describe("validateProfileId", () => {
     );
   });
 
-  it("rejects IDs with ANSI escape sequences", () => {
-    expect(validateProfileId("pre\x1b[31mred")).toMatch(/may only contain/);
+  it("rejects IDs with control characters (terminal/log injection)", () => {
+    expect(validateProfileId("pre\x1b[31mred")).toMatch(/control or escape characters/);
+    expect(validateProfileId("line\nbreak")).toMatch(/control or escape characters/);
+    expect(validateProfileId("nul\x00byte")).toMatch(/control or escape characters/);
   });
 });
