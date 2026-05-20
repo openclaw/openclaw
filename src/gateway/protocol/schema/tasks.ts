@@ -89,3 +89,26 @@ export const TasksCancelResultSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+export const TaskNotifyPolicySchema = Type.Union([
+  Type.Literal("done_only"),
+  Type.Literal("state_changes"),
+  Type.Literal("silent"),
+]);
+
+export const TasksUpdateParamsSchema = Type.Object(
+  {
+    taskId: NonEmptyString,
+    notifyPolicy: Type.Optional(TaskNotifyPolicySchema),
+  },
+  { additionalProperties: false },
+);
+
+export const TasksUpdateResultSchema = Type.Object(
+  {
+    found: Type.Boolean(),
+    updated: Type.Boolean(),
+    task: Type.Optional(TaskSummarySchema),
+  },
+  { additionalProperties: false },
+);

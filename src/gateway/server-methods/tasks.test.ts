@@ -17,6 +17,7 @@ type TaskResponsePayload = {
   task?: Record<string, unknown>;
   found?: boolean;
   cancelled?: boolean;
+  updated?: boolean;
 };
 
 let stateDir: string;
@@ -180,6 +181,81 @@ describe("tasks gateway handlers", () => {
     expect(payload?.task?.terminalSummary).toBe("Failed after build");
     expect(payload?.task?.error).toBe("Tool failed");
     expect(JSON.stringify(calls[0]?.[1])).not.toContain("OpenClaw runtime context");
+  });
+
+  it("updates notifyPolicy for an existing task", () => {
+    const task = createTaskRecord({
+      runtime: "subagent",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      runId: "run-update",
+      task: "Updateable task",
+      status: "running",
+      deliveryStatus: "pending",
+    });
+
+    const { calls, respond } = captureRespond();
+    tasksHandlers["tasks.update"]({
+      req: { type: "req", id: "req-update-1", method: "tasks.update" },
+      params: { taskId: task.taskId, notifyPolicy: "silent" },
+      respond,
+      context: createContext(),
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(calls[0]?.[0]).toBe(true);
+    const payload = calls[0]?.[1] as TaskResponsePayload | undefined;
+    expect(payload?.found).toBe(true);
+    expect(payload?.updated).toBe(true);
+    expect(payload?.task?.id).toBe(task.taskId);
+  });
+
+  it("returns found=true, updated=false when no mutable fields are provided", () => {
+    const task = createTaskRecord({
+      runtime: "subagent",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      runId: "run-update-noop",
+      task: "No-op update task",
+      status: "running",
+      deliveryStatus: "pending",
+    });
+
+    const { calls, respond } = captureRespond();
+    tasksHandlers["tasks.update"]({
+      req: { type: "req", id: "req-update-2", method: "tasks.update" },
+      params: { taskId: task.taskId },
+      respond,
+      context: createContext(),
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(calls[0]?.[0]).toBe(true);
+    const payload = calls[0]?.[1] as TaskResponsePayload | undefined;
+    expect(payload?.found).toBe(true);
+    expect(payload?.updated).toBe(false);
+    expect(payload?.task?.id).toBe(task.taskId);
+  });
+
+  it("returns found=false when taskId does not exist", () => {
+    const { calls, respond } = captureRespond();
+    tasksHandlers["tasks.update"]({
+      req: { type: "req", id: "req-update-3", method: "tasks.update" },
+      params: { taskId: "nonexistent-task-id", notifyPolicy: "done_only" },
+      respond,
+      context: createContext(),
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(calls[0]?.[0]).toBe(true);
+    const payload = calls[0]?.[1] as TaskResponsePayload | undefined;
+    expect(payload?.found).toBe(false);
+    expect(payload?.updated).toBe(false);
   });
 
   it("cancels running task records and returns the updated task", async () => {

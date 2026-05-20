@@ -1,7 +1,11 @@
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { cancelDetachedTaskRunById } from "../../tasks/detached-task-runtime.js";
-import { getTaskById, listTaskRecords } from "../../tasks/runtime-internal.js";
+import {
+  getTaskById,
+  listTaskRecords,
+  updateTaskNotifyPolicyById,
+} from "../../tasks/runtime-internal.js";
 import type { TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
 import {
   TASK_STATUS_DETAIL_MAX_CHARS,
@@ -17,6 +21,7 @@ import {
   validateTasksCancelParams,
   validateTasksGetParams,
   validateTasksListParams,
+  validateTasksUpdateParams,
 } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
@@ -190,6 +195,35 @@ export const tasksHandlers: GatewayRequestHandlers = {
       return;
     }
     respond(true, { task: mapTaskSummary(task) });
+  },
+  "tasks.update": ({ params, respond }) => {
+    if (!validateTasksUpdateParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid tasks.update params: ${formatValidationErrors(validateTasksUpdateParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    const taskId = params.taskId;
+    const existing = getTaskById(taskId);
+    if (!existing) {
+      respond(true, { found: false, updated: false });
+      return;
+    }
+    if (params.notifyPolicy === undefined) {
+      respond(true, { found: true, updated: false, task: mapTaskSummary(existing) });
+      return;
+    }
+    const updated = updateTaskNotifyPolicyById({ taskId, notifyPolicy: params.notifyPolicy });
+    respond(true, {
+      found: true,
+      updated: updated !== null,
+      ...(updated ? { task: mapTaskSummary(updated) } : {}),
+    });
   },
   "tasks.cancel": async ({ params, respond, context }) => {
     if (!validateTasksCancelParams(params)) {
