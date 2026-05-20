@@ -18,6 +18,7 @@ import {
   HumanDelaySchema,
   TypingModeSchema,
 } from "./zod-schema.core.js";
+import { NotificationWakePolicyConfigSchema } from "./zod-schema.notifications.js";
 
 const SilentReplyPolicySchema = z.union([z.literal("allow"), z.literal("disallow")]);
 
@@ -249,6 +250,7 @@ export const AgentDefaultsSchema = z
     typingIntervalSeconds: z.number().int().positive().optional(),
     typingMode: TypingModeSchema.optional(),
     heartbeat: HeartbeatSchema,
+    notificationWake: NotificationWakePolicyConfigSchema,
     maxConcurrent: z.number().int().positive().optional(),
     subagents: z
       .object({

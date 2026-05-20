@@ -877,7 +877,12 @@ Default slash command settings:
     - `all`
     - `allowlist` (uses `guilds.<id>.users`)
 
-    Reaction events are turned into system events and attached to the routed Discord session.
+    Accepted reaction events are turned into system events attached to the routed Discord session. They queue by default so reaction-only inputs remain visible without waking the model automatically. Set `channels.discord.notificationWake.reactions` to `wake` to request an immediate heartbeat wake, or `off` to disable reaction notification enqueueing after ingress authorization.
+
+    Reaction event text includes stable keys:
+
+    - standard emoji: `reaction_key=emoji:<emoji>`
+    - custom emoji: `reaction_key=custom_emoji:<id>`
 
   </Accordion>
 

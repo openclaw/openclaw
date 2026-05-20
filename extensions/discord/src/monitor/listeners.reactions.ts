@@ -1,7 +1,10 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
+import {
+  enqueueNotificationSystemEvent,
+  enqueueSystemEvent,
+} from "openclaw/plugin-sdk/system-event-runtime";
 import {
   ChannelType,
   type Client,
@@ -52,6 +55,14 @@ type DiscordReactionMode = "off" | "own" | "all" | "allowlist";
 type DiscordReactionChannelConfig = ReturnType<typeof resolveDiscordChannelConfigWithFallback>;
 type DiscordReactionIngressAccess = Awaited<ReturnType<typeof authorizeDiscordReactionIngress>>;
 type DiscordFetchedReactionMessage = { author?: User | null } | null;
+type DiscordReactionEmoji = DiscordReactionEvent["emoji"];
+
+function resolveDiscordReactionKey(emoji: DiscordReactionEmoji): string {
+  if (emoji.id) {
+    return `custom_emoji:${emoji.id}`;
+  }
+  return `emoji:${emoji.name ?? "emoji"}`;
+}
 
 export class DiscordReactionListener extends MessageReactionAddListener {
   constructor(private params: DiscordReactionListenerParams) {
@@ -468,6 +479,7 @@ async function handleDiscordReactionEvent(
         return reactionBase;
       }
       const emojiLabel = formatDiscordReactionEmoji(data.emoji);
+      const reactionKey = resolveDiscordReactionKey(data.emoji);
       const actorLabel = formatDiscordUserTag(user);
       const guildSlug =
         guildInfo?.slug ||
@@ -479,8 +491,8 @@ async function handleDiscordReactionEvent(
         : channelName
           ? `#${normalizeDiscordSlug(channelName)}`
           : `#${data.channel_id}`;
-      const baseText = `Discord reaction ${action}: ${emojiLabel} by ${actorLabel} on ${guildSlug} ${channelLabel} msg ${data.message_id}`;
-      const contextKey = `discord:reaction:${action}:${data.message_id}:${user.id}:${emojiLabel}`;
+      const baseText = `Discord reaction ${action}: ${emojiLabel} by ${actorLabel} on ${guildSlug} ${channelLabel} msg ${data.message_id} (reaction_key=${reactionKey})`;
+      const contextKey = `discord:reaction:${action}:${data.message_id}:${user.id}:${reactionKey}`;
       reactionBase = { baseText, contextKey };
       return reactionBase;
     };
@@ -498,12 +510,27 @@ async function handleDiscordReactionEvent(
         },
         parentPeer: parentPeerId ? { kind: "channel", id: parentPeerId } : undefined,
       });
-      enqueueSystemEvent(text, {
+      const result = enqueueNotificationSystemEvent({
+        cfg: params.cfg,
+        channel: "discord",
+        accountId: params.accountId,
+        agentId: route.agentId,
         sessionKey: route.sessionKey,
+        family: "reactions",
+        text,
         contextKey,
         forceSenderIsOwnerFalse: true,
         trusted: false,
+        reason: "discord-reaction",
+        enqueueSystemEvent,
       });
+      if (result.status === "skipped") {
+        logVerbose(`discord: reaction event skipped by notificationWake policy: ${text}`);
+        return;
+      }
+      if (result.status === "deduped") {
+        logVerbose(`discord: skipped duplicate reaction event: ${text}`);
+      }
     };
     const shouldNotifyReaction = (options: {
       mode: DiscordReactionMode;
