@@ -222,3 +222,43 @@ describe("P2.11 args-start sentinel variants (jsonl e8d2bd03, 2026-05-19)", () =
     expect(sanitizeSearchToolParams(input, "grep")).toBe(input);
   });
 });
+
+// P2.16 — 2026-05-20 12:25 KST 라이브 검증(session e8d2bd03)에서 jsonl 에
+// 누설된 새 read tool file_path 변형. PM2 로그 timestamp 12:25:28/12:25:36 의
+// `tool.sanitize_special_tokens tool=file arg=path original_len=4 sanitized_len=0`
+// 으로 sanitize 가 이미 동작 중임을 확인했으나, 향후 회귀 시 즉시 발견되도록
+// 변형별 명시적 회귀 가드를 추가한다.
+describe("P2.16 prefix-only sentinel variants (jsonl e8d2bd03, 2026-05-20 12:25 KST)", () => {
+  afterEach(() => {
+    vi.mocked(logWarn).mockClear();
+  });
+
+  // 5글자 prefix-only sentinel (`<|<|"` — P2.11 의 4글자 `<|<|` 변형에 trailing
+  // 따옴표가 붙은 형태). file_path 전체가 sentinel 잔재이므로 빈 string 으로
+  // 정리되어 read tool 의 "Missing required parameter" 정상 거절을 유도해야 함.
+  it('prefix+quote sentinel-only: read {file_path: "<|<|\\""} → ""', () => {
+    const out = sanitizeFileToolParams({ file_path: '<|<|"' }, "read");
+    expect(out.file_path).toBe("");
+  });
+
+  // prefix + 정상 path: prefix 만 떼어내고 path 본문은 보존되어야 함.
+  it('prefix+quote+path: read {file_path: "<|<|\\"/home/..."} → clean path', () => {
+    const out = sanitizeFileToolParams(
+      {
+        file_path: '<|<|"/home/lisyoen/.openclaw/agents/gemma/workspace/memory/2026-05-02.md',
+      },
+      "read",
+    );
+    expect(out.file_path).toBe(
+      "/home/lisyoen/.openclaw/agents/gemma/workspace/memory/2026-05-02.md",
+    );
+  });
+
+  // 정상 입력 회귀 안전망 — 깨끗한 절대 경로는 무변형 + 동일 참조 반환.
+  it("guard: clean absolute path is a no-op (same reference)", () => {
+    const input = {
+      file_path: "/home/lisyoen/.openclaw/agents/gemma/workspace/memory/2026-05-02.md",
+    };
+    expect(sanitizeFileToolParams(input, "read")).toBe(input);
+  });
+});

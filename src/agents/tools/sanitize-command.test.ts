@@ -205,3 +205,31 @@ describe("P2.11 args-start sentinel variants (jsonl e8d2bd03, 2026-05-19)", () =
     expect(sanitizeCommandInput("grep x f || echo none")).toBe("grep x f || echo none");
   });
 });
+
+// P2.16 — 2026-05-20 12:25 KST 라이브 검증(session e8d2bd03)에서 jsonl 에
+// 누설된 새 prefix-only 변형. PM2 로그 + jsonl tool result(L9 `2026-05-19`)
+// 로 P2.11 가 이미 모두 잡고 있음을 확인했으나, 향후 P2.11 정규식이 깨질
+// 경우 즉시 발견되도록 변형별 명시적 회귀 가드를 잠가둔다.
+describe("P2.16 prefix-only sentinel variants (jsonl e8d2bd03, 2026-05-20 12:25 KST)", () => {
+  // jsonl L8 03:25:29 UTC: exec 도구 raw args
+  //   {command: '<|<|"date -d "yesterday" +%Y-%m-%d'}
+  // tool result L9 = "2026-05-19" → sanitize 가 prefix 를 떼어 정상 실행됨.
+  it('L8 03:25:29 UTC: exec <|<|"date -d "yesterday" +%Y-%m-%d → clean date cmd', () => {
+    expect(sanitizeCommandInput('<|<|"date -d "yesterday" +%Y-%m-%d')).toBe(
+      'date -d "yesterday" +%Y-%m-%d',
+    );
+  });
+
+  // 5글자 prefix-only sentinel (`<|<|"` — P2.11 가 다루던 `<|<|` 4글자 변형의
+  // 따옴표 trailing 형태). bash 로 흘러가면 syntax error 만 유발.
+  it('L8 prefix-only variant: <|<|" (5-char, with trailing quote) → ""', () => {
+    expect(sanitizeCommandInput('<|<|"')).toBe("");
+  });
+
+  // 정상 입력 회귀 안전망 — `date -d ...` 가 P2.16 강화에도 무변형 통과.
+  it("guard: date -d 'yesterday' +%Y-%m-%d (valid bash) is untouched", () => {
+    expect(sanitizeCommandInput("date -d 'yesterday' +%Y-%m-%d")).toBe(
+      "date -d 'yesterday' +%Y-%m-%d",
+    );
+  });
+});
