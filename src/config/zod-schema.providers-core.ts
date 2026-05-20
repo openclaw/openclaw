@@ -605,6 +605,8 @@ const DiscordVoiceSchema = z
     model: z.string().min(1).optional(),
     realtime: DiscordVoiceRealtimeSchema.optional(),
     autoJoin: z.array(DiscordVoiceAutoJoinSchema).optional(),
+    followUsersEnabled: z.boolean().optional(),
+    followUsers: z.array(z.string().min(1)).optional(),
     allowedChannels: z.array(DiscordVoiceAllowedChannelSchema).optional(),
     daveEncryption: z.boolean().optional(),
     decryptionFailureTolerance: z.number().int().min(0).optional(),

@@ -194,6 +194,8 @@ describe("discord config schema", () => {
       voice: {
         mode: "agent-proxy",
         model: "openai-codex/gpt-5.5",
+        followUsersEnabled: true,
+        followUsers: ["58398277829140480"],
         realtime: {
           provider: "openai",
           model: "gpt-realtime-2",
@@ -214,6 +216,8 @@ describe("discord config schema", () => {
 
     expect(cfg.voice?.mode).toBe("agent-proxy");
     expect(cfg.voice?.model).toBe("openai-codex/gpt-5.5");
+    expect(cfg.voice?.followUsersEnabled).toBe(true);
+    expect(cfg.voice?.followUsers).toEqual(["58398277829140480"]);
     expect(cfg.voice?.realtime?.provider).toBe("openai");
     expect(cfg.voice?.realtime?.model).toBe("gpt-realtime-2");
     expect(cfg.voice?.realtime?.voice).toBe("cedar");
@@ -233,6 +237,7 @@ describe("discord config schema", () => {
       { mode: "agent-proxy", realtime: { minBargeInAudioEndMs: -1 } },
       { mode: "agent-proxy", realtime: { minBargeInAudioEndMs: 10_001 } },
       { agentSession: { mode: "target" } },
+      { followUsers: [""] },
     ]) {
       expectInvalidDiscordConfig({ voice });
     }

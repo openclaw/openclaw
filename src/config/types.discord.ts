@@ -185,6 +185,10 @@ export type DiscordVoiceConfig = {
   realtime?: DiscordVoiceRealtimeConfig;
   /** Voice channels to auto-join on startup. */
   autoJoin?: DiscordVoiceAutoJoinConfig[];
+  /** If false, configured followUsers are ignored without removing the saved user list. */
+  followUsersEnabled?: boolean;
+  /** Discord user IDs whose current voice channel the bot should follow. */
+  followUsers?: string[];
   /** Voice channels the bot is allowed to join or remain in. Unset means any voice channel is allowed. */
   allowedChannels?: DiscordVoiceAllowedChannelConfig[];
   /** Enable/disable DAVE end-to-end encryption (default: true; Discord may require this). */
