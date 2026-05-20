@@ -1,9 +1,9 @@
 import AVFAudio
+import Foundation
+import Observation
 import OpenClawChatUI
 import OpenClawKit
 import OpenClawProtocol
-import Foundation
-import Observation
 import OSLog
 import Speech
 
@@ -99,7 +99,7 @@ final class TalkModeManager: NSObject {
 
     private var gateway: GatewayNodeSession?
     private var gatewayConnected = false
-    private var silenceWindow: TimeInterval = TimeInterval(TalkModeManager.defaultSilenceTimeoutMs) / 1000
+    private var silenceWindow: TimeInterval = .init(TalkModeManager.defaultSilenceTimeoutMs) / 1000
     private var lastAudioActivity: Date?
     private var noiseFloorSamples: [Double] = []
     private var noiseFloor: Double?
@@ -488,16 +488,16 @@ final class TalkModeManager: NSObject {
 
     private func startRecognition() throws {
         #if targetEnvironment(simulator)
-            if self.allowSimulatorCapture {
-                self.recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
-                self.recognitionRequest?.shouldReportPartialResults = true
-                return
-            }
-            if !self.allowSimulatorCapture {
-                throw NSError(domain: "TalkMode", code: 2, userInfo: [
-                    NSLocalizedDescriptionKey: "Talk mode is not supported on the iOS simulator",
-                ])
-            }
+        if self.allowSimulatorCapture {
+            self.recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
+            self.recognitionRequest?.shouldReportPartialResults = true
+            return
+        }
+        if !self.allowSimulatorCapture {
+            throw NSError(domain: "TalkMode", code: 2, userInfo: [
+                NSLocalizedDescriptionKey: "Talk mode is not supported on the iOS simulator",
+            ])
+        }
         #endif
 
         self.stopRecognition()
@@ -550,8 +550,7 @@ final class TalkModeManager: NSObject {
                         let threshold = min(0.35, max(0.12, avg + 0.10))
                         GatewayDiagnostics.log(
                             "talk audio: noiseFloor=\(String(format: "%.3f", avg)) "
-                                + "threshold=\(String(format: "%.3f", threshold))"
-                        )
+                                + "threshold=\(String(format: "%.3f", threshold))")
                     }
                 }
 
@@ -576,8 +575,7 @@ final class TalkModeManager: NSObject {
 
         GatewayDiagnostics.log(
             "talk speech: recognition started mode=\(String(describing: self.captureMode)) "
-                + "engineRunning=\(self.audioEngine.isRunning)"
-        )
+                + "engineRunning=\(self.audioEngine.isRunning)")
         self.recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
             guard let self else { return }
             if let error {
@@ -722,7 +720,7 @@ final class TalkModeManager: NSObject {
             guard self.isListening, !self.isSpeechOutputActive else { return }
             let transcript = self.lastTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !transcript.isEmpty else { return }
-            let lastActivity = [self.lastHeard, self.lastAudioActivity].compactMap { $0 }.max()
+            let lastActivity = [self.lastHeard, self.lastAudioActivity].compactMap(\.self).max()
             guard let lastActivity else { return }
             if Date().timeIntervalSince(lastActivity) < self.silenceWindow { return }
             await self.processTranscript(transcript, restartAfter: true)
@@ -733,13 +731,13 @@ final class TalkModeManager: NSObject {
         guard self.isListening, !self.isSpeaking, self.isPushToTalkActive else { return }
         let transcript = self.lastTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !transcript.isEmpty else { return }
-        let lastActivity = [self.lastHeard, self.lastAudioActivity].compactMap { $0 }.max()
+        let lastActivity = [self.lastHeard, self.lastAudioActivity].compactMap(\.self).max()
         guard let lastActivity else { return }
         if Date().timeIntervalSince(lastActivity) < self.silenceWindow { return }
         _ = await self.endPushToTalk()
     }
 
-    // Guardrail for PTT once so we don't stay open indefinitely.
+    /// Guardrail for PTT once so we don't stay open indefinitely.
     private func schedulePTTTimeout(seconds: TimeInterval) {
         guard seconds > 0 else { return }
         let nanos = UInt64(seconds * 1_000_000_000)
@@ -802,11 +800,11 @@ final class TalkModeManager: NSObject {
                 }
             }
             let completion = await self.waitForChatCompletion(runId: runId, gateway: gateway, timeoutSeconds: 120)
-            if completion == .timeout {
+            if completion.state == .timeout {
                 self.logger.warning(
                     "chat completion timeout runId=\(runId, privacy: .public); attempting history fallback")
                 GatewayDiagnostics.log("talk: chat completion timeout runId=\(runId)")
-            } else if completion == .aborted {
+            } else if completion.state == .aborted {
                 self.statusText = "Aborted"
                 self.logger.warning("chat completion aborted runId=\(runId, privacy: .public)")
                 GatewayDiagnostics.log("talk: chat completion aborted runId=\(runId)")
@@ -814,7 +812,7 @@ final class TalkModeManager: NSObject {
                 await self.finishIncrementalSpeech()
                 await self.start()
                 return
-            } else if completion == .error {
+            } else if completion.state == .error {
                 self.statusText = "Chat error"
                 self.logger.warning("chat completion error runId=\(runId, privacy: .public)")
                 GatewayDiagnostics.log("talk: chat completion error runId=\(runId)")
@@ -824,15 +822,18 @@ final class TalkModeManager: NSObject {
                 return
             }
 
-            var assistantText = try await self.waitForAssistantText(
-                gateway: gateway,
-                since: startedAt,
-                timeoutSeconds: completion == .final ? 12 : 25)
+            var assistantText = completion.assistantText
             if assistantText == nil, shouldIncremental {
                 let fallback = self.incrementalSpeechBuffer.latestText
                 if !fallback.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     assistantText = fallback
                 }
+            }
+            if assistantText == nil {
+                assistantText = try await self.waitForAssistantTextFromHistory(
+                    gateway: gateway,
+                    since: startedAt,
+                    timeoutSeconds: completion.state == .final ? 12 : 25)
             }
             guard let assistantText else {
                 self.statusText = "No reply"
@@ -900,6 +901,11 @@ final class TalkModeManager: NSObject {
         }
     }
 
+    private struct ChatCompletionResult {
+        var state: ChatCompletionState
+        var assistantText: String?
+    }
+
     private func sendChat(_ message: String, gateway: GatewayNodeSession) async throws -> String {
         struct SendResponse: Decodable { let runId: String }
         let payload: [String: Any] = [
@@ -924,40 +930,51 @@ final class TalkModeManager: NSObject {
     private func waitForChatCompletion(
         runId: String,
         gateway: GatewayNodeSession,
-        timeoutSeconds: Int = 120) async -> ChatCompletionState
+        timeoutSeconds: Int = 120) async -> ChatCompletionResult
     {
         let stream = await gateway.subscribeServerEvents(bufferingNewest: 200)
-        return await withTaskGroup(of: ChatCompletionState.self) { group in
+        return await withTaskGroup(of: ChatCompletionResult.self) { group in
             group.addTask { [runId] in
+                var latestAssistantText: String?
                 for await evt in stream {
-                    if Task.isCancelled { return .timeout }
+                    if Task.isCancelled {
+                        return ChatCompletionResult(state: .timeout, assistantText: latestAssistantText)
+                    }
                     guard evt.event == "chat", let payload = evt.payload else { continue }
-                    guard let chatEvent = try? GatewayPayloadDecoding.decode(payload, as: ChatEvent.self) else {
+                    guard let chatEvent = try? GatewayPayloadDecoding.decode(
+                        payload,
+                        as: OpenClawChatEventPayload.self)
+                    else {
                         continue
                     }
-                    guard chatEvent.runid == runId else { continue }
-                    if let state = chatEvent.state.value as? String {
-                        switch state {
-                        case "final": return .final
-                        case "aborted": return .aborted
-                        case "error": return .error
-                        default: break
-                        }
+                    guard chatEvent.runId == runId else { continue }
+                    if let text = OpenClawChatEventText.assistantText(from: chatEvent) {
+                        latestAssistantText = text
+                    }
+                    switch chatEvent.state {
+                    case "final":
+                        return ChatCompletionResult(state: .final, assistantText: latestAssistantText)
+                    case "aborted":
+                        return ChatCompletionResult(state: .aborted, assistantText: nil)
+                    case "error":
+                        return ChatCompletionResult(state: .error, assistantText: nil)
+                    default:
+                        break
                     }
                 }
-                return .timeout
+                return ChatCompletionResult(state: .timeout, assistantText: latestAssistantText)
             }
             group.addTask {
                 try? await Task.sleep(nanoseconds: UInt64(timeoutSeconds) * 1_000_000_000)
-                return .timeout
+                return ChatCompletionResult(state: .timeout, assistantText: nil)
             }
-            let result = await group.next() ?? .timeout
+            let result = await group.next() ?? ChatCompletionResult(state: .timeout, assistantText: nil)
             group.cancelAll()
             return result
         }
     }
 
-    private func waitForAssistantText(
+    private func waitForAssistantTextFromHistory(
         gateway: GatewayNodeSession,
         since: Double,
         timeoutSeconds: Int) async throws -> String?
@@ -1103,7 +1120,9 @@ final class TalkModeManager: NSObject {
                     result = await self.mp3Player.play(stream: rawStream)
                 }
                 let duration = Date().timeIntervalSince(started)
-                self.logger.info("elevenlabs stream finished=\(result.finished, privacy: .public) dur=\(duration, privacy: .public)s")
+                self.logger
+                    .info(
+                        "elevenlabs finished=\(result.finished, privacy: .public) dur=\(duration, privacy: .public)s")
                 if !result.finished, let interruptedAt = result.interruptedAt {
                     self.lastInterruptedAtSeconds = interruptedAt
                 }
@@ -1186,9 +1205,9 @@ final class TalkModeManager: NSObject {
         return !route.outputs.contains { output in
             switch output.portType {
             case .builtInSpeaker, .builtInReceiver:
-                return true
+                true
             default:
-                return false
+                false
             }
         }
     }
@@ -1392,8 +1411,7 @@ final class TalkModeManager: NSObject {
 
     private func consumeIncrementalPrefetchedAudioIfAvailable(
         for segment: String,
-        context: IncrementalSpeechContext?
-    ) async -> IncrementalPrefetchedAudio?
+        context: IncrementalSpeechContext?) async -> IncrementalPrefetchedAudio?
     {
         guard let context else {
             self.cancelIncrementalPrefetch()
@@ -1467,8 +1485,8 @@ final class TalkModeManager: NSObject {
             guard evt.event == "agent", let payload = evt.payload else { continue }
             guard let agentEvent = try? GatewayPayloadDecoding.decode(
                 payload,
-                as: OpenClawAgentEventPayload.self
-            ) else {
+                as: OpenClawAgentEventPayload.self)
+            else {
                 continue
             }
             guard agentEvent.runId == runId, agentEvent.stream == "assistant" else { continue }
@@ -1550,8 +1568,7 @@ final class TalkModeManager: NSObject {
     private func makeIncrementalTTSRequest(
         text: String,
         context: IncrementalSpeechContext,
-        outputFormat: String?
-    ) -> ElevenLabsTTSRequest
+        outputFormat: String?) -> ElevenLabsTTSRequest
     {
         ElevenLabsTTSRequest(
             text: text,
@@ -1579,8 +1596,7 @@ final class TalkModeManager: NSObject {
 
     private static func monitorStreamFailures(
         _ stream: AsyncThrowingStream<Data, Error>,
-        failureBox: StreamFailureBox
-    ) -> AsyncThrowingStream<Data, Error>
+        failureBox: StreamFailureBox) -> AsyncThrowingStream<Data, Error>
     {
         AsyncThrowingStream { continuation in
             let task = Task {
@@ -1622,8 +1638,7 @@ final class TalkModeManager: NSObject {
     private func speakIncrementalSegment(
         _ text: String,
         context preferredContext: IncrementalSpeechContext? = nil,
-        prefetchedAudio: IncrementalPrefetchedAudio? = nil
-    ) async
+        prefetchedAudio: IncrementalPrefetchedAudio? = nil) async
     {
         let context: IncrementalSpeechContext
         if let preferredContext {
@@ -1651,11 +1666,10 @@ final class TalkModeManager: NSObject {
             text: text,
             context: context,
             outputFormat: context.outputFormat)
-        let rawStream: AsyncThrowingStream<Data, Error>
-        if let prefetchedAudio, !prefetchedAudio.chunks.isEmpty {
-            rawStream = Self.makeBufferedAudioStream(chunks: prefetchedAudio.chunks)
+        let rawStream: AsyncThrowingStream<Data, Error> = if let prefetchedAudio, !prefetchedAudio.chunks.isEmpty {
+            Self.makeBufferedAudioStream(chunks: prefetchedAudio.chunks)
         } else {
-            rawStream = client.streamSynthesize(voiceId: voiceId, request: request)
+            client.streamSynthesize(voiceId: voiceId, request: request)
         }
         let playbackFormat = prefetchedAudio?.outputFormat ?? context.outputFormat
         let sampleRate = TalkTTSValidation.pcmSampleRate(from: playbackFormat)
@@ -1689,7 +1703,6 @@ final class TalkModeManager: NSObject {
             self.lastInterruptedAtSeconds = interruptedAt
         }
     }
-
 }
 
 private struct IncrementalSpeechBuffer {
@@ -1818,7 +1831,7 @@ private struct IncrementalSpeechBuffer {
     }
 
     private static func isSoftBoundary(_ ch: Character, bufferedChars: Int) -> Bool {
-        bufferedChars >= Self.softBoundaryMinChars && ch.isWhitespace
+        bufferedChars >= self.softBoundaryMinChars && ch.isWhitespace
     }
 }
 
@@ -1987,8 +2000,7 @@ extension TalkModeManager {
             let res = try await gateway.request(
                 method: "talk.config",
                 paramsJSON: "{\"includeSecrets\":true}",
-                timeoutSeconds: 8
-            )
+                timeoutSeconds: 8)
             guard let json = try JSONSerialization.jsonObject(with: res) as? [String: Any] else { return }
             guard let config = json["config"] as? [String: Any] else { return }
             let parsed = TalkModeGatewayConfigParser.parse(
@@ -2060,7 +2072,7 @@ extension TalkModeManager {
             .allowBluetoothHFP,
             .defaultToSpeaker,
         ])
-        try? session.setPreferredSampleRate(48_000)
+        try? session.setPreferredSampleRate(48000)
         try? session.setPreferredIOBufferDuration(0.02)
         try session.setActive(true, options: [])
     }
@@ -2101,19 +2113,19 @@ private final class AudioTapDiagnostics: @unchecked Sendable {
         var shouldLog = false
         var shouldEmitLevel = false
         var count = 0
-        lock.lock()
-        bufferCount += 1
-        count = bufferCount
+        self.lock.lock()
+        self.bufferCount += 1
+        count = self.bufferCount
         let now = Date()
-        if now.timeIntervalSince(lastLoggedAt) >= 1.0 {
-            lastLoggedAt = now
+        if now.timeIntervalSince(self.lastLoggedAt) >= 1.0 {
+            self.lastLoggedAt = now
             shouldLog = true
         }
-        if now.timeIntervalSince(lastLevelEmitAt) >= 0.12 {
-            lastLevelEmitAt = now
+        if now.timeIntervalSince(self.lastLevelEmitAt) >= 0.12 {
+            self.lastLevelEmitAt = now
             shouldEmitLevel = true
         }
-        lock.unlock()
+        self.lock.unlock()
 
         let rate = buffer.format.sampleRate
         let ch = buffer.format.channelCount
@@ -2133,12 +2145,12 @@ private final class AudioTapDiagnostics: @unchecked Sendable {
         }
 
         let resolvedRms = rms ?? 0
-        lock.lock()
-        lastRms = resolvedRms
-        if resolvedRms > maxRmsWindow { maxRmsWindow = resolvedRms }
-        let maxRms = maxRmsWindow
-        if shouldLog { maxRmsWindow = 0 }
-        lock.unlock()
+        self.lock.lock()
+        self.lastRms = resolvedRms
+        if resolvedRms > self.maxRmsWindow { self.maxRmsWindow = resolvedRms }
+        let maxRms = self.maxRmsWindow
+        if shouldLog { self.maxRmsWindow = 0 }
+        self.lock.unlock()
 
         if shouldEmitLevel, let onLevel {
             onLevel(resolvedRms)
@@ -2146,9 +2158,8 @@ private final class AudioTapDiagnostics: @unchecked Sendable {
 
         guard shouldLog else { return }
         GatewayDiagnostics.log(
-            "\(label) mic: buffers=\(count) frames=\(frames) rate=\(Int(rate))Hz ch=\(ch) "
-                + "rms=\(String(format: "%.4f", resolvedRms)) max=\(String(format: "%.4f", maxRms))"
-        )
+            "\(self.label) mic: buffers=\(count) frames=\(frames) rate=\(Int(rate))Hz ch=\(ch) "
+                + "rms=\(String(format: "%.4f", resolvedRms)) max=\(String(format: "%.4f", maxRms))")
     }
 }
 

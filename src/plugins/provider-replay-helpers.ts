@@ -1,4 +1,5 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import { isGemma4ModelId } from "../shared/google-models.js";
 import { sanitizeGoogleAssistantFirstOrdering } from "../shared/google-turn-ordering.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type {
@@ -9,9 +10,14 @@ import type {
   ProviderSanitizeReplayHistoryContext,
 } from "./types.js";
 
+/** @deprecated Provider replay helper; prefer provider-local replay hooks. */
 export function buildOpenAICompatibleReplayPolicy(
   modelApi: string | null | undefined,
-  options: { sanitizeToolCallIds?: boolean } = {},
+  options: {
+    sanitizeToolCallIds?: boolean;
+    modelId?: string | null;
+    dropReasoningFromHistory?: boolean;
+  } = {},
 ): ProviderReplayPolicy | undefined {
   if (
     modelApi !== "openai-completions" &&
@@ -23,11 +29,17 @@ export function buildOpenAICompatibleReplayPolicy(
   }
 
   const sanitizeToolCallIds = options.sanitizeToolCallIds ?? true;
+  const dropReasoningFromHistory = options.dropReasoningFromHistory ?? true;
+  const isResponsesFamily =
+    modelApi === "openai-responses" ||
+    modelApi === "openai-codex-responses" ||
+    modelApi === "azure-openai-responses";
 
   return {
     ...(sanitizeToolCallIds
       ? { sanitizeToolCallIds: true, toolCallIdMode: "strict" as const }
       : {}),
+    ...(isResponsesFamily ? { allowSyntheticToolResults: true } : {}),
     ...(modelApi === "openai-completions"
       ? {
           applyAssistantFirstOrderingFix: true,
@@ -39,9 +51,14 @@ export function buildOpenAICompatibleReplayPolicy(
           validateGeminiTurns: false,
           validateAnthropicTurns: false,
         }),
+    ...(modelApi === "openai-completions" &&
+    (dropReasoningFromHistory || isGemma4ModelId(options.modelId))
+      ? { dropReasoningFromHistory: true }
+      : {}),
   };
 }
 
+/** @deprecated Anthropic-family provider replay helper; prefer provider-local replay hooks. */
 export function buildStrictAnthropicReplayPolicy(
   options: {
     dropThinkingBlocks?: boolean;
@@ -75,6 +92,8 @@ export function buildStrictAnthropicReplayPolicy(
  * thinking blocks from prior turns breaks prompt cache prefix matching.
  *
  * See: https://platform.claude.com/docs/en/build-with-claude/extended-thinking#differences-in-thinking-across-model-versions
+ *
+ * @deprecated Anthropic-family provider replay helper; prefer provider-local replay hooks.
  */
 export function shouldPreserveThinkingBlocks(modelId?: string): boolean {
   const id = normalizeLowercaseStringOrEmpty(modelId);
@@ -101,6 +120,7 @@ export function shouldPreserveThinkingBlocks(modelId?: string): boolean {
   return false;
 }
 
+/** @deprecated Anthropic-family provider replay helper; prefer provider-local replay hooks. */
 export function buildAnthropicReplayPolicyForModel(modelId?: string): ProviderReplayPolicy {
   const isClaude = normalizeLowercaseStringOrEmpty(modelId).includes("claude");
   return buildStrictAnthropicReplayPolicy({
@@ -108,6 +128,7 @@ export function buildAnthropicReplayPolicyForModel(modelId?: string): ProviderRe
   });
 }
 
+/** @deprecated Anthropic-family provider replay helper; prefer provider-local replay hooks. */
 export function buildNativeAnthropicReplayPolicyForModel(modelId?: string): ProviderReplayPolicy {
   const isClaude = normalizeLowercaseStringOrEmpty(modelId).includes("claude");
   return buildStrictAnthropicReplayPolicy({
@@ -117,6 +138,7 @@ export function buildNativeAnthropicReplayPolicyForModel(modelId?: string): Prov
   });
 }
 
+/** @deprecated Provider replay helper; prefer provider-local replay hooks. */
 export function buildHybridAnthropicOrOpenAIReplayPolicy(
   ctx: ProviderReplayPolicyContext,
   options: { anthropicModelDropThinkingBlocks?: boolean } = {},
@@ -131,7 +153,7 @@ export function buildHybridAnthropicOrOpenAIReplayPolicy(
     });
   }
 
-  return buildOpenAICompatibleReplayPolicy(ctx.modelApi);
+  return buildOpenAICompatibleReplayPolicy(ctx.modelApi, { modelId: ctx.modelId });
 }
 
 const GOOGLE_TURN_ORDERING_CUSTOM_TYPE = "google-turn-ordering-bootstrap";
@@ -148,6 +170,7 @@ function markGoogleTurnOrderingMarker(sessionState: ProviderReplaySessionState):
   });
 }
 
+/** @deprecated Google provider replay helper; prefer provider-local replay hooks. */
 export function buildGoogleGeminiReplayPolicy(): ProviderReplayPolicy {
   return {
     sanitizeMode: "full",
@@ -165,6 +188,7 @@ export function buildGoogleGeminiReplayPolicy(): ProviderReplayPolicy {
   };
 }
 
+/** @deprecated Google provider replay helper; prefer provider-local replay hooks. */
 export function buildPassthroughGeminiSanitizingReplayPolicy(
   modelId?: string,
 ): ProviderReplayPolicy {
@@ -184,6 +208,7 @@ export function buildPassthroughGeminiSanitizingReplayPolicy(
   };
 }
 
+/** @deprecated Google provider replay helper; prefer provider-local replay hooks. */
 export function sanitizeGoogleGeminiReplayHistory(
   ctx: ProviderSanitizeReplayHistoryContext,
 ): AgentMessage[] {
@@ -198,6 +223,7 @@ export function sanitizeGoogleGeminiReplayHistory(
   return messages;
 }
 
+/** @deprecated Provider replay helper; prefer provider-local replay hooks. */
 export function resolveTaggedReasoningOutputMode(): ProviderReasoningOutputMode {
   return "tagged";
 }

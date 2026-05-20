@@ -1,5 +1,7 @@
+import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import fg from "fast-glob";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS,
   applyDefaultMultiSpecVitestCachePaths,
@@ -8,12 +10,119 @@ import {
   buildFullSuiteVitestRunPlans,
   buildVitestRunPlans,
   listFullExtensionVitestProjectConfigs,
+  orderFullSuiteSpecsForParallelRun,
   shouldAcquireLocalHeavyCheckLock,
   resolveChangedTestTargetPlan,
   resolveChangedTargetArgs,
   resolveParallelFullSuiteConcurrency,
   shouldRetryVitestNoOutputTimeout,
 } from "../../scripts/test-projects.test-support.mjs";
+import { captureReaddirSyncCallsDuring } from "../../src/test-utils/fs-scan-assertions.js";
+import { toRepoPath } from "../../src/test-utils/repo-files.js";
+import { fullSuiteVitestShards } from "../vitest/vitest.test-shards.mjs";
+
+const normalizeRepoPath = toRepoPath;
+
+type VitestTestConfig = {
+  dir?: string;
+  exclude?: string[];
+  include?: string[];
+};
+
+type VitestConfig = {
+  test?: VitestTestConfig;
+};
+
+type VitestConfigFactory = (env?: Record<string, string | undefined>) => VitestConfig;
+
+function isVitestConfigFactory(value: unknown): value is VitestConfigFactory {
+  return typeof value === "function";
+}
+
+function findVitestConfigFactory(mod: Record<string, unknown>): VitestConfigFactory | null {
+  for (const [name, value] of Object.entries(mod)) {
+    if (
+      name !== "default" &&
+      /^create.*VitestConfig$/u.test(name) &&
+      isVitestConfigFactory(value)
+    ) {
+      return value;
+    }
+  }
+  return null;
+}
+
+async function loadRawVitestConfig(configPath: string): Promise<VitestConfig> {
+  const previousArgv = process.argv;
+  const previousIncludeFile = process.env.OPENCLAW_VITEST_INCLUDE_FILE;
+  process.argv = [previousArgv[0] ?? "node", previousArgv[1] ?? "vitest"];
+  delete process.env.OPENCLAW_VITEST_INCLUDE_FILE;
+  try {
+    const mod = (await import(path.resolve(process.cwd(), configPath))) as Record<string, unknown>;
+    return findVitestConfigFactory(mod)?.(process.env) ?? ((mod.default ?? {}) as VitestConfig);
+  } finally {
+    process.argv = previousArgv;
+    if (previousIncludeFile === undefined) {
+      delete process.env.OPENCLAW_VITEST_INCLUDE_FILE;
+    } else {
+      process.env.OPENCLAW_VITEST_INCLUDE_FILE = previousIncludeFile;
+    }
+  }
+}
+
+async function listMatchedTestFilesForConfig(configPath: string): Promise<string[]> {
+  const testConfig = (await loadRawVitestConfig(configPath)).test ?? {};
+  const dir = testConfig.dir ? path.resolve(process.cwd(), testConfig.dir) : process.cwd();
+  const include = testConfig.include ?? [];
+  const exclude = (testConfig.exclude ?? []).map((pattern) =>
+    path.isAbsolute(pattern)
+      ? normalizeRepoPath(path.relative(dir, pattern))
+      : normalizeRepoPath(pattern),
+  );
+  return fg
+    .sync(include, {
+      absolute: false,
+      cwd: dir,
+      dot: false,
+      ignore: exclude,
+    })
+    .map((file) => normalizeRepoPath(path.relative(process.cwd(), path.resolve(dir, file))))
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
+async function listFullSuiteTestFileMatches(): Promise<Map<string, string[]>> {
+  const configs = [...new Set(fullSuiteVitestShards.flatMap((shard) => shard.projects))];
+  const matches = new Map<string, string[]>();
+  for (const config of configs) {
+    for (const file of await listMatchedTestFilesForConfig(config)) {
+      matches.set(file, [...(matches.get(file) ?? []), config]);
+    }
+  }
+  return matches;
+}
+
+function listNormalFullSuiteTestFiles(): string[] {
+  const e2eNamedIntegrationTests = new Set([
+    "src/gateway/gateway.test.ts",
+    "src/gateway/server.startup-matrix-migration.integration.test.ts",
+    "src/gateway/sessions-history-http.test.ts",
+  ]);
+  return fg
+    .sync(["**/*.{test,spec}.{ts,tsx,mts,cts,js,jsx,mjs,cjs}"], {
+      cwd: process.cwd(),
+      dot: false,
+      ignore: ["**/.*/**", "**/dist/**", "**/node_modules/**", "**/vendor/**"],
+    })
+    .map(normalizeRepoPath)
+    .filter(
+      (file) =>
+        !file.includes(".live.test.") &&
+        !file.includes(".e2e.test.") &&
+        !file.startsWith("test/fixtures/") &&
+        !e2eNamedIntegrationTests.has(file),
+    )
+    .toSorted((left, right) => left.localeCompare(right));
+}
 
 describe("scripts/test-projects changed-target routing", () => {
   it("maps changed source files into scoped lane targets", () => {
@@ -25,12 +134,23 @@ describe("scripts/test-projects changed-target routing", () => {
     ).toEqual(["src/shared/string-normalization.test.ts", "src/utils/provider-utils.test.ts"]);
   });
 
-  it("keeps the broad changed run for Vitest wiring edits", () => {
+  it("keeps changed mode focused by default for Vitest wiring edits", () => {
     expect(
       resolveChangedTargetArgs(["--changed", "origin/main"], process.cwd(), () => [
         "test/vitest/vitest.shared.config.ts",
         "src/utils/provider-utils.ts",
       ]),
+    ).toEqual(["src/utils/provider-utils.test.ts"]);
+  });
+
+  it("keeps the broad changed run available for Vitest wiring edits", () => {
+    expect(
+      resolveChangedTargetArgs(
+        ["--changed", "origin/main"],
+        process.cwd(),
+        () => ["test/vitest/vitest.shared.config.ts", "src/utils/provider-utils.ts"],
+        { env: { OPENCLAW_TEST_CHANGED_BROAD: "1" } },
+      ),
     ).toBeNull();
   });
 
@@ -45,6 +165,78 @@ describe("scripts/test-projects changed-target routing", () => {
     ).toEqual({
       mode: "targets",
       targets: ["test/scripts/changed-lanes.test.ts", "test/scripts/test-projects.test.ts"],
+    });
+  });
+
+  it("routes group visible reply config changes through channel delivery regressions", () => {
+    expect(
+      resolveChangedTestTargetPlan([
+        "src/config/types.messages.ts",
+        "src/config/zod-schema.core.ts",
+      ]),
+    ).toEqual({
+      mode: "targets",
+      targets: [
+        "src/auto-reply/reply/dispatch-acp.test.ts",
+        "src/auto-reply/reply/dispatch-from-config.test.ts",
+        "src/auto-reply/reply/followup-runner.test.ts",
+        "src/auto-reply/reply/groups.test.ts",
+        "extensions/discord/src/monitor/message-handler.process.test.ts",
+        "extensions/slack/src/monitor.tool-result.test.ts",
+      ],
+    });
+  });
+
+  it("routes source reply prompt changes through prompt and channel delivery regressions", () => {
+    expect(resolveChangedTestTargetPlan(["src/agents/system-prompt.ts"])).toEqual({
+      mode: "targets",
+      targets: [
+        "src/agents/system-prompt.test.ts",
+        "src/auto-reply/reply/dispatch-acp.test.ts",
+        "src/auto-reply/reply/dispatch-from-config.test.ts",
+        "src/auto-reply/reply/followup-runner.test.ts",
+        "src/auto-reply/reply/groups.test.ts",
+        "extensions/discord/src/monitor/message-handler.process.test.ts",
+        "extensions/slack/src/monitor.tool-result.test.ts",
+      ],
+    });
+  });
+
+  it("routes source reply delivery mode changes through channel delivery regressions", () => {
+    expect(
+      resolveChangedTestTargetPlan(["src/auto-reply/reply/source-reply-delivery-mode.ts"]),
+    ).toEqual({
+      mode: "targets",
+      targets: [
+        "src/auto-reply/reply/dispatch-acp.test.ts",
+        "src/auto-reply/reply/dispatch-from-config.test.ts",
+        "src/auto-reply/reply/followup-runner.test.ts",
+        "src/auto-reply/reply/groups.test.ts",
+        "extensions/discord/src/monitor/message-handler.process.test.ts",
+        "extensions/slack/src/monitor.tool-result.test.ts",
+      ],
+    });
+  });
+
+  it("routes channel reply pipeline SDK changes through SDK and channel delivery regressions", () => {
+    expect(resolveChangedTestTargetPlan(["src/plugin-sdk/channel-reply-pipeline.ts"])).toEqual({
+      mode: "targets",
+      targets: [
+        "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
+        "src/auto-reply/reply/dispatch-acp.test.ts",
+        "src/auto-reply/reply/dispatch-from-config.test.ts",
+        "src/auto-reply/reply/followup-runner.test.ts",
+        "src/auto-reply/reply/groups.test.ts",
+        "extensions/discord/src/monitor/message-handler.process.test.ts",
+        "extensions/slack/src/monitor.tool-result.test.ts",
+      ],
+    });
+  });
+
+  it("routes reply runtime SDK exports through plugin SDK contract tests", () => {
+    expect(resolveChangedTestTargetPlan(["src/plugin-sdk/reply-runtime.ts"])).toEqual({
+      mode: "targets",
+      targets: ["src/plugins/contracts/plugin-sdk-subpaths.test.ts"],
     });
   });
 
@@ -129,16 +321,37 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
-  it("keeps the broad changed run for shared test helpers", () => {
+  it("keeps shared test helpers cheap by default when no precise target exists", () => {
     expect(
       resolveChangedTargetArgs(["--changed", "origin/main"], process.cwd(), () => [
-        "test/helpers/channels/plugin.ts",
+        "test/helpers/poll.ts",
       ]),
+    ).toStrictEqual([]);
+  });
+
+  it("keeps the broad changed run available for shared test helpers", () => {
+    expect(
+      resolveChangedTargetArgs(
+        ["--changed", "origin/main"],
+        process.cwd(),
+        () => ["test/helpers/poll.ts"],
+        { env: { OPENCLAW_TEST_CHANGED_BROAD: "1" } },
+      ),
     ).toBeNull();
   });
 
-  it("routes channel helper edits through the tests that import them", () => {
-    expect(resolveChangedTestTargetPlan(["test/helpers/channels/directory-ids.ts"])).toEqual({
+  it("routes channel contract helper edits through the tests that import them", () => {
+    const plan = resolveChangedTestTargetPlan([
+      "src/channels/plugins/contracts/test-helpers/manifest.ts",
+    ]);
+
+    expect(plan.mode).toBe("targets");
+    expect(plan.targets).toContain("src/channels/plugins/contracts/registry.contract.test.ts");
+    expect(plan.targets).not.toContain("extensions/discord/src/directory-contract.test.ts");
+  });
+
+  it("routes channel SDK helper edits through the tests that import them", () => {
+    expect(resolveChangedTestTargetPlan(["src/plugin-sdk/test-helpers/directory-ids.ts"])).toEqual({
       mode: "targets",
       targets: [
         "extensions/discord/src/directory-contract.test.ts",
@@ -150,7 +363,7 @@ describe("scripts/test-projects changed-target routing", () => {
 
   it("routes channel contract helper edits through contract shards", () => {
     const plan = resolveChangedTestTargetPlan([
-      "test/helpers/channels/registry-backed-contract-shards.ts",
+      "src/channels/plugins/contracts/test-helpers/registry-backed-contract-shards.ts",
     ]);
 
     expect(plan.mode).toBe("targets");
@@ -166,7 +379,7 @@ describe("scripts/test-projects changed-target routing", () => {
   it("routes precise plugin contract helpers without broad-running every shard", () => {
     expect(
       resolveChangedTargetArgs(["--changed", "origin/main"], process.cwd(), () => [
-        "test/helpers/plugins/tts-contract-suites.ts",
+        "src/plugins/contracts/tts-contract-suites.ts",
       ]),
     ).toEqual([
       "src/plugins/contracts/core-extension-facade-boundary.test.ts",
@@ -174,11 +387,22 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
-  it("keeps the broad changed run for unknown root surfaces", () => {
+  it("keeps unknown root surfaces cheap by default", () => {
     expect(
       resolveChangedTargetArgs(["--changed", "origin/main"], process.cwd(), () => [
         "unknown/file.txt",
       ]),
+    ).toStrictEqual([]);
+  });
+
+  it("keeps the broad changed run available for unknown root surfaces", () => {
+    expect(
+      resolveChangedTargetArgs(
+        ["--changed", "origin/main"],
+        process.cwd(),
+        () => ["unknown/file.txt"],
+        { env: { OPENCLAW_TEST_CHANGED_BROAD: "1" } },
+      ),
     ).toBeNull();
   });
 
@@ -187,13 +411,13 @@ describe("scripts/test-projects changed-target routing", () => {
       resolveChangedTargetArgs(["--changed", "origin/main"], process.cwd(), () => [
         "docs/help/testing.md",
       ]),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("skips root agent guidance changes instead of broad-running tests", () => {
     expect(
       buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => ["AGENTS.md"]),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("skips app-only changes because app tests are separate from Vitest lanes", () => {
@@ -201,13 +425,31 @@ describe("scripts/test-projects changed-target routing", () => {
       buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
         "apps/macos/OpenClaw/AppDelegate.swift",
       ]),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
-  it("adds extension tests for public plugin SDK changes", () => {
+  it("keeps public plugin SDK changes focused by default", () => {
     const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
       "src/plugin-sdk/provider-entry.ts",
     ]);
+
+    expect(plans).toEqual([
+      {
+        config: "test/vitest/vitest.unit-fast.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/plugin-sdk/provider-entry.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("adds extension tests for public plugin SDK changes in broad changed mode", () => {
+    const plans = buildVitestRunPlans(
+      ["--changed", "origin/main"],
+      process.cwd(),
+      () => ["src/plugin-sdk/provider-entry.ts"],
+      { env: { OPENCLAW_TEST_CHANGED_BROAD: "1" } },
+    );
 
     expect(plans).toEqual([
       {
@@ -266,7 +508,7 @@ describe("scripts/test-projects changed-target routing", () => {
     );
   });
 
-  it("narrows default-lane changed source files to include globs", () => {
+  it("narrows default-lane changed source files to affected tests", () => {
     const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
       "packages/sdk/src/index.ts",
     ]);
@@ -274,8 +516,8 @@ describe("scripts/test-projects changed-target routing", () => {
     expect(plans).toEqual([
       {
         config: "test/vitest/vitest.unit.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["packages/sdk/src/**/*.test.ts"],
+        forwardedArgs: ["packages/sdk/src/index.test.ts"],
+        includePatterns: null,
         watchMode: false,
       },
     ]);
@@ -312,6 +554,50 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
+  it("routes unit ui test targets to the unit ui lane", () => {
+    expect(buildVitestRunPlans(["ui/src/ui/chat/grouped-render.test.ts"])).toEqual([
+      {
+        config: "test/vitest/vitest.unit-ui.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["ui/src/ui/chat/grouped-render.test.ts"],
+        watchMode: false,
+      },
+    ]);
+
+    expect(buildVitestRunPlans(["ui/src/ui/views/chat.test.ts"])).toEqual([
+      {
+        config: "test/vitest/vitest.unit-ui.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["ui/src/ui/views/chat.test.ts"],
+        watchMode: false,
+      },
+    ]);
+
+    expect(buildVitestRunPlans(["ui/src/ui/views/dreaming.test.ts"])).toEqual([
+      {
+        config: "test/vitest/vitest.unit-ui.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["ui/src/ui/views/dreaming.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes changed unit ui tests to the unit ui lane", () => {
+    const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
+      "ui/src/ui/chat/grouped-render.test.ts",
+    ]);
+
+    expect(plans).toEqual([
+      {
+        config: "test/vitest/vitest.unit-ui.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["ui/src/ui/chat/grouped-render.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
   it("routes auto-reply route source files to route regression tests", () => {
     expect(
       resolveChangedTestTargetPlan([
@@ -322,7 +608,12 @@ describe("scripts/test-projects changed-target routing", () => {
     ).toEqual({
       mode: "targets",
       targets: [
+        "src/auto-reply/reply/dispatch-acp.test.ts",
         "src/auto-reply/reply/dispatch-from-config.test.ts",
+        "src/auto-reply/reply/followup-runner.test.ts",
+        "src/auto-reply/reply/groups.test.ts",
+        "extensions/discord/src/monitor/message-handler.process.test.ts",
+        "extensions/slack/src/monitor.tool-result.test.ts",
         "src/auto-reply/reply/effective-reply-route.test.ts",
       ],
     });
@@ -371,14 +662,27 @@ describe("scripts/test-projects changed-target routing", () => {
       resolveChangedTestTargetPlan([
         "src/commands/doctor-memory-search.ts",
         "src/memory-host-sdk/host/embedding-defaults.ts",
-        "src/memory-host-sdk/host/embeddings.ts",
       ]),
     ).toEqual({
       mode: "targets",
       targets: [
         "src/commands/doctor-memory-search.test.ts",
-        "src/memory-host-sdk/host/embeddings.test.ts",
+        "packages/memory-host-sdk/src/host/embeddings.test.ts",
       ],
+    });
+  });
+
+  it("routes commitment model-selection runtime edits away from broad gateway dependents", () => {
+    expect(
+      resolveChangedTestTargetPlan([
+        "src/agents/model-selection.test.ts",
+        "src/commitments/model-selection.runtime.ts",
+        "src/commitments/runtime.test.ts",
+        "src/commitments/runtime.ts",
+      ]),
+    ).toEqual({
+      mode: "targets",
+      targets: ["src/agents/model-selection.test.ts", "src/commitments/runtime.test.ts"],
     });
   });
 
@@ -485,10 +789,28 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
-  it("routes plugin-sdk source files with sibling tests narrowly plus extension tests", () => {
+  it("routes plugin-sdk source files with sibling tests narrowly by default", () => {
     const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
       "src/plugin-sdk/facade-runtime.ts",
     ]);
+
+    expect(plans).toEqual([
+      {
+        config: "test/vitest/vitest.bundled.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/plugin-sdk/facade-runtime.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes plugin-sdk source files with sibling tests plus extensions in broad changed mode", () => {
+    const plans = buildVitestRunPlans(
+      ["--changed", "origin/main"],
+      process.cwd(),
+      () => ["src/plugin-sdk/facade-runtime.ts"],
+      { env: { OPENCLAW_TEST_CHANGED_BROAD: "1" } },
+    );
 
     expect(plans).toEqual([
       {
@@ -521,23 +843,35 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
-  it("keeps focused changed mode to precise targets only", () => {
-    expect(
-      resolveChangedTestTargetPlan(["package.json", "src/commands/channels.add.ts"], {
-        focused: true,
-      }),
-    ).toEqual({
+  it("keeps changed mode to precise targets by default", () => {
+    expect(resolveChangedTestTargetPlan(["package.json", "src/commands/channels.add.ts"])).toEqual({
       mode: "targets",
       targets: ["src/commands/channels.add.test.ts"],
     });
   });
 
-  it("uses import-graph targets in focused changed mode", () => {
+  it("keeps broad changed fallback available through explicit env", () => {
     expect(
-      resolveChangedTestTargetPlan(["test/helpers/plugins/plugin-registration.ts"], {
-        focused: true,
-      }).targets,
-    ).toContain("extensions/openrouter/index.test.ts");
+      resolveChangedTestTargetPlan(["package.json", "src/commands/channels.add.ts"], {
+        env: { OPENCLAW_TEST_CHANGED_BROAD: "1" },
+      }),
+    ).toEqual({
+      mode: "broad",
+      targets: [],
+    });
+  });
+
+  it("uses import-graph targets in default changed mode", () => {
+    const readFileSync = vi.spyOn(fs, "readFileSync");
+    const before = readFileSync.mock.calls.length;
+    const targets = resolveChangedTestTargetPlan(["test/helpers/normalize-text.ts"]).targets;
+    const repoSourceReads = readFileSync.mock.calls
+      .slice(before)
+      .filter(([file]) => typeof file === "string" && normalizeRepoPath(file).includes("/src/"));
+    readFileSync.mockRestore();
+
+    expect(targets).toContain("src/auto-reply/status.test.ts");
+    expect(repoSourceReads.length).toBeLessThan(100);
   });
 
   it.each([
@@ -633,6 +967,69 @@ describe("scripts/test-projects local heavy-check lock", () => {
 });
 
 describe("scripts/test-projects full-suite sharding", () => {
+  let fullSuiteMatches: Map<string, string[]>;
+  let normalFullSuiteTestFiles: string[];
+  let leafShardPlans: ReturnType<typeof buildFullSuiteVitestRunPlans>;
+  let leafShardGatewayTreeReads: unknown[][];
+
+  beforeAll(async () => {
+    [fullSuiteMatches, normalFullSuiteTestFiles] = await Promise.all([
+      listFullSuiteTestFileMatches(),
+      Promise.resolve(listNormalFullSuiteTestFiles()),
+    ]);
+
+    const previous = process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
+    const gatewayServerConfig = "test/vitest/vitest.gateway-server.config.ts";
+    process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS = "1";
+    try {
+      const captured = captureReaddirSyncCallsDuring(() =>
+        buildFullSuiteVitestRunPlans([], process.cwd()),
+      );
+      leafShardPlans = captured.result;
+      leafShardGatewayTreeReads = captured.calls.filter(([target]) =>
+        typeof target === "string" ? normalizeRepoPath(target).includes("src/gateway") : false,
+      );
+      if (!leafShardPlans.some((plan) => plan.config === gatewayServerConfig)) {
+        throw new Error("expected gateway server leaf shard plans");
+      }
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
+      } else {
+        process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS = previous;
+      }
+    }
+  });
+
+  it("interleaves heavy and light configs for cold parallel full-suite runs", () => {
+    const specs = [
+      "test/vitest/vitest.gateway.config.ts",
+      "test/vitest/vitest.gateway-server.config.ts",
+      "test/vitest/vitest.commands.config.ts",
+      "test/vitest/vitest.extension-memory.config.ts",
+      "test/vitest/vitest.extension-msteams.config.ts",
+    ].map((config) => ({ config }));
+
+    expect(orderFullSuiteSpecsForParallelRun(specs).map((spec) => spec.config)).toEqual([
+      "test/vitest/vitest.gateway-server.config.ts",
+      "test/vitest/vitest.extension-msteams.config.ts",
+      "test/vitest/vitest.gateway.config.ts",
+      "test/vitest/vitest.extension-memory.config.ts",
+      "test/vitest/vitest.commands.config.ts",
+    ]);
+  });
+
+  it("covers each normal full-suite test file exactly once", () => {
+    const missing = normalFullSuiteTestFiles.filter((file) => !fullSuiteMatches.has(file));
+    const duplicated = [...fullSuiteMatches.entries()]
+      .filter(([, configs]) => configs.length > 1)
+      .map(([file, configs]) => `${file}: ${configs.join(", ")}`)
+      .toSorted((left, right) => left.localeCompare(right));
+
+    expect(missing).toStrictEqual([]);
+    expect(duplicated).toStrictEqual([]);
+  });
+
   it("uses the large host-aware local profile on roomy local hosts", () => {
     expect(
       resolveParallelFullSuiteConcurrency(
@@ -808,20 +1205,11 @@ describe("scripts/test-projects full-suite sharding", () => {
   });
 
   it("can expand full-suite shards to project configs for perf experiments", () => {
-    const previous = process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
-    process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS = "1";
-    let plans: ReturnType<typeof buildFullSuiteVitestRunPlans>;
-    try {
-      plans = buildFullSuiteVitestRunPlans([], process.cwd());
-    } finally {
-      if (previous === undefined) {
-        delete process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
-      } else {
-        process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS = previous;
-      }
-    }
+    const gatewayServerConfig = "test/vitest/vitest.gateway-server.config.ts";
+    const plans = leafShardPlans;
 
-    expect(plans.map((plan) => plan.config)).toEqual([
+    expect(leafShardGatewayTreeReads).toEqual([]);
+    expect(leafShardPlans.map((plan) => plan.config)).toEqual([
       "test/vitest/vitest.unit-fast.config.ts",
       "test/vitest/vitest.unit-src.config.ts",
       "test/vitest/vitest.unit-security.config.ts",
@@ -854,11 +1242,17 @@ describe("scripts/test-projects full-suite sharding", () => {
       "test/vitest/vitest.gateway-core.config.ts",
       "test/vitest/vitest.gateway-client.config.ts",
       "test/vitest/vitest.gateway-methods.config.ts",
-      "test/vitest/vitest.gateway-server.config.ts",
+      gatewayServerConfig,
+      gatewayServerConfig,
+      gatewayServerConfig,
+      gatewayServerConfig,
       "test/vitest/vitest.cli.config.ts",
       "test/vitest/vitest.commands-light.config.ts",
       "test/vitest/vitest.commands.config.ts",
-      "test/vitest/vitest.agents.config.ts",
+      "test/vitest/vitest.agents-core.config.ts",
+      "test/vitest/vitest.agents-pi-embedded.config.ts",
+      "test/vitest/vitest.agents-support.config.ts",
+      "test/vitest/vitest.agents-tools.config.ts",
       "test/vitest/vitest.daemon.config.ts",
       "test/vitest/vitest.plugin-sdk-light.config.ts",
       "test/vitest/vitest.plugin-sdk.config.ts",
@@ -868,7 +1262,6 @@ describe("scripts/test-projects full-suite sharding", () => {
       "test/vitest/vitest.auto-reply-top-level.config.ts",
       "test/vitest/vitest.auto-reply-reply.config.ts",
       "test/vitest/vitest.extension-acpx.config.ts",
-      "test/vitest/vitest.extension-bluebubbles.config.ts",
       "test/vitest/vitest.extension-diffs.config.ts",
       "test/vitest/vitest.extension-discord.config.ts",
       "test/vitest/vitest.extension-feishu.config.ts",
@@ -891,15 +1284,28 @@ describe("scripts/test-projects full-suite sharding", () => {
       "test/vitest/vitest.extension-browser.config.ts",
       "test/vitest/vitest.extension-qa.config.ts",
       "test/vitest/vitest.extension-media.config.ts",
+      "test/vitest/vitest.extensions.config.ts",
       "test/vitest/vitest.extension-misc.config.ts",
     ]);
-    expect(plans).toEqual(
-      plans.map((plan) => ({
-        config: plan.config,
-        forwardedArgs: [],
-        includePatterns: null,
-        watchMode: false,
-      })),
+
+    const gatewayPlans = plans.filter((plan) => plan.config === gatewayServerConfig);
+    const gatewayTargets = gatewayPlans.flatMap((plan) => plan.forwardedArgs);
+    const gatewayChunkSizes = gatewayPlans.map((plan) => plan.forwardedArgs.length);
+    expect(gatewayPlans).toHaveLength(4);
+    expect(gatewayTargets.length).toBeGreaterThan(90);
+    expect(new Set(gatewayTargets).size).toBe(gatewayTargets.length);
+    expect(gatewayTargets).toContain("src/gateway/server-network-runtime.e2e.test.ts");
+    expect(gatewayTargets).not.toContain("src/gateway/gateway.test.ts");
+    expect(Math.max(...gatewayChunkSizes) - Math.min(...gatewayChunkSizes)).toBeLessThanOrEqual(1);
+    expect(plans.filter((plan) => plan.config !== gatewayServerConfig)).toEqual(
+      plans
+        .filter((plan) => plan.config !== gatewayServerConfig)
+        .map((plan) => ({
+          config: plan.config,
+          forwardedArgs: [],
+          includePatterns: null,
+          watchMode: false,
+        })),
     );
   });
 

@@ -12,6 +12,10 @@ const noopLogger = createNoopLogger();
 const { makeStorePath } = createCronStoreHarness();
 installCronTestHooks({ logger: noopLogger });
 
+function expectCronRunSessionKey(value: unknown, jobId: string) {
+  expect(value).toMatch(new RegExp(`^agent:main:cron:${jobId}:run:\\d+$`));
+}
+
 describe("CronService interval/cron jobs fire on time", () => {
   const runLateTimerAndLoadJob = async ({
     cron,
@@ -34,11 +38,30 @@ describe("CronService interval/cron jobs fire on time", () => {
   const expectMainSystemEvent = (
     enqueueSystemEvent: ReturnType<typeof vi.fn>,
     expectedText: string,
+    jobId: string,
   ) => {
-    expect(enqueueSystemEvent).toHaveBeenCalledWith(
-      expectedText,
-      expect.objectContaining({ agentId: undefined }),
-    );
+    const matchingCall = enqueueSystemEvent.mock.calls.find(([text]) => text === expectedText);
+    if (!matchingCall) {
+      throw new Error(`missing system event ${expectedText}`);
+    }
+    const options = matchingCall[1] as Record<string, unknown>;
+    expect(options.agentId).toBeUndefined();
+    expectCronRunSessionKey(options.sessionKey, jobId);
+    expect(typeof options.contextKey).toBe("string");
+    expect(String(options.contextKey).startsWith("cron:")).toBe(true);
+  };
+
+  const countMainSystemEvents = (
+    enqueueSystemEvent: ReturnType<typeof vi.fn>,
+    expectedText: string,
+  ): number => {
+    let count = 0;
+    for (const [text] of enqueueSystemEvent.mock.calls) {
+      if (text === expectedText) {
+        count++;
+      }
+    }
+    return count;
   };
 
   it("fires an every-type main job when the timer fires a few ms late", async () => {
@@ -67,7 +90,7 @@ describe("CronService interval/cron jobs fire on time", () => {
       jobId: job.id,
       firstDueAt,
     });
-    expectMainSystemEvent(enqueueSystemEvent, "tick");
+    expectMainSystemEvent(enqueueSystemEvent, "tick", job.id);
     expect(updated?.state.lastStatus).toBe("ok");
     // nextRunAtMs must advance by at least one full interval past the due time.
     expect(updated?.state.nextRunAtMs).toBeGreaterThanOrEqual(firstDueAt + 10_000);
@@ -104,7 +127,7 @@ describe("CronService interval/cron jobs fire on time", () => {
       jobId: job.id,
       firstDueAt,
     });
-    expectMainSystemEvent(enqueueSystemEvent, "cron-tick");
+    expectMainSystemEvent(enqueueSystemEvent, "cron-tick", job.id);
     expect(updated?.state.lastStatus).toBe("ok");
     // nextRunAtMs should be the next whole-minute boundary (60s later).
     expect(updated?.state.nextRunAtMs).toBe(firstDueAt + 60_000);
@@ -116,7 +139,7 @@ describe("CronService interval/cron jobs fire on time", () => {
   it("keeps legacy every jobs due while minute cron jobs recompute schedules", async () => {
     const store = await makeStorePath();
     const enqueueSystemEvent = vi.fn();
-    const requestHeartbeatNow = vi.fn();
+    const requestHeartbeat = vi.fn();
     const nowMs = Date.parse("2025-12-13T00:00:00.000Z");
 
     await writeCronStoreSnapshot({
@@ -154,7 +177,7 @@ describe("CronService interval/cron jobs fire on time", () => {
       cronEnabled: true,
       log: noopLogger,
       enqueueSystemEvent,
-      requestHeartbeatNow,
+      requestHeartbeat,
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
 
@@ -171,10 +194,8 @@ describe("CronService interval/cron jobs fire on time", () => {
     const sfRun = await cron.run("legacy-every", "due");
     expect(sfRun).toEqual({ ok: true, ran: true });
 
-    const sfRuns = enqueueSystemEvent.mock.calls.filter((args) => args[0] === "sf-tick").length;
-    const minuteRuns = enqueueSystemEvent.mock.calls.filter(
-      (args) => args[0] === "minute-tick",
-    ).length;
+    const sfRuns = countMainSystemEvents(enqueueSystemEvent, "sf-tick");
+    const minuteRuns = countMainSystemEvents(enqueueSystemEvent, "minute-tick");
     expect(minuteRuns).toBeGreaterThan(0);
     expect(sfRuns).toBeGreaterThan(0);
 

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Verifies hidden runtime context transcript persistence in Docker using the
+# package-installed functional E2E image.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -17,12 +19,13 @@ trap cleanup EXIT
 docker_e2e_build_or_reuse "$IMAGE_NAME" session-runtime-context
 
 echo "Running session runtime context Docker E2E..."
+# Harness files are mounted read-only; the app under test comes from /app/dist.
 set +e
-docker run --rm \
+docker_e2e_run_with_harness \
   --name "$CONTAINER_NAME" \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   "$IMAGE_NAME" \
-  bash -lc 'set -euo pipefail; node --import tsx scripts/e2e/session-runtime-context-docker-client.ts' \
+  bash -lc 'set -euo pipefail; tsx scripts/e2e/session-runtime-context-docker-client.ts' \
   >"$RUN_LOG" 2>&1
 status=$?
 set -e

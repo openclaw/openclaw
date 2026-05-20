@@ -6,16 +6,14 @@ read_when:
   - Working on security features or audit responses
 ---
 
-# OpenClaw Threat Model v1.0
-
-## MITRE ATLAS Framework
+## MITRE ATLAS framework
 
 **Version:** 1.0-draft
 **Last Updated:** 2026-02-04
 **Methodology:** MITRE ATLAS + Data Flow Diagrams
 **Framework:** [MITRE ATLAS](https://atlas.mitre.org/) (Adversarial Threat Landscape for AI Systems)
 
-### Framework Attribution
+### Framework attribution
 
 This threat model is built on [MITRE ATLAS](https://atlas.mitre.org/), the industry-standard framework for documenting adversarial threats to AI/ML systems. ATLAS is maintained by [MITRE](https://www.mitre.org/) in collaboration with the AI security community.
 

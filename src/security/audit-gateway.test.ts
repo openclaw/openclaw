@@ -111,4 +111,54 @@ describe("security audit gateway config findings", () => {
       })(),
     ]);
   });
+
+  it("warns when OPENCLAW_GATEWAY_TOKEN shadows a different configured token source", () => {
+    const cfg: OpenClawConfig = {
+      gateway: { auth: { token: "config-token" } },
+    };
+    const findings = collectGatewayConfigFindings(cfg, cfg, {
+      OPENCLAW_GATEWAY_TOKEN: "env-token",
+    });
+
+    expect(hasFinding("gateway.env_token_overrides_config", findings)).toBe(true);
+  });
+
+  it("does not warn inside the managed gateway service credential context", () => {
+    const cfg: OpenClawConfig = {
+      gateway: { auth: { token: "config-token" } },
+    };
+    const findings = collectGatewayConfigFindings(cfg, cfg, {
+      OPENCLAW_GATEWAY_TOKEN: "env-token",
+      OPENCLAW_SERVICE_KIND: "gateway",
+    });
+
+    expect(hasFinding("gateway.env_token_overrides_config", findings)).toBe(false);
+  });
+
+  it("does not warn when gateway.auth.token resolves from OPENCLAW_GATEWAY_TOKEN", () => {
+    const cfg: OpenClawConfig = {
+      gateway: { auth: { token: "${OPENCLAW_GATEWAY_TOKEN}" } },
+      secrets: { providers: { default: { source: "env" } } },
+    };
+    const findings = collectGatewayConfigFindings(cfg, cfg, {
+      OPENCLAW_GATEWAY_TOKEN: "env-token",
+    });
+
+    expect(hasFinding("gateway.env_token_overrides_config", findings)).toBe(false);
+  });
+
+  it("does not warn about local gateway auth token precedence in remote mode", () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        mode: "remote",
+        remote: { token: "remote-token" },
+        auth: { token: "local-token" },
+      },
+    };
+    const findings = collectGatewayConfigFindings(cfg, cfg, {
+      OPENCLAW_GATEWAY_TOKEN: "env-token",
+    });
+
+    expect(hasFinding("gateway.env_token_overrides_config", findings)).toBe(false);
+  });
 });

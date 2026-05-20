@@ -26,16 +26,17 @@ import {
   browserStatus,
   browserStop,
   callGatewayTool,
+  getRuntimeConfig,
   getBrowserProfileCapabilities,
   imageResultFromFile,
   jsonResult,
   listNodes,
-  loadConfig,
   normalizeOptionalString,
   persistBrowserProxyFiles,
   readStringParam,
   readStringValue,
   resolveBrowserConfig,
+  resolveRuntimeImageSanitization,
   resolveExistingPathsWithinRoot,
   resolveNodeIdFromList,
   resolveProfile,
@@ -61,8 +62,8 @@ const browserToolDeps = {
   browserStart,
   browserStatus,
   browserStop,
+  getRuntimeConfig,
   imageResultFromFile,
-  loadConfig,
   listNodes,
   callGatewayTool,
   touchSessionBrowserTab,
@@ -70,7 +71,7 @@ const browserToolDeps = {
   untrackSessionBrowserTab,
 };
 
-export const __testing = {
+export const testing = {
   setDepsForTest(
     overrides: Partial<{
       browserAct: typeof browserAct;
@@ -88,7 +89,7 @@ export const __testing = {
       browserStatus: typeof browserStatus;
       browserStop: typeof browserStop;
       imageResultFromFile: typeof imageResultFromFile;
-      loadConfig: typeof loadConfig;
+      getRuntimeConfig: typeof getRuntimeConfig;
       listNodes: typeof listNodes;
       callGatewayTool: typeof callGatewayTool;
       touchSessionBrowserTab: typeof touchSessionBrowserTab;
@@ -113,7 +114,7 @@ export const __testing = {
     browserToolDeps.browserStatus = overrides?.browserStatus ?? browserStatus;
     browserToolDeps.browserStop = overrides?.browserStop ?? browserStop;
     browserToolDeps.imageResultFromFile = overrides?.imageResultFromFile ?? imageResultFromFile;
-    browserToolDeps.loadConfig = overrides?.loadConfig ?? loadConfig;
+    browserToolDeps.getRuntimeConfig = overrides?.getRuntimeConfig ?? getRuntimeConfig;
     browserToolDeps.listNodes = overrides?.listNodes ?? listNodes;
     browserToolDeps.callGatewayTool = overrides?.callGatewayTool ?? callGatewayTool;
     browserToolDeps.touchSessionBrowserTab =
@@ -220,7 +221,7 @@ async function resolveBrowserNodeTarget(params: {
   target?: "sandbox" | "host" | "node";
   sandboxBridgeUrl?: string;
 }): Promise<BrowserNodeTarget | null> {
-  const cfg = browserToolDeps.loadConfig();
+  const cfg = browserToolDeps.getRuntimeConfig();
   const policy = cfg.gateway?.nodes?.browser;
   const mode = policy?.mode ?? "auto";
   if (mode === "off") {
@@ -316,15 +317,25 @@ async function callBrowserProxy(params: {
       idempotencyKey: crypto.randomUUID(),
     },
   );
-  const parsed =
-    payload?.payload ??
-    (typeof payload?.payloadJSON === "string" && payload.payloadJSON
-      ? (JSON.parse(payload.payloadJSON) as BrowserProxyResult)
-      : null);
+  const parsed = unwrapBrowserProxyPayload(payload);
   if (!parsed || typeof parsed !== "object" || !("result" in parsed)) {
     throw new Error("browser proxy failed");
   }
   return parsed;
+}
+
+function unwrapBrowserProxyPayload(payload: { payload?: unknown; payloadJSON?: unknown } | null) {
+  if (payload?.payload !== undefined) {
+    return payload.payload;
+  }
+  if (typeof payload?.payloadJSON !== "string" || !payload.payloadJSON.trim()) {
+    return null;
+  }
+  try {
+    return JSON.parse(payload.payloadJSON) as BrowserProxyResult;
+  } catch {
+    return null;
+  }
 }
 
 async function persistProxyFiles(files: BrowserProxyFile[] | undefined) {
@@ -340,7 +351,7 @@ function resolveBrowserBaseUrl(params: {
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
 }): string | undefined {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
   const normalizedSandbox = params.sandboxBridgeUrl?.trim() ?? "";
   const target = params.target ?? (normalizedSandbox ? "sandbox" : "host");
@@ -369,7 +380,7 @@ function shouldPreferHostForProfile(profileName: string | undefined) {
   if (!profileName) {
     return false;
   }
-  const cfg = browserToolDeps.loadConfig();
+  const cfg = browserToolDeps.getRuntimeConfig();
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
   const profile = resolveProfile(resolved, profileName);
   if (!profile) {
@@ -395,7 +406,7 @@ function usesExistingSessionManageFlow(params: { action: string; profileName?: s
   if (!EXISTING_SESSION_MANAGE_ACTIONS.has(params.action)) {
     return false;
   }
-  const cfg = browserToolDeps.loadConfig();
+  const cfg = browserToolDeps.getRuntimeConfig();
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
   const profile = resolveProfile(resolved, params.profileName ?? resolved.defaultProfile);
   if (profile && getBrowserProfileCapabilities(profile).usesChromeMcp) {
@@ -448,7 +459,9 @@ export function createBrowserTool(opts?: {
       const requestedNode = readStringParam(params, "node");
       const requestedTimeoutMs = readToolTimeoutMs(params);
       let target = readStringParam(params, "target") as "sandbox" | "host" | "node" | undefined;
-      const configuredNode = browserToolDeps.loadConfig().gateway?.nodes?.browser?.node?.trim();
+      const configuredNode = browserToolDeps
+        .getRuntimeConfig()
+        .gateway?.nodes?.browser?.node?.trim();
 
       if (requestedNode && target && target !== "node") {
         throw new Error('node is only supported with target="node".');
@@ -758,6 +771,7 @@ export function createBrowserTool(opts?: {
             label: "browser:screenshot",
             path: result.path,
             details: result,
+            imageSanitization: resolveRuntimeImageSanitization(),
           });
         }
         case "navigate": {
@@ -855,6 +869,7 @@ export function createBrowserTool(opts?: {
         case "dialog": {
           const accept = Boolean(params.accept);
           const promptText = readStringValue(params.promptText);
+          const dialogId = readStringValue(params.dialogId);
           const { targetId, timeoutMs } = readOptionalTargetAndTimeout(params);
           if (proxyRequest) {
             const result = await proxyRequest({
@@ -864,6 +879,7 @@ export function createBrowserTool(opts?: {
               body: {
                 accept,
                 promptText,
+                dialogId,
                 targetId,
                 timeoutMs,
               },
@@ -873,6 +889,7 @@ export function createBrowserTool(opts?: {
           const result = await browserToolDeps.browserArmDialog(baseUrl, {
             accept,
             promptText,
+            dialogId,
             targetId,
             timeoutMs,
             profile,
@@ -899,3 +916,4 @@ export function createBrowserTool(opts?: {
     },
   };
 }
+export { testing as __testing };

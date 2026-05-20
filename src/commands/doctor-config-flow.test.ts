@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { withTempHome } from "../../test/helpers/temp-home.js";
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
 import {
   getDoctorConfigInputForTest,
@@ -11,6 +11,17 @@ import {
 type TerminalNote = (message: string, title?: string) => void;
 
 const terminalNoteMock = vi.hoisted(() => vi.fn<TerminalNote>());
+const collectImplicitFallbackClobberWarningsMock = vi.hoisted(() =>
+  vi.fn<(cfg: unknown) => string[]>(() => []),
+);
+const noteImplicitFallbackClobberWarningsMock = vi.hoisted(() =>
+  vi.fn<(cfg: unknown) => void>((cfg) => {
+    const warnings = collectImplicitFallbackClobberWarningsMock(cfg);
+    if (warnings.length > 0) {
+      terminalNoteMock(warnings.join("\n"), "Doctor warnings");
+    }
+  }),
+);
 const legacyConfigMigrationForTest = vi.hoisted(() => {
   function asRecord(value: unknown): Record<string, unknown> | null {
     return value && typeof value === "object" && !Array.isArray(value)
@@ -156,6 +167,11 @@ const legacyConfigMigrationForTest = vi.hoisted(() => {
     }
 
     migrateThreadBinding(next.session, changes, "session");
+    const sessionMaintenance = asRecord(asRecord(next.session)?.maintenance);
+    if (sessionMaintenance && "rotateBytes" in sessionMaintenance) {
+      delete sessionMaintenance.rotateBytes;
+      changes.push("Removed deprecated session.maintenance.rotateBytes.");
+    }
     const channels = asRecord(next.channels);
     for (const [channelId, channelRaw] of Object.entries(channels ?? {})) {
       if (channelId === "defaults") {
@@ -191,11 +207,17 @@ const legacyConfigMigrationForTest = vi.hoisted(() => {
     return changes.length > 0 ? { next, changes } : { next: null, changes: [] };
   }
 
+  let partiallyValidOverride: boolean | undefined;
+
   return {
     migrate,
     migrateLegacyConfig: (raw: unknown) => {
       const { next, changes } = migrate(raw);
-      return { config: next, changes };
+      const partiallyValid = partiallyValidOverride;
+      return { config: next, changes, ...(partiallyValid ? { partiallyValid } : {}) };
+    },
+    setPartiallyValidOverride(value: boolean | undefined) {
+      partiallyValidOverride = value;
     },
   };
 });
@@ -331,6 +353,14 @@ vi.mock("../config/legacy.js", () => {
           issues,
           ["session", "threadBindings", "ttlHours"],
           'session.threadBindings.ttlHours is legacy; use session.threadBindings.idleHours. Run "openclaw doctor --fix".',
+        );
+      }
+      const sessionMaintenance = asRecord(asRecord(root.session)?.maintenance);
+      if (sessionMaintenance && "rotateBytes" in sessionMaintenance) {
+        addIssue(
+          issues,
+          ["session", "maintenance"],
+          'session.maintenance.rotateBytes is deprecated and ignored; run "openclaw doctor --fix" to remove it.',
         );
       }
       const xSearch = asRecord(asRecord(asRecord(root.tools)?.web)?.x_search);
@@ -582,7 +612,7 @@ vi.mock("./doctor/shared/channel-legacy-config-migrate.js", () => ({
 }));
 
 vi.mock("./doctor/shared/legacy-config-migrate.js", () => ({
-  migrateLegacyConfig: legacyConfigMigrationForTest.migrateLegacyConfig,
+  migrateLegacyConfig: (raw: unknown) => legacyConfigMigrationForTest.migrateLegacyConfig(raw),
 }));
 
 vi.mock("./doctor/shared/bundled-plugin-load-paths.js", () => ({
@@ -624,7 +654,7 @@ vi.mock("./doctor/channel-capabilities.js", () => {
     msteams: {
       dmAllowFromMode: "topOnly",
       groupModel: "hybrid",
-      groupAllowFromFallbackToAllowFrom: false,
+      groupAllowFromFallbackToAllowFrom: true,
       warnOnEmptyGroupSenderAllowlist: true,
     },
     zalouser: {
@@ -810,6 +840,26 @@ vi.mock("../plugins/doctor-contract-registry.js", () => {
         match: hasLegacyTalkFields,
       },
     ],
+  };
+});
+
+vi.mock("./doctor/shared/legacy-config-issues.js", async () => {
+  const {
+    collectRelevantDoctorPluginIds,
+    listPluginDoctorLegacyConfigRules,
+  }: typeof import("../plugins/doctor-contract-registry.js") =
+    await import("../plugins/doctor-contract-registry.js");
+  const { findLegacyConfigIssues }: typeof import("../config/legacy.js") =
+    await import("../config/legacy.js");
+  return {
+    findDoctorLegacyConfigIssues: (raw: unknown, sourceRaw?: unknown) =>
+      findLegacyConfigIssues(
+        raw,
+        sourceRaw,
+        listPluginDoctorLegacyConfigRules({
+          pluginIds: collectRelevantDoctorPluginIds(raw),
+        }),
+      ),
   };
 });
 
@@ -1272,7 +1322,9 @@ vi.mock("./doctor-config-analysis.js", () => {
   }
 
   return {
+    collectImplicitFallbackClobberWarnings: collectImplicitFallbackClobberWarningsMock,
     formatConfigPath,
+    noteImplicitFallbackClobberWarnings: noteImplicitFallbackClobberWarningsMock,
     noteIncludeConfinementWarning: vi.fn(),
     noteOpencodeProviderOverrides: vi.fn(),
     resolveConfigPathTarget,
@@ -1313,7 +1365,13 @@ async function collectDoctorWarnings(config: Record<string, unknown>): Promise<s
     config,
     run: loadAndMaybeMigrateDoctorConfig,
   });
-  return noteSpy.mock.calls.filter((call) => call[1] === "Doctor warnings").map((call) => call[0]);
+  const warnings: string[] = [];
+  for (const [message, title] of noteSpy.mock.calls) {
+    if (title === "Doctor warnings") {
+      warnings.push(message);
+    }
+  }
+  return warnings;
 }
 
 type DiscordGuildRule = {
@@ -1340,6 +1398,9 @@ type RepairedDiscordPolicy = {
 describe("doctor config flow", () => {
   beforeEach(() => {
     terminalNoteMock.mockClear();
+    collectImplicitFallbackClobberWarningsMock.mockClear();
+    collectImplicitFallbackClobberWarningsMock.mockReturnValue([]);
+    noteImplicitFallbackClobberWarningsMock.mockClear();
   });
 
   it("preserves invalid config for doctor repairs", async () => {
@@ -1370,6 +1431,61 @@ describe("doctor config flow", () => {
       },
     });
     expect(doctorWarnings.some((line) => line.includes("mutable allowlist"))).toBe(false);
+  });
+
+  it("emits implicit fallback clobber warnings from the loaded config", async () => {
+    collectImplicitFallbackClobberWarningsMock.mockReturnValueOnce([
+      '- agents.list[0].model (id=ops) is "openai/gpt-5.3", a bare string with no fallbacks. At runtime this clobbers agents.defaults.model.fallbacks (openai/gpt-5.4), leaving the agent with no fallbacks.',
+    ]);
+    const config = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.5",
+            fallbacks: ["openai/gpt-5.4"],
+          },
+        },
+        list: [{ id: "ops", model: "openai/gpt-5.3" }],
+      },
+    };
+
+    await runDoctorConfigWithInput({
+      config,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(noteImplicitFallbackClobberWarningsMock).toHaveBeenCalledTimes(1);
+    const [[warningParams]] = noteImplicitFallbackClobberWarningsMock.mock
+      .calls as unknown as Array<[{ agents?: unknown }]>;
+    expect(warningParams.agents).toStrictEqual(config.agents);
+    const doctorWarnings = terminalNoteMock.mock.calls
+      .filter(([, title]) => title === "Doctor warnings")
+      .map(([message]) => message);
+    expect(doctorWarnings.join("\n")).toContain("clobbers agents.defaults.model.fallbacks");
+  });
+
+  it("warns when hooks transformsDir points outside the hook transforms root", async () => {
+    const doctorWarnings = await collectDoctorWarnings({
+      hooks: {
+        enabled: true,
+        token: "hook-secret",
+        transformsDir: "/virtual/.openclaw/workspace/skills/linear-webhook",
+        mappings: [
+          {
+            match: { path: "linear" },
+            action: "agent",
+            messageTemplate: "Linear event",
+            transform: { module: "./openclaw-linear-transform.js" },
+          },
+        ],
+      },
+    });
+
+    const warning = doctorWarnings.join("\n");
+    expect(warning).toContain("hooks.transformsDir:");
+    expect(warning).toContain("/virtual/.openclaw/workspace/skills/linear-webhook");
+    expect(warning).toContain("/virtual/.openclaw/hooks/transforms");
+    expect(warning).toContain("move custom transforms there or remove hooks.transformsDir");
   });
 
   it("does not warn about sender-based group allowlist for googlechat", async () => {
@@ -1563,6 +1679,11 @@ describe("doctor config flow", () => {
         bridge: { bind: "auto" },
         gateway: { auth: { mode: "token", token: "ok", extra: true } },
         agents: { list: [{ id: "pi" }] },
+        session: {
+          maintenance: {
+            rotateBytes: "10mb",
+          },
+        },
         browser: {
           relayBindHost: "0.0.0.0",
           profiles: {
@@ -1593,8 +1714,27 @@ describe("doctor config flow", () => {
     expect(
       ((browser.profiles as Record<string, { driver?: string }>)?.chromeLive ?? {}).driver,
     ).toBe("existing-session");
-    expect(result.cfg.plugins?.allow).toEqual(["telegram", "browser"]);
+    expect(result.cfg.plugins?.allow).toEqual(["telegram", "browser", "codex"]);
     expect(result.cfg.plugins?.entries?.browser?.enabled).toBe(true);
+    expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(true);
+  });
+
+  it("preserves commitments config on repair", async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        commitments: {
+          enabled: true,
+          maxPerDay: 2,
+        },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.cfg.commitments).toEqual({
+      enabled: true,
+      maxPerDay: 2,
+    });
   });
 
   it("preserves discord streaming intent while stripping unsupported keys on repair", async () => {
@@ -1930,8 +2070,8 @@ describe("doctor config flow", () => {
         .filter((call) => call[1] === "Doctor warnings" || call[1] === "Doctor changes")
         .map((call) => call[0]);
       const joinedOutputs = outputs.join("\n");
-      expect(outputs.filter((line) => line.includes("\u001b"))).toEqual([]);
-      expect(outputs.filter((line) => line.includes("\nforged"))).toEqual([]);
+      expect(outputs.some((line) => line.includes("\u001b"))).toBe(false);
+      expect(outputs.some((line) => line.includes("\nforged"))).toBe(false);
       expect(joinedOutputs).toContain('channels.slack.accounts.opsopen.allowFrom: set to ["*"]');
       expect(joinedOutputs).toContain('required by dmPolicy="open"');
       expect(
@@ -2304,6 +2444,9 @@ describe("doctor config flow", () => {
         bind?: string;
       };
       session?: {
+        maintenance?: {
+          rotateBytes?: unknown;
+        };
         threadBindings?: {
           idleHours?: number;
           ttlHours?: number;
@@ -2343,27 +2486,18 @@ describe("doctor config flow", () => {
       };
     };
     expect(cfg.heartbeat).toBeUndefined();
-    expect(cfg.agents?.defaults?.heartbeat).toMatchObject({
-      model: "anthropic/claude-3-5-haiku-20241022",
-      every: "30m",
-    });
+    expect(cfg.agents?.defaults?.heartbeat?.model).toBe("anthropic/claude-3-5-haiku-20241022");
+    expect(cfg.agents?.defaults?.heartbeat?.every).toBe("30m");
     expect(cfg.gateway?.bind).toBe("lan");
-    expect(cfg.session?.threadBindings).toMatchObject({
-      idleHours: 24,
-    });
-    expect(cfg.channels?.discord?.threadBindings).toMatchObject({
-      idleHours: 12,
-    });
-    expect(cfg.channels?.discord?.accounts?.alpha?.threadBindings).toMatchObject({
-      idleHours: 6,
-    });
+    expect(cfg.session?.maintenance?.rotateBytes).toBeUndefined();
+    expect(cfg.session?.threadBindings?.idleHours).toBe(24);
+    expect(cfg.channels?.discord?.threadBindings?.idleHours).toBe(12);
+    expect(cfg.channels?.discord?.accounts?.alpha?.threadBindings?.idleHours).toBe(6);
     expect(cfg.session?.threadBindings?.ttlHours).toBeUndefined();
     expect(cfg.channels?.discord?.threadBindings?.ttlHours).toBeUndefined();
     expect(cfg.channels?.discord?.accounts?.alpha?.threadBindings?.ttlHours).toBeUndefined();
-    expect(cfg.channels?.defaults?.heartbeat).toMatchObject({
-      showOk: true,
-      showAlerts: false,
-    });
+    expect(cfg.channels?.defaults?.heartbeat?.showOk).toBe(true);
+    expect(cfg.channels?.defaults?.heartbeat?.showAlerts).toBe(false);
   });
 
   it("warns clearly about legacy config surfaces and points to doctor --fix", async () => {
@@ -2414,6 +2548,9 @@ describe("doctor config flow", () => {
             },
           },
           session: {
+            maintenance: {
+              rotateBytes: "10mb",
+            },
             threadBindings: {
               ttlHours: 24,
             },
@@ -2454,6 +2591,8 @@ describe("doctor config flow", () => {
       expect(legacyMessages).toContain("does not rewrite this shape automatically");
       expect(legacyMessages).toContain("session.threadBindings.ttlHours");
       expect(legacyMessages).toContain("session.threadBindings.idleHours");
+      expect(legacyMessages).toContain("session.maintenance.rotateBytes");
+      expect(legacyMessages).toContain("deprecated and ignored");
       expect(legacyMessages).toContain("channels.<id>.threadBindings.ttlHours");
       expect(legacyMessages).toContain("channels.<id>.threadBindings.idleHours");
       expect(legacyMessages).toContain("talk:");
@@ -2469,6 +2608,51 @@ describe("doctor config flow", () => {
             message.includes('Run "openclaw doctor --fix" to migrate legacy config keys.'),
         ),
       ).toBe(true);
+    } finally {
+      noteSpy.mockClear();
+    }
+  });
+
+  it("titles the legacy migration panel as a preview when --fix is not passed (#80817)", async () => {
+    const noteSpy = resetTerminalNoteMock();
+    try {
+      await runDoctorConfigWithInput({
+        config: {
+          heartbeat: {
+            model: "anthropic/claude-3-5-haiku-20241022",
+            every: "30m",
+          },
+        },
+        run: loadAndMaybeMigrateDoctorConfig,
+      });
+      const changeTitles = noteSpy.mock.calls.map(([, title]) => title);
+      expect(changeTitles).toContain("Doctor changes preview");
+      expect(changeTitles).not.toContain("Doctor changes");
+      const previewPanel = noteSpy.mock.calls.find(
+        ([, title]) => title === "Doctor changes preview",
+      );
+      expect(previewPanel?.[0]).toContain("Moved heartbeat to");
+    } finally {
+      noteSpy.mockClear();
+    }
+  });
+
+  it("titles the legacy migration panel as applied when --fix is passed (#80817)", async () => {
+    const noteSpy = resetTerminalNoteMock();
+    try {
+      await runDoctorConfigWithInput({
+        repair: true,
+        config: {
+          heartbeat: {
+            model: "anthropic/claude-3-5-haiku-20241022",
+            every: "30m",
+          },
+        },
+        run: loadAndMaybeMigrateDoctorConfig,
+      });
+      const changeTitles = noteSpy.mock.calls.map(([, title]) => title);
+      expect(changeTitles).toContain("Doctor changes");
+      expect(changeTitles).not.toContain("Doctor changes preview");
     } finally {
       noteSpy.mockClear();
     }
@@ -2498,7 +2682,7 @@ describe("doctor config flow", () => {
       };
     };
     expect(cfg.channels.googlechat.dm.allowFrom).toEqual(["*"]);
-    expect(cfg.channels.googlechat.allowFrom).toEqual(["*"]);
+    expect(cfg.channels.googlechat.allowFrom).toBeUndefined();
   });
 
   it("does not report repeat talk provider normalization on consecutive repair runs", async () => {
@@ -2546,12 +2730,31 @@ describe("doctor config flow", () => {
             .filter((call) => call[1] === "Doctor changes")
             .map((call) => call[0])
             .filter((line) => line.includes("Normalized talk.provider/providers shape"));
-          expect(secondRunTalkNormalizationLines).toEqual([]);
+          expect(secondRunTalkNormalizationLines).toStrictEqual([]);
         } finally {
           noteSpy.mockClear();
         }
       },
       { skipSessionCleanup: true },
     );
+  });
+
+  it("sets skipPluginValidationOnWrite when legacy migration is only partially valid (#76800)", async () => {
+    legacyConfigMigrationForTest.setPartiallyValidOverride(true);
+    try {
+      const result = await runDoctorConfigWithInput({
+        config: {
+          heartbeat: { model: "openai/gpt-4o", every: 60 },
+          tools: { web: { search: { provider: "brave" } } },
+        },
+        repair: true,
+        preflightMode: "compat",
+        run: ({ options, confirm }) =>
+          loadAndMaybeMigrateDoctorConfig({ options, confirm: async () => confirm() }),
+      });
+      expect(result.skipPluginValidationOnWrite).toBe(true);
+    } finally {
+      legacyConfigMigrationForTest.setPartiallyValidOverride(undefined);
+    }
   });
 });

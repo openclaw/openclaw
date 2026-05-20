@@ -1,4 +1,9 @@
-import { MODEL_APIS, type ModelApi, type ModelCompatConfig } from "../config/types.models.js";
+import {
+  MODEL_APIS,
+  isModelThinkingFormat,
+  type ModelApi,
+  type ModelCompatConfig,
+} from "../config/types.models.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
@@ -169,6 +174,7 @@ function normalizeModelCatalogCompat(value: unknown): ModelCompatConfig | undefi
     "supportsTools",
     "supportsStrictMode",
     "requiresStringContent",
+    "strictMessageKeys",
     "requiresToolResultName",
     "requiresAssistantAfterToolResult",
     "requiresThinkingAsText",
@@ -202,20 +208,24 @@ function normalizeModelCatalogCompat(value: unknown): ModelCompatConfig | undefi
     }
   }
 
+  if (isRecord(value.reasoningEffortMap)) {
+    const reasoningEffortMap = Object.fromEntries(
+      Object.entries(value.reasoningEffortMap)
+        .map(([key, mapped]) => [key.trim(), typeof mapped === "string" ? mapped.trim() : ""])
+        .filter(([key, mapped]) => key.length > 0 && mapped.length > 0),
+    );
+    if (Object.keys(reasoningEffortMap).length > 0) {
+      compat.reasoningEffortMap = reasoningEffortMap;
+    }
+  }
+
   const maxTokensField = normalizeOptionalString(value.maxTokensField) ?? "";
   if (maxTokensField === "max_completion_tokens" || maxTokensField === "max_tokens") {
     compat.maxTokensField = maxTokensField;
   }
 
   const thinkingFormat = normalizeOptionalString(value.thinkingFormat) ?? "";
-  if (
-    thinkingFormat === "openai" ||
-    thinkingFormat === "openrouter" ||
-    thinkingFormat === "deepseek" ||
-    thinkingFormat === "zai" ||
-    thinkingFormat === "qwen" ||
-    thinkingFormat === "qwen-chat-template"
-  ) {
+  if (isModelThinkingFormat(thinkingFormat)) {
     compat.thinkingFormat = thinkingFormat;
   }
 
@@ -361,10 +371,25 @@ function normalizeModelCatalogSuppressions(value: unknown): ModelCatalogSuppress
       continue;
     }
     const reason = normalizeOptionalString(entry.reason) ?? "";
+    const rawWhen = isRecord(entry.when) ? entry.when : undefined;
+    const baseUrlHosts = normalizeTrimmedStringList(rawWhen?.baseUrlHosts).map((host) =>
+      host.toLowerCase(),
+    );
+    const providerConfigApiIn = normalizeTrimmedStringList(rawWhen?.providerConfigApiIn).map(
+      (api) => api.toLowerCase(),
+    );
+    const when =
+      baseUrlHosts.length > 0 || providerConfigApiIn.length > 0
+        ? {
+            ...(baseUrlHosts.length > 0 ? { baseUrlHosts } : {}),
+            ...(providerConfigApiIn.length > 0 ? { providerConfigApiIn } : {}),
+          }
+        : undefined;
     suppressions.push({
       provider,
       model,
       ...(reason ? { reason } : {}),
+      ...(when ? { when } : {}),
     });
   }
   return suppressions.length > 0 ? suppressions : undefined;

@@ -5,16 +5,16 @@ read_when:
 title: "macOS dev setup"
 ---
 
-# macOS Developer Setup
+# macOS developer setup
 
-This guide covers the necessary steps to build and run the OpenClaw macOS application from source.
+Build and run the OpenClaw macOS application from source.
 
 ## Prerequisites
 
 Before building the app, ensure you have the following installed:
 
 1. **Xcode 26.2+**: Required for Swift development.
-2. **Node.js 24 & pnpm**: Recommended for the gateway, CLI, and packaging scripts. Node 22 LTS, currently `22.14+`, remains supported for compatibility.
+2. **Node.js 24 & pnpm**: Recommended for the gateway, CLI, and packaging scripts. Node 22 LTS, currently `22.19+`, remains supported for compatibility.
 
 ## 1. Install Dependencies
 
@@ -60,7 +60,7 @@ For the Gateway runtime, Node remains the recommended path.
 
 ## Troubleshooting
 
-### Build Fails: Toolchain or SDK Mismatch
+### Build fails: toolchain or SDK mismatch
 
 The macOS app build expects the latest macOS SDK and Swift 6.2 toolchain.
 
@@ -76,9 +76,9 @@ xcodebuild -version
 xcrun swift --version
 ```
 
-If versions don’t match, update macOS/Xcode and re-run the build.
+If versions don't match, update macOS/Xcode and re-run the build.
 
-### App Crashes on Permission Grant
+### App crashes on permission grant
 
 If the app crashes when you try to allow **Speech Recognition** or **Microphone** access, it may be due to a corrupted TCC cache or signature mismatch.
 

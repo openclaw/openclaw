@@ -1,9 +1,9 @@
 #!/usr/bin/env -S node --import tsx
 
 import { spawn, type ChildProcess } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { createRequire } from "node:module";
 import path from "node:path";
 
 type OtlpAnyValue = {
@@ -33,26 +33,6 @@ type OtlpScopeSpans = {
 
 type OtlpResourceSpans = {
   scopeSpans?: OtlpScopeSpans[];
-};
-
-type OtlpTraceRequest = {
-  resourceSpans?: OtlpResourceSpans[];
-};
-
-type OtlpRoot = {
-  opentelemetry: {
-    proto: {
-      collector: {
-        trace: {
-          v1: {
-            ExportTraceServiceRequest: {
-              decode(input: Uint8Array): OtlpTraceRequest;
-            };
-          };
-        };
-      };
-    };
-  };
 };
 
 type CliOptions = {
@@ -87,16 +67,13 @@ const REQUIRED_SPAN_NAMES = [
 ] as const;
 const DISALLOWED_ATTRIBUTE_KEYS = new Set([
   "openclaw.runId",
+  "openclaw.chatId",
+  "openclaw.messageId",
   "openclaw.sessionKey",
   "openclaw.sessionId",
   "openclaw.callId",
   "openclaw.toolCallId",
 ]);
-
-const require = createRequire(import.meta.url);
-const otlpRoot = require("@opentelemetry/otlp-transformer/build/src/generated/root.js") as OtlpRoot;
-const traceRequestDecoder =
-  otlpRoot.opentelemetry.proto.collector.trace.v1.ExportTraceServiceRequest;
 
 function usage(): string {
   return `Usage: pnpm qa:otel:smoke [--output-dir <path>] [--provider-mode <mode>] [--scenario <id>] [--model <ref>] [--alt-model <ref>]
@@ -196,11 +173,205 @@ function spanAttributes(span: OtlpSpan): Record<string, string | number | boolea
   return attributes;
 }
 
+class ProtoReader {
+  private offset = 0;
+
+  constructor(private readonly buffer: Uint8Array) {}
+
+  done(): boolean {
+    return this.offset >= this.buffer.length;
+  }
+
+  tag() {
+    const raw = this.varint();
+    return { field: raw >>> 3, wire: raw & 0x7 };
+  }
+
+  varint(): number {
+    let result = 0;
+    let shift = 0;
+    while (this.offset < this.buffer.length) {
+      const byte = this.buffer[this.offset++];
+      result += (byte & 0x7f) * 2 ** shift;
+      if ((byte & 0x80) === 0) {
+        return result;
+      }
+      shift += 7;
+    }
+    throw new Error("truncated protobuf varint");
+  }
+
+  bytes(): Uint8Array {
+    const length = this.varint();
+    const end = this.offset + length;
+    if (end > this.buffer.length) {
+      throw new Error("truncated protobuf bytes");
+    }
+    const value = this.buffer.subarray(this.offset, end);
+    this.offset = end;
+    return value;
+  }
+
+  string(): string {
+    return new TextDecoder().decode(this.bytes());
+  }
+
+  fixed64(): number {
+    const end = this.offset + 8;
+    if (end > this.buffer.length) {
+      throw new Error("truncated protobuf fixed64");
+    }
+    const view = new DataView(this.buffer.buffer, this.buffer.byteOffset + this.offset, 8);
+    this.offset = end;
+    return view.getFloat64(0, true);
+  }
+
+  skip(wire: number) {
+    if (wire === 0) {
+      this.varint();
+    } else if (wire === 1) {
+      this.offset += 8;
+    } else if (wire === 2) {
+      this.bytes();
+    } else if (wire === 5) {
+      this.offset += 4;
+    } else {
+      throw new Error(`unsupported protobuf wire type ${wire}`);
+    }
+  }
+}
+
+function decodeAnyValue(message: Uint8Array): OtlpAnyValue {
+  const reader = new ProtoReader(message);
+  const value: OtlpAnyValue = {};
+  while (!reader.done()) {
+    const { field, wire } = reader.tag();
+    if (field === 1 && wire === 2) {
+      value.stringValue = reader.string();
+    } else if (field === 2 && wire === 0) {
+      value.boolValue = reader.varint() !== 0;
+    } else if (field === 3 && wire === 0) {
+      value.intValue = reader.varint();
+    } else if (field === 4 && wire === 1) {
+      value.doubleValue = reader.fixed64();
+    } else if (field === 5 && wire === 2) {
+      value.arrayValue = decodeArrayValue(reader.bytes());
+    } else if (field === 6 && wire === 2) {
+      value.kvlistValue = decodeKeyValueList(reader.bytes());
+    } else if (field === 7 && wire === 2) {
+      value.bytesValue = reader.bytes();
+    } else {
+      reader.skip(wire);
+    }
+  }
+  return value;
+}
+
+function decodeArrayValue(message: Uint8Array): { values?: OtlpAnyValue[] } {
+  const reader = new ProtoReader(message);
+  const values: OtlpAnyValue[] = [];
+  while (!reader.done()) {
+    const { field, wire } = reader.tag();
+    if (field === 1 && wire === 2) {
+      values.push(decodeAnyValue(reader.bytes()));
+    } else {
+      reader.skip(wire);
+    }
+  }
+  return { values };
+}
+
+function decodeKeyValue(message: Uint8Array): OtlpKeyValue {
+  const reader = new ProtoReader(message);
+  const entry: OtlpKeyValue = {};
+  while (!reader.done()) {
+    const { field, wire } = reader.tag();
+    if (field === 1 && wire === 2) {
+      entry.key = reader.string();
+    } else if (field === 2 && wire === 2) {
+      entry.value = decodeAnyValue(reader.bytes());
+    } else {
+      reader.skip(wire);
+    }
+  }
+  return entry;
+}
+
+function decodeKeyValueList(message: Uint8Array): { values?: OtlpKeyValue[] } {
+  const reader = new ProtoReader(message);
+  const values: OtlpKeyValue[] = [];
+  while (!reader.done()) {
+    const { field, wire } = reader.tag();
+    if (field === 1 && wire === 2) {
+      values.push(decodeKeyValue(reader.bytes()));
+    } else {
+      reader.skip(wire);
+    }
+  }
+  return { values };
+}
+
+function decodeSpan(message: Uint8Array): OtlpSpan {
+  const reader = new ProtoReader(message);
+  const span: OtlpSpan = {};
+  while (!reader.done()) {
+    const { field, wire } = reader.tag();
+    if (field === 4 && wire === 2) {
+      span.parentSpanId = reader.bytes();
+    } else if (field === 5 && wire === 2) {
+      span.name = reader.string();
+    } else if (field === 9 && wire === 2) {
+      span.attributes ??= [];
+      span.attributes.push(decodeKeyValue(reader.bytes()));
+    } else {
+      reader.skip(wire);
+    }
+  }
+  return span;
+}
+
+function decodeScopeSpans(message: Uint8Array): OtlpScopeSpans {
+  const reader = new ProtoReader(message);
+  const spans: OtlpSpan[] = [];
+  while (!reader.done()) {
+    const { field, wire } = reader.tag();
+    if (field === 2 && wire === 2) {
+      spans.push(decodeSpan(reader.bytes()));
+    } else {
+      reader.skip(wire);
+    }
+  }
+  return { spans };
+}
+
+function decodeResourceSpans(message: Uint8Array): OtlpResourceSpans {
+  const reader = new ProtoReader(message);
+  const scopeSpans: OtlpScopeSpans[] = [];
+  while (!reader.done()) {
+    const { field, wire } = reader.tag();
+    if (field === 2 && wire === 2) {
+      scopeSpans.push(decodeScopeSpans(reader.bytes()));
+    } else {
+      reader.skip(wire);
+    }
+  }
+  return { scopeSpans };
+}
+
 function decodeTraceRequest(body: Buffer): CapturedSpan[] {
-  const decoded = traceRequestDecoder.decode(body);
+  const reader = new ProtoReader(body);
+  const resourceSpans: OtlpResourceSpans[] = [];
+  while (!reader.done()) {
+    const { field, wire } = reader.tag();
+    if (field === 1 && wire === 2) {
+      resourceSpans.push(decodeResourceSpans(reader.bytes()));
+    } else {
+      reader.skip(wire);
+    }
+  }
   const spans: CapturedSpan[] = [];
-  for (const resourceSpans of decoded.resourceSpans ?? []) {
-    for (const scopeSpans of resourceSpans.scopeSpans ?? []) {
+  for (const resource of resourceSpans) {
+    for (const scopeSpans of resource.scopeSpans ?? []) {
       for (const span of scopeSpans.spans ?? []) {
         const name = span.name?.trim();
         if (!name) {
@@ -261,15 +432,15 @@ function startLocalOtlpTraceReceiver() {
   };
 }
 
-function spawnPnpm(args: string[], env: NodeJS.ProcessEnv): ChildProcess {
-  const npmExecPath = process.env.npm_execpath?.trim();
-  if (npmExecPath) {
-    return spawn(process.execPath, [npmExecPath, ...args], {
-      env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+function openClawEntryArgs(): string[] {
+  if (existsSync(path.join(process.cwd(), "scripts", "run-node.mjs"))) {
+    return ["scripts/run-node.mjs"];
   }
-  return spawn(process.platform === "win32" ? "pnpm.cmd" : "pnpm", args, {
+  return ["openclaw.mjs"];
+}
+
+function spawnOpenClaw(args: string[], env: NodeJS.ProcessEnv): ChildProcess {
+  return spawn(process.execPath, [...openClawEntryArgs(), ...args], {
     env,
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -297,7 +468,6 @@ function buildQaEnv(port: number): NodeJS.ProcessEnv {
 
 function buildQaArgs(options: CliOptions): string[] {
   const args = [
-    "openclaw",
     "qa",
     "suite",
     "--provider-mode",
@@ -410,7 +580,7 @@ async function main() {
 
   let childExitCode = 1;
   try {
-    const child = spawnPnpm(buildQaArgs(options), buildQaEnv(port));
+    const child = spawnOpenClaw(buildQaArgs(options), buildQaEnv(port));
     child.stdout?.on("data", (chunk) => process.stdout.write(chunk));
     child.stderr?.on("data", (chunk) => process.stderr.write(chunk));
     childExitCode = await waitForChild(child);

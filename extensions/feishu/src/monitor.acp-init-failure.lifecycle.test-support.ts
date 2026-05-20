@@ -1,6 +1,6 @@
 import "./lifecycle.test-support.js";
+import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import {
   getFeishuLifecycleTestMocks,
@@ -29,8 +29,8 @@ const {
   withReplyDispatcherMock,
 } = getFeishuLifecycleTestMocks();
 
-let _handlers: Record<string, (data: unknown) => Promise<void>> = {};
-let lastRuntime: ReturnType<typeof createRuntimeEnv> | null = null;
+let handlers: Record<string, (data: unknown) => Promise<void>> = {};
+let lastRuntime = createRuntimeEnv();
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 const { cfg: lifecycleConfig, account: lifecycleAccount } = createFeishuLifecycleFixture({
   accountId: "acct-acp",
@@ -63,7 +63,7 @@ async function setupLifecycleMonitor() {
   return setupFeishuLifecycleHandler({
     createEventDispatcherMock,
     onRegister: (registered) => {
-      _handlers = registered;
+      handlers = registered;
     },
     runtime: lastRuntime,
     cfg: lifecycleConfig,
@@ -77,8 +77,8 @@ describe("Feishu ACP-init failure lifecycle", () => {
   beforeEach(() => {
     vi.useRealTimers();
     resetFeishuLifecycleTestMocks();
-    _handlers = {};
-    lastRuntime = null;
+    handlers = {};
+    lastRuntime = createRuntimeEnv();
     setFeishuLifecycleStateDir("openclaw-feishu-acp-failure");
 
     resolveBoundConversationMock.mockReturnValue(null);

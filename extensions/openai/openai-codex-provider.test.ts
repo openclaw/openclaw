@@ -45,6 +45,56 @@ function createSingleModelRegistry(
   };
 }
 
+type CodexProvider = ReturnType<typeof buildOpenAICodexProviderPlugin>;
+type CodexAuthMethod = NonNullable<CodexProvider["auth"]>[number];
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!isRecord(value)) {
+    throw new Error(`expected ${label} to be an object`);
+  }
+  return value;
+}
+
+function requireArray(value: unknown, label: string): unknown[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`expected ${label} to be an array`);
+  }
+  return value;
+}
+
+function requireAuthMethod(provider: CodexProvider, id: string): CodexAuthMethod {
+  const method = provider.auth?.find((candidate) => candidate.id === id);
+  if (!method) {
+    throw new Error(`expected OpenAI Codex auth method ${id}`);
+  }
+  return method;
+}
+
+function expectRecordFields(value: unknown, label: string, expected: Record<string, unknown>) {
+  const record = requireRecord(value, label);
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key]).toEqual(expectedValue);
+  }
+}
+
+function expectModelFields(model: unknown, expected: Record<string, unknown>) {
+  expectRecordFields(model, "model", expected);
+}
+
+function requireEntryById(entries: unknown, id: string): Record<string, unknown> {
+  const entry = requireArray(entries, "model catalog entries")
+    .filter(isRecord)
+    .find((candidate) => candidate.id === id);
+  if (!entry) {
+    throw new Error(`expected model catalog entry ${id}`);
+  }
+  return entry;
+}
+
 describe("openai codex provider", () => {
   beforeAll(async () => {
     ({ buildOpenAICodexProviderPlugin } = await import("./openai-codex-provider.js"));
@@ -102,30 +152,41 @@ describe("openai codex provider", () => {
       expires: Date.now() + 60_000,
     });
 
-    await expect(provider.refreshOAuth?.(credential)).resolves.toEqual({
+    const refreshed = await provider.refreshOAuth?.(credential);
+
+    expect(refreshed?.expires).toBeTypeOf("number");
+    expect(refreshed).toEqual({
       ...credential,
       access: "next-access",
       refresh: "next-refresh",
-      expires: expect.any(Number),
+      expires: refreshed?.expires,
     });
   });
 
   it("exposes grouped model/auth picker labels for Codex auth methods", () => {
     const provider = buildOpenAICodexProviderPlugin();
-    const oauth = provider.auth?.find((method) => method.id === "oauth");
-    const deviceCode = provider.auth?.find((method) => method.id === "device-code");
+    const oauth = requireAuthMethod(provider, "oauth");
+    const deviceCode = requireAuthMethod(provider, "device-code");
+    const apiKey = requireAuthMethod(provider, "api-key");
 
-    expect(oauth?.wizard).toMatchObject({
-      choiceLabel: "OpenAI Codex Browser Login",
-      groupId: "openai-codex",
-      groupLabel: "OpenAI Codex",
-      groupHint: "ChatGPT/Codex sign-in",
+    expectRecordFields(oauth.wizard, "oauth wizard", {
+      choiceLabel: "ChatGPT/Codex Browser Login",
+      groupId: "openai",
+      groupLabel: "OpenAI",
+      groupHint: "ChatGPT/Codex sign-in or API key",
     });
-    expect(deviceCode?.wizard).toMatchObject({
-      choiceLabel: "OpenAI Codex Device Pairing",
-      groupId: "openai-codex",
-      groupLabel: "OpenAI Codex",
-      groupHint: "ChatGPT/Codex sign-in",
+    expectRecordFields(deviceCode.wizard, "device-code wizard", {
+      choiceLabel: "ChatGPT/Codex Device Pairing",
+      groupId: "openai",
+      groupLabel: "OpenAI",
+      groupHint: "ChatGPT/Codex sign-in or API key",
+    });
+    expectRecordFields(apiKey.wizard, "api-key wizard", {
+      choiceLabel: "OpenAI API Key Backup",
+      choiceHint: "Use an OpenAI API key when your Codex subscription is unavailable",
+      groupId: "openai",
+      groupLabel: "OpenAI",
+      groupHint: "ChatGPT/Codex sign-in or API key",
     });
   });
 
@@ -157,32 +218,31 @@ describe("openai codex provider", () => {
 
   it("offers OpenAI menu auth methods for browser login and device pairing", () => {
     const provider = buildOpenAICodexProviderPlugin();
+    const oauth = requireAuthMethod(provider, "oauth");
+    const deviceCode = requireAuthMethod(provider, "device-code");
 
-    expect(provider.auth?.map((method) => method.id)).toEqual(["oauth", "device-code"]);
-    expect(provider.auth?.find((method) => method.id === "oauth")).toMatchObject({
-      label: "OpenAI Codex Browser Login",
-      hint: "Sign in with OpenAI in your browser",
-      wizard: {
-        choiceId: "openai-codex",
-        choiceLabel: "OpenAI Codex Browser Login",
-        assistantPriority: -30,
-      },
+    expect(provider.auth?.map((method) => method.id)).toEqual(["oauth", "device-code", "api-key"]);
+    expect(oauth.label).toBe("ChatGPT/Codex Browser Login");
+    expect(oauth.hint).toBe("Sign in with OpenAI in your browser");
+    expectRecordFields(oauth.wizard, "oauth wizard", {
+      choiceId: "openai-codex",
+      choiceLabel: "ChatGPT/Codex Browser Login",
+      assistantPriority: -30,
+      onboardingFeatured: true,
     });
-    expect(provider.auth?.find((method) => method.id === "device-code")).toMatchObject({
-      label: "OpenAI Codex Device Pairing",
-      hint: "Pair in browser with a device code",
-      kind: "device_code",
-      wizard: {
-        choiceId: "openai-codex-device-code",
-        choiceLabel: "OpenAI Codex Device Pairing",
-        assistantPriority: -10,
-      },
+    expect(deviceCode.label).toBe("ChatGPT/Codex Device Pairing");
+    expect(deviceCode.hint).toBe("Pair in browser with a device code");
+    expect(deviceCode.kind).toBe("device_code");
+    expectRecordFields(deviceCode.wizard, "device-code wizard", {
+      choiceId: "openai-codex-device-code",
+      choiceLabel: "ChatGPT/Codex Device Pairing",
+      assistantPriority: -10,
     });
   });
 
   it("stores device-code logins as OpenAI Codex oauth profiles", async () => {
     const provider = buildOpenAICodexProviderPlugin();
-    const deviceCodeMethod = provider.auth?.find((method) => method.id === "device-code");
+    const deviceCodeMethod = requireAuthMethod(provider, "device-code");
     const note = vi.fn(async () => {});
     const progress = { update: vi.fn(), stop: vi.fn() };
     const runtime = {
@@ -197,7 +257,7 @@ describe("openai codex provider", () => {
       expires: Date.now() + 60_000,
     });
 
-    const result = await deviceCodeMethod?.run({
+    const result = await deviceCodeMethod.run({
       config: {},
       env: process.env,
       prompter: {
@@ -216,27 +276,37 @@ describe("openai codex provider", () => {
       "Trouble with device code login? See https://docs.openclaw.ai/start/faq",
       "OAuth help",
     );
-    expect(result).toMatchObject({
-      profiles: [
-        {
-          credential: {
-            type: "oauth",
-            provider: "openai-codex",
-            access:
-              "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdC1kZXZpY2UtMTIzIn19.signature",
-            refresh: "device-refresh-token",
+    const profiles = requireArray(result?.profiles, "device-code profiles");
+    expect(profiles).toHaveLength(1);
+    const profile = requireRecord(profiles[0], "device-code profile");
+    const credential = requireRecord(profile.credential, "device-code credential");
+    expect(profile.profileId).toBe("openai-codex:default");
+    expect(credential).toEqual({
+      type: "oauth",
+      provider: "openai-codex",
+      access:
+        "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdC1kZXZpY2UtMTIzIn19.signature",
+      refresh: "device-refresh-token",
+      expires: credential.expires,
+      accountId: "acct-device-123",
+    });
+    expect(credential.expires).toBeTypeOf("number");
+    expect(result?.defaultModel).toBe("openai/gpt-5.5");
+    expect(result?.configPatch).toEqual({
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.5": {},
           },
         },
-      ],
-      defaultModel: "openai-codex/gpt-5.5",
+      },
     });
     expect(result?.profiles[0]?.credential).not.toHaveProperty("idToken");
-    expect(result?.profiles[0]?.credential).not.toHaveProperty("accountId");
   });
 
-  it("does not log the device pairing code in remote mode", async () => {
+  async function runRemoteDeviceCodeAuthFlow() {
     const provider = buildOpenAICodexProviderPlugin();
-    const deviceCodeMethod = provider.auth?.find((method) => method.id === "device-code");
+    const deviceCodeMethod = requireAuthMethod(provider, "device-code");
     const note = vi.fn(async () => {});
     const progress = { update: vi.fn(), stop: vi.fn() };
     const runtime = {
@@ -258,32 +328,49 @@ describe("openai codex provider", () => {
       };
     });
 
-    await expect(
-      deviceCodeMethod?.run({
-        config: {},
-        env: process.env,
-        prompter: {
-          note,
-          progress: vi.fn(() => progress),
-        } as never,
-        runtime: runtime as never,
-        isRemote: true,
-        openUrl: async () => {},
-        oauth: { createVpsAwareHandlers: (() => ({})) as never },
-      }),
-    ).resolves.toBeDefined();
+    const result = await deviceCodeMethod.run({
+      config: {},
+      env: process.env,
+      prompter: {
+        note,
+        progress: vi.fn(() => progress),
+      } as never,
+      runtime: runtime as never,
+      isRemote: true,
+      openUrl: async () => {},
+      oauth: { createVpsAwareHandlers: (() => ({})) as never },
+    });
+
+    expect(
+      requireArray(result.profiles, "remote device-code profiles").map(
+        (profile) => requireRecord(profile, "remote device-code profile").profileId,
+      ),
+    ).toContain("openai-codex:default");
+
+    return { note, runtime };
+  }
+
+  it("surfaces the device pairing code via the prompter note in remote (SSH) mode (#74212)", async () => {
+    const { note } = await runRemoteDeviceCodeAuthFlow();
+
+    expect(note).toHaveBeenCalledWith(
+      [
+        "Open this URL in your LOCAL browser and enter the code below.",
+        "URL: https://auth.openai.com/codex/device",
+        "Code: CODE-12345",
+        "Code expires in 15 minutes. Never share it.",
+      ].join("\n"),
+      "OpenAI Codex device code",
+    );
+    expect(note).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not write the device pairing code to the runtime log in remote mode", async () => {
+    const { runtime } = await runRemoteDeviceCodeAuthFlow();
 
     const logOutput = runtime.log.mock.calls.flat().join("\n");
     expect(logOutput).toContain("https://auth.openai.com/codex/device");
     expect(logOutput).not.toContain("CODE-12345");
-    expect(note).toHaveBeenCalledWith(
-      expect.stringContaining("Code: [shown on the local device only]"),
-      "OpenAI Codex device code",
-    );
-    expect(note).not.toHaveBeenCalledWith(
-      expect.stringContaining("Code: CODE-12345"),
-      "OpenAI Codex device code",
-    );
   });
 
   it("owns native reasoning output mode for Codex responses", () => {
@@ -307,7 +394,7 @@ describe("openai codex provider", () => {
       modelRegistry: createSingleModelRegistry(createCodexTemplate({})) as never,
     });
 
-    expect(model).toMatchObject({
+    expectModelFields(model, {
       id: "gpt-5.4",
       contextWindow: 1_050_000,
       contextTokens: 272_000,
@@ -324,7 +411,7 @@ describe("openai codex provider", () => {
       modelRegistry: createSingleModelRegistry(createCodexTemplate({})) as never,
     });
 
-    expect(model).toMatchObject({
+    expectModelFields(model, {
       id: "gpt-5.4-pro",
       contextWindow: 1_050_000,
       contextTokens: 272_000,
@@ -353,7 +440,7 @@ describe("openai codex provider", () => {
       modelRegistry: createSingleModelRegistry(createCodexTemplate({ id: "gpt-5.4-pro" })) as never,
     });
 
-    expect(model).toMatchObject({
+    expectModelFields(model, {
       id: "gpt-5.5",
       api: "openai-codex-responses",
       baseUrl: "https://chatgpt.com/backend-api",
@@ -362,7 +449,7 @@ describe("openai codex provider", () => {
       maxTokens: 128_000,
       cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
     });
-    expect(pro).toMatchObject({
+    expectModelFields(pro, {
       id: "gpt-5.5-pro",
       api: "openai-codex-responses",
       baseUrl: "https://chatgpt.com/backend-api",
@@ -382,7 +469,7 @@ describe("openai codex provider", () => {
       modelRegistry: createSingleModelRegistry(createCodexTemplate({}), null) as never,
     });
 
-    expect(model).toMatchObject({
+    expectModelFields(model, {
       id: "gpt-5.5",
       api: "openai-codex-responses",
       baseUrl: "https://chatgpt.com/backend-api/codex",
@@ -390,6 +477,43 @@ describe("openai codex provider", () => {
       input: ["text", "image"],
       contextWindow: 400_000,
       contextTokens: 272_000,
+      maxTokens: 128_000,
+    });
+  });
+
+  it("honors providerConfig.baseUrl in the gpt-5.5 synthesis fallback", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+
+    const model = provider.resolveDynamicModel?.({
+      provider: "openai-codex",
+      modelId: "gpt-5.5",
+      modelRegistry: createSingleModelRegistry(createCodexTemplate({}), null) as never,
+      providerConfig: { baseUrl: "http://proxy.local:30400" },
+    });
+
+    expectModelFields(model, {
+      id: "gpt-5.5",
+      api: "openai-codex-responses",
+      baseUrl: "http://proxy.local:30400",
+    });
+  });
+
+  it("honors providerConfig.baseUrl in the gpt-5.4 synthesis fallback", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+    const emptyRegistry = { find: () => null };
+
+    const model = provider.resolveDynamicModel?.({
+      provider: "openai-codex",
+      modelId: "gpt-5.4",
+      modelRegistry: emptyRegistry as never,
+      providerConfig: { baseUrl: "http://proxy.local:30400" },
+    });
+
+    expectModelFields(model, {
+      id: "gpt-5.4",
+      api: "openai-codex-responses",
+      baseUrl: "http://proxy.local:30400",
+      contextWindow: 1_050_000,
       maxTokens: 128_000,
     });
   });
@@ -410,7 +534,7 @@ describe("openai codex provider", () => {
       ) as never,
     });
 
-    expect(model).toMatchObject({
+    expectModelFields(model, {
       id: "gpt-5.4-pro",
       api: "openai-codex-responses",
       baseUrl: "https://chatgpt.com/backend-api",
@@ -430,7 +554,7 @@ describe("openai codex provider", () => {
       modelRegistry: createSingleModelRegistry(createCodexTemplate({})) as never,
     });
 
-    expect(model).toMatchObject({
+    expectModelFields(model, {
       id: "gpt-5.4",
       name: "gpt-5.4",
       contextWindow: 1_050_000,
@@ -439,7 +563,7 @@ describe("openai codex provider", () => {
     });
   });
 
-  it("resolves gpt-5.4-mini from codex templates with codex-sized limits", () => {
+  it("resolves gpt-5.4-mini through the Codex OAuth route", () => {
     const provider = buildOpenAICodexProviderPlugin();
 
     const model = provider.resolveDynamicModel?.({
@@ -447,20 +571,25 @@ describe("openai codex provider", () => {
       modelId: "gpt-5.4-mini",
       modelRegistry: createSingleModelRegistry(
         createCodexTemplate({
-          id: "gpt-5.1-codex-mini",
-          cost: { input: 0.25, output: 2, cacheRead: 0.025, cacheWrite: 0 },
+          id: "gpt-5.4",
+          cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
+          contextWindow: 1_050_000,
+          contextTokens: 272_000,
         }),
         null,
       ) as never,
     } as never);
 
-    expect(model).toMatchObject({
+    expectModelFields(model, {
       id: "gpt-5.4-mini",
-      contextWindow: 272_000,
+      name: "gpt-5.4-mini",
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+      contextWindow: 400_000,
+      contextTokens: 272_000,
       maxTokens: 128_000,
       cost: { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0 },
     });
-    expect(model).not.toHaveProperty("contextTokens");
   });
 
   it("augments catalog with gpt-5.5-pro and gpt-5.4 native metadata", () => {
@@ -480,42 +609,31 @@ describe("openai codex provider", () => {
       ],
     } as never);
 
-    expect(entries).not.toContainEqual(
-      expect.objectContaining({
-        id: "gpt-5.5",
-      }),
-    );
-    expect(entries).toContainEqual(
-      expect.objectContaining({
-        id: "gpt-5.5-pro",
-        contextWindow: 1_000_000,
-        contextTokens: 272_000,
-        cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
-      }),
-    );
-    expect(entries).toContainEqual(
-      expect.objectContaining({
-        id: "gpt-5.4",
-        contextWindow: 1_050_000,
-        contextTokens: 272_000,
-        cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
-      }),
-    );
-    expect(entries).toContainEqual(
-      expect.objectContaining({
-        id: "gpt-5.4-pro",
-        contextWindow: 1_050_000,
-        contextTokens: 272_000,
-        cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
-      }),
-    );
-    expect(entries).toContainEqual(
-      expect.objectContaining({
-        id: "gpt-5.4-mini",
-        contextWindow: 272_000,
-        cost: { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0 },
-      }),
-    );
+    expect(
+      requireArray(entries, "model catalog entries").some(
+        (entry) => isRecord(entry) && entry.id === "gpt-5.5",
+      ),
+    ).toBe(false);
+    expectRecordFields(requireEntryById(entries, "gpt-5.5-pro"), "gpt-5.5-pro entry", {
+      contextWindow: 1_000_000,
+      contextTokens: 272_000,
+      cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
+    });
+    expectRecordFields(requireEntryById(entries, "gpt-5.4"), "gpt-5.4 entry", {
+      contextWindow: 1_050_000,
+      contextTokens: 272_000,
+      cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
+    });
+    expectRecordFields(requireEntryById(entries, "gpt-5.4-pro"), "gpt-5.4-pro entry", {
+      contextWindow: 1_050_000,
+      contextTokens: 272_000,
+      cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
+    });
+    expectRecordFields(requireEntryById(entries, "gpt-5.4-mini"), "gpt-5.4-mini entry", {
+      contextWindow: 400_000,
+      contextTokens: 272_000,
+      cost: { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0 },
+    });
   });
 
   it("augments gpt-5.4-pro from catalog gpt-5.4 when legacy codex rows are absent", () => {
@@ -535,14 +653,11 @@ describe("openai codex provider", () => {
       ],
     } as never);
 
-    expect(entries).toContainEqual(
-      expect.objectContaining({
-        id: "gpt-5.4-pro",
-        contextWindow: 1_050_000,
-        contextTokens: 272_000,
-        cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
-      }),
-    );
+    expectRecordFields(requireEntryById(entries, "gpt-5.4-pro"), "gpt-5.4-pro entry", {
+      contextWindow: 1_050_000,
+      contextTokens: 272_000,
+      cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
+    });
   });
 
   it("canonicalizes legacy gpt-5.4-codex models during resolved-model normalization", () => {
@@ -565,7 +680,7 @@ describe("openai codex provider", () => {
       },
     } as never);
 
-    expect(model).toMatchObject({
+    expectModelFields(model, {
       id: "gpt-5.4",
       name: "gpt-5.4",
     });
@@ -590,7 +705,7 @@ describe("openai codex provider", () => {
       },
     } as never);
 
-    expect(model).toMatchObject({
+    expectModelFields(model, {
       api: "openai-codex-responses",
       baseUrl: "https://chatgpt.com/backend-api/codex",
     });
@@ -616,7 +731,7 @@ describe("openai codex provider", () => {
       },
     } as never);
 
-    expect(model).toMatchObject({
+    expectModelFields(model, {
       api: "openai-codex-responses",
       baseUrl: "https://chatgpt.com/backend-api/codex",
     });
@@ -642,7 +757,7 @@ describe("openai codex provider", () => {
       },
     } as never);
 
-    expect(model).toMatchObject({
+    expectModelFields(model, {
       api: "openai-codex-responses",
       baseUrl: "https://chatgpt.com/backend-api/codex",
     });
@@ -668,7 +783,7 @@ describe("openai codex provider", () => {
       },
     } as never);
 
-    expect(model).toMatchObject({
+    expectModelFields(model, {
       api: "openai-codex-responses",
       baseUrl: "https://chatgpt.com/backend-api/codex",
     });

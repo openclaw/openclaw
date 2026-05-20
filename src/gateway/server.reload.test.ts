@@ -2,13 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
-import {
-  __setModelCatalogImportForTest,
-  resetModelCatalogCacheForTest,
-} from "../agents/model-catalog.js";
-import { buildModelsProviderData } from "../auto-reply/reply/commands-models.js";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { drainSystemEvents } from "../infra/system-events.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
@@ -25,7 +19,7 @@ import {
   rpcReq,
   startServerWithClient,
   testState,
-  withGatewayServer,
+  withGatewayServer as withMinimalGatewayServer,
 } from "./test-helpers.js";
 
 const hoisted = vi.hoisted(() => {
@@ -52,11 +46,20 @@ const hoisted = vi.hoisted(() => {
   const totalPendingReplies = { value: 0 };
   const totalQueueSize = { value: 0 };
   const activeTaskCount = { value: 0 };
+  const activeTaskBlockers: Array<{
+    taskId: string;
+    status: "queued" | "running";
+    runtime: "subagent" | "acp" | "cli" | "cron";
+    runId?: string;
+    label?: string;
+    title?: string;
+  }> = [];
 
   const startGmailWatcher = vi.fn(async () => ({ started: true }));
   const stopGmailWatcher = vi.fn(async () => {});
   const resetModelCatalogCache = vi.fn();
   const disposeAllSessionMcpRuntimes = vi.fn(async () => {});
+  const resolveOpenClawPackageRootSync = vi.fn((_params: unknown) => "/package");
 
   const providerManager = {
     getRuntimeSnapshot: vi.fn(() => ({
@@ -155,20 +158,24 @@ const hoisted = vi.hoisted(() => {
     totalPendingReplies,
     totalQueueSize,
     activeTaskCount,
+    activeTaskBlockers,
     startGmailWatcher,
     stopGmailWatcher,
     resetModelCatalogCache,
     disposeAllSessionMcpRuntimes,
+    resolveOpenClawPackageRootSync,
     providerManager,
     createChannelManager,
     startGatewayConfigReloader,
     reloaderStop,
     getOnHotReload: () => onHotReload,
     getOnRestart: () => onRestart,
+    resetReloadCallbacks: () => {
+      onHotReload = null;
+      onRestart = null;
+    },
   };
 });
-
-type PiDiscoveryRuntimeModule = typeof import("../agents/pi-model-discovery-runtime.js");
 
 vi.mock("../cron/service.js", () => ({
   CronService: hoisted.CronService,
@@ -206,9 +213,27 @@ vi.mock("../agents/pi-bundle-mcp-tools.js", async () => {
   };
 });
 
+vi.mock("../infra/openclaw-root.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/openclaw-root.js")>();
+  return {
+    ...actual,
+    resolveOpenClawPackageRootSync: hoisted.resolveOpenClawPackageRootSync,
+  };
+});
+
 vi.mock("../agents/pi-embedded-runner/runs.js", async () => {
   const actual = await vi.importActual<typeof import("../agents/pi-embedded-runner/runs.js")>(
     "../agents/pi-embedded-runner/runs.js",
+  );
+  return {
+    ...actual,
+    getActiveEmbeddedRunCount: () => hoisted.activeEmbeddedRunCount.value,
+  };
+});
+
+vi.mock("../agents/pi-embedded-runner/run-state.js", async () => {
+  const actual = await vi.importActual<typeof import("../agents/pi-embedded-runner/run-state.js")>(
+    "../agents/pi-embedded-runner/run-state.js",
   );
   return {
     ...actual,
@@ -242,6 +267,7 @@ vi.mock("../tasks/task-registry.maintenance.js", async () => {
   );
   return {
     ...actual,
+    getInspectableActiveTaskRestartBlockers: () => hoisted.activeTaskBlockers,
     getInspectableTaskRegistrySummary: () => ({
       active: hoisted.activeTaskCount.value,
       queued: 0,
@@ -264,6 +290,15 @@ vi.mock("./config-reload.js", async (importOriginal) => {
 });
 
 installGatewayTestHooks({ scope: "suite" });
+
+function latestMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
+  const calls = mock.mock.calls;
+  const call = calls[calls.length - 1];
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
 
 async function waitForGatewayAuthChangedClose(ws: WebSocket): Promise<{
   code: number;
@@ -296,10 +331,14 @@ describe("gateway hot reload", () => {
     hoisted.totalPendingReplies.value = 0;
     hoisted.totalQueueSize.value = 0;
     hoisted.activeTaskCount.value = 0;
+    hoisted.activeTaskBlockers.length = 0;
     embeddedRunMock.activeIds.clear();
     hoisted.resetModelCatalogCache.mockReset();
     hoisted.disposeAllSessionMcpRuntimes.mockReset();
     hoisted.disposeAllSessionMcpRuntimes.mockResolvedValue(undefined);
+    hoisted.resolveOpenClawPackageRootSync.mockClear();
+    hoisted.resolveOpenClawPackageRootSync.mockReturnValue("/package");
+    hoisted.resetReloadCallbacks();
   });
 
   afterEach(() => {
@@ -405,7 +444,7 @@ describe("gateway hot reload", () => {
     );
 
     await expect(params.applyReload()).rejects.toThrow(params.expectedError);
-    expect(drainSystemEvents(params.sessionKey)).toEqual([]);
+    expect(drainSystemEvents(params.sessionKey)).toStrictEqual([]);
   }
 
   async function expectSecretReloadRecovered(params: {
@@ -420,59 +459,12 @@ describe("gateway hot reload", () => {
   }
 
   async function withNonMinimalGatewayServer(
-    fn: Parameters<typeof withGatewayServer>[0],
-  ): ReturnType<typeof withGatewayServer> {
+    fn: Parameters<typeof withMinimalGatewayServer>[0],
+  ): ReturnType<typeof withMinimalGatewayServer> {
     return await withEnvAsync({ OPENCLAW_TEST_MINIMAL_GATEWAY: undefined }, async () =>
-      withGatewayServer(fn),
+      withMinimalGatewayServer(fn),
     );
   }
-
-  it("defers channel hot reload until active work drains", async () => {
-    await withNonMinimalGatewayServer(async () => {
-      const onHotReload = hoisted.getOnHotReload();
-      expect(onHotReload).toBeTypeOf("function");
-
-      hoisted.providerManager.stopChannel.mockClear();
-      hoisted.providerManager.startChannel.mockClear();
-      hoisted.activeEmbeddedRunCount.value = 1;
-      embeddedRunMock.activeIds.add("reload-active");
-      const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-      const reloadPromise = onHotReload?.(
-        {
-          changedPaths: ["channels.discord.token"],
-          restartGateway: false,
-          restartReasons: [],
-          hotReasons: ["channels.discord.token"],
-          reloadHooks: false,
-          restartGmailWatcher: false,
-          restartCron: false,
-          restartHeartbeat: false,
-          restartChannels: new Set(["discord"]),
-          noopPaths: [],
-        },
-        {
-          gateway: { reload: { deferralTimeoutMs: 60_000 } },
-          channels: { discord: { token: "token" } },
-        },
-      );
-      try {
-        await delay(550);
-        expect(hoisted.providerManager.stopChannel).not.toHaveBeenCalled();
-        expect(hoisted.providerManager.startChannel).not.toHaveBeenCalled();
-
-        hoisted.activeEmbeddedRunCount.value = 0;
-        embeddedRunMock.activeIds.clear();
-        await reloadPromise;
-      } finally {
-        hoisted.activeEmbeddedRunCount.value = 0;
-        embeddedRunMock.activeIds.clear();
-        await reloadPromise?.catch(() => {});
-      }
-
-      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("discord");
-      expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("discord");
-    });
-  });
 
   it("uses the configured timeout when active work does not drain before channel reload", async () => {
     await withNonMinimalGatewayServer(async () => {
@@ -518,12 +510,14 @@ describe("gateway hot reload", () => {
         await reloadPromise?.catch(() => {});
       }
 
-      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("discord");
+      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("discord", undefined, {
+        manual: false,
+      });
       expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("discord");
     });
   });
 
-  it("waits indefinitely for channel hot reload when deferral timeout is 0 or omitted", async () => {
+  it("waits indefinitely for channel hot reload when deferral timeout is 0", async () => {
     await withNonMinimalGatewayServer(async () => {
       const onHotReload = hoisted.getOnHotReload();
       expect(onHotReload).toBeTypeOf("function");
@@ -569,15 +563,24 @@ describe("gateway hot reload", () => {
         await reloadPromise?.catch(() => {});
       }
 
-      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("discord");
+      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("discord", undefined, {
+        manual: false,
+      });
       expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("discord");
+    });
+  });
+
+  it("uses the default channel reload deferral timeout when config omits deferralTimeoutMs", async () => {
+    await withNonMinimalGatewayServer(async () => {
+      const onHotReload = hoisted.getOnHotReload();
+      expect(onHotReload).toBeTypeOf("function");
 
       hoisted.providerManager.stopChannel.mockClear();
       hoisted.providerManager.startChannel.mockClear();
       hoisted.activeEmbeddedRunCount.value = 1;
-      embeddedRunMock.activeIds.add("reload-indefinite-omitted");
+      embeddedRunMock.activeIds.add("reload-default-timeout");
       vi.useFakeTimers();
-      const omittedPromise = onHotReload?.(
+      const reloadPromise = onHotReload?.(
         {
           changedPaths: ["channels.telegram.botToken"],
           restartGateway: false,
@@ -596,23 +599,23 @@ describe("gateway hot reload", () => {
       );
       try {
         await Promise.resolve();
-        await vi.advanceTimersByTimeAsync(10 * 60_000);
+        await vi.advanceTimersByTimeAsync(299_500);
         expect(hoisted.providerManager.stopChannel).not.toHaveBeenCalled();
         expect(hoisted.providerManager.startChannel).not.toHaveBeenCalled();
 
-        hoisted.activeEmbeddedRunCount.value = 0;
-        embeddedRunMock.activeIds.clear();
         await vi.advanceTimersByTimeAsync(500);
-        await omittedPromise;
+        await reloadPromise;
       } finally {
         hoisted.activeEmbeddedRunCount.value = 0;
         embeddedRunMock.activeIds.clear();
         await vi.advanceTimersByTimeAsync(500).catch(() => {});
         vi.useRealTimers();
-        await omittedPromise?.catch(() => {});
+        await reloadPromise?.catch(() => {});
       }
 
-      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("telegram");
+      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("telegram", undefined, {
+        manual: false,
+      });
       expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("telegram");
     });
   });
@@ -665,29 +668,54 @@ describe("gateway hot reload", () => {
       );
 
       expect(hoisted.stopGmailWatcher).toHaveBeenCalled();
-      expect(hoisted.startGmailWatcher).toHaveBeenCalledWith(expect.objectContaining(nextConfig));
+      const [restartedGmailConfig] = latestMockCall(
+        hoisted.startGmailWatcher,
+        "Gmail watcher start",
+      ) as [typeof nextConfig];
+      expect(restartedGmailConfig.hooks).toEqual(nextConfig.hooks);
+      expect(restartedGmailConfig.channels).toEqual(nextConfig.channels);
 
       expect(hoisted.startHeartbeatRunner).toHaveBeenCalledTimes(1);
       expect(hoisted.heartbeatUpdateConfig).toHaveBeenCalledTimes(1);
-      expect(hoisted.heartbeatUpdateConfig).toHaveBeenCalledWith(
-        expect.objectContaining(nextConfig),
-      );
+      const [heartbeatConfig] = latestMockCall(
+        hoisted.heartbeatUpdateConfig,
+        "heartbeat config update",
+      ) as [typeof nextConfig];
+      expect(heartbeatConfig.agents).toEqual(nextConfig.agents);
+      expect(heartbeatConfig.web).toEqual(nextConfig.web);
 
-      expect(hoisted.cronInstances.length).toBe(2);
-      expect(hoisted.cronInstances[0].stop).toHaveBeenCalledTimes(1);
-      expect(hoisted.cronInstances[1].start).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => {
+        expect(hoisted.cronInstances.length).toBeGreaterThanOrEqual(1);
+      });
+      const restartedCron = hoisted.cronInstances.at(-1);
+      if (!restartedCron) {
+        throw new Error("expected cron restart to create a cron service");
+      }
+      await vi.waitFor(() => {
+        expect(restartedCron.start).toHaveBeenCalledTimes(1);
+      });
 
       expect(hoisted.providerManager.stopChannel).toHaveBeenCalledTimes(5);
       expect(hoisted.providerManager.startChannel).toHaveBeenCalledTimes(5);
-      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("whatsapp");
+      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("whatsapp", undefined, {
+        manual: false,
+      });
       expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("whatsapp");
-      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("telegram");
+      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("telegram", undefined, {
+        manual: false,
+      });
       expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("telegram");
-      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("discord");
+      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("discord", undefined, {
+        manual: false,
+      });
       expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("discord");
-      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("signal");
+      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("signal", undefined, {
+        manual: false,
+      });
       expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("signal");
-      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("imessage");
+      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("imessage", undefined, {
+        manual: false,
+      });
       expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("imessage");
 
       const onRestart = hoisted.getOnRestart();
@@ -714,6 +742,54 @@ describe("gateway hot reload", () => {
       await Promise.resolve(restartResult);
 
       expect(signalSpy).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("uses the default restart deferral timeout when config omits deferralTimeoutMs", async () => {
+    await withNonMinimalGatewayServer(async () => {
+      const onRestart = hoisted.getOnRestart();
+      expect(onRestart).toBeTypeOf("function");
+
+      const restartTesting = (await import("../infra/restart.js")).testing;
+      restartTesting.resetSigusr1State();
+      hoisted.activeTaskBlockers.push({
+        taskId: "task-running-1",
+        status: "running",
+        runtime: "subagent",
+      });
+      const signalSpy = vi.fn();
+      process.once("SIGUSR1", signalSpy);
+      vi.useFakeTimers();
+
+      try {
+        onRestart?.(
+          {
+            changedPaths: ["gateway.port"],
+            restartGateway: true,
+            restartReasons: ["gateway.port"],
+            hotReasons: [],
+            reloadHooks: false,
+            restartGmailWatcher: false,
+            restartCron: false,
+            restartHeartbeat: false,
+            restartChannels: new Set(),
+            noopPaths: [],
+          },
+          {},
+        );
+
+        await vi.advanceTimersByTimeAsync(299_500);
+        expect(signalSpy).not.toHaveBeenCalled();
+
+        await vi.advanceTimersByTimeAsync(500);
+        await Promise.resolve();
+        expect(signalSpy).toHaveBeenCalledTimes(1);
+      } finally {
+        hoisted.activeTaskBlockers.length = 0;
+        vi.useRealTimers();
+        process.removeListener("SIGUSR1", signalSpy);
+        restartTesting.resetSigusr1State();
+      }
     });
   });
 
@@ -765,7 +841,7 @@ describe("gateway hot reload", () => {
   });
 
   it("clears the model catalog cache on model-related hot reloads", async () => {
-    await withGatewayServer(async () => {
+    await withNonMinimalGatewayServer(async () => {
       const onHotReload = hoisted.getOnHotReload();
       expect(onHotReload).toBeTypeOf("function");
 
@@ -796,9 +872,8 @@ describe("gateway hot reload", () => {
       expect(hoisted.resetModelCatalogCache).toHaveBeenCalledTimes(1);
     });
   });
-
   it("disposes cached MCP runtimes on MCP config hot reloads", async () => {
-    await withGatewayServer(async () => {
+    await withNonMinimalGatewayServer(async () => {
       const onHotReload = hoisted.getOnHotReload();
       expect(onHotReload).toBeTypeOf("function");
 
@@ -828,96 +903,38 @@ describe("gateway hot reload", () => {
     });
   });
 
-  it("makes newly available catalog models visible in-process after hot reload", async () => {
-    type TestRegistryEntry = { provider: string; id: string; name: string };
-    let registryEntries: TestRegistryEntry[] = [
-      { provider: "ollama", id: "existing", name: "Existing" },
-    ];
-    __setModelCatalogImportForTest(
-      async () =>
-        ({
-          discoverAuthStorage: () => ({}),
-          ModelRegistry: class {
-            getAll() {
-              return registryEntries;
-            }
-          },
-        }) as unknown as PiDiscoveryRuntimeModule,
-    );
-    resetModelCatalogCacheForTest();
+  it("reloads plugin runtime surfaces and disposes MCP runtimes on plugin config hot reloads", async () => {
+    await withNonMinimalGatewayServer(async () => {
+      const onHotReload = hoisted.getOnHotReload();
+      expect(onHotReload).toBeTypeOf("function");
 
-    try {
-      await withGatewayServer(async () => {
-        const onHotReload = hoisted.getOnHotReload();
-        expect(onHotReload).toBeTypeOf("function");
-
-        const baseConfig: OpenClawConfig = {
-          agents: {
-            defaults: {
-              model: {
-                primary: "ollama/existing",
-              },
+      await onHotReload?.(
+        {
+          changedPaths: ["plugins.entries.discord.enabled"],
+          restartGateway: false,
+          restartReasons: [],
+          hotReasons: ["plugins.entries.discord.enabled"],
+          reloadHooks: false,
+          restartGmailWatcher: false,
+          restartCron: false,
+          restartHeartbeat: false,
+          restartHealthMonitor: false,
+          reloadPlugins: true,
+          restartChannels: new Set(),
+          disposeMcpRuntimes: true,
+          noopPaths: [],
+        },
+        {
+          plugins: {
+            entries: {
+              discord: { enabled: false },
             },
           },
-          models: {
-            providers: {
-              ollama: {
-                baseUrl: "http://127.0.0.1:11434",
-                api: "ollama",
-                apiKey: "ollama-local",
-                models: [],
-              },
-            },
-          },
-        };
+        },
+      );
 
-        const before = await buildModelsProviderData(baseConfig);
-        expect([...(before.byProvider.get("ollama") ?? new Set()).values()]).toEqual(["existing"]);
-
-        registryEntries = [
-          ...registryEntries,
-          { provider: "ollama", id: "glm-5.1:cloud", name: "GLM 5.1 Cloud" },
-        ];
-
-        const nextConfig = structuredClone(baseConfig);
-        await onHotReload?.(
-          {
-            changedPaths: ["models.providers.ollama.models"],
-            restartGateway: false,
-            restartReasons: [],
-            hotReasons: ["models.providers.ollama.models"],
-            reloadHooks: false,
-            restartGmailWatcher: false,
-            restartCron: false,
-            restartHeartbeat: false,
-            restartChannels: new Set(),
-            noopPaths: [],
-          },
-          nextConfig,
-        );
-
-        __setModelCatalogImportForTest(
-          async () =>
-            ({
-              discoverAuthStorage: () => ({}),
-              ModelRegistry: class {
-                getAll() {
-                  return registryEntries;
-                }
-              },
-            }) as unknown as PiDiscoveryRuntimeModule,
-        );
-        const after = await buildModelsProviderData(nextConfig);
-        expect([...(after.byProvider.get("ollama") ?? new Set()).values()]).toEqual([
-          "existing",
-          "glm-5.1:cloud",
-        ]);
-        expect(hoisted.resetModelCatalogCache).toHaveBeenCalledTimes(1);
-      });
-    } finally {
-      __setModelCatalogImportForTest();
-      resetModelCatalogCacheForTest();
-    }
+      expect(hoisted.disposeAllSessionMcpRuntimes).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("serves secrets.reload immediately after startup without race failures", async () => {

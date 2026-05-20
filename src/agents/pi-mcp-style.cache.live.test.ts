@@ -1,4 +1,4 @@
-import type { AssistantMessage, Tool } from "@mariozechner/pi-ai";
+import type { AssistantMessage, Tool } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import {
@@ -91,11 +91,11 @@ async function runToolOnlyTurn(params: ToolOnlyTurnParams) {
     text = extractAssistantText(response);
   }
 
-  expect(toolCall).toBeTruthy();
   expect(text.length).toBe(0);
   if (!toolCall || toolCall.type !== "toolCall") {
     throw new Error("expected tool call");
   }
+  expect(toolCall.name).toBe(MCP_TOOL.name);
   return {
     prompt,
     response,

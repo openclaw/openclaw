@@ -1,5 +1,5 @@
+import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
-import { isLiveTestEnabled } from "../../src/agents/live-test-helpers.js";
 import { listMicrosoftVoices } from "./speech-provider.js";
 
 const describeLive = isLiveTestEnabled() ? describe : describe.skip;
@@ -9,6 +9,6 @@ describeLive("microsoft plugin live", () => {
     const voices = await listMicrosoftVoices();
 
     expect(voices.length).toBeGreaterThan(100);
-    expect(voices.some((voice) => voice.id === "en-US-MichelleNeural")).toBe(true);
+    expect(voices.map((voice) => voice.id)).toContain("en-US-MichelleNeural");
   }, 60_000);
 });

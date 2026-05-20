@@ -1,4 +1,4 @@
-import type { Api } from "@mariozechner/pi-ai";
+import type { Api } from "@earendil-works/pi-ai";
 import type { ModelDefinitionConfig } from "../config/types.js";
 import type {
   ConfiguredModelProviderRequest,
@@ -7,6 +7,7 @@ import type {
 import { assertSecretInputResolved } from "../config/types.secrets.js";
 import type { PinnedDispatcherPolicy } from "../infra/net/ssrf.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { COPILOT_INTEGRATION_ID, buildCopilotIdeHeaders } from "./copilot-dynamic-headers.js";
 import type {
   ProviderRequestCapabilities,
   ProviderRequestCapability,
@@ -66,7 +67,7 @@ export type ModelProviderRequestTransportOverrides = ProviderRequestTransportOve
   allowPrivateNetwork?: boolean;
 };
 
-export type ResolvedProviderRequestAuthConfig =
+type ResolvedProviderRequestAuthConfig =
   | {
       configured: false;
       mode: "provider-default" | "authorization-bearer";
@@ -88,7 +89,7 @@ export type ResolvedProviderRequestAuthConfig =
       injectAuthorizationHeader: false;
     };
 
-export type ResolvedProviderRequestProxyConfig =
+type ResolvedProviderRequestProxyConfig =
   | {
       configured: false;
     }
@@ -104,7 +105,7 @@ export type ResolvedProviderRequestProxyConfig =
       tls: ResolvedProviderRequestTlsConfig;
     };
 
-export type ResolvedProviderRequestTlsConfig =
+type ResolvedProviderRequestTlsConfig =
   | {
       configured: false;
     }
@@ -118,7 +119,7 @@ export type ResolvedProviderRequestTlsConfig =
       rejectUnauthorized?: boolean;
     };
 
-export type ResolvedProviderRequestExtraHeadersConfig = {
+type ResolvedProviderRequestExtraHeadersConfig = {
   configured: boolean;
   headers?: Record<string, string>;
 };
@@ -134,10 +135,11 @@ export type ResolvedProviderRequestConfig = {
   policy: ProviderRequestPolicyResolution;
 };
 
-export type ProviderRequestHeaderPrecedence = "caller-wins" | "defaults-win";
+type ProviderRequestHeaderPrecedence = "caller-wins" | "defaults-win";
 
-export type ResolvedProviderRequestPolicyConfig = ResolvedProviderRequestConfig & {
+type ResolvedProviderRequestPolicyConfig = ResolvedProviderRequestConfig & {
   allowPrivateNetwork: boolean;
+  privateNetworkExplicitlyDenied: boolean;
   capabilities: ProviderRequestCapabilities;
 };
 
@@ -165,6 +167,25 @@ type ResolveProviderRequestPolicyConfigParams = {
   allowPrivateNetwork?: boolean;
   request?: ModelProviderRequestTransportOverrides;
 };
+
+function resolvePrivateNetworkAccess(params: ResolveProviderRequestPolicyConfigParams): {
+  allowPrivateNetwork: boolean;
+  explicitlyDenied: boolean;
+} {
+  // Preserve existing precedence: runtime/caller policy overrides model config.
+  const configuredAllowPrivateNetwork =
+    params.allowPrivateNetwork ?? params.request?.allowPrivateNetwork;
+  if (configuredAllowPrivateNetwork !== undefined) {
+    return {
+      allowPrivateNetwork: configuredAllowPrivateNetwork,
+      explicitlyDenied: !configuredAllowPrivateNetwork,
+    };
+  }
+  return {
+    allowPrivateNetwork: false,
+    explicitlyDenied: false,
+  };
+}
 
 function sanitizeConfiguredRequestString(value: unknown, path: string): string | undefined {
   if (typeof value !== "string") {
@@ -375,7 +396,20 @@ export function normalizeBaseUrl(
   return raw.replace(/\/+$/, "");
 }
 
-export function mergeProviderRequestHeaders(
+function resolveProviderDefaultRequestHeaders(
+  provider: string | undefined,
+): Record<string, string> | undefined {
+  if (normalizeLowercaseStringOrEmpty(provider) !== "github-copilot") {
+    return undefined;
+  }
+  return {
+    ...buildCopilotIdeHeaders(),
+    "Copilot-Integration-Id": COPILOT_INTEGRATION_ID,
+    "Openai-Organization": "github-copilot",
+  };
+}
+
+function mergeProviderRequestHeaders(
   ...headerSets: Array<Record<string, string> | undefined>
 ): Record<string, string> | undefined {
   let merged: Record<string, string> | undefined;
@@ -623,6 +657,7 @@ export function resolveProviderRequestPolicyConfig(
   });
   const extraHeaders = applyResolvedAuthHeader(
     mergeProviderRequestHeaders(
+      resolveProviderDefaultRequestHeaders(params.provider),
       params.discoveredHeaders,
       params.providerHeaders,
       params.modelHeaders,
@@ -645,6 +680,7 @@ export function resolveProviderRequestPolicyConfig(
     params.precedence === "caller-wins"
       ? mergeProviderRequestHeaders(mergedDefaults, unprotectedCallerHeaders)
       : mergeProviderRequestHeaders(unprotectedCallerHeaders, mergedDefaults);
+  const privateNetworkAccess = resolvePrivateNetworkAccess(params);
 
   return {
     api: params.api,
@@ -659,7 +695,8 @@ export function resolveProviderRequestPolicyConfig(
     tls: resolveTlsOverride(params.request?.tls),
     policy,
     capabilities,
-    allowPrivateNetwork: params.allowPrivateNetwork ?? params.request?.allowPrivateNetwork ?? false,
+    allowPrivateNetwork: privateNetworkAccess.allowPrivateNetwork,
+    privateNetworkExplicitlyDenied: privateNetworkAccess.explicitlyDenied,
   };
 }
 

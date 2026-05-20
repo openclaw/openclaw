@@ -1,14 +1,20 @@
+import { parseExplicitTargetForLoadedChannel } from "../../channels/plugins/target-parsing-loaded.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
 import { loadSessionStore } from "../../config/sessions/store-load.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-id-resolution.js";
+import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { tryResolveLoadedOutboundTarget } from "../../infra/outbound/targets-loaded.js";
 import { resolveSessionDeliveryTarget } from "../../infra/outbound/targets-session.js";
 import type { OutboundChannel } from "../../infra/outbound/targets.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { resolveCronStoredDeliveryContext } from "../delivery-context.js";
+import { resolveCronAgentSessionKey } from "./session-key.js";
 
 export type DeliveryTargetResolution =
   | {
@@ -29,41 +35,82 @@ export type DeliveryTargetResolution =
       error: Error;
     };
 
-let targetsRuntimePromise:
-  | Promise<typeof import("../../infra/outbound/targets.runtime.js")>
-  | undefined;
+const targetsRuntimeLoader = createLazyImportLoader(
+  () => import("../../infra/outbound/targets.runtime.js"),
+);
 
 async function loadTargetsRuntime() {
-  targetsRuntimePromise ??= import("../../infra/outbound/targets.runtime.js");
-  return await targetsRuntimePromise;
+  return await targetsRuntimeLoader.load();
 }
 
 async function resolveOutboundTargetWithRuntime(
   params: Parameters<typeof tryResolveLoadedOutboundTarget>[0],
 ) {
-  const loaded = tryResolveLoadedOutboundTarget(params);
-  if (loaded) {
-    return loaded;
+  try {
+    const loaded = tryResolveLoadedOutboundTarget(params);
+    if (loaded) {
+      return loaded;
+    }
+    const { resolveOutboundTarget } = await loadTargetsRuntime();
+    return resolveOutboundTarget({ ...params, allowBootstrap: true });
+  } catch (err) {
+    return {
+      ok: false as const,
+      error: new Error(`Invalid delivery target: ${formatErrorMessage(err)}`),
+    };
   }
-  const { resolveOutboundTarget } = await loadTargetsRuntime();
-  return resolveOutboundTarget(params);
 }
 
-let channelSelectionRuntimePromise:
-  | Promise<typeof import("../../infra/outbound/channel-selection.runtime.js")>
-  | undefined;
-let deliveryTargetRuntimePromise:
-  | Promise<typeof import("./delivery-target.runtime.js")>
-  | undefined;
+function normalizeTargetForThreadCarry(
+  channel: Exclude<OutboundChannel, "none"> | undefined,
+  to: string | undefined,
+): string | undefined {
+  if (!channel || !to) {
+    return undefined;
+  }
+  try {
+    const normalized = normalizeTargetForProvider(channel, to);
+    const comparable = normalized ?? to.trim();
+    if (!comparable) {
+      return undefined;
+    }
+    const parsed = parseExplicitTargetForLoadedChannel(channel, comparable);
+    const base = parsed?.to ?? comparable;
+    return normalizeTargetForProvider(channel, base) ?? base;
+  } catch {
+    return undefined;
+  }
+}
+
+function deliveryTargetsShareThreadRoute(params: {
+  channel: Exclude<OutboundChannel, "none"> | undefined;
+  to: string | undefined;
+  lastTo: string | undefined;
+}): boolean {
+  if (!params.to || !params.lastTo) {
+    return false;
+  }
+  if (params.to === params.lastTo) {
+    return true;
+  }
+  const normalizedTo = normalizeTargetForThreadCarry(params.channel, params.to);
+  const normalizedLastTo = normalizeTargetForThreadCarry(params.channel, params.lastTo);
+  return Boolean(normalizedTo && normalizedLastTo && normalizedTo === normalizedLastTo);
+}
+
+const channelSelectionRuntimeLoader = createLazyImportLoader(
+  () => import("../../infra/outbound/channel-selection.runtime.js"),
+);
+const deliveryTargetRuntimeLoader = createLazyImportLoader(
+  () => import("./delivery-target.runtime.js"),
+);
 
 async function loadChannelSelectionRuntime() {
-  channelSelectionRuntimePromise ??= import("../../infra/outbound/channel-selection.runtime.js");
-  return await channelSelectionRuntimePromise;
+  return await channelSelectionRuntimeLoader.load();
 }
 
 async function loadDeliveryTargetRuntime() {
-  deliveryTargetRuntimePromise ??= import("./delivery-target.runtime.js");
-  return await deliveryTargetRuntimePromise;
+  return await deliveryTargetRuntimeLoader.load();
 }
 export async function resolveDeliveryTarget(
   cfg: OpenClawConfig,
@@ -89,9 +136,28 @@ export async function resolveDeliveryTarget(
 
   // Look up thread-specific session first (e.g. agent:main:main:thread:1234),
   // then fall back to the main session entry.
-  const threadSessionKey = jobPayload.sessionKey?.trim();
+  const rawSessionKey = jobPayload.sessionKey?.trim();
+  const threadSessionKey = rawSessionKey
+    ? resolveCronAgentSessionKey({
+        sessionKey: rawSessionKey,
+        agentId,
+        mainKey: cfg.session?.mainKey,
+        cfg,
+      })
+    : undefined;
+  const storedDeliveryContext = resolveCronStoredDeliveryContext({
+    cfg,
+    sessionKey: threadSessionKey,
+  });
+  const storedDeliveryEntry = storedDeliveryContext
+    ? ({
+        sessionId: threadSessionKey ?? mainSessionKey,
+        updatedAt: 0,
+        deliveryContext: storedDeliveryContext,
+      } satisfies SessionEntry)
+    : undefined;
   const threadEntry = threadSessionKey ? store[threadSessionKey] : undefined;
-  const main = threadEntry ?? store[mainSessionKey];
+  const main = storedDeliveryEntry ?? threadEntry ?? store[mainSessionKey];
 
   const preliminary = resolveSessionDeliveryTarget({
     entry: main,
@@ -158,11 +224,26 @@ export async function resolveDeliveryTarget(
   // or when delivering to the same recipient as the session's last conversation.
   // Session-derived threadIds are dropped when the target differs to prevent
   // stale thread IDs from leaking to a different chat.
-  const threadId =
+  let threadId =
     resolved.threadId &&
-    (resolved.threadIdExplicit || (resolved.to && resolved.to === resolved.lastTo))
+    (resolved.threadIdExplicit ||
+      deliveryTargetsShareThreadRoute({
+        channel,
+        to: resolved.to,
+        lastTo: resolved.lastTo,
+      }))
       ? resolved.threadId
       : undefined;
+
+  if (channel === "telegram" && typeof toCandidate === "string") {
+    const topicMatch = toCandidate.match(/:topic:(\d+)$/i);
+    if (topicMatch) {
+      if (jobPayload.threadId == null || jobPayload.threadId === "") {
+        threadId = Number(topicMatch[1]);
+      }
+      toCandidate = toCandidate.replace(/:topic:\d+$/i, "");
+    }
+  }
 
   if (!channel) {
     return {
@@ -180,11 +261,8 @@ export async function resolveDeliveryTarget(
 
   let effectiveAllowFrom: string[] | undefined;
   if (mode === "implicit") {
-    const {
-      getLoadedChannelPluginForRead,
-      mapAllowFromEntries,
-      readChannelAllowFromStoreEntriesSync,
-    } = await loadDeliveryTargetRuntime();
+    const { getLoadedChannelPluginForRead, mapAllowFromEntries } =
+      await loadDeliveryTargetRuntime();
     const channelPlugin = getLoadedChannelPluginForRead(channel);
     const resolvedAccountId = normalizeAccountId(accountId);
     const configuredAllowFromRaw = channelPlugin?.config.resolveAllowFrom?.({
@@ -194,12 +272,7 @@ export async function resolveDeliveryTarget(
     const configuredAllowFrom = configuredAllowFromRaw
       ? mapAllowFromEntries(configuredAllowFromRaw)
       : [];
-    const storeAllowFrom = readChannelAllowFromStoreEntriesSync(
-      channel,
-      process.env,
-      resolvedAccountId,
-    );
-    const allowFromOverride = [...new Set([...configuredAllowFrom, ...storeAllowFrom])];
+    const allowFromOverride = [...new Set(configuredAllowFrom)];
     effectiveAllowFrom = allowFromOverride;
 
     if (toCandidate && allowFromOverride.length > 0) {

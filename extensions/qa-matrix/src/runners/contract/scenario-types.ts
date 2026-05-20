@@ -17,6 +17,16 @@ export type MatrixQaCanaryArtifact = {
 
 export type MatrixQaScenarioArtifacts = {
   accepted?: MatrixQaScenarioArtifacts;
+  approval?: MatrixQaObservedEvent["approval"] & {
+    eventId: string;
+    roomId: string;
+  };
+  approvals?: Array<
+    MatrixQaObservedEvent["approval"] & {
+      eventId: string;
+      roomId: string;
+    }
+  >;
   attachments?: Array<{
     eventId: string;
     filename?: string;
@@ -30,6 +40,7 @@ export type MatrixQaScenarioArtifacts = {
   attachmentFilename?: string;
   attachmentKind?: string;
   attachmentMsgtype?: string;
+  accountId?: string;
   actorUserId?: string;
   blocked?: MatrixQaScenarioArtifacts;
   catchupDriverEventId?: string;
@@ -38,6 +49,8 @@ export type MatrixQaScenarioArtifacts = {
   dedupeCommitObserved?: boolean;
   duplicateWindowMs?: number;
   driverEventId?: string;
+  driverEventIds?: string[];
+  driverUserId?: string;
   editEventId?: string;
   editedToken?: string;
   expectedNoReplyWindowMs?: number;
@@ -91,6 +104,8 @@ export type MatrixQaScenarioArtifacts = {
   noticeEventId?: string;
   previewBodyPreview?: string;
   previewEventId?: string;
+  previewFormattedBodyPreview?: string;
+  previewMentions?: MatrixQaObservedEvent["mentions"];
   blockEventIds?: string[];
   bootstrapActor?: "driver" | "observer" | "sut";
   bootstrapErrorPreview?: string;
@@ -101,6 +116,8 @@ export type MatrixQaScenarioArtifacts = {
   backupRestored?: boolean;
   backupReset?: boolean;
   completedVerificationId?: string;
+  backupVersion?: string | null;
+  cliDeviceId?: string | null;
   completedVerificationIds?: string[];
   currentDeviceId?: string | null;
   accountRoot?: string;
@@ -111,13 +128,18 @@ export type MatrixQaScenarioArtifacts = {
   deletedBackupVersion?: string | null;
   faultedEndpoint?: string;
   faultHitCount?: number;
+  faultProxyBaseUrl?: string;
   faultRuleId?: string;
   historyEventId?: string;
   observerRecoveryDeviceId?: string;
   qrBytes?: number;
   recoveryDeviceId?: string;
   recoveryKeyPreserved?: boolean;
+  decoyAccountPreserved?: boolean;
+  defaultAccountPreserved?: boolean;
+  recoveryKeyAccepted?: boolean;
   recoveryKeyId?: string | null;
+  recoveryKeyRejected?: boolean;
   recoveryKeyStored?: boolean;
   rotatedRecoveryKeyId?: string | null;
   remainingDeviceIds?: string[];
@@ -132,9 +154,24 @@ export type MatrixQaScenarioArtifacts = {
   replyEventId?: string;
   statusError?: string;
   statusExitCode?: number;
+  defaultStatusError?: string;
+  defaultStatusExitCode?: number;
   serverDeviceKnown?: boolean | null;
+  replacementDeviceId?: string;
   selfVerificationTransactionId?: string | null;
   transportInterruption?: string;
+  encryptionChanged?: boolean;
+  encryptionEnabled?: boolean;
+  firstEncryptionChanged?: boolean;
+  gatewayUserId?: string;
+  secondEncryptionChanged?: boolean;
+  setupSuccess?: boolean;
+  stateAfterFaultHitCount?: number;
+  stateAfterFaultRuleId?: string;
+  strippedSyncStateAfterParam?: boolean;
+  verificationBootstrapAttempted?: boolean;
+  verificationBootstrapSuccess?: boolean;
+  gatewayReply?: MatrixQaReplyArtifact;
   verificationRoomId?: string;
   joinedRoomId?: string;
   localEventId?: string;

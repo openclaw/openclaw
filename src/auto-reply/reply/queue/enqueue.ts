@@ -1,9 +1,17 @@
 import { resolveGlobalDedupeCache } from "../../../infra/dedupe.js";
+import { channelRouteDedupeKey } from "../../../plugin-sdk/channel-route.js";
 import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import { applyQueueDropPolicy, shouldSkipQueueItem } from "../../../utils/queue-helpers.js";
 import { kickFollowupDrainIfIdle, rememberFollowupDrainCallback } from "./drain.js";
 import { getExistingFollowupQueue, getFollowupQueue } from "./state.js";
-import type { FollowupRun, QueueDedupeMode, QueueSettings } from "./types.js";
+import {
+  completeFollowupRunLifecycle,
+  isFollowupRunAborted,
+  markFollowupRunEnqueued,
+  type FollowupRun,
+  type QueueDedupeMode,
+  type QueueSettings,
+} from "./types.js";
 
 /**
  * Keep queued message-id dedupe shared across bundled chunks so redeliveries
@@ -16,6 +24,15 @@ const RECENT_QUEUE_MESSAGE_IDS = resolveGlobalDedupeCache(RECENT_QUEUE_MESSAGE_I
   maxSize: 10_000,
 });
 
+function followupRouteIdentityKey(run: FollowupRun): string {
+  return channelRouteDedupeKey({
+    channel: run.originatingChannel,
+    to: run.originatingTo,
+    accountId: run.originatingAccountId,
+    threadId: run.originatingThreadId,
+  });
+}
+
 function buildRecentMessageIdKey(run: FollowupRun, queueKey: string): string | undefined {
   const messageId = normalizeOptionalString(run.messageId);
   if (!messageId) {
@@ -23,15 +40,7 @@ function buildRecentMessageIdKey(run: FollowupRun, queueKey: string): string | u
   }
   // Use JSON tuple serialization to avoid delimiter-collision edge cases when
   // channel/to/account values contain "|" characters.
-  return JSON.stringify([
-    "queue",
-    queueKey,
-    run.originatingChannel ?? "",
-    run.originatingTo ?? "",
-    run.originatingAccountId ?? "",
-    run.originatingThreadId == null ? "" : String(run.originatingThreadId),
-    messageId,
-  ]);
+  return JSON.stringify(["queue", queueKey, followupRouteIdentityKey(run), messageId]);
 }
 
 function isRunAlreadyQueued(
@@ -39,11 +48,8 @@ function isRunAlreadyQueued(
   items: FollowupRun[],
   allowPromptFallback = false,
 ): boolean {
-  const hasSameRouting = (item: FollowupRun) =>
-    item.originatingChannel === run.originatingChannel &&
-    item.originatingTo === run.originatingTo &&
-    item.originatingAccountId === run.originatingAccountId &&
-    item.originatingThreadId === run.originatingThreadId;
+  const routeKey = followupRouteIdentityKey(run);
+  const hasSameRouting = (item: FollowupRun) => followupRouteIdentityKey(item) === routeKey;
 
   const messageId = normalizeOptionalString(run.messageId);
   if (messageId) {
@@ -65,6 +71,9 @@ export function enqueueFollowupRun(
   runFollowup?: (run: FollowupRun) => Promise<void>,
   restartIfIdle = true,
 ): boolean {
+  if (isFollowupRunAborted(run)) {
+    return false;
+  }
   const queue = getFollowupQueue(key, settings);
   const recentMessageIdKey = dedupeMode !== "none" ? buildRecentMessageIdKey(run, key) : undefined;
   if (recentMessageIdKey && RECENT_QUEUE_MESSAGE_IDS.peek(recentMessageIdKey)) {
@@ -88,12 +97,31 @@ export function enqueueFollowupRun(
   const shouldEnqueue = applyQueueDropPolicy({
     queue,
     summarize: (item) => normalizeOptionalString(item.summaryLine) || item.prompt.trim(),
+    onDrop: (dropped) => {
+      if (queue.dropPolicy === "summarize") {
+        queue.summarySources.push(...dropped);
+        return;
+      }
+      for (const item of dropped) {
+        completeFollowupRunLifecycle(item);
+      }
+    },
   });
+  if (queue.dropPolicy === "summarize") {
+    const overflow = queue.summarySources.length - queue.summaryLines.length;
+    if (overflow > 0) {
+      const removed = queue.summarySources.splice(0, overflow);
+      for (const item of removed) {
+        completeFollowupRunLifecycle(item);
+      }
+    }
+  }
   if (!shouldEnqueue) {
     return false;
   }
 
   queue.items.push(run);
+  markFollowupRunEnqueued(run);
   if (recentMessageIdKey) {
     RECENT_QUEUE_MESSAGE_IDS.check(recentMessageIdKey);
   }

@@ -1,10 +1,12 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import { streamSimple } from "@mariozechner/pi-ai";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import { streamSimple } from "@earendil-works/pi-ai";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   applyAnthropicPayloadPolicyToParams,
   composeProviderStreamWrappers,
+  createAnthropicThinkingPrefillPayloadWrapper,
   resolveAnthropicPayloadPolicy,
+  stripTrailingAnthropicAssistantPrefillWhenThinking,
   streamWithPayloadPatch,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
@@ -12,7 +14,7 @@ import {
   normalizeFastMode,
   normalizeLowercaseStringOrEmpty,
   readStringValue,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const log = createSubsystemLogger("anthropic-stream");
 
@@ -168,6 +170,16 @@ export function createAnthropicServiceTierWrapper(
   };
 }
 
+export function createAnthropicThinkingPrefillWrapper(
+  baseStreamFn: StreamFn | undefined,
+): StreamFn {
+  return createAnthropicThinkingPrefillPayloadWrapper(baseStreamFn, (stripped) => {
+    log.warn(
+      `removed ${stripped} trailing assistant prefill message${stripped === 1 ? "" : "s"} because Anthropic extended thinking requires conversations to end with a user turn`,
+    );
+  });
+}
+
 export function resolveAnthropicFastMode(
   extraParams: Record<string, unknown> | undefined,
 ): boolean | undefined {
@@ -205,7 +217,12 @@ export function wrapAnthropicProviderStream(
     fastMode !== undefined
       ? (streamFn) => createAnthropicFastModeWrapper(streamFn, fastMode)
       : undefined,
+    (streamFn) => createAnthropicThinkingPrefillWrapper(streamFn),
   );
 }
 
-export const __testing = { log };
+export const testing = {
+  log,
+  stripTrailingAssistantPrefillWhenThinking: stripTrailingAnthropicAssistantPrefillWhenThinking,
+};
+export { testing as __testing };

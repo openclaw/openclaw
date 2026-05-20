@@ -1,4 +1,5 @@
 import type { ChildProcessWithoutNullStreams, SpawnOptions } from "node:child_process";
+import { createWindowsOutputDecoder } from "../../../infra/windows-encoding.js";
 import { killProcessTree } from "../../kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../../linux-oom-score.js";
 import { spawnWithFallback } from "../../spawn-utils.js";
@@ -72,35 +73,68 @@ export async function createChildAdapter(params: {
   });
 
   const child = spawned.child as ChildProcessWithoutNullStreams;
-  if (child.stdin) {
+  const childStdin = spawned.child.stdin;
+  let stdinDestroyed = childStdin?.destroyed ?? false;
+  let stdinEnded = childStdin?.writableEnded === true || childStdin?.writableFinished === true;
+  if (childStdin) {
+    childStdin.once("finish", () => {
+      stdinEnded = true;
+    });
+    childStdin.once("close", () => {
+      stdinEnded = true;
+      stdinDestroyed = true;
+    });
+    childStdin.once("error", () => {
+      stdinDestroyed = true;
+    });
     if (params.input !== undefined) {
-      child.stdin.write(params.input);
-      child.stdin.end();
+      childStdin.write(params.input);
+      stdinEnded = true;
+      childStdin.end();
     } else if (stdinMode === "pipe-closed") {
-      child.stdin.end();
+      stdinEnded = true;
+      childStdin.end();
     }
   }
 
-  const stdin: ManagedRunStdin | undefined = child.stdin
+  const stdin: ManagedRunStdin | undefined = childStdin
     ? {
-        destroyed: false,
+        get destroyed() {
+          return stdinDestroyed || childStdin.destroyed;
+        },
+        get writable() {
+          return !stdinDestroyed && !stdinEnded && childStdin.writable;
+        },
+        get writableEnded() {
+          return stdinEnded || childStdin.writableEnded;
+        },
+        get writableFinished() {
+          return childStdin.writableFinished;
+        },
         write: (data: string, cb?: (err?: Error | null) => void) => {
+          if (stdinDestroyed || stdinEnded || !childStdin.writable) {
+            cb?.(new Error("stdin is not writable"));
+            return;
+          }
           try {
-            child.stdin.write(data, cb);
+            childStdin.write(data, cb);
           } catch (err) {
             cb?.(err as Error);
           }
         },
         end: () => {
           try {
-            child.stdin.end();
+            stdinEnded = true;
+            childStdin.end();
           } catch {
             // ignore close errors
           }
         },
         destroy: () => {
           try {
-            child.stdin.destroy();
+            stdinDestroyed = true;
+            stdinEnded = true;
+            childStdin.destroy();
           } catch {
             // ignore destroy errors
           }
@@ -109,15 +143,49 @@ export async function createChildAdapter(params: {
     : undefined;
 
   const onStdout = (listener: (chunk: string) => void) => {
+    const stdoutDecoder = createWindowsOutputDecoder();
+    let flushed = false;
+    const flush = () => {
+      if (flushed) {
+        return;
+      }
+      flushed = true;
+      const tail = stdoutDecoder.flush();
+      if (tail) {
+        listener(tail);
+      }
+    };
     child.stdout.on("data", (chunk) => {
-      listener(chunk.toString());
+      const text = stdoutDecoder.decode(chunk);
+      if (text) {
+        listener(text);
+      }
     });
+    child.stdout.once("end", flush);
+    child.stdout.once("close", flush);
   };
 
   const onStderr = (listener: (chunk: string) => void) => {
+    const stderrDecoder = createWindowsOutputDecoder();
+    let flushed = false;
+    const flush = () => {
+      if (flushed) {
+        return;
+      }
+      flushed = true;
+      const tail = stderrDecoder.flush();
+      if (tail) {
+        listener(tail);
+      }
+    };
     child.stderr.on("data", (chunk) => {
-      listener(chunk.toString());
+      const text = stderrDecoder.decode(chunk);
+      if (text) {
+        listener(text);
+      }
     });
+    child.stderr.once("end", flush);
+    child.stderr.once("close", flush);
   };
 
   let waitResult: { code: number | null; signal: NodeJS.Signals | null } | null = null;

@@ -1,15 +1,18 @@
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { patchTopLevelChannelConfigSection } from "openclaw/plugin-sdk/setup";
 import {
   createDelegatedSetupWizardProxy,
   createStandardChannelSetupStatus,
   DEFAULT_ACCOUNT_ID,
+  createSetupTranslator,
   type ChannelSetupAdapter,
 } from "openclaw/plugin-sdk/setup-runtime";
 import { buildChannelConfigSchema, type ChannelPlugin } from "./channel-api.js";
 import { NostrConfigSchema } from "./config-schema.js";
 import { DEFAULT_RELAYS } from "./default-relays.js";
+
+const t = createSetupTranslator();
 
 const channel = "nostr" as const;
 
@@ -175,10 +178,10 @@ const nostrSetupWizard = createDelegatedSetupWizardProxy({
   status: {
     ...createStandardChannelSetupStatus({
       channelLabel: "Nostr",
-      configuredLabel: "configured",
-      unconfiguredLabel: "needs private key",
-      configuredHint: "configured",
-      unconfiguredHint: "needs private key",
+      configuredLabel: t("wizard.channels.statusConfigured"),
+      unconfiguredLabel: t("wizard.channels.statusNeedsPrivateKey"),
+      configuredHint: t("wizard.channels.statusConfigured"),
+      unconfiguredHint: t("wizard.channels.statusNeedsPrivateKey"),
       configuredScore: 1,
       unconfiguredScore: 0,
       includeStatusLine: true,

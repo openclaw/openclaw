@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../protocol/index.js";
 
 const mocks = vi.hoisted(() => ({
-  loadConfig: vi.fn(() => ({})),
+  getRuntimeConfig: vi.fn(() => ({})),
   resolveExplicitTtsOverrides: vi.fn(() => ({})),
   textToSpeech: vi.fn(async () => ({
     success: true,
@@ -14,7 +14,8 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../config/config.js", () => ({
-  loadConfig: mocks.loadConfig as typeof import("../../config/config.js").loadConfig,
+  getRuntimeConfig:
+    mocks.getRuntimeConfig as typeof import("../../config/config.js").getRuntimeConfig,
 }));
 
 vi.mock("../../tts/provider-registry.js", () => ({
@@ -44,8 +45,8 @@ vi.mock("../../tts/tts.js", () => ({
 
 describe("ttsHandlers", () => {
   beforeEach(() => {
-    mocks.loadConfig.mockReset();
-    mocks.loadConfig.mockReturnValue({});
+    mocks.getRuntimeConfig.mockReset();
+    mocks.getRuntimeConfig.mockReturnValue({});
     mocks.resolveExplicitTtsOverrides.mockReset();
     mocks.resolveExplicitTtsOverrides.mockReturnValue({});
     mocks.textToSpeech.mockReset();
@@ -72,16 +73,16 @@ describe("ttsHandlers", () => {
         provider: "bad",
       },
       respond,
+      context: { getRuntimeConfig: mocks.getRuntimeConfig },
     } as never);
 
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: ErrorCodes.INVALID_REQUEST,
-        message: 'Error: Unknown TTS provider "bad".',
-      }),
-    );
+    const call = respond.mock.calls.at(0) as
+      | [boolean, unknown, { code?: number; message?: string }]
+      | undefined;
+    expect(call?.[0]).toBe(false);
+    expect(call?.[1]).toBeUndefined();
+    expect(call?.[2]?.code).toBe(ErrorCodes.INVALID_REQUEST);
+    expect(call?.[2]?.message).toBe('Error: Unknown TTS provider "bad".');
     expect(mocks.textToSpeech).not.toHaveBeenCalled();
   });
 });

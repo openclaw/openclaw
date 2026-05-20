@@ -4,7 +4,8 @@
   "description": "Codex app-server harness and Codex-managed GPT model catalog.",
   "providers": ["codex"],
   "contracts": {
-    "mediaUnderstandingProviders": ["codex"]
+    "mediaUnderstandingProviders": ["codex"],
+    "migrationProviders": ["codex"]
   },
   "mediaUnderstandingProviderMetadata": {
     "codex": {
@@ -14,10 +15,11 @@
       }
     }
   },
-  "providerDiscoveryEntry": "./provider-discovery.ts",
+  "providerCatalogEntry": "./provider-discovery.ts",
   "syntheticAuthRefs": ["codex"],
   "nonSecretAuthMarkers": ["codex-app-server"],
   "activation": {
+    "onStartup": false,
     "onAgentHarnesses": ["codex"]
   },
   "commandAliases": [
@@ -31,6 +33,16 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "codexDynamicToolsLoading": {
+        "type": "string",
+        "enum": ["searchable", "direct"],
+        "default": "searchable"
+      },
+      "codexDynamicToolsExclude": {
+        "type": "array",
+        "items": { "type": "string" },
+        "default": []
+      },
       "discovery": {
         "type": "object",
         "additionalProperties": false,
@@ -40,6 +52,78 @@
             "type": "number",
             "minimum": 1,
             "default": 2500
+          }
+        }
+      },
+      "computerUse": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": false
+          },
+          "autoInstall": {
+            "type": "boolean",
+            "default": false
+          },
+          "marketplaceDiscoveryTimeoutMs": {
+            "type": "number",
+            "minimum": 1,
+            "default": 60000
+          },
+          "marketplaceSource": {
+            "type": "string"
+          },
+          "marketplacePath": {
+            "type": "string"
+          },
+          "marketplaceName": {
+            "type": "string"
+          },
+          "pluginName": {
+            "type": "string",
+            "default": "computer-use"
+          },
+          "mcpServerName": {
+            "type": "string",
+            "default": "computer-use"
+          }
+        }
+      },
+      "codexPlugins": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": false
+          },
+          "allow_destructive_actions": {
+            "type": "boolean",
+            "default": true
+          },
+          "plugins": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                },
+                "marketplaceName": {
+                  "type": "string",
+                  "enum": ["openai-curated"]
+                },
+                "pluginName": {
+                  "type": "string"
+                },
+                "allow_destructive_actions": {
+                  "type": "boolean"
+                }
+              }
+            }
           }
         }
       },
@@ -73,7 +157,20 @@
             "type": "object",
             "additionalProperties": { "type": "string" }
           },
+          "clearEnv": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "codeModeOnly": {
+            "type": "boolean",
+            "default": false
+          },
           "requestTimeoutMs": {
+            "type": "number",
+            "minimum": 1,
+            "default": 60000
+          },
+          "turnCompletionIdleTimeoutMs": {
             "type": "number",
             "minimum": 1,
             "default": 60000
@@ -90,7 +187,7 @@
             "type": "string",
             "enum": ["user", "auto_review", "guardian_subagent"]
           },
-          "serviceTier": { "type": ["string", "null"], "enum": ["fast", "flex", null] },
+          "serviceTier": { "type": ["string", "null"] },
           "defaultWorkspaceDir": {
             "type": "string"
           }
@@ -99,6 +196,16 @@
     }
   },
   "uiHints": {
+    "codexDynamicToolsLoading": {
+      "label": "Dynamic Tools Loading",
+      "help": "Use searchable to defer OpenClaw dynamic tools behind Codex tool search, or direct to expose them in the initial context.",
+      "advanced": true
+    },
+    "codexDynamicToolsExclude": {
+      "label": "Dynamic Tool Excludes",
+      "help": "Additional OpenClaw dynamic tool names to omit from Codex app-server turns.",
+      "advanced": true
+    },
     "discovery": {
       "label": "Model Discovery",
       "help": "Plugin-owned controls for discovering Codex app-server models."
@@ -110,6 +217,71 @@
     "discovery.timeoutMs": {
       "label": "Discovery Timeout",
       "help": "Maximum time to wait for Codex app-server model discovery before falling back to the bundled model list.",
+      "advanced": true
+    },
+    "computerUse": {
+      "label": "Computer Use",
+      "help": "Controls Codex app-server setup for the Computer Use plugin.",
+      "advanced": true
+    },
+    "computerUse.enabled": {
+      "label": "Enable Computer Use",
+      "help": "When true, Codex-mode turns require the configured Computer Use MCP server to be available.",
+      "advanced": true
+    },
+    "computerUse.autoInstall": {
+      "label": "Auto Install",
+      "help": "Install the configured Computer Use plugin when Codex-mode turns start.",
+      "advanced": true
+    },
+    "computerUse.marketplaceDiscoveryTimeoutMs": {
+      "label": "Marketplace Discovery Timeout",
+      "help": "Maximum time to wait for Codex app-server to finish loading marketplaces during Computer Use install.",
+      "advanced": true
+    },
+    "computerUse.marketplaceSource": {
+      "label": "Marketplace Source",
+      "help": "Optional Codex marketplace source to add before installing Computer Use.",
+      "advanced": true
+    },
+    "computerUse.marketplacePath": {
+      "label": "Marketplace Path",
+      "help": "Optional local Codex marketplace file path containing the Computer Use plugin.",
+      "advanced": true
+    },
+    "computerUse.marketplaceName": {
+      "label": "Marketplace Name",
+      "help": "Optional registered Codex marketplace name containing the Computer Use plugin.",
+      "advanced": true
+    },
+    "computerUse.pluginName": {
+      "label": "Plugin Name",
+      "help": "Codex marketplace plugin name for Computer Use.",
+      "advanced": true
+    },
+    "computerUse.mcpServerName": {
+      "label": "MCP Server Name",
+      "help": "MCP server name exposed by the Computer Use plugin.",
+      "advanced": true
+    },
+    "codexPlugins": {
+      "label": "Native Codex Plugins",
+      "help": "Controls native Codex plugin availability for Codex harness turns.",
+      "advanced": true
+    },
+    "codexPlugins.enabled": {
+      "label": "Enable Native Plugins",
+      "help": "Expose explicit migrated Codex plugin entries to Codex harness turns.",
+      "advanced": true
+    },
+    "codexPlugins.allow_destructive_actions": {
+      "label": "Allow Destructive Plugin Actions",
+      "help": "Default policy for plugin app write or destructive action elicitations. Defaults to true.",
+      "advanced": true
+    },
+    "codexPlugins.plugins": {
+      "label": "Migrated Plugin Entries",
+      "help": "Explicit migration-authored plugin entries. The wildcard key * is not supported.",
       "advanced": true
     },
     "appServer": {
@@ -153,9 +325,24 @@
       "help": "Additional headers sent to the WebSocket app-server.",
       "advanced": true
     },
+    "appServer.clearEnv": {
+      "label": "Clear Environment",
+      "help": "Environment variable names removed from the spawned stdio app-server process after overrides are applied.",
+      "advanced": true
+    },
+    "appServer.codeModeOnly": {
+      "label": "Code Mode Only",
+      "help": "Expose Codex's code-mode-only tool surface. OpenClaw dynamic tools remain available through Codex nested tool calls.",
+      "advanced": true
+    },
     "appServer.requestTimeoutMs": {
       "label": "Request Timeout",
       "help": "Maximum time to wait for Codex app-server control-plane requests.",
+      "advanced": true
+    },
+    "appServer.turnCompletionIdleTimeoutMs": {
+      "label": "Turn Completion Idle Timeout",
+      "help": "Maximum quiet time after Codex accepts a turn or after a turn-scoped app-server request before OpenClaw interrupts the turn while waiting for turn/completed.",
       "advanced": true
     },
     "appServer.approvalPolicy": {
@@ -175,7 +362,7 @@
     },
     "appServer.serviceTier": {
       "label": "Service Tier",
-      "help": "Optional Codex app-server service tier. Use fast, flex, or null.",
+      "help": "Optional Codex app-server service tier. Use priority, flex, or null. Legacy fast is accepted as priority.",
       "advanced": true
     },
     "appServer.defaultWorkspaceDir": {

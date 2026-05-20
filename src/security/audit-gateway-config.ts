@@ -2,6 +2,7 @@ import { isIP } from "node:net";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import { resolveGatewayAuth } from "../gateway/auth-resolve.js";
+import { resolveGatewayAuthTokenSourceConflict } from "../gateway/auth-token-source-conflict.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -113,6 +114,17 @@ export function collectGatewayConfigFindings(
       title: "Gateway binds beyond loopback without auth",
       detail: `gateway.bind="${bind}" but no gateway.auth token/password is configured.`,
       remediation: `Set gateway.auth (token recommended) or bind to loopback.`,
+    });
+  }
+
+  const tokenConflict = resolveGatewayAuthTokenSourceConflict({ cfg: sourceConfig, env });
+  if (tokenConflict) {
+    findings.push({
+      checkId: tokenConflict.checkId,
+      severity: "warn",
+      title: tokenConflict.title,
+      detail: tokenConflict.detail,
+      remediation: tokenConflict.remediation,
     });
   }
 
@@ -260,14 +272,14 @@ export function collectGatewayConfigFindings(
   const enabledDangerousFlags = (
     options.collectDangerousConfigFlags ?? collectCoreInsecureOrDangerousFlags
   )(cfg);
-  if (enabledDangerousFlags.length > 0) {
+  for (const enabledFlag of enabledDangerousFlags) {
     findings.push({
       checkId: "config.insecure_or_dangerous_flags",
       severity: "warn",
-      title: "Insecure or dangerous config flags enabled",
-      detail: `Detected ${enabledDangerousFlags.length} enabled flag(s): ${enabledDangerousFlags.join(", ")}.`,
+      title: "Insecure or dangerous config flag enabled",
+      detail: `Detected enabled flag: ${enabledFlag}.`,
       remediation:
-        "Disable these flags when not actively debugging, or keep deployment scoped to trusted/local-only networks.",
+        "Disable this flag when not actively debugging, or keep deployment scoped to trusted/local-only networks.",
     });
   }
 
@@ -323,6 +335,20 @@ export function collectGatewayConfigFindings(
         remediation:
           "Set gateway.auth.trustedProxy.userHeader to the header name your proxy uses " +
           '(e.g., "x-forwarded-user", "x-pomerium-claim-email").',
+      });
+    }
+
+    if (trustedProxyConfig?.allowLoopback === true) {
+      findings.push({
+        checkId: "gateway.trusted_proxy_allow_loopback",
+        severity: "warn",
+        title: "Trusted-proxy auth allows loopback proxy sources",
+        detail:
+          "gateway.auth.trustedProxy.allowLoopback=true allows loopback-source requests " +
+          "from configured gateway.trustedProxies entries to satisfy trusted-proxy auth.",
+        remediation:
+          "Enable this only when a same-host reverse proxy is the intended trust boundary. " +
+          "Keep direct Gateway access private to the host and require the proxy to strip or overwrite identity headers.",
       });
     }
 

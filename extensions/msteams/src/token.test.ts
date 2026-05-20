@@ -208,10 +208,15 @@ describe("token – federated credentials (managed identity)", () => {
       useManagedIdentity: false,
     } as any;
     const result = resolveMSTeamsCredentials(cfg);
-    expect(result).toBeDefined();
-    expect(result!.type).toBe("federated");
-    expect((result as any).useManagedIdentity).toBeUndefined();
-    expect((result as any).certificatePath).toBe("/cert.pem");
+    expect(result).toEqual({
+      type: "federated",
+      appId: "app-id",
+      tenantId: "tenant-id",
+      certificatePath: "/cert.pem",
+      certificateThumbprint: undefined,
+      useManagedIdentity: undefined,
+      managedIdentityClientId: undefined,
+    });
   });
 });
 
@@ -222,8 +227,12 @@ describe("token – backward compatibility", () => {
   it("defaults to secret when authType is absent", () => {
     const cfg = { appId: "app-id", appPassword: "pw", tenantId: "tenant-id" } as any;
     const result = resolveMSTeamsCredentials(cfg);
-    expect(result).toBeDefined();
-    expect(result!.type).toBe("secret");
+    expect(result).toEqual({
+      type: "secret",
+      appId: "app-id",
+      appPassword: "pw",
+      tenantId: "tenant-id",
+    });
   });
 
   it("explicit authType=secret behaves same as absent", () => {

@@ -1,5 +1,5 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { AssistantMessage, UserMessage, Usage } from "@mariozechner/pi-ai";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AssistantMessage, UserMessage, Usage } from "@earendil-works/pi-ai";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   expectOpenAIResponsesStrictSanitizeCall,
@@ -29,10 +29,8 @@ vi.mock("./pi-embedded-helpers.js", async () => ({
 }));
 
 vi.mock("../plugins/provider-hook-runtime.js", async () => ({
-  __testing: {},
-  clearProviderRuntimeHookCache: vi.fn(),
+  testing: {},
   prepareProviderExtraParams: vi.fn(() => undefined),
-  resetProviderRuntimeHookCacheForTest: vi.fn(),
   resolveProviderHookPlugin: vi.fn(() => undefined),
   resolveProviderPluginsForHooks: vi.fn(() => []),
   resolveProviderRuntimePlugin: vi.fn(({ provider }: { provider?: string }) =>
@@ -272,6 +270,20 @@ describe("sanitizeSessionHistory", () => {
       | undefined;
   };
 
+  const expectAssistantUsageSnapshot = (assistant: unknown) => {
+    const usage = (assistant as { usage?: Usage } | undefined)?.usage;
+    expect(typeof usage?.input).toBe("number");
+    expect(typeof usage?.output).toBe("number");
+    expect(typeof usage?.cacheRead).toBe("number");
+    expect(typeof usage?.cacheWrite).toBe("number");
+    expect(typeof usage?.totalTokens).toBe("number");
+    expect(typeof usage?.cost?.input).toBe("number");
+    expect(typeof usage?.cost?.output).toBe("number");
+    expect(typeof usage?.cost?.cacheRead).toBe("number");
+    expect(typeof usage?.cost?.cacheWrite).toBe("number");
+    expect(typeof usage?.cost?.total).toBe("number");
+  };
+
   beforeAll(async () => {
     const harness = await loadSanitizeSessionHistoryWithCleanMocks();
     sanitizeSessionHistory = harness.sanitizeSessionHistory;
@@ -317,10 +329,8 @@ describe("sanitizeSessionHistory", () => {
       sessionId: TEST_SESSION_ID,
     });
 
-    expect(result[0]).toMatchObject({
-      role: "user",
-      content: "(session bootstrap)",
-    });
+    expect(result[0]?.role).toBe("user");
+    expect((result[0] as { content?: unknown } | undefined)?.content).toBe("(session bootstrap)");
     expect(
       sessionEntries.some((entry) => entry.customType === "google-turn-ordering-bootstrap"),
     ).toBe(true);
@@ -474,7 +484,6 @@ describe("sanitizeSessionHistory", () => {
     const staleAssistant = result.find((message) => message.role === "assistant") as
       | (AgentMessage & { usage?: unknown })
       | undefined;
-    expect(staleAssistant).toBeDefined();
     expect(staleAssistant?.usage).toEqual(makeZeroUsageSnapshot());
   });
 
@@ -499,7 +508,7 @@ describe("sanitizeSessionHistory", () => {
     const assistants = getAssistantMessages(result);
     expect(assistants).toHaveLength(2);
     expect(assistants[0]?.usage).toEqual(makeZeroUsageSnapshot());
-    expect(assistants[1]?.usage).toBeDefined();
+    expectAssistantUsageSnapshot(assistants[1]);
   });
 
   it("adds a zeroed assistant usage snapshot when usage is missing", async () => {
@@ -657,7 +666,7 @@ describe("sanitizeSessionHistory", () => {
       JSON.stringify(message.content).includes("fresh answer"),
     );
     expect(keptAssistant?.usage).toEqual(makeZeroUsageSnapshot());
-    expect(freshAssistant?.usage).toBeDefined();
+    expectAssistantUsageSnapshot(freshAssistant);
   });
 
   it("keeps reasoning-only assistant messages for openai-responses", async () => {
@@ -782,8 +791,10 @@ describe("sanitizeSessionHistory", () => {
       "user",
     ]);
     expect(
-      extractToolCallsFromAssistant(result[0] as Extract<AgentMessage, { role: "assistant" }>),
-    ).toMatchObject([
+      extractToolCallsFromAssistant(result[0] as Extract<AgentMessage, { role: "assistant" }>).map(
+        (call) => ({ id: call.id, name: call.name }),
+      ),
+    ).toEqual([
       { id: "call1", name: "read" },
       { id: "call2", name: "exec" },
       { id: "call3", name: "write" },
@@ -922,7 +933,7 @@ describe("sanitizeSessionHistory", () => {
       allowedToolNames: ["read"],
     });
 
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
   });
 
   it("downgrades orphaned openai reasoning even when the model has not changed", async () => {
@@ -943,7 +954,7 @@ describe("sanitizeSessionHistory", () => {
       sessionManager,
     });
 
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
   });
 
   it("downgrades orphaned openai reasoning when the model changes too", async () => {
@@ -983,7 +994,7 @@ describe("sanitizeSessionHistory", () => {
 
     expect(result).toEqual([
       {
-        ...(messages[0] as Record<string, unknown>),
+        ...(messages[0] as unknown as Record<string, unknown>),
         usage: makeZeroUsageSnapshot(),
       },
     ]);
@@ -1130,6 +1141,160 @@ describe("sanitizeSessionHistory", () => {
 
     expect((result[1] as Extract<AgentMessage, { role: "assistant" }>).content).toEqual([
       { type: "text", text: "Pong" },
+    ]);
+  });
+
+  it("drops metadata-only assistant replay turns before provider validation", async () => {
+    setNonGoogleModelApi();
+
+    const metadataOnlyText = [
+      "Conversation info (untrusted metadata):",
+      "```json",
+      '{"chat_id":"channel:123","sender":"OpenClaw"}',
+      "```",
+    ].join("\n");
+    const messages = castAgentMessages([
+      makeUserMessage("First"),
+      makeAssistantMessage([{ type: "text", text: metadataOnlyText }]),
+      makeUserMessage("Second"),
+    ]);
+
+    const sanitized = await sanitizeSessionHistory({
+      messages,
+      modelApi: "anthropic-messages",
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-6",
+      sessionManager: makeMockSessionManager(),
+      sessionId: TEST_SESSION_ID,
+    });
+    expect(sanitized.map((msg) => msg.role)).toEqual(["user", "user"]);
+    expect(JSON.stringify(sanitized)).not.toContain("assistant copied inbound metadata omitted");
+
+    const validated = await validateReplayTurns({
+      messages: sanitized,
+      modelApi: "anthropic-messages",
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-6",
+      sessionId: TEST_SESSION_ID,
+    });
+    expect(validated).toHaveLength(1);
+    expect(validated[0]?.role).toBe("user");
+    expect((validated[0] as Extract<AgentMessage, { role: "user" }>).content).toEqual([
+      { type: "text", text: "First" },
+      { type: "text", text: "Second" },
+    ]);
+    expect(typeof (validated[0] as { timestamp?: unknown }).timestamp).toBe("number");
+  });
+
+  it("strips prior assistant reasoning for Qwen-style OpenAI-compatible replay", async () => {
+    setNonGoogleModelApi();
+
+    const messages = castAgentMessages([
+      makeUserMessage("first"),
+      makeAssistantMessage([
+        {
+          type: "thinking",
+          thinking: "private reasoning",
+          thinkingSignature: "reasoning_content",
+        },
+        { type: "text", text: "visible answer" },
+      ]),
+      makeUserMessage("second"),
+    ]);
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-completions",
+      provider: "vllm",
+      modelId: "Qwen3.6-27B",
+      sessionManager: makeMockSessionManager(),
+      sessionId: TEST_SESSION_ID,
+    });
+
+    expect((result[1] as Extract<AgentMessage, { role: "assistant" }>).content).toEqual([
+      { type: "text", text: "visible answer" },
+    ]);
+  });
+
+  it.each([
+    ["Kimi K2.6", "custom-openai-proxy", "moonshotai/kimi-k2.6"],
+    ["MiMo V2.6 Pro", "custom-openai-proxy", "xiaomi/mimo-v2.6-pro"],
+  ])(
+    "preserves prior assistant reasoning for %s OpenAI-compatible replay",
+    async (_label, provider, modelId) => {
+      setNonGoogleModelApi();
+
+      const messages = castAgentMessages([
+        makeUserMessage("first"),
+        makeAssistantMessage([
+          {
+            type: "thinking",
+            thinking: "private reasoning",
+            thinkingSignature: "reasoning_content",
+          },
+          { type: "text", text: "visible answer" },
+        ]),
+        makeUserMessage("second"),
+      ]);
+
+      const result = await sanitizeSessionHistory({
+        messages,
+        modelApi: "openai-completions",
+        provider,
+        modelId,
+        sessionManager: makeMockSessionManager(),
+        sessionId: TEST_SESSION_ID,
+      });
+
+      expect((result[1] as Extract<AgentMessage, { role: "assistant" }>).content).toEqual([
+        {
+          type: "thinking",
+          thinking: "private reasoning",
+          thinkingSignature: "reasoning_content",
+        },
+        { type: "text", text: "visible answer" },
+      ]);
+    },
+  );
+
+  it("preserves current OpenAI-compatible tool-call reasoning during tool continuation replay", async () => {
+    setNonGoogleModelApi();
+
+    const messages = castAgentMessages([
+      makeUserMessage("look up the answer"),
+      makeAssistantMessage([
+        {
+          type: "thinking",
+          thinking: "call the tool",
+          thinkingSignature: "reasoning_content",
+        },
+        { type: "toolCall", id: "call123456", name: "lookup", arguments: {} },
+      ]),
+      {
+        role: "toolResult",
+        toolCallId: "call123456",
+        toolName: "lookup",
+        content: "42",
+        timestamp: nextTimestamp(),
+      },
+    ]);
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-completions",
+      provider: "vllm",
+      modelId: "Qwen3.6-27B",
+      sessionManager: makeMockSessionManager(),
+      sessionId: TEST_SESSION_ID,
+    });
+
+    expect((result[1] as Extract<AgentMessage, { role: "assistant" }>).content).toEqual([
+      {
+        type: "thinking",
+        thinking: "call the tool",
+        thinkingSignature: "reasoning_content",
+      },
+      { type: "toolCall", id: "call123456", name: "lookup", arguments: {} },
     ]);
   });
 
@@ -1412,10 +1577,8 @@ describe("sanitizeSessionHistory", () => {
     });
 
     expect(result).toHaveLength(1);
-    expect(result[0]).toMatchObject({
-      role: "user",
-      content: "retry",
-    });
+    expect(result[0]?.role).toBe("user");
+    expect((result[0] as { content?: unknown } | undefined)?.content).toBe("retry");
   });
 
   it("uses immutable thinking replay for amazon-bedrock claude providers when policy preserves signatures", async () => {
@@ -1440,10 +1603,8 @@ describe("sanitizeSessionHistory", () => {
     });
 
     expect(result).toHaveLength(1);
-    expect(result[0]).toMatchObject({
-      role: "user",
-      content: "retry",
-    });
+    expect(result[0]?.role).toBe("user");
+    expect((result[0] as { content?: unknown } | undefined)?.content).toBe("retry");
   });
 
   it.each([

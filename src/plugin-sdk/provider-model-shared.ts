@@ -3,7 +3,6 @@
 // Keep provider-owned exports out of this subpath so plugin loaders can import it
 // without recursing through provider-specific facades.
 
-import type { BedrockDiscoveryConfig, ModelDefinitionConfig } from "../config/types.models.js";
 import {
   buildAnthropicReplayPolicyForModel,
   buildGoogleGeminiReplayPolicy,
@@ -20,14 +19,19 @@ import type {
   ProviderReasoningOutputModeContext,
   ProviderReplayPolicyContext,
   ProviderSanitizeReplayHistoryContext,
+  ProviderThinkingProfile,
 } from "./plugin-entry.js";
 import {
   normalizeAntigravityPreviewModelId,
   normalizeGooglePreviewModelId,
-  normalizeNativeXaiModelId,
 } from "./provider-model-id-normalize.js";
 
 export type { ModelApi, ModelProviderConfig } from "../config/types.models.js";
+export type {
+  UnifiedModelCatalogEntry,
+  UnifiedModelCatalogKind,
+  UnifiedModelCatalogSource,
+} from "../model-catalog/types.js";
 export type {
   BedrockDiscoveryConfig,
   ModelCompatConfig,
@@ -37,13 +41,18 @@ export type {
   ProviderEndpointClass,
   ProviderEndpointResolution,
 } from "../agents/provider-attribution.js";
-export type { ProviderPlugin } from "../plugins/types.js";
-export type { KilocodeModelCatalogEntry } from "../plugins/provider-model-kilocode.js";
+export type {
+  ProviderPlugin,
+  UnifiedModelCatalogProviderContext,
+  UnifiedModelCatalogProviderPlugin,
+} from "../plugins/types.js";
 
 export { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 export {
   GPT5_BEHAVIOR_CONTRACT,
+  GPT5_FRIENDLY_CHAT_PROMPT_OVERLAY,
   GPT5_FRIENDLY_PROMPT_OVERLAY,
+  GPT5_HEARTBEAT_PROMPT_OVERLAY,
   isGpt5ModelId,
   normalizeGpt5PromptOverlayMode,
   renderGpt5PromptOverlay,
@@ -82,7 +91,22 @@ export {
 } from "../plugins/provider-model-helpers.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
-export function getModelProviderHint(modelId: string): string | null {
+const CLAUDE_OPUS_47_MODEL_PREFIXES = ["claude-opus-4-7", "claude-opus-4.7"] as const;
+const CLAUDE_ADAPTIVE_THINKING_DEFAULT_MODEL_PREFIXES = [
+  "claude-opus-4-6",
+  "claude-opus-4.6",
+  "claude-sonnet-4-6",
+  "claude-sonnet-4.6",
+] as const;
+const BASE_CLAUDE_THINKING_LEVELS = [
+  { id: "off" },
+  { id: "minimal" },
+  { id: "low" },
+  { id: "medium" },
+  { id: "high" },
+] as const satisfies ProviderThinkingProfile["levels"];
+
+function getModelProviderHint(modelId: string): string | null {
   const trimmed = normalizeOptionalLowercaseString(modelId);
   if (!trimmed) {
     return null;
@@ -94,15 +118,43 @@ export function getModelProviderHint(modelId: string): string | null {
   return trimmed.slice(0, slashIndex) || null;
 }
 
+/** @deprecated Proxy provider-owned model helper; do not use from third-party plugins. */
 export function isProxyReasoningUnsupportedModelHint(modelId: string): boolean {
   return getModelProviderHint(modelId) === "x-ai";
 }
 
-export {
-  normalizeAntigravityPreviewModelId,
-  normalizeGooglePreviewModelId,
-  normalizeNativeXaiModelId,
-};
+function matchesClaudeModelPrefix(modelId: string, prefixes: readonly string[]): boolean {
+  const lower = normalizeOptionalLowercaseString(modelId);
+  return Boolean(lower && prefixes.some((prefix) => lower.startsWith(prefix)));
+}
+
+function isClaudeOpus47ModelId(modelId: string): boolean {
+  return matchesClaudeModelPrefix(modelId, CLAUDE_OPUS_47_MODEL_PREFIXES);
+}
+
+/** @deprecated Anthropic provider-owned model helper; do not use from third-party plugins. */
+export function isClaudeAdaptiveThinkingDefaultModelId(modelId: string): boolean {
+  return matchesClaudeModelPrefix(modelId, CLAUDE_ADAPTIVE_THINKING_DEFAULT_MODEL_PREFIXES);
+}
+
+/** @deprecated Anthropic provider-owned model helper; do not use from third-party plugins. */
+export function resolveClaudeThinkingProfile(modelId: string): ProviderThinkingProfile {
+  if (isClaudeOpus47ModelId(modelId)) {
+    return {
+      levels: [...BASE_CLAUDE_THINKING_LEVELS, { id: "xhigh" }, { id: "adaptive" }, { id: "max" }],
+      defaultLevel: "off",
+    };
+  }
+  if (isClaudeAdaptiveThinkingDefaultModelId(modelId)) {
+    return {
+      levels: [...BASE_CLAUDE_THINKING_LEVELS, { id: "adaptive" }],
+      defaultLevel: "adaptive",
+    };
+  }
+  return { levels: BASE_CLAUDE_THINKING_LEVELS };
+}
+
+export { normalizeAntigravityPreviewModelId, normalizeGooglePreviewModelId };
 
 export type ProviderReplayFamily =
   | "openai-compatible"
@@ -118,7 +170,11 @@ type ProviderReplayFamilyHooks = Pick<
 >;
 
 type BuildProviderReplayFamilyHooksOptions =
-  | { family: "openai-compatible"; sanitizeToolCallIds?: boolean }
+  | {
+      family: "openai-compatible";
+      sanitizeToolCallIds?: boolean;
+      dropReasoningFromHistory?: boolean;
+    }
   | { family: "anthropic-by-model" }
   | { family: "native-anthropic-by-model" }
   | { family: "google-gemini" }
@@ -133,10 +189,16 @@ export function buildProviderReplayFamilyHooks(
 ): ProviderReplayFamilyHooks {
   switch (options.family) {
     case "openai-compatible": {
-      const policyOptions = { sanitizeToolCallIds: options.sanitizeToolCallIds };
+      const policyOptions = {
+        sanitizeToolCallIds: options.sanitizeToolCallIds,
+        dropReasoningFromHistory: options.dropReasoningFromHistory,
+      };
       return {
         buildReplayPolicy: (ctx: ProviderReplayPolicyContext) =>
-          buildOpenAICompatibleReplayPolicy(ctx.modelApi, policyOptions),
+          buildOpenAICompatibleReplayPolicy(ctx.modelApi, {
+            ...policyOptions,
+            modelId: ctx.modelId,
+          }),
       };
     }
     case "anthropic-by-model":
@@ -173,18 +235,22 @@ export function buildProviderReplayFamilyHooks(
   throw new Error("Unsupported provider replay family");
 }
 
+/** @deprecated Provider-owned replay hook shortcut; use local provider hooks instead. */
 export const OPENAI_COMPATIBLE_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
   family: "openai-compatible",
 });
 
+/** @deprecated Anthropic provider-owned replay hook shortcut; use local provider hooks instead. */
 export const ANTHROPIC_BY_MODEL_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
   family: "anthropic-by-model",
 });
 
+/** @deprecated Anthropic provider-owned replay hook shortcut; use local provider hooks instead. */
 export const NATIVE_ANTHROPIC_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
   family: "native-anthropic-by-model",
 });
 
+/** @deprecated Google provider-owned replay hook shortcut; use local provider hooks instead. */
 export const PASSTHROUGH_GEMINI_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
   family: "passthrough-gemini",
 });

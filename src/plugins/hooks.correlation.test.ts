@@ -24,7 +24,7 @@ describe("hook correlation fields", () => {
     await runner.runBeforeAgentStart({ prompt: "hello" }, TEST_PLUGIN_AGENT_CTX);
 
     expect(handler).toHaveBeenCalledWith(
-      expect.objectContaining({ prompt: "hello", runId: "test-run-id" }),
+      { prompt: "hello", runId: "test-run-id" },
       TEST_PLUGIN_AGENT_CTX,
     );
   });
@@ -48,8 +48,76 @@ describe("hook correlation fields", () => {
     );
 
     expect(handler).toHaveBeenCalledWith(
-      expect.objectContaining({ messages: [], success: true, runId: "test-run-id" }),
+      { messages: [], success: true, runId: "test-run-id" },
       TEST_PLUGIN_AGENT_CTX,
     );
+  });
+
+  it("times out never-settling agent_end handlers", async () => {
+    vi.useFakeTimers();
+    try {
+      const handler = vi.fn(() => new Promise<void>(() => {}));
+      addTestHook({
+        registry,
+        pluginId: "plugin-a",
+        hookName: "agent_end",
+        handler: handler as PluginHookRegistration["handler"],
+      });
+      const logger = {
+        error: vi.fn(),
+        warn: vi.fn(),
+      };
+
+      const runner = createHookRunner(registry, {
+        logger,
+        voidHookTimeoutMsByHook: { agent_end: 5 },
+      });
+      const run = runner.runAgentEnd({ messages: [], success: true }, TEST_PLUGIN_AGENT_CTX);
+
+      await vi.advanceTimersByTimeAsync(5);
+
+      await expect(run).resolves.toBeUndefined();
+      expect(logger.error).toHaveBeenCalledWith(
+        "[hooks] agent_end handler from plugin-a failed: timed out after 5ms",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("honors per-hook registration timeouts over the default void hook timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const handler = vi.fn(
+        async () =>
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 20);
+          }),
+      );
+      addTestHook({
+        registry,
+        pluginId: "plugin-a",
+        hookName: "agent_end",
+        handler: handler as PluginHookRegistration["handler"],
+        timeoutMs: 30,
+      });
+      const logger = {
+        error: vi.fn(),
+        warn: vi.fn(),
+      };
+
+      const runner = createHookRunner(registry, {
+        logger,
+        voidHookTimeoutMsByHook: { agent_end: 5 },
+      });
+      const run = runner.runAgentEnd({ messages: [], success: true }, TEST_PLUGIN_AGENT_CTX);
+
+      await vi.advanceTimersByTimeAsync(20);
+
+      await expect(run).resolves.toBeUndefined();
+      expect(logger.error).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

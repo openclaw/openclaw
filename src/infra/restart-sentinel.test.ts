@@ -7,14 +7,22 @@ import {
   DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE,
   buildRestartSuccessContinuation,
   consumeRestartSentinel,
+  finalizeUpdateRestartSentinelRunningVersion,
   formatDoctorNonInteractiveHint,
   formatRestartSentinelMessage,
+  markUpdateRestartSentinelFailure,
   readRestartSentinel,
   resolveRestartSentinelPath,
   summarizeRestartSentinel,
   trimLogTail,
   writeRestartSentinel,
 } from "./restart-sentinel.js";
+import {
+  CONTROL_PLANE_UPDATE_RESTART_HEALTH_PENDING_REASON,
+  buildControlPlaneUpdateRestartHealthPendingResult,
+  isPendingControlPlaneUpdateRestartSentinel,
+} from "./update-control-plane-sentinel.js";
+import { buildUpdateRestartSentinelPayload } from "./update-restart-sentinel-payload.js";
 
 async function withRestartSentinelStateDir(run: () => Promise<void>): Promise<void> {
   const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
@@ -26,6 +34,26 @@ async function withRestartSentinelStateDir(run: () => Promise<void>): Promise<vo
   } finally {
     envSnapshot.restore();
   }
+}
+
+async function expectPathMissing(targetPath: string): Promise<void> {
+  try {
+    await fs.stat(targetPath);
+  } catch (error) {
+    expect(error).toBeInstanceOf(Error);
+    const statError = error as NodeJS.ErrnoException;
+    expect({
+      code: statError.code,
+      path: statError.path,
+      syscall: statError.syscall,
+    }).toEqual({
+      code: "ENOENT",
+      path: targetPath,
+      syscall: "stat",
+    });
+    return;
+  }
+  throw new Error(`Expected path to be missing: ${targetPath}`);
 }
 
 describe("restart sentinel", () => {
@@ -67,7 +95,7 @@ describe("restart sentinel", () => {
       const read = await readRestartSentinel();
       expect(read).toBeNull();
 
-      await expect(fs.stat(filePath)).rejects.toThrow();
+      await expectPathMissing(filePath);
     });
   });
 
@@ -78,7 +106,7 @@ describe("restart sentinel", () => {
       await fs.writeFile(filePath, JSON.stringify({ version: 2, payload: null }), "utf-8");
 
       await expect(readRestartSentinel()).resolves.toBeNull();
-      await expect(fs.stat(filePath)).rejects.toThrow();
+      await expectPathMissing(filePath);
     });
   });
 
@@ -184,6 +212,62 @@ describe("restart sentinel", () => {
     expect(trimLogTail("hello\n")).toBe("hello");
     expect(trimLogTail(undefined)).toBeNull();
   });
+
+  it("writes the running version back to update sentinels on startup", async () => {
+    await withRestartSentinelStateDir(async () => {
+      const ts = Date.now();
+      await writeRestartSentinel({
+        kind: "update",
+        status: "ok",
+        ts,
+        stats: {
+          after: { version: "expected-version" },
+        },
+      });
+
+      await finalizeUpdateRestartSentinelRunningVersion("actual-version");
+
+      await expect(readRestartSentinel()).resolves.toEqual({
+        version: 1,
+        payload: {
+          kind: "update",
+          status: "ok",
+          ts,
+          stats: {
+            after: {
+              version: "actual-version",
+            },
+          },
+        },
+      });
+    });
+  });
+
+  it("marks update restart failures with a stable reason", async () => {
+    await withRestartSentinelStateDir(async () => {
+      const ts = Date.now();
+      await writeRestartSentinel({
+        kind: "update",
+        status: "ok",
+        ts,
+        stats: {},
+      });
+
+      await markUpdateRestartSentinelFailure("restart-unhealthy");
+
+      await expect(readRestartSentinel()).resolves.toEqual({
+        version: 1,
+        payload: {
+          kind: "update",
+          status: "error",
+          ts,
+          stats: {
+            reason: "restart-unhealthy",
+          },
+        },
+      });
+    });
+  });
 });
 
 describe("restart success continuation", () => {
@@ -208,6 +292,49 @@ describe("restart success continuation", () => {
 
   it("stays silent without session context", () => {
     expect(buildRestartSuccessContinuation({})).toBeNull();
+  });
+});
+
+describe("control-plane update restart sentinel", () => {
+  it("keeps restart-health-pending sentinels continuation-free until final success", () => {
+    const result = {
+      status: "ok" as const,
+      mode: "npm" as const,
+      root: "/tmp/openclaw",
+      before: { version: "2026.4.23" },
+      after: { version: "2026.4.24" },
+      steps: [],
+      durationMs: 42,
+    };
+    const meta = {
+      sessionKey: "agent:main:webchat:dm:user-123",
+      continuationMessage: "Check the running version and finish the update report.",
+    };
+
+    const pendingResult = buildControlPlaneUpdateRestartHealthPendingResult(result);
+    const pendingPayload = buildUpdateRestartSentinelPayload({
+      result: pendingResult,
+      meta,
+      nowMs: 1,
+    });
+
+    expect(pendingPayload.status).toBe("skipped");
+    expect(pendingPayload.stats?.reason).toBe(CONTROL_PLANE_UPDATE_RESTART_HEALTH_PENDING_REASON);
+    expect(pendingPayload.continuation).toBeUndefined();
+    expect(isPendingControlPlaneUpdateRestartSentinel(pendingPayload)).toBe(true);
+
+    const finalPayload = buildUpdateRestartSentinelPayload({
+      result,
+      meta,
+      nowMs: 2,
+    });
+
+    expect(finalPayload.status).toBe("ok");
+    expect(finalPayload.continuation).toEqual({
+      kind: "agentTurn",
+      message: "Check the running version and finish the update report.",
+    });
+    expect(isPendingControlPlaneUpdateRestartSentinel(finalPayload)).toBe(false);
   });
 });
 

@@ -1,6 +1,8 @@
+import fs from "node:fs";
 import type { LiveSessionModelSelection } from "../../agents/live-model-switch.js";
 import type { SkillSnapshot } from "../../agents/skills.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { isCronSessionKey } from "../../sessions/session-key-utils.js";
 import type { resolveCronSession } from "./session.js";
 
 type MutableSessionStore = Record<string, SessionEntry>;
@@ -19,33 +21,86 @@ type UpdateSessionStore = (
 
 export type PersistCronSessionEntry = () => Promise<void>;
 
-function cloneSessionEntry(entry: MutableCronSessionEntry): MutableCronSessionEntry {
-  return globalThis.structuredClone(entry);
+function cronTranscriptExists(entry: SessionEntry): boolean {
+  const sessionFile = entry.sessionFile?.trim();
+  return Boolean(sessionFile && fs.existsSync(sessionFile));
+}
+
+function normalizeSessionField(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function toNonResumableCronSessionEntry(entry: SessionEntry): SessionEntry {
+  const next = { ...entry } as Partial<SessionEntry>;
+  delete next.sessionId;
+  delete next.sessionFile;
+  delete next.sessionStartedAt;
+  delete next.lastInteractionAt;
+  delete next.cliSessionIds;
+  delete next.cliSessionBindings;
+  delete next.claudeCliSessionId;
+  return next as SessionEntry;
 }
 
 export function createPersistCronSessionEntry(params: {
   isFastTestEnv: boolean;
   cronSession: MutableCronSession;
   agentSessionKey: string;
-  runSessionKey: string;
   updateSessionStore: UpdateSessionStore;
 }): PersistCronSessionEntry {
   return async () => {
     if (params.isFastTestEnv) {
       return;
     }
-    const runSessionEntry = cloneSessionEntry(params.cronSession.sessionEntry);
-    params.cronSession.store[params.agentSessionKey] = params.cronSession.sessionEntry;
-    if (params.runSessionKey !== params.agentSessionKey) {
-      params.cronSession.store[params.runSessionKey] = runSessionEntry;
-    }
+    const persistedEntry =
+      isCronSessionKey(params.agentSessionKey) &&
+      params.cronSession.sessionEntry.sessionId &&
+      !cronTranscriptExists(params.cronSession.sessionEntry)
+        ? toNonResumableCronSessionEntry(params.cronSession.sessionEntry)
+        : params.cronSession.sessionEntry;
+    params.cronSession.store[params.agentSessionKey] = persistedEntry;
     await params.updateSessionStore(params.cronSession.storePath, (store) => {
-      store[params.agentSessionKey] = params.cronSession.sessionEntry;
-      if (params.runSessionKey !== params.agentSessionKey) {
-        store[params.runSessionKey] = runSessionEntry;
-      }
+      store[params.agentSessionKey] = persistedEntry;
     });
   };
+}
+
+export function adoptCronRunSessionMetadata(params: {
+  entry: MutableCronSessionEntry;
+  sessionKey: string;
+  runMeta?: {
+    sessionId?: string;
+    sessionFile?: string;
+  };
+}): boolean {
+  const nextSessionId = normalizeSessionField(params.runMeta?.sessionId);
+  const nextSessionFile = normalizeSessionField(params.runMeta?.sessionFile);
+  if (!nextSessionFile) {
+    return false;
+  }
+
+  let changed = false;
+  const previousSessionId = params.entry.sessionId;
+  if (nextSessionId && nextSessionId !== previousSessionId) {
+    params.entry.sessionId = nextSessionId;
+    params.entry.usageFamilyKey = params.entry.usageFamilyKey ?? params.sessionKey;
+    params.entry.usageFamilySessionIds = Array.from(
+      new Set([
+        ...(params.entry.usageFamilySessionIds ?? []),
+        ...(previousSessionId ? [previousSessionId] : []),
+        nextSessionId,
+      ]),
+    );
+    changed = true;
+  }
+
+  if (nextSessionFile !== params.entry.sessionFile) {
+    params.entry.sessionFile = nextSessionFile;
+    changed = true;
+  }
+
+  return changed;
 }
 
 export async function persistCronSkillsSnapshotIfChanged(params: {

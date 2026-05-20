@@ -27,6 +27,18 @@ vi.mock("./token.js", () => ({
   resolveMSTeamsCredentials: resolveMSTeamsCredentialsMock,
 }));
 
+vi.mock("../runtime-api.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../runtime-api.js")>();
+  return {
+    ...original,
+    fetchWithSsrFGuard: async (params: { url: string; init?: RequestInit }) => ({
+      response: await globalThis.fetch(params.url, params.init),
+      finalUrl: params.url,
+      release: async () => undefined,
+    }),
+  };
+});
+
 import { searchGraphUsers } from "./graph-users.js";
 import {
   deleteGraphRequest,
@@ -105,8 +117,28 @@ function fetchCallUrl(index: number) {
   return requestUrl(input);
 }
 
+function fetchCallInit(index: number) {
+  return vi.mocked(globalThis.fetch).mock.calls[index]?.[1];
+}
+
+function fetchCallHeader(index: number, name: string) {
+  const headers = fetchCallInit(index)?.headers;
+  if (!headers) {
+    throw new Error(`Expected fetch headers at index ${index}`);
+  }
+  return (headers as Record<string, string>)[name];
+}
+
 function expectFetchPathContains(index: number, expectedPath: string) {
   expect(fetchCallUrl(index)).toContain(expectedPath);
+}
+
+function fetchCallSearchParam(index: number, name: string): string | null {
+  const url = fetchCallUrl(index);
+  if (!url) {
+    throw new Error(`Expected fetch call ${index}`);
+  }
+  return new URL(url).searchParams.get(name);
 }
 
 async function expectSearchGraphUsers(
@@ -168,15 +200,9 @@ describe("msteams graph helpers", () => {
       }),
     ).resolves.toEqual(graphCollection(groupOne));
 
-    expect(globalThis.fetch).toHaveBeenCalledWith(
-      "https://graph.microsoft.com/v1.0/groups?$select=id",
-      {
-        headers: expect.objectContaining({
-          Authorization: `Bearer ${graphToken}`,
-          ConsistencyLevel: "eventual",
-        }),
-      },
-    );
+    expect(fetchCallUrl(0)).toBe("https://graph.microsoft.com/v1.0/groups?$select=id");
+    expect(fetchCallHeader(0, "Authorization")).toBe(`Bearer ${graphToken}`);
+    expect(fetchCallHeader(0, "ConsistencyLevel")).toBe("eventual");
 
     mockTextFetchResponse("forbidden", { status: 403 });
 
@@ -186,6 +212,19 @@ describe("msteams graph helpers", () => {
         path: "/teams/team-1/channels",
       }),
       "Graph /teams/team-1/channels failed (403): forbidden",
+    );
+
+    mockTextFetchResponse("{ nope", {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+
+    await expectRejectsToThrow(
+      fetchGraphJson({
+        token: graphToken,
+        path: "/teams/team-1/channels",
+      }),
+      "Graph /teams/team-1/channels failed: malformed JSON response",
     );
   });
 
@@ -213,26 +252,16 @@ describe("msteams graph helpers", () => {
       }),
     ).resolves.toBeUndefined();
 
-    expect(globalThis.fetch).toHaveBeenNthCalledWith(
-      1,
-      "https://graph.microsoft.com/v1.0/chats/chat-1/pinnedMessages",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({ messageId: "msg-1" }),
-        headers: expect.objectContaining({
-          Authorization: `Bearer ${graphToken}`,
-          "Content-Type": "application/json",
-        }),
-      }),
-    );
-    expect(globalThis.fetch).toHaveBeenNthCalledWith(
-      2,
+    expect(fetchCallUrl(0)).toBe("https://graph.microsoft.com/v1.0/chats/chat-1/pinnedMessages");
+    expect(fetchCallInit(0)?.method).toBe("POST");
+    expect(fetchCallInit(0)?.body).toBe(JSON.stringify({ messageId: "msg-1" }));
+    expect(fetchCallHeader(0, "Authorization")).toBe(`Bearer ${graphToken}`);
+    expect(fetchCallHeader(0, "Content-Type")).toBe("application/json");
+    expect(fetchCallUrl(1)).toBe(
       "https://graph.microsoft.com/beta/chats/chat-1/messages/msg-1/setReaction",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({ reactionType: "like" }),
-      }),
     );
+    expect(fetchCallInit(1)?.method).toBe("POST");
+    expect(fetchCallInit(1)?.body).toBe(JSON.stringify({ reactionType: "like" }));
   });
 
   it("surfaces POST and DELETE graph failures with method-specific labels", async () => {
@@ -296,10 +325,10 @@ describe("msteams graph helpers", () => {
       deploymentsChannel,
     ]);
 
-    expectFetchPathContains(
-      0,
-      "/groups?$filter=resourceProvisioningOptions%2FAny(x%3Ax%20eq%20'Team')%20and%20startsWith(displayName%2C'Bob''s%20Team')&$select=id,displayName",
+    expect(fetchCallSearchParam(0, "$filter")).toBe(
+      "resourceProvisioningOptions/Any(x:x eq 'Team') and startsWith(displayName,'Bob''s Team')",
     );
+    expect(fetchCallSearchParam(0, "$select")).toBe("id,displayName");
     expectFetchPathContains(1, "/teams/team%2Fops/channels?$select=id,displayName");
   });
 
@@ -315,10 +344,10 @@ describe("msteams graph helpers", () => {
     await expectSearchGraphUsers("alice.o'hara@example.com", [userOne], {
       token: "token-2",
     });
-    expectFetchPathContains(
-      0,
-      "/users?$filter=(mail%20eq%20'alice.o''hara%40example.com'%20or%20userPrincipalName%20eq%20'alice.o''hara%40example.com')&$select=id,displayName,mail,userPrincipalName",
+    expect(fetchCallSearchParam(0, "$filter")).toBe(
+      "(mail eq 'alice.o''hara@example.com' or userPrincipalName eq 'alice.o''hara@example.com')",
     );
+    expect(fetchCallSearchParam(0, "$select")).toBe("id,displayName,mail,userPrincipalName");
   });
 
   it("uses displayName search with eventual consistency and default top handling", async () => {
@@ -335,16 +364,11 @@ describe("msteams graph helpers", () => {
     });
     await expectSearchGraphUsers("carol", [], { token: "token-4" });
 
-    const calls = vi.mocked(globalThis.fetch).mock.calls;
     expectFetchPathContains(
       0,
       "/users?$search=%22displayName%3Abob%22&$select=id,displayName,mail,userPrincipalName&$top=25",
     );
-    expect(calls[0]?.[1]).toEqual(
-      expect.objectContaining({
-        headers: expect.objectContaining({ ConsistencyLevel: "eventual" }),
-      }),
-    );
+    expect(fetchCallHeader(0, "ConsistencyLevel")).toBe("eventual");
     expectFetchPathContains(
       1,
       "/users?$search=%22displayName%3Acarol%22&$select=id,displayName,mail,userPrincipalName&$top=10",

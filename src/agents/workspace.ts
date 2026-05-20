@@ -1,7 +1,9 @@
 import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { openBoundaryFile } from "../infra/boundary-file-read.js";
+import { openRootFile } from "../infra/boundary-file-read.js";
+import { pathExists } from "../infra/fs-safe.js";
+import { replaceFileAtomic } from "../infra/replace-file.js";
 import {
   CANONICAL_ROOT_MEMORY_FILENAME,
   exactWorkspaceEntryExists,
@@ -55,7 +57,7 @@ async function readWorkspaceFileWithGuards(params: {
   filePath: string;
   workspaceDir: string;
 }): Promise<WorkspaceGuardedReadResult> {
-  const opened = await openBoundaryFile({
+  const opened = await openRootFile({
     absolutePath: params.filePath,
     rootPath: params.workspaceDir,
     boundaryLabel: "workspace root",
@@ -174,6 +176,13 @@ const VALID_BOOTSTRAP_NAMES: ReadonlySet<string> = new Set([
   DEFAULT_MEMORY_FILENAME,
 ]);
 
+const OPTIONAL_BOOTSTRAP_FILENAMES: ReadonlySet<string> = new Set([
+  DEFAULT_SOUL_FILENAME,
+  DEFAULT_IDENTITY_FILENAME,
+  DEFAULT_USER_FILENAME,
+  DEFAULT_HEARTBEAT_FILENAME,
+]);
+
 async function writeFileIfMissing(filePath: string, content: string): Promise<boolean> {
   try {
     await fs.writeFile(filePath, content, {
@@ -186,15 +195,6 @@ async function writeFileIfMissing(filePath: string, content: string): Promise<bo
     if (anyErr.code !== "EEXIST") {
       throw err;
     }
-    return false;
-  }
-}
-
-async function fileExists(filePath: string): Promise<boolean> {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
     return false;
   }
 }
@@ -267,7 +267,7 @@ async function reconcileWorkspaceBootstrapCompletionState(params: {
   state: WorkspaceSetupState;
   bootstrapExists?: boolean;
 }): Promise<WorkspaceBootstrapCompletionReconcileResult> {
-  const bootstrapExists = params.bootstrapExists ?? (await fileExists(params.bootstrapPath));
+  const bootstrapExists = params.bootstrapExists ?? (await pathExists(params.bootstrapPath));
   if (
     typeof params.state.setupCompletedAt === "string" &&
     params.state.setupCompletedAt.trim().length > 0
@@ -299,9 +299,14 @@ async function reconcileWorkspaceBootstrapCompletionState(params: {
     bootstrapSeededAt: params.state.bootstrapSeededAt ?? now,
     setupCompletedAt: now,
   };
-  await fs.rm(params.bootstrapPath, { force: true });
   await writeWorkspaceSetupState(params.statePath, repairedState);
-  return { repaired: true, bootstrapExists: false, state: repairedState };
+  try {
+    await fs.rm(params.bootstrapPath, { force: true });
+    return { repaired: true, bootstrapExists: false, state: repairedState };
+  } catch {
+    // Completion state is authoritative; stale BOOTSTRAP cleanup is best-effort.
+    return { repaired: true, bootstrapExists: true, state: repairedState };
+  }
 }
 
 function resolveWorkspaceStatePath(dir: string): string {
@@ -377,7 +382,7 @@ export async function resolveWorkspaceBootstrapStatus(
     return "complete";
   }
   const bootstrapPath = path.join(resolvedDir, DEFAULT_BOOTSTRAP_FILENAME);
-  const bootstrapExists = await fileExists(bootstrapPath);
+  const bootstrapExists = await pathExists(bootstrapPath);
   if (!bootstrapExists) {
     return "complete";
   }
@@ -409,16 +414,11 @@ async function writeWorkspaceSetupState(
   statePath: string,
   state: WorkspaceSetupState,
 ): Promise<void> {
-  await fs.mkdir(path.dirname(statePath), { recursive: true });
-  const payload = `${JSON.stringify(state, null, 2)}\n`;
-  const tmpPath = `${statePath}.tmp-${process.pid}-${Date.now().toString(36)}`;
-  try {
-    await fs.writeFile(tmpPath, payload, { encoding: "utf-8" });
-    await fs.rename(tmpPath, statePath);
-  } catch (err) {
-    await fs.unlink(tmpPath).catch(() => {});
-    throw err;
-  }
+  await replaceFileAtomic({
+    filePath: statePath,
+    content: `${JSON.stringify(state, null, 2)}\n`,
+    tempPrefix: ".workspace-state",
+  });
 }
 
 async function hasGitRepo(dir: string): Promise<boolean> {
@@ -467,6 +467,12 @@ async function ensureGitRepo(dir: string, isBrandNewWorkspace: boolean) {
 export async function ensureAgentWorkspace(params?: {
   dir?: string;
   ensureBootstrapFiles?: boolean;
+  /**
+   * List of optional bootstrap filenames to skip writing.
+   * Applies only to SOUL.md, USER.md, HEARTBEAT.md, IDENTITY.md.
+   * Required workspace setup such as AGENTS.md and TOOLS.md still runs.
+   */
+  skipOptionalBootstrapFiles?: string[];
 }): Promise<{
   dir: string;
   agentsPath?: string;
@@ -519,12 +525,24 @@ export async function ensureAgentWorkspace(params?: {
   const identityTemplate = await loadTemplate(DEFAULT_IDENTITY_FILENAME);
   const userTemplate = await loadTemplate(DEFAULT_USER_FILENAME);
   const heartbeatTemplate = await loadTemplate(DEFAULT_HEARTBEAT_FILENAME);
+  const skipOptionalBootstrapFiles = new Set(params?.skipOptionalBootstrapFiles ?? []);
+  const shouldWriteBootstrapFile = (fileName: string): boolean =>
+    !OPTIONAL_BOOTSTRAP_FILENAMES.has(fileName) || !skipOptionalBootstrapFiles.has(fileName);
+
   await writeFileIfMissing(agentsPath, agentsTemplate);
-  await writeFileIfMissing(soulPath, soulTemplate);
+  if (shouldWriteBootstrapFile(DEFAULT_SOUL_FILENAME)) {
+    await writeFileIfMissing(soulPath, soulTemplate);
+  }
   await writeFileIfMissing(toolsPath, toolsTemplate);
-  const identityPathCreated = await writeFileIfMissing(identityPath, identityTemplate);
-  await writeFileIfMissing(userPath, userTemplate);
-  await writeFileIfMissing(heartbeatPath, heartbeatTemplate);
+  const identityPathCreated = shouldWriteBootstrapFile(DEFAULT_IDENTITY_FILENAME)
+    ? await writeFileIfMissing(identityPath, identityTemplate)
+    : false;
+  if (shouldWriteBootstrapFile(DEFAULT_USER_FILENAME)) {
+    await writeFileIfMissing(userPath, userTemplate);
+  }
+  if (shouldWriteBootstrapFile(DEFAULT_HEARTBEAT_FILENAME)) {
+    await writeFileIfMissing(heartbeatPath, heartbeatTemplate);
+  }
 
   let state = await readWorkspaceSetupState(statePath, {
     persistLegacyMigration: true,
@@ -536,7 +554,7 @@ export async function ensureAgentWorkspace(params?: {
   };
   const nowIso = () => new Date().toISOString();
 
-  let bootstrapExists = await fileExists(bootstrapPath);
+  let bootstrapExists = await pathExists(bootstrapPath);
   if (!state.bootstrapSeededAt && bootstrapExists) {
     markState({ bootstrapSeededAt: nowIso() });
   }
@@ -571,7 +589,7 @@ export async function ensureAgentWorkspace(params?: {
       const bootstrapTemplate = await loadTemplate(DEFAULT_BOOTSTRAP_FILENAME);
       const wroteBootstrap = await writeFileIfMissing(bootstrapPath, bootstrapTemplate);
       if (!wroteBootstrap) {
-        bootstrapExists = await fileExists(bootstrapPath);
+        bootstrapExists = await pathExists(bootstrapPath);
       } else {
         bootstrapExists = true;
       }
@@ -684,6 +702,96 @@ export function filterBootstrapFilesForSession(
   return files.filter((file) => MINIMAL_BOOTSTRAP_ALLOWLIST.has(file.name));
 }
 
+function hasGlobPattern(pattern: string): boolean {
+  // Keep square brackets literal here; workspace paths commonly contain them.
+  return /[?*{}]/u.test(pattern);
+}
+
+function normalizeWorkspacePatternPath(value: string): string {
+  return value
+    .replaceAll(path.sep, "/")
+    .replaceAll("\\", "/")
+    .replace(/^\.\/+/u, "");
+}
+
+function resolveGlobWalkRoot(pattern: string): string {
+  const normalized = normalizeWorkspacePatternPath(pattern);
+  const globIndex = normalized.search(/[?*{}]/u);
+  if (globIndex === -1) {
+    return normalized;
+  }
+  const slashIndex = normalized.lastIndexOf("/", globIndex);
+  return slashIndex === -1 ? "." : normalized.slice(0, slashIndex) || ".";
+}
+
+async function* walkWorkspaceFiles(
+  workspaceDir: string,
+  initialRelativeDir: string,
+): AsyncGenerator<string> {
+  const stack = [initialRelativeDir === "." ? "" : initialRelativeDir];
+  while (stack.length > 0) {
+    const currentRelativeDir = stack.pop() ?? "";
+    const currentDir = path.resolve(workspaceDir, currentRelativeDir);
+    const relativeToWorkspace = path.relative(workspaceDir, currentDir);
+    if (relativeToWorkspace.startsWith("..") || path.isAbsolute(relativeToWorkspace)) {
+      continue;
+    }
+
+    let entries: syncFs.Dirent[];
+    try {
+      entries = await fs.readdir(currentDir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    for (const entry of entries) {
+      const childRelativePath = currentRelativeDir
+        ? path.join(currentRelativeDir, entry.name)
+        : entry.name;
+      if (entry.isDirectory()) {
+        stack.push(childRelativePath);
+        continue;
+      }
+      if (entry.isFile() || entry.isSymbolicLink()) {
+        yield normalizeWorkspacePatternPath(childRelativePath);
+      }
+    }
+  }
+}
+
+async function resolveExtraBootstrapPatternPaths(
+  workspaceDir: string,
+  pattern: string,
+): Promise<string[]> {
+  if (typeof fs.glob === "function") {
+    try {
+      const matches: string[] = [];
+      for await (const match of fs.glob(pattern, { cwd: workspaceDir })) {
+        matches.push(match);
+      }
+      return matches;
+    } catch {
+      // Fall through to the local matcher before treating the pattern as literal.
+    }
+  }
+
+  if (typeof path.matchesGlob !== "function") {
+    return [pattern];
+  }
+
+  const normalizedPattern = normalizeWorkspacePatternPath(pattern);
+  const matches: string[] = [];
+  for await (const candidate of walkWorkspaceFiles(
+    workspaceDir,
+    resolveGlobWalkRoot(normalizedPattern),
+  )) {
+    if (path.matchesGlob(candidate, normalizedPattern)) {
+      matches.push(candidate);
+    }
+  }
+  return matches.length > 0 ? matches : [pattern];
+}
+
 export async function loadExtraBootstrapFiles(
   dir: string,
   extraPatterns: string[],
@@ -707,15 +815,10 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
   // Resolve glob patterns into concrete file paths
   const resolvedPaths = new Set<string>();
   for (const pattern of extraPatterns) {
-    if (pattern.includes("*") || pattern.includes("?") || pattern.includes("{")) {
-      try {
-        const matches = fs.glob(pattern, { cwd: resolvedDir });
-        for await (const m of matches) {
-          resolvedPaths.add(m);
-        }
-      } catch {
-        // glob not available or pattern error — fall back to literal
-        resolvedPaths.add(pattern);
+    if (hasGlobPattern(pattern)) {
+      const matches = await resolveExtraBootstrapPatternPaths(resolvedDir, pattern);
+      for (const match of matches) {
+        resolvedPaths.add(match);
       }
     } else {
       resolvedPaths.add(pattern);

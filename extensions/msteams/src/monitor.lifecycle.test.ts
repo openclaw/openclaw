@@ -3,6 +3,7 @@ import type { Request, Response } from "express";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
+import type { MSTeamsActivityHandler, MSTeamsMessageHandlerDeps } from "./monitor-handler.js";
 import type { MSTeamsPollStore } from "./polls.js";
 
 type FakeServer = EventEmitter & {
@@ -11,6 +12,34 @@ type FakeServer = EventEmitter & {
   requestTimeout: number;
   headersTimeout: number;
 };
+
+type MSTeamsChannelResolution = {
+  input: string;
+  resolved: boolean;
+  teamId?: string;
+  channelId?: string;
+};
+
+type MSTeamsUserResolution = {
+  input: string;
+  resolved: boolean;
+  id?: string;
+};
+
+type ResolveMSTeamsChannelAllowlistMock = (params: {
+  cfg: unknown;
+  entries: string[];
+}) => Promise<MSTeamsChannelResolution[]>;
+
+type ResolveMSTeamsUserAllowlistMock = (params: {
+  cfg: unknown;
+  entries: string[];
+}) => Promise<MSTeamsUserResolution[]>;
+
+type RegisterMSTeamsHandlersMock = (
+  handler: MSTeamsActivityHandler,
+  deps: MSTeamsMessageHandlerDeps,
+) => MSTeamsActivityHandler;
 
 const expressControl = vi.hoisted(() => ({
   mode: { value: "listening" as "listening" | "error" },
@@ -21,8 +50,11 @@ const expressControl = vi.hoisted(() => ({
   }>,
 }));
 
+const isDangerousNameMatchingEnabled = vi.hoisted(() => vi.fn());
+
 vi.mock("../runtime-api.js", () => ({
   DEFAULT_WEBHOOK_MAX_BODY_BYTES: 1024 * 1024,
+  isDangerousNameMatchingEnabled,
   normalizeSecretInputString: (value: unknown) =>
     typeof value === "string" && value.trim() ? value.trim() : undefined,
   hasConfiguredSecretInput: (value: unknown) =>
@@ -91,9 +123,7 @@ vi.mock("express", () => {
 });
 
 const registerMSTeamsHandlers = vi.hoisted(() =>
-  vi.fn(() => ({
-    run: vi.fn(async () => {}),
-  })),
+  vi.fn<RegisterMSTeamsHandlersMock>((handler) => handler),
 );
 const createMSTeamsAdapter = vi.hoisted(() =>
   vi.fn(() => ({
@@ -115,12 +145,17 @@ const loadMSTeamsSdkWithAuth = vi.hoisted(() =>
 );
 
 vi.mock("./monitor-handler.js", () => ({
-  registerMSTeamsHandlers: () => registerMSTeamsHandlers(),
+  registerMSTeamsHandlers,
+}));
+
+const resolveAllowlistMocks = vi.hoisted(() => ({
+  resolveMSTeamsChannelAllowlist: vi.fn<ResolveMSTeamsChannelAllowlistMock>(async () => []),
+  resolveMSTeamsUserAllowlist: vi.fn<ResolveMSTeamsUserAllowlistMock>(async () => []),
 }));
 
 vi.mock("./resolve-allowlist.js", () => ({
-  resolveMSTeamsChannelAllowlist: vi.fn(async () => []),
-  resolveMSTeamsUserAllowlist: vi.fn(async () => []),
+  resolveMSTeamsChannelAllowlist: resolveAllowlistMocks.resolveMSTeamsChannelAllowlist,
+  resolveMSTeamsUserAllowlist: resolveAllowlistMocks.resolveMSTeamsUserAllowlist,
 }));
 
 vi.mock("./sdk.js", () => ({
@@ -170,6 +205,20 @@ function createConfig(port: number): OpenClawConfig {
   } as OpenClawConfig;
 }
 
+function updateMSTeamsConfig(
+  cfg: OpenClawConfig,
+  patch: NonNullable<NonNullable<OpenClawConfig["channels"]>["msteams"]>,
+): void {
+  const msteams = cfg.channels?.msteams;
+  if (!cfg.channels || !msteams) {
+    throw new Error("Expected Microsoft Teams config fixture");
+  }
+  cfg.channels.msteams = {
+    ...msteams,
+    ...patch,
+  };
+}
+
 function createRuntime(): RuntimeEnv {
   return {
     log: vi.fn(),
@@ -187,11 +236,33 @@ function createStores() {
   };
 }
 
+function readMockCallArg(mock: ReturnType<typeof vi.fn>, callIndex: number, argIndex: number) {
+  const call = mock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected mock call #${callIndex + 1}`);
+  }
+  if (argIndex >= call.length) {
+    throw new Error(`expected mock call #${callIndex + 1} argument #${argIndex + 1}`);
+  }
+  return call[argIndex];
+}
+
+function requireRegisteredMSTeamsConfig(): OpenClawConfig {
+  const registered = readMockCallArg(registerMSTeamsHandlers, 0, 1) as { cfg?: OpenClawConfig };
+  if (!registered?.cfg) {
+    throw new Error("expected registered MSTeams handler config");
+  }
+  return registered.cfg;
+}
+
 describe("monitorMSTeamsProvider lifecycle", () => {
   afterEach(() => {
     vi.clearAllMocks();
     expressControl.mode.value = "listening";
     expressControl.apps.length = 0;
+    isDangerousNameMatchingEnabled.mockReset().mockReturnValue(false);
+    resolveAllowlistMocks.resolveMSTeamsChannelAllowlist.mockReset().mockResolvedValue([]);
+    resolveAllowlistMocks.resolveMSTeamsUserAllowlist.mockReset().mockResolvedValue([]);
     jwtValidate.mockReset().mockResolvedValue(true);
   });
 
@@ -214,7 +285,9 @@ describe("monitorMSTeamsProvider lifecycle", () => {
 
     abort.abort();
     const result = await task;
-    expect(result.app).not.toBeNull();
+    if (!result.app) {
+      throw new Error("expected Teams monitor app after startup abort");
+    }
     await expect(result.shutdown()).resolves.toBeUndefined();
   });
 
@@ -241,18 +314,24 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       pollStore: createStores().pollStore,
     });
 
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    await vi.waitFor(() => {
+      expect(expressControl.apps.length).toBeGreaterThan(0);
+    });
 
     const app = expressControl.apps.at(-1);
-    expect(app).toBeDefined();
-    expect(app!.use).toHaveBeenCalledTimes(4);
+    if (!app) {
+      throw new Error("expected Express app to be created");
+    }
+    expect(app.use).toHaveBeenCalledTimes(4);
 
     const jsonMiddleware = vi.mocked((await import("express")).json).mock.results[0]?.value;
-    expect(jsonMiddleware).toBeDefined();
-    expect(app!.use.mock.calls[1]?.[0]).not.toBe(jsonMiddleware);
-    expect(app!.use.mock.calls[2]?.[0]).toBe(jsonMiddleware);
+    if (typeof jsonMiddleware !== "function") {
+      throw new Error("expected Express JSON middleware");
+    }
+    expect(readMockCallArg(app.use, 1, 0)).not.toBe(jsonMiddleware);
+    expect(readMockCallArg(app.use, 2, 0)).toBe(jsonMiddleware);
 
-    const jwtMiddleware = app!.use.mock.calls[1]?.[0] as (
+    const jwtMiddleware = readMockCallArg(app.use, 1, 0) as (
       req: Request,
       res: Response,
       next: (err?: unknown) => void,
@@ -271,6 +350,106 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       expect(jwtValidate).toHaveBeenCalledWith("Bearer token");
       expect(next).toHaveBeenCalledTimes(1);
     });
+
+    abort.abort();
+    await task;
+  });
+
+  it("does not resolve user allowlists by display name unless name matching is enabled", async () => {
+    const abort = new AbortController();
+    const cfg = createConfig(0);
+    updateMSTeamsConfig(cfg, {
+      allowFrom: ["Alice", "user:40a1a0ed-4ff2-4164-a219-55518990c197"],
+      groupAllowFrom: ["Bob", "msteams:user:50a1a0ed-4ff2-4164-a219-55518990c198"],
+      teams: {
+        Product: {
+          channels: {
+            Roadmap: {},
+          },
+        },
+      },
+    });
+    resolveAllowlistMocks.resolveMSTeamsChannelAllowlist.mockResolvedValueOnce([
+      {
+        input: "Product/Roadmap",
+        resolved: true,
+        teamId: "team-id",
+        channelId: "channel-id",
+      },
+    ]);
+
+    const task = monitorMSTeamsProvider({
+      cfg,
+      runtime: createRuntime(),
+      abortSignal: abort.signal,
+      conversationStore: createStores().conversationStore,
+      pollStore: createStores().pollStore,
+    });
+
+    await vi.waitFor(() => {
+      expect(registerMSTeamsHandlers).toHaveBeenCalled();
+    });
+
+    expect(resolveAllowlistMocks.resolveMSTeamsUserAllowlist).not.toHaveBeenCalled();
+    expect(resolveAllowlistMocks.resolveMSTeamsChannelAllowlist).toHaveBeenCalledWith({
+      cfg,
+      entries: ["Product/Roadmap"],
+    });
+
+    const registeredCfg = requireRegisteredMSTeamsConfig();
+    expect(registeredCfg.channels?.msteams?.allowFrom).toEqual([
+      "Alice",
+      "user:40a1a0ed-4ff2-4164-a219-55518990c197",
+      "40a1a0ed-4ff2-4164-a219-55518990c197",
+    ]);
+    expect(registeredCfg.channels?.msteams?.groupAllowFrom).toEqual([
+      "Bob",
+      "msteams:user:50a1a0ed-4ff2-4164-a219-55518990c198",
+      "50a1a0ed-4ff2-4164-a219-55518990c198",
+    ]);
+
+    abort.abort();
+    await task;
+  });
+
+  it("resolves user allowlists when name matching is enabled", async () => {
+    isDangerousNameMatchingEnabled.mockReturnValue(true);
+    resolveAllowlistMocks.resolveMSTeamsUserAllowlist
+      .mockResolvedValueOnce([{ input: "Alice", resolved: true, id: "alice-aad" }])
+      .mockResolvedValueOnce([{ input: "Bob", resolved: true, id: "bob-aad" }]);
+
+    const abort = new AbortController();
+    const cfg = createConfig(0);
+    updateMSTeamsConfig(cfg, {
+      dangerouslyAllowNameMatching: true,
+      allowFrom: ["Alice"],
+      groupAllowFrom: ["Bob"],
+    });
+
+    const task = monitorMSTeamsProvider({
+      cfg,
+      runtime: createRuntime(),
+      abortSignal: abort.signal,
+      conversationStore: createStores().conversationStore,
+      pollStore: createStores().pollStore,
+    });
+
+    await vi.waitFor(() => {
+      expect(registerMSTeamsHandlers).toHaveBeenCalled();
+    });
+
+    expect(resolveAllowlistMocks.resolveMSTeamsUserAllowlist).toHaveBeenNthCalledWith(1, {
+      cfg,
+      entries: ["Alice"],
+    });
+    expect(resolveAllowlistMocks.resolveMSTeamsUserAllowlist).toHaveBeenNthCalledWith(2, {
+      cfg,
+      entries: ["Bob"],
+    });
+
+    const registeredCfg = requireRegisteredMSTeamsConfig();
+    expect(registeredCfg.channels?.msteams?.allowFrom).toEqual(["Alice", "alice-aad"]);
+    expect(registeredCfg.channels?.msteams?.groupAllowFrom).toEqual(["Bob", "bob-aad"]);
 
     abort.abort();
     await task;

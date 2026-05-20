@@ -16,17 +16,19 @@ import {
   type OpenClawConfig as ProviderAuthConfig,
   type ProviderAuthResult,
   suggestOAuthProfileIdForLegacyDefault,
-  upsertAuthProfile,
+  upsertAuthProfileWithLock,
   validateAnthropicSetupToken,
 } from "openclaw/plugin-sdk/provider-auth";
 import {
   cloneFirstTemplateModel,
   type ProviderPlugin,
+  resolveClaudeThinkingProfile,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { fetchClaudeUsage } from "openclaw/plugin-sdk/provider-usage";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import * as claudeCliAuth from "./cli-auth-seam.js";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
+import { buildClaudeCliCatalogEntries } from "./cli-catalog.js";
 import { buildAnthropicCliMigrationResult } from "./cli-migration.js";
 import {
   CLAUDE_CLI_BACKEND_ID,
@@ -42,6 +44,7 @@ import { buildAnthropicReplayPolicy } from "./replay-policy.js";
 import { wrapAnthropicProviderStream } from "./stream-wrappers.js";
 
 const PROVIDER_ID = "anthropic";
+type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
 const DEFAULT_ANTHROPIC_MODEL = "anthropic/claude-opus-4-7";
 const ANTHROPIC_OPUS_47_MODEL_ID = "claude-opus-4-7";
 const ANTHROPIC_OPUS_47_DOT_MODEL_ID = "claude-opus-4.7";
@@ -60,11 +63,17 @@ const ANTHROPIC_SONNET_46_DOT_MODEL_ID = "claude-sonnet-4.6";
 const ANTHROPIC_SONNET_TEMPLATE_MODEL_IDS = ["claude-sonnet-4-5", "claude-sonnet-4.5"] as const;
 const ANTHROPIC_MODERN_MODEL_PREFIXES = [
   "claude-opus-4-7",
+  "claude-opus-4.7",
   "claude-opus-4-6",
+  "claude-opus-4.6",
   "claude-sonnet-4-6",
+  "claude-sonnet-4.6",
   "claude-opus-4-5",
+  "claude-opus-4.5",
   "claude-sonnet-4-5",
+  "claude-sonnet-4.5",
   "claude-haiku-4-5",
+  "claude-haiku-4.5",
 ] as const;
 const ANTHROPIC_SETUP_TOKEN_NOTE_LINES = [
   "Anthropic setup-token auth is supported in OpenClaw.",
@@ -78,6 +87,15 @@ const CLAUDE_CLI_CANONICAL_ALLOWLIST_REFS = CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS.ma
     ? `anthropic/${ref.slice(CLAUDE_CLI_BACKEND_ID.length + 1)}`
     : ref,
 );
+
+async function upsertAuthProfileWithLockOrThrow(params: UpsertAuthProfileParams): Promise<void> {
+  const updated = await upsertAuthProfileWithLock(params);
+  if (!updated) {
+    throw new Error(
+      "Failed to update auth profile store; the auth store lock may be busy. Wait a moment and retry.",
+    );
+  }
+}
 const CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF = CLAUDE_CLI_DEFAULT_MODEL_REF.startsWith(
   `${CLAUDE_CLI_BACKEND_ID}/`,
 )
@@ -164,7 +182,7 @@ async function runAnthropicSetupTokenNonInteractive(
 
   const profileId = resolveAnthropicSetupTokenProfileId(ctx.opts.tokenProfileId);
   const expires = resolveAnthropicSetupTokenExpiry(ctx.opts.tokenExpiresIn);
-  upsertAuthProfile({
+  await upsertAuthProfileWithLockOrThrow({
     profileId,
     credential: {
       type: "token",
@@ -212,6 +230,9 @@ function resolveAnthropic46ForwardCompatModel(params: {
 }): ProviderRuntimeModel | undefined {
   const trimmedModelId = params.ctx.modelId.trim();
   const lower = normalizeLowercaseStringOrEmpty(trimmedModelId);
+  if (trimmedModelId !== lower) {
+    return undefined;
+  }
   const is46Model =
     lower === params.dashModelId ||
     lower === params.dotModelId ||
@@ -273,26 +294,12 @@ function resolveAnthropicForwardCompatModel(
   );
 }
 
-function shouldUseAnthropicAdaptiveThinkingDefault(modelId: string): boolean {
-  const lowerModelId = normalizeLowercaseStringOrEmpty(modelId);
-  return (
-    lowerModelId.startsWith(ANTHROPIC_OPUS_46_MODEL_ID) ||
-    lowerModelId.startsWith(ANTHROPIC_OPUS_46_DOT_MODEL_ID) ||
-    lowerModelId.startsWith(ANTHROPIC_SONNET_46_MODEL_ID) ||
-    lowerModelId.startsWith(ANTHROPIC_SONNET_46_DOT_MODEL_ID)
-  );
-}
-
 function isAnthropicOpus47Model(modelId: string): boolean {
-  const lowerModelId = normalizeLowercaseStringOrEmpty(modelId);
+  const normalized = normalizeLowercaseStringOrEmpty(modelId);
   return (
-    lowerModelId.startsWith(ANTHROPIC_OPUS_47_MODEL_ID) ||
-    lowerModelId.startsWith(ANTHROPIC_OPUS_47_DOT_MODEL_ID)
+    normalized.startsWith(ANTHROPIC_OPUS_47_MODEL_ID) ||
+    normalized.startsWith(ANTHROPIC_OPUS_47_DOT_MODEL_ID)
   );
-}
-
-function supportsAnthropicAdaptiveThinking(modelId: string): boolean {
-  return shouldUseAnthropicAdaptiveThinkingDefault(modelId) || isAnthropicOpus47Model(modelId);
 }
 
 function hasConfiguredModelContextOverride(
@@ -367,6 +374,46 @@ function applyAnthropicOpus47ContextWindow(params: {
 function matchesAnthropicModernModel(modelId: string): boolean {
   const lower = normalizeLowercaseStringOrEmpty(modelId);
   return ANTHROPIC_MODERN_MODEL_PREFIXES.some((prefix) => lower.startsWith(prefix));
+}
+
+function hasImageInput(input: unknown): boolean {
+  return Array.isArray(input) && input.includes("image");
+}
+
+function supportsAnthropicImageInput(modelId: string, modelName?: string): boolean {
+  return [modelId, modelName]
+    .filter((value): value is string => typeof value === "string")
+    .some((candidate) => matchesAnthropicModernModel(candidate));
+}
+
+function applyAnthropicImageInputCapability(params: {
+  modelId: string;
+  model: ProviderRuntimeModel;
+}): ProviderRuntimeModel | undefined {
+  if (hasImageInput(params.model.input)) {
+    return undefined;
+  }
+  if (!supportsAnthropicImageInput(params.modelId, params.model.name)) {
+    return undefined;
+  }
+  return {
+    ...params.model,
+    input: ["text", "image"],
+  };
+}
+
+function normalizeAnthropicResolvedModel(
+  ctx: ProviderNormalizeResolvedModelContext,
+): ProviderRuntimeModel | undefined {
+  const imageCapableModel = applyAnthropicImageInputCapability(ctx) ?? ctx.model;
+  const contextWindowModel =
+    applyAnthropicOpus47ContextWindow({
+      config: ctx.config,
+      provider: ctx.provider,
+      modelId: ctx.modelId,
+      model: imageCapableModel,
+    }) ?? imageCapableModel;
+  return contextWindowModel === ctx.model ? undefined : contextWindowModel;
 }
 
 function buildAnthropicAuthDoctorHint(params: {
@@ -575,42 +622,31 @@ export function buildAnthropicProvider(): ProviderPlugin {
       if (!model) {
         return undefined;
       }
+      const imageCapableModel =
+        applyAnthropicImageInputCapability({
+          modelId: ctx.modelId,
+          model,
+        }) ?? model;
       return (
         applyAnthropicOpus47ContextWindow({
           config: ctx.config,
           provider: ctx.provider,
           modelId: ctx.modelId,
-          model,
-        }) ?? model
+          model: imageCapableModel,
+        }) ?? imageCapableModel
       );
     },
-    normalizeResolvedModel: (ctx) => applyAnthropicOpus47ContextWindow(ctx),
+    normalizeResolvedModel: (ctx) => normalizeAnthropicResolvedModel(ctx),
     resolveSyntheticAuth: ({ provider }) =>
       normalizeLowercaseStringOrEmpty(provider) === CLAUDE_CLI_BACKEND_ID
         ? resolveClaudeCliSyntheticAuth()
         : undefined,
+    // Publish Claude CLI rows through the provider catalog hook.
+    augmentModelCatalog: () => buildClaudeCliCatalogEntries(),
     buildReplayPolicy: buildAnthropicReplayPolicy,
     isModernModelRef: ({ modelId }) => matchesAnthropicModernModel(modelId),
     resolveReasoningOutputMode: () => "native",
-    resolveThinkingProfile: ({ modelId }) => {
-      const levels: Array<{
-        id: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | "max";
-      }> = [{ id: "off" }, { id: "minimal" }, { id: "low" }, { id: "medium" }, { id: "high" }];
-      if (isAnthropicOpus47Model(modelId)) {
-        levels.push({ id: "xhigh" }, { id: "adaptive" }, { id: "max" });
-      } else if (supportsAnthropicAdaptiveThinking(modelId)) {
-        levels.push({ id: "adaptive" });
-      }
-      return {
-        levels,
-        defaultLevel: isAnthropicOpus47Model(modelId)
-          ? "off"
-          : matchesAnthropicModernModel(modelId) &&
-              shouldUseAnthropicAdaptiveThinkingDefault(modelId)
-            ? "adaptive"
-            : undefined,
-      };
-    },
+    resolveThinkingProfile: ({ modelId }) => resolveClaudeThinkingProfile(modelId),
     wrapStreamFn: wrapAnthropicProviderStream,
     resolveUsageAuth: async (ctx) => await ctx.resolveOAuthToken(),
     fetchUsageSnapshot: async (ctx) =>

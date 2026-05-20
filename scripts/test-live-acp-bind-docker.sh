@@ -1,18 +1,28 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-source "$ROOT_DIR/scripts/lib/live-docker-auth.sh"
+SCRIPT_ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT_DIR="${OPENCLAW_LIVE_DOCKER_REPO_ROOT:-$SCRIPT_ROOT_DIR}"
+ROOT_DIR="$(cd "$ROOT_DIR" && pwd)"
+TRUSTED_HARNESS_DIR="${OPENCLAW_LIVE_DOCKER_TRUSTED_HARNESS_DIR:-$SCRIPT_ROOT_DIR}"
+if [[ -z "$TRUSTED_HARNESS_DIR" || ! -d "$TRUSTED_HARNESS_DIR" ]]; then
+  echo "ERROR: trusted live Docker harness directory not found: ${TRUSTED_HARNESS_DIR:-<empty>}." >&2
+  exit 1
+fi
+TRUSTED_HARNESS_DIR="$(cd "$TRUSTED_HARNESS_DIR" && pwd)"
+source "$TRUSTED_HARNESS_DIR/scripts/lib/live-docker-auth.sh"
 IMAGE_NAME="${OPENCLAW_IMAGE:-openclaw:local}"
 LIVE_IMAGE_NAME="${OPENCLAW_LIVE_IMAGE:-${IMAGE_NAME}-live}"
 CONFIG_DIR="${OPENCLAW_CONFIG_DIR:-$HOME/.openclaw}"
 WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-$HOME/.openclaw/workspace}"
-PROFILE_FILE="${OPENCLAW_PROFILE_FILE:-$HOME/.profile}"
+PROFILE_FILE="$(openclaw_live_default_profile_file)"
 ACP_AGENT_LIST_RAW="${OPENCLAW_LIVE_ACP_BIND_AGENTS:-${OPENCLAW_LIVE_ACP_BIND_AGENT:-claude,codex,gemini}}"
 TEMP_DIRS=()
 DOCKER_USER="${OPENCLAW_DOCKER_USER:-node}"
 DOCKER_HOME_MOUNT=()
 DOCKER_AUTH_PRESTAGED=0
+DOCKER_TRUSTED_HARNESS_CONTAINER_DIR="/trusted-harness"
+DOCKER_TRUSTED_HARNESS_MOUNT=(-v "$TRUSTED_HARNESS_DIR":"$DOCKER_TRUSTED_HARNESS_CONTAINER_DIR":ro)
 
 openclaw_live_acp_bind_append_build_extension() {
   local extension="${1:?extension required}"
@@ -60,7 +70,7 @@ trap cleanup_temp_dirs EXIT
 
 if [[ -n "${OPENCLAW_DOCKER_CLI_TOOLS_DIR:-}" ]]; then
   CLI_TOOLS_DIR="${OPENCLAW_DOCKER_CLI_TOOLS_DIR}"
-elif [[ "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
+elif openclaw_live_is_ci; then
   CLI_TOOLS_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-docker-cli-tools.XXXXXX")"
   TEMP_DIRS+=("$CLI_TOOLS_DIR")
 else
@@ -68,7 +78,7 @@ else
 fi
 if [[ -n "${OPENCLAW_DOCKER_CACHE_HOME_DIR:-}" ]]; then
   CACHE_HOME_DIR="${OPENCLAW_DOCKER_CACHE_HOME_DIR}"
-elif [[ "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
+elif openclaw_live_is_ci; then
   CACHE_HOME_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-docker-cache.XXXXXX")"
   TEMP_DIRS+=("$CACHE_HOME_DIR")
 else
@@ -77,7 +87,7 @@ fi
 
 mkdir -p "$CLI_TOOLS_DIR"
 mkdir -p "$CACHE_HOME_DIR"
-if [[ "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
+if openclaw_live_is_ci; then
   DOCKER_USER="$(id -u):$(id -g)"
 fi
 
@@ -148,6 +158,7 @@ exec "\$script_dir/claude-real" "\$@"
 WRAP
       chmod +x "$NPM_CONFIG_PREFIX/bin/claude"
     fi
+    export CLAUDE_CODE_EXECUTABLE="$NPM_CONFIG_PREFIX/bin/claude"
     claude auth status || true
     ;;
   codex)
@@ -162,14 +173,40 @@ WRAP
     fi
     droid --version
     if [ -z "${FACTORY_API_KEY:-}" ]; then
-      echo "Droid Docker ACP bind requires FACTORY_API_KEY; Factory OAuth/keyring auth in ~/.factory is not portable into the container." >&2
-      exit 1
+      echo "SKIP: Droid Docker ACP bind requires FACTORY_API_KEY; Factory OAuth/keyring auth in ~/.factory is not portable into the container." >&2
+      exit 0
     fi
     ;;
   gemini)
     mkdir -p "$HOME/.gemini"
     if [ ! -x "$NPM_CONFIG_PREFIX/bin/gemini" ]; then
       npm install -g @google/gemini-cli
+    fi
+    if [ -n "${GEMINI_API_KEY:-}" ] || [ -n "${GOOGLE_API_KEY:-}" ]; then
+      gemini_auth_type="gemini-api-key"
+      if [ -z "${GEMINI_API_KEY:-}" ] && [ -n "${GOOGLE_API_KEY:-}" ]; then
+        gemini_auth_type="vertex-ai"
+        export GOOGLE_GENAI_USE_VERTEXAI="${GOOGLE_GENAI_USE_VERTEXAI:-true}"
+      fi
+      GEMINI_CLI_AUTH_TYPE="$gemini_auth_type" node <<'NODE'
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+
+const settingsPath = path.join(os.homedir(), ".gemini", "settings.json");
+let settings = {};
+try {
+  settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+} catch {}
+settings.security = settings.security && typeof settings.security === "object" ? settings.security : {};
+settings.security.auth =
+  settings.security.auth && typeof settings.security.auth === "object" ? settings.security.auth : {};
+settings.security.auth.selectedType = process.env.GEMINI_CLI_AUTH_TYPE;
+settings.security.auth.enforcedType = process.env.GEMINI_CLI_AUTH_TYPE;
+fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+fs.writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+NODE
+      echo "Using Gemini CLI auth type $gemini_auth_type"
     fi
     ;;
   opencode)
@@ -186,7 +223,8 @@ WRAP
     ;;
 esac
 tmp_dir="$(mktemp -d)"
-source /src/scripts/lib/live-docker-stage.sh
+trusted_scripts_dir="${OPENCLAW_LIVE_DOCKER_SCRIPTS_DIR:-/src/scripts}"
+source "$trusted_scripts_dir/lib/live-docker-stage.sh"
 openclaw_live_stage_source_tree "$tmp_dir"
 openclaw_live_stage_node_modules "$tmp_dir"
 openclaw_live_link_runtime_tree "$tmp_dir"
@@ -194,11 +232,11 @@ openclaw_live_stage_state_dir "$tmp_dir/.openclaw-state"
 openclaw_live_prepare_staged_config
 cd "$tmp_dir"
 export OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND="${OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND:-}"
-pnpm test:live src/gateway/gateway-acp-bind.live.test.ts
+node scripts/test-live.mjs -- src/gateway/gateway-acp-bind.live.test.ts
 EOF
 
 openclaw_live_acp_bind_append_build_extension acpx
-"$ROOT_DIR/scripts/test-live-build-docker.sh"
+OPENCLAW_LIVE_DOCKER_REPO_ROOT="$ROOT_DIR" "$TRUSTED_HARNESS_DIR/scripts/test-live-build-docker.sh"
 
 IFS=',' read -r -a ACP_AGENT_TOKENS <<<"$ACP_AGENT_LIST_RAW"
 ACP_AGENTS=()
@@ -251,7 +289,7 @@ for ACP_AGENT in "${ACP_AGENTS[@]}"; do
 
   DOCKER_HOME_MOUNT=()
   DOCKER_AUTH_PRESTAGED=0
-  if [[ "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
+  if openclaw_live_is_ci; then
     DOCKER_HOME_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-docker-home.XXXXXX")"
     TEMP_DIRS+=("$DOCKER_HOME_DIR")
     DOCKER_HOME_MOUNT=(-v "$DOCKER_HOME_DIR":/home/node)
@@ -260,6 +298,16 @@ for ACP_AGENT in "${ACP_AGENTS[@]}"; do
   if [[ -n "${DOCKER_HOME_DIR:-}" ]]; then
     openclaw_live_stage_auth_into_home "$DOCKER_HOME_DIR" "${AUTH_DIRS[@]}" --files "${AUTH_FILES[@]}"
     DOCKER_AUTH_PRESTAGED=1
+  fi
+
+  if [[ "$ACP_AGENT" == "droid" && -z "${FACTORY_API_KEY:-}" ]]; then
+    echo "==> Run ACP bind live test in Docker"
+    echo "==> Agent: $ACP_AGENT"
+    echo "==> Profile file: $PROFILE_STATUS"
+    echo "==> Auth dirs: ${AUTH_DIRS_CSV:-none}"
+    echo "==> Auth files: ${AUTH_FILES_CSV:-none}"
+    echo "SKIP: Droid Docker ACP bind requires FACTORY_API_KEY; Factory OAuth/keyring auth in ~/.factory is not portable into the container." >&2
+    continue
   fi
 
   EXTERNAL_AUTH_MOUNTS=()
@@ -309,6 +357,7 @@ for ACP_AGENT in "${ACP_AGENTS[@]}"; do
     -e OPENCLAW_DOCKER_AUTH_PRESTAGED="$DOCKER_AUTH_PRESTAGED" \
     -e OPENCLAW_DOCKER_AUTH_DIRS_RESOLVED="$AUTH_DIRS_CSV" \
     -e OPENCLAW_DOCKER_AUTH_FILES_RESOLVED="$AUTH_FILES_CSV" \
+    -e OPENCLAW_LIVE_DOCKER_SCRIPTS_DIR="${DOCKER_TRUSTED_HARNESS_CONTAINER_DIR}/scripts" \
     -e OPENCLAW_LIVE_DOCKER_SOURCE_STAGE_MODE="${OPENCLAW_LIVE_DOCKER_SOURCE_STAGE_MODE:-copy}" \
     -e OPENCLAW_LIVE_TEST=1 \
     -e OPENCLAW_LIVE_ACP_BIND=1 \
@@ -316,6 +365,7 @@ for ACP_AGENT in "${ACP_AGENTS[@]}"; do
     -e OPENCLAW_LIVE_ACP_BIND_OPENCODE_MODEL="${OPENCLAW_LIVE_ACP_BIND_OPENCODE_MODEL:-opencode/kimi-k2.6}" \
     -e OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND="$AGENT_COMMAND")
   openclaw_live_append_array DOCKER_RUN_ARGS DOCKER_HOME_MOUNT
+  openclaw_live_append_array DOCKER_RUN_ARGS DOCKER_TRUSTED_HARNESS_MOUNT
   DOCKER_RUN_ARGS+=(\
     -v "$CACHE_HOME_DIR":/home/node/.cache \
     -v "$ROOT_DIR":/src:ro \

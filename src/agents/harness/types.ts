@@ -1,25 +1,51 @@
-import type { CompactEmbeddedPiSessionParams } from "../pi-embedded-runner/compact.types.js";
-import type {
-  EmbeddedRunAttemptParams,
-  EmbeddedRunAttemptResult,
-} from "../pi-embedded-runner/run/types.js";
-import type { EmbeddedAgentRuntime } from "../pi-embedded-runner/runtime.js";
-import type { EmbeddedPiCompactResult } from "../pi-embedded-runner/types.js";
-
 export type AgentHarnessSupportContext = {
   provider: string;
   modelId?: string;
-  requestedRuntime: EmbeddedAgentRuntime;
+  requestedRuntime: import("../pi-embedded-runner/runtime.js").EmbeddedAgentRuntime;
 };
 
 export type AgentHarnessSupport =
   | { supported: true; priority?: number; reason?: string }
   | { supported: false; reason?: string };
 
-export type AgentHarnessAttemptParams = EmbeddedRunAttemptParams;
-export type AgentHarnessAttemptResult = EmbeddedRunAttemptResult;
-export type AgentHarnessCompactParams = CompactEmbeddedPiSessionParams;
-export type AgentHarnessCompactResult = EmbeddedPiCompactResult;
+export type AgentHarnessAttemptParams =
+  import("../pi-embedded-runner/run/types.js").EmbeddedRunAttemptParams;
+export type AgentHarnessAttemptResult =
+  import("../pi-embedded-runner/run/types.js").EmbeddedRunAttemptResult;
+export type AgentHarnessSideQuestionParams = {
+  cfg: import("../../config/types.openclaw.js").OpenClawConfig;
+  agentDir: string;
+  provider: string;
+  model: string;
+  runtimeModel?: import("@earendil-works/pi-ai").Model<import("@earendil-works/pi-ai").Api>;
+  question: string;
+  sessionEntry: import("../../config/sessions.js").SessionEntry;
+  sessionStore?: Record<string, import("../../config/sessions.js").SessionEntry>;
+  sessionKey?: string;
+  storePath?: string;
+  resolvedThinkLevel?: import("../../auto-reply/thinking.js").ThinkLevel;
+  resolvedReasoningLevel: import("../../auto-reply/thinking.js").ReasoningLevel;
+  blockReplyChunking?: import("../pi-embedded-block-chunker.js").BlockReplyChunking;
+  resolvedBlockStreamingBreak?: "text_end" | "message_end";
+  opts?: import("../../auto-reply/get-reply-options.types.js").GetReplyOptions;
+  isNewSession: boolean;
+  sessionId: string;
+  sessionFile: string;
+  agentId?: string;
+  workspaceDir?: string;
+  messageChannel?: string;
+  messageProvider?: string;
+  currentChannelId?: string;
+  authProfileId?: string;
+  authProfileIdSource?: "auto" | "user";
+};
+export type AgentHarnessSideQuestionResult = {
+  text: string;
+};
+export type AgentHarnessCompactParams =
+  import("../pi-embedded-runner/compact.types.js").CompactEmbeddedPiSessionParams;
+export type AgentHarnessCompactResult =
+  import("../pi-embedded-runner/types.js").EmbeddedPiCompactResult;
 export type AgentHarnessResetParams = {
   sessionId?: string;
   sessionKey?: string;
@@ -29,14 +55,24 @@ export type AgentHarnessResetParams = {
 
 export type AgentHarnessResultClassification =
   | "ok"
-  | NonNullable<EmbeddedRunAttemptResult["agentHarnessResultClassification"]>;
+  | NonNullable<AgentHarnessAttemptResult["agentHarnessResultClassification"]>;
+
+export type AgentHarnessDeliveryDefaults = {
+  /**
+   * @deprecated Prefer `messages.visibleReplies` / `messages.groupChat.visibleReplies`
+   * config. Kept for existing harness plugins.
+   */
+  sourceVisibleReplies?: "automatic" | "message_tool";
+};
 
 export type AgentHarness = {
   id: string;
   label: string;
   pluginId?: string;
+  deliveryDefaults?: AgentHarnessDeliveryDefaults;
   supports(ctx: AgentHarnessSupportContext): AgentHarnessSupport;
   runAttempt(params: AgentHarnessAttemptParams): Promise<AgentHarnessAttemptResult>;
+  runSideQuestion?(params: AgentHarnessSideQuestionParams): Promise<AgentHarnessSideQuestionResult>;
   classify?(
     result: AgentHarnessAttemptResult,
     ctx: AgentHarnessAttemptParams,

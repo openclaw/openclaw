@@ -2,12 +2,7 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { hasAvailableAuthForProvider } from "../agents/model-auth.js";
-import {
-  findModelInCatalog,
-  loadModelCatalog,
-  modelSupportsVision,
-} from "../agents/model-catalog.js";
+import { isMinimaxVlmModel, isMinimaxVlmProvider } from "../agents/minimax-vlm.js";
 import { findNormalizedProviderValue } from "../agents/provider-id.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import {
@@ -29,14 +24,13 @@ import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { ActiveMediaModel } from "./active-model.types.js";
 import { MediaAttachmentCache, selectAttachments } from "./attachments.js";
-import { resolveAutoMediaKeyProviders, resolveDefaultMediaModel } from "./defaults.js";
 import { isMediaUnderstandingSkipError } from "./errors.js";
 import { fileExists } from "./fs.js";
 import { extractGeminiResponse } from "./output-extract.js";
+import { normalizeMediaExecutionProviderId, normalizeMediaProviderId } from "./provider-id.js";
 import {
   buildMediaUnderstandingRegistry,
   getMediaUnderstandingProvider,
-  normalizeMediaProviderId,
 } from "./provider-registry.js";
 import { providerSupportsCapability } from "./provider-supports.js";
 import { resolveModelEntries, resolveScopeDecision } from "./resolve.js";
@@ -58,11 +52,45 @@ export { createMediaAttachmentCache, normalizeMediaAttachments } from "./runner.
 export type { ActiveMediaModel } from "./active-model.types.js";
 
 type ProviderRegistry = Map<string, MediaUnderstandingProvider>;
+type HasAvailableAuthForProvider =
+  typeof import("../agents/model-auth.js").hasAvailableAuthForProvider;
+type ModelCatalogApi = typeof import("../agents/model-catalog.js");
+type ModelCatalog = Awaited<ReturnType<ModelCatalogApi["loadModelCatalog"]>>;
 
 export type RunCapabilityResult = {
   outputs: MediaUnderstandingOutput[];
   decision: MediaUnderstandingDecision;
 };
+
+let cachedHasAvailableAuthForProvider: HasAvailableAuthForProvider | null = null;
+let cachedModelCatalogApi: ModelCatalogApi | null = null;
+
+async function loadModelCatalogApi(): Promise<ModelCatalogApi> {
+  cachedModelCatalogApi ??= await import("../agents/model-catalog.js");
+  return cachedModelCatalogApi;
+}
+
+function resolveLiteralProviderApiKey(
+  cfg: OpenClawConfig | undefined,
+  providerId: string,
+): string | null {
+  const value = findNormalizedProviderValue(cfg?.models?.providers, providerId)?.apiKey;
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+async function hasProviderAuthAvailable(params: {
+  provider: string;
+  cfg?: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+}): Promise<boolean> {
+  if (resolveLiteralProviderApiKey(params.cfg, params.provider)) {
+    return true;
+  }
+  cachedHasAvailableAuthForProvider ??= (await import("../agents/model-auth.js"))
+    .hasAvailableAuthForProvider;
+  return await cachedHasAvailableAuthForProvider(params);
+}
 
 function resolveConfiguredKeyProviderOrder(params: {
   cfg: OpenClawConfig;
@@ -71,11 +99,14 @@ function resolveConfiguredKeyProviderOrder(params: {
   fallbackProviders: readonly string[];
 }): string[] {
   const configuredProviders = Object.keys(params.cfg.models?.providers ?? {})
-    .map((providerId) => normalizeMediaProviderId(providerId))
+    .map((providerId) => normalizeMediaExecutionProviderId(providerId))
     .filter(Boolean)
     .filter((providerId, index, values) => values.indexOf(providerId) === index)
     .filter((providerId) =>
-      providerSupportsCapability(params.providerRegistry.get(providerId), params.capability),
+      providerSupportsCapability(
+        params.providerRegistry.get(normalizeMediaProviderId(providerId)),
+        params.capability,
+      ),
     );
 
   return [...new Set([...configuredProviders, ...params.fallbackProviders])];
@@ -85,6 +116,9 @@ function resolveConfiguredImageModelId(params: {
   cfg: OpenClawConfig;
   providerId: string;
 }): string | undefined {
+  if (isMinimaxVlmProvider(params.providerId)) {
+    return undefined;
+  }
   const configured = resolveConfiguredImageModel(params);
   const id = configured?.id?.trim();
   return id || undefined;
@@ -113,11 +147,13 @@ function resolveConfiguredImageModel(params: {
 
 function resolveCatalogImageModelId(params: {
   providerId: string;
-  catalog: Awaited<ReturnType<typeof loadModelCatalog>>;
+  catalog: ModelCatalog;
+  modelSupportsVision: ModelCatalogApi["modelSupportsVision"];
 }): string | undefined {
   const matches = params.catalog.filter(
     (entry) =>
-      normalizeMediaProviderId(entry.provider) === params.providerId && modelSupportsVision(entry),
+      normalizeMediaProviderId(entry.provider) === normalizeMediaProviderId(params.providerId) &&
+      params.modelSupportsVision(entry),
   );
   if (matches.length === 0) {
     return undefined;
@@ -126,15 +162,62 @@ function resolveCatalogImageModelId(params: {
   return normalizeOptionalString((autoEntry ?? matches[0])?.id);
 }
 
+function resolveDefaultMediaModelFromRegistry(params: {
+  providerId: string;
+  capability: MediaUnderstandingCapability;
+  providerRegistry: ProviderRegistry;
+}): string | undefined {
+  const provider = params.providerRegistry.get(normalizeMediaProviderId(params.providerId));
+  return normalizeOptionalString(provider?.defaultModels?.[params.capability]);
+}
+
+function resolveAutoMediaKeyProvidersFromRegistry(params: {
+  capability: MediaUnderstandingCapability;
+  providerRegistry: ProviderRegistry;
+}): string[] {
+  type AutoProviderEntry = {
+    provider: MediaUnderstandingProvider;
+    priority: number;
+  };
+  return [...params.providerRegistry.values()]
+    .filter(
+      (provider) =>
+        provider.capabilities?.includes(params.capability) ??
+        providerSupportsCapability(provider, params.capability),
+    )
+    .map((provider): AutoProviderEntry | null => {
+      const priority = provider.autoPriority?.[params.capability];
+      return typeof priority === "number" && Number.isFinite(priority)
+        ? { provider, priority }
+        : null;
+    })
+    .filter((entry): entry is AutoProviderEntry => entry !== null)
+    .toSorted((left, right) => {
+      if (left.priority !== right.priority) {
+        return left.priority - right.priority;
+      }
+      return left.provider.id.localeCompare(right.provider.id);
+    })
+    .map((entry) => normalizeMediaProviderId(entry.provider.id))
+    .filter(Boolean);
+}
+
 async function explicitImageModelVisionStatus(params: {
   cfg: OpenClawConfig;
   providerId: string;
   model: string;
 }): Promise<"supported" | "unsupported" | "unknown"> {
+  if (
+    isMinimaxVlmProvider(params.providerId) &&
+    !isMinimaxVlmModel(params.providerId, params.model)
+  ) {
+    return "unsupported";
+  }
   const configured = resolveConfiguredImageModel(params);
   if (configured?.id?.trim() === params.model && configured.input?.includes("image")) {
     return "supported";
   }
+  const { findModelInCatalog, loadModelCatalog, modelSupportsVision } = await loadModelCatalogApi();
   const catalog = await loadModelCatalog({ config: params.cfg });
   const entry = findModelInCatalog(catalog, params.providerId, params.model);
   if (!entry) {
@@ -146,7 +229,9 @@ async function explicitImageModelVisionStatus(params: {
 async function resolveAutoImageModelId(params: {
   cfg: OpenClawConfig;
   providerId: string;
+  providerRegistry: ProviderRegistry;
   explicitModel?: string;
+  workspaceDir?: string;
 }): Promise<string | undefined> {
   const explicit = normalizeOptionalString(params.explicitModel);
   if (explicit) {
@@ -159,22 +244,37 @@ async function resolveAutoImageModelId(params: {
       return explicit;
     }
   }
+  if (isMinimaxVlmProvider(params.providerId)) {
+    return "MiniMax-VL-01";
+  }
   const configuredModel = resolveConfiguredImageModelId(params);
   if (configuredModel) {
     return configuredModel;
   }
-  const defaultModel = resolveDefaultMediaModel({
-    cfg: params.cfg,
+  const defaultModel = resolveDefaultMediaModelFromRegistry({
     providerId: params.providerId,
     capability: "image",
+    providerRegistry: params.providerRegistry,
   });
   if (defaultModel) {
     return defaultModel;
   }
+  const { resolveDefaultMediaModel } = await import("./defaults.js");
+  const bundledDefaultModel = resolveDefaultMediaModel({
+    cfg: params.cfg,
+    providerId: params.providerId,
+    capability: "image",
+    workspaceDir: params.workspaceDir,
+  });
+  if (bundledDefaultModel) {
+    return bundledDefaultModel;
+  }
+  const { loadModelCatalog, modelSupportsVision } = await loadModelCatalogApi();
   const catalog = await loadModelCatalog({ config: params.cfg });
   return resolveCatalogImageModelId({
     providerId: params.providerId,
     catalog,
+    modelSupportsVision,
   });
 }
 
@@ -188,9 +288,17 @@ export function buildProviderRegistry(
 export function resolveMediaAttachmentLocalRoots(params: {
   cfg: OpenClawConfig;
   ctx: MsgContext;
+  workspaceDir?: string;
 }): readonly string[] {
+  // ctx.MediaWorkspaceDir is set by chat.send's prestageNonImageOffloads when
+  // inbound attachments were staged into a sandbox workspace. The paths in
+  // ctx.MediaPaths are kept sandbox-relative (so the agent inside the
+  // container can read them), and the workspace dir is carried separately so
+  // host-side media-understanding can still resolve them via this root list.
+  const workspaceDir = params.ctx.MediaWorkspaceDir ?? params.workspaceDir;
   return mergeInboundPathRoots(
     getDefaultMediaLocalRoots(),
+    workspaceDir ? [path.resolve(workspaceDir)] : undefined,
     resolveChannelInboundAttachmentRoots(params),
   );
 }
@@ -434,11 +542,12 @@ async function resolveGeminiCliEntry(
 async function resolveKeyEntry(params: {
   cfg: OpenClawConfig;
   agentDir?: string;
+  workspaceDir?: string;
   providerRegistry: ProviderRegistry;
   capability: MediaUnderstandingCapability;
   activeModel?: ActiveMediaModel;
 }): Promise<MediaUnderstandingModelConfig | null> {
-  const { cfg, agentDir, providerRegistry, capability } = params;
+  const { cfg, agentDir, workspaceDir, providerRegistry, capability } = params;
   const checkProvider = async (
     providerId: string,
     model?: string,
@@ -457,17 +566,24 @@ async function resolveKeyEntry(params: {
       return null;
     }
     if (
-      !(await hasAvailableAuthForProvider({
+      !(await hasProviderAuthAvailable({
         provider: providerId,
         cfg,
         agentDir,
+        workspaceDir,
       }))
     ) {
       return null;
     }
     const resolvedModel =
       capability === "image"
-        ? await resolveAutoImageModelId({ cfg, providerId, explicitModel: model })
+        ? await resolveAutoImageModelId({
+            cfg,
+            providerId,
+            providerRegistry,
+            explicitModel: model,
+            workspaceDir,
+          })
         : model;
     if (capability === "image" && !resolvedModel) {
       return null;
@@ -486,8 +602,7 @@ async function resolveKeyEntry(params: {
     cfg,
     providerRegistry,
     capability,
-    fallbackProviders: resolveAutoMediaKeyProviders({
-      cfg,
+    fallbackProviders: resolveAutoMediaKeyProvidersFromRegistry({
       capability,
       providerRegistry,
     }),
@@ -542,6 +657,7 @@ function hasExplicitImageUnderstandingConfig(params: {
 async function resolveAutoEntries(params: {
   cfg: OpenClawConfig;
   agentDir?: string;
+  workspaceDir?: string;
   providerRegistry: ProviderRegistry;
   capability: MediaUnderstandingCapability;
   activeModel?: ActiveMediaModel;
@@ -580,6 +696,7 @@ async function resolveAutoEntries(params: {
 export async function resolveAutoImageModel(params: {
   cfg: OpenClawConfig;
   agentDir?: string;
+  workspaceDir?: string;
   activeModel?: ActiveMediaModel;
 }): Promise<ActiveMediaModel | null> {
   const providerRegistry = buildProviderRegistry(undefined, params.cfg);
@@ -603,6 +720,7 @@ export async function resolveAutoImageModel(params: {
   const activeEntry = await resolveActiveModelEntry({
     cfg: params.cfg,
     agentDir: params.agentDir,
+    workspaceDir: params.workspaceDir,
     providerRegistry,
     capability: "image",
     activeModel: params.activeModel,
@@ -614,6 +732,7 @@ export async function resolveAutoImageModel(params: {
   const keyEntry = await resolveKeyEntry({
     cfg: params.cfg,
     agentDir: params.agentDir,
+    workspaceDir: params.workspaceDir,
     providerRegistry,
     capability: "image",
     activeModel: params.activeModel,
@@ -624,6 +743,7 @@ export async function resolveAutoImageModel(params: {
 async function resolveActiveModelEntry(params: {
   cfg: OpenClawConfig;
   agentDir?: string;
+  workspaceDir?: string;
   providerRegistry: ProviderRegistry;
   capability: MediaUnderstandingCapability;
   activeModel?: ActiveMediaModel;
@@ -632,7 +752,7 @@ async function resolveActiveModelEntry(params: {
   if (!activeProviderRaw) {
     return null;
   }
-  const providerId = normalizeMediaProviderId(activeProviderRaw);
+  const providerId = normalizeMediaExecutionProviderId(activeProviderRaw);
   if (!providerId) {
     return null;
   }
@@ -649,23 +769,34 @@ async function resolveActiveModelEntry(params: {
   if (params.capability === "video" && !provider.describeVideo) {
     return null;
   }
-  const hasAuth = await hasAvailableAuthForProvider({
+  const hasAuth = await hasProviderAuthAvailable({
     provider: providerId,
     cfg: params.cfg,
     agentDir: params.agentDir,
+    workspaceDir: params.workspaceDir,
   });
   if (!hasAuth) {
     return null;
   }
-  const model =
-    params.capability === "image"
-      ? await resolveAutoImageModelId({
-          cfg: params.cfg,
-          providerId,
-          explicitModel: params.activeModel?.model,
-        })
-      : params.activeModel?.model;
-  if (params.capability === "image" && !model) {
+  let model: string | undefined;
+  if (params.capability === "image") {
+    model = await resolveAutoImageModelId({
+      cfg: params.cfg,
+      providerId,
+      providerRegistry: params.providerRegistry,
+      explicitModel: params.activeModel?.model,
+      workspaceDir: params.workspaceDir,
+    });
+  } else if (params.capability === "audio") {
+    model = resolveDefaultMediaModelFromRegistry({
+      providerId,
+      capability: "audio",
+      providerRegistry: params.providerRegistry,
+    });
+  } else {
+    model = params.activeModel?.model;
+  }
+  if ((params.capability === "image" || params.capability === "audio") && !model) {
     return null;
   }
   return {
@@ -681,6 +812,7 @@ async function runAttachmentEntries(params: {
   ctx: MsgContext;
   attachmentIndex: number;
   agentDir?: string;
+  workspaceDir?: string;
   providerRegistry: ProviderRegistry;
   cache: MediaAttachmentCache;
   entries: MediaUnderstandingModelConfig[];
@@ -713,6 +845,7 @@ async function runAttachmentEntries(params: {
               attachmentIndex: params.attachmentIndex,
               cache: params.cache,
               agentDir: params.agentDir,
+              workspaceDir: params.workspaceDir,
               providerRegistry: params.providerRegistry,
               config: params.config,
             });
@@ -775,6 +908,7 @@ export async function runCapability(params: {
   attachments: MediaAttachmentCache;
   media: MediaAttachment[];
   agentDir?: string;
+  workspaceDir?: string;
   providerRegistry: ProviderRegistry;
   config?: MediaUnderstandingConfig;
   activeModel?: ActiveMediaModel;
@@ -822,8 +956,11 @@ export async function runCapability(params: {
   if (
     capability === "image" &&
     activeProvider &&
+    !isMinimaxVlmProvider(activeProvider) &&
     !hasExplicitImageUnderstandingConfig({ cfg, config })
   ) {
+    const { findModelInCatalog, loadModelCatalog, modelSupportsVision } =
+      await loadModelCatalogApi();
     const catalog = await loadModelCatalog({ config: cfg });
     const entry = findModelInCatalog(catalog, activeProvider, params.activeModel?.model ?? "");
     if (modelSupportsVision(entry)) {
@@ -867,6 +1004,7 @@ export async function runCapability(params: {
     resolvedEntries = await resolveAutoEntries({
       cfg,
       agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
       providerRegistry: params.providerRegistry,
       capability,
       activeModel: params.activeModel,
@@ -892,6 +1030,7 @@ export async function runCapability(params: {
       ctx,
       attachmentIndex: attachment.index,
       agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
       providerRegistry: params.providerRegistry,
       cache: params.attachments,
       entries: resolvedEntries,

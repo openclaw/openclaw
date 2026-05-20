@@ -1,12 +1,19 @@
 import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import type { Agent } from "node:https";
+import { HttpsProxyAgent } from "https-proxy-agent";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { VERSION } from "openclaw/plugin-sdk/cli-runtime";
-import { resolveAmbientNodeProxyAgent } from "openclaw/plugin-sdk/extension-shared";
+import {
+  createHttp1EnvHttpProxyAgent,
+  createHttp1ProxyAgent,
+  resolveActiveManagedProxyTlsOptions,
+  resolveEnvHttpProxyUrl,
+  shouldUseEnvHttpProxyForUrl,
+} from "openclaw/plugin-sdk/fetch-runtime";
 import { danger, success } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger, toPinoLikeLogger } from "openclaw/plugin-sdk/runtime-env";
-import { ensureDir, resolveUserPath } from "openclaw/plugin-sdk/text-runtime";
+import { ensureDir, resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   readCredsJsonRaw,
   restoreCredsFromBackupIfNeeded,
@@ -16,13 +23,11 @@ import {
 } from "./auth-store.js";
 import {
   enqueueCredsSave,
-  waitForCredsSaveQueue,
   waitForCredsSaveQueueWithTimeout,
   writeCredsJsonAtomically,
-  type CredsQueueWaitResult,
 } from "./creds-persistence.js";
 import { renderQrTerminal } from "./qr-terminal.js";
-import { formatError, getStatusCode } from "./session-errors.js";
+import { getStatusCode } from "./session-errors.js";
 import {
   DisconnectReason,
   fetchLatestBaileysVersion,
@@ -30,6 +35,10 @@ import {
   makeWASocket,
   useMultiFileAuthState,
 } from "./session.runtime.js";
+import {
+  DEFAULT_WHATSAPP_SOCKET_TIMING,
+  type WhatsAppSocketTimingOptions,
+} from "./socket-timing.js";
 export { formatError, getStatusCode } from "./session-errors.js";
 
 export {
@@ -58,6 +67,7 @@ export {
 export type { CredsQueueWaitResult } from "./creds-persistence.js";
 
 const LOGGED_OUT_STATUS = DisconnectReason?.loggedOut ?? 401;
+const WHATSAPP_WEBSOCKET_PROXY_TARGET = "https://mmg.whatsapp.net/";
 const CREDS_FLUSH_TIMEOUT_MESSAGE =
   "Queued WhatsApp creds save did not finish before auth bootstrap; skipping repair and continuing with primary creds.";
 
@@ -110,7 +120,7 @@ async function safeSaveCreds(
 }
 
 async function printTerminalQr(qr: string): Promise<void> {
-  const output = await renderQrTerminal(qr, { small: true });
+  const output = await renderQrTerminal(qr);
   process.stdout.write(output.endsWith("\n") ? output : `${output}\n`);
 }
 
@@ -121,7 +131,10 @@ async function printTerminalQr(qr: string): Promise<void> {
 export async function createWaSocket(
   printQr: boolean,
   verbose: boolean,
-  opts: { authDir?: string; onQr?: (qr: string) => void } = {},
+  opts: {
+    authDir?: string;
+    onQr?: (qr: string) => void;
+  } & WhatsAppSocketTimingOptions = {},
 ): Promise<ReturnType<typeof makeWASocket>> {
   const baseLogger = getChildLogger(
     { module: "baileys" },
@@ -146,6 +159,13 @@ export async function createWaSocket(
   const { version } = await fetchLatestBaileysVersion();
   const agent = await resolveEnvProxyAgent(sessionLogger);
   const fetchAgent = await resolveEnvFetchDispatcher(sessionLogger, agent);
+  const socketTiming = {
+    keepAliveIntervalMs:
+      opts.keepAliveIntervalMs ?? DEFAULT_WHATSAPP_SOCKET_TIMING.keepAliveIntervalMs,
+    connectTimeoutMs: opts.connectTimeoutMs ?? DEFAULT_WHATSAPP_SOCKET_TIMING.connectTimeoutMs,
+    defaultQueryTimeoutMs:
+      opts.defaultQueryTimeoutMs ?? DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs,
+  };
   const sock = makeWASocket({
     auth: {
       creds: state.creds,
@@ -157,6 +177,7 @@ export async function createWaSocket(
     browser: ["openclaw", "cli", VERSION],
     syncFullHistory: false,
     markOnlineOnConnect: false,
+    ...socketTiming,
     agent,
     // Baileys types still model `fetchAgent` as a Node agent even though the
     // runtime path accepts an undici dispatcher for upload fetches.
@@ -164,38 +185,35 @@ export async function createWaSocket(
   });
 
   sock.ev.on("creds.update", () => enqueueSaveCreds(authDir, saveCreds, sessionLogger));
-  sock.ev.on(
-    "connection.update",
-    async (update: Partial<import("@whiskeysockets/baileys").ConnectionState>) => {
-      try {
-        const { connection, lastDisconnect, qr } = update;
-        if (qr) {
-          opts.onQr?.(qr);
-          if (printQr) {
-            console.log("Scan this QR in WhatsApp (Linked Devices):");
-            void printTerminalQr(qr).catch((err) => {
-              sessionLogger.warn({ error: String(err) }, "failed rendering WhatsApp QR");
-            });
-          }
+  sock.ev.on("connection.update", async (update: Partial<import("baileys").ConnectionState>) => {
+    try {
+      const { connection, lastDisconnect, qr } = update;
+      if (qr) {
+        opts.onQr?.(qr);
+        if (printQr) {
+          console.log("Open the WhatsApp app, go to Linked Devices, then scan this QR:");
+          void printTerminalQr(qr).catch((err) => {
+            sessionLogger.warn({ error: String(err) }, "failed rendering WhatsApp QR");
+          });
         }
-        if (connection === "close") {
-          const status = getStatusCode(lastDisconnect?.error);
-          if (status === LOGGED_OUT_STATUS) {
-            console.error(
-              danger(
-                `WhatsApp session logged out. Run: ${formatCliCommand("openclaw channels login")}`,
-              ),
-            );
-          }
-        }
-        if (connection === "open" && verbose) {
-          console.log(success("WhatsApp Web connected."));
-        }
-      } catch (err) {
-        sessionLogger.error({ error: String(err) }, "connection.update handler error");
       }
-    },
-  );
+      if (connection === "close") {
+        const status = getStatusCode(lastDisconnect?.error);
+        if (status === LOGGED_OUT_STATUS) {
+          console.error(
+            danger(
+              `WhatsApp session logged out. Run: ${formatCliCommand("openclaw channels login")}`,
+            ),
+          );
+        }
+      }
+      if (connection === "open" && verbose) {
+        console.log(success("WhatsApp Web connected."));
+      }
+    } catch (err) {
+      sessionLogger.error({ error: String(err) }, "connection.update handler error");
+    }
+  });
 
   // Handle WebSocket-level errors to prevent unhandled exceptions from crashing the process
   if (sock.ws && typeof (sock.ws as unknown as { on?: unknown }).on === "function") {
@@ -210,17 +228,26 @@ export async function createWaSocket(
 async function resolveEnvProxyAgent(
   logger: ReturnType<typeof getChildLogger>,
 ): Promise<Agent | undefined> {
-  return resolveAmbientNodeProxyAgent<Agent>({
-    onError: (err) => {
-      logger.warn(
-        { error: String(err) },
-        "Failed to initialize env proxy agent for WhatsApp WebSocket connection",
-      );
-    },
-    onUsingProxy: () => {
-      logger.info("Using ambient env proxy for WhatsApp WebSocket connection");
-    },
-  });
+  if (!shouldUseEnvHttpProxyForUrl(WHATSAPP_WEBSOCKET_PROXY_TARGET)) {
+    return undefined;
+  }
+  const proxyUrl = resolveEnvHttpProxyUrl("https");
+  if (!proxyUrl) {
+    return undefined;
+  }
+  const proxyTls = resolveActiveManagedProxyTlsOptions({ proxyUrl });
+  const proxyAgentOptions = proxyTls?.ca ? { ca: proxyTls.ca } : undefined;
+  try {
+    const agent = new HttpsProxyAgent(proxyUrl, proxyAgentOptions) as Agent;
+    logger.info("Using ambient env proxy for WhatsApp WebSocket connection");
+    return agent;
+  } catch (error) {
+    logger.warn(
+      { error: String(error) },
+      "Failed to initialize env proxy agent for WhatsApp WebSocket connection",
+    );
+    return undefined;
+  }
 }
 
 async function resolveEnvFetchDispatcher(
@@ -233,10 +260,7 @@ async function resolveEnvFetchDispatcher(
     return undefined;
   }
   try {
-    const { EnvHttpProxyAgent, ProxyAgent } = await import("undici");
-    return proxyUrl
-      ? new ProxyAgent({ allowH2: false, uri: proxyUrl })
-      : new EnvHttpProxyAgent({ allowH2: false });
+    return proxyUrl ? createHttp1ProxyAgent({ uri: proxyUrl }) : createHttp1EnvHttpProxyAgent();
   } catch (error) {
     logger.warn(
       { error: String(error) },
@@ -283,7 +307,7 @@ export async function waitForWaConnection(sock: ReturnType<typeof makeWASocket>)
     const evWithOff = sock.ev as unknown as OffCapable;
 
     const handler = (...args: unknown[]) => {
-      const update = (args[0] ?? {}) as Partial<import("@whiskeysockets/baileys").ConnectionState>;
+      const update = (args[0] ?? {}) as Partial<import("baileys").ConnectionState>;
       if (update.connection === "open") {
         evWithOff.off?.("connection.update", handler);
         resolve();

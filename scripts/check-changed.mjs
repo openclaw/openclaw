@@ -1,7 +1,8 @@
+import { accessSync, constants } from "node:fs";
+import path from "node:path";
 import { performance } from "node:perf_hooks";
 import {
-  classifyPackageJsonChangeFromGit,
-  detectChangedLanes,
+  detectChangedLanesForPaths,
   listChangedPathsFromGit,
   listStagedChangedPaths,
   normalizeChangedPath,
@@ -14,12 +15,7 @@ import {
 } from "./lib/local-heavy-check-runtime.mjs";
 import { runManagedCommand } from "./lib/managed-child-process.mjs";
 import { createSparseTsgoSkipEnv } from "./lib/tsgo-sparse-guard.mjs";
-import { isCiLikeEnv } from "./lib/vitest-local-scheduling.mjs";
-import { resolveChangedTestTargetPlan } from "./test-projects.test-support.mjs";
 
-export const CHANGED_CHECK_VITEST_NO_OUTPUT_TIMEOUT_MS = "600000";
-const VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS";
-const VITEST_NO_OUTPUT_RETRY_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_RETRY";
 const LIVE_DOCKER_AUTH_SHELL_TARGETS = [
   "scripts/lib/live-docker-auth.sh",
   "scripts/test-live-acp-bind-docker.sh",
@@ -27,6 +23,7 @@ const LIVE_DOCKER_AUTH_SHELL_TARGETS = [
   "scripts/test-live-codex-harness-docker.sh",
   "scripts/test-live-gateway-models-docker.sh",
   "scripts/test-live-models-docker.sh",
+  "scripts/test-live-subagent-announce-docker.sh",
 ];
 
 export function createChangedCheckChildEnv(baseEnv = process.env) {
@@ -39,33 +36,100 @@ export function createChangedCheckChildEnv(baseEnv = process.env) {
   };
 }
 
-export function createChangedCheckVitestEnv(baseEnv = process.env) {
-  const resolvedBaseEnv = createChangedCheckChildEnv(baseEnv);
-  const env = {
-    ...resolvedBaseEnv,
-    [VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]:
-      resolvedBaseEnv[VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]?.trim() ||
-      CHANGED_CHECK_VITEST_NO_OUTPUT_TIMEOUT_MS,
-    [VITEST_NO_OUTPUT_RETRY_ENV_KEY]:
-      resolvedBaseEnv[VITEST_NO_OUTPUT_RETRY_ENV_KEY]?.trim() || "0",
-  };
+function isTruthyEnvFlag(value) {
+  const normalized = String(value ?? "")
+    .trim()
+    .toLowerCase();
+  return normalized !== "" && normalized !== "0" && normalized !== "false" && normalized !== "no";
+}
 
-  const hasWorkerOverride = Boolean(
-    (resolvedBaseEnv.OPENCLAW_VITEST_MAX_WORKERS ?? resolvedBaseEnv.OPENCLAW_TEST_WORKERS)?.trim(),
-  );
-  const hasParallelOverride = Boolean(resolvedBaseEnv.OPENCLAW_TEST_PROJECTS_PARALLEL?.trim());
-  const serialOverride = resolvedBaseEnv.OPENCLAW_TEST_PROJECTS_SERIAL?.trim();
-  if (
-    !isCiLikeEnv(resolvedBaseEnv) &&
-    !hasWorkerOverride &&
-    !hasParallelOverride &&
-    serialOverride !== "0"
-  ) {
-    env.OPENCLAW_TEST_PROJECTS_SERIAL = serialOverride || "1";
-    env.OPENCLAW_VITEST_MAX_WORKERS = "1";
+function executableExistsOnPath(command, env = process.env) {
+  const pathValue = env.PATH ?? env.Path ?? "";
+  const pathExts =
+    process.platform === "win32" ? (env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";") : [""];
+  for (const searchPath of pathValue.split(path.delimiter)) {
+    if (!searchPath) {
+      continue;
+    }
+    for (const ext of pathExts) {
+      try {
+        accessSync(path.join(searchPath, `${command}${ext}`), constants.X_OK);
+        return true;
+      } catch {
+        continue;
+      }
+    }
   }
+  return false;
+}
 
-  return env;
+export function shouldSkipAppLintForMissingSwiftlint(options = {}) {
+  const env = options.env ?? process.env;
+  const platform = options.platform ?? process.platform;
+  const swiftlintAvailable = options.swiftlintAvailable ?? executableExistsOnPath("swiftlint", env);
+  return (
+    isTruthyEnvFlag(env.OPENCLAW_TESTBOX_REMOTE_RUN) && platform !== "darwin" && !swiftlintAvailable
+  );
+}
+
+export function shouldDelegateChangedCheckToCrabbox(argv = [], env = process.env) {
+  if (!isTruthyEnvFlag(env.OPENCLAW_TESTBOX)) {
+    return false;
+  }
+  if (isTruthyEnvFlag(env.OPENCLAW_TESTBOX_REMOTE_RUN)) {
+    return false;
+  }
+  if (isTruthyEnvFlag(env.CI) || isTruthyEnvFlag(env.GITHUB_ACTIONS)) {
+    return false;
+  }
+  if (argv.includes("--dry-run")) {
+    return false;
+  }
+  return true;
+}
+
+export function buildChangedCheckCrabboxArgs(argv = []) {
+  return [
+    "crabbox:run",
+    "--",
+    "--provider",
+    "blacksmith-testbox",
+    "--blacksmith-org",
+    "openclaw",
+    "--blacksmith-workflow",
+    ".github/workflows/ci-check-testbox.yml",
+    "--blacksmith-job",
+    "check",
+    "--blacksmith-ref",
+    "main",
+    "--idle-timeout",
+    "90m",
+    "--ttl",
+    "240m",
+    "--timing-json",
+    "--",
+    "CI=1",
+    "NODE_OPTIONS=--max-old-space-size=4096",
+    "OPENCLAW_TEST_PROJECTS_PARALLEL=6",
+    "OPENCLAW_VITEST_MAX_WORKERS=1",
+    "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000",
+    "OPENCLAW_TESTBOX=1",
+    "OPENCLAW_TESTBOX_REMOTE_RUN=1",
+    "pnpm",
+    "check:changed",
+    ...argv,
+  ];
+}
+
+export async function runChangedCheckViaCrabbox(argv = [], env = process.env) {
+  console.error(
+    "[check:changed] OPENCLAW_TESTBOX=1 set; delegating to Blacksmith Testbox via `pnpm crabbox:run`.",
+  );
+  return await runManagedCommand({
+    bin: "pnpm",
+    args: buildChangedCheckCrabboxArgs(argv),
+    env,
+  });
 }
 
 export function createChangedCheckPlan(result, options = {}) {
@@ -89,14 +153,16 @@ export function createChangedCheckPlan(result, options = {}) {
   const addLint = (name, args) => add(name, args, baseEnv);
 
   add("conflict markers", ["check:no-conflict-markers"]);
+  add("changelog attributions", ["check:changelog-attributions"]);
+  add("guarded extension wildcard re-exports", ["lint:extensions:no-guarded-wildcard-reexports"]);
+  add("plugin-sdk wildcard re-exports", ["lint:extensions:no-plugin-sdk-wildcard-reexports"]);
+  add("duplicate scan target coverage", ["dup:check:coverage"]);
+  add("dependency pin guard", ["deps:pins:check"]);
+  add("package patch guard", ["deps:patches:check"]);
 
   if (result.docsOnly) {
     return {
       commands,
-      testTargets: [],
-      runChangedTestsBroad: false,
-      runFullTests: false,
-      runExtensionTests: false,
       summary: "docs-only",
     };
   }
@@ -118,24 +184,18 @@ export function createChangedCheckPlan(result, options = {}) {
     add("root dependency ownership", ["deps:root-ownership:check"]);
     return {
       commands,
-      testTargets: [],
-      runChangedTestsBroad: false,
-      runFullTests: false,
-      runExtensionTests: false,
       summary: "release metadata",
     };
   }
 
   if (runAll) {
+    add("media download helper guard", ["check:media-download-helpers"]);
+    add("runtime sidecar loader guard", ["check:runtime-sidecar-loaders"]);
     addTypecheck("typecheck all", ["tsgo:all"]);
     addLint("lint", ["lint"]);
     add("runtime import cycles", ["check:import-cycles"]);
     return {
       commands,
-      testTargets: [],
-      runChangedTestsBroad: false,
-      runFullTests: true,
-      runExtensionTests: false,
       summary: "all",
     };
   }
@@ -169,11 +229,23 @@ export function createChangedCheckPlan(result, options = {}) {
   if (lanes.tooling || lanes.liveDockerTooling) {
     addLint("lint scripts", ["lint:scripts"]);
   }
-  if (lanes.apps) {
+  if (lanes.apps && shouldSkipAppLintForMissingSwiftlint({ ...options, env: baseEnv })) {
+    addCommand(
+      "lint apps (swiftlint unavailable in Testbox)",
+      "node",
+      [
+        "-e",
+        "console.error('[check:changed] Swift app lint skipped: swiftlint is unavailable in this Linux Testbox; macOS CI owns SwiftLint coverage.')",
+      ],
+      baseEnv,
+    );
+  } else if (lanes.apps) {
     addLint("lint apps", ["lint:apps"]);
   }
 
   if (lanes.core || lanes.extensions) {
+    add("media download helper guard", ["check:media-download-helpers"]);
+    add("runtime sidecar loader guard", ["check:runtime-sidecar-loaders"]);
     add("runtime import cycles", ["check:import-cycles"]);
   }
   if (lanes.core) {
@@ -189,26 +261,10 @@ export function createChangedCheckPlan(result, options = {}) {
       OPENCLAW_DOCKER_ALL_DRY_RUN: "1",
       OPENCLAW_DOCKER_ALL_LIVE_MODE: "only",
     });
-    add(
-      "ACP bind unit tests",
-      ["test", "src/gateway/live-agent-probes.test.ts", "src/agents/acp-spawn.test.ts"],
-      createChangedCheckVitestEnv(baseEnv),
-    );
-    add("ACPX extension tests", ["test:extension", "acpx"], createChangedCheckVitestEnv(baseEnv));
   }
 
-  const testPlan = resolveChangedTestTargetPlan(result.paths);
-  const runExtensionTests = result.extensionImpactFromCore;
-  const testTargets = runExtensionTests
-    ? testPlan.targets.filter((target) => target !== "extensions")
-    : testPlan.targets;
-  const runChangedTestsBroad = testPlan.mode === "broad";
   return {
     commands,
-    testTargets,
-    runChangedTestsBroad,
-    runFullTests: false,
-    runExtensionTests,
     summary: Object.entries(lanes)
       .filter(([, enabled]) => enabled)
       .map(([lane]) => lane)
@@ -244,61 +300,6 @@ export async function runChangedCheck(result, options = {}) {
       }
     }
 
-    if (plan.runFullTests) {
-      const status = await runPnpm(
-        { name: "tests all", args: ["test"], env: createChangedCheckVitestEnv(childEnv) },
-        timings,
-      );
-      if (status !== 0) {
-        printSummary(timings, options);
-        return status;
-      }
-    } else if (plan.runChangedTestsBroad) {
-      const testArgs = options.explicitPaths
-        ? ["test"]
-        : ["test", "--changed", options.base ?? "origin/main"];
-      const status = await runPnpm(
-        {
-          name: options.explicitPaths ? "tests all" : "tests changed broad",
-          args: testArgs,
-          env: createChangedCheckVitestEnv(childEnv),
-        },
-        timings,
-      );
-      if (status !== 0) {
-        printSummary(timings, options);
-        return status;
-      }
-    } else if (plan.testTargets.length > 0) {
-      const status = await runPnpm(
-        {
-          name: "tests changed",
-          args: ["test", ...plan.testTargets],
-          env: createChangedCheckVitestEnv(childEnv),
-        },
-        timings,
-      );
-      if (status !== 0) {
-        printSummary(timings, options);
-        return status;
-      }
-    }
-
-    if (plan.runExtensionTests) {
-      const status = await runPnpm(
-        {
-          name: "tests extensions",
-          args: ["test:extensions"],
-          env: createChangedCheckVitestEnv(childEnv),
-        },
-        timings,
-      );
-      if (status !== 0) {
-        printSummary(timings, options);
-        return status;
-      }
-    }
-
     printSummary(timings, options);
     return 0;
   } finally {
@@ -314,16 +315,10 @@ function printPlan(result, plan, options) {
   const prefix = options.dryRun ? "[check:changed:dry-run]" : "[check:changed]";
   console.error(`${prefix} lanes=${plan.summary || "none"}`);
   if (result.extensionImpactFromCore) {
-    console.error(`${prefix} core contract changed; extension tests included`);
-  }
-  if (plan.runChangedTestsBroad) {
-    console.error(`${prefix} broad changed tests included`);
+    console.error(`${prefix} extension-impacting surface; extension typecheck included`);
   }
   for (const reason of result.reasons) {
     console.error(`${prefix} ${reason}`);
-  }
-  if (plan.testTargets.length > 0) {
-    console.error(`${prefix} test targets=${plan.testTargets.length}`);
   }
 }
 
@@ -401,23 +396,26 @@ function isDirectRun() {
 }
 
 if (isDirectRun()) {
-  const args = parseArgs(process.argv.slice(2));
-  const paths =
-    args.paths.length > 0
-      ? args.paths
-      : args.staged
-        ? listStagedChangedPaths()
-        : listChangedPathsFromGit({ base: args.base, head: args.head });
-  const packageJsonChangeKind = paths.includes("package.json")
-    ? classifyPackageJsonChangeFromGit({
-        base: args.base,
-        head: args.head,
-        staged: args.staged,
-      })
-    : null;
-  const result = detectChangedLanes(paths, { packageJsonChangeKind });
-  process.exitCode = await runChangedCheck(result, {
-    ...args,
-    explicitPaths: args.paths.length > 0,
-  });
+  const argv = process.argv.slice(2);
+  if (shouldDelegateChangedCheckToCrabbox(argv, process.env)) {
+    process.exitCode = await runChangedCheckViaCrabbox(argv, process.env);
+  } else {
+    const args = parseArgs(argv);
+    const paths =
+      args.paths.length > 0
+        ? args.paths
+        : args.staged
+          ? listStagedChangedPaths()
+          : listChangedPathsFromGit({ base: args.base, head: args.head });
+    const result = detectChangedLanesForPaths({
+      paths,
+      base: args.base,
+      head: args.head,
+      staged: args.staged,
+    });
+    process.exitCode = await runChangedCheck(result, {
+      ...args,
+      explicitPaths: args.paths.length > 0,
+    });
+  }
 }

@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -13,34 +14,33 @@ import { resolveConfiguredTtsMode, shouldCleanTtsDirectiveText } from "../../tts
 import type { FinalizedMsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
+import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 
-let routeReplyRuntimePromise: Promise<typeof import("./route-reply.runtime.js")> | null = null;
-let dispatchAcpTtsRuntimePromise: Promise<typeof import("./dispatch-acp-tts.runtime.js")> | null =
-  null;
-let channelPluginRuntimePromise: Promise<typeof import("../../channels/plugins/index.js")> | null =
-  null;
-let messageActionRuntimePromise: Promise<
-  typeof import("../../infra/outbound/message-action-runner.js")
-> | null = null;
+const routeReplyRuntimeLoader = createLazyImportLoader(() => import("./route-reply.runtime.js"));
+const dispatchAcpTtsRuntimeLoader = createLazyImportLoader(
+  () => import("./dispatch-acp-tts.runtime.js"),
+);
+const channelPluginRuntimeLoader = createLazyImportLoader(
+  () => import("../../channels/plugins/index.js"),
+);
+const messageActionRuntimeLoader = createLazyImportLoader(
+  () => import("../../infra/outbound/message-action-runner.js"),
+);
 
 function loadRouteReplyRuntime() {
-  routeReplyRuntimePromise ??= import("./route-reply.runtime.js");
-  return routeReplyRuntimePromise;
+  return routeReplyRuntimeLoader.load();
 }
 
 function loadDispatchAcpTtsRuntime() {
-  dispatchAcpTtsRuntimePromise ??= import("./dispatch-acp-tts.runtime.js");
-  return dispatchAcpTtsRuntimePromise;
+  return dispatchAcpTtsRuntimeLoader.load();
 }
 
 function loadChannelPluginRuntime() {
-  channelPluginRuntimePromise ??= import("../../channels/plugins/index.js");
-  return channelPluginRuntimePromise;
+  return channelPluginRuntimeLoader.load();
 }
 
 function loadMessageActionRuntime() {
-  messageActionRuntimePromise ??= import("../../infra/outbound/message-action-runner.js");
-  return messageActionRuntimePromise;
+  return messageActionRuntimeLoader.load();
 }
 
 export type AcpDispatchDeliveryMeta = {
@@ -100,6 +100,9 @@ async function maybeApplyAcpTts(params: {
   if (params.skipTts) {
     return params.payload;
   }
+  if (params.payload.isCompactionNotice || params.payload.isFallbackNotice) {
+    return params.payload;
+  }
   const ttsStatus = resolveStatusTtsSnapshot({
     cfg: params.cfg,
     sessionAuto: params.ttsAuto,
@@ -141,6 +144,7 @@ type AcpDispatchDeliveryState = {
   accumulatedBlockText: string;
   accumulatedVisibleBlockText: string;
   accumulatedBlockTtsText: string;
+  accumulatedFinalText: string;
   cleanBlockTtsDirectiveText?: ReturnType<typeof createTtsDirectiveTextStreamCleaner>;
   blockCount: number;
   deliveredFinalReply: boolean;
@@ -163,6 +167,7 @@ export type AcpDispatchDeliveryCoordinator = {
   getAccumulatedBlockText: () => string;
   getAccumulatedVisibleBlockText: () => string;
   getAccumulatedBlockTtsText: () => string;
+  getAccumulatedFinalText: () => string;
   settleVisibleText: () => Promise<void>;
   hasDeliveredFinalReply: () => boolean;
   hasDeliveredVisibleText: () => boolean;
@@ -181,6 +186,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
   sessionTtsAuto?: TtsAutoMode;
   ttsChannel?: string;
   suppressUserDelivery?: boolean;
+  suppressReplyLifecycle?: boolean;
   shouldRouteToOriginating: boolean;
   originatingChannel?: string;
   originatingTo?: string;
@@ -202,6 +208,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     accumulatedBlockText: "",
     accumulatedVisibleBlockText: "",
     accumulatedBlockTtsText: "",
+    accumulatedFinalText: "",
     cleanBlockTtsDirectiveText: shouldCleanTtsDirectiveText({
       cfg: params.cfg,
       ttsAuto: params.sessionTtsAuto,
@@ -245,11 +252,9 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       return;
     }
     state.startedReplyLifecycle = true;
-    // When delivery is suppressed (e.g. sendPolicy: "deny"), do not fire the
-    // onReplyStart callback — channels wire it to typing indicators / lifecycle
-    // notifications that should not leak outbound events while the session is
-    // under a deny policy. See #53328.
-    if (params.suppressUserDelivery) {
+    // Delivery and lifecycle suppression are separate: message-tool-only turns
+    // suppress automatic user delivery but still need typing/lifecycle signals.
+    if (params.suppressReplyLifecycle) {
       return;
     }
     void Promise.resolve(params.onReplyStart?.()).catch((error) => {
@@ -309,19 +314,22 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     let visiblePayload = payload;
     const rawBlockText = kind === "block" ? normalizeOptionalString(payload.text) : undefined;
     if (rawBlockText) {
+      const isStatusNotice = payload.isCompactionNotice || payload.isFallbackNotice;
       const joinsBufferedTtsDirective =
         state.cleanBlockTtsDirectiveText?.hasBufferedDirectiveText() === true;
-      if (state.accumulatedBlockText.length > 0) {
-        state.accumulatedBlockText += "\n";
+      if (!isStatusNotice) {
+        if (state.accumulatedBlockText.length > 0) {
+          state.accumulatedBlockText += "\n";
+        }
+        state.accumulatedBlockText += rawBlockText;
+        if (state.accumulatedBlockTtsText.length > 0 && !joinsBufferedTtsDirective) {
+          state.accumulatedBlockTtsText += "\n";
+        }
+        state.accumulatedBlockTtsText += rawBlockText;
+        state.blockCount += 1;
       }
-      state.accumulatedBlockText += rawBlockText;
-      if (state.accumulatedBlockTtsText.length > 0 && !joinsBufferedTtsDirective) {
-        state.accumulatedBlockTtsText += "\n";
-      }
-      state.accumulatedBlockTtsText += rawBlockText;
-      state.blockCount += 1;
 
-      if (state.cleanBlockTtsDirectiveText && !payload.isCompactionNotice) {
+      if (state.cleanBlockTtsDirectiveText && !isStatusNotice) {
         const text = state.cleanBlockTtsDirectiveText.push(rawBlockText);
         visiblePayload = { ...payload, text: text.trim() ? text : undefined };
       }
@@ -331,6 +339,15 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         }
         state.accumulatedVisibleBlockText += visiblePayload.text;
       }
+    }
+    const isStatusNotice = payload.isCompactionNotice || payload.isFallbackNotice;
+    const rawFinalText =
+      kind === "final" && !isStatusNotice ? normalizeOptionalString(payload.text) : undefined;
+    if (rawFinalText) {
+      if (state.accumulatedFinalText.length > 0) {
+        state.accumulatedFinalText += "\n";
+      }
+      state.accumulatedFinalText += rawFinalText;
     }
 
     if (hasOutboundReplyContent(visiblePayload, { trimText: true })) {
@@ -371,6 +388,10 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         routed: true,
       });
       const { routeReply } = await loadRouteReplyRuntime();
+      const threadId = resolveRoutedDeliveryThreadId({
+        ctx: params.ctx,
+        sessionKey: deliverySessionKey,
+      });
       const result = await routeReply({
         payload: ttsPayload,
         channel: params.originatingChannel,
@@ -384,7 +405,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         requesterSenderName: params.ctx.SenderName,
         requesterSenderUsername: params.ctx.SenderUsername,
         requesterSenderE164: params.ctx.SenderE164,
-        threadId: params.ctx.MessageThreadId,
+        threadId,
         cfg: params.cfg,
         mirror: false,
       });
@@ -402,7 +423,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
           channel: params.originatingChannel,
           accountId: resolvedAccountId,
           to: params.originatingTo,
-          ...(params.ctx.MessageThreadId != null ? { threadId: params.ctx.MessageThreadId } : {}),
+          ...(threadId != null ? { threadId } : {}),
           messageId: result.messageId,
         });
       }
@@ -447,6 +468,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     getAccumulatedBlockText: () => state.accumulatedBlockText,
     getAccumulatedVisibleBlockText: () => state.accumulatedVisibleBlockText,
     getAccumulatedBlockTtsText: () => state.accumulatedBlockTtsText,
+    getAccumulatedFinalText: () => state.accumulatedFinalText,
     settleVisibleText: settleDirectVisibleText,
     hasDeliveredFinalReply: () => state.deliveredFinalReply,
     hasDeliveredVisibleText: () => state.deliveredVisibleText,

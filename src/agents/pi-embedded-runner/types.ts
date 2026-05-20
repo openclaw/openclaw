@@ -1,15 +1,28 @@
+import type { HeartbeatToolResponse } from "../../auto-reply/heartbeat-tool-response.js";
 import type { CliSessionBinding, SessionSystemPromptReport } from "../../config/sessions/types.js";
 import type { DiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
-import type { MessagingToolSend } from "../pi-embedded-messaging.types.js";
+import type { FallbackAttempt } from "../model-fallback.types.js";
+import type {
+  MessagingToolSend,
+  MessagingToolSourceReplyPayload,
+} from "../pi-embedded-messaging.types.js";
 
 export type EmbeddedPiAgentMeta = {
   sessionId: string;
+  sessionFile?: string;
   provider: string;
   model: string;
   contextTokens?: number;
   agentHarnessId?: string;
+  fallbackAttempts?: FallbackAttempt[];
   cliSessionBinding?: CliSessionBinding;
   compactionCount?: number;
+  /**
+   * Token count estimate after the most recent successful auto-compaction.
+   * Used as the freshest context snapshot when the follow-up model call omits
+   * usage metadata.
+   */
+  compactionTokensAfter?: number;
   /**
    * Prompt/context snapshot from the latest model request. Prefer this for
    * context-window utilization because provider usage totals can include cached
@@ -102,6 +115,15 @@ export type ContextManagementTrace = {
 
 export type EmbeddedRunLivenessState = "working" | "paused" | "blocked" | "abandoned";
 
+export type EmbeddedRunFailureSignal = {
+  kind: "execution_denied";
+  source: "tool";
+  toolName?: string;
+  code: "SYSTEM_RUN_DENIED" | "INVALID_REQUEST";
+  message: string;
+  fatalForCron: true;
+};
+
 export type EmbeddedPiRunMeta = {
   durationMs: number;
   agentMeta?: EmbeddedPiAgentMeta;
@@ -114,15 +136,18 @@ export type EmbeddedPiRunMeta = {
   livenessState?: EmbeddedRunLivenessState;
   agentHarnessResultClassification?: "empty" | "reasoning-only" | "planning-only";
   terminalReplyKind?: "silent-empty";
+  yielded?: boolean;
   error?: {
     kind:
       | "context_overflow"
       | "compaction_failure"
       | "role_ordering"
       | "image_size"
-      | "retry_limit";
+      | "retry_limit"
+      | "hook_block";
     message: string;
   };
+  failureSignal?: EmbeddedRunFailureSignal;
   /** Stop reason for the agent run (e.g., "completed", "tool_calls"). */
   stopReason?: string;
   /** Pending tool calls when stopReason is "tool_calls". */
@@ -148,18 +173,26 @@ export type EmbeddedPiRunResult = {
     isError?: boolean;
     isReasoning?: boolean;
     audioAsVoice?: boolean;
+    trustedLocalMedia?: boolean;
+    channelData?: Record<string, unknown>;
   }>;
   meta: EmbeddedPiRunMeta;
   diagnosticTrace?: DiagnosticTraceContext;
   // True if a messaging tool successfully sent a message.
   // Used to suppress agent's confirmation text.
   didSendViaMessagingTool?: boolean;
+  // True if a deterministic approval prompt was sent through the tool-result channel.
+  didSendDeterministicApprovalPrompt?: boolean;
   // Texts successfully sent via messaging tools during the run.
   messagingToolSentTexts?: string[];
   // Media URLs successfully sent via messaging tools during the run.
   messagingToolSentMediaUrls?: string[];
   // Messaging tool targets that successfully sent a message during the run.
   messagingToolSentTargets?: MessagingToolSend[];
+  // Message-tool replies delivered to the active internal UI source.
+  messagingToolSourceReplyPayloads?: MessagingToolSourceReplyPayload[];
+  // Structured heartbeat outcome recorded by the heartbeat response tool.
+  heartbeatToolResponse?: HeartbeatToolResponse;
   // Count of successful cron.add tool calls in this run.
   successfulCronAdds?: number;
 };
@@ -168,12 +201,21 @@ export type EmbeddedPiCompactResult = {
   ok: boolean;
   compacted: boolean;
   reason?: string;
+  /** Structured failure metadata used by model fallback classification. */
+  failure?: {
+    reason?: string;
+    status?: number;
+    code?: string;
+    rawError?: string;
+  };
   result?: {
     summary: string;
     firstKeptEntryId: string;
     tokensBefore: number;
     tokensAfter?: number;
     details?: unknown;
+    sessionId?: string;
+    sessionFile?: string;
   };
 };
 

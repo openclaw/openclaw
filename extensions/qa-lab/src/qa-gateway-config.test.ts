@@ -23,6 +23,7 @@ function createQaChannelTransportParams(baseUrl = "http://127.0.0.1:43124") {
       messages: {
         groupChat: {
           mentionPatterns: ["\\b@?openclaw\\b"],
+          visibleReplies: "automatic",
         },
       },
     } satisfies QaTransportGatewayConfig,
@@ -59,6 +60,7 @@ describe("buildQaGatewayConfig", () => {
     expect(cfg.models?.providers?.anthropic?.baseUrl).toBe("http://127.0.0.1:44080");
     expect(cfg.models?.providers?.anthropic?.request).toEqual({ allowPrivateNetwork: true });
     expect(cfg.plugins?.allow).toEqual(["acpx", "memory-core", "qa-channel"]);
+    expect(cfg.plugins?.slots?.memory).toBe("memory-core");
     expect(cfg.plugins?.entries?.acpx).toEqual({
       enabled: true,
       config: {
@@ -72,12 +74,11 @@ describe("buildQaGatewayConfig", () => {
     expect(cfg.gateway?.reload?.deferralTimeoutMs).toBe(1_000);
     expect(cfg.tools?.profile).toBe("coding");
     expect(cfg.agents?.list?.[0]?.tools?.profile).toBe("coding");
-    expect(cfg.channels?.["qa-channel"]).toMatchObject({
-      enabled: true,
-      baseUrl: "http://127.0.0.1:43124",
-      pollTimeoutMs: 250,
-    });
+    expect(cfg.channels?.["qa-channel"]?.enabled).toBe(true);
+    expect(cfg.channels?.["qa-channel"]?.baseUrl).toBe("http://127.0.0.1:43124");
+    expect(cfg.channels?.["qa-channel"]?.pollTimeoutMs).toBe(250);
     expect(cfg.messages?.groupChat?.mentionPatterns).toEqual(["\\b@?openclaw\\b"]);
+    expect(cfg.messages?.groupChat?.visibleReplies).toBe("automatic");
   });
 
   it("maps provider-qualified openai and anthropic refs through the mock provider lane", () => {
@@ -89,7 +90,7 @@ describe("buildQaGatewayConfig", () => {
       workspaceDir: "/tmp/qa-workspace",
       providerMode: "mock-openai",
       primaryModel: "openai/gpt-5.5",
-      alternateModel: "anthropic/claude-opus-4-6",
+      alternateModel: "anthropic/claude-opus-4-7",
     });
 
     expect(getPrimaryModel(cfg.agents?.defaults?.model)).toBe("openai/gpt-5.5");
@@ -100,9 +101,25 @@ describe("buildQaGatewayConfig", () => {
     expect(cfg.models?.providers?.anthropic?.baseUrl).toBe("http://127.0.0.1:44080");
     expect(cfg.models?.providers?.anthropic?.request).toEqual({ allowPrivateNetwork: true });
     expect(cfg.models?.providers?.anthropic?.models.map((model) => model.id)).toContain(
-      "claude-opus-4-6",
+      "claude-opus-4-7",
     );
     expect(cfg.plugins?.allow).toEqual(["acpx", "memory-core"]);
+  });
+
+  it("falls back to provider defaults for blank model refs", () => {
+    const cfg = buildQaGatewayConfig({
+      bind: "loopback",
+      gatewayPort: 18789,
+      gatewayToken: "token",
+      providerBaseUrl: "http://127.0.0.1:44080/v1",
+      workspaceDir: "/tmp/qa-workspace",
+      providerMode: "mock-openai",
+      primaryModel: " ",
+      alternateModel: "",
+    });
+
+    expect(getPrimaryModel(cfg.agents?.defaults?.model)).toBe("mock-openai/gpt-5.5");
+    expect(cfg.agents?.defaults?.models).toHaveProperty("mock-openai/gpt-5.5-alt");
   });
 
   it("can wire AIMock as a separate mock provider lane", () => {
@@ -118,9 +135,7 @@ describe("buildQaGatewayConfig", () => {
     });
 
     expect(getPrimaryModel(cfg.agents?.defaults?.model)).toBe("aimock/gpt-5.5");
-    expect(cfg.agents?.defaults?.imageGenerationModel).toEqual({
-      primary: "aimock/gpt-image-1",
-    });
+    expect(cfg.agents?.defaults).not.toHaveProperty("imageGenerationModel");
     expect(cfg.models?.providers?.aimock?.baseUrl).toBe("http://127.0.0.1:45080/v1");
     expect(cfg.models?.providers?.aimock?.api).toBe("openai-responses");
     expect(cfg.models?.providers?.openai?.baseUrl).toBe("http://127.0.0.1:45080/v1");
@@ -280,9 +295,7 @@ describe("buildQaGatewayConfig", () => {
     });
 
     expect(cfg.agents?.defaults?.thinkingDefault).toBe("xhigh");
-    expect(cfg.agents?.defaults?.models?.["openai/gpt-5.5"]?.params).toMatchObject({
-      thinking: "xhigh",
-    });
+    expect(cfg.agents?.defaults?.models?.["openai/gpt-5.5"]?.params?.thinking).toBe("xhigh");
   });
 
   it("can disable control ui for suite-only gateway children", () => {

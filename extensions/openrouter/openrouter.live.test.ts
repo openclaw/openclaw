@@ -1,10 +1,10 @@
-import { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
+import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import OpenAI from "openai";
-import { describe, expect, it } from "vitest";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
-} from "../../test/helpers/plugins/provider-registration.js";
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY ?? "";
@@ -63,12 +63,10 @@ describeLive("openrouter plugin live", () => {
       throw new Error(`openrouter provider did not resolve ${LIVE_MODEL_ID}`);
     }
 
-    expect(resolved).toMatchObject({
-      provider: "openrouter",
-      id: LIVE_MODEL_ID,
-      api: "openai-completions",
-      baseUrl: "https://openrouter.ai/api/v1",
-    });
+    expect(resolved.provider).toBe("openrouter");
+    expect(resolved.id).toBe(LIVE_MODEL_ID);
+    expect(resolved.api).toBe("openai-completions");
+    expect(resolved.baseUrl).toBe("https://openrouter.ai/api/v1");
 
     const client = new OpenAI({
       apiKey: OPENROUTER_API_KEY,

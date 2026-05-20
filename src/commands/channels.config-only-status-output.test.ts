@@ -4,6 +4,7 @@ import { makeDirectPlugin } from "../test-utils/channel-plugin-test-fixtures.js"
 import { formatConfigChannelsStatusLines } from "./channels/status-config-format.js";
 
 const activeChannelPlugins = vi.hoisted(() => [] as ChannelPlugin[]);
+const listReadOnlyChannelPluginsForConfig = vi.hoisted(() => vi.fn(() => activeChannelPlugins));
 
 vi.mock("../channels/plugins/index.js", () => ({
   listChannelPlugins: () => activeChannelPlugins,
@@ -12,7 +13,7 @@ vi.mock("../channels/plugins/index.js", () => ({
 }));
 
 vi.mock("../channels/plugins/read-only.js", () => ({
-  listReadOnlyChannelPluginsForConfig: () => activeChannelPlugins,
+  listReadOnlyChannelPluginsForConfig,
 }));
 
 vi.mock("../channels/plugins/status.js", () => ({
@@ -190,7 +191,29 @@ function expectResolvedTokenStatusSummary(
   }
 }
 
+function requireReadOnlyPluginListCall(): unknown[] {
+  const call = listReadOnlyChannelPluginsForConfig.mock.calls[0];
+  if (!call) {
+    throw new Error("expected listReadOnlyChannelPluginsForConfig call");
+  }
+  return call;
+}
+
 describe("config-only channels status output", () => {
+  it("uses setup fallback plugins so configured external channels can be shown", async () => {
+    registerSingleTestPlugin("token-only", makeUnavailableTokenPlugin());
+    listReadOnlyChannelPluginsForConfig.mockClear();
+    const cfg = { channels: { "token-only": { enabled: true } } };
+
+    await formatLocalStatusSummary(cfg);
+
+    expect(listReadOnlyChannelPluginsForConfig).toHaveBeenCalledOnce();
+    expect(requireReadOnlyPluginListCall()).toStrictEqual([
+      cfg,
+      { activationSourceConfig: cfg, includeSetupFallbackPlugins: true },
+    ]);
+  });
+
   it("shows configured-but-unavailable credentials distinctly from not configured", async () => {
     registerSingleTestPlugin("token-only", makeUnavailableTokenPlugin());
 

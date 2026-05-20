@@ -4,6 +4,7 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { installScheduledTask, readScheduledTaskCommand } from "./schtasks.js";
+import { auditGatewayServiceConfig, SERVICE_AUDIT_CODES } from "./service-audit.js";
 
 const schtasksCalls: string[][] = [];
 const schtasksResponses: { code: number; stdout: string; stderr: string }[] = [];
@@ -102,7 +103,7 @@ describe("installScheduledTask", () => {
       expect(script).not.toContain("set OC_INJECT=");
 
       const parsed = await readScheduledTaskCommand(env);
-      expect(parsed).toMatchObject({
+      expect(parsed).toStrictEqual({
         programArguments: [
           "node",
           "gateway.js",
@@ -114,15 +115,22 @@ describe("installScheduledTask", () => {
           "!token!",
         ],
         workingDirectory: "C:\\temp\\poc&calc",
+        environment: {
+          OC_INJECT: "safe & whoami | calc",
+          OC_CARET: "a^b",
+          OC_PERCENT: "%TEMP%",
+          OC_BANG: "!token!",
+          OC_QUOTE: 'he said "hi"',
+        },
+        environmentValueSources: {
+          OC_INJECT: "inline",
+          OC_CARET: "inline",
+          OC_PERCENT: "inline",
+          OC_BANG: "inline",
+          OC_QUOTE: "inline",
+        },
+        sourcePath: scriptPath,
       });
-      expect(parsed?.environment).toMatchObject({
-        OC_INJECT: "safe & whoami | calc",
-        OC_CARET: "a^b",
-        OC_PERCENT: "%TEMP%",
-        OC_BANG: "!token!",
-        OC_QUOTE: 'he said "hi"',
-      });
-      expect(parsed?.environment).not.toHaveProperty("OC_EMPTY");
 
       expect(schtasksCalls[0]).toEqual(["/Query"]);
       expect(schtasksCalls[1]).toEqual(["/Query", "/TN", "OpenClaw Gateway"]);
@@ -171,6 +179,68 @@ describe("installScheduledTask", () => {
 
       expectInitialTaskQueries();
       expect(schtasksCalls[2]?.[0]).toBe("/Create");
+      expectTaskRunCall(3);
+    });
+  });
+
+  it("creates hidden launcher Windows tasks when requested", async () => {
+    await withUserProfileDir(async (_tmpDir, env) => {
+      schtasksResponses.push(okSchtasksResponse, missingTaskResponse);
+
+      const { scriptPath } = await installDefaultGatewayTask({
+        ...env,
+        USERDOMAIN: "WORKSTATION",
+        USERNAME: "alice",
+        OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1",
+      });
+      const launcherPath = scriptPath.replace(/\.cmd$/i, ".vbs");
+      const launcher = await fs.readFile(launcherPath, "utf8");
+
+      expectInitialTaskQueries();
+      expect(schtasksCalls[2]).toEqual([
+        "/Create",
+        "/F",
+        "/SC",
+        "ONLOGON",
+        "/RL",
+        "LIMITED",
+        "/TN",
+        "OpenClaw Gateway",
+        "/TR",
+        expect.stringContaining("gateway.vbs"),
+        "/RU",
+        "WORKSTATION\\alice",
+        "/NP",
+        "/IT",
+      ]);
+      expect(launcher).toContain("WScript.Shell");
+      expect(launcher).toContain(scriptPath);
+      expect(launcher).toContain(`Run """${scriptPath}""", 0, False`);
+      expectTaskRunCall(3);
+    });
+  });
+
+  it("updates existing tasks to use the hidden launcher when requested", async () => {
+    await withUserProfileDir(async (_tmpDir, env) => {
+      schtasksResponses.push(okSchtasksResponse, okSchtasksResponse, okSchtasksResponse);
+
+      const { scriptPath } = await installDefaultGatewayTask({
+        ...env,
+        USERDOMAIN: "WORKSTATION",
+        USERNAME: "alice",
+        OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "true",
+      });
+      const launcherPath = scriptPath.replace(/\.cmd$/i, ".vbs");
+
+      expectInitialTaskQueries();
+      expect(schtasksCalls[2]).toEqual([
+        "/Change",
+        "/TN",
+        "OpenClaw Gateway",
+        "/TR",
+        expect.stringContaining("gateway.vbs"),
+      ]);
+      expect(schtasksCalls[2]?.[4]).toContain(launcherPath);
       expectTaskRunCall(3);
     });
   });
@@ -241,6 +311,44 @@ describe("installScheduledTask", () => {
       const script = await fs.readFile(scriptPath, "utf8");
       expect(script).not.toContain('set "PATH=');
       expect(script).toContain('set "OPENCLAW_GATEWAY_PORT=18789"');
+    });
+  });
+
+  it("exposes Windows task script env values as inline for managed-env drift audit", async () => {
+    await withUserProfileDir(async (_tmpDir, env) => {
+      const { scriptPath } = await installScheduledTask({
+        env,
+        stdout: new PassThrough(),
+        programArguments: ["node", "gateway.js"],
+        environment: {
+          OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "TAVILY_API_KEY",
+          TAVILY_API_KEY: "old-inline-value",
+        },
+      });
+
+      const command = await readScheduledTaskCommand(env);
+      expect(command).toStrictEqual({
+        programArguments: ["node", "gateway.js"],
+        environment: {
+          OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "TAVILY_API_KEY",
+          TAVILY_API_KEY: "old-inline-value",
+        },
+        environmentValueSources: {
+          OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "inline",
+          TAVILY_API_KEY: "inline",
+        },
+        sourcePath: scriptPath,
+      });
+
+      const audit = await auditGatewayServiceConfig({
+        env,
+        platform: "win32",
+        command,
+        expectedManagedServiceEnvKeys: ["TAVILY_API_KEY"],
+      });
+      expect(
+        audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayManagedEnvEmbedded),
+      ).toBe(true);
     });
   });
 });

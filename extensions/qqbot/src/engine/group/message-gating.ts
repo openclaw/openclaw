@@ -1,72 +1,108 @@
-/**
- * Group message gating — three-layer access control for group messages.
- *
- * 1. `ignoreOtherMentions` — skip messages that @other bots, not this one.
- * 2. `shouldBlock` — enforce allowFrom whitelist at the group level.
- * 3. `mentionGating` — require explicit @bot mention in group chats.
- *
- * All functions are **pure** (no side effects, no I/O), making them easy to
- * test and safe to share between the built-in and standalone versions.
- */
+type GroupMessageGateAction =
+  | "drop_other_mention"
+  | "block_unauthorized_command"
+  | "skip_no_mention"
+  | "pass";
 
-/** Result of the group message gate evaluation. */
-export interface GateResult {
-  /** Whether the message should be blocked (i.e. not processed). */
-  blocked: boolean;
-  /** Reason for blocking (for logging). */
-  reason?: string;
-  /** Whether the sender is authorized for slash commands. */
+export interface GroupMessageGateResult {
+  action: GroupMessageGateAction;
+  effectiveWasMentioned: boolean;
+  shouldBypassMention: boolean;
+}
+
+export interface GroupMessageGateInput {
+  ignoreOtherMentions: boolean;
+  hasAnyMention: boolean;
+  wasMentioned: boolean;
+  implicitMention: boolean;
+  allowTextCommands: boolean;
+  isControlCommand: boolean;
   commandAuthorized: boolean;
+  requireMention: boolean;
+  canDetectMention: boolean;
 }
 
-/** Configuration relevant to group message gating. */
-export interface GroupGateConfig {
-  /** Normalized allowFrom list (uppercase, `qqbot:` prefix stripped). */
-  normalizedAllowFrom: string[];
-  /**
-   * Whether to ignore messages that mention other bots.
-   * When true, messages containing @mentions for other bot IDs are silently dropped.
-   */
-  ignoreOtherMentions?: boolean;
+function resolveMentionGating(input: {
+  requireMention: boolean;
+  canDetectMention: boolean;
+  wasMentioned: boolean;
+  implicitMention: boolean;
+  shouldBypassMention: boolean;
+}): { effectiveWasMentioned: boolean; shouldSkip: boolean } {
+  const effectiveWasMentioned =
+    input.wasMentioned || input.implicitMention || input.shouldBypassMention;
+  const shouldSkip = input.requireMention && input.canDetectMention && !effectiveWasMentioned;
+  return { effectiveWasMentioned, shouldSkip };
 }
 
-/**
- * Evaluate the group message gate for one inbound message.
- *
- * @param senderId - The sender's openid (raw, not normalized).
- * @param config - Group gating configuration.
- * @returns The gate evaluation result.
- */
-export function resolveGroupMessageGate(senderId: string, config: GroupGateConfig): GateResult {
-  const { normalizedAllowFrom } = config;
+function resolveCommandBypass(input: {
+  requireMention: boolean;
+  wasMentioned: boolean;
+  hasAnyMention: boolean;
+  allowTextCommands: boolean;
+  commandAuthorized: boolean;
+  isControlCommand: boolean;
+}): boolean {
+  return (
+    input.requireMention &&
+    !input.wasMentioned &&
+    !input.hasAnyMention &&
+    input.allowTextCommands &&
+    input.commandAuthorized &&
+    input.isControlCommand
+  );
+}
 
-  // Normalize the sender ID for comparison.
-  const normalizedSenderId = senderId.replace(/^qqbot:/i, "").toUpperCase();
+export function resolveGroupMessageGate(input: GroupMessageGateInput): GroupMessageGateResult {
+  if (
+    input.ignoreOtherMentions &&
+    input.hasAnyMention &&
+    !input.wasMentioned &&
+    !input.implicitMention
+  ) {
+    return {
+      action: "drop_other_mention",
+      effectiveWasMentioned: false,
+      shouldBypassMention: false,
+    };
+  }
 
-  // Open gate: empty allowFrom or wildcard means everyone is allowed.
-  const allowAll = normalizedAllowFrom.length === 0 || normalizedAllowFrom.some((e) => e === "*");
+  if (input.allowTextCommands && input.isControlCommand && !input.commandAuthorized) {
+    return {
+      action: "block_unauthorized_command",
+      effectiveWasMentioned: false,
+      shouldBypassMention: false,
+    };
+  }
 
-  const commandAuthorized = allowAll || normalizedAllowFrom.includes(normalizedSenderId);
+  const shouldBypassMention = resolveCommandBypass({
+    requireMention: input.requireMention,
+    wasMentioned: input.wasMentioned,
+    hasAnyMention: input.hasAnyMention,
+    allowTextCommands: input.allowTextCommands,
+    commandAuthorized: input.commandAuthorized,
+    isControlCommand: input.isControlCommand,
+  });
+
+  const mentionGate = resolveMentionGating({
+    requireMention: input.requireMention,
+    canDetectMention: input.canDetectMention,
+    wasMentioned: input.wasMentioned,
+    implicitMention: input.implicitMention,
+    shouldBypassMention,
+  });
+
+  if (mentionGate.shouldSkip) {
+    return {
+      action: "skip_no_mention",
+      effectiveWasMentioned: mentionGate.effectiveWasMentioned,
+      shouldBypassMention,
+    };
+  }
 
   return {
-    blocked: false,
-    commandAuthorized,
+    action: "pass",
+    effectiveWasMentioned: mentionGate.effectiveWasMentioned,
+    shouldBypassMention,
   };
-}
-
-/**
- * Normalize an allowFrom list by stripping `qqbot:` prefixes and uppercasing.
- *
- * @param allowFrom - Raw allowFrom config entries.
- * @returns Normalized entries for comparison.
- */
-export function normalizeAllowFrom(allowFrom: Array<string | number> | undefined | null): string[] {
-  if (!allowFrom) {
-    return [];
-  }
-  return allowFrom
-    .map((entry) => String(entry).trim())
-    .filter(Boolean)
-    .map((entry) => entry.replace(/^qqbot:/i, ""))
-    .map((entry) => entry.toUpperCase());
 }

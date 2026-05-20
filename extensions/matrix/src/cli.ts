@@ -1,6 +1,5 @@
 import type { Command } from "commander";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { formatZonedTimestamp } from "openclaw/plugin-sdk/matrix-runtime-shared";
 import type { ChannelSetupInput } from "openclaw/plugin-sdk/setup";
 import { resolveMatrixAccount, resolveMatrixAccountConfig } from "./matrix/accounts.js";
 import { listMatrixOwnDevices, pruneMatrixStaleGatewayDevices } from "./matrix/actions/devices.js";
@@ -30,6 +29,7 @@ import { isOpenClawManagedMatrixDevice } from "./matrix/device-health.js";
 import type { MatrixDirectRoomCandidate } from "./matrix/direct-management.js";
 import { formatMatrixErrorMessage } from "./matrix/errors.js";
 import { applyMatrixProfileUpdate, type MatrixProfileUpdateResult } from "./profile-update.js";
+import { formatZonedTimestamp } from "./runtime-api.js";
 import { getMatrixRuntime } from "./runtime.js";
 import { matrixSetupAdapter } from "./setup-core.js";
 import type { CoreConfig } from "./types.js";
@@ -150,7 +150,7 @@ function resolveMatrixCliAccountContext(accountId?: string): {
   accountId: string;
   cfg: CoreConfig;
 } {
-  const cfg = getMatrixRuntime().config.loadConfig() as CoreConfig;
+  const cfg = getMatrixRuntime().config.current() as CoreConfig;
   return {
     accountId: resolveMatrixAuthContext({ cfg, accountId }).accountId,
     cfg,
@@ -245,6 +245,7 @@ type MatrixCliAccountAddResult = {
   accountId: string;
   configPath: string;
   useEnv: boolean;
+  encryptionEnabled: boolean;
   deviceHealth: {
     currentDeviceId: string | null;
     staleOpenClawDeviceIds: string[];
@@ -280,9 +281,10 @@ async function addMatrixAccount(params: {
   initialSyncLimit?: string;
   allowPrivateNetwork?: boolean;
   useEnv?: boolean;
+  enableEncryption?: boolean;
 }): Promise<MatrixCliAccountAddResult> {
   const runtime = getMatrixRuntime();
-  const cfg = runtime.config.loadConfig() as CoreConfig;
+  const cfg = runtime.config.current() as CoreConfig;
   if (!matrixSetupAdapter.applyAccountConfig) {
     throw new Error("Matrix account setup is unavailable.");
   }
@@ -315,12 +317,18 @@ async function addMatrixAccount(params: {
     throw new Error(validationError);
   }
 
-  const updated = matrixSetupAdapter.applyAccountConfig({
+  let updated = matrixSetupAdapter.applyAccountConfig({
     cfg,
     accountId,
     input,
   }) as CoreConfig;
-  await runtime.config.writeConfigFile(updated as never);
+  if (params.enableEncryption === true) {
+    updated = updateMatrixAccountConfig(updated, accountId, { encryption: true });
+  }
+  await runtime.config.replaceConfigFile({
+    nextConfig: updated as never,
+    afterWrite: { mode: "auto" },
+  });
   const accountConfig = resolveMatrixAccountConfig({ cfg: updated, accountId });
 
   let verificationBootstrap: MatrixCliAccountAddResult["verificationBootstrap"] = {
@@ -350,17 +358,21 @@ async function addMatrixAccount(params: {
   if (desiredDisplayName || desiredAvatarUrl) {
     try {
       const synced = await updateMatrixOwnProfile({
+        cfg: updated,
         accountId,
         displayName: desiredDisplayName,
         avatarUrl: desiredAvatarUrl,
       });
       let resolvedAvatarUrl = synced.resolvedAvatarUrl;
       if (synced.convertedAvatarFromHttp && synced.resolvedAvatarUrl) {
-        const latestCfg = runtime.config.loadConfig() as CoreConfig;
+        const latestCfg = runtime.config.current() as CoreConfig;
         const withAvatar = updateMatrixAccountConfig(latestCfg, accountId, {
           avatarUrl: synced.resolvedAvatarUrl,
         });
-        await runtime.config.writeConfigFile(withAvatar as never);
+        await runtime.config.replaceConfigFile({
+          nextConfig: withAvatar as never,
+          afterWrite: { mode: "auto" },
+        });
         resolvedAvatarUrl = synced.resolvedAvatarUrl;
       }
       profile = {
@@ -406,6 +418,7 @@ async function addMatrixAccount(params: {
     accountId,
     configPath: resolveMatrixConfigPath(updated, accountId),
     useEnv: input.useEnv === true,
+    encryptionEnabled: accountConfig.encryption === true,
     deviceHealth,
     verificationBootstrap,
     profile,
@@ -455,7 +468,7 @@ async function inspectMatrixDirectRoom(params: {
   accountId: string;
   userId: string;
 }): Promise<MatrixCliDirectRoomInspection> {
-  const cfg = getMatrixRuntime().config.loadConfig() as CoreConfig;
+  const cfg = getMatrixRuntime().config.current() as CoreConfig;
   const [{ withResolvedActionClient }, { inspectMatrixDirectRooms }] = await Promise.all([
     loadMatrixActionClientModule(),
     loadMatrixDirectManagementModule(),
@@ -485,7 +498,7 @@ async function repairMatrixDirectRoom(params: {
   accountId: string;
   userId: string;
 }): Promise<MatrixCliDirectRoomRepair> {
-  const cfg = getMatrixRuntime().config.loadConfig() as CoreConfig;
+  const cfg = getMatrixRuntime().config.current() as CoreConfig;
   const account = resolveMatrixAccount({ cfg, accountId: params.accountId });
   const [{ withStartedActionClient }, { repairMatrixDirectRooms }] = await Promise.all([
     loadMatrixActionClientModule(),
@@ -591,6 +604,7 @@ type MatrixCliVerificationStatus = {
   serverDeviceKnown?: boolean | null;
   recoveryKeyStored: boolean;
   recoveryKeyCreatedAt: string | null;
+  recoveryKeyId: string | null;
   pendingVerifications: number;
   recoveryKeyAccepted?: boolean;
   backupUsable?: boolean;
@@ -658,6 +672,111 @@ type MatrixCliDirectRoomRepair = MatrixCliDirectRoomInspection & {
   directContentBefore: Record<string, string[]>;
   directContentAfter: Record<string, string[]>;
 };
+
+type MatrixCliVerificationBootstrap = Awaited<ReturnType<typeof bootstrapMatrixVerification>>;
+
+type MatrixCliEncryptionSetupResult = {
+  accountId: string;
+  configPath: string;
+  encryptionChanged: boolean;
+  bootstrap: MatrixCliVerificationBootstrap;
+  status: MatrixCliVerificationStatus;
+};
+
+function isMatrixVerificationSetupComplete(status: MatrixCliVerificationStatus): boolean {
+  return (
+    status.encryptionEnabled &&
+    status.verified &&
+    status.crossSigningVerified &&
+    status.signedByOwner &&
+    status.serverDeviceKnown === true &&
+    resolveMatrixRoomKeyBackupIssue(resolveBackupStatus(status)).code === "ok"
+  );
+}
+
+function buildNoopMatrixVerificationBootstrap(
+  status: MatrixCliVerificationStatus,
+): MatrixCliVerificationBootstrap {
+  const verification = {
+    ...status,
+    backup: resolveBackupStatus(status),
+    serverDeviceKnown: status.serverDeviceKnown ?? null,
+  };
+  return {
+    success: true,
+    verification,
+    crossSigning: {
+      userId: status.userId,
+      masterKeyPublished: status.crossSigningVerified,
+      selfSigningKeyPublished: status.signedByOwner,
+      userSigningKeyPublished: status.signedByOwner,
+      published: status.crossSigningVerified && status.signedByOwner,
+    },
+    pendingVerifications: status.pendingVerifications,
+    cryptoBootstrap: null,
+  };
+}
+
+async function setupMatrixEncryption(params: {
+  account?: string;
+  recoveryKey?: string;
+  forceResetCrossSigning?: boolean;
+}): Promise<MatrixCliEncryptionSetupResult> {
+  const runtime = getMatrixRuntime();
+  const { accountId, cfg } = resolveMatrixCliAccountContext(params.account);
+  const account = resolveMatrixAccount({ cfg, accountId });
+  if (!account.configured) {
+    throw new Error(
+      `Matrix account "${accountId}" is not configured; run ${formatMatrixCliCommand(
+        "account add",
+        accountId,
+      )} first.`,
+    );
+  }
+
+  const currentAccountConfig = resolveMatrixAccountConfig({ cfg, accountId });
+  const encryptionChanged = currentAccountConfig.encryption !== true;
+  const updated = encryptionChanged
+    ? updateMatrixAccountConfig(cfg, accountId, { encryption: true })
+    : cfg;
+  if (encryptionChanged) {
+    await runtime.config.replaceConfigFile({
+      nextConfig: updated as never,
+      afterWrite: { mode: "auto" },
+    });
+  }
+
+  const canUseExistingBootstrap =
+    !encryptionChanged && !params.recoveryKey && params.forceResetCrossSigning !== true;
+  const existingStatus = canUseExistingBootstrap
+    ? await getMatrixVerificationStatus({ accountId, cfg: updated, readiness: "none" })
+    : null;
+  if (existingStatus && isMatrixVerificationSetupComplete(existingStatus)) {
+    return {
+      accountId,
+      configPath: resolveMatrixConfigPath(updated, accountId),
+      encryptionChanged,
+      bootstrap: buildNoopMatrixVerificationBootstrap(existingStatus),
+      status: existingStatus,
+    };
+  }
+
+  const bootstrap = await bootstrapMatrixVerification({
+    accountId,
+    cfg: updated,
+    recoveryKey: params.recoveryKey,
+    forceResetCrossSigning: params.forceResetCrossSigning === true,
+  });
+  const status = await getMatrixVerificationStatus({ accountId, cfg: updated });
+
+  return {
+    accountId,
+    configPath: resolveMatrixConfigPath(updated, accountId),
+    encryptionChanged,
+    bootstrap,
+    status,
+  };
+}
 
 function toCliDirectRoomCandidate(room: MatrixDirectRoomCandidate): MatrixCliDirectRoomCandidate {
   return {
@@ -1233,6 +1352,33 @@ function printVerificationStatus(
   printVerificationGuidance(status, accountId);
 }
 
+function printMatrixEncryptionSetupResult(
+  result: MatrixCliEncryptionSetupResult,
+  verbose = false,
+): void {
+  printAccountLabel(result.accountId);
+  console.log(
+    `Encryption config: ${result.encryptionChanged ? "enabled" : "already enabled"} at ${formatMatrixCliText(
+      result.configPath,
+    )}`,
+  );
+  console.log(`Bootstrap success: ${result.bootstrap.success ? "yes" : "no"}`);
+  if (result.bootstrap.error) {
+    console.log(`Bootstrap error: ${formatMatrixCliText(result.bootstrap.error)}`);
+  }
+  console.log(`Verified by owner: ${result.status.verified ? "yes" : "no"}`);
+  printVerificationBackupSummary(result.status);
+  if (verbose) {
+    printVerificationIdentity(result.status);
+    printVerificationTrustDiagnostics(result.status);
+    printVerificationBackupStatus(result.status);
+    console.log(`Recovery key stored: ${result.status.recoveryKeyStored ? "yes" : "no"}`);
+    printTimestamp("Recovery key created at", result.status.recoveryKeyCreatedAt);
+    console.log(`Pending verifications: ${result.status.pendingVerifications}`);
+  }
+  printVerificationGuidance(result.status, result.accountId);
+}
+
 export function registerMatrixCli(params: { program: Command }): void {
   const root = params.program
     .command("matrix")
@@ -1258,6 +1404,8 @@ export function registerMatrixCli(params: { program: Command }): void {
     .option("--password <password>", "Matrix password")
     .option("--device-name <name>", "Matrix device display name")
     .option("--initial-sync-limit <n>", "Matrix initial sync limit")
+    .option("--enable-e2ee", "Enable Matrix end-to-end encryption and bootstrap verification")
+    .option("--encryption", "Alias for --enable-e2ee")
     .option(
       "--use-env",
       "Use MATRIX_* env vars (or MATRIX_<ACCOUNT_ID>_* for non-default accounts)",
@@ -1277,6 +1425,8 @@ export function registerMatrixCli(params: { program: Command }): void {
         password?: string;
         deviceName?: string;
         initialSyncLimit?: string;
+        enableE2ee?: boolean;
+        encryption?: boolean;
         useEnv?: boolean;
         verbose?: boolean;
         json?: boolean;
@@ -1297,6 +1447,7 @@ export function registerMatrixCli(params: { program: Command }): void {
               password: options.password,
               deviceName: options.deviceName,
               initialSyncLimit: options.initialSyncLimit,
+              enableEncryption: options.enableE2ee === true || options.encryption === true,
               useEnv: options.useEnv === true,
             }),
           onText: (result) => {
@@ -1305,6 +1456,7 @@ export function registerMatrixCli(params: { program: Command }): void {
             console.log(
               `Credentials source: ${result.useEnv ? "MATRIX_* / MATRIX_<ACCOUNT_ID>_* env vars" : "inline config"}`,
             );
+            console.log(`Encryption: ${result.encryptionEnabled ? "enabled" : "disabled"}`);
             if (result.verificationBootstrap.attempted) {
               if (result.verificationBootstrap.success) {
                 console.log("Matrix verification bootstrap: complete");
@@ -1462,6 +1614,44 @@ export function registerMatrixCli(params: { program: Command }): void {
             }
           },
           errorPrefix: "Direct room repair failed",
+        });
+      },
+    );
+
+  const encryption = root.command("encryption").description("Set up Matrix end-to-end encryption");
+
+  encryption
+    .command("setup")
+    .description("Enable Matrix E2EE, bootstrap verification, and print next steps")
+    .option("--account <id>", "Account ID (for multi-account setups)")
+    .option("--recovery-key <key>", "Recovery key to apply before bootstrap")
+    .option("--force-reset-cross-signing", "Force reset cross-signing identity before bootstrap")
+    .option("--verbose", "Show detailed diagnostics")
+    .option("--json", "Output as JSON")
+    .action(
+      async (options: {
+        account?: string;
+        recoveryKey?: string;
+        forceResetCrossSigning?: boolean;
+        verbose?: boolean;
+        json?: boolean;
+      }) => {
+        await runMatrixCliCommand({
+          verbose: options.verbose === true,
+          json: options.json === true,
+          run: async () =>
+            await setupMatrixEncryption({
+              account: options.account,
+              recoveryKey: options.recoveryKey,
+              forceResetCrossSigning: options.forceResetCrossSigning === true,
+            }),
+          onText: (result, verbose) => {
+            printMatrixEncryptionSetupResult(result, verbose);
+          },
+          onJson: (result) => ({ success: result.bootstrap.success, ...result }),
+          shouldFail: (result) => !result.bootstrap.success,
+          errorPrefix: "Encryption setup failed",
+          onJsonError: (message) => ({ success: false, error: message }),
         });
       },
     );
@@ -1721,9 +1911,14 @@ export function registerMatrixCli(params: { program: Command }): void {
     .option("--account <id>", "Account ID (for multi-account setups)")
     .option("--verbose", "Show detailed diagnostics")
     .option("--include-recovery-key", "Include stored recovery key in output")
+    .option(
+      "--allow-degraded-local-state",
+      "Return best-effort diagnostics without preparing the Matrix account",
+    )
     .option("--json", "Output as JSON")
     .action(
       async (options: {
+        allowDegradedLocalState?: boolean;
         account?: string;
         verbose?: boolean;
         includeRecoveryKey?: boolean;
@@ -1738,6 +1933,7 @@ export function registerMatrixCli(params: { program: Command }): void {
               accountId,
               cfg,
               includeRecoveryKey: options.includeRecoveryKey === true,
+              ...(options.allowDegradedLocalState === true ? { readiness: "none" as const } : {}),
             }),
           onText: (status, verbose) => {
             printAccountLabel(accountId);

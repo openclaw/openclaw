@@ -1,4 +1,6 @@
-import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-response.js";
 import type { ReplyDirectiveParseResult } from "../auto-reply/reply/reply-directives.js";
 import type { ReasoningLevel } from "../auto-reply/thinking.js";
 import type { InlineCodeState } from "../markdown/code-spans.js";
@@ -15,8 +17,9 @@ import type {
 import type { ToolErrorSummary } from "./tool-error-summary.js";
 import type { NormalizedUsage } from "./usage.js";
 
-export type EmbeddedSubscribeLogger = {
+type EmbeddedSubscribeLogger = {
   debug: (message: string, meta?: Record<string, unknown>) => void;
+  info: (message: string, meta?: Record<string, unknown>) => void;
   warn: (message: string, meta?: Record<string, unknown>) => void;
 };
 
@@ -24,6 +27,7 @@ export type ToolCallSummary = {
   meta?: string;
   mutatingAction: boolean;
   actionFingerprint?: string;
+  fileTarget?: import("./tool-mutation.js").FileTarget;
 };
 
 export type EmbeddedPiSubscribeState = {
@@ -31,6 +35,7 @@ export type EmbeddedPiSubscribeState = {
   toolMetas: Array<{ toolName?: string; meta?: string }>;
   toolMetaById: Map<string, ToolCallSummary>;
   toolSummaryById: Set<string>;
+  execLiveUpdateStateById?: Map<string, { lastEmittedAtMs: number }>;
   itemActiveIds: Set<string>;
   itemStartedCount: number;
   itemCompletedCount: number;
@@ -44,13 +49,25 @@ export type EmbeddedPiSubscribeState = {
 
   deltaBuffer: string;
   blockBuffer: string;
-  blockState: { thinking: boolean; final: boolean; inlineCode: InlineCodeState };
-  partialBlockState: { thinking: boolean; final: boolean; inlineCode: InlineCodeState };
+  blockState: {
+    thinking: boolean;
+    final: boolean;
+    inlineCode: InlineCodeState;
+    pendingTagFragment?: string;
+  };
+  partialBlockState: {
+    thinking: boolean;
+    final: boolean;
+    inlineCode: InlineCodeState;
+    pendingTagFragment?: string;
+  };
   lastStreamedAssistant?: string;
   lastStreamedAssistantCleaned?: string;
   emittedAssistantUpdate: boolean;
   lastStreamedReasoning?: string;
   lastBlockReplyText?: string;
+  lastDeliveredBlockReplyText?: string;
+  toolExecutionSinceLastBlockReply: boolean;
   reasoningStreamOpen: boolean;
   assistantMessageIndex: number;
   lastAssistantStreamItemId?: string;
@@ -64,6 +81,7 @@ export type EmbeddedPiSubscribeState = {
   assistantUsageCommitted: boolean;
 
   compactionInFlight: boolean;
+  lastCompactionTokensAfter?: number;
   pendingCompactionRetry: number;
   compactionRetryResolve?: () => void;
   compactionRetryReject?: (reason?: unknown) => void;
@@ -71,11 +89,14 @@ export type EmbeddedPiSubscribeState = {
   unsubscribed: boolean;
   replayState: EmbeddedRunReplayState;
   livenessState?: EmbeddedRunLivenessState;
+  terminalStopReason?: string;
+  yielded?: boolean;
   hadDeterministicSideEffect?: boolean;
 
   messagingToolSentTexts: string[];
   messagingToolSentTextsNormalized: string[];
   messagingToolSentTargets: MessagingToolSend[];
+  heartbeatToolResponse?: HeartbeatToolResponse;
   messagingToolSentMediaUrls: string[];
   pendingMessagingTexts: Map<string, string>;
   pendingMessagingTargets: Map<string, MessagingToolSend>;
@@ -84,6 +105,7 @@ export type EmbeddedPiSubscribeState = {
   pendingToolMediaUrls: string[];
   pendingToolAudioAsVoice: boolean;
   pendingToolTrustedLocalMedia: boolean;
+  visibleBlockReplyCount: number;
   pendingAssistantReplyDirectives?: Pick<
     BlockReplyPayload,
     "mediaUrls" | "audioAsVoice" | "replyToId" | "replyToTag" | "replyToCurrent"
@@ -109,10 +131,22 @@ export type EmbeddedPiSubscribeContext = {
   emitToolOutput: (toolName?: string, meta?: string, output?: string, result?: unknown) => void;
   stripBlockTags: (
     text: string,
-    state: { thinking: boolean; final: boolean; inlineCode?: InlineCodeState },
+    state: {
+      thinking: boolean;
+      final: boolean;
+      inlineCode?: InlineCodeState;
+      pendingTagFragment?: string;
+    },
+    options?: { final?: boolean },
   ) => string;
-  emitBlockChunk: (text: string, options?: { assistantMessageIndex?: number }) => void;
-  flushBlockReplyBuffer: (options?: { assistantMessageIndex?: number }) => void | Promise<void>;
+  emitBlockChunk: (
+    text: string,
+    options?: { assistantMessageIndex?: number; final?: boolean },
+  ) => void;
+  flushBlockReplyBuffer: (options?: {
+    assistantMessageIndex?: number;
+    final?: boolean;
+  }) => void | Promise<void>;
   emitReasoningStream: (text: string) => void;
   consumeReplyDirectives: (
     text: string,
@@ -137,8 +171,10 @@ export type EmbeddedPiSubscribeContext = {
   recordAssistantUsage: (usage: unknown) => void;
   commitAssistantUsage: () => void;
   incrementCompactionCount: () => void;
+  noteCompactionTokensAfter: (value: unknown) => void;
   getUsageTotals: () => NormalizedUsage | undefined;
   getCompactionCount: () => number;
+  getLastCompactionTokensAfter: () => number | undefined;
   emitBlockReply: (payload: BlockReplyPayload) => void;
 };
 
@@ -147,23 +183,26 @@ export type EmbeddedPiSubscribeContext = {
  * tests provide only the fields they exercise
  * without needing the full `EmbeddedPiSubscribeContext`.
  */
-export type ToolHandlerParams = Pick<
+type ToolHandlerParams = Pick<
   SubscribeEmbeddedPiSessionParams,
   | "runId"
   | "onBlockReplyFlush"
   | "onAgentEvent"
+  | "onExecutionPhase"
   | "onToolResult"
   | "sessionKey"
   | "sessionId"
   | "agentId"
   | "toolResultFormat"
+  | "toolProgressDetail"
 >;
 
-export type ToolHandlerState = Pick<
+type ToolHandlerState = Pick<
   EmbeddedPiSubscribeState,
   | "toolMetaById"
   | "toolMetas"
   | "toolSummaryById"
+  | "execLiveUpdateStateById"
   | "itemActiveIds"
   | "itemStartedCount"
   | "itemCompletedCount"
@@ -180,8 +219,10 @@ export type ToolHandlerState = Pick<
   | "messagingToolSentTextsNormalized"
   | "messagingToolSentMediaUrls"
   | "messagingToolSentTargets"
+  | "heartbeatToolResponse"
   | "successfulCronAdds"
   | "deterministicApprovalPromptSent"
+  | "toolExecutionSinceLastBlockReply"
 >;
 
 export type ToolHandlerContext = {
@@ -199,6 +240,6 @@ export type ToolHandlerContext = {
 };
 
 export type EmbeddedPiSubscribeEvent =
-  | AgentEvent
+  | AgentSessionEvent
   | { type: string; [k: string]: unknown }
   | { type: "message_start"; message: AgentMessage };

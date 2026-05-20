@@ -1,9 +1,10 @@
 import type { SlackEventMiddlewareArgs } from "@slack/bolt";
 import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-writes";
-import { loadConfig, writeConfigFile } from "openclaw/plugin-sdk/config-runtime";
+import { mutateConfigFile } from "openclaw/plugin-sdk/config-mutation";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, warn } from "openclaw/plugin-sdk/runtime-env";
+import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { migrateSlackChannelConfig } from "../../channel-migration.js";
 import { resolveSlackChannelLabel } from "../channel-config.js";
 import type { SlackMonitorContext } from "../context.js";
@@ -45,6 +46,8 @@ export function registerSlackChannelEvents(params: {
     enqueueSystemEvent(`Slack channel ${params.kind}: ${label}.`, {
       sessionKey,
       contextKey: `slack:channel:${params.kind}:${params.channelId ?? params.channelName ?? "unknown"}`,
+      forceSenderIsOwnerFalse: true,
+      trusted: false,
     });
   };
 
@@ -129,7 +132,7 @@ export function registerSlackChannelEvents(params: {
           return;
         }
 
-        const currentConfig = loadConfig();
+        const currentConfig = getRuntimeConfig();
         const migration = migrateSlackChannelConfig({
           cfg: currentConfig,
           accountId: ctx.accountId,
@@ -144,7 +147,17 @@ export function registerSlackChannelEvents(params: {
             oldChannelId,
             newChannelId,
           });
-          await writeConfigFile(currentConfig);
+          await mutateConfigFile({
+            afterWrite: { mode: "auto" },
+            mutate: (draft) => {
+              migrateSlackChannelConfig({
+                cfg: draft,
+                accountId: ctx.accountId,
+                oldChannelId,
+                newChannelId,
+              });
+            },
+          });
           ctx.runtime.log?.(warn("[slack] Channel config migrated and saved successfully."));
         } else if (migration.skippedExisting) {
           ctx.runtime.log?.(

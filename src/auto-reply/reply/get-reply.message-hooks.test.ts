@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { logVerbose } from "../../globals.js";
 import type { MsgContext } from "../templating.js";
 import { withFastReplyConfig } from "./get-reply-fast-path.js";
 import {
@@ -64,6 +65,18 @@ function buildCtx(overrides: Partial<MsgContext> = {}): MsgContext {
   });
 }
 
+function hookEventCall(index: number): [string, string, string, Record<string, unknown>] {
+  const call = mocks.createInternalHookEvent.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected hook event call ${index + 1}`);
+  }
+  return call as [string, string, string, Record<string, unknown>];
+}
+
+function verboseMessages(): string[] {
+  return vi.mocked(logVerbose).mock.calls.map(([message]) => message);
+}
+
 describe("getReplyFromConfig message hooks", () => {
   beforeEach(async () => {
     await loadGetReplyRuntimeForTest();
@@ -74,6 +87,7 @@ describe("getReplyFromConfig message hooks", () => {
     mocks.triggerInternalHook.mockReset();
     mocks.resolveReplyDirectives.mockReset();
     mocks.initSessionState.mockReset();
+    vi.mocked(logVerbose).mockReset();
 
     mocks.applyMediaUnderstanding.mockImplementation(async (...args: unknown[]) => {
       const { ctx } = args[0] as { ctx: MsgContext };
@@ -109,28 +123,21 @@ describe("getReplyFromConfig message hooks", () => {
     await getReplyFromConfig(ctx, undefined, withFastReplyConfig({}));
 
     expect(mocks.createInternalHookEvent).toHaveBeenCalledTimes(2);
-    expect(mocks.createInternalHookEvent).toHaveBeenNthCalledWith(
-      1,
-      "message",
-      "transcribed",
-      "agent:main:telegram:-100123",
-      expect.objectContaining({
-        transcript: "voice transcript",
-        channelId: "telegram",
-        conversationId: "telegram:-100123",
-      }),
-    );
-    expect(mocks.createInternalHookEvent).toHaveBeenNthCalledWith(
-      2,
-      "message",
-      "preprocessed",
-      "agent:main:telegram:-100123",
-      expect.objectContaining({
-        transcript: "voice transcript",
-        isGroup: true,
-        groupId: "telegram:-100123",
-      }),
-    );
+    const transcribed = hookEventCall(0);
+    expect(transcribed[0]).toBe("message");
+    expect(transcribed[1]).toBe("transcribed");
+    expect(transcribed[2]).toBe("agent:main:telegram:-100123");
+    expect(transcribed[3].transcript).toBe("voice transcript");
+    expect(transcribed[3].channelId).toBe("telegram");
+    expect(transcribed[3].conversationId).toBe("telegram:-100123");
+
+    const preprocessed = hookEventCall(1);
+    expect(preprocessed[0]).toBe("message");
+    expect(preprocessed[1]).toBe("preprocessed");
+    expect(preprocessed[2]).toBe("agent:main:telegram:-100123");
+    expect(preprocessed[3].transcript).toBe("voice transcript");
+    expect(preprocessed[3].isGroup).toBe(true);
+    expect(preprocessed[3].groupId).toBe("telegram:-100123");
     expect(mocks.triggerInternalHook).toHaveBeenCalledTimes(2);
   });
 
@@ -145,12 +152,11 @@ describe("getReplyFromConfig message hooks", () => {
     await getReplyFromConfig(buildCtx(), undefined, withFastReplyConfig({}));
 
     expect(mocks.createInternalHookEvent).toHaveBeenCalledTimes(1);
-    expect(mocks.createInternalHookEvent).toHaveBeenCalledWith(
-      "message",
-      "preprocessed",
-      "agent:main:telegram:-100123",
-      expect.any(Object),
-    );
+    const preprocessed = hookEventCall(0);
+    expect(preprocessed[0]).toBe("message");
+    expect(preprocessed[1]).toBe("preprocessed");
+    expect(preprocessed[2]).toBe("agent:main:telegram:-100123");
+    expect(preprocessed[3]).toBeTypeOf("object");
   });
 
   it("skips message hooks in fast test mode", async () => {
@@ -197,5 +203,66 @@ describe("getReplyFromConfig message hooks", () => {
 
     expect(mocks.applyMediaUnderstanding).not.toHaveBeenCalled();
     expect(mocks.applyLinkUnderstanding).not.toHaveBeenCalled();
+  });
+
+  it("continues dispatching when media understanding fails before reply routing", async () => {
+    mocks.applyMediaUnderstanding.mockRejectedValueOnce(
+      new Error("Cannot find module '/tmp/openclaw/dist/media-understanding/apply.runtime-old.js'"),
+    );
+
+    const reply = await getReplyFromConfig(buildCtx(), undefined, withFastReplyConfig({}));
+
+    expect(reply).toEqual({ text: "ok" });
+    expect(mocks.applyMediaUnderstanding).toHaveBeenCalledTimes(1);
+    expect(mocks.initSessionState).toHaveBeenCalledTimes(1);
+    expect(mocks.resolveReplyDirectives).toHaveBeenCalledTimes(1);
+    expect(mocks.createInternalHookEvent).toHaveBeenCalledTimes(1);
+    const preprocessed = hookEventCall(0);
+    expect(preprocessed[0]).toBe("message");
+    expect(preprocessed[1]).toBe("preprocessed");
+    expect(preprocessed[2]).toBe("agent:main:telegram:-100123");
+    expect(preprocessed[3]).toBeTypeOf("object");
+    expect(
+      verboseMessages().some((message) =>
+        message.includes("media understanding failed, proceeding with raw content"),
+      ),
+    ).toBe(true);
+  });
+
+  it("continues dispatching URL messages when link understanding fails before reply routing", async () => {
+    mocks.applyLinkUnderstanding.mockRejectedValueOnce(
+      new Error("Cannot find module '/tmp/openclaw/dist/link-understanding/apply.runtime-old.js'"),
+    );
+
+    const reply = await getReplyFromConfig(
+      buildCtx({
+        Body: "read https://example.test/page",
+        BodyForAgent: "read https://example.test/page",
+        RawBody: "read https://example.test/page",
+        CommandBody: "read https://example.test/page",
+        BodyForCommands: "read https://example.test/page",
+        MediaPath: undefined,
+        MediaUrl: undefined,
+        MediaPaths: undefined,
+        MediaUrls: undefined,
+        MediaTypes: undefined,
+        MediaType: undefined,
+        Sticker: undefined,
+        StickerMediaIncluded: undefined,
+      }),
+      undefined,
+      withFastReplyConfig({}),
+    );
+
+    expect(reply).toEqual({ text: "ok" });
+    expect(mocks.applyMediaUnderstanding).not.toHaveBeenCalled();
+    expect(mocks.applyLinkUnderstanding).toHaveBeenCalledTimes(1);
+    expect(mocks.initSessionState).toHaveBeenCalledTimes(1);
+    expect(mocks.resolveReplyDirectives).toHaveBeenCalledTimes(1);
+    expect(
+      verboseMessages().some((message) =>
+        message.includes("link understanding failed, proceeding with raw content"),
+      ),
+    ).toBe(true);
   });
 });

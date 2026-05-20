@@ -1,7 +1,9 @@
+import {
+  createEmptyPluginRegistry,
+  createRuntimeEnv,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createEmptyPluginRegistry } from "../../../src/plugins/registry-empty.js";
-import { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
-import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import type { OpenClawConfig } from "../runtime-api.js";
 import type { ResolvedZaloAccount } from "./accounts.js";
 
@@ -89,9 +91,7 @@ describe("monitorZaloProvider lifecycle", () => {
     await monitoredRun;
 
     expect(settled).toBe(true);
-    expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining("Zalo provider stopped mode=polling"),
-    );
+    expect(runtime.log).toHaveBeenCalledWith("[default] Zalo provider stopped mode=polling");
   });
 
   it("deletes an existing webhook before polling", async () => {
@@ -108,7 +108,7 @@ describe("monitorZaloProvider lifecycle", () => {
     expect(getWebhookInfoMock).toHaveBeenCalledTimes(1);
     expect(deleteWebhookMock).toHaveBeenCalledTimes(1);
     expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining("Zalo polling mode ready (webhook disabled)"),
+      "[default] Zalo polling mode ready (webhook disabled)",
     );
 
     abort.abort();
@@ -127,7 +127,7 @@ describe("monitorZaloProvider lifecycle", () => {
     expect(getWebhookInfoMock).toHaveBeenCalledTimes(1);
     expect(deleteWebhookMock).not.toHaveBeenCalled();
     expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining("webhook inspection unavailable; continuing without webhook cleanup"),
+      "[default] Zalo polling mode webhook inspection unavailable; continuing without webhook cleanup",
     );
     expect(runtime.error).not.toHaveBeenCalled();
 
@@ -189,8 +189,6 @@ describe("monitorZaloProvider lifecycle", () => {
 
     expect(settled).toBe(true);
     expect(registry.httpRoutes).toHaveLength(0);
-    expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining("Zalo provider stopped mode=webhook"),
-    );
+    expect(runtime.log).toHaveBeenCalledWith("[default] Zalo provider stopped mode=webhook");
   });
 });

@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  normalizeInheritedToolAllowlist,
+  normalizeInheritedToolDenylist,
+} from "../agents/inherited-tool-deny.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import {
   resolveAllowedModelRef,
@@ -101,14 +105,35 @@ export async function applySessionsPatchToStore(params: {
   const subagentModelHint = isSubagentSessionKey(storeKey)
     ? resolveSubagentConfiguredModelSelection({ cfg, agentId: sessionAgentId })
     : undefined;
+  let loadedModelCatalog: ModelCatalogEntry[] | undefined;
+  const loadModelCatalogForPatch = async () => {
+    if (loadedModelCatalog) {
+      return loadedModelCatalog;
+    }
+    if (!params.loadGatewayModelCatalog) {
+      return undefined;
+    }
+    const catalog = await params.loadGatewayModelCatalog();
+    loadedModelCatalog = Array.isArray(catalog) ? catalog : [];
+    return loadedModelCatalog;
+  };
 
   const existing = store[storeKey];
-  const next: SessionEntry = existing
+  const next: SessionEntry = existing?.sessionId
     ? {
         ...existing,
         updatedAt: Math.max(existing.updatedAt ?? 0, now),
       }
-    : { sessionId: randomUUID(), updatedAt: now };
+    : {
+        ...existing,
+        sessionId: randomUUID(),
+        sessionFile: undefined,
+        updatedAt: Math.max(existing?.updatedAt ?? 0, now),
+      };
+  if (existing && !existing.sessionId) {
+    delete next.label;
+    delete next.displayName;
+  }
 
   if ("spawnedBy" in patch) {
     const raw = patch.spawnedBy;
@@ -216,6 +241,46 @@ export async function applySessionsPatchToStore(params: {
     }
   }
 
+  if ("inheritedToolDeny" in patch) {
+    const raw = patch.inheritedToolDeny;
+    if (raw === null) {
+      delete next.inheritedToolDeny;
+    } else if (raw !== undefined) {
+      if (!Array.isArray(raw)) {
+        return invalid("invalid inheritedToolDeny (use an array of tool names)");
+      }
+      if (!supportsSpawnLineage(storeKey)) {
+        return invalid("inheritedToolDeny is only supported for subagent:* or acp:* sessions");
+      }
+      const inheritedToolDeny = normalizeInheritedToolDenylist(raw);
+      if (inheritedToolDeny.length > 0) {
+        next.inheritedToolDeny = inheritedToolDeny;
+      } else {
+        delete next.inheritedToolDeny;
+      }
+    }
+  }
+
+  if ("inheritedToolAllow" in patch) {
+    const raw = patch.inheritedToolAllow;
+    if (raw === null) {
+      delete next.inheritedToolAllow;
+    } else if (raw !== undefined) {
+      if (!Array.isArray(raw)) {
+        return invalid("invalid inheritedToolAllow (use an array of tool names)");
+      }
+      if (!supportsSpawnLineage(storeKey)) {
+        return invalid("inheritedToolAllow is only supported for subagent:* or acp:* sessions");
+      }
+      const inheritedToolAllow = normalizeInheritedToolAllowlist(raw);
+      if (inheritedToolAllow.length > 0) {
+        next.inheritedToolAllow = inheritedToolAllow;
+      } else {
+        delete next.inheritedToolAllow;
+      }
+    }
+  }
+
   if ("label" in patch) {
     const raw = patch.label;
     if (raw === null) {
@@ -248,8 +313,9 @@ export async function applySessionsPatchToStore(params: {
         const hintProvider =
           normalizeOptionalString(existing?.providerOverride) || resolvedDefault.provider;
         const hintModel = normalizeOptionalString(existing?.modelOverride) || resolvedDefault.model;
+        const thinkingCatalog = await loadModelCatalogForPatch();
         return invalid(
-          `invalid thinkingLevel (use ${formatThinkingLevels(hintProvider, hintModel, "|")})`,
+          `invalid thinkingLevel (use ${formatThinkingLevels(hintProvider, hintModel, "|", thinkingCatalog)})`,
         );
       }
       next.thinkingLevel = normalized;
@@ -408,7 +474,13 @@ export async function applySessionsPatchToStore(params: {
           error: errorShape(ErrorCodes.UNAVAILABLE, "model catalog unavailable"),
         };
       }
-      const catalog = await params.loadGatewayModelCatalog();
+      const catalog = await loadModelCatalogForPatch();
+      if (!catalog) {
+        return {
+          ok: false,
+          error: errorShape(ErrorCodes.UNAVAILABLE, "model catalog unavailable"),
+        };
+      }
       const resolved = resolveAllowedModelRef({
         cfg,
         catalog,
@@ -438,6 +510,7 @@ export async function applySessionsPatchToStore(params: {
     const effectiveProvider = next.providerOverride ?? resolvedDefault.provider;
     const effectiveModel = next.modelOverride ?? resolvedDefault.model;
     const thinkingLevel = normalizeThinkLevel(next.thinkingLevel);
+    const thinkingCatalog = await loadModelCatalogForPatch();
     if (!thinkingLevel) {
       delete next.thinkingLevel;
     } else if (
@@ -445,17 +518,19 @@ export async function applySessionsPatchToStore(params: {
         provider: effectiveProvider,
         model: effectiveModel,
         level: thinkingLevel,
+        catalog: thinkingCatalog,
       })
     ) {
       if ("thinkingLevel" in patch) {
         return invalid(
-          `thinkingLevel "${thinkingLevel}" is not supported for ${effectiveProvider}/${effectiveModel} (use ${formatThinkingLevels(effectiveProvider, effectiveModel, "|")})`,
+          `thinkingLevel "${thinkingLevel}" is not supported for ${effectiveProvider}/${effectiveModel} (use ${formatThinkingLevels(effectiveProvider, effectiveModel, "|", thinkingCatalog)})`,
         );
       }
       next.thinkingLevel = resolveSupportedThinkingLevel({
         provider: effectiveProvider,
         model: effectiveModel,
         level: thinkingLevel,
+        catalog: thinkingCatalog,
       });
     }
   }

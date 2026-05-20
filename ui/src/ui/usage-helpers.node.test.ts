@@ -2,6 +2,14 @@
 import { describe, expect, it } from "vitest";
 import { extractQueryTerms, filterSessionsByQuery, parseToolSummary } from "./usage-helpers.ts";
 
+function requireFirstTool(tools: Array<[string, number]>): [string, number] {
+  const tool = tools[0];
+  if (!tool) {
+    throw new Error("expected parsed tool summary entry");
+  }
+  return tool;
+}
+
 describe("usage-helpers", () => {
   it("tokenizes query terms including quoted strings", () => {
     const terms = extractQueryTerms('agent:main "model:gpt-5.2" has:errors');
@@ -15,7 +23,7 @@ describe("usage-helpers", () => {
       usage: { totalTokens: 100, totalCost: 0 },
     };
     const matches = filterSessionsByQuery([session], "key:agent:main:cron*");
-    expect(matches.sessions).toHaveLength(1);
+    expect(matches.sessions).toEqual([session]);
   });
 
   it("supports numeric filters like minTokens/maxTokens", () => {
@@ -28,17 +36,17 @@ describe("usage-helpers", () => {
   it("warns on unknown keys and invalid numbers", () => {
     const session = { key: "a", usage: { totalTokens: 10, totalCost: 0 } };
     const res = filterSessionsByQuery([session], "wat:1 minTokens:wat");
-    expect(res.warnings.some((w) => w.includes("Unknown filter"))).toBe(true);
-    expect(res.warnings.some((w) => w.includes("Invalid number"))).toBe(true);
+    expect(res.warnings).toEqual(["Unknown filter: wat", "Invalid number for minTokens"]);
   });
 
   it("parses tool summaries from compact session logs", () => {
     const res = parseToolSummary(
       "[Tool: read]\n[Tool Result]\n[Tool: exec]\n[Tool: read]\n[Tool Result]",
     );
-    expect(res.summary).toContain("read");
-    expect(res.summary).toContain("exec");
-    expect(res.tools[0]?.[0]).toBe("read");
-    expect(res.tools[0]?.[1]).toBe(2);
+    expect(res.summary).toBe("Tools: read×2, exec×1 (3 calls)");
+    expect(res.cleanContent).toBe("");
+    const firstTool = requireFirstTool(res.tools);
+    expect(firstTool[0]).toBe("read");
+    expect(firstTool[1]).toBe(2);
   });
 });

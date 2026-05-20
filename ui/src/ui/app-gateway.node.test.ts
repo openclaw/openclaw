@@ -43,8 +43,14 @@ vi.mock("./gateway.ts", async (importOriginal) => {
     readonly start = vi.fn();
     readonly stop = vi.fn();
     readonly request = vi.fn(async (method: string) => {
+      if (method === "update.status") {
+        return { sentinel: null };
+      }
       if (method === "models.authStatus") {
         return { ts: 0, providers: [] };
+      }
+      if (method === "sessions.list") {
+        return { count: 0, sessions: [] };
       }
       return {};
     });
@@ -71,8 +77,9 @@ vi.mock("./gateway.ts", async (importOriginal) => {
           this.opts.onHello?.(
             hello ?? {
               type: "hello-ok",
-              protocol: 3,
+              protocol: 4,
               snapshot: {},
+              auth: { role: "operator", scopes: [] },
             },
           );
         },
@@ -109,6 +116,7 @@ vi.mock("./controllers/control-ui-bootstrap.ts", () => ({
 }));
 
 type TestGatewayHost = Parameters<typeof connectGateway>[0] & {
+  chatMessages: unknown[];
   chatSideResult: unknown;
   chatSideResultTerminalRuns: Set<string>;
   chatStream: string | null;
@@ -154,6 +162,8 @@ function createHost(): TestGatewayHost {
     assistantAgentId: null,
     localMediaPreviewRoots: [],
     serverVersion: null,
+    pendingUpdateExpectedVersion: null,
+    updateStatusBanner: null,
     sessionKey: "main",
     chatMessages: [],
     chatQueue: [],
@@ -172,14 +182,22 @@ function createHost(): TestGatewayHost {
     execApprovalQueue: [],
     execApprovalError: null,
     updateAvailable: null,
+    updateComplete: new Promise(() => undefined),
   } as unknown as TestGatewayHost;
+}
+
+function requireGatewayClient(index = 0): GatewayClientMock {
+  const client = gatewayClientInstances[index];
+  if (!client) {
+    throw new Error(`Expected gateway client instance at index ${index}`);
+  }
+  return client;
 }
 
 function connectHostGateway() {
   const host = createHost();
   connectGateway(host);
-  const client = gatewayClientInstances[0];
-  expect(client).toBeDefined();
+  const client = requireGatewayClient();
   return { host, client };
 }
 
@@ -207,8 +225,14 @@ describe("connectGateway", () => {
     gatewayClientInstances.length = 0;
     loadChatHistoryMock.mockClear();
     loadControlUiBootstrapConfigMock.mockClear();
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) =>
+      setTimeout(() => callback(Date.now()), 0),
+    );
+    vi.stubGlobal("cancelAnimationFrame", (id: number) => clearTimeout(id));
     vi.stubGlobal("window", {
       setTimeout: globalThis.setTimeout,
+      requestAnimationFrame: globalThis.requestAnimationFrame,
+      cancelAnimationFrame: globalThis.cancelAnimationFrame,
     });
   });
 
@@ -216,12 +240,10 @@ describe("connectGateway", () => {
     const host = createHost();
 
     connectGateway(host);
-    const firstClient = gatewayClientInstances[0];
-    expect(firstClient).toBeDefined();
+    const firstClient = requireGatewayClient();
 
     connectGateway(host);
-    const secondClient = gatewayClientInstances[1];
-    expect(secondClient).toBeDefined();
+    const secondClient = requireGatewayClient(1);
 
     firstClient.emitGap(10, 13);
     expect(host.lastError).toBeNull();
@@ -236,12 +258,10 @@ describe("connectGateway", () => {
     const host = createHost();
 
     connectGateway(host);
-    const firstClient = gatewayClientInstances[0];
-    expect(firstClient).toBeDefined();
+    const firstClient = requireGatewayClient();
 
     connectGateway(host);
-    const secondClient = gatewayClientInstances[1];
-    expect(secondClient).toBeDefined();
+    const secondClient = requireGatewayClient(1);
 
     firstClient.emitEvent({ event: "presence", payload: { presence: [{ host: "stale" }] } });
     expect(host.eventLogBuffer).toHaveLength(0);
@@ -251,16 +271,97 @@ describe("connectGateway", () => {
     expect(host.eventLogBuffer[0]?.event).toBe("presence");
   });
 
+  it("marks orphaned run state interrupted after reconnect hello", () => {
+    vi.useFakeTimers();
+    try {
+      const host = createHost() as TestGatewayHost & {
+        chatRunStatus?: unknown;
+        chatStreamStartedAt?: number | null;
+        compactionStatus?: unknown;
+        compactionClearTimer?: ReturnType<typeof setTimeout> | null;
+        fallbackStatus?: unknown;
+        fallbackClearTimer?: ReturnType<typeof setTimeout> | null;
+        sessionsResult?: {
+          ts: number;
+          path: string;
+          count: number;
+          defaults: Record<string, unknown>;
+          sessions: Array<Record<string, unknown>>;
+        };
+      };
+      host.chatRunId = "run-1";
+      host.chatStream = "Working...";
+      host.chatStreamStartedAt = 100;
+      host.compactionStatus = {
+        phase: "active",
+        runId: "run-1",
+        startedAt: 100,
+        completedAt: null,
+      };
+      host.compactionClearTimer = setTimeout(() => undefined, 1_000);
+      host.fallbackStatus = {
+        selected: "openai/gpt-5.5",
+        active: "anthropic/claude-sonnet-4-6",
+        attempts: [],
+        occurredAt: 100,
+      };
+      host.fallbackClearTimer = setTimeout(() => undefined, 1_000);
+      host.toolStreamById.set("tool-1", {} as never);
+      host.toolStreamOrder = ["tool-1"];
+      host.chatToolMessages = [{ role: "assistant" }];
+      host.sessionsResult = {
+        ts: 0,
+        path: "",
+        count: 1,
+        defaults: {},
+        sessions: [
+          {
+            key: "main",
+            kind: "direct",
+            updatedAt: 1,
+            hasActiveRun: true,
+            status: "running",
+            startedAt: 100,
+          },
+        ],
+      };
+
+      connectGateway(host);
+      const client = requireGatewayClient();
+      client.emitHello();
+
+      expect(host.chatRunId).toBeNull();
+      expect(host.chatStream).toBeNull();
+      expect(host.chatStreamStartedAt).toBeNull();
+      expect(host.compactionStatus).toBeNull();
+      expect(host.compactionClearTimer).toBeNull();
+      expect(host.fallbackStatus).toBeNull();
+      expect(host.fallbackClearTimer).toBeNull();
+      expect(host.toolStreamOrder).toStrictEqual([]);
+      expect(host.chatToolMessages).toStrictEqual([]);
+      expect(host.chatRunStatus).toMatchObject({
+        phase: "interrupted",
+        runId: "run-1",
+        sessionKey: "main",
+      });
+      expect(host.sessionsResult.sessions[0]).toMatchObject({
+        hasActiveRun: false,
+        status: "killed",
+        abortedLastRun: true,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("applies update.available only from active client", () => {
     const host = createHost();
 
     connectGateway(host);
-    const firstClient = gatewayClientInstances[0];
-    expect(firstClient).toBeDefined();
+    const firstClient = requireGatewayClient();
 
     connectGateway(host);
-    const secondClient = gatewayClientInstances[1];
-    expect(secondClient).toBeDefined();
+    const secondClient = requireGatewayClient(1);
 
     firstClient.emitEvent({
       event: GATEWAY_EVENT_UPDATE_AVAILABLE,
@@ -283,16 +384,126 @@ describe("connectGateway", () => {
     });
   });
 
+  it("clears pending update verification when the restarted version matches", async () => {
+    const host = createHost();
+    host.pendingUpdateExpectedVersion = "2.0.0";
+
+    connectGateway(host);
+    const client = requireGatewayClient();
+    client.request.mockImplementation(async (method: string) => {
+      if (method === "update.status") {
+        return {
+          sentinel: {
+            kind: "update",
+            status: "ok",
+            stats: {
+              after: { version: "2.0.0" },
+            },
+          },
+        };
+      }
+      return {};
+    });
+
+    client.emitHello({
+      type: "hello-ok",
+      protocol: 4,
+      server: { version: "2.0.0" },
+      auth: { role: "operator", scopes: [] },
+      snapshot: {},
+    });
+
+    await vi.waitFor(() => {
+      expect(host.pendingUpdateExpectedVersion).toBeNull();
+    });
+    expect(host.updateStatusBanner).toBeNull();
+  });
+
+  it("shows a hard error when the restarted version does not match the expected update", async () => {
+    const host = createHost();
+    host.pendingUpdateExpectedVersion = "2.0.0";
+
+    connectGateway(host);
+    const client = requireGatewayClient();
+    client.request.mockImplementation(async (method: string) => {
+      if (method === "update.status") {
+        return {
+          sentinel: {
+            kind: "update",
+            status: "ok",
+            stats: {
+              after: { version: "1.0.0" },
+            },
+          },
+        };
+      }
+      return {};
+    });
+
+    client.emitHello({
+      type: "hello-ok",
+      protocol: 4,
+      server: { version: "1.0.0" },
+      auth: { role: "operator", scopes: [] },
+      snapshot: {},
+    });
+
+    await vi.waitFor(() => {
+      expect(host.pendingUpdateExpectedVersion).toBeNull();
+      expect(host.updateStatusBanner).toEqual({
+        tone: "danger",
+        text: "Update installed but running version did not change — restart may have been blocked. Expected v2.0.0, running v1.0.0.",
+      });
+    });
+  });
+
+  it("surfaces post-restart sentinel failures after reconnect", async () => {
+    const host = createHost();
+    host.pendingUpdateExpectedVersion = "2.0.0";
+
+    connectGateway(host);
+    const client = requireGatewayClient();
+    client.request.mockImplementation(async (method: string) => {
+      if (method === "update.status") {
+        return {
+          sentinel: {
+            kind: "update",
+            status: "error",
+            stats: {
+              reason: "restart-unhealthy",
+              after: { version: "1.0.0" },
+            },
+          },
+        };
+      }
+      return {};
+    });
+
+    client.emitHello({
+      type: "hello-ok",
+      protocol: 4,
+      server: { version: "1.0.0" },
+      auth: { role: "operator", scopes: [] },
+      snapshot: {},
+    });
+
+    await vi.waitFor(() => {
+      expect(host.pendingUpdateExpectedVersion).toBeNull();
+      expect(host.updateStatusBanner).toEqual({
+        tone: "danger",
+        text: "Update error: restart-unhealthy. The replacement process never became healthy and the previous process stayed up.",
+      });
+    });
+  });
+
   it("ignores stale client onClose callbacks after reconnect", () => {
     const host = createHost();
 
     connectGateway(host);
-    const firstClient = gatewayClientInstances[0];
-    expect(firstClient).toBeDefined();
+    const firstClient = requireGatewayClient();
 
     connectGateway(host);
-    const secondClient = gatewayClientInstances[1];
-    expect(secondClient).toBeDefined();
+    const secondClient = requireGatewayClient(1);
 
     firstClient.emitClose({ code: 1005 });
     expect(host.lastError).toBeNull();
@@ -301,6 +512,46 @@ describe("connectGateway", () => {
     secondClient.emitClose({ code: 1005 });
     expect(host.lastError).toBe("disconnected (1005): no reason");
     expect(host.lastErrorCode).toBeNull();
+  });
+
+  it("routes exec approval requested events with command spans", () => {
+    const { host, client } = connectHostGateway();
+
+    client.emitEvent({
+      event: "exec.approval.requested",
+      payload: {
+        id: "approval-explain-1",
+        request: {
+          command: 'ls | grep "stuff" | python -c \'print("hi")\'',
+          host: "gateway",
+          commandSpans: [{ startIndex: 20, endIndex: 26 }],
+        },
+        createdAtMs: Date.now(),
+        expiresAtMs: Date.now() + 60_000,
+      },
+    });
+
+    expect(host.execApprovalQueue).toHaveLength(1);
+    expect(host.execApprovalQueue[0]?.request.commandSpans).toEqual([
+      { startIndex: 20, endIndex: 26 },
+    ]);
+  });
+
+  it("clears pending session reload timers when the active client closes", () => {
+    vi.useFakeTimers();
+    try {
+      const { host, client } = connectHostGateway();
+      const pendingReload = vi.fn();
+      host.sessionsChangedReloadTimer = globalThis.setTimeout(pendingReload, 1_000);
+
+      client.emitClose({ code: 1005 });
+
+      expect(host.sessionsChangedReloadTimer).toBeNull();
+      vi.advanceTimersByTime(1_000);
+      expect(pendingReload).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("preserves pending approval requests across reconnect", () => {
@@ -328,8 +579,7 @@ describe("connectGateway", () => {
     const host = createHost();
 
     connectGateway(host);
-    const client = gatewayClientInstances[0];
-    expect(client).toBeDefined();
+    const client = requireGatewayClient();
 
     client.emitClose({
       code: 4008,
@@ -342,15 +592,14 @@ describe("connectGateway", () => {
     });
 
     expect(host.lastErrorCode).toBe(ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH);
-    expect(host.lastError).toContain("gateway token mismatch");
+    expect(host.lastError).toBe("gateway token mismatch");
   });
 
   it("maps TypeError fetch failures to actionable auth rate-limit guidance", () => {
     const host = createHost();
 
     connectGateway(host);
-    const client = gatewayClientInstances[0];
-    expect(client).toBeDefined();
+    const client = requireGatewayClient();
 
     client.emitClose({
       code: 4008,
@@ -363,15 +612,14 @@ describe("connectGateway", () => {
     });
 
     expect(host.lastErrorCode).toBe(ConnectErrorDetailCodes.AUTH_RATE_LIMITED);
-    expect(host.lastError).toContain("too many failed authentication attempts");
+    expect(host.lastError).toBe("too many failed authentication attempts");
   });
 
   it("maps generic fetch failures to actionable device identity guidance", () => {
     const host = createHost();
 
     connectGateway(host);
-    const client = gatewayClientInstances[0];
-    expect(client).toBeDefined();
+    const client = requireGatewayClient();
 
     client.emitClose({
       code: 4008,
@@ -384,15 +632,16 @@ describe("connectGateway", () => {
     });
 
     expect(host.lastErrorCode).toBe(ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED);
-    expect(host.lastError).toContain("device identity required");
+    expect(host.lastError).toBe(
+      "device identity required (use HTTPS/localhost or allow insecure auth explicitly)",
+    );
   });
 
   it("maps generic fetch failures to actionable origin guidance", () => {
     const host = createHost();
 
     connectGateway(host);
-    const client = gatewayClientInstances[0];
-    expect(client).toBeDefined();
+    const client = requireGatewayClient();
 
     client.emitClose({
       code: 4008,
@@ -405,15 +654,16 @@ describe("connectGateway", () => {
     });
 
     expect(host.lastErrorCode).toBe(ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED);
-    expect(host.lastError).toContain("origin not allowed");
+    expect(host.lastError).toBe(
+      "origin not allowed (open the Control UI from the gateway host or allow it in gateway.controlUi.allowedOrigins)",
+    );
   });
 
   it("preserves specific close errors even when auth detail codes are present", () => {
     const host = createHost();
 
     connectGateway(host);
-    const client = gatewayClientInstances[0];
-    expect(client).toBeDefined();
+    const client = requireGatewayClient();
 
     client.emitClose({
       code: 4008,
@@ -433,8 +683,7 @@ describe("connectGateway", () => {
     const host = createHost();
 
     connectGateway(host);
-    const client = gatewayClientInstances[0];
-    expect(client).toBeDefined();
+    const client = requireGatewayClient();
 
     client.emitClose({
       code: 4008,
@@ -447,7 +696,9 @@ describe("connectGateway", () => {
       },
     });
 
-    expect(host.lastError).toContain("gateway token mismatch");
+    expect(host.lastError).toBe(
+      "unauthorized: gateway token mismatch (open the dashboard URL and paste the token in Control UI settings)",
+    );
     expect(host.lastErrorCode).toBe("AUTH_TOKEN_MISMATCH");
   });
 
@@ -455,8 +706,7 @@ describe("connectGateway", () => {
     const host = createHost();
 
     connectGateway(host);
-    const client = gatewayClientInstances[0];
-    expect(client).toBeDefined();
+    const client = requireGatewayClient();
 
     client.emitClose({
       code: 4008,
@@ -480,8 +730,7 @@ describe("connectGateway", () => {
     const host = createHost();
 
     connectGateway(host);
-    const client = gatewayClientInstances[0];
-    expect(client).toBeDefined();
+    const client = requireGatewayClient();
 
     client.emitEvent({
       event: "shutdown",
@@ -502,8 +751,7 @@ describe("connectGateway", () => {
     const host = createHost();
 
     connectGateway(host);
-    const client = gatewayClientInstances[0];
-    expect(client).toBeDefined();
+    const client = requireGatewayClient();
 
     client.emitEvent({
       event: "shutdown",
@@ -527,13 +775,63 @@ describe("connectGateway", () => {
     const host = createHost();
 
     connectGateway(host);
-    const client = gatewayClientInstances[0];
-    expect(client).toBeDefined();
+    const client = requireGatewayClient();
 
     client.emitHello();
 
     expect(loadControlUiBootstrapConfigMock).toHaveBeenCalledTimes(1);
-    expect(loadControlUiBootstrapConfigMock).toHaveBeenCalledWith(host);
+    expect(loadControlUiBootstrapConfigMock).toHaveBeenCalledWith(host, { applyIdentity: false });
+  });
+
+  it("falls back from restored unconfigured agent sessions before refreshing chat", async () => {
+    const host = createHost();
+    host.tab = "chat";
+    host.sessionKey = "agent:local:main";
+    host.settings = {
+      ...host.settings,
+      sessionKey: "agent:local:main",
+      lastActiveSessionKey: "agent:local:main",
+    };
+
+    connectGateway(host);
+    const client = requireGatewayClient();
+    client.request.mockImplementation(async (method: string) => {
+      if (method === "agents.list") {
+        return {
+          defaultId: "main",
+          mainKey: "agent:main:main",
+          scope: "all",
+          agents: [{ id: "main", name: "Main" }],
+        };
+      }
+      if (method === "update.status") {
+        return { sentinel: null };
+      }
+      if (method === "models.authStatus") {
+        return { ts: 0, providers: [] };
+      }
+      return {};
+    });
+
+    client.emitHello({
+      type: "hello-ok",
+      protocol: 3,
+      auth: { role: "operator", scopes: [] },
+      snapshot: {
+        sessionDefaults: {
+          defaultAgentId: "main",
+          mainKey: "main",
+          mainSessionKey: "agent:main:main",
+        },
+      },
+    } as GatewayHelloOk);
+
+    await vi.waitFor(() => {
+      expect(loadChatHistoryMock).toHaveBeenCalledWith(host);
+    });
+    expect(host.sessionKey).toBe("agent:main:main");
+    expect(host.settings.sessionKey).toBe("agent:main:main");
+    expect(host.settings.lastActiveSessionKey).toBe("agent:main:main");
   });
 
   it("sends queued chat aborts after reconnect before clearing pending state", async () => {
@@ -543,8 +841,7 @@ describe("connectGateway", () => {
     host.pendingAbort = { runId: "run-main", sessionKey: "main" };
 
     connectGateway(host);
-    const client = gatewayClientInstances[0];
-    expect(client).toBeDefined();
+    const client = requireGatewayClient();
 
     client.emitHello();
     await Promise.resolve();
@@ -558,14 +855,29 @@ describe("connectGateway", () => {
     expect(host.chatStream).toBeNull();
   });
 
+  it("sends queued session-scoped chat aborts after reconnect", async () => {
+    const host = createHost();
+    host.pendingAbort = { sessionKey: "main" };
+
+    connectGateway(host);
+    const client = requireGatewayClient();
+
+    client.emitHello();
+    await Promise.resolve();
+
+    expect(client.request).toHaveBeenCalledWith("chat.abort", {
+      sessionKey: "main",
+    });
+    expect(host.pendingAbort).toBeNull();
+  });
+
   it("logs and drops stale queued chat abort failures after reconnect", async () => {
     const host = createHost();
     host.pendingAbort = { runId: "run-stale", sessionKey: "main" };
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
     connectGateway(host);
-    const client = gatewayClientInstances[0];
-    expect(client).toBeDefined();
+    const client = requireGatewayClient();
     const error = new Error("run already finished");
     client.request.mockImplementationOnce(async () => {
       throw error;
@@ -583,8 +895,7 @@ describe("connectGateway", () => {
     const host = createHost();
 
     connectGateway(host);
-    const client = gatewayClientInstances[0];
-    expect(client).toBeDefined();
+    const client = requireGatewayClient();
 
     client.emitEvent({
       event: "shutdown",
@@ -603,8 +914,7 @@ describe("connectGateway", () => {
     const host = createHost();
 
     connectGateway(host);
-    const client = gatewayClientInstances[0];
-    expect(client).toBeDefined();
+    const client = requireGatewayClient();
 
     client.emitEvent({
       event: "shutdown",
@@ -626,6 +936,39 @@ describe("connectGateway", () => {
     expect(loadChatHistoryMock).not.toHaveBeenCalled();
   });
 
+  it("renders session-scoped tool events for externally started runs", () => {
+    const { host, client } = connectHostGateway();
+
+    client.emitEvent({
+      event: "session.tool",
+      payload: {
+        runId: "external-run-1",
+        seq: 1,
+        stream: "tool",
+        ts: 123,
+        sessionKey: "main",
+        data: {
+          toolCallId: "session-tool-1",
+          name: "exec",
+          phase: "start",
+          args: { command: "pwd" },
+        },
+      },
+    });
+
+    expect(host.toolStreamOrder).toStrictEqual(["session-tool-1"]);
+    const entry = host.toolStreamById.get("session-tool-1") as
+      | { args?: unknown; name?: string; runId?: string; sessionKey?: string }
+      | undefined;
+    expect(entry).toMatchObject({
+      args: { command: "pwd" },
+      name: "exec",
+      runId: "external-run-1",
+      sessionKey: "main",
+    });
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+  });
+
   it("stores BTW side results for the active session", () => {
     const { host, client } = connectHostGateway();
 
@@ -641,12 +984,13 @@ describe("connectGateway", () => {
       },
     });
 
-    expect(host.chatSideResult).toMatchObject({
-      kind: "btw",
-      runId: "btw-run-1",
-      question: "what changed?",
-      text: "Only the UI layer is missing support.",
-    });
+    const sideResult = host.chatSideResult as
+      | { kind?: string; runId?: string; question?: string; text?: string }
+      | undefined;
+    expect(sideResult?.kind).toBe("btw");
+    expect(sideResult?.runId).toBe("btw-run-1");
+    expect(sideResult?.question).toBe("what changed?");
+    expect(sideResult?.text).toBe("Only the UI layer is missing support.");
     expect(host.chatSideResultTerminalRuns.has("btw-run-1")).toBe(true);
   });
 
@@ -753,12 +1097,155 @@ describe("connectGateway", () => {
     },
   );
 
+  it("does not reload chat history after final assistant payload reconciles an active run", () => {
+    const { host, client } = connectHostGateway();
+    host.chatRunId = "main-run-4";
+    loadChatHistoryMock.mockClear();
+
+    client.emitEvent({
+      event: "session.message",
+      payload: {
+        sessionKey: "main",
+      },
+    });
+    client.emitEvent({
+      event: "chat",
+      payload: {
+        runId: "main-run-4",
+        sessionKey: "main",
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Final answer" }],
+        },
+      },
+    });
+
+    expect(host.chatRunId).toBeNull();
+    expect(host.chatMessages).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Final answer" }],
+      },
+    ]);
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+  });
+
+  it("replays deferred session.message reloads after legacy silent final payload", () => {
+    const { host, client } = connectHostGateway();
+    host.chatRunId = "main-run-silent";
+    loadChatHistoryMock.mockClear();
+
+    client.emitEvent({
+      event: "session.message",
+      payload: {
+        sessionKey: "main",
+      },
+    });
+    client.emitEvent({
+      event: "chat",
+      payload: {
+        runId: "main-run-silent",
+        sessionKey: "main",
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "NO_REPLY" }],
+        },
+      },
+    });
+
+    expect(host.chatRunId).toBeNull();
+    expect(host.chatMessages).toStrictEqual([]);
+    expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
+    expect(loadChatHistoryMock).toHaveBeenCalledWith(host);
+  });
+
+  it("keeps deferred session.message reload pending across unrelated terminal events", () => {
+    const { host, client } = connectHostGateway();
+    host.chatRunId = "main-run-5";
+    host.chatStream = "still streaming";
+    loadChatHistoryMock.mockClear();
+
+    client.emitEvent({
+      event: "session.message",
+      payload: {
+        sessionKey: "main",
+      },
+    });
+    client.emitEvent({
+      event: "chat",
+      payload: {
+        runId: "other-run-1",
+        sessionKey: "main",
+        state: "final",
+      },
+    });
+
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+    expect(host.chatRunId).toBe("main-run-5");
+    expect(host.chatStream).toBe("still streaming");
+
+    client.emitEvent({
+      event: "chat",
+      payload: {
+        runId: "main-run-5",
+        sessionKey: "main",
+        state: "aborted",
+      },
+    });
+
+    expect(host.chatRunId).toBeNull();
+    expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
+    expect(loadChatHistoryMock).toHaveBeenCalledWith(host);
+  });
+
+  it("keeps deferred session.message reload pending across unowned terminal events", () => {
+    const { host, client } = connectHostGateway();
+    host.chatRunId = "main-run-unowned";
+    host.chatStream = "still streaming";
+    loadChatHistoryMock.mockClear();
+
+    client.emitEvent({
+      event: "session.message",
+      payload: {
+        sessionKey: "main",
+      },
+    });
+    client.emitEvent({
+      event: "chat",
+      payload: {
+        sessionKey: "main",
+        state: "final",
+      },
+    });
+
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+    expect(host.chatRunId).toBe("main-run-unowned");
+    expect(host.chatStream).toBe("still streaming");
+
+    client.emitEvent({
+      event: "chat",
+      payload: {
+        runId: "main-run-unowned",
+        sessionKey: "main",
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Done" }],
+        },
+      },
+    });
+
+    expect(host.chatRunId).toBeNull();
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+  });
+
   it("clears tracked BTW terminal runs after reconnect hello", () => {
     const host = createHost();
 
     connectGateway(host);
-    const firstClient = gatewayClientInstances[0];
-    expect(firstClient).toBeDefined();
+    const firstClient = requireGatewayClient();
 
     firstClient.emitEvent({
       event: "chat.side_result",
@@ -774,8 +1261,7 @@ describe("connectGateway", () => {
     expect(host.chatSideResultTerminalRuns.has("btw-run-reconnect")).toBe(true);
 
     connectGateway(host);
-    const reconnectClient = gatewayClientInstances[1];
-    expect(reconnectClient).toBeDefined();
+    const reconnectClient = requireGatewayClient(1);
 
     reconnectClient.emitHello();
 
@@ -805,8 +1291,7 @@ describe("connectGateway", () => {
     const host = createHost();
 
     connectGateway(host);
-    const client = gatewayClientInstances[0];
-    expect(client).toBeDefined();
+    const client = requireGatewayClient();
 
     client.emitEvent({
       event: "plugin.approval.requested",
@@ -834,8 +1319,7 @@ describe("connectGateway", () => {
     const host = createHost();
 
     connectGateway(host);
-    const client = gatewayClientInstances[0];
-    expect(client).toBeDefined();
+    const client = requireGatewayClient();
 
     // Add a plugin approval first
     client.emitEvent({
@@ -907,6 +1391,33 @@ describe("resolveControlUiClientVersion", () => {
         pageUrl: "https://control.example.com/openclaw/",
       }),
     ).toBe("2026.3.7");
+  });
+
+  it("returns serverVersion for loopback aliases on the same port", () => {
+    expect(
+      resolveControlUiClientVersion({
+        gatewayUrl: "ws://127.0.0.1:18789",
+        serverVersion: "2026.4.24",
+        pageUrl: "http://localhost:18789/chat",
+      }),
+    ).toBe("2026.4.24");
+    expect(
+      resolveControlUiClientVersion({
+        gatewayUrl: "ws://[::1]:18789",
+        serverVersion: "2026.4.24",
+        pageUrl: "http://127.0.0.1:18789/chat",
+      }),
+    ).toBe("2026.4.24");
+  });
+
+  it("omits serverVersion for loopback aliases on different ports", () => {
+    expect(
+      resolveControlUiClientVersion({
+        gatewayUrl: "ws://127.0.0.1:18789",
+        serverVersion: "2026.4.24",
+        pageUrl: "http://localhost:19889/chat",
+      }),
+    ).toBeUndefined();
   });
 
   it("omits serverVersion for cross-origin targets", () => {

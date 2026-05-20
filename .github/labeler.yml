@@ -1,14 +1,15 @@
-"channel: bluebubbles":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "extensions/bluebubbles/**"
-          - "docs/channels/bluebubbles.md"
 "plugin: azure-speech":
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/azure-speech/**"
           - "docs/providers/azure-speech.md"
           - "docs/tools/tts.md"
+"plugin: file-transfer":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/file-transfer/**"
+          - "docs/nodes/index.md"
+          - "docs/plugins/sdk-runtime.md"
 "channel: discord":
   - changed-files:
       - any-glob-to-any-file:
@@ -35,6 +36,17 @@
       - any-glob-to-any-file:
           - "extensions/google-meet/**"
           - "docs/plugins/google-meet.md"
+"plugin: migrate-hermes":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/migrate-hermes/**"
+          - "docs/cli/migrate.md"
+"plugin: migrate-claude":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/migrate-claude/**"
+          - "docs/cli/migrate.md"
+          - "docs/install/migrating-claude.md"
 "plugin: bonjour":
   - changed-files:
       - any-glob-to-any-file:
@@ -89,7 +101,9 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/qa-lab/**"
+          - "qa/scenarios/**"
           - "docs/concepts/qa-e2e-automation.md"
+          - "docs/concepts/personal-agent-benchmark-pack.md"
           - "docs/channels/qa-channel.md"
 "channel: signal":
   - changed-files:
@@ -101,6 +115,11 @@
       - any-glob-to-any-file:
           - "extensions/slack/**"
           - "docs/channels/slack.md"
+"channel: synology-chat":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/synology-chat/**"
+          - "docs/channels/synology-chat.md"
 "channel: telegram":
   - changed-files:
       - any-glob-to-any-file:
@@ -173,7 +192,6 @@
   - changed-files:
       - any-glob-to-any-file:
           - "docs/**"
-          - "docs.acp.md"
 
 "cli":
   - changed-files:
@@ -196,10 +214,10 @@
           - "Dockerfile"
           - "Dockerfile.*"
           - "docker-compose.yml"
-          - "docker-setup.sh"
-          - "setup-podman.sh"
           - ".dockerignore"
+          - "deploy/fly.private.toml"
           - "scripts/docker/setup.sh"
+          - "scripts/docker/sandbox/Dockerfile*"
           - "scripts/podman/setup.sh"
           - "scripts/**/*docker*"
           - "scripts/**/Dockerfile*"
@@ -222,9 +240,16 @@
 "security":
   - changed-files:
       - any-glob-to-any-file:
+          - ".github/workflows/opengrep-*.yml"
+          - ".semgrepignore"
           - "docs/cli/security.md"
           - "docs/gateway/security.md"
+          - "security/**"
 
+"extensions: admin-http-rpc":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/admin-http-rpc/**"
 "extensions: copilot-proxy":
   - changed-files:
       - any-glob-to-any-file:
@@ -257,6 +282,15 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/memory-wiki/**"
+"extensions: oc-path":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/oc-path/**"
+"extensions: policy":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/policy/**"
+          - "docs/cli/policy.md"
 "extensions: open-prose":
   - changed-files:
       - any-glob-to-any-file:
@@ -289,10 +323,20 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/byteplus/**"
+"extensions: cerebras":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/cerebras/**"
+          - "docs/providers/cerebras.md"
 "extensions: deepseek":
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/deepseek/**"
+"extensions: deepinfra":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/deepinfra/**"
+          - "docs/providers/deepinfra.md"
 "extensions: tencent":
   - changed-files:
       - any-glob-to-any-file:
@@ -421,3 +465,91 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/gradium/**"
+"extensions: amazon-bedrock":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/amazon-bedrock/**"
+"extensions: anthropic-vertex":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/anthropic-vertex/**"
+"extensions: brave":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/brave/**"
+"extensions: chutes":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/chutes/**"
+"extensions: diffs":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/diffs/**"
+"extensions: elevenlabs":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/elevenlabs/**"
+"extensions: firecrawl":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/firecrawl/**"
+"extensions: github-copilot":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/github-copilot/**"
+"extensions: google":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/google/**"
+"extensions: microsoft":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/microsoft/**"
+"extensions: mistral":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/mistral/**"
+"extensions: ollama":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/ollama/**"
+"extensions: opencode":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/opencode/**"
+"extensions: opencode-go":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/opencode-go/**"
+"extensions: openrouter":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/openrouter/**"
+"extensions: openshell":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/openshell/**"
+"extensions: perplexity":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/perplexity/**"
+"extensions: sglang":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/sglang/**"
+"extensions: thread-ownership":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/thread-ownership/**"
+"extensions: vllm":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/vllm/**"
+"extensions: xai":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/xai/**"
+"extensions: zai":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/zai/**"

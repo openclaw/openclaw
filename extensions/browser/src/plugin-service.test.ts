@@ -20,7 +20,7 @@ const runtimeMocks = vi.hoisted(() => ({
   startLazyPluginServiceModule: vi.fn(async (_params: StartLazyPluginServiceModuleParams) => null),
 }));
 
-vi.mock("openclaw/plugin-sdk/browser-node-runtime", () => ({
+vi.mock("./sdk-node-runtime.js", () => ({
   startLazyPluginServiceModule: runtimeMocks.startLazyPluginServiceModule,
 }));
 
@@ -30,7 +30,11 @@ describe("createBrowserPluginService", () => {
   });
 
   function getStartParams(): StartLazyPluginServiceModuleParamsWithValidator {
-    const params = runtimeMocks.startLazyPluginServiceModule.mock.calls[0]?.[0];
+    const [call] = runtimeMocks.startLazyPluginServiceModule.mock.calls;
+    if (!call) {
+      throw new Error("expected browser plugin service lazy loader call");
+    }
+    const [params] = call;
     if (!params?.validateOverrideSpecifier) {
       throw new Error("expected browser plugin service to pass validateOverrideSpecifier");
     }

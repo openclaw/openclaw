@@ -1,13 +1,16 @@
 import { withActivatedPluginIds } from "./activation-context.js";
 import { resolveBundledPluginCompatibleActivationInputs } from "./activation-context.js";
 import { resolveManifestActivationPluginIds } from "./activation-planner.js";
+import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import {
+  getRuntimePluginRegistryForLoadOptions,
   isPluginRegistryLoadInFlight,
   loadOpenClawPlugins,
-  resolveRuntimePluginRegistry,
   type PluginLoadOptions,
 } from "./loader.js";
+import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
 import { hasExplicitPluginIdScope } from "./plugin-scope.js";
+import { resolveProviderConfigApiOwnerHint } from "./provider-config-owner.js";
 import {
   resolveActivatableProviderOwnerPluginIds,
   resolveDiscoverableProviderOwnerPluginIds,
@@ -34,6 +37,7 @@ function resolveExplicitProviderOwnerPluginIds(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
+  pluginMetadataSnapshot?: PluginMetadataRegistryView;
 }): string[] {
   return dedupeSortedPluginIds(
     params.providerRefs.flatMap((provider) => {
@@ -45,9 +49,39 @@ function resolveExplicitProviderOwnerPluginIds(params: {
         config: params.config,
         workspaceDir: params.workspaceDir,
         env: params.env,
+        manifestRecords: params.pluginMetadataSnapshot?.manifestRegistry.plugins,
       });
       if (plannedPluginIds.length > 0) {
         return plannedPluginIds;
+      }
+      const apiOwnerHint = resolveProviderConfigApiOwnerHint({
+        provider,
+        config: params.config,
+      });
+      if (apiOwnerHint) {
+        const apiOwnerPluginIds = resolveManifestActivationPluginIds({
+          trigger: {
+            kind: "provider",
+            provider: apiOwnerHint,
+          },
+          config: params.config,
+          workspaceDir: params.workspaceDir,
+          env: params.env,
+          manifestRecords: params.pluginMetadataSnapshot?.manifestRegistry.plugins,
+        });
+        if (apiOwnerPluginIds.length > 0) {
+          return apiOwnerPluginIds;
+        }
+        const legacyApiOwnerPluginIds = resolveOwningPluginIdsForProvider({
+          provider: apiOwnerHint,
+          config: params.config,
+          workspaceDir: params.workspaceDir,
+          env: params.env,
+          manifestRegistry: params.pluginMetadataSnapshot?.manifestRegistry,
+        });
+        if (legacyApiOwnerPluginIds?.length) {
+          return legacyApiOwnerPluginIds;
+        }
       }
       // Keep legacy provider/CLI-backend ownership working until every owner is
       // expressible through activation descriptors.
@@ -57,6 +91,7 @@ function resolveExplicitProviderOwnerPluginIds(params: {
           config: params.config,
           workspaceDir: params.workspaceDir,
           env: params.env,
+          manifestRegistry: params.pluginMetadataSnapshot?.manifestRegistry,
         }) ?? []
       );
     }),
@@ -80,6 +115,7 @@ function resolvePluginProviderLoadBase(params: {
   onlyPluginIds?: string[];
   providerRefs?: readonly string[];
   modelRefs?: readonly string[];
+  pluginMetadataSnapshot?: PluginMetadataRegistryView;
 }) {
   const env = params.env ?? process.env;
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDir();
@@ -89,6 +125,7 @@ function resolvePluginProviderLoadBase(params: {
         config: params.config,
         workspaceDir,
         env,
+        pluginMetadataSnapshot: params.pluginMetadataSnapshot,
       })
     : [];
   const modelOwnedPluginIds = params.modelRefs?.length
@@ -97,6 +134,7 @@ function resolvePluginProviderLoadBase(params: {
         config: params.config,
         workspaceDir,
         env,
+        manifestRegistry: params.pluginMetadataSnapshot?.manifestRegistry,
       })
     : [];
   const requestedPluginIds =
@@ -136,6 +174,8 @@ function resolveSetupProviderPluginLoadState(
     env: base.env,
     onlyPluginIds: base.requestedPluginIds,
     includeUntrustedWorkspacePlugins: params.includeUntrustedWorkspacePlugins,
+    registry: params.pluginMetadataSnapshot?.index,
+    manifestRegistry: params.pluginMetadataSnapshot?.manifestRegistry,
   });
   const explicitOwnerPluginIds = resolveDiscoverableProviderOwnerPluginIds({
     pluginIds: base.explicitOwnerPluginIds,
@@ -143,6 +183,8 @@ function resolveSetupProviderPluginLoadState(
     workspaceDir: base.workspaceDir,
     env: base.env,
     includeUntrustedWorkspacePlugins: params.includeUntrustedWorkspacePlugins,
+    registry: params.pluginMetadataSnapshot?.index,
+    manifestRegistry: params.pluginMetadataSnapshot?.manifestRegistry,
   });
   const setupPluginIds = mergeExplicitOwnerPluginIds(providerPluginIds, explicitOwnerPluginIds);
   if (setupPluginIds.length === 0) {
@@ -181,6 +223,8 @@ function resolveRuntimeProviderPluginLoadState(
     workspaceDir: base.workspaceDir,
     env: base.env,
     includeUntrustedWorkspacePlugins: params.includeUntrustedWorkspacePlugins,
+    registry: params.pluginMetadataSnapshot?.index,
+    manifestRegistry: params.pluginMetadataSnapshot?.manifestRegistry,
   });
   const runtimeRequestedPluginIds =
     base.requestedPluginIds !== undefined
@@ -201,7 +245,11 @@ function resolveRuntimeProviderPluginLoadState(
       enablement: "allowlist",
       vitest: params.bundledProviderVitestCompat,
     },
-    resolveCompatPluginIds: resolveBundledProviderCompatPluginIds,
+    resolveCompatPluginIds: (compatParams) =>
+      resolveBundledProviderCompatPluginIds({
+        ...compatParams,
+        manifestRegistry: params.pluginMetadataSnapshot?.manifestRegistry,
+      }),
   });
   const config = params.bundledProviderVitestCompat
     ? withBundledProviderVitestCompat({
@@ -216,6 +264,8 @@ function resolveRuntimeProviderPluginLoadState(
       workspaceDir: base.workspaceDir,
       env: base.env,
       onlyPluginIds: runtimeRequestedPluginIds,
+      registry: params.pluginMetadataSnapshot?.index,
+      manifestRegistry: params.pluginMetadataSnapshot?.manifestRegistry,
     }),
     explicitOwnerPluginIds,
   );
@@ -233,7 +283,6 @@ function resolveRuntimeProviderPluginLoadState(
       pluginSdkResolution: params.pluginSdkResolution,
       cache: params.cache ?? true,
       activate: params.activate ?? false,
-      installBundledRuntimeDeps: params.installBundledRuntimeDeps,
     },
   );
   return { loadOptions };
@@ -266,10 +315,10 @@ export function resolvePluginProviders(params: {
   activate?: boolean;
   cache?: boolean;
   applyAutoEnable?: boolean;
-  installBundledRuntimeDeps?: boolean;
   pluginSdkResolution?: PluginLoadOptions["pluginSdkResolution"];
   mode?: "runtime" | "setup";
   includeUntrustedWorkspacePlugins?: boolean;
+  pluginMetadataSnapshot?: PluginMetadataRegistryView;
 }): ProviderPlugin[] {
   const base = resolvePluginProviderLoadBase(params);
   if (params.mode === "setup") {
@@ -283,7 +332,15 @@ export function resolvePluginProviders(params: {
     );
   }
   const loadState = resolveRuntimeProviderPluginLoadState(params, base);
-  const registry = resolveRuntimePluginRegistry(loadState.loadOptions);
+  const registry =
+    loadState.loadOptions.onlyPluginIds?.length === 0
+      ? undefined
+      : (getLoadedRuntimePluginRegistry({
+          env: base.env,
+          loadOptions: loadState.loadOptions,
+          workspaceDir: base.workspaceDir,
+          requiredPluginIds: loadState.loadOptions.onlyPluginIds,
+        }) ?? getRuntimePluginRegistryForLoadOptions(loadState.loadOptions));
   if (!registry) {
     return [];
   }

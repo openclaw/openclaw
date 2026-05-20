@@ -4,15 +4,13 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from "node:http";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/io.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logDebug, logWarn } from "../logger.js";
 import { handleMcpJsonRpc } from "./mcp-http.handlers.js";
 import {
   clearActiveMcpLoopbackRuntimeByOwnerToken,
-  createMcpLoopbackServerConfig,
-  getActiveMcpLoopbackRuntime,
   setActiveMcpLoopbackRuntime,
 } from "./mcp-http.loopback-runtime.js";
 import { jsonRpcError, type JsonRpcRequest } from "./mcp-http.protocol.js";
@@ -105,13 +103,14 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
       try {
         const body = await readMcpHttpBody(req);
         const parsed: JsonRpcRequest | JsonRpcRequest[] = JSON.parse(body);
-        const cfg = loadConfig();
+        const cfg = getRuntimeConfig();
         const requestContext = resolveMcpRequestContext(req, cfg, auth);
         const scopedTools = toolCache.resolve({
           cfg,
           sessionKey: requestContext.sessionKey,
           messageProvider: requestContext.messageProvider,
           accountId: requestContext.accountId,
+          inboundEventKind: requestContext.inboundEventKind,
           senderIsOwner: requestContext.senderIsOwner,
         });
 
@@ -120,6 +119,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
           batchSize: messages.length,
           methods: messages.map((message) => message.method),
           sessionKey: requestContext.sessionKey,
+          inboundEventKind: requestContext.inboundEventKind,
           senderIsOwner: requestContext.senderIsOwner,
           toolCount: scopedTools.toolSchema.length,
           cronVisible: scopedTools.toolSchema.some((tool) => tool.name === "cron"),
@@ -132,6 +132,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
             toolSchema: scopedTools.toolSchema,
             hookContext: {
               agentId: scopedTools.agentId,
+              config: cfg,
               sessionKey: requestContext.sessionKey,
             },
             signal: requestAbort.signal,

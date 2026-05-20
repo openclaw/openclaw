@@ -1,11 +1,48 @@
 import fs from "node:fs";
 import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
 import { normalizeCronJobInput } from "../normalize.js";
+import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
+import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { isInvalidCronSessionTargetIdError } from "../session-target.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
 import { recomputeNextRuns } from "./jobs.js";
 import type { CronServiceState } from "./state.js";
+
+function invalidateStaleNextRunOnScheduleChange(params: {
+  previousJobsById: ReadonlyMap<string, CronJob>;
+  hydrated: CronJob;
+}) {
+  const previousJob = params.previousJobsById.get(params.hydrated.id);
+  if (!previousJob || cronSchedulingInputsEqual(previousJob, params.hydrated)) {
+    return;
+  }
+  params.hydrated.state ??= {};
+  params.hydrated.state.nextRunAtMs = undefined;
+}
+
+function warnInvalidPersistedCronJob(params: {
+  state: CronServiceState;
+  raw: Record<string, unknown>;
+  index: number;
+  reason: string;
+}) {
+  const jobId = typeof params.raw.id === "string" ? params.raw.id : undefined;
+  const dedupeKey = jobId ?? `index:${params.index}`;
+  if (params.state.warnedInvalidPersistedJobKeys.has(dedupeKey)) {
+    return;
+  }
+  params.state.warnedInvalidPersistedJobKeys.add(dedupeKey);
+  params.state.deps.log.warn(
+    {
+      storePath: params.state.deps.storePath,
+      jobId,
+      jobIndex: params.index,
+      reason: params.reason,
+    },
+    "cron: skipped invalid persisted job; run openclaw doctor --fix to repair",
+  );
+}
 
 async function getFileMtimeMs(path: string): Promise<number | null> {
   try {
@@ -30,13 +67,18 @@ export async function ensureLoaded(
   if (state.store && !opts?.forceReload) {
     return;
   }
+  const previousJobsById = new Map<string, CronJob>();
+  for (const job of state.store?.jobs ?? []) {
+    previousJobsById.set(job.id, job);
+  }
   // Force reload always re-reads the file to avoid missing cross-service
   // edits on filesystems with coarse mtime resolution.
 
   const fileMtimeMs = await getFileMtimeMs(state.deps.storePath);
   const loaded = await loadCronStore(state.deps.storePath);
-  const jobs = (loaded.jobs ?? []) as unknown as CronJob[];
-  for (const [index, job] of jobs.entries()) {
+  const loadedJobs = (loaded.jobs ?? []) as unknown as CronJob[];
+  const jobs: CronJob[] = [];
+  for (const [index, job] of loadedJobs.entries()) {
     const raw = job as unknown as Record<string, unknown>;
     const { legacyJobIdIssue } = normalizeCronJobIdentityFields(raw);
     let normalized: Record<string, unknown> | null;
@@ -54,7 +96,14 @@ export async function ensureLoaded(
     }
     const hydrated =
       normalized && typeof normalized === "object" ? (normalized as unknown as CronJob) : job;
-    jobs[index] = hydrated;
+    const invalidReason = getInvalidPersistedCronJobReason(
+      hydrated as unknown as Record<string, unknown>,
+    );
+    if (invalidReason) {
+      warnInvalidPersistedCronJob({ state, raw, index, reason: invalidReason });
+      continue;
+    }
+    jobs.push(hydrated);
     if (legacyJobIdIssue) {
       const resolvedId = typeof hydrated.id === "string" ? hydrated.id : undefined;
       state.deps.log.warn(
@@ -67,6 +116,7 @@ export async function ensureLoaded(
     if (typeof hydrated.enabled !== "boolean") {
       hydrated.enabled = true;
     }
+    invalidateStaleNextRunOnScheduleChange({ previousJobsById, hydrated });
     // Same shape: persisted jobs missing `sessionTarget` crash downstream
     // on any code path that dereferences `.startsWith` (e.g.
     // `runIsolatedAgentJob` in `src/gateway/server-cron.ts`). Mirror the
@@ -131,7 +181,10 @@ export function warnIfDisabled(state: CronServiceState, action: string) {
   );
 }
 
-export async function persist(state: CronServiceState, opts?: { skipBackup?: boolean }) {
+export async function persist(
+  state: CronServiceState,
+  opts?: { skipBackup?: boolean; stateOnly?: boolean },
+) {
   if (!state.store) {
     return;
   }

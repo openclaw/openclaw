@@ -1,18 +1,18 @@
 import crypto from "node:crypto";
-import fs from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright-core";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
-import { writeViaSiblingTempPath } from "./output-atomic.js";
+import { writeExternalFileWithinOutputRoot } from "./output-files.js";
 import { DEFAULT_UPLOAD_DIR, resolveStrictExistingPathsWithinRoot } from "./paths.js";
 import {
+  armObservedDialogResponseOnPage,
   ensurePageState,
   getPageForTargetId,
   refLocator,
+  respondToObservedDialogOnPage,
   restoreRoleRefsForTarget,
 } from "./pw-session.js";
 import {
-  bumpDialogArmId,
   bumpDownloadArmId,
   bumpUploadArmId,
   normalizeTimeoutMs,
@@ -89,28 +89,22 @@ type DownloadPayload = {
   saveAs?: (outPath: string) => Promise<void>;
 };
 
-async function saveDownloadPayload(download: DownloadPayload, outPath: string) {
+async function saveDownloadPayload(download: DownloadPayload, outPath: string, rootDir?: string) {
   const suggested = download.suggestedFilename?.() || "download.bin";
   const requestedPath = outPath?.trim();
   const resolvedOutPath = path.resolve(requestedPath || buildTempDownloadPath(suggested));
-  await fs.mkdir(path.dirname(resolvedOutPath), { recursive: true });
-
-  if (!requestedPath) {
-    await download.saveAs?.(resolvedOutPath);
-  } else {
-    await writeViaSiblingTempPath({
-      rootDir: path.dirname(resolvedOutPath),
-      targetPath: resolvedOutPath,
-      writeTemp: async (tempPath) => {
-        await download.saveAs?.(tempPath);
-      },
-    });
-  }
+  const finalPath = await writeExternalFileWithinOutputRoot({
+    rootDir,
+    path: resolvedOutPath,
+    write: async (tempPath) => {
+      await download.saveAs?.(tempPath);
+    },
+  });
 
   return {
     url: download.url?.() || "",
     suggestedFilename: suggested,
-    path: resolvedOutPath,
+    path: finalPath,
   };
 }
 
@@ -119,13 +113,14 @@ async function awaitDownloadPayload(params: {
   state: ReturnType<typeof ensurePageState>;
   armId: number;
   outPath?: string;
+  rootDir?: string;
 }) {
   try {
     const download = (await params.waiter.promise) as DownloadPayload;
     if (params.state.armIdDownload !== params.armId) {
       throw new Error("Download was superseded by another waiter");
     }
-    return await saveDownloadPayload(download, params.outPath ?? "");
+    return await saveDownloadPayload(download, params.outPath ?? "", params.rootDir);
   } catch (err) {
     params.waiter.cancel();
     throw err;
@@ -197,38 +192,41 @@ export async function armFileUploadViaPlaywright(opts: {
 export async function armDialogViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  dialogId?: string;
   accept: boolean;
   promptText?: string;
   timeoutMs?: number;
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
-  const state = ensurePageState(page);
   const timeout = normalizeTimeoutMs(opts.timeoutMs, 120_000);
-
-  state.armIdDialog = bumpDialogArmId();
-  const armId = state.armIdDialog;
-
-  void page
-    .waitForEvent("dialog", { timeout })
-    .then(async (dialog) => {
-      if (state.armIdDialog !== armId) {
-        return;
-      }
-      if (opts.accept) {
-        await dialog.accept(opts.promptText);
-      } else {
-        await dialog.dismiss();
-      }
-    })
-    .catch(() => {
-      // Ignore timeouts; the dialog may never appear.
+  try {
+    await respondToObservedDialogOnPage({
+      page,
+      accept: opts.accept,
+      closedBy: "agent",
+      ...(opts.dialogId !== undefined ? { dialogId: opts.dialogId } : {}),
+      ...(opts.promptText !== undefined ? { promptText: opts.promptText } : {}),
     });
+    return;
+  } catch (err) {
+    if (opts.dialogId || (err instanceof Error && !err.message.includes("No dialog is pending"))) {
+      throw err;
+    }
+  }
+
+  armObservedDialogResponseOnPage({
+    page,
+    accept: opts.accept,
+    timeoutMs: timeout,
+    ...(opts.promptText !== undefined ? { promptText: opts.promptText } : {}),
+  });
 }
 
 export async function waitForDownloadViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
   path?: string;
+  rootDir?: string;
   timeoutMs?: number;
 }): Promise<{
   url: string;
@@ -243,7 +241,13 @@ export async function waitForDownloadViaPlaywright(opts: {
   const armId = state.armIdDownload;
 
   const waiter = createPageDownloadWaiter(page, timeout);
-  return await awaitDownloadPayload({ waiter, state, armId, outPath: opts.path });
+  return await awaitDownloadPayload({
+    waiter,
+    state,
+    armId,
+    outPath: opts.path,
+    rootDir: opts.rootDir,
+  });
 }
 
 export async function downloadViaPlaywright(opts: {
@@ -251,6 +255,7 @@ export async function downloadViaPlaywright(opts: {
   targetId?: string;
   ref: string;
   path: string;
+  rootDir?: string;
   timeoutMs?: number;
 }): Promise<{
   url: string;
@@ -279,7 +284,13 @@ export async function downloadViaPlaywright(opts: {
     } catch (err) {
       throw toAIFriendlyError(err, ref);
     }
-    return await awaitDownloadPayload({ waiter, state, armId, outPath });
+    return await awaitDownloadPayload({
+      waiter,
+      state,
+      armId,
+      outPath,
+      rootDir: opts.rootDir,
+    });
   } catch (err) {
     waiter.cancel();
     throw err;

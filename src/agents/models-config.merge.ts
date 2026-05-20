@@ -155,7 +155,7 @@ export function mergeProviderModels(
       {},
       explicitModel,
       {
-        input: implicitModel.input,
+        input: "input" in explicitModel ? explicitModel.input : implicitModel.input,
         reasoning: `reasoning` in explicitModel ? explicitModel.reasoning : implicitModel.reasoning,
       },
       contextWindow === undefined ? {} : { contextWindow },

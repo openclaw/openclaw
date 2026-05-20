@@ -1,12 +1,70 @@
 import fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createEmbeddedLobsterRunner,
   loadEmbeddedToolRuntimeFromPackage,
   resolveLobsterCwd,
 } from "./lobster-runner.js";
+
+const requireForTest = createRequire(import.meta.url);
+
+type AjvCacheOwner = {
+  _cache?: { size: number };
+};
+
+function readAjvInternalCacheSize(ajv: unknown): number {
+  return (ajv as AjvCacheOwner)["_cache"]?.size ?? 0;
+}
+
+function createRepeatedResponseSchema() {
+  return {
+    type: "object",
+    properties: {
+      answer: { type: "string" },
+    },
+    required: ["answer"],
+    additionalProperties: false,
+  };
+}
+
+function createUniqueResponseSchema(index: number) {
+  return {
+    type: "object",
+    properties: {
+      [`answer${index}`]: { type: "string" },
+    },
+    required: [`answer${index}`],
+    additionalProperties: false,
+  };
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label} to be a record`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireFirstCallParam(calls: ReadonlyArray<readonly unknown[]>, label: string) {
+  const call = calls[0];
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call[0];
+}
+
+function expectToolContext(value: unknown, expected: { cwd?: string; mode: "tool" }) {
+  const ctx = requireRecord(value, "tool context");
+  if (expected.cwd !== undefined) {
+    expect(ctx.cwd).toBe(expected.cwd);
+  }
+  expect(ctx.mode).toBe(expected.mode);
+  expect(ctx.signal).toBeInstanceOf(AbortSignal);
+}
 
 describe("resolveLobsterCwd", () => {
   it("defaults to the current working directory", () => {
@@ -50,14 +108,12 @@ describe("createEmbeddedLobsterRunner", () => {
     });
 
     expect(runtime.runToolRequest).toHaveBeenCalledTimes(1);
-    expect(runtime.runToolRequest).toHaveBeenCalledWith({
-      pipeline: "exec --json=true echo hi",
-      ctx: expect.objectContaining({
-        cwd: process.cwd(),
-        mode: "tool",
-        signal: expect.any(AbortSignal),
-      }),
-    });
+    const request = requireRecord(
+      requireFirstCallParam(runtime.runToolRequest.mock.calls, "run tool request"),
+      "run tool request",
+    );
+    expect(request.pipeline).toBe("exec --json=true echo hi");
+    expectToolContext(request.ctx, { cwd: process.cwd(), mode: "tool" });
     expect(envelope).toEqual({
       ok: true,
       status: "ok",
@@ -96,14 +152,14 @@ describe("createEmbeddedLobsterRunner", () => {
         maxStdoutBytes: 4096,
       });
 
-      expect(runtime.runToolRequest).toHaveBeenCalledWith({
-        filePath: workflowPath,
-        args: { limit: 3 },
-        ctx: expect.objectContaining({
-          cwd: tempDir,
-          mode: "tool",
-        }),
-      });
+      expect(runtime.runToolRequest).toHaveBeenCalledOnce();
+      const request = requireRecord(
+        requireFirstCallParam(runtime.runToolRequest.mock.calls, "workflow run tool request"),
+        "workflow run tool request",
+      );
+      expect(request.filePath).toBe(workflowPath);
+      expect(request.args).toEqual({ limit: 3 });
+      expectToolContext(request.ctx, { cwd: tempDir, mode: "tool" });
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
@@ -223,15 +279,14 @@ describe("createEmbeddedLobsterRunner", () => {
       maxStdoutBytes: 4096,
     });
 
-    expect(runtime.resumeToolRequest).toHaveBeenCalledWith({
-      token: "resume-token",
-      approved: false,
-      ctx: expect.objectContaining({
-        cwd: process.cwd(),
-        mode: "tool",
-        signal: expect.any(AbortSignal),
-      }),
-    });
+    expect(runtime.resumeToolRequest).toHaveBeenCalledOnce();
+    const request = requireRecord(
+      requireFirstCallParam(runtime.resumeToolRequest.mock.calls, "resume tool request"),
+      "resume tool request",
+    );
+    expect(request.token).toBe("resume-token");
+    expect(request.approved).toBe(false);
+    expectToolContext(request.ctx, { cwd: process.cwd(), mode: "tool" });
     expect(envelope).toEqual({
       ok: true,
       status: "cancelled",
@@ -265,11 +320,14 @@ describe("createEmbeddedLobsterRunner", () => {
       maxStdoutBytes: 4096,
     });
 
-    expect(runtime.resumeToolRequest).toHaveBeenCalledWith({
-      approvalId: "dbc98d05",
-      approved: true,
-      ctx: expect.objectContaining({ mode: "tool" }),
-    });
+    expect(runtime.resumeToolRequest).toHaveBeenCalledOnce();
+    const request = requireRecord(
+      requireFirstCallParam(runtime.resumeToolRequest.mock.calls, "approval resume tool request"),
+      "approval resume tool request",
+    );
+    expect(request.approvalId).toBe("dbc98d05");
+    expect(request.approved).toBe(true);
+    expectToolContext(request.ctx, { mode: "tool" });
   });
 
   it("passes approvalId through the normalized needs_approval envelope", async () => {
@@ -354,6 +412,53 @@ describe("createEmbeddedLobsterRunner", () => {
     });
 
     expect(loadRuntime).toHaveBeenCalledTimes(1);
+  });
+
+  it("installs an Ajv content cache before loading the embedded runtime", async () => {
+    const AjvModule = await import("ajv");
+    const AjvCtor = AjvModule.default as unknown as new (opts?: object) => import("ajv").default;
+    const ajv = new AjvCtor({ allErrors: true, strict: false, addUsedSchema: false });
+    const before = readAjvInternalCacheSize(ajv);
+
+    await loadEmbeddedToolRuntimeFromPackage({
+      importModule: async () => ({
+        runToolRequest: vi.fn(),
+        resumeToolRequest: vi.fn(),
+      }),
+    });
+
+    const first = ajv.compile(createRepeatedResponseSchema());
+    const second = ajv.compile(createRepeatedResponseSchema());
+    const afterRepeated = readAjvInternalCacheSize(ajv);
+
+    expect(second).toBe(first);
+    expect(afterRepeated - before).toBe(1);
+
+    for (let index = 0; index < 520; index += 1) {
+      ajv.compile(createUniqueResponseSchema(index));
+    }
+
+    expect(readAjvInternalCacheSize(ajv)).toBeLessThanOrEqual(before + 512);
+  });
+
+  it("deduplicates content-identical schema compilation in the installed Lobster runtime", async () => {
+    await loadEmbeddedToolRuntimeFromPackage();
+
+    const corePath = requireForTest.resolve("@clawdbot/lobster/core");
+    const validationPath = path.join(path.dirname(path.dirname(corePath)), "validation.js");
+    const validationModule = (await import(pathToFileURL(validationPath).href)) as {
+      sharedAjv: import("ajv").default;
+    };
+    const before = readAjvInternalCacheSize(validationModule.sharedAjv);
+
+    const first = validationModule.sharedAjv.compile(createRepeatedResponseSchema());
+    for (let index = 0; index < 1000; index += 1) {
+      validationModule.sharedAjv.compile(createRepeatedResponseSchema());
+    }
+    const second = validationModule.sharedAjv.compile(createRepeatedResponseSchema());
+
+    expect(second).toBe(first);
+    expect(readAjvInternalCacheSize(validationModule.sharedAjv) - before).toBe(1);
   });
 
   it("falls back to the installed package core file when the core export is unavailable", async () => {
@@ -462,13 +567,14 @@ describe("createEmbeddedLobsterRunner", () => {
       runToolRequest: vi.fn(
         async ({ ctx }: { ctx?: { signal?: AbortSignal } }) =>
           await new Promise((resolve, reject) => {
-            ctx?.signal?.addEventListener("abort", () => {
-              reject(ctx.signal?.reason ?? new Error("aborted"));
-            });
-            setTimeout(
+            const timeout = setTimeout(
               () => resolve({ ok: true, status: "ok", output: [], requiresApproval: null }),
               500,
             );
+            ctx?.signal?.addEventListener("abort", () => {
+              clearTimeout(timeout);
+              reject(ctx.signal?.reason ?? new Error("aborted"));
+            });
           }),
       ),
       resumeToolRequest: vi.fn(),

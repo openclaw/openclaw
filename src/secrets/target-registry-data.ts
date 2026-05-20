@@ -1,6 +1,7 @@
+import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
-import { loadPluginManifestRegistryForPluginRegistry } from "../plugins/plugin-registry.js";
-import { loadBundledChannelSecretContractApi } from "./channel-contract-api.js";
+import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { loadChannelSecretContractApiForRecord } from "./channel-contract-api.js";
 import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
 
 const SECRET_INPUT_SHAPE = "secret_input"; // pragma: allowlist secret
@@ -47,13 +48,11 @@ function hasWebProviderContract(
   return (plugin.contracts?.[contract]?.length ?? 0) > 0;
 }
 
-function listBundledWebProviderSecretTargetRegistryEntries(): SecretTargetRegistryEntry[] {
+function listBundledWebProviderSecretTargetRegistryEntries(
+  bundledPlugins: readonly PluginManifestRecord[],
+): SecretTargetRegistryEntry[] {
   const entries: SecretTargetRegistryEntry[] = [];
-  for (const record of loadPluginManifestRegistryForPluginRegistry({ includeDisabled: true })
-    .plugins) {
-    if (record.origin !== "bundled") {
-      continue;
-    }
+  for (const record of bundledPlugins) {
     for (const config of WEB_PROVIDER_SECRET_CONFIGS) {
       if (
         hasWebProviderContract(record, config.contract) &&
@@ -66,23 +65,41 @@ function listBundledWebProviderSecretTargetRegistryEntries(): SecretTargetRegist
   return entries.toSorted((left, right) => left.id.localeCompare(right.id));
 }
 
-function listChannelSecretTargetRegistryEntries(): SecretTargetRegistryEntry[] {
+function listBundledPluginConfigSecretTargetRegistryEntries(
+  bundledPlugins: readonly PluginManifestRecord[],
+): SecretTargetRegistryEntry[] {
+  const entries: SecretTargetRegistryEntry[] = [];
+  const seen = new Set<string>();
+  for (const record of bundledPlugins) {
+    const secretInputs = record.configContracts?.secretInputs?.paths ?? [];
+    for (const secretInput of secretInputs) {
+      const entry = createPluginOpenClawConfigSecretTargetEntry(record.id, secretInput.path);
+      const key = `${entry.configFile}:${entry.pathPattern}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      entries.push(entry);
+    }
+  }
+  return entries.toSorted((left, right) => left.id.localeCompare(right.id));
+}
+
+function listChannelSecretTargetRegistryEntries(
+  channelPlugins: readonly PluginManifestRecord[],
+): SecretTargetRegistryEntry[] {
   const entries: SecretTargetRegistryEntry[] = [];
 
-  for (const record of loadPluginManifestRegistryForPluginRegistry({ includeDisabled: true })
-    .plugins) {
-    if (record.origin !== "bundled") {
-      continue;
-    }
+  for (const record of channelPlugins) {
     const channelIds = record.channels;
     if (channelIds.length === 0) {
       continue;
     }
     try {
-      const contractApi = loadBundledChannelSecretContractApi(record.id);
+      const contractApi = loadChannelSecretContractApiForRecord(record);
       entries.push(...(contractApi?.secretTargetRegistryEntries ?? []));
     } catch {
-      // Ignore bundled channels that do not expose a usable secret contract artifact.
+      // Ignore channels that do not expose a usable secret contract artifact.
     }
   }
   return entries;
@@ -421,9 +438,59 @@ const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
     includeInConfigure: true,
     includeInAudit: true,
   },
+  {
+    id: "tools.web.fetch.firecrawl.apiKey",
+    targetType: "tools.web.fetch.firecrawl.apiKey",
+    configFile: "openclaw.json",
+    pathPattern: "tools.web.fetch.firecrawl.apiKey",
+    secretShape: SECRET_INPUT_SHAPE,
+    expectedResolvedValue: "string",
+    includeInPlan: true,
+    includeInConfigure: true,
+    includeInAudit: true,
+  },
+  {
+    id: "tools.web.search.*.apiKey",
+    targetType: "tools.web.search.*.apiKey",
+    configFile: "openclaw.json",
+    pathPattern: "tools.web.search.*.apiKey",
+    secretShape: SECRET_INPUT_SHAPE,
+    expectedResolvedValue: "string",
+    includeInPlan: true,
+    includeInConfigure: false,
+    includeInAudit: true,
+    providerIdPathSegmentIndex: 3,
+  },
 ];
 
 let cachedSecretTargetRegistry: SecretTargetRegistryEntry[] | null = null;
+
+function loadSecretTargetRegistryFromPluginMetadata(params: {
+  env: NodeJS.ProcessEnv;
+  preferPersisted?: boolean;
+}): SecretTargetRegistryEntry[] {
+  const plugins =
+    (params.preferPersisted === false
+      ? undefined
+      : getCurrentPluginMetadataSnapshot({
+          config: {},
+          env: params.env,
+        })
+    )?.plugins ??
+    loadPluginMetadataSnapshot({
+      config: {},
+      env: params.env,
+      ...(params.preferPersisted !== undefined ? { preferPersisted: params.preferPersisted } : {}),
+    }).plugins;
+  const bundledPlugins = plugins.filter((record) => record.origin === "bundled");
+  const channelPlugins = plugins.filter((record) => record.channels.length > 0);
+  return [
+    ...CORE_SECRET_TARGET_REGISTRY,
+    ...listBundledWebProviderSecretTargetRegistryEntries(bundledPlugins),
+    ...listBundledPluginConfigSecretTargetRegistryEntries(bundledPlugins),
+    ...listChannelSecretTargetRegistryEntries(channelPlugins),
+  ];
+}
 
 export function getCoreSecretTargetRegistry(): SecretTargetRegistryEntry[] {
   return CORE_SECRET_TARGET_REGISTRY;
@@ -433,10 +500,18 @@ export function getSecretTargetRegistry(): SecretTargetRegistryEntry[] {
   if (cachedSecretTargetRegistry) {
     return cachedSecretTargetRegistry;
   }
-  cachedSecretTargetRegistry = [
-    ...CORE_SECRET_TARGET_REGISTRY,
-    ...listBundledWebProviderSecretTargetRegistryEntries(),
-    ...listChannelSecretTargetRegistryEntries(),
-  ];
+  cachedSecretTargetRegistry = loadSecretTargetRegistryFromPluginMetadata({
+    env: process.env,
+  });
   return cachedSecretTargetRegistry;
+}
+
+export function getSourceSecretTargetRegistry(): SecretTargetRegistryEntry[] {
+  return loadSecretTargetRegistryFromPluginMetadata({
+    env: {
+      ...process.env,
+      OPENCLAW_BUNDLED_PLUGINS_DIR: process.env.OPENCLAW_BUNDLED_PLUGINS_DIR ?? "extensions",
+    },
+    preferPersisted: false,
+  });
 }

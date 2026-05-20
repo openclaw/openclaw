@@ -1,11 +1,9 @@
 import fs from "node:fs/promises";
 import { normalizeChannelId as normalizeBundledChannelId } from "../../channels/registry.js";
 import { getResolvedLoggerSettings } from "../../logging.js";
+import { resolveLogFile } from "../../logging/log-tail.js";
 import { parseLogLine } from "../../logging/parse-log-line.js";
-import {
-  listPluginContributionIds,
-  loadPluginRegistrySnapshot,
-} from "../../plugins/plugin-registry.js";
+import { listManifestChannelContributionIds } from "../../plugins/manifest-contribution-ids.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { theme } from "../../terminal/theme.js";
@@ -22,14 +20,10 @@ const DEFAULT_LIMIT = 200;
 const MAX_BYTES = 1_000_000;
 
 function listManifestChannelIds(): Set<string> {
-  const index = loadPluginRegistrySnapshot({
-    env: process.env,
-  });
   return new Set(
-    listPluginContributionIds({
-      index,
-      contribution: "channels",
+    listManifestChannelContributionIds({
       includeDisabled: true,
+      env: process.env,
     }),
   );
 }
@@ -69,6 +63,12 @@ async function readTailLines(file: string, limit: number): Promise<string[]> {
   const start = Math.max(0, size - MAX_BYTES);
   const handle = await fs.open(file, "r");
   try {
+    let prefix = "";
+    if (start > 0) {
+      const prefixBuf = Buffer.alloc(1);
+      const prefixRead = await handle.read(prefixBuf, 0, 1, start - 1);
+      prefix = prefixBuf.toString("utf8", 0, prefixRead.bytesRead);
+    }
     const length = Math.max(0, size - start);
     if (length === 0) {
       return [];
@@ -77,7 +77,7 @@ async function readTailLines(file: string, limit: number): Promise<string[]> {
     const readResult = await handle.read(buffer, 0, length, start);
     const text = buffer.toString("utf8", 0, readResult.bytesRead);
     let lines = text.split("\n");
-    if (start > 0) {
+    if (start > 0 && prefix !== "\n") {
       lines = lines.slice(1);
     }
     if (lines.length && lines[lines.length - 1] === "") {
@@ -103,7 +103,7 @@ export async function channelsLogsCommand(
       ? Math.floor(limitRaw)
       : DEFAULT_LIMIT;
 
-  const file = getResolvedLoggerSettings().file;
+  const file = await resolveLogFile(getResolvedLoggerSettings().file);
   const rawLines = await readTailLines(file, limit * 4);
   const parsed = rawLines
     .map(parseLogLine)

@@ -149,6 +149,7 @@ MCP servers can use stdio or HTTP transport:
 ```
 
 - `transport` may be set to `"streamable-http"` or `"sse"`; when omitted, OpenClaw uses `sse`
+- `type: "http"` is a CLI-native downstream shape; use `transport: "streamable-http"` in OpenClaw config. `openclaw mcp set` and `openclaw doctor --fix` normalize the common alias.
 - only `http:` and `https:` URL schemes are allowed
 - `headers` values support `${ENV_VAR}` interpolation
 - a server entry with both `command` and `url` is rejected
@@ -164,6 +165,8 @@ OpenClaw registers bundle MCP tools with provider-safe names in the form
 `memory_search` tool registers as `vigil-harbor__memory_search`.
 
 - characters outside `A-Za-z0-9_-` are replaced with `-`
+- fragments that would start with a non-letter get a letter prefix, so numeric
+  server keys such as `12306` become provider-safe tool prefixes
 - server prefixes are capped at 30 characters
 - full tool names are capped at 64 characters
 - empty server names fall back to `mcp`
@@ -254,11 +257,15 @@ dual-format packages from being partially installed as bundles.
 
 ## Runtime dependencies and cleanup
 
-- Bundled plugin runtime dependencies ship inside the OpenClaw package under
-  `dist/*`. OpenClaw does **not** run `npm install` at startup for bundled
-  plugins; the release pipeline is responsible for shipping a complete bundled
-  dependency payload (see the postpublish verification rule in
-  [Releasing](/reference/RELEASING)).
+- Third-party compatible bundles do not get startup `npm install` repair. They
+  should be installed through `openclaw plugins install` and ship everything
+  they need in the installed plugin directory.
+- OpenClaw-owned bundled plugins are either shipped lightweight in core or
+  downloadable through the plugin installer. Gateway startup never runs a
+  package manager for them.
+- `openclaw doctor --fix` removes legacy staged dependency directories and can
+  recover downloadable plugins that are missing from the local plugin index when
+  config references them.
 
 ## Security
 

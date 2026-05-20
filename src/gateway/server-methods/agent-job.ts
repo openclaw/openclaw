@@ -29,6 +29,9 @@ type AgentRunSnapshot = {
   startedAt?: number;
   endedAt?: number;
   error?: string;
+  stopReason?: string;
+  livenessState?: string;
+  yielded?: boolean;
   ts: number;
 };
 
@@ -135,12 +138,17 @@ function createSnapshotFromLifecycleEvent(params: {
     typeof data?.startedAt === "number" ? data.startedAt : agentRunStarts.get(runId);
   const endedAt = typeof data?.endedAt === "number" ? data.endedAt : undefined;
   const error = typeof data?.error === "string" ? data.error : undefined;
+  const stopReason = typeof data?.stopReason === "string" ? data.stopReason : undefined;
+  const livenessState = typeof data?.livenessState === "string" ? data.livenessState : undefined;
   return {
     runId,
     status: phase === "error" ? "error" : data?.aborted ? "timeout" : "ok",
     startedAt,
     endedAt,
     error,
+    stopReason,
+    livenessState,
+    ...(data?.yielded === true ? { yielded: true } : {}),
     ts: Date.now(),
   };
 }
@@ -364,7 +372,7 @@ export async function waitForAgentJob(params: {
 
 ensureAgentRunListener();
 
-export const __testing = {
+export const testing = {
   getWaiterCount(runId?: string): number {
     if (runId) {
       return agentRunWaiterCounts.get(runId) ?? 0;
@@ -379,3 +387,4 @@ export const __testing = {
     agentRunWaiterCounts.clear();
   },
 };
+export { testing as __testing };

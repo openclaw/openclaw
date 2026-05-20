@@ -14,14 +14,25 @@ import {
 } from "openclaw/plugin-sdk/provider-stream-family";
 import { buildOpenRouterImageGenerationProvider } from "./image-generation-provider.js";
 import { openrouterMediaUnderstandingProvider } from "./media-understanding-provider.js";
+import { buildOpenRouterMusicGenerationProvider } from "./music-generation-provider.js";
 import { applyOpenrouterConfig, OPENROUTER_DEFAULT_MODEL_REF } from "./onboard.js";
 import {
   buildOpenrouterProvider,
+  isOpenRouterProxyReasoningUnsupportedModel,
   normalizeOpenRouterBaseUrl,
   OPENROUTER_BASE_URL,
 } from "./provider-catalog.js";
+import { resolveOpenRouterExtraParamsForTransport } from "./provider-routing.js";
 import { buildOpenRouterSpeechProvider } from "./speech-provider.js";
 import { wrapOpenRouterProviderStream } from "./stream.js";
+import {
+  resolveOpenRouterThinkingProfile,
+  supportsOpenRouterXHighThinking,
+} from "./thinking-policy.js";
+import {
+  buildOpenRouterVideoGenerationProvider,
+  listOpenRouterVideoModelCatalog,
+} from "./video-generation-provider.js";
 
 const PROVIDER_ID = "openrouter";
 const OPENROUTER_DEFAULT_MAX_TOKENS = 8192;
@@ -35,12 +46,17 @@ const OPENROUTER_CACHE_TTL_MODEL_PREFIXES = [
 
 function normalizeOpenRouterResolvedModel<T extends ProviderRuntimeModel>(model: T): T | undefined {
   const normalizedBaseUrl = normalizeOpenRouterBaseUrl(model.baseUrl);
-  if (!normalizedBaseUrl || normalizedBaseUrl === model.baseUrl) {
+  const reasoning = isOpenRouterProxyReasoningUnsupportedModel(model.id) ? false : model.reasoning;
+  if (
+    (!normalizedBaseUrl || normalizedBaseUrl === model.baseUrl) &&
+    reasoning === model.reasoning
+  ) {
     return undefined;
   }
   return {
     ...model,
-    baseUrl: normalizedBaseUrl,
+    ...(normalizedBaseUrl ? { baseUrl: normalizedBaseUrl } : {}),
+    reasoning,
   };
 }
 
@@ -59,8 +75,13 @@ export default definePluginEntry({
         api: "openai-completions",
         provider: PROVIDER_ID,
         baseUrl: OPENROUTER_BASE_URL,
-        reasoning: capabilities?.reasoning ?? false,
+        reasoning:
+          (capabilities?.reasoning ?? false) &&
+          !isOpenRouterProxyReasoningUnsupportedModel(ctx.modelId),
         input: capabilities?.input ?? ["text"],
+        ...(capabilities?.supportsTools !== undefined
+          ? { compat: { supportsTools: capabilities.supportsTools } }
+          : {}),
         cost: capabilities?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: capabilities?.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
         maxTokens: capabilities?.maxTokens ?? OPENROUTER_DEFAULT_MAX_TOKENS,
@@ -95,6 +116,7 @@ export default definePluginEntry({
             groupId: "openrouter",
             groupLabel: "OpenRouter",
             groupHint: "API key",
+            onboardingScopes: ["text-inference", "music-generation"],
           },
         }),
       ],
@@ -141,12 +163,22 @@ export default definePluginEntry({
       },
       ...PASSTHROUGH_GEMINI_REPLAY_HOOKS,
       resolveReasoningOutputMode: () => "native",
+      supportsXHighThinking: ({ modelId }) => supportsOpenRouterXHighThinking(modelId),
+      resolveThinkingProfile: ({ modelId }) => resolveOpenRouterThinkingProfile(modelId),
       isModernModelRef: () => true,
+      extraParamsForTransport: resolveOpenRouterExtraParamsForTransport,
       wrapStreamFn: wrapOpenRouterProviderStream,
       isCacheTtlEligible: (ctx) => isOpenRouterCacheTtlModel(ctx.modelId),
     });
     api.registerMediaUnderstandingProvider(openrouterMediaUnderstandingProvider);
     api.registerImageGenerationProvider(buildOpenRouterImageGenerationProvider());
+    api.registerMusicGenerationProvider(buildOpenRouterMusicGenerationProvider());
+    api.registerVideoGenerationProvider(buildOpenRouterVideoGenerationProvider());
+    api.registerModelCatalogProvider({
+      provider: PROVIDER_ID,
+      kinds: ["video_generation"],
+      liveCatalog: listOpenRouterVideoModelCatalog,
+    });
     api.registerSpeechProvider(buildOpenRouterSpeechProvider());
   },
 });

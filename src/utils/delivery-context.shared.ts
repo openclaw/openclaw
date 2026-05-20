@@ -1,4 +1,11 @@
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  channelRouteCompactKey,
+  channelRouteThreadId,
+  channelRouteTarget,
+  normalizeChannelRouteRef,
+  normalizeChannelRouteTarget,
+  type ChannelRouteRef,
+} from "../plugin-sdk/channel-route.js";
 import { normalizeAccountId } from "./account-id.js";
 import type { DeliveryContext, DeliveryContextSessionSource } from "./delivery-context.types.js";
 import { normalizeMessageChannel } from "./message-channel-core.js";
@@ -8,35 +15,86 @@ export function normalizeDeliveryContext(context?: DeliveryContext): DeliveryCon
   if (!context) {
     return undefined;
   }
-  const channel =
-    typeof context.channel === "string"
-      ? (normalizeMessageChannel(context.channel) ?? context.channel.trim())
-      : undefined;
-  const to = normalizeOptionalString(context.to);
-  const accountId = normalizeAccountId(context.accountId);
-  const threadId =
-    typeof context.threadId === "number" && Number.isFinite(context.threadId)
-      ? Math.trunc(context.threadId)
-      : typeof context.threadId === "string"
-        ? normalizeOptionalString(context.threadId)
-        : undefined;
-  const normalizedThreadId =
-    typeof threadId === "string" ? (threadId ? threadId : undefined) : threadId;
-  if (!channel && !to && !accountId && normalizedThreadId == null) {
+  const route = normalizeChannelRouteTarget({
+    channel:
+      typeof context.channel === "string"
+        ? (normalizeMessageChannel(context.channel) ?? context.channel.trim())
+        : undefined,
+    to: context.to,
+    accountId: context.accountId,
+    threadId: context.threadId,
+  });
+  if (!route) {
     return undefined;
   }
   const normalized: DeliveryContext = {
-    channel: channel || undefined,
-    to: to || undefined,
-    accountId,
+    channel: route.channel,
+    to: channelRouteTarget(route),
+    accountId: normalizeAccountId(route.accountId),
   };
-  if (normalizedThreadId != null) {
-    normalized.threadId = normalizedThreadId;
+  const threadId = channelRouteThreadId(route);
+  if (threadId != null) {
+    normalized.threadId = threadId;
   }
   return normalized;
 }
 
+export function normalizeDeliveryChannelRoute(route?: unknown): ChannelRouteRef | undefined {
+  if (!route || typeof route !== "object" || Array.isArray(route)) {
+    return undefined;
+  }
+  const candidate = route as ChannelRouteRef;
+  return normalizeChannelRouteRef({
+    channel: candidate.channel,
+    to: candidate.target?.to,
+    rawTo: candidate.target?.rawTo,
+    chatType: candidate.target?.chatType,
+    accountId: candidate.accountId,
+    threadId: candidate.thread?.id,
+    threadKind: candidate.thread?.kind,
+    threadSource: candidate.thread?.source,
+  });
+}
+
+export function deliveryContextFromChannelRoute(
+  route?: ChannelRouteRef,
+): DeliveryContext | undefined {
+  const normalized = normalizeDeliveryChannelRoute(route);
+  return normalizeDeliveryContext({
+    channel: normalized?.channel,
+    to: channelRouteTarget(normalized),
+    accountId: normalized?.accountId,
+    threadId: channelRouteThreadId(normalized),
+  });
+}
+
+export function channelRouteFromDeliveryContext(
+  context?: DeliveryContext,
+): ChannelRouteRef | undefined {
+  return normalizeChannelRouteTarget(normalizeDeliveryContext(context));
+}
+
+function mergeRouteMetadataWithDeliveryContext(
+  route: ChannelRouteRef | undefined,
+  context: DeliveryContext,
+): ChannelRouteRef | undefined {
+  if (!route) {
+    return channelRouteFromDeliveryContext(context);
+  }
+  return normalizeChannelRouteRef({
+    channel: route.channel ?? context.channel,
+    to: route.target?.to ?? context.to,
+    rawTo: route.target?.rawTo,
+    chatType: route.target?.chatType,
+    accountId: route.accountId ?? context.accountId,
+    threadId: route.thread?.id ?? context.threadId,
+    threadKind: route.thread?.kind,
+    threadSource: route.thread?.source,
+  });
+}
+
 export function normalizeSessionDeliveryFields(source?: DeliveryContextSessionSource): {
+  route?: ChannelRouteRef;
   deliveryContext?: DeliveryContext;
   lastChannel?: string;
   lastTo?: string;
@@ -45,6 +103,7 @@ export function normalizeSessionDeliveryFields(source?: DeliveryContextSessionSo
 } {
   if (!source) {
     return {
+      route: undefined,
       deliveryContext: undefined,
       lastChannel: undefined,
       lastTo: undefined,
@@ -53,18 +112,22 @@ export function normalizeSessionDeliveryFields(source?: DeliveryContextSessionSo
     };
   }
 
+  const normalizedRoute = normalizeDeliveryChannelRoute(source.route);
+  const routeContext = deliveryContextFromChannelRoute(normalizedRoute);
+  const legacyContext = normalizeDeliveryContext({
+    channel: source.lastChannel ?? source.channel,
+    to: source.lastTo,
+    accountId: source.lastAccountId,
+    threadId: source.lastThreadId,
+  });
   const merged = mergeDeliveryContext(
-    normalizeDeliveryContext({
-      channel: source.lastChannel ?? source.channel,
-      to: source.lastTo,
-      accountId: source.lastAccountId,
-      threadId: source.lastThreadId,
-    }),
-    normalizeDeliveryContext(source.deliveryContext),
+    routeContext,
+    mergeDeliveryContext(legacyContext, normalizeDeliveryContext(source.deliveryContext)),
   );
 
   if (!merged) {
     return {
+      route: undefined,
       deliveryContext: undefined,
       lastChannel: undefined,
       lastTo: undefined,
@@ -74,6 +137,7 @@ export function normalizeSessionDeliveryFields(source?: DeliveryContextSessionSo
   }
 
   return {
+    route: mergeRouteMetadataWithDeliveryContext(normalizedRoute, merged),
     deliveryContext: merged,
     lastChannel: merged.channel,
     lastTo: merged.to,
@@ -89,6 +153,7 @@ export function deliveryContextFromSession(
     return undefined;
   }
   const source: DeliveryContextSessionSource = {
+    route: entry.route,
     channel: entry.channel ?? entry.origin?.provider,
     lastChannel: entry.lastChannel,
     lastTo: entry.lastTo,
@@ -130,11 +195,5 @@ export function mergeDeliveryContext(
 }
 
 export function deliveryContextKey(context?: DeliveryContext): string | undefined {
-  const normalized = normalizeDeliveryContext(context);
-  if (!normalized?.channel || !normalized?.to) {
-    return undefined;
-  }
-  const threadId =
-    normalized.threadId != null && normalized.threadId !== "" ? String(normalized.threadId) : "";
-  return `${normalized.channel}|${normalized.to}|${normalized.accountId ?? ""}|${threadId}`;
+  return channelRouteCompactKey(normalizeDeliveryContext(context));
 }

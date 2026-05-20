@@ -30,6 +30,9 @@ const STEP_LABELS: Record<string, string> = {
   "git rev-parse HEAD (after)": "Verifying update",
   "global update": "Updating via package manager",
   "global update (omit optional)": "Retrying update without optional deps",
+  "global install stage": "Preparing staged package install",
+  "global install verify": "Verifying global package",
+  "global install swap": "Activating global package",
   "global install": "Installing global package",
 };
 
@@ -75,12 +78,20 @@ export function inferUpdateFailureHints(result: UpdateRunResult): string[] {
 
   const stderr = normalizeLowercaseStringOrEmpty(failedStep.stderrTail);
   const hints: string[] = [];
+  const isGlobalPackageInstallStep =
+    failedStep.name.startsWith("global update") || failedStep.name.startsWith("global install");
 
-  if (failedStep.name.startsWith("global update") && stderr.includes("eacces")) {
+  if (isGlobalPackageInstallStep && stderr.includes("eacces")) {
     hints.push(
       "Detected permission failure (EACCES). Re-run with a writable global prefix or sudo (for system-managed Node installs).",
     );
+    hints.push(
+      "If you recover with sudo/manual package install on a managed Gateway, stop the Gateway first so it does not load files while the package tree is being replaced.",
+    );
     hints.push("Example: npm config set prefix ~/.local && npm i -g openclaw@latest");
+    hints.push(
+      "System install outline: openclaw gateway stop -> sudo <system-npm> i -g openclaw@latest -> openclaw gateway install --force -> openclaw gateway restart.",
+    );
   }
 
   if (

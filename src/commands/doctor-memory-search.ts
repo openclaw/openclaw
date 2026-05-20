@@ -25,10 +25,12 @@ import {
   type DreamingArtifactsAuditSummary,
   type ShortTermAuditSummary,
 } from "../plugin-sdk/memory-core-engine-runtime.js";
+import { normalizePluginsConfig } from "../plugins/config-state.js";
 import {
   getActiveMemorySearchManager,
   resolveActiveMemoryBackendConfig,
 } from "../plugins/memory-runtime.js";
+import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { note } from "../terminal/note.js";
@@ -126,6 +128,10 @@ function resolveSuggestedRemoteMemoryProvider(): string | undefined {
   return listAutoSelectMemoryEmbeddingProviderDoctorMetadata().find(
     (provider) => provider.transport === "remote",
   )?.providerId;
+}
+
+function isKeyOptionalMemoryProvider(providerId: string): boolean {
+  return providerId === "local" || providerId === "ollama" || providerId === "lmstudio";
 }
 
 async function resolveRuntimeMemoryAuditContext(
@@ -299,6 +305,31 @@ export async function maybeRepairMemoryRecallHealth(params: {
   }
 }
 
+function hasActiveAlternateMemoryPluginSlot(cfg: OpenClawConfig): boolean {
+  const plugins = normalizePluginsConfig(cfg.plugins);
+  if (!plugins.enabled) {
+    return false;
+  }
+  const memorySlot = plugins.slots.memory;
+  if (typeof memorySlot !== "string" || memorySlot.length === 0) {
+    return false;
+  }
+  if (memorySlot === defaultSlotIdForKey("memory")) {
+    return false;
+  }
+  if (plugins.deny.includes(memorySlot)) {
+    return false;
+  }
+  if (!Object.prototype.hasOwnProperty.call(plugins.entries, memorySlot)) {
+    return false;
+  }
+  const entry = plugins.entries[memorySlot];
+  if (!entry || entry.enabled === false) {
+    return false;
+  }
+  return entry.enabled === true || entry.config !== undefined;
+}
+
 /**
  * Check whether memory search has a usable embedding provider.
  * Runs as part of `openclaw doctor` — config-only checks where possible;
@@ -312,6 +343,7 @@ export async function noteMemorySearchHealth(
       checked: boolean;
       ready: boolean;
       error?: string;
+      skipped?: boolean;
     };
   },
 ): Promise<void> {
@@ -331,6 +363,12 @@ export async function noteMemorySearchHealth(
   // separate embedding provider is needed. Skip the provider check entirely.
   const backendConfig = resolveActiveMemoryBackendConfig({ cfg, agentId });
   if (!backendConfig) {
+    if (opts?.gatewayMemoryProbe?.checked && opts.gatewayMemoryProbe.ready) {
+      return;
+    }
+    if (hasActiveAlternateMemoryPluginSlot(cfg)) {
+      return;
+    }
     note("No active memory plugin is registered for the current config.", "Memory search");
     return;
   }
@@ -402,16 +440,26 @@ export async function noteMemorySearchHealth(
       );
       return;
     }
-    if (resolved.provider === "lmstudio") {
+    if (isKeyOptionalMemoryProvider(resolved.provider)) {
       if (opts?.gatewayMemoryProbe?.checked && opts.gatewayMemoryProbe.ready) {
+        return;
+      }
+      // When the probe was intentionally skipped (skipped: true / checked: false
+      // due to probe:false path), we have no embedding status information — do
+      // not warn. A skipped probe means the user ran `openclaw doctor` without
+      // --deep; it does not mean embeddings are unavailable.
+      // NOTE: a transport timeout also sets checked: false, but skipped stays
+      // false/absent — a timeout is a real diagnostic signal and should fall
+      // through to the warning below.
+      if (opts?.gatewayMemoryProbe?.skipped) {
         return;
       }
       const gatewayProbeWarning = buildGatewayProbeWarning(opts?.gatewayMemoryProbe);
       note(
         [
           gatewayProbeWarning
-            ? 'Memory search provider "lmstudio" is configured, but the gateway reports embeddings are not ready.'
-            : 'Memory search provider "lmstudio" is configured, but the gateway could not confirm embeddings are ready.',
+            ? `Memory search provider "${resolved.provider}" is configured, but the gateway reports embeddings are not ready.`
+            : `Memory search provider "${resolved.provider}" is configured, but the gateway could not confirm embeddings are ready.`,
           gatewayProbeWarning,
           `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
         ]
@@ -575,6 +623,7 @@ function buildGatewayProbeWarning(
         checked: boolean;
         ready: boolean;
         error?: string;
+        skipped?: boolean;
       }
     | undefined,
 ): string | null {

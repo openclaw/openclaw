@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 /**
  * Regression test for #18264: Gateway announcement delivery loop.
@@ -9,7 +10,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vi
  */
 
 const mocks = vi.hoisted(() => ({
-  loadConfig: vi.fn(() => ({
+  getRuntimeConfig: vi.fn(() => ({
     session: { store: "/tmp/test-store", mainKey: "main" },
     agents: {},
   })),
@@ -21,13 +22,12 @@ const mocks = vi.hoisted(() => ({
   captureSubagentCompletionReply: vi.fn(),
   loadSubagentRegistryFromDisk: vi.fn(() => new Map()),
   saveSubagentRegistryToDisk: vi.fn(),
-  resetAnnounceQueuesForTests: vi.fn(),
   resolveAgentTimeoutMs: vi.fn(() => 60_000),
   scheduleOrphanRecovery: vi.fn(),
 }));
 
 vi.mock("../config/config.js", () => ({
-  loadConfig: mocks.loadConfig,
+  getRuntimeConfig: mocks.getRuntimeConfig,
 }));
 
 vi.mock("../config/sessions.js", () => ({
@@ -58,10 +58,6 @@ vi.mock("./subagent-registry.store.js", () => ({
   saveSubagentRegistryToDisk: mocks.saveSubagentRegistryToDisk,
 }));
 
-vi.mock("./subagent-announce-queue.js", () => ({
-  resetAnnounceQueuesForTests: mocks.resetAnnounceQueuesForTests,
-}));
-
 vi.mock("./timeout.js", () => ({
   resolveAgentTimeoutMs: mocks.resolveAgentTimeoutMs,
 }));
@@ -73,6 +69,14 @@ vi.mock("./subagent-orphan-recovery.js", () => ({
 describe("announce loop guard (#18264)", () => {
   let registry: typeof import("./subagent-registry.js");
 
+  function requireRunById(runs: SubagentRunRecord[], runId: string): SubagentRunRecord {
+    const entry = runs.find((run) => run.runId === runId);
+    if (!entry) {
+      throw new Error(`expected subagent run ${runId}`);
+    }
+    return entry;
+  }
+
   beforeAll(async () => {
     vi.resetModules();
     registry = await import("./subagent-registry.js");
@@ -82,13 +86,12 @@ describe("announce loop guard (#18264)", () => {
     vi.useFakeTimers();
     mocks.callGateway.mockClear();
     mocks.captureSubagentCompletionReply.mockClear();
-    mocks.loadConfig.mockClear();
+    mocks.getRuntimeConfig.mockClear();
     mocks.loadSubagentRegistryFromDisk.mockReset();
     mocks.loadSubagentRegistryFromDisk.mockReturnValue(new Map());
     mocks.onAgentEventStop.mockClear();
     mocks.onAgentEvent.mockReset();
     mocks.onAgentEvent.mockReturnValue(mocks.onAgentEventStop);
-    mocks.resetAnnounceQueuesForTests.mockClear();
     mocks.resolveAgentTimeoutMs.mockClear();
     mocks.runSubagentAnnounceFlow.mockReset();
     mocks.runSubagentAnnounceFlow.mockResolvedValue(false);
@@ -96,7 +99,7 @@ describe("announce loop guard (#18264)", () => {
     mocks.saveSubagentRegistryToDisk.mockClear();
     mocks.updateSessionStore.mockClear();
     registry.resetSubagentRegistryForTests({ persist: false });
-    registry.__testing.setDepsForTest({
+    registry.testing.setDepsForTest({
       captureSubagentCompletionReply: mocks.captureSubagentCompletionReply,
       cleanupBrowserSessionsForLifecycleEnd: async () => {},
       runSubagentAnnounceFlow: mocks.runSubagentAnnounceFlow,
@@ -105,7 +108,7 @@ describe("announce loop guard (#18264)", () => {
 
   afterEach(() => {
     registry.resetSubagentRegistryForTests({ persist: false });
-    registry.__testing.setDepsForTest();
+    registry.testing.setDepsForTest();
     vi.useRealTimers();
     vi.clearAllMocks();
   });
@@ -130,10 +133,9 @@ describe("announce loop guard (#18264)", () => {
     });
 
     const runs = registry.listSubagentRunsForRequester("agent:main:main");
-    const entry = runs.find((r) => r.runId === "test-loop-guard");
-    expect(entry).toBeDefined();
-    expect(entry!.announceRetryCount).toBe(3);
-    expect(entry!.lastAnnounceRetryAt).toBeDefined();
+    const entry = requireRunById(runs, "test-loop-guard");
+    expect(entry.announceRetryCount).toBe(3);
+    expect(entry.lastAnnounceRetryAt).toBe(now - 10_000);
   });
 
   test.each([
@@ -180,12 +182,13 @@ describe("announce loop guard (#18264)", () => {
     mocks.loadSubagentRegistryFromDisk.mockReturnValue(new Map([[entry.runId, entry]]));
 
     // Initialization attempts resume once, then gives up for exhausted entries.
+    const beforeInit = Date.now();
     registry.initSubagentRegistry();
     await Promise.resolve();
     await Promise.resolve();
 
     expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
-    expect(entry.cleanupCompletedAt).toBeDefined();
+    expect(entry.cleanupCompletedAt).toBeGreaterThanOrEqual(beforeInit);
   });
 
   test("expired completion-message entries are still resumed for announce", async () => {

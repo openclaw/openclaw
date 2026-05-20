@@ -6,12 +6,15 @@ import {
   normalizeStringifiedOptionalString,
 } from "../shared/string-coerce.js";
 import {
-  SilentReplyPolicyConfigSchema,
-  SilentReplyRewriteConfigSchema,
-} from "./zod-schema.agent-defaults.js";
+  isValidControlUiChatMessageMaxWidth,
+  normalizeControlUiChatMessageMaxWidth,
+} from "./control-ui-css.js";
+import type { GatewayRemoteConfig } from "./types.gateway.js";
+import { SilentReplyPolicyConfigSchema } from "./zod-schema.agent-defaults.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { AgentsSchema, AudioSchema, BindingsSchema, BroadcastSchema } from "./zod-schema.agents.js";
 import { ApprovalsSchema } from "./zod-schema.approvals.js";
+import { ChannelsSchema } from "./zod-schema.channels-config.js";
 import {
   HexColorSchema,
   ModelsConfigSchema,
@@ -19,7 +22,7 @@ import {
   SecretsConfigSchema,
 } from "./zod-schema.core.js";
 import { HookMappingSchema, HooksGmailSchema, InternalHooksSchema } from "./zod-schema.hooks.js";
-import { ChannelsSchema } from "./zod-schema.providers.js";
+import { ProxyConfigSchema } from "./zod-schema.proxy.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 import {
   CommandsSchema,
@@ -48,6 +51,79 @@ const NodeHostSchema = z
   .strict()
   .optional();
 
+type ConfigSchemaShape<T extends object> = {
+  [Key in keyof T]-?: z.ZodType<T[Key]>;
+};
+
+const GatewayRemoteSchemaShape = {
+  enabled: z.boolean().optional(),
+  url: z.string().optional(),
+  transport: z.union([z.literal("ssh"), z.literal("direct")]).optional(),
+  remotePort: z.number().int().min(1).max(65_535).optional(),
+  token: SecretInputSchema.optional().register(sensitive),
+  password: SecretInputSchema.optional().register(sensitive),
+  tlsFingerprint: z.string().optional(),
+  sshTarget: z.string().optional(),
+  sshIdentity: z.string().optional(),
+} satisfies ConfigSchemaShape<GatewayRemoteConfig>;
+
+const GatewayRemoteConfigSchema = z.object(GatewayRemoteSchemaShape).strict().optional();
+
+const LegacyCanvasHostSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    root: z.string().optional(),
+    port: z.number().int().positive().optional(),
+    liveReload: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
+const SecuritySchema = z
+  .object({
+    audit: z
+      .object({
+        suppressions: z
+          .array(
+            z
+              .object({
+                checkId: z.string().min(1),
+                titleIncludes: z.string().min(1).optional(),
+                detailIncludes: z.string().min(1).optional(),
+                reason: z.string().min(1).optional(),
+              })
+              .strict(),
+          )
+          .optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict()
+  .optional();
+
+const AccessGroupsSchema = z
+  .record(
+    z.string().min(1),
+    z.discriminatedUnion("type", [
+      z
+        .object({
+          type: z.literal("discord.channelAudience"),
+          guildId: z.string().min(1),
+          channelId: z.string().min(1),
+          membership: z.literal("canViewChannel").optional(),
+        })
+        .strict(),
+      z
+        .object({
+          type: z.literal("message.senders"),
+          members: z.record(z.string().min(1), z.array(z.string().min(1))),
+        })
+        .strict(),
+    ]),
+  )
+  .optional();
+
 const MemoryQmdPathSchema = z
   .object({
     path: z.string(),
@@ -69,6 +145,8 @@ const MemoryQmdUpdateSchema = z
     interval: z.string().optional(),
     debounceMs: z.number().int().nonnegative().optional(),
     onBoot: z.boolean().optional(),
+    startup: z.enum(["off", "idle", "immediate"]).optional(),
+    startupDelayMs: z.number().int().nonnegative().optional(),
     waitForBootSync: z.boolean().optional(),
     embedInterval: z.string().optional(),
     commandTimeoutMs: z.number().int().nonnegative().optional(),
@@ -161,6 +239,8 @@ const PluginEntrySchema = z
       .object({
         allowPromptInjection: z.boolean().optional(),
         allowConversationAccess: z.boolean().optional(),
+        timeoutMs: z.number().int().positive().max(600_000).optional(),
+        timeouts: z.record(z.string(), z.number().int().positive().max(600_000)).optional(),
       })
       .strict()
       .optional(),
@@ -168,6 +248,14 @@ const PluginEntrySchema = z
       .object({
         allowModelOverride: z.boolean().optional(),
         allowedModels: z.array(z.string()).optional(),
+      })
+      .strict()
+      .optional(),
+    llm: z
+      .object({
+        allowModelOverride: z.boolean().optional(),
+        allowedModels: z.array(z.string()).optional(),
+        allowAgentIdOverride: z.boolean().optional(),
       })
       .strict()
       .optional(),
@@ -181,10 +269,49 @@ const TalkProviderEntrySchema = z
   })
   .catchall(z.unknown());
 
+const TalkRealtimeSchema = z
+  .object({
+    provider: z.string().optional(),
+    providers: z.record(z.string(), TalkProviderEntrySchema).optional(),
+    model: z.string().optional(),
+    voice: z.string().optional(),
+    instructions: z.string().optional(),
+    mode: z.enum(["realtime", "stt-tts", "transcription"]).optional(),
+    transport: z.enum(["webrtc", "provider-websocket", "gateway-relay", "managed-room"]).optional(),
+    brain: z.enum(["agent-consult", "direct-tools", "none"]).optional(),
+  })
+  .strict()
+  .superRefine((realtime, ctx) => {
+    const provider = normalizeLowercaseStringOrEmpty(realtime.provider ?? "");
+    const providers = realtime.providers ? Object.keys(realtime.providers) : [];
+
+    if (provider && providers.length > 0 && !(provider in realtime.providers!)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["provider"],
+        message: `talk.realtime.provider must match a key in talk.realtime.providers (missing "${provider}")`,
+      });
+    }
+
+    if (!provider && providers.length > 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["provider"],
+        message:
+          "talk.realtime.provider is required when talk.realtime.providers defines multiple providers",
+      });
+    }
+  });
+
 const TalkSchema = z
   .object({
     provider: z.string().optional(),
     providers: z.record(z.string(), TalkProviderEntrySchema).optional(),
+    realtime: TalkRealtimeSchema.optional(),
+    consultThinkingLevel: z
+      .enum(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"])
+      .optional(),
+    consultFastMode: z.boolean().optional(),
     speechLocale: z.string().optional(),
     interruptOnSpeech: z.boolean().optional(),
     silenceTimeoutMs: z.number().int().positive().optional(),
@@ -219,11 +346,28 @@ const McpServerSchema = z
     cwd: z.string().optional(),
     workingDirectory: z.string().optional(),
     url: HttpUrlSchema.optional(),
+    transport: z.union([z.literal("sse"), z.literal("streamable-http")]).optional(),
     headers: z
       .record(
         z.string(),
         z.union([z.string().register(sensitive), z.number(), z.boolean()]).register(sensitive),
       )
+      .optional(),
+    codex: z
+      .object({
+        agents: z
+          .array(
+            z
+              .string()
+              .trim()
+              .regex(/^[a-z0-9][a-z0-9_-]{0,63}$/i),
+          )
+          .min(1)
+          .optional(),
+        defaultToolsApprovalMode: z.enum(["auto", "prompt", "approve"]).optional(),
+        default_tools_approval_mode: z.enum(["auto", "prompt", "approve"]).optional(),
+      })
+      .strict()
       .optional(),
   })
   .catchall(z.unknown());
@@ -246,6 +390,14 @@ const CrestodianSchema = z
       })
       .strict()
       .optional(),
+  })
+  .strict()
+  .optional();
+
+const CommitmentsSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    maxPerDay: z.number().int().positive().optional(),
   })
   .strict()
   .optional();
@@ -302,6 +454,8 @@ export const OpenClawSchema = z
         enabled: z.boolean().optional(),
         flags: z.array(z.string()).optional(),
         stuckSessionWarnMs: z.number().int().positive().optional(),
+        stuckSessionAbortMs: z.number().int().positive().optional(),
+        memoryPressureSnapshot: z.boolean().optional(),
         otel: z
           .object({
             enabled: z.boolean().optional(),
@@ -451,6 +605,15 @@ export const OpenClawSchema = z
           )
           .optional(),
         extraArgs: z.array(z.string()).optional(),
+        tabCleanup: z
+          .object({
+            enabled: z.boolean().optional(),
+            idleMinutes: z.number().int().nonnegative().optional(),
+            maxTabsPerSession: z.number().int().nonnegative().optional(),
+            sweepMinutes: z.number().int().positive().optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),
@@ -476,7 +639,12 @@ export const OpenClawSchema = z
             z
               .object({
                 provider: z.string(),
-                mode: z.union([z.literal("api_key"), z.literal("oauth"), z.literal("token")]),
+                mode: z.union([
+                  z.literal("api_key"),
+                  z.literal("aws-sdk"),
+                  z.literal("oauth"),
+                  z.literal("token"),
+                ]),
                 email: z.string().optional(),
                 displayName: z.string().optional(),
               })
@@ -501,6 +669,7 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
+    accessGroups: AccessGroupsSchema,
     acp: z
       .object({
         enabled: z.boolean().optional(),
@@ -511,6 +680,7 @@ export const OpenClawSchema = z
           .strict()
           .optional(),
         backend: z.string().optional(),
+        fallbacks: z.array(z.string()).optional(),
         defaultAgent: z.string().optional(),
         allowedAgents: z.array(z.string()).optional(),
         maxConcurrentSessions: z.number().int().positive().optional(),
@@ -548,6 +718,7 @@ export const OpenClawSchema = z
     nodeHost: NodeHostSchema,
     agents: AgentsSchema,
     tools: ToolsSchema,
+    security: SecuritySchema,
     bindings: BindingsSchema,
     broadcast: BroadcastSchema,
     audio: AudioSchema,
@@ -598,6 +769,7 @@ export const OpenClawSchema = z
             enabled: z.boolean().optional(),
             after: z.number().int().min(1).optional(),
             cooldownMs: z.number().int().min(0).optional(),
+            includeSkipped: z.boolean().optional(),
             mode: z.enum(["announce", "webhook"]).optional(),
             accountId: z.string().optional(),
           })
@@ -643,6 +815,7 @@ export const OpenClawSchema = z
         }
       })
       .optional(),
+    commitments: CommitmentsSchema,
     hooks: z
       .object({
         enabled: z.boolean().optional(),
@@ -675,6 +848,14 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        whatsapp: z
+          .object({
+            keepAliveIntervalMs: z.number().int().positive().optional(),
+            connectTimeoutMs: z.number().int().positive().optional(),
+            defaultQueryTimeoutMs: z.number().int().positive().optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),
@@ -694,15 +875,6 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
-      })
-      .strict()
-      .optional(),
-    canvasHost: z
-      .object({
-        enabled: z.boolean().optional(),
-        root: z.string().optional(),
-        port: z.number().int().positive().optional(),
-        liveReload: z.boolean().optional(),
       })
       .strict()
       .optional(),
@@ -730,6 +902,14 @@ export const OpenClawSchema = z
               .union([z.literal("strict"), z.literal("scripts"), z.literal("trusted")])
               .optional(),
             allowExternalEmbedUrls: z.boolean().optional(),
+            chatMessageMaxWidth: z
+              .string()
+              .transform((value) => normalizeControlUiChatMessageMaxWidth(value))
+              .refine((value) => isValidControlUiChatMessageMaxWidth(value), {
+                message:
+                  "Expected a CSS width value such as 960px, 82%, min(1280px, 82%), or calc(100% - 2rem)",
+              })
+              .optional(),
             allowedOrigins: z.array(z.string()).optional(),
             dangerouslyAllowHostHeaderOriginFallback: z.boolean().optional(),
             allowInsecureAuth: z.boolean().optional(),
@@ -764,6 +944,7 @@ export const OpenClawSchema = z
                 userHeader: z.string().min(1, "userHeader is required for trusted-proxy mode"),
                 requiredHeaders: z.array(z.string()).optional(),
                 allowUsers: z.array(z.string()).optional(),
+                allowLoopback: z.boolean().optional(),
               })
               .strict()
               .optional(),
@@ -785,6 +966,7 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        handshakeTimeoutMs: z.number().int().min(1).optional(),
         channelHealthCheckMinutes: z.number().int().min(0).optional(),
         channelStaleEventThresholdMinutes: z.number().int().min(1).optional(),
         channelMaxRestartsPerHour: z.number().int().min(1).optional(),
@@ -792,21 +974,11 @@ export const OpenClawSchema = z
           .object({
             mode: z.union([z.literal("off"), z.literal("serve"), z.literal("funnel")]).optional(),
             resetOnExit: z.boolean().optional(),
+            preserveFunnel: z.boolean().optional(),
           })
           .strict()
           .optional(),
-        remote: z
-          .object({
-            url: z.string().optional(),
-            transport: z.union([z.literal("ssh"), z.literal("direct")]).optional(),
-            token: SecretInputSchema.optional().register(sensitive),
-            password: SecretInputSchema.optional().register(sensitive),
-            tlsFingerprint: z.string().optional(),
-            sshTarget: z.string().optional(),
-            sshIdentity: z.string().optional(),
-          })
-          .strict()
-          .optional(),
+        remote: GatewayRemoteConfigSchema,
         reload: z
           .object({
             mode: z
@@ -956,6 +1128,7 @@ export const OpenClawSchema = z
         load: z
           .object({
             extraDirs: z.array(z.string()).optional(),
+            allowSymlinkTargets: z.array(z.string()).optional(),
             watch: z.boolean().optional(),
             watchDebounceMs: z.number().int().min(0).optional(),
           })
@@ -967,6 +1140,7 @@ export const OpenClawSchema = z
             nodeManager: z
               .union([z.literal("npm"), z.literal("pnpm"), z.literal("yarn"), z.literal("bun")])
               .optional(),
+            allowUploadedArchives: z.boolean().optional(),
           })
           .strict()
           .optional(),
@@ -1003,20 +1177,22 @@ export const OpenClawSchema = z
           .strict()
           .optional(),
         entries: z.record(z.string(), PluginEntrySchema).optional(),
+        bundledDiscovery: z.enum(["compat", "allowlist"]).optional(),
       })
       .strict()
       .optional(),
+    canvasHost: LegacyCanvasHostSchema,
     surfaces: z
       .record(
         z.string(),
         z
           .object({
             silentReply: SilentReplyPolicyConfigSchema.optional(),
-            silentReplyRewrite: SilentReplyRewriteConfigSchema.optional(),
           })
           .strict(),
       )
       .optional(),
+    proxy: ProxyConfigSchema,
   })
   .strict()
   .superRefine((cfg, ctx) => {

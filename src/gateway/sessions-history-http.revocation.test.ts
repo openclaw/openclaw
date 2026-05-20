@@ -18,7 +18,7 @@ let gatewayConfig: {
 let authCheckCalls = 0;
 
 vi.mock("../config/config.js", () => ({
-  loadConfig: () => ({
+  getRuntimeConfig: () => ({
     gateway: gatewayConfig,
   }),
 }));
@@ -47,6 +47,7 @@ vi.mock("./http-utils.js", () => ({
   authorizeScopedGatewayHttpRequestOrReply: async () => ({
     cfg: { gateway: { webchat: { chatHistoryMaxChars: 2000 } } },
     requestAuth: { trustDeclaredOperatorScopes: true },
+    operatorScopes: ["operator.read"],
   }),
   checkGatewayHttpRequestAuth: async (params: {
     trustedProxies?: string[];
@@ -91,7 +92,7 @@ vi.mock("./session-utils.js", () => ({
     sessionId: "session-1",
     sessionFile: "/tmp/session-1.jsonl",
   }),
-  readSessionMessages: () => [],
+  readSessionMessagesAsync: async () => [],
   resolveSessionTranscriptCandidates: () => ["/tmp/session-1.jsonl"],
 }));
 
@@ -100,14 +101,14 @@ vi.mock("./session-history-state.js", () => ({
     history: { items: [], nextCursor: null, messages: [] },
   }),
   SessionHistorySseState: {
-    fromRawSnapshot: () => ({
+    fromRawSnapshot: (_params: unknown) => ({
       snapshot: () => ({ items: [], nextCursor: null, messages: [] }),
       appendInlineMessage: ({ message, messageId }: { message: unknown; messageId?: string }) => ({
         message,
         messageSeq: 1,
         messageId,
       }),
-      refresh: () => ({ items: [], nextCursor: null, messages: [] }),
+      refreshAsync: async () => ({ items: [], nextCursor: null, messages: [] }),
     }),
   },
 }));
@@ -196,7 +197,9 @@ describe("session history SSE auth revocation", () => {
       messageId: "m-1",
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await vi.waitFor(() => {
+      expect(res.writableEnded).toBe(true);
+    });
 
     const joined = res.writes.join("");
     expect(joined).not.toContain("event: message");
@@ -231,7 +234,9 @@ describe("session history SSE auth revocation", () => {
       messageId: "m-2",
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await vi.waitFor(() => {
+      expect(res.writableEnded).toBe(true);
+    });
 
     const joined = res.writes.join("");
     expect(joined).not.toContain("event: message");
@@ -266,8 +271,6 @@ describe("session history SSE auth revocation", () => {
       message: { role: "assistant", content: [{ type: "text", text: "other session" }] },
       messageId: "m-3",
     });
-
-    await new Promise((resolve) => setTimeout(resolve, 0));
 
     const joined = res.writes.join("");
     expect(authCheckCalls).toBe(0);

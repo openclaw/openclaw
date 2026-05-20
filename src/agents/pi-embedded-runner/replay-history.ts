@@ -1,6 +1,7 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { SessionManager } from "@mariozechner/pi-coding-agent";
-import { stripInboundMetadata } from "../../auto-reply/reply/strip-inbound-meta.js";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { SessionManager } from "@earendil-works/pi-coding-agent";
+import { stripInternalMetadataForDisplay } from "../../auto-reply/reply/display-text-sanitize.js";
+import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import {
@@ -12,6 +13,7 @@ import type {
   ProviderReplaySessionState,
 } from "../../plugins/types.js";
 import {
+  annotateInterSessionPromptText,
   hasInterSessionUserProvenance,
   normalizeInputProvenance,
 } from "../../sessions/input-provenance.js";
@@ -43,9 +45,12 @@ import {
   type UsageLike,
 } from "../usage.js";
 import { isZeroUsageEmptyStopAssistantTurn } from "./empty-assistant-turn.js";
-import { dropThinkingBlocks, stripInvalidThinkingSignatures } from "./thinking.js";
+import {
+  dropReasoningFromHistory,
+  dropThinkingBlocks,
+  stripInvalidThinkingSignatures,
+} from "./thinking.js";
 
-const INTER_SESSION_PREFIX_BASE = "[Inter-session message]";
 const MODEL_SNAPSHOT_CUSTOM_TYPE = "model-snapshot";
 type CustomEntryLike = { type?: unknown; customType?: unknown; data?: unknown };
 type ModelSnapshotEntry = {
@@ -54,6 +59,7 @@ type ModelSnapshotEntry = {
   modelApi?: string | null;
   modelId?: string;
 };
+type AssistantReplayMessage = Extract<AgentMessage, { role: "assistant" }>;
 
 type ProviderReplayHookParams = {
   config?: OpenClawConfig;
@@ -86,22 +92,6 @@ function createProviderReplayPluginParams(params: ProviderReplayHookParams) {
   };
 }
 
-function buildInterSessionPrefix(message: AgentMessage): string {
-  const provenance = normalizeInputProvenance((message as { provenance?: unknown }).provenance);
-  if (!provenance) {
-    return INTER_SESSION_PREFIX_BASE;
-  }
-  const details = [
-    provenance.sourceSessionKey ? `sourceSession=${provenance.sourceSessionKey}` : undefined,
-    provenance.sourceChannel ? `sourceChannel=${provenance.sourceChannel}` : undefined,
-    provenance.sourceTool ? `sourceTool=${provenance.sourceTool}` : undefined,
-  ].filter(Boolean);
-  if (details.length === 0) {
-    return INTER_SESSION_PREFIX_BASE;
-  }
-  return `${INTER_SESSION_PREFIX_BASE} ${details.join(" ")}`;
-}
-
 function annotateInterSessionUserMessages(messages: AgentMessage[]): AgentMessage[] {
   let touched = false;
   const out: AgentMessage[] = [];
@@ -110,17 +100,18 @@ function annotateInterSessionUserMessages(messages: AgentMessage[]): AgentMessag
       out.push(msg);
       continue;
     }
-    const prefix = buildInterSessionPrefix(msg);
+    const provenance = normalizeInputProvenance((msg as { provenance?: unknown }).provenance);
     const user = msg as Extract<AgentMessage, { role: "user" }>;
     if (typeof user.content === "string") {
-      if (user.content.startsWith(prefix)) {
+      const annotated = annotateInterSessionPromptText(user.content, provenance);
+      if (annotated === user.content) {
         out.push(msg);
         continue;
       }
       touched = true;
       out.push({
         ...(msg as unknown as Record<string, unknown>),
-        content: `${prefix}\n${user.content}`,
+        content: annotated,
       } as AgentMessage);
       continue;
     }
@@ -139,14 +130,15 @@ function annotateInterSessionUserMessages(messages: AgentMessage[]): AgentMessag
 
     if (textIndex >= 0) {
       const existing = user.content[textIndex] as { type: "text"; text: string };
-      if (existing.text.startsWith(prefix)) {
+      const annotated = annotateInterSessionPromptText(existing.text, provenance);
+      if (annotated === existing.text) {
         out.push(msg);
         continue;
       }
       const nextContent = [...user.content];
       nextContent[textIndex] = {
         ...existing,
-        text: `${prefix}\n${existing.text}`,
+        text: annotated,
       };
       touched = true;
       out.push({
@@ -159,7 +151,13 @@ function annotateInterSessionUserMessages(messages: AgentMessage[]): AgentMessag
     touched = true;
     out.push({
       ...(msg as unknown as Record<string, unknown>),
-      content: [{ type: "text", text: prefix }, ...user.content],
+      content: [
+        {
+          type: "text",
+          text: annotateInterSessionPromptText("Inter-session content follows.", provenance),
+        },
+        ...user.content,
+      ],
     } as AgentMessage);
   }
   return touched ? out : messages;
@@ -238,7 +236,39 @@ function stripStaleAssistantUsageBeforeLatestCompaction(messages: AgentMessage[]
 // content and, on Bedrock or strict OpenAI-compatible providers, can also
 // trigger turn-ordering rejections.
 const TRANSCRIPT_ONLY_OPENCLAW_MODELS = new Set<string>(["delivery-mirror", "gateway-injected"]);
-const OMITTED_INBOUND_METADATA_TEXT = "[assistant copied inbound metadata omitted]";
+
+function sanitizeUserReplayContent(message: AgentMessage): AgentMessage | null {
+  if (!message || message.role !== "user") {
+    return message;
+  }
+  const replayContent = (message as { content?: unknown }).content;
+  if (typeof replayContent === "string") {
+    return replayContent.trim() ? message : null;
+  }
+  if (!Array.isArray(replayContent)) {
+    return message;
+  }
+
+  let touched = false;
+  const sanitizedContent = replayContent.filter((block) => {
+    if (!block || typeof block !== "object") {
+      return true;
+    }
+    if ((block as { type?: unknown }).type !== "text") {
+      return true;
+    }
+    const text = (block as { text?: unknown }).text;
+    if (typeof text !== "string" || text.trim().length > 0) {
+      return true;
+    }
+    touched = true;
+    return false;
+  });
+  if (sanitizedContent.length === 0) {
+    return null;
+  }
+  return touched ? ({ ...message, content: sanitizedContent } as AgentMessage) : message;
+}
 
 function isTranscriptOnlyOpenclawAssistant(message: AgentMessage): boolean {
   if (!message || message.role !== "assistant") {
@@ -253,10 +283,69 @@ function isTranscriptOnlyOpenclawAssistant(message: AgentMessage): boolean {
   );
 }
 
+function normalizeAssistantReplayTextContent(message: AgentMessage, replayContent: string) {
+  const strippedText = stripInternalMetadataForDisplay(replayContent);
+  const trimmed = strippedText.trim();
+  if (!trimmed || isSilentReplyPayloadText(trimmed, SILENT_REPLY_TOKEN)) {
+    return null;
+  }
+  return {
+    ...message,
+    content: [{ type: "text", text: strippedText }],
+  } as AgentMessage;
+}
+
+function normalizeAssistantReplayBlockContent(message: AgentMessage, replayContent: unknown[]) {
+  let touched = false;
+  const sanitizedContent: unknown[] = [];
+  for (const block of replayContent) {
+    if (!block || typeof block !== "object") {
+      sanitizedContent.push(block);
+      continue;
+    }
+    const text = (block as { text?: unknown }).text;
+    if (typeof text !== "string") {
+      sanitizedContent.push(block);
+      continue;
+    }
+    const strippedText = stripInternalMetadataForDisplay(text);
+    if (strippedText === text) {
+      if (!isSilentReplyPayloadText(text.trim(), SILENT_REPLY_TOKEN)) {
+        sanitizedContent.push(block);
+      } else {
+        touched = true;
+      }
+      continue;
+    }
+    touched = true;
+    const trimmed = strippedText.trim();
+    if (trimmed && !isSilentReplyPayloadText(trimmed, SILENT_REPLY_TOKEN)) {
+      sanitizedContent.push({ ...block, text: strippedText });
+    }
+  }
+  if (!touched) {
+    return message;
+  }
+  if (sanitizedContent.length === 0) {
+    return null;
+  }
+  return { ...message, content: sanitizedContent } as AgentMessage;
+}
+
 export function normalizeAssistantReplayContent(messages: AgentMessage[]): AgentMessage[] {
   let touched = false;
   const out: AgentMessage[] = [];
   for (const message of messages) {
+    if (message?.role === "user") {
+      const sanitizedUserMessage = sanitizeUserReplayContent(message);
+      if (sanitizedUserMessage) {
+        out.push(sanitizedUserMessage);
+      }
+      if (sanitizedUserMessage !== message) {
+        touched = true;
+      }
+      continue;
+    }
     if (!message || message.role !== "assistant") {
       out.push(message);
       continue;
@@ -267,46 +356,28 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
       touched = true;
       continue;
     }
-    const replayContent = (message as { content?: unknown }).content;
+    let assistantMessage: AssistantReplayMessage = message;
+    let replayContent = (message as { content?: unknown }).content;
     if (typeof replayContent === "string") {
-      const strippedText = stripInboundMetadata(replayContent);
-      out.push({
-        ...message,
-        content: [
-          {
-            type: "text",
-            text: strippedText.trim() ? strippedText : OMITTED_INBOUND_METADATA_TEXT,
-          },
-        ],
-      });
+      const normalized = normalizeAssistantReplayTextContent(message, replayContent);
+      if (normalized) {
+        out.push(normalized);
+      }
       touched = true;
       continue;
     }
+    if (!Array.isArray(replayContent)) {
+      replayContent =
+        replayContent != null && typeof replayContent === "object" ? [replayContent] : [];
+      assistantMessage = { ...message, content: replayContent } as AssistantReplayMessage;
+      touched = true;
+    }
     if (Array.isArray(replayContent)) {
-      let contentTouched = false;
-      const sanitizedContent = replayContent.map((block) => {
-        if (!block || typeof block !== "object") {
-          return block;
+      const normalized = normalizeAssistantReplayBlockContent(assistantMessage, replayContent);
+      if (normalized !== assistantMessage) {
+        if (normalized) {
+          out.push(normalized);
         }
-        const text = (block as { text?: unknown }).text;
-        if (typeof text !== "string") {
-          return block;
-        }
-        const strippedText = stripInboundMetadata(text);
-        if (strippedText === text) {
-          return block;
-        }
-        contentTouched = true;
-        return {
-          ...block,
-          text: strippedText.trim() ? strippedText : OMITTED_INBOUND_METADATA_TEXT,
-        };
-      });
-      if (contentTouched) {
-        out.push({
-          ...message,
-          content: sanitizedContent,
-        });
         touched = true;
         continue;
       }
@@ -328,19 +399,86 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
       // or completion and no content. Leaving other non-error empty-content
       // turns untouched preserves silent-reply semantics on every other code
       // path.
-      const stopReason = (message as { stopReason?: unknown }).stopReason;
-      if (stopReason === "error" || isZeroUsageEmptyStopAssistantTurn(message)) {
+      const stopReason = (assistantMessage as { stopReason?: unknown }).stopReason;
+      if (stopReason === "error" || isZeroUsageEmptyStopAssistantTurn(assistantMessage)) {
         out.push({
-          ...message,
+          ...assistantMessage,
           content: [{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }],
         });
         touched = true;
         continue;
       }
     }
-    out.push(message);
+    out.push(assistantMessage);
+  }
+
+  // Drop trailing stream-error / zero-usage-empty-stop placeholder turns. The
+  // sentinel was synthesized to satisfy Bedrock Converse's "ContentBlock must
+  // not be empty" rule for *non-trailing* error turns; when it is the trailing
+  // entry, prefill-strict providers (e.g. github-copilot/claude-opus-4.6 — the
+  // exact path reported in #77228) reject the request with
+  // `400 This model does not support assistant message prefill. The
+  // conversation must end with a user message.`. The original turn carried
+  // `content: []` and zero usage — there is no information to lose by
+  // dropping it. This trim runs after the main loop so it also catches a
+  // sentinel that was *persisted* to disk by an earlier session-file repair
+  // pass (matching the same content shape the loop above produces).
+  while (out.length > 0) {
+    const last = out[out.length - 1];
+    if (!isReplayDroppableTrailingAssistant(last)) {
+      break;
+    }
+    out.pop();
+    touched = true;
   }
   return touched ? out : messages;
+}
+
+function isReplayDroppableTrailingAssistant(message: AgentMessage | undefined): boolean {
+  if (!message || message.role !== "assistant") {
+    return false;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  if (content.length === 0) {
+    const stopReason = (message as { stopReason?: unknown }).stopReason;
+    return stopReason === "error" || isZeroUsageEmptyStopAssistantTurn(message);
+  }
+  // Sentinel-text content is the post-rewrite shape produced by either
+  // session-file-repair.rewriteAssistantEntryWithEmptyContent (always
+  // stopReason="error") or the in-memory rewrite earlier in this same
+  // normalizeAssistantReplayContent loop (preserves the original
+  // stopReason — "error" or zero-usage "stop"). Drop only when the trailing
+  // turn carries that synthetic provenance: without this guard, a real
+  // model reply that happens to consist of exactly the sentinel string
+  // would be silently removed on next replay
+  // (clawsweeper review on #77287, P2).
+  if (!isStreamErrorSentinelContent(content)) {
+    return false;
+  }
+  const stopReason = (message as { stopReason?: unknown }).stopReason;
+  if (stopReason === "error") {
+    return true;
+  }
+  return isZeroUsageEmptyStopAssistantTurn({
+    stopReason,
+    usage: (message as { usage?: unknown }).usage,
+    content: [],
+  });
+}
+
+function isStreamErrorSentinelContent(content: readonly unknown[]): boolean {
+  if (content.length !== 1) {
+    return false;
+  }
+  const block = content[0];
+  if (!block || typeof block !== "object") {
+    return false;
+  }
+  const blockRecord = block as { type?: unknown; text?: unknown };
+  return blockRecord.type === "text" && blockRecord.text === STREAM_ERROR_FALLBACK_TEXT;
 }
 
 function normalizeAssistantUsageSnapshot(usage: unknown) {
@@ -587,9 +725,12 @@ export async function sanitizeSessionHistory(params: {
   const validatedThinkingSignatures = policy.preserveSignatures
     ? stripInvalidThinkingSignatures(sanitizedImages)
     : sanitizedImages;
-  const droppedThinking = policy.dropThinkingBlocks
-    ? dropThinkingBlocks(validatedThinkingSignatures)
+  const droppedReasoning = policy.dropReasoningFromHistory
+    ? dropReasoningFromHistory(validatedThinkingSignatures)
     : validatedThinkingSignatures;
+  const droppedThinking = policy.dropThinkingBlocks
+    ? dropThinkingBlocks(droppedReasoning)
+    : droppedReasoning;
   const sanitizedToolCalls = sanitizeToolCallInputs(droppedThinking, {
     allowedToolNames: params.allowedToolNames,
     allowProviderOwnedThinkingReplay,

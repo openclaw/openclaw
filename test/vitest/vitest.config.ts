@@ -11,6 +11,7 @@ export { resolveDefaultVitestPool, resolveLocalVitestMaxWorkers, resolveLocalVit
 
 export const rootVitestProjects = [
   "test/vitest/vitest.unit.config.ts",
+  "test/vitest/vitest.unit-ui.config.ts",
   "test/vitest/vitest.infra.config.ts",
   "test/vitest/vitest.boundary.config.ts",
   "test/vitest/vitest.contracts-channel-surface.config.ts",
@@ -31,7 +32,10 @@ export const rootVitestProjects = [
   "test/vitest/vitest.commands-light.config.ts",
   "test/vitest/vitest.commands.config.ts",
   "test/vitest/vitest.auto-reply.config.ts",
-  "test/vitest/vitest.agents.config.ts",
+  "test/vitest/vitest.agents-core.config.ts",
+  "test/vitest/vitest.agents-pi-embedded.config.ts",
+  "test/vitest/vitest.agents-support.config.ts",
+  "test/vitest/vitest.agents-tools.config.ts",
   "test/vitest/vitest.daemon.config.ts",
   "test/vitest/vitest.media.config.ts",
   "test/vitest/vitest.unit-fast.config.ts",
@@ -51,7 +55,6 @@ export const rootVitestProjects = [
   "test/vitest/vitest.wizard.config.ts",
   "test/vitest/vitest.channels.config.ts",
   "test/vitest/vitest.extension-acpx.config.ts",
-  "test/vitest/vitest.extension-bluebubbles.config.ts",
   "test/vitest/vitest.extension-diffs.config.ts",
   "test/vitest/vitest.extension-discord.config.ts",
   "test/vitest/vitest.extension-feishu.config.ts",
@@ -71,6 +74,10 @@ export const rootVitestProjects = [
   "test/vitest/vitest.extension-voice-call.config.ts",
   "test/vitest/vitest.extension-whatsapp.config.ts",
   "test/vitest/vitest.extension-zalo.config.ts",
+  "test/vitest/vitest.extension-browser.config.ts",
+  "test/vitest/vitest.extension-qa.config.ts",
+  "test/vitest/vitest.extension-media.config.ts",
+  "test/vitest/vitest.extension-misc.config.ts",
   "test/vitest/vitest.extensions.config.ts",
 ] as const;
 

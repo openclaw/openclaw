@@ -1,12 +1,14 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
 import { fireAndForgetBoundedHook } from "../../../hooks/fire-and-forget.js";
 import {
   diagnosticErrorCategory,
+  diagnosticErrorFailureKind,
   diagnosticProviderRequestIdHash,
 } from "../../../infra/diagnostic-error-metadata.js";
 import {
   emitTrustedDiagnosticEvent,
   type DiagnosticEventInput,
+  type DiagnosticMemoryUsage,
 } from "../../../infra/diagnostic-events.js";
 import {
   createChildDiagnosticTraceContext,
@@ -17,6 +19,7 @@ import {
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type {
   PluginHookAgentContext,
+  PluginHookContextWindowSource,
   PluginHookModelCallEndedEvent,
   PluginHookModelCallStartedEvent,
 } from "../../../plugins/hook-types.js";
@@ -31,8 +34,12 @@ type ModelCallDiagnosticContext = {
   model: string;
   api?: string;
   transport?: string;
+  contextTokenBudget?: number;
+  contextWindowSource?: PluginHookContextWindowSource;
+  contextWindowReferenceTokens?: number;
   trace: DiagnosticTraceContext;
   nextCallId: () => string;
+  onStarted?: () => void;
 };
 
 type ModelCallEventBase = Omit<
@@ -41,16 +48,71 @@ type ModelCallEventBase = Omit<
 >;
 type ModelCallErrorFields = Pick<
   Extract<DiagnosticEventInput, { type: "model.call.error" }>,
-  "errorCategory" | "upstreamRequestIdHash"
+  "errorCategory" | "failureKind" | "memory" | "upstreamRequestIdHash"
 >;
 type ModelCallEndedHookFields = Pick<
   PluginHookModelCallEndedEvent,
-  "durationMs" | "outcome" | "errorCategory" | "upstreamRequestIdHash"
+  | "durationMs"
+  | "outcome"
+  | "errorCategory"
+  | "requestPayloadBytes"
+  | "responseStreamBytes"
+  | "timeToFirstByteMs"
+  | "failureKind"
+  | "upstreamRequestIdHash"
 >;
+type ModelCallSizeTimingFields = Pick<
+  Extract<DiagnosticEventInput, { type: "model.call.completed" }>,
+  "requestPayloadBytes" | "responseStreamBytes" | "timeToFirstByteMs"
+>;
+type ModelCallObservationState = {
+  requestPayloadBytes?: number;
+  responseStreamBytes: number;
+  timeToFirstByteMs?: number;
+};
 
 const MODEL_CALL_STREAM_RETURN_TIMEOUT_MS = 1000;
 const TRACEPARENT_HEADER_NAME = "traceparent";
 type ModelCallStreamOptions = Parameters<StreamFn>[2];
+
+function utf8JsonByteLength(value: unknown): number | undefined {
+  try {
+    return Buffer.byteLength(JSON.stringify(value), "utf8");
+  } catch {
+    return undefined;
+  }
+}
+
+function assignRequestPayloadBytes(state: ModelCallObservationState, payload: unknown): void {
+  const bytes = utf8JsonByteLength(payload);
+  if (bytes !== undefined) {
+    state.requestPayloadBytes = bytes;
+  }
+}
+
+function observeResponseChunk(
+  state: ModelCallObservationState,
+  startedAt: number,
+  chunk: unknown,
+): void {
+  state.timeToFirstByteMs ??= Math.max(0, Date.now() - startedAt);
+  const bytes = utf8JsonByteLength(chunk);
+  if (bytes !== undefined) {
+    state.responseStreamBytes += bytes;
+  }
+}
+
+function modelCallSizeTimingFields(state: ModelCallObservationState): ModelCallSizeTimingFields {
+  return {
+    ...(state.requestPayloadBytes !== undefined
+      ? { requestPayloadBytes: state.requestPayloadBytes }
+      : {}),
+    ...(state.responseStreamBytes > 0 ? { responseStreamBytes: state.responseStreamBytes } : {}),
+    ...(state.timeToFirstByteMs !== undefined
+      ? { timeToFirstByteMs: state.timeToFirstByteMs }
+      : {}),
+  };
+}
 
 function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
   if (value === null || (typeof value !== "object" && typeof value !== "function")) {
@@ -92,16 +154,38 @@ function baseModelCallEvent(
     model: ctx.model,
     ...(ctx.api && { api: ctx.api }),
     ...(ctx.transport && { transport: ctx.transport }),
+    ...(ctx.contextTokenBudget ? { contextTokenBudget: ctx.contextTokenBudget } : {}),
+    ...(ctx.contextWindowSource ? { contextWindowSource: ctx.contextWindowSource } : {}),
+    ...(ctx.contextWindowReferenceTokens
+      ? { contextWindowReferenceTokens: ctx.contextWindowReferenceTokens }
+      : {}),
     trace,
   };
 }
 
 function modelCallErrorFields(err: unknown): ModelCallErrorFields {
   const upstreamRequestIdHash = diagnosticProviderRequestIdHash(err);
+  const failureKind = diagnosticErrorFailureKind(err);
   return {
     errorCategory: diagnosticErrorCategory(err),
+    ...(failureKind ? { failureKind, memory: processMemoryUsageSnapshot() } : {}),
     ...(upstreamRequestIdHash ? { upstreamRequestIdHash } : {}),
   };
+}
+
+function processMemoryUsageSnapshot(): DiagnosticMemoryUsage | undefined {
+  try {
+    const memory = process.memoryUsage();
+    return {
+      rssBytes: memory.rss,
+      heapTotalBytes: memory.heapTotal,
+      heapUsedBytes: memory.heapUsed,
+      externalBytes: memory.external,
+      arrayBuffersBytes: memory.arrayBuffers,
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 function modelCallHookEventBase(eventBase: ModelCallEventBase): PluginHookModelCallStartedEvent {
@@ -114,6 +198,13 @@ function modelCallHookEventBase(eventBase: ModelCallEventBase): PluginHookModelC
     model: eventBase.model,
     ...(eventBase.api ? { api: eventBase.api } : {}),
     ...(eventBase.transport ? { transport: eventBase.transport } : {}),
+    ...(eventBase.contextTokenBudget ? { contextTokenBudget: eventBase.contextTokenBudget } : {}),
+    ...(eventBase.contextWindowSource
+      ? { contextWindowSource: eventBase.contextWindowSource }
+      : {}),
+    ...(eventBase.contextWindowReferenceTokens
+      ? { contextWindowReferenceTokens: eventBase.contextWindowReferenceTokens }
+      : {}),
   };
 }
 
@@ -125,6 +216,13 @@ function modelCallHookContext(eventBase: ModelCallEventBase): PluginHookAgentCon
     ...(eventBase.sessionId ? { sessionId: eventBase.sessionId } : {}),
     modelProviderId: eventBase.provider,
     modelId: eventBase.model,
+    ...(eventBase.contextTokenBudget ? { contextTokenBudget: eventBase.contextTokenBudget } : {}),
+    ...(eventBase.contextWindowSource
+      ? { contextWindowSource: eventBase.contextWindowSource }
+      : {}),
+    ...(eventBase.contextWindowReferenceTokens
+      ? { contextWindowReferenceTokens: eventBase.contextWindowReferenceTokens }
+      : {}),
   }) as PluginHookAgentContext;
 }
 
@@ -168,34 +266,45 @@ function emitModelCallStarted(eventBase: ModelCallEventBase): void {
   dispatchModelCallStartedHook(eventBase);
 }
 
-function emitModelCallCompleted(eventBase: ModelCallEventBase, startedAt: number): void {
+function emitModelCallCompleted(
+  eventBase: ModelCallEventBase,
+  startedAt: number,
+  state: ModelCallObservationState,
+): void {
   const durationMs = Date.now() - startedAt;
+  const sizeTimingFields = modelCallSizeTimingFields(state);
   emitTrustedDiagnosticEvent({
     type: "model.call.completed",
     ...eventBase,
     durationMs,
+    ...sizeTimingFields,
   });
   dispatchModelCallEndedHook(eventBase, {
     durationMs,
     outcome: "completed",
+    ...sizeTimingFields,
   });
 }
 
 function emitModelCallError(
   eventBase: ModelCallEventBase,
   startedAt: number,
+  state: ModelCallObservationState,
   fields: ModelCallErrorFields,
 ): void {
   const durationMs = Date.now() - startedAt;
+  const sizeTimingFields = modelCallSizeTimingFields(state);
   emitTrustedDiagnosticEvent({
     type: "model.call.error",
     ...eventBase,
     durationMs,
+    ...sizeTimingFields,
     ...fields,
   });
   dispatchModelCallEndedHook(eventBase, {
     durationMs,
     outcome: "error",
+    ...sizeTimingFields,
     ...fields,
   });
 }
@@ -203,10 +312,31 @@ function emitModelCallError(
 function withDiagnosticTraceparentHeader(
   options: ModelCallStreamOptions,
   trace: DiagnosticTraceContext,
+  state: ModelCallObservationState,
 ): ModelCallStreamOptions {
   const traceparent = formatDiagnosticTraceparent(trace);
+  const originalOnPayload = options?.onPayload;
+  const onPayload: NonNullable<ModelCallStreamOptions>["onPayload"] = (payload, model) => {
+    if (!originalOnPayload) {
+      assignRequestPayloadBytes(state, payload);
+      return undefined;
+    }
+    const result = originalOnPayload(payload, model);
+    if (isPromiseLike(result)) {
+      return result.then((replacement) => {
+        assignRequestPayloadBytes(state, replacement ?? payload);
+        return replacement;
+      });
+    }
+    assignRequestPayloadBytes(state, result ?? payload);
+    return result;
+  };
+
   if (!traceparent) {
-    return options;
+    return {
+      ...options,
+      onPayload,
+    };
   }
 
   const headers: Record<string, string> = {};
@@ -220,6 +350,7 @@ function withDiagnosticTraceparentHeader(
   return {
     ...options,
     headers,
+    onPayload,
   };
 }
 
@@ -259,6 +390,7 @@ async function* observeModelCallIterator<T>(
   iterator: AsyncIterator<T>,
   eventBase: ModelCallEventBase,
   startedAt: number,
+  state: ModelCallObservationState,
 ): AsyncIterable<T> {
   let terminalEmitted = false;
   try {
@@ -267,18 +399,19 @@ async function* observeModelCallIterator<T>(
       if (next.done) {
         break;
       }
+      observeResponseChunk(state, startedAt, next.value);
       yield next.value;
     }
     terminalEmitted = true;
-    emitModelCallCompleted(eventBase, startedAt);
+    emitModelCallCompleted(eventBase, startedAt, state);
   } catch (err) {
     terminalEmitted = true;
-    emitModelCallError(eventBase, startedAt, modelCallErrorFields(err));
+    emitModelCallError(eventBase, startedAt, state, modelCallErrorFields(err));
     throw err;
   } finally {
     if (!terminalEmitted) {
       await safeReturnIterator(iterator);
-      emitModelCallCompleted(eventBase, startedAt);
+      emitModelCallCompleted(eventBase, startedAt, state);
     }
   }
 }
@@ -288,9 +421,10 @@ function observeModelCallStream<T extends AsyncIterable<unknown>>(
   createIterator: () => AsyncIterator<unknown>,
   eventBase: ModelCallEventBase,
   startedAt: number,
+  state: ModelCallObservationState,
 ): T {
   const observedIterator = () =>
-    observeModelCallIterator(createIterator(), eventBase, startedAt)[Symbol.asyncIterator]();
+    observeModelCallIterator(createIterator(), eventBase, startedAt, state)[Symbol.asyncIterator]();
   let hasNonConfigurableIterator = false;
   try {
     hasNonConfigurableIterator =
@@ -318,6 +452,7 @@ function observeModelCallResult(
   result: unknown,
   eventBase: ModelCallEventBase,
   startedAt: number,
+  state: ModelCallObservationState,
 ): unknown {
   const createIterator = asyncIteratorFactory(result);
   if (createIterator) {
@@ -326,9 +461,10 @@ function observeModelCallResult(
       createIterator,
       eventBase,
       startedAt,
+      state,
     );
   }
-  emitModelCallCompleted(eventBase, startedAt);
+  emitModelCallCompleted(eventBase, startedAt, state);
   return result;
 }
 
@@ -341,23 +477,25 @@ export function wrapStreamFnWithDiagnosticModelCallEvents(
     const trace = freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(ctx.trace));
     const eventBase = baseModelCallEvent(ctx, callId, trace);
     emitModelCallStarted(eventBase);
+    ctx.onStarted?.();
     const startedAt = Date.now();
-    const propagatedOptions = withDiagnosticTraceparentHeader(options, trace);
+    const state: ModelCallObservationState = { responseStreamBytes: 0 };
+    const propagatedOptions = withDiagnosticTraceparentHeader(options, trace, state);
 
     try {
       const result = streamFn(model, streamContext, propagatedOptions);
       if (isPromiseLike(result)) {
         return result.then(
-          (resolved) => observeModelCallResult(resolved, eventBase, startedAt),
+          (resolved) => observeModelCallResult(resolved, eventBase, startedAt, state),
           (err) => {
-            emitModelCallError(eventBase, startedAt, modelCallErrorFields(err));
+            emitModelCallError(eventBase, startedAt, state, modelCallErrorFields(err));
             throw err;
           },
         );
       }
-      return observeModelCallResult(result, eventBase, startedAt);
+      return observeModelCallResult(result, eventBase, startedAt, state);
     } catch (err) {
-      emitModelCallError(eventBase, startedAt, modelCallErrorFields(err));
+      emitModelCallError(eventBase, startedAt, state, modelCallErrorFields(err));
       throw err;
     }
   }) as StreamFn;

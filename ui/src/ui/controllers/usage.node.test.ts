@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  __test,
+  testApi,
   loadSessionLogs,
   loadSessionTimeSeries,
   loadUsage,
@@ -20,6 +20,7 @@ function createState(request: RequestFn, overrides: Partial<UsageState> = {}): U
     usageError: null,
     usageStartDate: "2026-02-16",
     usageEndDate: "2026-02-16",
+    usageScope: "family",
     usageSelectedSessions: [],
     usageSelectedDays: [],
     usageTimeSeries: null,
@@ -39,6 +40,8 @@ function expectSpecificTimezoneCalls(request: ReturnType<typeof vi.fn>, startCal
     endDate: "2026-02-16",
     mode: "specific",
     utcOffset: "UTC+5:30",
+    groupBy: "family",
+    includeHistorical: true,
     limit: 1000,
     includeContextWeight: true,
   });
@@ -52,7 +55,7 @@ function expectSpecificTimezoneCalls(request: ReturnType<typeof vi.fn>, startCal
 
 describe("usage controller date interpretation params", () => {
   beforeEach(() => {
-    __test.resetLegacyUsageDateParamsCache();
+    testApi.resetLegacyUsageDateParamsCache();
   });
 
   afterEach(() => {
@@ -60,9 +63,9 @@ describe("usage controller date interpretation params", () => {
   });
 
   it("formats UTC offsets for whole and half-hour timezones", () => {
-    expect(__test.formatUtcOffset(240)).toBe("UTC-4");
-    expect(__test.formatUtcOffset(-330)).toBe("UTC+5:30");
-    expect(__test.formatUtcOffset(0)).toBe("UTC+0");
+    expect(testApi.formatUtcOffset(240)).toBe("UTC-4");
+    expect(testApi.formatUtcOffset(-330)).toBe("UTC+5:30");
+    expect(testApi.formatUtcOffset(0)).toBe("UTC+0");
   });
 
   it("sends specific mode with browser offset when usage timezone is local", async () => {
@@ -85,6 +88,8 @@ describe("usage controller date interpretation params", () => {
       startDate: "2026-02-16",
       endDate: "2026-02-16",
       mode: "utc",
+      groupBy: "family",
+      includeHistorical: true,
       limit: 1000,
       includeContextWeight: true,
     });
@@ -107,7 +112,7 @@ describe("usage controller date interpretation params", () => {
   });
 
   it("serializes non-Error objects without object-to-string coercion", () => {
-    expect(__test.toErrorMessage({ reason: "nope" })).toBe('{"reason":"nope"}');
+    expect(testApi.toErrorMessage({ reason: "nope" })).toBe('{"reason":"nope"}');
   });
 
   it("falls back and remembers compatibility when sessions.usage rejects mode/utcOffset", async () => {
@@ -139,6 +144,8 @@ describe("usage controller date interpretation params", () => {
     expect(request).toHaveBeenNthCalledWith(3, "sessions.usage", {
       startDate: "2026-02-16",
       endDate: "2026-02-16",
+      groupBy: "family",
+      includeHistorical: true,
       limit: 1000,
       includeContextWeight: true,
     });
@@ -153,6 +160,8 @@ describe("usage controller date interpretation params", () => {
     expect(request).toHaveBeenNthCalledWith(5, "sessions.usage", {
       startDate: "2026-02-16",
       endDate: "2026-02-16",
+      groupBy: "family",
+      includeHistorical: true,
       limit: 1000,
       includeContextWeight: true,
     });
@@ -162,11 +171,74 @@ describe("usage controller date interpretation params", () => {
     });
 
     // Persisted flag should survive cache resets (simulating app reload).
-    __test.resetLegacyUsageDateParamsCache();
-    expect(__test.shouldSendLegacyDateInterpretation(state)).toBe(false);
+    testApi.resetLegacyUsageDateParamsCache();
+    expect(testApi.shouldSendLegacyDateInterpretation(state)).toBe(false);
 
     vi.unstubAllGlobals();
   });
+
+  it("falls back and remembers compatibility when sessions.usage rejects lineage params", async () => {
+    const storage = createStorageMock();
+    vi.stubGlobal("localStorage", storage as unknown as Storage);
+    vi.spyOn(Date.prototype, "getTimezoneOffset").mockReturnValue(-330);
+
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "sessions.usage") {
+        const record = (params ?? {}) as Record<string, unknown>;
+        if ("groupBy" in record || "includeHistorical" in record) {
+          throw new Error(
+            "invalid sessions.usage params: at root: unexpected property 'groupBy'; at root: unexpected property 'includeHistorical'",
+          );
+        }
+        return { sessions: [] };
+      }
+      return {};
+    });
+
+    const state = createState(request, {
+      usageTimeZone: "local",
+      settings: { gatewayUrl: "ws://127.0.0.1:18789" },
+    });
+
+    await loadUsage(state);
+
+    expectSpecificTimezoneCalls(request, 1);
+    expect(request).toHaveBeenNthCalledWith(3, "sessions.usage", {
+      startDate: "2026-02-16",
+      endDate: "2026-02-16",
+      mode: "specific",
+      utcOffset: "UTC+5:30",
+      limit: 1000,
+      includeContextWeight: true,
+    });
+    expect(request).toHaveBeenNthCalledWith(4, "usage.cost", {
+      startDate: "2026-02-16",
+      endDate: "2026-02-16",
+      mode: "specific",
+      utcOffset: "UTC+5:30",
+    });
+
+    // Subsequent loads for the same gateway should still send date params but skip lineage params.
+    await loadUsage(state);
+
+    expect(request).toHaveBeenNthCalledWith(5, "sessions.usage", {
+      startDate: "2026-02-16",
+      endDate: "2026-02-16",
+      mode: "specific",
+      utcOffset: "UTC+5:30",
+      limit: 1000,
+      includeContextWeight: true,
+    });
+    expect(request).toHaveBeenNthCalledWith(6, "usage.cost", {
+      startDate: "2026-02-16",
+      endDate: "2026-02-16",
+      mode: "specific",
+      utcOffset: "UTC+5:30",
+    });
+
+    vi.unstubAllGlobals();
+  });
+
   it("keeps optional loaders resilient when requests fail", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.usage.timeseries" || method === "sessions.usage.logs") {
