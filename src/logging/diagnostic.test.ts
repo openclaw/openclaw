@@ -1264,7 +1264,7 @@ describe("stuck session diagnostics threshold", () => {
     expect(recoverStuckSession).not.toHaveBeenCalled();
   });
 
-  it("recovers queued sessions behind terminal embedded progress after the abort threshold", () => {
+  it("does not abort queued sessions behind terminal embedded progress while work remains queued", () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn();
     const stuckSessionWarnMs = 30_000;
@@ -1314,11 +1314,7 @@ describe("stuck session diagnostics threshold", () => {
       terminalProgressStale: true,
       lastProgressReason: terminalReason,
     });
-    expectRecoveryCall(
-      recoverStuckSession,
-      { sessionId: "s1", sessionKey: "main", queueDepth: 1, allowActiveAbort: true },
-      ["ageMs", "stateGeneration"],
-    );
+    expect(recoverStuckSession).not.toHaveBeenCalled();
   });
 
   it("starts and stops the stability recorder with the heartbeat lifecycle", () => {
