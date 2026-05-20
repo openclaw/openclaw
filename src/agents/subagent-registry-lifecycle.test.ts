@@ -920,6 +920,68 @@ describe("subagent registry lifecycle hardening", () => {
     expect(persist).toHaveBeenCalled();
   });
 
+  it("credits a requester delivery mirror before retrying a NO_REPLY completion announce", async () => {
+    const persist = vi.fn();
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      expectsCompletionMessage: true,
+      retainAttachmentsOnKeep: true,
+    });
+    const runSubagentAnnounceFlow = vi.fn(
+      async (announceParams: {
+        onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
+      }) => {
+        announceParams.onDeliveryResult?.({
+          delivered: false,
+          path: "direct",
+          error: "completion agent did not produce a visible reply",
+        });
+        return false;
+      },
+    );
+    gatewayMocks.callGateway.mockResolvedValueOnce({
+      messages: [
+        {
+          role: "assistant",
+          provider: "openclaw",
+          model: "delivery-mirror",
+          content: "final completion reply",
+          timestamp: 12_345,
+        },
+      ],
+    });
+
+    const controller = createLifecycleController({
+      entry,
+      persist,
+      runSubagentAnnounceFlow,
+    });
+
+    await expect(
+      controller.completeSubagentRun({
+        runId: entry.runId,
+        endedAt: 4_000,
+        outcome: { status: "ok" },
+        reason: SUBAGENT_ENDED_REASON_COMPLETE,
+        triggerCleanup: true,
+      }),
+    ).resolves.toBeUndefined();
+
+    await vi.waitFor(() => expect(entry.cleanupCompletedAt).toBeTypeOf("number"));
+    expect(gatewayMocks.callGateway).toHaveBeenCalledWith({
+      method: "chat.history",
+      params: { sessionKey: entry.requesterSessionKey, limit: 25 },
+      timeoutMs: 5_000,
+    });
+    expect(entry.completionDeliveredAt).toBe(12_345);
+    expect(entry.completionAnnouncedAt).toBe(12_345);
+    expect(entry.lastAnnounceDeliveryError).toBeUndefined();
+    expect(entry.pendingFinalDelivery).toBeUndefined();
+    expect(entry.announceRetryCount).toBeUndefined();
+    expect(hasDeliveredTaskStatusUpdate(entry.runId)).toBe(true);
+    expect(helperMocks.logAnnounceGiveUp).not.toHaveBeenCalled();
+  });
+
   it("skips browser cleanup when steer restart suppresses cleanup flow", async () => {
     const entry = createRunEntry({
       expectsCompletionMessage: false,

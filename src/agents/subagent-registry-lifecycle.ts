@@ -4,6 +4,7 @@ import type { callGateway as defaultCallGateway } from "../gateway/call.js";
 import { formatErrorMessage, readErrorName } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
+import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import {
   completeTaskRunByRunId,
@@ -159,6 +160,47 @@ export function createSubagentRegistryLifecycleController(params: {
         typeof delivery.deliveredAt === "number" ? delivery.deliveredAt : Date.now();
       entry.completionDeliveredAt = deliveredAt;
       entry.lastAnnounceDropReason = undefined;
+    }
+  };
+
+  const hasPriorRequesterDeliveryMirror = async (entry: SubagentRunRecord): Promise<boolean> => {
+    const expectedText = extractTextFromChatContent(entry.frozenResultText, { joinWith: "" });
+    if (entry.expectsCompletionMessage !== true || expectedText == null) {
+      return false;
+    }
+    try {
+      const history = await params.callGateway<{
+        messages?: unknown[];
+      }>({
+        method: "chat.history",
+        params: { sessionKey: entry.requesterSessionKey, limit: 25 },
+        timeoutMs: 5_000,
+      });
+      const mirror = history.messages?.find((message) => {
+        if (!message || typeof message !== "object") {
+          return false;
+        }
+        const record = message as {
+          role?: unknown;
+          provider?: unknown;
+          model?: unknown;
+          content?: unknown;
+        };
+        const text = extractTextFromChatContent(record.content, { joinWith: "" });
+        return (
+          record.role === "assistant" &&
+          record.provider === "openclaw" &&
+          record.model === "delivery-mirror" &&
+          text === expectedText
+        );
+      });
+      const deliveredAt = (mirror as { timestamp?: unknown } | undefined)?.timestamp;
+      if (typeof deliveredAt === "number") {
+        entry.completionDeliveredAt = deliveredAt;
+      }
+      return Boolean(mirror);
+    } catch {
+      return false;
     }
   };
 
@@ -774,11 +816,20 @@ export function createSubagentRegistryLifecycleController(params: {
     const pendingPayload = loadPendingFinalDeliveryPayload(entry);
     const requesterOrigin = normalizeDeliveryContext(pendingPayload.requesterOrigin);
     let latestDeliveryError = entry.lastAnnounceDeliveryError;
-    const finalizeAnnounceCleanup = (didAnnounce: boolean) => {
+    const finalizeAnnounceCleanup = async (didAnnounce: boolean) => {
+      const shouldCreditPriorDelivery =
+        !didAnnounce && (await hasPriorRequesterDeliveryMirror(entry));
+      if (shouldCreditPriorDelivery) {
+        latestDeliveryError = undefined;
+      }
       if (!didAnnounce && latestDeliveryError) {
         entry.lastAnnounceDeliveryError = latestDeliveryError;
       }
-      void finalizeSubagentCleanup(runId, entry.cleanup, didAnnounce).catch((err) => {
+      void finalizeSubagentCleanup(
+        runId,
+        entry.cleanup,
+        didAnnounce || shouldCreditPriorDelivery,
+      ).catch((err) => {
         defaultRuntime.log(`[warn] subagent cleanup finalize failed (${runId}): ${String(err)}`);
         const current = params.runs.get(runId);
         if (!current || current.cleanupCompletedAt) {
@@ -830,13 +881,13 @@ export function createSubagentRegistryLifecycleController(params: {
         },
       })
       .then((didAnnounce) => {
-        finalizeAnnounceCleanup(didAnnounce);
+        void finalizeAnnounceCleanup(didAnnounce);
       })
       .catch((error) => {
         defaultRuntime.log(
           `[warn] Subagent announce flow failed during cleanup for run ${runId}: ${String(error)}`,
         );
-        finalizeAnnounceCleanup(false);
+        void finalizeAnnounceCleanup(false);
       });
     return true;
   };
