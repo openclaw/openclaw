@@ -281,6 +281,7 @@ Docs: https://docs.openclaw.ai
 - ACP/Codex: honor terminal ACP turn results so failed Codex/acpx runs are not recorded as successful after only progress text. Fixes #79522. Thanks @dudaefj.
 - Telegram: warn when a media group drops photos that fail to download, including albums where every photo is skipped. Fixes #55216. (#82987) Thanks @eldar702.
 - Agents/diagnostics: treat repeated same-handle embedded-run cleanup as idempotent while preserving true replacement-handle mismatch diagnostics. Fixes #82959. (#82960) Thanks @galiniliev.
+- Agents/subagents: preserve high-priority `AGENTS.md` policy in bootstrap context when oversized files are trimmed, and warn agents to read the full policy file before relying on scoped rules. Fixes #82920. (#82921) Thanks @galiniliev.
 - Agents/skills: apply the full effective tool policy pipeline to inline `command-dispatch: tool` skill dispatch before owner-only filtering, preserving configured allow, deny, sandbox, sender, group, and subagent restrictions. (#78525)
 - Codex: avoid spawning native hook relay subprocesses for post-tool/finalize events with no registered hook handlers while preserving pre-tool safety and approval relays. Fixes #76552. (#78004) Thanks @evgyur.
 - Channel accounts: keep top-level default channel accounts visible when named accounts are added alongside default credential material, so mixed legacy/new account configs keep resolving `default` instead of silently dropping it.
