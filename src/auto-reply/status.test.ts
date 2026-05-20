@@ -34,6 +34,8 @@ vi.mock("../plugins/commands.js", () => ({
 
 afterEach(() => {
   vi.restoreAllMocks();
+  listPluginCommands.mockReset();
+  listPluginCommands.mockImplementation(() => []);
   MODEL_CONTEXT_TOKEN_CACHE.clear();
 });
 
@@ -772,6 +774,43 @@ describe("buildStatusMessage", () => {
     expect(normalized).not.toContain("Context: 49k/1.0m");
   });
 
+  it("renders CLI runtime aliases as the selected model route", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "anthropic/claude-opus-4-7",
+      },
+      sessionEntry: {
+        sessionId: "claude-cli-runtime-alias",
+        updatedAt: 0,
+        providerOverride: "anthropic",
+        modelOverride: "claude-opus-4-7",
+        modelProvider: "claude-cli",
+        model: "claude-opus-4-7",
+        fallbackNoticeSelectedModel: "anthropic/claude-opus-4-7",
+        fallbackNoticeActiveModel: "claude-cli/claude-opus-4-7",
+        fallbackNoticeReason: "selected model unavailable",
+        inputTokens: 29,
+        outputTokens: 19_000,
+        cacheRead: 3_000_000,
+        totalTokens: 36_000,
+        totalTokensFresh: true,
+        contextTokens: 1_000_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "unknown",
+      activeModelAuth: "oauth (anthropic:claude-cli)",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Model: anthropic/claude-opus-4-7");
+    expect(normalized).toContain("oauth (anthropic:claude-cli)");
+    expect(normalized).not.toContain("Fallback: claude-cli/claude-opus-4-7");
+    expect(normalized).not.toContain("unknown");
+    expect(normalized).toContain("Context: 36k/1.0m (4%)");
+  });
+
   it("keeps an explicit runtime context limit when fallback status already computed one", () => {
     const text = buildStatusMessage({
       config: {
@@ -1306,6 +1345,89 @@ describe("buildStatusMessage", () => {
     });
 
     expect(normalizeTestText(text)).toContain("Model: google-antigravity/claude-sonnet-4-6");
+  });
+
+  it("warns when the session-selected model differs from the configured default", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "zhipu/glm-4.5-air",
+      },
+      configuredDefaultModelLabel: "zhipu/glm-4.5-air",
+      sessionEntry: {
+        sessionId: "pinned-session",
+        updatedAt: 0,
+        providerOverride: "deepseek",
+        modelOverride: "deepseek-v4-flash",
+        modelOverrideSource: "user",
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Configured default: zhipu/glm-4.5-air");
+    expect(normalized).toContain("Session selected: deepseek/deepseek-v4-flash");
+    expect(normalized).toContain("Reason: session override");
+    expect(normalized).toContain(
+      "This session is pinned to deepseek/deepseek-v4-flash; config primary zhipu/glm-4.5-air will apply to new/unpinned sessions.",
+    );
+    expect(normalized).toContain("Clear with: /model zhipu/glm-4.5-air or /reset");
+    expect(normalized).toContain(
+      "Docs: https://docs.openclaw.ai/concepts/models#selection-source-and-fallback-behavior",
+    );
+  });
+
+  it("does not warn when only the last runtime model differs from the configured default", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "zhipu/glm-4.5-air",
+      },
+      configuredDefaultModelLabel: "zhipu/glm-4.5-air",
+      sessionEntry: {
+        sessionId: "runtime-snapshot-only",
+        updatedAt: 0,
+        modelProvider: "deepseek",
+        model: "deepseek-v4-flash",
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Model: zhipu/glm-4.5-air");
+    expect(normalized).not.toContain("Configured default:");
+    expect(normalized).not.toContain("Reason: session override");
+  });
+
+  it("does not label auto fallback model overrides as pinned selections", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "zhipu/glm-4.5-air",
+      },
+      configuredDefaultModelLabel: "zhipu/glm-4.5-air",
+      sessionEntry: {
+        sessionId: "auto-fallback",
+        updatedAt: 0,
+        providerOverride: "deepseek",
+        modelOverride: "deepseek-v4-flash",
+        modelOverrideSource: "auto",
+        modelOverrideFallbackOriginProvider: "zhipu",
+        modelOverrideFallbackOriginModel: "glm-4.5-air",
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Model: deepseek/deepseek-v4-flash");
+    expect(normalized).not.toContain("Configured default:");
+    expect(normalized).not.toContain("Reason: session override");
   });
 
   it("handles missing agent config gracefully", () => {
@@ -2131,9 +2253,7 @@ describe("buildCommandsMessagePaginated", () => {
     ];
     listPluginCommands.mockImplementation(() => pluginCommands);
     expect(listPluginCommands()).toEqual(pluginCommands);
-    vi.resetModules();
-    const { buildCommandsMessagePaginated: buildPaginatedCommands } = await import("./status.js");
-    const firstPage = buildPaginatedCommands(
+    const firstPage = buildCommandsMessagePaginated(
       {
         commands: { config: false, debug: false },
       } as unknown as OpenClawConfig,
@@ -2141,7 +2261,7 @@ describe("buildCommandsMessagePaginated", () => {
       { surface: "telegram", page: 1, forcePaginatedList: true },
     );
     const pages = Array.from({ length: firstPage.totalPages }, (_, index) =>
-      buildPaginatedCommands(
+      buildCommandsMessagePaginated(
         {
           commands: { config: false, debug: false },
         } as unknown as OpenClawConfig,

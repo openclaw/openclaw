@@ -17,7 +17,11 @@ import {
 } from "../gateway/protocol/client-info.js";
 import {
   type HelloOk,
+  MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
+  type CommandEntry,
+  type CommandsListParams,
+  type CommandsListResult,
   type SessionsListParams,
   type SessionsPatchResult,
   type SessionsPatchParams,
@@ -128,7 +132,7 @@ export class GatewayChatClient implements TuiBackend {
       deviceIdentity: connection.allowInsecureLocalOperatorUi ? null : undefined,
       caps: [GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
       instanceId: randomUUID(),
-      minProtocol: PROTOCOL_VERSION,
+      minProtocol: MIN_CLIENT_PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,
       onHelloOk: (hello) => {
         this.hello = hello;
@@ -249,6 +253,11 @@ export class GatewayChatClient implements TuiBackend {
   async listModels(): Promise<GatewayModelChoice[]> {
     const res = await this.client.request("models.list");
     return Array.isArray(res?.models) ? res.models : [];
+  }
+
+  async listCommands(opts?: CommandsListParams): Promise<CommandEntry[]> {
+    const res = await this.client.request<CommandsListResult>("commands.list", opts ?? {});
+    return Array.isArray(res?.commands) ? res.commands : [];
   }
 }
 

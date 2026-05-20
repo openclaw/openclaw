@@ -235,10 +235,11 @@ describe("voice-call outbound helpers", () => {
       inlineTwiml: undefined,
       preConnectTwiml: "<DtmfRedirect />",
     });
-    expect(ctx.activeCalls.get(callId)?.metadata).toMatchObject({
-      initialMessage: "hello meet",
-      mode: "conversation",
-    });
+    const metadata = (
+      ctx.activeCalls.get(callId) as { metadata?: Record<string, unknown> } | undefined
+    )?.metadata;
+    expect(metadata?.initialMessage).toBe("hello meet");
+    expect(metadata?.mode).toBe("conversation");
   });
 
   it("rejects DTMF sequences outside conversation mode", async () => {
@@ -448,7 +449,7 @@ describe("voice-call outbound helpers", () => {
       providerCallId: "provider-1",
       reason: "hangup-bot",
     });
-    expect(call).toMatchObject({ endReason: "hangup-bot" });
+    expect((call as { endReason?: string }).endReason).toBe("hangup-bot");
     const endedAt = (call as { endedAt?: unknown }).endedAt;
     expect(endedAt).toBeTypeOf("number");
     if (typeof endedAt === "number") {
@@ -482,7 +483,7 @@ describe("voice-call outbound helpers", () => {
       providerCallId: "provider-1",
       reason: "timeout",
     });
-    expect(call).toMatchObject({ endReason: "timeout" });
+    expect((call as { endReason?: string }).endReason).toBe("timeout");
     const endedAt = (call as { endedAt?: unknown }).endedAt;
     expect(endedAt).toBeTypeOf("number");
     if (typeof endedAt === "number") {
@@ -527,5 +528,102 @@ describe("voice-call outbound helpers", () => {
         "call-1",
       ),
     ).resolves.toEqual({ success: true });
+  });
+
+  it("issues a stream session and threads streamUrl + streamAuthToken through for Telnyx realtime", async () => {
+    const initiateProviderCall = vi.fn(async () => ({ providerCallId: "call-control-1" }));
+    const streamSessionIssuer = vi.fn(() => ({
+      token: "token-xyz",
+      streamUrl: "wss://example.test/voice/stream/realtime/token-xyz",
+    }));
+    const ctx = {
+      activeCalls: new Map(),
+      providerCallIdMap: new Map(),
+      provider: { name: "telnyx", initiateCall: initiateProviderCall },
+      config: {
+        maxConcurrentCalls: 3,
+        outbound: { defaultMode: "conversation" },
+        fromNumber: "+14155550100",
+        realtime: { enabled: true },
+      },
+      storePath: "/tmp/voice-call.json",
+      webhookUrl: "https://example.com/webhook",
+      streamSessionIssuer,
+    };
+
+    const result = await initiateCall(ctx as never, "+14155550123");
+
+    expect(result.success).toBe(true);
+    expect(streamSessionIssuer).toHaveBeenCalledTimes(1);
+    const issuerCall = (
+      streamSessionIssuer.mock.calls as unknown as Array<
+        [{ providerName: string; direction: string; to: string }]
+      >
+    )[0]?.[0];
+    expect(issuerCall?.providerName).toBe("telnyx");
+    expect(issuerCall?.direction).toBe("outbound");
+    expect(issuerCall?.to).toBe("+14155550123");
+    const providerCall = (
+      initiateProviderCall.mock.calls as unknown as Array<
+        [{ streamUrl?: string; streamAuthToken?: string }]
+      >
+    )[0]?.[0];
+    expect(providerCall?.streamUrl).toBe("wss://example.test/voice/stream/realtime/token-xyz");
+    expect(providerCall?.streamAuthToken).toBe("token-xyz");
+  });
+
+  it("skips the stream session for Twilio realtime (Twilio learns the URL from TwiML)", async () => {
+    const initiateProviderCall = vi.fn(async () => ({ providerCallId: "provider-1" }));
+    const streamSessionIssuer = vi.fn(() => ({
+      token: "should-not-be-used",
+      streamUrl: "wss://example.test/should-not-be-used",
+    }));
+    const ctx = {
+      activeCalls: new Map(),
+      providerCallIdMap: new Map(),
+      provider: { name: "twilio", initiateCall: initiateProviderCall },
+      config: {
+        maxConcurrentCalls: 3,
+        outbound: { defaultMode: "conversation" },
+        fromNumber: "+14155550100",
+        realtime: { enabled: true },
+      },
+      storePath: "/tmp/voice-call.json",
+      webhookUrl: "https://example.com/webhook",
+      streamSessionIssuer,
+    };
+
+    const result = await initiateCall(ctx as never, "+14155550123");
+
+    expect(result.success).toBe(true);
+    expect(streamSessionIssuer).not.toHaveBeenCalled();
+    const providerCall = (
+      initiateProviderCall.mock.calls as unknown as Array<[Record<string, unknown>]>
+    )[0]?.[0];
+    expect(providerCall?.streamUrl).toBeUndefined();
+    expect(providerCall?.streamAuthToken).toBeUndefined();
+  });
+
+  it("does not issue a stream session when realtime is disabled", async () => {
+    const initiateProviderCall = vi.fn(async () => ({ providerCallId: "call-control-1" }));
+    const streamSessionIssuer = vi.fn();
+    const ctx = {
+      activeCalls: new Map(),
+      providerCallIdMap: new Map(),
+      provider: { name: "telnyx", initiateCall: initiateProviderCall },
+      config: {
+        maxConcurrentCalls: 3,
+        outbound: { defaultMode: "conversation" },
+        fromNumber: "+14155550100",
+        realtime: { enabled: false },
+      },
+      storePath: "/tmp/voice-call.json",
+      webhookUrl: "https://example.com/webhook",
+      streamSessionIssuer,
+    };
+
+    await initiateCall(ctx as never, "+14155550123");
+
+    expect(streamSessionIssuer).not.toHaveBeenCalled();
   });
 });

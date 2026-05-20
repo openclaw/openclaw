@@ -88,7 +88,12 @@ vi.mock("./subagent-announce-delivery.runtime.js", () =>
     resolveMainSessionKey: () => "agent:main:main",
     resolveStorePath: () => "/tmp/sessions-main.json",
     isEmbeddedPiRunActive: (sessionId: string) => isEmbeddedPiRunActiveMock(sessionId),
-    queueEmbeddedPiMessage: () => false,
+    queueEmbeddedPiMessageWithOutcome: (sessionId: string) => ({
+      queued: false,
+      sessionId,
+      reason: "not_streaming",
+      gatewayHealth: "live",
+    }),
   }),
 );
 vi.mock("./subagent-announce-delivery.js", () => ({
@@ -170,13 +175,26 @@ vi.mock("./subagent-announce-delivery.js", () => ({
 }));
 vi.mock("./subagent-announce.runtime.js", () => ({
   callGateway: createGatewayCallModuleMock().callGateway,
+  dispatchGatewayMethodInProcess: async (
+    method: string,
+    params: Record<string, unknown>,
+    options?: { expectFinal?: boolean; timeoutMs?: number },
+  ) => {
+    const request = {
+      method,
+      params,
+      expectFinal: options?.expectFinal,
+      timeoutMs: options?.timeoutMs,
+    };
+    gatewayCalls.push(request);
+    return await callGatewayImpl(request);
+  },
   getRuntimeConfig: () => configOverride,
   loadSessionStore: vi.fn(() => sessionStore),
   resolveAgentIdFromSessionKey: () => "main",
   resolveStorePath: () => "/tmp/sessions-main.json",
   resolveMainSessionKey: () => "agent:main:main",
   isEmbeddedPiRunActive: (sessionId: string) => isEmbeddedPiRunActiveMock(sessionId),
-  queueEmbeddedPiMessage: (_sessionId: string, _text: string) => false,
   waitForEmbeddedPiRunEnd: (sessionId: string, timeoutMs?: number) =>
     waitForEmbeddedPiRunEndMock(sessionId, timeoutMs),
 }));

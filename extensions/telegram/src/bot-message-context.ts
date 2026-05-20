@@ -1,10 +1,13 @@
-import type { ReactionTypeEmoji } from "@grammyjs/types";
+import type { ReactionTypeEmoji } from "grammy/types";
 import {
   resolveAckReaction,
   shouldAckReaction as shouldAckReactionGate,
 } from "openclaw/plugin-sdk/channel-feedback";
 import { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
-import type { TelegramDirectConfig, TelegramGroupConfig } from "openclaw/plugin-sdk/config-types";
+import type {
+  TelegramDirectConfig,
+  TelegramGroupConfig,
+} from "openclaw/plugin-sdk/config-contracts";
 import { deriveLastRoutePolicy } from "openclaw/plugin-sdk/routing";
 import { normalizeAccountId, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -26,6 +29,7 @@ import {
 } from "./bot-message-context.session.js";
 import type { BuildTelegramMessageContextParams } from "./bot-message-context.types.js";
 import {
+  buildTelegramInboundOriginTarget,
   buildTypingThreadParams,
   extractTelegramForumFlag,
   resolveTelegramForumFlag,
@@ -156,6 +160,7 @@ export const buildTelegramMessageContext = async ({
     chatType: msg.chat.type,
     isGroup,
     isForum: extractTelegramForumFlag(msg.chat),
+    isTopicMessage: msg.is_topic_message,
     getChat: getChatApi,
   });
   const threadSpec = resolveTelegramThreadSpec({
@@ -440,6 +445,7 @@ export const buildTelegramMessageContext = async ({
     direction: "inbound",
   });
 
+  const originatingTo = buildTelegramInboundOriginTarget(chatId, threadSpec);
   const bodyResult = await resolveTelegramInboundBody({
     cfg,
     primaryCtx,
@@ -452,6 +458,7 @@ export const buildTelegramMessageContext = async ({
     senderUsername,
     resolvedThreadId,
     replyThreadId,
+    originatingTo,
     routeAgentId: route.agentId,
     sessionKey,
     effectiveGroupAllow,
@@ -472,6 +479,45 @@ export const buildTelegramMessageContext = async ({
     return null;
   }
 
+  const { ctxPayload, skillFilter, turn } = await buildTelegramInboundContextPayload({
+    cfg,
+    primaryCtx,
+    msg,
+    allMedia,
+    replyMedia,
+    replyChain,
+    promptContext,
+    isGroup,
+    isForum,
+    chatId,
+    senderId,
+    senderUsername,
+    resolvedThreadId,
+    dmThreadId,
+    threadSpec,
+    route,
+    rawBody: bodyResult.rawBody,
+    bodyText: bodyResult.bodyText,
+    historyKey: bodyResult.historyKey ?? "",
+    historyLimit,
+    groupHistories,
+    groupConfig,
+    topicConfig,
+    stickerCacheHit: bodyResult.stickerCacheHit,
+    effectiveWasMentioned: bodyResult.effectiveWasMentioned,
+    hasControlCommand: bodyResult.hasControlCommand,
+    ...(bodyResult.audioTranscribedMediaIndex !== undefined
+      ? { audioTranscribedMediaIndex: bodyResult.audioTranscribedMediaIndex }
+      : {}),
+    locationData: bodyResult.locationData,
+    options,
+    dmAllowFrom: dmAllow.allowFrom,
+    effectiveGroupAllow,
+    commandAuthorized: bodyResult.commandAuthorized,
+    topicName,
+    sessionRuntime,
+  });
+  const canShowStatusReaction = ctxPayload.InboundEventKind !== "room_event";
   const ackReaction = resolveAckReaction(cfg, route.agentId, {
     channel: "telegram",
     accountId: account.accountId,
@@ -480,6 +526,7 @@ export const buildTelegramMessageContext = async ({
     ackReaction && isTelegramSupportedReactionEmoji(ackReaction) ? ackReaction : undefined;
   const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
   const shouldSendAckReaction = Boolean(
+    canShowStatusReaction &&
     ackReaction &&
     shouldAckReactionGate({
       scope: ackReactionScope,
@@ -573,44 +620,6 @@ export const buildTelegramMessageContext = async ({
           },
         )
       : null;
-
-  const { ctxPayload, skillFilter, turn } = await buildTelegramInboundContextPayload({
-    cfg,
-    primaryCtx,
-    msg,
-    allMedia,
-    replyMedia,
-    replyChain,
-    promptContext,
-    isGroup,
-    isForum,
-    chatId,
-    senderId,
-    senderUsername,
-    resolvedThreadId,
-    dmThreadId,
-    threadSpec,
-    route,
-    rawBody: bodyResult.rawBody,
-    bodyText: bodyResult.bodyText,
-    historyKey: bodyResult.historyKey ?? "",
-    historyLimit,
-    groupHistories,
-    groupConfig,
-    topicConfig,
-    stickerCacheHit: bodyResult.stickerCacheHit,
-    effectiveWasMentioned: bodyResult.effectiveWasMentioned,
-    ...(bodyResult.audioTranscribedMediaIndex !== undefined
-      ? { audioTranscribedMediaIndex: bodyResult.audioTranscribedMediaIndex }
-      : {}),
-    locationData: bodyResult.locationData,
-    options,
-    dmAllowFrom: dmAllow.allowFrom,
-    effectiveGroupAllow,
-    commandAuthorized: bodyResult.commandAuthorized,
-    topicName,
-    sessionRuntime,
-  });
 
   return {
     ctxPayload,

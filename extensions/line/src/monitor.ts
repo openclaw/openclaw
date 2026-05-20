@@ -1,6 +1,6 @@
 import type { webhook } from "@line/bot-sdk";
 import { hasFinalChannelTurnDispatch } from "openclaw/plugin-sdk/channel-message";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { chunkMarkdownText } from "openclaw/plugin-sdk/reply-runtime";
 import {
   danger,
@@ -429,15 +429,20 @@ export async function monitorLineProvider(
           }
 
           requestLifecycle.release();
-
-          if (body.events && body.events.length > 0) {
-            logVerbose(`line: received ${body.events.length} webhook events`);
-            await match.target.bot.handleWebhook(body);
-          }
-
           res.statusCode = 200;
           res.setHeader("Content-Type", "application/json");
           res.end(JSON.stringify({ status: "ok" }));
+
+          if (body.events && body.events.length > 0) {
+            logVerbose(`line: received ${body.events.length} webhook events`);
+            void Promise.resolve()
+              .then(() => match.target.bot.handleWebhook(body))
+              .catch((err) => {
+                match.target.runtime.error?.(
+                  danger(`line webhook dispatch failed: ${String(err)}`),
+                );
+              });
+          }
         } catch (err) {
           if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {
             res.statusCode = 413;

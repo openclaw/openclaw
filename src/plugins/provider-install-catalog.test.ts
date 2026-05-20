@@ -7,6 +7,7 @@ type ResolveManifestProviderAuthChoices =
   typeof import("./provider-auth-choices.js").resolveManifestProviderAuthChoices;
 type ListOfficialExternalProviderCatalogEntries =
   typeof import("./official-external-plugin-catalog.js").listOfficialExternalProviderCatalogEntries;
+type PluginInstallSourceInfo = import("./install-source-info.js").PluginInstallSourceInfo;
 
 const loadOpenClawProviderIndex = vi.hoisted(() =>
   vi.fn<LoadOpenClawProviderIndex>(() => ({ version: 1, providers: {} })),
@@ -324,7 +325,15 @@ describe("provider install catalog", () => {
       },
     ]);
 
-    expect(resolveProviderInstallCatalogEntry("vllm")).toMatchObject({
+    expect(resolveProviderInstallCatalogEntry("vllm")).toEqual({
+      pluginId: "vllm",
+      providerId: "vllm",
+      methodId: "server",
+      choiceId: "vllm",
+      choiceLabel: "vLLM",
+      groupLabel: "vLLM",
+      label: "vLLM",
+      origin: "global",
       install: {
         clawhubSpec: "clawhub:openclaw/vllm@2026.5.2",
         defaultChoice: "clawhub",
@@ -390,6 +399,59 @@ describe("provider install catalog", () => {
         methodId: "api-key",
         choiceId: "demo-provider-api-key",
         choiceLabel: "Demo Provider API key",
+      },
+    ]);
+
+    expect(resolveProviderInstallCatalogEntries()).toStrictEqual([]);
+  });
+
+  it("ignores malformed persisted package install metadata", () => {
+    loadPluginRegistrySnapshot.mockReturnValue({
+      version: 1,
+      hostContractVersion: "test",
+      compatRegistryVersion: "test",
+      migrationVersion: 1,
+      policyHash: "test",
+      generatedAtMs: 0,
+      installRecords: {},
+      plugins: [
+        {
+          pluginId: "openai",
+          origin: "bundled",
+          manifestPath: "/repo/extensions/openai/openclaw.plugin.json",
+          manifestHash: "hash",
+          rootDir: "/repo/extensions/openai",
+          enabled: true,
+          startup: {
+            sidecar: false,
+            memory: false,
+            deferConfiguredChannelFullLoadUntilAfterListen: false,
+            agentHarnesses: [],
+          },
+          compat: [],
+          packageName: "@openclaw/openai",
+          packageInstall: {
+            defaultChoice: "npm",
+            npm: {
+              spec: 12,
+              packageName: "@openclaw/openai",
+              selectorKind: "exact-version",
+              exactVersion: true,
+              pinState: "exact-with-integrity",
+            },
+            warnings: [],
+          } as unknown as PluginInstallSourceInfo,
+        },
+      ],
+      diagnostics: [],
+    });
+    resolveManifestProviderAuthChoices.mockReturnValue([
+      {
+        pluginId: "openai",
+        providerId: "openai",
+        methodId: "api-key",
+        choiceId: "openai-api-key",
+        choiceLabel: "OpenAI API key",
       },
     ]);
 
@@ -547,7 +609,7 @@ describe("provider install catalog", () => {
       },
     ]);
 
-    expect(resolveProviderInstallCatalogEntry("codex")).toMatchObject({
+    expect(resolveProviderInstallCatalogEntry("codex")).toEqual({
       pluginId: "codex",
       providerId: "codex",
       methodId: "app-server",
@@ -558,9 +620,21 @@ describe("provider install catalog", () => {
       groupLabel: "Codex",
       onboardingScopes: ["text-inference"],
       label: "Codex",
+      origin: "bundled",
       install: {
         npmSpec: "@openclaw/codex",
         defaultChoice: "npm",
+      },
+      installSource: {
+        defaultChoice: "npm",
+        npm: {
+          spec: "@openclaw/codex",
+          packageName: "@openclaw/codex",
+          selectorKind: "none",
+          exactVersion: false,
+          pinState: "floating-without-integrity",
+        },
+        warnings: ["npm-spec-floating", "npm-spec-missing-integrity"],
       },
     });
   });
@@ -786,8 +860,14 @@ describe("provider install catalog", () => {
 
     expect(entries.map((entry) => entry.choiceId)).toEqual(["groq-api-key", "vllm-server"]);
     expect(resolveProviderInstallCatalogEntry("moonshot-api-key")).toBeUndefined();
-    expect(resolveProviderInstallCatalogEntry("vllm-server")).toMatchObject({
+    expect(resolveProviderInstallCatalogEntry("vllm-server")).toEqual({
       pluginId: "vllm",
+      providerId: "vllm",
+      methodId: "server",
+      choiceId: "vllm-server",
+      choiceLabel: "vLLM server",
+      label: "vLLM",
+      origin: "bundled",
       install: {
         clawhubSpec: "clawhub:openclaw/vllm@2026.5.2",
         npmSpec: "@openclaw/plugin-vllm@2026.5.2",
@@ -797,10 +877,19 @@ describe("provider install catalog", () => {
         defaultChoice: "clawhub",
         clawhub: {
           spec: "clawhub:openclaw/vllm@2026.5.2",
+          packageName: "openclaw/vllm",
+          version: "2026.5.2",
+          exactVersion: true,
         },
         npm: {
           spec: "@openclaw/plugin-vllm@2026.5.2",
+          packageName: "@openclaw/plugin-vllm",
+          selector: "2026.5.2",
+          selectorKind: "exact-version",
+          exactVersion: true,
+          pinState: "exact-without-integrity",
         },
+        warnings: ["npm-spec-missing-integrity"],
       },
     });
   });

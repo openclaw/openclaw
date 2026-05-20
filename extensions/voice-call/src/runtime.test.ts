@@ -129,6 +129,44 @@ function createExternalProviderConfig(params: {
   return config;
 }
 
+type RealtimeConsultToolHandler = (
+  args: unknown,
+  callId: string,
+  context?: { partialUserTranscript?: string },
+) => Promise<unknown>;
+
+function firstMockCall(calls: readonly unknown[][], label: string): unknown[] {
+  const call = calls.at(0);
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
+function firstCallParam(calls: readonly unknown[][], label: string) {
+  const call = firstMockCall(calls, label);
+  return call[0];
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label} to be a record`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireRealtimeConsultToolHandler(): RealtimeConsultToolHandler {
+  const registeredToolHandler = firstMockCall(
+    mocks.realtimeHandlerRegisterToolHandler.mock.calls,
+    "realtime tool handler registration",
+  );
+  expect(registeredToolHandler[0]).toBe("openclaw_agent_consult");
+  if (typeof registeredToolHandler[1] !== "function") {
+    throw new Error("expected realtime tool handler callback");
+  }
+  return registeredToolHandler[1] as RealtimeConsultToolHandler;
+}
+
 describe("createVoiceCallRuntime lifecycle", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -350,48 +388,48 @@ describe("createVoiceCallRuntime lifecycle", () => {
       agentRuntime: agentRuntime as never,
     });
 
-    expect(mocks.realtimeHandlerCtorArgs[0]?.[0]).toMatchObject({
-      tools: [
-        expect.objectContaining({ name: "openclaw_agent_consult" }),
-        expect.objectContaining({ name: "custom_tool" }),
-      ],
-    });
-    const registeredToolHandler = mocks.realtimeHandlerRegisterToolHandler.mock.calls[0];
-    expect(registeredToolHandler?.[0]).toBe("openclaw_agent_consult");
-    expect(registeredToolHandler?.[1]).toBeTypeOf("function");
-
-    const handler = mocks.realtimeHandlerRegisterToolHandler.mock.calls[0]?.[1] as
-      | ((
-          args: unknown,
-          callId: string,
-          context?: { partialUserTranscript?: string },
-        ) => Promise<unknown>)
-      | undefined;
+    const realtimeHandlerOptions = requireRecord(
+      mocks.realtimeHandlerCtorArgs[0]?.[0],
+      "realtime handler options",
+    );
+    const tools = realtimeHandlerOptions.tools;
+    if (!Array.isArray(tools)) {
+      throw new Error("expected realtime handler tools to be an array");
+    }
+    expect(tools.map((tool) => requireRecord(tool, "realtime tool").name)).toEqual([
+      "openclaw_agent_consult",
+      "custom_tool",
+    ]);
+    const handler = requireRealtimeConsultToolHandler();
     await expect(
-      handler?.({ question: "What should I say?" }, "call-1", {
+      handler({ question: "What should I say?" }, "call-1", {
         partialUserTranscript: "Also check the ETA.",
       }),
     ).resolves.toEqual({
       text: "Use the shipment status.",
     });
-    expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "voice:15550009999",
-        spawnedBy: "agent:main:discord:channel:general",
-        messageProvider: "voice",
-        lane: "voice",
-        provider: "openai",
-        model: "gpt-5.4",
-        toolsAllow: ["read", "web_search", "web_fetch", "x_search", "memory_search", "memory_get"],
-        extraSystemPrompt: expect.stringContaining("one or two bounded read-only queries"),
-        prompt: expect.stringContaining("Caller: Can you check shipment status?"),
-      }),
+    expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
+    const consultParams = requireRecord(
+      firstCallParam(runEmbeddedPiAgent.mock.calls as unknown[][], "embedded PI consult"),
+      "embedded PI consult params",
     );
-    expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        prompt: expect.stringContaining("Caller: Also check the ETA."),
-      }),
-    );
+    expect(consultParams.sessionKey).toBe("voice:15550009999");
+    expect(consultParams.spawnedBy).toBe("agent:main:discord:channel:general");
+    expect(consultParams.messageProvider).toBe("voice");
+    expect(consultParams.lane).toBe("voice");
+    expect(consultParams.provider).toBe("openai");
+    expect(consultParams.model).toBe("gpt-5.4");
+    expect(consultParams.toolsAllow).toEqual([
+      "read",
+      "web_search",
+      "web_fetch",
+      "x_search",
+      "memory_search",
+      "memory_get",
+    ]);
+    expect(consultParams.extraSystemPrompt).toContain("one or two bounded read-only queries");
+    expect(consultParams.prompt).toContain("Caller: Can you check shipment status?");
+    expect(consultParams.prompt).toContain("Caller: Also check the ETA.");
   });
 
   it("uses persisted per-call session keys for realtime consults", async () => {
@@ -436,21 +474,16 @@ describe("createVoiceCallRuntime lifecycle", () => {
       agentRuntime: agentRuntime as never,
     });
 
-    const handler = mocks.realtimeHandlerRegisterToolHandler.mock.calls[0]?.[1] as
-      | ((
-          args: unknown,
-          callId: string,
-          context?: { partialUserTranscript?: string },
-        ) => Promise<unknown>)
-      | undefined;
-    await expect(handler?.({ question: "What should I say?" }, "call-1")).resolves.toEqual({
+    const handler = requireRealtimeConsultToolHandler();
+    await expect(handler({ question: "What should I say?" }, "call-1")).resolves.toEqual({
       text: "Per-call consult answer.",
     });
-    expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "voice:call:call-1",
-      }),
+    expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
+    const consultParams = requireRecord(
+      firstCallParam(runEmbeddedPiAgent.mock.calls as unknown[][], "per-call embedded PI consult"),
+      "per-call embedded PI consult params",
     );
+    expect(consultParams.sessionKey).toBe("voice:call:call-1");
   });
 
   it("answers realtime consults from fast memory context before starting the full agent", async () => {
@@ -504,18 +537,10 @@ describe("createVoiceCallRuntime lifecycle", () => {
       agentRuntime: agentRuntime as never,
     });
 
-    const handler = mocks.realtimeHandlerRegisterToolHandler.mock.calls[0]?.[1] as
-      | ((
-          args: unknown,
-          callId: string,
-          context?: { partialUserTranscript?: string },
-        ) => Promise<unknown>)
-      | undefined;
-    await expect(handler?.({ question: "Are the basement lights on?" }, "call-1")).resolves.toEqual(
-      {
-        text: expect.stringContaining("The caller's basement lights are on."),
-      },
-    );
+    const handler = requireRealtimeConsultToolHandler();
+    const fastContextResult = await handler({ question: "Are the basement lights on?" }, "call-1");
+    const fastContextRecord = requireRecord(fastContextResult, "fast context result");
+    expect(fastContextRecord.text).toContain("The caller's basement lights are on.");
     expect(mocks.resolveRealtimeFastContextConsult).toHaveBeenCalledWith({
       cfg: {},
       agentId: "main",
@@ -580,19 +605,21 @@ describe("createVoiceCallRuntime lifecycle", () => {
       agentRuntime: agentRuntime as never,
     });
 
-    const handler = mocks.realtimeHandlerRegisterToolHandler.mock.calls[0]?.[1] as
-      | ((args: unknown, callId: string) => Promise<unknown>)
-      | undefined;
-    await expect(handler?.({ question: "Turn on the lights." }, "call-1")).resolves.toEqual({
+    const handler = requireRealtimeConsultToolHandler();
+    await expect(handler({ question: "Turn on the lights." }, "call-1")).resolves.toEqual({
       text: "Done.",
     });
 
     expect(agentRuntime.resolveThinkingDefault).not.toHaveBeenCalled();
-    expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        thinkLevel: "low",
-        fastMode: true,
-      }),
+    expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
+    const consultParams = requireRecord(
+      firstCallParam(
+        runEmbeddedPiAgent.mock.calls as unknown[][],
+        "configured embedded PI consult",
+      ),
+      "configured embedded PI consult params",
     );
+    expect(consultParams.thinkLevel).toBe("low");
+    expect(consultParams.fastMode).toBe(true);
   });
 });

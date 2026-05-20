@@ -112,31 +112,18 @@ struct MenuContent: View {
             }
             Divider()
             Button {
-                Task { @MainActor in
-                    await self.openDashboard()
-                }
+                AppNavigationActions.openDashboard()
             } label: {
                 Label("Open Dashboard", systemImage: "gauge")
             }
             Button {
-                Task { @MainActor in
-                    let sessionKey = await WebChatManager.shared.preferredSessionKey()
-                    WebChatManager.shared.show(sessionKey: sessionKey)
-                }
+                AppNavigationActions.openChat()
             } label: {
                 Label("Open Chat", systemImage: "bubble.left.and.bubble.right")
             }
             if self.state.canvasEnabled {
                 Button {
-                    Task { @MainActor in
-                        if self.state.canvasPanelVisible {
-                            CanvasManager.shared.hideAll()
-                        } else {
-                            let sessionKey = await GatewayConnection.shared.mainSessionKey()
-                            // Don't force a navigation on re-open: preserve the current web view state.
-                            _ = try? CanvasManager.shared.show(sessionKey: sessionKey, path: nil)
-                        }
-                    }
+                    AppNavigationActions.toggleCanvas()
                 } label: {
                     Label(
                         self.state.canvasPanelVisible ? "Close Canvas" : "Open Canvas",
@@ -334,26 +321,7 @@ struct MenuContent: View {
     }
 
     private func open(tab: SettingsTab) {
-        SettingsTabRouter.request(tab)
-        NSApp.activate(ignoringOtherApps: true)
-        self.openSettings()
-        DispatchQueue.main.async {
-            NotificationCenter.default.post(name: .openclawSelectSettingsTab, object: tab)
-        }
-    }
-
-    @MainActor
-    private func openDashboard() async {
-        do {
-            let config = try await GatewayEndpointStore.shared.requireConfig()
-            let url = try GatewayEndpointStore.dashboardURL(for: config, mode: self.state.connectionMode)
-            NSWorkspace.shared.open(url)
-        } catch {
-            let alert = NSAlert()
-            alert.messageText = "Dashboard unavailable"
-            alert.informativeText = error.localizedDescription
-            alert.runModal()
-        }
+        AppNavigationActions.openSettings(tab: tab)
     }
 
     private var macNodeStatus: (label: String, color: Color)? {

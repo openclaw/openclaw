@@ -1,5 +1,5 @@
-import { runAgentLoop, type AgentEvent, type StreamFn } from "@mariozechner/pi-agent-core";
-import { createAssistantMessageEventStream, validateToolArguments } from "@mariozechner/pi-ai";
+import { runAgentLoop, type AgentEvent, type StreamFn } from "@earendil-works/pi-agent-core";
+import { createAssistantMessageEventStream, validateToolArguments } from "@earendil-works/pi-ai";
 import { Type, type TSchema } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import { wrapToolWithBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
@@ -71,6 +71,44 @@ describe("normalizeToolParameterSchema", () => {
     expect(normalizeToolParameterSchema(schema)).toEqual(schema);
   });
 
+  it("adds permissive items schemas to arrays missing items", () => {
+    expect(
+      normalizeToolParameterSchema({
+        type: "object",
+        properties: {
+          entity_hints: { type: "array", description: "Optional entity hints" },
+          nested: {
+            type: "object",
+            properties: {
+              ids: { type: "array" },
+            },
+          },
+          alternatives: {
+            anyOf: [{ type: "array" }, { type: "string" }],
+          },
+        },
+      }),
+    ).toEqual({
+      type: "object",
+      properties: {
+        entity_hints: {
+          type: "array",
+          description: "Optional entity hints",
+          items: {},
+        },
+        nested: {
+          type: "object",
+          properties: {
+            ids: { type: "array", items: {} },
+          },
+        },
+        alternatives: {
+          anyOf: [{ type: "array", items: {} }, { type: "string" }],
+        },
+      },
+    });
+  });
+
   it("inlines local $ref before removing unsupported keywords", () => {
     const cleaned = cleanToolSchemaForGemini({
       type: "object",
@@ -86,15 +124,132 @@ describe("normalizeToolParameterSchema", () => {
     };
 
     expect(cleaned.$defs).toBeUndefined();
-    expect(cleaned.properties).toMatchObject({
+    expect(cleaned.properties).toEqual({
       foo: {
         type: "string",
         enum: ["a", "b"],
       },
     });
-    expect(cleaned.properties?.foo).toMatchObject({
+    expect(cleaned.properties?.foo).toEqual({
       type: "string",
       enum: ["a", "b"],
+    });
+  });
+
+  it("inlines nested local $ref schemas for provider-neutral tools", () => {
+    expect(
+      normalizeToolParameterSchema({
+        type: "object",
+        required: ["parent"],
+        properties: {
+          parent: {
+            $ref: "#/$defs/Parent",
+            description: "Notion parent",
+          },
+        },
+        $defs: {
+          Parent: {
+            oneOf: [
+              {
+                type: "object",
+                required: ["page_id"],
+                properties: { page_id: { type: "string" } },
+              },
+              {
+                type: "object",
+                required: ["database_id"],
+                properties: { database_id: { type: "string" } },
+              },
+            ],
+          },
+        },
+      }),
+    ).toEqual({
+      type: "object",
+      required: ["parent"],
+      properties: {
+        parent: {
+          description: "Notion parent",
+          oneOf: [
+            {
+              type: "object",
+              required: ["page_id"],
+              properties: { page_id: { type: "string" } },
+            },
+            {
+              type: "object",
+              required: ["database_id"],
+              properties: { database_id: { type: "string" } },
+            },
+          ],
+        },
+      },
+    });
+  });
+
+  it("inlines local $ref schemas that target nested JSON Pointer paths", () => {
+    expect(
+      normalizeToolParameterSchema({
+        type: "object",
+        properties: {
+          pageId: { $ref: "#/$defs/Parent/properties/page_id" },
+          legacyDatabaseId: { $ref: "#/definitions/Parent/properties/database_id" },
+        },
+        $defs: {
+          Parent: {
+            type: "object",
+            properties: {
+              page_id: { type: "string", description: "Page id" },
+            },
+          },
+        },
+        definitions: {
+          Parent: {
+            type: "object",
+            properties: {
+              database_id: { type: "string", description: "Database id" },
+            },
+          },
+        },
+      }),
+    ).toEqual({
+      type: "object",
+      properties: {
+        pageId: { type: "string", description: "Page id" },
+        legacyDatabaseId: { type: "string", description: "Database id" },
+      },
+    });
+  });
+
+  it("preserves local definitions when a local $ref cannot be resolved", () => {
+    expect(
+      normalizeToolParameterSchema({
+        type: "object",
+        properties: {
+          missing: { $ref: "#/$defs/Missing/properties/id" },
+        },
+        $defs: {
+          Present: {
+            type: "object",
+            properties: {
+              id: { type: "string" },
+            },
+          },
+        },
+      }),
+    ).toEqual({
+      type: "object",
+      properties: {
+        missing: { $ref: "#/$defs/Missing/properties/id" },
+      },
+      $defs: {
+        Present: {
+          type: "object",
+          properties: {
+            id: { type: "string" },
+          },
+        },
+      },
     });
   });
 
@@ -428,22 +583,31 @@ describe("normalizeToolParameters", () => {
     );
 
     expect(streamCalls).toBe(2);
-    expect(execute).toHaveBeenCalledWith("call-null-args", {}, undefined, expect.any(Function));
+    const executeCall = execute.mock.calls[0];
+    expect(executeCall?.[0]).toBe("call-null-args");
+    expect(executeCall?.[1]).toEqual({});
+    expect(executeCall?.[2]).toBeUndefined();
+    expect(typeof executeCall?.[3]).toBe("function");
     const toolResult = messages.find((message) => message.role === "toolResult");
-    expect(toolResult).toMatchObject({
-      role: "toolResult",
-      toolCallId: "call-null-args",
-      toolName: "wiki_lint",
-      isError: false,
-      content: [{ type: "text", text: "wiki ok" }],
-    });
+    const toolResultRecord = toolResult as
+      | {
+          role?: string;
+          toolCallId?: string;
+          toolName?: string;
+          isError?: boolean;
+          content?: unknown;
+        }
+      | undefined;
+    expect(toolResultRecord?.role).toBe("toolResult");
+    expect(toolResultRecord?.toolCallId).toBe("call-null-args");
+    expect(toolResultRecord?.toolName).toBe("wiki_lint");
+    expect(toolResultRecord?.isError).toBe(false);
+    expect(toolResultRecord?.content).toEqual([{ type: "text", text: "wiki ok" }]);
     const endedToolCall = events.find((event) => event.type === "tool_execution_end");
-    expect(endedToolCall).toMatchObject({
-      type: "tool_execution_end",
-      toolCallId: "call-null-args",
-      toolName: "wiki_lint",
-      isError: false,
-    });
+    expect(endedToolCall?.type).toBe("tool_execution_end");
+    expect(endedToolCall?.toolCallId).toBe("call-null-args");
+    expect(endedToolCall?.toolName).toBe("wiki_lint");
+    expect(endedToolCall?.isError).toBe(false);
     expect(JSON.stringify(messages)).not.toContain("Validation failed for tool");
   });
 
@@ -476,6 +640,50 @@ describe("normalizeToolParameters", () => {
     expect(parameters.properties?.count.type).toBe("integer");
     expect(parameters.properties?.query.minLength).toBeUndefined();
     expect(parameters.properties?.query.type).toBe("string");
+  });
+
+  it("omits empty array items when model compat requires it", () => {
+    const tool: AnyAgentTool = {
+      name: "demo",
+      label: "demo",
+      description: "demo",
+      parameters: {
+        type: "object",
+        properties: Object.fromEntries([
+          ["__proto__", { type: "array", items: {} }],
+          ["emptyItems", { type: "array" }],
+          ["typedItems", { type: "array", items: { type: "string" } }],
+          ["falseItems", { type: "array", items: false }],
+          ["nullItems", { type: "array", items: null }],
+          ["literalDefault", { type: "string", default: { type: "array", items: {} } }],
+          ["literalEnum", { type: "string", enum: [{ type: "array", items: {} }] }],
+        ]),
+      },
+      execute: vi.fn(),
+    };
+
+    const normalized = normalizeToolParameters(tool, {
+      modelCompat: { omitEmptyArrayItems: true } as never,
+    });
+
+    expect(normalized.parameters).toEqual({
+      type: "object",
+      properties: Object.fromEntries([
+        ["__proto__", { type: "array" }],
+        ["emptyItems", { type: "array" }],
+        ["typedItems", { type: "array", items: { type: "string" } }],
+        ["falseItems", { type: "array", items: false }],
+        ["nullItems", { type: "array", items: null }],
+        ["literalDefault", { type: "string", default: { type: "array", items: {} } }],
+        ["literalEnum", { type: "string", enum: [{ type: "array", items: {} }] }],
+      ]),
+    });
+    expect(
+      Object.prototype.hasOwnProperty.call(
+        (normalized.parameters as { properties?: Record<string, unknown> }).properties,
+        "__proto__",
+      ),
+    ).toBe(true);
   });
 
   it("filters required to match properties when flattening anyOf for Gemini", () => {

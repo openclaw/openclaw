@@ -78,6 +78,26 @@ Further restrict tools for specific providers or models. Order: base profile →
 }
 ```
 
+### `tools.toolsBySender`
+
+Restricts tools for a specific requester identity. This is defense-in-depth on top of channel access control; sender values must come from the channel adapter, not message text.
+
+```json5
+{
+  tools: {
+    toolsBySender: {
+      "channel:discord:1234567890123": { alsoAllow: ["group:fs"] },
+      "id:guest-user-id": { deny: ["group:runtime", "group:fs"] },
+      "*": { deny: ["exec", "process", "write", "edit", "apply_patch"] },
+    },
+  },
+}
+```
+
+Keys use explicit prefixes: `channel:<channelId>:<senderId>`, `id:<senderId>`, `e164:<phone>`, `username:<handle>`, `name:<displayName>`, or `"*"`. Channel ids are canonical OpenClaw ids; aliases such as `teams` normalize to `msteams`. Legacy unprefixed keys are accepted as `id:` only. Matching order is channel+id, id, e164, username, name, then wildcard.
+
+Per-agent `agents.list[].tools.toolsBySender` overrides the global sender match when it matches, even with an empty `{}` policy.
+
 ### `tools.elevated`
 
 Controls elevated exec access outside the sandbox:
@@ -111,6 +131,7 @@ Controls elevated exec access outside the sandbox:
       cleanupMs: 1800000,
       notifyOnExit: true,
       notifyOnExitEmptySuccess: false,
+      commandHighlighting: false,
       applyPatch: {
         enabled: false,
         allowModels: ["gpt-5.5"],
@@ -371,6 +392,7 @@ Experimental built-in tool flags. Default off unless a strict-agentic GPT-5 auto
         model: "minimax/MiniMax-M2.7",
         maxConcurrent: 8,
         runTimeoutSeconds: 900,
+        announceTimeoutMs: 120000,
         archiveAfterMinutes: 60,
       },
     },
@@ -379,8 +401,9 @@ Experimental built-in tool flags. Default off unless a strict-agentic GPT-5 auto
 ```
 
 - `model`: default model for spawned sub-agents. If omitted, sub-agents inherit the caller's model.
-- `allowAgents`: default allowlist of target agent ids for `sessions_spawn` when the requester agent does not set its own `subagents.allowAgents` (`["*"]` = any; default: same agent only).
+- `allowAgents`: default allowlist of target agent ids for `sessions_spawn` when the requester agent does not set its own `subagents.allowAgents` (`["*"]` = any configured target; default: same agent only).
 - `runTimeoutSeconds`: default timeout (seconds) for `sessions_spawn` when the tool call omits `runTimeoutSeconds`. `0` means no timeout.
+- `announceTimeoutMs`: per-call timeout (milliseconds) for gateway `agent` announce delivery attempts. Default: `120000`. Transient retries can make the total announce wait longer than one configured timeout.
 - Per-subagent tool policy: `tools.subagents.tools.allow` / `tools.subagents.tools.deny`.
 
 ---
@@ -388,6 +411,8 @@ Experimental built-in tool flags. Default off unless a strict-agentic GPT-5 auto
 ## Custom providers and base URLs
 
 OpenClaw uses the built-in model catalog. Add custom providers via `models.providers` in config or `~/.openclaw/agents/<agentId>/agent/models.json`.
+
+Configuring a custom/local provider `baseUrl` is also the narrow network trust decision for model HTTP requests: OpenClaw allows that exact `scheme://host:port` origin through the guarded fetch path, without adding a separate config option or trusting other private origins.
 
 ```json5
 {
@@ -464,7 +489,7 @@ OpenClaw uses the built-in model catalog. Add custom providers via `models.provi
     - `request.auth`: auth strategy override. Modes: `"provider-default"` (use provider's built-in auth), `"authorization-bearer"` (with `token`), `"header"` (with `headerName`, `value`, optional `prefix`).
     - `request.proxy`: HTTP proxy override. Modes: `"env-proxy"` (use `HTTP_PROXY`/`HTTPS_PROXY` env vars), `"explicit-proxy"` (with `url`). Both modes accept an optional `tls` sub-object.
     - `request.tls`: TLS override for direct connections. Fields: `ca`, `cert`, `key`, `passphrase` (all accept SecretRef), `serverName`, `insecureSkipVerify`.
-    - `request.allowPrivateNetwork`: when `true`, allow HTTPS to `baseUrl` when DNS resolves to private, CGNAT, or similar ranges, via the provider HTTP fetch guard (operator opt-in for trusted self-hosted OpenAI-compatible endpoints). Loopback model-provider stream URLs such as `localhost`, `127.0.0.1`, and `[::1]` are allowed automatically unless this is explicitly set to `false`; LAN, tailnet, and private DNS hosts still require opt-in. WebSocket uses the same `request` for headers/TLS but not that fetch SSRF gate. Default `false`.
+    - `request.allowPrivateNetwork`: when `true`, allow model-provider HTTP requests to private, CGNAT, or similar ranges through the provider HTTP fetch guard. Custom/local provider base URLs already trust the exact configured origin, except metadata/link-local origins, which remain blocked without explicit opt-in. Set this to `false` to opt out of exact-origin trust. WebSocket uses the same `request` for headers/TLS but not that fetch SSRF gate. Default `false`.
 
   </Accordion>
   <Accordion title="Model catalog entries">
@@ -474,7 +499,8 @@ OpenClaw uses the built-in model catalog. Add custom providers via `models.provi
     - `models.providers.*.models.*.contextTokens`: optional runtime context cap. This overrides provider-level `contextTokens`; use it when you want a smaller effective context budget than the model's native `contextWindow`; `openclaw models list` shows both values when they differ.
     - `models.providers.*.models.*.compat.supportsDeveloperRole`: optional compatibility hint. For `api: "openai-completions"` with a non-empty non-native `baseUrl` (host not `api.openai.com`), OpenClaw forces this to `false` at runtime. Empty/omitted `baseUrl` keeps default OpenAI behavior.
     - `models.providers.*.models.*.compat.requiresStringContent`: optional compatibility hint for string-only OpenAI-compatible chat endpoints. When `true`, OpenClaw flattens pure text `messages[].content` arrays into plain strings before sending the request.
-    - `models.providers.*.models.*.compat.thinkingFormat`: optional thinking payload hint. Use `"qwen"` for top-level `enable_thinking`, or `"qwen-chat-template"` for `chat_template_kwargs.enable_thinking` on Qwen-family OpenAI-compatible servers that support request-level chat-template kwargs, such as vLLM.
+    - `models.providers.*.models.*.compat.strictMessageKeys`: optional compatibility hint for strict OpenAI-compatible chat endpoints. When `true`, OpenClaw strips outgoing Chat Completions message objects to `role` and `content` before sending the request.
+    - `models.providers.*.models.*.compat.thinkingFormat`: optional thinking payload hint. Use `"together"` for Together-style `reasoning.enabled`, `"qwen"` for top-level `enable_thinking`, or `"qwen-chat-template"` for `chat_template_kwargs.enable_thinking` on Qwen-family OpenAI-compatible servers that support request-level chat-template kwargs, such as vLLM.
 
   </Accordion>
   <Accordion title="Amazon Bedrock discovery">
@@ -538,8 +564,8 @@ Interactive custom-provider onboarding infers image input for common vision mode
       env: { KIMI_API_KEY: "sk-..." },
       agents: {
         defaults: {
-          model: { primary: "kimi/kimi-code" },
-          models: { "kimi/kimi-code": { alias: "Kimi Code" } },
+          model: { primary: "kimi/kimi-for-coding" },
+          models: { "kimi/kimi-for-coding": { alias: "Kimi Code" } },
         },
       },
     }

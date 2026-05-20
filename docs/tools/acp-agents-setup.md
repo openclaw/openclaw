@@ -164,10 +164,12 @@ Then verify backend health:
 
 ### acpx command and version configuration
 
-By default, the `acpx` plugin registers the embedded ACP backend without
-spawning an ACP agent during Gateway startup. Run `/acp doctor` for an explicit
-live probe. Set `OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE=1` only when you need the
-Gateway to probe the configured agent at startup.
+By default, the `acpx` plugin registers the embedded ACP backend during Gateway
+startup and waits for the embedded runtime startup probe before the gateway
+`ready` signal. Set `OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE=0` or
+`OPENCLAW_SKIP_ACPX_RUNTIME_PROBE=1` only for scripts or environments that
+intentionally keep the startup probe disabled. Run `/acp doctor` for an explicit
+on-demand probe.
 
 Override the command or version in plugin config:
 
@@ -274,26 +276,26 @@ What this does:
 - Exposes selected built-in OpenClaw tools. The initial server exposes `cron`.
 - Keeps core-tool exposure explicit and default-off.
 
-### Runtime timeout configuration
+### Runtime operation timeout configuration
 
-The `acpx` plugin defaults embedded runtime turns to a 120-second
-timeout. This gives slower harnesses such as Gemini CLI enough time to complete
-ACP startup and initialization. Override it if your host needs a different
-runtime limit:
+The `acpx` plugin gives embedded runtime startup and control operations 120
+seconds by default. This gives slower harnesses such as Gemini CLI enough time
+to complete ACP startup and initialization. Override it if your host needs a
+different operation limit:
 
 ```bash
 openclaw config set plugins.entries.acpx.config.timeoutSeconds 180
 ```
 
-Restart the gateway after changing this value.
+Runtime turns use OpenClaw agent/run timeouts, including `/acp timeout` and
+`sessions_spawn.timeoutSeconds`. Restart the gateway after changing this value.
 
 ### Health probe agent configuration
 
-When `/acp doctor` or the opt-in startup probe checks the backend, the bundled
-`acpx` plugin probes one harness agent. If `acp.allowedAgents` is set, it
-defaults to the first allowed agent; otherwise it defaults to `codex`. If your
-deployment needs a different ACP agent for health checks, set the probe agent
-explicitly:
+When `/acp doctor` or the startup probe checks the backend, the bundled `acpx`
+plugin probes one harness agent. If `acp.allowedAgents` is set, it defaults to
+the first allowed agent; otherwise it defaults to `codex`. If your deployment
+needs a different ACP agent for health checks, set the probe agent explicitly:
 
 ```bash
 openclaw config set plugins.entries.acpx.config.probeAgent claude

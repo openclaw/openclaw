@@ -7,11 +7,17 @@ import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import type { EnvelopeFormatOptions } from "../envelope.js";
 import { formatEnvelopeTimestamp } from "../envelope.js";
+import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import type { TemplateContext } from "../templating.js";
 
 const MAX_UNTRUSTED_JSON_STRING_CHARS = 2_000;
 const MAX_UNTRUSTED_HISTORY_ENTRIES = 20;
 const MAX_UNTRUSTED_TRANSCRIPT_FIELD_CHARS = 500;
+const MESSAGE_TOOL_DELIVERY_HINT = "Delivery: to send a message, use the `message` tool.";
+
+type InboundUserContextPrefixOptions = {
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+};
 
 function stripNullBytes(value: string): string {
   return value.replaceAll("\u0000", "");
@@ -24,6 +30,16 @@ function normalizePromptMetadataString(value: unknown): string | undefined {
   }
   const sanitized = stripNullBytes(normalized);
   return sanitized || undefined;
+}
+
+function normalizePromptMetadataStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const normalized = value
+    .map((entry) => normalizePromptMetadataString(entry))
+    .filter((entry): entry is string => Boolean(entry));
+  return normalized.length > 0 ? normalized : undefined;
 }
 
 function sanitizePromptBody(value: unknown): string | undefined {
@@ -100,6 +116,22 @@ function formatUntrustedJsonBlock(label: string, payload: unknown): string {
   ].join("\n");
 }
 
+function buildConversationMentionMetadataPayload(
+  ctx: TemplateContext,
+  isDirect: boolean,
+): Record<string, unknown> {
+  return {
+    is_group_chat: !isDirect ? true : undefined,
+    was_mentioned: ctx.WasMentioned === true ? true : undefined,
+    explicitly_mentioned_bot:
+      typeof ctx.ExplicitlyMentionedBot === "boolean" ? ctx.ExplicitlyMentionedBot : undefined,
+    mentioned_user_ids: normalizePromptMetadataStringArray(ctx.MentionedUserIds),
+    mentioned_subteam_ids: normalizePromptMetadataStringArray(ctx.MentionedSubteamIds),
+    implicit_mention_kinds: normalizePromptMetadataStringArray(ctx.ImplicitMentionKinds),
+    mention_source: normalizePromptMetadataString(ctx.MentionSource),
+  };
+}
+
 function formatStructuredContextRelation(value: unknown): string | undefined {
   const relation = sanitizeTranscriptField(value);
   if (relation === "before_current_message") {
@@ -143,7 +175,7 @@ function formatChatWindowStructuredContext(
   entry: NonNullable<TemplateContext["UntrustedStructuredContext"]>[number],
   envelope?: EnvelopeFormatOptions,
 ): string | undefined {
-  if (normalizePromptMetadataString(entry.type) !== "chat_window" || !isRecord(entry.payload)) {
+  if (!isChatWindowStructuredContext(entry)) {
     return undefined;
   }
   const messages = Array.isArray(entry.payload["messages"]) ? entry.payload["messages"] : [];
@@ -161,6 +193,46 @@ function formatChatWindowStructuredContext(
   return [`${label} (${qualifiers}):`, ...lines].join("\n");
 }
 
+function isChatWindowStructuredContext(
+  entry: NonNullable<TemplateContext["UntrustedStructuredContext"]>[number],
+): entry is NonNullable<TemplateContext["UntrustedStructuredContext"]>[number] & {
+  payload: Record<string, unknown>;
+} {
+  return normalizePromptMetadataString(entry.type) === "chat_window" && isRecord(entry.payload);
+}
+
+function collectChatWindowMessageIds(
+  entries: NonNullable<TemplateContext["UntrustedStructuredContext"]>,
+): Set<string> {
+  const ids = new Set<string>();
+  for (const entry of entries) {
+    if (!isChatWindowStructuredContext(entry)) {
+      continue;
+    }
+    const messages = Array.isArray(entry.payload["messages"]) ? entry.payload["messages"] : [];
+    for (const message of messages) {
+      if (!isRecord(message)) {
+        continue;
+      }
+      const id = normalizePromptMetadataString(message["message_id"]);
+      if (id) {
+        ids.add(id);
+      }
+    }
+  }
+  return ids;
+}
+
+function isChatWindowHistoryContext(
+  entry: NonNullable<TemplateContext["UntrustedStructuredContext"]>[number],
+): boolean {
+  if (!isChatWindowStructuredContext(entry)) {
+    return false;
+  }
+  const relation = normalizePromptMetadataString(entry.payload["relation"]);
+  return relation === "before_current_message" || relation === "selected_for_current_message";
+}
+
 function buildLocationContextPayload(ctx: TemplateContext): Record<string, unknown> | undefined {
   const payload = {
     latitude: typeof ctx.LocationLat === "number" ? ctx.LocationLat : undefined,
@@ -176,6 +248,25 @@ function buildLocationContextPayload(ctx: TemplateContext): Record<string, unkno
     caption: sanitizePromptBody(ctx.LocationCaption),
   };
   return Object.values(payload).some((value) => value !== undefined) ? payload : undefined;
+}
+
+function buildInboundHistoryMediaPromptPayload(value: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((entry) => {
+    if (!isRecord(entry)) {
+      return [];
+    }
+    const payload = {
+      kind: normalizePromptMetadataString(entry["kind"]),
+      content_type: normalizePromptMetadataString(entry["contentType"]),
+      message_id: normalizePromptMetadataString(entry["messageId"]),
+      has_local_path: normalizePromptMetadataString(entry["path"]) ? true : undefined,
+      has_url: normalizePromptMetadataString(entry["url"]) ? true : undefined,
+    };
+    return Object.values(payload).some((field) => field !== undefined) ? [payload] : [];
+  });
 }
 
 function buildReplyChainPayload(ctx: TemplateContext): Array<Record<string, unknown>> {
@@ -212,6 +303,51 @@ function buildReplyChainPayload(ctx: TemplateContext): Array<Record<string, unkn
       },
     ];
   });
+}
+
+function isTelegramInboundContext(ctx: TemplateContext): boolean {
+  return [ctx.OriginatingChannel, ctx.Surface, ctx.Provider].some(
+    (value) => normalizePromptMetadataString(value) === "telegram",
+  );
+}
+
+function resolveInlineReplyQuote(ctx: TemplateContext): string | undefined {
+  return sanitizeTranscriptField(ctx.ReplyToQuoteText) ?? sanitizeTranscriptField(ctx.ReplyToBody);
+}
+
+function formatTelegramCurrentMessageContext(ctx: TemplateContext): string | undefined {
+  if (!isTelegramInboundContext(ctx)) {
+    return undefined;
+  }
+  const quote = resolveInlineReplyQuote(ctx);
+  if (!quote) {
+    return undefined;
+  }
+  const messageId =
+    normalizePromptMetadataString(ctx.MessageSid) ??
+    normalizePromptMetadataString(ctx.MessageSidFull);
+  const sender =
+    resolveSenderLabel({
+      name: normalizePromptMetadataString(ctx.SenderName),
+      username: normalizePromptMetadataString(ctx.SenderUsername),
+      tag: normalizePromptMetadataString(ctx.SenderTag),
+      e164: normalizePromptMetadataString(ctx.SenderE164),
+      id: normalizePromptMetadataString(ctx.SenderId),
+    }) ?? "unknown sender";
+  const header = [messageId ? `#${messageId}` : undefined, sanitizeTranscriptField(sender)].filter(
+    Boolean,
+  );
+  return [
+    "Current message:",
+    `[Replying to: ${JSON.stringify(quote)}]`,
+    header.length > 0 ? `${header.join(" ")}:` : undefined,
+  ]
+    .filter((line) => line !== undefined)
+    .join("\n");
+}
+
+export function resolveInboundUserContextPromptJoiner(ctx: TemplateContext): " " | undefined {
+  return formatTelegramCurrentMessageContext(ctx) ? " " : undefined;
 }
 
 function formatConversationTimestamp(
@@ -300,8 +436,12 @@ export function buildInboundMetaSystemPrompt(
 export function buildInboundUserContextPrefix(
   ctx: TemplateContext,
   envelope?: EnvelopeFormatOptions,
+  options?: InboundUserContextPrefixOptions,
 ): string {
   const blocks: string[] = [];
+  if (options?.sourceReplyDeliveryMode === "message_tool_only") {
+    blocks.push(MESSAGE_TOOL_DELIVERY_HINT);
+  }
   const chatType = normalizeChatType(ctx.ChatType);
   const isDirect = !chatType || chatType === "direct";
   const directChannelValue = resolveInboundChannel(ctx);
@@ -316,7 +456,25 @@ export function buildInboundUserContextPrefix(
   const timestampStr = formatConversationTimestamp(ctx.Timestamp, envelope);
   const inboundHistory = Array.isArray(ctx.InboundHistory) ? ctx.InboundHistory : [];
   const boundedHistory = inboundHistory.slice(-MAX_UNTRUSTED_HISTORY_ENTRIES);
+  const historyMediaCount = boundedHistory.reduce(
+    (count, entry) => count + buildInboundHistoryMediaPromptPayload(entry.media).length,
+    0,
+  );
   const replyChainPayload = buildReplyChainPayload(ctx);
+  const structuredContext = Array.isArray(ctx.UntrustedStructuredContext)
+    ? ctx.UntrustedStructuredContext
+    : [];
+  const chatWindowMessageIds = collectChatWindowMessageIds(structuredContext);
+  const replyToId = normalizePromptMetadataString(ctx.ReplyToId);
+  const chatWindowCoversReplyContext =
+    replyChainPayload.length > 0
+      ? replyChainPayload.every((entry) => {
+          const messageId = normalizePromptMetadataString(entry["message_id"]);
+          return messageId ? chatWindowMessageIds.has(messageId) : false;
+        })
+      : Boolean(replyToId && chatWindowMessageIds.has(replyToId));
+  const chatWindowCoversHistory = structuredContext.some(isChatWindowHistoryContext);
+  const currentMessageContext = formatTelegramCurrentMessageContext(ctx);
 
   // Keep volatile conversation/message identifiers in the user-role block so the system
   // prompt stays byte-stable across task-scoped sessions and reply turns.
@@ -342,19 +500,20 @@ export function buildInboundUserContextPrefix(
     group_space: normalizePromptMetadataString(ctx.GroupSpace),
     group_members: sanitizePromptBody(ctx.GroupMembers),
     thread_label: normalizePromptMetadataString(ctx.ThreadLabel),
+    inbound_event_kind: ctx.InboundEventKind,
     topic_id:
       ctx.MessageThreadId != null
         ? (normalizePromptMetadataString(String(ctx.MessageThreadId)) ?? undefined)
         : undefined,
     topic_name: normalizePromptMetadataString(ctx.TopicName) ?? undefined,
     is_forum: ctx.IsForum === true ? true : undefined,
-    is_group_chat: !isDirect ? true : undefined,
-    was_mentioned: ctx.WasMentioned === true ? true : undefined,
+    ...buildConversationMentionMetadataPayload(ctx, isDirect),
     has_reply_context:
       replyChainPayload.length > 0 || sanitizePromptBody(ctx.ReplyToBody) ? true : undefined,
     has_forwarded_context: normalizePromptMetadataString(ctx.ForwardedFrom) ? true : undefined,
     has_thread_starter: sanitizePromptBody(ctx.ThreadStarterBody) ? true : undefined,
     history_count: boundedHistory.length > 0 ? boundedHistory.length : undefined,
+    history_media_count: historyMediaCount > 0 ? historyMediaCount : undefined,
     history_truncated: inboundHistory.length > MAX_UNTRUSTED_HISTORY_ENTRIES ? true : undefined,
   };
   if (Object.values(conversationInfo).some((v) => v !== undefined)) {
@@ -391,14 +550,14 @@ export function buildInboundUserContextPrefix(
   }
 
   const replyToBody = sanitizePromptBody(ctx.ReplyToBody);
-  if (replyChainPayload.length > 0) {
+  if (replyChainPayload.length > 0 && !chatWindowCoversReplyContext && !currentMessageContext) {
     blocks.push(
       formatUntrustedJsonBlock(
         "Reply chain of current user message (untrusted, nearest first):",
         replyChainPayload,
       ),
     );
-  } else if (replyToBody) {
+  } else if (replyToBody && !chatWindowCoversReplyContext && !currentMessageContext) {
     blocks.push(
       formatUntrustedJsonBlock("Reply target of current user message (untrusted, for context):", {
         sender_label: normalizePromptMetadataString(ctx.ReplyToSender),
@@ -429,9 +588,6 @@ export function buildInboundUserContextPrefix(
     blocks.push(formatUntrustedJsonBlock("Location (untrusted metadata):", locationContext));
   }
 
-  const structuredContext = Array.isArray(ctx.UntrustedStructuredContext)
-    ? ctx.UntrustedStructuredContext
-    : [];
   for (const entry of structuredContext) {
     if (!entry || typeof entry !== "object") {
       continue;
@@ -450,17 +606,26 @@ export function buildInboundUserContextPrefix(
     );
   }
 
-  if (boundedHistory.length > 0) {
+  if (boundedHistory.length > 0 && !chatWindowCoversHistory) {
     blocks.push(
       formatUntrustedJsonBlock(
         "Chat history since last reply (untrusted, for context):",
-        boundedHistory.map((entry) => ({
-          sender: sanitizePromptBody(entry.sender),
-          timestamp_ms: entry.timestamp,
-          body: sanitizePromptBody(entry.body),
-        })),
+        boundedHistory.map((entry) => {
+          const media = buildInboundHistoryMediaPromptPayload(entry.media);
+          return {
+            sender: sanitizePromptBody(entry.sender),
+            timestamp_ms: entry.timestamp,
+            message_id: normalizePromptMetadataString(entry.messageId),
+            body: sanitizePromptBody(entry.body),
+            media: media.length > 0 ? media : undefined,
+          };
+        }),
       ),
     );
+  }
+
+  if (currentMessageContext) {
+    blocks.push(currentMessageContext);
   }
 
   return blocks.filter(Boolean).join("\n\n");

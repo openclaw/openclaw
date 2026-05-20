@@ -27,6 +27,30 @@ Expected healthy signals:
 - `openclaw doctor` reports no blocking config/service issues.
 - `openclaw channels status --probe` shows live per-account transport status and, where supported, probe/audit results such as `works` or `audit ok`.
 
+## After an update
+
+Use this when an update finishes but the Gateway is down, channels are empty, or
+model calls start failing with 401s.
+
+```bash
+openclaw status --all
+openclaw update status --json
+openclaw gateway status --deep
+openclaw doctor --fix
+openclaw gateway restart
+```
+
+Look for:
+
+- `Update restart` in `openclaw status` / `openclaw status --all`. Pending or
+  failed handoffs include the next command to run.
+- `plugin load failed: dependency tree corrupted; run openclaw doctor --fix`
+  under Channels. That means the channel config still exists, but plugin
+  registration failed before the channel could load.
+- provider 401s after re-auth. `openclaw doctor --fix` checks for stale
+  per-agent OAuth auth shadows and removes the old copies so all agents resolve
+  the current shared profile.
+
 ## Split brain installs and newer config guard
 
 Use this when a gateway service unexpectedly stops after an update, or logs show that one `openclaw` binary is older than the version that last wrote `openclaw.json`.
@@ -61,6 +85,32 @@ openclaw config get meta.lastTouchedVersion
 <Warning>
 For intentional downgrade or emergency recovery only, set `OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1` for the single command. Leave it unset for normal operation.
 </Warning>
+
+## Protocol mismatch after rollback
+
+Use this when logs keep printing `protocol mismatch` after you downgrade or roll back OpenClaw. This means an older Gateway is running, but a newer local client process is still trying to reconnect with a protocol range that the older Gateway cannot speak.
+
+```bash
+openclaw --version
+which -a openclaw
+openclaw gateway status --deep
+openclaw doctor --deep
+openclaw logs --follow
+```
+
+Look for:
+
+- `protocol mismatch ... client=... v<version> min=<n> max=<n> expected=<n>` in Gateway logs.
+- `Established clients:` in `openclaw gateway status --deep` or `Gateway clients` in `openclaw doctor --deep`. This lists active TCP clients connected to the Gateway port, including PIDs and command lines when the OS allows it.
+- A client process whose command line points at the newer OpenClaw install or wrapper you rolled back from.
+
+Fix:
+
+1. Stop or restart the stale OpenClaw client process shown by `gateway status --deep`.
+2. Restart apps or wrappers that embed OpenClaw, such as local dashboards, editors, app-server helpers, or long-running `openclaw logs --follow` shells.
+3. Re-run `openclaw gateway status --deep` or `openclaw doctor --deep` and confirm the stale client PID is gone.
+
+Do not make an older Gateway accept a newer incompatible protocol. Protocol bumps protect the wire contract; rollback recovery is a process/version cleanup problem.
 
 ## Skill symlink skipped as path escape
 
@@ -175,6 +225,7 @@ Look for:
   <Accordion title="Common signatures">
     - `model_not_found` with a local MLX/vLLM-style server → verify `baseUrl` includes `/v1`, `api` is `"openai-completions"` for `/v1/chat/completions` backends, and `models.providers.<provider>.models[].id` is the bare provider-local id. Select it with the provider prefix once, for example `mlx/mlx-community/Qwen3-30B-A3B-6bit`; keep the catalog entry as `mlx-community/Qwen3-30B-A3B-6bit`.
     - `messages[...].content: invalid type: sequence, expected a string` → backend rejects structured Chat Completions content parts. Fix: set `models.providers.<provider>.models[].compat.requiresStringContent: true`.
+    - `validation.keys` or allowed message keys like `["role","content"]` → backend rejects OpenAI-style replay metadata on Chat Completions messages. Fix: set `models.providers.<provider>.models[].compat.strictMessageKeys: true`.
     - `incomplete turn detected ... stopReason=stop payloads=0` → the backend completed the Chat Completions request but returned no user-visible assistant text for that turn. OpenClaw retries replay-safe empty OpenAI-compatible turns once; persistent failures usually mean the backend is emitting empty/non-text content or suppressing final-answer text.
     - direct tiny requests succeed, but OpenClaw agent runs fail with backend/model crashes (for example Gemma on some `inferrs` builds) → OpenClaw transport is likely already correct; the backend is failing on the larger agent-runtime prompt shape.
     - failures shrink after disabling tools but do not disappear → tool schemas were part of the pressure, but the remaining issue is still upstream model/server capacity or a backend bug.
@@ -182,9 +233,10 @@ Look for:
   </Accordion>
   <Accordion title="Fix options">
     1. Set `compat.requiresStringContent: true` for string-only Chat Completions backends.
-    2. Set `compat.supportsTools: false` for models/backends that cannot handle OpenClaw's tool schema surface reliably.
-    3. Lower prompt pressure where possible: smaller workspace bootstrap, shorter session history, lighter local model, or a backend with stronger long-context support.
-    4. If tiny direct requests keep passing while OpenClaw agent turns still crash inside the backend, treat it as an upstream server/model limitation and file a repro there with the accepted payload shape.
+    2. Set `compat.strictMessageKeys: true` for strict Chat Completions backends that only accept `role` and `content` on each message.
+    3. Set `compat.supportsTools: false` for models/backends that cannot handle OpenClaw's tool schema surface reliably.
+    4. Lower prompt pressure where possible: smaller workspace bootstrap, shorter session history, lighter local model, or a backend with stronger long-context support.
+    5. If tiny direct requests keep passing while OpenClaw agent turns still crash inside the backend, treat it as an upstream server/model limitation and file a repro there with the accepted payload shape.
   </Accordion>
 </AccordionGroup>
 
@@ -250,6 +302,7 @@ Look for:
     - `device signature invalid` / `device signature expired` → client signed the wrong payload (or stale timestamp) for the current handshake.
     - `AUTH_TOKEN_MISMATCH` with `canRetryWithDeviceToken=true` → client can do one trusted retry with cached device token.
     - That cached-token retry reuses the cached scope set stored with the paired device token. Explicit `deviceToken` / explicit `scopes` callers keep their requested scope set instead.
+    - `AUTH_SCOPE_MISMATCH` → the device token was recognized, but its approved scopes do not cover this connect request; re-pair or approve the requested scope contract instead of rotating a shared gateway token.
     - Outside that retry path, connect auth precedence is explicit shared token/password first, then explicit `deviceToken`, then stored device token, then bootstrap token.
     - On the async Tailscale Serve Control UI path, failed attempts for the same `{scope, ip}` are serialized before the limiter records the failure. Two bad concurrent retries from the same client can therefore surface `retry later` on the second attempt instead of two plain mismatches.
     - `too many failed authentication attempts (retry later)` from a browser-origin loopback client → repeated failures from that same normalized `Origin` are locked out temporarily; another localhost origin uses a separate bucket.
@@ -268,6 +321,7 @@ Use `error.details.code` from the failed `connect` response to pick the next act
 | `AUTH_TOKEN_MISSING`         | Client did not send a required shared token.                                                                                                                                                 | Paste/set token in the client and retry. For dashboard paths: `openclaw config get gateway.auth.token` then paste into Control UI settings.                                                                                                                                              |
 | `AUTH_TOKEN_MISMATCH`        | Shared token did not match gateway auth token.                                                                                                                                               | If `canRetryWithDeviceToken=true`, allow one trusted retry. Cached-token retries reuse stored approved scopes; explicit `deviceToken` / `scopes` callers keep requested scopes. If still failing, run the [token drift recovery checklist](/cli/devices#token-drift-recovery-checklist). |
 | `AUTH_DEVICE_TOKEN_MISMATCH` | Cached per-device token is stale or revoked.                                                                                                                                                 | Rotate/re-approve device token using [devices CLI](/cli/devices), then reconnect.                                                                                                                                                                                                        |
+| `AUTH_SCOPE_MISMATCH`        | Device token is valid, but its approved role/scopes do not cover this connect request.                                                                                                       | Re-pair the device or approve the requested scope contract; do not treat this as shared-token drift.                                                                                                                                                                                     |
 | `PAIRING_REQUIRED`           | Device identity needs approval. Check `error.details.reason` for `not-paired`, `scope-upgrade`, `role-upgrade`, or `metadata-upgrade`, and use `requestId` / `remediationHint` when present. | Approve pending request: `openclaw devices list` then `openclaw devices approve <requestId>`. Scope/role upgrades use the same flow after you review the requested access.                                                                                                               |
 
 <Note>
@@ -347,6 +401,42 @@ Related:
 - [Configuration](/gateway/configuration)
 - [Doctor](/gateway/doctor)
 
+## Gateway exits during high memory use
+
+Use this when the Gateway disappears under load, the supervisor reports an OOM-style restart, or logs mention `critical memory pressure bundle written`.
+
+```bash
+openclaw gateway status --deep
+openclaw logs --follow
+openclaw gateway stability --bundle latest
+openclaw gateway diagnostics export
+```
+
+Look for:
+
+- `Reason: diagnostic.memory.pressure.critical` in the latest stability bundle.
+- `Memory pressure:` with `critical/rss_threshold`, `critical/heap_threshold`, or `critical/rss_growth`.
+- `V8 heap:` values near the heap limit.
+- `Largest session files:` entries such as `agents/<agent>/sessions/<session>.jsonl` or `sessions/<session>.jsonl`.
+- Linux cgroup memory counters when the gateway runs inside a container or memory-limited service.
+
+Common signatures:
+
+- `critical memory pressure bundle written` appears shortly before restart → OpenClaw captured a pre-OOM stability bundle. Inspect it with `openclaw gateway stability --bundle latest`.
+- `memory pressure: level=critical ... memoryPressureSnapshot=disabled` appears in gateway logs → OpenClaw detected critical memory pressure, but the pre-OOM stability snapshot is off.
+- `Largest session files:` points at a very large redacted transcript path → reduce retained session history, inspect session growth, or move old transcripts out of the active store before restarting.
+- `V8 heap:` used bytes are close to the heap limit → lower prompt/session pressure, reduce concurrent work, or raise the Node heap limit only after confirming the workload is expected.
+- `Memory pressure: critical/rss_growth` → memory grew quickly inside one sampling window. Check the latest logs for a large import, runaway tool output, repeated retries, or a batch of queued agent work.
+- Critical memory pressure appears in logs but no bundle exists → this is the default. Set `diagnostics.memoryPressureSnapshot: true` to capture the pre-OOM stability bundle on future critical memory pressure events.
+
+The stability bundle is payload-free. It includes operational memory evidence and redacted relative file paths, not message text, webhook bodies, credentials, tokens, cookies, or raw session ids. Attach the diagnostics export to bug reports instead of copying raw logs.
+
+Related:
+
+- [Gateway health](/gateway/health)
+- [Diagnostics export](/gateway/diagnostics)
+- [Sessions](/cli/sessions)
+
 ## Gateway rejected invalid config
 
 Use this when Gateway startup fails with `Invalid config` or hot reload logs say
@@ -366,6 +456,7 @@ Look for:
 - `Config write rejected: ...`
 - A timestamped `openclaw.json.rejected.*` file beside the active config
 - A timestamped `openclaw.json.clobbered.*` file if `doctor --fix` repaired a broken direct edit
+- OpenClaw keeps the latest 32 `.clobbered.*` files for each config path and rotates older ones
 
 <AccordionGroup>
   <Accordion title="What happened">
@@ -374,6 +465,7 @@ Look for:
     - Hot reload skips invalid external edits and keeps the current runtime config active.
     - OpenClaw-owned writes reject invalid/destructive payloads before commit and save `.rejected.*`.
     - `openclaw doctor --fix` owns repair. It can remove non-JSON prefixes or restore the last-known-good copy while preserving the rejected payload as `.clobbered.*`.
+    - When many repairs happen for one config path, OpenClaw rotates older `.clobbered.*` files so the newest repaired payload is still available.
 
   </Accordion>
   <Accordion title="Inspect and repair">

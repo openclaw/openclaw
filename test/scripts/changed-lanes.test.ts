@@ -9,10 +9,10 @@ import {
   isPackageScriptOnlyChange,
 } from "../../scripts/changed-lanes.mjs";
 import {
-  buildChangedCheckTestboxArgs,
+  buildChangedCheckCrabboxArgs,
   createChangedCheckChildEnv,
   createChangedCheckPlan,
-  shouldDelegateChangedCheckToTestbox,
+  shouldDelegateChangedCheckToCrabbox,
 } from "../../scripts/check-changed.mjs";
 import { cleanupTempDirs, makeTempRepoRoot } from "../helpers/temp-repo.js";
 
@@ -243,15 +243,36 @@ describe("scripts/changed-lanes", () => {
 
   it("delegates local Testbox-mode changed gates before running locally", () => {
     expect(
-      shouldDelegateChangedCheckToTestbox(["--base", "origin/main"], {
+      shouldDelegateChangedCheckToCrabbox(["--base", "origin/main"], {
         OPENCLAW_TESTBOX: "1",
         PATH: "/usr/bin",
       }),
     ).toBe(true);
 
-    expect(buildChangedCheckTestboxArgs(["--base", "origin/main", "--head", "HEAD"])).toEqual([
-      "testbox:run",
+    expect(buildChangedCheckCrabboxArgs(["--base", "origin/main", "--head", "HEAD"])).toEqual([
+      "crabbox:run",
       "--",
+      "--provider",
+      "blacksmith-testbox",
+      "--blacksmith-org",
+      "openclaw",
+      "--blacksmith-workflow",
+      ".github/workflows/ci-check-testbox.yml",
+      "--blacksmith-job",
+      "check",
+      "--blacksmith-ref",
+      "main",
+      "--idle-timeout",
+      "90m",
+      "--ttl",
+      "240m",
+      "--timing-json",
+      "--",
+      "CI=1",
+      "NODE_OPTIONS=--max-old-space-size=4096",
+      "OPENCLAW_TEST_PROJECTS_PARALLEL=6",
+      "OPENCLAW_VITEST_MAX_WORKERS=1",
+      "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000",
       "OPENCLAW_TESTBOX=1",
       "OPENCLAW_TESTBOX_REMOTE_RUN=1",
       "pnpm",
@@ -264,15 +285,15 @@ describe("scripts/changed-lanes", () => {
   });
 
   it("does not delegate dry-run, CI, or already-remote changed gates", () => {
-    expect(shouldDelegateChangedCheckToTestbox(["--dry-run"], { OPENCLAW_TESTBOX: "1" })).toBe(
+    expect(shouldDelegateChangedCheckToCrabbox(["--dry-run"], { OPENCLAW_TESTBOX: "1" })).toBe(
       false,
     );
     expect(
-      shouldDelegateChangedCheckToTestbox([], { OPENCLAW_TESTBOX: "1", GITHUB_ACTIONS: "true" }),
+      shouldDelegateChangedCheckToCrabbox([], { OPENCLAW_TESTBOX: "1", GITHUB_ACTIONS: "true" }),
     ).toBe(false);
-    expect(shouldDelegateChangedCheckToTestbox([], { OPENCLAW_TESTBOX: "1", CI: "1" })).toBe(false);
+    expect(shouldDelegateChangedCheckToCrabbox([], { OPENCLAW_TESTBOX: "1", CI: "1" })).toBe(false);
     expect(
-      shouldDelegateChangedCheckToTestbox([], {
+      shouldDelegateChangedCheckToCrabbox([], {
         OPENCLAW_TESTBOX: "1",
         OPENCLAW_TESTBOX_REMOTE_RUN: "1",
       }),
@@ -452,6 +473,8 @@ describe("scripts/changed-lanes", () => {
       "guarded extension wildcard re-exports",
       "plugin-sdk wildcard re-exports",
       "duplicate scan target coverage",
+      "dependency pin guard",
+      "package patch guard",
       "typecheck core tests",
       "lint core",
       "lint scripts",
@@ -469,6 +492,7 @@ describe("scripts/changed-lanes", () => {
         "scripts/test-live-codex-harness-docker.sh",
         "scripts/test-live-gateway-models-docker.sh",
         "scripts/test-live-models-docker.sh",
+        "scripts/test-live-subagent-announce-docker.sh",
       ],
     });
     const schedulerDryRun = plan.commands.find(
@@ -731,6 +755,8 @@ describe("scripts/changed-lanes", () => {
       "lint:extensions:no-guarded-wildcard-reexports",
       "lint:extensions:no-plugin-sdk-wildcard-reexports",
       "dup:check:coverage",
+      "deps:pins:check",
+      "deps:patches:check",
       "release-metadata:check",
       "ios:version:check",
       "config:schema:check",
@@ -839,6 +865,41 @@ describe("scripts/changed-lanes", () => {
     expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:all");
   });
 
+  it("keeps app lint explicit when Linux Testbox lacks SwiftLint", () => {
+    const result = detectChangedLanes([
+      "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
+    ]);
+    const plan = createChangedCheckPlan(result, {
+      env: { OPENCLAW_TESTBOX_REMOTE_RUN: "1", PATH: "/usr/bin" },
+      platform: "linux",
+      swiftlintAvailable: false,
+    });
+
+    expectLanes(result.lanes, {
+      apps: true,
+    });
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("lint:apps");
+    expect(plan.commands).toContainEqual(
+      expect.objectContaining({
+        name: "lint apps (swiftlint unavailable in Testbox)",
+        bin: "node",
+      }),
+    );
+  });
+
+  it("runs app lint when SwiftLint is available in Testbox", () => {
+    const result = detectChangedLanes([
+      "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
+    ]);
+    const plan = createChangedCheckPlan(result, {
+      env: { OPENCLAW_TESTBOX_REMOTE_RUN: "1", PATH: "/usr/bin" },
+      platform: "linux",
+      swiftlintAvailable: true,
+    });
+
+    expect(plan.commands.map((command) => command.args[0])).toContain("lint:apps");
+  });
+
   it("routes legacy root asset deletions as tooling during root cleanup", () => {
     const result = detectChangedLanes([
       "assets/avatar-placeholder.svg",
@@ -931,6 +992,8 @@ describe("scripts/changed-lanes", () => {
         args: ["lint:extensions:no-plugin-sdk-wildcard-reexports"],
       },
       { name: "duplicate scan target coverage", args: ["dup:check:coverage"] },
+      { name: "dependency pin guard", args: ["deps:pins:check"] },
+      { name: "package patch guard", args: ["deps:patches:check"] },
     ]);
   });
 
@@ -951,6 +1014,8 @@ describe("scripts/changed-lanes", () => {
         args: ["lint:extensions:no-plugin-sdk-wildcard-reexports"],
       },
       { name: "duplicate scan target coverage", args: ["dup:check:coverage"] },
+      { name: "dependency pin guard", args: ["deps:pins:check"] },
+      { name: "package patch guard", args: ["deps:patches:check"] },
     ]);
   });
 });

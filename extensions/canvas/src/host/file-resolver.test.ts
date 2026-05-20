@@ -16,10 +16,11 @@ async function withCanvasTemp<T>(prefix: string, run: (dir: string) => Promise<T
 function expectResolvedFile(
   result: Awaited<ReturnType<typeof resolveFileWithinRoot>>,
 ): ResolvedFile {
-  expect(result).toEqual(expect.objectContaining({ handle: expect.any(Object) }));
   if (result === null) {
     throw new Error("Expected resolved file within root");
   }
+  expect(typeof result.handle.close).toBe("function");
+  expect(typeof result.handle.readFile).toBe("function");
   return result;
 }
 
@@ -46,7 +47,15 @@ describe("resolveFileWithinRoot", () => {
 
   it("rejects traversal paths", async () => {
     await withCanvasTemp("openclaw-canvas-resolver-", async (root) => {
+      await fs.writeFile(path.join(root, "outside.txt"), "inside-root", "utf8");
       await expect(resolveFileWithinRoot(root, "/../outside.txt")).resolves.toBeNull();
+      await expect(resolveFileWithinRoot(root, "/%2e%2e%2foutside.txt")).resolves.toBeNull();
+    });
+  });
+
+  it("rejects malformed URL encoding as a missing file", async () => {
+    await withCanvasTemp("openclaw-canvas-resolver-", async (root) => {
+      await expect(resolveFileWithinRoot(root, "/%E0%A4%A")).resolves.toBeNull();
     });
   });
 

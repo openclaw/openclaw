@@ -209,6 +209,7 @@ vi.mock("../../agents/model-auth-env-vars.js", () => ({
   listKnownProviderEnvApiKeyNames: mocks.listKnownProviderEnvApiKeyNames,
 }));
 vi.mock("../../agents/provider-auth-aliases.js", () => ({
+  resolveProviderAuthAliasMap: vi.fn(() => ({ "codex-cli": "openai-codex" })),
   resolveProviderIdForAuth: vi.fn((provider: string) =>
     provider === "codex-cli" ? "openai-codex" : provider,
   ),
@@ -263,6 +264,56 @@ function createRuntime() {
   };
 }
 
+function parseFirstJsonLog(runtimeLike: { log: Mock }) {
+  return JSON.parse(String(runtimeLike.log.mock.calls[0]?.[0]));
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null) {
+    throw new Error(`${label} was not an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
+  for (const [key, value] of Object.entries(fields)) {
+    expect(record[key]).toEqual(value);
+  }
+}
+
+function requireArray(value: unknown, label: string): unknown[] {
+  expect(Array.isArray(value)).toBe(true);
+  if (!Array.isArray(value)) {
+    throw new Error(`${label} was not an array`);
+  }
+  return value;
+}
+
+function requireProvider(providers: unknown, provider: string) {
+  const entry = requireArray(providers, "auth providers").find(
+    (candidate) => requireRecord(candidate, "auth provider").provider === provider,
+  );
+  if (!entry) {
+    throw new Error(`missing provider ${provider}`);
+  }
+  return requireRecord(entry, `provider ${provider}`);
+}
+
+function requireProfile(profiles: unknown, profileId: string) {
+  const entry = requireArray(profiles, "auth profiles").find(
+    (candidate) => requireRecord(candidate, "auth profile").profileId === profileId,
+  );
+  if (!entry) {
+    throw new Error(`missing profile ${profileId}`);
+  }
+  return requireRecord(entry, `profile ${profileId}`);
+}
+
+function expectResolveAgentDirCalledFor(agentId: string) {
+  const hasCall = mocks.resolveAgentDir.mock.calls.some((call) => call[1] === agentId);
+  expect(hasCall).toBe(true);
+}
+
 async function withAgentScopeOverrides<T>(
   overrides: {
     primary?: string;
@@ -312,9 +363,9 @@ async function withAgentScopeOverrides<T>(
 describe("modelsStatusCommand auth overview", () => {
   it("includes masked auth sources in JSON output", async () => {
     await modelsStatusCommand({ json: true }, runtime as never);
-    const payload = JSON.parse(String((runtime.log as Mock).mock.calls[0]?.[0]));
+    const payload = parseFirstJsonLog(runtime);
 
-    expect(mocks.resolveAgentDir).toHaveBeenCalledWith(expect.anything(), "main");
+    expectResolveAgentDirCalledFor("main");
     expect(mocks.ensureAuthProfileStore).toHaveBeenCalled();
     expect(payload.defaultModel).toBe("anthropic/claude-opus-4-6");
     expect(payload.configPath).toBe("/tmp/openclaw-dev/openclaw.json");
@@ -347,17 +398,11 @@ describe("modelsStatusCommand auth overview", () => {
         provider.startsWith("openai "),
       ),
     ).toBe(false);
-    expect(providers).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          provider: "minimax",
-          effective: expect.objectContaining({ kind: "env" }),
-        }),
-        expect.objectContaining({
-          provider: "fal",
-          effective: expect.objectContaining({ kind: "env" }),
-        }),
-      ]),
+    expect(
+      requireRecord(requireProvider(providers, "minimax").effective, "minimax effective").kind,
+    ).toBe("env");
+    expect(requireRecord(requireProvider(providers, "fal").effective, "fal effective").kind).toBe(
+      "env",
     );
 
     expect(
@@ -385,7 +430,7 @@ describe("modelsStatusCommand auth overview", () => {
 
     expect(mocks.resolveAgentDir).not.toHaveBeenCalled();
     expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith("/tmp/openclaw-isolated-agent");
-    const payload = JSON.parse(String((localRuntime.log as Mock).mock.calls[0]?.[0]));
+    const payload = parseFirstJsonLog(localRuntime);
     expect(payload.agentDir).toBe("/tmp/openclaw-isolated-agent");
     expect(payload.auth.storePath).toBe("/tmp/openclaw-isolated-agent/auth-profiles.json");
   });
@@ -400,8 +445,8 @@ describe("modelsStatusCommand auth overview", () => {
       },
       async () => {
         await modelsStatusCommand({ json: true, agent: "Jeremiah" }, localRuntime as never);
-        expect(mocks.resolveAgentDir).toHaveBeenCalledWith(expect.anything(), "jeremiah");
-        const payload = JSON.parse(String((localRuntime.log as Mock).mock.calls[0]?.[0]));
+        expectResolveAgentDirCalledFor("jeremiah");
+        const payload = parseFirstJsonLog(localRuntime);
         expect(payload.agentId).toBe("jeremiah");
         expect(payload.agentDir).toBe("/tmp/openclaw-agent-custom");
         expect(payload.defaultModel).toBe("openai/gpt-4");
@@ -453,11 +498,153 @@ describe("modelsStatusCommand auth overview", () => {
 
     try {
       await modelsStatusCommand({ json: true, check: true }, localRuntime as never);
-      const payload = JSON.parse(String((localRuntime.log as Mock).mock.calls[0]?.[0]));
+      const payload = parseFirstJsonLog(localRuntime);
       expect(payload.auth.missingProvidersInUse).toStrictEqual([]);
       expect(localRuntime.exit).not.toHaveBeenCalledWith(1);
     } finally {
       mocks.store.profiles = originalProfiles;
+      if (originalLoadConfig) {
+        mocks.loadConfig.mockImplementation(originalLoadConfig);
+      }
+      if (originalEnvImpl) {
+        mocks.resolveEnvApiKey.mockImplementation(originalEnvImpl);
+      } else if (defaultResolveEnvApiKeyImpl) {
+        mocks.resolveEnvApiKey.mockImplementation(defaultResolveEnvApiKeyImpl);
+      } else {
+        mocks.resolveEnvApiKey.mockImplementation(() => null);
+      }
+    }
+  });
+
+  it("uses Codex synthetic auth for canonical OpenAI text routes", async () => {
+    const localRuntime = createRuntime();
+    const originalLoadConfig = mocks.loadConfig.getMockImplementation();
+    const originalProfiles = { ...mocks.store.profiles };
+    const originalEnvImpl = mocks.resolveEnvApiKey.getMockImplementation();
+    const originalSyntheticImpl =
+      mocks.resolveRuntimeSyntheticAuthProviderRefs.getMockImplementation();
+    const originalResolveSyntheticAuthImpl =
+      mocks.resolveProviderSyntheticAuthWithPlugin.getMockImplementation();
+    mocks.loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5", fallbacks: [] },
+          models: { "openai/gpt-5.5": {} },
+        },
+      },
+      models: { providers: {} },
+      env: { shellEnv: { enabled: false } },
+    });
+    mocks.store.profiles = {};
+    mocks.resolveEnvApiKey.mockImplementation(() => null);
+    mocks.resolveRuntimeSyntheticAuthProviderRefs.mockReturnValue(["codex"]);
+    mocks.resolveProviderSyntheticAuthWithPlugin.mockImplementation(
+      ({ provider }: { provider: string }) =>
+        provider === "codex"
+          ? {
+              apiKey: "codex-runtime-token",
+              source: "codex-app-server",
+              mode: "token",
+              expiresAt: Date.now() + 60_000,
+            }
+          : undefined,
+    );
+
+    try {
+      const syntheticProbeStart = mocks.resolveProviderSyntheticAuthWithPlugin.mock.calls.length;
+      await modelsStatusCommand({ json: true, check: true }, localRuntime as never);
+      const payload = parseFirstJsonLog(localRuntime);
+      const syntheticProbeProviders = mocks.resolveProviderSyntheticAuthWithPlugin.mock.calls
+        .slice(syntheticProbeStart)
+        .map(([arg]) => (arg as { provider: string }).provider);
+      expect(payload.auth.missingProvidersInUse).toStrictEqual([]);
+      expect(payload.auth.runtimeAuthRoutes).toEqual([
+        {
+          provider: "openai",
+          runtime: "codex",
+          authProvider: "openai-codex",
+          status: "usable",
+          effective: {
+            kind: "synthetic",
+            detail: "codex-app-server",
+          },
+        },
+      ]);
+      expect(localRuntime.exit).not.toHaveBeenCalledWith(1);
+      expect(syntheticProbeProviders).toContain("codex");
+    } finally {
+      mocks.store.profiles = originalProfiles;
+      if (originalLoadConfig) {
+        mocks.loadConfig.mockImplementation(originalLoadConfig);
+      }
+      if (originalEnvImpl) {
+        mocks.resolveEnvApiKey.mockImplementation(originalEnvImpl);
+      } else if (defaultResolveEnvApiKeyImpl) {
+        mocks.resolveEnvApiKey.mockImplementation(defaultResolveEnvApiKeyImpl);
+      } else {
+        mocks.resolveEnvApiKey.mockImplementation(() => null);
+      }
+      if (originalSyntheticImpl) {
+        mocks.resolveRuntimeSyntheticAuthProviderRefs.mockImplementation(originalSyntheticImpl);
+      } else {
+        mocks.resolveRuntimeSyntheticAuthProviderRefs.mockReturnValue([]);
+      }
+      if (originalResolveSyntheticAuthImpl) {
+        mocks.resolveProviderSyntheticAuthWithPlugin.mockImplementation(
+          originalResolveSyntheticAuthImpl,
+        );
+      } else {
+        mocks.resolveProviderSyntheticAuthWithPlugin.mockReturnValue(undefined);
+      }
+    }
+  });
+
+  it("shows compatible OpenAI API-key profiles for Codex runtime auth routes", async () => {
+    const localRuntime = createRuntime();
+    const originalLoadConfig = mocks.loadConfig.getMockImplementation();
+    const originalProfiles = { ...mocks.store.profiles };
+    const originalOrder = mocks.store.order ? { ...mocks.store.order } : undefined;
+    const originalEnvImpl = mocks.resolveEnvApiKey.getMockImplementation();
+    mocks.loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5", fallbacks: [] },
+          models: { "openai/gpt-5.5": {} },
+        },
+      },
+      models: { providers: {} },
+      env: { shellEnv: { enabled: false } },
+    });
+    mocks.store.profiles = {
+      "openai:default": {
+        type: "api_key",
+        provider: "openai",
+        key: "sk-openai-compatible-profile", // pragma: allowlist secret
+      },
+    };
+    mocks.store.order = undefined;
+    mocks.resolveEnvApiKey.mockImplementation(() => null);
+
+    try {
+      await modelsStatusCommand({ json: true, check: true }, localRuntime as never);
+      const payload = parseFirstJsonLog(localRuntime);
+      expect(payload.auth.missingProvidersInUse).toStrictEqual([]);
+      expect(payload.auth.runtimeAuthRoutes).toEqual([
+        {
+          provider: "openai",
+          runtime: "codex",
+          authProvider: "openai-codex",
+          status: "usable",
+          effective: {
+            kind: "profiles",
+            detail: "/tmp/openclaw-agent/auth-profiles.json",
+          },
+        },
+      ]);
+      expect(localRuntime.exit).not.toHaveBeenCalledWith(1);
+    } finally {
+      mocks.store.profiles = originalProfiles;
+      mocks.store.order = originalOrder;
       if (originalLoadConfig) {
         mocks.loadConfig.mockImplementation(originalLoadConfig);
       }
@@ -546,28 +733,13 @@ describe("modelsStatusCommand auth overview", () => {
 
     try {
       await modelsStatusCommand({ json: true, check: true }, localRuntime as never);
-      const payload = JSON.parse(String((localRuntime.log as Mock).mock.calls[0]?.[0]));
+      const payload = parseFirstJsonLog(localRuntime);
       expect(payload.auth.missingProvidersInUse).toEqual([]);
-      expect(payload.auth.oauth.profiles).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            profileId: "openai-codex:default",
-            status: "expired",
-          }),
-          expect.objectContaining({
-            profileId: "openai-codex:named",
-            status: "ok",
-          }),
-        ]),
+      expect(requireProfile(payload.auth.oauth.profiles, "openai-codex:default").status).toBe(
+        "expired",
       );
-      expect(payload.auth.oauth.providers).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            provider: "openai-codex",
-            status: "ok",
-          }),
-        ]),
-      );
+      expect(requireProfile(payload.auth.oauth.profiles, "openai-codex:named").status).toBe("ok");
+      expect(requireProvider(payload.auth.oauth.providers, "openai-codex").status).toBe("ok");
       expect(localRuntime.exit).not.toHaveBeenCalledWith(1);
     } finally {
       mocks.store.profiles = originalProfiles;
@@ -641,7 +813,7 @@ describe("modelsStatusCommand auth overview", () => {
 
     try {
       await modelsStatusCommand({ json: true, check: true }, localRuntime as never);
-      const payload = JSON.parse(String((localRuntime.log as Mock).mock.calls[0]?.[0]));
+      const payload = parseFirstJsonLog(localRuntime);
       expect(payload.auth.missingProvidersInUse).toEqual([]);
       expect(localRuntime.exit).toHaveBeenCalledWith(1);
     } finally {
@@ -726,7 +898,7 @@ describe("modelsStatusCommand auth overview", () => {
 
     try {
       await modelsStatusCommand({ json: true, check: true }, localRuntime as never);
-      const payload = JSON.parse(String((localRuntime.log as Mock).mock.calls[0]?.[0]));
+      const payload = parseFirstJsonLog(localRuntime);
       expect(payload.resolvedDefault).toBe("anthropic/claude-opus-4-6");
       expect(localRuntime.exit).toHaveBeenCalledWith(1);
     } finally {
@@ -796,15 +968,11 @@ describe("modelsStatusCommand auth overview", () => {
 
     try {
       await modelsStatusCommand({ json: true, check: true }, localRuntime as never);
-      const payload = JSON.parse(String((localRuntime.log as Mock).mock.calls[0]?.[0]));
-      expect(payload.auth.providers).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            provider: "anthropic",
-            env: expect.objectContaining({ source: "env: ANTHROPIC_OAUTH_TOKEN" }),
-          }),
-        ]),
-      );
+      const payload = parseFirstJsonLog(localRuntime);
+      expect(
+        requireRecord(requireProvider(payload.auth.providers, "anthropic").env, "anthropic env")
+          .source,
+      ).toBe("env: ANTHROPIC_OAUTH_TOKEN");
       expect(localRuntime.exit).not.toHaveBeenCalledWith(1);
       expect(localRuntime.exit).not.toHaveBeenCalledWith(2);
     } finally {
@@ -854,7 +1022,7 @@ describe("modelsStatusCommand auth overview", () => {
 
     try {
       await modelsStatusCommand({ json: true, check: true }, localRuntime as never);
-      const payload = JSON.parse(String((localRuntime.log as Mock).mock.calls[0]?.[0]));
+      const payload = parseFirstJsonLog(localRuntime);
       expect(payload.auth.missingProvidersInUse).toEqual(["anthropic"]);
       expect(localRuntime.exit).toHaveBeenCalledWith(1);
     } finally {
@@ -905,11 +1073,14 @@ describe("modelsStatusCommand auth overview", () => {
     mocks.resolveUsableCustomProviderApiKey.mockImplementation(() => null);
     try {
       await modelsStatusCommand({ json: true, check: true }, localRuntime as never);
-      const payload = JSON.parse(String((localRuntime.log as Mock).mock.calls[0]?.[0]));
+      const payload = parseFirstJsonLog(localRuntime);
       expect(payload.auth.missingProvidersInUse).toEqual(["anthropic"]);
-      expect(mocks.resolveUsableCustomProviderApiKey).toHaveBeenCalledWith(
-        expect.objectContaining({ provider: "anthropic" }),
-      );
+      expect(
+        mocks.resolveUsableCustomProviderApiKey.mock.calls.some(
+          ([params]) =>
+            requireRecord(params, "custom provider key params").provider === "anthropic",
+        ),
+      ).toBe(true);
       expect(localRuntime.exit).toHaveBeenCalledWith(1);
     } finally {
       mocks.store.profiles = originalProfiles;
@@ -967,7 +1138,7 @@ describe("modelsStatusCommand auth overview", () => {
 
     try {
       await modelsStatusCommand({ json: true, check: true }, localRuntime as never);
-      const payload = JSON.parse(String((localRuntime.log as Mock).mock.calls[0]?.[0]));
+      const payload = parseFirstJsonLog(localRuntime);
       expect(payload.auth.missingProvidersInUse).toEqual(["openai"]);
       expect(localRuntime.exit).toHaveBeenCalledWith(1);
     } finally {
@@ -1001,7 +1172,7 @@ describe("modelsStatusCommand auth overview", () => {
 
     try {
       await modelsStatusCommand({ json: true }, localRuntime as never);
-      const payload = JSON.parse(String((localRuntime.log as Mock).mock.calls[0]?.[0]));
+      const payload = parseFirstJsonLog(localRuntime);
 
       expect(payload.defaultModel).toBe("openrouter/auto");
       expect(payload.resolvedDefault).toBe("openrouter/auto");
@@ -1031,7 +1202,7 @@ describe("modelsStatusCommand auth overview", () => {
 
     try {
       await modelsStatusCommand({ json: true }, localRuntime as never);
-      const payload = JSON.parse(String((localRuntime.log as Mock).mock.calls[0]?.[0]));
+      const payload = parseFirstJsonLog(localRuntime);
       expect(payload.defaultModel).toBe("claude-cli/claude-sonnet-4-6");
       expect(payload.auth.missingProvidersInUse).toStrictEqual([]);
 
@@ -1056,7 +1227,7 @@ describe("modelsStatusCommand auth overview", () => {
         return null;
       });
       await modelsStatusCommand({ json: true }, aliasRuntime as never);
-      const aliasPayload = JSON.parse(String((aliasRuntime.log as Mock).mock.calls[0]?.[0]));
+      const aliasPayload = parseFirstJsonLog(aliasRuntime);
       const providers = aliasPayload.auth.providers as Array<{ provider: string }>;
       expect(
         providers.reduce((count, provider) => count + (provider.provider === "zai" ? 1 : 0), 0),
@@ -1109,29 +1280,28 @@ describe("modelsStatusCommand auth overview", () => {
     );
 
     try {
+      const syntheticProbeStart = mocks.resolveProviderSyntheticAuthWithPlugin.mock.calls.length;
       await modelsStatusCommand({ json: true }, localRuntime as never);
-      const payload = JSON.parse(String((localRuntime.log as Mock).mock.calls[0]?.[0]));
+      const payload = parseFirstJsonLog(localRuntime);
       const providers = payload.auth.providers as Array<{
         provider: string;
         syntheticAuth?: { value: string; source: string };
         effective?: { kind: string; detail?: string };
       }>;
+      const syntheticProbeProviders = mocks.resolveProviderSyntheticAuthWithPlugin.mock.calls
+        .slice(syntheticProbeStart)
+        .map(([arg]) => (arg as { provider: string }).provider);
       expect(payload.auth.missingProvidersInUse).toStrictEqual([]);
-      expect(providers).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            provider: "codex",
-            syntheticAuth: expect.objectContaining({
-              value: "plugin-owned",
-              source: "codex-app-server",
-            }),
-            effective: {
-              kind: "synthetic",
-              detail: "codex-app-server",
-            },
-          }),
-        ]),
-      );
+      const codexProvider = requireProvider(providers, "codex");
+      expectRecordFields(requireRecord(codexProvider.syntheticAuth, "codex synthetic auth"), {
+        value: "plugin-owned",
+        source: "codex-app-server",
+      });
+      expectRecordFields(requireRecord(codexProvider.effective, "codex effective auth"), {
+        kind: "synthetic",
+        detail: "codex-app-server",
+      });
+      expect(syntheticProbeProviders).toStrictEqual(["codex"]);
       expect(providers.map((entry) => entry.provider)).not.toContain("unused-synthetic");
     } finally {
       if (originalLoadConfig) {
@@ -1185,7 +1355,7 @@ describe("modelsStatusCommand auth overview", () => {
 
     try {
       await modelsStatusCommand({ json: true, check: true }, localRuntime as never);
-      const payload = JSON.parse(String((localRuntime.log as Mock).mock.calls[0]?.[0]));
+      const payload = parseFirstJsonLog(localRuntime);
       expect(payload.auth.missingProvidersInUse).toEqual(["codex"]);
       expect(localRuntime.exit).toHaveBeenCalledWith(1);
     } finally {
@@ -1243,15 +1413,13 @@ describe("modelsStatusCommand auth overview", () => {
 
     try {
       await modelsStatusCommand({ json: true }, localRuntime as never);
-      const payload = JSON.parse(String((localRuntime.log as Mock).mock.calls[0]?.[0]));
-      expect(payload.auth.providers).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            provider: "workspace-cloud",
-            effective: expect.objectContaining({ kind: "env" }),
-            env: expect.objectContaining({ source: "workspace cloud credentials" }),
-          }),
-        ]),
+      const payload = parseFirstJsonLog(localRuntime);
+      const workspaceProvider = requireProvider(payload.auth.providers, "workspace-cloud");
+      expect(requireRecord(workspaceProvider.effective, "workspace effective auth").kind).toBe(
+        "env",
+      );
+      expect(requireRecord(workspaceProvider.env, "workspace env auth").source).toBe(
+        "workspace cloud credentials",
       );
     } finally {
       if (originalKeysImpl) {
@@ -1287,7 +1455,7 @@ describe("modelsStatusCommand auth overview", () => {
 
         const jsonRuntime = createRuntime();
         await modelsStatusCommand({ json: true, agent: "main" }, jsonRuntime as never);
-        const payload = JSON.parse(String((jsonRuntime.log as Mock).mock.calls[0]?.[0]));
+        const payload = parseFirstJsonLog(jsonRuntime);
         expect(payload.modelConfig).toEqual({
           defaultSource: "defaults",
           fallbacksSource: "defaults",

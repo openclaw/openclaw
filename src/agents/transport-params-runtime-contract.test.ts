@@ -1,5 +1,5 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { Context, Model } from "@mariozechner/pi-ai";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { Context, Model } from "@earendil-works/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   GPT_PARALLEL_TOOL_CALLS_PAYLOAD_APIS,
@@ -9,7 +9,7 @@ import {
   UNRELATED_TOOL_CALLS_PAYLOAD_APIS,
 } from "../../test/helpers/agents/transport-params-runtime-contract.js";
 import {
-  __testing as extraParamsTesting,
+  testing as extraParamsTesting,
   applyExtraParamsToAgent,
   resolveExtraParams,
   resolvePreparedExtraParams,
@@ -122,7 +122,7 @@ describe("transport params runtime contract (Pi/OpenAI path)", () => {
   });
 
   it("composes provider preparation before transport patch resolution", () => {
-    const resolveProviderExtraParamsForTransport = vi.fn(() => ({
+    const resolveProviderExtraParamsForTransport = vi.fn((_params: unknown) => ({
       patch: {
         parallel_tool_calls: false,
         transportHookApplied: true,
@@ -150,22 +150,20 @@ describe("transport params runtime contract (Pi/OpenAI path)", () => {
       } as Model<"openai-responses">,
     });
 
-    expect(prepared).toMatchObject({
-      transport: "websocket",
-      preparedByProvider: true,
-      parallel_tool_calls: false,
-      transportHookApplied: true,
-    });
-    expect(resolveProviderExtraParamsForTransport).toHaveBeenCalledWith(
-      expect.objectContaining({
-        context: expect.objectContaining({
-          extraParams: expect.objectContaining({
-            preparedByProvider: true,
-          }),
-          transport: "websocket",
-        }),
-      }),
-    );
+    expect(prepared?.transport).toBe("websocket");
+    expect(prepared?.preparedByProvider).toBe(true);
+    expect(prepared?.parallel_tool_calls).toBe(false);
+    expect(prepared?.transportHookApplied).toBe(true);
+    const transportInput = resolveProviderExtraParamsForTransport.mock.calls.at(0)?.[0] as
+      | {
+          context?: {
+            extraParams?: { preparedByProvider?: boolean };
+            transport?: string;
+          };
+        }
+      | undefined;
+    expect(transportInput?.context?.extraParams?.preparedByProvider).toBe(true);
+    expect(transportInput?.context?.transport).toBe("websocket");
   });
 });
 

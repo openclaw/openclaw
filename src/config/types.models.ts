@@ -2,7 +2,7 @@ import type {
   AnthropicMessagesCompat,
   OpenAICompletionsCompat,
   OpenAIResponsesCompat,
-} from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-ai";
 import type { AgentRuntimePolicyConfig } from "./types.agents-shared.js";
 import type { ConfiguredModelProviderRequest } from "./types.provider-request.js";
 import type { SecretInput } from "./types.secrets.js";
@@ -53,7 +53,8 @@ type SupportedAnthropicMessagesCompatFields = Pick<
 type SupportedThinkingFormat =
   | NonNullable<OpenAICompletionsCompat["thinkingFormat"]>
   | "deepseek"
-  | "openrouter";
+  | "openrouter"
+  | "together";
 
 export type ModelCompatConfig = SupportedOpenAICompatFields &
   SupportedOpenAIResponsesCompatFields &
@@ -65,6 +66,7 @@ export type ModelCompatConfig = SupportedOpenAICompatFields &
     supportsTools?: boolean;
     supportsPromptCacheKey?: boolean;
     requiresStringContent?: boolean;
+    strictMessageKeys?: boolean;
     toolSchemaProfile?: string;
     unsupportedToolSchemaKeywords?: string[];
     nativeWebSearchTool?: boolean;
@@ -74,6 +76,16 @@ export type ModelCompatConfig = SupportedOpenAICompatFields &
   };
 
 export type ModelProviderAuthMode = "api-key" | "aws-sdk" | "oauth" | "token";
+
+export type ModelProviderLocalServiceConfig = {
+  command: string;
+  args?: string[];
+  cwd?: string;
+  env?: Record<string, string>;
+  healthUrl?: string;
+  readyTimeoutMs?: number;
+  idleStopMs?: number;
+};
 
 export type ModelDefinitionConfig = {
   id: string;
@@ -131,6 +143,8 @@ export type ModelProviderConfig = {
   params?: Record<string, unknown>;
   /** Optional default agent execution runtime for models under this provider. */
   agentRuntime?: AgentRuntimePolicyConfig;
+  /** Optional local service to start before calling this provider. */
+  localService?: ModelProviderLocalServiceConfig;
   headers?: Record<string, SecretInput>;
   authHeader?: boolean;
   request?: ConfiguredModelProviderRequest;

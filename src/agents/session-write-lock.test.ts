@@ -4,12 +4,13 @@ import path from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 const FAKE_STARTTIME = 12345;
-let __testing: typeof import("./session-write-lock.js").__testing;
+let testing: typeof import("./session-write-lock.js").testing;
 let acquireSessionWriteLock: typeof import("./session-write-lock.js").acquireSessionWriteLock;
 let cleanStaleLockFiles: typeof import("./session-write-lock.js").cleanStaleLockFiles;
 let resetSessionWriteLockStateForTest: typeof import("./session-write-lock.js").resetSessionWriteLockStateForTest;
 let resolveSessionLockMaxHoldFromTimeout: typeof import("./session-write-lock.js").resolveSessionLockMaxHoldFromTimeout;
 let resolveSessionWriteLockAcquireTimeoutMs: typeof import("./session-write-lock.js").resolveSessionWriteLockAcquireTimeoutMs;
+let resolveSessionWriteLockOptions: typeof import("./session-write-lock.js").resolveSessionWriteLockOptions;
 
 async function expectLockRemovedOnlyAfterFinalRelease(params: {
   lockPath: string;
@@ -31,6 +32,17 @@ async function expectPathMissing(targetPath: string): Promise<void> {
     return;
   }
   throw new Error(`Expected path to be missing: ${targetPath}`);
+}
+
+function lockCleanupRecords(
+  locks: Array<{ lockPath: string; removed: boolean; stale: boolean; staleReasons: string[] }>,
+) {
+  return locks.map((entry) => ({
+    name: path.basename(entry.lockPath),
+    removed: entry.removed,
+    stale: entry.stale,
+    staleReasons: entry.staleReasons,
+  }));
 }
 
 async function expectCurrentPidOwnsLock(params: {
@@ -129,12 +141,13 @@ async function expectActiveInProcessLockIsNotReclaimed(params?: {
 describe("acquireSessionWriteLock", () => {
   beforeAll(async () => {
     ({
-      __testing,
+      testing,
       acquireSessionWriteLock,
       cleanStaleLockFiles,
       resetSessionWriteLockStateForTest,
       resolveSessionLockMaxHoldFromTimeout,
       resolveSessionWriteLockAcquireTimeoutMs,
+      resolveSessionWriteLockOptions,
     } = await import("./session-write-lock.js"));
   });
 
@@ -144,7 +157,7 @@ describe("acquireSessionWriteLock", () => {
   });
 
   function pinCurrentProcessStartTimeForTest(): void {
-    __testing.setProcessStartTimeResolverForTest((pid) =>
+    testing.setProcessStartTimeResolverForTest((pid) =>
       pid === process.pid ? FAKE_STARTTIME : null,
     );
   }
@@ -309,8 +322,8 @@ describe("acquireSessionWriteLock", () => {
         maxHoldMs: 1,
       });
 
-      const released = await __testing.runLockWatchdogCheck(Date.now() + 1000);
-      expect(released).toBeGreaterThanOrEqual(1);
+      const released = await testing.runLockWatchdogCheck(Date.now() + 1000);
+      expect(released).toBe(1);
       await expectPathMissing(lockPath);
 
       const lockB = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
@@ -332,7 +345,7 @@ describe("acquireSessionWriteLock", () => {
     await withTempSessionLockFile(async ({ sessionFile, lockPath }) => {
       const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
 
-      __testing.releaseAllLocksSync();
+      testing.releaseAllLocksSync();
 
       await expectPathMissing(lockPath);
       await lock.release();
@@ -356,6 +369,91 @@ describe("acquireSessionWriteLock", () => {
         session: { writeLock: { acquireTimeoutMs: 0 } },
       }),
     ).toBe(60_000);
+  });
+
+  it("resolves session write-lock stale and max-hold policy", () => {
+    expect(
+      resolveSessionWriteLockOptions({
+        session: {
+          writeLock: {
+            acquireTimeoutMs: 90_000,
+            staleMs: 45_000,
+            maxHoldMs: 30_000,
+          },
+        },
+      }),
+    ).toEqual({
+      timeoutMs: 90_000,
+      staleMs: 45_000,
+      maxHoldMs: 30_000,
+    });
+  });
+
+  it("lets session write-lock env override config for emergency tuning", () => {
+    expect(
+      resolveSessionWriteLockOptions(
+        {
+          session: {
+            writeLock: {
+              acquireTimeoutMs: 90_000,
+              staleMs: 45_000,
+              maxHoldMs: 30_000,
+            },
+          },
+        },
+        {
+          env: {
+            OPENCLAW_SESSION_WRITE_LOCK_ACQUIRE_TIMEOUT_MS: "120000",
+            OPENCLAW_SESSION_WRITE_LOCK_STALE_MS: "60000",
+            OPENCLAW_SESSION_WRITE_LOCK_MAX_HOLD_MS: "50000",
+          },
+        },
+      ),
+    ).toEqual({
+      timeoutMs: 120_000,
+      staleMs: 60_000,
+      maxHoldMs: 50_000,
+    });
+  });
+
+  it("uses resolved stale policy when cleaning stale lock files", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-policy-"));
+    const sessionsDir = path.join(root, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const nowMs = Date.now();
+    const lockPath = path.join(sessionsDir, "configured-live.jsonl.lock");
+
+    try {
+      await fs.writeFile(
+        lockPath,
+        JSON.stringify({
+          pid: process.pid,
+          createdAt: new Date(nowMs - 45_000).toISOString(),
+        }),
+        "utf8",
+      );
+
+      const configOnly = await cleanStaleLockFiles({
+        sessionsDir,
+        config: { session: { writeLock: { staleMs: 30_000 } } },
+        nowMs,
+        removeStale: false,
+        readOwnerProcessArgs: () => ["node", "/opt/openclaw/openclaw.mjs", "doctor"],
+      });
+      expect(configOnly.locks[0]?.stale).toBe(true);
+
+      const envOverride = await cleanStaleLockFiles({
+        sessionsDir,
+        config: { session: { writeLock: { staleMs: 30_000 } } },
+        env: { OPENCLAW_SESSION_WRITE_LOCK_STALE_MS: "60000" },
+        nowMs,
+        removeStale: false,
+        readOwnerProcessArgs: () => ["node", "/opt/openclaw/openclaw.mjs", "doctor"],
+      });
+      expect(envOverride.locks[0]?.stale).toBe(false);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("clamps max hold for effectively no-timeout runs", () => {
@@ -407,18 +505,210 @@ describe("acquireSessionWriteLock", () => {
         staleMs: 30_000,
         nowMs,
         removeStale: true,
+        readOwnerProcessArgs: () => ["node", "/opt/openclaw/openclaw.mjs", "agent"],
       });
 
       expect(result.locks).toHaveLength(3);
-      expect(result.cleaned).toHaveLength(2);
-      expect(result.cleaned.map((entry) => path.basename(entry.lockPath)).toSorted()).toEqual([
-        "dead.jsonl.lock",
-        "old-live.jsonl.lock",
+      expect(lockCleanupRecords(result.locks)).toEqual([
+        {
+          name: "dead.jsonl.lock",
+          removed: true,
+          stale: true,
+          staleReasons: ["dead-pid", "too-old"],
+        },
+        {
+          name: "fresh-live.jsonl.lock",
+          removed: false,
+          stale: false,
+          staleReasons: [],
+        },
+        {
+          name: "old-live.jsonl.lock",
+          removed: true,
+          stale: true,
+          staleReasons: ["too-old"],
+        },
+      ]);
+      expect(lockCleanupRecords(result.cleaned)).toEqual([
+        {
+          name: "dead.jsonl.lock",
+          removed: true,
+          stale: true,
+          staleReasons: ["dead-pid", "too-old"],
+        },
+        {
+          name: "old-live.jsonl.lock",
+          removed: true,
+          stale: true,
+          staleReasons: ["too-old"],
+        },
       ]);
 
       await expectPathMissing(staleDeadLock);
       await expectPathMissing(staleAliveLock);
       await expect(fs.access(freshAliveLock)).resolves.toBeUndefined();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("cleans fresh live .jsonl lock files owned by a non-OpenClaw process", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
+    const sessionsDir = path.join(root, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const nowMs = Date.now();
+    const falseLiveLock = path.join(sessionsDir, "false-live.jsonl.lock");
+
+    try {
+      await fs.writeFile(
+        falseLiveLock,
+        JSON.stringify({
+          pid: process.pid,
+          createdAt: new Date(nowMs).toISOString(),
+        }),
+        "utf8",
+      );
+
+      const result = await cleanStaleLockFiles({
+        sessionsDir,
+        staleMs: 30_000,
+        nowMs,
+        removeStale: true,
+        readOwnerProcessArgs: () => ["python", "worker.py"],
+      });
+
+      expect(lockCleanupRecords(result.locks)).toEqual([
+        {
+          name: "false-live.jsonl.lock",
+          removed: true,
+          stale: true,
+          staleReasons: ["non-openclaw-owner"],
+        },
+      ]);
+      expect(lockCleanupRecords(result.cleaned)).toEqual([
+        {
+          name: "false-live.jsonl.lock",
+          removed: true,
+          stale: true,
+          staleReasons: ["non-openclaw-owner"],
+        },
+      ]);
+      await expect(fs.access(falseLiveLock)).rejects.toThrow();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("cleans fresh live .jsonl lock files owned by generic non-OpenClaw entrypoints", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
+    const sessionsDir = path.join(root, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const nowMs = Date.now();
+    const falseLiveLock = path.join(sessionsDir, "false-live-generic-entry.jsonl.lock");
+
+    try {
+      await fs.writeFile(
+        falseLiveLock,
+        JSON.stringify({
+          pid: process.pid,
+          createdAt: new Date(nowMs).toISOString(),
+        }),
+        "utf8",
+      );
+
+      const result = await cleanStaleLockFiles({
+        sessionsDir,
+        staleMs: 30_000,
+        nowMs,
+        removeStale: true,
+        readOwnerProcessArgs: () => ["node", "/srv/app/dist/index.js"],
+      });
+
+      expect(lockCleanupRecords(result.cleaned)).toEqual([
+        {
+          name: "false-live-generic-entry.jsonl.lock",
+          removed: true,
+          stale: true,
+          staleReasons: ["non-openclaw-owner"],
+        },
+      ]);
+      await expect(fs.access(falseLiveLock)).rejects.toThrow();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps fresh live .jsonl lock files with OpenClaw or unknown owners", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
+    const sessionsDir = path.join(root, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const nowMs = Date.now();
+    const openclawLock = path.join(sessionsDir, "openclaw-live.jsonl.lock");
+    const gatewayLock = path.join(sessionsDir, "gateway-live.jsonl.lock");
+    const unknownLock = path.join(sessionsDir, "unknown-live.jsonl.lock");
+
+    try {
+      await fs.writeFile(
+        openclawLock,
+        JSON.stringify({
+          pid: process.pid,
+          createdAt: new Date(nowMs).toISOString(),
+        }),
+        "utf8",
+      );
+      const openclawResult = await cleanStaleLockFiles({
+        sessionsDir,
+        staleMs: 30_000,
+        nowMs,
+        removeStale: true,
+        readOwnerProcessArgs: () => ["node", "/opt/openclaw/openclaw.mjs", "agent"],
+      });
+
+      expect(openclawResult.cleaned).toEqual([]);
+      await expect(fs.access(openclawLock)).resolves.toBeUndefined();
+
+      await fs.rm(openclawLock, { force: true });
+      await fs.writeFile(
+        gatewayLock,
+        JSON.stringify({
+          pid: process.pid,
+          createdAt: new Date(nowMs).toISOString(),
+        }),
+        "utf8",
+      );
+      const gatewayResult = await cleanStaleLockFiles({
+        sessionsDir,
+        staleMs: 30_000,
+        nowMs,
+        removeStale: true,
+        readOwnerProcessArgs: () => ["node", "dist/index.js", "gateway", "run"],
+      });
+
+      expect(gatewayResult.cleaned).toEqual([]);
+      await expect(fs.access(gatewayLock)).resolves.toBeUndefined();
+
+      await fs.rm(gatewayLock, { force: true });
+      await fs.writeFile(
+        unknownLock,
+        JSON.stringify({
+          pid: process.pid,
+          createdAt: new Date(nowMs).toISOString(),
+        }),
+        "utf8",
+      );
+      const unknownResult = await cleanStaleLockFiles({
+        sessionsDir,
+        staleMs: 30_000,
+        nowMs,
+        removeStale: true,
+        readOwnerProcessArgs: () => null,
+      });
+
+      expect(unknownResult.cleaned).toEqual([]);
+      await expect(fs.access(unknownLock)).resolves.toBeUndefined();
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
@@ -451,11 +741,22 @@ describe("acquireSessionWriteLock", () => {
         removeStale: true,
       });
 
-      expect(result.locks).toHaveLength(1);
-      expect(result.cleaned.map((entry) => path.basename(entry.lockPath))).toEqual([
-        "orphan-self.jsonl.lock",
+      expect(lockCleanupRecords(result.locks)).toEqual([
+        {
+          name: "orphan-self.jsonl.lock",
+          removed: true,
+          stale: true,
+          staleReasons: ["orphan-self-pid"],
+        },
       ]);
-      expect(result.cleaned[0]?.staleReasons).toContain("orphan-self-pid");
+      expect(lockCleanupRecords(result.cleaned)).toEqual([
+        {
+          name: "orphan-self.jsonl.lock",
+          removed: true,
+          stale: true,
+          staleReasons: ["orphan-self-pid"],
+        },
+      ]);
       await expectPathMissing(orphanSelfLock);
     } finally {
       await fs.rm(root, { recursive: true, force: true });
@@ -478,7 +779,7 @@ describe("acquireSessionWriteLock", () => {
             process.on(signal, keepAlive);
           }
 
-          __testing.handleTerminationSignal(signal);
+          testing.handleTerminationSignal(signal);
 
           await expectPathMissing(lockPath);
           if (signal === "SIGINT") {
@@ -541,8 +842,8 @@ describe("acquireSessionWriteLock", () => {
   });
 
   it("registers cleanup for SIGQUIT and SIGABRT", () => {
-    expect(__testing.cleanupSignals).toContain("SIGQUIT");
-    expect(__testing.cleanupSignals).toContain("SIGABRT");
+    expect(testing.cleanupSignals).toContain("SIGQUIT");
+    expect(testing.cleanupSignals).toContain("SIGABRT");
   });
   it("cleans up locks on SIGINT without removing other handlers", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
@@ -566,7 +867,7 @@ describe("acquireSessionWriteLock", () => {
       const lockPath = `${sessionFile}.lock`;
       await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
 
-      __testing.handleTerminationSignal("SIGINT");
+      testing.handleTerminationSignal("SIGINT");
 
       await expectPathMissing(lockPath);
       expect(otherHandlerCalled).toBe(false);
@@ -608,7 +909,7 @@ describe("acquireSessionWriteLock", () => {
     process.on("SIGINT", keepAlive);
 
     try {
-      __testing.handleTerminationSignal("SIGINT");
+      testing.handleTerminationSignal("SIGINT");
       expect(process.listeners("SIGINT")).toContain(keepAlive);
     } finally {
       process.off("SIGINT", keepAlive);

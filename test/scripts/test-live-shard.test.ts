@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import fs, { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   LIVE_TEST_SHARDS,
@@ -6,9 +6,19 @@ import {
   collectAllLiveTestFiles,
   selectLiveShardFiles,
 } from "../../scripts/test-live-shard.mjs";
+import { expectNoReaddirSyncDuring } from "../../src/test-utils/fs-scan-assertions.js";
 
 describe("scripts/test-live-shard", () => {
   const allFiles = collectAllLiveTestFiles();
+
+  it("discovers live tests without scanning source roots in-process", () => {
+    expectNoReaddirSyncDuring(() => {
+      const files = collectAllLiveTestFiles();
+
+      expect(files.length).toBeGreaterThan(0);
+      expect(files.every((file) => file.endsWith(".live.test.ts"))).toBe(true);
+    });
+  });
 
   it("covers every native live test and tracks provider-filtered release fanout", () => {
     const selected = RELEASE_LIVE_TEST_SHARDS.flatMap((shard) =>
@@ -24,7 +34,7 @@ describe("scripts/test-live-shard", () => {
       .toSorted();
 
     expect(allFiles.length).toBeGreaterThan(0);
-    expect([...new Set(selectedFiles)].toSorted()).toEqual(allFiles);
+    expect([...new Set(selectedFiles)].toSorted((a, b) => a.localeCompare(b))).toEqual(allFiles);
     expect(duplicateFiles).toEqual(["extensions/music-generation-providers.live.test.ts"]);
     expect(musicProviderFanout).toEqual([
       "native-live-extensions-media-music-google",
@@ -45,7 +55,7 @@ describe("scripts/test-live-shard", () => {
       [
         ...selectLiveShardFiles("native-live-extensions-o-z-other", allFiles),
         ...selectLiveShardFiles("native-live-extensions-xai", allFiles),
-      ].toSorted(),
+      ].toSorted((a, b) => a.localeCompare(b)),
     );
 
     const mediaAlias = selectLiveShardFiles("native-live-extensions-media", allFiles);
@@ -54,7 +64,7 @@ describe("scripts/test-live-shard", () => {
         ...selectLiveShardFiles("native-live-extensions-media-audio", allFiles),
         ...selectLiveShardFiles("native-live-extensions-media-music", allFiles),
         ...selectLiveShardFiles("native-live-extensions-media-video", allFiles),
-      ].toSorted(),
+      ].toSorted((a, b) => a.localeCompare(b)),
     );
   });
 

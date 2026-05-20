@@ -1,4 +1,5 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createSessionsListTool } from "./sessions-list-tool.js";
 
 const mocks = vi.hoisted(() => ({
   gatewayCall: vi.fn(),
@@ -52,12 +53,6 @@ function getSessionsListDetails(result: { details?: unknown }): SessionsListDeta
 }
 
 describe("sessions-list-tool", () => {
-  let createSessionsListTool: typeof import("./sessions-list-tool.js").createSessionsListTool;
-
-  beforeAll(async () => {
-    ({ createSessionsListTool } = await import("./sessions-list-tool.js"));
-  });
-
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.createAgentToAgentPolicy.mockReturnValue({});

@@ -3,7 +3,7 @@ import type {
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { cloneFirstTemplateModel } from "openclaw/plugin-sdk/provider-model-shared";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const GOOGLE_GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
 const GOOGLE_ANTIGRAVITY_PROVIDER_ID = "google-antigravity";
@@ -30,12 +30,22 @@ const GEMINI_3_FLASH_ANTIGRAVITY_TEMPLATE_IDS = ["gemini-3-flash"] as const;
 // Gemma uses the Gemini flash template as a forward-compat approximation
 // until a dedicated Gemma template is registered in the catalog.
 const GEMMA_TEMPLATE_IDS = GEMINI_3_1_FLASH_TEMPLATE_IDS;
+const GOOGLE_PROVIDER_PREFIX = "google/";
 
 function normalizeGeminiProRequestId(id: string): string {
+  if (id.startsWith(GOOGLE_PROVIDER_PREFIX)) {
+    const modelId = id.slice(GOOGLE_PROVIDER_PREFIX.length);
+    const normalizedModelId = normalizeGeminiProRequestId(modelId);
+    return normalizedModelId === modelId ? id : `${GOOGLE_PROVIDER_PREFIX}${normalizedModelId}`;
+  }
   if (id === "gemini-3-pro" || id === "gemini-3-pro-preview" || id === "gemini-3.1-pro") {
     return "gemini-3.1-pro-preview";
   }
   return id;
+}
+
+function googleFamilyModelId(id: string): string {
+  return id.startsWith(GOOGLE_PROVIDER_PREFIX) ? id.slice(GOOGLE_PROVIDER_PREFIX.length) : id;
 }
 
 type GoogleForwardCompatFamily = {
@@ -130,7 +140,7 @@ export function resolveGoogleGeminiForwardCompatModel(params: {
   ctx: ProviderResolveDynamicModelContext;
 }): ProviderRuntimeModel | undefined {
   const trimmed = normalizeGeminiProRequestId(params.ctx.modelId.trim());
-  const lower = normalizeOptionalLowercaseString(trimmed) ?? "";
+  const lower = normalizeOptionalLowercaseString(googleFamilyModelId(trimmed)) ?? "";
 
   let family: GoogleForwardCompatFamily;
   let patch: Partial<ProviderRuntimeModel> | undefined;

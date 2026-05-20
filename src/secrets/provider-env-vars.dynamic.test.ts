@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  __testing,
+  testing,
   getProviderEnvVars,
   listKnownProviderAuthEnvVarNames,
   listKnownSecretEnvVarNames,
@@ -64,7 +64,8 @@ const pluginRegistryMocks = vi.hoisted(() => {
 });
 
 function requireLastMetadataSnapshotCall(): unknown[] {
-  const call = pluginRegistryMocks.loadPluginMetadataSnapshot.mock.calls.at(-1);
+  const calls = pluginRegistryMocks.loadPluginMetadataSnapshot.mock.calls;
+  const call = calls[calls.length - 1];
   if (!call) {
     throw new Error("expected plugin metadata snapshot call");
   }
@@ -102,7 +103,7 @@ describe("provider env vars dynamic manifest metadata", () => {
     pluginRegistryMocks.getCurrentPluginMetadataSnapshot.mockReset();
     pluginRegistryMocks.getCurrentPluginMetadataSnapshot.mockReturnValue(undefined);
     pluginRegistryMocks.loadPluginMetadataSnapshot.mockClear();
-    __testing.resetProviderEnvVarCachesForTests();
+    testing.resetProviderEnvVarCachesForTests();
   });
 
   it("includes later-installed plugin env vars without a bundled generated map", () => {
@@ -188,9 +189,8 @@ describe("provider env vars dynamic manifest metadata", () => {
         source: "external cloud credentials",
       },
     ]);
-    expect(requireLastMetadataSnapshotCall()[0]).toMatchObject({
-      preferPersisted: false,
-    });
+    const [snapshotOptions] = requireLastMetadataSnapshotCall() as [{ preferPersisted?: boolean }];
+    expect(snapshotOptions.preferPersisted).toBe(false);
   });
 
   it("reuses the current compatible metadata snapshot for workspace auth evidence", () => {

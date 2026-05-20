@@ -5,6 +5,18 @@ function readComponentsCss(): string {
   return readStyleSheet("ui/src/styles/components.css");
 }
 
+describe("code block highlight styles", () => {
+  it("targets the markdown renderer's generated code block wrapper", () => {
+    const css = readComponentsCss();
+
+    expect(css).toContain(":is(.code-block .hljs, .code-block-wrapper pre code.hljs)");
+    expect(css).toContain(":is(.code-block, .code-block-wrapper pre code.hljs) .hljs-keyword");
+    expect(css).toContain(
+      ':root[data-theme-mode="light"] :is(.code-block, .code-block-wrapper pre code.hljs) .hljs-string',
+    );
+  });
+});
+
 describe("agent fallback chip styles", () => {
   it("styles the chip remove control inside the agent model input", () => {
     const css = readComponentsCss();
@@ -16,6 +28,14 @@ describe("agent fallback chip styles", () => {
     expect(css).toContain("outline: 2px solid var(--accent);");
     expect(css).toContain("outline-offset: 2px;");
     expect(css).toContain(".agent-chip-input .chip-remove:disabled");
+  });
+
+  it("keeps touch-primary field controls large enough to avoid iOS focus zoom", () => {
+    const css = readComponentsCss();
+
+    expect(css).toMatch(
+      /@media \(hover: none\) and \(pointer: coarse\) \{[\s\S]*\.field input,[\s\S]*\.field textarea,[\s\S]*\.field select \{[\s\S]*font-size: 16px;/,
+    );
   });
 });
 
@@ -36,23 +56,30 @@ describe("sessions table responsive styles", () => {
 
     expect(componentsCss).toContain(".session-compaction-cell {");
     expect(componentsCss).toContain(".session-compaction-trigger {");
+    expect(componentsCss).toContain(".session-status-badge {");
+    expect(componentsCss).toContain(".sessions-table tbody tr.session-data-row > td {");
+    expect(componentsCss).toContain(".session-runtime-cell .mono {");
+    expect(componentsCss).toContain("text-overflow: ellipsis;");
     expect(componentsCss).toContain(".session-details-panel {");
     expect(componentsCss).not.toContain(".session-checkpoint-toggle {");
-    expect(mobileCss).toContain(".data-table.sessions-table {\n    min-width: 540px;");
+    expect(mobileCss).toContain(".data-table.sessions-table {\n    min-width: 560px;");
     expect(mobileCss).toContain(
-      ".sessions-table th:nth-child(10),\n  .sessions-table td:nth-child(10),\n  .sessions-table th:nth-child(11),\n  .sessions-table td:nth-child(11)",
+      ".sessions-table th:nth-child(12),\n  .sessions-table td:nth-child(12),\n  .sessions-table th:nth-child(13),\n  .sessions-table td:nth-child(13)",
     );
     expect(mobileCss).toContain(
-      ".sessions-table th:nth-child(4),\n  .sessions-table td:nth-child(4),\n  .sessions-table th:nth-child(9),\n  .sessions-table td:nth-child(9)",
+      ".sessions-table th:nth-child(4),\n  .sessions-table td:nth-child(4),\n  .sessions-table th:nth-child(11),\n  .sessions-table td:nth-child(11)",
     );
     expect(mobileCss).toContain(
-      ".sessions-table th:nth-child(3),\n  .sessions-table td:nth-child(3),\n  .sessions-table th:nth-child(8),\n  .sessions-table td:nth-child(8)",
+      ".sessions-table th:nth-child(3),\n  .sessions-table td:nth-child(3),\n  .sessions-table th:nth-child(10),\n  .sessions-table td:nth-child(10)",
     );
     expect(mobileCss).toContain(
-      ".sessions-table th:nth-child(5),\n  .sessions-table td:nth-child(5)",
+      ".sessions-table th:nth-child(6),\n  .sessions-table td:nth-child(6),\n  .sessions-table th:nth-child(7),\n  .sessions-table td:nth-child(7)",
     );
     expect(mobileCss).toContain(".data-table.sessions-table .data-table-key-col {");
-    expect(mobileCss).not.toContain(".sessions-table th:nth-child(7),");
+    expect(mobileCss).toContain(".sessions-table .session-status-col {");
+    expect(mobileCss).not.toContain(
+      ".sessions-table th:nth-child(5),\n  .sessions-table td:nth-child(5)",
+    );
   });
 });
 

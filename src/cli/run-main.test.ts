@@ -40,6 +40,16 @@ const losslessClawToolRegistry: PluginManifestCommandAliasRegistry = {
   ],
 };
 
+const browserCommandAliasRegistry: PluginManifestCommandAliasRegistry = {
+  plugins: [
+    {
+      id: "browser",
+      enabledByDefault: true,
+      commandAliases: [{ name: "browser" }],
+    },
+  ],
+};
+
 describe("isGatewayRunFastPathArgv", () => {
   it("matches only plain gateway foreground starts without root options or help", () => {
     expect(isGatewayRunFastPathArgv(["node", "openclaw", "gateway"])).toBe(true);
@@ -104,6 +114,12 @@ describe("shouldEnsureCliPath", () => {
   it("skips path bootstrap for read-only fast paths", () => {
     expect(shouldEnsureCliPath(["node", "openclaw"])).toBe(false);
     expect(shouldEnsureCliPath(["node", "openclaw", "--profile", "work"])).toBe(false);
+    expect(shouldEnsureCliPath(["node", "openclaw", "approvals"])).toBe(false);
+    expect(shouldEnsureCliPath(["node", "openclaw", "channels"])).toBe(false);
+    expect(shouldEnsureCliPath(["node", "openclaw", "cron"])).toBe(false);
+    expect(shouldEnsureCliPath(["node", "openclaw", "devices"])).toBe(false);
+    expect(shouldEnsureCliPath(["node", "openclaw", "plugins"])).toBe(false);
+    expect(shouldEnsureCliPath(["node", "openclaw", "mcp"])).toBe(false);
     expect(shouldEnsureCliPath(["node", "openclaw", "status"])).toBe(false);
     expect(shouldEnsureCliPath(["node", "openclaw", "--log-level", "debug", "status"])).toBe(false);
     expect(shouldEnsureCliPath(["node", "openclaw", "sessions", "--json"])).toBe(false);
@@ -160,6 +176,14 @@ describe("shouldStartProxyForCli", () => {
     expect(shouldStartProxyForCli(["node", "openclaw", "--update"])).toBe(true);
     expect(shouldStartProxyForCli(["node", "openclaw", "--profile", "p", "--update"])).toBe(true);
   });
+
+  it("skips managed proxy routing for bare parent default help", () => {
+    expect(shouldStartProxyForCli(["node", "openclaw", "plugins"])).toBe(false);
+    expect(shouldStartProxyForCli(["node", "openclaw", "channels"])).toBe(false);
+    expect(shouldStartProxyForCli(["node", "openclaw", "cron"])).toBe(false);
+    expect(shouldStartProxyForCli(["node", "openclaw", "devices"])).toBe(false);
+    expect(shouldStartProxyForCli(["node", "openclaw", "mcp"])).toBe(false);
+  });
 });
 
 describe("shouldUseRootHelpFastPath", () => {
@@ -191,11 +215,15 @@ describe("shouldUseBrowserHelpFastPath", () => {
 describe("resolveMissingPluginCommandMessage", () => {
   it("explains plugins.allow misses for a bundled plugin command", () => {
     expect(
-      resolveMissingPluginCommandMessage("browser", {
-        plugins: {
-          allow: ["quietchat"],
+      resolveMissingPluginCommandMessage(
+        "browser",
+        {
+          plugins: {
+            allow: ["quietchat"],
+          },
         },
-      }),
+        { registry: browserCommandAliasRegistry },
+      ),
     ).toContain('`plugins.allow` excludes "browser"');
   });
 
@@ -386,7 +414,9 @@ describe("resolveMissingPluginCommandMessage", () => {
       },
       { registry: losslessClawToolRegistry },
     );
-    expect(message).not.toBeNull();
+    if (message === null) {
+      throw new Error("expected missing plugin command message");
+    }
     expect(message).toContain('"lcm_recent"');
     expect(message).toContain('"lossless-claw"');
     expect(message).toContain("agent tool");
@@ -397,12 +427,14 @@ describe("resolveMissingPluginCommandMessage", () => {
     const message = resolveMissingPluginCommandMessage("LCM_Recent", undefined, {
       registry: losslessClawToolRegistry,
     });
-    expect(message).not.toBeNull();
+    if (message === null) {
+      throw new Error("expected missing plugin command message");
+    }
     expect(message).toContain("agent tool");
     expect(message).toContain('"lossless-claw"');
   });
 
-  it("preserves the plugins.allow suggestion when the unknown name is not a plugin tool", () => {
+  it("returns null for unknown names excluded by plugins.allow", () => {
     const message = resolveMissingPluginCommandMessage(
       "totally-unknown",
       {
@@ -412,14 +444,30 @@ describe("resolveMissingPluginCommandMessage", () => {
       },
       { registry: losslessClawToolRegistry },
     );
-    expect(message).not.toBeNull();
-    expect(message).toContain('`plugins.allow` excludes "totally-unknown"');
+    expect(message).toBeNull();
+  });
+
+  it("points metadata-only CLI roots in plugins.allow at their parent plugin", () => {
+    const message = resolveMissingPluginCommandMessage(
+      "qa",
+      {
+        plugins: {
+          allow: ["browser"],
+        },
+      },
+      {
+        resolveCliCommandSurfaceOwner: () => "qa-lab",
+      },
+    );
+    expect(message).toContain('"qa" is not a plugin');
+    expect(message).toContain('"qa-lab"');
+    expect(message).toContain('Add "qa-lab" to `plugins.allow` instead of "qa"');
   });
 
   it("does not attribute a tool to an owning plugin excluded by plugins.allow", () => {
     // The owning plugin is denied via plugins.allow, so the manifest-declared
-    // tool is not available through the owning plugin. Fall through to the
-    // standard plugins.allow message instead of falsely attributing it.
+    // tool is not available through the owning plugin. Tool names are not CLI
+    // command surfaces, so do not suggest adding the tool name to plugins.allow.
     const message = resolveMissingPluginCommandMessage(
       "lcm_recent",
       {
@@ -429,9 +477,7 @@ describe("resolveMissingPluginCommandMessage", () => {
       },
       { registry: losslessClawToolRegistry },
     );
-    expect(message).not.toBeNull();
-    expect(message).not.toContain("agent tool available");
-    expect(message).toContain('`plugins.allow` excludes "lcm_recent"');
+    expect(message).toBeNull();
   });
 
   it("does not attribute a tool to an owning plugin disabled via plugins.entries", () => {
@@ -467,7 +513,9 @@ describe("resolveMissingPluginCommandMessage", () => {
     const message = resolveMissingPluginCommandMessage("feishu_chat", undefined, {
       resolveToolOwner: () => manifestOnlyOwner,
     });
-    expect(message).not.toBeNull();
+    if (message === null) {
+      throw new Error("expected missing plugin command message");
+    }
     expect(message).toContain("may be provided by");
     expect(message).toContain('"feishu"');
     expect(message).not.toContain("registered by");

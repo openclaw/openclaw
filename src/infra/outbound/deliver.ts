@@ -8,6 +8,7 @@ import type {
   ChannelMessageSendLifecycleAdapter,
   ChannelMessageSendResult,
 } from "../../channels/message/types.js";
+import { adaptMessagePresentationForChannel } from "../../channels/plugins/outbound/interactive.js";
 import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load.js";
 import type {
   ChannelDeliveryCapabilities,
@@ -136,12 +137,14 @@ async function loadChannelBootstrapRuntime() {
 type ChannelHandler = {
   chunker: ChannelOutboundAdapter["chunker"] | null;
   chunkerMode?: "text" | "markdown";
+  chunkedTextFormatting?: OutboundDeliveryFormattingOptions;
   textChunkLimit?: number;
   supportsMedia: boolean;
   sanitizeText?: (payload: ReplyPayload) => string;
   normalizePayload?: (payload: ReplyPayload) => ReplyPayload | null;
   sendTextOnlyErrorPayloads?: boolean;
   renderPresentation?: (payload: ReplyPayload) => Promise<ReplyPayload | null>;
+  presentationCapabilities?: ChannelOutboundAdapter["presentationCapabilities"];
   pinDeliveredMessage?: (params: {
     target: ChannelOutboundTargetRef;
     messageId: string;
@@ -345,6 +348,7 @@ function createPluginHandler(
     replyToIdSource?: "explicit" | "implicit";
     threadId?: string | number | null;
     audioAsVoice?: boolean;
+    formatting?: OutboundDeliveryFormattingOptions;
   }): Omit<ChannelOutboundContext, "text" | "mediaUrl"> => ({
     ...baseCtx,
     replyToId: overrides && "replyToId" in overrides ? overrides.replyToId : baseCtx.replyToId,
@@ -354,6 +358,10 @@ function createPluginHandler(
         : baseCtx.replyToIdSource,
     threadId: overrides && "threadId" in overrides ? overrides.threadId : baseCtx.threadId,
     audioAsVoice: overrides?.audioAsVoice,
+    formatting:
+      overrides && "formatting" in overrides
+        ? { ...baseCtx.formatting, ...overrides.formatting }
+        : baseCtx.formatting,
   });
   const buildTargetRef = (overrides?: {
     threadId?: string | number | null;
@@ -366,15 +374,22 @@ function createPluginHandler(
   return {
     chunker,
     chunkerMode,
+    chunkedTextFormatting: outbound?.chunkedTextFormatting,
     textChunkLimit: outbound?.textChunkLimit,
     supportsMedia: Boolean(messageMedia ?? sendMedia),
     sanitizeText: outbound?.sanitizeText
       ? (payload) => outbound.sanitizeText!({ text: payload.text ?? "", payload })
       : undefined,
     normalizePayload: outbound?.normalizePayload
-      ? (payload) => outbound.normalizePayload!({ payload })
+      ? (payload) =>
+          outbound.normalizePayload!({
+            payload,
+            cfg: params.cfg,
+            accountId: params.accountId,
+          })
       : undefined,
     sendTextOnlyErrorPayloads: outbound?.sendTextOnlyErrorPayloads === true,
+    presentationCapabilities: outbound?.presentationCapabilities,
     renderPresentation: outbound?.renderPresentation
       ? async (payload) => {
           const presentation = normalizeMessagePresentation(payload.presentation);
@@ -938,7 +953,14 @@ async function renderPresentationForDelivery(
   if (!presentation) {
     return payload;
   }
-  const rendered = handler.renderPresentation ? await handler.renderPresentation(payload) : null;
+  const adaptedPresentation = adaptMessagePresentationForChannel({
+    presentation,
+    capabilities: handler.presentationCapabilities,
+  });
+  const adaptedPayload = { ...payload, presentation: adaptedPresentation };
+  const rendered = handler.renderPresentation
+    ? await handler.renderPresentation(adaptedPayload)
+    : null;
   if (rendered) {
     const { presentation: _presentation, ...withoutPresentation } = rendered;
     return withoutPresentation;
@@ -948,7 +970,7 @@ async function renderPresentationForDelivery(
     ...withoutPresentation,
     text: renderMessagePresentationFallbackText({
       text: payload.text,
-      presentation,
+      presentation: adaptedPresentation,
     }),
   };
 }
@@ -1386,6 +1408,7 @@ async function deliverOutboundPayloadsCore(
       overrides,
       chunker: handler.chunker,
       chunkerMode: handler.chunkerMode,
+      chunkedTextFormatting: handler.chunkedTextFormatting,
       textLimit,
       chunkMode,
       formatting: params.formatting,

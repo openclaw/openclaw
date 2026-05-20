@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   BOUNDARY_CHECKS,
   formatCommand,
+  parseShardSelection,
   parseShardSpec,
   resolveConcurrency,
   runChecks,
@@ -23,7 +24,7 @@ function createOutputBuffer() {
 
 describe("run-additional-boundary-checks", () => {
   it("runs prompt snapshot drift checks in CI", () => {
-    expect(BOUNDARY_CHECKS).toContainEqual({
+    expect(BOUNDARY_CHECKS[0]).toEqual({
       label: "prompt:snapshots:check",
       command: "pnpm",
       args: ["prompt:snapshots:check"],
@@ -44,24 +45,39 @@ describe("run-additional-boundary-checks", () => {
 
   it("parses and applies CI shard specs", () => {
     expect(parseShardSpec("2/4")).toEqual({ count: 4, index: 1, label: "2/4" });
+    expect(parseShardSelection("2/4,3/4")).toEqual([
+      { count: 4, index: 1, label: "2/4" },
+      { count: 4, index: 2, label: "3/4" },
+    ]);
     expect(selectChecksForShard(BOUNDARY_CHECKS, "1/4")).toEqual(
       BOUNDARY_CHECKS.filter((_check, index) => index % 4 === 0),
+    );
+    expect(selectChecksForShard(BOUNDARY_CHECKS, "2/4,3/4")).toEqual(
+      BOUNDARY_CHECKS.filter((_check, index) => index % 4 === 1 || index % 4 === 2),
     );
     const shardedLabels = [1, 2, 3, 4].flatMap((index) =>
       selectChecksForShard(BOUNDARY_CHECKS, `${index}/4`).map((check) => check.label),
     );
-    expect(shardedLabels.toSorted()).toEqual(
-      BOUNDARY_CHECKS.map((check) => check.label).toSorted(),
+    expect(shardedLabels.toSorted((a, b) => a.localeCompare(b))).toEqual(
+      BOUNDARY_CHECKS.map((check) => check.label).toSorted((a, b) => a.localeCompare(b)),
     );
     expect(new Set(shardedLabels).size).toBe(BOUNDARY_CHECKS.length);
     expect(() => parseShardSpec("5/4")).toThrow("Invalid shard spec");
   });
 
   it("keeps the raw HTTP/2 import guard in source boundary checks", () => {
-    expect(BOUNDARY_CHECKS).toContainEqual({
+    expect(BOUNDARY_CHECKS[6]).toEqual({
       label: "lint:tmp:no-raw-http2-imports",
       command: "pnpm",
       args: ["run", "lint:tmp:no-raw-http2-imports"],
+    });
+  });
+
+  it("keeps the Telegram grammY type import guard in source boundary checks", () => {
+    expect(BOUNDARY_CHECKS).toContainEqual({
+      label: "lint:extensions:telegram-grammy-types",
+      command: "pnpm",
+      args: ["run", "lint:extensions:telegram-grammy-types"],
     });
   });
 

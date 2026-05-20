@@ -101,6 +101,10 @@
       "destination": "/plugins/building-plugins#registering-agent-tools"
     },
     {
+      "source": "/gateway/admin-http-rpc",
+      "destination": "/plugins/admin-http-rpc"
+    },
+    {
       "source": "/cli/capability",
       "destination": "/cli/infer"
     },
@@ -1050,7 +1054,7 @@
             "groups": [
               {
                 "group": "Overview",
-                "pages": ["channels/index"]
+                "pages": ["channels/index", "announcements/bluebubbles-imessage"]
               },
               {
                 "group": "Mainstream messaging",
@@ -1101,6 +1105,7 @@
                   "channels/access-groups",
                   "channels/group-messages",
                   "channels/groups",
+                  "channels/ambient-room-events",
                   "channels/broadcast-groups",
                   "channels/channel-routing",
                   "channels/location",
@@ -1129,6 +1134,7 @@
                   "start/bootstrapping",
                   "concepts/experimental-features",
                   "concepts/qa-e2e-automation",
+                  "concepts/personal-agent-benchmark-pack",
                   "concepts/qa-matrix"
                 ]
               },
@@ -1179,7 +1185,7 @@
             ]
           },
           {
-            "tab": "Tools & Plugins",
+            "tab": "Capabilities",
             "groups": [
               {
                 "group": "Overview",
@@ -1191,52 +1197,36 @@
                   "tools/plugin",
                   "plugins/manage-plugins",
                   "plugins/community",
-                  "plugins/plugin-inventory",
-                  "plugins/reference",
-                  "plugins/bundles",
-                  "plugins/dependency-resolution",
-                  "plugins/install-overrides",
+                  "plugins/bundles"
+                ]
+              },
+              {
+                "group": "Bundled plugin guides",
+                "pages": [
                   "plugins/codex-harness",
+                  "plugins/codex-native-plugins",
                   "plugins/codex-computer-use",
                   "plugins/google-meet",
                   "plugins/webhooks",
+                  "plugins/admin-http-rpc",
                   "plugins/voice-call",
                   "plugins/memory-wiki",
                   "plugins/memory-lancedb",
-                  "plugins/message-presentation",
                   "plugins/oc-path",
                   "plugins/skill-workshop",
-                  "plugins/zalouser",
-                  {
-                    "group": "Building plugins",
-                    "pages": [
-                      "plugins/building-plugins",
-                      "plugins/hooks",
-                      "plugins/sdk-channel-plugins",
-                      "plugins/sdk-channel-message",
-                      "plugins/sdk-provider-plugins",
-                      "plugins/cli-backend-plugins",
-                      "plugins/adding-capabilities",
-                      "plugins/compatibility",
-                      "plugins/sdk-migration"
-                    ]
-                  },
-                  {
-                    "group": "Plugin SDK reference",
-                    "pages": [
-                      "plugins/sdk-overview",
-                      "plugins/sdk-subpaths",
-                      "plugins/sdk-entrypoints",
-                      "plugins/sdk-runtime",
-                      "plugins/sdk-channel-turn",
-                      "plugins/sdk-agent-harness",
-                      "plugins/sdk-setup",
-                      "plugins/sdk-testing",
-                      "plugins/manifest",
-                      "plugins/architecture",
-                      "plugins/architecture-internals"
-                    ]
-                  }
+                  "plugins/zalouser"
+                ]
+              },
+              {
+                "group": "Building plugins",
+                "pages": [
+                  "plugins/building-plugins",
+                  "plugins/tool-plugins",
+                  "plugins/sdk-channel-plugins",
+                  "plugins/sdk-provider-plugins",
+                  "plugins/cli-backend-plugins",
+                  "plugins/hooks",
+                  "plugins/adding-capabilities"
                 ]
               },
               {
@@ -1250,7 +1240,7 @@
                 ]
               },
               {
-                "group": "Automation and tasks",
+                "group": "Automation",
                 "pages": [
                   "automation/index",
                   "automation/cron-jobs",
@@ -1280,6 +1270,7 @@
                   "tools/reactions",
                   "tools/thinking",
                   "tools/tokenjuice",
+                  "tools/tool-search",
                   "tools/loop-detection",
                   "tools/trajectory",
                   "tools/tts",
@@ -1352,7 +1343,6 @@
                 "pages": [
                   "clawhub/api",
                   "clawhub/http-api",
-                  "clawhub/security",
                   "clawhub/acceptable-usage"
                 ]
               }
@@ -1386,6 +1376,7 @@
                   "providers/deepgram",
                   "providers/deepinfra",
                   "providers/deepseek",
+                  "providers/ds4",
                   "providers/elevenlabs",
                   "providers/fal",
                   "providers/fireworks",
@@ -1555,7 +1546,8 @@
                       "gateway/openresponses-http-api",
                       "gateway/tools-invoke-http-api",
                       "gateway/cli-backends",
-                      "gateway/local-models"
+                      "gateway/local-models",
+                      "gateway/local-model-services"
                     ]
                   },
                   {
@@ -1677,7 +1669,7 @@
                   },
                   {
                     "group": "Plugins and skills",
-                    "pages": ["cli/plugins", "cli/path", "cli/skills"]
+                    "pages": ["cli/plugins", "cli/path", "cli/policy", "cli/skills"]
                   },
                   {
                     "group": "Interfaces",
@@ -1704,7 +1696,50 @@
                   "reference/rpc",
                   "concepts/openclaw-sdk",
                   "reference/openclaw-sdk-api-design",
+                  "reference/code-mode",
                   "reference/device-models"
+                ]
+              },
+              {
+                "group": "Codex harness",
+                "pages": [
+                  "plugins/codex-harness-reference",
+                  "plugins/codex-harness-runtime"
+                ]
+              },
+              {
+                "group": "Plugin reference",
+                "pages": [
+                  "plugins/plugin-inventory",
+                  "plugins/reference",
+                  "plugins/dependency-resolution",
+                  "plugins/install-overrides"
+                ]
+              },
+              {
+                "group": "Plugin SDK reference",
+                "pages": [
+                  "plugins/sdk-overview",
+                  "plugins/sdk-subpaths",
+                  "plugins/sdk-entrypoints",
+                  "plugins/sdk-runtime",
+                  "plugins/sdk-agent-harness",
+                  "plugins/sdk-setup",
+                  "plugins/sdk-testing",
+                  "plugins/manifest"
+                ]
+              },
+              {
+                "group": "Plugin maintainer reference",
+                "pages": [
+                  "plugins/architecture",
+                  "plugins/architecture-internals",
+                  "plugins/sdk-migration",
+                  "plugins/compatibility",
+                  "plugins/sdk-channel-message",
+                  "plugins/sdk-channel-turn",
+                  "plugins/sdk-channel-ingress",
+                  "plugins/message-presentation"
                 ]
               },
               {

@@ -166,9 +166,13 @@ export async function resolveReplyDirectives(params: {
   commandAuthorized: boolean;
   defaultProvider: string;
   defaultModel: string;
+  primaryProvider?: string;
+  primaryModel?: string;
   aliasIndex: ModelAliasIndex;
   provider: string;
   model: string;
+  hasOneTurnModelOverride?: boolean;
+  skipStoredModelOverride?: boolean;
   hasResolvedHeartbeatModelOverride: boolean;
   typing: TypingController;
   opts?: GetReplyOptions;
@@ -194,8 +198,12 @@ export async function resolveReplyDirectives(params: {
     commandAuthorized,
     defaultProvider,
     defaultModel,
+    primaryProvider,
+    primaryModel,
     provider: initialProvider,
     model: initialModel,
+    hasOneTurnModelOverride,
+    skipStoredModelOverride,
     hasResolvedHeartbeatModelOverride,
     typing,
     opts,
@@ -526,10 +534,15 @@ export async function resolveReplyDirectives(params: {
         storePath,
         defaultProvider,
         defaultModel,
+        primaryProvider,
+        primaryModel,
         provider,
         model,
         hasModelDirective: directives.hasModelDirective,
+        hasOneTurnModelOverride,
+        skipStoredModelOverride,
         hasResolvedHeartbeatModelOverride,
+        isHeartbeat: opts?.isHeartbeat === true,
       });
   provider = modelState.provider;
   model = modelState.model;

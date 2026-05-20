@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  __testing as replyRunTesting,
+  testing as replyRunTesting,
   createReplyOperation,
   replyRunRegistry,
 } from "../auto-reply/reply/reply-run-registry.js";
@@ -34,6 +34,11 @@ import { buildSystemPrompt } from "./cli-runner/helpers.js";
 import { setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
 import { createClaudeApiErrorFixture } from "./test-helpers/claude-api-error-fixture.js";
+
+vi.mock("../plugin-sdk/anthropic-cli.js", () => ({
+  CLAUDE_CLI_BACKEND_ID: "claude-cli",
+  isClaudeCliProvider: (providerId: string) => providerId === "claude-cli",
+}));
 
 type ProcessSupervisor = ReturnType<typeof getProcessSupervisor>;
 type SupervisorSpawnFn = ProcessSupervisor["spawn"];
@@ -125,6 +130,8 @@ function buildPreparedCliRunContext(params: {
       ...(params.mcpConfigHash ? { mcpConfigHash: params.mcpConfigHash } : {}),
     },
     reusableCliSession: {},
+    hadSessionFile: false,
+    contextEngineConfig: {},
     modelId: params.model,
     normalizedModel: params.model,
     systemPrompt: "You are a helpful assistant.",
@@ -154,8 +161,45 @@ function requireRegexMatch(value: string, pattern: RegExp): RegExpExecArray {
   return match;
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label} to be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0): unknown {
+  const call = mock.mock.calls[callIndex] as unknown[] | undefined;
+  if (!call) {
+    throw new Error(`expected mock call ${callIndex}`);
+  }
+  return call[argIndex];
+}
+
+async function expectRejectsWithFields(
+  promise: Promise<unknown>,
+  expected: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  try {
+    await promise;
+  } catch (error) {
+    const actual = requireRecord(error, "rejection");
+    for (const [key, value] of Object.entries(expected)) {
+      expect(actual[key]).toBe(value);
+    }
+    return actual;
+  }
+  throw new Error("expected promise to reject");
+}
+
 async function expectPathMissing(targetPath: string): Promise<void> {
-  await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+  try {
+    await fs.access(targetPath);
+  } catch (error) {
+    expect(requireRecord(error, "filesystem error").code).toBe("ENOENT");
+    return;
+  }
+  throw new Error(`expected ${targetPath} to be missing`);
 }
 
 describe("runCliAgent spawn path", () => {
@@ -230,6 +274,8 @@ describe("runCliAgent spawn path", () => {
         env: {},
       },
       reusableCliSession: {},
+      hadSessionFile: false,
+      contextEngineConfig: {},
       modelId: "sonnet",
       normalizedModel: "sonnet",
       systemPrompt: "You are a helpful assistant.",
@@ -239,7 +285,7 @@ describe("runCliAgent spawn path", () => {
     };
     await executePreparedCliRun(context);
 
-    const input = supervisorSpawnMock.mock.calls[0]?.[0] as { argv?: string[] };
+    const input = mockCallArg(supervisorSpawnMock) as { argv?: string[] };
     const allArgs = (input.argv ?? []).join("\n");
     expect(allArgs).not.toContain("Tools are disabled in this session");
     expect(allArgs).toContain("You are a helpful assistant.");
@@ -261,7 +307,7 @@ describe("runCliAgent spawn path", () => {
       ].join("\n"),
     });
 
-    expect(systemPrompt).toContain("## Skills (mandatory)");
+    expect(systemPrompt).toContain("## Skills");
     expect(systemPrompt).toContain("<name>weather</name>");
     expect(systemPrompt).toContain("/tmp/skills/weather/SKILL.md");
   });
@@ -289,7 +335,7 @@ describe("runCliAgent spawn path", () => {
       }),
     );
 
-    const input = supervisorSpawnMock.mock.calls[0]?.[0] as {
+    const input = mockCallArg(supervisorSpawnMock) as {
       argv?: string[];
       input?: string;
     };
@@ -301,9 +347,7 @@ describe("runCliAgent spawn path", () => {
     let systemPromptPath = "";
     supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
       const input = (args[0] ?? {}) as { argv?: string[] };
-      const systemPromptArgIndex = input.argv?.indexOf("--append-system-prompt-file") ?? -1;
-      expect(systemPromptArgIndex).toBeGreaterThanOrEqual(0);
-      systemPromptPath = input.argv?.[systemPromptArgIndex + 1] ?? "";
+      systemPromptPath = requireArgAfter(input.argv, "--append-system-prompt-file");
       expect(systemPromptPath).toContain("openclaw-cli-system-prompt-");
       await expect(fs.readFile(systemPromptPath, "utf-8")).resolves.toBe(
         "You are a helpful assistant.",
@@ -329,7 +373,7 @@ describe("runCliAgent spawn path", () => {
       }),
     );
 
-    await expect(fs.access(systemPromptPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expectPathMissing(systemPromptPath);
   });
 
   it("passes --session-id for new Claude sessions", async () => {
@@ -343,7 +387,7 @@ describe("runCliAgent spawn path", () => {
       }),
     );
 
-    const input = supervisorSpawnMock.mock.calls[0]?.[0] as {
+    const input = mockCallArg(supervisorSpawnMock) as {
       argv?: string[];
       input?: string;
       mode?: string;
@@ -369,19 +413,14 @@ describe("runCliAgent spawn path", () => {
       }),
     );
 
-    expect(resolveExecutionArgs).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "claude-cli",
-        modelId: "sonnet",
-        thinkingLevel: "high",
-        useResume: false,
-        baseArgs: ["-p", "--output-format", "stream-json"],
-      }),
-    );
-    const input = supervisorSpawnMock.mock.calls[0]?.[0] as { argv?: string[] };
-    const effortArgIndex = input.argv?.indexOf("--effort") ?? -1;
-    expect(effortArgIndex).toBeGreaterThanOrEqual(0);
-    expect(input.argv?.[effortArgIndex + 1]).toBe("high");
+    const resolveArgsInput = requireRecord(mockCallArg(resolveExecutionArgs), "resolved args");
+    expect(resolveArgsInput.provider).toBe("claude-cli");
+    expect(resolveArgsInput.modelId).toBe("sonnet");
+    expect(resolveArgsInput.thinkingLevel).toBe("high");
+    expect(resolveArgsInput.useResume).toBe(false);
+    expect(resolveArgsInput.baseArgs).toEqual(["-p", "--output-format", "stream-json"]);
+    const input = mockCallArg(supervisorSpawnMock) as { argv?: string[] };
+    expect(requireArgAfter(input.argv, "--effort")).toBe("high");
   });
 
   it("passes OpenClaw skills to Claude as a session plugin", async () => {
@@ -404,16 +443,12 @@ describe("runCliAgent spawn path", () => {
     let pluginDir = "";
     supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
       const input = (args[0] ?? {}) as { argv?: string[] };
-      const pluginArgIndex = input.argv?.indexOf("--plugin-dir") ?? -1;
-      expect(pluginArgIndex).toBeGreaterThanOrEqual(0);
-      pluginDir = input.argv?.[pluginArgIndex + 1] ?? "";
+      pluginDir = requireArgAfter(input.argv, "--plugin-dir");
       const manifest = JSON.parse(
         await fs.readFile(path.join(pluginDir, ".claude-plugin", "plugin.json"), "utf-8"),
       ) as { name?: string; skills?: string };
-      expect(manifest).toMatchObject({
-        name: "openclaw-skills",
-        skills: "./skills",
-      });
+      expect(manifest.name).toBe("openclaw-skills");
+      expect(manifest.skills).toBe("./skills");
       await expect(
         fs.readFile(path.join(pluginDir, "skills", "weather", "SKILL.md"), "utf-8"),
       ).resolves.toContain("Read forecast data before replying.");
@@ -459,7 +494,13 @@ describe("runCliAgent spawn path", () => {
           },
         }),
       );
-      await expectPathMissing(pluginDir);
+      let accessError: unknown;
+      try {
+        await fs.access(pluginDir);
+      } catch (error) {
+        accessError = error;
+      }
+      expect((accessError as NodeJS.ErrnoException | undefined)?.code).toBe("ENOENT");
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
@@ -618,7 +659,7 @@ describe("runCliAgent spawn path", () => {
     const result = await executePreparedCliRun(context, "thread-123");
 
     expect(result.text).toBe("ok");
-    const input = supervisorSpawnMock.mock.calls[0]?.[0] as {
+    const input = mockCallArg(supervisorSpawnMock) as {
       argv?: string[];
       mode?: string;
       timeoutMs?: number;
@@ -647,9 +688,7 @@ describe("runCliAgent spawn path", () => {
     let promptFileText = "";
     supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
       const input = (args[0] ?? {}) as { argv?: string[] };
-      const configArgIndex = input.argv?.indexOf("-c") ?? -1;
-      expect(configArgIndex).toBeGreaterThanOrEqual(0);
-      const configArg = input.argv?.[configArgIndex + 1] ?? "";
+      const configArg = requireArgAfter(input.argv, "-c");
       const match = requireRegexMatch(configArg, /^model_instructions_file="(.+)"$/);
       promptFileText = await fs.readFile(match[1], "utf-8");
       return createManagedRun({
@@ -738,7 +777,7 @@ describe("runCliAgent spawn path", () => {
     });
     abortController.abort();
 
-    await expect(runPromise).rejects.toMatchObject({ name: "AbortError" });
+    await expectRejectsWithFields(runPromise, { name: "AbortError" });
     expect(cancel).toHaveBeenCalledWith("manual-cancel");
   });
 
@@ -882,7 +921,7 @@ describe("runCliAgent spawn path", () => {
         }),
       );
 
-      const spawnInput = supervisorSpawnMock.mock.calls[0]?.[0] as {
+      const spawnInput = mockCallArg(supervisorSpawnMock) as {
         argv?: string[];
         stdinMode?: string;
       };
@@ -913,7 +952,7 @@ describe("runCliAgent spawn path", () => {
   it("defers prepared backend cleanup to the Claude live session lifecycle", async () => {
     let stdoutListener: ((chunk: string) => void) | undefined;
     const stdin = {
-      write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+      write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
         stdoutListener?.(
           [
             JSON.stringify({ type: "system", subtype: "init", session_id: "live-session-cleanup" }),
@@ -968,7 +1007,7 @@ describe("runCliAgent spawn path", () => {
     const largeText = "x".repeat(270 * 1024);
     let stdoutListener: ((chunk: string) => void) | undefined;
     const stdin = {
-      write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+      write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
         stdoutListener?.(
           JSON.stringify({
             type: "result",
@@ -1012,7 +1051,7 @@ describe("runCliAgent spawn path", () => {
     const largeText = "x".repeat(1500);
     let stdoutListener: ((chunk: string) => void) | undefined;
     const stdin = {
-      write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+      write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
         stdoutListener?.(
           JSON.stringify({
             type: "result",
@@ -1037,7 +1076,7 @@ describe("runCliAgent spawn path", () => {
       };
     });
 
-    await expect(
+    await expectRejectsWithFields(
       executePreparedCliRun(
         buildPreparedCliRunContext({
           provider: "claude-cli",
@@ -1053,17 +1092,18 @@ describe("runCliAgent spawn path", () => {
           },
         }),
       ),
-    ).rejects.toMatchObject({
-      name: "FailoverError",
-      message: "Claude CLI JSONL line exceeded output limit.",
-    });
+      {
+        name: "FailoverError",
+        message: "Claude CLI JSONL line exceeded output limit.",
+      },
+    );
   });
 
   it("accepts operator-raised Claude live stream-json raw turn limits", async () => {
     const largeText = "x".repeat(1500);
     let stdoutListener: ((chunk: string) => void) | undefined;
     const stdin = {
-      write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+      write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
         stdoutListener?.(
           JSON.stringify({
             type: "result",
@@ -1115,7 +1155,7 @@ describe("runCliAgent spawn path", () => {
       markWriteReady = resolve;
     });
     const stdin = {
-      write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+      write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
         markWriteReady?.();
         cb?.();
       }),
@@ -1173,7 +1213,8 @@ describe("runCliAgent spawn path", () => {
       ].join("\n") + "\n",
     );
 
-    await expect(run).resolves.toMatchObject({ text: "done" });
+    const result = await run;
+    expect(result.text).toBe("done");
     expect(replyRunRegistry.isStreaming("agent:main:main")).toBe(false);
     operation.complete();
   });
@@ -1182,7 +1223,7 @@ describe("runCliAgent spawn path", () => {
     let stdoutListener: ((chunk: string) => void) | undefined;
     let turn = 0;
     const stdin = {
-      write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+      write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
         turn += 1;
         stdoutListener?.(
           [
@@ -1248,7 +1289,7 @@ describe("runCliAgent spawn path", () => {
       releaseSpawn = resolve;
     });
     const stdin = {
-      write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+      write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
         turn += 1;
         stdoutListener?.(
           [
@@ -1318,7 +1359,7 @@ describe("runCliAgent spawn path", () => {
       const spawnIndex = supervisorSpawnMock.mock.calls.length;
       await spawnReady;
       const stdin = {
-        write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+        write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
           input.onStdout?.(
             [
               JSON.stringify({
@@ -1448,16 +1489,9 @@ describe("runCliAgent spawn path", () => {
       useResume: false,
     });
 
-    expect(args).toEqual(
-      expect.arrayContaining([
-        "--input-format",
-        "stream-json",
-        "--output-format",
-        "stream-json",
-        "--permission-prompt-tool",
-        "stdio",
-      ]),
-    );
+    expect(requireArgAfter(args, "--input-format")).toBe("stream-json");
+    expect(requireArgAfter(args, "--output-format")).toBe("stream-json");
+    expect(requireArgAfter(args, "--permission-prompt-tool")).toBe("stdio");
   });
 
   it("restarts Claude live sessions for env changes and fresh retries", async () => {
@@ -1474,7 +1508,7 @@ describe("runCliAgent spawn path", () => {
         pid: 2345 + spawnIndex,
         startedAtMs: Date.now(),
         stdin: {
-          write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+          write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
             const result = turnResults[turnIndex] ?? "ok";
             turnIndex += 1;
             input.onStdout?.(
@@ -1557,7 +1591,7 @@ describe("runCliAgent spawn path", () => {
   it("ignores non-JSON stdout lines from Claude live sessions", async () => {
     let stdoutListener: ((chunk: string) => void) | undefined;
     const stdin = {
-      write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+      write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
         stdoutListener?.(
           [
             "Claude CLI warning",
@@ -1603,7 +1637,7 @@ describe("runCliAgent spawn path", () => {
   it("fails Claude live turns on is_error results", async () => {
     let stdoutListener: ((chunk: string) => void) | undefined;
     const stdin = {
-      write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+      write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
         stdoutListener?.(
           [
             JSON.stringify({ type: "system", subtype: "init", session_id: "live-error" }),
@@ -1632,7 +1666,7 @@ describe("runCliAgent spawn path", () => {
       };
     });
 
-    await expect(
+    await expectRejectsWithFields(
       executePreparedCliRun(
         buildPreparedCliRunContext({
           provider: "claude-cli",
@@ -1643,10 +1677,11 @@ describe("runCliAgent spawn path", () => {
           },
         }),
       ),
-    ).rejects.toMatchObject({
-      name: "FailoverError",
-      message: "Credit balance is too low",
-    });
+      {
+        name: "FailoverError",
+        message: "Credit balance is too low",
+      },
+    );
   });
 
   it("fails when Claude exits before a live turn starts", async () => {
@@ -1696,7 +1731,7 @@ describe("runCliAgent spawn path", () => {
       const cancel = vi.fn();
       cancels.push(cancel);
       const stdin = {
-        write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+        write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
           if (spawnIndex === 2) {
             stdoutListener?.(
               [
@@ -1757,7 +1792,7 @@ describe("runCliAgent spawn path", () => {
     });
     abortController.abort();
 
-    await expect(first).rejects.toMatchObject({ name: "AbortError" });
+    await expectRejectsWithFields(first, { name: "AbortError" });
     expect(cancels[0]).toHaveBeenCalledWith("manual-cancel");
     stdoutListener?.(
       [
@@ -1801,7 +1836,7 @@ describe("runCliAgent spawn path", () => {
       const cancel = vi.fn();
       cancels.push(cancel);
       const stdin = {
-        write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+        write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
           const text = spawnIndex === 1 ? "weather-ok" : "git-ok";
           input.onStdout?.(
             [
@@ -1998,7 +2033,7 @@ describe("runCliAgent spawn path", () => {
     });
     let writeCount = 0;
     const stdin = {
-      write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+      write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
         writeCount += 1;
         if (writeCount === 1) {
           stderrListener?.("stale stderr from first turn");
@@ -2073,7 +2108,7 @@ describe("runCliAgent spawn path", () => {
     );
 
     expect(first.text).toBe("first-ok");
-    await expect(second).rejects.toMatchObject({
+    await expectRejectsWithFields(second, {
       name: "FailoverError",
       message: "Claude CLI failed.",
     });
@@ -2103,7 +2138,7 @@ describe("runCliAgent spawn path", () => {
       }),
     );
 
-    await expect(run).rejects.toMatchObject({
+    await expectRejectsWithFields(run, {
       name: "FailoverError",
       message,
       reason: "billing",
@@ -2131,7 +2166,7 @@ describe("runCliAgent spawn path", () => {
       "thread-123",
     );
 
-    const input = supervisorSpawnMock.mock.calls[0]?.[0] as {
+    const input = mockCallArg(supervisorSpawnMock) as {
       env?: Record<string, string | undefined>;
     };
     expect(input.env?.SAFE_KEY).toBe("ok");
@@ -2159,7 +2194,7 @@ describe("runCliAgent spawn path", () => {
       "thread-123",
     );
 
-    const input = supervisorSpawnMock.mock.calls[0]?.[0] as {
+    const input = mockCallArg(supervisorSpawnMock) as {
       env?: Record<string, string | undefined>;
     };
     expect(input.env?.SAFE_KEEP).toBe("keep-me");
@@ -2183,7 +2218,7 @@ describe("runCliAgent spawn path", () => {
         "thread-123",
       );
 
-      const input = supervisorSpawnMock.mock.calls[0]?.[0] as {
+      const input = mockCallArg(supervisorSpawnMock) as {
         env?: Record<string, string | undefined>;
       };
       expect(input.env?.SAFE_CLEAR).toBe("from-base");
@@ -2212,7 +2247,7 @@ describe("runCliAgent spawn path", () => {
       "thread-123",
     );
 
-    const input = supervisorSpawnMock.mock.calls[0]?.[0] as {
+    const input = mockCallArg(supervisorSpawnMock) as {
       env?: Record<string, string | undefined>;
     };
     expect(input.env?.SAFE_OVERRIDE).toBe("from-override");
@@ -2268,7 +2303,7 @@ describe("runCliAgent spawn path", () => {
       }),
     );
 
-    const input = supervisorSpawnMock.mock.calls[0]?.[0] as {
+    const input = mockCallArg(supervisorSpawnMock) as {
       env?: Record<string, string | undefined>;
     };
     expect(input.env?.SAFE_KEEP).toBe("ok");
@@ -2338,7 +2373,7 @@ describe("runCliAgent spawn path", () => {
 
     await executePreparedCliRun(context, "thread-123");
 
-    const input = supervisorSpawnMock.mock.calls[0]?.[0] as {
+    const input = mockCallArg(supervisorSpawnMock) as {
       argv?: string[];
       input?: string;
     };
@@ -2393,7 +2428,7 @@ describe("runCliAgent spawn path", () => {
       expect(allArgs).toContain(`## ${soulPath}`);
       expect(allArgs).toContain("SOUL-SECRET");
       expect(allArgs).toContain(
-        "If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.",
+        "SOUL.md: persona/tone. Follow it unless higher-priority instructions override.",
       );
       expect(allArgs).toContain(`## ${identityPath}`);
       expect(allArgs).toContain("IDENTITY-SECRET");

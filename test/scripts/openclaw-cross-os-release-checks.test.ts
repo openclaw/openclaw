@@ -89,14 +89,17 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
   });
 
   it("gives the Windows packaged updater wrapper enough headroom for OpenClaw timeout output", () => {
-    expect(CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS).toBeGreaterThanOrEqual(20 * 60);
+    expect(CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS).toBeLessThanOrEqual(10 * 60);
     expect(CROSS_OS_WINDOWS_PACKAGED_UPGRADE_WRAPPER_TIMEOUT_MS).toBeGreaterThan(
       CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS * 1000,
     );
     expect(
       CROSS_OS_WINDOWS_PACKAGED_UPGRADE_WRAPPER_TIMEOUT_MS -
         CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS * 1000,
-    ).toBeGreaterThanOrEqual(5 * 60 * 1000);
+    ).toBeGreaterThanOrEqual(2 * 60 * 1000);
+    expect(CROSS_OS_WINDOWS_PACKAGED_UPGRADE_WRAPPER_TIMEOUT_MS).toBeLessThanOrEqual(
+      12 * 60 * 1000,
+    );
   });
 
   it("prints command heartbeats before long release commands hit job timeouts", () => {
@@ -202,10 +205,10 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         OPENCLAW_CROSS_OS_MODEL: "openai/gpt-5.4-nano",
       })?.model,
     ).toBe("openai/gpt-5.4-nano");
-    expect(resolveProviderConfig("openai", {})?.model).toBe("openai/gpt-5.4");
+    expect(resolveProviderConfig("openai", {})?.model).toBe("openai/gpt-5.5");
   });
 
-  it("keeps release cross-OS OpenAI smoke on GPT-5.4", () => {
+  it("keeps release cross-OS OpenAI smoke on GPT-5.5", () => {
     const workflow = readFileSync(
       ".github/workflows/openclaw-cross-os-release-checks-reusable.yml",
       "utf8",
@@ -213,9 +216,9 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     const releaseChecks = readFileSync(".github/workflows/openclaw-release-checks.yml", "utf8");
 
     expect(workflow).toContain(
-      "OPENCLAW_CROSS_OS_OPENAI_MODEL: ${{ inputs.openai_model || vars.OPENCLAW_CROSS_OS_OPENAI_MODEL || 'openai/gpt-5.4' }}",
+      "OPENCLAW_CROSS_OS_OPENAI_MODEL: ${{ inputs.openai_model || vars.OPENCLAW_CROSS_OS_OPENAI_MODEL || 'openai/gpt-5.5' }}",
     );
-    expect(releaseChecks).toContain("openai_model: openai/gpt-5.4");
+    expect(releaseChecks).toContain("openai_model: openai/gpt-5.5");
   });
 
   it("keeps release smoke plugin allowlists focused on agent-turn essentials", () => {
@@ -263,11 +266,12 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     const providerOverride = "models.providers.${params.providerConfig.extensionId}";
 
     expect(CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE).toBe("minimal");
-    expect(source).toContain('"--thinking",\n    "minimal"');
+    expect(source).toContain('"--thinking",\n    "off"');
     expect(source.match(/"tools\.profile", CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE/g)).toHaveLength(2);
     expect(CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS).toBeGreaterThanOrEqual(600);
     expect(source).toContain("buildReleaseProviderConfigOverride");
     expect(source).toContain("models: []");
+    expect(source).toContain('agentRuntime: { id: "pi" }');
     expect(source).toContain('"--merge"');
     expect(source).toContain(providerOverride);
     expect(source).not.toContain("models.providers.${params.providerConfig.extensionId}.baseUrl");

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { OpenClawConfig } from "../config/types.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import { recordTalkObservabilityEvent } from "../talk/observability.js";
 import {
@@ -20,6 +21,7 @@ import {
 } from "../talk/talk-session-controller.js";
 import { abortChatRunById } from "./chat-abort.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
+import { forgetUnifiedTalkSession } from "./talk-session-registry.js";
 
 const RELAY_SESSION_TTL_MS = 30 * 60 * 1000;
 const MAX_AUDIO_BASE64_BYTES = 512 * 1024;
@@ -68,6 +70,7 @@ type RelaySession = {
 type CreateTalkRealtimeRelaySessionParams = {
   context: GatewayRequestContext;
   connId: string;
+  cfg?: OpenClawConfig;
   provider: RealtimeVoiceProviderPlugin;
   providerConfig: RealtimeVoiceProviderConfig;
   instructions: string;
@@ -113,6 +116,7 @@ function abortRelayAgentRuns(session: RelaySession, reason: string): void {
 
 function closeRelaySession(session: RelaySession, reason: "completed" | "error"): void {
   relaySessions.delete(session.id);
+  forgetUnifiedTalkSession(session.id);
   clearTimeout(session.cleanupTimer);
   abortRelayAgentRuns(session, reason === "error" ? "relay-error" : "relay-closed");
   session.bridge.close();
@@ -173,6 +177,7 @@ export function createTalkRealtimeRelaySession(
     { onEvent: recordTalkObservabilityEvent },
   );
   let relay: RelaySession | undefined;
+  let bridgeSession: RealtimeVoiceBridgeSession | undefined;
   const emit = (event: TalkRealtimeRelayEventPayload, talkEvent?: TalkEventInput) =>
     broadcastToOwner(params.context, params.connId, {
       ...event,
@@ -180,9 +185,12 @@ export function createTalkRealtimeRelaySession(
     });
   const bridge = createRealtimeVoiceBridgeSession({
     provider: params.provider,
+    cfg: params.cfg,
     providerConfig: params.providerConfig,
     audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
     instructions: params.instructions,
+    autoRespondToAudio: false,
+    interruptResponseOnInputAudio: false,
     tools: params.tools,
     markStrategy: "ack-immediately",
     audioSink: {
@@ -247,6 +255,9 @@ export function createTalkRealtimeRelaySession(
           final,
         },
       );
+      if (role === "user" && final && text.trim()) {
+        bridgeSession?.sendUserMessage(text.trim());
+      }
     },
     onToolCall: (toolCall) => {
       const turnId = relay ? ensureRelayTurn(relay) : undefined;
@@ -281,6 +292,7 @@ export function createTalkRealtimeRelaySession(
         return;
       }
       relaySessions.delete(relaySessionId);
+      forgetUnifiedTalkSession(relaySessionId);
       clearTimeout(active.cleanupTimer);
       abortRelayAgentRuns(active, "relay-closed");
       emit(
@@ -289,6 +301,7 @@ export function createTalkRealtimeRelaySession(
       );
     },
   });
+  bridgeSession = bridge;
   relay = {
     id: relaySessionId,
     connId: params.connId,
@@ -449,6 +462,7 @@ export function stopTalkRealtimeRelaySession(params: {
 export function clearTalkRealtimeRelaySessionsForTest(): void {
   for (const session of relaySessions.values()) {
     clearTimeout(session.cleanupTimer);
+    forgetUnifiedTalkSession(session.id);
     session.bridge.close();
   }
   relaySessions.clear();

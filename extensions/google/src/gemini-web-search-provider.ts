@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createWebSearchProviderContractFields,
   mergeScopedSearchConfig,
@@ -143,8 +143,9 @@ export function createGeminiWebSearchProvider(): WebSearchProviderPlugin {
   };
 }
 
-export const __testing = {
+export const testing = {
   resolveGeminiApiKey,
   resolveGeminiBaseUrl,
   resolveGeminiModel,
 } as const;
+export { testing as __testing };

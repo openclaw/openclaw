@@ -10,7 +10,7 @@ import {
   resolveTextChunksWithFallback,
   sendMediaWithLeadingCaption,
 } from "openclaw/plugin-sdk/reply-payload";
-import { stripReasoningTagsFromText } from "openclaw/plugin-sdk/text-runtime";
+import { stripReasoningTagsFromText } from "openclaw/plugin-sdk/text-chunking";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { sendMediaFeishu, shouldSuppressFeishuTextForVoiceMedia } from "./media.js";
@@ -147,6 +147,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const sendReplyToMessageId = skipReplyToInMessages ? undefined : replyToMessageId;
   const threadReplyMode = threadReply === true;
   const effectiveReplyInThread = threadReplyMode ? true : replyInThread;
+  const allowTopLevelReplyFallback =
+    effectiveReplyInThread === true &&
+    threadReplyMode &&
+    rootId !== undefined &&
+    sendReplyToMessageId !== undefined &&
+    sendReplyToMessageId !== rootId;
   const account = resolveFeishuRuntimeAccount({ cfg, accountId });
   const prefixContext = createReplyPrefixContext({ cfg, agentId });
 
@@ -244,7 +250,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     if (!thinking) {
       return "";
     }
-    const withoutLabel = thinking.replace(/^Reasoning:\n/, "");
+    const withoutLabel = thinking.replace(/^(?:Reasoning:|Thinking\.{0,3})\s*/u, "");
     const plain = withoutLabel.replace(/^_(.*)_$/gm, "$1");
     const lines = plain.split("\n").map((line) => `> ${line}`);
     return `> 💭 **Thinking**\n${lines.join("\n")}`;
@@ -465,6 +471,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 text: chunk,
                 replyToMessageId: sendReplyToMessageId,
                 replyInThread: effectiveReplyInThread,
+                allowTopLevelReplyFallback,
                 accountId,
               });
             },
@@ -491,6 +498,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                     text: chunk,
                     replyToMessageId: sendReplyToMessageId,
                     replyInThread: effectiveReplyInThread,
+                    allowTopLevelReplyFallback,
                     accountId,
                   });
                 },
@@ -605,6 +613,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                   text: chunk,
                   replyToMessageId: sendReplyToMessageId,
                   replyInThread: effectiveReplyInThread,
+                  allowTopLevelReplyFallback,
                   accountId,
                   header: cardHeader,
                   note: cardNote,
@@ -623,6 +632,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                   text: chunk,
                   replyToMessageId: sendReplyToMessageId,
                   replyInThread: effectiveReplyInThread,
+                  allowTopLevelReplyFallback,
                   accountId,
                 });
               },

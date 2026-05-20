@@ -1,9 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildConfiguredAgentSystemPrompt,
   resolveAgentSystemPromptConfig,
 } from "./system-prompt-config.js";
+
+vi.mock("../tts/tts.js", () => ({
+  buildTtsSystemPromptHint: vi.fn(() => undefined),
+}));
 
 describe("resolveAgentSystemPromptConfig", () => {
   it("defaults sub-agent delegation mode to suggest", () => {

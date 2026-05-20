@@ -151,7 +151,7 @@ candidate contains redacted secret placeholders such as `***`.
     }
     ```
 
-    - `agents.defaults.models` defines the model catalog and acts as the allowlist for `/model`.
+    - `agents.defaults.models` defines the model catalog and acts as the allowlist for `/model`; `provider/*` entries filter `/model`, `/models`, and model pickers to selected providers while still using dynamic model discovery.
     - Use `openclaw config set agents.defaults.models '<json>' --strict-json --merge` to add allowlist entries without removing existing models. Plain replacements that would remove entries are rejected unless you pass `--replace`.
     - Model refs use `provider/model` format (e.g. `anthropic/claude-opus-4-6`).
     - `agents.defaults.imageMaxDimensionPx` controls transcript/tool image downscaling (default `1200`); lower values usually reduce vision-token usage on screenshot-heavy runs.
@@ -175,14 +175,15 @@ candidate contains redacted secret placeholders such as `***`.
   </Accordion>
 
   <Accordion title="Set up group chat mention gating">
-    Group messages default to **require mention**. Configure trigger patterns per agent, and keep visible room replies on the default message-tool path unless you intentionally want legacy automatic final replies:
+    Group messages default to **require mention**. Configure trigger patterns per agent. Normal group/channel replies post automatically; opt into the message-tool path for shared rooms where the agent should decide when to speak:
 
     ```json5
     {
       messages: {
         visibleReplies: "automatic", // set "message_tool" to require message-tool sends everywhere
         groupChat: {
-          visibleReplies: "message_tool", // default; use "automatic" for legacy room replies
+          visibleReplies: "message_tool", // opt-in; visible output requires message(action=send)
+          unmentionedInbound: "room_event", // unmentioned always-on group chatter is quiet context
         },
       },
       agents: {

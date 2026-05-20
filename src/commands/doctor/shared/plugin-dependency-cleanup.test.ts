@@ -2,10 +2,16 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { __testing, cleanupLegacyPluginDependencyState } from "./plugin-dependency-cleanup.js";
+import { testing, cleanupLegacyPluginDependencyState } from "./plugin-dependency-cleanup.js";
 
 async function expectPathMissing(targetPath: string): Promise<void> {
-  await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+  try {
+    await fs.stat(targetPath);
+  } catch (error) {
+    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+    return;
+  }
+  throw new Error(`expected path to be missing: ${targetPath}`);
 }
 
 describe("cleanupLegacyPluginDependencyState", () => {
@@ -68,18 +74,14 @@ describe("cleanupLegacyPluginDependencyState", () => {
       OPENCLAW_PLUGIN_STAGE_DIR: explicitStageDir,
       STATE_DIRECTORY: stateDirectory,
     };
-    const targets = await __testing.collectLegacyPluginDependencyTargets(env, { packageRoot });
-    expect(targets).toEqual(
-      expect.arrayContaining([
-        legacyRuntimeRoot,
-        legacyLocalRoot,
-        legacyExtensionNodeModules,
-        legacyExtensionStamp,
-        legacyManifest,
-        explicitStageDir,
-        path.join(stateDirectory, "plugin-runtime-deps"),
-      ]),
-    );
+    const targets = await testing.collectLegacyPluginDependencyTargets(env, { packageRoot });
+    expect(targets).toContain(legacyRuntimeRoot);
+    expect(targets).toContain(legacyLocalRoot);
+    expect(targets).toContain(legacyExtensionNodeModules);
+    expect(targets).toContain(legacyExtensionStamp);
+    expect(targets).toContain(legacyManifest);
+    expect(targets).toContain(explicitStageDir);
+    expect(targets).toContain(path.join(stateDirectory, "plugin-runtime-deps"));
     expect(targets).not.toContain(thirdPartyNodeModules);
 
     const result = await cleanupLegacyPluginDependencyState({ env, packageRoot });
@@ -128,7 +130,10 @@ describe("cleanupLegacyPluginDependencyState", () => {
     });
 
     expect(result.warnings).toStrictEqual([]);
-    expect(result.changes).toContain(`Removed stale plugin-runtime symlink: ${slackLink}`);
+    expect(result.changes).toStrictEqual([
+      `Removed stale plugin-runtime symlink: ${slackLink}`,
+      `Removed legacy plugin dependency state: ${legacyRuntimeRoot}`,
+    ]);
     await expectPathMissing(slackLink);
     expect((await fs.lstat(liveLink)).isSymbolicLink()).toBe(true);
   });

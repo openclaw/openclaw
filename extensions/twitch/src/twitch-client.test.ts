@@ -129,18 +129,16 @@ describe("TwitchClientManager", () => {
 
   afterEach(() => {
     // Clean up manager to avoid side effects
-    manager._clearForTest();
+    manager.clearForTest();
   });
 
   describe("getClient", () => {
     it("should create a new client connection", async () => {
-      const _client = await manager.getClient(testAccount);
+      const clientForTest = await manager.getClient(testAccount);
 
       // New implementation: connect is called, channels are passed to constructor
       expect(mockConnect).toHaveBeenCalledTimes(1);
-      expect(mockLogger.info).toHaveBeenCalledWith(
-        expect.stringContaining("Connected to Twitch as testbot"),
-      );
+      expect(mockLogger.info).toHaveBeenCalledWith("Connected to Twitch as testbot");
     });
 
     it("should use account username as default channel when channel not specified", async () => {
@@ -203,6 +201,33 @@ describe("TwitchClientManager", () => {
       );
     });
 
+    it("should register refreshing tokens for Twurple chat intent", async () => {
+      const refreshingAccount: TwitchAccountConfig = {
+        ...testAccount,
+        clientSecret: "test-client-secret",
+        refreshToken: "test-refresh-token",
+        expiresIn: 3600,
+        obtainmentTimestamp: 1_700_000_000_000,
+      };
+
+      await manager.getClient(refreshingAccount);
+
+      expect(mockAddUserForToken).toHaveBeenCalledTimes(1);
+      expect(mockAddUserForToken).toHaveBeenCalledWith(
+        {
+          accessToken: "mock-token-from-tests",
+          refreshToken: "test-refresh-token",
+          expiresIn: 3600,
+          obtainmentTimestamp: 1_700_000_000_000,
+        },
+        ["chat"],
+      );
+      expect(mockAuthProvider.constructor).not.toHaveBeenCalled();
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        "Using RefreshingAuthProvider for testbot (automatic token refresh enabled)",
+      );
+    });
+
     it("should throw error when clientId is missing", async () => {
       const accountWithoutClientId: TwitchAccountConfig = {
         ...testAccount,
@@ -213,9 +238,7 @@ describe("TwitchClientManager", () => {
         "Missing Twitch client ID",
       );
 
-      expect(mockLogger.error).toHaveBeenCalledWith(
-        expect.stringContaining("Missing Twitch client ID"),
-      );
+      expect(mockLogger.error).toHaveBeenCalledWith("Missing Twitch client ID for account testbot");
     });
 
     it("should throw error when token is missing", async () => {
@@ -232,7 +255,7 @@ describe("TwitchClientManager", () => {
       await manager.getClient(testAccount);
 
       expect(mockOnMessage).toHaveBeenCalled();
-      expect(mockLogger.info).toHaveBeenCalledWith(expect.stringContaining("Set up handlers for"));
+      expect(mockLogger.info).toHaveBeenCalledWith("Set up handlers for testbot:testchannel");
     });
 
     it("should create separate clients for same account with different channels", async () => {
@@ -279,7 +302,7 @@ describe("TwitchClientManager", () => {
       await manager.disconnect(testAccount);
 
       expect(mockQuit).toHaveBeenCalledTimes(1);
-      expect(mockLogger.info).toHaveBeenCalledWith(expect.stringContaining("Disconnected"));
+      expect(mockLogger.info).toHaveBeenCalledWith("Disconnected testbot:testchannel");
     });
 
     it("should clear client and message handler", async () => {
@@ -339,11 +362,10 @@ describe("TwitchClientManager", () => {
 
     it("should send message successfully", async () => {
       const result = await manager.sendMessage(testAccount, "testchannel", "Hello, world!");
+      const { messageId, ...resultRest } = result;
 
-      expect(result).toMatchObject({ ok: true });
-      expect(result.messageId).toMatch(
-        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
-      );
+      expect(resultRest).toEqual({ ok: true });
+      expect(messageId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
       expect(mockSay).toHaveBeenCalledWith("testchannel", "Hello, world!");
     });
 
@@ -373,9 +395,7 @@ describe("TwitchClientManager", () => {
 
       expect(result.ok).toBe(false);
       expect(result.error).toBe("Rate limited");
-      expect(mockLogger.error).toHaveBeenCalledWith(
-        expect.stringContaining("Failed to send message"),
-      );
+      expect(mockLogger.error).toHaveBeenCalledWith("Failed to send message: Rate limited");
     });
 
     it("should handle unknown error types", async () => {

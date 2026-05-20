@@ -138,6 +138,28 @@ describe("telegram bot message processor", () => {
     );
   });
 
+  it("does not send early typing cues for room events", async () => {
+    const sendTyping = vi.fn().mockResolvedValue(undefined);
+    buildTelegramMessageContext.mockResolvedValue(
+      createMessageContext({
+        sendTyping,
+        ctxPayload: {
+          From: "telegram:123",
+          To: "telegram:123",
+          ChatType: "group",
+          RawBody: "ambient",
+          InboundEventKind: "room_event",
+        },
+      }),
+    );
+
+    const processMessage = createTelegramMessageProcessor(baseDeps);
+    await processSampleMessage(processMessage);
+
+    expect(sendTyping).not.toHaveBeenCalled();
+    expect(dispatchTelegramMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("skips dispatch when no context is produced", async () => {
     buildTelegramMessageContext.mockResolvedValue(null);
     const processMessage = createTelegramMessageProcessor(baseDeps);
@@ -198,7 +220,9 @@ describe("telegram bot message processor", () => {
       "Something went wrong while processing your request. Please try again.",
       { message_thread_id: 456 },
     );
-    expect(runtimeError).toHaveBeenCalledWith(expect.stringContaining("dispatch exploded"));
+    expect(runtimeError).toHaveBeenCalledWith(
+      "telegram message processing failed: Error: dispatch exploded",
+    );
   });
 
   it("omits message_thread_id for General-topic fallback replies", async () => {
@@ -236,6 +260,8 @@ describe("telegram bot message processor", () => {
       "Something went wrong while processing your request. Please try again.",
       undefined,
     );
-    expect(runtimeError).toHaveBeenCalledWith(expect.stringContaining("dispatch exploded"));
+    expect(runtimeError).toHaveBeenCalledWith(
+      "telegram message processing failed: Error: dispatch exploded",
+    );
   });
 });

@@ -32,7 +32,7 @@ import {
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { createRuntimeOutboundDelegates } from "openclaw/plugin-sdk/outbound-runtime";
 import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   inspectFeishuCredentials,
   listEnabledFeishuAccounts,
@@ -1387,6 +1387,19 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
         selects: false,
         context: true,
         divider: true,
+        limits: {
+          actions: {
+            maxActions: 20,
+            maxActionsPerRow: 5,
+            maxLabelLength: 40,
+            maxValueBytes: 1024,
+          },
+          text: {
+            maxLength: 4000,
+            encoding: "characters",
+            markdownDialect: "markdown",
+          },
+        },
       },
       renderPresentation: async (ctx) => {
         const runtime = await loadFeishuChannelRuntime();

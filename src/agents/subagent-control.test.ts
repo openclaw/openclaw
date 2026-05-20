@@ -6,7 +6,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CallGatewayOptions } from "../gateway/call.js";
 import {
-  __testing,
+  testing,
   killAllControlledSubagentRuns,
   killControlledSubagentRun,
   killSubagentRunAdmin,
@@ -14,7 +14,7 @@ import {
   steerControlledSubagentRun,
 } from "./subagent-control.js";
 import {
-  __testing as subagentRegistryTesting,
+  testing as subagentRegistryTesting,
   addSubagentRunForTests,
   getSubagentRunByChildSessionKey,
   resetSubagentRegistryForTests,
@@ -109,9 +109,9 @@ vi.mock("./run-wait.js", () => {
 });
 
 function setSubagentControlDepsForTest(
-  overrides: Parameters<typeof __testing.setDepsForTest>[0] = {},
+  overrides: Parameters<typeof testing.setDepsForTest>[0] = {},
 ) {
-  __testing.setDepsForTest({
+  testing.setDepsForTest({
     abortEmbeddedPiRun: () => false,
     clearSessionQueues: () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
     updateSessionStore: async <T>(
@@ -163,6 +163,7 @@ beforeEach(() => {
     ensureRuntimePluginsLoaded: () => {},
     getSubagentRunsSnapshotForRead: (runs) => new Map(runs),
     persistSubagentRunsToDisk: () => {},
+    persistSubagentRunsToDiskOrThrow: () => {},
     restoreSubagentRunsFromDisk: () => 0,
     resolveContextEngine: async () => ({
       info: { id: "test", name: "Test" },
@@ -180,7 +181,7 @@ afterEach(() => {
 describe("sendControlledSubagentMessage", () => {
   afterEach(() => {
     resetSubagentRegistryForTests({ persist: false });
-    __testing.setDepsForTest();
+    testing.setDepsForTest();
   });
 
   it("rejects runs controlled by another session", async () => {
@@ -262,11 +263,9 @@ describe("sendControlledSubagentMessage", () => {
       message: "continue",
     });
 
-    expect(result).toEqual({
-      status: "error",
-      runId: expect.any(String),
-      error: "gateway unavailable",
-    });
+    expect(result.status).toBe("error");
+    expect(typeof result.runId).toBe("string");
+    expect(result.error).toBe("gateway unavailable");
   });
 
   it("does not send to a newer live run when the caller passes a stale run entry", async () => {
@@ -526,7 +525,7 @@ describe("sendControlledSubagentMessage", () => {
 describe("killSubagentRunAdmin", () => {
   afterEach(() => {
     resetSubagentRegistryForTests({ persist: false });
-    __testing.setDepsForTest();
+    testing.setDepsForTest();
   });
 
   it("kills a subagent by session key without requester ownership checks", async () => {
@@ -557,12 +556,10 @@ describe("killSubagentRunAdmin", () => {
       sessionKey: childSessionKey,
     });
 
-    expect(result).toMatchObject({
-      found: true,
-      killed: true,
-      runId: "run-worker",
-      sessionKey: childSessionKey,
-    });
+    expect(result.found).toBe(true);
+    expect(result.killed).toBe(true);
+    expect(result.runId).toBe("run-worker");
+    expect(result.sessionKey).toBe(childSessionKey);
     expect(getSubagentRunByChildSessionKey(childSessionKey)?.endedAt).toBeTypeOf("number");
   });
 
@@ -608,12 +605,10 @@ describe("killSubagentRunAdmin", () => {
       sessionKey: childSessionKey,
     });
 
-    expect(result).toMatchObject({
-      found: true,
-      killed: false,
-      runId: "run-current-admin",
-      sessionKey: childSessionKey,
-    });
+    expect(result.found).toBe(true);
+    expect(result.killed).toBe(false);
+    expect(result.runId).toBe("run-current-admin");
+    expect(result.sessionKey).toBe(childSessionKey);
   });
 
   it("still terminates the run when session store persistence fails during kill", async () => {
@@ -648,12 +643,10 @@ describe("killSubagentRunAdmin", () => {
       sessionKey: childSessionKey,
     });
 
-    expect(result).toMatchObject({
-      found: true,
-      killed: true,
-      runId: "run-worker-store-fail",
-      sessionKey: childSessionKey,
-    });
+    expect(result.found).toBe(true);
+    expect(result.killed).toBe(true);
+    expect(result.runId).toBe("run-worker-store-fail");
+    expect(result.sessionKey).toBe(childSessionKey);
     expect(getSubagentRunByChildSessionKey(childSessionKey)?.endedAt).toBeTypeOf("number");
   });
 });
@@ -661,7 +654,7 @@ describe("killSubagentRunAdmin", () => {
 describe("killControlledSubagentRun", () => {
   afterEach(() => {
     resetSubagentRegistryForTests({ persist: false });
-    __testing.setDepsForTest();
+    testing.setDepsForTest();
   });
 
   it("does not mutate the live session when the caller passes a stale run entry", async () => {
@@ -912,7 +905,7 @@ describe("killControlledSubagentRun", () => {
 describe("killAllControlledSubagentRuns", () => {
   afterEach(() => {
     resetSubagentRegistryForTests({ persist: false });
-    __testing.setDepsForTest();
+    testing.setDepsForTest();
   });
 
   it("ignores stale run snapshots in bulk kill requests", async () => {
@@ -1170,7 +1163,7 @@ describe("killAllControlledSubagentRuns", () => {
 describe("steerControlledSubagentRun", () => {
   afterEach(() => {
     resetSubagentRegistryForTests({ persist: false });
-    __testing.setDepsForTest();
+    testing.setDepsForTest();
   });
 
   it("returns an error and clears the restart marker when run remap fails", async () => {
@@ -1232,10 +1225,9 @@ describe("steerControlledSubagentRun", () => {
         sessionId: undefined,
         error: "failed to replace steered subagent run",
       });
-      expect(getSubagentRunByChildSessionKey("agent:main:subagent:steer-worker")).toMatchObject({
-        runId: "run-steer-old",
-        suppressAnnounceReason: undefined,
-      });
+      const storedRun = getSubagentRunByChildSessionKey("agent:main:subagent:steer-worker");
+      expect(storedRun?.runId).toBe("run-steer-old");
+      expect(storedRun?.suppressAnnounceReason).toBeUndefined();
     } finally {
       replaceSpy.mockRestore();
     }

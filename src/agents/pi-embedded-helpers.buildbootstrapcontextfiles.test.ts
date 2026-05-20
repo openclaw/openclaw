@@ -71,14 +71,11 @@ describe("buildBootstrapContextFiles", () => {
       warn: (message) => warnings.push(message),
     });
     const kept = result?.content.match(/kept (\d+)\+(\d+) chars/);
-    if (!kept) {
-      throw new Error("missing truncation kept-count marker");
-    }
-    expect(kept[1].length).toBeGreaterThan(0);
-    expect(kept[2].length).toBeGreaterThan(0);
-    const headChars = Number(kept[1]);
-    const tailChars = Number(kept[2]);
+    expect(kept?.slice(0, 3)).toStrictEqual(["kept 74+24 chars", "74", "24"]);
+    const headChars = Number(kept?.[1]);
+    const tailChars = Number(kept?.[2]);
     expect(result?.content).toContain("[...truncated, read TOOLS.md for full content...]");
+    expect(result?.content.length).toBe(199);
     expect(result?.content.length).toBeLessThan(long.length);
     expect(result?.content.length).toBeLessThanOrEqual(maxChars);
     expect(result?.content.startsWith(long.slice(0, headChars))).toBe(true);
@@ -101,6 +98,26 @@ describe("buildBootstrapContextFiles", () => {
     const [result] = buildBootstrapContextFiles(files, { maxChars });
     expect(result?.content).toContain("[...truncated, read HEARTBEAT.md for full content...]");
     expect(result?.content.length).toBeLessThanOrEqual(maxChars);
+  });
+  it("keeps policy digest lines from oversized AGENTS.md middle content", () => {
+    const requiredScopedInstruction =
+      "- Required scoped instruction: read scoped AGENTS.md before editing subtree work.";
+    const content = [
+      "# Root policy",
+      "A".repeat(900),
+      "## Scoped policy",
+      requiredScopedInstruction,
+      "B".repeat(700),
+      "tail marker",
+    ].join("\n");
+    const [result] = buildBootstrapContextFiles([makeFile({ content })], {
+      maxChars: 600,
+    });
+
+    expect(result?.content.length).toBeLessThanOrEqual(600);
+    expect(result?.content).toContain("[Policy digest from AGENTS.md]");
+    expect(result?.content).toContain(requiredScopedInstruction);
+    expect(result?.content).toContain("[...truncated, read AGENTS.md for full content...]");
   });
   it("keeps bootstrap bytes in tiny per-file budgets when the marker is longer than the limit", () => {
     const maxChars = 64;
@@ -228,7 +245,7 @@ describe("buildBootstrapContextFiles", () => {
 
 type BootstrapLimitResolverCase = {
   name: "bootstrapMaxChars" | "bootstrapTotalMaxChars";
-  resolve: (cfg?: OpenClawConfig) => number;
+  resolve: (cfg?: OpenClawConfig, agentId?: string | null) => number;
   defaultValue: number;
 };
 
@@ -261,6 +278,30 @@ describe("bootstrap limit resolvers", () => {
     }
   });
 
+  it("uses per-agent values before defaults", () => {
+    for (const resolver of BOOTSTRAP_LIMIT_RESOLVERS) {
+      const cfg = {
+        agents: {
+          defaults: { [resolver.name]: 12345 },
+          list: [{ id: "worker", [resolver.name]: 6789 }],
+        },
+      } as OpenClawConfig;
+      expect(resolver.resolve(cfg, "worker")).toBe(6789);
+    }
+  });
+
+  it("falls back to defaults when the agent has no override", () => {
+    for (const resolver of BOOTSTRAP_LIMIT_RESOLVERS) {
+      const cfg = {
+        agents: {
+          defaults: { [resolver.name]: 12345 },
+          list: [{ id: "worker" }],
+        },
+      } as OpenClawConfig;
+      expect(resolver.resolve(cfg, "worker")).toBe(12345);
+    }
+  });
+
   it("fall back when values are invalid", () => {
     for (const resolver of BOOTSTRAP_LIMIT_RESOLVERS) {
       const cfg = {
@@ -272,10 +313,9 @@ describe("bootstrap limit resolvers", () => {
 });
 
 describe("resolveBootstrapPromptTruncationWarningMode", () => {
-  it("defaults to once", () => {
-    expect(resolveBootstrapPromptTruncationWarningMode()).toBe(
-      DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE,
-    );
+  it("defaults to always", () => {
+    expect(resolveBootstrapPromptTruncationWarningMode()).toBe("always");
+    expect(DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE).toBe("always");
   });
 
   it("accepts explicit valid modes", () => {
@@ -284,6 +324,11 @@ describe("resolveBootstrapPromptTruncationWarningMode", () => {
         agents: { defaults: { bootstrapPromptTruncationWarning: "off" } },
       } as OpenClawConfig),
     ).toBe("off");
+    expect(
+      resolveBootstrapPromptTruncationWarningMode({
+        agents: { defaults: { bootstrapPromptTruncationWarning: "once" } },
+      } as OpenClawConfig),
+    ).toBe("once");
     expect(
       resolveBootstrapPromptTruncationWarningMode({
         agents: { defaults: { bootstrapPromptTruncationWarning: "always" } },

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const REPLY_CACHE_MAX = 2000;
 const REPLY_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
@@ -468,6 +468,22 @@ export function resolveIMessageMessageId(
   return trimmed;
 }
 
+export function isKnownFromMeIMessageMessageId(
+  messageId: string | undefined,
+  ctx: IMessageChatContext & { accountId?: string },
+): boolean {
+  const trimmed = normalizeOptionalString(messageId);
+  if (!trimmed || !ctx.accountId || !hasChatScope(ctx)) {
+    return false;
+  }
+  hydrateFromDiskOnce();
+  const cached = imessageReplyCacheByMessageId.get(trimmed);
+  if (!cached || cached.isFromMe !== true || cached.accountId !== ctx.accountId) {
+    return false;
+  }
+  return isPositiveChatMatch(cached, ctx);
+}
+
 function buildFromMeError(inputId: string, inputKind: "short" | "uuid"): Error {
   return new Error(
     `iMessage message id ${describeMessageIdForError(inputId, inputKind)} is not one this agent sent. ` +
@@ -563,7 +579,7 @@ function isPositiveChatMatch(entry: IMessageReplyCacheEntry, ctx: IMessageChatCo
   return false;
 }
 
-export function _resetIMessageShortIdState(): void {
+export function resetIMessageShortIdState(): void {
   imessageReplyCacheByMessageId.clear();
   imessageShortIdToUuid.clear();
   imessageUuidToShortId.clear();

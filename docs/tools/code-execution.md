@@ -9,14 +9,14 @@ title: "Code execution"
 
 `code_execution` runs sandboxed remote Python analysis on xAI's Responses API. It is registered by the bundled `xai` plugin (under the `tools` contract) and dispatches to the same `https://api.x.ai/v1/responses` endpoint used by `x_search`.
 
-| Property           | Value                                                          |
-| ------------------ | -------------------------------------------------------------- |
-| Tool name          | `code_execution`                                               |
-| Provider plugin    | `xai` (bundled, `enabledByDefault: true`)                      |
-| Auth               | `XAI_API_KEY` or `plugins.entries.xai.config.webSearch.apiKey` |
-| Default model      | `grok-4-1-fast`                                                |
-| Default timeout    | 30 seconds                                                     |
-| Default `maxTurns` | unset (xAI applies its own internal limit)                     |
+| Property           | Value                                                                             |
+| ------------------ | --------------------------------------------------------------------------------- |
+| Tool name          | `code_execution`                                                                  |
+| Provider plugin    | `xai` (bundled, `enabledByDefault: true`)                                         |
+| Auth               | xAI auth profile, `XAI_API_KEY`, or `plugins.entries.xai.config.webSearch.apiKey` |
+| Default model      | `grok-4-1-fast`                                                                   |
+| Default timeout    | 30 seconds                                                                        |
+| Default `maxTurns` | unset (xAI applies its own internal limit)                                        |
 
 This is different from local [`exec`](/tools/exec):
 
@@ -36,10 +36,29 @@ Do **not** use it when you need local files, your shell, your repo, or paired de
 ## Setup
 
 <Steps>
-  <Step title="Provide an xAI API key">
-    Set `XAI_API_KEY` in the gateway environment, or configure the key under the xAI plugin so the same credential covers `code_execution`, `x_search`, web search, and other xAI tools:
+  <Step title="Provide xAI credentials">
+    Sign in with Grok OAuth using an eligible SuperGrok or X Premium subscription,
+    use the remote-friendly device-code flow, or store an API key. OAuth works
+    for `code_execution` and `x_search`; `XAI_API_KEY` or plugin web-search
+    config can also power Grok `web_search`.
 
     ```bash
+    openclaw models auth login --provider xai --method oauth
+    openclaw models auth login --provider xai --device-code
+    ```
+
+    During a fresh install, the same auth choices are available inside
+    onboarding:
+
+    ```bash
+    openclaw onboard --install-daemon
+    openclaw onboard --install-daemon --auth-choice xai-device-code
+    ```
+
+    Or use an API key:
+
+    ```bash
+    openclaw models auth login --provider xai --method api-key
     export XAI_API_KEY=xai-...
     ```
 
@@ -64,7 +83,9 @@ Do **not** use it when you need local files, your shell, your repo, or paired de
   </Step>
 
   <Step title="Enable and tune code_execution">
-    The tool is gated on `plugins.entries.xai.config.codeExecution.enabled`. Default is off.
+    `code_execution` is available when xAI credentials are available. Set
+    `plugins.entries.xai.config.codeExecution.enabled` to `false` to disable it,
+    or use the same block to tune the model and timeout.
 
     ```json5
     {
@@ -117,12 +138,12 @@ The tool takes a single `task` parameter internally, so the agent should send th
 
 ## Errors
 
-When the tool runs without auth, it returns a structured `missing_xai_api_key` error pointing at the env var and config path. The error is JSON, not a thrown exception, so the agent can self-correct:
+When the tool runs without auth, it returns a structured `missing_xai_api_key` error pointing at the auth-profile, env var, and config options. The error is JSON, not a thrown exception, so the agent can self-correct:
 
 ```json
 {
   "error": "missing_xai_api_key",
-  "message": "code_execution needs an xAI API key. Set XAI_API_KEY in the Gateway environment, or configure plugins.entries.xai.config.webSearch.apiKey.",
+  "message": "code_execution needs xAI credentials. Run `openclaw onboard --auth-choice xai-oauth` to sign in with Grok, run `openclaw onboard --auth-choice xai-api-key`, set `XAI_API_KEY` in the Gateway environment, or configure `plugins.entries.xai.config.webSearch.apiKey`.",
   "docs": "https://docs.openclaw.ai/tools/code-execution"
 }
 ```

@@ -48,6 +48,8 @@ const GROQ_SERVICE_UNAVAILABLE_MESSAGE =
 const PLAIN_INTERNAL_SERVER_ERROR_STATUS_SAMPLE = "Proxy notice: Status: Internal Server Error";
 const MIXED_INTERNAL_SERVER_ERROR_STATUS_SAMPLE = `${PLAIN_INTERNAL_SERVER_ERROR_STATUS_SAMPLE}; upstream connect error`;
 const INTERNAL_SERVER_ERROR_STATUS_WITH_500_SAMPLE = `${PLAIN_INTERNAL_SERVER_ERROR_STATUS_SAMPLE}; code:500`;
+const OPENAI_SERVER_ERROR_PAYLOAD =
+  'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request."},"sequence_number":2}';
 
 function expectMessageMatches(
   matcher: (message: string) => boolean,
@@ -656,6 +658,16 @@ describe("classifyFailoverReasonFromHttpStatus", () => {
     ).toBe("billing");
   });
 
+  it("lets OpenRouter API-key budget limit 403 responses bypass generic auth", () => {
+    expect(
+      classifyFailoverReasonFromHttpStatus(
+        403,
+        "403 API key budget limit exceeded (monthly limit). Contact your org admin.",
+        { provider: "openrouter" },
+      ),
+    ).toBe("billing");
+  });
+
   it("keeps generic HTTP 401 key-limit text on the auth path without provider context", () => {
     expect(
       classifyFailoverReasonFromHttpStatus(401, "401 Key limit exceeded (monthly limit)"),
@@ -671,6 +683,27 @@ describe("classifyFailoverReasonFromHttpStatus", () => {
         '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
       ),
     ).toBe("overloaded");
+  });
+
+  it("does not let structured server_error markers override 4xx status handling", () => {
+    const payload = '{"type":"error","error":{"type":"server_error","code":"server_error"}}';
+
+    expect(classifyFailoverReasonFromHttpStatus(401, payload)).toBe("auth");
+    expect(classifyFailoverReasonFromHttpStatus(402, payload)).toBe("billing");
+    expect(classifyFailoverReasonFromHttpStatus(422, payload)).toBe("format");
+  });
+
+  it("preserves structured server_error markers on explicit HTTP 5xx statuses", () => {
+    expect(classifyFailoverReasonFromHttpStatus(500, OPENAI_SERVER_ERROR_PAYLOAD)).toBe(
+      "server_error",
+    );
+    expect(classifyFailoverReasonFromHttpStatus(502, OPENAI_SERVER_ERROR_PAYLOAD)).toBe(
+      "server_error",
+    );
+    expect(classifyFailoverReasonFromHttpStatus(504, OPENAI_SERVER_ERROR_PAYLOAD)).toBe(
+      "server_error",
+    );
+    expect(classifyFailoverReasonFromHttpStatus(500)).toBe("timeout");
   });
 
   it("treats generic HTTP 410 responses as retryable timeouts", () => {
@@ -1148,11 +1181,15 @@ describe("classifyFailoverReason provider messages", () => {
         "521 <!DOCTYPE html><html><head><title>Web server is down</title></head><body>Cloudflare</body></html>",
       ),
     ).toBe("timeout");
+    expect(classifyFailoverReason(OPENAI_SERVER_ERROR_PAYLOAD)).toBe("server_error");
     expect(
       classifyFailoverReason(
-        'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request."},"sequence_number":2}',
+        "An error occurred while processing your request. You can retry your request, or contact us through our help center at help.openai.com if the error persists. Please include the request ID synthetic-provider-request-001 in your message.",
       ),
     ).toBe("timeout");
+    expect(classifyFailoverReason(`402 Payment Required ${OPENAI_SERVER_ERROR_PAYLOAD}`)).toBe(
+      "billing",
+    );
     expect(classifyFailoverReason("string should match pattern")).toBe("format");
     expect(
       classifyFailoverReason(
@@ -1405,11 +1442,34 @@ describe("classifyProviderRuntimeFailureKind", () => {
   });
 
   it("classifies OAuth refresh failures", () => {
-    expect(
-      classifyProviderRuntimeFailureKind(
-        "OAuth token refresh failed for openai-codex: invalid_grant. Please try again or re-authenticate.",
-      ),
-    ).toBe("auth_refresh");
+    const refreshFailures = [
+      "OAuth token refresh failed for openai-codex: invalid_grant. Please try again or re-authenticate.",
+      "Your access token could not be refreshed because you have since logged out or signed in to another account. Please sign in again.",
+      "Your authentication session could not be refreshed automatically. Please log out and sign in again.",
+    ];
+    for (const message of refreshFailures) {
+      expect(classifyProviderRuntimeFailureKind(message)).toBe("auth_refresh");
+      expect(classifyFailoverReason(message, { provider: "openai-codex" })).toBe("auth_permanent");
+    }
+  });
+
+  it("does not make uncertain OAuth refresh wrappers terminal", () => {
+    const message =
+      "OAuth token refresh failed for openai-codex: file lock timeout for /tmp/agent/auth-profiles.json. Please try again or re-authenticate.";
+    expect(classifyProviderRuntimeFailureKind(message)).toBe("auth_refresh");
+    expect(classifyFailoverReason(message, { provider: "openai-codex" })).toBe("auth");
+  });
+
+  it("keeps Codex entitlement and usage-limit payloads out of terminal auth", () => {
+    const entitlementMessages = [
+      "You've hit your usage limit. Upgrade to Plus to continue using Codex (https://chatgpt.com/explore/plus), try again after 11:34 AM.",
+      "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits, try again later.",
+      '429 {"type":"error","error":{"type":"rate_limit_error","message":"You\\u0027ve hit your usage limit. Upgrade to Plus to continue using Codex (https://chatgpt.com/explore/plus), try again after 11:34 AM."}}',
+    ];
+    for (const message of entitlementMessages) {
+      expect(classifyProviderRuntimeFailureKind(message)).not.toBe("auth_refresh");
+      expect(classifyFailoverReason(message, { provider: "openai-codex" })).toBe("rate_limit");
+    }
   });
 
   it("classifies OAuth refresh timeouts and lock contention distinctly", () => {

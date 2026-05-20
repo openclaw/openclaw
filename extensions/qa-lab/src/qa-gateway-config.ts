@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   defaultQaModelForMode,
@@ -126,6 +126,9 @@ export function buildQaGatewayConfig(params: {
   return {
     plugins: {
       allow: allowedPlugins,
+      slots: {
+        memory: "memory-core",
+      },
       entries: {
         acpx: {
           enabled: true,

@@ -6,19 +6,19 @@ import { resolveStateDir } from "../config/paths.js";
 import { readLocalFileSafely } from "../infra/fs-safe.js";
 import { tryReadJson, writeJson } from "../infra/json-files.js";
 import { safeFileURLToPath } from "../infra/local-file-access.js";
+import { assertLocalMediaAllowed } from "../media/local-media-access.js";
 import {
   getImageMetadata,
   hasAlphaChannel,
   resizeToJpeg,
   resizeToPng,
-} from "../media/image-ops.js";
-import { assertLocalMediaAllowed } from "../media/local-media-access.js";
+} from "../media/media-services.js";
 import { isPassThroughRemoteMediaSource } from "../media/media-source-url.js";
 import { MEDIA_MAX_BYTES, saveMediaBuffer, saveMediaSource } from "../media/store.js";
 import { resolveUserPath } from "../utils.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { sendJson, sendMethodNotAllowed } from "./http-common.js";
+import { sendJson, sendMethodNotAllowed, sendMissingScopeForbidden } from "./http-common.js";
 import {
   authorizeGatewayHttpRequestOrReply,
   resolveOpenAiCompatibleHttpOperatorScopes,
@@ -697,7 +697,7 @@ async function getSessionManagedOutgoingAttachmentIndex(
   });
   const index: SessionManagedOutgoingAttachmentIndex = new Set();
   for (const message of messages) {
-    const meta = (message as { __openclaw?: { id?: string } } | null)?.__openclaw;
+    const meta = (message as { __openclaw?: { id?: string } } | null)?.["__openclaw"];
     const messageId = meta?.id;
     if (typeof messageId !== "string" || !messageId) {
       continue;
@@ -987,13 +987,7 @@ export async function handleManagedOutgoingImageHttpRequest(
   const requestedScopes = resolveOpenAiCompatibleHttpOperatorScopes(req, requestAuth);
   const scopeAuth = authorizeOperatorScopesForMethod("chat.history", requestedScopes);
   if (!scopeAuth.allowed) {
-    sendJson(res, 403, {
-      ok: false,
-      error: {
-        type: "forbidden",
-        message: `missing scope: ${scopeAuth.missingScope}`,
-      },
-    });
+    sendMissingScopeForbidden(res, scopeAuth.missingScope);
     return true;
   }
 

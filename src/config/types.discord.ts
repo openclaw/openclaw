@@ -10,7 +10,7 @@ import type {
 import type {
   ChannelHealthMonitorConfig,
   ChannelHeartbeatVisibilityConfig,
-} from "./types.channels.js";
+} from "./types.channel-health.js";
 import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
 import type { SecretInput } from "./types.secrets.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
@@ -129,11 +129,20 @@ export type DiscordVoiceAutoJoinConfig = {
   channelId: string;
 };
 
+export type DiscordVoiceAllowedChannelConfig = {
+  /** Guild ID that owns the voice channel. */
+  guildId: string;
+  /** Voice channel ID allowed for realtime voice sessions. */
+  channelId: string;
+};
+
 export type DiscordVoiceMode = "stt-tts" | "agent-proxy" | "bidi";
 
 export type DiscordVoiceRealtimeConsultPolicy = "auto" | "always";
 
 export type DiscordVoiceRealtimeToolPolicy = "safe-read-only" | "owner" | "none";
+
+export type DiscordVoiceRealtimeBootstrapContextFile = "IDENTITY.md" | "USER.md" | "SOUL.md";
 
 export type DiscordVoiceRealtimeConfig = {
   /** Realtime voice provider id, for example "openai". */
@@ -148,6 +157,8 @@ export type DiscordVoiceRealtimeConfig = {
   toolPolicy?: DiscordVoiceRealtimeToolPolicy;
   /** Whether bidi should force the OpenClaw agent brain for every substantive turn. */
   consultPolicy?: DiscordVoiceRealtimeConsultPolicy;
+  /** Agent profile bootstrap files to include in realtime provider instructions. Defaults to IDENTITY.md, USER.md, and SOUL.md; set [] to disable. */
+  bootstrapContextFiles?: DiscordVoiceRealtimeBootstrapContextFile[];
   /** Allow Discord speaker-start events to interrupt active realtime playback. */
   bargeIn?: boolean;
   /** Minimum assistant playback duration before a barge-in truncates audio. Default: 250ms; set 0 for immediate interruption. */
@@ -178,6 +189,12 @@ export type DiscordVoiceConfig = {
   realtime?: DiscordVoiceRealtimeConfig;
   /** Voice channels to auto-join on startup. */
   autoJoin?: DiscordVoiceAutoJoinConfig[];
+  /** If false, configured followUsers are ignored without removing the saved user list. */
+  followUsersEnabled?: boolean;
+  /** Discord user IDs whose current voice channel the bot should follow. */
+  followUsers?: string[];
+  /** Voice channels the bot is allowed to join or remain in. Unset means any voice channel is allowed. */
+  allowedChannels?: DiscordVoiceAllowedChannelConfig[];
   /** Enable/disable DAVE end-to-end encryption (default: true; Discord may require this). */
   daveEncryption?: boolean;
   /** Consecutive decrypt failures before DAVE session reinitialization (default: 24). */
@@ -312,6 +329,20 @@ export type DiscordAccountConfig = {
   /** Allow bot-authored messages to trigger replies (default: false). Set "mentions" to gate on mentions. */
   allowBots?: boolean | "mentions";
   /**
+   * Sliding-window guard that suppresses runaway two-bot exchanges. Default on
+   * whenever `allowBots` lets bot messages reach dispatch. See #58789.
+   */
+  botLoopProtection?: {
+    /** Enable the bot-pair sliding-window guard (default: true when allowBots is set). */
+    enabled?: boolean;
+    /** Maximum messages a single bot pair may exchange in the configured window. Default: 20. */
+    maxEventsPerWindow?: number;
+    /** Sliding window length in seconds. Default: 60. */
+    windowSeconds?: number;
+    /** Cooldown seconds applied to a bot pair after the limit is hit. Default: 60. */
+    cooldownSeconds?: number;
+  };
+  /**
    * Break-glass override: allow mutable identity matching (names/tags/slugs) in allowlists.
    * Default behavior is ID-only matching.
    */
@@ -332,6 +363,11 @@ export type DiscordAccountConfig = {
   contextVisibility?: ContextVisibilityMode;
   /** Outbound text chunk size (chars). Default: 2000. */
   textChunkLimit?: number;
+  /**
+   * Suppress Discord-generated link embeds for outbound messages. Default: true.
+   * Explicit `embeds` payloads are still sent normally.
+   */
+  suppressEmbeds?: boolean;
   /** Streaming + chunking settings. Prefer this nested shape over legacy flat keys. */
   streaming?: ChannelPreviewStreamingConfig;
   /**
@@ -440,9 +476,3 @@ export type DiscordConfig = {
   /** Optional default account id when multiple accounts are configured. */
   defaultAccount?: string;
 } & DiscordAccountConfig;
-
-declare module "./types.channels.js" {
-  interface ChannelsConfig {
-    discord?: DiscordConfig;
-  }
-}

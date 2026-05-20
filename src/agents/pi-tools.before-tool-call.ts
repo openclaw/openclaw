@@ -83,8 +83,13 @@ type HookOutcome =
   | { blocked: false; params: unknown };
 type PluginApprovalRequest = NonNullable<PluginHookBeforeToolCallResult["requireApproval"]>;
 
+export function hasBeforeToolCallPolicy(): boolean {
+  return getGlobalHookRunner()?.hasHooks("before_tool_call") === true || hasTrustedToolPolicies();
+}
+
 const log = createSubsystemLogger("agents/tools");
 const BEFORE_TOOL_CALL_WRAPPED = Symbol("beforeToolCallWrapped");
+const BEFORE_TOOL_CALL_DIAGNOSTIC_OPTIONS = Symbol("beforeToolCallDiagnosticOptions");
 const BEFORE_TOOL_CALL_HOOK_FAILURE_REASON =
   "Tool call blocked because before_tool_call hook failed";
 const MAX_TRACKED_ADJUSTED_PARAMS = 1024;
@@ -490,14 +495,16 @@ export async function runBeforeToolCallHook(args: {
       }
     }
 
-    recordToolCall(
-      sessionState,
-      toolName,
-      params,
-      args.toolCallId,
-      args.ctx.loopDetection,
-      loopScope,
-    );
+    if (args.ctx.loopDetection?.enabled !== false) {
+      recordToolCall(
+        sessionState,
+        toolName,
+        params,
+        args.toolCallId,
+        args.ctx.loopDetection,
+        loopScope,
+      );
+    }
   }
 
   const hookRunner = getGlobalHookRunner();
@@ -660,12 +667,14 @@ export async function runBeforeToolCallHook(args: {
 export function wrapToolWithBeforeToolCallHook(
   tool: AnyAgentTool,
   ctx?: HookContext,
+  options: { emitDiagnostics?: boolean } = {},
 ): AnyAgentTool {
   const execute = tool.execute;
   if (!execute) {
     return tool;
   }
   const toolName = tool.name || "tool";
+  const diagnosticOptions = { emitDiagnostics: options.emitDiagnostics !== false };
   const wrappedTool: AnyAgentTool = {
     ...tool,
     execute: async (toolCallId, params, signal, onUpdate) => {
@@ -693,12 +702,14 @@ export function wrapToolWithBeforeToolCallHook(
           ...(toolCallId && { toolCallId }),
           paramsSummary: summarizeToolParams(outcome.params ?? params),
         };
-        emitTrustedDiagnosticEvent({
-          type: "tool.execution.blocked",
-          ...eventBase,
-          reason: outcome.reason,
-          deniedReason: outcome.deniedReason ?? "plugin-before-tool-call",
-        });
+        if (diagnosticOptions.emitDiagnostics) {
+          emitTrustedDiagnosticEvent({
+            type: "tool.execution.blocked",
+            ...eventBase,
+            reason: outcome.reason,
+            deniedReason: outcome.deniedReason ?? "plugin-before-tool-call",
+          });
+        }
         const blockedResult = buildBlockedToolResult({
           reason: outcome.reason,
           deniedReason: outcome.deniedReason ?? "plugin-before-tool-call",
@@ -735,10 +746,12 @@ export function wrapToolWithBeforeToolCallHook(
         ...(toolCallId && { toolCallId }),
         paramsSummary: summarizeToolParams(outcome.params),
       };
-      emitTrustedDiagnosticEvent({
-        type: "tool.execution.started",
-        ...eventBase,
-      });
+      if (diagnosticOptions.emitDiagnostics) {
+        emitTrustedDiagnosticEvent({
+          type: "tool.execution.started",
+          ...eventBase,
+        });
+      }
       const startedAt = Date.now();
       try {
         const result = await execute(toolCallId, outcome.params, signal, onUpdate);
@@ -750,22 +763,26 @@ export function wrapToolWithBeforeToolCallHook(
           toolCallId,
           result,
         });
-        emitTrustedDiagnosticEvent({
-          type: "tool.execution.completed",
-          ...eventBase,
-          durationMs,
-        });
+        if (diagnosticOptions.emitDiagnostics) {
+          emitTrustedDiagnosticEvent({
+            type: "tool.execution.completed",
+            ...eventBase,
+            durationMs,
+          });
+        }
         return result;
       } catch (err) {
         const cause = unwrapErrorCause(err);
         const errorCode = diagnosticHttpStatusCode(cause);
-        emitTrustedDiagnosticEvent({
-          type: "tool.execution.error",
-          ...eventBase,
-          durationMs: Date.now() - startedAt,
-          errorCategory: diagnosticErrorCategory(cause),
-          ...(errorCode ? { errorCode } : {}),
-        });
+        if (diagnosticOptions.emitDiagnostics) {
+          emitTrustedDiagnosticEvent({
+            type: "tool.execution.error",
+            ...eventBase,
+            durationMs: Date.now() - startedAt,
+            errorCategory: diagnosticErrorCategory(cause),
+            ...(errorCode ? { errorCode } : {}),
+          });
+        }
         await recordLoopOutcome({
           ctx,
           toolName: normalizedToolName,
@@ -783,12 +800,34 @@ export function wrapToolWithBeforeToolCallHook(
     value: true,
     enumerable: true,
   });
+  Object.defineProperty(wrappedTool, BEFORE_TOOL_CALL_DIAGNOSTIC_OPTIONS, {
+    value: diagnosticOptions,
+    enumerable: false,
+  });
   return wrappedTool;
 }
 
 export function isToolWrappedWithBeforeToolCallHook(tool: AnyAgentTool): boolean {
   const taggedTool = tool as unknown as Record<symbol, unknown>;
   return taggedTool[BEFORE_TOOL_CALL_WRAPPED] === true;
+}
+
+export function setBeforeToolCallDiagnosticsEnabled(tool: AnyAgentTool, enabled: boolean): void {
+  const taggedTool = tool as unknown as Record<symbol, unknown>;
+  const options = taggedTool[BEFORE_TOOL_CALL_DIAGNOSTIC_OPTIONS];
+  if (options && typeof options === "object" && "emitDiagnostics" in options) {
+    (options as { emitDiagnostics: boolean }).emitDiagnostics = enabled;
+  }
+}
+
+export function copyBeforeToolCallHookMarker(source: AnyAgentTool, target: AnyAgentTool): void {
+  if (!isToolWrappedWithBeforeToolCallHook(source)) {
+    return;
+  }
+  Object.defineProperty(target, BEFORE_TOOL_CALL_WRAPPED, {
+    value: true,
+    enumerable: true,
+  });
 }
 
 export function consumeAdjustedParamsForToolCall(toolCallId: string, runId?: string): unknown {
@@ -798,7 +837,8 @@ export function consumeAdjustedParamsForToolCall(toolCallId: string, runId?: str
   return params;
 }
 
-export const __testing = {
+export const testing = {
+  BEFORE_TOOL_CALL_DIAGNOSTIC_OPTIONS,
   BEFORE_TOOL_CALL_WRAPPED,
   buildAdjustedParamsKey,
   adjustedParamsByToolCallId,
@@ -806,3 +846,4 @@ export const __testing = {
   mergeParamsWithApprovalOverrides,
   isPlainObject,
 };
+export { testing as __testing };

@@ -13,7 +13,7 @@ For OpenClaw iMessage deployments, use `imsg` on a signed-in macOS Messages host
 </Note>
 
 <Warning>
-BlueBubbles support was removed. Migrate `channels.bluebubbles` configs to `channels.imessage`; OpenClaw supports iMessage through `imsg` only.
+BlueBubbles support was removed. Migrate `channels.bluebubbles` configs to `channels.imessage`; OpenClaw supports iMessage through `imsg` only. Start with [BlueBubbles removal and the imsg iMessage path](/announcements/bluebubbles-imessage) for the short announcement, or [Coming from BlueBubbles](/channels/imessage-from-bluebubbles) for the full migration table.
 </Warning>
 
 Status: native external CLI integration. Gateway spawns `imsg rpc` and communicates over JSON-RPC on stdio (no separate daemon/port). Advanced actions require `imsg launch` and a successful private API probe.
@@ -118,6 +118,18 @@ exec ssh -T gateway-host imsg "$@"
     OpenClaw uses strict host-key checking for SCP, so the relay host key must already exist in `~/.ssh/known_hosts`.
     Attachment paths are validated against allowed roots (`attachmentRoots` / `remoteAttachmentRoots`).
 
+<Warning>
+Any `cliPath` wrapper or SSH proxy you put in front of `imsg` MUST behave like a transparent stdio pipe for long-lived JSON-RPC. OpenClaw exchanges small newline-framed JSON-RPC messages over the wrapper's stdin/stdout for the lifetime of the channel:
+
+- Forward each stdin chunk/line **as soon as bytes are available** — don't wait for EOF.
+- Forward each stdout chunk/line promptly in the reverse direction.
+- Preserve newlines.
+- Avoid fixed-size blocking reads (`read(4096)`, `cat | buffer`, default shell `read`) that can starve small frames.
+- Keep stderr separate from the JSON-RPC stdout stream.
+
+A wrapper that buffers stdin until a large block fills will produce symptoms that look like an iMessage outage — `imsg rpc timeout (chats.list)` or repeated channel restarts — even though `imsg rpc` itself is healthy. `ssh -T host imsg "$@"` (above) is safe because it forwards OpenClaw's `cliPath` arguments such as `rpc` and `--db`. Pipelines like `ssh host imsg | grep -v '^DEBUG'` are NOT — line-buffered tools can still hold frames; use `stdbuf -oL -eL` on every stage if you must filter.
+</Warning>
+
   </Tab>
 </Tabs>
 
@@ -217,7 +229,7 @@ If SIP-disabled isn't acceptable for your threat model:
 
     Allowlist field: `channels.imessage.allowFrom`.
 
-    Allowlist entries can be handles or chat targets (`chat_id:*`, `chat_guid:*`, `chat_identifier:*`).
+    Allowlist entries must identify senders: handles or static sender access groups (`accessGroup:<name>`). Use `channels.imessage.groupAllowFrom` for chat targets such as `chat_id:*`, `chat_guid:*`, or `chat_identifier:*`; use `channels.imessage.groups` for numeric `chat_id` registry keys.
 
   </Tab>
 
@@ -230,7 +242,9 @@ If SIP-disabled isn't acceptable for your threat model:
 
     Group sender allowlist: `channels.imessage.groupAllowFrom`.
 
-    Runtime fallback: if `groupAllowFrom` is unset, iMessage group sender checks fall back to `allowFrom` when available.
+    `groupAllowFrom` entries can also reference static sender access groups (`accessGroup:<name>`).
+
+    Runtime fallback: if `groupAllowFrom` is unset, iMessage group sender checks use `allowFrom`; set `groupAllowFrom` when DM and group admission should differ.
     Runtime note: if `channels.imessage` is completely missing, runtime falls back to `groupPolicy="allowlist"` and logs a warning (even if `channels.defaults.groupPolicy` is set).
 
     <Warning>
@@ -537,6 +551,19 @@ When `imsg launch` is running and `openclaw channels status --probe` reports `pr
     Older `imsg` builds that pre-date the per-method capability list will gate off typing/read silently; OpenClaw logs a one-time warning per restart so the missing receipt is attributable.
 
   </Accordion>
+
+  <Accordion title="Inbound tapbacks">
+    OpenClaw subscribes to iMessage tapbacks and routes accepted reactions as system events instead of normal message text, so a user tapback does not trigger an ordinary reply loop.
+
+    Notification mode is controlled by `channels.imessage.reactionNotifications`:
+
+    - `"own"` (default): notify only when users react to bot-authored messages.
+    - `"all"`: notify for all inbound tapbacks from authorized senders.
+    - `"off"`: ignore inbound tapbacks.
+
+    Per-account overrides use `channels.imessage.accounts.<id>.reactionNotifications`.
+
+  </Accordion>
 </AccordionGroup>
 
 ## Config writes
@@ -778,6 +805,7 @@ openclaw channels status --probe --channel imessage
 ## Related
 
 - [Channels Overview](/channels) — all supported channels
+- [BlueBubbles removal and the imsg iMessage path](/announcements/bluebubbles-imessage) — announcement and migration summary
 - [Coming from BlueBubbles](/channels/imessage-from-bluebubbles) — config translation table and step-by-step cutover
 - [Pairing](/channels/pairing) — DM authentication and pairing flow
 - [Groups](/channels/groups) — group chat behavior and mention gating

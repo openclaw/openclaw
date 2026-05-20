@@ -21,7 +21,7 @@ Reference for **LLM/model providers** (not chat channels like WhatsApp/Telegram)
 
   </Accordion>
   <Accordion title="Adding provider auth does not change your primary model">
-    `openclaw configure` preserves an existing `agents.defaults.model.primary` when you add or reauth a provider. Provider plugins may still return a recommended default model in their auth config patch, but configure treats that as "make this model available" when a primary model already exists, not "replace the current primary model."
+    `openclaw configure` preserves an existing `agents.defaults.model.primary` when you add or reauth a provider. `openclaw models auth login` does the same unless you pass `--set-default`. Provider plugins may still return a recommended default model in their auth config patch, but OpenClaw treats that as "make this model available" when a primary model already exists, not "replace the current primary model."
 
     To intentionally switch the default model, use `openclaw models set <provider/model>` or `openclaw models auth login --provider <id> --set-default`.
 
@@ -41,9 +41,9 @@ Reference for **LLM/model providers** (not chat channels like WhatsApp/Telegram)
 
   </Accordion>
   <Accordion title="CLI runtimes">
-    CLI runtimes use the same split: choose canonical model refs such as `anthropic/claude-*`, `google/gemini-*`, or `openai/gpt-*`, then set provider/model runtime policy to `claude-cli`, `google-gemini-cli`, or `codex-cli` when you want a local CLI backend.
+    CLI runtimes use the same split: choose canonical model refs such as `anthropic/claude-*` or `google/gemini-*`, then set provider/model runtime policy to `claude-cli` or `google-gemini-cli` when you want a local CLI backend.
 
-    Legacy `claude-cli/*`, `google-gemini-cli/*`, and `codex-cli/*` refs migrate back to canonical provider refs with the runtime recorded separately.
+    Legacy `claude-cli/*` and `google-gemini-cli/*` refs migrate back to canonical provider refs with the runtime recorded separately. Legacy `codex-cli/*` refs migrate to `openai/*` and use the Codex app-server route; OpenClaw no longer keeps a bundled Codex CLI backend.
 
   </Accordion>
 </AccordionGroup>
@@ -149,7 +149,7 @@ Anthropic staff told us OpenClaw-style Claude CLI usage is allowed again, so Ope
 - Policy note: OpenAI Codex OAuth is explicitly supported for external tools/workflows like OpenClaw.
 - For the common subscription plus native Codex runtime route, sign in with `openai-codex` auth but configure `openai/gpt-5.5`; OpenAI agent turns select Codex by default.
 - Use provider/model `agentRuntime.id: "pi"` only when you want a compatibility route through PI; otherwise keep `openai/gpt-5.5` on the default Codex harness.
-- Older `openai-codex/gpt-5.1*`, `openai-codex/gpt-5.2*`, and `openai-codex/gpt-5.3*` refs are suppressed because ChatGPT/Codex OAuth accounts reject them; use `openai-codex/gpt-5.5` or the native Codex runtime route instead.
+- `openai-codex/gpt-*` refs remain a legacy PI route. Prefer `openai/gpt-5.5` on the native Codex runtime for new agent config, and run `openclaw doctor --fix` when you want to migrate old `openai-codex/*` refs to canonical `openai/*` refs.
 
 ```json5
 {
@@ -301,7 +301,7 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 | Groq                    | `groq`                           | `GROQ_API_KEY`                                               | -                                             |
 | Hugging Face Inference  | `huggingface`                    | `HUGGINGFACE_HUB_TOKEN` or `HF_TOKEN`                        | `huggingface/deepseek-ai/DeepSeek-R1`         |
 | Kilo Gateway            | `kilocode`                       | `KILOCODE_API_KEY`                                           | `kilocode/kilo/auto`                          |
-| Kimi Coding             | `kimi`                           | `KIMI_API_KEY` or `KIMICODE_API_KEY`                         | `kimi/kimi-code`                              |
+| Kimi Coding             | `kimi`                           | `KIMI_API_KEY` or `KIMICODE_API_KEY`                         | `kimi/kimi-for-coding`                        |
 | MiniMax                 | `minimax` / `minimax-portal`     | `MINIMAX_API_KEY` / `MINIMAX_OAUTH_TOKEN`                    | `minimax/MiniMax-M2.7`                        |
 | Mistral                 | `mistral`                        | `MISTRAL_API_KEY`                                            | `mistral/mistral-large-latest`                |
 | Moonshot                | `moonshot`                       | `MOONSHOT_API_KEY`                                           | `moonshot/kimi-k2.6`                          |
@@ -314,7 +314,7 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 | Venice                  | `venice`                         | `VENICE_API_KEY`                                             | -                                             |
 | Vercel AI Gateway       | `vercel-ai-gateway`              | `AI_GATEWAY_API_KEY`                                         | `vercel-ai-gateway/anthropic/claude-opus-4.6` |
 | Volcano Engine (Doubao) | `volcengine` / `volcengine-plan` | `VOLCANO_ENGINE_API_KEY`                                     | `volcengine-plan/ark-code-latest`             |
-| xAI                     | `xai`                            | `XAI_API_KEY`                                                | `xai/grok-4.3`                                |
+| xAI                     | `xai`                            | SuperGrok/X Premium OAuth or `XAI_API_KEY`                   | `xai/grok-4.3`                                |
 | Xiaomi                  | `xiaomi`                         | `XIAOMI_API_KEY`                                             | `xiaomi/mimo-v2-flash`                        |
 
 #### Quirks worth knowing
@@ -333,7 +333,7 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
     Model ids use a `nvidia/<vendor>/<model>` namespace (for example `nvidia/nvidia/nemotron-...` alongside `nvidia/moonshotai/kimi-k2.5`); pickers preserve the literal `<provider>/<model-id>` composition while the canonical key sent to the API stays single-prefixed.
   </Accordion>
   <Accordion title="xAI">
-    Uses the xAI Responses path. `grok-4.3` is the bundled default chat model. `/fast` or `params.fastMode: true` rewrites `grok-3`, `grok-3-mini`, `grok-4`, and `grok-4-0709` to their `*-fast` variants. `tool_stream` defaults on; disable via `agents.defaults.models["xai/<model>"].params.tool_stream=false`.
+    Uses the xAI Responses path. The recommended path is SuperGrok/X Premium OAuth; API keys still work via `XAI_API_KEY` or plugin config. `grok-4.3` is the bundled default chat model. `/fast` or `params.fastMode: true` rewrites `grok-3`, `grok-3-mini`, `grok-4`, and `grok-4-0709` to their `*-fast` variants. `tool_stream` defaults on; disable via `agents.defaults.models["xai/<model>"].params.tool_stream=false`.
   </Accordion>
   <Accordion title="Cerebras">
     Ships as the bundled `cerebras` provider plugin. GLM uses `zai-glm-4.7`; OpenAI-compatible base URL is `https://api.cerebras.ai/v1`.
@@ -347,6 +347,8 @@ Use `models.providers` (or `models.json`) to add **custom** providers or OpenAI/
 Many of the bundled provider plugins below already publish a default catalog. Use explicit `models.providers.<id>` entries only when you want to override the default base URL, headers, or model list.
 
 Gateway model capability checks also read explicit `models.providers.<id>.models[]` metadata. If a custom or proxy model accepts images, set `input: ["text", "image"]` on that model so WebChat and node-origin attachment paths pass images as native model inputs instead of text-only media refs.
+
+`agents.defaults.models["provider/model"]` only controls model visibility, aliases, and per-model metadata for agents. It does not register a new runtime model by itself. For custom provider models, also add `models.providers.<provider>.models[]` with at least the matching `id`.
 
 ### Moonshot AI (Kimi)
 
@@ -394,18 +396,18 @@ Kimi Coding uses Moonshot AI's Anthropic-compatible endpoint:
 
 - Provider: `kimi`
 - Auth: `KIMI_API_KEY`
-- Example model: `kimi/kimi-code`
+- Example model: `kimi/kimi-for-coding`
 
 ```json5
 {
   env: { KIMI_API_KEY: "sk-..." },
   agents: {
-    defaults: { model: { primary: "kimi/kimi-code" } },
+    defaults: { model: { primary: "kimi/kimi-for-coding" } },
   },
 }
 ```
 
-Legacy `kimi/k2p5` remains accepted as a compatibility model id.
+Legacy `kimi/kimi-code` and `kimi/k2p5` remain accepted as compatibility model ids and normalize to Kimi's stable API model id.
 
 ### Volcano Engine (Doubao)
 
@@ -686,8 +688,8 @@ Example (OpenAI-compatible):
     - Proxy-style OpenAI-compatible routes also skip native OpenAI-only request shaping: no `service_tier`, no Responses `store`, no Completions `store`, no prompt-cache hints, no OpenAI reasoning-compat payload shaping, and no hidden OpenClaw attribution headers.
     - For OpenAI-compatible Completions proxies that need vendor-specific fields, set `agents.defaults.models["provider/model"].params.extra_body` (or `extraBody`) to merge extra JSON into the outbound request body.
     - For vLLM chat-template controls, set `agents.defaults.models["provider/model"].params.chat_template_kwargs`. The bundled vLLM plugin automatically sends `enable_thinking: false` and `force_nonempty_content: true` for `vllm/nemotron-3-*` when the session thinking level is off.
-    - For slow local models or remote LAN/tailnet hosts, set `models.providers.<id>.timeoutSeconds`. This extends provider model HTTP request handling, including connect, headers, body streaming, and the total guarded-fetch abort, without increasing the whole agent runtime timeout.
-    - Model provider HTTP calls allow Surge, Clash, and sing-box fake-IP DNS answers in `198.18.0.0/15` and `fc00::/7` only for the configured provider `baseUrl` hostname. Other private, loopback, link-local, and metadata destinations still require an explicit `models.providers.<id>.request.allowPrivateNetwork: true` opt-in.
+    - For slow local models or remote LAN/tailnet hosts, set `models.providers.<id>.timeoutSeconds`. This extends provider model HTTP request handling, including connect, headers, body streaming, and the total guarded-fetch abort, without increasing the whole agent runtime timeout. If `agents.defaults.timeoutSeconds` or a run-specific timeout is lower, raise that ceiling too; provider timeouts cannot extend the whole run.
+    - Model provider HTTP calls allow Surge, Clash, and sing-box fake-IP DNS answers in `198.18.0.0/15` and `fc00::/7` only for the configured provider `baseUrl` hostname. Custom/local provider endpoints also trust that exact configured `scheme://host:port` origin for guarded model requests, including loopback, LAN, and tailnet hosts. This is not a new config option; the `baseUrl` you configure extends the request policy only for that origin. Fake-IP hostname allowance and exact-origin trust are independent mechanisms. Other private, loopback, link-local, metadata destinations, and different ports still require an explicit `models.providers.<id>.request.allowPrivateNetwork: true` opt-in. Set `models.providers.<id>.request.allowPrivateNetwork: false` to opt out of the exact-origin trust.
     - If `baseUrl` is empty/omitted, OpenClaw keeps the default OpenAI behavior (which resolves to `api.openai.com`).
     - For safety, an explicit `compat.supportsDeveloperRole: true` is still overridden on non-native `openai-completions` endpoints.
     - For `api: "anthropic-messages"` on non-direct endpoints (any provider other than canonical `anthropic`, or a custom `models.providers.anthropic.baseUrl` whose host is not a public `api.anthropic.com` endpoint), OpenClaw suppresses implicit Anthropic beta headers such as `claude-code-20250219`, `interleaved-thinking-2025-05-14`, and OAuth markers, so custom Anthropic-compatible proxies do not reject unsupported beta flags. Set `models.providers.<id>.headers["anthropic-beta"]` explicitly if your proxy needs specific beta features.

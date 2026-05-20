@@ -1,5 +1,5 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
-import type { DmPolicy } from "openclaw/plugin-sdk/config-types";
+import type { DmPolicy } from "openclaw/plugin-sdk/config-contracts";
 import {
   type ChannelSetupDmPolicy,
   type ChannelSetupWizardAdapter,
@@ -769,6 +769,7 @@ export const matrixOnboardingAdapter: ChannelSetupWizardAdapter = {
   }),
 };
 
-export const __testing = {
+export const testing = {
   promptMatrixAllowFrom,
 };
+export { testing as __testing };

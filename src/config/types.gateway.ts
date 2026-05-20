@@ -54,6 +54,8 @@ export type TalkRealtimeConfig = {
   model?: string;
   /** Provider voice override for realtime sessions. */
   voice?: string;
+  /** Additional system instructions appended to realtime Talk sessions. */
+  instructions?: string;
   /** Realtime execution mode. */
   mode?: "realtime" | "stt-tts" | "transcription";
   /** Byte/session transport. */
@@ -224,6 +226,8 @@ export type GatewayRemoteConfig = {
   url?: string;
   /** Transport for macOS remote connections (ssh tunnel or direct WS). */
   transport?: "ssh" | "direct";
+  /** Gateway port on the remote SSH host. Defaults to 18789. */
+  remotePort?: number;
   /** Token for remote auth (when the gateway requires token auth). */
   token?: SecretInput;
   /** Password for remote auth (when the gateway requires password auth). */

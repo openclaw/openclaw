@@ -124,6 +124,13 @@ describe("resolveBuildAllStep", () => {
       },
     });
   });
+
+  it("keeps plugin-sdk dts cache metadata aligned with declaration inputs", () => {
+    const step = getBuildAllStep("build:plugin-sdk:dts");
+
+    expect(step.cache?.inputs).toEqual(expect.arrayContaining(["packages/memory-host-sdk/src"]));
+    expect(step.cache?.outputs).toEqual(expect.arrayContaining(["dist/plugin-sdk/packages"]));
+  });
 });
 
 describe("resolveBuildAllSteps", () => {
@@ -159,6 +166,18 @@ describe("resolveBuildAllSteps", () => {
       "runtime-postbuild",
       "build-stamp",
       "runtime-postbuild-stamp",
+    ]);
+  });
+
+  it("uses a CLI startup profile without generated plugin assets", () => {
+    expect(resolveBuildAllSteps("cliStartup").map((step) => step.label)).toEqual([
+      "tsdown",
+      "check-cli-bootstrap-imports",
+      "runtime-postbuild",
+      "build-stamp",
+      "runtime-postbuild-stamp",
+      "write-cli-startup-metadata",
+      "write-cli-compat",
     ]);
   });
 

@@ -1,9 +1,18 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
+import {
+  clearCurrentPluginMetadataSnapshot,
+  setCurrentPluginMetadataSnapshot,
+} from "../plugins/current-plugin-metadata-snapshot.js";
+import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
+import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { writeSkill, writeWorkspaceSkills } from "./skills.e2e-test-helpers.js";
 import {
   restoreMockSkillsHomeEnv,
@@ -52,6 +61,103 @@ let envSnapshot: SkillsHomeEnvSnapshot;
 let tempRoot = "";
 let workspaceCaseIndex = 0;
 
+function createWorkspacePluginRegistry(workspaceDir: string): PluginManifestRegistry {
+  const extensionsRoot = path.join(workspaceDir, ".openclaw", "extensions");
+  const plugins: PluginManifestRecord[] = [];
+  for (const id of ["open-prose", "browser"]) {
+    const rootDir = path.join(extensionsRoot, id);
+    const manifestPath = path.join(rootDir, "openclaw.plugin.json");
+    if (!fsSync.existsSync(manifestPath)) {
+      continue;
+    }
+    const manifest = JSON.parse(fsSync.readFileSync(manifestPath, "utf8")) as {
+      id?: string;
+      enabledByDefault?: boolean;
+      skills?: string[];
+      configSchema?: Record<string, unknown>;
+    };
+    plugins.push({
+      id: manifest.id ?? id,
+      origin: id === "browser" ? "bundled" : "workspace",
+      enabledByDefault: manifest.enabledByDefault,
+      channels: [],
+      providers: [],
+      cliBackends: [],
+      legacyPluginIds: [],
+      kind: [],
+      skills: manifest.skills ?? ["./skills"],
+      hooks: [],
+      rootDir,
+      source: rootDir,
+      manifestPath,
+      configSchema: manifest.configSchema,
+    });
+  }
+  return { plugins, diagnostics: [] };
+}
+
+function createWorkspacePluginMetadataSnapshot(params: {
+  workspaceDir: string;
+  config?: OpenClawConfig;
+  manifestRegistry: PluginManifestRegistry;
+}): PluginMetadataSnapshot {
+  const policyHash = resolveInstalledPluginIndexPolicyHash(params.config);
+  return {
+    policyHash,
+    workspaceDir: params.workspaceDir,
+    index: {
+      version: 1,
+      hostContractVersion: "test",
+      compatRegistryVersion: "test",
+      migrationVersion: 1,
+      policyHash,
+      generatedAtMs: 1,
+      installRecords: {},
+      plugins: [],
+      diagnostics: [],
+    },
+    registryDiagnostics: [],
+    manifestRegistry: params.manifestRegistry,
+    plugins: params.manifestRegistry.plugins,
+    diagnostics: params.manifestRegistry.diagnostics,
+    byPluginId: new Map(params.manifestRegistry.plugins.map((plugin) => [plugin.id, plugin])),
+    normalizePluginId: (pluginId) => pluginId,
+    owners: {
+      channels: new Map(),
+      channelConfigs: new Map(),
+      providers: new Map(),
+      modelCatalogProviders: new Map(),
+      cliBackends: new Map(),
+      setupProviders: new Map(),
+      commandAliases: new Map(),
+      contracts: new Map(),
+    },
+    metrics: {
+      registrySnapshotMs: 0,
+      manifestRegistryMs: 0,
+      ownerMapsMs: 0,
+      totalMs: 0,
+      indexPluginCount: 0,
+      manifestPluginCount: params.manifestRegistry.plugins.length,
+    },
+  };
+}
+
+function setWorkspacePluginMetadataSnapshot(workspaceDir: string, config?: OpenClawConfig): void {
+  const manifestRegistry = createWorkspacePluginRegistry(workspaceDir);
+  setCurrentPluginMetadataSnapshot(
+    createWorkspacePluginMetadataSnapshot({
+      workspaceDir,
+      manifestRegistry,
+      ...(config === undefined ? {} : { config }),
+    }),
+    {
+      workspaceDir,
+      ...(config === undefined ? {} : { config }),
+    },
+  );
+}
+
 function collectMatching<T>(items: readonly T[], predicate: (item: T) => boolean): T[] {
   const matches: T[] = [];
   for (const item of items) {
@@ -60,6 +166,16 @@ function collectMatching<T>(items: readonly T[], predicate: (item: T) => boolean
     }
   }
   return matches;
+}
+
+async function expectMissingPath(pathToCheck: string) {
+  let thrown: unknown;
+  try {
+    await fs.lstat(pathToCheck);
+  } catch (error) {
+    thrown = error;
+  }
+  expect((thrown as NodeJS.ErrnoException | undefined)?.code).toBe("ENOENT");
 }
 
 async function createTempWorkspaceDir() {
@@ -80,10 +196,16 @@ function captureWarningLogger() {
   return warn;
 }
 
+function firstWarningLine(warn: ReturnType<typeof vi.fn>): string {
+  const [line] = warn.mock.calls[0] ?? [];
+  return String(line);
+}
+
 function loadTestWorkspaceSkillEntries(
   workspaceDir: string,
   opts?: Parameters<typeof loadWorkspaceSkillEntries>[1],
 ) {
+  setWorkspacePluginMetadataSnapshot(workspaceDir, opts?.config);
   return loadWorkspaceSkillEntries(workspaceDir, {
     managedSkillsDir: path.join(workspaceDir, ".managed"),
     bundledSkillsDir: "",
@@ -100,6 +222,7 @@ beforeAll(async () => {
 });
 
 afterEach(async () => {
+  clearCurrentPluginMetadataSnapshot();
   setLoggerOverride(null);
   loggingState.rawConsole = null;
   resetLogger();
@@ -228,9 +351,7 @@ describe("loadWorkspaceSkillEntries", () => {
     });
 
     expect(blockedEntries.map((entry) => entry.skill.name)).not.toContain("browser-automation");
-    await expect(
-      fs.lstat(path.join(workspaceDir, ".plugin-skills", "browser-automation")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expectMissingPath(path.join(workspaceDir, ".plugin-skills", "browser-automation"));
   });
 
   it("loads frontmatter edge cases in one workspace", async () => {
@@ -360,8 +481,7 @@ describe("loadWorkspaceSkillEntries", () => {
       expect(entries.map((entry) => entry.skill.name)).not.toContain("outside-skill");
       expect(entries.map((entry) => entry.skill.name)).not.toContain("outside-file-skill");
       expect(entries.map((entry) => entry.skill.name)).not.toContain("symlink-target");
-      const [line] = warn.mock.calls[0] ?? [];
-      const warningLine = String(line);
+      const warningLine = firstWarningLine(warn);
       expect(warningLine).toContain("Skipping escaped skill path outside its configured root:");
       expect(warningLine).toContain("reason=symlink-escape");
       expect(warningLine).toContain("source=openclaw-workspace");
@@ -383,9 +503,9 @@ describe("loadWorkspaceSkillEntries", () => {
         name: skillName,
         description: "Manager skill",
       });
-      const personalSkillsDir = path.join(fakeHome, ".agents", "skills");
-      await fs.mkdir(personalSkillsDir, { recursive: true });
-      const symlinkPath = path.join(personalSkillsDir, skillName);
+      const workspaceSkillsDir = path.join(workspaceDir, "skills");
+      await fs.mkdir(workspaceSkillsDir, { recursive: true });
+      const symlinkPath = path.join(workspaceSkillsDir, skillName);
       await fs.symlink(targetSkillDir, symlinkPath, "dir");
       const warn = captureWarningLogger();
 
@@ -409,6 +529,73 @@ describe("loadWorkspaceSkillEntries", () => {
   );
 
   it.runIf(process.platform !== "win32")(
+    "loads managed skill directory symlinks outside the managed root",
+    async () => {
+      const workspaceDir = await createTempWorkspaceDir();
+      const managedDir = path.join(workspaceDir, ".managed");
+      const skillName = `managed-${++workspaceCaseIndex}`;
+      const targetSkillDir = path.join(tempRoot, `${skillName}-target`, skillName);
+      await writeSkill({
+        dir: targetSkillDir,
+        name: skillName,
+        description: "Managed symlink target",
+      });
+      await fs.mkdir(managedDir, { recursive: true });
+      const symlinkPath = path.join(managedDir, skillName);
+      await fs.symlink(targetSkillDir, symlinkPath, "dir");
+      const warn = captureWarningLogger();
+
+      try {
+        const entries = loadTestWorkspaceSkillEntries(workspaceDir, {
+          managedSkillsDir: managedDir,
+        });
+
+        expect(entries.map((entry) => entry.skill.name)).toContain(skillName);
+        expect(warn).not.toHaveBeenCalled();
+      } finally {
+        await fs.unlink(symlinkPath).catch(() => undefined);
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "keeps SKILL.md containment for managed symlinked skill directories",
+    async () => {
+      const workspaceDir = await createTempWorkspaceDir();
+      const managedDir = path.join(workspaceDir, ".managed");
+      const skillName = `managed-file-link-${++workspaceCaseIndex}`;
+      const targetSkillDir = path.join(tempRoot, `${skillName}-target`, skillName);
+      const outsideDir = path.join(tempRoot, `${skillName}-outside`);
+      await fs.mkdir(targetSkillDir, { recursive: true });
+      await fs.mkdir(outsideDir, { recursive: true });
+      await writeSkill({
+        dir: outsideDir,
+        name: skillName,
+        description: "Escaped metadata",
+      });
+      await fs.symlink(path.join(outsideDir, "SKILL.md"), path.join(targetSkillDir, "SKILL.md"));
+      await fs.mkdir(managedDir, { recursive: true });
+      const symlinkPath = path.join(managedDir, skillName);
+      await fs.symlink(targetSkillDir, symlinkPath, "dir");
+      const warn = captureWarningLogger();
+
+      try {
+        const entries = loadTestWorkspaceSkillEntries(workspaceDir, {
+          managedSkillsDir: managedDir,
+        });
+
+        expect(entries.map((entry) => entry.skill.name)).not.toContain(skillName);
+        const warningLine = firstWarningLine(warn);
+        expect(warningLine).toContain("Skipping escaped skill path outside its configured root:");
+        expect(warningLine).toContain("source=openclaw-managed");
+        expect(warningLine).toContain("reason=symlink-escape");
+      } finally {
+        await fs.unlink(symlinkPath).catch(() => undefined);
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "calls out bundled symlink escapes with compact home-relative paths",
     async () => {
       const { workspaceDir, bundledDir, requestedPath } = await createEscapedBundledSkillFixture();
@@ -419,8 +606,7 @@ describe("loadWorkspaceSkillEntries", () => {
       });
 
       expect(entries.map((entry) => entry.skill.name)).not.toContain("outside-bundled-skill");
-      const [line] = warn.mock.calls[0] ?? [];
-      const warningLine = String(line);
+      const warningLine = firstWarningLine(warn);
       expect(warningLine).toContain("Skipping escaped skill path outside its configured root:");
       expect(warningLine).toContain("source=openclaw-bundled");
       expect(warningLine).toContain("reason=bundled-symlink-escape");
@@ -443,8 +629,7 @@ describe("loadWorkspaceSkillEntries", () => {
         bundledSkillsDir: bundledDir,
       });
 
-      const [line] = warn.mock.calls[0] ?? [];
-      const warningLine = String(line);
+      const warningLine = firstWarningLine(warn);
       expect(warningLine).toContain("root=~/workspace/.bundled");
       expect(warningLine).toContain("requested=~/workspace/.bundled/escaped-bundled-skill");
       expect(warningLine).toContain("resolved=~/outside/outside-bundled-skill");
@@ -467,10 +652,8 @@ describe("loadWorkspaceSkillEntries", () => {
         filePath: path.join(skillDir, "SKILL.md"),
       });
 
-      expect(frontmatter).toMatchObject({
-        name: "root-allowed",
-        description: "Readable from filesystem root",
-      });
+      expect(frontmatter?.name).toBe("root-allowed");
+      expect(frontmatter?.description).toBe("Readable from filesystem root");
     },
   );
 
@@ -504,7 +687,8 @@ describe("loadWorkspaceSkillEntries", () => {
       });
 
       const names = loadTestWorkspaceSkillEntries(workspaceDir).map((entry) => entry.skill.name);
-      expect(names).toEqual(expect.arrayContaining(["direct-skill", "grouped-skill"]));
+      expect(names).toContain("direct-skill");
+      expect(names).toContain("grouped-skill");
     });
 
     it("does not count invalid grouped candidates against the loaded skill cap", async () => {

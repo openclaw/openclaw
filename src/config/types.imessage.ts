@@ -8,7 +8,7 @@ import type {
 import type {
   ChannelHealthMonitorConfig,
   ChannelHeartbeatVisibilityConfig,
-} from "./types.channels.js";
+} from "./types.channel-health.js";
 import type { DmConfig } from "./types.messages.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
@@ -25,6 +25,8 @@ export type IMessageActionConfig = {
   leaveGroup?: boolean;
   sendAttachment?: boolean;
 };
+
+export type IMessageReactionNotificationMode = "off" | "own" | "all";
 
 export type IMessageAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
@@ -91,6 +93,13 @@ export type IMessageAccountConfig = {
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
   /** When private API is available, mark inbound chats read before dispatch (default: true). */
   sendReadReceipts?: boolean;
+  /**
+   * Controls inbound tapback notifications:
+   * - "off": ignore tapbacks
+   * - "own" (default): notify only when users react to bot-authored messages
+   * - "all": notify for all inbound tapbacks from authorized senders
+   */
+  reactionNotifications?: IMessageReactionNotificationMode;
   /**
    * Merge consecutive same-sender DM rows from `chat.db` into a single agent
    * turn, so Apple's split-send (`<command> <URL>` arriving as two separate
@@ -163,9 +172,3 @@ export type IMessageConfig = {
   /** Optional default account id when multiple accounts are configured. */
   defaultAccount?: string;
 } & IMessageAccountConfig;
-
-declare module "./types.channels.js" {
-  interface ChannelsConfig {
-    imessage?: IMessageConfig;
-  }
-}

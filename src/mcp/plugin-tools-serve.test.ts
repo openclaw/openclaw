@@ -58,6 +58,24 @@ afterEach(() => {
   resetGlobalHookRunner();
 });
 
+function requireFirstMockCall(calls: readonly unknown[][], label: string): unknown[] {
+  const call = calls.at(0);
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
+function requireToolPolicyParams(mock: ReturnType<typeof vi.fn>) {
+  const params = requireFirstMockCall(mock.mock.calls, "plugin tool policy")[0] as
+    | { toolAllowlist?: string[]; toolDenylist?: string[] }
+    | undefined;
+  if (!params) {
+    throw new Error("expected plugin tool policy params");
+  }
+  return params;
+}
+
 describe("plugin tools MCP server", () => {
   it("routes logs to stderr before resolving tools for stdio", async () => {
     const { servePluginToolsMcp } = await import("./plugin-tools-serve.js");
@@ -99,18 +117,12 @@ describe("plugin tools MCP server", () => {
 
     await servePluginToolsMcp();
 
-    expect(ensureStandalonePluginToolRegistryLoadedMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        toolAllowlist: expect.arrayContaining(["memory_search"]),
-        toolDenylist: ["memory_forget"],
-      }),
-    );
-    expect(resolvePluginToolsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        toolAllowlist: expect.arrayContaining(["memory_search"]),
-        toolDenylist: ["memory_forget"],
-      }),
-    );
+    const loadPolicy = requireToolPolicyParams(ensureStandalonePluginToolRegistryLoadedMock);
+    expect(loadPolicy.toolAllowlist).toContain("memory_search");
+    expect(loadPolicy.toolDenylist).toEqual(["memory_forget"]);
+    const resolvePolicy = requireToolPolicyParams(resolvePluginToolsMock);
+    expect(resolvePolicy.toolAllowlist).toContain("memory_search");
+    expect(resolvePolicy.toolDenylist).toEqual(["memory_forget"]);
   });
 
   it("lists registered plugin tools and serializes non-array tool content", async () => {
@@ -132,29 +144,28 @@ describe("plugin tools MCP server", () => {
 
     const handlers = createPluginToolsMcpHandlers([tool]);
     const listed = await handlers.listTools();
-    expect(listed.tools).toEqual([
-      expect.objectContaining({
-        name: "memory_recall",
-        description: "Recall stored memory",
-        inputSchema: expect.objectContaining({
-          type: "object",
-          required: ["query"],
-        }),
-      }),
-    ]);
+    expect(listed.tools).toHaveLength(1);
+    expect(listed.tools[0]?.name).toBe("memory_recall");
+    expect(listed.tools[0]?.description).toBe("Recall stored memory");
+    const inputSchema = listed.tools[0]?.inputSchema as
+      | { type?: unknown; required?: unknown }
+      | undefined;
+    expect(inputSchema?.type).toBe("object");
+    expect(inputSchema?.required).toEqual(["query"]);
 
     const result = await handlers.callTool({
       name: "memory_recall",
       arguments: { query: "remember this" },
     });
-    expect(execute).toHaveBeenCalledWith(
-      expect.stringMatching(/^mcp-\d+$/),
-      {
-        query: "remember this",
-      },
-      undefined,
-      undefined,
-    );
+    expect(execute).toHaveBeenCalledTimes(1);
+    const executeCall = requireFirstMockCall(execute.mock.calls, "plugin tool execute");
+    const requestId = executeCall[0];
+    expect(typeof requestId).toBe("string");
+    expect((requestId as string).startsWith("mcp-")).toBe(true);
+    expect(Number.isSafeInteger(Number((requestId as string).slice("mcp-".length)))).toBe(true);
+    expect(executeCall[1]).toEqual({ query: "remember this" });
+    expect(executeCall[2]).toBeUndefined();
+    expect(executeCall[3]).toBeUndefined();
     expect(result.content).toEqual([{ type: "text", text: "Stored." }]);
   });
 

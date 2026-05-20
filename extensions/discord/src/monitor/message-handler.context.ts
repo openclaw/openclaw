@@ -1,17 +1,19 @@
 import {
+  buildChannelInboundEventContext,
   formatInboundEnvelope,
   resolveEnvelopeFormatOptions,
+  toHistoryMediaEntries,
+  toInboundMediaFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/conversation-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
-import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-dispatch-runtime";
-import { buildPendingHistoryContextFromMap } from "openclaw/plugin-sdk/reply-history";
+import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import { buildAgentSessionKey, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
 import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveDiscordConversationIdentity } from "../conversation-identity.js";
 import { ChannelType } from "../internal/discord.js";
 import { normalizeDiscordAllowList, normalizeDiscordSlug } from "./allow-list.js";
@@ -22,17 +24,25 @@ import {
 } from "./inbound-context.js";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
 import {
-  buildDiscordMediaPayload,
+  resolveReferencedReplyMediaList,
   resolveDiscordMessageText,
   type DiscordMediaInfo,
 } from "./message-utils.js";
 import { buildDirectLabel, buildGuildLabel, resolveReplyContext } from "./reply-context.js";
 import { resolveDiscordAutoThreadReplyPlan, resolveDiscordThreadStarter } from "./threading.js";
+import {
+  DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
+  DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,
+} from "./timeouts.js";
 
 function normalizeDiscordDmOwnerEntry(entry: string): string | undefined {
   const normalized = normalizeDiscordAllowList([entry], ["discord:", "user:", "pk:"]);
   const candidate = normalized?.ids.values().next().value;
   return typeof candidate === "string" && /^\d+$/.test(candidate) ? candidate : undefined;
+}
+
+function isContextAborted(abortSignal?: AbortSignal): boolean {
+  return Boolean(abortSignal?.aborted);
 }
 
 export async function buildDiscordMessageProcessContext(params: {
@@ -46,6 +56,9 @@ export async function buildDiscordMessageProcessContext(params: {
     discordConfig,
     accountId,
     runtime,
+    mediaMaxBytes,
+    discordRestFetch,
+    abortSignal,
     guildHistories,
     historyLimit,
     replyToMode,
@@ -110,7 +123,6 @@ export async function buildDiscordMessageProcessContext(params: {
     allowNameMatching: isDangerousNameMatchingEnabled(discordConfig),
     isGuild: isGuildMessage,
     channelTopic: channelInfo?.topic,
-    messageBody: text,
   });
   const pinnedMainDmOwner = isDirectMessage
     ? resolvePinnedMainDmOwnerFromAllowlist({
@@ -139,6 +151,8 @@ export async function buildDiscordMessageProcessContext(params: {
     storePath,
     sessionKey: route.sessionKey,
   });
+  const channelHistory = createChannelHistoryWindow({ historyMap: guildHistories });
+  const isRoomEvent = ctx.inboundEventKind === "room_event";
   let combinedBody = formatInboundEnvelope({
     channel: "Discord",
     from: fromLabel,
@@ -150,10 +164,10 @@ export async function buildDiscordMessageProcessContext(params: {
     envelope: envelopeOptions,
   });
   const shouldIncludeChannelHistory =
-    !isDirectMessage && !(isGuildMessage && channelConfig?.autoThread && !threadChannel);
+    !isDirectMessage &&
+    (isRoomEvent || !(isGuildMessage && channelConfig?.autoThread && !threadChannel));
   if (shouldIncludeChannelHistory) {
-    combinedBody = buildPendingHistoryContextFromMap({
-      historyMap: guildHistories,
+    combinedBody = channelHistory.buildPendingContext({
       historyKey: messageChannelId,
       limit: historyLimit,
       currentMessage: combinedBody,
@@ -185,6 +199,19 @@ export async function buildDiscordMessageProcessContext(params: {
   const filteredReplyContext = replyContext && replyVisibility?.include ? replyContext : null;
   if (replyContext && !filteredReplyContext && isGuildMessage) {
     logVerbose(`discord: drop reply context (mode=${contextVisibilityMode})`);
+  }
+  const mediaListForContext = [...mediaList];
+  if (filteredReplyContext) {
+    const referencedReplyMediaList = await resolveReferencedReplyMediaList(message, mediaMaxBytes, {
+      fetchImpl: discordRestFetch,
+      ssrfPolicy: cfg.browser?.ssrfPolicy,
+      readIdleTimeoutMs: DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
+      totalTimeoutMs: DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,
+      abortSignal,
+    });
+    if (!isContextAborted(abortSignal)) {
+      mediaListForContext.push(...referencedReplyMediaList);
+    }
   }
   if (forumContextLine) {
     combinedBody = `${combinedBody}\n${forumContextLine}`;
@@ -238,11 +265,10 @@ export async function buildDiscordMessageProcessContext(params: {
       parentSessionKey = undefined;
     }
   }
-  const mediaPayload = buildDiscordMediaPayload(mediaList);
   const preflightAudioIndex =
     preflightAudioTranscript === undefined
       ? -1
-      : mediaList.findIndex((media) => media.contentType?.startsWith("audio/"));
+      : mediaListForContext.findIndex((media) => media.contentType?.startsWith("audio/"));
   const threadKeys = resolveThreadSessionKeys({
     baseSessionKey,
     threadId: threadChannel ? messageChannelId : undefined,
@@ -254,7 +280,7 @@ export async function buildDiscordMessageProcessContext(params: {
     message,
     messageChannelId,
     isGuildMessage,
-    channelConfig,
+    channelConfig: isRoomEvent ? null : channelConfig,
     threadChannel,
     channelType: channelInfo?.type,
     channelName: channelInfo?.name,
@@ -287,14 +313,12 @@ export async function buildDiscordMessageProcessContext(params: {
     return null;
   }
   const lastRouteTo = dmConversationTarget ?? effectiveTo;
-  const inboundHistory =
-    shouldIncludeChannelHistory && historyLimit > 0
-      ? (guildHistories.get(messageChannelId) ?? []).map((entry) => ({
-          sender: entry.sender,
-          body: entry.body,
-          timestamp: entry.timestamp,
-        }))
-      : undefined;
+  const inboundHistory = shouldIncludeChannelHistory
+    ? channelHistory.buildInboundHistory({
+        historyKey: messageChannelId,
+        limit: historyLimit,
+      })
+    : undefined;
   const originatingTo = autoThreadContext?.OriginatingTo ?? dmConversationTarget ?? replyTarget;
   const effectiveSessionKey =
     boundSessionKey ?? autoThreadContext?.SessionKey ?? threadKeys.sessionKey;
@@ -306,55 +330,117 @@ export async function buildDiscordMessageProcessContext(params: {
           sessionKey: effectiveSessionKey,
         });
 
-  const ctxPayload = finalizeInboundContext({
-    Body: combinedBody,
-    BodyForAgent: preflightAudioTranscript ?? baseText ?? text,
-    InboundHistory: inboundHistory,
-    RawBody: preflightAudioTranscript ?? baseText,
-    CommandBody: preflightAudioTranscript ?? baseText,
-    ...(preflightAudioTranscript !== undefined ? { Transcript: preflightAudioTranscript } : {}),
-    From: effectiveFrom,
-    To: effectiveTo,
-    SessionKey: effectiveSessionKey,
-    AccountId: route.accountId,
-    ChatType: isDirectMessage ? "direct" : "channel",
-    ConversationLabel: fromLabel,
-    SenderName: senderName,
-    SenderId: sender.id,
-    SenderUsername: senderUsername,
-    SenderTag: sender.tag,
-    GroupSubject: groupSubject,
-    GroupChannel: groupChannel,
-    MemberRoleIds: memberRoleIds,
-    UntrustedContext: untrustedContext,
-    GroupSystemPrompt: isGuildMessage ? groupSystemPrompt : undefined,
-    GroupSpace: isGuildMessage ? (guildInfo?.id ?? guildSlug) || undefined : undefined,
-    OwnerAllowFrom: ownerAllowFrom,
-    Provider: "discord" as const,
-    Surface: "discord" as const,
-    WasMentioned: ctx.effectiveWasMentioned,
-    MessageSid: canonicalMessageId ?? message.id,
-    ...(canonicalMessageId && canonicalMessageId !== message.id
-      ? { MessageSidFull: message.id }
-      : {}),
-    ReplyToId: filteredReplyContext?.id,
-    ReplyToBody: filteredReplyContext?.body,
-    ReplyToSender: filteredReplyContext?.sender,
-    ParentSessionKey: autoThreadContext?.ParentSessionKey ?? threadKeys.parentSessionKey,
-    ModelParentSessionKey:
-      autoThreadContext?.ModelParentSessionKey ?? modelParentSessionKey ?? undefined,
-    MessageThreadId: threadChannel?.id ?? autoThreadContext?.createdThreadId ?? undefined,
-    ThreadStarterBody: !effectivePreviousTimestamp ? threadStarterBody : undefined,
-    ThreadLabel: threadLabel,
-    Timestamp: resolveTimestampMs(message.timestamp),
-    ...mediaPayload,
-    ...(preflightAudioIndex >= 0 ? { MediaTranscribedIndexes: [preflightAudioIndex] } : {}),
-    CommandAuthorized: commandAuthorized,
-    CommandSource: "text" as const,
-    OriginatingChannel: "discord" as const,
-    OriginatingTo: originatingTo,
+  const ctxPayload = buildChannelInboundEventContext({
+    channel: "discord",
+    provider: "discord",
+    surface: "discord",
+    accountId: route.accountId,
+    messageId: canonicalMessageId ?? message.id,
+    messageIdFull: canonicalMessageId && canonicalMessageId !== message.id ? message.id : undefined,
+    timestamp: resolveTimestampMs(message.timestamp),
+    from: effectiveFrom,
+    sender: {
+      id: sender.id,
+      name: senderName,
+      username: senderUsername,
+      tag: sender.tag,
+      roles: memberRoleIds,
+      displayLabel: senderLabel,
+    },
+    conversation: {
+      kind: isDirectMessage ? "direct" : "channel",
+      id: messageChannelId,
+      label: fromLabel,
+      spaceId: isGuildMessage ? (guildInfo?.id ?? guildSlug) || undefined : undefined,
+      threadId: threadChannel?.id ?? autoThreadContext?.createdThreadId ?? undefined,
+      routePeer: {
+        kind: isDirectMessage ? "direct" : "channel",
+        id: isDirectMessage ? author.id : messageChannelId,
+      },
+    },
+    route: {
+      agentId: route.agentId,
+      accountId: route.accountId,
+      routeSessionKey: route.sessionKey,
+      dispatchSessionKey: effectiveSessionKey,
+      parentSessionKey: autoThreadContext?.ParentSessionKey ?? threadKeys.parentSessionKey,
+      modelParentSessionKey:
+        autoThreadContext?.ModelParentSessionKey ?? modelParentSessionKey ?? undefined,
+    },
+    reply: {
+      to: effectiveTo,
+      originatingTo,
+    },
+    message: {
+      inboundEventKind: ctx.inboundEventKind,
+      body: combinedBody,
+      rawBody: preflightAudioTranscript ?? baseText,
+      bodyForAgent: preflightAudioTranscript ?? baseText ?? text,
+      commandBody: preflightAudioTranscript ?? baseText,
+      envelopeFrom: fromLabel,
+      inboundHistory,
+    },
+    access: {
+      mentions: {
+        canDetectMention: ctx.canDetectMention,
+        wasMentioned: ctx.effectiveWasMentioned,
+        hasAnyMention: ctx.hasAnyMention,
+        requireMention: ctx.shouldRequireMention,
+        effectiveWasMentioned: ctx.effectiveWasMentioned,
+      },
+      commands: {
+        authorized: commandAuthorized,
+        allowTextCommands: ctx.allowTextCommands,
+        useAccessGroups: false,
+        authorizers: [],
+      },
+    },
+    commandTurn: {
+      kind: "text-slash" as const,
+      source: "text" as const,
+      authorized: commandAuthorized,
+      body: preflightAudioTranscript ?? baseText,
+    },
+    media: toInboundMediaFacts(mediaListForContext, {
+      transcribed: (_media, index) => index === preflightAudioIndex,
+    }),
+    supplemental: {
+      quote: filteredReplyContext
+        ? {
+            id: filteredReplyContext.id,
+            body: filteredReplyContext.body,
+            sender: filteredReplyContext.sender,
+          }
+        : undefined,
+      thread: {
+        starterBody: !effectivePreviousTimestamp ? threadStarterBody : undefined,
+        label: threadLabel,
+      },
+      groupSystemPrompt: isGuildMessage ? groupSystemPrompt : undefined,
+    },
+    extra: {
+      ...(preflightAudioTranscript !== undefined ? { Transcript: preflightAudioTranscript } : {}),
+      GroupSubject: groupSubject,
+      GroupChannel: groupChannel,
+      UntrustedStructuredContext: untrustedContext,
+      OwnerAllowFrom: ownerAllowFrom,
+    },
   });
   const persistedSessionKey = ctxPayload.SessionKey ?? route.sessionKey;
+  if (isRoomEvent && shouldIncludeChannelHistory) {
+    await channelHistory.recordWithMedia({
+      historyKey: messageChannelId,
+      limit: historyLimit,
+      entry: {
+        sender: senderName,
+        body: text,
+        timestamp: resolveTimestampMs(message.timestamp),
+        messageId: message.id,
+      },
+      media: toHistoryMediaEntries(mediaList, { messageId: message.id }),
+      messageId: message.id,
+    });
+  }
 
   if (shouldLogVerbose()) {
     const preview = truncateUtf16Safe(combinedBody, 200).replace(/\n/g, "\\n");

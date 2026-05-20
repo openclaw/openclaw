@@ -1,7 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createAgentsListTool } from "./agents-list-tool.js";
 
 const loadConfigMock = vi.fn<() => OpenClawConfig>();
+
+type AgentListDetails = {
+  requester?: string;
+  allowAny?: boolean;
+  agents?: Array<{
+    id?: string;
+    name?: string;
+    configured?: boolean;
+    model?: string;
+    agentRuntime?: { id?: string; source?: string };
+  }>;
+};
 
 vi.mock("../../config/config.js", async () => {
   const actual =
@@ -41,14 +54,15 @@ describe("agents_list tool", () => {
       },
     } satisfies OpenClawConfig);
 
-    const { createAgentsListTool } = await import("./agents-list-tool.js");
     const result = await createAgentsListTool({ agentSessionKey: "agent:main:main" }).execute(
       "call",
       {},
     );
+    const details = result.details as AgentListDetails;
 
-    expect(result.details).toMatchObject({
+    expect(details).toStrictEqual({
       requester: "main",
+      allowAny: false,
       agents: [
         {
           id: "codex",
@@ -68,19 +82,22 @@ describe("agents_list tool", () => {
       },
     } satisfies OpenClawConfig);
 
-    const { createAgentsListTool } = await import("./agents-list-tool.js");
     const result = await createAgentsListTool({ agentSessionKey: "agent:main:main" }).execute(
       "call",
       {},
     );
+    const details = result.details as AgentListDetails;
 
-    expect(result.details).toMatchObject({
+    expect(details).toStrictEqual({
       requester: "main",
       allowAny: false,
       agents: [
         {
           id: "main",
+          name: undefined,
           configured: true,
+          model: undefined,
+          agentRuntime: { id: "codex", source: "implicit" },
         },
       ],
     });
@@ -97,16 +114,21 @@ describe("agents_list tool", () => {
       },
     } satisfies OpenClawConfig);
 
-    const { createAgentsListTool } = await import("./agents-list-tool.js");
     const result = await createAgentsListTool({ agentSessionKey: "agent:main:main" }).execute(
       "call",
       {},
     );
+    const details = result.details as AgentListDetails;
 
-    expect(result.details).toMatchObject({
+    expect(details).toStrictEqual({
+      requester: "main",
+      allowAny: false,
       agents: [
         {
           id: "main",
+          name: undefined,
+          configured: true,
+          model: "openai/gpt-5.5",
           agentRuntime: { id: "codex", source: "implicit" },
         },
       ],
@@ -127,16 +149,21 @@ describe("agents_list tool", () => {
       },
     } satisfies OpenClawConfig);
 
-    const { createAgentsListTool } = await import("./agents-list-tool.js");
     const result = await createAgentsListTool({ agentSessionKey: "agent:main:main" }).execute(
       "call",
       {},
     );
+    const details = result.details as AgentListDetails;
 
-    expect(result.details).toMatchObject({
+    expect(details).toStrictEqual({
+      requester: "main",
+      allowAny: false,
       agents: [
         {
           id: "strict",
+          name: undefined,
+          configured: true,
+          model: undefined,
           agentRuntime: { id: "codex", source: "implicit" },
         },
       ],

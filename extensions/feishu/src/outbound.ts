@@ -18,7 +18,7 @@ import {
   sendTextMediaPayload,
 } from "openclaw/plugin-sdk/reply-payload";
 import { statRegularFileSync } from "openclaw/plugin-sdk/security-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
 import { createFeishuClient } from "./client.js";
@@ -514,6 +514,19 @@ export const feishuOutbound: ChannelOutboundAdapter = {
     selects: false,
     context: true,
     divider: true,
+    limits: {
+      actions: {
+        maxActions: 20,
+        maxActionsPerRow: 5,
+        maxLabelLength: 40,
+        maxValueBytes: 1024,
+      },
+      text: {
+        maxLength: 4000,
+        encoding: "characters",
+        markdownDialect: "markdown",
+      },
+    },
   },
   renderPresentation: renderFeishuPresentationPayload,
   sendPayload: async (ctx) => {
