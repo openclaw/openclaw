@@ -254,6 +254,40 @@ describe("models-config runtime source snapshot", () => {
     expect(providers.moonshot?.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
   });
 
+  it("does not write plaintext source provider api keys to models.json", async () => {
+    const sourceConfig: OpenClawConfig = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: "sk-source-plaintext", // pragma: allowlist secret
+            api: "openai-completions" as const,
+            models: [],
+          },
+        },
+      },
+    };
+    const runtimeConfig: OpenClawConfig = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: "sk-runtime-resolved", // pragma: allowlist secret
+            api: "openai-completions" as const,
+            models: [],
+          },
+        },
+      },
+    };
+
+    const providers = await planGeneratedProviders({
+      config: runtimeConfig,
+      sourceConfigForSecrets: sourceConfig,
+    });
+
+    expect(providers.openai?.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
+  });
+
   it("projects cloned runtime configs onto source snapshot when preserving provider auth", async () => {
     const agentDir = await fixtureSuite.createCaseDir("agent");
     await withTempEnv(MODELS_CONFIG_IMPLICIT_ENV_VARS, async () => {

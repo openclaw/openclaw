@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { isRecord } from "../utils.js";
 import {
+  isNonSecretApiKeyMarker,
   resolveNonEnvSecretRefApiKeyMarker,
   resolveNonEnvSecretRefHeaderValueMarker,
   resolveEnvSecretRefHeaderValueMarker,
@@ -36,7 +37,12 @@ function resolveSourceManagedApiKeyMarker(params: {
     defaults: params.sourceSecretDefaults,
   }).ref;
   if (!sourceApiKeyRef || !sourceApiKeyRef.id.trim()) {
-    return undefined;
+    const sourceApiKey =
+      typeof params.sourceProvider?.apiKey === "string" ? params.sourceProvider.apiKey.trim() : "";
+    if (!sourceApiKey || isNonSecretApiKeyMarker(sourceApiKey)) {
+      return undefined;
+    }
+    return resolveNonEnvSecretRefApiKeyMarker("file");
   }
   return sourceApiKeyRef.source === "env"
     ? sourceApiKeyRef.id.trim()
