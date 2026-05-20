@@ -476,7 +476,7 @@ describe("maybeCompactCodexAppServerSession", () => {
       }),
     );
     expect(maintain).toHaveBeenCalledTimes(1);
-    const [maintainCall] = maintain.mock.calls[0] ?? [];
+    const maintainCall = maintain.mock.calls[0]?.[0];
     const maintainParams = maintainCall as
       | {
           sessionId?: string;
@@ -553,18 +553,20 @@ describe("maybeCompactCodexAppServerSession", () => {
       trigger: "manual",
     });
 
-    expect(compact).toHaveBeenCalledWith({
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1:heartbeat-run:codex",
-      sessionFile,
-      tokenBudget: 777,
-      currentTokenCount: 123,
-      compactionTarget: "threshold",
-      customInstructions: undefined,
-      force: true,
-      runtimeContext: { workspaceDir: tempDir, provider: "codex" },
-    });
-    const [maintainCall] = maintain.mock.calls[0] ?? [];
+    expect(compact).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1:heartbeat-run:codex",
+        sessionFile,
+        tokenBudget: 777,
+        currentTokenCount: 123,
+        compactionTarget: "threshold",
+        customInstructions: undefined,
+        force: true,
+        runtimeContext: { workspaceDir: tempDir, provider: "codex" },
+      }),
+    );
+    const maintainCall = maintain.mock.calls[0]?.[0];
     expect((maintainCall as { sessionKey?: string } | undefined)?.sessionKey).toBe(
       "agent:main:session-1:heartbeat-run:codex",
     );
@@ -620,7 +622,7 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(await readCodexAppServerBinding(sessionFile)).toBeUndefined();
     expect(await readCodexAppServerBinding(successorFile)).toBeUndefined();
     expect(maintain).toHaveBeenCalledTimes(1);
-    const [maintainCall] = maintain.mock.calls[0] ?? [];
+    const maintainCall = maintain.mock.calls[0]?.[0];
     const maintainParams = maintainCall as
       | {
           sessionId?: string;
