@@ -156,12 +156,6 @@ export function buildRealtimeVoiceAgentConsultChatMessage(args: unknown): string
   const parsed = parseRealtimeVoiceAgentConsultArgs(args);
   return [
     parsed.question,
-    [
-      "Realtime voice consult instructions:",
-      "- Use tools for facts, files, memory, todo lists, current state, devices, and user-specific context.",
-      "- For todo/list/file ranking questions, inspect the exact source entries. If a command or read result is summarized and hides the requested entries, rerun a narrower command before answering.",
-      "- Return only the concise speakable answer.",
-    ].join("\n"),
     parsed.context ? `Context:\n${parsed.context}` : undefined,
     parsed.responseStyle ? `Spoken style:\n${parsed.responseStyle}` : undefined,
   ]
@@ -190,7 +184,6 @@ export function buildRealtimeVoiceAgentConsultPrompt(params: {
   return [
     `Live voice request from the ${questionSourceLabel} during ${params.surface}.`,
     "Act as the configured OpenClaw agent on behalf of this user. Use available tools when the request asks you to do work.",
-    "For todo/list/file ranking questions, inspect the exact source entries. If tool output is summarized and hides the requested entries, rerun a narrower command before answering.",
     "When finished, return only the concise result the realtime voice agent should speak back.",
     "Do not include markdown, tool logs, or private reasoning. Include citations only when the spoken answer needs them.",
     parsed.responseStyle ? `Spoken style: ${parsed.responseStyle}` : undefined,

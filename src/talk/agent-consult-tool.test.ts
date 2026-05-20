@@ -19,19 +19,7 @@ describe("realtime voice agent consult tool", () => {
         context: "  PR #123 ",
         responseStyle: " concise ",
       }),
-    ).toBe(
-      [
-        "What changed?",
-        [
-          "Realtime voice consult instructions:",
-          "- Use tools for facts, files, memory, todo lists, current state, devices, and user-specific context.",
-          "- For todo/list/file ranking questions, inspect the exact source entries. If a command or read result is summarized and hides the requested entries, rerun a narrower command before answering.",
-          "- Return only the concise speakable answer.",
-        ].join("\n"),
-        "Context:\nPR #123",
-        "Spoken style:\nconcise",
-      ].join("\n\n"),
-    );
+    ).toBe("What changed?\n\nContext:\nPR #123\n\nSpoken style:\nconcise");
   });
 
   it("requires a non-empty question", () => {
@@ -72,7 +60,6 @@ describe("realtime voice agent consult tool", () => {
       [
         "Live voice request from the participant during a private Google Meet.",
         "Act as the configured OpenClaw agent on behalf of this user. Use available tools when the request asks you to do work.",
-        "For todo/list/file ranking questions, inspect the exact source entries. If tool output is summarized and hides the requested entries, rerun a narrower command before answering.",
         "When finished, return only the concise result the realtime voice agent should speak back.",
         "Do not include markdown, tool logs, or private reasoning. Include citations only when the spoken answer needs them.",
         "Recent voice transcript for context:\nParticipant: Can you check the repo?\nAgent: I'll verify.",
