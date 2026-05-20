@@ -21,8 +21,10 @@ export function registerMaintenanceCommands(program: Command) {
     .option("--non-interactive", "Run without prompts (safe migrations only)", false)
     .option("--generate-gateway-token", "Generate and configure a gateway token", false)
     .option("--deep", "Scan system services for extra gateway installs", false)
+    .option("--dry-run", "Preview doctor --fix repair actions without mutating state", false)
+    .option("--diff", "With --dry-run: include concrete repair diffs when available", false)
     .option("--lint", "Run read-only health checks and report findings", false)
-    .option("--json", "With --lint: emit JSON findings instead of human output", false)
+    .option("--json", "With --lint or preview: emit JSON output", false)
     .option(
       "--severity-min <level>",
       "With --lint: drop findings below this severity (info|warning|error)",
@@ -40,6 +42,7 @@ export function registerMaintenanceCommands(program: Command) {
       [],
     )
     .action(async (opts) => {
+      const dryRun = Boolean(opts.dryRun) || Boolean(opts.diff);
       if (opts.lint === true) {
         await runCommandWithRuntime(
           defaultRuntime,
@@ -67,16 +70,24 @@ export function registerMaintenanceCommands(program: Command) {
         defaultRuntime.exit(2);
         return;
       }
+      if (opts.json === true && !dryRun) {
+        defaultRuntime.error("doctor --json requires --lint or --dry-run/--diff.");
+        defaultRuntime.exit(2);
+        return;
+      }
       await runCommandWithRuntime(defaultRuntime, async () => {
         const { doctorCommand } = await import("../../commands/doctor.js");
         await doctorCommand(defaultRuntime, {
           workspaceSuggestions: opts.workspaceSuggestions,
           yes: Boolean(opts.yes),
-          repair: Boolean(opts.repair) || Boolean(opts.fix),
+          repair: Boolean(opts.repair) || Boolean(opts.fix) || dryRun,
           force: Boolean(opts.force),
           nonInteractive: Boolean(opts.nonInteractive),
           generateGatewayToken: Boolean(opts.generateGatewayToken),
           deep: Boolean(opts.deep),
+          dryRun,
+          diff: Boolean(opts.diff),
+          json: Boolean(opts.json),
         });
         defaultRuntime.exit(0);
       });
@@ -160,13 +171,11 @@ export function registerMaintenanceCommands(program: Command) {
 }
 
 function hasLintOnlyDoctorOptions(opts: {
-  readonly json?: boolean;
   readonly severityMin?: unknown;
   readonly skip?: unknown;
   readonly only?: unknown;
 }): boolean {
   return (
-    opts.json === true ||
     typeof opts.severityMin === "string" ||
     (Array.isArray(opts.skip) && opts.skip.length > 0) ||
     (Array.isArray(opts.only) && opts.only.length > 0)

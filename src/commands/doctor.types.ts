@@ -8,4 +8,5 @@ export type DoctorOptions = {
   generateGatewayToken?: boolean;
   dryRun?: boolean;
   diff?: boolean;
+  json?: boolean;
 };

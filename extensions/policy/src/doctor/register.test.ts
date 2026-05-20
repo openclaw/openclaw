@@ -526,6 +526,42 @@ describe("registerPolicyDoctorChecks", () => {
     expect(result.config.channels?.telegram).toEqual({ enabled: false });
   });
 
+  it("previews denied channel repairs without mutating config during dry-run", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy({ workspaceRepairs: true }),
+      channels: { telegram: { enabled: true } },
+    } as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify(
+        {
+          channels: {
+            denyRules: [{ id: "no-telegram", when: { provider: "telegram" } }],
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const result = await runDeniedChannelRepair({ ...repairCtx(configPath, cfg), dryRun: true });
+
+    expect(result.config.channels?.telegram).toEqual({ enabled: true });
+    expect(result.changes).toEqual([
+      "Would disable channels.telegram.enabled for policy conformance.",
+    ]);
+    expect(result.effects).toEqual([
+      expect.objectContaining({
+        kind: "config",
+        action: "would-disable-policy-denied-channel",
+        target: "channels.telegram.enabled",
+      }),
+    ]);
+  });
+
   it("does not repair denied channels without workspace repair opt-in", async () => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {

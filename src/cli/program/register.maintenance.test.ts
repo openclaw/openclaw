@@ -101,6 +101,74 @@ describe("registerMaintenanceCommands doctor action", () => {
     expect(options.repair).toBe(true);
   });
 
+  it("passes doctor dry-run and diff as repair preview options", async () => {
+    doctorCommand.mockResolvedValue(undefined);
+
+    await runMaintenanceCli(["doctor", "--dry-run", "--diff"]);
+
+    expect(doctorCommand).toHaveBeenCalledTimes(1);
+    const [, options] = commandCall(doctorCommand);
+    expect(options.repair).toBe(true);
+    expect(options.dryRun).toBe(true);
+    expect(options.diff).toBe(true);
+  });
+
+  it("treats doctor --dry-run as a repair preview", async () => {
+    doctorCommand.mockResolvedValue(undefined);
+
+    await runMaintenanceCli(["doctor", "--dry-run"]);
+
+    const [, options] = commandCall(doctorCommand);
+    expect(options.repair).toBe(true);
+    expect(options.dryRun).toBe(true);
+    expect(options.diff).toBe(false);
+  });
+
+  it("treats doctor --diff as a dry-run preview", async () => {
+    doctorCommand.mockResolvedValue(undefined);
+
+    await runMaintenanceCli(["doctor", "--diff"]);
+
+    const [, options] = commandCall(doctorCommand);
+    expect(options.repair).toBe(true);
+    expect(options.dryRun).toBe(true);
+    expect(options.diff).toBe(true);
+  });
+
+  it("preserves explicit repair flags alongside doctor preview flags", async () => {
+    doctorCommand.mockResolvedValue(undefined);
+
+    await runMaintenanceCli(["doctor", "--fix", "--dry-run"]);
+
+    const [, options] = commandCall(doctorCommand);
+    expect(options.repair).toBe(true);
+    expect(options.dryRun).toBe(true);
+    expect(options.diff).toBe(false);
+  });
+
+  it("passes JSON through for doctor dry-run previews", async () => {
+    doctorCommand.mockResolvedValue(undefined);
+
+    await runMaintenanceCli(["doctor", "--dry-run", "--json"]);
+
+    const [, options] = commandCall(doctorCommand);
+    expect(options.repair).toBe(true);
+    expect(options.dryRun).toBe(true);
+    expect(options.diff).toBe(false);
+    expect(options.json).toBe(true);
+  });
+
+  it("rejects doctor JSON outside lint or preview mode", async () => {
+    await runMaintenanceCli(["doctor", "--json"]);
+
+    expect(doctorCommand).not.toHaveBeenCalled();
+    expect(runDoctorLintCli).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      "doctor --json requires --lint or --dry-run/--diff.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(2);
+  });
+
   it("runs doctor lint mode without invoking repair doctor", async () => {
     runDoctorLintCli.mockResolvedValue(1);
 

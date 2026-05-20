@@ -196,8 +196,15 @@ const policyChannelsDeniedProviderCheck: HealthCheck = {
       return {
         findings,
         status: "repairable",
-        changes,
-        effects,
+        changes: next.changed.map(
+          (id) => `Would disable channels.${id}.enabled for policy conformance.`,
+        ),
+        effects: next.changed.map((id) => ({
+          kind: "config" as const,
+          action: "would-disable-policy-denied-channel",
+          target: `channels.${id}.enabled`,
+          dryRunSafe: true,
+        })),
       };
     }
     return {
