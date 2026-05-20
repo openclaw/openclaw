@@ -7,11 +7,13 @@ import {
   type OpenClawConfig,
 } from "../config/config.js";
 import { createConfigRuntimeEnv } from "../config/env-vars.js";
+import { coerceSecretRef } from "../config/types.secrets.js";
 import { privateFileStore } from "../infra/private-file-store.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { isRecord } from "../utils.js";
+import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentDir,
@@ -121,7 +123,13 @@ function resolvePlaintextProviderApiKey(provider: unknown): string | undefined {
 
 function hasConfiguredProviderApiKey(cfg: OpenClawConfig, providerKey: string): boolean {
   const provider = findNormalizedProviderValue(cfg.models?.providers, providerKey);
-  return isRecord(provider) && provider.apiKey !== undefined;
+  if (!isRecord(provider)) {
+    return false;
+  }
+  return (
+    normalizeOptionalSecretInput(provider.apiKey) !== undefined ||
+    coerceSecretRef(provider.apiKey) !== null
+  );
 }
 
 function resolveMigratedModelsJsonProfileId(providerKey: string): string {
