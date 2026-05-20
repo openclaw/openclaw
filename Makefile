@@ -32,7 +32,9 @@ clean: ## Remove dist, dist-runtime, and node_modules
 clean-dist: ## Remove build output only (keep node_modules)
 	rm -rf dist dist-runtime
 
-rebuild: clean-dist build ## Clean build output then rebuild everything
+rebuild: ## Clean build output then rebuild everything
+	$(MAKE) clean-dist
+	$(MAKE) build
 
 # ── Quality gates ─────────────────────────────────────────
 # See AGENTS.md "Build, Test, and Development Commands" for
@@ -75,8 +77,8 @@ test-channels: deps ## Run channel tests
 
 # ── Development ───────────────────────────────────────────
 
-dev: deps ## Run gateway in foreground (dev mode)
-	pnpm dev
+dev: deps ## Run gateway watch in foreground (dev mode)
+	pnpm gateway:watch:raw
 
 version: ## Print current version
 	@node -e "console.log(require('./package.json').version)" 2>/dev/null || \
@@ -84,4 +86,7 @@ version: ## Print current version
 
 # ── Compound targets ──────────────────────────────────────
 
-landing-gate: check test build ## Full landing gate (check + test + build)
+landing-gate: ## Full landing gate (check + test + build)
+	$(MAKE) check
+	$(MAKE) test
+	$(MAKE) build
