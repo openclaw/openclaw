@@ -409,6 +409,8 @@ function formatThemeModeLabel(mode: ThemeMode): string {
     case "system":
       return uiText("System", "Theo hệ thống");
   }
+  const exhaustiveMode: never = mode;
+  return exhaustiveMode;
 }
 
 function formatToolProfileLabel(profile: string): string {
