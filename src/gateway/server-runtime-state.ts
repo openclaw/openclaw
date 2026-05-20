@@ -2,6 +2,7 @@ import type { IncomingMessage, Server as HttpServer, ServerResponse } from "node
 import type { Duplex } from "node:stream";
 import { WebSocketServer } from "ws";
 import type { CliDeps } from "../cli/deps.types.js";
+import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import {
@@ -86,6 +87,7 @@ export async function createGatewayRuntimeState(params: {
   pluginRegistry: PluginRegistry;
   getPluginRouteRegistry?: () => PluginRegistry;
   getGatewayRequestContext?: () => GatewayRequestContext | undefined;
+  getHeartbeatRunner?: () => HeartbeatRunner | undefined;
   pinChannelRegistry?: boolean;
   deps: CliDeps;
   log: { info: (msg: string) => void; warn: (msg: string) => void };
@@ -250,6 +252,7 @@ export async function createGatewayRuntimeState(params: {
         getResolvedAuth: params.getResolvedAuth,
         rateLimiter: params.rateLimiter,
         getReadiness: params.getReadiness,
+        getHeartbeatRunner: params.getHeartbeatRunner,
         tlsOptions: params.gatewayTls?.enabled ? params.gatewayTls.tlsOptions : undefined,
       });
       // Attach upgrade handler BEFORE listening to prevent race condition

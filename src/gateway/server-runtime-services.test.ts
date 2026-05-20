@@ -4,6 +4,7 @@ const hoisted = vi.hoisted(() => {
   const heartbeatRunner = {
     stop: vi.fn(),
     updateConfig: vi.fn(),
+    getAgentSnapshots: vi.fn(() => []),
   };
   const stopModelPricingRefresh = vi.fn();
   return {

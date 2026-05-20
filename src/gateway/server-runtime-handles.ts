@@ -45,6 +45,7 @@ export function createGatewayServerMutableState(): GatewayServerMutableState {
     heartbeatRunner: {
       stop: () => {},
       updateConfig: (_cfg: OpenClawConfig) => {},
+      getAgentSnapshots: () => [],
     } satisfies HeartbeatRunner,
     stopGatewayUpdateCheck: () => {},
     tailscaleCleanup: null as (() => Promise<void>) | null,

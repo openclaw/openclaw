@@ -30,6 +30,7 @@ function createNoopHeartbeatRunner(): HeartbeatRunner {
   return {
     stop: () => {},
     updateConfig: (_cfg: OpenClawConfig) => {},
+    getAgentSnapshots: () => [],
   };
 }
 

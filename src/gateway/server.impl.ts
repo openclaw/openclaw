@@ -891,6 +891,7 @@ export async function startGatewayServer(
       pluginRegistry,
       getPluginRouteRegistry: () => pluginRegistry,
       getGatewayRequestContext: () => currentPluginRegistryGatewayContext,
+      getHeartbeatRunner: () => runtimeState?.heartbeatRunner,
       pinChannelRegistry: !minimalTestGateway,
       deps,
       log,

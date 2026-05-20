@@ -80,6 +80,9 @@ let sessionHistoryHttpModulePromise:
   | Promise<typeof import("./sessions-history-http.js")>
   | undefined;
 let sessionKillHttpModulePromise: Promise<typeof import("./session-kill-http.js")> | undefined;
+let ocHeartbeatAgentsHttpModulePromise:
+  | Promise<typeof import("./oc-heartbeat-agents-http.js")>
+  | undefined;
 let toolsInvokeHttpModulePromise: Promise<typeof import("./tools-invoke-http.js")> | undefined;
 let pluginNodeCapabilityAuthModulePromise:
   | Promise<typeof import("./server/plugin-node-capability-auth.js")>
@@ -132,6 +135,11 @@ function getSessionHistoryHttpModule() {
 function getSessionKillHttpModule() {
   sessionKillHttpModulePromise ??= import("./session-kill-http.js");
   return sessionKillHttpModulePromise;
+}
+
+function getOcHeartbeatAgentsHttpModule() {
+  ocHeartbeatAgentsHttpModulePromise ??= import("./oc-heartbeat-agents-http.js");
+  return ocHeartbeatAgentsHttpModulePromise;
 }
 
 function getToolsInvokeHttpModule() {
@@ -490,6 +498,7 @@ export function createGatewayHttpServer(opts: {
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
   getReadiness?: ReadinessChecker;
+  getHeartbeatRunner?: () => import("../infra/heartbeat-runner.js").HeartbeatRunner | undefined;
   getRuntimeConfig?: () => OpenClawConfig;
   tlsOptions?: TlsOptions;
 }): HttpServer {
@@ -610,6 +619,23 @@ export function createGatewayHttpServer(opts: {
           run: async () =>
             (await getEmbeddingsHttpModule()).handleOpenAiEmbeddingsHttpRequest(req, res, {
               auth: resolvedAuth,
+              trustedProxies,
+              allowRealIpFallback,
+              rateLimiter,
+            }),
+        });
+      }
+      if (scopedRequestPath === "/oc/heartbeat/agents") {
+        requestStages.push({
+          name: "oc-heartbeat-agents",
+          run: async () =>
+            (await getOcHeartbeatAgentsHttpModule()).handleOcHeartbeatAgentsHttpRequest(req, res, {
+              auth: resolvedAuth,
+              heartbeatRunner: opts.getHeartbeatRunner?.() ?? {
+                stop: () => {},
+                updateConfig: () => {},
+                getAgentSnapshots: () => [],
+              },
               trustedProxies,
               allowRealIpFallback,
               rateLimiter,

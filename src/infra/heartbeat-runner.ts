@@ -291,9 +291,15 @@ function activeHoursConfigMatch(a?: ActiveHoursSchedule, b?: ActiveHoursSchedule
   return a.start === b.start && a.end === b.end && a.timezone === b.timezone;
 }
 
+export type HeartbeatRunnerAgentSnapshot = {
+  agentId: string;
+  lastRunStartedAtMs: number | undefined;
+};
+
 export type HeartbeatRunner = {
   stop: () => void;
   updateConfig: (cfg: OpenClawConfig) => void;
+  getAgentSnapshots: () => readonly HeartbeatRunnerAgentSnapshot[];
 };
 
 function resolveHeartbeatSchedulerSeed(explicitSeed?: string) {
@@ -2506,6 +2512,14 @@ export function startHeartbeatRunner(opts: {
   const disposeWakeHandler = setHeartbeatWakeHandler(wakeHandler);
   updateConfig(state.cfg);
 
+  const getAgentSnapshots = () =>
+    Array.from(state.agents.values())
+      .toSorted((a, b) => a.agentId.localeCompare(b.agentId))
+      .map((agent) => ({
+        agentId: agent.agentId,
+        lastRunStartedAtMs: agent.lastRunStartedAtMs,
+      }));
+
   const cleanup = () => {
     if (state.stopped) {
       return;
@@ -2520,5 +2534,5 @@ export function startHeartbeatRunner(opts: {
 
   opts.abortSignal?.addEventListener("abort", cleanup, { once: true });
 
-  return { stop: cleanup, updateConfig };
+  return { stop: cleanup, updateConfig, getAgentSnapshots };
 }
