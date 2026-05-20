@@ -116,16 +116,16 @@ Outside heartbeats, stray `HEARTBEAT_OK` at the start/end of a message is stripp
 ### Scope and precedence
 
 - `agents.defaults.heartbeat` sets global heartbeat behavior.
-- `agents.list[].heartbeat` merges on top; if any agent has a `heartbeat` block, **only those agents** run heartbeats.
+- `agents.list[].heartbeat` merges on top of `agents.defaults.heartbeat`. Agents without a per-agent `heartbeat` block fall back to the defaults.
 - `channels.defaults.heartbeat` sets visibility defaults for all channels.
 - `channels.<channel>.heartbeat` overrides channel defaults.
 - `channels.<channel>.accounts.<id>.heartbeat` (multi-account channels) overrides per-channel settings.
 
 ### Per-agent heartbeats
 
-If any `agents.list[]` entry includes a `heartbeat` block, **only those agents** run heartbeats. The per-agent block merges on top of `agents.defaults.heartbeat` (so you can set shared defaults once and override per agent).
+`agents.list[].heartbeat` merges on top of `agents.defaults.heartbeat`. Agents without a per-agent `heartbeat` block fall back to the defaults. An empty `heartbeat: {}` object is treated as absent and also falls back to defaults. Set `every: "0m"` to explicitly disable an agent.
 
-Example: two agents, only the second agent runs heartbeats.
+Example: two agents; the second agent overrides the cadence, while the first agent inherits defaults.
 
 ```json5
 {

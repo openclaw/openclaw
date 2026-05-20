@@ -5,9 +5,10 @@ import {
 import { parseDurationMs } from "../cli/parse-duration.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isHeartbeatEnabledForAgent } from "../infra/heartbeat-summary.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { listAgentEntries, resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
+import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
 
 type HeartbeatConfig = AgentDefaultsConfig["heartbeat"];
 
@@ -24,18 +25,6 @@ function resolveHeartbeatConfigForSystemPrompt(
     return overrides;
   }
   return { ...defaults, ...overrides };
-}
-
-function isHeartbeatEnabledByAgentPolicy(config: OpenClawConfig, agentId: string): boolean {
-  const resolvedAgentId = normalizeAgentId(agentId);
-  const agents = listAgentEntries(config);
-  const hasExplicitHeartbeatAgents = agents.some((entry) => Boolean(entry?.heartbeat));
-  if (hasExplicitHeartbeatAgents) {
-    return agents.some(
-      (entry) => Boolean(entry?.heartbeat) && normalizeAgentId(entry.id) === resolvedAgentId,
-    );
-  }
-  return resolvedAgentId === resolveDefaultAgentId(config);
 }
 
 function isHeartbeatCadenceEnabled(heartbeat?: HeartbeatConfig): boolean {
@@ -61,7 +50,7 @@ export function shouldIncludeHeartbeatGuidanceForSystemPrompt(params: {
   if (!agentId || normalizeAgentId(agentId) !== normalizeAgentId(defaultAgentId)) {
     return false;
   }
-  if (params.config && !isHeartbeatEnabledByAgentPolicy(params.config, agentId)) {
+  if (params.config && !isHeartbeatEnabledForAgent(params.config, agentId)) {
     return false;
   }
   const heartbeat = resolveHeartbeatConfigForSystemPrompt(params.config, agentId);

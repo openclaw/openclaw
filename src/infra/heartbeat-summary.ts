@@ -24,24 +24,34 @@ export type HeartbeatSummary = {
 
 const DEFAULT_HEARTBEAT_TARGET = "none";
 
-function hasExplicitHeartbeatAgents(cfg: OpenClawConfig) {
-  const list = cfg.agents?.list ?? [];
-  return list.some((entry) => Boolean(entry?.heartbeat));
-}
-
 export function isHeartbeatEnabledForAgent(cfg: OpenClawConfig, agentId?: string): boolean {
   const resolvedAgentId = normalizeAgentId(agentId ?? resolveDefaultAgentId(cfg));
-  const list = cfg.agents?.list ?? [];
-  const hasExplicit = hasExplicitHeartbeatAgents(cfg);
-  if (hasExplicit) {
-    return list.some(
-      (entry) => Boolean(entry?.heartbeat) && normalizeAgentId(entry?.id) === resolvedAgentId,
-    );
+  const defaults = cfg.agents?.defaults?.heartbeat;
+  const overridesRaw = resolveAgentConfig(cfg, resolvedAgentId)?.heartbeat;
+  const overrides = overridesRaw && Object.keys(overridesRaw).length > 0 ? overridesRaw : undefined;
+
+  // Neither exists → legacy: only default agent gets a heartbeat
+  if (!defaults && !overrides) {
+    return resolvedAgentId === resolveDefaultAgentId(cfg);
   }
-  if (cfg.agents?.defaults?.heartbeat) {
+
+  // Merge and evaluate effective every
+  const merged = { ...defaults, ...overrides };
+  const rawEvery = merged?.every;
+  if (rawEvery === undefined) {
+    // No every specified anywhere, but heartbeat config exists
     return true;
   }
-  return resolvedAgentId === resolveDefaultAgentId(cfg);
+
+  const trimmed = normalizeOptionalString(rawEvery) ?? "";
+  if (!trimmed) {
+    return false;
+  }
+  try {
+    return parseDurationMs(trimmed, { defaultUnit: "m" }) > 0;
+  } catch {
+    return false;
+  }
 }
 
 export function resolveHeartbeatIntervalMs(
