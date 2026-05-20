@@ -229,8 +229,10 @@ Policy currently verifies:
 | `policy/policy-hash-mismatch`            | Policy does not match configured `expectedHash`.                    |
 | `policy/attestation-hash-mismatch`       | Current policy evidence no longer matches the accepted attestation. |
 | `policy/channels-denied-provider`        | An enabled channel matches a channel deny rule.                     |
+| `policy/tools-missing-owner`             | A governed tool declaration is missing owner metadata.              |
 | `policy/tools-missing-risk-level`        | A governed tool declaration is missing risk metadata.               |
 | `policy/tools-missing-sensitivity-token` | A governed tool declaration is missing sensitivity metadata.        |
+| `policy/tools-unknown-risk-level`        | A governed tool declaration uses an unknown risk value.             |
 | `policy/tools-unknown-sensitivity-token` | A governed tool declaration uses an unknown sensitivity value.      |
 
 Policy findings can include both `target` and `requirement`. `target` is the
