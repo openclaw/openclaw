@@ -184,10 +184,11 @@ export async function planOpenClawModelsJsonWithDeps(
       sourceSecretDefaults: params.sourceConfigForSecrets?.secrets?.defaults,
       secretRefManagedProviders,
     }) ?? providers;
+  const promptSafeProviders = stripPlaintextProviderApiKeys(normalizedProviders);
   const mergedProviders = resolveProvidersForMode({
     mode,
     existingParsed: params.existingParsed,
-    providers: normalizedProviders,
+    providers: promptSafeProviders,
     secretRefManagedProviders,
   });
   const normalizedMergedProviders =
@@ -199,9 +200,7 @@ export async function planOpenClawModelsJsonWithDeps(
       sourceSecretDefaults: params.sourceConfigForSecrets?.secrets?.defaults,
       secretRefManagedProviders,
     }) ?? normalizedMergedProviders;
-  const finalProviders = stripPlaintextProviderApiKeys(
-    applyNativeStreamingUsageCompat(secretEnforcedProviders),
-  );
+  const finalProviders = applyNativeStreamingUsageCompat(secretEnforcedProviders);
   const nextContents = `${JSON.stringify({ providers: finalProviders }, null, 2)}\n`;
 
   if (params.existingRaw === nextContents) {

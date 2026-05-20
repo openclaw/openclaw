@@ -16,6 +16,7 @@ vi.mock("../plugins/provider-runtime.js", () => ({
 async function planGeneratedProviders(params: {
   config: OpenClawConfig;
   sourceConfigForSecrets?: OpenClawConfig;
+  existingParsed?: unknown;
 }) {
   const plan = await planOpenClawModelsJsonWithDeps(
     {
@@ -24,7 +25,7 @@ async function planGeneratedProviders(params: {
       agentDir: "/tmp/openclaw-models-plan",
       env: {},
       existingRaw: "",
-      existingParsed: null,
+      existingParsed: params.existingParsed ?? null,
     },
     {
       resolveImplicitProviders: async () => ({}),
@@ -74,5 +75,34 @@ describe("models-config plan", () => {
     });
 
     expect(providers.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
+  });
+
+  it("preserves existing models.json-only provider api keys in merge mode", async () => {
+    const providers = await planGeneratedProviders({
+      config: {
+        models: {
+          mode: "merge",
+          providers: {
+            custom: {
+              baseUrl: "https://custom.example/v1",
+              api: "openai-completions",
+              models: [],
+            },
+          },
+        },
+      },
+      existingParsed: {
+        providers: {
+          custom: {
+            baseUrl: "https://custom.example/v1",
+            api: "openai-completions",
+            apiKey: "sk-existing-models-json-only", // pragma: allowlist secret
+            models: [],
+          },
+        },
+      },
+    });
+
+    expect(providers.custom?.apiKey).toBe("sk-existing-models-json-only"); // pragma: allowlist secret
   });
 });
