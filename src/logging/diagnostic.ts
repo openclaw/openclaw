@@ -1,7 +1,9 @@
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
+import { resolveEmbeddedSessionLane } from "../agents/pi-embedded-runner/lanes.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resetCommandLane } from "../process/command-queue.js";
 import {
   areDiagnosticsEnabledForProcess,
   emitDiagnosticEvent,
@@ -737,6 +739,22 @@ export function logSessionStateChange(
   if (params.state === "idle") {
     state.queueDepth = Math.max(0, state.queueDepth - 1);
     state.activeQueuedTurn = false;
+    // Belt-and-suspenders: if the lane returns to idle but still has queued
+    // items, force a pump. Normally `drainLane` re-fires recursively after
+    // each task completes, but in production we have observed lanes that go
+    // `idle` with `queueDepth > 0` and never dequeue (e.g., after an embedded
+    // run ends with terminal progress). Calling `resetCommandLane` bumps the
+    // lane generation, clears any stale `activeTaskIds`, and re-invokes
+    // `drainLane` — a no-op when the lane queue is already empty.
+    if (state.queueDepth > 0 && state.sessionKey) {
+      try {
+        resetCommandLane(resolveEmbeddedSessionLane(state.sessionKey));
+      } catch (err) {
+        diag.warn(
+          `lane-pump-on-idle failed: sessionKey=${state.sessionKey} error="${String(err)}"`,
+        );
+      }
+    }
   }
   if (!isProbeSession && diag.isEnabled("debug")) {
     diag.debug(
