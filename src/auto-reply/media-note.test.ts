@@ -20,15 +20,30 @@ describe("buildInboundMediaNote", () => {
     expect(note).toBe("[media attached: /tmp/a.png (image/png)]");
   });
 
-  it("renders managed inbound media-store paths as media URIs", () => {
+  it("renders managed inbound media-store paths as media URIs (collapses duplicate URL, #47587)", () => {
     const inboundPath = path.join(getMediaDir(), "inbound", "photo---abc123.png");
     const note = buildInboundMediaNote({
       MediaPath: inboundPath,
       MediaType: "image/png",
       MediaUrl: inboundPath,
     });
+    // Both MediaPath and MediaUrl normalize to the same media://inbound/ URI,
+    // so the duplicate URL suffix is collapsed per #47587. Channels that
+    // surface a genuinely different URL (e.g. a remote handle) still get the
+    // ` | <url>` suffix - see the next test case.
+    expect(note).toBe("[media attached: media://inbound/photo---abc123.png (image/png)]");
+  });
+
+  it("renders managed inbound media-store paths with distinct remote URL", () => {
+    const inboundPath = path.join(getMediaDir(), "inbound", "photo---abc123.png");
+    const note = buildInboundMediaNote({
+      MediaPath: inboundPath,
+      MediaType: "image/png",
+      MediaUrl: "https://cdn.example.com/photo---abc123.png",
+    });
+    // Genuinely different URL (remote CDN) is preserved as the suffix.
     expect(note).toBe(
-      "[media attached: media://inbound/photo---abc123.png (image/png) | media://inbound/photo---abc123.png]",
+      "[media attached: media://inbound/photo---abc123.png (image/png) | https://cdn.example.com/photo---abc123.png]",
     );
   });
 
