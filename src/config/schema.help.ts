@@ -1560,7 +1560,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.list[].compaction.identifierPolicy":
     "Use this per-agent identifier-preservation strategy to control how compaction summaries handle names, ids, and literal tokens.",
   "agents.list[].compaction.identifierInstructions":
-    "Per-agent custom identifier-preservation instructions used when identifierPolicy is custom.",
+    "Use these per-agent custom identifier-preservation instructions when identifierPolicy is custom.",
   "agents.list[].compaction.recentTurnsPreserve":
     "Keep this many recent turns verbatim during compaction for the matching agent before older content is summarized.",
   "agents.list[].compaction.qualityGuard":
@@ -1580,7 +1580,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.list[].compaction.timeoutSeconds":
     "Use this per-agent compaction timeout override in seconds when the matching agent needs a different compaction budget.",
   "agents.list[].compaction.model":
-    "Per-agent exact compaction model. This stays exact instead of inheriting session fallback chains.",
+    "Use this per-agent exact compaction model override when one agent should compact on a different model. This stays exact instead of inheriting session fallback chains.",
   "agents.list[].compaction.truncateAfterCompaction":
     "Use this per-agent transcript rotation override to control whether the matching agent truncates transcript files after successful compaction.",
   "agents.list[].compaction.maxActiveTranscriptBytes":
