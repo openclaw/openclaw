@@ -45,6 +45,11 @@ describe("followup queue restart round-trip (real on-disk state file)", () => {
     };
 
     try {
+      // Hermetic start: CI runs this shard non-isolated, so FOLLOWUP_QUEUES and
+      // the restore-once flag are shared across files. Reset our slice first so
+      // a sibling test's leftover queue entry can't bleed into our assertions.
+      simulateGatewayRestart();
+
       // 1. Mid-turn enqueue: a Telegram message arrives while a run is active.
       //    restartIfIdle=false mirrors agent-runner's enqueue-followup call,
       //    which queues the message behind the active turn instead of draining.
@@ -72,7 +77,8 @@ describe("followup queue restart round-trip (real on-disk state file)", () => {
           { items: { prompt: string; originatingChannel?: string; originatingTo?: string }[] },
         ][];
       };
-      const persistedItem = persisted.entries[0]?.[1]?.items[0];
+      const persistedEntry = persisted.entries.find(([entryKey]) => entryKey === key);
+      const persistedItem = persistedEntry?.[1]?.items[0];
       expect(persistedItem?.prompt).toBe("summarize the thread so far");
       expect(persistedItem?.originatingChannel).toBe("telegram");
       expect(persistedItem?.originatingTo).toBe("6300969793");
