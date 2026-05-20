@@ -73,7 +73,7 @@ function createHost() {
     chatLoading: false,
     chatMessages: [],
     chatToolMessages: [],
-    chatStream: "",
+    chatStream: "" as string | null,
     logsAutoFollow: false,
     logsAtBottom: true,
     logsEntries: [],

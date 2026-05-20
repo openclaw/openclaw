@@ -495,6 +495,9 @@ class GatewaySession(
       if (isClosed.compareAndSet(false, true)) {
         incomingMessages.close()
         messagePumpJob.cancel()
+        if (!connectDeferred.isCompleted) {
+          connectDeferred.completeExceptionally(IllegalStateException("Gateway closed"))
+        }
         socket?.close(1000, "bye")
         socket = null
         closedDeferred.complete(Unit)
