@@ -84,7 +84,7 @@ function normalizeArgs(raw: ExecutePlanStepInput, index: number): Record<string,
 }
 
 function isPlanObject(input: ExecutePlanInput): input is { steps?: unknown } {
-  return Boolean(input && typeof input === "object" && !Array.isArray(input));
+  return input != null && typeof input === "object" && !Array.isArray(input);
 }
 
 function resolvePlanSteps(input: ExecutePlanInput): ExecutePlanStepInput[] {
