@@ -18,6 +18,10 @@ type LockOptions = {
   maxHoldMs: number;
 };
 
+type SessionWriteLockRunOptions = {
+  publishOwnedWrite?: boolean;
+};
+
 type SessionEventProcessor = {
   _processAgentEvent?: (event: unknown) => Promise<void>;
   _extensionRunner?: {
@@ -378,7 +382,10 @@ export type EmbeddedAttemptSessionLockController = {
   releaseForPrompt(): Promise<void>;
   refreshAfterOwnedSessionWrite(): void;
   waitForSessionEvents(session: unknown): Promise<void>;
-  withSessionWriteLock<T>(run: () => Promise<T> | T): Promise<T>;
+  withSessionWriteLock<T>(
+    run: () => Promise<T> | T,
+    options?: SessionWriteLockRunOptions,
+  ): Promise<T>;
   acquireForCleanup(params?: { session?: unknown }): Promise<SessionLock>;
   hasSessionTakeover(): boolean;
 };
@@ -462,6 +469,16 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     if (takeoverDetected) {
       return;
     }
+    const fingerprint = await readSessionFileFingerprint(params.lockOptions.sessionFile);
+    if (!sameSessionFileFingerprint(beforeWrite, fingerprint) && fenceActive) {
+      fenceFingerprint = fingerprint;
+    }
+  }
+
+  async function publishOwnedSessionFileFence(beforeWrite: SessionFileFingerprint): Promise<void> {
+    if (takeoverDetected) {
+      return;
+    }
     const ownedWrite = await publishOwnedSessionFileWriteIfChanged(beforeWrite);
     if (ownedWrite && fenceActive) {
       fenceFingerprint = ownedWrite.fingerprint;
@@ -512,7 +529,10 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       }
     },
     waitForSessionEvents: waitForSessionEventQueue,
-    async withSessionWriteLock<T>(run: () => Promise<T> | T): Promise<T> {
+    async withSessionWriteLock<T>(
+      run: () => Promise<T> | T,
+      options?: SessionWriteLockRunOptions,
+    ): Promise<T> {
       if (takeoverDetected) {
         throw new EmbeddedAttemptSessionTakeoverError(params.lockOptions.sessionFile);
       }
@@ -527,7 +547,11 @@ export async function createEmbeddedAttemptSessionLockController(params: {
           try {
             return await run();
           } finally {
-            await refreshSessionFileFence(beforeWrite);
+            if (options?.publishOwnedWrite === true) {
+              await publishOwnedSessionFileFence(beforeWrite);
+            } else {
+              await refreshSessionFileFence(beforeWrite);
+            }
           }
         };
         if (owned) {
