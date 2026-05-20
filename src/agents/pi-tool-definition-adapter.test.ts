@@ -56,7 +56,19 @@ describe("pi tool definition adapter", () => {
   });
 
   it("normalizes exec tool aliases in error results", async () => {
-    const result = await executeThrowingTool("bash", "call2");
+    const tool = {
+      name: "bash",
+      label: "Bash",
+      description: "throws",
+      parameters: Type.Object({}),
+      execute: async () => {
+        throw new Error("nope");
+      },
+    } satisfies AgentTool;
+
+    const defs = toToolDefinitions([tool]);
+    const def = defs[0]!;
+    const result = await def.execute("call2", { command: "echo hi" }, undefined, undefined, extensionContext);
 
     const details = result.details as
       | { status?: string; tool?: string; error?: string }
