@@ -570,6 +570,32 @@ async function clearPendingFinalDeliveryAfterSuccess(params: {
   });
 }
 
+async function markPendingFinalDeliveryAfterFailure(params: {
+  storePath?: string;
+  sessionKey?: string;
+  error: string;
+}): Promise<void> {
+  if (!params.storePath || !params.sessionKey) {
+    return;
+  }
+  const now = Date.now();
+  await updateSessionStoreEntry({
+    storePath: params.storePath,
+    sessionKey: params.sessionKey,
+    update: async (entry) => {
+      if (!entry.pendingFinalDelivery && !entry.pendingFinalDeliveryText) {
+        return null;
+      }
+      return {
+        pendingFinalDeliveryLastAttemptAt: now,
+        pendingFinalDeliveryAttemptCount: (entry.pendingFinalDeliveryAttemptCount ?? 0) + 1,
+        pendingFinalDeliveryLastError: params.error,
+        updatedAt: now,
+      };
+    },
+  });
+}
+
 async function mirrorInternalSourceReplyToTranscript(params: {
   metadata: NonNullable<ReturnType<typeof getReplyPayloadMetadata>>["sourceReplyTranscriptMirror"];
   cfg: OpenClawConfig;
@@ -1825,6 +1851,7 @@ export async function dispatchReplyFromConfig(
     let routedFinalCount = 0;
     let attemptedFinalDelivery = false;
     let finalDeliveryFailed = false;
+    let finalDeliveryError: string | undefined;
     const shouldDeliverDespiteSourceReplySuppression = (reply: ReplyPayload) =>
       suppressAutomaticSourceDelivery &&
       ctx.InboundEventKind !== "room_event" &&
@@ -1859,6 +1886,7 @@ export async function dispatchReplyFromConfig(
       routedFinalCount += finalReply.routedFinalCount;
       if (!finalReply.queuedFinal && finalReply.routedFinalCount === 0) {
         finalDeliveryFailed = true;
+        finalDeliveryError = "final delivery produced no routed or queued send";
       }
     }
 
@@ -1866,6 +1894,12 @@ export async function dispatchReplyFromConfig(
       await clearPendingFinalDeliveryAfterSuccess({
         storePath: sessionStoreEntry.storePath,
         sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
+      });
+    } else if (attemptedFinalDelivery && finalDeliveryFailed) {
+      await markPendingFinalDeliveryAfterFailure({
+        storePath: sessionStoreEntry.storePath,
+        sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
+        error: finalDeliveryError ?? "final delivery failed",
       });
     }
 

@@ -206,7 +206,7 @@ describe("routeReply", () => {
       ]),
     );
     mocks.deliverOutboundPayloads.mockReset();
-    mocks.deliverOutboundPayloads.mockResolvedValue([]);
+    mocks.deliverOutboundPayloads.mockResolvedValue([{ channel: "slack", messageId: "mock" }]);
   });
 
   afterEach(() => {
@@ -253,6 +253,24 @@ describe("routeReply", () => {
       to: "channel:C123",
     });
     expect(lastDeliveryPayload().text).toBe(`${SILENT_REPLY_TOKEN} -- (why am I here?)`);
+  });
+
+  it("reports a visible reply with no outbound result as failed", async () => {
+    mocks.deliverOutboundPayloads.mockResolvedValueOnce([]);
+
+    const res = await routeReply({
+      payload: { text: "hi" },
+      channel: "telegram",
+      to: "telegram:123",
+      cfg: {} as never,
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.error).toContain("no visible delivery result");
+    expectLastDeliveryFields({
+      channel: "telegram",
+      to: "telegram:123",
+    });
   });
 
   it("passes policySessionKey through to outbound delivery targets", async () => {

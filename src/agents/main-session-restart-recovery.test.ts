@@ -482,7 +482,9 @@ describe("main-session-restart-recovery", () => {
     expect(entry?.pendingFinalDelivery).toBe(true);
     expect(entry?.pendingFinalDeliveryText).toBe(pendingPayload);
     expect(entry?.pendingFinalDeliveryAttemptCount).toBe(1);
-    expect(entry?.pendingFinalDeliveryLastError).toBeNull();
+    expect(entry?.pendingFinalDeliveryLastError).toBe(
+      "pending final resume requested; channel delivery still pending",
+    );
     expect(entry?.pendingFinalDeliveryCreatedAt).toBeLessThanOrEqual(beforeStoreRead);
     expect(entry?.pendingFinalDeliveryLastAttemptAt).toBeLessThanOrEqual(beforeStoreRead);
     expect(entry?.pendingFinalDeliveryLastAttemptAt ?? 0).toBeGreaterThanOrEqual(

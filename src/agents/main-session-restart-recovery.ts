@@ -310,7 +310,8 @@ async function resumeMainSession(params: {
             entry.pendingFinalDeliveryLastAttemptAt = now;
             entry.pendingFinalDeliveryAttemptCount =
               (entry.pendingFinalDeliveryAttemptCount ?? 0) + 1;
-            entry.pendingFinalDeliveryLastError = null;
+            entry.pendingFinalDeliveryLastError =
+              "pending final resume requested; channel delivery still pending";
             entry.pendingFinalDeliveryText = sanitizedPendingText;
           } else {
             entry.pendingFinalDelivery = undefined;

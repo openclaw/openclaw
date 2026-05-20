@@ -238,6 +238,12 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
     if (send.status === "failed" || send.status === "partial_failed") {
       throw send.error;
     }
+    if (send.status === "suppressed") {
+      return {
+        ok: false,
+        error: `Failed to route reply to ${channel}: no visible delivery result (${send.reason})`,
+      };
+    }
     const results = send.status === "sent" ? send.results : [];
 
     const last = results.at(-1);
