@@ -11,7 +11,7 @@ const ALLOWED_PATCHED_DEPENDENCIES = new Map([
     "@agentclientprotocol/claude-agent-acp@0.33.1",
     "patches/@agentclientprotocol__claude-agent-acp@0.33.1.patch",
   ],
-  ["baileys@7.0.0-rc11", "patches/baileys@7.0.0-rc11.patch"],
+  ["baileys@7.0.0-rc12", "patches/baileys@7.0.0-rc12.patch"],
 ]);
 
 const ALLOWED_PATCH_FILES = new Set(["patches/.gitkeep", ...ALLOWED_PATCHED_DEPENDENCIES.values()]);
