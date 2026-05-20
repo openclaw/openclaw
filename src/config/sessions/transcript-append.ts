@@ -240,7 +240,80 @@ type AppendSessionTranscriptMessageParams<TMessage = unknown> = {
   cwd?: string;
   useRawWhenLinear?: boolean;
   config?: OpenClawConfig;
+  /**
+   * Optional idempotency key. When provided, the locked append path scans the
+   * transcript for an existing entry whose `message.idempotencyKey` matches. If
+   * found, the existing entry is returned with `deduped: true` and no new
+   * entry is written. The check is performed inside the same critical section
+   * as the write so concurrent identical requests can never both be persisted.
+   */
+  idempotencyKey?: string;
 };
+
+type AppendSessionTranscriptMessageResult<TMessage> = {
+  messageId: string;
+  message: TMessage;
+  /** True when an existing entry with matching idempotencyKey was returned. */
+  deduped?: boolean;
+};
+
+async function findTranscriptEntryByIdempotencyKey(
+  transcriptPath: string,
+  idempotencyKey: string,
+): Promise<{ id: string; message: unknown } | undefined> {
+  let handle: fs.FileHandle | undefined;
+  try {
+    handle = await fs.open(transcriptPath, "r");
+  } catch {
+    return undefined;
+  }
+  try {
+    const decoder = new StringDecoder("utf8");
+    const buffer = Buffer.allocUnsafe(TRANSCRIPT_APPEND_SCAN_CHUNK_BYTES);
+    let carry = "";
+    const scan = (line: string): { id: string; message: unknown } | undefined => {
+      if (!line.trim()) {
+        return undefined;
+      }
+      try {
+        const parsed = JSON.parse(line) as {
+          id?: unknown;
+          message?: { idempotencyKey?: unknown };
+        };
+        if (
+          parsed?.message &&
+          (parsed.message as { idempotencyKey?: unknown }).idempotencyKey === idempotencyKey &&
+          typeof parsed.id === "string"
+        ) {
+          return { id: parsed.id, message: parsed.message };
+        }
+      } catch {
+        return undefined;
+      }
+      return undefined;
+    };
+    while (true) {
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
+      if (bytesRead <= 0) {
+        break;
+      }
+      const text = carry + decoder.write(buffer.subarray(0, bytesRead));
+      const lines = text.split(/\r?\n/);
+      carry = lines.pop() ?? "";
+      for (const line of lines) {
+        const hit = scan(line);
+        if (hit) {
+          return hit;
+        }
+      }
+      await yieldTranscriptAppendScan();
+    }
+    const tail = carry + decoder.end();
+    return scan(tail);
+  } finally {
+    await handle.close();
+  }
+}
 
 function isTranscriptAgentMessage(value: unknown): value is AgentMessage {
   return (
@@ -253,7 +326,7 @@ function isTranscriptAgentMessage(value: unknown): value is AgentMessage {
 
 export async function appendSessionTranscriptMessage<TMessage>(
   params: AppendSessionTranscriptMessageParams<TMessage>,
-): Promise<{ messageId: string; message: TMessage }> {
+): Promise<AppendSessionTranscriptMessageResult<TMessage>> {
   return await withTranscriptAppendQueue(params.transcriptPath, () =>
     appendSessionTranscriptMessageLocked(params),
   );
@@ -261,13 +334,31 @@ export async function appendSessionTranscriptMessage<TMessage>(
 
 async function appendSessionTranscriptMessageLocked<TMessage>(
   params: AppendSessionTranscriptMessageParams<TMessage>,
-): Promise<{ messageId: string; message: TMessage }> {
+): Promise<AppendSessionTranscriptMessageResult<TMessage>> {
   const lock = await acquireSessionWriteLock({
     sessionFile: params.transcriptPath,
     ...resolveSessionWriteLockOptions(params.config),
     allowReentrant: true,
   });
   try {
+    // Idempotency check happens INSIDE the critical section (queue + write lock).
+    // A previous implementation checked this before acquiring the queue, which
+    // allowed concurrent identical requests to both pass the check and append
+    // duplicate entries. Performing the scan here guarantees at-most-once
+    // persistence per (transcriptPath, idempotencyKey) within this process.
+    if (params.idempotencyKey) {
+      const existing = await findTranscriptEntryByIdempotencyKey(
+        params.transcriptPath,
+        params.idempotencyKey,
+      );
+      if (existing) {
+        return {
+          messageId: existing.id,
+          message: existing.message as TMessage,
+          deduped: true,
+        };
+      }
+    }
     const now = params.now ?? Date.now();
     const messageId = randomUUID();
     await ensureTranscriptHeader(params.transcriptPath, {

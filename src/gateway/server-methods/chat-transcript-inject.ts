@@ -16,14 +16,14 @@ export type GatewayInjectedTranscriptAppendResult = {
   ok: boolean;
   messageId?: string;
   message?: Record<string, unknown>;
+  /** True when an existing entry with matching idempotencyKey was returned. */
+  deduped?: boolean;
   error?: string;
 };
 
-export type GatewayInjectedTtsSupplementMarker = {
-  textSha256: string;
-};
+type GatewayInjectedRole = "assistant" | "user";
 
-function resolveInjectedAssistantContent(params: {
+function resolveInjectedContent(params: {
   message: string;
   label?: string;
   content?: Array<Record<string, unknown>>;
@@ -47,7 +47,8 @@ function resolveInjectedAssistantContent(params: {
   return [{ type: "text", text: `${labelPrefix}${params.message}` }];
 }
 
-export async function appendInjectedAssistantMessageToTranscript(params: {
+async function appendInjectedMessageToTranscript(params: {
+  role?: GatewayInjectedRole;
   transcriptPath: string;
   message: string;
   label?: string;
@@ -55,10 +56,10 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   content?: Array<Record<string, unknown>>;
   idempotencyKey?: string;
   abortMeta?: GatewayInjectedAbortMeta;
-  ttsSupplement?: GatewayInjectedTtsSupplementMarker;
   now?: number;
   config?: OpenClawConfig;
 }): Promise<GatewayInjectedTranscriptAppendResult> {
+  const role: GatewayInjectedRole = params.role === "user" ? "user" : "assistant";
   const now = params.now ?? Date.now();
   const usage = {
     input: 0,
@@ -74,55 +75,111 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
       total: 0,
     },
   };
-  const resolvedContent = resolveInjectedAssistantContent({
+  const resolvedContent = resolveInjectedContent({
     message: params.message,
     label: params.label,
     content: params.content,
   });
-  const messageBody: AppendMessageArg & Record<string, unknown> = {
-    role: "assistant",
-    // Gateway-injected assistant messages can include non-model content blocks (e.g. embedded TTS audio).
-    content: resolvedContent as unknown as Extract<
-      AppendMessageArg,
-      { role: "assistant" }
-    >["content"],
-    timestamp: now,
-    // Pi stopReason is a strict enum; this is not model output, but we still store it as a
-    // normal assistant message so it participates in the session parentId chain.
-    stopReason: "stop",
-    usage,
-    // Make these explicit so downstream tooling never treats this as model output.
-    api: "openai-responses",
-    provider: "openclaw",
-    model: "gateway-injected",
-    ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
-    ...(params.ttsSupplement ? { openclawTtsSupplement: params.ttsSupplement } : {}),
-    ...(params.abortMeta
+  const messageBody: AppendMessageArg & Record<string, unknown> =
+    role === "assistant"
       ? {
-          openclawAbort: {
-            aborted: true,
-            origin: params.abortMeta.origin,
-            runId: params.abortMeta.runId,
-          },
+          role,
+          // Gateway-injected assistant messages can include non-model content blocks (e.g. embedded TTS audio).
+          content: resolvedContent as unknown as Extract<
+            AppendMessageArg,
+            { role: "assistant" }
+          >["content"],
+          timestamp: now,
+          // Pi stopReason is a strict enum; this is not model output, but we still store it as a
+          // normal assistant message so it participates in the session parentId chain.
+          stopReason: "stop",
+          usage,
+          // Make these explicit so downstream tooling never treats this as model output.
+          api: "openai-responses",
+          provider: "openclaw",
+          model: "gateway-injected",
+          ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
+          ...(params.abortMeta
+            ? {
+                openclawAbort: {
+                  aborted: true,
+                  origin: params.abortMeta.origin,
+                  runId: params.abortMeta.runId,
+                },
+              }
+            : {}),
         }
-      : {}),
-  };
+      : {
+          role,
+          content: resolvedContent as unknown as Extract<
+            AppendMessageArg,
+            { role: "user" }
+          >["content"],
+          timestamp: now,
+          ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
+        };
 
   try {
-    const { messageId, message: appendedMessage } = await appendSessionTranscriptMessage({
+    const {
+      messageId,
+      message: appendedMessage,
+      deduped,
+    } = await appendSessionTranscriptMessage({
       transcriptPath: params.transcriptPath,
       message: messageBody,
       now,
       useRawWhenLinear: true,
       config: params.config,
+      // Pass the idempotency key as a first-class param so the locked write
+      // path can dedupe atomically. The key is also embedded in the message
+      // body above for backward-compatible on-disk inspection.
+      ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
     });
-    emitSessionTranscriptUpdate({
-      sessionFile: params.transcriptPath,
-      message: appendedMessage,
+    if (!deduped) {
+      emitSessionTranscriptUpdate({
+        sessionFile: params.transcriptPath,
+        message: appendedMessage,
+        messageId,
+      });
+    }
+    return {
+      ok: true,
       messageId,
-    });
-    return { ok: true, messageId, message: appendedMessage as unknown as Record<string, unknown> };
+      message: appendedMessage as unknown as Record<string, unknown>,
+      ...(deduped ? { deduped: true } : {}),
+    };
   } catch (err) {
     return { ok: false, error: formatErrorMessage(err) };
   }
+}
+
+export async function appendInjectedAssistantMessageToTranscript(params: {
+  transcriptPath: string;
+  message: string;
+  label?: string;
+  /** When set, used as the assistant `content` array (e.g. text + embedded audio blocks). */
+  content?: Array<Record<string, unknown>>;
+  idempotencyKey?: string;
+  abortMeta?: GatewayInjectedAbortMeta;
+  now?: number;
+  config?: OpenClawConfig;
+}): Promise<GatewayInjectedTranscriptAppendResult> {
+  return await appendInjectedMessageToTranscript({
+    ...params,
+    role: "assistant",
+  });
+}
+
+export async function appendInjectedUserMessageToTranscript(params: {
+  transcriptPath: string;
+  message: string;
+  content?: Array<Record<string, unknown>>;
+  idempotencyKey?: string;
+  now?: number;
+  config?: OpenClawConfig;
+}): Promise<GatewayInjectedTranscriptAppendResult> {
+  return await appendInjectedMessageToTranscript({
+    ...params,
+    role: "user",
+  });
 }
