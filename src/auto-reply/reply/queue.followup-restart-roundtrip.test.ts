@@ -106,7 +106,9 @@ describe("followup queue restart round-trip (real on-disk state file)", () => {
       // persists the acknowledgement. Poll the on-disk state until our key is
       // gone (or empty) so the no-replay check below sees the acked file.
       const keyDrainedOnDisk = () => {
-        if (!fs.existsSync(statePath)) return true;
+        if (!fs.existsSync(statePath)) {
+          return true;
+        }
         const disk = JSON.parse(fs.readFileSync(statePath, "utf8")) as {
           entries?: [string, { items?: unknown[] }][];
         };
