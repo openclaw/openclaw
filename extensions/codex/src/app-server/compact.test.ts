@@ -527,7 +527,7 @@ describe("maybeCompactCodexAppServerSession", () => {
         tokensBefore: 55,
       },
     }));
-    const maintain = vi.fn(async () => ({
+    const maintain = vi.fn(async (_params: unknown) => ({
       changed: false,
       bytesFreed: 0,
       rewrittenEntries: 0,
