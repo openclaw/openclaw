@@ -102,6 +102,23 @@ describe("policy commands", () => {
     });
   });
 
+  it("reports unparseable policy files in policy check output", async () => {
+    await fs.writeFile(join(workspaceDir, "policy.jsonc"), "{ channels: ", "utf-8");
+    const { exitCode, parsed } = await runPolicyCheckJson();
+
+    expect(exitCode).toBe(1);
+    expect(parsed).toMatchObject({
+      ok: false,
+      findings: [
+        {
+          checkId: "policy/policy-jsonc-invalid",
+          severity: "error",
+          target: "oc://policy.jsonc",
+        },
+      ],
+    });
+  });
+
   it("links policy findings to evidence and policy requirement refs", async () => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
