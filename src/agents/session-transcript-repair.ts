@@ -169,6 +169,35 @@ function makeMissingToolResult(params: {
   } as Extract<AgentMessage, { role: "toolResult" }>;
 }
 
+/**
+ * Check whether a tool result is a synthetic "missing tool result" error injected
+ * by transcript repair or the session-tool-result-guard flush.
+ *
+ * Only detects synthetics using the default marker text.  When callers pass custom
+ * `missingToolResultText` (e.g. "aborted" for OpenAI/Codex replay), the resulting
+ * synthetic will NOT be detected here — the preference logic won't fire and the
+ * existing first-seen deduplication applies instead.  This is acceptable because
+ * custom-text synthetics are produced for fresh API submissions, not persisted
+ * session history repair.
+ */
+function isSyntheticMissingToolResult(msg: Extract<AgentMessage, { role: "toolResult" }>): boolean {
+  if (!(msg as { isError?: unknown }).isError) {
+    return false;
+  }
+  const content = (msg as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  return content.some(
+    (block: unknown) =>
+      typeof block === "object" &&
+      block !== null &&
+      (block as { type?: string }).type === "text" &&
+      typeof (block as { text?: string }).text === "string" &&
+      (block as { text: string }).text.includes("[openclaw] missing tool result"),
+  );
+}
+
 function normalizeToolResultName(
   message: Extract<AgentMessage, { role: "toolResult" }>,
   fallbackName?: string,
@@ -481,6 +510,7 @@ export function repairToolUseResultPairing(
   const out: AgentMessage[] = [];
   const added: Array<Extract<AgentMessage, { role: "toolResult" }>> = [];
   const seenToolResultIds = new Set<string>();
+  const toolResultPositions = new Map<string, number>();
   let droppedDuplicateCount = 0;
   let droppedOrphanCount = 0;
   let moved = false;
@@ -489,12 +519,30 @@ export function repairToolUseResultPairing(
   const pushToolResult = (msg: Extract<AgentMessage, { role: "toolResult" }>) => {
     const id = extractToolResultId(msg);
     if (id && seenToolResultIds.has(id)) {
+      const existingIdx = toolResultPositions.get(id);
+      if (existingIdx !== undefined) {
+        const existing = out[existingIdx];
+        if (
+          existing &&
+          isSyntheticMissingToolResult(existing as Extract<AgentMessage, { role: "toolResult" }>) &&
+          !isSyntheticMissingToolResult(msg)
+        ) {
+          out[existingIdx] = msg;
+          const addedIdx = added.findIndex((a) => extractToolResultId(a) === id);
+          if (addedIdx !== -1) {
+            added.splice(addedIdx, 1);
+          }
+          changed = true;
+          return;
+        }
+      }
       droppedDuplicateCount += 1;
       changed = true;
       return;
     }
     if (id) {
       seenToolResultIds.add(id);
+      toolResultPositions.set(id, out.length);
     }
     out.push(msg);
   };
@@ -579,8 +627,15 @@ export function repairToolUseResultPairing(
           if (normalizedToolResult !== toolResult) {
             changed = true;
           }
-          if (!spanResultsById.has(id)) {
+          const existingSpan = spanResultsById.get(id);
+          if (!existingSpan) {
             spanResultsById.set(id, normalizedToolResult);
+          } else if (
+            isSyntheticMissingToolResult(existingSpan) &&
+            !isSyntheticMissingToolResult(normalizedToolResult)
+          ) {
+            spanResultsById.set(id, normalizedToolResult);
+            changed = true;
           }
           continue;
         }

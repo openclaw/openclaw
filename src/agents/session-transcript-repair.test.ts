@@ -417,6 +417,123 @@ describe("sanitizeToolUseResultPairing", () => {
   });
 });
 
+describe("repairToolUseResultPairing prefers real result over synthetic error", () => {
+  const SYNTHETIC_TEXT =
+    "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.";
+
+  function makeSyntheticResult(toolCallId: string) {
+    return {
+      role: "toolResult" as const,
+      toolCallId,
+      toolName: "read",
+      content: [{ type: "text", text: SYNTHETIC_TEXT }],
+      isError: true,
+    };
+  }
+
+  function makeRealResult(toolCallId: string, text = "real output") {
+    return {
+      role: "toolResult" as const,
+      toolCallId,
+      toolName: "read",
+      content: [{ type: "text", text }],
+      isError: false,
+    };
+  }
+
+  function makeAssistant(toolCallId: string) {
+    return {
+      role: "assistant" as const,
+      content: [{ type: "toolCall", id: toolCallId, name: "read", arguments: {} }],
+    };
+  }
+
+  it("synthetic first, real second → keeps real", () => {
+    const input = castAgentMessages([
+      makeAssistant("call_1"),
+      makeSyntheticResult("call_1"),
+      makeRealResult("call_1"),
+    ]);
+
+    const result = repairToolUseResultPairing(input);
+
+    const toolResult = result.messages.find((m) => m.role === "toolResult") as {
+      isError?: boolean;
+      content?: Array<{ text?: string }>;
+    };
+    expect(toolResult?.isError).not.toBe(true);
+    expect(toolResult?.content?.[0]?.text).toBe("real output");
+  });
+
+  it("real first, synthetic second → keeps real", () => {
+    const input = castAgentMessages([
+      makeAssistant("call_1"),
+      makeRealResult("call_1"),
+      makeSyntheticResult("call_1"),
+    ]);
+
+    const result = repairToolUseResultPairing(input);
+
+    const toolResult = result.messages.find((m) => m.role === "toolResult") as {
+      isError?: boolean;
+      content?: Array<{ text?: string }>;
+    };
+    expect(toolResult?.isError).not.toBe(true);
+    expect(toolResult?.content?.[0]?.text).toBe("real output");
+  });
+
+  it("two real results → keeps first (unchanged behavior)", () => {
+    const input = castAgentMessages([
+      makeAssistant("call_1"),
+      makeRealResult("call_1", "first real"),
+      makeRealResult("call_1", "second real"),
+    ]);
+
+    const result = repairToolUseResultPairing(input);
+
+    const toolResult = result.messages.find((m) => m.role === "toolResult") as {
+      content?: Array<{ text?: string }>;
+    };
+    expect(toolResult?.content?.[0]?.text).toBe("first real");
+  });
+
+  it("two synthetic errors → keeps first (unchanged behavior)", () => {
+    const input = castAgentMessages([
+      makeAssistant("call_1"),
+      makeSyntheticResult("call_1"),
+      makeSyntheticResult("call_1"),
+    ]);
+
+    const result = repairToolUseResultPairing(input);
+
+    const toolResult = result.messages.find((m) => m.role === "toolResult") as {
+      isError?: boolean;
+      content?: Array<{ text?: string }>;
+    };
+    expect(toolResult?.isError).toBe(true);
+    expect(toolResult?.content?.[0]?.text).toBe(SYNTHETIC_TEXT);
+  });
+
+  it("span-level: synthetic then real in span → picks real", () => {
+    const input = castAgentMessages([
+      makeAssistant("call_1"),
+      makeSyntheticResult("call_1"),
+      makeRealResult("call_1"),
+      { role: "user", content: "next" },
+    ]);
+
+    const result = repairToolUseResultPairing(input);
+
+    const toolResults = result.messages.filter((m) => m.role === "toolResult") as Array<{
+      isError?: boolean;
+      content?: Array<{ text?: string }>;
+    }>;
+    expect(toolResults).toHaveLength(1);
+    expect(toolResults[0]?.isError).not.toBe(true);
+    expect(toolResults[0]?.content?.[0]?.text).toBe("real output");
+  });
+});
+
 describe("sanitizeToolCallInputs legacy block filtering", () => {
   it("drops malformed snake_case tool call blocks", () => {
     const input = castAgentMessages([
