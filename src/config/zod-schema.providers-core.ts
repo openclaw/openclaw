@@ -117,7 +117,7 @@ const SlackCapabilitiesSchema = z.union([
     })
     .strict(),
 ]);
-export const BotLoopProtectionSchema = z
+const BotLoopProtectionSchema = z
   .object({
     enabled: z.boolean().optional(),
     maxEventsPerWindow: z.number().int().positive().optional(),
