@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createConfigRuntimeEnv } from "../config/env-vars.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { OPENCLAW_MANAGED_AUTH_MARKER } from "./model-auth-markers.js";
 import { unsetEnv, withTempEnv } from "./models-config.e2e-harness.js";
 import {
   planOpenClawModelsJsonWithDeps,
@@ -27,6 +28,21 @@ function createImplicitOpenRouterProvider(): ProviderConfig {
         maxTokens: 8192,
       },
     ],
+  };
+}
+
+function createTestModel(
+  id = "custom-model",
+  name = "Custom",
+): NonNullable<ProviderConfig["models"]>[number] {
+  return {
+    id,
+    name,
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128000,
+    maxTokens: 16384,
   };
 }
 
@@ -244,6 +260,183 @@ describe("models-config", () => {
     expect(parsed.providers?.google?.models?.map((model) => model.id)).toEqual([
       "gemini-3.1-pro-preview",
     ]);
+  });
+
+  it("serializes a non-secret marker instead of config plaintext provider api keys", async () => {
+    const plan = await planOpenClawModelsJsonWithDeps(
+      {
+        cfg: {
+          models: {
+            providers: {
+              custom: {
+                baseUrl: "https://custom.example/v1",
+                api: "openai-completions",
+                apiKey: "sk-config-plaintext",
+                models: [createTestModel()],
+              },
+            },
+          },
+        },
+        agentDir: "/tmp/openclaw-models-config-env-vars-test",
+        env: {},
+        existingRaw: "",
+        existingParsed: null,
+      },
+      {
+        resolveImplicitProviders: async () => ({}),
+      },
+    );
+
+    expect(plan.action).toBe("write");
+    if (plan.action !== "write") {
+      throw new Error("Expected models.json write plan");
+    }
+    const parsed = JSON.parse(plan.contents) as {
+      providers?: Record<string, { apiKey?: string; baseUrl?: string }>;
+    };
+    expect(parsed.providers?.custom?.baseUrl).toBe("https://custom.example/v1");
+    expect(parsed.providers?.custom?.apiKey).toBe(OPENCLAW_MANAGED_AUTH_MARKER);
+    expect(plan.contents).not.toContain("sk-config-plaintext");
+  });
+
+  it("preserves managed env secret markers while serializing models.json", async () => {
+    const plan = await planOpenClawModelsJsonWithDeps(
+      {
+        cfg: {
+          models: {
+            providers: {
+              custom: {
+                baseUrl: "https://custom.example/v1",
+                api: "openai-completions",
+                apiKey: "${MY_CUSTOM_API_KEY}",
+                models: [createTestModel()],
+              },
+            },
+          },
+        },
+        agentDir: "/tmp/openclaw-models-config-env-vars-test",
+        env: { MY_CUSTOM_API_KEY: "sk-runtime-custom" } as NodeJS.ProcessEnv,
+        existingRaw: "",
+        existingParsed: null,
+      },
+      {
+        resolveImplicitProviders: async () => ({}),
+      },
+    );
+
+    expect(plan.action).toBe("write");
+    if (plan.action !== "write") {
+      throw new Error("Expected models.json write plan");
+    }
+    const parsed = JSON.parse(plan.contents) as {
+      providers?: Record<string, { apiKey?: string }>;
+    };
+    expect(parsed.providers?.custom?.apiKey).toBe("MY_CUSTOM_API_KEY");
+    expect(plan.contents).not.toContain("sk-runtime-custom");
+  });
+
+  it("keeps existing models.json-only plaintext api keys to avoid upgrade auth loss", async () => {
+    const plan = await planOpenClawModelsJsonWithDeps(
+      {
+        cfg: {
+          models: {
+            mode: "merge",
+            providers: {
+              custom: {
+                baseUrl: "https://custom.example/v1",
+                api: "openai-completions",
+                models: [createTestModel()],
+              },
+            },
+          },
+        },
+        agentDir: "/tmp/openclaw-models-config-env-vars-test",
+        env: {},
+        existingRaw: "",
+        existingParsed: {
+          providers: {
+            custom: {
+              baseUrl: "https://old.example/v1",
+              api: "openai-completions",
+              apiKey: "sk-existing-plaintext",
+              models: [createTestModel("old-model", "Old")],
+            },
+          },
+        },
+      },
+      {
+        resolveImplicitProviders: async () => ({}),
+      },
+    );
+
+    expect(plan.action).toBe("write");
+    if (plan.action !== "write") {
+      throw new Error("Expected models.json write plan");
+    }
+    const parsed = JSON.parse(plan.contents) as {
+      providers?: Record<string, { apiKey?: string; baseUrl?: string }>;
+    };
+    expect(parsed.providers?.custom?.baseUrl).toBe("https://old.example/v1");
+    expect(parsed.providers?.custom?.apiKey).toBe("sk-existing-plaintext");
+  });
+
+  it("replaces existing plaintext api keys when source config owns the provider secret", async () => {
+    const plan = await planOpenClawModelsJsonWithDeps(
+      {
+        cfg: {
+          models: {
+            mode: "merge",
+            providers: {
+              custom: {
+                baseUrl: "https://custom.example/v1",
+                api: "openai-completions",
+                apiKey: "sk-config-plaintext",
+                models: [createTestModel()],
+              },
+            },
+          },
+        },
+        sourceConfigForSecrets: {
+          models: {
+            providers: {
+              custom: {
+                baseUrl: "https://custom.example/v1",
+                api: "openai-completions",
+                apiKey: "sk-config-plaintext",
+                models: [createTestModel()],
+              },
+            },
+          },
+        },
+        agentDir: "/tmp/openclaw-models-config-env-vars-test",
+        env: {},
+        existingRaw: "",
+        existingParsed: {
+          providers: {
+            custom: {
+              baseUrl: "https://old.example/v1",
+              api: "openai-completions",
+              apiKey: "sk-existing-plaintext",
+              models: [createTestModel("old-model", "Old")],
+            },
+          },
+        },
+      },
+      {
+        resolveImplicitProviders: async () => ({}),
+      },
+    );
+
+    expect(plan.action).toBe("write");
+    if (plan.action !== "write") {
+      throw new Error("Expected models.json write plan");
+    }
+    const parsed = JSON.parse(plan.contents) as {
+      providers?: Record<string, { apiKey?: string; baseUrl?: string }>;
+    };
+    expect(parsed.providers?.custom?.apiKey).toBe(OPENCLAW_MANAGED_AUTH_MARKER);
+    expect(plan.contents).not.toContain("sk-config-plaintext");
+    expect(plan.contents).not.toContain("sk-existing-plaintext");
   });
 
   it("uses config env.vars entries for implicit provider discovery without mutating process.env", async () => {

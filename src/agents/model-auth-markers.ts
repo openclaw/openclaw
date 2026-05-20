@@ -9,6 +9,7 @@ export const OLLAMA_LOCAL_AUTH_MARKER = "ollama-local";
 /** @deprecated Bundled local-provider marker; do not use from third-party plugins. */
 export const CUSTOM_LOCAL_AUTH_MARKER = "custom-local";
 export const GCP_VERTEX_CREDENTIALS_MARKER = "gcp-vertex-credentials";
+export const OPENCLAW_MANAGED_AUTH_MARKER = "openclaw-managed";
 export const NON_ENV_SECRETREF_MARKER = "secretref-managed"; // pragma: allowlist secret
 export const SECRETREF_ENV_HEADER_MARKER_PREFIX = "secretref-env:"; // pragma: allowlist secret
 
@@ -20,6 +21,7 @@ const AWS_SDK_ENV_MARKERS = new Set([
 const CORE_NON_SECRET_API_KEY_MARKERS = [
   CUSTOM_LOCAL_AUTH_MARKER,
   OLLAMA_LOCAL_AUTH_MARKER,
+  OPENCLAW_MANAGED_AUTH_MARKER,
   NON_ENV_SECRETREF_MARKER,
 ] as const;
 let knownEnvApiKeyMarkersCache: Set<string> | undefined;
