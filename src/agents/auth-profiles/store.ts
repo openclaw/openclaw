@@ -590,7 +590,17 @@ export function loadAuthProfileStoreForSecretsRuntime(agentDir?: string): AuthPr
   return loadAuthProfileStoreForRuntime(agentDir, {
     readOnly: true,
     allowKeychainPrompt: false,
-    resolveLegacyOAuthSidecars: false,
+    // L4 PATCH (lane-pump branch): include legacy OAuth sidecar material when
+    // the runtime is resolving secrets for an agent turn. Without this, embedded
+    // agent runs (Telegram replies, cron invocations) cannot reach the access
+    // token for openai-codex profiles whose `oauthRef.source` is
+    // "openclaw-credentials", and resolveApiKeyForProfile() falls through to
+    // "No API key found". The OAuth-manager-internal refresh helper added in
+    // upstream #83312 already sets this to true; this default was inadvertently
+    // left at `false` after the sidecar runtime removal in #82777, breaking
+    // the embedded-agent OAuth resolution path while leaving the direct CLI
+    // inference path unaffected. See UPSTREAM_ISSUE_DRAFT.md in local-patches.
+    resolveLegacyOAuthSidecars: true,
   });
 }
 
