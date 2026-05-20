@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { NON_ENV_SECRETREF_MARKER } from "../agents/model-auth-markers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import {
@@ -154,12 +155,21 @@ describe("buildSingleProviderApiKeyCatalog", () => {
       expected: null,
     },
     {
-      name: "adds api key to the built provider",
+      name: "adds a safe marker for raw api keys",
       ctx: createCatalogContext({
         apiKeys: { "test-provider": "secret-key" },
       }),
       expected: createSingleCatalogProvider({
-        apiKey: "secret-key",
+        apiKey: NON_ENV_SECRETREF_MARKER,
+      }),
+    },
+    {
+      name: "preserves env var api key markers",
+      ctx: createCatalogContext({
+        apiKeys: { "test-provider": "OPENAI_API_KEY" },
+      }),
+      expected: createSingleCatalogProvider({
+        apiKey: "OPENAI_API_KEY",
       }),
     },
     {
@@ -180,7 +190,7 @@ describe("buildSingleProviderApiKeyCatalog", () => {
       allowExplicitBaseUrl: true,
       expected: createSingleCatalogProvider({
         baseUrl: "https://override.example/v1/",
-        apiKey: "secret-key",
+        apiKey: NON_ENV_SECRETREF_MARKER,
       }),
     },
     {
@@ -201,7 +211,7 @@ describe("buildSingleProviderApiKeyCatalog", () => {
       allowExplicitBaseUrl: true,
       expected: createSingleCatalogProvider({
         baseUrl: "https://api.z.ai/custom",
-        apiKey: "secret-key",
+        apiKey: NON_ENV_SECRETREF_MARKER,
       }),
       providerId: "z-ai",
       buildProvider: () => createProviderConfig({ baseUrl: "https://default.example/zai" }),
@@ -224,7 +234,16 @@ describe("buildSingleProviderApiKeyCatalog", () => {
       ctx: createCatalogContext({
         apiKeys: { "test-provider": "secret-key" },
       }),
-      expected: createPairedCatalogProviders("secret-key"),
+      expected: createPairedCatalogProviders(NON_ENV_SECRETREF_MARKER),
+    });
+  });
+
+  it("preserves env markers for each paired provider", async () => {
+    await expectPairedCatalogResult({
+      ctx: createCatalogContext({
+        apiKeys: { "test-provider": "OPENAI_API_KEY" },
+      }),
+      expected: createPairedCatalogProviders("OPENAI_API_KEY"),
     });
   });
 });
