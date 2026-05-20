@@ -11,9 +11,10 @@ import {
   normalizeCodexServiceTier,
   type CodexAppServerApprovalPolicy,
   type CodexAppServerSandboxMode,
+  type CodexWorkspacePromptSurface,
 } from "./config.js";
 import type { PluginAppPolicyContext } from "./plugin-thread-config.js";
-import type { CodexServiceTier } from "./protocol.js";
+import type { CodexPersonality, CodexServiceTier } from "./protocol.js";
 
 const CODEX_APP_SERVER_NATIVE_AUTH_PROVIDER = "openai-codex";
 const PUBLIC_OPENAI_MODEL_PROVIDER = "openai";
@@ -39,6 +40,9 @@ export type CodexAppServerThreadBinding = {
   approvalPolicy?: CodexAppServerApprovalPolicy;
   sandbox?: CodexAppServerSandboxMode;
   serviceTier?: CodexServiceTier;
+  personality?: CodexPersonality;
+  workspacePromptSurface?: CodexWorkspacePromptSurface;
+  workspacePromptFingerprint?: string;
   dynamicToolsFingerprint?: string;
   userMcpServersFingerprint?: string;
   mcpServersFingerprint?: string;
@@ -105,6 +109,12 @@ export async function readCodexAppServerBinding(
       approvalPolicy: readApprovalPolicy(parsed.approvalPolicy),
       sandbox: readSandboxMode(parsed.sandbox),
       serviceTier: readServiceTier(parsed.serviceTier),
+      personality: readPersonality(parsed.personality),
+      workspacePromptSurface: readWorkspacePromptSurface(parsed.workspacePromptSurface),
+      workspacePromptFingerprint:
+        typeof parsed.workspacePromptFingerprint === "string"
+          ? parsed.workspacePromptFingerprint
+          : undefined,
       dynamicToolsFingerprint:
         typeof parsed.dynamicToolsFingerprint === "string"
           ? parsed.dynamicToolsFingerprint
@@ -158,6 +168,9 @@ export async function writeCodexAppServerBinding(
     approvalPolicy: binding.approvalPolicy,
     sandbox: binding.sandbox,
     serviceTier: binding.serviceTier,
+    personality: binding.personality,
+    workspacePromptSurface: binding.workspacePromptSurface,
+    workspacePromptFingerprint: binding.workspacePromptFingerprint,
     dynamicToolsFingerprint: binding.dynamicToolsFingerprint,
     userMcpServersFingerprint: binding.userMcpServersFingerprint,
     mcpServersFingerprint: binding.mcpServersFingerprint,
@@ -391,6 +404,14 @@ function readSandboxMode(value: unknown): CodexAppServerSandboxMode | undefined 
   return value === "read-only" || value === "workspace-write" || value === "danger-full-access"
     ? value
     : undefined;
+}
+
+function readPersonality(value: unknown): CodexPersonality | undefined {
+  return value === "none" || value === "friendly" || value === "pragmatic" ? value : undefined;
+}
+
+function readWorkspacePromptSurface(value: unknown): CodexWorkspacePromptSurface | undefined {
+  return value === "per_turn_context" || value === "thread_developer" ? value : undefined;
 }
 
 function readServiceTier(value: unknown): CodexServiceTier | undefined {

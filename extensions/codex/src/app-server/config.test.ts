@@ -457,11 +457,24 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
       readCodexPluginConfig({
         codexDynamicToolsLoading: "direct",
         codexDynamicToolsExclude: ["custom_tool"],
+        personalityMode: "soul_when_present",
+        workspacePromptSurface: "thread_developer",
       }),
     ).toEqual({
       codexDynamicToolsLoading: "direct",
       codexDynamicToolsExclude: ["custom_tool"],
+      personalityMode: "soul_when_present",
+      workspacePromptSurface: "thread_developer",
     });
+  });
+
+  it("rejects invalid workspace prompt and personality modes", () => {
+    expect(
+      readCodexPluginConfig({
+        workspacePromptSurface: "per-file",
+        personalityMode: "blank",
+      }),
+    ).toEqual({});
   });
 
   it("rejects the retired dynamic tool profile key", () => {

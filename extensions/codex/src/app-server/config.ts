@@ -2,7 +2,7 @@ import { createHmac, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { hostname as readHostName } from "node:os";
 import { z } from "zod";
-import type { CodexSandboxPolicy, CodexServiceTier } from "./protocol.js";
+import type { CodexPersonality, CodexSandboxPolicy, CodexServiceTier } from "./protocol.js";
 
 const START_OPTIONS_KEY_SECRET_SYMBOL = Symbol.for("openclaw.codexAppServerStartOptionsKeySecret");
 const START_OPTIONS_KEY_SECRET = getStartOptionsKeySecret();
@@ -34,6 +34,8 @@ type CodexAppServerApprovalsReviewer = "user" | "auto_review" | "guardian_subage
 type CodexAppServerCommandSource = "managed" | "resolved-managed" | "config" | "env";
 export type CodexDynamicToolsLoading = "searchable" | "direct";
 export type CodexPluginDestructivePolicy = boolean;
+export type CodexPersonalityMode = "codex" | "soul_when_present" | "none";
+export type CodexWorkspacePromptSurface = "per_turn_context" | "thread_developer";
 
 export const CODEX_PLUGINS_MARKETPLACE_NAME = "openai-curated";
 
@@ -113,6 +115,8 @@ export type CodexAppServerRuntimeOptions = {
 export type CodexPluginConfig = {
   codexDynamicToolsLoading?: CodexDynamicToolsLoading;
   codexDynamicToolsExclude?: string[];
+  personalityMode?: CodexPersonalityMode;
+  workspacePromptSurface?: CodexWorkspacePromptSurface;
   discovery?: {
     enabled?: boolean;
     timeoutMs?: number;
@@ -158,6 +162,12 @@ export const CODEX_APP_SERVER_CONFIG_KEYS = [
   "defaultWorkspaceDir",
 ] as const;
 
+export const CODEX_PERSONALITY_MODE_CONFIG_KEYS = ["codex", "soul_when_present", "none"] as const;
+export const CODEX_WORKSPACE_PROMPT_SURFACE_CONFIG_KEYS = [
+  "per_turn_context",
+  "thread_developer",
+] as const;
+
 export const CODEX_COMPUTER_USE_CONFIG_KEYS = [
   "enabled",
   "autoInstall",
@@ -197,6 +207,8 @@ const codexAppServerApprovalPolicySchema = z.enum([
 const codexAppServerSandboxSchema = z.enum(["read-only", "workspace-write", "danger-full-access"]);
 const codexAppServerApprovalsReviewerSchema = z.enum(["user", "auto_review", "guardian_subagent"]);
 const codexDynamicToolsLoadingSchema = z.enum(["searchable", "direct"]);
+const codexPersonalityModeSchema = z.enum(CODEX_PERSONALITY_MODE_CONFIG_KEYS);
+const codexWorkspacePromptSurfaceSchema = z.enum(CODEX_WORKSPACE_PROMPT_SURFACE_CONFIG_KEYS);
 const codexAppServerServiceTierSchema = z
   .preprocess(
     (value) => (value === null ? null : normalizeCodexServiceTier(value)),
@@ -225,6 +237,8 @@ const codexPluginConfigSchema = z
   .object({
     codexDynamicToolsLoading: codexDynamicToolsLoadingSchema.optional(),
     codexDynamicToolsExclude: z.array(z.string()).optional(),
+    personalityMode: codexPersonalityModeSchema.optional(),
+    workspacePromptSurface: codexWorkspacePromptSurfaceSchema.optional(),
     discovery: z
       .object({
         enabled: z.boolean().optional(),
@@ -281,6 +295,26 @@ export function readCodexPluginConfig(value: unknown): CodexPluginConfig {
     return config;
   }
   return { ...config, ...(plugins.data ? { codexPlugins: plugins.data } : {}) };
+}
+
+export function resolveCodexWorkspacePromptSurface(
+  pluginConfig?: CodexPluginConfig,
+): CodexWorkspacePromptSurface {
+  return pluginConfig?.workspacePromptSurface ?? "per_turn_context";
+}
+
+export function resolveCodexPersonalityOverride(params: {
+  pluginConfig?: CodexPluginConfig;
+  hasSoulContext: boolean;
+}): CodexPersonality | undefined {
+  const mode = params.pluginConfig?.personalityMode ?? "soul_when_present";
+  if (mode === "none") {
+    return "none";
+  }
+  if (mode === "soul_when_present" && params.hasSoulContext) {
+    return "none";
+  }
+  return undefined;
 }
 
 export function resolveCodexPluginsPolicy(pluginConfig?: unknown): ResolvedCodexPluginsPolicy {

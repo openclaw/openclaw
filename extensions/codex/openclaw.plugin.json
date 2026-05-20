@@ -43,6 +43,16 @@
         "items": { "type": "string" },
         "default": []
       },
+      "workspacePromptSurface": {
+        "type": "string",
+        "enum": ["per_turn_context", "thread_developer"],
+        "default": "per_turn_context"
+      },
+      "personalityMode": {
+        "type": "string",
+        "enum": ["codex", "soul_when_present", "none"],
+        "default": "soul_when_present"
+      },
       "discovery": {
         "type": "object",
         "additionalProperties": false,
@@ -204,6 +214,16 @@
     "codexDynamicToolsExclude": {
       "label": "Dynamic Tool Excludes",
       "help": "Additional OpenClaw dynamic tool names to omit from Codex app-server turns.",
+      "advanced": true
+    },
+    "workspacePromptSurface": {
+      "label": "Workspace Prompt Surface",
+      "help": "Controls whether OpenClaw workspace profile files stay in per-turn context or move to Codex thread developer instructions.",
+      "advanced": true
+    },
+    "personalityMode": {
+      "label": "Native Personality Mode",
+      "help": "Controls Codex's native personality overlay: keep Codex, disable it when SOUL.md is present, or always disable it.",
       "advanced": true
     },
     "discovery": {

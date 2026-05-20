@@ -8,7 +8,11 @@ import { listRegisteredPluginAgentPromptGuidance } from "openclaw/plugin-sdk/plu
 import { CODEX_GPT5_HEARTBEAT_PROMPT_OVERLAY } from "../../prompt-overlay.js";
 import { isModernCodexModel } from "../../provider.js";
 import { isCodexAppServerConnectionClosedError, type CodexAppServerClient } from "./client.js";
-import { codexSandboxPolicyForTurn, type CodexAppServerRuntimeOptions } from "./config.js";
+import {
+  codexSandboxPolicyForTurn,
+  type CodexAppServerRuntimeOptions,
+  type CodexWorkspacePromptSurface,
+} from "./config.js";
 import {
   resolveCodexContextEngineProjectionMaxChars,
   resolveCodexContextEngineProjectionReserveTokens,
@@ -26,6 +30,7 @@ import {
 import {
   isJsonObject,
   type CodexDynamicToolSpec,
+  type CodexPersonality,
   type CodexSandboxPolicy,
   type CodexThreadResumeParams,
   type CodexThreadStartParams,
@@ -77,10 +82,6 @@ export const CODEX_CODE_MODE_DISABLED_THREAD_CONFIG: JsonObject = {
   "features.code_mode_only": false,
 };
 
-const CODEX_LIGHTWEIGHT_CONTEXT_THREAD_CONFIG: JsonObject = {
-  project_doc_max_bytes: 0,
-};
-
 export async function startOrResumeThread(params: {
   client: CodexAppServerClient;
   params: EmbeddedRunAttemptParams;
@@ -89,6 +90,9 @@ export async function startOrResumeThread(params: {
   dynamicTools: CodexDynamicToolSpec[];
   appServer: CodexAppServerRuntimeOptions;
   developerInstructions?: string;
+  personality?: CodexPersonality;
+  workspacePromptSurface?: CodexWorkspacePromptSurface;
+  workspacePromptFingerprint?: string;
   config?: JsonObject;
   finalConfigPatch?: JsonObject;
   nativeCodeModeEnabled?: boolean;
@@ -100,6 +104,7 @@ export async function startOrResumeThread(params: {
   contextEngineProjection?: CodexContextEngineThreadBootstrapProjection;
 }): Promise<CodexAppServerThreadLifecycleBinding> {
   const dynamicToolsFingerprint = fingerprintDynamicTools(params.dynamicTools);
+  const workspacePromptSurface = params.workspacePromptSurface ?? "per_turn_context";
   const contextEngineBinding = buildContextEngineBinding(
     params.params,
     params.contextEngineProjection,
@@ -159,6 +164,26 @@ export async function startOrResumeThread(params: {
     });
     await clearCodexAppServerBinding(params.params.sessionFile);
     binding = undefined;
+  }
+  if (binding?.threadId) {
+    const promptSurfaceChanged =
+      !isManualCodexResumeBindingWithoutPromptMetadata(binding) &&
+      (binding.personality !== params.personality ||
+        binding.workspacePromptSurface !== workspacePromptSurface ||
+        binding.workspacePromptFingerprint !== params.workspacePromptFingerprint);
+    if (promptSurfaceChanged) {
+      embeddedAgentLog.debug("codex app-server prompt surface changed; starting a new thread", {
+        threadId: binding.threadId,
+        personality: params.personality,
+        previousPersonality: binding.personality,
+        workspacePromptSurface,
+        previousWorkspacePromptSurface: binding.workspacePromptSurface,
+        workspacePromptFingerprint: params.workspacePromptFingerprint,
+        previousWorkspacePromptFingerprint: binding.workspacePromptFingerprint,
+      });
+      await clearCodexAppServerBinding(params.params.sessionFile);
+      binding = undefined;
+    }
   }
   if (
     binding?.threadId &&
@@ -263,6 +288,7 @@ export async function startOrResumeThread(params: {
               appServer: params.appServer,
               dynamicTools: params.dynamicTools,
               developerInstructions: params.developerInstructions,
+              personality: params.personality,
               config: resumeConfig,
               nativeCodeModeEnabled: params.nativeCodeModeEnabled,
               nativeCodeModeOnlyEnabled: params.nativeCodeModeOnlyEnabled,
@@ -289,6 +315,9 @@ export async function startOrResumeThread(params: {
             authProfileId: boundAuthProfileId,
             model: params.params.modelId,
             modelProvider: response.modelProvider ?? fallbackModelProvider,
+            personality: params.personality,
+            workspacePromptSurface,
+            workspacePromptFingerprint: params.workspacePromptFingerprint,
             dynamicToolsFingerprint,
             userMcpServersFingerprint,
             mcpServersFingerprint: nextMcpServersFingerprint,
@@ -322,6 +351,9 @@ export async function startOrResumeThread(params: {
           authProfileId: boundAuthProfileId,
           model: params.params.modelId,
           modelProvider: response.modelProvider ?? fallbackModelProvider,
+          personality: params.personality,
+          workspacePromptSurface,
+          workspacePromptFingerprint: params.workspacePromptFingerprint,
           dynamicToolsFingerprint,
           userMcpServersFingerprint,
           mcpServersFingerprint: nextMcpServersFingerprint,
@@ -360,6 +392,7 @@ export async function startOrResumeThread(params: {
         dynamicTools: params.dynamicTools,
         appServer: params.appServer,
         developerInstructions: params.developerInstructions,
+        personality: params.personality,
         config,
         nativeCodeModeEnabled: params.nativeCodeModeEnabled,
         nativeCodeModeOnlyEnabled: params.nativeCodeModeOnlyEnabled,
@@ -385,6 +418,9 @@ export async function startOrResumeThread(params: {
         authProfileId: params.params.authProfileId,
         model: response.model ?? params.params.modelId,
         modelProvider: response.modelProvider ?? modelProvider,
+        personality: params.personality,
+        workspacePromptSurface,
+        workspacePromptFingerprint: params.workspacePromptFingerprint,
         dynamicToolsFingerprint,
         userMcpServersFingerprint,
         mcpServersFingerprint: nextMcpServersFingerprint,
@@ -420,6 +456,9 @@ export async function startOrResumeThread(params: {
     authProfileId: params.params.authProfileId,
     model: response.model ?? params.params.modelId,
     modelProvider: response.modelProvider ?? modelProvider,
+    personality: params.personality,
+    workspacePromptSurface,
+    workspacePromptFingerprint: params.workspacePromptFingerprint,
     dynamicToolsFingerprint,
     userMcpServersFingerprint,
     mcpServersFingerprint: nextMcpServersFingerprint,
@@ -434,6 +473,17 @@ export async function startOrResumeThread(params: {
       ...(rotatedContextEngineBinding ? { rotatedContextEngineBinding } : {}),
     },
   };
+}
+
+function isManualCodexResumeBindingWithoutPromptMetadata(
+  binding: CodexAppServerThreadBinding,
+): boolean {
+  return (
+    binding.personality === undefined &&
+    binding.workspacePromptSurface === undefined &&
+    binding.workspacePromptFingerprint === undefined &&
+    binding.dynamicToolsFingerprint === undefined
+  );
 }
 
 export function buildContextEngineBinding(
@@ -560,6 +610,7 @@ export function buildThreadStartParams(
     dynamicTools: CodexDynamicToolSpec[];
     appServer: CodexAppServerRuntimeOptions;
     developerInstructions?: string;
+    personality?: CodexPersonality;
     config?: JsonObject;
     nativeCodeModeEnabled?: boolean;
     nativeCodeModeOnlyEnabled?: boolean;
@@ -580,6 +631,7 @@ export function buildThreadStartParams(
     approvalsReviewer: options.appServer.approvalsReviewer,
     sandbox: options.appServer.sandbox,
     ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
+    ...(options.personality ? { personality: options.personality } : {}),
     serviceName: "OpenClaw",
     config: buildCodexRuntimeThreadConfigForRun(params, options.config, {
       nativeCodeModeEnabled: options.nativeCodeModeEnabled,
@@ -603,6 +655,7 @@ export function buildThreadResumeParams(
     appServer: CodexAppServerRuntimeOptions;
     dynamicTools?: CodexDynamicToolSpec[];
     developerInstructions?: string;
+    personality?: CodexPersonality;
     config?: JsonObject;
     nativeCodeModeEnabled?: boolean;
     nativeCodeModeOnlyEnabled?: boolean;
@@ -623,6 +676,7 @@ export function buildThreadResumeParams(
     approvalsReviewer: options.appServer.approvalsReviewer,
     sandbox: options.appServer.sandbox,
     ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
+    ...(options.personality ? { personality: options.personality } : {}),
     config: buildCodexRuntimeThreadConfigForRun(params, options.config, {
       nativeCodeModeEnabled: options.nativeCodeModeEnabled,
       nativeCodeModeOnlyEnabled: options.nativeCodeModeOnlyEnabled,
@@ -667,20 +721,11 @@ export function buildCodexRuntimeThreadConfig(
 }
 
 function buildCodexRuntimeThreadConfigForRun(
-  params: EmbeddedRunAttemptParams,
+  _params: EmbeddedRunAttemptParams,
   config: JsonObject | undefined,
   options: { nativeCodeModeEnabled?: boolean; nativeCodeModeOnlyEnabled?: boolean } = {},
 ): JsonObject {
-  const runtimeConfig = buildCodexRuntimeThreadConfig(config, options);
-  if (params.bootstrapContextMode !== "lightweight") {
-    return runtimeConfig;
-  }
-  return (
-    mergeCodexThreadConfigs(runtimeConfig, CODEX_LIGHTWEIGHT_CONTEXT_THREAD_CONFIG) ?? {
-      ...runtimeConfig,
-      ...CODEX_LIGHTWEIGHT_CONTEXT_THREAD_CONFIG,
-    }
-  );
+  return buildCodexRuntimeThreadConfig(config, options);
 }
 
 export function buildTurnStartParams(
@@ -842,7 +887,11 @@ function compareJsonFingerprint(left: JsonValue, right: JsonValue): number {
 
 export function buildDeveloperInstructions(
   params: EmbeddedRunAttemptParams,
-  options: { dynamicTools?: readonly CodexDynamicToolSpec[] } = {},
+  options: {
+    dynamicTools?: readonly CodexDynamicToolSpec[];
+    includeOpenClawTurnContextBridge?: boolean;
+    useSoulPromptContextForPersonality?: boolean;
+  } = {},
 ): string {
   const nativeCommandGuidance = listRegisteredPluginAgentPromptGuidance({
     surface: "codex_app_server",
@@ -850,6 +899,7 @@ export function buildDeveloperInstructions(
   }).join("\n");
   const sections = [
     "You are a personal agent running inside OpenClaw. OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.",
+    buildOpenClawTurnContextBridge(options),
     buildDeferredDynamicToolManifest(options.dynamicTools),
     "Use Codex native `spawn_agent` for Codex subagents. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation.",
     buildVisibleReplyInstruction(params, options.dynamicTools),
@@ -857,6 +907,25 @@ export function buildDeveloperInstructions(
     params.extraSystemPrompt,
   ];
   return sections.filter((section) => typeof section === "string" && section.trim()).join("\n\n");
+}
+
+function buildOpenClawTurnContextBridge(options: {
+  includeOpenClawTurnContextBridge?: boolean;
+  useSoulPromptContextForPersonality?: boolean;
+}): string | undefined {
+  if (!options.includeOpenClawTurnContextBridge) {
+    return undefined;
+  }
+  const lines = [
+    "OpenClaw is the host runtime; Codex is the native execution harness. OpenClaw may prepend current-turn workspace, memory, skill, or channel context to the user input. Treat that OpenClaw context as current reference material for this turn, not as a replacement for Codex system or developer instructions.",
+    "Do not infer that every OpenClaw turn is software-engineering work. Follow the user's actual request and the active OpenClaw channel/runtime context.",
+  ];
+  if (options.useSoulPromptContextForPersonality) {
+    lines.push(
+      "When SOUL.md appears in OpenClaw turn context, use SOUL.md as the positive source for personality, tone, and agent voice, subject to higher-priority safety, privacy, tool, and current-request instructions.",
+    );
+  }
+  return lines.join("\n");
 }
 
 function buildDeferredDynamicToolManifest(

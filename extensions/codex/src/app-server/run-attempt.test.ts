@@ -426,6 +426,7 @@ async function writeExistingBinding(
     cwd: workspaceDir,
     model: "gpt-5.4-codex",
     modelProvider: "openai",
+    workspacePromptSurface: "per_turn_context",
     ...overrides,
   });
 }
@@ -4720,7 +4721,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).toContain("make the default webpage openclaw");
   });
 
-  it("passes stable workspace files as Codex developer instructions and keeps MEMORY.md as turn context", async () => {
+  it("keeps stable workspace files in per-turn Codex context by default", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const agentsGuidance = "Follow AGENTS guidance.";
@@ -4750,21 +4751,24 @@ describe("runCodexAppServerAttempt", () => {
     const threadStartParams = threadStart?.params as {
       config?: { instructions?: string };
       developerInstructions?: string;
+      personality?: string;
     };
     const config = threadStartParams.config;
 
-    expect(threadStartParams.developerInstructions).toContain("OpenClaw Agent Soul");
+    expect(threadStartParams.developerInstructions).toContain("OpenClaw is the host runtime");
     expect(threadStartParams.developerInstructions).toContain(
-      "They define who you are, how you work",
+      "use SOUL.md as the positive source for personality",
     );
-    expect(threadStartParams.developerInstructions).toContain(soulGuidance);
-    expect(threadStartParams.developerInstructions).toContain(identityGuidance);
-    expect(threadStartParams.developerInstructions).toContain(toolGuidance);
-    expect(threadStartParams.developerInstructions).toContain(userProfile);
+    expect(threadStartParams.developerInstructions).not.toContain("OpenClaw Agent Soul");
+    expect(threadStartParams.developerInstructions).not.toContain(soulGuidance);
+    expect(threadStartParams.developerInstructions).not.toContain(identityGuidance);
+    expect(threadStartParams.developerInstructions).not.toContain(toolGuidance);
+    expect(threadStartParams.developerInstructions).not.toContain(userProfile);
     expect(threadStartParams.developerInstructions).not.toContain(heartbeatChecklist);
     expect(threadStartParams.developerInstructions).not.toContain(memorySummary);
-    expect(threadStartParams.developerInstructions).not.toContain("Codex loads AGENTS.md natively");
+    expect(threadStartParams.developerInstructions).not.toContain("Codex loads AGENTS.md");
     expect(threadStartParams.developerInstructions).not.toContain(agentsGuidance);
+    expect(threadStartParams.personality).toBe("none");
     expect(config?.instructions).toBeUndefined();
 
     const turnStart = harness.requests.find((request) => request.method === "turn/start");
@@ -4775,13 +4779,13 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).toContain("OpenClaw runtime context for this turn:");
     expect(inputText).not.toContain("does not override Codex system/developer instructions");
     expect(inputText).not.toContain("not developer policy");
-    expect(inputText).not.toContain(soulGuidance);
-    expect(inputText).not.toContain(identityGuidance);
-    expect(inputText).not.toContain(toolGuidance);
-    expect(inputText).not.toContain(userProfile);
+    expect(inputText).toContain(soulGuidance);
+    expect(inputText).toContain(identityGuidance);
+    expect(inputText).toContain(toolGuidance);
+    expect(inputText).toContain(userProfile);
     expect(inputText).not.toContain(heartbeatChecklist);
     expect(inputText).toContain(memorySummary);
-    expect(inputText).toContain("Codex loads AGENTS.md natively");
+    expect(inputText).toContain("Codex loads AGENTS.md and AGENTS.override.md natively");
     expect(inputText).not.toContain(agentsGuidance);
     expect(inputText).toContain("Current user request:\nhello");
 
@@ -4823,6 +4827,172 @@ describe("runCodexAppServerAttempt", () => {
       injectedChars: agentsGuidance.length,
       truncated: false,
     });
+  });
+
+  it("can opt into thread-level Codex developer instructions for stable workspace files", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "Follow AGENTS guidance.");
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "Soul voice goes here.");
+    await fs.writeFile(path.join(workspaceDir, "IDENTITY.md"), "Identity guidance goes here.");
+    await fs.writeFile(path.join(workspaceDir, "TOOLS.md"), "Tool guidance goes here.");
+    await fs.writeFile(path.join(workspaceDir, "USER.md"), "User profile goes here.");
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Memory summary goes here.");
+    const harness = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+      pluginConfig: { workspacePromptSurface: "thread_developer" },
+    });
+    await harness.waitForMethod("turn/start");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    const result = await run;
+
+    const threadStart = harness.requests.find((request) => request.method === "thread/start");
+    const threadStartParams = threadStart?.params as {
+      developerInstructions?: string;
+      personality?: string;
+    };
+    expect(threadStartParams.developerInstructions).toContain("OpenClaw Agent Soul");
+    expect(threadStartParams.developerInstructions).toContain("Soul voice goes here.");
+    expect(threadStartParams.developerInstructions).toContain("Identity guidance goes here.");
+    expect(threadStartParams.developerInstructions).toContain("Tool guidance goes here.");
+    expect(threadStartParams.developerInstructions).toContain("User profile goes here.");
+    expect(threadStartParams.developerInstructions).not.toContain("Memory summary goes here.");
+    expect(threadStartParams.developerInstructions).not.toContain("Follow AGENTS guidance.");
+    expect(threadStartParams.personality).toBe("none");
+
+    const turnStart = harness.requests.find((request) => request.method === "turn/start");
+    const inputText =
+      (turnStart?.params as { input?: Array<{ text?: string }> } | undefined)?.input?.[0]?.text ??
+      "";
+    expect(inputText).not.toContain("Soul voice goes here.");
+    expect(inputText).not.toContain("Identity guidance goes here.");
+    expect(inputText).not.toContain("Tool guidance goes here.");
+    expect(inputText).not.toContain("User profile goes here.");
+    expect(inputText).toContain("Memory summary goes here.");
+    expect(inputText).not.toContain("Follow AGENTS guidance.");
+
+    const binding = await readCodexAppServerBinding(sessionFile);
+    expect(binding?.workspacePromptSurface).toBe("thread_developer");
+    expect(binding?.workspacePromptFingerprint).toMatch(/^[a-f0-9]{64}$/);
+    expect(
+      result.systemPromptReport?.injectedWorkspaceFiles.find((file) => file.name === "SOUL.md"),
+    ).toMatchObject({ injectedChars: "Soul voice goes here.".length });
+  });
+
+  it("rotates legacy Codex bindings without workspace prompt surface metadata", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "Soul voice goes here.");
+    await writeExistingBinding(sessionFile, workspaceDir, {
+      dynamicToolsFingerprint: "[]",
+      workspacePromptSurface: undefined,
+    });
+    const harness = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    expect(harness.requests.some((request) => request.method === "thread/resume")).toBe(false);
+    expect(harness.requests.some((request) => request.method === "thread/start")).toBe(true);
+    const binding = await readCodexAppServerBinding(sessionFile);
+    expect(binding?.workspacePromptSurface).toBe("per_turn_context");
+    expect(binding?.personality).toBe("none");
+  });
+
+  it("preserves manual /codex resume bindings without prompt metadata", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "Soul voice goes here.");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-existing",
+      cwd: workspaceDir,
+      model: "gpt-5.4-codex",
+      modelProvider: "openai",
+    });
+    const harness = createResumeHarness();
+
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+    await run;
+
+    expect(harness.requests.some((request) => request.method === "thread/resume")).toBe(true);
+    expect(harness.requests.some((request) => request.method === "thread/start")).toBe(false);
+    const binding = await readCodexAppServerBinding(sessionFile);
+    expect(binding?.threadId).toBe("thread-existing");
+    expect(binding?.workspacePromptSurface).toBe("per_turn_context");
+    expect(binding?.personality).toBe("none");
+    expect(binding?.dynamicToolsFingerprint).toBe("[]");
+  });
+
+  it("rotates Codex bindings when native AGENTS.md content changes", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "Follow AGENTS v1.");
+    const firstHarness = createStartedThreadHarness();
+
+    const firstRun = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    await firstHarness.waitForMethod("turn/start");
+    await firstHarness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await firstRun;
+    const firstBinding = await readCodexAppServerBinding(sessionFile);
+    expect(firstBinding?.workspacePromptFingerprint).toMatch(/^[a-f0-9]{64}$/);
+
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "Follow AGENTS v2.");
+    const secondHarness = createStartedThreadHarness();
+    const secondRun = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    await secondHarness.waitForMethod("turn/start");
+    await secondHarness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await secondRun;
+
+    expect(secondHarness.requests.some((request) => request.method === "thread/resume")).toBe(
+      false,
+    );
+    const secondBinding = await readCodexAppServerBinding(sessionFile);
+    expect(secondBinding?.workspacePromptFingerprint).not.toBe(
+      firstBinding?.workspacePromptFingerprint,
+    );
+  });
+
+  it("rotates thread-developer Codex bindings when SOUL.md changes", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "Soul voice v1.");
+    const firstHarness = createStartedThreadHarness();
+
+    const firstRun = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+      pluginConfig: { workspacePromptSurface: "thread_developer" },
+    });
+    await firstHarness.waitForMethod("turn/start");
+    await firstHarness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await firstRun;
+    const firstBinding = await readCodexAppServerBinding(sessionFile);
+
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "Soul voice v2.");
+    const secondHarness = createStartedThreadHarness();
+    const secondRun = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+      pluginConfig: { workspacePromptSurface: "thread_developer" },
+    });
+    await secondHarness.waitForMethod("turn/start");
+    await secondHarness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await secondRun;
+
+    expect(secondHarness.requests.some((request) => request.method === "thread/resume")).toBe(
+      false,
+    );
+    const secondBinding = await readCodexAppServerBinding(sessionFile);
+    expect(secondBinding?.workspacePromptFingerprint).not.toBe(
+      firstBinding?.workspacePromptFingerprint,
+    );
   });
 
   it("points heartbeat Codex turns at HEARTBEAT.md without injecting its contents", async () => {
@@ -4959,11 +5129,14 @@ describe("runCodexAppServerAttempt", () => {
     const threadStartParams = threadStart?.params as {
       developerInstructions?: string;
       config?: Record<string, unknown>;
+      personality?: string;
     };
-    expect(threadStartParams.config?.project_doc_max_bytes).toBe(0);
+    expect(threadStartParams.config?.project_doc_max_bytes).toBeUndefined();
     expect(threadStartParams.developerInstructions).not.toContain("Soul voice goes here.");
     expect(threadStartParams.developerInstructions).not.toContain("Follow AGENTS guidance.");
     expect(threadStartParams.developerInstructions).not.toContain("<available_skills>");
+    expect(threadStartParams.developerInstructions).not.toContain("OpenClaw is the host runtime");
+    expect(threadStartParams.personality).toBeUndefined();
 
     const turnStart = harness.requests.find((request) => request.method === "turn/start");
     const turnStartParams = turnStart?.params as {

@@ -80,11 +80,14 @@ import { ensureCodexComputerUse } from "./computer-use.js";
 import {
   isCodexAppServerApprovalPolicyAllowedByRequirements,
   readCodexPluginConfig,
+  resolveCodexPersonalityOverride,
   resolveCodexPluginsPolicy,
   resolveCodexAppServerRuntimeOptions,
+  resolveCodexWorkspacePromptSurface,
   withMcpElicitationsApprovalPolicy,
   type CodexAppServerRuntimeOptions,
   type CodexPluginConfig,
+  type CodexWorkspacePromptSurface,
 } from "./config.js";
 import {
   projectContextEngineAssemblyForCodex,
@@ -196,7 +199,7 @@ const CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS = 5 * 60_000;
 const CODEX_NATIVE_HOOK_RELAY_RENEW_INTERVAL_MS = 60_000;
 const CODEX_STEER_ALL_DEBOUNCE_MS = 500;
 const LOG_FIELD_MAX_LENGTH = 160;
-const CODEX_NATIVE_PROJECT_DOC_BASENAMES = new Set(["agents.md"]);
+const CODEX_NATIVE_PROJECT_DOC_BASENAMES = new Set(["agents.md", "agents.override.md"]);
 const CODEX_WORKSPACE_DEVELOPER_CONTEXT_BASENAMES = new Set([
   "identity.md",
   "soul.md",
@@ -233,6 +236,7 @@ type CodexWorkspaceBootstrapContext = CodexBootstrapContext & {
   promptContext?: string;
   developerInstructions?: string;
   heartbeatCollaborationInstructions?: string;
+  workspacePromptFingerprint?: string;
 };
 
 let openClawCodingToolsFactoryForTests: OpenClawCodingToolsFactory | undefined;
@@ -1008,16 +1012,33 @@ export async function runCodexAppServerAttempt(
     historyMessages =
       (await readMirroredSessionHistoryMessages(activeSessionFile)) ?? historyMessages;
   }
+  const workspacePromptSurface = resolveCodexWorkspacePromptSurface(pluginConfig);
   const workspaceBootstrapContext = await buildCodexWorkspaceBootstrapContext({
     params,
     resolvedWorkspace,
     effectiveWorkspace,
     sessionKey: sandboxSessionKey,
     sessionAgentId,
+    workspacePromptSurface,
+  });
+  const shouldInjectOpenClawPromptContext = shouldInjectCodexOpenClawPromptContext(params);
+  const hasSoulContext = hasDeliveredCodexSoulContext(
+    workspaceBootstrapContext,
+    shouldInjectOpenClawPromptContext,
+  );
+  const codexPersonality = resolveCodexPersonalityOverride({
+    pluginConfig,
+    hasSoulContext,
   });
   const baseDeveloperInstructions = joinPresentSections(
     buildDeveloperInstructions(params, {
       dynamicTools: toolBridge.specs,
+      includeOpenClawTurnContextBridge:
+        shouldInjectOpenClawPromptContext && Boolean(workspaceBootstrapContext.promptContext),
+      useSoulPromptContextForPersonality:
+        workspacePromptSurface === "per_turn_context" &&
+        hasSoulContext &&
+        codexPersonality === "none",
     }),
     workspaceBootstrapContext.developerInstructions,
   );
@@ -1283,6 +1304,9 @@ export async function runCodexAppServerAttempt(
               dynamicTools: toolBridge.specs,
               appServer: pluginAppServer,
               developerInstructions: promptBuild.developerInstructions,
+              personality: codexPersonality,
+              workspacePromptSurface,
+              workspacePromptFingerprint: workspaceBootstrapContext.workspacePromptFingerprint,
               config: threadConfig,
               finalConfigPatch: nativeHookRelayConfig,
               nativeCodeModeEnabled: nativeToolSurfaceEnabled,
@@ -4282,6 +4306,7 @@ async function buildCodexWorkspaceBootstrapContext(params: {
   effectiveWorkspace: string;
   sessionKey: string;
   sessionAgentId: string;
+  workspacePromptSurface: CodexWorkspacePromptSurface;
 }): Promise<CodexWorkspaceBootstrapContext> {
   try {
     const bootstrapContext = await resolveBootstrapContextForRun({
@@ -4301,11 +4326,19 @@ async function buildCodexWorkspaceBootstrapContext(params: {
         targetWorkspaceDir: params.effectiveWorkspace,
       }),
     );
-    const promptContextFiles = selectCodexWorkspacePromptContextFiles(contextFiles);
+    const promptContextFiles = selectCodexWorkspacePromptContextFiles(
+      contextFiles,
+      params.workspacePromptSurface,
+    );
     const developerInstructionFiles = shouldInjectCodexOpenClawPromptContext(params.params)
-      ? selectCodexWorkspaceDeveloperInstructionFiles(contextFiles)
+      ? selectCodexWorkspaceDeveloperInstructionFiles(contextFiles, params.workspacePromptSurface)
       : [];
     const heartbeatReferenceFiles = selectCodexWorkspaceHeartbeatReferenceFiles(contextFiles);
+    const workspacePromptFingerprint = fingerprintCodexWorkspacePromptContext({
+      contextFiles,
+      developerInstructionFiles,
+      workspacePromptSurface: params.workspacePromptSurface,
+    });
     return {
       ...bootstrapContext,
       contextFiles,
@@ -4316,6 +4349,7 @@ async function buildCodexWorkspaceBootstrapContext(params: {
       developerInstructions: renderCodexWorkspaceDeveloperInstructions(developerInstructionFiles),
       heartbeatCollaborationInstructions:
         renderCodexWorkspaceHeartbeatReference(heartbeatReferenceFiles),
+      workspacePromptFingerprint,
     };
   } catch (error) {
     embeddedAgentLog.warn("failed to load codex workspace bootstrap instructions", { error });
@@ -4551,14 +4585,13 @@ function prependCodexOpenClawPromptContext(prompt: string, context: string | und
 }
 
 function renderCodexWorkspaceBootstrapPromptContext(
-  contextFiles: EmbeddedContextFile[],
+  files: EmbeddedContextFile[],
 ): string | undefined {
-  const files = selectCodexWorkspacePromptContextFiles(contextFiles);
   if (files.length === 0) {
     return undefined;
   }
   const lines = [
-    "OpenClaw loaded these user-editable workspace files for the current turn. Codex loads AGENTS.md natively. SOUL.md, IDENTITY.md, TOOLS.md, and USER.md are provided separately as Codex developer instructions. HEARTBEAT.md is handled by heartbeat collaboration-mode guidance. Those files are not repeated here.",
+    "OpenClaw loaded these user-editable workspace files for the current turn. Codex loads AGENTS.md and AGENTS.override.md natively. HEARTBEAT.md is handled by heartbeat collaboration-mode guidance and is not repeated here.",
     "",
     "# Project Context",
     "",
@@ -4573,14 +4606,19 @@ function renderCodexWorkspaceBootstrapPromptContext(
 
 function selectCodexWorkspacePromptContextFiles(
   contextFiles: EmbeddedContextFile[],
+  workspacePromptSurface: CodexWorkspacePromptSurface,
 ): EmbeddedContextFile[] {
   return contextFiles
     .filter((file) => {
       const baseName = getCodexContextFileBasename(file.path);
+      const threadDeveloperFile =
+        workspacePromptSurface === "thread_developer" &&
+        baseName &&
+        CODEX_WORKSPACE_DEVELOPER_CONTEXT_BASENAMES.has(baseName);
       return (
         baseName &&
         !CODEX_NATIVE_PROJECT_DOC_BASENAMES.has(baseName) &&
-        !CODEX_WORKSPACE_DEVELOPER_CONTEXT_BASENAMES.has(baseName) &&
+        !threadDeveloperFile &&
         baseName !== CODEX_HEARTBEAT_CONTEXT_BASENAME &&
         !isMissingCodexBootstrapContextFile(file)
       );
@@ -4590,7 +4628,11 @@ function selectCodexWorkspacePromptContextFiles(
 
 function selectCodexWorkspaceDeveloperInstructionFiles(
   contextFiles: EmbeddedContextFile[],
+  workspacePromptSurface: CodexWorkspacePromptSurface,
 ): EmbeddedContextFile[] {
+  if (workspacePromptSurface !== "thread_developer") {
+    return [];
+  }
   return contextFiles
     .filter((file) => {
       const baseName = getCodexContextFileBasename(file.path);
@@ -4620,6 +4662,47 @@ function renderCodexWorkspaceDeveloperInstructions(
     lines.push(`### ${file.path}`, "", file.content, "");
   }
   return lines.join("\n").trim();
+}
+
+function hasDeliveredCodexSoulContext(
+  context: CodexWorkspaceBootstrapContext,
+  shouldInjectOpenClawPromptContext: boolean,
+): boolean {
+  return [
+    ...(shouldInjectOpenClawPromptContext ? (context.promptContextFiles ?? []) : []),
+    ...(context.developerInstructionFiles ?? []),
+  ].some((file) => getCodexContextFileBasename(file.path) === "soul.md");
+}
+
+function fingerprintCodexWorkspacePromptContext(params: {
+  contextFiles: EmbeddedContextFile[];
+  developerInstructionFiles: EmbeddedContextFile[];
+  workspacePromptSurface: CodexWorkspacePromptSurface;
+}): string | undefined {
+  const trackedFiles = params.contextFiles
+    .filter((file) => {
+      const baseName = getCodexContextFileBasename(file.path);
+      return (
+        baseName &&
+        !isMissingCodexBootstrapContextFile(file) &&
+        (CODEX_NATIVE_PROJECT_DOC_BASENAMES.has(baseName) ||
+          params.developerInstructionFiles.some(
+            (developerFile) => developerFile.path === file.path,
+          ))
+      );
+    })
+    .map((file) => ({
+      path: file.path,
+      content: file.content,
+      missing: isMissingCodexBootstrapContextFile(file),
+    }))
+    .toSorted((left, right) => left.path.localeCompare(right.path));
+  if (trackedFiles.length === 0 && params.workspacePromptSurface === "per_turn_context") {
+    return undefined;
+  }
+  return createHash("sha256")
+    .update(JSON.stringify({ surface: params.workspacePromptSurface, files: trackedFiles }))
+    .digest("hex");
 }
 
 function selectCodexWorkspaceHeartbeatReferenceFiles(
