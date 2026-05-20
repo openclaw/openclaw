@@ -190,6 +190,71 @@ describe("embedded attempt session lock lifecycle", () => {
     expect(release).toHaveBeenCalledTimes(2);
   });
 
+  it("allows delivery mirror appends while the prompt lock is released", async () => {
+    const sessionFile = await createTempSessionFile();
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLock = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+    await appendSessionTranscriptMessage({
+      transcriptPath: sessionFile,
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "mirrored media delivery" }],
+        provider: "openclaw",
+        model: "delivery-mirror",
+      },
+    });
+
+    await expect(controller.withSessionWriteLock(() => "late-write")).resolves.toBe("late-write");
+    const cleanupLock = await controller.acquireForCleanup();
+    await cleanupLock.release();
+
+    expect(controller.hasSessionTakeover()).toBe(false);
+    expect(release).toHaveBeenCalledTimes(3);
+  });
+
+  it("allows delivery mirror appends that migrate legacy linear transcripts", async () => {
+    const sessionFile = await createTempSessionFile();
+    await fs.appendFile(
+      sessionFile,
+      `${JSON.stringify({
+        type: "message",
+        id: "legacy-user",
+        message: { role: "user", content: [{ type: "text", text: "hello" }] },
+      })}\n`,
+      "utf8",
+    );
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLock = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+    await appendSessionTranscriptMessage({
+      transcriptPath: sessionFile,
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "mirrored migrated media delivery" }],
+        provider: "openclaw",
+        model: "delivery-mirror",
+      },
+    });
+
+    await expect(controller.withSessionWriteLock(() => "late-write")).resolves.toBe("late-write");
+    const cleanupLock = await controller.acquireForCleanup();
+    await cleanupLock.release();
+
+    await expect(fs.readFile(sessionFile, "utf8")).resolves.toContain('"parentId"');
+    expect(controller.hasSessionTakeover()).toBe(false);
+  });
+
   it("refreshes the prompt fence after an owned write throws", async () => {
     const sessionFile = await createTempSessionFile();
     const release = vi.fn(async () => {});
