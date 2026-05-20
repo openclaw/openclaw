@@ -80,6 +80,7 @@ import { ensureCodexComputerUse } from "./computer-use.js";
 import {
   isCodexAppServerApprovalPolicyAllowedByRequirements,
   readCodexPluginConfig,
+  resolveCodexComputerUseConfig,
   resolveCodexPluginsPolicy,
   resolveCodexAppServerRuntimeOptions,
   withMcpElicitationsApprovalPolicy,
@@ -801,6 +802,7 @@ export async function runCodexAppServerAttempt(
   const attemptStartedAt = Date.now();
   const attemptClientFactory = options.clientFactory ?? defaultCodexAppServerClientFactory;
   const pluginConfig = readCodexPluginConfig(options.pluginConfig);
+  const computerUseConfig = resolveCodexComputerUseConfig({ pluginConfig });
   const configuredAppServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   await fs.mkdir(resolvedWorkspace, { recursive: true });
@@ -1228,6 +1230,9 @@ export async function runCodexAppServerAttempt(
     const resolvedPluginPolicy = pluginThreadConfigRequired
       ? resolveCodexPluginsPolicy(pluginThreadConfigPluginConfig)
       : undefined;
+    const computerUseMcpElicitationDelegationRequired = computerUseConfig.enabled;
+    const mcpElicitationDelegationRequired =
+      resolvedPluginPolicy?.enabled === true || computerUseMcpElicitationDelegationRequired;
     const enabledPluginConfigKeys = resolvedPluginPolicy
       ? resolvedPluginPolicy.pluginPolicies
           .filter((plugin) => plugin.enabled)
@@ -1247,13 +1252,12 @@ export async function runCodexAppServerAttempt(
         appServer,
       }),
     );
-    pluginAppServer =
-      resolvedPluginPolicy?.enabled === true
-        ? {
-            ...appServer,
-            approvalPolicy: withMcpElicitationsApprovalPolicy(appServer.approvalPolicy),
-          }
-        : appServer;
+    pluginAppServer = mcpElicitationDelegationRequired
+      ? {
+          ...appServer,
+          approvalPolicy: withMcpElicitationsApprovalPolicy(appServer.approvalPolicy),
+        }
+      : appServer;
     ({ client, thread } = await withCodexStartupTimeout({
       timeoutMs: startupTimeoutMs,
       signal: runAbortController.signal,
@@ -1270,7 +1274,7 @@ export async function runCodexAppServerAttempt(
           startupClientForCleanup = startupClient;
           await ensureCodexComputerUse({
             client: startupClient,
-            pluginConfig: options.pluginConfig,
+            pluginConfig,
             timeoutMs: appServer.requestTimeoutMs,
             signal: runAbortController.signal,
           });
@@ -2041,6 +2045,9 @@ export async function runCodexAppServerAttempt(
           threadId: thread.threadId,
           turnId,
           pluginAppPolicyContext: thread.pluginAppPolicyContext,
+          ...(computerUseConfig.enabled
+            ? { computerUseMcpServerName: computerUseConfig.mcpServerName }
+            : {}),
           signal: runAbortController.signal,
         });
       }
