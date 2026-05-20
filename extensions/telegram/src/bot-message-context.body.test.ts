@@ -72,6 +72,29 @@ function transcribeCallContext(index = 0): Record<string, unknown> {
 }
 
 describe("resolveTelegramInboundBody", () => {
+  it("treats Telegram /command@TargetBot bot_command entities as mentions", async () => {
+    const result = await resolveTelegramBody({
+      primaryCtx: {
+        me: { id: 7, username: "target_bot" },
+      } as never,
+      msg: {
+        message_id: 8,
+        date: 1_700_000_008,
+        chat: { id: -100123, type: "supergroup", title: "Ops" },
+        from: { id: 42, first_name: "Pat" },
+        text: "/ping@Target_Bot",
+        entities: [{ type: "bot_command", offset: 0, length: 16 }],
+      } as never,
+      isGroup: true,
+      chatId: -100123,
+      senderId: "42",
+      requireMention: true,
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.effectiveWasMentioned).toBe(true);
+  });
+
   it("keeps the media marker when a captioned video has no downloaded media", async () => {
     const result = await resolveTelegramBody({
       msg: {
