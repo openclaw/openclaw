@@ -553,6 +553,7 @@ const MessageToolSchema = buildMessageToolSchemaFromActions(AllMessageActions, {
 type MessageToolOptions = {
   agentAccountId?: string;
   agentSessionKey?: string;
+  runId?: string;
   sessionId?: string;
   agentId?: string;
   config?: OpenClawConfig;
@@ -881,6 +882,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
   const resolveSecretRefsForTool =
     options?.resolveCommandSecretRefsViaGateway ?? resolveCommandSecretRefsViaGateway;
   const runMessageActionForTool = options?.runMessageAction ?? runMessageAction;
+  let generatedIdempotencyCounter = 0;
   const effectiveCurrentChannel = resolveEffectiveCurrentChannelContext(options);
   const currentThreadTs =
     options?.currentThreadTs ??
@@ -1041,10 +1043,19 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
             }
           : undefined;
 
+      const actionIdempotencyKey =
+        normalizeOptionalString(params.idempotencyKey) ??
+        (options?.runId
+          ? `${options.runId}:message-tool:${++generatedIdempotencyCounter}`
+          : undefined);
+      const actionParams = actionIdempotencyKey
+        ? { ...params, idempotencyKey: actionIdempotencyKey }
+        : params;
+
       const result = await runMessageActionForTool({
         cfg,
         action,
-        params,
+        params: actionParams,
         defaultAccountId: accountId ?? undefined,
         requesterSenderId: options?.requesterSenderId,
         senderIsOwner: options?.senderIsOwner,

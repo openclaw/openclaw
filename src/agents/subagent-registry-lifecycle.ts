@@ -50,6 +50,8 @@ type BrowserCleanupModule = Pick<
   "cleanupBrowserSessionsForLifecycleEnd"
 >;
 
+const DELIVERY_MIRROR_HISTORY_MAX_CHARS = 128 * 1024;
+
 const browserCleanupLoader = createLazyImportLoader<BrowserCleanupModule>(
   () => import("../browser-lifecycle-cleanup.js"),
 );
@@ -184,13 +186,19 @@ export function createSubagentRegistryLifecycleController(params: {
       typeof value === "string" &&
       (value === expectedIdempotencyKey ||
         value.startsWith(`${expectedIdempotencyKey}:internal-source-reply:`) ||
-        value.startsWith(`${expectedIdempotencyKey}:message-tool:internal-source-reply:`));
+        value.startsWith(`${expectedIdempotencyKey}:message-tool:internal-source-reply:`) ||
+        value.startsWith(`${entry.runId}:message-tool:`) ||
+        value.startsWith(`${entry.runId}:internal-source-reply:`));
     try {
       const history = await params.callGateway<{
         messages?: unknown[];
       }>({
         method: "chat.history",
-        params: { sessionKey: entry.requesterSessionKey, limit: 25 },
+        params: {
+          sessionKey: entry.requesterSessionKey,
+          limit: 25,
+          maxChars: DELIVERY_MIRROR_HISTORY_MAX_CHARS,
+        },
         timeoutMs: 5_000,
       });
       const mirror = history.messages?.find((message) => {

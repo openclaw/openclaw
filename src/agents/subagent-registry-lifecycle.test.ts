@@ -187,6 +187,7 @@ function createLifecycleController({
 async function runNoReplyMirrorScenario(params: {
   timestamp: number;
   idempotencyKey?: string;
+  idempotencyKeyForEntry?: (entry: SubagentRunRecord) => string;
 }): Promise<SubagentRunRecord> {
   const entry = createRunEntry({
     endedAt: 4_000,
@@ -194,6 +195,7 @@ async function runNoReplyMirrorScenario(params: {
     retainAttachmentsOnKeep: true,
   });
   const idempotencyKey =
+    params.idempotencyKeyForEntry?.(entry) ??
     params.idempotencyKey ??
     `announce:v1:${entry.childSessionKey}:${entry.runId}:internal-source-reply:0`;
   const runSubagentAnnounceFlow = vi.fn(
@@ -977,7 +979,7 @@ describe("subagent registry lifecycle hardening", () => {
     await vi.waitFor(() => expect(entry.cleanupCompletedAt).toBeTypeOf("number"));
     expect(gatewayMocks.callGateway).toHaveBeenCalledWith({
       method: "chat.history",
-      params: { sessionKey: entry.requesterSessionKey, limit: 25 },
+      params: { sessionKey: entry.requesterSessionKey, limit: 25, maxChars: 128 * 1024 },
       timeoutMs: 5_000,
     });
     expect(entry.completionDeliveredAt).toBe(12_345);
@@ -987,6 +989,16 @@ describe("subagent registry lifecycle hardening", () => {
     expect(entry.announceRetryCount).toBeUndefined();
     expect(hasDeliveredTaskStatusUpdate(entry.runId)).toBe(true);
     expect(helperMocks.logAnnounceGiveUp).not.toHaveBeenCalled();
+
+    vi.clearAllMocks();
+    gatewayMocks.callGateway.mockResolvedValue({});
+    const childRunMirrorEntry = await runNoReplyMirrorScenario({
+      timestamp: 12_345,
+      idempotencyKeyForEntry: (candidate) => `${candidate.runId}:message-tool:1`,
+    });
+
+    await vi.waitFor(() => expect(childRunMirrorEntry.cleanupCompletedAt).toBeTypeOf("number"));
+    expect(childRunMirrorEntry.completionDeliveredAt).toBe(12_345);
 
     vi.clearAllMocks();
     taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId.mockReset();
