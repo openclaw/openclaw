@@ -339,6 +339,121 @@ describe("before_agent_run invalid ask outcome", () => {
   });
 });
 
+describe("queue_before_enqueue hook", () => {
+  it("merges prompt rewrites in priority order", async () => {
+    const registry = makeRegistry([
+      {
+        pluginId: "first",
+        hookName: "queue_before_enqueue",
+        handler: async () => ({ prompt: "rewritten prompt" }),
+        source: "test",
+        priority: 10,
+      },
+      {
+        pluginId: "second",
+        hookName: "queue_before_enqueue",
+        handler: async () => ({ summaryLine: "summary" }),
+        source: "test",
+        priority: 5,
+      },
+    ]);
+    const runner = createHookRunner(registry);
+    const result = await runner.runQueueBeforeEnqueue(
+      {
+        queueKey: "session-1",
+        queueMode: "followup",
+        depthBefore: 0,
+        prompt: "original",
+      },
+      {
+        agentId: "agent-1",
+        sessionKey: "session-1",
+        sessionId: "sid-1",
+      },
+    );
+
+    expect(result).toEqual({
+      prompt: "rewritten prompt",
+      summaryLine: "summary",
+      block: undefined,
+      blockReason: undefined,
+    });
+  });
+
+  it("short-circuits on block", async () => {
+    const lowerPriority = vi.fn(async () => ({ prompt: "should not run" }));
+    const registry = makeRegistry([
+      {
+        pluginId: "blocker",
+        hookName: "queue_before_enqueue",
+        handler: async () => ({ block: true, blockReason: "queue policy" }),
+        source: "test",
+        priority: 10,
+      },
+      {
+        pluginId: "lower",
+        hookName: "queue_before_enqueue",
+        handler: lowerPriority,
+        source: "test",
+        priority: 1,
+      },
+    ]);
+    const runner = createHookRunner(registry);
+    const result = await runner.runQueueBeforeEnqueue(
+      {
+        queueKey: "session-1",
+        queueMode: "followup",
+        depthBefore: 0,
+        prompt: "original",
+      },
+      {
+        agentId: "agent-1",
+        sessionKey: "session-1",
+        sessionId: "sid-1",
+      },
+    );
+
+    expect(result?.block).toBe(true);
+    expect(result?.blockReason).toBe("queue policy");
+    expect(lowerPriority).not.toHaveBeenCalled();
+  });
+});
+
+describe("queue_after_enqueue hook", () => {
+  it("runs observation handlers", async () => {
+    const handler = vi.fn(async () => undefined);
+    const registry = makeRegistry([
+      {
+        pluginId: "observer",
+        hookName: "queue_after_enqueue",
+        handler,
+        source: "test",
+      },
+    ]);
+    const runner = createHookRunner(registry);
+    await runner.runQueueAfterEnqueue(
+      {
+        queueKey: "session-1",
+        queueMode: "followup",
+        depthBefore: 0,
+        depthAfter: 1,
+        enqueued: true,
+        prompt: "queued",
+      },
+      {
+        agentId: "agent-1",
+        sessionKey: "session-1",
+        sessionId: "sid-1",
+      },
+    );
+
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({ depthAfter: 1, enqueued: true, prompt: "queued" }),
+      expect.objectContaining({ sessionKey: "session-1" }),
+    );
+  });
+});
+
 describe("before_agent_start hook default timeout (#48534)", () => {
   afterEach(() => {
     vi.useRealTimers();

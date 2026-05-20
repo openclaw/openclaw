@@ -86,6 +86,8 @@ export type PluginHookName =
   | "message_sent"
   | "before_tool_call"
   | "after_tool_call"
+  | "queue_before_enqueue"
+  | "queue_after_enqueue"
   | "tool_result_persist"
   | "before_message_write"
   | "session_start"
@@ -126,6 +128,8 @@ export const PLUGIN_HOOK_NAMES = [
   "message_sent",
   "before_tool_call",
   "after_tool_call",
+  "queue_before_enqueue",
+  "queue_after_enqueue",
   "tool_result_persist",
   "before_message_write",
   "session_start",
@@ -494,6 +498,43 @@ export type PluginHookAfterToolCallEvent = {
   result?: unknown;
   error?: string;
   durationMs?: number;
+};
+
+export type PluginHookQueueContext = {
+  agentId?: string;
+  sessionKey?: string;
+  sessionId?: string;
+  runId?: string;
+  channelId?: string;
+};
+
+export type PluginHookQueueBeforeEnqueueEvent = {
+  queueKey: string;
+  queueMode: "steer" | "followup" | "collect" | "interrupt";
+  dropPolicy?: "old" | "new" | "summarize";
+  depthBefore: number;
+  prompt: string;
+  summaryLine?: string;
+  messageId?: string;
+  originatingChannel?: string;
+  originatingTo?: string;
+  originatingAccountId?: string;
+  originatingThreadId?: string | number;
+  sessionId?: string;
+  sessionKey?: string;
+  runId?: string;
+};
+
+export type PluginHookQueueBeforeEnqueueResult = {
+  block?: boolean;
+  blockReason?: string;
+  prompt?: string;
+  summaryLine?: string;
+};
+
+export type PluginHookQueueAfterEnqueueEvent = PluginHookQueueBeforeEnqueueEvent & {
+  depthAfter: number;
+  enqueued: boolean;
 };
 
 export type PluginHookToolResultPersistContext = {
@@ -982,6 +1023,17 @@ export type PluginHookHandlerMap = {
   after_tool_call: (
     event: PluginHookAfterToolCallEvent,
     ctx: PluginHookToolContext,
+  ) => Promise<void> | void;
+  queue_before_enqueue: (
+    event: PluginHookQueueBeforeEnqueueEvent,
+    ctx: PluginHookQueueContext,
+  ) =>
+    | Promise<PluginHookQueueBeforeEnqueueResult | void>
+    | PluginHookQueueBeforeEnqueueResult
+    | void;
+  queue_after_enqueue: (
+    event: PluginHookQueueAfterEnqueueEvent,
+    ctx: PluginHookQueueContext,
   ) => Promise<void> | void;
   tool_result_persist: (
     event: PluginHookToolResultPersistEvent,
