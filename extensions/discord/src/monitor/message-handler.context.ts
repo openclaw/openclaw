@@ -417,7 +417,6 @@ export async function buildDiscordMessageProcessContext(params: {
         label: threadLabel,
       },
       groupSystemPrompt: isGuildMessage ? groupSystemPrompt : undefined,
-      groupSystemPromptTrusted: true,
     },
     extra: {
       ...(preflightAudioTranscript !== undefined ? { Transcript: preflightAudioTranscript } : {}),

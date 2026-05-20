@@ -128,11 +128,17 @@ function resolveAccessFactsCommandAuthorized(access: AccessFacts | undefined): b
 function resolveSupplementalGroupSystemPrompt(
   supplemental: SupplementalContextFacts | undefined,
 ): string | undefined {
-  const prompt = supplemental?.groupSystemPrompt;
-  if (prompt === undefined || supplemental?.groupSystemPromptTrusted === true) {
-    return prompt;
-  }
-  return sanitizeInboundSystemTags(normalizeInboundTextNewlines(prompt));
+  const trustedPrompt = supplemental?.groupSystemPrompt;
+  const untrustedPrompt =
+    supplemental?.untrustedGroupSystemPrompt === undefined
+      ? undefined
+      : sanitizeInboundSystemTags(
+          normalizeInboundTextNewlines(supplemental.untrustedGroupSystemPrompt),
+        );
+  const parts = [trustedPrompt, untrustedPrompt].filter(
+    (entry): entry is string => typeof entry === "string" && entry.length > 0,
+  );
+  return parts.length > 0 ? parts.join("\n\n") : undefined;
 }
 
 function resolveChannelCommandContext(params: {
