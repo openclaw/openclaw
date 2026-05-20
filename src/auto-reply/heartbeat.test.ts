@@ -241,6 +241,26 @@ Keep this file empty unless you want a tiny checklist.
     expect(isHeartbeatContentEffectivelyEmpty("Remind me to call mom")).toBe(false);
   });
 
+  it("returns true for the full HEARTBEAT.md doc template including Related section", () => {
+    const content = `\`\`\`markdown
+# Keep this file empty (or with only comments) to skip heartbeat API calls.
+
+# Add tasks below when you want the agent to check something periodically.
+\`\`\`
+
+## Related
+
+- [Heartbeat config](/gateway/config-agents)
+`;
+    expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(true);
+  });
+
+  it("returns false for a generic markdown link list item (not the known template line)", () => {
+    expect(isHeartbeatContentEffectivelyEmpty("- [Check this repo](https://example.com)")).toBe(
+      false,
+    );
+  });
+
   it("returns false for content with tasks after header", () => {
     const content = `# HEARTBEAT.md
 

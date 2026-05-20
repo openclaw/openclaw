@@ -64,6 +64,11 @@ export function isHeartbeatContentEffectivelyEmpty(content: string | undefined |
     if (/^```[A-Za-z0-9_-]*$/.test(trimmed)) {
       continue;
     }
+    // Skip the specific "Related" doc-template link to the heartbeat config page.
+    // This line appears at the bottom of the HEARTBEAT.md workspace template.
+    if (trimmed === "- [Heartbeat config](/gateway/config-agents)") {
+      continue;
+    }
     // Found a non-empty, non-comment line - there's actionable content
     return false;
   }
