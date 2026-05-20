@@ -2175,8 +2175,6 @@ export async function runCodexAppServerAttempt(
       try {
         const sourceReplyPayloadCountBefore =
           toolBridge.telemetry.messagingToolSourceReplyPayloads.length;
-        const messagingToolSentTargetCountBefore =
-          toolBridge.telemetry.messagingToolSentTargets.length;
         const response = await handleDynamicToolCallWithTimeout({
           call,
           toolBridge,
@@ -2194,8 +2192,7 @@ export async function runCodexAppServerAttempt(
         });
         if (
           toolBridge.telemetry.messagingToolSourceReplyPayloads.length >
-            sourceReplyPayloadCountBefore ||
-          toolBridge.telemetry.messagingToolSentTargets.length > messagingToolSentTargetCountBefore
+          sourceReplyPayloadCountBefore
         ) {
           await projector?.completeToolPlanAnnouncementDeliveryForTool({
             input: toolPlanAnnouncementInput,

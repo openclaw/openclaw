@@ -2250,6 +2250,67 @@ describe("runCodexAppServerAttempt", () => {
     expect(activeDiagnosticToolKeys(diagnosticEvents)).toEqual(new Set());
   });
 
+  it("does not treat external message tool sends as source acknowledgement delivery", async () => {
+    const harness = createStartedThreadHarness();
+    const onBlockReply = vi.fn();
+    testing.setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("message"),
+      createRuntimeDynamicTool("lookup"),
+    ]);
+
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.sourceReplyDeliveryMode = "message_tool_only";
+    params.onBlockReply = onBlockReply;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("thread/start");
+
+    await harness.handleServerRequest({
+      id: "request-message-tool",
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-message-1",
+        namespace: null,
+        tool: "message",
+        arguments: {
+          action: "send",
+          text: "sent somewhere else",
+          to: "external-chat",
+        },
+      },
+    });
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+
+    await harness.handleServerRequest({
+      id: "request-lookup-tool",
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-lookup-1",
+        namespace: null,
+        tool: "lookup",
+        arguments: {},
+      },
+    });
+
+    expect(onBlockReply).toHaveBeenCalledWith({
+      text: 'I\'ll run the "lookup" step, then report the result here.',
+      isStatusNotice: true,
+    });
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+  });
+
   it("clears dynamic tool diagnostics after successful app-server tool responses", async () => {
     const harness = createStartedThreadHarness();
     const diagnosticEvents: DiagnosticEventPayload[] = [];
