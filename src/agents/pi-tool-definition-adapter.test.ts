@@ -67,7 +67,10 @@ describe("pi tool definition adapter", () => {
     } satisfies AgentTool;
 
     const defs = toToolDefinitions([tool]);
-    const def = defs[0]!;
+    const def = defs[0];
+    if (!def) {
+      throw new Error("missing tool definition");
+    }
     const result = await def.execute("call2", { command: "echo hi" }, undefined, undefined, extensionContext);
 
     const details = result.details as
