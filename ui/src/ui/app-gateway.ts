@@ -690,6 +690,7 @@ function handleTerminalChatEvent(
     if (state === "final") {
       void loadSessions(host as unknown as SessionsState, {
         ...createChatSessionsLoadOverrides(host),
+        agentId: resolveChatEventSessionListAgentId(host, payload),
       });
     }
   }
@@ -838,6 +839,7 @@ function handleSessionMessageGatewayEvent(
     const runIdBeforeRefresh = host.chatRunId;
     void loadSessions(host as unknown as SessionsState, {
       ...createChatSessionsLoadOverrides(host),
+      agentId: resolveSessionListAgentIdForSessionKey(host, sessionKey),
     }).finally(() =>
       replayDeferredSessionMessageReloadAfterSessionsRefresh(
         host,
@@ -850,6 +852,22 @@ function handleSessionMessageGatewayEvent(
   }
   deferredReloadHost.pendingSessionMessageReloadSessionKey = null;
   void loadChatHistory(host as unknown as ChatState);
+}
+
+function resolveChatEventSessionListAgentId(
+  host: GatewayHost,
+  payload: ChatEventPayload | undefined,
+): string {
+  const sessionKey = typeof payload?.sessionKey === "string" ? payload.sessionKey : host.sessionKey;
+  return resolveSessionListAgentIdForSessionKey(host, sessionKey);
+}
+
+function resolveSessionListAgentIdForSessionKey(host: GatewayHost, sessionKey: string): string {
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (parsed?.agentId) {
+    return parsed.agentId;
+  }
+  return normalizeAgentId(host.agentsList?.defaultId) || "main";
 }
 
 function replayDeferredSessionMessageReloadAfterSessionsRefresh(

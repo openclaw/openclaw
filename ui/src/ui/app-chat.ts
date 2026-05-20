@@ -818,6 +818,7 @@ export async function refreshChat(
   const secondaryRefresh = Promise.allSettled([
     loadSessions(host as unknown as SessionsState, {
       ...createChatSessionsLoadOverrides(host),
+      agentId: resolveAgentIdForSession(host) ?? undefined,
     }),
     refreshChatAvatar(host),
     refreshChatModels(host),

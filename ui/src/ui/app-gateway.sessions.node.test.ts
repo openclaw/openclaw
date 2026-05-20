@@ -158,6 +158,7 @@ describe("handleGatewayEvent sessions.changed", () => {
 
     expect(loadSessionsMock).toHaveBeenCalledWith(host, {
       activeMinutes: 10,
+      agentId: "ops",
       limit: 25,
     });
   });
@@ -557,6 +558,7 @@ describe("handleGatewayEvent session.message", () => {
     expect(loadChatHistoryMock).not.toHaveBeenCalled();
     expect(loadSessionsMock).toHaveBeenCalledWith(host, {
       activeMinutes: 10,
+      agentId: "qa",
       limit: 25,
     });
     await Promise.resolve();

@@ -701,6 +701,7 @@ export async function createChatSession(state: AppViewState): Promise<boolean> {
     },
     {
       ...createChatSessionsLoadOverrides(state),
+      agentId: resolveAgentIdFromSessionKey(previousSessionKey),
     },
   );
   if (
@@ -729,6 +730,7 @@ export async function createChatSession(state: AppViewState): Promise<boolean> {
 async function refreshSessionOptions(state: AppViewState) {
   await loadSessions(state as unknown as Parameters<typeof loadSessions>[0], {
     ...createChatSessionsLoadOverrides(state),
+    agentId: parseAgentSessionKey(state.sessionKey)?.agentId,
   });
 }
 
