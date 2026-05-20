@@ -205,11 +205,10 @@ function resolveActiveProfileId(params: {
   // authoritative for the status display and overrides `lastGood`/usage
   // heuristics, matching the core `resolveAuthProfileOrder` precedence so the
   // display does not silently disagree with the runtime resolver. When no
-  // fully-usable candidate exists, anchor to params.order[0] so the display
-  // stays consistent with operator intent rather than deferring to stale
-  // lastGood/mostRecent heuristics that could show a lower-ranked profile.
+  // fully-usable candidate exists return undefined — marking an ineligible
+  // profile as active would misrepresent what the runtime resolver can use.
   if (params.explicitOrder) {
-    const firstUsable = params.order.find(
+    return params.order.find(
       (profileId) =>
         isActiveProfileCandidate(params, profileId) &&
         resolveAuthProfileEligibility({
@@ -220,7 +219,6 @@ function resolveActiveProfileId(params: {
           now: params.now,
         }).eligible,
     );
-    return firstUsable ?? params.order[0];
   }
   const lastGood = [
     params.store.lastGood?.[OPENAI_PROVIDER_ID],

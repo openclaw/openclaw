@@ -1440,10 +1440,10 @@ describe("codex command", () => {
     expect(safeCodexControlRequest).toHaveBeenCalledTimes(2);
   });
 
-  it("uses first explicit-order profile rather than lastGood when all token credentials are expired", async () => {
+  it("does not mark any profile active when all explicit-order token credentials are expired", async () => {
     // Both profiles use type:"token" with expired expiry, so resolveAuthProfileEligibility
-    // returns eligible=false for both and firstUsable is undefined. The fix must return
-    // params.order[0] (fresh) rather than falling through to lastGood (stale).
+    // returns eligible=false for both. resolveActiveProfileId must return undefined rather
+    // than marking an ineligible profile as active; the display shows "no working credential".
     const config = {};
     const now = Date.now();
     installAuthProfileStore(
@@ -1477,28 +1477,40 @@ describe("codex command", () => {
 
     const safeCodexControlRequest = vi
       .fn()
+      // call 1: account info for the active/first profile
       .mockResolvedValueOnce({
         ok: true,
         value: { account: { type: "unknown" }, requiresOpenaiAuth: true },
       })
+      // call 2: rate limits for the active profile
       .mockResolvedValueOnce({
         ok: false,
         error: "rate limits unavailable",
+      })
+      // call 3: readSubscriptionUsage — no activeProfileId means the subscription
+      // profile (fresh, type:"token") is fetched separately
+      .mockResolvedValueOnce({
+        ok: false,
+        error: "subscription limits unavailable",
       });
 
     const result = await handleCodexCommand(createContext("account", undefined, { config }), {
       deps: createDeps({ safeCodexControlRequest }),
     });
 
-    // With explicit order, order[0] (fresh) must be shown as active even though
-    // all credentials are expired. lastGood (stale) must not override the stated
-    // operator rank.
-    expect(result.text).toContain("\n  1. fresh@example.com   ChatGPT subscription   — active now");
+    // With all credentials expired, no profile is active — the display shows
+    // "no working credential" and both profiles are labelled "sign-in expired".
+    // lastGood (stale) must not override the stated operator rank, and the
+    // first explicit-order entry must not be falsely marked active when ineligible.
+    expect(result.text).toContain("no working credential");
+    expect(result.text).toContain(
+      "\n  1. fresh@example.com   ChatGPT subscription   — sign-in expired",
+    );
     expect(result.text).toContain(
       "\n  2. stale@example.com   ChatGPT subscription   — sign-in expired",
     );
-    expect(result.text).not.toContain("stale@example.com   ChatGPT subscription   — active now");
-    expect(safeCodexControlRequest).toHaveBeenCalledTimes(2);
+    expect(result.text).not.toContain("active now");
+    expect(safeCodexControlRequest).toHaveBeenCalledTimes(3);
   });
 
   it("escapes successful Codex account fallback summaries before chat display", async () => {
