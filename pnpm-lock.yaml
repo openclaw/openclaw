@@ -84,8 +84,8 @@ importers:
         specifier: 0.6.0
         version: 0.6.0
       '@openclaw/fs-safe':
-        specifier: 0.2.6
-        version: 0.2.6
+        specifier: 0.2.7
+        version: 0.2.7
       '@openclaw/proxyline':
         specifier: 0.3.3
         version: 0.3.3(undici@8.3.0)
@@ -3315,8 +3315,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@openclaw/fs-safe@0.2.6':
-    resolution: {integrity: sha512-9RG/tD9yJF5UkoXiXgvd+IWXFeTWQmNJWB20h/lbbDJiV+6C/pgjcLDMRq9vntSNNEJhaj6Hrqs2W8iiIbAtOA==}
+  '@openclaw/fs-safe@0.2.7':
+    resolution: {integrity: sha512-l/Yj3K2ChR/gI+bZo1wIe7rjKyTFwGOAw120cTCMRT8LZbVhJhTbiZLGIRBMv0Gc9GQjYE8EjPBza3RdrSSbyQ==}
     engines: {node: '>=20.11'}
 
   '@openclaw/proxyline@0.3.3':
@@ -9468,7 +9468,7 @@ snapshots:
   '@openai/codex@0.132.0-win32-x64':
     optional: true
 
-  '@openclaw/fs-safe@0.2.6':
+  '@openclaw/fs-safe@0.2.7':
     optionalDependencies:
       jszip: 3.10.1
       tar: 7.5.15
