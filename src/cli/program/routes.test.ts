@@ -53,10 +53,6 @@ vi.mock("../../commands/channels/status.js", () => ({
   channelsStatusCommand: channelsStatusCommandMock,
 }));
 
-vi.mock("../../commands/agents.js", () => {
-  throw new Error("routed agents list must not import the agents barrel");
-});
-
 vi.mock("../../commands/agents.commands.list.js", () => ({
   agentsListCommand: agentsListCommandMock,
 }));

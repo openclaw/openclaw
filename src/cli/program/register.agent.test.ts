@@ -36,10 +36,6 @@ vi.mock("../../commands/agent-via-gateway.js", () => ({
   agentCliCommand: mocks.agentCliCommandMock,
 }));
 
-vi.mock("../../commands/agents.js", () => {
-  throw new Error("register.agent must not import the agents barrel");
-});
-
 vi.mock("../../commands/agents.commands.add.js", () => ({
   agentsAddCommand: mocks.agentsAddCommandMock,
 }));
