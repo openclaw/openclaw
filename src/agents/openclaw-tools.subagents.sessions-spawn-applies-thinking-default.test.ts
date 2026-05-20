@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveSubagentThinkingOverride } from "./subagent-spawn-thinking.js";
 
-type ThinkingLevel = "high" | "medium" | "low";
+type ThinkingLevel = "high" | "medium" | "low" | "off";
 
 function expectResolvedThinkingPlan(input: {
   expected: ThinkingLevel;
@@ -79,6 +79,32 @@ describe("sessions_spawn thinking defaults", () => {
     expectResolvedThinkingPlan({
       callerThinkingRaw: "medium",
       expected: "high",
+    });
+  });
+
+  it("preserves caller thinking off when inherited", () => {
+    expectResolvedThinkingPlan({
+      cfg: {
+        session: { mainKey: "main", scope: "per-sender" },
+        agents: { defaults: {} },
+      } as OpenClawConfig,
+      callerThinkingRaw: "off",
+      expected: "off",
+    });
+  });
+
+  it("preserves explicit thinking off", () => {
+    expectResolvedThinkingPlan({
+      thinkingOverrideRaw: "off",
+      expected: "off",
+    });
+  });
+
+  it("preserves configured subagent thinking off", () => {
+    expectResolvedThinkingPlan({
+      targetAgentConfig: { subagents: { thinking: "off" } },
+      callerThinkingRaw: "high",
+      expected: "off",
     });
   });
 });

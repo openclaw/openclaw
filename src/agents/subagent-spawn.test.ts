@@ -288,6 +288,31 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(persistedStore?.[childSessionKey]?.thinkingLevel).toBe("high");
   });
 
+  it("persists inherited requester thinking off", async () => {
+    let persistedStore: Record<string, Record<string, unknown>> | undefined;
+    hoisted.loadSessionStoreMock.mockReturnValue({
+      "agent:main:main": { thinkingLevel: "off" },
+    });
+    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {
+      onStore: (store) => {
+        persistedStore = store;
+      },
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "inherit thinking off",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    const childSessionKey = result.childSessionKey as string;
+    expect(persistedStore?.[childSessionKey]?.thinkingLevel).toBe("off");
+  });
+
   it("applies requester-agent subagent thinking before caller session thinking", async () => {
     let persistedStore: Record<string, Record<string, unknown>> | undefined;
     hoisted.configOverride = createConfigOverride({
