@@ -207,7 +207,7 @@ function buildAgentsPolicyDigest(content: string, budget: number): PolicyDigest 
 
   const lines = candidates
     .filter((candidate) => selected.has(candidate.index))
-    .sort((a, b) => a.index - b.index)
+    .toSorted((a, b) => a.index - b.index)
     .map((candidate) => candidate.line);
   return {
     text: lines.join("\n"),
