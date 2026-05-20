@@ -8,6 +8,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveTrajectoryFilePath } from "../trajectory/paths.js";
+import { resolveTrajectoryRuntimeFile } from "../trajectory/runtime-file.js";
 import type { TrajectoryEvent } from "../trajectory/types.js";
 import { resolveSessionStoreTargetsOrExit } from "./session-store-targets.js";
 import { shortenText } from "./text-format.js";
@@ -211,26 +212,32 @@ function compareSelectionsByUpdatedAt(a: TailSelection, b: TailSelection): numbe
   return (b.entry.updatedAt ?? 0) - (a.entry.updatedAt ?? 0);
 }
 
-function buildTailSelection(params: {
+async function buildTailSelection(params: {
   agentId: string;
   entry: SessionEntry;
   key: string;
   storePath: string;
-}): TailSelection {
+}): Promise<TailSelection> {
   const sessionsDir = path.dirname(params.storePath);
   const sessionFile = resolveSessionFilePath(params.entry.sessionId, params.entry, {
     agentId: params.agentId,
     sessionsDir,
   });
+  const trajectoryPath =
+    (await resolveTrajectoryRuntimeFile({
+      sessionFile,
+      sessionId: params.entry.sessionId,
+    })) ??
+    resolveTrajectoryFilePath({
+      sessionFile,
+      sessionId: params.entry.sessionId,
+    });
   return {
     agentId: params.agentId,
     entry: params.entry,
     key: params.key,
     storePath: params.storePath,
-    trajectoryPath: resolveTrajectoryFilePath({
-      sessionFile,
-      sessionId: params.entry.sessionId,
-    }),
+    trajectoryPath,
   };
 }
 
@@ -360,17 +367,20 @@ export async function sessionsTailCommand(
     return;
   }
 
-  const selections = targets.flatMap((target) => {
+  const selections: TailSelection[] = [];
+  for (const target of targets) {
     const store = loadSessionStore(target.storePath);
-    return Object.entries(store).map(([key, entry]) =>
-      buildTailSelection({
-        agentId: target.agentId,
-        entry,
-        key,
-        storePath: target.storePath,
-      }),
-    );
-  });
+    for (const [key, entry] of Object.entries(store)) {
+      selections.push(
+        await buildTailSelection({
+          agentId: target.agentId,
+          entry,
+          key,
+          storePath: target.storePath,
+        }),
+      );
+    }
+  }
   const selected = selectSessionsToTail(selections, opts.sessionKey);
   if (selected.length === 0) {
     const suffix = opts.sessionKey ? ` for ${opts.sessionKey}` : "";

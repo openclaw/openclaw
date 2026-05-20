@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
+import { resolveTrajectoryPointerFilePath } from "../trajectory/paths.js";
 import type { TrajectoryEvent } from "../trajectory/types.js";
 import { sessionsTailCommand } from "./sessions-tail.js";
 
@@ -169,6 +170,36 @@ describe("sessionsTailCommand", () => {
     expect(output).not.toContain("session.started");
     expect(output).toContain("tool.call");
     expect(output).toContain("tool.result");
+  });
+
+  it("uses a session trajectory pointer for relocated runtime files", async () => {
+    const runtime = makeRuntime();
+    const relocatedDir = path.join(tmpDir, "relocated-trajectories");
+    const relocatedTrajectoryPath = path.join(relocatedDir, "session-one.jsonl");
+    fs.mkdirSync(relocatedDir, { recursive: true });
+    fs.writeFileSync(
+      resolveTrajectoryPointerFilePath(path.join(tmpDir, "session-one.jsonl")),
+      `${JSON.stringify({
+        traceSchema: "openclaw-trajectory-pointer",
+        schemaVersion: 1,
+        sessionId: "session-one",
+        runtimeFile: relocatedTrajectoryPath,
+      })}\n`,
+    );
+    writeJsonl(relocatedTrajectoryPath, [
+      makeEvent({
+        type: "tool.result",
+        ts: "2026-05-18T12:04:21.000Z",
+        data: { name: "bash", success: true },
+      }),
+    ]);
+
+    await sessionsTailCommand({ store: storePath, sessionKey }, runtime);
+
+    const output = runtimeOutput(runtime);
+    expect(output).toContain("tool.result");
+    expect(output).toContain("bash ok");
+    expect(output).not.toContain("No sessions found");
   });
 
   it("preserves events appended while follow mode starts", async () => {
