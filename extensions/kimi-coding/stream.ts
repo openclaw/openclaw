@@ -296,7 +296,7 @@ function rewriteKimiTaggedToolCallsInMessage(message: unknown): void {
   }
 
   (message as { content: unknown[] }).content = nextContent;
-    const typedMessage = message as Record<string, unknown>;
+  const typedMessage = message as Record<string, unknown>;
   if (
     typedMessage.role === "assistant" &&
     typedMessage.stopReason === "stop" &&
