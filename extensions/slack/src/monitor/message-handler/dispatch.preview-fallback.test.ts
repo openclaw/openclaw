@@ -359,6 +359,7 @@ async function dispatchNativeProgressScenario(params: {
   events: typeof mockedReplyOptionEvents;
   finalPayload?: { text: string; isError?: boolean };
   progress?: { label?: string; maxLineChars?: number; nativeTaskCards?: true; render?: "rich" };
+  replyToMode?: "off" | "first" | "all" | "batched";
 }) {
   mockedNativeStreaming = true;
   mockedSlackStreamingMode = "progress";
@@ -369,6 +370,7 @@ async function dispatchNativeProgressScenario(params: {
 
   await dispatchPreparedSlackMessage(
     createPreparedSlackMessage({
+      replyToMode: params.replyToMode,
       accountConfig: {
         streaming: {
           mode: "progress",
@@ -1870,6 +1872,23 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(startSlackStreamMock.mock.invocationCallOrder[0]).toBeLessThan(
       appendSlackStreamMock.mock.invocationCallOrder[0] ?? 0,
     );
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
+  });
+
+  it("keeps final fallback in the planned thread when native Slack progress start fails", async () => {
+    startSlackStreamMock.mockRejectedValueOnce(new Error("start stream failed"));
+    mockedReplyThreadTsSequence = [THREAD_TS, undefined];
+
+    await dispatchNativeProgressScenario({
+      replyToMode: "first",
+      finalPayload: { text: FINAL_REPLY_TEXT },
+      events: [{ kind: "item", progressText: "slow tool" }],
+    });
+
+    expect(startSlackStreamMock).toHaveBeenCalledTimes(1);
+    expect(appendSlackStreamMock).not.toHaveBeenCalled();
+    expect(stopSlackStreamMock).not.toHaveBeenCalled();
     expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
     expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
   });
