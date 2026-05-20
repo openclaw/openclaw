@@ -588,6 +588,31 @@ export async function readSessionMessagesAsync(
   return index?.entries.flatMap((entry) => indexedTranscriptEntryToMessages(entry)) ?? [];
 }
 
+export async function readSessionMessageByIdAsync(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile: string | undefined,
+  messageId: string,
+): Promise<{ message?: unknown; seq?: number; oversized: boolean; found: boolean }> {
+  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile);
+  if (!filePath) {
+    return { oversized: false, found: false };
+  }
+  const index = await readSessionTranscriptIndex(filePath);
+  if (!index) {
+    return { oversized: false, found: false };
+  }
+  const entry = index.entries.find((candidate) => candidate.id === messageId);
+  if (!entry) {
+    return { oversized: false, found: false };
+  }
+  if (entry.byteLength > MAX_TRANSCRIPT_PARSE_LINE_BYTES) {
+    return { oversized: true, found: true, seq: entry.seq };
+  }
+  const message = indexedTranscriptEntryToMessage(entry);
+  return { message, seq: entry.seq, oversized: false, found: true };
+}
+
 export async function visitSessionMessagesAsync(
   sessionId: string,
   storePath: string | undefined,

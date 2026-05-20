@@ -313,7 +313,6 @@ describe("tool-cards", () => {
     expect(sidebar.docId).toBe("cv_sidebar");
     expect(sidebar.entryUrl).toBe("/__openclaw__/canvas/documents/cv_sidebar/index.html");
   });
-
   describe("isToolErrorOutput", () => {
     it("flags JSON payloads that carry a top-level error string", () => {
       expect(
@@ -576,5 +575,40 @@ describe("tool-cards", () => {
     expect(container.textContent).not.toContain("Tool error");
     expect(container.querySelector(".chat-tool-msg-summary--error")).toBeNull();
     expect(container.querySelector(".chat-tool-card__status-badge")).toBeNull();
+  });
+  it("adds a full-message request when opening tool details", () => {
+    const container = document.createElement("div");
+    const onOpenSidebar = vi.fn();
+    render(
+      renderToolCard(
+        {
+          id: "msg:tool:full",
+          name: "browser.open",
+          outputText: "Opened page",
+          messageId: "msg-tool-full",
+        },
+        {
+          expanded: true,
+          sessionKey: "main",
+          agentId: "work",
+          onToggleExpanded: vi.fn(),
+          onOpenSidebar,
+        },
+      ),
+      container,
+    );
+
+    const sidebarButton = container.querySelector<HTMLButtonElement>(".chat-tool-card__action-btn");
+    expect(sidebarButton).toBeInstanceOf(HTMLButtonElement);
+    sidebarButton!.click();
+
+    const sidebar = requireFirstMockArg(onOpenSidebar, "sidebar open");
+    expect(sidebar.kind).toBe("markdown");
+    expect(sidebar.fullMessageRequest).toEqual({
+      sessionKey: "main",
+      agentId: "work",
+      messageId: "msg-tool-full",
+      kind: "tool_output",
+    });
   });
 });

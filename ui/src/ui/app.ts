@@ -152,6 +152,25 @@ declare global {
 
 const bootAssistantIdentity = normalizeAssistantIdentity({});
 const bootLocalUserIdentity = loadLocalUserIdentity();
+const FULL_MESSAGE_SIDEBAR_MAX_CHARS = 500_000;
+
+function isSidebarMarkdownLike(content: SidebarContent | null): content is SidebarContent {
+  return Boolean(content && (content.kind === "markdown" || content.kind === "canvas"));
+}
+
+function resolveSidebarUnavailableReason(
+  reason: "not_found" | "oversized" | "not_visible" | null | undefined,
+): string {
+  switch (reason) {
+    case "oversized":
+      return "Full content is unavailable because the stored transcript entry is too large to return safely.";
+    case "not_visible":
+      return "Full content is unavailable because this transcript entry does not have a visible WebChat projection.";
+    case "not_found":
+    default:
+      return "Full content is no longer available for this transcript entry.";
+  }
+}
 
 function resolveOnboardingMode(): boolean {
   if (!window.location.search) {
@@ -1289,6 +1308,86 @@ export class OpenClawApp extends LitElement {
     this.pendingGatewayToken = null;
   }
 
+  private async maybeUpgradeSidebarToFullMessage(content: SidebarContent) {
+    const request = content.fullMessageRequest;
+    if (!request || !this.client) {
+      return;
+    }
+    try {
+      const result = (await this.client.request("chat.message.get", {
+        sessionKey: request.sessionKey,
+        ...(request.agentId ? { agentId: request.agentId } : {}),
+        messageId: request.messageId,
+        maxChars: FULL_MESSAGE_SIDEBAR_MAX_CHARS,
+      })) as
+        | {
+            ok?: boolean;
+            message?: unknown;
+            unavailableReason?: "not_found" | "oversized" | "not_visible";
+          }
+        | undefined;
+
+      if (this.sidebarContent !== content) {
+        return;
+      }
+
+      if (!result?.ok || !result.message || typeof result.message !== "object") {
+        this.sidebarContent = {
+          ...content,
+          unavailableReason: result?.unavailableReason ?? "not_found",
+        };
+        this.sidebarError = resolveSidebarUnavailableReason(
+          result?.unavailableReason ?? "not_found",
+        );
+        return;
+      }
+
+      const message = result.message as Record<string, unknown>;
+      const nextRawText =
+        content.kind === "canvas"
+          ? typeof content.rawText === "string"
+            ? content.rawText
+            : null
+          : typeof message.text === "string"
+            ? message.text
+            : Array.isArray(message.content)
+              ? message.content
+                  .map((block) =>
+                    block &&
+                    typeof block === "object" &&
+                    typeof (block as { text?: unknown }).text === "string"
+                      ? (block as { text: string }).text
+                      : null,
+                  )
+                  .filter((value): value is string => typeof value === "string")
+                  .join("\n")
+              : typeof content.rawText === "string"
+                ? content.rawText
+                : content.content;
+
+      if (content.kind === "markdown") {
+        this.sidebarContent = {
+          ...content,
+          content: nextRawText || content.content,
+          rawText: nextRawText || content.rawText || content.content,
+          unavailableReason: null,
+        };
+      } else {
+        this.sidebarContent = {
+          ...content,
+          rawText: nextRawText || content.rawText || null,
+          unavailableReason: null,
+        };
+      }
+      this.sidebarError = null;
+    } catch (err) {
+      if (this.sidebarContent !== content) {
+        return;
+      }
+      this.sidebarError = `Failed to load full content: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
   // Sidebar handlers for tool output viewing
   handleOpenSidebar(content: SidebarContent) {
     if (this.sidebarCloseTimer != null) {
@@ -1298,6 +1397,9 @@ export class OpenClawApp extends LitElement {
     this.sidebarContent = content;
     this.sidebarError = null;
     this.sidebarOpen = true;
+    if (isSidebarMarkdownLike(content) && content.fullMessageRequest) {
+      void this.maybeUpgradeSidebarToFullMessage(content);
+    }
   }
 
   handleCloseSidebar() {

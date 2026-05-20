@@ -2210,4 +2210,35 @@ describe("grouped chat rendering", () => {
     expect(onOpenSidebar).toHaveBeenCalledTimes(1);
     expect(requireFirstMockArg(onOpenSidebar, "sidebar open").kind).toBe("markdown");
   });
+
+  it("adds a full-message request when opening a truncated assistant message", () => {
+    const container = document.createElement("div");
+    const onOpenSidebar = vi.fn();
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "abcde\n...(truncated)..." }],
+        __openclaw: { id: "msg-truncated-1", seq: 1 },
+      },
+      {
+        sessionKey: "main",
+        agentId: "work",
+        onOpenSidebar,
+      },
+    );
+
+    const expandButton = container.querySelector<HTMLButtonElement>(".chat-expand-btn");
+    expect(expandButton).toBeInstanceOf(HTMLButtonElement);
+    expandButton!.click();
+
+    const sidebar = requireFirstMockArg(onOpenSidebar, "sidebar open");
+    expect(sidebar.kind).toBe("markdown");
+    expect(sidebar.fullMessageRequest).toEqual({
+      sessionKey: "main",
+      agentId: "work",
+      messageId: "msg-truncated-1",
+      kind: "assistant_message",
+    });
+  });
 });

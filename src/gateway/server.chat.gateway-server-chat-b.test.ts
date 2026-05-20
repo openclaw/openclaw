@@ -129,6 +129,35 @@ async function fetchHistoryMessages(
   return historyRes.payload?.messages ?? [];
 }
 
+async function fetchChatMessage(
+  ws: GatewaySocket,
+  params: {
+    sessionKey: string;
+    agentId?: string;
+    messageId: string;
+    maxChars?: number;
+  },
+): Promise<{
+  ok?: boolean;
+  message?: unknown;
+  unavailableReason?: "not_found" | "oversized" | "not_visible";
+}> {
+  const res = await rpcReq<{
+    ok?: boolean;
+    message?: unknown;
+    unavailableReason?: "not_found" | "oversized" | "not_visible";
+  }>(ws, "chat.message.get", {
+    sessionKey: params.sessionKey,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    messageId: params.messageId,
+    ...(typeof params.maxChars === "number" ? { maxChars: params.maxChars } : {}),
+  });
+  if (!res.ok) {
+    throw new Error(`chat.message.get rpc failed: ${JSON.stringify(res.error ?? null)}`);
+  }
+  return res.payload ?? {};
+}
+
 type ConfiguredImageModelCase = {
   id: string;
   imageModel: AgentModelConfig;
@@ -1365,6 +1394,95 @@ describe("gateway server chat", () => {
       expect((tooLargeRes.error as { message?: string } | undefined)?.message ?? "").toMatch(
         /invalid chat\.history params/i,
       );
+    });
+  });
+
+  test("chat.message.get returns the full projected message for a truncated history row", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({
+          id: "msg-full-assistant",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "abcdefghij" }],
+            timestamp: Date.now(),
+          },
+        }),
+      ]);
+
+      const historyMessages = await fetchHistoryMessages(ws, { maxChars: 5 });
+      expect(JSON.stringify(historyMessages)).toContain("abcde\\n...(truncated)...");
+
+      const full = await fetchChatMessage(ws, {
+        sessionKey: "main",
+        messageId: "msg-full-assistant",
+      });
+      expect(full.ok).toBe(true);
+      expect(full.unavailableReason).toBeUndefined();
+      expect(JSON.stringify(full.message)).toContain("abcdefghij");
+      expect(JSON.stringify(full.message)).not.toContain("...(truncated)...");
+    });
+  });
+
+  test("chat.message.get accepts the selected agent for global sessions", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await writeGatewayConfig({
+        session: { scope: "global" },
+        agents: {
+          list: [{ id: "main", default: true }, { id: "work" }],
+        },
+      });
+      await connectOk(ws);
+      const sessionDir = await createSessionDir();
+      await writeSessionStore({
+        entries: {
+          global: { sessionId: "sess-global", updatedAt: Date.now() },
+        },
+      });
+      await fs.writeFile(
+        path.join(sessionDir, "sess-global.jsonl"),
+        `${JSON.stringify({
+          id: "msg-global-agent",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "global agent content" }],
+            timestamp: Date.now(),
+          },
+        })}\n`,
+        "utf-8",
+      );
+
+      const full = await fetchChatMessage(ws, {
+        sessionKey: "global",
+        agentId: "work",
+        messageId: "msg-global-agent",
+      });
+      expect(full.ok).toBe(true);
+      expect(JSON.stringify(full.message)).toContain("global agent content");
+    });
+  });
+
+  test("chat.message.get reports oversized transcript entries as unavailable", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      const oversizedLine = JSON.stringify({
+        id: "msg-oversized",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "x".repeat(300 * 1024) }],
+          timestamp: Date.now(),
+        },
+      });
+      await writeMainSessionTranscript(sessionDir, [oversizedLine]);
+
+      const full = await fetchChatMessage(ws, {
+        sessionKey: "main",
+        messageId: "msg-oversized",
+      });
+      expect(full.ok).toBe(false);
+      expect(full.unavailableReason).toBe("oversized");
+      expect(full.message).toBeUndefined();
     });
   });
 

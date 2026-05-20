@@ -12,8 +12,24 @@ import { formatToolOutputForSidebar, getTruncatedPreview } from "./tool-helpers.
 
 export type ToolPreview = NonNullable<ToolCard["preview"]>;
 
+type FullMessageRequest = NonNullable<SidebarContent["fullMessageRequest"]>;
+
 function resolveCanvasPreviewSandbox(preview: ToolPreview): string {
   return resolveEmbedSandbox(preview.kind === "canvas" ? "scripts" : "scripts");
+}
+
+function resolveTranscriptMessageId(message: Record<string, unknown>): string | undefined {
+  if (typeof message.messageId === "string" && message.messageId.trim()) {
+    return message.messageId;
+  }
+  const openClawMeta = message["__openclaw"];
+  const transcriptMeta =
+    openClawMeta && typeof openClawMeta === "object" && !Array.isArray(openClawMeta)
+      ? (openClawMeta as Record<string, unknown>)
+      : null;
+  return typeof transcriptMeta?.id === "string" && transcriptMeta.id.trim()
+    ? transcriptMeta.id
+    : undefined;
 }
 
 function normalizeContent(content: unknown): Array<Record<string, unknown>> {
@@ -239,6 +255,7 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
   const content = normalizeContent(m.content);
   const messageIsError = readToolErrorFlag(m);
   const cards: ToolCard[] = [];
+  const transcriptMessageId = resolveTranscriptMessageId(m);
 
   for (let index = 0; index < content.length; index++) {
     const item = content[index] ?? {};
@@ -254,6 +271,7 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
         name: typeof item.name === "string" ? item.name : "tool",
         args,
         inputText: serializeToolInput(args),
+        messageId: transcriptMessageId,
       });
       continue;
     }
@@ -277,6 +295,7 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
         id: cardId,
         name,
         outputText: text,
+        messageId: transcriptMessageId,
         ...(isError !== undefined ? { isError } : {}),
         preview,
       });
@@ -301,6 +320,7 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
       id: resolveToolCardId({}, m, 0, prefix),
       name,
       outputText: text,
+      messageId: transcriptMessageId,
       ...(messageIsError !== undefined ? { isError: messageIsError } : {}),
       preview: extractToolPreview(text, name),
     });
@@ -416,18 +436,23 @@ export function renderToolPreview(
 
 export function buildSidebarContent(
   value: string,
-  options?: { rawText?: string | null },
+  options?: {
+    rawText?: string | null;
+    fullMessageRequest?: FullMessageRequest;
+  },
 ): SidebarContent {
   return {
     kind: "markdown",
     content: value,
     ...(options?.rawText ? { rawText: options.rawText } : {}),
+    ...(options?.fullMessageRequest ? { fullMessageRequest: options.fullMessageRequest } : {}),
   };
 }
 
 export function buildPreviewSidebarContent(
   preview: ToolPreview,
   rawText?: string | null,
+  options?: { fullMessageRequest?: FullMessageRequest },
 ): SidebarContent | null {
   if (preview.kind !== "canvas" || preview.render !== "url" || !preview.viewId || !preview.url) {
     return null;
@@ -439,6 +464,23 @@ export function buildPreviewSidebarContent(
     ...(preview.title ? { title: preview.title } : {}),
     ...(preview.preferredHeight ? { preferredHeight: preview.preferredHeight } : {}),
     ...(rawText ? { rawText } : {}),
+    ...(options?.fullMessageRequest ? { fullMessageRequest: options.fullMessageRequest } : {}),
+  };
+}
+
+function buildToolSidebarFullMessageRequest(
+  card: ToolCard,
+  sessionKey: string | undefined,
+  agentId: string | undefined,
+): FullMessageRequest | undefined {
+  if (!sessionKey || !card.messageId) {
+    return undefined;
+  }
+  return {
+    sessionKey,
+    ...(agentId ? { agentId } : {}),
+    messageId: card.messageId,
+    kind: "tool_output",
   };
 }
 
@@ -538,6 +580,8 @@ export function renderToolCard(
   opts: {
     expanded: boolean;
     onToggleExpanded: (id: string) => void;
+    sessionKey?: string;
+    agentId?: string;
     onOpenSidebar?: (content: SidebarContent) => void;
     canvasPluginSurfaceUrl?: string | null;
     embedSandboxMode?: EmbedSandboxMode;
@@ -570,6 +614,8 @@ export function renderToolCard(
             <div class="chat-tool-msg-body">
               ${renderExpandedToolCardContent(
                 card,
+                opts.sessionKey,
+                opts.agentId,
                 opts.onOpenSidebar,
                 opts.canvasPluginSurfaceUrl,
                 opts.embedSandboxMode ?? "scripts",
@@ -584,6 +630,8 @@ export function renderToolCard(
 
 export function renderExpandedToolCardContent(
   card: ToolCard,
+  sessionKey?: string,
+  agentId?: string,
   onOpenSidebar?: (content: SidebarContent) => void,
   canvasPluginSurfaceUrl?: string | null,
   embedSandboxMode: EmbedSandboxMode = "scripts",
@@ -595,12 +643,17 @@ export function renderExpandedToolCardContent(
   const hasInput = Boolean(card.inputText?.trim());
   const isError = isToolCardError(card);
   const canOpenSidebar = Boolean(onOpenSidebar);
+  const fullMessageRequest = buildToolSidebarFullMessageRequest(card, sessionKey, agentId);
   const previewSidebarContent =
     card.preview?.kind === "canvas"
-      ? buildPreviewSidebarContent(card.preview, card.outputText)
+      ? buildPreviewSidebarContent(card.preview, card.outputText, { fullMessageRequest })
       : null;
   const sidebarActionContent =
-    previewSidebarContent ?? buildSidebarContent(buildToolCardSidebarContent(card));
+    previewSidebarContent ??
+    buildSidebarContent(buildToolCardSidebarContent(card), {
+      fullMessageRequest,
+      rawText: card.outputText ?? null,
+    });
   const visiblePreview = card.preview
     ? renderToolPreview(card.preview, "chat_tool", {
         onOpenSidebar,
@@ -665,6 +718,7 @@ export function renderToolCardSidebar(
   onOpenSidebar?: (content: SidebarContent) => void,
   canvasPluginSurfaceUrl?: string | null,
   embedSandboxMode: EmbedSandboxMode = "scripts",
+  options?: { sessionKey?: string; agentId?: string },
 ) {
   const display = resolveToolDisplay({ name: card.name, args: card.args });
   const detail = formatToolDetail(display);
@@ -672,11 +726,24 @@ export function renderToolCardSidebar(
   const hasText = Boolean(card.outputText?.trim());
   const hasPreview = Boolean(preview);
   const isError = isToolCardError(card);
+  const fullMessageRequest = buildToolSidebarFullMessageRequest(
+    card,
+    options?.sessionKey,
+    options?.agentId,
+  );
   const sidebarContent =
     preview?.kind === "canvas"
-      ? buildPreviewSidebarContent(preview, card.outputText)
-      : buildSidebarContent(buildToolCardSidebarContent(card));
-  const actionContent = sidebarContent ?? buildSidebarContent(buildToolCardSidebarContent(card));
+      ? buildPreviewSidebarContent(preview, card.outputText, { fullMessageRequest })
+      : buildSidebarContent(buildToolCardSidebarContent(card), {
+          fullMessageRequest,
+          rawText: card.outputText ?? null,
+        });
+  const actionContent =
+    sidebarContent ??
+    buildSidebarContent(buildToolCardSidebarContent(card), {
+      fullMessageRequest,
+      rawText: card.outputText ?? null,
+    });
   const canClick = Boolean(onOpenSidebar);
   const handleClick = canClick ? () => onOpenSidebar?.(actionContent) : undefined;
   const isShort = hasText && !hasPreview && (card.outputText?.length ?? 0) <= 240;
