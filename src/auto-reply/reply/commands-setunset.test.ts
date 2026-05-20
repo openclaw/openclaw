@@ -87,6 +87,24 @@ describe("parseSlashCommandWithSetUnset", () => {
     expect(result).toBeNull();
   });
 
+  it("does not match longer slash command names that share the same prefix", () => {
+    const result = parseSlashCommandWithSetUnset<ParsedSetUnsetAction>(
+      createSlashParams({ raw: "/config-check show" }),
+    );
+    expect(result).toBeNull();
+  });
+
+  it("accepts colon as a slash command delimiter", () => {
+    const result = parseSlashCommandWithSetUnset<ParsedSetUnsetAction>(
+      createSlashParams({
+        raw: "/config: show",
+        onKnownAction: (action) =>
+          action === "show" ? { action: "unset", path: "dummy" } : undefined,
+      }),
+    );
+    expect(result).toEqual({ action: "unset", path: "dummy" });
+  });
+
   it("prefers set/unset mapping and falls back to known actions", () => {
     const setResult = parseSlashCommandWithSetUnset<ParsedSetUnsetAction>(
       createSlashParams({

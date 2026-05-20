@@ -16,7 +16,12 @@ function parseSlashCommandActionArgs(raw: string, slash: string): SlashCommandPa
   if (!normalizeLowercaseStringOrEmpty(trimmed).startsWith(slashLower)) {
     return { kind: "no-match" };
   }
-  const rest = trimmed.slice(slash.length).trim();
+  const charAfterSlash = trimmed.charAt(slash.length);
+  if (charAfterSlash && !/[\s:]/.test(charAfterSlash)) {
+    return { kind: "no-match" };
+  }
+  const restOffset = charAfterSlash === ":" ? slash.length + 1 : slash.length;
+  const rest = trimmed.slice(restOffset).trim();
   if (!rest) {
     return { kind: "empty" };
   }
