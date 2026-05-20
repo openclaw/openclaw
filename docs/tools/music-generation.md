@@ -274,8 +274,8 @@ explicit `model`, `primary`, and `fallbacks` entries.
   </Accordion>
   <Accordion title="MiniMax">
     Uses the batch `music_generation` endpoint. Supports prompt, optional
-    lyrics, instrumental mode, duration steering, and mp3 output through
-    either `minimax` API-key auth or `minimax-portal` OAuth.
+    lyrics, instrumental mode, and mp3 output through either `minimax`
+    API-key auth or `minimax-portal` OAuth.
   </Accordion>
   <Accordion title="OpenRouter">
     Uses OpenRouter chat completions audio output with streaming enabled. The
