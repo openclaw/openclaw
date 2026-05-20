@@ -22,6 +22,7 @@ const outputPrecomputedBrowserHelpTextMock = vi.hoisted(() => vi.fn(() => false)
 const loadRootHelpRenderOptionsForConfigSensitivePluginsMock = vi.hoisted(() =>
   vi.fn<() => Promise<RootHelpRenderOptions | null>>(async () => null),
 );
+const tryOutputSetupOnboardConfigureHelpMock = vi.hoisted(() => vi.fn(async () => true));
 const buildProgramMock = vi.hoisted(() => vi.fn());
 const getProgramContextMock = vi.hoisted(() => vi.fn(() => null));
 const registerCoreCliByNameMock = vi.hoisted(() => vi.fn());
@@ -177,6 +178,10 @@ vi.mock("./root-help-live-config.js", () => ({
     loadRootHelpRenderOptionsForConfigSensitivePluginsMock,
 }));
 
+vi.mock("./setup-onboard-configure-help-fast-path.js", () => ({
+  tryOutputSetupOnboardConfigureHelp: tryOutputSetupOnboardConfigureHelpMock,
+}));
+
 vi.mock("./program.js", () => ({
   buildProgram: buildProgramMock,
 }));
@@ -252,6 +257,7 @@ describe("runCli exit behavior", () => {
     outputPrecomputedBrowserHelpTextMock.mockReturnValue(false);
     outputPrecomputedRootHelpTextMock.mockReturnValue(false);
     loadRootHelpRenderOptionsForConfigSensitivePluginsMock.mockResolvedValue(null);
+    tryOutputSetupOnboardConfigureHelpMock.mockResolvedValue(true);
     hasEnvHttpProxyAgentConfiguredMock.mockReturnValue(false);
     loadConfigMock.mockReturnValue({});
     startProxyMock.mockResolvedValue(null);
@@ -416,6 +422,20 @@ describe("runCli exit behavior", () => {
     expect(hasEnvHttpProxyAgentConfiguredMock).not.toHaveBeenCalled();
     expect(ensureGlobalUndiciEnvProxyDispatcherMock).not.toHaveBeenCalled();
     expect(runCrestodianMock).not.toHaveBeenCalled();
+  });
+
+  it("renders setup/onboard/configure help without building the full program", async () => {
+    await runCli(["node", "openclaw", "setup", "--help"]);
+
+    expect(tryOutputSetupOnboardConfigureHelpMock).toHaveBeenCalledWith([
+      "node",
+      "openclaw",
+      "setup",
+      "--help",
+    ]);
+    expect(tryRouteCliMock).not.toHaveBeenCalled();
+    expect(buildProgramMock).not.toHaveBeenCalled();
+    expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
   });
 
   it("renders root help without building the full program", async () => {
