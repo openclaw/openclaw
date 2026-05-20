@@ -1266,6 +1266,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
     const parentSessionKey = normalizeOptionalString(p.parentSessionKey);
     let canonicalParentSessionKey: string | undefined;
+    const initialMessage = resolveOptionalInitialSessionMessage(p);
     if (parentSessionKey) {
       const parent = loadSessionEntry(parentSessionKey);
       if (!parent.entry?.sessionId) {
@@ -1278,13 +1279,10 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       }
       canonicalParentSessionKey = parent.canonicalKey;
     }
-    if (
-      canonicalParentSessionKey &&
-      p.emitCommandHooks === true &&
-      !requestedKey &&
-      !resolveOptionalInitialSessionMessage(p) &&
-      cfg.session?.dmScope === "main"
-    ) {
+    const shouldCreateFreshRootFromParent = Boolean(
+      canonicalParentSessionKey && p.emitCommandHooks === true && !requestedKey && !initialMessage,
+    );
+    if (shouldCreateFreshRootFromParent && cfg.session?.dmScope === "main") {
       const parentAgentId = normalizeAgentId(
         resolveAgentIdFromSessionKey(canonicalParentSessionKey) ?? resolveDefaultAgentId(cfg),
       );
@@ -1372,7 +1370,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         },
         loadGatewayModelCatalog: context.loadGatewayModelCatalog,
       });
-      if (!patched.ok || !canonicalParentSessionKey) {
+      if (!patched.ok || !canonicalParentSessionKey || shouldCreateFreshRootFromParent) {
         return patched;
       }
       const nextEntry: SessionEntry = {
@@ -1426,7 +1424,6 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       });
     }
 
-    const initialMessage = resolveOptionalInitialSessionMessage(p);
     let runPayload: Record<string, unknown> | undefined;
     let runError: unknown;
     let runMeta: Record<string, unknown> | undefined;

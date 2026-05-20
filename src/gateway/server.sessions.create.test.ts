@@ -6,6 +6,7 @@ import {
   setupGatewaySessionsTestHarness,
   sessionStoreEntry,
   directSessionReq,
+  sessionHookMocks,
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
@@ -82,6 +83,79 @@ test("sessions.create stores dashboard session model and parent linkage, and cre
   const header = JSON.parse(headerLine) as { type?: string; id?: string };
   expect(header.type).toBe("session");
   expect(header.id).toBe(created.payload?.sessionId);
+});
+
+test("sessions.create treats dashboard New Chat from a parent as a fresh root", async () => {
+  const { storePath } = await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      "dashboard:parent": sessionStoreEntry("sess-parent"),
+    },
+  });
+
+  const created = await directSessionReq<{
+    key?: string;
+    sessionId?: string;
+    entry?: {
+      parentSessionKey?: string;
+    };
+  }>("sessions.create", {
+    agentId: "main",
+    parentSessionKey: "agent:main:dashboard:parent",
+    emitCommandHooks: true,
+  });
+
+  expect(created.ok).toBe(true);
+  expect(created.payload?.key).toMatch(/^agent:main:dashboard:/);
+  expect(created.payload?.entry?.parentSessionKey).toBeUndefined();
+  expect(sessionHookMocks.triggerInternalHook).toHaveBeenCalledWith(
+    expect.objectContaining({
+      action: "new",
+      sessionKey: "agent:main:dashboard:parent",
+    }),
+  );
+
+  const rawStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    {
+      parentSessionKey?: string;
+    }
+  >;
+  const key = created.payload?.key as string;
+  expect(rawStore[key]?.parentSessionKey).toBeUndefined();
+});
+
+test("sessions.create preserves parent linkage for explicit keyed lifecycle creates", async () => {
+  const { storePath } = await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      "dashboard:parent": sessionStoreEntry("sess-parent"),
+    },
+  });
+
+  const key = "agent:main:dashboard:explicit-child";
+  const created = await directSessionReq<{
+    key?: string;
+    entry?: {
+      parentSessionKey?: string;
+    };
+  }>("sessions.create", {
+    key,
+    parentSessionKey: "agent:main:dashboard:parent",
+    emitCommandHooks: true,
+  });
+
+  expect(created.ok).toBe(true);
+  expect(created.payload?.key).toBe(key);
+  expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:dashboard:parent");
+
+  const rawStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    {
+      parentSessionKey?: string;
+    }
+  >;
+  expect(rawStore[key]?.parentSessionKey).toBe("agent:main:dashboard:parent");
 });
 
 test("sessions.create accepts an explicit key for persistent dashboard sessions", async () => {
