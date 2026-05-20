@@ -85,6 +85,40 @@ Truncate output to this many characters.
 }
 ```
 
+## Apify fallback
+
+If Readability extraction fails (or `readability: false` is set), `web_fetch` can use
+[Apify Website Content Crawler](/tools/apify) for full JS rendering and anti-bot extraction:
+
+```json5
+{
+  tools: {
+    web: {
+      fetch: {
+        provider: "apify", // optional; omit for auto-detect
+        readability: false, // route all fetches through Apify, skip local extraction
+      },
+    },
+  },
+  plugins: {
+    entries: {
+      apify: {
+        enabled: true,
+        config: {
+          apiKey: "apify_...", // optional if APIFY_API_KEY is set
+          webFetch: {
+            crawlerType: "playwright:adaptive", // "playwright:adaptive" | "playwright:firefox" | "cheerio"
+            timeoutSeconds: 60,
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Use `crawlerType: "playwright:firefox"` when `playwright:adaptive` returns empty or partial content.
+
 ## Firecrawl fallback
 
 If Readability extraction fails, `web_fetch` can fall back to
@@ -95,7 +129,7 @@ If Readability extraction fails, `web_fetch` can fall back to
   tools: {
     web: {
       fetch: {
-        provider: "firecrawl", // optional; omit for auto-detect from available credentials
+        provider: "firecrawl", // "apify" | "firecrawl"; omit for auto-detect from available credentials
       },
     },
   },
@@ -192,4 +226,5 @@ If you use tool profiles or allowlists, add `web_fetch` or `group:web`:
 
 - [Web Search](/tools/web) -- search the web with multiple providers
 - [Web Browser](/tools/browser) -- full browser automation for JS-heavy sites
+- [Apify](/tools/apify) -- Apify web search and web fetch providers
 - [Firecrawl](/tools/firecrawl) -- Firecrawl search and scrape tools

@@ -315,6 +315,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/acpx/**"
+"extensions: apify":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/apify/**"
 "extensions: arcee":
   - changed-files:
       - any-glob-to-any-file:

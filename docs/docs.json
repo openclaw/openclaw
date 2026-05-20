@@ -1290,6 +1290,7 @@
                     "pages": [
                       "tools/web-fetch",
                       "tools/web",
+                      "tools/apify",
                       "tools/brave-search",
                       "tools/duckduckgo-search",
                       "tools/exa-search",

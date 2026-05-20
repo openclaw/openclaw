@@ -1,0 +1,61 @@
+{
+  "id": "apify",
+  "providerAuthEnvVars": {
+    "apify": ["APIFY_API_KEY"]
+  },
+  "uiHints": {
+    "apiKey": {
+      "label": "Apify API Token",
+      "help": "Apify personal API token used for both web search and web fetch (fallback: APIFY_API_KEY env var).",
+      "sensitive": true,
+      "placeholder": "apify_..."
+    },
+    "webFetch.crawlerType": {
+      "label": "Fetch Crawler Type",
+      "help": "Crawler engine for web fetch. \"playwright:adaptive\" (default) auto-selects rendering; \"playwright:firefox\" forces full rendering for heavily bot-protected pages; \"cheerio\" is fastest for plain-HTML pages."
+    },
+    "webFetch.timeoutSeconds": {
+      "label": "Fetch Timeout (seconds)",
+      "help": "Maximum seconds to wait for the website-content-crawler actor to respond (1–300)."
+    },
+    "webSearch.maxResults": {
+      "label": "Search Max Results",
+      "help": "Maximum number of search results to return (1–10, capped by OpenClaw core)."
+    },
+    "webSearch.timeoutSeconds": {
+      "label": "Search Timeout (seconds)",
+      "help": "Maximum seconds to wait for the rag-web-browser actor to respond (1–300)."
+    }
+  },
+  "contracts": {
+    "webFetchProviders": ["apify"],
+    "webSearchProviders": ["apify"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "apiKey": { "type": ["string", "object"] },
+      "webSearch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "timeoutSeconds": { "type": "number", "minimum": 1, "maximum": 300, "default": 30 },
+          "maxResults": { "type": "number", "minimum": 1, "maximum": 10, "default": 5 }
+        }
+      },
+      "webFetch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "crawlerType": {
+            "type": "string",
+            "enum": ["cheerio", "playwright:firefox", "playwright:adaptive"],
+            "default": "playwright:adaptive"
+          },
+          "timeoutSeconds": { "type": "number", "minimum": 1, "maximum": 300, "default": 60 }
+        }
+      }
+    }
+  }
+}

@@ -57,6 +57,9 @@ local while `web_search` and `x_search` can use xAI Responses under the hood.
 ## Choosing a provider
 
 <CardGroup cols={2}>
+  <Card title="Apify" icon="globe" href="/tools/apify">
+    Headless-rendered Google Search results with smart Markdown extraction. Free tier available.
+  </Card>
   <Card title="Brave Search" icon="shield" href="/tools/brave-search">
     Structured results with snippets. Supports `llm-context` mode, country/language filters. Free tier available.
   </Card>
@@ -99,6 +102,7 @@ local while `web_search` and `x_search` can use xAI Responses under the hood.
 
 | Provider                                  | Result style                                                   | Filters                                          | API key                                                                                 |
 | ----------------------------------------- | -------------------------------------------------------------- | ------------------------------------------------ | --------------------------------------------------------------------------------------- |
+| [Apify](/tools/apify)                     | Full-page Markdown                                             | --                                               | `APIFY_API_KEY`                                                                         |
 | [Brave](/tools/brave-search)              | Structured snippets                                            | Country, language, time, `llm-context` mode      | `BRAVE_API_KEY`                                                                         |
 | [DuckDuckGo](/tools/duckduckgo-search)    | Structured snippets                                            | --                                               | None (key-free)                                                                         |
 | [Exa](/tools/exa-search)                  | Structured + extracted                                         | Neural/keyword mode, date, content extraction    | `EXA_API_KEY`                                                                           |
@@ -181,15 +185,16 @@ API-backed providers first:
 4. **Grok** -- `XAI_API_KEY` or `plugins.entries.xai.config.webSearch.apiKey` (order 30)
 5. **Kimi** -- `KIMI_API_KEY` / `MOONSHOT_API_KEY` or `plugins.entries.moonshot.config.webSearch.apiKey` (order 40)
 6. **Perplexity** -- `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` or `plugins.entries.perplexity.config.webSearch.apiKey` (order 50)
-7. **Firecrawl** -- `FIRECRAWL_API_KEY` or `plugins.entries.firecrawl.config.webSearch.apiKey` (order 60)
-8. **Exa** -- `EXA_API_KEY` or `plugins.entries.exa.config.webSearch.apiKey`; optional `plugins.entries.exa.config.webSearch.baseUrl` overrides the Exa endpoint (order 65)
-9. **Tavily** -- `TAVILY_API_KEY` or `plugins.entries.tavily.config.webSearch.apiKey` (order 70)
+7. **Apify** -- `APIFY_API_KEY` or `plugins.entries.apify.config.apiKey` (order 60)
+8. **Firecrawl** -- `FIRECRAWL_API_KEY` or `plugins.entries.firecrawl.config.webSearch.apiKey` (order 60)
+9. **Exa** -- `EXA_API_KEY` or `plugins.entries.exa.config.webSearch.apiKey`; optional `plugins.entries.exa.config.webSearch.baseUrl` overrides the Exa endpoint (order 65)
+10. **Tavily** -- `TAVILY_API_KEY` or `plugins.entries.tavily.config.webSearch.apiKey` (order 70)
 
 Key-free fallbacks after that:
 
-10. **DuckDuckGo** -- key-free HTML fallback with no account or API key (order 100)
-11. **Ollama Web Search** -- key-free fallback via your configured local Ollama host when it is reachable and signed in with `ollama signin`; can reuse Ollama provider bearer auth when the host needs it, and can call direct `https://ollama.com` search when configured with `OLLAMA_API_KEY` (order 110)
-12. **SearXNG** -- `SEARXNG_BASE_URL` or `plugins.entries.searxng.config.webSearch.baseUrl` (order 200)
+11. **DuckDuckGo** -- key-free HTML fallback with no account or API key (order 100)
+12. **Ollama Web Search** -- key-free fallback via your configured local Ollama host when it is reachable and signed in with `ollama signin`; can reuse Ollama provider bearer auth when the host needs it, and can call direct `https://ollama.com` search when configured with `OLLAMA_API_KEY` (order 110)
+13. **SearXNG** -- `SEARXNG_BASE_URL` or `plugins.entries.searxng.config.webSearch.baseUrl` (order 200)
 
 If no provider is detected, it falls back to Brave (you will get a missing-key
 error prompting you to configure one).
@@ -245,8 +250,7 @@ plugin or run `openclaw doctor --fix` to clean up the stale config.
   provider from available credentials
 - non-sandboxed `web_fetch` can use installed plugin providers that declare
   `contracts.webFetchProviders`; sandboxed fetches stay bundled-only
-- today the bundled web-fetch provider is Firecrawl, configured under
-  `plugins.entries.firecrawl.config.webFetch.*`
+- bundled web-fetch providers are Apify (`plugins.entries.apify.config.webFetch.*`) and Firecrawl (`plugins.entries.firecrawl.config.webFetch.*`); Apify is selected first if `APIFY_API_KEY` is set
 
 When you choose **Kimi** during `openclaw onboard` or
 `openclaw configure --section web`, OpenClaw can also ask for:

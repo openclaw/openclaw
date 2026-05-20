@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Plugins/Apify: add bundled Apify plugin with web search (RAG Web Browser actor) and web fetch (Website Content Crawler actor) providers, sharing a single API key at `plugins.entries.apify.config.apiKey` with `playwright:adaptive`/`playwright:firefox`/`cheerio` crawler type selection and configurable timeouts. Thanks @JanHranicky.
 - Discord: let voice sessions follow configured Discord users into voice channels, with allowed-channel checks, multi-user handoff, bounded reconciliation, and DAVE recovery preservation. (#84264) Thanks @fuller-stack-dev.
 - Discord/voice: include bounded `IDENTITY.md`, `USER.md`, and `SOUL.md` profile context in realtime voice session instructions by default, with `voice.realtime.bootstrapContextFiles: []` available to disable it. (#84499) Thanks @fuller-stack-dev.
 - Dependencies: bump the bundled Codex harness to `@openai/codex` `0.132.0` and refresh the app-server model-list docs for the new catalog.
