@@ -1734,6 +1734,47 @@ describe("registerPolicyDoctorChecks", () => {
           },
         },
       },
+      tools: {
+        media: {
+          models: [
+            {
+              request: {
+                headers: {
+                  Authorization: "Bearer inline-media-model-token",
+                },
+              },
+            },
+          ],
+          audio: {
+            models: [
+              {
+                request: {
+                  proxy: {
+                    tls: {
+                      passphrase: "inline-audio-model-proxy-passphrase",
+                    },
+                  },
+                },
+              },
+            ],
+          },
+          image: {
+            request: {
+              auth: {
+                mode: "authorization-bearer",
+                value: "inline-image-auth-value",
+              },
+            },
+          },
+          video: {
+            request: {
+              tls: {
+                key: "inline-video-tls-key",
+              },
+            },
+          },
+        },
+      },
       plugins: {
         ...baseCfg.plugins,
         entries: {
@@ -1782,6 +1823,10 @@ describe("registerPolicyDoctorChecks", () => {
     expect(JSON.stringify(evidence)).not.toContain("inline-token");
     expect(JSON.stringify(evidence)).not.toContain("inline-auth-value");
     expect(JSON.stringify(evidence)).not.toContain("inline-tls-key");
+    expect(JSON.stringify(evidence)).not.toContain("inline-media-model-token");
+    expect(JSON.stringify(evidence)).not.toContain("inline-audio-model-proxy-passphrase");
+    expect(JSON.stringify(evidence)).not.toContain("inline-image-auth-value");
+    expect(JSON.stringify(evidence)).not.toContain("inline-video-tls-key");
     expect(JSON.stringify(evidence)).not.toContain("inline-plugin-secret");
     expect(JSON.stringify(evidence)).not.toContain("inline-mcp-secret");
     expect(evidence.secrets).toEqual(
@@ -1811,6 +1856,26 @@ describe("registerPolicyDoctorChecks", () => {
         expect.objectContaining({
           kind: "input",
           provenance: "inline",
+          source: 'oc://openclaw.config/tools/media/models/"#0"/request/headers/Authorization',
+        }),
+        expect.objectContaining({
+          kind: "input",
+          provenance: "inline",
+          source: 'oc://openclaw.config/tools/media/audio/models/"#0"/request/proxy/tls/passphrase',
+        }),
+        expect.objectContaining({
+          kind: "input",
+          provenance: "inline",
+          source: "oc://openclaw.config/tools/media/image/request/auth/value",
+        }),
+        expect.objectContaining({
+          kind: "input",
+          provenance: "inline",
+          source: "oc://openclaw.config/tools/media/video/request/tls/key",
+        }),
+        expect.objectContaining({
+          kind: "input",
+          provenance: "inline",
           source:
             "oc://openclaw.config/plugins/entries/acpx/config/mcpServers/github/env/CUSTOM_CREDENTIAL",
         }),
@@ -1834,6 +1899,22 @@ describe("registerPolicyDoctorChecks", () => {
         expect.objectContaining({
           checkId: "policy/secrets-inline-value",
           ocPath: "oc://openclaw.config/models/providers/openai/request/tls/key",
+        }),
+        expect.objectContaining({
+          checkId: "policy/secrets-inline-value",
+          ocPath: 'oc://openclaw.config/tools/media/models/"#0"/request/headers/Authorization',
+        }),
+        expect.objectContaining({
+          checkId: "policy/secrets-inline-value",
+          ocPath: 'oc://openclaw.config/tools/media/audio/models/"#0"/request/proxy/tls/passphrase',
+        }),
+        expect.objectContaining({
+          checkId: "policy/secrets-inline-value",
+          ocPath: "oc://openclaw.config/tools/media/image/request/auth/value",
+        }),
+        expect.objectContaining({
+          checkId: "policy/secrets-inline-value",
+          ocPath: "oc://openclaw.config/tools/media/video/request/tls/key",
         }),
         expect.objectContaining({
           checkId: "policy/secrets-inline-value",

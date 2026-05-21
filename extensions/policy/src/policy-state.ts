@@ -428,19 +428,77 @@ function isSecretInputPath(path: readonly string[]): boolean {
   const joined = path.join(".");
   return (
     /^models\.providers\.[^.]+\.headers\.[^.]+$/.test(joined) ||
-    /^models\.providers\.[^.]+\.request\.headers\.[^.]+$/.test(joined) ||
-    /^models\.providers\.[^.]+\.request\.auth\.value$/.test(joined) ||
-    /^models\.providers\.[^.]+\.request\.(?:proxy\.)?tls\.(?:ca|cert|key|passphrase)$/.test(
-      joined,
-    ) ||
-    /^tools\.media\.audio\.request\.headers\.[^.]+$/.test(joined) ||
-    /^tools\.media\.audio\.request\.auth\.value$/.test(joined) ||
-    /^tools\.media\.audio\.request\.(?:proxy\.)?tls\.(?:ca|cert|key|passphrase)$/.test(joined) ||
+    isConfiguredProviderRequestSecretPath(path, ["models", "providers", "*"]) ||
+    isMediaConfiguredProviderRequestSecretPath(path) ||
     /^agents\.defaults\.memorySearch\.remote\.headers\.[^.]+$/.test(joined) ||
     /^diagnostics\.otel\.headers\.[^.]+$/.test(joined) ||
     /^mcp\.servers\.[^.]+\.env\.[^.]+$/.test(joined) ||
     /^plugins\.entries\.[^.]+\.config\.mcpServers\.[^.]+\.env\.[^.]+$/.test(joined)
   );
+}
+
+function isMediaConfiguredProviderRequestSecretPath(path: readonly string[]): boolean {
+  return (
+    isConfiguredProviderRequestSecretPath(path, ["tools", "media", "models", "#"]) ||
+    isConfiguredProviderRequestSecretPath(path, ["tools", "media", "audio"]) ||
+    isConfiguredProviderRequestSecretPath(path, ["tools", "media", "audio", "models", "#"]) ||
+    isConfiguredProviderRequestSecretPath(path, ["tools", "media", "image"]) ||
+    isConfiguredProviderRequestSecretPath(path, ["tools", "media", "image", "models", "#"]) ||
+    isConfiguredProviderRequestSecretPath(path, ["tools", "media", "video"]) ||
+    isConfiguredProviderRequestSecretPath(path, ["tools", "media", "video", "models", "#"])
+  );
+}
+
+function isConfiguredProviderRequestSecretPath(
+  path: readonly string[],
+  prefix: readonly string[],
+): boolean {
+  if (path.length < prefix.length + 3) {
+    return false;
+  }
+  if (!matchesConfigPathPrefix(path, prefix)) {
+    return false;
+  }
+  const requestIndex = prefix.length;
+  if (path[requestIndex] !== "request") {
+    return false;
+  }
+  const suffix = path.slice(requestIndex + 1);
+  if (suffix.length === 2 && suffix[0] === "headers") {
+    return true;
+  }
+  if (suffix.length === 2 && suffix[0] === "auth" && suffix[1] === "value") {
+    return true;
+  }
+  if (suffix.length === 2 && suffix[0] === "tls" && isConfiguredProviderTlsSecretKey(suffix[1])) {
+    return true;
+  }
+  return (
+    suffix.length === 3 &&
+    suffix[0] === "proxy" &&
+    suffix[1] === "tls" &&
+    isConfiguredProviderTlsSecretKey(suffix[2])
+  );
+}
+
+function matchesConfigPathPrefix(path: readonly string[], prefix: readonly string[]): boolean {
+  if (path.length < prefix.length) {
+    return false;
+  }
+  return prefix.every((segment, index) => {
+    const value = path[index];
+    if (segment === "*") {
+      return value !== undefined && value !== "";
+    }
+    if (segment === "#") {
+      return value?.startsWith("#") === true;
+    }
+    return value === segment;
+  });
+}
+
+function isConfiguredProviderTlsSecretKey(key: string | undefined): boolean {
+  return key === "ca" || key === "cert" || key === "key" || key === "passphrase";
 }
 
 function isSecretInputKey(key: string): boolean {
