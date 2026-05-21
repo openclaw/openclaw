@@ -18,6 +18,14 @@ const originalDiscordMessagingActionRuntime = { ...discordMessagingActionRuntime
 const originalDiscordGuildActionRuntime = { ...discordGuildActionRuntime };
 const originalDiscordModerationActionRuntime = { ...discordModerationActionRuntime };
 
+type DiscordChannelInfoTest = {
+  id: string;
+  type: number;
+  guild_id?: string;
+  name?: string;
+  parent_id?: string;
+};
+
 const discordSendMocks = {
   banMemberDiscord: vi.fn(async () => ({})),
   createChannelDiscord: vi.fn(async () => ({
@@ -33,7 +41,9 @@ const discordSendMocks = {
     name: "edited",
   })),
   editMessageDiscord: vi.fn(async () => ({})),
-  fetchChannelInfoDiscord: vi.fn(async () => ({ id: "C1", type: 0 })),
+  fetchChannelInfoDiscord: vi.fn(
+    async (channelId: string): Promise<DiscordChannelInfoTest> => ({ id: channelId, type: 0 }),
+  ),
   fetchChannelPermissionsDiscord: vi.fn(async () => ({})),
   fetchGuildInfoDiscord: vi.fn(async (guildId: string) => ({
     id: guildId,
