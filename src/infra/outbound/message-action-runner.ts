@@ -794,6 +794,9 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   if (!params.replyTo && parsed.replyToId) {
     params.replyTo = parsed.replyToId;
   }
+  if (parsed.slackReplyBroadcast && params.replyBroadcast === undefined) {
+    params.replyBroadcast = true;
+  }
   if (!params.media) {
     // Use path/filePath if media not set, then fall back to parsed directives
     params.media = mergedMediaUrls[0] || undefined;

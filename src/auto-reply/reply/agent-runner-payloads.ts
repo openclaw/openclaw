@@ -79,6 +79,7 @@ export function buildReplyPayloads(params: {
         replyToId: payload.replyToId ?? parsed.replyToId,
         replyToTag: payload.replyToTag || parsed.replyToTag,
         replyToCurrent: payload.replyToCurrent || parsed.replyToCurrent,
+        slackReplyBroadcast: Boolean(payload.slackReplyBroadcast || parsed.slackReplyBroadcast),
         audioAsVoice: Boolean(payload.audioAsVoice || parsed.audioAsVoice),
       };
     })

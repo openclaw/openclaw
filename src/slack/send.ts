@@ -1,4 +1,8 @@
-import { type FilesUploadV2Arguments, type WebClient } from "@slack/web-api";
+import {
+  type ChatPostMessageArguments,
+  type FilesUploadV2Arguments,
+  type WebClient,
+} from "@slack/web-api";
 import type { SlackTokenSource } from "./accounts.js";
 import {
   chunkMarkdownTextWithMode,
@@ -33,6 +37,7 @@ type SlackSendOpts = {
   mediaUrl?: string;
   client?: WebClient;
   threadTs?: string;
+  replyBroadcast?: boolean;
 };
 
 export type SlackSendResult = {
@@ -170,6 +175,22 @@ export async function sendMessageSlack(
       ? account.config.mediaMaxMb * 1024 * 1024
       : undefined;
 
+  const createPostMessagePayload = (text: string): ChatPostMessageArguments => {
+    if (opts.threadTs && opts.replyBroadcast) {
+      return {
+        channel: channelId,
+        text,
+        thread_ts: opts.threadTs,
+        reply_broadcast: true,
+      };
+    }
+    return {
+      channel: channelId,
+      text,
+      thread_ts: opts.threadTs,
+    };
+  };
+
   let lastMessageId = "";
   if (opts.mediaUrl) {
     const [firstChunk, ...rest] = chunks;
@@ -182,20 +203,12 @@ export async function sendMessageSlack(
       maxBytes: mediaMaxBytes,
     });
     for (const chunk of rest) {
-      const response = await client.chat.postMessage({
-        channel: channelId,
-        text: chunk,
-        thread_ts: opts.threadTs,
-      });
+      const response = await client.chat.postMessage(createPostMessagePayload(chunk));
       lastMessageId = response.ts ?? lastMessageId;
     }
   } else {
     for (const chunk of chunks.length ? chunks : [""]) {
-      const response = await client.chat.postMessage({
-        channel: channelId,
-        text: chunk,
-        thread_ts: opts.threadTs,
-      });
+      const response = await client.chat.postMessage(createPostMessagePayload(chunk));
       lastMessageId = response.ts ?? lastMessageId;
     }
   }

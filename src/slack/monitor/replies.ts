@@ -34,6 +34,7 @@ export async function deliverReplies(params: {
         token: params.token,
         threadTs,
         accountId: params.accountId,
+        replyBroadcast: Boolean(payload.slackReplyBroadcast),
       });
     } else {
       let first = true;
@@ -45,6 +46,7 @@ export async function deliverReplies(params: {
           mediaUrl,
           threadTs,
           accountId: params.accountId,
+          replyBroadcast: Boolean(payload.slackReplyBroadcast),
         });
       }
     }

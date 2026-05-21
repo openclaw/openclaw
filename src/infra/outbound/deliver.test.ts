@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { signalOutbound } from "../../channels/plugins/outbound/signal.js";
+import { slackOutbound } from "../../channels/plugins/outbound/slack.js";
 import { telegramOutbound } from "../../channels/plugins/outbound/telegram.js";
 import { whatsappOutbound } from "../../channels/plugins/outbound/whatsapp.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -66,6 +67,41 @@ describe("deliverOutboundPayloads", () => {
         process.env.TELEGRAM_BOT_TOKEN = prevTelegramToken;
       }
     }
+  });
+
+  it("passes Slack reply broadcast through only with a resolved thread", async () => {
+    const sendSlack = vi.fn().mockResolvedValue({ messageId: "s1", channelId: "c1" });
+    const cfg: OpenClawConfig = { channels: { slack: { botToken: "tok-1" } } };
+
+    await deliverOutboundPayloads({
+      cfg,
+      channel: "slack",
+      to: "C123",
+      replyToId: "111.222",
+      payloads: [{ text: "hello [[reply_broadcast]]" }],
+      deps: { sendSlack },
+    });
+
+    expect(sendSlack).toHaveBeenCalledWith(
+      "C123",
+      "hello",
+      expect.objectContaining({ threadTs: "111.222", replyBroadcast: true }),
+    );
+
+    sendSlack.mockClear();
+    await deliverOutboundPayloads({
+      cfg,
+      channel: "slack",
+      to: "C123",
+      payloads: [{ text: "hello [[reply_broadcast]]" }],
+      deps: { sendSlack },
+    });
+
+    expect(sendSlack).toHaveBeenCalledWith(
+      "C123",
+      "hello",
+      expect.objectContaining({ threadTs: undefined, replyBroadcast: true }),
+    );
   });
 
   it("passes explicit accountId to sendTelegram", async () => {
@@ -359,6 +395,11 @@ describe("deliverOutboundPayloads", () => {
 
 const emptyRegistry = createTestRegistry([]);
 const defaultRegistry = createTestRegistry([
+  {
+    pluginId: "slack",
+    plugin: createOutboundTestPlugin({ id: "slack", outbound: slackOutbound }),
+    source: "test",
+  },
   {
     pluginId: "telegram",
     plugin: createOutboundTestPlugin({ id: "telegram", outbound: telegramOutbound }),

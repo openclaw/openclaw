@@ -94,6 +94,7 @@ export function createSlackActions(providerId: string): ChannelMessageActionAdap
             mediaUrl: mediaUrl ?? undefined,
             accountId: accountId ?? undefined,
             threadTs: threadId ?? replyTo ?? undefined,
+            replyBroadcast: params.replyBroadcast ?? params.slackReplyBroadcast,
           },
           cfg,
           toolContext,

@@ -464,6 +464,7 @@ For fine-grained control, use these tags in agent responses:
 
 - `[[reply_to_current]]` — reply to the triggering message (start/continue thread).
 - `[[reply_to:<id>]]` — reply to a specific message id.
+- `[[slack_reply_broadcast]]` (or `[[reply_broadcast]]`) — when the reply is posted in a Slack thread, also share it to the channel using Slack's native `reply_broadcast` behavior. The tag is stripped from visible output and ignored outside Slack or when no thread is selected.
 
 ## Sessions + routing
 

@@ -74,6 +74,7 @@ export type EmbeddedRunAttemptParams = {
     replyToId?: string;
     replyToTag?: boolean;
     replyToCurrent?: boolean;
+    slackReplyBroadcast?: boolean;
   }) => void | Promise<void>;
   onBlockReplyFlush?: () => void | Promise<void>;
   blockReplyBreak?: "text_end" | "message_end";

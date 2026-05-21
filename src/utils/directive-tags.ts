@@ -4,8 +4,10 @@ export type InlineDirectiveParseResult = {
   replyToId?: string;
   replyToExplicitId?: string;
   replyToCurrent: boolean;
+  slackReplyBroadcast: boolean;
   hasAudioTag: boolean;
   hasReplyTag: boolean;
+  hasSlackReplyBroadcastTag: boolean;
 };
 
 type InlineDirectiveParseOptions = {
@@ -16,6 +18,7 @@ type InlineDirectiveParseOptions = {
 
 const AUDIO_TAG_RE = /\[\[\s*audio_as_voice\s*\]\]/gi;
 const REPLY_TAG_RE = /\[\[\s*(?:reply_to_current|reply_to\s*:\s*([^\]\n]+))\s*\]\]/gi;
+const SLACK_REPLY_BROADCAST_TAG_RE = /\[\[\s*(?:slack_reply_broadcast|reply_broadcast)\s*\]\]/gi;
 
 function normalizeDirectiveWhitespace(text: string): string {
   return text
@@ -34,8 +37,10 @@ export function parseInlineDirectives(
       text: "",
       audioAsVoice: false,
       replyToCurrent: false,
+      slackReplyBroadcast: false,
       hasAudioTag: false,
       hasReplyTag: false,
+      hasSlackReplyBroadcastTag: false,
     };
   }
 
@@ -43,7 +48,9 @@ export function parseInlineDirectives(
   let audioAsVoice = false;
   let hasAudioTag = false;
   let hasReplyTag = false;
+  let hasSlackReplyBroadcastTag = false;
   let sawCurrent = false;
+  let slackReplyBroadcast = false;
   let lastExplicitId: string | undefined;
 
   cleaned = cleaned.replace(AUDIO_TAG_RE, (match) => {
@@ -65,6 +72,11 @@ export function parseInlineDirectives(
     return stripReplyTags ? " " : match;
   });
 
+  cleaned = cleaned.replace(SLACK_REPLY_BROADCAST_TAG_RE, " ");
+  SLACK_REPLY_BROADCAST_TAG_RE.lastIndex = 0;
+  hasSlackReplyBroadcastTag = SLACK_REPLY_BROADCAST_TAG_RE.test(text);
+  slackReplyBroadcast = hasSlackReplyBroadcastTag;
+
   cleaned = normalizeDirectiveWhitespace(cleaned);
 
   const replyToId =
@@ -76,7 +88,9 @@ export function parseInlineDirectives(
     replyToId,
     replyToExplicitId: lastExplicitId,
     replyToCurrent: sawCurrent,
+    slackReplyBroadcast,
     hasAudioTag,
     hasReplyTag,
+    hasSlackReplyBroadcastTag,
   };
 }

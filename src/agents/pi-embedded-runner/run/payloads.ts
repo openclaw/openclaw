@@ -40,6 +40,7 @@ export function buildEmbeddedRunPayloads(params: {
   audioAsVoice?: boolean;
   replyToTag?: boolean;
   replyToCurrent?: boolean;
+  slackReplyBroadcast?: boolean;
 }> {
   const replyItems: Array<{
     text: string;
@@ -49,6 +50,7 @@ export function buildEmbeddedRunPayloads(params: {
     replyToId?: string;
     replyToTag?: boolean;
     replyToCurrent?: boolean;
+    slackReplyBroadcast?: boolean;
   }> = [];
 
   const useMarkdown = params.toolResultFormat === "markdown";
@@ -94,6 +96,7 @@ export function buildEmbeddedRunPayloads(params: {
         replyToId,
         replyToTag,
         replyToCurrent,
+        slackReplyBroadcast,
       } = parseReplyDirectives(agg);
       if (cleanedText) {
         replyItems.push({
@@ -103,6 +106,7 @@ export function buildEmbeddedRunPayloads(params: {
           replyToId,
           replyToTag,
           replyToCurrent,
+          slackReplyBroadcast,
         });
       }
     }
@@ -176,6 +180,7 @@ export function buildEmbeddedRunPayloads(params: {
       replyToId,
       replyToTag,
       replyToCurrent,
+      slackReplyBroadcast,
     } = parseReplyDirectives(text);
     if (!cleanedText && (!mediaUrls || mediaUrls.length === 0) && !audioAsVoice) {
       continue;
@@ -187,6 +192,7 @@ export function buildEmbeddedRunPayloads(params: {
       replyToId,
       replyToTag,
       replyToCurrent,
+      slackReplyBroadcast,
     });
   }
 
@@ -241,6 +247,7 @@ export function buildEmbeddedRunPayloads(params: {
       replyToId: item.replyToId,
       replyToTag: item.replyToTag,
       replyToCurrent: item.replyToCurrent,
+      slackReplyBroadcast: item.slackReplyBroadcast,
       audioAsVoice: item.audioAsVoice || Boolean(hasAudioAsVoiceTag && item.media?.length),
     }))
     .filter((p) => {

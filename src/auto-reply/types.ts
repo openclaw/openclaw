@@ -49,6 +49,8 @@ export type ReplyPayload = {
   replyToTag?: boolean;
   /** True when [[reply_to_current]] was present but not yet mapped to a message id. */
   replyToCurrent?: boolean;
+  /** Request Slack's thread reply_broadcast when replying in a Slack thread. No-op elsewhere. */
+  slackReplyBroadcast?: boolean;
   /** Send audio as voice message (bubble) instead of audio file. Defaults to false. */
   audioAsVoice?: boolean;
   isError?: boolean;

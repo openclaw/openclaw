@@ -440,6 +440,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       replyToId,
       replyToTag,
       replyToCurrent,
+      slackReplyBroadcast,
     } = splitResult;
     // Skip empty payloads, but always emit if audioAsVoice is set (to propagate the flag)
     if (!cleanedText && (!mediaUrls || mediaUrls.length === 0) && !audioAsVoice) {
@@ -452,6 +453,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       replyToId,
       replyToTag,
       replyToCurrent,
+      slackReplyBroadcast,
     });
   };
 

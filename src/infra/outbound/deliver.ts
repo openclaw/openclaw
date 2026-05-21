@@ -70,8 +70,12 @@ type ChannelHandler = {
   chunkerMode?: "text" | "markdown";
   textChunkLimit?: number;
   sendPayload?: (payload: ReplyPayload) => Promise<OutboundDeliveryResult>;
-  sendText: (text: string) => Promise<OutboundDeliveryResult>;
-  sendMedia: (caption: string, mediaUrl: string) => Promise<OutboundDeliveryResult>;
+  sendText: (text: string, payload?: ReplyPayload) => Promise<OutboundDeliveryResult>;
+  sendMedia: (
+    caption: string,
+    mediaUrl: string,
+    payload?: ReplyPayload,
+  ) => Promise<OutboundDeliveryResult>;
 };
 
 function throwIfAborted(abortSignal?: AbortSignal): void {
@@ -150,7 +154,7 @@ function createPluginHandler(params: {
             payload,
           })
       : undefined,
-    sendText: async (text) =>
+    sendText: async (text, payload) =>
       sendText({
         cfg: params.cfg,
         to: params.to,
@@ -160,8 +164,9 @@ function createPluginHandler(params: {
         threadId: params.threadId,
         gifPlayback: params.gifPlayback,
         deps: params.deps,
+        payload,
       }),
-    sendMedia: async (caption, mediaUrl) =>
+    sendMedia: async (caption, mediaUrl, payload) =>
       sendMedia({
         cfg: params.cfg,
         to: params.to,
@@ -172,6 +177,7 @@ function createPluginHandler(params: {
         threadId: params.threadId,
         gifPlayback: params.gifPlayback,
         deps: params.deps,
+        payload,
       }),
   };
 }
@@ -233,10 +239,10 @@ export async function deliverOutboundPayloads(params: {
       })
     : undefined;
 
-  const sendTextChunks = async (text: string) => {
+  const sendTextChunks = async (text: string, payload?: ReplyPayload) => {
     throwIfAborted(abortSignal);
     if (!handler.chunker || textLimit === undefined) {
-      results.push(await handler.sendText(text));
+      results.push(await handler.sendText(text, payload));
       return;
     }
     if (chunkMode === "newline") {
@@ -256,7 +262,7 @@ export async function deliverOutboundPayloads(params: {
         }
         for (const chunk of chunks) {
           throwIfAborted(abortSignal);
-          results.push(await handler.sendText(chunk));
+          results.push(await handler.sendText(chunk, payload));
         }
       }
       return;
@@ -264,7 +270,7 @@ export async function deliverOutboundPayloads(params: {
     const chunks = handler.chunker(text, textLimit);
     for (const chunk of chunks) {
       throwIfAborted(abortSignal);
-      results.push(await handler.sendText(chunk));
+      results.push(await handler.sendText(chunk, payload));
     }
   };
 
@@ -335,7 +341,7 @@ export async function deliverOutboundPayloads(params: {
         if (isSignalChannel) {
           await sendSignalTextChunks(payloadSummary.text);
         } else {
-          await sendTextChunks(payloadSummary.text);
+          await sendTextChunks(payloadSummary.text, payload);
         }
         continue;
       }
@@ -348,7 +354,7 @@ export async function deliverOutboundPayloads(params: {
         if (isSignalChannel) {
           results.push(await sendSignalMedia(caption, url));
         } else {
-          results.push(await handler.sendMedia(caption, url));
+          results.push(await handler.sendMedia(caption, url, payload));
         }
       }
     } catch (err) {

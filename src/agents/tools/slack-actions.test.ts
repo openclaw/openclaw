@@ -140,6 +140,27 @@ describe("handleSlackAction", () => {
     });
   });
 
+  it("strips Slack reply broadcast tag and forwards the broadcast request", async () => {
+    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    sendSlackMessage.mockClear();
+
+    await handleSlackAction(
+      {
+        action: "sendMessage",
+        to: "channel:C123",
+        content: "Hello thread [[slack_reply_broadcast]]",
+        threadTs: "1234567890.123456",
+      },
+      cfg,
+    );
+
+    expect(sendSlackMessage).toHaveBeenCalledWith("channel:C123", "Hello thread", {
+      mediaUrl: undefined,
+      threadTs: "1234567890.123456",
+      replyBroadcast: true,
+    });
+  });
+
   it("auto-injects threadTs from context when replyToMode=all", async () => {
     const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
     sendSlackMessage.mockClear();
