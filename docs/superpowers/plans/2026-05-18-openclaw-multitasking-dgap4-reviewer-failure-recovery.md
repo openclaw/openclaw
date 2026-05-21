@@ -34,16 +34,16 @@ local idempotency, and a `*ForTests` reset — the same shape as
 
 - **Wrong recovery.** A `reviewer_run_failed` (the reviewer agent crashed,
   timed out, or lost transport before producing a verdict) leaves the work
-  *unjudged* — the loop must retry the reviewer. A `worker_failed` (the work
+  _unjudged_ — the loop must retry the reviewer. A `worker_failed` (the work
   under review failed) has nothing to re-review — the loop must report the
   worker failure. Conflating them either re-runs a reviewer over a dead worker
   or silently drops an unjudged result.
-- **Stale retries.** Once a newer operator-loop pass (a higher *generation*)
+- **Stale retries.** Once a newer operator-loop pass (a higher _generation_)
   owns a worker, a reviewer retry scheduled by an older pass must not fire. The
   loop needs a supersession filter that gates whether a reviewer failure
   becomes a real retry action.
 - **Briefing spam.** Terminal events are re-emitted (retry races, double-
-  finalize). Each *distinct* reviewer failure should brief the owner exactly
+  finalize). Each _distinct_ reviewer failure should brief the owner exactly
   once.
 
 ## Design (implemented + proven)
