@@ -245,6 +245,7 @@ Docs: https://docs.openclaw.ai
 - Plugin SDK: add row-level session workflow helpers and deprecate `loadSessionStore` so plugins can read and patch sessions without depending on the legacy whole-store shape. (#84693) Thanks @efpiva.
 - Gateway/plugins: reuse a compatible Gateway startup plugin registry during dispatch so safe plugin dispatches avoid redundant registry loading. (#84324) Thanks @ai-hpc.
 - Plugins/SDK: add a general `embeddingProviders` capability contract and registration API so embeddings can become a reusable provider surface outside memory-specific adapters.
+- Memory-core: allow explicit memory embedding configs to use generic plugin embedding providers while preserving memory-specific adapters and auto-selection behavior.
 - Dependencies: refresh provider, plugin, UI, and tooling packages, update `protobufjs` to 8.4.0 to clear the current npm advisory, and carry the Claude ACP completion patch forward to `@agentclientprotocol/claude-agent-acp` 0.36.1.
 - Agents/tools: remove the old sender-owner tool gating path so configured tools stay visible for trusted sessions while command and channel-action auth still carry real sender identity.
 - QA-Lab: add curated mock JSONL replay fixtures and first-drift reporting for runtime-parity audits. (#80323, refs #80176) Thanks @100yenadmin.
