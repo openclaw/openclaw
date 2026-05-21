@@ -136,6 +136,7 @@ function createInlineExtensionApi(params: {
       options: Parameters<ExtensionAPI["exec"]>[2],
     ) {
       assertActive();
+      void args;
       throw new Error(
         `Embedded inline extension attempted to execute ${command} from ${options?.cwd ?? cwd}`,
       );
