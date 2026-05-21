@@ -40,6 +40,19 @@ vi.mock("./progress.js", () => {
   };
 });
 
+vi.mock("../runtime.js", () => {
+  loaded.mark("default-runtime");
+  return {
+    defaultRuntime: {
+      error: vi.fn(),
+      exit: vi.fn(),
+      log: vi.fn(),
+      writeJson: vi.fn(),
+      writeStdout: vi.fn(),
+    },
+  };
+});
+
 vi.mock("../commands/doctor.js", () => {
   loaded.mark("doctor-command");
   return { doctorCommand: vi.fn(async () => {}) };
@@ -117,6 +130,26 @@ vi.mock("../commands/flows.js", () => {
   };
 });
 
+vi.mock("../commands/configure.commands.js", () => {
+  loaded.mark("configure-command");
+  return { configureCommandFromSectionsArg: vi.fn(async () => {}) };
+});
+
+vi.mock("../commands/configure.wizard.js", () => {
+  loaded.mark("configure-wizard");
+  return { runConfigureWizard: vi.fn(async () => {}) };
+});
+
+vi.mock("../commands/onboard.js", () => {
+  loaded.mark("onboard-command");
+  return { setupWizardCommand: vi.fn(async () => {}) };
+});
+
+vi.mock("../commands/setup.js", () => {
+  loaded.mark("setup-command");
+  return { setupCommand: vi.fn(async () => {}) };
+});
+
 function makeProgram(): Command {
   const program = new Command();
   program.name("openclaw");
@@ -179,5 +212,40 @@ describe("subcommand help cold imports", () => {
     expect(loaded.modules).not.toContain("commitments-command");
     expect(loaded.modules).not.toContain("tasks-command");
     expect(loaded.modules).not.toContain("flows-command");
+  });
+
+  it("keeps configure help out of configure action/wizard modules", async () => {
+    const { registerConfigureCommand } = await import("./program/register.configure.js");
+    const program = makeProgram();
+
+    registerConfigureCommand(program);
+    await expectHelpExit(program, ["configure", "--help"]);
+
+    expect(loaded.modules).not.toContain("configure-command");
+    expect(loaded.modules).not.toContain("configure-wizard");
+    expect(loaded.modules).not.toContain("default-runtime");
+  });
+
+  it("keeps setup help out of setup and onboard action modules", async () => {
+    const { registerSetupCommand } = await import("./program/register.setup.js");
+    const program = makeProgram();
+
+    registerSetupCommand(program);
+    await expectHelpExit(program, ["setup", "--help"]);
+
+    expect(loaded.modules).not.toContain("setup-command");
+    expect(loaded.modules).not.toContain("onboard-command");
+    expect(loaded.modules).not.toContain("default-runtime");
+  });
+
+  it("keeps onboard help out of onboard action modules", async () => {
+    const { registerOnboardCommand } = await import("./program/register.onboard.js");
+    const program = makeProgram();
+
+    registerOnboardCommand(program);
+    await expectHelpExit(program, ["onboard", "--help"]);
+
+    expect(loaded.modules).not.toContain("onboard-command");
+    expect(loaded.modules).not.toContain("default-runtime");
   });
 });
