@@ -11,6 +11,7 @@ import { listMemoryWikiImportRuns } from "./import-runs.js";
 import { ingestMemoryWikiSource } from "./ingest.js";
 import { listMemoryWikiPalace } from "./memory-palace.js";
 import { searchMemoryWiki } from "./query.js";
+import { recordMemoryUtilizationReceipt } from "./receipts.js";
 import { syncMemoryWikiImportedSources } from "./source-sync.js";
 import { resolveMemoryWikiStatus } from "./status.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
@@ -56,6 +57,10 @@ vi.mock("./query.js", () => ({
   getMemoryWikiPage: vi.fn(),
   searchMemoryWiki: vi.fn(),
   WIKI_SEARCH_MODES: ["auto", "find-person", "route-question", "source-evidence", "raw-claim"],
+}));
+
+vi.mock("./receipts.js", () => ({
+  recordMemoryUtilizationReceipt: vi.fn(),
 }));
 
 vi.mock("./source-sync.js", () => ({
@@ -167,6 +172,11 @@ describe("memory-wiki gateway methods", () => {
       items: [],
       total: 0,
     } as never);
+    vi.mocked(recordMemoryUtilizationReceipt).mockResolvedValue({
+      recorded: true,
+      runId: "run.alpha",
+      logPath: "/tmp/wiki/.openclaw-wiki/telemetry/memory-receipts.jsonl",
+    });
   });
 
   it("registers Obsidian CLI methods with write scope", async () => {
@@ -251,6 +261,52 @@ describe("memory-wiki gateway methods", () => {
         }),
       }),
     );
+  });
+
+  it("records memory utilization receipts through a write-scoped gateway method", async () => {
+    const { config } = await createVault({ prefix: "memory-wiki-gateway-" });
+    const { api, registerGatewayMethod } = createPluginApi();
+    const receipt = {
+      run_id: "run.alpha",
+      task: "verify memory receipt plumbing",
+      memory_preflight: {
+        performed: true,
+        wiki_injectable: true,
+        reason_if_not: null,
+        files_read: [".openclaw-wiki/cache/agent-digest.json"],
+        claims_used: ["claim.alpha"],
+      },
+      decisions_influenced_by_memory: ["Used claim.alpha to choose the narrow gateway method."],
+      writeback: {
+        performed: false,
+        paths: [],
+      },
+    };
+
+    registerMemoryWikiGatewayMethods({ api, config });
+    expect(readGatewayMethodOptions(registerGatewayMethod, "wiki.record_receipt")).toEqual({
+      scope: "operator.write",
+    });
+    const handler = findGatewayHandler(registerGatewayMethod, "wiki.record_receipt");
+    if (!handler) {
+      throw new Error("wiki.record_receipt handler missing");
+    }
+    const respond = vi.fn();
+
+    await handler({
+      params: { receipt },
+      respond,
+    });
+
+    expect(recordMemoryUtilizationReceipt).toHaveBeenCalledWith({
+      config,
+      receipt,
+    });
+    expect(readRespondPayload(respond)).toEqual({
+      recorded: true,
+      runId: "run.alpha",
+      logPath: "/tmp/wiki/.openclaw-wiki/telemetry/memory-receipts.jsonl",
+    });
   });
 
   it("returns recent import runs over the gateway", async () => {

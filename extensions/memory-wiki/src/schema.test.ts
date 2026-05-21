@@ -117,4 +117,48 @@ describe("memory-wiki JSON schemas", () => {
       }),
     ).toBe(false);
   });
+
+  it("enforces memory utilization receipt preflight, decision, and writeback fields", async () => {
+    const validate = createAjv().compile(
+      await loadSchema("memory-utilization-receipt.schema.json"),
+    );
+    const validReceipt = {
+      run_id: "run.receipt.alpha",
+      task: "Verify memory utilization receipt plumbing.",
+      memory_preflight: {
+        performed: true,
+        wiki_injectable: true,
+        reason_if_not: null,
+        files_read: [".openclaw-wiki/cache/agent-digest.json"],
+        claims_used: ["claim.alpha"],
+      },
+      decisions_influenced_by_memory: [
+        "Used claim.alpha to keep the implementation scoped to memory-wiki.",
+      ],
+      writeback: {
+        performed: false,
+        paths: [],
+      },
+    };
+
+    expect(validate(validReceipt)).toBe(true);
+    expect(
+      validate({
+        ...validReceipt,
+        memory_preflight: {
+          performed: true,
+          wiki_injectable: true,
+          reason_if_not: null,
+          files_read: ["memory/MEMORY.md"],
+        },
+      }),
+    ).toBe(false);
+    expect(
+      validate({
+        ...validReceipt,
+        writeback: { performed: true },
+      }),
+    ).toBe(false);
+    expect(validate({ ...validReceipt, extra: true })).toBe(false);
+  });
 });

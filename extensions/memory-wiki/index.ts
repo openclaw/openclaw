@@ -4,6 +4,11 @@ export type {
   WikiInjectableOutputName,
   WikiInjectableResult,
 } from "./src/freshness.js";
+export {
+  recordMemoryUtilizationReceipt,
+  validateMemoryUtilizationReceipt,
+} from "./src/receipts.js";
+export type { MemoryUtilizationReceipt } from "./src/receipts.js";
 
 import { definePluginEntry } from "./api.js";
 import { registerWikiCli } from "./src/cli.js";

@@ -21,6 +21,7 @@ import {
   runObsidianSearch,
 } from "./obsidian.js";
 import { getMemoryWikiPage, searchMemoryWiki, WIKI_SEARCH_MODES } from "./query.js";
+import { recordMemoryUtilizationReceipt } from "./receipts.js";
 import { syncMemoryWikiImportedSources } from "./source-sync.js";
 import { buildMemoryWikiDoctorReport, resolveMemoryWikiStatus } from "./status.js";
 import { initializeMemoryWikiVault } from "./vault.js";
@@ -82,6 +83,10 @@ function readEnumParam<T extends string>(
     return value as T;
   }
   throw new Error(`${key} must be one of: ${allowed.join(", ")}.`);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function respondError(respond: GatewayRespond, error: unknown) {
@@ -220,6 +225,25 @@ export function registerMemoryWikiGatewayMethods(params: {
           sourceImport: { operation: "refresh", ...sync },
         });
         respond(true, { sync, compile });
+      } catch (error) {
+        respondError(respond, error);
+      }
+    },
+    { scope: WRITE_SCOPE },
+  );
+
+  api.registerGatewayMethod(
+    "wiki.record_receipt",
+    async ({ params: requestParams, respond }) => {
+      try {
+        const receipt = isRecord(requestParams.receipt) ? requestParams.receipt : requestParams;
+        respond(
+          true,
+          await recordMemoryUtilizationReceipt({
+            config,
+            receipt,
+          }),
+        );
       } catch (error) {
         respondError(respond, error);
       }

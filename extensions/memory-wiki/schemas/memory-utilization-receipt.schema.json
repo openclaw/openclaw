@@ -1,0 +1,106 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://openclaw.local/schemas/memory-wiki/memory-utilization-receipt.schema.json",
+  "title": "Memory Utilization Receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "run_id",
+    "task",
+    "memory_preflight",
+    "decisions_influenced_by_memory",
+    "writeback"
+  ],
+  "properties": {
+    "run_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "task": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000
+    },
+    "memory_preflight": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "performed",
+        "wiki_injectable",
+        "reason_if_not",
+        "files_read",
+        "claims_used"
+      ],
+      "properties": {
+        "performed": {
+          "type": "boolean"
+        },
+        "wiki_injectable": {
+          "type": "boolean"
+        },
+        "reason_if_not": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1000
+            }
+          ]
+        },
+        "files_read": {
+          "type": "array",
+          "maxItems": 500,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "uniqueItems": true
+        },
+        "claims_used": {
+          "type": "array",
+          "maxItems": 1000,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "decisions_influenced_by_memory": {
+      "type": "array",
+      "maxItems": 500,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 4000
+      }
+    },
+    "writeback": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["performed", "paths"],
+      "properties": {
+        "performed": {
+          "type": "boolean"
+        },
+        "paths": {
+          "type": "array",
+          "maxItems": 500,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "uniqueItems": true
+        }
+      }
+    }
+  }
+}

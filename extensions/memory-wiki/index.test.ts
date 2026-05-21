@@ -28,6 +28,7 @@ describe("memory-wiki plugin", () => {
       "wiki.doctor",
       "wiki.compile",
       "wiki.refresh",
+      "wiki.record_receipt",
       "wiki.ingest",
       "wiki.lint",
       "wiki.bridge.import",
