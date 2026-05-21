@@ -5,6 +5,7 @@ import path from "node:path";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
+import { createPnpmRunnerSpawnSpec } from "../pnpm-runner.mjs";
 
 const PLUGIN_SPEC =
   process.env.OPENCLAW_KITCHEN_SINK_NPM_SPEC || "npm:@openclaw/kitchen-sink@latest";
@@ -46,7 +47,7 @@ function resolveOpenClawRunner() {
       return { command: "node", baseArgs: [resolved], label: resolved };
     }
   }
-  return { command: "pnpm", baseArgs: ["openclaw"], label: "pnpm openclaw" };
+  return { pnpm: true, baseArgs: ["openclaw"], label: "pnpm openclaw" };
 }
 
 function makeEnv() {
@@ -119,10 +120,29 @@ function runCommand(command, args, options = {}) {
 }
 
 async function runOpenClaw(runner, args, env, options = {}) {
-  return runCommand(runner.command, [...runner.baseArgs, ...args], {
+  const command = resolveOpenClawCommand(runner, args, env, {
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  return runCommand(command.command, command.args, {
+    ...command.options,
     env,
     timeoutMs: options.timeoutMs ?? COMMAND_TIMEOUT_MS,
   });
+}
+
+function resolveOpenClawCommand(runner, args, env, options = {}) {
+  if (runner.pnpm) {
+    return createPnpmRunnerSpawnSpec({
+      env,
+      pnpmArgs: [...runner.baseArgs, ...args],
+      stdio: options.stdio,
+    });
+  }
+  return {
+    command: runner.command,
+    args: [...runner.baseArgs, ...args],
+    options: { env, stdio: options.stdio },
+  };
 }
 
 function parseJsonOutput(stdout) {
@@ -319,10 +339,9 @@ function configureKitchenSink(env, port) {
 
 function startGateway(runner, port, env, logPath) {
   const log = fs.openSync(logPath, "w");
-  const child = childProcess.spawn(
-    runner.command,
+  const command = resolveOpenClawCommand(
+    runner,
     [
-      ...runner.baseArgs,
       "gateway",
       "--port",
       String(port),
@@ -330,12 +349,16 @@ function startGateway(runner, port, env, logPath) {
       "loopback",
       "--allow-unconfigured",
     ],
+    env,
     {
-      env,
       stdio: ["ignore", log, log],
-      detached: false,
     },
   );
+  const child = childProcess.spawn(command.command, command.args, {
+    ...command.options,
+    env,
+    detached: false,
+  });
   fs.closeSync(log);
   return child;
 }
