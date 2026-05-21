@@ -22,6 +22,10 @@ import {
   consumeGatewayFastPathRootOptionToken,
   consumeGatewayRunOptionToken,
 } from "./gateway-run-argv.js";
+import {
+  hasJsonOutputFlag,
+  withConsoleLogsRoutedToStderrForJson,
+} from "./json-output-mode.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
 import { getCoreCliCommandNames } from "./program/core-command-descriptors.js";
 import { getSubCliEntries } from "./program/subcli-descriptors.js";
@@ -131,18 +135,6 @@ export function isGatewayRunFastPathArgv(argv: string[]): boolean {
   }
 
   return sawGateway;
-}
-
-function hasJsonOutputFlag(argv: string[]): boolean {
-  for (const arg of argv) {
-    if (arg === "--") {
-      return false;
-    }
-    if (arg === "--json" || arg.startsWith("--json=")) {
-      return true;
-    }
-  }
-  return false;
 }
 
 async function tryRunGatewayRunFastPath(
@@ -740,8 +732,8 @@ export async function runCli(argv: string[] = process.argv) {
         const config = await startupTrace.measure("register-plugin-commands", async () => {
           const { registerPluginCliCommandsFromValidatedConfig } =
             await import("../plugins/cli.js");
-          if (!hasJsonOutputFlag(parseArgv)) {
-            return await registerPluginCliCommandsFromValidatedConfig(
+          return await withConsoleLogsRoutedToStderrForJson(parseArgv, () =>
+            registerPluginCliCommandsFromValidatedConfig(
               program,
               undefined,
               undefined,
@@ -749,24 +741,8 @@ export async function runCli(argv: string[] = process.argv) {
                 mode: "lazy",
                 primary,
               },
-            );
-          }
-          const { loggingState } = await import("../logging/state.js");
-          const previousForceStderr = loggingState.forceConsoleToStderr;
-          loggingState.forceConsoleToStderr = true;
-          try {
-            return await registerPluginCliCommandsFromValidatedConfig(
-              program,
-              undefined,
-              undefined,
-              {
-                mode: "lazy",
-                primary,
-              },
-            );
-          } finally {
-            loggingState.forceConsoleToStderr = previousForceStderr;
-          }
+            ),
+          );
         });
         if (config) {
           if (
