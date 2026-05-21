@@ -20,6 +20,17 @@ const DEPENDENCY_FILE_PATTERNS = [
   /\/package\.json$/u,
 ];
 
+const DEPENDENCY_DIFF_PATHS = [
+  "package.json",
+  "package-lock.json",
+  "npm-shrinkwrap.json",
+  "pnpm-lock.yaml",
+  "pnpm-workspace.yaml",
+  "extensions/*/npm-shrinkwrap.json",
+  "*package.json",
+  "patches",
+];
+
 function payloadFromLockfile(lockfileText) {
   return createBulkAdvisoryPayload(collectAllResolvedPackagesFromLockfile(lockfileText));
 }
@@ -175,22 +186,14 @@ export function isDependencyFile(filePath) {
   return DEPENDENCY_FILE_PATTERNS.some((pattern) => pattern.test(filePath));
 }
 
+export function dependencyDiffPathspecs() {
+  return [...DEPENDENCY_DIFF_PATHS];
+}
+
 function gitDiffDependencyFiles(baseRef, cwd) {
   const output = execFileSync(
     "git",
-    [
-      "diff",
-      "--name-status",
-      baseRef,
-      "--",
-      "package.json",
-      "package-lock.json",
-      "npm-shrinkwrap.json",
-      "pnpm-lock.yaml",
-      "pnpm-workspace.yaml",
-      "*package.json",
-      "patches",
-    ],
+    ["diff", "--name-status", baseRef, "--", ...DEPENDENCY_DIFF_PATHS],
     {
       cwd,
       encoding: "utf8",
