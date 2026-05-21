@@ -968,14 +968,12 @@ export async function runPreparedReply(
           : undefined,
     };
   };
-  let authProfileId: string | undefined;
-  let authProfileIdSource: "auto" | "user" | undefined;
-  ({ authProfileId, authProfileIdSource } = await traceRunPhase("reply.resolve_auth_profile", () =>
-    resolveRuntimeAuthProfile(),
-  ));
-  const { runReplyAgent } = await traceRunPhase("reply.load_agent_runner_runtime", () =>
-    loadAgentRunnerRuntime(),
-  );
+  const [runtimeAuthProfile, agentRunnerRuntime] = await Promise.all([
+    traceRunPhase("reply.resolve_auth_profile", () => resolveRuntimeAuthProfile()),
+    traceRunPhase("reply.load_agent_runner_runtime", () => loadAgentRunnerRuntime()),
+  ]);
+  const { authProfileId, authProfileIdSource } = runtimeAuthProfile;
+  const { runReplyAgent } = agentRunnerRuntime;
   const queueKey = sessionKey ?? sessionIdFinal;
   preparedSessionState = resolvePreparedSessionState();
   const resolveActiveReplyOperationSessionId = () =>

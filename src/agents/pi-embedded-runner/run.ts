@@ -18,6 +18,10 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import {
+  resolveProviderRuntimePluginHandle,
+  type ProviderRuntimePluginHandle,
+} from "../../plugins/provider-hook-runtime.js";
 import { resolveProviderAuthProfileId } from "../../plugins/provider-runtime.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import type { CommandQueueEnqueueOptions } from "../../process/command-queue.types.js";
@@ -895,12 +899,29 @@ export async function runEmbeddedPiAgent(
               ),
             ),
           ];
+      const providerRuntimeHandles = new Map<string, ProviderRuntimePluginHandle>();
+      const resolveProviderRuntimeHandle = (
+        targetProvider: string,
+      ): ProviderRuntimePluginHandle => {
+        const cached = providerRuntimeHandles.get(targetProvider);
+        if (cached) {
+          return cached;
+        }
+        const handle = resolveProviderRuntimePluginHandle({
+          provider: targetProvider,
+          config: params.config,
+          workspaceDir: resolvedWorkspace,
+        });
+        providerRuntimeHandles.set(targetProvider, handle);
+        return handle;
+      };
       const providerPreferredProfileId = lockedProfileId
         ? undefined
         : resolveProviderAuthProfileId({
             provider,
             config: params.config,
             workspaceDir: resolvedWorkspace,
+            runtimeHandle: resolveProviderRuntimeHandle(provider),
             context: {
               config: params.config,
               agentDir,
@@ -1421,6 +1442,7 @@ export async function runEmbeddedPiAgent(
               : undefined,
             config: params.config,
             workspaceDir: resolvedWorkspace,
+            providerRuntimeHandle: resolveProviderRuntimeHandle(provider),
             agentDir,
             agentId: workspaceResolution.agentId,
             thinkingLevel: thinkLevel,
