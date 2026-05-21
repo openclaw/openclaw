@@ -63,8 +63,16 @@ Set these variables on the service:
 
 - `OPENCLAW_GATEWAY_PORT=8080` (required — must match the port in Public Networking)
 - `OPENCLAW_GATEWAY_TOKEN` (required; treat as an admin secret)
+- `OPENCLAW_CONFIG_PATH=/app/deploy/railway/openclaw.json` (required — loads the bundled Railway gateway config with Control UI origin and trusted proxy settings)
 - `OPENCLAW_STATE_DIR=/data/.openclaw` (recommended)
 - `OPENCLAW_WORKSPACE_DIR=/data/workspace` (recommended)
+
+<Tip>
+The bundled config at `deploy/railway/openclaw.json` sets
+`gateway.controlUi.allowedOrigins` and `gateway.trustedProxies` for the
+default Railway domain. If you use a custom domain, edit that file or
+create your own config with the correct origin.
+</Tip>
 
 ## Connect a channel
 

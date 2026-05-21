@@ -1,0 +1,13 @@
+{
+  "$schema": "https://docs.openclaw.ai/schema/openclaw.json",
+  "gateway": {
+    "controlUi": {
+      "allowedOrigins": [
+        "https://openclaw-stagingopenclaw.up.railway.app"
+      ]
+    },
+    "trustedProxies": [
+      "100.64.0.0/10"
+    ]
+  }
+}
