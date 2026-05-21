@@ -132,6 +132,45 @@ describe("models-config plan", () => {
     expect(providers.custom?.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
   });
 
+  it("plans cleanup for catalog-only provider api keys before the empty-provider skip path", async () => {
+    const existingRaw = `${JSON.stringify(
+      {
+        providers: {
+          custom: {
+            baseUrl: "https://custom.example/v1",
+            api: "openai-completions",
+            apiKey: "sk-existing-catalog-only", // pragma: allowlist secret
+            models: [customModelConfig()],
+          },
+        },
+      },
+      null,
+      2,
+    )}\n`;
+
+    const plan = await planOpenClawModelsJsonWithDeps(
+      {
+        cfg: {},
+        sourceConfigForSecrets: {},
+        agentDir: "/tmp/openclaw-models-plan",
+        env: {},
+        existingRaw,
+        existingParsed: JSON.parse(existingRaw) as unknown,
+      },
+      {
+        resolveImplicitProviders: async () => ({}),
+      },
+    );
+
+    expect(plan.action).toBe("write");
+    if (plan.action !== "write") {
+      throw new Error(`expected catalog-only cleanup write, got ${plan.action}`);
+    }
+    expect(plan.contents).not.toContain("sk-existing-catalog-only");
+    const providers = JSON.parse(plan.contents).providers as Record<string, { apiKey?: string }>;
+    expect(providers.custom?.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
+  });
+
   it("keeps custom provider models discoverable after stripping plaintext api keys", async () => {
     const contents = await planGeneratedContents({
       config: {

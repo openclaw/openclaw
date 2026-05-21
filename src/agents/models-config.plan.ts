@@ -141,6 +141,32 @@ function stripPlaintextProviderApiKeys(
   return mutated ? nextProviders : providers;
 }
 
+function planExistingCatalogOnlyCredentialCleanup(params: {
+  existingRaw: string;
+  existingParsed: unknown;
+}): ModelsJsonPlan | undefined {
+  const existing = params.existingParsed;
+  if (!isRecord(existing) || !isRecord(existing.providers)) {
+    return undefined;
+  }
+
+  const promptSafeProviders = stripPlaintextProviderApiKeys(
+    existing.providers as Record<string, ProviderConfig>,
+  );
+  if (promptSafeProviders === existing.providers) {
+    return undefined;
+  }
+
+  const nextContents = `${JSON.stringify({ providers: promptSafeProviders }, null, 2)}\n`;
+  if (params.existingRaw === nextContents) {
+    return { action: "noop" };
+  }
+  return {
+    action: "write",
+    contents: nextContents,
+  };
+}
+
 export async function planOpenClawModelsJsonWithDeps(
   params: {
     cfg: OpenClawConfig;
@@ -183,7 +209,12 @@ export async function planOpenClawModelsJsonWithDeps(
   );
 
   if (Object.keys(providers).length === 0) {
-    return { action: "skip" };
+    return (
+      planExistingCatalogOnlyCredentialCleanup({
+        existingRaw: params.existingRaw,
+        existingParsed: params.existingParsed,
+      }) ?? { action: "skip" }
+    );
   }
 
   const mode = cfg.models?.mode ?? "merge";

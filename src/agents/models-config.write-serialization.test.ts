@@ -273,6 +273,67 @@ describe("models-config write serialization", () => {
     });
   });
 
+  it("migrates catalog-only provider api keys when cleaning an existing models.json", async () => {
+    await withModelsTempHome(async (home) => {
+      const agentDir = path.join(home, "agent");
+      await fs.mkdir(agentDir, { recursive: true });
+      await fs.writeFile(
+        path.join(agentDir, "models.json"),
+        `${JSON.stringify(
+          {
+            providers: {
+              custom: {
+                baseUrl: "https://custom.example/v1",
+                api: "openai-completions",
+                apiKey: "sk-existing-catalog-only", // pragma: allowlist secret
+                models: [],
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      planOpenClawModelsJsonMock.mockImplementation(async () => ({
+        action: "write",
+        contents: `${JSON.stringify(
+          {
+            providers: {
+              custom: {
+                baseUrl: "https://custom.example/v1",
+                api: "openai-completions",
+                models: [],
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+      }));
+
+      await ensureOpenClawModelsJson({}, agentDir);
+
+      const modelsJson = JSON.parse(
+        await fs.readFile(path.join(agentDir, "models.json"), "utf8"),
+      ) as {
+        providers: Record<string, { apiKey?: string }>;
+      };
+      expect(modelsJson.providers.custom?.apiKey).toBeUndefined();
+
+      const authProfiles = JSON.parse(
+        await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf8"),
+      ) as {
+        profiles: Record<string, unknown>;
+      };
+      expect(authProfiles.profiles["custom:models-json"]).toMatchObject({
+        type: "api_key",
+        provider: "custom",
+        key: "sk-existing-catalog-only",
+        copyToAgents: false,
+      });
+    });
+  });
+
   it("treats blank configured provider api keys as missing during models.json key migration", async () => {
     await withModelsTempHome(async (home) => {
       const agentDir = path.join(home, "agent");
