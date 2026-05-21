@@ -148,8 +148,8 @@ describe("prepareModelForSimpleCompletion", () => {
       headers: {},
     };
     resolveProviderStreamFn.mockReturnValueOnce(undefined);
-    prepareGoogleSimpleCompletionModel.mockImplementationOnce((m: Model<"google-generative-ai">) => ({
-      ...m,
+    prepareGoogleSimpleCompletionModel.mockImplementationOnce((m: unknown) => ({
+      ...(m as Model<"google-generative-ai">),
       api: "openclaw-google-generative-ai-simple",
     }));
 
