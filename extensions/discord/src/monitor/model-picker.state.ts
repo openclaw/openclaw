@@ -28,6 +28,7 @@ const PICKER_ACTIONS = [
   "reset",
   "cancel",
   "recents",
+  "nav",
 ] as const;
 const PICKER_VIEWS = ["providers", "models", "recents"] as const;
 
