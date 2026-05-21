@@ -436,7 +436,7 @@ describe("config schema regressions", () => {
 
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(res.issues.some((iss) => /Unknown agent id "ghost"/.test(iss.message))).toBe(true);
+      expect(res.issues.some((iss) => iss.message.includes('Unknown agent id "ghost"'))).toBe(true);
     }
   });
 

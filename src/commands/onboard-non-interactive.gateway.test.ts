@@ -446,7 +446,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         runtime,
       );
 
-      const cfg = readTestConfig<OpenClawConfig>();
+      const cfg = readTestConfig();
       expect(cfg.agents?.list?.map((a) => a.id)).toEqual(["alpha", "beta"]);
       expect(cfg.bindings).toEqual(seededBindings);
 
