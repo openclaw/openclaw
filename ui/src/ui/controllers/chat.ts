@@ -9,6 +9,11 @@ import {
 } from "../chat/heartbeat-display.ts";
 import { extractText } from "../chat/message-extract.ts";
 import { reconcileChatRunLifecycle } from "../chat/run-lifecycle.ts";
+import {
+  chatMessageCacheSessionKeysMatch,
+  readChatMessageCacheSessionDefaults,
+  resolveEquivalentChatMessageCacheKeys,
+} from "../chat/session-message-cache-keys.ts";
 import { formatConnectError } from "../connect-error.ts";
 import { GatewayRequestError, type GatewayBrowserClient } from "../gateway.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
@@ -306,18 +311,28 @@ function setCachedChatMessages(state: ChatState, sessionKey: string, messages: u
   if (!state.chatMessagesBySession) {
     return;
   }
-  const messagesBySession = state.chatMessagesBySession;
+  const messagesBySession = { ...state.chatMessagesBySession };
   if (messages.length > 0) {
     messagesBySession[sessionKey] = [...messages];
   } else {
     delete messagesBySession[sessionKey];
   }
-  state.chatMessagesBySession = { ...messagesBySession };
+  state.chatMessagesBySession = messagesBySession;
 }
 
 function appendCachedChatMessage(state: ChatState, sessionKey: string, message: unknown) {
-  const current = state.chatMessagesBySession?.[sessionKey] ?? [];
-  setCachedChatMessages(state, sessionKey, [...current, message]);
+  const defaults = readChatMessageCacheSessionDefaults(state);
+  for (const cacheKey of resolveEquivalentChatMessageCacheKeys(sessionKey, defaults)) {
+    const current = state.chatMessagesBySession?.[cacheKey] ?? [];
+    setCachedChatMessages(state, cacheKey, [...current, message]);
+  }
+}
+
+function replaceCachedChatMessages(state: ChatState, sessionKey: string, messages: unknown[]) {
+  const defaults = readChatMessageCacheSessionDefaults(state);
+  for (const cacheKey of resolveEquivalentChatMessageCacheKeys(sessionKey, defaults)) {
+    setCachedChatMessages(state, cacheKey, messages);
+  }
 }
 
 export async function loadChatHistory(state: ChatState) {
@@ -368,7 +383,7 @@ export async function loadChatHistory(state: ChatState) {
     const messages = Array.isArray(res.messages) ? res.messages : [];
     const visibleMessages = messages.filter((message) => !shouldHideHistoryMessage(message));
     state.chatMessages = preserveOptimisticTailMessages(visibleMessages, previousMessages);
-    setCachedChatMessages(state, sessionKey, state.chatMessages);
+    replaceCachedChatMessages(state, sessionKey, state.chatMessages);
     state.currentSessionId =
       typeof res.sessionId === "string" && res.sessionId.trim() ? res.sessionId : null;
     state.chatThinkingLevel = res.thinkingLevel ?? null;
@@ -682,7 +697,12 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   if (!payload) {
     return null;
   }
-  const sessionMatches = payload.sessionKey === state.sessionKey;
+  const sessionDefaults = readChatMessageCacheSessionDefaults(state);
+  const sessionMatches = chatMessageCacheSessionKeysMatch(
+    payload.sessionKey,
+    state.sessionKey,
+    sessionDefaults,
+  );
   const activeRunMatches =
     state.chatRunId !== null &&
     typeof payload.runId === "string" &&
@@ -722,7 +742,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
       sessionStatus,
       runId: terminalRunId,
       sessionKey: state.sessionKey,
-      sessionKeys: payload.sessionKey === state.sessionKey ? [payload.sessionKey] : [],
+      sessionKeys: sessionMatches ? [payload.sessionKey] : [],
       clearLocalRun: true,
       clearChatStream: true,
     });

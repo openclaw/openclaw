@@ -26,6 +26,10 @@ import { warnQueryToken } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
 import {
+  readChatMessageCacheSessionDefaults,
+  resolveEquivalentChatMessageCacheKeys,
+} from "./chat/session-message-cache-keys.ts";
+import {
   controlUiNowMs,
   recordControlUiRenderTiming,
   roundedControlUiDurationMs,
@@ -2774,6 +2778,17 @@ export function renderApp(state: AppViewState) {
                     try {
                       await state.client.request("sessions.reset", { key: state.sessionKey });
                       state.chatMessages = [];
+                      {
+                        const messagesBySession = { ...state.chatMessagesBySession };
+                        const defaults = readChatMessageCacheSessionDefaults(state);
+                        for (const cacheKey of resolveEquivalentChatMessageCacheKeys(
+                          state.sessionKey,
+                          defaults,
+                        )) {
+                          delete messagesBySession[cacheKey];
+                        }
+                        state.chatMessagesBySession = messagesBySession;
+                      }
                       state.chatSideResult = null;
                       reconcileChatRunLifecycle(
                         state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0],

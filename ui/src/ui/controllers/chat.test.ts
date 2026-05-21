@@ -136,6 +136,129 @@ describe("handleChatEvent", () => {
     expect(state.chatMessagesBySession?.other).toEqual([payload.message]);
   });
 
+  it("caches canonical default-session finals under the main alias", () => {
+    const state = createState({
+      sessionKey: "agent:main:other",
+      chatMessages: [{ role: "assistant", content: [{ type: "text", text: "other visible" }] }],
+      chatMessagesBySession: {},
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "agent:main:main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "main final" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe(null);
+    expect(state.chatMessagesBySession?.main).toEqual([payload.message]);
+    expect(state.chatMessagesBySession?.["agent:main:main"]).toEqual([payload.message]);
+  });
+
+  it("caches configured default-session finals under runtime aliases", () => {
+    const state = createState({
+      sessionKey: "agent:ops:other",
+      chatMessagesBySession: {},
+    }) as ChatState & {
+      hello: { snapshot: { sessionDefaults: { defaultAgentId: string; mainKey: string } } };
+    };
+    state.hello = {
+      snapshot: {
+        sessionDefaults: {
+          defaultAgentId: "ops",
+          mainKey: "home",
+        },
+      },
+    };
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "agent:ops:home",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "ops main final" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe(null);
+    expect(state.chatMessagesBySession?.home).toEqual([payload.message]);
+    expect(state.chatMessagesBySession?.["agent:main:home"]).toEqual([payload.message]);
+    expect(state.chatMessagesBySession?.["agent:ops:main"]).toEqual([payload.message]);
+    expect(state.chatMessagesBySession?.["agent:ops:home"]).toEqual([payload.message]);
+  });
+
+  it("caches canonical non-main finals under the plain session key", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatMessagesBySession: {},
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "agent:main:project",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "project final" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe(null);
+    expect(state.chatMessagesBySession?.project).toEqual([payload.message]);
+    expect(state.chatMessagesBySession?.["agent:main:project"]).toEqual([payload.message]);
+  });
+
+  it("accepts configured default-session final events through equivalent aliases", () => {
+    const state = createState({
+      sessionKey: "home",
+      chatRunId: null,
+      chatMessages: [],
+    }) as ChatState & {
+      hello: { snapshot: { sessionDefaults: { defaultAgentId: string; mainKey: string } } };
+    };
+    state.hello = {
+      snapshot: {
+        sessionDefaults: {
+          defaultAgentId: "ops",
+          mainKey: "home",
+        },
+      },
+    };
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "agent:main:home",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Live reply" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toEqual([payload.message]);
+  });
+
+  it("accepts canonical non-main final events through the plain session key", () => {
+    const state = createState({
+      sessionKey: "project",
+      chatRunId: null,
+      chatMessages: [],
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "agent:main:project",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Project reply" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toEqual([payload.message]);
+  });
+
   it("accepts delta events for the active run when gateway emits a canonical session key", () => {
     const state = createState({
       sessionKey: "main",

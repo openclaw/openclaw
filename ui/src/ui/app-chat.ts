@@ -18,6 +18,10 @@ import {
   type ChatInputHistoryState,
 } from "./chat/input-history.ts";
 import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
+import {
+  readChatMessageCacheSessionDefaults,
+  resolveEquivalentChatMessageCacheKeys,
+} from "./chat/session-message-cache-keys.ts";
 import type { ChatSideResult } from "./chat/side-result.ts";
 import { executeSlashCommand } from "./chat/slash-command-executor.ts";
 import { parseSlashCommand, refreshSlashCommands } from "./chat/slash-commands.ts";
@@ -51,6 +55,7 @@ export type ChatHost = ChatInputHistoryState & {
   client: GatewayBrowserClient | null;
   chatStream: string | null;
   connected: boolean;
+  chatMessagesBySession?: Record<string, unknown[]>;
   chatAttachments: ChatAttachment[];
   chatQueue: ChatQueueItem[];
   chatRunId: string | null;
@@ -149,6 +154,18 @@ export function hasAbortableSessionRun(host: {
       (session) => session.key === host.sessionKey && isSessionRunActive(session),
     ),
   );
+}
+
+function clearCachedChatMessagesForSession(host: ChatHost, sessionKey: string) {
+  if (!host.chatMessagesBySession) {
+    return;
+  }
+  const messagesBySession = { ...host.chatMessagesBySession };
+  const defaults = readChatMessageCacheSessionDefaults(host);
+  for (const cacheKey of resolveEquivalentChatMessageCacheKeys(sessionKey, defaults)) {
+    delete messagesBySession[cacheKey];
+  }
+  host.chatMessagesBySession = messagesBySession;
 }
 
 export function isChatStopCommand(text: string) {
@@ -774,6 +791,7 @@ async function clearChatHistory(host: ChatHost) {
   try {
     await host.client.request("sessions.reset", { key: host.sessionKey });
     host.chatMessages = [];
+    clearCachedChatMessagesForSession(host, host.sessionKey);
     host.chatSideResult = null;
     reconcileChatRunLifecycle(host as unknown as Parameters<typeof reconcileChatRunLifecycle>[0], {
       outcome: hadActiveRun ? "interrupted" : undefined,

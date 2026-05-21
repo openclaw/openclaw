@@ -1287,13 +1287,28 @@ describe("handleSendChat", () => {
     });
     const host = makeHost({
       client: { request } as unknown as ChatHost["client"],
-      sessionKey: "main",
+      sessionKey: "home",
       chatMessage: "/clear",
       chatMessages: [{ role: "user", content: "hello", timestamp: 1 }],
+      chatMessagesBySession: {
+        home: [{ role: "user", content: "hello", timestamp: 1 }],
+        "agent:main:home": [{ role: "user", content: "hello", timestamp: 1 }],
+        "agent:ops:main": [{ role: "user", content: "hello", timestamp: 1 }],
+        "agent:ops:home": [{ role: "user", content: "hello", timestamp: 1 }],
+        "agent:main:main": [{ role: "user", content: "hello", timestamp: 1 }],
+      },
+      hello: {
+        snapshot: {
+          sessionDefaults: {
+            defaultAgentId: "ops",
+            mainKey: "home",
+          },
+        },
+      } as ChatHost["hello"],
       chatSideResult: {
         kind: "btw",
         runId: "btw-run-clear",
-        sessionKey: "main",
+        sessionKey: "home",
         question: "what changed?",
         text: "Detached BTW result",
         isError: false,
@@ -1304,8 +1319,13 @@ describe("handleSendChat", () => {
 
     await handleSendChat(host);
 
-    expect(request).toHaveBeenCalledWith("sessions.reset", { key: "main" });
+    expect(request).toHaveBeenCalledWith("sessions.reset", { key: "home" });
     expect(host.chatMessages).toStrictEqual([]);
+    expect(host.chatMessagesBySession?.home).toBeUndefined();
+    expect(host.chatMessagesBySession?.["agent:main:home"]).toBeUndefined();
+    expect(host.chatMessagesBySession?.["agent:ops:main"]).toBeUndefined();
+    expect(host.chatMessagesBySession?.["agent:ops:home"]).toBeUndefined();
+    expect(host.chatMessagesBySession?.["agent:main:main"]).toBeUndefined();
     expect(host.chatSideResult).toBeNull();
     expect(host.chatSideResultTerminalRuns?.size).toBe(0);
     expect(host.chatRunId).toBeNull();
