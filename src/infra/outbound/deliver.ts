@@ -1180,14 +1180,24 @@ function suppressedPayloadOutcome(params: {
 export async function deliverOutboundPayloads(
   params: DeliverOutboundPayloadsParams,
 ): Promise<OutboundDeliveryResult[]> {
+  return await deliverOutboundPayloadsInternal(params);
+}
+
+export async function deliverOutboundPayloadsInternal(
+  params: DeliverOutboundPayloadsParams,
+): Promise<OutboundDeliveryResult[]> {
   // TEMP DIAGNOSTIC (2026-05-21): trace which channel deliveries reach
-  // deliverOutboundPayloads, which is what fires applyMessageSendingHook
-  // (provenance footer attach). If a channel bypasses this entry point,
-  // its outbound messages won't carry the footer. Remove after the
-  // slack-vs-discord footer asymmetry is resolved.
+  // deliverOutboundPayloadsInternal, which is what fires
+  // applyMessageSendingHook (provenance footer attach). If a channel
+  // bypasses this entry point, its outbound messages won't carry the
+  // footer. Real callers (src/channels/message/send.ts:203,
+  // src/gateway/server-runtime-services.ts:165,
+  // src/plugin-sdk/delivery-queue-runtime.ts:23) call the Internal entry
+  // directly, not the exported wrapper. Remove after the slack-vs-
+  // discord footer asymmetry is resolved.
   try {
     log.info(
-      `[deliverOutboundPayloads] entry channel=${params.channel} to=${params.to} ` +
+      `[deliverOutboundPayloadsInternal] entry channel=${params.channel} to=${params.to} ` +
         `payloads=${params.payloads.length} skipQueue=${params.skipQueue === true} ` +
         `bestEffort=${params.bestEffort === true} ` +
         `session=${params.session?.key ?? params.session?.policyKey ?? ""}`,
@@ -1195,12 +1205,6 @@ export async function deliverOutboundPayloads(
   } catch {
     // never throw from a diagnostic
   }
-  return await deliverOutboundPayloadsInternal(params);
-}
-
-export async function deliverOutboundPayloadsInternal(
-  params: DeliverOutboundPayloadsParams,
-): Promise<OutboundDeliveryResult[]> {
   const { channel, to, payloads } = params;
   const queuePolicy = params.queuePolicy ?? "best_effort";
   const queuePayloads = payloads.map(stripInternalRuntimeScaffoldingFromPayload);
