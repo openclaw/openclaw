@@ -6,6 +6,10 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/account-resolution";
 import { resolveAccountEntry } from "openclaw/plugin-sdk/account-resolution";
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/core";
+import {
+  hasConfiguredSecretInput,
+  normalizeResolvedSecretInputString,
+} from "openclaw/plugin-sdk/secret-input";
 import type {
   LineAccountConfig,
   LineConfig,
@@ -26,8 +30,12 @@ function resolveToken(params: {
 }): { token: string; tokenSource: LineTokenSource } {
   const { accountId, baseConfig, accountConfig } = params;
 
-  if (accountConfig?.channelAccessToken?.trim()) {
-    return { token: accountConfig.channelAccessToken.trim(), tokenSource: "config" };
+  const accountConfigToken = normalizeResolvedSecretInputString({
+    value: accountConfig?.channelAccessToken,
+    path: `channels.line.accounts.${accountId}.channelAccessToken`,
+  });
+  if (accountConfigToken) {
+    return { token: accountConfigToken, tokenSource: "config" };
   }
 
   const accountFileToken = readFileIfExists(accountConfig?.tokenFile);
@@ -36,8 +44,12 @@ function resolveToken(params: {
   }
 
   if (accountId === DEFAULT_ACCOUNT_ID) {
-    if (baseConfig?.channelAccessToken?.trim()) {
-      return { token: baseConfig.channelAccessToken.trim(), tokenSource: "config" };
+    const baseConfigToken = normalizeResolvedSecretInputString({
+      value: baseConfig?.channelAccessToken,
+      path: "channels.line.channelAccessToken",
+    });
+    if (baseConfigToken) {
+      return { token: baseConfigToken, tokenSource: "config" };
     }
 
     const baseFileToken = readFileIfExists(baseConfig?.tokenFile);
@@ -61,8 +73,12 @@ function resolveSecret(params: {
 }): string {
   const { accountId, baseConfig, accountConfig } = params;
 
-  if (accountConfig?.channelSecret?.trim()) {
-    return accountConfig.channelSecret.trim();
+  const accountConfigSecret = normalizeResolvedSecretInputString({
+    value: accountConfig?.channelSecret,
+    path: `channels.line.accounts.${accountId}.channelSecret`,
+  });
+  if (accountConfigSecret) {
+    return accountConfigSecret;
   }
 
   const accountFileSecret = readFileIfExists(accountConfig?.secretFile);
@@ -71,8 +87,12 @@ function resolveSecret(params: {
   }
 
   if (accountId === DEFAULT_ACCOUNT_ID) {
-    if (baseConfig?.channelSecret?.trim()) {
-      return baseConfig.channelSecret.trim();
+    const baseConfigSecret = normalizeResolvedSecretInputString({
+      value: baseConfig?.channelSecret,
+      path: "channels.line.channelSecret",
+    });
+    if (baseConfigSecret) {
+      return baseConfigSecret;
     }
 
     const baseFileSecret = readFileIfExists(baseConfig?.secretFile);
@@ -149,7 +169,7 @@ export function listLineAccountIds(cfg: OpenClawConfig): string[] {
   const ids = new Set<string>();
 
   if (
-    lineConfig?.channelAccessToken?.trim() ||
+    hasConfiguredSecretInput(lineConfig?.channelAccessToken) ||
     lineConfig?.tokenFile ||
     process.env.LINE_CHANNEL_ACCESS_TOKEN?.trim()
   ) {

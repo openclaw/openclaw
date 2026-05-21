@@ -9,6 +9,7 @@ import {
   collectRuntimeConfigAssignments,
   secretTargetRegistryEntries,
 } from "../secret-contract-api.js";
+import { LineConfigSchema } from "./config-schema.js";
 
 function envRef(id: string) {
   return { source: "env" as const, provider: "default" as const, id };
@@ -54,6 +55,20 @@ describe("LINE secret contract", () => {
   });
 
   it("resolves default and named account credential SecretRefs", async () => {
+    const parseResult = LineConfigSchema.safeParse({
+      enabled: true,
+      channelAccessToken: envRef("LINE_DEFAULT_CHANNEL_ACCESS_TOKEN"),
+      channelSecret: envRef("LINE_DEFAULT_CHANNEL_SECRET"),
+      accounts: {
+        work: {
+          enabled: true,
+          channelAccessToken: envRef("LINE_WORK_CHANNEL_ACCESS_TOKEN"),
+          channelSecret: envRef("LINE_WORK_CHANNEL_SECRET"),
+        },
+      },
+    });
+    expect(parseResult.success).toBe(true);
+
     const { resolvedConfig, warnings } = await resolveLineSecretAssignments(
       {
         channels: {
