@@ -590,16 +590,11 @@ export function loadAuthProfileStoreForSecretsRuntime(agentDir?: string): AuthPr
   return loadAuthProfileStoreForRuntime(agentDir, {
     readOnly: true,
     allowKeychainPrompt: false,
-    // L4 PATCH (lane-pump branch): include legacy OAuth sidecar material when
-    // the runtime is resolving secrets for an agent turn. Without this, embedded
-    // agent runs (Telegram replies, cron invocations) cannot reach the access
-    // token for openai-codex profiles whose `oauthRef.source` is
+    // Include legacy OAuth sidecar material when the runtime is resolving
+    // secrets for an agent turn. Without this, embedded agent runs cannot reach
+    // the access token for openai-codex profiles whose `oauthRef.source` is
     // "openclaw-credentials", and resolveApiKeyForProfile() falls through to
-    // "No API key found". The OAuth-manager-internal refresh helper added in
-    // upstream #83312 already sets this to true; this default was inadvertently
-    // left at `false` after the sidecar runtime removal in #82777, breaking
-    // the embedded-agent OAuth resolution path while leaving the direct CLI
-    // inference path unaffected. See UPSTREAM_ISSUE_DRAFT.md in local-patches.
+    // "No API key found".
     resolveLegacyOAuthSidecars: true,
   });
 }
@@ -614,12 +609,9 @@ export function loadAuthProfileStoreWithoutExternalProfiles(
   const options: LoadAuthProfileStoreOptions = {
     readOnly: true,
     allowKeychainPrompt: loadOptions?.allowKeychainPrompt ?? false,
-    // L4.1 PATCH: default sidecar resolution to true so that any caller
-    // not explicitly overriding (model-auth-label, model-provider-auth,
-    // pi-auth-discovery, list.list-command, etc.) still picks up legacy
-    // OAuth credential material. Was inadvertently left at `false` in the
-    // upstream #82777/#83312 refactor and breaks isolated/sub-agent auth
-    // resolution paths (e.g., cron-nested lanes).
+    // Default sidecar resolution to true so callers that do not explicitly
+    // override still pick up legacy OAuth credential material for isolated and
+    // sub-agent auth resolution paths.
     resolveLegacyOAuthSidecars: loadOptions?.resolveLegacyOAuthSidecars ?? true,
   };
   const store = loadAuthProfileStoreForAgent(agentDir, options);
@@ -657,10 +649,10 @@ export function ensureAuthProfileStoreWithoutExternalProfiles(
   agentDir?: string,
   options?: { allowKeychainPrompt?: boolean; resolveLegacyOAuthSidecars?: boolean },
 ): AuthProfileStore {
-  // L4.1 PATCH: forward `resolveLegacyOAuthSidecars` through this entry
-  // point so embedded-runner sub-agents (cron-nested, isolated session
-  // lanes for AgentOS sweeps) can read the legacy sidecar credential
-  // material. Default true to match `loadAuthProfileStoreWithoutExternalProfiles`.
+  // Forward `resolveLegacyOAuthSidecars` through this entry point so embedded
+  // runner sub-agents and isolated session lanes can read legacy sidecar
+  // credential material. Default true to match
+  // `loadAuthProfileStoreWithoutExternalProfiles`.
   const resolveLegacyOAuthSidecars = options?.resolveLegacyOAuthSidecars ?? true;
   const effectiveOptions: LoadAuthProfileStoreOptions = {
     ...(options ?? {}),
@@ -677,9 +669,8 @@ export function ensureAuthProfileStoreWithoutExternalProfiles(
     return store;
   }
 
-  // L4.1 PATCH: use effectiveOptions (with sidecar resolution) for the main
-  // fallback load too, otherwise sub-agents that need to merge in the main
-  // store would still miss the legacy credential material.
+  // Use the same options for the main fallback load; sub-agents that merge in
+  // the main store need the same legacy sidecar material.
   const mainStore = loadAuthProfileStoreForAgent(undefined, effectiveOptions);
   return mergeAuthProfileStores(mainStore, store);
 }

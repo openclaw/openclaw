@@ -3,7 +3,6 @@ import { resolveEmbeddedSessionLane } from "../agents/pi-embedded-runner/lanes.j
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resetCommandLane } from "../process/command-queue.js";
 import {
   areDiagnosticsEnabledForProcess,
   emitDiagnosticEvent,
@@ -11,6 +10,7 @@ import {
   type DiagnosticPhaseSnapshot,
   type DiagnosticLivenessWarningReason,
 } from "../infra/diagnostic-events.js";
+import { resetCommandLane } from "../process/command-queue.js";
 import { emitDiagnosticMemorySample, resetDiagnosticMemoryForTest } from "./diagnostic-memory.js";
 import {
   getCurrentDiagnosticPhase,
@@ -1134,6 +1134,14 @@ export function startDiagnosticHeartbeat(
           thresholdMs: stuckSessionWarnMs,
           abortThresholdMs: stuckSessionAbortMs,
         });
+        const activeAbortRecoveryEligible =
+          classification !== undefined &&
+          isActiveAbortRecoveryEligible({
+            classification,
+            activity,
+            ageMs: attentionAgeMs,
+            stuckSessionAbortMs,
+          });
         if (classification?.recoveryEligible) {
           requestStuckSessionRecovery({
             recover: opts?.recoverStuckSession ?? recoverStuckSession,
@@ -1143,19 +1151,12 @@ export function startDiagnosticHeartbeat(
               sessionKey: state.sessionKey,
               ageMs: attentionAgeMs,
               queueDepth: state.queueDepth,
+              ...(activeAbortRecoveryEligible ? { allowActiveAbort: true } : {}),
               expectedState: state.state,
               stateGeneration: state.generation,
             },
           });
-        } else if (
-          classification &&
-          isActiveAbortRecoveryEligible({
-            classification,
-            activity,
-            ageMs: attentionAgeMs,
-            stuckSessionAbortMs,
-          })
-        ) {
+        } else if (classification && activeAbortRecoveryEligible) {
           requestStuckSessionRecovery({
             recover: opts?.recoverStuckSession ?? recoverStuckSession,
             classification,
