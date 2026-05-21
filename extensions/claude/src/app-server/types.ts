@@ -94,6 +94,13 @@ export type ThreadResumeParams = {
   approvalPolicy?: ApprovalPolicy;
   approvalsReviewer?: "user" | "auto_review";
   sandbox?: SandboxPolicy;
+  /**
+   * Updated workspace pin. When set, the server patches meta.cwd so
+   * subsequent turns get the new path without a thread rotation. Used by
+   * the plugin when openclaw's resolveSandboxContext switches the
+   * effectiveWorkspace mid-session.
+   */
+  cwd?: string;
 };
 
 export type TurnStartParams = {

@@ -189,12 +189,13 @@ export async function runClaudeAppServerAttempt(
     // OpenClaw's BeforeToolCall policy chain instead of falling through to
     // the default-decline path. Without this, promoting approvalPolicy to
     // "untrusted" would blanket-block every native tool call. Bypass-mode
-    // turns (allowAll=true on the server) never invoke this path. Note:
-    // approve/decline only — the SDK approval response doesn't carry
-    // adjusted params, so a hook's params-rewrite is effectively ignored for
-    // native tools (filed as openclaw-ggv).
+    // turns (allowAll=true on the server) never invoke this path. Param
+    // rewrites from BeforeToolCall are detected and declined rather than
+    // silently dropped (the SDK approval response can't carry them) —
+    // codex does the same at codex/approval-bridge.ts:353.
     const unregisterApproval = registerApprovalHandler(client, {
       ...sharedHookContext,
+      cwd: effectiveWorkspace,
       signal: ac.signal,
     });
     const composedUnregister = unregisterServerRequest;
@@ -565,13 +566,6 @@ async function ensureThread(
   if (existing) {
     if (existing.approvalPolicy !== cfg.appServer.approvalPolicy) {
       rotationReason = `approvalPolicy ${existing.approvalPolicy ?? "unset"} → ${cfg.appServer.approvalPolicy}`;
-    } else if (existing.cwd && existing.cwd !== effectiveWorkspace) {
-      // Pre-effectiveWorkspace bindings (and any cross-sandbox-shift case)
-      // would otherwise resume with stale cwd. The openclaw-claude server
-      // pins sdkOptions.cwd from meta.cwd at resume time and ignores
-      // turn/start.cwd updates, so the only way to give native tools the
-      // right workspace on resume is to rotate. Tank P1/P2 review.
-      rotationReason = `cwd ${existing.cwd} → ${effectiveWorkspace}`;
     } else if (
       existing.developerInstructionsFingerprint &&
       existing.developerInstructionsFingerprint !== developerInstructionsFingerprint
@@ -584,10 +578,41 @@ async function ensureThread(
       rotationReason = "dynamic tool catalog changed (plugin set, allowlist, or sandbox shifted)";
     }
   }
+  // NOTE: we do NOT rotate on cwd mismatch. Tank P2 caught a regression
+  // where rotation called thread/start which creates a fresh thread_id +
+  // sessionId, and the SDK's session store keys messages.jsonl by that id —
+  // so rotation eats the conversation transcript. Instead we send `cwd` on
+  // thread/resume and the server patches meta.cwd via applyResumeOverrides;
+  // subsequent turns pin sdkOptions.cwd from the updated meta. No transcript
+  // loss.
 
   if (existing && !rotationReason) {
     try {
-      await client.request("thread/resume", { threadId: existing.threadId });
+      // Send cwd so the server can patch meta.cwd if the effectiveWorkspace
+      // diverged from what the existing binding recorded (e.g. sandbox
+      // toggled, or this is a pre-effectiveWorkspace binding). Server
+      // updates meta in-place; no thread rotation, no transcript loss.
+      const cwdDiverged = existing.cwd !== effectiveWorkspace;
+      await client.request("thread/resume", {
+        threadId: existing.threadId,
+        ...(cwdDiverged ? { cwd: effectiveWorkspace } : {}),
+      });
+      // Persist the new cwd in our binding sidecar so future resumes don't
+      // re-send the same cwd update on every turn.
+      if (cwdDiverged && sessionFile) {
+        await writeClaudeAppServerBinding(sessionFile, {
+          threadId: existing.threadId,
+          cwd: effectiveWorkspace,
+          model: existing.model,
+          modelProvider: existing.modelProvider,
+          approvalPolicy: existing.approvalPolicy,
+          approvalsReviewer: existing.approvalsReviewer,
+          sandbox: existing.sandbox,
+          developerInstructionsFingerprint: existing.developerInstructionsFingerprint,
+          dynamicToolsFingerprint: existing.dynamicToolsFingerprint,
+          createdAt: existing.createdAt,
+        });
+      }
       return existing.threadId;
     } catch (err) {
       if (!isThreadNotFound(err)) throw err;
@@ -1262,6 +1287,13 @@ type ApprovalRegistrationContext = {
   sessionKey?: string;
   runId?: string;
   channelId?: string;
+  /**
+   * Effective workspace pin for the turn. Codex includes this in the
+   * BeforeToolCall hook ctx for app-server approval policies; we do the
+   * same so policies that inspect workspace/sandbox paths can reason about
+   * the right cwd for native Claude tool calls.
+   */
+  cwd?: string;
   signal?: AbortSignal;
 };
 
@@ -1291,6 +1323,11 @@ function registerApprovalHandler(
         ctx: {
           agentId: ctx.agentId,
           config: ctx.config,
+          // Codex includes cwd in the approval ctx
+          // (codex/approval-bridge.ts:343) so policies that inspect
+          // workspace/sandbox paths can reason about the right path for
+          // native tool calls. Tank P3 review.
+          ...(ctx.cwd ? { cwd: ctx.cwd } : {}),
           sessionId: ctx.sessionId,
           sessionKey: ctx.sessionKey,
           runId: ctx.runId,
