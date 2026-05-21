@@ -26,6 +26,7 @@ Docs: https://docs.openclaw.ai
 - Infra/secrets: restore the fail-closed contract for `tryReadSecretFileSync` so credential loaders that pass `rejectSymlink: true` (Telegram, LINE, Zalo, IRC, Nextcloud Talk tokens) refuse symlinked credential files instead of silently accepting them, and the infra-state CI shard's secret-file symlink test passes again. Thanks @romneyda.
 - Browser: honor the configured image sanitization limit for screenshots and labeled snapshots so browser-captured images follow the same resize policy as other image results. (#84595)
 - Doctor: remove unrecognized `models.providers.*.models[*].compat.thinkingFormat` values during `doctor --fix` so stale provider model config can validate after upgrade. Fixes #77803.
+- Doctor: warn when `openclaw.json` stores plaintext secret-bearing config fields, including model provider API keys and sensitive provider headers. (#84718) Thanks @lukaIvanic.
 - Status: show the configured default, session-selected model, reason, clear hint, and docs link when a session remains pinned to a model that differs from `agents.defaults.model.primary`.
 - Mac app: keep local packaging signed with a stable app identity for permission testing and fix Control UI production builds under current Vite/Highlight.js exports.
 - macOS app: update the embedded Peekaboo bridge to 3.2.1 so OpenClaw-hosted UI automation works with current Peekaboo CLI capture flows.
