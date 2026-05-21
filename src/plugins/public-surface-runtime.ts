@@ -39,14 +39,16 @@ export function normalizeBundledPluginArtifactSubpath(artifactBasename: string):
 }
 
 export function normalizeBundledPluginDirName(dirName: string): string {
-  const normalized = dirName.trim();
+  let normalized = dirName.trim();
+  if (!normalized) {
+    throw new Error(`Bundled plugin dirName must be a single directory: ${dirName}`);
+  }
+  normalized = normalized.replace(/:/g, "-");
   if (
-    !normalized ||
     normalized === "." ||
     normalized === ".." ||
     normalized.includes("/") ||
-    normalized.includes("\\") ||
-    normalized.includes(":")
+    normalized.includes("\\")
   ) {
     throw new Error(`Bundled plugin dirName must be a single directory: ${dirName}`);
   }

@@ -122,6 +122,13 @@ describe("bundled plugin public surface runtime", () => {
     expect(() => normalizeBundledPluginDirName("../outside")).toThrow(/single directory/);
     expect(() => normalizeBundledPluginDirName("nested/plugin")).toThrow(/single directory/);
     expect(() => normalizeBundledPluginDirName("nested\\plugin")).toThrow(/single directory/);
-    expect(() => normalizeBundledPluginDirName("C:plugin")).toThrow(/single directory/);
+  });
+
+  it("sanitizes colons in dirName to dashes", () => {
+    expect(normalizeBundledPluginDirName("C:plugin")).toBe("C-plugin");
+    expect(normalizeBundledPluginDirName("-1003803644436:topic:35526")).toBe(
+      "-1003803644436-topic-35526",
+    );
+    expect(normalizeBundledPluginDirName("a:b:c")).toBe("a-b-c");
   });
 });
