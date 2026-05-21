@@ -52,6 +52,7 @@ export type CronAgentWatchdog = {
   noteLaneAdmitted: () => void;
   noteRunnerStarted: (info?: CronAgentExecutionStarted) => void;
   notePhase: (info: CronAgentExecutionPhaseUpdate) => void;
+  getDeadlineAtMs: () => number | undefined;
   activeExecution: () => CronAgentExecutionStarted | undefined;
   observedLaneWait: () => boolean;
   dispose: () => void;
@@ -69,6 +70,7 @@ export function createCronAgentWatchdog(params: {
   let preExecutionTimeoutId: NodeJS.Timeout | undefined;
   let activeExecution: CronAgentExecutionStarted | undefined;
   let observedLaneWait = false;
+  let deadlineAtMs: number | undefined;
 
   const setTimedOut = (reason: string) => {
     if (state === "timed_out" || state === "disposed") {
@@ -81,6 +83,7 @@ export function createCronAgentWatchdog(params: {
     if (timeoutId || state === "disposed") {
       return;
     }
+    deadlineAtMs = Date.now() + params.jobTimeoutMs;
     timeoutId = setTimeout(() => {
       setTimedOut(timeoutErrorMessage(activeExecution));
     }, params.jobTimeoutMs);
@@ -175,6 +178,7 @@ export function createCronAgentWatchdog(params: {
       }
       noteExecutionProgress(info);
     },
+    getDeadlineAtMs: () => deadlineAtMs,
     activeExecution: () => activeExecution,
     observedLaneWait: () => observedLaneWait,
     dispose: () => {

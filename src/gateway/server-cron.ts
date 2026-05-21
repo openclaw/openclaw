@@ -390,6 +390,8 @@ export function buildGatewayCronService(params: {
       onExecutionStarted,
       onExecutionPhase,
       onLaneWait,
+      deadlineAtMs,
+      getDeadlineAtMs,
     }) => {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
       const sessionKey = resolveCronSessionTargetSessionKey(job.sessionTarget) ?? `cron:${job.id}`;
@@ -403,6 +405,8 @@ export function buildGatewayCronService(params: {
           onExecutionStarted,
           onExecutionPhase,
           onLaneWait,
+          deadlineAtMs,
+          getDeadlineAtMs,
           agentId,
           sessionKey,
           lane: "cron",
