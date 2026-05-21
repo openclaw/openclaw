@@ -156,40 +156,85 @@ function updateCompletionProfile(
   return { next, changed: next !== content, hadExisting };
 }
 
-/** Resolves the shell startup profile path that should contain the OpenClaw completion block. */
-export function resolveCompletionProfilePath(
+export type CompletionProfilePathOptions = {
+  env?: NodeJS.ProcessEnv;
+  homeDir?: () => string;
+  platform?: NodeJS.Platform;
+};
+
+/**
+ * Profile-path candidates the shell may read, in priority order (#63069).
+ *
+ * zsh honors `$ZDOTDIR` exclusively when set; falling back to `$HOME/.zshrc` in
+ * that case would write to a file the shell never reads. The same rule applies
+ * to fish + `$XDG_CONFIG_HOME`. Bash returns both `.bashrc` and `.bash_profile`
+ * because either may be the canonical interactive rc depending on platform.
+ */
+export function resolveCompletionProfilePathCandidates(
   shell: CompletionShell,
-  options: {
-    env?: NodeJS.ProcessEnv;
-    homeDir?: () => string;
-    platform?: NodeJS.Platform;
-  } = {},
-): string {
+  options: CompletionProfilePathOptions = {},
+): string[] {
   const env = options.env ?? process.env;
   const homeDir = options.homeDir ?? os.homedir;
   const platform = options.platform ?? process.platform;
   const home = env.HOME || homeDir();
   if (shell === "zsh") {
-    return path.join(home, ".zshrc");
+    const zdotdir = normalizeOptionalString(env.ZDOTDIR);
+    if (zdotdir) {
+      return [path.join(zdotdir, ".zshrc")];
+    }
+    return [path.join(home, ".zshrc")];
   }
   if (shell === "bash") {
-    return path.join(home, ".bashrc");
+    return [path.join(home, ".bashrc"), path.join(home, ".bash_profile")];
   }
   if (shell === "fish") {
-    return path.join(home, ".config", "fish", "config.fish");
+    const xdgConfigHome = normalizeOptionalString(env.XDG_CONFIG_HOME);
+    if (xdgConfigHome) {
+      return [path.join(xdgConfigHome, "fish", "config.fish")];
+    }
+    return [path.join(home, ".config", "fish", "config.fish")];
   }
   if (platform === "win32") {
     const shellPath = normalizeOptionalString(env.SHELL) ?? "";
     const shellName = shellPath ? resolveShellBasename(shellPath, platform) : "";
     const profileDirectory = shellName === "powershell" ? "WindowsPowerShell" : "PowerShell";
-    return path.win32.join(
-      env.USERPROFILE || home,
-      "Documents",
-      profileDirectory,
-      "Microsoft.PowerShell_profile.ps1",
-    );
+    return [
+      path.win32.join(
+        env.USERPROFILE || home,
+        "Documents",
+        profileDirectory,
+        "Microsoft.PowerShell_profile.ps1",
+      ),
+    ];
   }
-  return path.join(home, ".config", "powershell", "Microsoft.PowerShell_profile.ps1");
+  return [path.join(home, ".config", "powershell", "Microsoft.PowerShell_profile.ps1")];
+}
+
+export function resolveCompletionProfilePath(
+  shell: CompletionShell,
+  options: CompletionProfilePathOptions = {},
+): string {
+  return resolveCompletionProfilePathCandidates(shell, options)[0] as string;
+}
+
+/**
+ * Picks the first candidate that already exists on disk so check + install
+ * agree on the same file. Falls back to the canonical install target
+ * (first candidate) when no candidate exists, so first-time installs still
+ * create a stable path.
+ */
+async function resolveExistingCompletionProfilePath(
+  shell: CompletionShell,
+  options: CompletionProfilePathOptions = {},
+): Promise<string> {
+  const candidates = resolveCompletionProfilePathCandidates(shell, options);
+  for (const candidate of candidates) {
+    if (await pathExists(candidate)) {
+      return candidate;
+    }
+  }
+  return candidates[0] as string;
 }
 
 /** Returns whether a shell profile already contains an OpenClaw completion block or source line. */
@@ -197,7 +242,7 @@ export async function isCompletionInstalled(
   shell: CompletionShell,
   binName = "openclaw",
 ): Promise<boolean> {
-  const profilePath = resolveCompletionProfilePath(shell);
+  const profilePath = await resolveExistingCompletionProfilePath(shell);
 
   if (!(await pathExists(profilePath))) {
     return false;
@@ -219,7 +264,7 @@ export async function usesSlowDynamicCompletion(
   shell: CompletionShell,
   binName = "openclaw",
 ): Promise<boolean> {
-  const profilePath = resolveCompletionProfilePath(shell);
+  const profilePath = await resolveExistingCompletionProfilePath(shell);
 
   if (!(await pathExists(profilePath))) {
     return false;
@@ -251,32 +296,8 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
     );
   }
 
-  let profilePath: string;
-  let sourceLine: string;
-  switch (shell) {
-    case "zsh":
-      profilePath = resolveCompletionProfilePath("zsh");
-      sourceLine = formatCompletionSourceLine("zsh", binName, cachePath);
-      break;
-    case "bash":
-      profilePath = resolveCompletionProfilePath("bash");
-      try {
-        await fs.access(profilePath);
-      } catch {
-        const home = process.env.HOME || os.homedir();
-        profilePath = path.join(home, ".bash_profile");
-      }
-      sourceLine = formatCompletionSourceLine("bash", binName, cachePath);
-      break;
-    case "fish":
-      profilePath = resolveCompletionProfilePath("fish");
-      sourceLine = formatCompletionSourceLine("fish", binName, cachePath);
-      break;
-    case "powershell":
-      profilePath = resolveCompletionProfilePath("powershell");
-      sourceLine = formatCompletionSourceLine("powershell", binName, cachePath);
-      break;
-  }
+  const profilePath = await resolveExistingCompletionProfilePath(shell);
+  const sourceLine = formatCompletionSourceLine(shell, binName, cachePath);
 
   try {
     try {
