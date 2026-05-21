@@ -150,6 +150,14 @@ export function capturePluginToolDescriptor(params: {
 }): CachedPluginToolDescriptor {
   const label = (params.tool as { label?: unknown }).label;
   const title = typeof label === "string" && label.trim() ? label.trim() : undefined;
+  const rawOutputSchema = params.tool.outputSchema;
+  const outputSchema =
+    rawOutputSchema !== null &&
+    rawOutputSchema !== undefined &&
+    typeof rawOutputSchema === "object" &&
+    !Array.isArray(rawOutputSchema)
+      ? asJsonObject(rawOutputSchema)
+      : undefined;
   return {
     ...(params.tool.displaySummary ? { displaySummary: params.tool.displaySummary } : {}),
     ...(params.tool.ownerOnly === true ? { ownerOnly: true } : {}),
@@ -159,6 +167,7 @@ export function capturePluginToolDescriptor(params: {
       ...(title ? { title } : {}),
       description: params.tool.description,
       inputSchema: asJsonObject(params.tool.parameters),
+      ...(outputSchema !== undefined ? { outputSchema } : {}),
       owner: { kind: "plugin", pluginId: params.pluginId },
       executor: { kind: "plugin", pluginId: params.pluginId, toolName: params.tool.name },
     },

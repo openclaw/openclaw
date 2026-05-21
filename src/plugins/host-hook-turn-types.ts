@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AgentTaskState } from "../agents/agent-task-state.js";
 import type { PluginJsonValue } from "./host-hook-json.js";
 
 export type PluginNextTurnInjectionPlacement = "prepend_context" | "append_context";
@@ -41,6 +42,8 @@ export type PluginHeartbeatPromptContributionEvent = {
   sessionKey?: string;
   agentId?: string;
   heartbeatName?: string;
+  /** Optional task state for heartbeat progress prompt contributions. */
+  taskState?: AgentTaskState;
 };
 
 export type PluginHeartbeatPromptContributionResult = {

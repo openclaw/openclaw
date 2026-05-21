@@ -21,6 +21,13 @@ import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeOptionalLowercaseString, readStringValue } from "../shared/string-coerce.js";
 import { truncateUtf16Safe } from "../utils.js";
+import {
+  buildToolCallLimitWarning,
+  isToolCallLimitExceeded,
+} from "./agent-tool-call-turn-guard.js";
+import { buildToolResultEnvelope } from "./agent-tool-result-bridge.js";
+import { appendStructuredResultMetadata } from "./agent-tool-result-model-output.js";
+import type { AgentToolResult } from "./agent-tool-result.js";
 import type { ApplyPatchSummary } from "./apply-patch.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
@@ -550,6 +557,15 @@ async function emitToolResultOutput(params: {
   isToolError: boolean;
   result: unknown;
   sanitizedResult: unknown;
+  /** Phase 4: structured envelope to inject into model-visible output text. */
+  structuredResult?: AgentToolResult;
+  /**
+   * Phase 8: optional per-turn limit warning to append to the model-visible
+   * output. When provided, it is appended after the tool output text (or
+   * emitted standalone if there is no output text). Never changes existing
+   * behavior when undefined.
+   */
+  limitWarning?: string;
 }) {
   const { ctx, toolName, rawToolName, meta, isToolError, result, sanitizedResult } = params;
   const hasStructuredMedia = Boolean(
@@ -634,12 +650,38 @@ async function emitToolResultOutput(params: {
       builtinToolNames: ctx.builtinToolNames,
     }) && ctx.shouldEmitToolOutput();
   if (shouldEmitOutput) {
-    if (outputText) {
-      ctx.emitToolOutput(rawToolName, meta, outputText, result);
+    // Phase 4 + Phase 8: build the model-visible output text.
+    // Phase 8: if a per-turn limit warning exists, append it after the tool
+    // output (or emit it standalone when there is no tool output). When
+    // limitWarning is undefined the behavior is byte-for-byte identical.
+    const annotatedOutputText = params.limitWarning
+      ? outputText
+        ? `${outputText}\n\n${params.limitWarning}`
+        : params.limitWarning
+      : outputText;
+    if (annotatedOutputText) {
+      // Phase 4: append structured metadata to the model-visible content block,
+      // but only for ordinary text outputs. Skip annotation for special paths
+      // where the existing semantics require exact output text:
+      //   - Media paths (hasStructuredMedia): the text is a caption/overlay for
+      //     the associated media; appending tags would corrupt media parsing.
+      //   - Provider inventory paths (details.providers): structured meta-query
+      //     results used for model planning; exact text is tested/compared.
+      const isSpecialOutputPath =
+        hasStructuredMedia ||
+        (Boolean(result) &&
+          typeof result === "object" &&
+          Boolean((result as { details?: unknown }).details) &&
+          Array.isArray((result as { details?: { providers?: unknown } }).details?.providers));
+      const modelOutputText =
+        params.structuredResult && outputText && !isSpecialOutputPath
+          ? appendStructuredResultMetadata(annotatedOutputText, params.structuredResult)
+          : annotatedOutputText;
+      ctx.emitToolOutput(rawToolName, meta, modelOutputText, result);
       if (ctx.params.toolResultFormat === "plain") {
         emittedToolOutputMediaUrls = await collectEmittedToolOutputMediaUrls(
           rawToolName,
-          outputText,
+          outputText ?? "",
           result,
         );
       }
@@ -1264,6 +1306,32 @@ export async function handleToolExecutionEnd(
     `embedded run tool end: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
   );
 
+  // Phase 4: build structured envelope before emitting to the model so it can
+  // be injected into the tool_result content block (and reused by hook events).
+  const structuredResult = buildToolResultEnvelope({
+    toolName,
+    isToolError,
+    isTimedOut: isToolResultTimedOut(sanitizedResult),
+    errorMessage: isToolError ? extractToolErrorMessage(sanitizedResult) : undefined,
+    outputText: extractToolResultText(sanitizedResult),
+  });
+
+  // Phase 8: increment the per-turn tool call counter and compute limit warning.
+  ctx.state.toolCallsThisTurn += 1;
+  const maxToolCallsPerTurn = ctx.params.maxToolCallsPerTurn ?? 0;
+  const limitWarning = isToolCallLimitExceeded(ctx.state.toolCallsThisTurn, maxToolCallsPerTurn)
+    ? buildToolCallLimitWarning({
+        toolName,
+        count: ctx.state.toolCallsThisTurn,
+        limit: maxToolCallsPerTurn,
+      })
+    : undefined;
+  if (limitWarning) {
+    ctx.log.warn(
+      `tool call limit exceeded: runId=${runId} turn_count=${ctx.state.toolCallsThisTurn} limit=${maxToolCallsPerTurn} tool=${toolName}`,
+    );
+  }
+
   await emitToolResultOutput({
     ctx,
     toolName,
@@ -1272,6 +1340,8 @@ export async function handleToolExecutionEnd(
     isToolError,
     result,
     sanitizedResult,
+    structuredResult,
+    limitWarning,
   });
 
   // Run after_tool_call plugin hook (fire-and-forget)
@@ -1292,6 +1362,7 @@ export async function handleToolExecutionEnd(
       result: sanitizedResult,
       error: isToolError ? extractToolErrorMessage(sanitizedResult) : undefined,
       durationMs,
+      structuredResult,
     };
     void hookRunnerAfter
       .runAfterToolCall(hookEvent, {

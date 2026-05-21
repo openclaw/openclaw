@@ -51,6 +51,7 @@ function createTestContext(): {
       itemActiveIds: new Set<string>(),
       itemStartedCount: 0,
       itemCompletedCount: 0,
+      toolCallsThisTurn: 0,
       pendingMessagingTargets: new Map<string, MessagingToolSend>(),
       pendingMessagingTexts: new Map<string, string>(),
       pendingMessagingMediaUrls: new Map<string, string[]>(),
@@ -132,16 +133,24 @@ function expectInteractiveApprovalButtons(
   result: Record<string, unknown>,
   expectedButtons: readonly Record<string, unknown>[],
 ) {
-  const interactive = result.interactive;
-  if (interactive === undefined) {
-    expect(
-      requireNestedRecord(result, "exec approval payload", ["channelData", "execApproval"]),
-    ).toBeTruthy();
+  if (result.presentation !== undefined) {
+    expect(requireRecord(result.presentation, "presentation payload")).toEqual({
+      blocks: [{ type: "buttons", buttons: expectedButtons }],
+    });
     return;
   }
-  expect(requireRecord(interactive, "interactive payload")).toEqual({
-    blocks: [{ type: "buttons", buttons: expectedButtons }],
-  });
+
+  const interactive = result.interactive;
+  if (interactive !== undefined) {
+    expect(requireRecord(interactive, "interactive payload")).toEqual({
+      blocks: [{ type: "buttons", buttons: expectedButtons }],
+    });
+    return;
+  }
+
+  expect(
+    requireNestedRecord(result, "exec approval payload", ["channelData", "execApproval"]),
+  ).toBeTruthy();
 }
 
 function requireSingleMessagingTarget(ctx: ToolHandlerContext) {

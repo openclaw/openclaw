@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AgentToolResult } from "../agents/agent-tool-result.js";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type {
@@ -494,6 +495,8 @@ export type PluginHookAfterToolCallEvent = {
   result?: unknown;
   error?: string;
   durationMs?: number;
+  /** Structured envelope built from pre-extracted tool result fields. Added in Phase 3. */
+  structuredResult?: AgentToolResult;
 };
 
 export type PluginHookToolResultPersistContext = {

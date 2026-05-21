@@ -7,6 +7,7 @@ import type { TSchema } from "typebox";
 import { readLocalFileSafely } from "../../infra/fs-safe.js";
 import { detectMime } from "../../media/mime.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
+import type { JsonObject } from "../../tools/types.js";
 import type { ImageSanitizationLimits } from "../image-sanitization.js";
 import { sanitizeToolResultImages } from "../tool-images.js";
 
@@ -16,6 +17,8 @@ export type AgentToolWithMeta<TParameters extends TSchema, TResult> = AgentTool<
 > & {
   ownerOnly?: boolean;
   displaySummary?: string;
+  /** Optional JSON Schema describing the tool's output shape. Metadata-only — not validated at runtime. */
+  outputSchema?: JsonObject;
 };
 
 type ErasedAgentToolExecute = {
@@ -32,6 +35,8 @@ export type AnyAgentTool = Omit<AgentTool<TSchema, unknown>, "execute"> &
   ErasedAgentToolExecute & {
     ownerOnly?: boolean;
     displaySummary?: string;
+    /** Optional JSON Schema describing the tool's output shape. Metadata-only — not validated at runtime. */
+    outputSchema?: JsonObject;
   };
 
 export function asToolParamsRecord(params: unknown): Record<string, unknown> {
