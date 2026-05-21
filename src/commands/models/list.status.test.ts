@@ -1156,6 +1156,86 @@ describe("modelsStatusCommand auth overview", () => {
     }
   });
 
+  it("reports oauth delegation markers from models.json as effective auth", async () => {
+    const localRuntime = createRuntime();
+    const originalLoadConfig = mocks.loadConfig.getMockImplementation();
+    const originalProfiles = { ...mocks.store.profiles };
+    const originalEnvImpl = mocks.resolveEnvApiKey.getMockImplementation();
+    const originalCustomKeyImpl = mocks.getCustomProviderApiKey.getMockImplementation();
+    const originalUsableCustomKeyImpl = mocks.resolveUsableCustomProviderApiKey.getMockImplementation();
+
+    mocks.store.profiles = {
+      "openai-codex:default": originalProfiles["openai-codex:default"],
+    };
+    mocks.loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5", fallbacks: [] },
+          models: { "openai/gpt-5.5": {} },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: "oauth:openai-codex",
+            api: "openai-responses",
+            models: [{ id: "gpt-5.5", name: "GPT-5.5", api: "openai-responses" }],
+          },
+          "openai-codex": {
+            baseUrl: "https://chatgpt.com/backend-api",
+            api: "openai-codex-responses",
+          },
+        },
+      },
+      env: { shellEnv: { enabled: true } },
+    });
+    mocks.resolveEnvApiKey.mockImplementation(() => null);
+    mocks.getCustomProviderApiKey.mockImplementation((cfg: unknown, provider: string) => {
+      const providers = (cfg as { models?: { providers?: Record<string, { apiKey?: string }> } }).models
+        ?.providers;
+      return providers?.[provider]?.apiKey;
+    });
+    mocks.resolveUsableCustomProviderApiKey.mockImplementation(() => null);
+
+    try {
+      await modelsStatusCommand({ json: true, check: true }, localRuntime as never);
+      const payload = parseFirstJsonLog(localRuntime);
+      const openaiProvider = requireProvider(payload.auth.providers, "openai");
+      expect(payload.auth.missingProvidersInUse).toStrictEqual([]);
+      expect(requireRecord(openaiProvider.effective, "openai effective auth")).toEqual({
+        kind: "models.json",
+        detail: "marker(oauth:openai-codex)",
+      });
+      expect(requireRecord(openaiProvider.modelsJson, "openai models.json auth").value).toBe(
+        "marker(oauth:openai-codex)",
+      );
+      expect(localRuntime.exit).toHaveBeenCalledWith(0);
+    } finally {
+      mocks.store.profiles = originalProfiles;
+      if (originalLoadConfig) {
+        mocks.loadConfig.mockImplementation(originalLoadConfig);
+      }
+      if (originalEnvImpl) {
+        mocks.resolveEnvApiKey.mockImplementation(originalEnvImpl);
+      } else if (defaultResolveEnvApiKeyImpl) {
+        mocks.resolveEnvApiKey.mockImplementation(defaultResolveEnvApiKeyImpl);
+      } else {
+        mocks.resolveEnvApiKey.mockImplementation(() => null);
+      }
+      if (originalCustomKeyImpl) {
+        mocks.getCustomProviderApiKey.mockImplementation(originalCustomKeyImpl);
+      } else {
+        mocks.getCustomProviderApiKey.mockReturnValue(undefined);
+      }
+      if (originalUsableCustomKeyImpl) {
+        mocks.resolveUsableCustomProviderApiKey.mockImplementation(originalUsableCustomKeyImpl);
+      } else {
+        mocks.resolveUsableCustomProviderApiKey.mockReturnValue(null);
+      }
+    }
+  });
+
   it("does not double-prefix provider-qualified resolved default models", async () => {
     const localRuntime = createRuntime();
     const originalLoadConfig = mocks.loadConfig.getMockImplementation();

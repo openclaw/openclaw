@@ -174,6 +174,9 @@ export function resolveProviderAuthOverview(params: {
     if (usableCustomKey) {
       return { kind: "models.json", detail: formatMarkerOrSecret(usableCustomKey.apiKey) };
     }
+    if (customKey && isNonSecretApiKeyMarker(customKey, { includeEnvVarName: false })) {
+      return { kind: "models.json", detail: formatMarkerOrSecret(customKey) };
+    }
     if (params.syntheticAuth) {
       return { kind: "synthetic", detail: params.syntheticAuth.source };
     }
