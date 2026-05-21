@@ -223,6 +223,13 @@ export class TelegramPollingSession {
   #spooledUpdateHandlerTimeoutMs: number;
   #spooledUpdateHandlerAbortGraceMs: number;
   #deliveryDrainInFlight = false;
+  // L5: callback supplied by the active isolated-ingress cycle to request
+  // the cycle abort itself when the bot has visibly lost its grammy
+  // initialized state mid-cycle (e.g., after a network drop during a
+  // handler retry loop). When set, calling it triggers a clean exit so
+  // the outer `runUntilAbort` loop creates a fresh bot and re-runs
+  // `bot.init()`. Cleared at the end of the cycle.
+  #requestCycleRestartOnBotReinitNeeded: ((reason: string) => void) | null = null;
 
   constructor(private readonly opts: TelegramPollingSessionOpts) {
     this.#transportState = new TelegramPollingTransportState({
@@ -465,9 +472,24 @@ export class TelegramPollingSession {
       );
       return;
     }
+    const errMessage = formatErrorMessage(params.err);
     this.opts.log(
-      `[telegram][diag] spooled update ${params.update.updateId} failed; keeping for retry: ${formatErrorMessage(params.err)}`,
+      `[telegram][diag] spooled update ${params.update.updateId} failed; keeping for retry: ${errMessage}`,
     );
+    // L5: if the grammy bot has lost its initialized state mid-cycle (typically
+    // after a network drop during a handler retry loop, where bot.init() never
+    // gets re-run), every subsequent update handler will fail with the same
+    // "Bot not initialized" message in a tight retry loop. Detect that case and
+    // ask the active cycle to abort itself; the outer runUntilAbort loop will
+    // create a fresh TelegramBot instance and re-run bot.init() against a now-
+    // stable network. Without this, the spool worker keeps retrying forever
+    // until something external (gateway restart, abort signal) intervenes.
+    if (typeof errMessage === "string" && errMessage.includes("Bot not initialized")) {
+      const requestRestart = this.#requestCycleRestartOnBotReinitNeeded;
+      if (requestRestart) {
+        requestRestart(`spooled update ${params.update.updateId} hit Bot-not-initialized`);
+      }
+    }
   }
 
   async #waitForSpooledUpdateHandlers(): Promise<void> {
@@ -724,6 +746,21 @@ export class TelegramPollingSession {
       void worker.stop();
     };
     this.opts.abortSignal?.addEventListener("abort", stopOnAbort, { once: true });
+    // L5: install a one-shot callback that the spool failure path can use to
+    // ask this cycle to restart when it sees grammy's "Bot not initialized"
+    // error. Setting restartRequested + stopping the worker tears the cycle
+    // down via the existing try/finally cleanup below; the outer
+    // runUntilAbort loop then creates a new bot and re-runs bot.init().
+    this.#requestCycleRestartOnBotReinitNeeded = (reason: string) => {
+      if (restartRequested) {
+        return;
+      }
+      restartRequested = true;
+      this.opts.log(
+        `[telegram][diag] requesting isolated polling cycle restart to re-run bot.init(): ${reason}`,
+      );
+      void worker.stop();
+    };
     const drainIntervalMs = Math.max(100, Math.floor(ingress.drainIntervalMs ?? 500));
     let drainActive = false;
     const stopBot = () => {
@@ -820,6 +857,9 @@ export class TelegramPollingSession {
       clearInterval(drainTimer);
       unsubscribe();
       this.opts.abortSignal?.removeEventListener("abort", stopOnAbort);
+      // L5: clear the restart-request callback so a future cycle (or other
+      // session) isn't accidentally talking to this cycle's local state.
+      this.#requestCycleRestartOnBotReinitNeeded = null;
       await worker.stop();
       if (!restartRequested) {
         await drainOnce();
