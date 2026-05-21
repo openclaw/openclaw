@@ -109,7 +109,7 @@ export function isGoogleVertexHostname(hostname: string): boolean {
   return host.endsWith(GOOGLE_VERTEX_REGION_HOST_SUFFIX);
 }
 
-export function isGoogleVertexBaseUrl(baseUrl?: string): boolean {
+export function isGoogleVertexBaseUrl(baseUrl?: string | null): boolean {
   const raw = normalizeOptionalString(baseUrl);
   if (!raw) {
     return false;
