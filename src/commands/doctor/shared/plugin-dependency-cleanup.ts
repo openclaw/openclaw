@@ -57,12 +57,16 @@ function isRuntimeDependencyMarkerName(name: string): boolean {
   );
 }
 
+function isInstallStageDebrisName(name: string): boolean {
+  return /^\.openclaw-install-stage(?:-.+)?$/u.test(name);
+}
+
 function isLegacyDependencyDebrisName(name: string): boolean {
   return (
     isRuntimeDependencyMarkerName(name) ||
     name === ".openclaw-pnpm-store" ||
     name === ".openclaw-install-backups" ||
-    name.startsWith(".openclaw-install-stage-")
+    isInstallStageDebrisName(name)
   );
 }
 
@@ -186,6 +190,10 @@ function filterLegacyStaleRootCandidates(
     }
     seen.add(targetPath);
     if (target.kind === "explicit-stage") {
+      if (!isInstallStageDebrisName(path.basename(targetPath))) {
+        warnings.push(`Skipped legacy plugin dependency state ${targetPath}: unexpected path name`);
+        continue;
+      }
       if (target.rawPath && hasParentPathSegment(target.rawPath)) {
         warnings.push(
           `Skipped legacy plugin dependency state ${targetPath}: parent path segments are not allowed`,

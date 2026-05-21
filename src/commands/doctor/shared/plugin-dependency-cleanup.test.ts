@@ -105,7 +105,7 @@ describe("cleanupLegacyPluginDependencyState", () => {
   it("removes configured plugin stage roots outside OpenClaw roots", async () => {
     const stateDir = path.join(tempDir, "state");
     const packageRoot = path.join(tempDir, "package");
-    const stageRoot = path.join(tempDir, "stage");
+    const stageRoot = path.join(tempDir, ".openclaw-install-stage-corrupt");
 
     await fs.mkdir(stateDir, { recursive: true });
     await fs.mkdir(packageRoot, { recursive: true });
@@ -124,10 +124,34 @@ describe("cleanupLegacyPluginDependencyState", () => {
     await expectPathMissing(stageRoot);
   });
 
+  it("refuses arbitrary explicit plugin stage roots outside OpenClaw roots", async () => {
+    const stateDir = path.join(tempDir, "state");
+    const packageRoot = path.join(tempDir, "package");
+    const stageRoot = path.join(tempDir, "stage");
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(packageRoot, { recursive: true });
+    await fs.mkdir(path.join(stageRoot, "node_modules", "ansi-escapes"), { recursive: true });
+
+    const result = await cleanupLegacyPluginDependencyState({
+      env: {
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_PLUGIN_STAGE_DIR: stageRoot,
+      },
+      packageRoot,
+    });
+
+    expect(result.changes).toStrictEqual([]);
+    expect(result.warnings).toContain(
+      `Skipped legacy plugin dependency state ${stageRoot}: unexpected path name`,
+    );
+    await expectDirectoryPresent(stageRoot);
+  });
+
   it("refuses explicit plugin stage paths with parent segments", async () => {
     const stateDir = path.join(tempDir, "state");
     const packageRoot = path.join(tempDir, "package");
-    const dotDotStage = `${stateDir}${path.sep}..${path.sep}dotdot-stage`;
+    const dotDotStage = `${stateDir}${path.sep}..${path.sep}.openclaw-install-stage-dotdot`;
     const resolvedDotDotStage = path.resolve(dotDotStage);
 
     await fs.mkdir(stateDir, { recursive: true });
