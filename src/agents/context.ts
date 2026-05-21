@@ -1,12 +1,9 @@
 // Lazy-load pi-coding-agent model metadata so we can infer context windows when
 // the agent reports a model id. This includes custom models.json entries.
 
-import path from "node:path";
-import { isHelpOrVersionInvocation } from "../cli/argv.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { computeBackoff, type BackoffPolicy } from "../infra/backoff.js";
-import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { lookupCachedContextTokens, MODEL_CONTEXT_TOKEN_CACHE } from "./context-cache.js";
@@ -106,82 +103,6 @@ export function applyConfiguredContextWindows(params: {
 
 function loadModelsConfigRuntime() {
   return CONTEXT_WINDOW_RUNTIME_STATE.modelsConfigRuntimeLoader.load();
-}
-
-function isLikelyOpenClawCliProcess(argv: string[] = process.argv): boolean {
-  const entryBasename = normalizeLowercaseStringOrEmpty(path.basename(argv[1] ?? ""));
-  return (
-    entryBasename === "openclaw" ||
-    entryBasename === "openclaw.mjs" ||
-    entryBasename === "entry.js" ||
-    entryBasename === "entry.mjs"
-  );
-}
-
-function getCommandPathFromArgv(argv: string[]): string[] {
-  const args = argv.slice(2);
-  const tokens: string[] = [];
-  for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i];
-    if (!arg || arg === FLAG_TERMINATOR) {
-      break;
-    }
-    const consumed = consumeRootOptionToken(args, i);
-    if (consumed > 0) {
-      i += consumed - 1;
-      continue;
-    }
-    if (arg.startsWith("-")) {
-      continue;
-    }
-    tokens.push(arg);
-    if (tokens.length >= 2) {
-      break;
-    }
-  }
-  return tokens;
-}
-
-const SKIP_EAGER_WARMUP_PRIMARY_COMMANDS = new Set([
-  "agent",
-  "backup",
-  "browser",
-  "completion",
-  "config",
-  "directory",
-  "doctor",
-  "gateway",
-  "health",
-  "hooks",
-  "logs",
-  "memory",
-  "message",
-  "models",
-  "pairing",
-  "plugins",
-  "secrets",
-  "sessions",
-  "status",
-  "update",
-  "webhooks",
-]);
-
-export function shouldEagerWarmContextWindowCache(argv: string[] = process.argv): boolean {
-  // Keep this gate tied to the real OpenClaw CLI entrypoints.
-  //
-  // This module can also land inside shared dist chunks that are imported from
-  // plugin-sdk/library surfaces during smoke tests and plugin loading. If we do
-  // eager warmup for those generic Node script imports, merely importing the
-  // built plugin-sdk can call ensureOpenClawModelsJson(), which cascades into
-  // plugin discovery and breaks dist/source singleton assumptions.
-  if (!isLikelyOpenClawCliProcess(argv)) {
-    return false;
-  }
-  if (isHelpOrVersionInvocation(argv)) {
-    return false;
-  }
-  const [primary] = getCommandPathFromArgv(argv);
-  return Boolean(primary) && !SKIP_EAGER_WARMUP_PRIMARY_COMMANDS.has(primary);
 }
 
 function primeConfiguredContextWindows(): OpenClawConfig | undefined {
