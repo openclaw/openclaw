@@ -335,6 +335,41 @@ describe("gateway session utils", () => {
     });
   });
 
+  test("session rows expose derived context budget pressure", () => {
+    const row = buildGatewaySessionRow({
+      cfg: createModelDefaultsConfig({ primary: "anthropic/claude-opus-4-6" }),
+      storePath: "",
+      store: {},
+      key: "agent:main:main",
+      entry: {
+        sessionId: "session-1",
+        updatedAt: 1,
+        contextBudgetStatus: {
+          schemaVersion: 1,
+          source: "pre-prompt-estimate",
+          updatedAt: 1,
+          provider: "anthropic",
+          model: "claude-opus-4-6",
+          route: "fits",
+          shouldCompact: false,
+          estimatedPromptTokens: 640_000,
+          contextTokenBudget: 1_000_000,
+          promptBudgetBeforeReserve: 900_000,
+          reserveTokens: 100_000,
+          effectiveReserveTokens: 100_000,
+          remainingPromptBudgetTokens: 260_000,
+          overflowTokens: 0,
+          toolResultReducibleChars: 0,
+          messageCount: 2,
+          unwindowedMessageCount: 2,
+        },
+      },
+    });
+
+    expect(row.contextBudgetPressure).toBe("watch");
+    expect(row.contextBudgetStatus?.estimatedPromptTokens).toBe(640_000);
+  });
+
   test("async session list reuses thinking metadata for lightweight rows", async () => {
     const resolveThinkingProfile = vi.fn(() => ({
       levels: [{ id: "off" as const }, { id: "medium" as const }],

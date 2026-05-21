@@ -50,6 +50,7 @@ import {
   resolveAllAgentSessionStoreTargetsSync,
   resolveAgentMainSessionKey,
   resolveFreshSessionTotalTokens,
+  resolveSessionContextBudgetPolicy,
   resolveStorePath,
   type SessionEntry,
   type SessionStoreTarget,
@@ -1861,6 +1862,7 @@ export function buildGatewaySessionRow(params: {
           allowAsyncLoad: false,
         }),
       ));
+  const contextBudgetPolicy = resolveSessionContextBudgetPolicy(entry?.contextBudgetStatus);
 
   let derivedTitle: string | undefined;
   let lastMessagePreview: string | undefined;
@@ -1946,6 +1948,7 @@ export function buildGatewaySessionRow(params: {
     agentRuntime,
     contextTokens,
     contextBudgetStatus: entry?.contextBudgetStatus,
+    contextBudgetPressure: contextBudgetPolicy?.pressure,
     deliveryContext: deliveryFields.deliveryContext,
     lastChannel: deliveryFields.lastChannel ?? entry?.lastChannel,
     lastTo: deliveryFields.lastTo ?? entry?.lastTo,

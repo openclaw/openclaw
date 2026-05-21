@@ -29,7 +29,9 @@ import {
   resolveSessionPluginStatusLines,
   resolveSessionPluginTraceLines,
   resolveFreshSessionTotalTokens,
+  resolveSessionContextBudgetPolicy,
   type SessionEntry,
+  type SessionContextBudgetPressure,
   type SessionScope,
 } from "../config/sessions.js";
 import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
@@ -241,6 +243,13 @@ const formatEstimatedContextBudgetTokens = (
   const totalLabel = formatTokenCount(estimatedPromptTokens);
   const ctxLabel = ctx ? formatTokenCount(ctx) : "?";
   return `~${totalLabel}/${ctxLabel}${pct !== null ? ` (${pct}% est)` : " (est)"}`;
+};
+
+const formatContextBudgetPressure = (pressure: SessionContextBudgetPressure | undefined) => {
+  if (!pressure) {
+    return null;
+  }
+  return `Budget: ${pressure}`;
 };
 
 export const formatContextUsageShort = (
@@ -857,8 +866,10 @@ export function buildStatusMessage(args: StatusArgs): string {
       ? (formatEstimatedContextBudgetTokens(entry?.contextBudgetStatus, contextTokens) ??
         formatTokens(totalTokens, contextTokens ?? null))
       : formatTokens(totalTokens, contextTokens ?? null);
+  const contextBudgetPolicy = resolveSessionContextBudgetPolicy(entry?.contextBudgetStatus);
   const contextLine = [
     `Context: ${contextUsageLabel}`,
+    formatContextBudgetPressure(contextBudgetPolicy?.pressure),
     `🧹 Compactions: ${entry?.compactionCount ?? 0}`,
   ]
     .filter(Boolean)

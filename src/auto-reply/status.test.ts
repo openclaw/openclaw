@@ -174,7 +174,7 @@ describe("buildStatusMessage", () => {
     });
     const normalized = normalizeTestText(text);
 
-    expect(normalized).toContain("Context: ~640k/1.0m (64% est)");
+    expect(normalized).toContain("Context: ~640k/1.0m (64% est) · Budget: watch");
     expect(normalized).not.toContain("Context: ?/1.0m");
     expect(normalized).not.toContain("Context: 3.8m/1.0m");
   });
@@ -220,6 +220,7 @@ describe("buildStatusMessage", () => {
     const normalized = normalizeTestText(text);
 
     expect(normalized).toContain("Context: 36k/1.0m (4%)");
+    expect(normalized).toContain("Budget: watch");
     expect(normalized).not.toContain("~640k");
   });
 
@@ -261,7 +262,7 @@ describe("buildStatusMessage", () => {
     });
     const normalized = normalizeTestText(text);
 
-    expect(normalized).toContain("Context: ~125k/1.0m (13% est)");
+    expect(normalized).toContain("Context: ~125k/1.0m (13% est) · Budget: safe");
     expect(normalized).not.toContain("Context: 0/1.0m");
   });
 
