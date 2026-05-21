@@ -527,6 +527,18 @@ describe("resolvePluginProviders", () => {
     expectOwningPluginIds("codex-cli");
   });
 
+  it("maps setup-only cli backend ids to owning plugin ids via manifests", () => {
+    setManifestPlugins([
+      createManifestProviderPlugin({
+        id: "setup-only-backend-owner",
+        providerIds: [],
+        setup: { cliBackends: ["setup-only-cli"] },
+      }),
+    ]);
+
+    expectOwningPluginIds("setup-only-cli", ["setup-only-backend-owner"]);
+  });
+
   it("reflects provider ownership manifest changes on the next lookup", () => {
     setManifestPlugins([
       createManifestProviderPlugin({

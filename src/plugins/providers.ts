@@ -527,6 +527,9 @@ export function resolveOwningPluginIdsForProvider(params: {
         ) ||
         plugin.cliBackends.some(
           (backendId) => normalizeProviderId(backendId) === normalizedProvider,
+        ) ||
+        (plugin.setup?.cliBackends ?? []).some(
+          (backendId) => normalizeProviderId(backendId) === normalizedProvider,
         ),
     )
     .map((plugin) => plugin.id);
