@@ -23,11 +23,7 @@ export function tryReadSecretFileSync(
     return undefined;
   }
 
-  try {
-    return readSecretFileSyncImpl(filePath, label, options);
-  } catch {
-    return undefined;
-  }
+  return readSecretFileSyncImpl(filePath, label, options);
 }
 
 export type SecretFileReadResult =
