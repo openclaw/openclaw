@@ -705,6 +705,12 @@ describe("createOpenClawCodingTools", () => {
     });
 
     expectListIncludes(stages, [
+      "tool-policy:effective",
+      "tool-policy:group",
+      "tool-policy:sender",
+      "tool-policy:profile",
+      "tool-policy:runtime-allow",
+      "tool-policy:subagent",
       "tool-policy",
       "workspace-policy",
       "base-coding-tools",
@@ -719,6 +725,20 @@ describe("createOpenClawCodingTools", () => {
       "abort-wrappers",
       "deferred-followup-descriptions",
     ]);
+    expect(stages.indexOf("tool-policy:effective")).toBeLessThan(
+      stages.indexOf("tool-policy:group"),
+    );
+    expect(stages.indexOf("tool-policy:group")).toBeLessThan(stages.indexOf("tool-policy:sender"));
+    expect(stages.indexOf("tool-policy:sender")).toBeLessThan(
+      stages.indexOf("tool-policy:profile"),
+    );
+    expect(stages.indexOf("tool-policy:profile")).toBeLessThan(
+      stages.indexOf("tool-policy:runtime-allow"),
+    );
+    expect(stages.indexOf("tool-policy:runtime-allow")).toBeLessThan(
+      stages.indexOf("tool-policy:subagent"),
+    );
+    expect(stages.indexOf("tool-policy:subagent")).toBeLessThan(stages.indexOf("tool-policy"));
     expect(stages.indexOf("tool-policy")).toBeLessThan(stages.indexOf("workspace-policy"));
     expect(stages.indexOf("workspace-policy")).toBeLessThan(stages.indexOf("base-coding-tools"));
     expect(stages.indexOf("openclaw-tools:test-helper")).toBeLessThan(

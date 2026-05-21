@@ -514,6 +514,7 @@ export function createOpenClawCodingTools(options?: {
     modelProvider: options?.modelProvider,
     modelId: options?.modelId,
   });
+  options?.recordToolPrepStage?.("tool-policy:effective");
   // Prefer the already-resolved sandbox context policy. Recomputing from
   // sessionKey/config can lose the real sandbox agent when callers pass a
   // legacy alias like `main` instead of an agent session key.
@@ -532,6 +533,7 @@ export function createOpenClawCodingTools(options?: {
     senderUsername: options?.senderUsername,
     senderE164: options?.senderE164,
   });
+  options?.recordToolPrepStage?.("tool-policy:group");
   const senderPolicy = resolveSenderToolPolicy({
     config: options?.config,
     agentId,
@@ -541,8 +543,10 @@ export function createOpenClawCodingTools(options?: {
     senderUsername: options?.senderUsername,
     senderE164: options?.senderE164,
   });
+  options?.recordToolPrepStage?.("tool-policy:sender");
   const profilePolicy = resolveToolProfilePolicy(profile);
   const providerProfilePolicy = resolveToolProfilePolicy(providerProfile);
+  options?.recordToolPrepStage?.("tool-policy:profile");
 
   const enableHeartbeatTool =
     options?.enableHeartbeatTool === true ||
@@ -591,6 +595,7 @@ export function createOpenClawCodingTools(options?: {
     ...(providerProfileAlsoAllow ?? []),
     ...runtimeProfileAlsoAllow,
   ]);
+  options?.recordToolPrepStage?.("tool-policy:runtime-allow");
   // Prefer sessionKey for process isolation scope to prevent cross-session process visibility/killing.
   // Fallback to agentId if no sessionKey is available (e.g. legacy or global contexts).
   const scopeKey = resolveProcessToolScopeKey({
@@ -619,6 +624,7 @@ export function createOpenClawCodingTools(options?: {
       store: subagentStore,
     },
   );
+  options?.recordToolPrepStage?.("tool-policy:subagent");
   const globalPolicyWithToolSearchControls = mergeToolSearchControlAllowlist(globalPolicy);
   const globalProviderPolicyWithToolSearchControls =
     mergeToolSearchControlAllowlist(globalProviderPolicy);
