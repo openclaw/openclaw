@@ -314,7 +314,7 @@ describe("handleModelsCommand", () => {
       },
     } as OpenClawConfig);
 
-    expect([...(data.byProvider.get("claude-cli") ?? [])].toSorted()).toEqual([
+    expect(Array.from(data.byProvider.get("claude-cli") ?? []).toSorted()).toEqual([
       "claude-haiku-4-5",
       "claude-opus-4-5",
       "claude-opus-4-6",
@@ -349,7 +349,7 @@ describe("handleModelsCommand", () => {
         },
       },
     } as OpenClawConfig);
-    expect([...(minimaxData.byProvider.get("minimax") ?? [])]).toEqual(["abab-7"]);
+    expect(Array.from(minimaxData.byProvider.get("minimax") ?? [])).toEqual(["abab-7"]);
   });
 
   it("does not synthesize claude-cli models when the catalog has no claude-cli entries", async () => {
@@ -625,8 +625,8 @@ describe("handleModelsCommand", () => {
 
     const data = await buildModelsProviderData(cfg as OpenClawConfig);
 
-    expect([...(data.byProvider.get("openai-codex") ?? [])]).toEqual(["gpt-5.4"]);
-    expect([...(data.byProvider.get("deepseek") ?? [])].toSorted()).toEqual([
+    expect(Array.from(data.byProvider.get("openai-codex") ?? [])).toEqual(["gpt-5.4"]);
+    expect(Array.from(data.byProvider.get("deepseek") ?? []).toSorted()).toEqual([
       "deepseek-v4-flash",
       "deepseek-v4-pro",
     ]);

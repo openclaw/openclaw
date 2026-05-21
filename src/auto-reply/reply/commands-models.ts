@@ -546,7 +546,7 @@ export async function resolveModelsCommandReply(params: {
     };
   }
 
-  const models = [...(byProvider.get(provider) ?? new Set<string>())].toSorted();
+  const models = Array.from(byProvider.get(provider) ?? new Set<string>()).toSorted();
   const total = models.length;
 
   if (total === 0) {
