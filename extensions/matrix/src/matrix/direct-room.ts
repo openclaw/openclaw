@@ -103,6 +103,20 @@ export async function inspectMatrixDirectRoomEvidence(params: {
     };
   }
   const memberStateFlag = await hasDirectMatrixMemberFlag(params.client, params.roomId, selfUserId);
+  // Explicit local override: if the bot's own m.room.member event carries
+  // is_direct: false (e.g. /createRoom called with is_direct: false, or the
+  // membership was rewritten by an admin), the room is intentionally NOT a
+  // DM — even though it happens to have exactly two joined members today.
+  // This preserves the user's ability to run a small named group room with
+  // requireMention and skill scoping before more members join.
+  if (memberStateFlag === false) {
+    return {
+      joinedMembers,
+      strict: false,
+      viaMemberState: false,
+      memberStateFlag,
+    };
+  }
   return {
     joinedMembers,
     strict,
