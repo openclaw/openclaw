@@ -397,84 +397,86 @@ const sidebarIcons = {
 };
 
 // Categorised section definitions
+type LocalizedLabel = [string, string];
+
 type SectionCategory = {
   id: string;
-  label: string;
-  sections: Array<{ key: string; label: string }>;
+  label: LocalizedLabel;
+  sections: Array<{ key: string; label: LocalizedLabel }>;
 };
 
 const SECTION_CATEGORIES: SectionCategory[] = [
   {
     id: "core",
-    label: "Core",
+    label: ["Core", "Core"],
     sections: [
-      { key: "env", label: "Environment" },
-      { key: "auth", label: "Authentication" },
-      { key: "update", label: "Updates" },
-      { key: "meta", label: "Meta" },
-      { key: "logging", label: "Logging" },
-      { key: "diagnostics", label: "Diagnostics" },
-      { key: "cli", label: "Cli" },
-      { key: "secrets", label: "Secrets" },
+      { key: "env", label: ["Environment", "Môi trường"] },
+      { key: "auth", label: ["Authentication", "Xác thực"] },
+      { key: "update", label: ["Updates", "Cập nhật"] },
+      { key: "meta", label: ["Meta", "Meta"] },
+      { key: "logging", label: ["Logging", "Ghi log"] },
+      { key: "diagnostics", label: ["Diagnostics", "Chẩn đoán"] },
+      { key: "cli", label: ["Cli", "CLI"] },
+      { key: "secrets", label: ["Secrets", "Secret"] },
     ],
   },
   {
     id: "ai",
-    label: "AI & Agents",
+    label: ["AI & Agents", "AI & agent"],
     sections: [
-      { key: "agents", label: "Agents" },
-      { key: "models", label: "Models" },
-      { key: "skills", label: "Skills" },
-      { key: "tools", label: "Tools" },
-      { key: "memory", label: "Memory" },
-      { key: "session", label: "Session" },
+      { key: "agents", label: ["Agents", "Agent"] },
+      { key: "models", label: ["Models", "Mô hình"] },
+      { key: "skills", label: ["Skills", "Kỹ năng"] },
+      { key: "tools", label: ["Tools", "Công cụ"] },
+      { key: "memory", label: ["Memory", "Bộ nhớ"] },
+      { key: "session", label: ["Session", "Phiên"] },
     ],
   },
   {
     id: "communication",
-    label: "Communication",
+    label: ["Communication", "Liên lạc"],
     sections: [
-      { key: "channels", label: "Channels" },
-      { key: "messages", label: "Messages" },
-      { key: "broadcast", label: "Broadcast" },
-      { key: "talk", label: "Talk" },
-      { key: "audio", label: "Audio" },
+      { key: "channels", label: ["Channels", "Kênh"] },
+      { key: "messages", label: ["Messages", "Tin nhắn"] },
+      { key: "broadcast", label: ["Broadcast", "Phát tin"] },
+      { key: "talk", label: ["Talk", "Nói chuyện"] },
+      { key: "audio", label: ["Audio", "Âm thanh"] },
     ],
   },
   {
     id: "automation",
-    label: "Automation",
+    label: ["Automation", "Tự động hóa"],
     sections: [
-      { key: "commands", label: "Commands" },
-      { key: "hooks", label: "Hooks" },
-      { key: "bindings", label: "Bindings" },
-      { key: "cron", label: "Cron" },
-      { key: "approvals", label: "Approvals" },
-      { key: "plugins", label: "Plugins" },
+      { key: "commands", label: ["Commands", "Lệnh"] },
+      { key: "hooks", label: ["Hooks", "Hook"] },
+      { key: "bindings", label: ["Bindings", "Liên kết"] },
+      { key: "cron", label: ["Cron", "Tác vụ Cron"] },
+      { key: "approvals", label: ["Approvals", "Phê duyệt"] },
+      { key: "plugins", label: ["Plugins", "Tiện ích"] },
     ],
   },
   {
     id: "infrastructure",
-    label: "Infrastructure",
+    label: ["Infrastructure", "Hạ tầng"],
     sections: [
-      { key: "gateway", label: "Gateway" },
-      { key: "web", label: "Web" },
-      { key: "browser", label: "Browser" },
-      { key: "nodeHost", label: "Node Host" },
-      { key: "canvasHost", label: "Canvas Host" },
-      { key: "discovery", label: "Discovery" },
-      { key: "media", label: "Media" },
-      { key: "acp", label: "ACP" },
-      { key: "mcp", label: "MCP" },
+      { key: "gateway", label: ["Gateway", "Gateway"] },
+      { key: "web", label: ["Web", "Web"] },
+      { key: "browser", label: ["Browser", "Trình duyệt"] },
+      { key: "nodeHost", label: ["Node Host", "Máy chủ node"] },
+      { key: "canvasHost", label: ["Canvas Host", "Máy chủ canvas"] },
+      { key: "discovery", label: ["Discovery", "Khám phá"] },
+      { key: "media", label: ["Media", "Phương tiện"] },
+      { key: "acp", label: ["ACP", "ACP"] },
+      { key: "mcp", label: ["MCP", "MCP"] },
     ],
   },
   {
     id: "appearance",
-    label: "Appearance",
+    label: ["Appearance", "Giao diện"],
     sections: [
-      { key: "__appearance__", label: "Theme" },
-      { key: "ui", label: "UI" },
-      { key: "wizard", label: "Setup Wizard" },
+      { key: "__appearance__", label: ["Theme", "Chủ đề"] },
+      { key: "ui", label: ["UI", "Giao diện UI"] },
+      { key: "wizard", label: ["Setup Wizard", "Trình hướng dẫn thiết lập"] },
     ],
   },
 ];
@@ -1269,16 +1271,18 @@ export function renderConfig(props: ConfigProps) {
   const schemaProps = analysis.schema?.properties ?? {};
 
   const VIRTUAL_SECTIONS = new Set(["__appearance__", "__notifications__"]);
-  const localizedCategories = SECTION_CATEGORIES.map((cat) =>
-    Object.assign({}, cat, {
-      label: translateConfigLabel(cat.label) ?? cat.label,
-      sections: cat.sections.map((section) =>
-        Object.assign({}, section, {
-          label: translateConfigLabel(section.label) ?? section.label,
-        }),
-      ),
-    }),
-  );
+  const localizedCategories = SECTION_CATEGORIES.map((cat) => {
+    const catLabel = uiText(...cat.label);
+    return Object.assign({}, cat, {
+      label: translateConfigLabel(catLabel) ?? catLabel,
+      sections: cat.sections.map((section) => {
+        const sectionLabel = uiText(...section.label);
+        return Object.assign({}, section, {
+          label: translateConfigLabel(sectionLabel) ?? sectionLabel,
+        });
+      }),
+    });
+  });
 
   const visibleCategories = localizedCategories
     .map((cat) =>

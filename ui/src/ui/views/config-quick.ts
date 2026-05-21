@@ -135,12 +135,12 @@ const BUILTIN_THEME_OPTIONS: ThemeOption[] = [
   { id: "dash", label: "Dash" },
 ];
 
-const BORDER_RADIUS_STOPS: Array<{ value: BorderRadiusStop; label: string }> = [
-  { value: 0, label: uiText("None", "Không bo") },
-  { value: 25, label: uiText("Slight", "Nhẹ") },
-  { value: 50, label: uiText("Default", "Mặc định") },
-  { value: 75, label: uiText("Round", "Bo tròn") },
-  { value: 100, label: uiText("Full", "Tròn hẳn") },
+const BORDER_RADIUS_STOPS: Array<{ value: BorderRadiusStop; label: [string, string] }> = [
+  { value: 0, label: ["None", "Không bo"] },
+  { value: 25, label: ["Slight", "Nhẹ"] },
+  { value: 50, label: ["Default", "Mặc định"] },
+  { value: 75, label: ["Round", "Bo tròn"] },
+  { value: 100, label: ["Full", "Tròn hẳn"] },
 ];
 
 const TEXT_SCALE_OPTIONS: Array<{ value: TextScaleStop; label: string }> = [
@@ -153,7 +153,7 @@ const TEXT_SCALE_OPTIONS: Array<{ value: TextScaleStop; label: string }> = [
 
 const THINKING_LEVELS = ["off", "low", "medium", "high"];
 const TOOL_PROFILES = ["minimal", "coding", "messaging", "full"];
-const LOCAL_USER_LABEL = uiText("You", "Bạn");
+const LOCAL_USER_LABEL: [string, string] = ["You", "Bạn"];
 // Keep raw uploads comfortably below the 2 MB persisted data URL limit after
 // base64 expansion and a small MIME/header prefix are added.
 const MAX_LOCAL_USER_AVATAR_FILE_BYTES = 1_500_000;
@@ -169,19 +169,20 @@ function renderDefaultUserAvatar() {
 }
 
 function renderLocalUserAvatarPreview(avatar: string | null | undefined) {
+  const localUserLabel = uiText(...LOCAL_USER_LABEL);
   const identity = normalizeLocalUserIdentity({ name: null, avatar });
   const avatarUrl = resolveLocalUserAvatarUrl(identity);
   const avatarText = resolveLocalUserAvatarText(identity);
   if (avatarUrl) {
-    return html`<img class="qs-user-avatar" src=${avatarUrl} alt=${LOCAL_USER_LABEL} />`;
+    return html`<img class="qs-user-avatar" src=${avatarUrl} alt=${localUserLabel} />`;
   }
   if (avatarText) {
-    return html`<div class="qs-user-avatar qs-user-avatar--text" aria-label=${LOCAL_USER_LABEL}>
+    return html`<div class="qs-user-avatar qs-user-avatar--text" aria-label=${localUserLabel}>
       ${avatarText}
     </div>`;
   }
   return html`
-    <div class="qs-user-avatar qs-user-avatar--default" aria-label=${LOCAL_USER_LABEL}>
+    <div class="qs-user-avatar qs-user-avatar--default" aria-label=${localUserLabel}>
       ${renderDefaultUserAvatar()}
     </div>
   `;
@@ -749,7 +750,7 @@ function renderAppearanceCard(props: QuickSettingsProps) {
                     : ""}"
                   @click=${() => props.setBorderRadius(stop.value)}
                 >
-                  ${stop.label}
+                  ${uiText(...stop.label)}
                 </button>
               `,
             )}
@@ -825,7 +826,7 @@ function renderPersonalCard(props: QuickSettingsProps) {
             ${renderLocalUserAvatarPreview(props.userAvatar)}
             <div class="qs-identity-card__copy">
               <div class="qs-identity-card__eyebrow">${uiText("User", "Người dùng")}</div>
-              <div class="qs-identity-card__title">${LOCAL_USER_LABEL}</div>
+              <div class="qs-identity-card__title">${uiText(...LOCAL_USER_LABEL)}</div>
               <div class="qs-identity-card__sub">
                 ${uiText("Avatar is browser-local", "Avatar chỉ lưu trong trình duyệt")}
               </div>
