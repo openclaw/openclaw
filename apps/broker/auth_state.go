@@ -47,7 +47,7 @@ import (
 // loginState tracks whether a binary's interactive /login flow is
 // currently in progress on this broker.
 type loginState struct {
-	mu       sync.Mutex
+	mu        sync.Mutex
 	loggingIn map[string]bool
 }
 
@@ -73,7 +73,14 @@ func (s *loginState) clear(binary string) {
 func (s *loginState) active(binary string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.loggingIn[binary]
+	if !s.loggingIn[binary] {
+		return false
+	}
+	if authFileExists(binary) {
+		delete(s.loggingIn, binary)
+		return false
+	}
+	return true
 }
 
 // globalLoginState is the singleton used by wsHandler + chatHandler.

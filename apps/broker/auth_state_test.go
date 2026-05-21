@@ -15,6 +15,7 @@ import (
 )
 
 func TestLoginStateMarkAndClear(t *testing.T) {
+	withTempHome(t)
 	s := newLoginState()
 	if s.active("codex") {
 		t.Fatal("fresh state should not be active")
@@ -32,7 +33,23 @@ func TestLoginStateMarkAndClear(t *testing.T) {
 	}
 }
 
+func TestLoginStateClearsStaleMarkWhenAuthFileExists(t *testing.T) {
+	withTempHome(t)
+	writeAuthFile(t, "codex")
+
+	s := newLoginState()
+	s.mark("codex")
+
+	if s.active("codex") {
+		t.Fatal("auth file should clear stale codex login-in-progress mark")
+	}
+	if s.loggingIn["codex"] {
+		t.Fatal("stale codex mark should be removed after auth file is present")
+	}
+}
+
 func TestLoginStateConcurrentSafety(t *testing.T) {
+	withTempHome(t)
 	s := newLoginState()
 	var wg sync.WaitGroup
 	for i := 0; i < 50; i++ {
@@ -77,6 +94,7 @@ func TestSniffLoginTrigger(t *testing.T) {
 // binary. This is the user-facing contract that fixes fleet-task #234.
 func TestChatHandlerRefusesDuringLogin(t *testing.T) {
 	t.Setenv("BROKER_TENANT_TOKEN", "tt")
+	withTempHome(t)
 
 	// Mark codex as logging-in.
 	globalLoginState.mark("codex")
