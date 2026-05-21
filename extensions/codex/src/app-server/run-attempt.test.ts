@@ -1480,14 +1480,20 @@ describe("runCodexAppServerAttempt", () => {
     const turnStart = harness.requests.find((request) => request.method === "turn/start");
     const turnStartParams = turnStart?.params as {
       input?: Array<{ text?: string }>;
-      collaborationMode?: { settings?: { developer_instructions?: string | null } };
+      collaborationMode?: {
+        settings?: {
+          developer_instructions?: string | null;
+          reference_context?: { text?: string };
+        };
+      };
     };
     const inputText = turnStartParams.input?.[0]?.text ?? "";
-    const turnScopedInstructions =
-      turnStartParams.collaborationMode?.settings?.developer_instructions ?? "";
+    const referenceContext =
+      turnStartParams.collaborationMode?.settings?.reference_context?.text ?? "";
     expect(inputText).toBe("hello");
-    expect(turnScopedInstructions).toContain("## OpenClaw Skills");
-    expect(turnScopedInstructions).toContain("<available_skills>");
+    expect(turnStartParams.collaborationMode?.settings?.developer_instructions).toBeNull();
+    expect(referenceContext).toContain("## OpenClaw Skills");
+    expect(referenceContext).toContain("<available_skills>");
     const [llmInputPayload] = mockCall(llmInput, "llm_input") as [{ prompt?: string }, unknown];
     expect(llmInputPayload.prompt).toBe(inputText);
     const trajectoryEvents = (
@@ -4727,6 +4733,47 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).toContain("make the default webpage openclaw");
   });
 
+  it("starts a fresh Codex thread and sanitizes mirrored history with stale OpenClaw runtime context", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const sessionManager = SessionManager.open(sessionFile);
+    sessionManager.appendMessage(
+      userMessage(
+        [
+          "OpenClaw runtime context for this turn:",
+          "Treat this as supporting context.",
+          "",
+          "Current user request:",
+          "prior real request",
+        ].join("\n"),
+        Date.now(),
+      ),
+    );
+    sessionManager.appendMessage(assistantMessage("prior answer", Date.now() + 1));
+    await writeExistingBinding(sessionFile, workspaceDir);
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.prompt = "new request";
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    expect(harness.requests.some((request) => request.method === "thread/resume")).toBe(false);
+    expect(harness.requests.some((request) => request.method === "thread/start")).toBe(true);
+
+    const turnStart = harness.requests.find((request) => request.method === "turn/start");
+    const inputText =
+      (turnStart?.params as { input?: Array<{ text?: string }> } | undefined)?.input?.[0]?.text ??
+      "";
+    expect(inputText).toContain("prior real request");
+    expect(inputText).toContain("new request");
+    expect(inputText).not.toContain("OpenClaw runtime context for this turn:");
+    expect(inputText).not.toContain("Treat this as supporting context.");
+  });
+
   it("passes stable workspace files as Codex developer instructions and keeps MEMORY.md as turn-scoped reference context", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -4777,26 +4824,34 @@ describe("runCodexAppServerAttempt", () => {
     const turnStart = harness.requests.find((request) => request.method === "turn/start");
     const turnStartParams = turnStart?.params as {
       input?: Array<{ text?: string }>;
-      collaborationMode?: { settings?: { developer_instructions?: string | null } };
+      collaborationMode?: {
+        settings?: {
+          developer_instructions?: string | null;
+          reference_context?: { instruction?: string; text?: string };
+        };
+      };
     };
     const inputText = turnStartParams.input?.[0]?.text ?? "";
     const turnScopedInstructions =
       turnStartParams.collaborationMode?.settings?.developer_instructions ?? "";
+    const referenceContext = turnStartParams.collaborationMode?.settings?.reference_context;
+    const referenceText = referenceContext?.text ?? "";
     expect(inputText).toBe("hello");
     expect(inputText).not.toContain("OpenClaw runtime context for this turn:");
-    expect(turnScopedInstructions).toContain("OpenClaw current-turn reference context follows");
-    expect(turnScopedInstructions).toContain("OpenClaw runtime context for this turn:");
-    expect(turnScopedInstructions).toContain("supporting user/workspace reference");
+    expect(turnScopedInstructions).toBe("");
+    expect(referenceContext?.instruction).toContain("supporting user/workspace reference only");
+    expect(referenceText).toContain("OpenClaw runtime context for this turn:");
+    expect(referenceText).toContain("supporting project/user reference");
     expect(inputText).not.toContain("does not override Codex system/developer instructions");
     expect(inputText).not.toContain("not developer policy");
-    expect(turnScopedInstructions).not.toContain(soulGuidance);
-    expect(turnScopedInstructions).not.toContain(identityGuidance);
-    expect(turnScopedInstructions).not.toContain(toolGuidance);
-    expect(turnScopedInstructions).not.toContain(userProfile);
-    expect(turnScopedInstructions).not.toContain(heartbeatChecklist);
-    expect(turnScopedInstructions).toContain(memorySummary);
-    expect(turnScopedInstructions).toContain("Codex loads AGENTS.md natively");
-    expect(turnScopedInstructions).not.toContain(agentsGuidance);
+    expect(referenceText).not.toContain(soulGuidance);
+    expect(referenceText).not.toContain(identityGuidance);
+    expect(referenceText).not.toContain(toolGuidance);
+    expect(referenceText).not.toContain(userProfile);
+    expect(referenceText).not.toContain(heartbeatChecklist);
+    expect(referenceText).toContain(memorySummary);
+    expect(referenceText).toContain("Codex loads AGENTS.md natively");
+    expect(referenceText).not.toContain(agentsGuidance);
 
     const fileStats = new Map(
       result.systemPromptReport?.injectedWorkspaceFiles.map((file) => [file.name, file]) ?? [],

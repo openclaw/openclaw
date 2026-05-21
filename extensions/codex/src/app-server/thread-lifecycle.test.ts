@@ -334,10 +334,14 @@ describe("Codex app-server turn input image sanitizing", () => {
     });
 
     expect(request.input).toEqual([{ type: "text", text: "user request only", text_elements: [] }]);
-    const developerInstructions = request.collaborationMode?.settings.developer_instructions ?? "";
-    expect(developerInstructions).toContain("OpenClaw current-turn reference context follows");
-    expect(developerInstructions).toContain("OpenClaw runtime context for this turn:");
-    expect(developerInstructions).toContain("memory note");
+    expect(request.collaborationMode?.settings.developer_instructions).toBeNull();
+    const referenceContext = request.collaborationMode?.settings.reference_context;
+    expect(referenceContext).toMatchObject({
+      kind: "openclaw_current_turn_reference",
+      authority: "reference",
+    });
+    expect(referenceContext?.text).toContain("OpenClaw runtime context for this turn:");
+    expect(referenceContext?.text).toContain("memory note");
   });
 });
 

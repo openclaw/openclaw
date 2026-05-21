@@ -149,7 +149,10 @@ import {
   readCodexAppServerBinding,
   type CodexAppServerThreadBinding,
 } from "./session-binding.js";
-import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
+import {
+  readCodexMirroredSessionHistory,
+  type CodexMirroredSessionHistoryReadResult,
+} from "./session-history.js";
 import { clearSharedCodexAppServerClientIfCurrent } from "./shared-client.js";
 import {
   areCodexDynamicToolFingerprintsCompatible,
@@ -958,7 +961,21 @@ export async function runCodexAppServerAttempt(
     },
   });
   const hadSessionFile = await pathExists(activeSessionFile);
-  let historyMessages = (await readMirroredSessionHistoryMessages(activeSessionFile)) ?? [];
+  let historyReadResult = await readMirroredSessionHistory(activeSessionFile);
+  let historyMessages = historyReadResult?.messages ?? [];
+  if (historyReadResult?.sanitizedRuntimeContextUserMessages && startupBinding?.threadId) {
+    embeddedAgentLog.info(
+      "codex app-server mirrored history contained stale OpenClaw runtime context; starting a new native thread",
+      {
+        sessionId: params.sessionId,
+        sessionKey: sandboxSessionKey,
+        threadId: startupBinding.threadId,
+        sanitizedUserMessages: historyReadResult.sanitizedRuntimeContextUserMessages,
+      },
+    );
+    await clearCodexAppServerBinding(params.sessionFile);
+    startupBinding = undefined;
+  }
   const hookContextWindowFields = {
     ...(params.contextWindowInfo?.tokens
       ? { contextTokenBudget: params.contextWindowInfo.tokens }
@@ -1007,8 +1024,8 @@ export async function runCodexAppServerAttempt(
       config: params.config,
       warn: (message) => embeddedAgentLog.warn(message),
     });
-    historyMessages =
-      (await readMirroredSessionHistoryMessages(activeSessionFile)) ?? historyMessages;
+    historyReadResult = await readMirroredSessionHistory(activeSessionFile);
+    historyMessages = historyReadResult?.messages ?? historyMessages;
   }
   const workspaceBootstrapContext = await buildCodexWorkspaceBootstrapContext({
     params,
@@ -2323,8 +2340,8 @@ export async function runCodexAppServerAttempt(
     }
   };
   const rebuildPromptAfterContextEngineCompaction = async () => {
-    historyMessages =
-      (await readMirroredSessionHistoryMessages(activeSessionFile)) ?? historyMessages;
+    historyReadResult = await readMirroredSessionHistory(activeSessionFile);
+    historyMessages = historyReadResult?.messages ?? historyMessages;
     resetCodexPromptInputs();
     try {
       await applyActiveContextEngineProjection(undefined);
@@ -2706,7 +2723,7 @@ export async function runCodexAppServerAttempt(
     if (activeContextEngine) {
       const activeContextEnginePluginId = resolveContextEngineOwnerPluginId(activeContextEngine);
       const finalMessages =
-        (await readMirroredSessionHistoryMessages(activeSessionFile)) ??
+        (await readMirroredSessionHistory(activeSessionFile))?.messages ??
         historyMessages.concat(result.messagesSnapshot);
       await finalizeHarnessContextEngineTurn({
         contextEngine: activeContextEngine,
@@ -4270,16 +4287,16 @@ function readBoolean(record: JsonObject, key: string): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
 }
 
-async function readMirroredSessionHistoryMessages(
+async function readMirroredSessionHistory(
   sessionFile: string,
-): Promise<AgentMessage[] | undefined> {
-  const messages = await readCodexMirroredSessionHistoryMessages(sessionFile);
-  if (!messages) {
+): Promise<CodexMirroredSessionHistoryReadResult | undefined> {
+  const result = await readCodexMirroredSessionHistory(sessionFile);
+  if (!result) {
     embeddedAgentLog.warn("failed to read mirrored session history for codex harness hooks", {
       sessionFile,
     });
   }
-  return messages;
+  return result;
 }
 
 async function buildCodexWorkspaceBootstrapContext(params: {

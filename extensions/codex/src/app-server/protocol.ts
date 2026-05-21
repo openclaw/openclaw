@@ -141,6 +141,7 @@ export type CodexTurnStartParams = JsonObject & {
     mode: string;
     settings: JsonObject & {
       developer_instructions: string | null;
+      reference_context?: JsonObject | null;
     };
   } | null;
 };

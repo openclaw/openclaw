@@ -613,6 +613,13 @@ function renderModelBoundPromptLayers(params: {
       ?.developer_instructions === "string"
       ? params.codexSnapshot.turnStartParams.collaborationMode.settings.developer_instructions
       : "";
+  const codexReferenceContext =
+    typeof params.codexSnapshot.turnStartParams.collaborationMode?.settings?.reference_context ===
+      "object" && params.codexSnapshot.turnStartParams.collaborationMode.settings.reference_context
+      ? stableJson(
+          params.codexSnapshot.turnStartParams.collaborationMode.settings.reference_context,
+        )
+      : "";
   const turnInputText = readCodexTurnInputText(params.codexSnapshot.turnStartParams);
   const textOnlyTotal = [
     codexModelInstructions,
@@ -620,6 +627,7 @@ function renderModelBoundPromptLayers(params: {
     codexConfigInstructions,
     openClawDeveloperInstructions,
     codexCollaborationModeInstructions,
+    codexReferenceContext,
     turnInputText,
   ]
     .filter(Boolean)
@@ -648,7 +656,7 @@ function renderModelBoundPromptLayers(params: {
         openClawRuntime: {
           configInstructionsFrom: "extensions/codex app-server thread/start config.instructions",
           workspaceBootstrapContextFrom:
-            "extensions/codex app-server turn/start collaborationMode.settings.developer_instructions current-turn reference context",
+            "extensions/codex app-server turn/start collaborationMode.settings.reference_context",
           developerInstructionsFrom:
             "extensions/codex app-server thread/start developerInstructions",
           collaborationModeDeveloperInstructionsFrom:
