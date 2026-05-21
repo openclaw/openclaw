@@ -1510,7 +1510,15 @@ describe("classifyProviderRuntimeFailureKind", () => {
       classifyProviderRuntimeFailureKind(
         "403 <!DOCTYPE html><html><body>Access denied</body></html>",
       ),
-    ).toBe("auth_html_403");
+    ).toBe("auth_html");
+  });
+
+  it("classifies HTML 401 auth failures", () => {
+    expect(
+      classifyProviderRuntimeFailureKind(
+        "401 <!DOCTYPE html><html><body>Unauthorized</body></html>",
+      ),
+    ).toBe("auth_html");
   });
 
   it("classifies proxy, dns, timeout, schema, sandbox, and replay failures", () => {
