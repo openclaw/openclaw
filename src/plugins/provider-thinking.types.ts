@@ -49,4 +49,9 @@ export type ProviderThinkingLevel = {
 export type ProviderThinkingProfile = {
   levels: ProviderThinkingLevel[] | ReadonlyArray<ProviderThinkingLevel>;
   defaultLevel?: ProviderThinkingLevelId | null;
+  /**
+   * Set when the provider profile is authoritative for this model and should
+   * win over stale catalog `reasoning: false` metadata.
+   */
+  overridesCatalogReasoning?: boolean;
 };

@@ -32,10 +32,33 @@ function matchesExactOrPrefix(id: string, values: readonly string[]): boolean {
   });
 }
 
+const OPENAI_REASONING_MODEL_PREFIXES = [
+  "gpt-5.3-codex",
+  "gpt-5.5",
+  "gpt-5.4",
+  "gpt-5.2",
+  "gpt-5.1",
+  "gpt-5.1-codex",
+  "gpt-5-codex",
+  "gpt-5-mini",
+  "gpt-5-nano",
+  "gpt-5-pro",
+  "o1",
+  "o3",
+  "o4",
+] as const;
+
+function isOpenAIReasoningModelId(modelId: string): boolean {
+  const normalizedId = normalizeModelId(modelId);
+  return normalizedId === "gpt-5" ||
+    matchesExactOrPrefix(normalizedId, OPENAI_REASONING_MODEL_PREFIXES);
+}
+
 function buildOpenAIThinkingProfile(params: {
   modelId: string;
   xhighModelIds: readonly string[];
 }): ProviderThinkingProfile {
+  const overridesCatalogReasoning = isOpenAIReasoningModelId(params.modelId);
   return {
     levels: [
       ...OPENAI_THINKING_BASE_LEVELS,
@@ -43,6 +66,7 @@ function buildOpenAIThinkingProfile(params: {
         ? [{ id: "xhigh" as const }]
         : []),
     ],
+    ...(overridesCatalogReasoning ? { overridesCatalogReasoning } : {}),
   };
 }
 

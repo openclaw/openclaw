@@ -160,6 +160,105 @@ describe("listThinkingLevels", () => {
     expect(listThinkingLevelLabels("demo", "demo-model")).toEqual(["off", "on"]);
   });
 
+  it("lets authoritative OpenAI provider profiles override stale off-only catalog metadata", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(
+      ({ provider, context }) => {
+        if (provider !== "openai" && provider !== "openai-codex") {
+          return context.reasoning === true
+            ? { levels: [{ id: "off" }, { id: "low" }] }
+            : undefined;
+        }
+        const overridesCatalogReasoning =
+          context.modelId === "gpt-5.4" || context.modelId === "gpt-5.5";
+        return {
+          levels: [
+            { id: "off" },
+            { id: "minimal" },
+            { id: "low" },
+            { id: "medium" },
+            { id: "high" },
+            { id: "xhigh" },
+          ],
+          ...(overridesCatalogReasoning ? { overridesCatalogReasoning } : {}),
+          defaultLevel: "medium",
+        };
+      },
+    );
+    const staleCatalog = [
+      {
+        provider: "openai",
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        reasoning: false,
+      },
+      {
+        provider: "openai-codex",
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        reasoning: false,
+      },
+      {
+        provider: "openai",
+        id: "gpt-4.1-mini",
+        name: "GPT-4.1 mini",
+        reasoning: false,
+      },
+      {
+        provider: "openai",
+        id: "gpt-5-chat-latest",
+        name: "GPT-5 Chat Latest",
+        reasoning: false,
+      },
+    ];
+
+    expect(
+      isThinkingLevelSupported({
+        provider: "openai",
+        model: "gpt-5.4",
+        level: "high",
+        catalog: staleCatalog,
+      }),
+    ).toBe(true);
+    expect(
+      isThinkingLevelSupported({
+        provider: "openai-codex",
+        model: "gpt-5.5",
+        level: "high",
+        catalog: staleCatalog,
+      }),
+    ).toBe(true);
+    expect(
+      isThinkingLevelSupported({
+        provider: "openai-codex",
+        model: "gpt-5.5",
+        level: "xhigh",
+        catalog: staleCatalog,
+      }),
+    ).toBe(true);
+    expect(formatThinkingLevels("openai-codex", "gpt-5.5", ", ", staleCatalog)).toBe(
+      "off, minimal, low, medium, high, xhigh",
+    );
+    expect(listThinkingLevels("openai", "gpt-4.1-mini", staleCatalog)).toEqual(["off"]);
+    expect(listThinkingLevels("openai", "gpt-5-chat-latest", staleCatalog)).toEqual(["off"]);
+  });
+
+  it("keeps non-authoritative provider profiles behind catalog reasoning=false", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
+      levels: [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }],
+      defaultLevel: "medium",
+    });
+    const catalog = [
+      {
+        provider: "demo",
+        id: "demo-model",
+        name: "Demo",
+        reasoning: false,
+      },
+    ];
+
+    expect(listThinkingLevels("demo", "demo-model", catalog)).toEqual(["off"]);
+  });
+
   it("treats catalog reasoning=false as an explicit thinking opt-out", () => {
     providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
       levels: [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }],

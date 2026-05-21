@@ -425,6 +425,30 @@ describe("buildOpenAIProvider", () => {
         } as never)
         ?.levels.map((level) => level.id),
     ).toContain("xhigh");
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "openai",
+        modelId: "gpt-5.5",
+      } as never)?.overridesCatalogReasoning,
+    ).toBe(true);
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "openai",
+        modelId: "gpt-5-chat-latest",
+      } as never)?.overridesCatalogReasoning,
+    ).toBeUndefined();
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "openai",
+        modelId: "gpt-5.2-chat-latest",
+      } as never)?.overridesCatalogReasoning,
+    ).toBe(true);
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "openai",
+        modelId: "gpt-5.3-chat-latest",
+      } as never)?.overridesCatalogReasoning,
+    ).toBeUndefined();
 
     const entries = provider.augmentModelCatalog?.({
       env: process.env,

@@ -55,6 +55,7 @@ type RankedThinkingLevelOption = ThinkingLevelOption & {
 type ResolvedThinkingProfile = {
   levels: RankedThinkingLevelOption[];
   defaultLevel?: ThinkLevel | null;
+  overridesCatalogReasoning?: boolean;
 };
 
 function resolveThinkingPolicyContext(params: {
@@ -113,7 +114,11 @@ function normalizeThinkingProfile(profile: ProviderThinkingProfile): ResolvedThi
     ? normalizeThinkLevel(profile.defaultLevel)
     : undefined;
   const defaultLevel = rawDefaultLevel && byId.has(rawDefaultLevel) ? rawDefaultLevel : undefined;
-  return { levels, defaultLevel };
+  return {
+    levels,
+    defaultLevel,
+    overridesCatalogReasoning: profile.overridesCatalogReasoning === true,
+  };
 }
 
 function buildBaseThinkingProfile(defaultLevel?: ThinkLevel | null): ResolvedThinkingProfile {
@@ -166,18 +171,23 @@ export function resolveThinkingProfile(params: {
     modelId: context.modelId,
     reasoning: context.reasoning,
   };
-  if (context.reasoning === false) {
-    return buildOffOnlyThinkingProfile();
-  }
   const pluginProfile = resolveProviderThinkingProfile({
     provider: context.normalizedProvider,
     context: providerContext,
   });
-  if (pluginProfile) {
-    const normalized = normalizeThinkingProfile(pluginProfile);
-    if (normalized.levels.length > 0) {
-      return normalized;
-    }
+  const normalizedPluginProfile = pluginProfile ? normalizeThinkingProfile(pluginProfile) : null;
+  if (
+    normalizedPluginProfile &&
+    normalizedPluginProfile.levels.length > 0 &&
+    normalizedPluginProfile.overridesCatalogReasoning
+  ) {
+    return normalizedPluginProfile;
+  }
+  if (context.reasoning === false) {
+    return buildOffOnlyThinkingProfile();
+  }
+  if (normalizedPluginProfile && normalizedPluginProfile.levels.length > 0) {
+    return normalizedPluginProfile;
   }
 
   const defaultLevel = resolveProviderDefaultThinkingLevel({
