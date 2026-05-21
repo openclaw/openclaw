@@ -172,7 +172,12 @@ function probeLoginShellEnv(params: {
   env: NodeJS.ProcessEnv;
   timeoutMs?: number;
   exec?: typeof execFileSync;
+  platform?: NodeJS.Platform;
 }): LoginShellEnvProbeResult {
+  const platform = params.platform ?? process.platform;
+  if (platform === "win32") {
+    return { ok: true, shellEnv: new Map() };
+  }
   const exec = params.exec ?? execFileSync;
   const timeoutMs = resolveTimeoutMs(params.timeoutMs);
   const shell = resolveShell(params.env);
@@ -212,6 +217,7 @@ type ShellEnvFallbackOptions = {
   logger?: Pick<typeof console, "warn">;
   timeoutMs?: number;
   exec?: typeof execFileSync;
+  platform?: NodeJS.Platform;
 };
 
 function hasExplicitEnvBinding(env: NodeJS.ProcessEnv, key: string): boolean {
@@ -238,6 +244,7 @@ export function loadShellEnvFallback(opts: ShellEnvFallbackOptions): ShellEnvFal
     env: opts.env,
     timeoutMs: opts.timeoutMs,
     exec: opts.exec,
+    platform: opts.platform,
   });
   if (!probe.ok) {
     logger.warn(`[openclaw] shell env fallback failed: ${probe.error}`);
@@ -298,6 +305,7 @@ export function getShellPathFromLoginShell(opts: {
     env: opts.env,
     timeoutMs: opts.timeoutMs,
     exec: opts.exec,
+    platform: opts.platform,
   });
   if (!probe.ok) {
     cachedShellPath = null;
