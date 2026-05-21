@@ -17,6 +17,11 @@ import { createDiscordPayloadSendContext } from "./outbound-send-context.js";
 import { createDiscordSendReceipt } from "./send.receipt.js";
 import type { DiscordSendComponents, DiscordSendEmbeds } from "./send.shared.js";
 
+function isDiscordVoiceOutboundAdapterUnavailable(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("discordVoice outbound adapter is unavailable");
+}
+
 export async function sendDiscordOutboundPayload(params: {
   ctx: Parameters<NonNullable<ChannelOutboundAdapter["sendPayload"]>>[0];
   fallbackAdapter: ChannelOutboundAdapter;
@@ -30,16 +35,39 @@ export async function sendDiscordOutboundPayload(params: {
   const sendContext = await createDiscordPayloadSendContext(ctx);
 
   if (payload.audioAsVoice && mediaUrls.length > 0) {
-    let lastResult = await sendContext.withRetry(
-      async () =>
-        await sendContext.sendVoice(sendContext.target, mediaUrls[0], {
-          cfg: ctx.cfg,
-          replyTo: sendContext.resolveReplyTo(),
-          accountId: ctx.accountId ?? undefined,
-          silent: ctx.silent ?? undefined,
-        }),
-    );
-    if (payload.text?.trim()) {
+    const voiceReplyTo = sendContext.resolveReplyTo();
+    let usedTextFallback = false;
+    let lastResult = await (async () => {
+      try {
+        return await sendContext.withRetry(
+          async () =>
+            await sendContext.sendVoice(sendContext.target, mediaUrls[0], {
+              cfg: ctx.cfg,
+              replyTo: voiceReplyTo,
+              accountId: ctx.accountId ?? undefined,
+              silent: ctx.silent ?? undefined,
+            }),
+        );
+      } catch (error) {
+        if (!payload.text?.trim() || !isDiscordVoiceOutboundAdapterUnavailable(error)) {
+          throw error;
+        }
+        usedTextFallback = true;
+        return await sendContext.withRetry(
+          async () =>
+            await sendContext.send(sendContext.target, payload.text, {
+              verbose: false,
+              replyTo: voiceReplyTo,
+              replyToId: voiceReplyTo,
+              accountId: ctx.accountId ?? undefined,
+              silent: ctx.silent ?? undefined,
+              cfg: ctx.cfg,
+              ...sendContext.formatting,
+            }),
+        );
+      }
+    })();
+    if (!usedTextFallback && payload.text?.trim()) {
       lastResult = await sendContext.withRetry(
         async () =>
           await sendContext.send(sendContext.target, payload.text, {

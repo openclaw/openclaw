@@ -43,6 +43,7 @@ type DiscordSendOpts = {
   verbose?: boolean;
   rest?: RequestClient;
   replyTo?: string;
+  replyToId?: string;
   retry?: RetryConfig;
   textLimit?: number;
   maxLinesPerMessage?: number;
@@ -181,6 +182,7 @@ export async function sendMessageDiscord(
     mentionAliases: accountInfo.config.mentionAliases,
   });
   const { token, rest, request } = createDiscordClient({ ...opts, cfg });
+  const replyTo = opts.replyTo ?? opts.replyToId;
   const recipient = await parseAndResolveRecipient(to, cfg, opts.accountId);
   const { channelId } = await resolveChannelId(rest, recipient, request);
 
@@ -327,7 +329,7 @@ export async function sendMessageDiscord(
         opts.mediaLocalRoots,
         opts.mediaReadFile,
         mediaMaxBytes,
-        opts.replyTo,
+        replyTo,
         request,
         maxLinesPerMessage,
         opts.components,
@@ -342,7 +344,7 @@ export async function sendMessageDiscord(
         rest,
         channelId,
         textWithMentions,
-        opts.replyTo,
+        replyTo,
         request,
         maxLinesPerMessage,
         opts.components,
@@ -370,7 +372,7 @@ export async function sendMessageDiscord(
   });
   return toDiscordSendResult(result, channelId, {
     kind: opts.mediaUrl ? "media" : opts.components || opts.embeds ? "card" : "text",
-    replyToId: opts.replyTo,
+    replyToId: replyTo,
   });
 }
 

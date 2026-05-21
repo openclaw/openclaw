@@ -360,6 +360,52 @@ describe("discordOutbound", () => {
     });
   });
 
+  it("falls back to Discord text when the discordVoice adapter dep is unavailable", async () => {
+    const unavailableVoice = vi.fn(async () => {
+      throw new Error("discordVoice outbound adapter is unavailable.");
+    });
+    const sendDiscord = vi.fn(async () => ({
+      messageId: "fallback-text-1",
+      channelId: "ch-1",
+    }));
+
+    const result = await discordOutbound.sendPayload?.({
+      cfg: {},
+      to: "channel:123456",
+      text: "",
+      payload: {
+        text: "Cron summary delivered as text.",
+        mediaUrl: "file:///tmp/openclaw-cron-tts.ogg",
+        audioAsVoice: true,
+        spokenText: "Cron summary delivered as text.",
+      },
+      deps: {
+        discord: sendDiscord,
+        discordVoice: unavailableVoice,
+      },
+      accountId: "default",
+      replyToId: "reply-1",
+      replyToMode: "first",
+    });
+
+    expect(unavailableVoice).toHaveBeenCalledTimes(1);
+    expect(hoisted.sendVoiceMessageDiscordMock).not.toHaveBeenCalled();
+    expect(hoisted.sendMessageDiscordMock).not.toHaveBeenCalled();
+    const messageCall = mockCall(sendDiscord, "sendDiscord");
+    expect(messageCall[0]).toBe("channel:123456");
+    expect(messageCall[1]).toBe("Cron summary delivered as text.");
+    const messageOptions = mockObjectArg(sendDiscord, "sendDiscord", 0, 2);
+    expect(messageOptions.mediaUrl).toBeUndefined();
+    expect(messageOptions.accountId).toBe("default");
+    expect(messageOptions.replyTo).toBe("reply-1");
+    expect(messageOptions.replyToId).toBe("reply-1");
+    expect(result).toEqual({
+      channel: "discord",
+      messageId: "fallback-text-1",
+      channelId: "ch-1",
+    });
+  });
+
   it("keeps replyToId on every internal audioAsVoice send when replyToMode is all", async () => {
     await discordOutbound.sendPayload?.({
       cfg: {},
