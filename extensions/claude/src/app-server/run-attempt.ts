@@ -144,13 +144,13 @@ export async function runClaudeAppServerAttempt(
       shouldPromote: hasBeforeToolCallPolicy(),
     });
 
-    // 2. Materialize OpenClaw's tool registry for this turn.
-    const tools = await buildTools(params, { sandbox, resolvedWorkspace, effectiveWorkspace });
-
-    // 3. Resolve hook channel/messageProvider off the sandbox session key so
+    // 2. Resolve hook channel/messageProvider off the sandbox session key so
     //    before/after tool hooks, loop detection, provenance, and group/
     //    channel policy resolution all see the right context — codex pattern
     //    from extensions/codex/src/app-server/run-attempt.ts:resolveCodexAppServerHookChannelId.
+    //    Computed before buildTools so createOpenClawCodingTools sees the
+    //    sandbox-resolved channel id (the tool wrapper falls back to
+    //    currentChannelId otherwise — Tank P2 review).
     const hookChannelFields = buildAgentHookContextChannelFields({
       sessionKey: sandboxSessionKey,
       messageChannel: params.messageChannel,
@@ -166,6 +166,14 @@ export async function runClaudeAppServerAttempt(
       runId: params.runId,
       channelId: hookChannelFields.channelId,
     };
+
+    // 3. Materialize OpenClaw's tool registry for this turn.
+    const tools = await buildTools(params, {
+      sandbox,
+      resolvedWorkspace,
+      effectiveWorkspace,
+      hookChannelId: hookChannelFields.channelId,
+    });
 
     // 4. Project to DynamicToolSpec[] + register the server→client tool-call bridge.
     const bridge = createClaudeDynamicToolBridge({
@@ -338,6 +346,14 @@ async function buildTools(
     sandbox: Awaited<ReturnType<typeof resolveSandboxContext>>;
     resolvedWorkspace: string;
     effectiveWorkspace: string;
+    /**
+     * Sandbox-resolved channel id from buildAgentHookContextChannelFields.
+     * Forwarded as `hookChannelId` to createOpenClawCodingTools so the tool
+     * wrapper's before/after-hook context uses the sandboxed channel, not
+     * the raw `currentChannelId` it would otherwise fall back to. Codex
+     * does the same at run-attempt.ts:3303.
+     */
+    hookChannelId?: string;
   },
 ) {
   // Gate the entire tool surface up front, mirroring codex/run-attempt.ts:3246.
@@ -391,6 +407,7 @@ async function buildTools(
     modelContextWindowTokens: params.model.contextWindow,
     modelHasVision,
     currentChannelId: params.currentChannelId,
+    hookChannelId: context.hookChannelId,
     currentThreadTs: params.currentThreadTs,
     currentMessageId: params.currentMessageId,
     replyToMode: params.replyToMode,
@@ -548,6 +565,13 @@ async function ensureThread(
   if (existing) {
     if (existing.approvalPolicy !== cfg.appServer.approvalPolicy) {
       rotationReason = `approvalPolicy ${existing.approvalPolicy ?? "unset"} → ${cfg.appServer.approvalPolicy}`;
+    } else if (existing.cwd && existing.cwd !== effectiveWorkspace) {
+      // Pre-effectiveWorkspace bindings (and any cross-sandbox-shift case)
+      // would otherwise resume with stale cwd. The openclaw-claude server
+      // pins sdkOptions.cwd from meta.cwd at resume time and ignores
+      // turn/start.cwd updates, so the only way to give native tools the
+      // right workspace on resume is to rotate. Tank P1/P2 review.
+      rotationReason = `cwd ${existing.cwd} → ${effectiveWorkspace}`;
     } else if (
       existing.developerInstructionsFingerprint &&
       existing.developerInstructionsFingerprint !== developerInstructionsFingerprint
@@ -1146,6 +1170,25 @@ function safeStringify(value: unknown): string {
   }
 }
 
+// Detect whether a BeforeToolCall hook rewrote the approval params.
+// Mirrors codex/approval-bridge.ts:531 (toolPolicyParamsWereRewritten).
+// Used by registerApprovalHandler to decline when the policy expected a
+// param rewrite that the SDK's approve/decline-only response can't carry.
+function approvalParamsWereRewritten(original: unknown, candidate: unknown): boolean {
+  if (candidate === original) return false;
+  const a = stableJsonText(original);
+  const b = stableJsonText(candidate);
+  return !b || a !== b;
+}
+
+function stableJsonText(value: unknown): string | undefined {
+  try {
+    return JSON.stringify(stabilizeJson(value));
+  } catch {
+    return undefined;
+  }
+}
+
 // ─── Native (claude_code preset) tool policy projection ────────────────────
 
 // Comprehensive list of native tools the Claude Code preset exposes. Listed
@@ -1199,14 +1242,12 @@ export const NATIVE_TOOLS_FULL_SET = [
 function computeNativeDisallowedTools(params: EmbeddedRunAttemptParams): string[] {
   // disableTools = hard-block everything native.
   if (params.disableTools) return NATIVE_TOOLS_FULL_SET;
-  // toolsAllow restricts the surface to a specific set of openclaw tool
-  // names. If it's wildcard / empty / undefined, no implication for native
-  // tools. If it's a real allowlist, treat it as restrictive of the WHOLE
-  // surface — block all native tools so the model has only the allowed
-  // openclaw subset. (Codex doesn't have native tools so this case doesn't
-  // arise there; for Claude we have to make the call.)
-  if (Array.isArray(params.toolsAllow) && params.toolsAllow.length > 0) {
-    if (params.toolsAllow.some((n) => n.trim() === "*")) return [];
+  // ANY toolsAllow present (even []) is restrictive of the whole tool
+  // surface. `toolsAllow: []` is the documented "block all tools" form;
+  // letting native Bash/Read/Edit through in that case would be a silent
+  // policy bypass. The only escape is an explicit wildcard.
+  if (Array.isArray(params.toolsAllow)) {
+    if (params.toolsAllow.some((n) => normalizeToolName(n) === "*")) return [];
     return NATIVE_TOOLS_FULL_SET;
   }
   return [];
@@ -1262,6 +1303,18 @@ function registerApprovalHandler(
         return {
           decision: "decline",
           reason: outcome.reason || `OpenClaw policy declined ${toolName}`,
+        } as unknown as JsonValue;
+      }
+      // If the policy hook rewrote params, the SDK's approval response
+      // can't carry the rewrite (only approve/decline). Codex's
+      // approval-bridge declines in this case rather than approving the
+      // original input — a sanitizing policy that asked for a rewrite
+      // would otherwise silently fail open. See
+      // extensions/codex/src/app-server/approval-bridge.ts:353.
+      if ("params" in outcome && approvalParamsWereRewritten(toolInput, outcome.params)) {
+        return {
+          decision: "decline",
+          reason: `OpenClaw tool policy rewrote ${toolName} approval params; refusing original request.`,
         } as unknown as JsonValue;
       }
       return { decision: "approve" } as unknown as JsonValue;
