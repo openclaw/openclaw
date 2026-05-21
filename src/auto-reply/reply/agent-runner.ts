@@ -1602,31 +1602,10 @@ export async function runReplyAgent(params: {
         `Role ordering conflict (${reason}). Restarting session ${sessionKey} -> ${nextSessionId}.`,
       cleanupTranscripts: true,
     });
-  const prePreflightCompactionCount = activeSessionEntry?.compactionCount ?? 0;
   let preflightCompactionApplied;
 
   try {
     await typingSignals.signalRunStart();
-
-    activeSessionEntry = await traceAgentPhase("reply.preflight_compaction", () =>
-      runPreflightCompactionIfNeeded({
-        cfg,
-        followupRun,
-        promptForEstimate: followupRun.prompt,
-        defaultModel,
-        agentCfgContextTokens,
-        sessionEntry: activeSessionEntry,
-        sessionStore: activeSessionStore,
-        sessionKey,
-        runtimePolicySessionKey,
-        storePath,
-        isHeartbeat,
-        replyOperation,
-        onCompactionNotice: sendDirectCompactionNotice,
-      }),
-    );
-    preflightCompactionApplied =
-      (activeSessionEntry?.compactionCount ?? 0) > prePreflightCompactionCount;
 
     const memoryFlushResult = await traceAgentPhase("reply.memory_flush", () =>
       runMemoryFlushIfNeeded({
@@ -1670,6 +1649,27 @@ export async function runReplyAgent(params: {
         replyOperation.updateSessionId(activeSessionEntry.sessionId);
       }
     }
+
+    const prePreflightCompactionCount = activeSessionEntry?.compactionCount ?? 0;
+    activeSessionEntry = await traceAgentPhase("reply.preflight_compaction", () =>
+      runPreflightCompactionIfNeeded({
+        cfg,
+        followupRun,
+        promptForEstimate: followupRun.prompt,
+        defaultModel,
+        agentCfgContextTokens,
+        sessionEntry: activeSessionEntry,
+        sessionStore: activeSessionStore,
+        sessionKey,
+        runtimePolicySessionKey,
+        storePath,
+        isHeartbeat,
+        replyOperation,
+        onCompactionNotice: sendDirectCompactionNotice,
+      }),
+    );
+    preflightCompactionApplied =
+      (activeSessionEntry?.compactionCount ?? 0) > prePreflightCompactionCount;
 
     // Exhausted background maintenance is non-terminal: optionally notify, then reply normally.
     if (memoryFlushResult.outcome === "exhausted") {
