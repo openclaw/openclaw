@@ -186,6 +186,12 @@ export const doctorHealthConversionRules = [
     rule: "Validate active agent tool schemas against the runtime tool projection path and report fatal schema blockers before a turn starts.",
   },
   {
+    contributionId: "doctor:wsl-environment",
+    conversion: "detect-only",
+    target: ["doctor-run/wsl-environment"],
+    rule: "Detect WSL2 systemd/resource/kernel issues as informational findings via note(); no repair (config changes live in Windows .wslconfig outside OpenClaw's control).",
+  },
+  {
     contributionId: "doctor:systemd-linger",
     conversion: "interactive-maintenance",
     target: ["core/doctor/systemd-linger"],
