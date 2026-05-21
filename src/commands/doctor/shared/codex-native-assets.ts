@@ -181,7 +181,7 @@ function plural(count: number, singular: string): string {
   return `${count} ${singular}${count === 1 ? "" : "s"}`;
 }
 
-export async function collectCodexNativeAssetWarnings(params: {
+export async function collectCodexNativeAssetInfoNotes(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): Promise<string[]> {

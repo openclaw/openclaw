@@ -251,8 +251,14 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     });
   } else {
     const { collectDoctorPreviewWarnings } = await import("./doctor/shared/preview-warnings.js");
+    const { collectCodexNativeAssetInfoNotes } =
+      await import("./doctor/shared/codex-native-assets.js");
     emitDoctorNotes({
       note,
+      infoNotes: await collectCodexNativeAssetInfoNotes({
+        cfg: candidate,
+        env: process.env,
+      }),
       warningNotes: await collectDoctorPreviewWarnings({
         cfg: candidate,
         doctorFixCommand,

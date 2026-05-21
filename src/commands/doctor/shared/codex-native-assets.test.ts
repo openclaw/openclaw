@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { collectCodexNativeAssetWarnings, scanCodexNativeAssets } from "./codex-native-assets.js";
+import { collectCodexNativeAssetInfoNotes, scanCodexNativeAssets } from "./codex-native-assets.js";
 
 const tempRoots = new Set<string>();
 
@@ -107,18 +107,18 @@ describe("scanCodexNativeAssets", () => {
   });
 });
 
-describe("collectCodexNativeAssetWarnings", () => {
-  it("points users at explicit Codex migration instead of auto-copying native assets", async () => {
+describe("collectCodexNativeAssetInfoNotes", () => {
+  it("points users at explicit Codex migration without classifying native assets as warnings", async () => {
     const root = await makeTempRoot();
     const codexHome = path.join(root, ".codex");
     await writeFile(path.join(root, ".agents", "skills", "agent-helper", "SKILL.md"));
 
-    const warnings = await collectCodexNativeAssetWarnings({
+    const infoNotes = await collectCodexNativeAssetInfoNotes({
       cfg: codexConfig(),
       env: { CODEX_HOME: codexHome, HOME: root },
     });
 
-    expect(warnings).toStrictEqual([
+    expect(infoNotes).toStrictEqual([
       [
         "- Personal Codex CLI assets were found, but native Codex-mode OpenClaw agents use isolated per-agent Codex homes.",
         `- Sources: ${codexHome} and ${path.join(root, ".agents", "skills")} (1 skill, 0 plugins, 0 config files, 0 hook files).`,

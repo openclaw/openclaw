@@ -8,12 +8,14 @@ describe("doctor note emission", () => {
     emitDoctorNotes({
       note,
       changeNotes: ["change one", "change two"],
+      infoNotes: ["info one"],
       warningNotes: ["warning one"],
     });
 
     expect(note.mock.calls).toEqual([
       ["change one", "Doctor changes"],
       ["change two", "Doctor changes"],
+      ["info one", "Doctor info"],
       ["warning one", "Doctor warnings"],
     ]);
   });
@@ -52,7 +54,7 @@ describe("doctor note emission", () => {
     const note = vi.fn();
 
     emitDoctorNotes({ note });
-    emitDoctorNotes({ note, changeNotes: [], warningNotes: [] });
+    emitDoctorNotes({ note, changeNotes: [], infoNotes: [], warningNotes: [] });
 
     expect(note).not.toHaveBeenCalled();
   });
