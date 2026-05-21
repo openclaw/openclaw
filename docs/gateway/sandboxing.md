@@ -101,9 +101,10 @@ If you deploy the OpenClaw Gateway itself as a Docker container, it orchestrates
 - **Codex code mode**: When an OpenClaw sandbox is active, OpenClaw disables Codex app-server native Code Mode, user MCP servers, and app-backed plugin execution for that turn because those native surfaces run from the Gateway-host app-server process instead of the OpenClaw sandbox backend. Shell access is exposed through OpenClaw sandbox-backed tools such as `sandbox_exec` and `sandbox_process` when the normal exec/process tools are available. Do not mount the host Docker socket into agent sandbox containers or custom Codex sandboxes.
 
 On Ubuntu/AppArmor hosts, Codex `workspace-write` can fail before shell startup
-when the service user is not allowed to create unprivileged user namespaces.
-When Docker sandbox egress is disabled (`network: "none"`, the default),
-Codex also needs an unprivileged network namespace. Common symptoms are
+when you intentionally run native Codex `workspace-write` without active
+OpenClaw sandboxing and the service user is not allowed to create unprivileged
+user namespaces. When Docker sandbox egress is disabled (`network: "none"`, the
+default), Codex also needs an unprivileged network namespace. Common symptoms are
 `bwrap: setting up uid map: Permission denied` and
 `bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted`. Run
 `openclaw doctor`; if it reports a Codex bwrap namespace probe failure, prefer
