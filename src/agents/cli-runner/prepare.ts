@@ -5,7 +5,9 @@ import { ensureMcpLoopbackServer } from "../../gateway/mcp-http.js";
 import {
   createMcpLoopbackServerConfig,
   getActiveMcpLoopbackRuntime,
+  resolveMcpLoopbackBearerToken,
 } from "../../gateway/mcp-http.loopback-runtime.js";
+import { resolveMcpLoopbackScopedTools } from "../../gateway/mcp-http.runtime.js";
 import { isClaudeCliProvider } from "../../plugin-sdk/anthropic-cli.js";
 import type {
   CliBackendAuthEpochMode,
@@ -67,6 +69,8 @@ const prepareDeps = {
   getActiveMcpLoopbackRuntime,
   ensureMcpLoopbackServer,
   createMcpLoopbackServerConfig,
+  resolveMcpLoopbackBearerToken,
+  resolveMcpLoopbackScopedTools,
   resolveOpenClawReferencePaths: async (
     params: Parameters<typeof import("../docs-path.js").resolveOpenClawReferencePaths>[0],
   ) => (await import("../docs-path.js")).resolveOpenClawReferencePaths(params),
@@ -221,10 +225,10 @@ export async function prepareCliRunContext(
       : undefined,
     env: mcpLoopbackRuntime
       ? {
-          OPENCLAW_MCP_TOKEN:
-            params.senderIsOwner === true
-              ? mcpLoopbackRuntime.ownerToken
-              : mcpLoopbackRuntime.nonOwnerToken,
+          OPENCLAW_MCP_TOKEN: prepareDeps.resolveMcpLoopbackBearerToken(
+            mcpLoopbackRuntime,
+            params.senderIsOwner === true,
+          ),
           OPENCLAW_MCP_AGENT_ID: sessionAgentId ?? "",
           OPENCLAW_MCP_ACCOUNT_ID: params.agentAccountId ?? "",
           OPENCLAW_MCP_SESSION_KEY: params.sessionKey ?? "",
@@ -282,6 +286,21 @@ export async function prepareCliRunContext(
     ...(preparedBackendEnv ? { env: preparedBackendEnv } : {}),
     ...(preparedBackendCleanup ? { cleanup: preparedBackendCleanup } : {}),
   };
+  const promptTools =
+    bundleMcpEnabled && mcpLoopbackRuntime
+      ? prepareDeps.resolveMcpLoopbackScopedTools({
+          cfg: params.config ?? getRuntimeConfig(),
+          sessionKey: params.sessionKey ?? "",
+          messageProvider: params.messageChannel ?? params.messageProvider,
+          accountId: params.agentAccountId,
+          inboundEventKind: params.currentInboundEventKind,
+          senderIsOwner: params.senderIsOwner,
+        }).tools
+      : [];
+  const promptToolNamesHash =
+    bundleMcpEnabled && mcpLoopbackRuntime
+      ? hashCliSessionText(JSON.stringify(promptTools.map((tool) => tool.name).toSorted()))
+      : undefined;
   // Pre-flight: if a saved Claude CLI sessionId points at a transcript that no
   // longer exists on disk (e.g. update.run aborted mid-swap, Claude CLI was
   // reinstalled, or the projects tree was manually pruned), `claude --resume`
@@ -306,6 +325,7 @@ export async function prepareCliRunContext(
           authEpoch,
           authEpochVersion: CLI_AUTH_EPOCH_VERSION,
           extraSystemPromptHash,
+          promptToolNamesHash,
           mcpConfigHash: preparedBackendFinal.mcpConfigHash,
           mcpResumeHash: preparedBackendFinal.mcpResumeHash,
         })
@@ -362,7 +382,7 @@ export async function prepareCliRunContext(
       docsPath: openClawReferences.docsPath ?? undefined,
       sourcePath: openClawReferences.sourcePath ?? undefined,
       skillsPrompt,
-      tools: [],
+      tools: promptTools,
       contextFiles,
       modelDisplay,
       agentId: sessionAgentId,
@@ -471,7 +491,7 @@ export async function prepareCliRunContext(
     bootstrapFiles,
     injectedFiles: contextFiles,
     skillsPrompt,
-    tools: [],
+    tools: promptTools,
     currentTurn: {
       ...(params.currentInboundEventKind ? { kind: params.currentInboundEventKind } : {}),
       promptChars: preparedPrompt.length,
@@ -530,6 +550,7 @@ export async function prepareCliRunContext(
       authEpoch,
       authEpochVersion: CLI_AUTH_EPOCH_VERSION,
       extraSystemPromptHash,
+      promptToolNamesHash,
     };
   } catch (err) {
     try {

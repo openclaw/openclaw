@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../../../auto-reply/heartbeat.js";
 import type { OpenClawConfig } from "../../../config/types.js";
 import { buildMemorySystemPromptAddition } from "../../../context-engine/delegate.js";
 import {
@@ -392,6 +393,294 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     }
   });
 
+  it("filters heartbeat response-tool transcript artifacts before normal prompt snapshots", async () => {
+    const contextEngine = createContextEngineBootstrapAndAssemble();
+    const sessionMessages = [
+      { role: "user", content: HEARTBEAT_TRANSCRIPT_PROMPT, timestamp: 1 },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_bash",
+            name: "bash",
+            arguments: { command: "cat HEARTBEAT.md" },
+          },
+        ],
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_bash",
+        content: [{ type: "text", text: "HEARTBEAT.md says stay quiet" }],
+        timestamp: 3,
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_heartbeat",
+            name: "heartbeat_respond",
+            arguments: {
+              outcome: "no_change",
+              notify: false,
+              summary: "No visible update.",
+            },
+          },
+        ],
+        timestamp: 4,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_heartbeat",
+        content: [{ type: "text", text: '{"notify":false}' }],
+        timestamp: 5,
+      },
+      { role: "assistant", content: "No visible update. notify=false", timestamp: 6 },
+    ] as AgentMessage[];
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine,
+      sessionKey,
+      tempPaths,
+      sessionMessages,
+      attemptOverrides: {
+        prompt: "what model are you",
+        transcriptPrompt: "what model are you",
+      },
+      sessionPrompt: async (session) => {
+        session.messages = [
+          ...session.messages,
+          { role: "assistant", content: "gpt-test", timestamp: 7 },
+        ];
+      },
+    });
+
+    const assembleInput = contextEngine.assemble.mock.calls.at(0)?.[0];
+    const assembledMessagesJson = JSON.stringify(assembleInput?.messages ?? []);
+    const snapshotJson = JSON.stringify(result.messagesSnapshot);
+    for (const artifact of [
+      "HEARTBEAT.md",
+      "heartbeat_respond",
+      "notify=false",
+      '"notify":false',
+      HEARTBEAT_TRANSCRIPT_PROMPT,
+    ]) {
+      expect(assembledMessagesJson).not.toContain(artifact);
+      expect(snapshotJson).not.toContain(artifact);
+    }
+    expect(result.finalPromptText).toBe("what model are you");
+  });
+
+  it("filters interrupted prompt-only heartbeat artifacts before normal prompt snapshots", async () => {
+    const contextEngine = createContextEngineBootstrapAndAssemble();
+    const sessionMessages = [
+      { role: "user", content: HEARTBEAT_TRANSCRIPT_PROMPT, timestamp: 1 },
+    ] as AgentMessage[];
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine,
+      sessionKey,
+      tempPaths,
+      sessionMessages,
+      attemptOverrides: {
+        prompt: "what model are you",
+        transcriptPrompt: "what model are you",
+      },
+      sessionPrompt: async (session) => {
+        session.messages = [
+          ...session.messages,
+          { role: "assistant", content: "gpt-test", timestamp: 2 },
+        ];
+      },
+    });
+
+    const assembleInput = contextEngine.assemble.mock.calls.at(0)?.[0];
+    const assembledMessagesJson = JSON.stringify(assembleInput?.messages ?? []);
+    const snapshotJson = JSON.stringify(result.messagesSnapshot);
+    expect(assembledMessagesJson).not.toContain(HEARTBEAT_TRANSCRIPT_PROMPT);
+    expect(snapshotJson).not.toContain(HEARTBEAT_TRANSCRIPT_PROMPT);
+    expect(result.finalPromptText).toBe("what model are you");
+  });
+
+  it("filters pending notify=true heartbeat response-tool calls before normal prompt snapshots", async () => {
+    const contextEngine = createContextEngineBootstrapAndAssemble();
+    const sessionMessages = [
+      { role: "user", content: HEARTBEAT_TRANSCRIPT_PROMPT, timestamp: 1 },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_heartbeat",
+            name: "heartbeat_respond",
+            arguments: {
+              outcome: "needs_attention",
+              notify: true,
+              summary: "Build is blocked.",
+              notificationText: "Build is blocked on missing credentials.",
+            },
+          },
+        ],
+        timestamp: 2,
+      },
+    ] as AgentMessage[];
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine,
+      sessionKey,
+      tempPaths,
+      sessionMessages,
+      attemptOverrides: {
+        prompt: "what model are you",
+        transcriptPrompt: "what model are you",
+      },
+      sessionPrompt: async (session) => {
+        session.messages = [
+          ...session.messages,
+          { role: "assistant", content: "gpt-test", timestamp: 3 },
+        ];
+      },
+    });
+
+    const assembleInput = contextEngine.assemble.mock.calls.at(0)?.[0];
+    const assembledMessagesJson = JSON.stringify(assembleInput?.messages ?? []);
+    const snapshotJson = JSON.stringify(result.messagesSnapshot);
+    for (const artifact of [
+      HEARTBEAT_TRANSCRIPT_PROMPT,
+      "heartbeat_respond",
+      '"notify":true',
+      "Build is blocked on missing credentials.",
+    ]) {
+      expect(assembledMessagesJson).not.toContain(artifact);
+      expect(snapshotJson).not.toContain(artifact);
+    }
+    expect(result.finalPromptText).toBe("what model are you");
+  });
+
+  it("preserves visible heartbeat alerts in normal prompt snapshots", async () => {
+    const contextEngine = createContextEngineBootstrapAndAssemble();
+    const sessionMessages = [
+      { role: "user", content: HEARTBEAT_TRANSCRIPT_PROMPT, timestamp: 1 },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_bash",
+            name: "bash",
+            arguments: { command: "cat HEARTBEAT.md" },
+          },
+        ],
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_bash",
+        content: [{ type: "text", text: "HEARTBEAT.md says check deployment" }],
+        timestamp: 3,
+      },
+      {
+        role: "assistant",
+        content: "Build is blocked on a failing release check.",
+        timestamp: 4,
+      },
+    ] as AgentMessage[];
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine,
+      sessionKey,
+      tempPaths,
+      sessionMessages,
+      attemptOverrides: {
+        prompt: "what changed while I was away?",
+        transcriptPrompt: "what changed while I was away?",
+      },
+      sessionPrompt: async (session) => {
+        session.messages = [
+          ...session.messages,
+          { role: "assistant", content: "gpt-test", timestamp: 5 },
+        ];
+      },
+    });
+
+    const assembleInput = contextEngine.assemble.mock.calls.at(0)?.[0];
+    const assembledMessagesJson = JSON.stringify(assembleInput?.messages ?? []);
+    const snapshotJson = JSON.stringify(result.messagesSnapshot);
+    for (const visibleContext of [
+      HEARTBEAT_TRANSCRIPT_PROMPT,
+      "HEARTBEAT.md says check deployment",
+      "Build is blocked on a failing release check.",
+    ]) {
+      expect(assembledMessagesJson).toContain(visibleContext);
+      expect(snapshotJson).toContain(visibleContext);
+    }
+    expect(result.finalPromptText).toBe("what changed while I was away?");
+  });
+
+  it("preserves visible heartbeat response-tool notifications in normal prompt snapshots", async () => {
+    const contextEngine = createContextEngineBootstrapAndAssemble();
+    const sessionMessages = [
+      { role: "user", content: HEARTBEAT_TRANSCRIPT_PROMPT, timestamp: 1 },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_heartbeat",
+            name: "heartbeat_respond",
+            arguments: {
+              outcome: "needs_attention",
+              notify: true,
+              summary: "Build is blocked.",
+              notificationText: "Build is blocked on missing credentials.",
+            },
+          },
+        ],
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_heartbeat",
+        content: [{ type: "text", text: '{"notify":true}' }],
+        timestamp: 3,
+      },
+      { role: "assistant", content: "HEARTBEAT_OK", timestamp: 4 },
+    ] as AgentMessage[];
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine,
+      sessionKey,
+      tempPaths,
+      sessionMessages,
+      attemptOverrides: {
+        prompt: "what changed while I was away?",
+        transcriptPrompt: "what changed while I was away?",
+      },
+      sessionPrompt: async (session) => {
+        session.messages = [
+          ...session.messages,
+          { role: "assistant", content: "gpt-test", timestamp: 5 },
+        ];
+      },
+    });
+
+    const assembleInput = contextEngine.assemble.mock.calls.at(0)?.[0];
+    const assembledMessagesJson = JSON.stringify(assembleInput?.messages ?? []);
+    const snapshotJson = JSON.stringify(result.messagesSnapshot);
+    for (const visibleContext of [
+      "heartbeat_respond",
+      '"notify":true',
+      "Build is blocked on missing credentials.",
+      "HEARTBEAT_OK",
+    ]) {
+      expect(assembledMessagesJson).toContain(visibleContext);
+      expect(snapshotJson).toContain(visibleContext);
+    }
+    expect(result.finalPromptText).toBe("what changed while I was away?");
+  });
+
   it("rebuilds skill prompt inputs from the sandbox workspace for non-rw sandbox runs", async () => {
     const sandboxWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sandbox-skills-"));
     tempPaths.push(sandboxWorkspace);
@@ -744,8 +1033,8 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(promptSubmitted?.data?.prompt).not.toContain("secret runtime context");
   });
 
-  it("marks inter-session transcriptPrompt before submitting the visible prompt", async () => {
-    let seenPrompt: string | undefined;
+  it("keeps inter-session provenance hidden while submitting the visible prompt", async () => {
+    const seen: { prompt?: string; messages?: unknown[] } = {};
 
     const result = await createContextEngineAttemptRunner({
       contextEngine: createContextEngineBootstrapAndAssemble(),
@@ -767,7 +1056,8 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
         },
       },
       sessionPrompt: async (session, prompt) => {
-        seenPrompt = prompt;
+        seen.prompt = prompt;
+        seen.messages = [...session.messages];
         session.messages = [
           ...session.messages,
           { role: "assistant", content: "done", timestamp: 2 },
@@ -775,10 +1065,17 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       },
     });
 
-    expect(seenPrompt).toMatch(/^\[Inter-session message\]/);
-    expect(seenPrompt).toContain("isUser=false");
-    expect(seenPrompt).toContain("visible ask");
-    expect(result.finalPromptText).toBe(seenPrompt);
+    expect(seen.prompt).toBe("visible ask");
+    expect(result.finalPromptText).toBe("visible ask");
+    const runtimeContext = findRecord(
+      requireRecords(seen.messages, "seen messages"),
+      (message) => message.customType === "openclaw.runtime-context",
+      "runtime context message",
+    );
+    expect(runtimeContext.content).toContain("[Inter-session message]");
+    expect(runtimeContext.content).toContain("isUser=false");
+    expect(runtimeContext.content).not.toContain("visible ask");
+    expect(runtimeContext.content).toContain("secret runtime context");
   });
 
   it("submits runtime-only context through system prompt without visible prompt", async () => {
@@ -819,6 +1116,54 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     const contextCompiled = trajectoryEvents.find((event) => event.type === "context.compiled");
     expect(contextCompiled?.data?.prompt).toBe("Continue the OpenClaw runtime event.");
     expect(contextCompiled?.data?.systemPrompt).toContain("internal heartbeat event");
+  });
+
+  it("keeps current inbound context visible on runtime-only turns", async () => {
+    let seenPrompt: string | undefined;
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      trajectory: true,
+      attemptOverrides: {
+        prompt: "runtime bare mention event",
+        transcriptPrompt: "",
+        currentInboundContext: {
+          text: [
+            "Reply target of current user message (untrusted, for context):",
+            "```json",
+            JSON.stringify(
+              { sender_label: "Alice", body: "Hello from the replied message" },
+              null,
+              2,
+            ),
+            "```",
+          ].join("\n"),
+        },
+      },
+      sessionPrompt: async (session, prompt) => {
+        seenPrompt = prompt;
+        session.messages = [
+          ...session.messages,
+          { role: "assistant", content: "done", timestamp: 2 },
+        ];
+      },
+    });
+
+    expect(seenPrompt).toContain("Reply target of current user message (untrusted, for context):");
+    expect(seenPrompt).toContain("Hello from the replied message");
+    expect(seenPrompt).toContain("Continue the OpenClaw runtime event.");
+    expect(result.finalPromptText).toBe(seenPrompt);
+    const trajectoryEvents = (
+      await fs.readFile(path.join(tempPaths[0] ?? "", "session.trajectory.jsonl"), "utf8")
+    )
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as TrajectoryEvent);
+    const contextCompiled = trajectoryEvents.find((event) => event.type === "context.compiled");
+    expect(contextCompiled?.data?.prompt).toContain("Hello from the replied message");
+    expect(contextCompiled?.data?.systemPrompt).toContain("runtime bare mention event");
   });
 
   it("submits suppressed room event context as the model prompt", async () => {

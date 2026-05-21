@@ -422,7 +422,7 @@ export type AgentDefaultsConfig = {
     skipWhenBusy?: boolean;
     /**
      * When enabled, deliver the model's reasoning payload for heartbeat runs (when available)
-     * as a separate message prefixed with `Reasoning:` (same as `/reasoning on`).
+     * as a separate message prefixed with `Thinking.` (same as `/reasoning on`).
      *
      * Default: false (only the final heartbeat payload is delivered).
      */
@@ -434,7 +434,7 @@ export type AgentDefaultsConfig = {
   subagents?: {
     /** Prompt-only guidance for how strongly the main agent should delegate work. Default: "suggest". */
     delegationMode?: SubagentDelegationMode;
-    /** Default allowlist of target agent ids for sessions_spawn. Use "*" to allow any. */
+    /** Default allowlist of target agent ids for sessions_spawn. Use "*" to allow any configured target. */
     allowAgents?: string[];
     /** Max concurrent sub-agent runs (global lane: "subagent"). Default: 1. */
     maxConcurrent?: number;

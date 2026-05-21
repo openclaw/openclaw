@@ -5,6 +5,7 @@ import path from "node:path";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
+import { createPnpmRunnerSpawnSpec } from "../pnpm-runner.mjs";
 
 const PLUGIN_SPEC =
   process.env.OPENCLAW_KITCHEN_SINK_NPM_SPEC || "npm:@openclaw/kitchen-sink@latest";
@@ -24,6 +25,7 @@ const COMMAND_TIMEOUT_MS = readPositiveInt(
 );
 const RPC_TIMEOUT_MS = readPositiveInt(process.env.OPENCLAW_KITCHEN_SINK_RPC_CALL_MS, 60000);
 const MAX_RSS_MIB = readPositiveInt(process.env.OPENCLAW_KITCHEN_SINK_MAX_RSS_MIB, 2048);
+const DEFAULT_PORT = 19000 + Math.floor(Math.random() * 1000);
 
 let callGatewayModulePromise;
 
@@ -46,7 +48,7 @@ function resolveOpenClawRunner() {
       return { command: "node", baseArgs: [resolved], label: resolved };
     }
   }
-  return { command: "pnpm", baseArgs: ["openclaw"], label: "pnpm openclaw" };
+  return { pnpm: true, baseArgs: ["openclaw"], label: "pnpm openclaw" };
 }
 
 function makeEnv() {
@@ -119,10 +121,29 @@ function runCommand(command, args, options = {}) {
 }
 
 async function runOpenClaw(runner, args, env, options = {}) {
-  return runCommand(runner.command, [...runner.baseArgs, ...args], {
+  const command = resolveOpenClawCommand(runner, args, env, {
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  return runCommand(command.command, command.args, {
+    ...command.options,
     env,
     timeoutMs: options.timeoutMs ?? COMMAND_TIMEOUT_MS,
   });
+}
+
+function resolveOpenClawCommand(runner, args, env, options = {}) {
+  if (runner.pnpm) {
+    return createPnpmRunnerSpawnSpec({
+      env,
+      pnpmArgs: [...runner.baseArgs, ...args],
+      stdio: options.stdio,
+    });
+  }
+  return {
+    command: runner.command,
+    args: [...runner.baseArgs, ...args],
+    options: { env, stdio: options.stdio },
+  };
 }
 
 function parseJsonOutput(stdout) {
@@ -319,10 +340,9 @@ function configureKitchenSink(env, port) {
 
 function startGateway(runner, port, env, logPath) {
   const log = fs.openSync(logPath, "w");
-  const child = childProcess.spawn(
-    runner.command,
+  const command = resolveOpenClawCommand(
+    runner,
     [
-      ...runner.baseArgs,
       "gateway",
       "--port",
       String(port),
@@ -330,12 +350,16 @@ function startGateway(runner, port, env, logPath) {
       "loopback",
       "--allow-unconfigured",
     ],
+    env,
     {
-      env,
       stdio: ["ignore", log, log],
-      detached: false,
     },
   );
+  const child = childProcess.spawn(command.command, command.args, {
+    ...command.options,
+    env,
+    detached: process.platform !== "win32",
+  });
   fs.closeSync(log);
   return child;
 }
@@ -344,14 +368,24 @@ async function stopGateway(child) {
   if (!child || child.exitCode !== null) {
     return;
   }
-  child.kill("SIGTERM");
+  signalGateway(child, "SIGTERM");
   const started = Date.now();
   while (child.exitCode === null && Date.now() - started < 10000) {
     await delay(100);
   }
   if (child.exitCode === null) {
-    child.kill("SIGKILL");
+    signalGateway(child, "SIGKILL");
   }
+}
+
+function signalGateway(child, signal) {
+  if (process.platform !== "win32" && typeof child.pid === "number") {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {}
+  }
+  child.kill(signal);
 }
 
 async function waitForGatewayReady(child, port, logPath) {
@@ -532,7 +566,7 @@ function isNonEmptyString(value) {
 
 async function main() {
   const runner = resolveOpenClawRunner();
-  const port = readPositiveInt(process.env.OPENCLAW_KITCHEN_SINK_RPC_PORT, 19173);
+  const port = readPositiveInt(process.env.OPENCLAW_KITCHEN_SINK_RPC_PORT, DEFAULT_PORT);
   const { root, env } = makeEnv();
   const logPath = path.join(root, "gateway.log");
 

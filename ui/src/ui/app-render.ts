@@ -136,7 +136,6 @@ import { icons } from "./icons.ts";
 import { createLazyView, renderLazyView } from "./lazy-view.ts";
 import {
   iconForTab,
-  isTabInGroup,
   isSettingsTab,
   normalizeBasePath,
   pathForTab,
@@ -1763,8 +1762,7 @@ export function renderApp(state: AppViewState) {
               <nav class="sidebar-nav">
                 ${TAB_GROUPS.map((group) => {
                   const isGroupCollapsed = state.settings.navGroupsCollapsed[group.label] ?? false;
-                  const hasActiveTab = isTabInGroup(group, state.tab);
-                  const showItems = navCollapsed || hasActiveTab || !isGroupCollapsed;
+                  const showItems = navCollapsed || !isGroupCollapsed;
 
                   return html`
                     <section class="nav-section ${!showItems ? "nav-section--collapsed" : ""}">

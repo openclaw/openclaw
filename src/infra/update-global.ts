@@ -79,6 +79,7 @@ export function isExplicitPackageInstallSpec(value: string): boolean {
     return false;
   }
   return (
+    /\.(?:tgz|tar\.gz)$/iu.test(trimmed) ||
     trimmed.includes("://") ||
     trimmed.includes("#") ||
     /^(?:file|github|git\+ssh|git\+https|git\+http|git\+file|npm):/i.test(trimmed)
@@ -793,7 +794,9 @@ export function globalInstallArgs(
     ...(installPrefix ? ["--prefix", installPrefix] : []),
     spec,
     ...NPM_GLOBAL_INSTALL_QUIET_FLAGS,
-    ...createNpmFreshnessBypassArgs(),
+    ...createNpmFreshnessBypassArgs(process.env, new Date(), {
+      npmConfigPrefix: installPrefix,
+    }),
   ];
 }
 
@@ -815,7 +818,9 @@ export function globalInstallFallbackArgs(
     spec,
     "--omit=optional",
     ...NPM_GLOBAL_INSTALL_QUIET_FLAGS,
-    ...createNpmFreshnessBypassArgs(),
+    ...createNpmFreshnessBypassArgs(process.env, new Date(), {
+      npmConfigPrefix: installPrefix,
+    }),
   ];
 }
 

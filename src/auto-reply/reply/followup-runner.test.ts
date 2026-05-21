@@ -942,6 +942,35 @@ describe("createFollowupRunner runtime config", () => {
     expect(call.abortSignal).toBe(abortController.signal);
   });
 
+  it("does not inherit source abort signals for queued user followups", async () => {
+    const sourceAbortController = new AbortController();
+    sourceAbortController.abort();
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {},
+    });
+    const runner = createFollowupRunner({
+      opts: { abortSignal: sourceAbortController.signal },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "openai/gpt-5.4",
+    });
+
+    await runner(
+      createQueuedRun({
+        currentInboundEventKind: "user_request",
+        run: {
+          provider: "openai",
+          model: "gpt-5.4",
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      }),
+    );
+
+    const call = requireLastMockCallArg(runEmbeddedPiAgentMock, "run embedded pi agent");
+    expect(call.abortSignal).toBeUndefined();
+  });
+
   it("keeps queued delivery correlations active during followup agent runs", async () => {
     const events: string[] = [];
     runEmbeddedPiAgentMock.mockImplementationOnce(async () => {

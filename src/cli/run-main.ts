@@ -22,10 +22,12 @@ import {
   consumeGatewayFastPathRootOptionToken,
   consumeGatewayRunOptionToken,
 } from "./gateway-run-argv.js";
+import { hasJsonOutputFlag, withConsoleLogsRoutedToStderrForJson } from "./json-output-mode.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
 import { getCoreCliCommandNames } from "./program/core-command-descriptors.js";
 import { getSubCliEntries } from "./program/subcli-descriptors.js";
 import {
+  resolvePrecomputedSubcommandHelpFastPath,
   resolveMissingPluginCommandMessage as resolveMissingPluginCommandMessageFromPolicy,
   rewriteUpdateFlagArgv,
   shouldEnsureCliPath,
@@ -33,18 +35,25 @@ import {
   shouldStartCrestodianForModernOnboard,
   shouldStartProxyForCli,
   shouldUseBrowserHelpFastPath,
+  shouldUseNodesHelpFastPath,
   shouldUseRootHelpFastPath,
+  shouldUseSecretsHelpFastPath,
+  shouldUseSetupOnboardConfigureHelpFastPath,
 } from "./run-main-policy.js";
 import { normalizeWindowsArgv } from "./windows-argv.js";
 
 export {
+  resolvePrecomputedSubcommandHelpFastPath,
   rewriteUpdateFlagArgv,
   shouldEnsureCliPath,
   shouldStartCrestodianForBareRoot,
   shouldStartCrestodianForModernOnboard,
   shouldStartProxyForCli,
   shouldUseBrowserHelpFastPath,
+  shouldUseNodesHelpFastPath,
   shouldUseRootHelpFastPath,
+  shouldUseSecretsHelpFastPath,
+  shouldUseSetupOnboardConfigureHelpFastPath,
 } from "./run-main-policy.js";
 
 type Awaitable<T> = T | Promise<T>;
@@ -131,18 +140,6 @@ export function isGatewayRunFastPathArgv(argv: string[]): boolean {
   }
 
   return sawGateway;
-}
-
-function hasJsonOutputFlag(argv: string[]): boolean {
-  for (const arg of argv) {
-    if (arg === "--") {
-      return false;
-    }
-    if (arg === "--json" || arg.startsWith("--json=")) {
-      return true;
-    }
-  }
-  return false;
 }
 
 async function tryRunGatewayRunFastPath(
@@ -534,11 +531,19 @@ export async function runCli(argv: string[] = process.argv) {
 
   try {
     if (shouldUseRootHelpFastPath(normalizedArgv)) {
-      const { outputPrecomputedRootHelpText } = await import("./root-help-metadata.js");
-      if (!outputPrecomputedRootHelpText()) {
-        const { outputRootHelp } = await import("./program/root-help.js");
-        await outputRootHelp();
+      const { loadRootHelpRenderOptionsForConfigSensitivePlugins } =
+        await import("./root-help-live-config.js");
+      const liveRootHelpOptions = await loadRootHelpRenderOptionsForConfigSensitivePlugins(
+        process.env,
+      );
+      if (!liveRootHelpOptions) {
+        const { outputPrecomputedRootHelpText } = await import("./root-help-metadata.js");
+        if (outputPrecomputedRootHelpText()) {
+          return;
+        }
       }
+      const { outputRootHelp } = await import("./program/root-help.js");
+      await outputRootHelp(liveRootHelpOptions ?? undefined);
       return;
     }
 
@@ -546,6 +551,43 @@ export async function runCli(argv: string[] = process.argv) {
       const { outputPrecomputedBrowserHelpText } = await import("./root-help-metadata.js");
       if (outputPrecomputedBrowserHelpText()) {
         return;
+      }
+    }
+
+    if (shouldUseSetupOnboardConfigureHelpFastPath(normalizedArgv)) {
+      const { tryOutputSetupOnboardConfigureHelp } =
+        await import("./setup-onboard-configure-help-fast-path.js");
+      if (await tryOutputSetupOnboardConfigureHelp(normalizedArgv)) {
+        return;
+      }
+    }
+
+    if (shouldUseSecretsHelpFastPath(normalizedArgv)) {
+      const { outputPrecomputedSecretsHelpText } = await import("./root-help-metadata.js");
+      if (outputPrecomputedSecretsHelpText()) {
+        return;
+      }
+    }
+
+    const precomputedSubcommandHelp = resolvePrecomputedSubcommandHelpFastPath(normalizedArgv);
+    if (precomputedSubcommandHelp) {
+      const { outputPrecomputedSubcommandHelpText } = await import("./root-help-metadata.js");
+      if (outputPrecomputedSubcommandHelpText(precomputedSubcommandHelp)) {
+        return;
+      }
+    }
+
+    if (shouldUseNodesHelpFastPath(normalizedArgv)) {
+      const { loadRootHelpRenderOptionsForConfigSensitivePlugins } =
+        await import("./root-help-live-config.js");
+      const liveRootHelpOptions = await loadRootHelpRenderOptionsForConfigSensitivePlugins(
+        process.env,
+      );
+      if (!liveRootHelpOptions) {
+        const { outputPrecomputedNodesHelpText } = await import("./root-help-metadata.js");
+        if (outputPrecomputedNodesHelpText()) {
+          return;
+        }
       }
     }
 
@@ -732,33 +774,12 @@ export async function runCli(argv: string[] = process.argv) {
         const config = await startupTrace.measure("register-plugin-commands", async () => {
           const { registerPluginCliCommandsFromValidatedConfig } =
             await import("../plugins/cli.js");
-          if (!hasJsonOutputFlag(parseArgv)) {
-            return await registerPluginCliCommandsFromValidatedConfig(
-              program,
-              undefined,
-              undefined,
-              {
-                mode: "lazy",
-                primary,
-              },
-            );
-          }
-          const { loggingState } = await import("../logging/state.js");
-          const previousForceStderr = loggingState.forceConsoleToStderr;
-          loggingState.forceConsoleToStderr = true;
-          try {
-            return await registerPluginCliCommandsFromValidatedConfig(
-              program,
-              undefined,
-              undefined,
-              {
-                mode: "lazy",
-                primary,
-              },
-            );
-          } finally {
-            loggingState.forceConsoleToStderr = previousForceStderr;
-          }
+          return await withConsoleLogsRoutedToStderrForJson(parseArgv, () =>
+            registerPluginCliCommandsFromValidatedConfig(program, undefined, undefined, {
+              mode: "lazy",
+              primary,
+            }),
+          );
         });
         if (config) {
           if (

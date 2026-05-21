@@ -57,8 +57,23 @@ function actionNeedsExplicitTarget(action: ChannelMessageActionName): boolean {
 function stripFormattedReasoningMessage(text: string): string {
   const stripped = stripReasoningTagsFromText(text);
   const lines = stripped.split(/\r?\n/u);
-  if (lines[0]?.trim() !== "Reasoning:") {
+  const prefix = lines[0]?.trim();
+  if (prefix !== "Reasoning:" && !/^Thinking\.{0,3}$/u.test(prefix ?? "")) {
     return stripped;
+  }
+  if (/^Thinking\.{0,3}$/u.test(prefix ?? "")) {
+    const firstBodyLine = lines.slice(1).find((line) => line.trim());
+    const trimmedBodyLine = firstBodyLine?.trim() ?? "";
+    if (
+      !trimmedBodyLine ||
+      !(
+        trimmedBodyLine.startsWith("_") &&
+        trimmedBodyLine.endsWith("_") &&
+        trimmedBodyLine.length >= 2
+      )
+    ) {
+      return stripped;
+    }
   }
 
   let index = 1;
@@ -71,6 +86,14 @@ function stripFormattedReasoningMessage(text: string): string {
     break;
   }
   return lines.slice(index).join("\n").trim();
+}
+
+function normalizeToolCallIdForIdempotencyKey(toolCallId: unknown): string | undefined {
+  const value = normalizeOptionalString(toolCallId);
+  if (!value) {
+    return undefined;
+  }
+  return value.replace(/[^A-Za-z0-9._:-]+/gu, "_");
 }
 
 function sanitizePresentationTextFields(value: unknown): unknown {
@@ -143,6 +166,7 @@ const presentationButtonSchema = Type.Object({
   url: Type.Optional(Type.String()),
   webApp: Type.Optional(Type.Object({ url: Type.String() })),
   web_app: Type.Optional(Type.Object({ url: Type.String() })),
+  disabled: Type.Optional(Type.Boolean()),
   style: Type.Optional(stringEnum(["primary", "secondary", "success", "danger"])),
 });
 
@@ -537,6 +561,7 @@ const MessageToolSchema = buildMessageToolSchemaFromActions(AllMessageActions, {
 type MessageToolOptions = {
   agentAccountId?: string;
   agentSessionKey?: string;
+  runId?: string;
   sessionId?: string;
   agentId?: string;
   config?: OpenClawConfig;
@@ -865,6 +890,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
   const resolveSecretRefsForTool =
     options?.resolveCommandSecretRefsViaGateway ?? resolveCommandSecretRefsViaGateway;
   const runMessageActionForTool = options?.runMessageAction ?? runMessageAction;
+  let generatedIdempotencyCounter = 0;
   const effectiveCurrentChannel = resolveEffectiveCurrentChannelContext(options);
   const currentThreadTs =
     options?.currentThreadTs ??
@@ -919,7 +945,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
     displaySummary: "Send and manage messages across configured channels.",
     description,
     parameters: schema,
-    execute: async (_toolCallId, args, signal) => {
+    execute: async (toolCallId, args, signal) => {
       // Check if already aborted before doing any work
       if (signal?.aborted) {
         const err = new Error("Message send aborted");
@@ -1025,10 +1051,21 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
             }
           : undefined;
 
+      const actionIdempotencyKey =
+        normalizeOptionalString(params.idempotencyKey) ??
+        (options?.runId
+          ? `${options.runId}:message-tool:${
+              normalizeToolCallIdForIdempotencyKey(toolCallId) ?? ++generatedIdempotencyCounter
+            }`
+          : undefined);
+      const actionParams = actionIdempotencyKey
+        ? { ...params, idempotencyKey: actionIdempotencyKey }
+        : params;
+
       const result = await runMessageActionForTool({
         cfg,
         action,
-        params,
+        params: actionParams,
         defaultAccountId: accountId ?? undefined,
         requesterSenderId: options?.requesterSenderId,
         senderIsOwner: options?.senderIsOwner,

@@ -381,7 +381,7 @@ export function runAgentAttempt(params: {
   fastMode?: boolean;
   timeoutMs: number;
   runId: string;
-  opts: AgentCommandOpts & { senderIsOwner: boolean };
+  opts: AgentCommandOpts;
   runContext: ReturnType<typeof resolveAgentRunContext>;
   spawnedBy: string | undefined;
   messageChannel: ReturnType<typeof resolveMessageChannel>;
@@ -434,6 +434,7 @@ export function runAgentAttempt(params: {
         cfg: params.cfg,
         agentId: params.sessionAgentId,
         modelId: params.modelOverride,
+        authProfileId: params.sessionEntry?.authProfileOverride,
       }) ?? params.providerOverride);
   const agentHarnessPolicy = isRawModelRun
     ? ({ runtime: "pi" } as const)

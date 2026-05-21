@@ -602,6 +602,85 @@ describe("legacy migrate sandbox scope aliases", () => {
     });
   });
 
+  it("moves recoverable whole-agent Claude CLI runtime policy before removing stale pins", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          agentRuntime: { id: "claude-cli" },
+          model: {
+            primary: "anthropic/claude-opus-4-7",
+            fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.5"],
+          },
+          models: {
+            "anthropic/claude-opus-4-7": { alias: "Opus" },
+          },
+        },
+        list: [
+          {
+            id: "paige",
+            agentRuntime: { id: "claude-cli" },
+            model: "anthropic/claude-sonnet-4-6",
+          },
+        ],
+      },
+    });
+
+    expect(res.changes).toStrictEqual([
+      "Moved agents.defaults.agentRuntime.id claude-cli to matching anthropic model runtime policy.",
+      "Removed agents.defaults.agentRuntime; runtime is now provider/model scoped.",
+      "Moved agents.list.0.agentRuntime.id claude-cli to matching anthropic model runtime policy.",
+      "Removed agents.list.0.agentRuntime; runtime is now provider/model scoped.",
+    ]);
+    expect(res.config?.agents?.defaults).toEqual({
+      model: {
+        primary: "anthropic/claude-opus-4-7",
+        fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.5"],
+      },
+      models: {
+        "anthropic/claude-opus-4-7": {
+          alias: "Opus",
+          agentRuntime: { id: "claude-cli" },
+        },
+        "anthropic/claude-sonnet-4-6": {
+          agentRuntime: { id: "claude-cli" },
+        },
+      },
+    });
+    expect(res.config?.agents?.list?.[0]).toEqual({
+      id: "paige",
+      model: "anthropic/claude-sonnet-4-6",
+      models: {
+        "anthropic/claude-sonnet-4-6": {
+          agentRuntime: { id: "claude-cli" },
+        },
+      },
+    });
+  });
+
+  it("does not overwrite explicit model runtime when removing stale whole-agent policy", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          agentRuntime: { id: "claude-cli" },
+          model: "anthropic/claude-opus-4-7",
+          models: {
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "pi" } },
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toStrictEqual([
+      "Removed agents.defaults.agentRuntime; runtime is now provider/model scoped.",
+    ]);
+    expect(res.config?.agents?.defaults).toEqual({
+      model: "anthropic/claude-opus-4-7",
+      models: {
+        "anthropic/claude-opus-4-7": { agentRuntime: { id: "pi" } },
+      },
+    });
+  });
+
   it("moves agents.defaults.sandbox.perSession into scope", () => {
     const res = migrateLegacyConfigForTest({
       agents: {
@@ -1055,5 +1134,100 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
     expect(res.config?.gateway?.bind).toBe("loopback");
     expect(res.config?.gateway?.controlUi).toBeUndefined();
     expect(res.changes).toStrictEqual(['Normalized gateway.bind "localhost" → "loopback".']);
+  });
+});
+
+describe("legacy model compat migrate", () => {
+  it("removes unrecognized model compat thinkingFormat values", () => {
+    const res = migrateLegacyConfigForTest({
+      models: {
+        providers: {
+          bailian: {
+            models: [
+              {
+                id: "qwen-legacy",
+                name: "Qwen Legacy",
+                compat: {
+                  thinkingFormat: "bailian-legacy",
+                  supportsTools: true,
+                },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(res.config?.models?.providers?.bailian?.models?.[0]?.compat).toEqual({
+      supportsTools: true,
+    });
+    expect(res.changes).toStrictEqual([
+      'Removed models.providers.bailian.models.0.compat.thinkingFormat (unrecognized value "bailian-legacy"; runtime default applies).',
+    ]);
+  });
+
+  it("preserves recognized model compat thinkingFormat values", () => {
+    const res = migrateLegacyConfigForTest({
+      models: {
+        providers: {
+          bailian: {
+            models: [
+              {
+                id: "qwen3",
+                name: "Qwen3",
+                compat: {
+                  thinkingFormat: "qwen",
+                },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toStrictEqual([]);
+  });
+
+  it("selectively removes invalid thinkingFormat values across providers", () => {
+    const res = migrateLegacyConfigForTest({
+      models: {
+        providers: {
+          bailian: {
+            models: [
+              {
+                id: "valid",
+                name: "Valid",
+                compat: { thinkingFormat: "qwen-chat-template" },
+              },
+              {
+                id: "legacy",
+                name: "Legacy",
+                compat: { thinkingFormat: "old-bailian" },
+              },
+            ],
+          },
+          openrouter: {
+            models: [
+              {
+                id: "legacy-router",
+                name: "Legacy Router",
+                compat: { thinkingFormat: "openrouter-v0" },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(res.config?.models?.providers?.bailian?.models?.[0]?.compat).toEqual({
+      thinkingFormat: "qwen-chat-template",
+    });
+    expect(res.config?.models?.providers?.bailian?.models?.[1]?.compat).toEqual({});
+    expect(res.config?.models?.providers?.openrouter?.models?.[0]?.compat).toEqual({});
+    expect(res.changes).toStrictEqual([
+      'Removed models.providers.bailian.models.1.compat.thinkingFormat (unrecognized value "old-bailian"; runtime default applies).',
+      'Removed models.providers.openrouter.models.0.compat.thinkingFormat (unrecognized value "openrouter-v0"; runtime default applies).',
+    ]);
   });
 });

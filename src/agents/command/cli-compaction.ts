@@ -8,6 +8,10 @@ import { resolveContextEngine as resolveContextEngineImpl } from "../../context-
 import type { ContextEngine } from "../../context-engine/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { buildEmbeddedCompactionRuntimeContext } from "../pi-embedded-runner/compaction-runtime-context.js";
+import {
+  compactContextEngineWithSafetyTimeout,
+  resolveCompactionTimeoutMs,
+} from "../pi-embedded-runner/compaction-safety-timeout.js";
 import { runContextEngineMaintenance as runContextEngineMaintenanceImpl } from "../pi-embedded-runner/context-engine-maintenance.js";
 import { shouldPreemptivelyCompactBeforePrompt as shouldPreemptivelyCompactBeforePromptImpl } from "../pi-embedded-runner/run/preemptive-compaction.js";
 import { resolveLiveToolResultMaxChars as resolveLiveToolResultMaxCharsImpl } from "../pi-embedded-runner/tool-result-truncation.js";
@@ -123,7 +127,6 @@ async function compactCliTranscript(params: {
   skillsSnapshot?: SkillSnapshot;
   messageChannel?: string;
   agentAccountId?: string;
-  senderIsOwner?: boolean;
   thinkLevel?: Parameters<typeof buildEmbeddedCompactionRuntimeContext>[0]["thinkLevel"];
   extraSystemPrompt?: string;
 }) {
@@ -138,7 +141,6 @@ async function compactCliTranscript(params: {
       agentDir: params.agentDir,
       config: params.cfg,
       skillsSnapshot: params.skillsSnapshot,
-      senderIsOwner: params.senderIsOwner,
       provider: params.provider,
       modelId: params.model,
       thinkLevel: params.thinkLevel,
@@ -149,16 +151,28 @@ async function compactCliTranscript(params: {
     trigger: "cli_budget",
   };
 
-  const compactResult = await params.contextEngine.compact({
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    sessionFile: params.sessionFile,
-    tokenBudget: params.contextTokenBudget,
-    currentTokenCount: params.currentTokenCount,
-    force: true,
-    compactionTarget: "budget",
-    runtimeContext,
-  });
+  let compactResult: Awaited<ReturnType<typeof params.contextEngine.compact>>;
+  try {
+    compactResult = await compactContextEngineWithSafetyTimeout(
+      params.contextEngine,
+      {
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        sessionFile: params.sessionFile,
+        tokenBudget: params.contextTokenBudget,
+        currentTokenCount: params.currentTokenCount,
+        force: true,
+        compactionTarget: "budget",
+        runtimeContext,
+      },
+      resolveCompactionTimeoutMs(params.cfg),
+    );
+  } catch (error) {
+    log.warn(
+      `CLI transcript compaction failed for ${params.provider}/${params.model}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return false;
+  }
 
   if (!compactResult.compacted) {
     log.warn(
@@ -195,7 +209,6 @@ export async function runCliTurnCompactionLifecycle(params: {
   skillsSnapshot?: SkillSnapshot;
   messageChannel?: string;
   agentAccountId?: string;
-  senderIsOwner?: boolean;
   thinkLevel?: Parameters<typeof buildEmbeddedCompactionRuntimeContext>[0]["thinkLevel"];
   extraSystemPrompt?: string;
 }): Promise<SessionEntry | undefined> {
@@ -259,7 +272,6 @@ export async function runCliTurnCompactionLifecycle(params: {
     skillsSnapshot: params.skillsSnapshot,
     messageChannel: params.messageChannel,
     agentAccountId: params.agentAccountId,
-    senderIsOwner: params.senderIsOwner,
     thinkLevel: params.thinkLevel,
     extraSystemPrompt: params.extraSystemPrompt,
   });

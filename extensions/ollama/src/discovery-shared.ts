@@ -70,7 +70,17 @@ function shouldSkipAmbientOllamaDiscovery(env: NodeJS.ProcessEnv): boolean {
   return Boolean(env.VITEST) || env.NODE_ENV === "test";
 }
 
-const LOCAL_OLLAMA_HOSTNAMES = new Set(["localhost", "127.0.0.1", "0.0.0.0", "::1", "::"]);
+const LOCAL_OLLAMA_HOSTNAMES = new Set([
+  "localhost",
+  "127.0.0.1",
+  "0.0.0.0",
+  "::1",
+  "::",
+  "docker.orb.internal",
+  "host.docker.internal",
+  "host.orb.internal",
+]);
+const LOOPBACK_OLLAMA_HOSTNAMES = new Set(["localhost", "127.0.0.1", "0.0.0.0", "::1", "::"]);
 
 function isIpv4Loopback(host: string): boolean {
   if (!/^\d+\.\d+\.\d+\.\d+$/.test(host)) {
@@ -137,7 +147,7 @@ function isLoopbackOllamaBaseUrl(baseUrl: string | undefined | null): boolean {
   if (host.startsWith("[") && host.endsWith("]")) {
     host = host.slice(1, -1);
   }
-  return LOCAL_OLLAMA_HOSTNAMES.has(host) || isIpv4Loopback(host);
+  return LOOPBACK_OLLAMA_HOSTNAMES.has(host) || isIpv4Loopback(host);
 }
 
 function hasExplicitRemoteOllamaApiProvider(
