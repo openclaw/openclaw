@@ -450,6 +450,113 @@ describe("buildContextOverflowRecoveryText", () => {
     expect(text).not.toContain("reserveTokensFloor");
   });
 
+  it("uses the stored session context window as the uncataloged runtime model fallback", () => {
+    const text = buildContextOverflowRecoveryText({
+      cfg: {
+        models: {
+          providers: {
+            openrouter: {
+              baseUrl: "https://openrouter.test",
+              models: [makeTestModel("qwen3.6-plus", 1_000_000)],
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            contextTokens: 100_000,
+            heartbeat: { model: "ollama/custom-32k" },
+          },
+        },
+      },
+      agentId: "agent",
+      primaryProvider: "openrouter",
+      primaryModel: "qwen3.6-plus",
+      activeSessionEntry: {
+        sessionId: "session",
+        updatedAt: 1,
+        modelProvider: "ollama",
+        model: "custom-32k",
+        contextTokens: 32_768,
+      },
+    });
+
+    expect(text).toContain("ollama/custom-32k (32k context)");
+    expect(text).not.toContain("ollama/custom-32k (98k context)");
+    expect(text).toContain("heartbeat model bleed");
+  });
+
+  it("does not blame heartbeat when the stored session fallback matches the capped primary window", () => {
+    const text = buildContextOverflowRecoveryText({
+      cfg: {
+        models: {
+          providers: {
+            openrouter: {
+              baseUrl: "https://openrouter.test",
+              models: [makeTestModel("qwen3.6-plus", 1_000_000)],
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            contextTokens: 100_000,
+            heartbeat: { model: "ollama/custom-large" },
+          },
+        },
+      },
+      agentId: "agent",
+      primaryProvider: "openrouter",
+      primaryModel: "qwen3.6-plus",
+      activeSessionEntry: {
+        sessionId: "session",
+        updatedAt: 1,
+        modelProvider: "ollama",
+        model: "custom-large",
+        contextTokens: 200_000,
+      },
+    });
+
+    expect(text).toContain("reserveTokensFloor");
+    expect(text).not.toContain("heartbeat model bleed");
+  });
+
+  it("does not blame heartbeat when the same agent cap constrains both cataloged models", () => {
+    const text = buildContextOverflowRecoveryText({
+      cfg: {
+        models: {
+          providers: {
+            openrouter: {
+              baseUrl: "https://openrouter.test",
+              models: [makeTestModel("qwen3.6-plus", 1_000_000)],
+            },
+            ollama: {
+              baseUrl: "http://ollama.test",
+              models: [makeTestModel("custom-large", 1_000_000)],
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            contextTokens: 100_000,
+            heartbeat: { model: "ollama/custom-large" },
+          },
+        },
+      },
+      agentId: "agent",
+      primaryProvider: "openrouter",
+      primaryModel: "qwen3.6-plus",
+      activeSessionEntry: {
+        sessionId: "session",
+        updatedAt: 1,
+        modelProvider: "ollama",
+        model: "custom-large",
+        contextTokens: 1_000_000,
+      },
+    });
+
+    expect(text).toContain("reserveTokensFloor");
+    expect(text).not.toContain("heartbeat model bleed");
+  });
+
   it("does not blame heartbeat when the smaller runtime model is not the configured heartbeat model", () => {
     const text = buildContextOverflowRecoveryText({
       cfg: {
