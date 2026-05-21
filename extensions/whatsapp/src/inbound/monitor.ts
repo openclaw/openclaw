@@ -1,4 +1,3 @@
-import { appendFile } from "node:fs/promises";
 import type {
   AnyMessageContent,
   MiscMessageGenerationOptions,
@@ -19,6 +18,7 @@ import { maybeResolveWhatsAppApprovalReaction } from "../approval-reactions.js";
 import { readWebSelfIdentityForDecision, WhatsAppAuthUnstableError } from "../auth-store.js";
 import { getPrimaryIdentityId, resolveComparableIdentity } from "../identity.js";
 import { addWhatsAppImagePreviewFields } from "../image-preview.js";
+import { traceWhatsAppQaEvent } from "../qa-trace.js";
 import { cacheInboundMessageMeta } from "../quoted-message.js";
 import { DEFAULT_RECONNECT_POLICY, computeBackoff, sleepWithAbort } from "../reconnect.js";
 import type { OpenClawConfig } from "../runtime-api.js";
@@ -69,8 +69,6 @@ const LOGGED_OUT_STATUS = DisconnectReason?.loggedOut ?? 401;
 const RECONNECT_IN_PROGRESS_ERROR = "no active socket - reconnection in progress";
 const GROUP_META_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const INBOUND_CLOSE_DRAIN_TIMEOUT_MS = 5_000;
-const WHATSAPP_QA_TRACE_ENV = "OPENCLAW_QA_WHATSAPP_TRACE";
-const WHATSAPP_QA_TRACE_PATH_ENV = "OPENCLAW_QA_WHATSAPP_TRACE_PATH";
 export const WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES = 500;
 
 type WhatsAppGroupMetadataCacheEntry = {
@@ -126,11 +124,6 @@ function logWhatsAppVerbose(enabled: boolean | undefined, message: string) {
   defaultRuntime.log(message);
 }
 
-function isQaTraceEnabled(): boolean {
-  const value = process.env[WHATSAPP_QA_TRACE_ENV]?.trim().toLowerCase();
-  return value === "1" || value === "true" || value === "yes";
-}
-
 function isGroupJid(jid: string): boolean {
   return (typeof isJidGroup === "function" ? isJidGroup(jid) : jid.endsWith("@g.us")) === true;
 }
@@ -146,22 +139,6 @@ function jidKind(jid: string | undefined): "group" | "direct" | "status" | "unkn
     return "status";
   }
   return "direct";
-}
-
-function traceWhatsAppQaEvent(event: Record<string, unknown>): void {
-  const tracePath = process.env[WHATSAPP_QA_TRACE_PATH_ENV]?.trim();
-  if (!tracePath && !isQaTraceEnabled()) {
-    return;
-  }
-  const line = `${JSON.stringify({ at: new Date().toISOString(), ...event })}\n`;
-  if (tracePath) {
-    void appendFile(tracePath, line).catch((error) => {
-      defaultRuntime.log(`Failed to write WhatsApp QA trace: ${String(error)}`);
-    });
-  }
-  if (isQaTraceEnabled()) {
-    defaultRuntime.log(`[whatsapp-qa-trace] ${line.trimEnd()}`);
-  }
 }
 
 function recordAcceptedInboundActivity(accountId: string): void {

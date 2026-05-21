@@ -22,6 +22,7 @@ import {
   resolveWhatsAppCommandAuthorized,
   resolveWhatsAppInboundPolicy,
 } from "../../inbound-policy.js";
+import { traceWhatsAppQaEvent } from "../../qa-trace.js";
 import { newConnectionId } from "../../reconnect.js";
 import { formatError } from "../../session.js";
 import {
@@ -212,6 +213,13 @@ export async function processMessage(params: {
    * - undefined (omitted) → caller did not attempt preflight; run internal STT as normal */
   preflightAudioTranscript?: string | null;
 }) {
+  const processStartedAtMs = Date.now();
+  traceWhatsAppQaEvent({
+    phase: "process_message_start",
+    accountId: params.route.accountId ?? params.msg.accountId,
+    chatType: params.msg.chatType,
+    routeSessionKey: params.route.sessionKey,
+  });
   const conversationId = params.msg.conversationId ?? params.msg.from;
   const self = getSelfIdentity(params.msg);
   const inboundPolicy = resolveWhatsAppInboundPolicy({
@@ -504,6 +512,12 @@ export async function processMessage(params: {
     updateLastRoute: updateLastRouteInBackground,
     warn: params.replyLogger.warn.bind(params.replyLogger),
   });
+  traceWhatsAppQaEvent({
+    phase: "process_message_context_ready",
+    accountId: params.route.accountId,
+    chatType: params.msg.chatType,
+    elapsedMs: Date.now() - processStartedAtMs,
+  });
 
   const turnResult = await runInboundReplyTurn({
     channel: "whatsapp",
@@ -540,8 +554,14 @@ export async function processMessage(params: {
             trackBackgroundTask(params.backgroundTasks, task);
           },
         },
-        runDispatch: () =>
-          dispatchWhatsAppBufferedReply({
+        runDispatch: async () => {
+          const dispatchStartedAtMs = Date.now();
+          traceWhatsAppQaEvent({
+            phase: "reply_dispatch_start",
+            accountId: params.route.accountId,
+            chatType: params.msg.chatType,
+          });
+          const result = await dispatchWhatsAppBufferedReply({
             cfg: params.cfg,
             connectionId: params.connectionId,
             context: ctxPayload,
@@ -563,9 +583,24 @@ export async function processMessage(params: {
             route: params.route,
             shouldClearGroupHistory,
             statusReactionController,
-          }),
+          });
+          traceWhatsAppQaEvent({
+            phase: "reply_dispatch_done",
+            accountId: params.route.accountId,
+            chatType: params.msg.chatType,
+            elapsedMs: Date.now() - dispatchStartedAtMs,
+          });
+          return result;
+        },
       }),
     },
+  });
+  traceWhatsAppQaEvent({
+    phase: "process_message_done",
+    accountId: params.route.accountId,
+    chatType: params.msg.chatType,
+    elapsedMs: Date.now() - processStartedAtMs,
+    dispatched: turnResult.dispatched,
   });
   const didSendReply = turnResult.dispatched ? turnResult.dispatchResult : false;
   removeAckReactionHandleAfterReply({

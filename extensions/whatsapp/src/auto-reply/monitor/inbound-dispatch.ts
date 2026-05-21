@@ -13,6 +13,7 @@ import {
   normalizeWhatsAppOutboundPayload,
   normalizeWhatsAppPayloadTextPreservingIndentation,
 } from "../../outbound-media-contract.js";
+import { traceWhatsAppQaEvent } from "../../qa-trace.js";
 import type { WhatsAppReplyDeliveryResult } from "../deliver-reply.js";
 import type { WebInboundMsg } from "../types.js";
 import { formatGroupMembers } from "./group-members.js";
@@ -612,6 +613,12 @@ export async function dispatchWhatsAppBufferedReply(params: {
     void statusReactionController.setThinking();
   }
 
+  const bufferedDispatchStartedAtMs = Date.now();
+  traceWhatsAppQaEvent({
+    phase: "buffered_dispatch_start",
+    accountId: params.route.accountId,
+    chatType: params.msg.chatType,
+  });
   const { queuedFinal, counts } = await dispatchReplyWithBufferedBlockDispatcher({
     ctx: params.context,
     cfg: params.cfg,
@@ -752,6 +759,18 @@ export async function dispatchWhatsAppBufferedReply(params: {
         : {}),
     },
   });
+  traceWhatsAppQaEvent({
+    phase: "buffered_dispatch_done",
+    accountId: params.route.accountId,
+    chatType: params.msg.chatType,
+    elapsedMs: Date.now() - bufferedDispatchStartedAtMs,
+    queuedFinal,
+    finalCount: counts.final,
+    blockCount: counts.block,
+    toolCount: counts.tool,
+  });
+  logWhatsAppMediaOnlyFlushResult(await mediaOnlyCoalescer.flushAll());
+
   const didQueueVisibleReply = hasVisibleInboundReplyDispatch({ queuedFinal, counts });
   if (!didQueueVisibleReply) {
     if (statusReactionController) {

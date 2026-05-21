@@ -759,6 +759,7 @@ Docs: https://docs.openclaw.ai
 - QA-Lab: include a redacted WhatsApp credential fingerprint in live RTT artifacts so maintainers can correlate logged-out Convex leases without exposing credential ids.
 - QA-Lab: settle WhatsApp live heap checkpoints before starting RTT timing so heap snapshots do not inflate the measured ping/pong send path.
 - Crabbox: exclude local `.tmp` captures from OpenClaw syncs so heapdump and trace analysis artifacts do not bloat remote proof uploads.
+- WhatsApp: extend QA trace phases through inbound processing and buffered reply dispatch so RTT artifacts isolate the remaining pre-send delay.
 - Replies: skip provider thinking-catalog hydration when thinking is off so messaging replies avoid unnecessary model-runtime setup before dispatch.
 - Providers: reuse already-loaded provider runtime hooks for synthetic auth before falling back to provider discovery loads.
 - QA-Lab: include the gateway diagnostic timeline in WhatsApp live trace artifacts so RTT probes expose reply setup, compaction, and model-run phase costs.
