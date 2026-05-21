@@ -492,7 +492,7 @@ Two built-in tools can make persistent control-plane changes:
 - `gateway` can inspect config with `config.schema.lookup` / `config.get`, and can make persistent changes with `config.apply`, `config.patch`, and `update.run`.
 - `cron` can create scheduled jobs that keep running after the original chat/task ends.
 
-The owner-only `gateway` runtime tool still refuses to rewrite
+The agent-facing `gateway` runtime tool still refuses to rewrite
 `tools.exec.ask` or `tools.exec.security`; legacy `tools.bash.*` aliases are
 normalized to the same protected exec paths before the write.
 Agent-driven `gateway config.apply` and `gateway config.patch` edits are
