@@ -1,6 +1,7 @@
 import type { BootstrapContextMode } from "../../agents/bootstrap-files.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import type { SkillSnapshot } from "../../agents/skills.js";
+import { normalizeToolList } from "../../agents/tool-policy-shared.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -53,6 +54,20 @@ async function loadCronEmbeddedRuntime() {
 
 async function loadCronSubagentRegistryRuntime() {
   return await cronSubagentRegistryRuntimeLoader.load();
+}
+
+// Only the `cron` tool is granted as an owner-only runtime allowlist entry
+// in isolated cron runs.  `gateway` is a control-plane tool and `nodes` is
+// exec-capable; neither should be auto-granted to unattended runs.  The owner
+// can use an embedded cron runtime or interactive session for those.
+const CRON_SAFE_OWNER_ONLY_TOOLS: ReadonlySet<string> = new Set(["cron"]);
+
+export function resolveCronOwnerOnlyToolAllowlist(
+  toolsAllow: string[] | undefined,
+): string[] | undefined {
+  const normalized = normalizeToolList(toolsAllow);
+  const ownerOnly = normalized.filter((name) => CRON_SAFE_OWNER_ONLY_TOOLS.has(name));
+  return ownerOnly.length > 0 ? ownerOnly : undefined;
 }
 
 const COMMAND_STYLE_CRON_PREFIX =
