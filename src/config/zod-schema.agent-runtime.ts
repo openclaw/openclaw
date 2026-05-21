@@ -7,6 +7,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
+import { isBlockedObjectKey } from "./prototype-keys.js";
 import { AgentModelSchema, AgentToolModelSchema } from "./zod-schema.agent-model.js";
 import {
   GroupChatSchema,
@@ -18,6 +19,38 @@ import {
   TtsConfigSchema,
 } from "./zod-schema.core.js";
 import { sensitive } from "./zod-schema.sensitive.js";
+
+function validateSandboxBindEntries(
+  binds: readonly string[] | undefined,
+  ctx: z.RefinementCtx,
+): void {
+  if (!binds) {
+    return;
+  }
+  for (let i = 0; i < binds.length; i += 1) {
+    const bind = normalizeOptionalString(binds[i]) ?? "";
+    if (!bind) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["binds", i],
+        message: "Sandbox security: bind mount entry must be a non-empty string.",
+      });
+      continue;
+    }
+
+    const parsed = splitSandboxBindSpec(bind);
+    const source = (parsed ? parsed.host : bind).trim();
+    if (!isSandboxHostPathAbsolute(source)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["binds", i],
+        message:
+          `Sandbox security: bind mount "${bind}" uses a non-absolute source path "${source}". ` +
+          "Only absolute POSIX or Windows drive-letter paths are supported for sandbox binds.",
+      });
+    }
+  }
+}
 
 export const AgentRunRetriesConfigSchema = z
   .object({
@@ -167,31 +200,7 @@ const SandboxDockerSchema = z
   })
   .strict()
   .superRefine((data, ctx) => {
-    if (data.binds) {
-      for (let i = 0; i < data.binds.length; i += 1) {
-        const bind = normalizeOptionalString(data.binds[i]) ?? "";
-        if (!bind) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: ["binds", i],
-            message: "Sandbox security: bind mount entry must be a non-empty string.",
-          });
-          continue;
-        }
-
-        const parsed = splitSandboxBindSpec(bind);
-        const source = (parsed ? parsed.host : bind).trim();
-        if (!isSandboxHostPathAbsolute(source)) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: ["binds", i],
-            message:
-              `Sandbox security: bind mount "${bind}" uses a non-absolute source path "${source}". ` +
-              "Only absolute POSIX or Windows drive-letter paths are supported for sandbox binds.",
-          });
-        }
-      }
-    }
+    validateSandboxBindEntries(data.binds, ctx);
     const blockedNetworkReason = getBlockedNetworkModeReason({
       network: data.network,
       allowContainerNamespaceJoin: data.dangerouslyAllowContainerNamespaceJoin === true,
@@ -252,6 +261,7 @@ const SandboxBrowserSchema = z
     binds: z.array(z.string()).optional(),
   })
   .superRefine((data, ctx) => {
+    validateSandboxBindEntries(data.binds, ctx);
     if (normalizeLowercaseStringOrEmpty(data.network ?? "") === "host") {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -340,26 +350,95 @@ const CodexUserLocationSchema = z
   })
   .optional();
 
+const LEGACY_WEB_SEARCH_PROVIDER_CONFIG_KEYS = new Set([
+  "brave",
+  "duckduckgo",
+  "exa",
+  "firecrawl",
+  "gemini",
+  "grok",
+  "kimi",
+  "minimax",
+  "ollama",
+  "perplexity",
+  "searxng",
+  "tavily",
+]);
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+const BLOCKED_WEB_SEARCH_KEYS_ISSUE_FIELD = "__openclawBlockedWebSearchKeys";
+
 const ToolsWebSearchSchema = z
-  .object({
-    enabled: z.boolean().optional(),
-    provider: z.string().optional(),
-    maxResults: z.number().int().positive().optional(),
-    timeoutSeconds: z.number().int().positive().optional(),
-    cacheTtlMinutes: z.number().nonnegative().optional(),
-    apiKey: SecretInputSchema.optional().register(sensitive),
-    openaiCodex: z
+  .preprocess(
+    (value) => {
+      if (!isPlainRecord(value)) {
+        return value;
+      }
+      const blockedKeys = Object.getOwnPropertyNames(value).filter((key) =>
+        isBlockedObjectKey(key),
+      );
+      if (blockedKeys.length === 0) {
+        return value;
+      }
+      return {
+        ...value,
+        [BLOCKED_WEB_SEARCH_KEYS_ISSUE_FIELD]: blockedKeys,
+      };
+    },
+    z
       .object({
         enabled: z.boolean().optional(),
-        mode: z.union([z.literal("cached"), z.literal("live")]).optional(),
-        allowedDomains: CodexAllowedDomainsSchema,
-        contextSize: z.union([z.literal("low"), z.literal("medium"), z.literal("high")]).optional(),
-        userLocation: CodexUserLocationSchema,
+        provider: z.string().optional(),
+        maxResults: z.number().int().positive().optional(),
+        timeoutSeconds: z.number().int().positive().optional(),
+        cacheTtlMinutes: z.number().nonnegative().optional(),
+        apiKey: SecretInputSchema.optional().register(sensitive),
+        openaiCodex: z
+          .object({
+            enabled: z.boolean().optional(),
+            mode: z.union([z.literal("cached"), z.literal("live")]).optional(),
+            allowedDomains: CodexAllowedDomainsSchema,
+            contextSize: z
+              .union([z.literal("low"), z.literal("medium"), z.literal("high")])
+              .optional(),
+            userLocation: CodexUserLocationSchema,
+          })
+          .strict()
+          .optional(),
       })
-      .strict()
-      .optional(),
-  })
-  .strict()
+      .catchall(z.unknown())
+      .superRefine((value, ctx) => {
+        const blockedKeys = value[BLOCKED_WEB_SEARCH_KEYS_ISSUE_FIELD];
+        if (Array.isArray(blockedKeys)) {
+          for (const key of blockedKeys) {
+            if (typeof key !== "string") {
+              continue;
+            }
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: [key],
+              message: "tools.web.search must not contain blocked object keys",
+            });
+          }
+        }
+        for (const [key, entry] of Object.entries(value)) {
+          if (key === BLOCKED_WEB_SEARCH_KEYS_ISSUE_FIELD || isBlockedObjectKey(key)) {
+            continue;
+          }
+          if (LEGACY_WEB_SEARCH_PROVIDER_CONFIG_KEYS.has(key) && isPlainRecord(entry)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: [key],
+              message:
+                "legacy web_search provider config must use plugins.entries.<plugin>.config.webSearch",
+            });
+          }
+        }
+      }),
+  )
   .optional();
 
 const ToolsWebFetchSchema = z
@@ -968,6 +1047,12 @@ export const AgentEntrySchema = z
       .optional(),
     bootstrapMaxChars: z.number().int().positive().optional(),
     bootstrapTotalMaxChars: z.number().int().positive().optional(),
+    experimental: z
+      .object({
+        localModelLean: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     skills: z.array(z.string()).optional(),
     memorySearch: MemorySearchSchema,
     humanDelay: HumanDelaySchema.optional(),

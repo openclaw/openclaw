@@ -154,6 +154,16 @@ from the OpenClaw sandbox egress setting: Docker `network: "none"` stays
 offline, while `network: "bridge"` or a custom Docker network permits outbound
 access.
 
+On Ubuntu/AppArmor hosts, Codex bwrap can fail under `workspace-write` before
+the shell command starts. If you see
+`bwrap: setting up uid map: Permission denied` or
+`bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted`, run
+`openclaw doctor` and fix the reported host namespace policy for the OpenClaw
+service user rather than granting broader Docker container privileges. Prefer
+a scoped AppArmor profile for the service process; the
+`kernel.apparmor_restrict_unprivileged_userns=0` fallback is host-wide and has
+security tradeoffs.
+
 ## Auth and environment isolation
 
 Auth is selected in this order:
@@ -256,6 +266,8 @@ available timeout in this order:
 
 - A positive per-call `timeoutMs` argument.
 - For `image_generate`, `agents.defaults.imageGenerationModel.timeoutMs`.
+- For `image_generate` without a configured timeout, the 120 second
+  image-generation default.
 - For the media-understanding `image` tool, `tools.media.image.timeoutSeconds`
   converted to milliseconds, or the 60 second media default.
 - The 30 second dynamic-tool default.
@@ -298,17 +310,17 @@ If discovery fails or times out, OpenClaw uses a bundled fallback catalog for:
 - GPT-5.4 mini
 - GPT-5.2
 
-The current bundled harness is `@openai/codex` `0.130.0`. A `model/list` probe
+The current bundled harness is `@openai/codex` `0.132.0`. A `model/list` probe
 against that bundled app-server returned:
 
-| Model id              | Default | Hidden | Input modalities | Reasoning efforts        |
-| --------------------- | ------- | ------ | ---------------- | ------------------------ |
-| `gpt-5.5`             | Yes     | No     | text, image      | low, medium, high, xhigh |
-| `gpt-5.4`             | No      | No     | text, image      | low, medium, high, xhigh |
-| `gpt-5.4-mini`        | No      | No     | text, image      | low, medium, high, xhigh |
-| `gpt-5.3-codex`       | No      | No     | text, image      | low, medium, high, xhigh |
-| `gpt-5.3-codex-spark` | No      | No     | text             | low, medium, high, xhigh |
-| `gpt-5.2`             | No      | No     | text, image      | low, medium, high, xhigh |
+| Model id            | Default | Hidden | Input modalities | Reasoning efforts        |
+| ------------------- | ------- | ------ | ---------------- | ------------------------ |
+| `gpt-5.5`           | Yes     | No     | text, image      | low, medium, high, xhigh |
+| `gpt-5.4`           | No      | No     | text, image      | low, medium, high, xhigh |
+| `gpt-5.4-mini`      | No      | No     | text, image      | low, medium, high, xhigh |
+| `gpt-5.3-codex`     | No      | No     | text, image      | low, medium, high, xhigh |
+| `gpt-5.2`           | No      | No     | text, image      | low, medium, high, xhigh |
+| `codex-auto-review` | No      | Yes    | text, image      | low, medium, high, xhigh |
 
 Hidden models can be returned by the app-server catalog for internal or
 specialized flows, but they are not normal model-picker choices.
@@ -361,11 +373,12 @@ filenames for persona files, because Codex fallbacks only apply when
 `AGENTS.md` is missing.
 
 For OpenClaw workspace parity, the Codex harness resolves the other bootstrap
-files, including `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`,
-`HEARTBEAT.md`, `BOOTSTRAP.md`, and `MEMORY.md` when present, and forwards them
-as OpenClaw turn input reference context. This keeps workspace persona and
-profile context visible to the native Codex turn without promoting it above
-Codex-owned system/developer instructions or duplicating `AGENTS.md`.
+files. `SOUL.md`, `IDENTITY.md`, `TOOLS.md`, and `USER.md` are forwarded as
+OpenClaw Codex developer instructions because they define the active agent,
+available workspace guidance, and user profile. `HEARTBEAT.md` content is not
+injected; heartbeat turns get a collaboration-mode pointer to read the file when
+it exists and is non-empty. `BOOTSTRAP.md` and `MEMORY.md` when present are
+forwarded as OpenClaw turn input reference context.
 
 ## Environment overrides
 
