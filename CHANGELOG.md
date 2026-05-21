@@ -21,6 +21,7 @@ Docs: https://docs.openclaw.ai
 - Infra/json: retry transient `File changed during read` races while loading JSON state so config and state reads recover instead of failing the turn. (#84285)
 - Gateway/sessions: preserve compatible session auth profile overrides when switching models within the same provider, including provider-auth aliases. Fixes #81837. (#81886) Thanks @TurboTheTurtle.
 - Gateway/status: surface inbound delivery telemetry counters and transport-liveness warnings in `openclaw status --all`. Fixes #49577. (#72724)
+- Docker: prune package-excluded plugin source workspaces and dependency closures so runtime images do not keep packages for plugins that were not opted in.
 - Providers/Ollama: treat Docker/OrbStack host aliases as local Ollama endpoints so `ollama-local` marker auth works when OpenClaw runs inside a VM/container and Ollama runs on the host. Fixes #84875.
 - QA-Lab: keep explicitly searchable/deferred OpenClaw dynamic tool rows report-only by default so tool-coverage gates do not treat mock discovery gaps as hard product failures. (#80319) Thanks @100yenadmin.
 - Agents: cap heartbeat model bleed context hints by the stored session window when runtime model metadata is unavailable, so overflow recovery advice does not suggest a larger window than the active session actually has.
