@@ -419,4 +419,55 @@ describe("config schema regressions", () => {
 
     expect(res.ok).toBe(true);
   });
+
+  it("rejects bindings referencing an agentId missing from agents.list (openclaw#84692)", () => {
+    const res = validateConfigObject({
+      agents: {
+        list: [{ id: "alpha", model: "anthropic/claude-3-5-sonnet" }],
+      },
+      bindings: [
+        {
+          type: "route",
+          agentId: "ghost",
+          match: { channel: "discord", peer: { kind: "direct", id: "user-1" } },
+        },
+      ],
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues.some((iss) => /Unknown agent id "ghost"/.test(iss.message))).toBe(true);
+    }
+  });
+
+  it("accepts bindings whose agentId is present in agents.list", () => {
+    const res = validateConfigObject({
+      agents: {
+        list: [{ id: "alpha", model: "anthropic/claude-3-5-sonnet" }],
+      },
+      bindings: [
+        {
+          type: "route",
+          agentId: "alpha",
+          match: { channel: "discord", peer: { kind: "direct", id: "user-1" } },
+        },
+      ],
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("skips binding agentId check when agents.list is empty (legacy passthrough)", () => {
+    const res = validateConfigObject({
+      bindings: [
+        {
+          type: "route",
+          agentId: "alpha",
+          match: { channel: "discord", peer: { kind: "direct", id: "user-1" } },
+        },
+      ],
+    });
+
+    expect(res.ok).toBe(true);
+  });
 });

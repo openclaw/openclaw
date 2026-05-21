@@ -1229,6 +1229,27 @@ export const OpenClawSchema = z
     }
     const agentIds = new Set(agents.map((agent) => agent.id));
 
+    // Bindings referencing a missing agent id silently misroute at gateway
+    // load time — see openclaw#84692. Only validate when agents.list is
+    // non-empty so legacy configs that haven't populated list yet still load.
+    const bindings = cfg.bindings;
+    if (Array.isArray(bindings)) {
+      for (let idx = 0; idx < bindings.length; idx += 1) {
+        const binding = bindings[idx];
+        if (!binding || typeof binding !== "object") {
+          continue;
+        }
+        const agentId = (binding as { agentId?: unknown }).agentId;
+        if (typeof agentId === "string" && !agentIds.has(agentId)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["bindings", idx, "agentId"],
+            message: `Unknown agent id "${agentId}" (not in agents.list).`,
+          });
+        }
+      }
+    }
+
     const broadcast = cfg.broadcast;
     if (!broadcast) {
       return;

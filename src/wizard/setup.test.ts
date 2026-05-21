@@ -550,7 +550,7 @@ describe("runSetupWizard", () => {
     );
     expectRecordFields(
       replaceParams.writeOptions,
-      { allowConfigSizeDrop: true },
+      { allowConfigSizeDrop: false },
       "config replacement write options",
     );
     expect(getMockCallArg(ensureWorkspaceAndSessions, 0, 0, "workspace setup")).toBe(workspaceDir);
