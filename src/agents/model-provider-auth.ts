@@ -1,13 +1,28 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   externalCliDiscoveryForProviderAuth,
+  externalCliDiscoveryForProviders,
   ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
   listProfilesForProvider,
   type AuthProfileStore,
 } from "./auth-profiles.js";
 import { hasRuntimeAvailableProviderAuth } from "./model-auth.js";
+import { loadModelCatalog } from "./model-catalog.js";
 import { normalizeProviderId } from "./model-selection.js";
+import { resolveDefaultAgentWorkspaceDir } from "./workspace.js";
+
+// Prepared runtime fact: which providers have available auth given the
+// current cfg + env. Populated explicitly at gateway startup and on config
+// reload; consulted by hasAuthForModelProvider so every model-listing call
+// (pickers, /models, status commands, CLI) skips the per-provider plugin
+// discovery and external-CLI probing on the hot path.
+
+let currentProviderAuthState: ReadonlyMap<string, boolean> | null = null;
+
+export function clearCurrentProviderAuthState(): void {
+  currentProviderAuthState = null;
+}
 
 export function hasAuthForModelProvider(params: {
   provider: string;
@@ -20,6 +35,10 @@ export function hasAuthForModelProvider(params: {
   discoverExternalCliAuth?: boolean;
 }): boolean {
   const provider = normalizeProviderId(params.provider);
+  const preparedAnswer = currentProviderAuthState?.get(provider);
+  if (preparedAnswer !== undefined) {
+    return preparedAnswer;
+  }
   if (
     hasRuntimeAvailableProviderAuth({
       provider,
@@ -73,4 +92,33 @@ export function createProviderAuthChecker(params: {
     authCache.set(key, value);
     return value;
   };
+}
+
+export async function warmCurrentProviderAuthState(cfg: OpenClawConfig): Promise<void> {
+  const catalog = await loadModelCatalog({ config: cfg });
+  const providers = new Set<string>();
+  for (const entry of catalog) {
+    providers.add(normalizeProviderId(entry.provider));
+  }
+  const workspaceDir = resolveDefaultAgentWorkspaceDir();
+  // One AuthProfileStore scoped to every candidate provider; without this the
+  // per-provider externalCli discovery rebuilds the store ~N times.
+  const store = ensureAuthProfileStore(undefined, {
+    config: cfg,
+    externalCli: externalCliDiscoveryForProviders({
+      cfg,
+      providers: [...providers],
+    }),
+  });
+  const state = new Map<string, boolean>();
+  for (const provider of providers) {
+    const value = hasAuthForModelProvider({
+      provider,
+      cfg,
+      workspaceDir,
+      store,
+    });
+    state.set(provider, value);
+  }
+  currentProviderAuthState = state;
 }

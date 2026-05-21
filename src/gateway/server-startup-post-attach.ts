@@ -1018,6 +1018,20 @@ export async function startGatewayPostAttachRuntime(
       params.log.warn(`gateway sidecars failed to start: ${String(err)}`);
     });
 
+  void sidecarsPromise
+    .then(async () => {
+      if (params.minimalTestGateway) {
+        return;
+      }
+      const { warmCurrentProviderAuthState } = await import("../agents/model-provider-auth.js");
+      const startMs = Date.now();
+      await warmCurrentProviderAuthState(params.cfgAtStart);
+      params.log.info(`provider auth state pre-warmed in ${Date.now() - startMs}ms`);
+    })
+    .catch((err) => {
+      params.log.warn(`provider auth state pre-warm failed: ${String(err)}`);
+    });
+
   if (params.deferSidecars !== true) {
     const [, tailscaleCleanup, sidecarsResult] = await Promise.all([
       startupLogPromise,
