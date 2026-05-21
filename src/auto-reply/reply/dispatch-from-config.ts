@@ -1227,8 +1227,28 @@ export async function dispatchReplyFromConfig(
 
     const isSlackNonDirectSurface =
       (ctx.Surface === "slack" || ctx.Provider === "slack") && ctx.ChatType !== "direct";
+    const isMultiParticipantChat = chatType === "group" || chatType === "channel";
+    // Carve out verbose tool progress on channel turns only when ALL of:
+    //   - resolved sourceReplyDeliveryMode is "message_tool_only" (proves the
+    //     message tool is actually available; if denied by tool policy the
+    //     resolver falls back to "automatic")
+    //   - the opt-in source is one of the legitimate paths (per-turn explicit
+    //     `params.replyOptions.sourceReplyDeliveryMode` per PR #80042, OR
+    //     configured `messages.groupChat.visibleReplies: "message_tool"`)
+    //     — NOT the unauthorized-text-slash-command suppression path that
+    //     also resolves to "message_tool_only"
+    //   - inbound event isn't a room_event (those have their own suppression
+    //     path and shouldn't be flagged as carrying explicit verbose tool
+    //     summaries in the reply_dispatch hook payload)
+    const isChannelExplicitMessageToolOptIn =
+      chatType === "channel" &&
+      ctx.InboundEventKind !== "room_event" &&
+      sourceReplyDeliveryMode === "message_tool_only" &&
+      (params.replyOptions?.sourceReplyDeliveryMode === "message_tool_only" ||
+        effectiveVisibleReplies === "message_tool");
     const shouldSendVerboseProgressMessages =
-      !isSlackNonDirectSurface && (ctx.ChatType !== "group" || ctx.IsForum === true);
+      !isSlackNonDirectSurface &&
+      (!isMultiParticipantChat || ctx.IsForum === true || isChannelExplicitMessageToolOptIn);
     const shouldSendToolSummaries = shouldSendVerboseProgressMessages;
     const shouldSendToolStartStatuses = false;
     const shouldDeliverVerboseProgressDespiteSourceSuppression = () =>

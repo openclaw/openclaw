@@ -6114,3 +6114,295 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(firstFinalReplyPayload(dispatcher)?.text).toBe("final reply");
   });
 });
+
+describe("channel verbose-progress suppression (issue #85000)", () => {
+  it("suppresses text-only tool summaries on default-mode non-room_event Matrix channel turns", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onToolResult?.({ text: "🛠️ `pwd (agent)`" });
+      return { text: "final" } satisfies ReplyPayload;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "matrix",
+        Surface: "matrix",
+        ChatType: "channel",
+        SessionKey: "test:matrix:channel:R1",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+    expect(result.queuedFinal).toBe(true);
+    expect(firstFinalReplyPayload(dispatcher)?.text).toBe("final");
+  });
+
+  it("preserves configured visibleReplies: message_tool opt-in for channel verbose progress", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+      verboseLevel: "on",
+    };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onToolResult?.({ text: "🛠️ `pwd (agent)`" });
+      return { text: "NO_REPLY" } satisfies ReplyPayload;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "matrix",
+        Surface: "matrix",
+        ChatType: "channel",
+        SessionKey: "test:matrix:channel:R1",
+      }),
+      cfg: {
+        messages: { groupChat: { visibleReplies: "message_tool" } },
+      } as OpenClawConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(dispatcher.sendToolResult).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "🛠️ `pwd (agent)`" }),
+    );
+  });
+
+  it("suppresses plan updates on default-mode Matrix channel turns even with verboseLevel: on", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+      verboseLevel: "on",
+    };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onPlanUpdate?.({ title: "do thing", steps: ["a", "b"] });
+      return { text: "final" } satisfies ReplyPayload;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "matrix",
+        Surface: "matrix",
+        ChatType: "channel",
+        SessionKey: "test:matrix:channel:R1",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+    expect(result.queuedFinal).toBe(true);
+  });
+
+  it("suppresses tool summaries on default-mode Discord channel turns (non-room_event)", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onToolResult?.({ text: "🛠️ `pwd (agent)`" });
+      return { text: "final" } satisfies ReplyPayload;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        ChatType: "channel",
+        SessionKey: "test:discord:channel:C1",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+    expect(result.queuedFinal).toBe(true);
+  });
+
+  it("delivers final reply on default-mode Matrix channel turns (over-suppression guard)", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "final reply" }) satisfies ReplyPayload);
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "matrix",
+        Surface: "matrix",
+        ChatType: "channel",
+        SessionKey: "test:matrix:channel:R1",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(result.queuedFinal).toBe(true);
+    expect(firstFinalReplyPayload(dispatcher)?.text).toBe("final reply");
+  });
+
+  it("preserves media-only tool payload pass-through on default-mode Matrix channel turns", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onToolResult?.({ mediaUrl: "https://example.test/screen.png" });
+      return { text: "final" } satisfies ReplyPayload;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "matrix",
+        Surface: "matrix",
+        ChatType: "channel",
+        SessionKey: "test:matrix:channel:R1",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendToolResult).toHaveBeenCalledWith(
+      expect.objectContaining({ mediaUrl: "https://example.test/screen.png" }),
+    );
+    expect(result.queuedFinal).toBe(true);
+  });
+
+  it("preserves verbose progress on channel turns when IsForum is true", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+      verboseLevel: "on",
+    };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onToolResult?.({ text: "🛠️ `pwd (agent)`" });
+      return { text: "final" } satisfies ReplyPayload;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "matrix",
+        Surface: "matrix",
+        ChatType: "channel",
+        IsForum: true,
+        SessionKey: "test:matrix:channel:R1",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendToolResult).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "🛠️ `pwd (agent)`" }),
+    );
+    expect(result.queuedFinal).toBe(true);
+  });
+
+  it("keeps unauthorized text slash command tool summaries suppressed on channel turns", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+      verboseLevel: "on",
+    };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onToolResult?.({ text: "🛠️ `pwd (agent)`" });
+      return { text: "final" } satisfies ReplyPayload;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "matrix",
+        Surface: "matrix",
+        ChatType: "channel",
+        CommandSource: "text",
+        CommandAuthorized: false,
+        CommandBody: "/status",
+        SessionKey: "test:matrix:channel:R1",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+  });
+
+  it("suppresses tool summaries when explicit message_tool_only request falls back because message tool is denied", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+      verboseLevel: "on",
+    };
+    const dispatcher = createDispatcher();
+    let resolverSawMode: string | undefined;
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      resolverSawMode = opts?.sourceReplyDeliveryMode;
+      await opts?.onToolResult?.({ text: "🛠️ `pwd (agent)`" });
+      return { text: "final" } satisfies ReplyPayload;
+    });
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "matrix",
+        Surface: "matrix",
+        ChatType: "channel",
+        SessionKey: "test:matrix:channel:R1",
+      }),
+      cfg: { tools: { allow: ["read"] } } as OpenClawConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    });
+
+    // Resolver sees the fallback mode "automatic" because the message tool is not allowed.
+    // The carve-out's AND on resolved sourceReplyDeliveryMode === "message_tool_only"
+    // is false here, so verbose tool summaries are NOT delivered.
+    expect(resolverSawMode).toBe("automatic");
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+  });
+});
