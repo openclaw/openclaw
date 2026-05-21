@@ -56,10 +56,7 @@ function resolveSourceReplyTarget(params: Record<string, unknown>): string | und
 }
 
 function resolveSourceReplyThreadId(params: SourceReplyTranscriptMirrorParams): string | undefined {
-  return (
-    readFirstString(params.actionParams, ["threadId", "messageThreadId"]) ??
-    normalizeOptionalString(params.toolContext?.currentThreadTs)
-  );
+  return readFirstString(params.actionParams, ["threadId", "messageThreadId"]);
 }
 
 function resolveThreadedSourceTarget(
@@ -137,7 +134,7 @@ export async function mirrorDeliveredSourceReplyToTranscript(
 
   const plan = createOutboundPayloadPlan([
     {
-      text: normalizeOptionalString(params.actionParams.message) ?? "",
+      text: readFirstString(params.actionParams, ["message", "content", "text", "caption"]) ?? "",
       mediaUrl: readFirstString(params.actionParams, [
         "mediaUrl",
         "media",

@@ -1359,6 +1359,102 @@ describe("gateway send mirroring", () => {
     });
   });
 
+  it("mirrors accepted source send text aliases", async () => {
+    mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
+      jsonResult({ ok: true, messageId: "tg-content-1" }),
+    );
+
+    const { respond } = await runMessageActionRequest({
+      channel: "telegram",
+      action: "send",
+      params: {
+        to: "chat-123",
+        content: "visible content alias reply",
+      },
+      sessionKey: "agent:main:telegram:direct:chat-123",
+      agentId: "main",
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "chat-123",
+      },
+      idempotencyKey: "idem-content-source-message-action",
+    });
+
+    expect(firstRespondCall(respond)[0]).toBe(true);
+    expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionKey: "agent:main:telegram:direct:chat-123",
+      text: "visible content alias reply",
+      mediaUrls: undefined,
+      idempotencyKey: "idem-content-source-message-action",
+      config: {},
+    });
+  });
+
+  it("keeps delivered source sends successful when transcript mirroring fails", async () => {
+    mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
+      jsonResult({ ok: true, messageId: "tg-mirror-failed" }),
+    );
+    mocks.appendAssistantMessageToSessionTranscript.mockRejectedValueOnce(
+      new Error("transcript unavailable"),
+    );
+
+    const { respond } = await runMessageActionRequest({
+      channel: "telegram",
+      action: "send",
+      params: {
+        to: "chat-123",
+        message: "visible source reply",
+      },
+      sessionKey: "agent:main:telegram:direct:chat-123",
+      agentId: "main",
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "chat-123",
+      },
+      idempotencyKey: "idem-source-message-action-mirror-failed",
+    });
+
+    const call = firstRespondCall(respond);
+    expect(call[0]).toBe(true);
+    expect(call[1]).toEqual({ ok: true, messageId: "tg-mirror-failed" });
+    expect(call[2]).toBeUndefined();
+    expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledOnce();
+  });
+
+  it("mirrors caption-only source sends with media", async () => {
+    mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
+      jsonResult({ ok: true, messageId: "tg-caption-1" }),
+    );
+
+    const { respond } = await runMessageActionRequest({
+      channel: "telegram",
+      action: "send",
+      params: {
+        to: "chat-123",
+        mediaUrl: "https://example.com/image.png",
+        caption: "visible media caption",
+      },
+      sessionKey: "agent:main:telegram:direct:chat-123",
+      agentId: "main",
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "chat-123",
+      },
+      idempotencyKey: "idem-caption-source-message-action",
+    });
+
+    expect(firstRespondCall(respond)[0]).toBe(true);
+    expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionKey: "agent:main:telegram:direct:chat-123",
+      text: "visible media caption",
+      mediaUrls: ["https://example.com/image.png"],
+      idempotencyKey: "idem-caption-source-message-action",
+      config: {},
+    });
+  });
+
   it("mirrors presentation-only source-conversation message.action sends", async () => {
     const telegramPlugin: ChannelPlugin = {
       id: "telegram",
@@ -1534,6 +1630,7 @@ describe("gateway send mirroring", () => {
       params: {
         to: "chat-123",
         message: "visible topic source reply",
+        messageThreadId: "77",
       },
       sessionKey: "agent:main:telegram:group:chat-123:topic:77",
       agentId: "main",
@@ -1554,6 +1651,62 @@ describe("gateway send mirroring", () => {
       idempotencyKey: "idem-topic-source-message-action",
       config: {},
     });
+  });
+
+  it("does not mirror topic context when delivery params target the parent chat", async () => {
+    const telegramTopicPlugin: ChannelPlugin = {
+      id: "telegram",
+      meta: {
+        id: "telegram",
+        label: "Telegram",
+        selectionLabel: "Telegram",
+        docsPath: "/channels/telegram",
+        blurb: "Telegram parent send transcript mirror test plugin.",
+      },
+      capabilities: { chatTypes: ["group"] },
+      config: {
+        listAccountIds: () => ["default"],
+        resolveAccount: () => ({ enabled: true }),
+        isConfigured: () => true,
+      },
+      actions: {
+        describeMessageTool: () => ({ actions: ["send"] }),
+        supportsAction: ({ action }) => action === "send",
+        handleAction: async () => jsonResult({ ok: true, messageId: "tg-parent-1" }),
+      },
+      threading: {
+        resolveCurrentChannelId: ({ to, threadId }) =>
+          threadId == null ? to : `${to}:topic:${threadId}`,
+      },
+    };
+    mocks.getChannelPlugin.mockReturnValue(telegramTopicPlugin);
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramTopicPlugin }]),
+      "send-test-topic-context-parent-message-action-mirror",
+    );
+    mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
+      jsonResult({ ok: true, messageId: "tg-parent-1" }),
+    );
+
+    const { respond } = await runMessageActionRequest({
+      channel: "telegram",
+      action: "send",
+      params: {
+        to: "chat-123",
+        message: "visible parent source reply",
+      },
+      sessionKey: "agent:main:telegram:group:chat-123:topic:77",
+      agentId: "main",
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "chat-123:topic:77",
+        currentThreadTs: "77",
+      },
+      idempotencyKey: "idem-topic-context-parent-message-action",
+    });
+
+    expect(firstRespondCall(respond)[0]).toBe(true);
+    expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
   });
 
   it("does not mirror message.action sends to a different target", async () => {
