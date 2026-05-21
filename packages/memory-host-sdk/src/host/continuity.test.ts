@@ -8,6 +8,8 @@ import {
   hasMaterialContinuityChange,
   parseContinuityDocument,
   RECENT_CONTINUITY_LATEST,
+  RECENT_CONTINUITY_SNAPSHOTS_DIR,
+  readRecentContinuitySnapshot,
   renderContinuitySnapshotMarkdown,
 } from "./continuity.js";
 
@@ -18,6 +20,27 @@ async function makeWorkspace(): Promise<string> {
   tempDirs.push(dir);
   await fs.mkdir(path.join(dir, "memory", "recent", "snapshots"), { recursive: true });
   return dir;
+}
+
+async function trySymlink(
+  target: string,
+  linkPath: string,
+  type: "file" | "dir",
+): Promise<boolean> {
+  try {
+    await fs.symlink(
+      target,
+      linkPath,
+      type === "dir" && process.platform === "win32" ? "junction" : type,
+    );
+    return true;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "EPERM" || code === "EACCES" || code === "ENOSYS") {
+      return false;
+    }
+    throw err;
+  }
 }
 
 afterEach(async () => {
@@ -227,6 +250,52 @@ describe("hasMaterialContinuityChange", () => {
         conversationSummary: "The updated summary captures new recovery context.",
       }),
     ).toBe(true);
+  });
+});
+
+describe("readRecentContinuitySnapshot", () => {
+  it("rejects symlinked latest.md and falls back to a regular snapshot", async () => {
+    const workspace = await makeWorkspace();
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-continuity-outside-"));
+    tempDirs.push(outside);
+    const outsideLatest = path.join(outside, "latest.md");
+    await fs.writeFile(outsideLatest, "# Outside Snapshot\n", "utf-8");
+
+    const symlinkCreated = await trySymlink(
+      outsideLatest,
+      path.join(workspace, RECENT_CONTINUITY_LATEST),
+      "file",
+    );
+    if (!symlinkCreated) {
+      return;
+    }
+
+    await fs.writeFile(
+      path.join(workspace, RECENT_CONTINUITY_SNAPSHOTS_DIR, "safe.md"),
+      "# Safe Snapshot\n",
+      "utf-8",
+    );
+
+    const snapshot = await readRecentContinuitySnapshot(workspace);
+    expect(snapshot?.path).toBe("memory/recent/snapshots/safe.md");
+    expect(snapshot?.content).toContain("Safe Snapshot");
+    expect(snapshot?.content).not.toContain("Outside Snapshot");
+  });
+
+  it("rejects a symlinked snapshots directory", async () => {
+    const workspace = await makeWorkspace();
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-continuity-outside-"));
+    tempDirs.push(outside);
+    await fs.writeFile(path.join(outside, "leak.md"), "# Outside Snapshot\n", "utf-8");
+
+    const snapshotsDir = path.join(workspace, RECENT_CONTINUITY_SNAPSHOTS_DIR);
+    await fs.rm(snapshotsDir, { recursive: true, force: true });
+    const symlinkCreated = await trySymlink(outside, snapshotsDir, "dir");
+    if (!symlinkCreated) {
+      return;
+    }
+
+    await expect(readRecentContinuitySnapshot(workspace)).resolves.toBeNull();
   });
 });
 

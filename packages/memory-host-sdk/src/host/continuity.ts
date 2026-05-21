@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import YAML from "yaml";
+import { readRegularFile, root, statRegularFile } from "./fs-utils.js";
 import { listMemoryFiles } from "./internal.js";
 
 export const RECENT_CONTINUITY_DIR = "memory/recent";
@@ -563,39 +564,63 @@ export async function readRecentContinuitySnapshot(workspaceDir: string): Promis
   path: string;
   content: string;
 } | null> {
+  const workspaceRoot = await root(workspaceDir);
   const latestPath = path.join(workspaceDir, RECENT_CONTINUITY_LATEST);
   try {
-    const content = await fs.readFile(latestPath, "utf-8");
-    return {
-      path: RECENT_CONTINUITY_LATEST,
-      content,
-    };
-  } catch {}
+    await workspaceRoot.resolve(RECENT_CONTINUITY_LATEST);
+    const stat = await statRegularFile(latestPath);
+    if (!stat.missing) {
+      const content = (await readRegularFile({ filePath: latestPath })).buffer.toString("utf-8");
+      return {
+        path: RECENT_CONTINUITY_LATEST,
+        content,
+      };
+    }
+  } catch {
+    // Fall through to older snapshots; unsafe latest.md candidates are ignored.
+  }
 
   const snapshotsDir = path.join(workspaceDir, RECENT_CONTINUITY_SNAPSHOTS_DIR);
   try {
+    await workspaceRoot.resolve(RECENT_CONTINUITY_SNAPSHOTS_DIR);
+    const snapshotsStat = await fs.lstat(snapshotsDir);
+    if (!snapshotsStat.isDirectory()) {
+      return null;
+    }
     const entries = await fs.readdir(snapshotsDir, { withFileTypes: true });
-    const files = await Promise.all(
-      entries
-        .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
-        .map(async (entry) => {
-          const absPath = path.join(snapshotsDir, entry.name);
-          const stat = await fs.stat(absPath);
-          return { absPath, mtimeMs: stat.mtimeMs };
-        }),
+    const files = (
+      await Promise.all(
+        entries
+          .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
+          .map(async (entry) => {
+            const relPath = `${RECENT_CONTINUITY_SNAPSHOTS_DIR}/${entry.name}`;
+            const absPath = path.join(snapshotsDir, entry.name);
+            try {
+              await workspaceRoot.resolve(relPath);
+              const stat = await statRegularFile(absPath);
+              if (stat.missing) {
+                return null;
+              }
+              return { absPath, relPath, mtimeMs: stat.stat.mtimeMs };
+            } catch {
+              return null;
+            }
+          }),
+      )
+    ).filter((entry): entry is { absPath: string; relPath: string; mtimeMs: number } =>
+      Boolean(entry),
     );
     const latest = files.toSorted((a, b) => b.mtimeMs - a.mtimeMs)[0];
     if (!latest) {
       return null;
     }
-    const content = await fs.readFile(latest.absPath, "utf-8");
+    const content = (await readRegularFile({ filePath: latest.absPath })).buffer.toString("utf-8");
     return {
-      path: path.relative(workspaceDir, latest.absPath).replace(/\\/g, "/"),
+      path: latest.relPath,
       content,
     };
-  } catch {
-    return null;
-  }
+  } catch {}
+  return null;
 }
 
 export async function buildContinuityManifest(params: {
