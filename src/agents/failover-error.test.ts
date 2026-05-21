@@ -950,6 +950,28 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ message: "deactivated workspace" })).toBe(
       "auth_permanent",
     );
+    expect(resolveFailoverReasonFromError({ code: "deactivated_workspace" })).toBe(
+      "auth_permanent",
+    );
+    expect(
+      resolveFailoverReasonFromError({
+        detail: { code: "deactivated_workspace" },
+      }),
+    ).toBe("auth_permanent");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 403,
+        message: "Forbidden",
+        detail: { code: "deactivated_workspace" },
+      }),
+    ).toBe("auth_permanent");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 400,
+        message: "Bad request",
+        detail: { code: "deactivated_workspace" },
+      }),
+    ).toBe("auth_permanent");
   });
 
   it("403 OpenRouter 'Key limit exceeded' returns billing (model fallback trigger)", () => {
