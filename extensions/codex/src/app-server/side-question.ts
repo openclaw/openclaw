@@ -36,12 +36,16 @@ import {
   buildCodexNativeHookRelayDisabledConfig,
   CODEX_NATIVE_HOOK_RELAY_EVENTS,
 } from "./native-hook-relay.js";
+import {
+  readCodexNotificationThreadId,
+  readCodexNotificationTurnId,
+} from "./notification-correlation.js";
 import { mergeCodexThreadConfigs } from "./plugin-thread-config.js";
 import {
   assertCodexThreadForkResponse,
   assertCodexTurnStartResponse,
   readCodexDynamicToolCallParams,
-  readCodexTurnCompletedNotification,
+  readCodexTurn,
 } from "./protocol-validators.js";
 import {
   isJsonObject,
@@ -913,8 +917,7 @@ class CodexSideQuestionCollector {
   }
 
   private completeFromTurn(params: JsonObject): void {
-    const notification = readCodexTurnCompletedNotification(params);
-    const turn = notification?.turn;
+    const turn = readCodexTurn(params.turn);
     if (!turn || turn.id !== this.turnId) {
       return;
     }
@@ -963,16 +966,13 @@ function collectAssistantText(turn: CodexTurn): string {
 }
 
 function isNotificationForTurn(params: JsonObject, threadId: string, turnId: string): boolean {
-  return readString(params, "threadId") === threadId && readNotificationTurnId(params) === turnId;
+  return (
+    readCodexNotificationThreadId(params) === threadId && readNotificationTurnId(params) === turnId
+  );
 }
 
 function readNotificationTurnId(record: JsonObject): string | undefined {
-  return readString(record, "turnId") ?? readNestedTurnId(record);
-}
-
-function readNestedTurnId(record: JsonObject): string | undefined {
-  const turn = record.turn;
-  return isJsonObject(turn) ? readString(turn, "id") : undefined;
+  return readCodexNotificationTurnId(record);
 }
 
 function readBooleanAlias(record: JsonObject, keys: readonly string[]): boolean | undefined {

@@ -256,6 +256,7 @@ export type CodexDynamicToolCallParams = {
 export type CodexDynamicToolCallResponse = {
   contentItems: CodexDynamicToolCallOutputContentItem[];
   diagnosticTerminalType?: CodexDynamicToolDiagnosticTerminalType;
+  sideEffectEvidence?: boolean;
   success: boolean;
 };
 

@@ -108,6 +108,11 @@ export type EmbeddedRunAttemptResult = {
   diagnosticTrace?: DiagnosticTraceContext;
   agentHarnessId?: string;
   agentHarnessResultClassification?: "empty" | "reasoning-only" | "planning-only";
+  promptTimeoutOutcome?: {
+    message?: string;
+    replayInvalid?: boolean;
+    livenessState?: EmbeddedRunLivenessState;
+  };
   bootstrapPromptWarningSignaturesSeen?: string[];
   bootstrapPromptWarningSignature?: string;
   systemPromptReport?: SessionSystemPromptReport;
