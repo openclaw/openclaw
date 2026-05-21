@@ -258,7 +258,7 @@ function buildNearAIModelDefinitionFromApi(model: NearAIModel): ModelDefinitionC
     typeof model.metadata?.modelDisplayName === "string" && model.metadata.modelDisplayName.trim()
       ? model.metadata.modelDisplayName.trim()
       : modelId;
-  return applyNearAIModelCompat({
+  const definition: ModelDefinitionConfig = {
     id: modelId,
     name,
     reasoning: resolveNearAIReasoning(model, modelId),
@@ -271,7 +271,8 @@ function buildNearAIModelDefinitionFromApi(model: NearAIModel): ModelDefinitionC
     },
     contextWindow,
     maxTokens: Math.min(contextWindow, NEARAI_DISCOVERY_MAX_TOKENS),
-  });
+  };
+  return applyNearAIModelCompat(definition);
 }
 
 type NearAIModelDiscoveryOptions = {

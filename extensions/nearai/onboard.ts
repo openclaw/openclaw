@@ -7,7 +7,7 @@ import {
   NEARAI_BASE_URL,
   NEARAI_DEFAULT_MODEL_REF,
   NEARAI_MODEL_CATALOG,
-} from "./api.js";
+} from "./models.js";
 
 export { NEARAI_DEFAULT_MODEL_REF };
 
