@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolveCodexAuthProfile, type QaAuthProfileSnapshot } from "./auth-profile-fixture.js";
+import { resolveCodexAuthProfile, type QaAuthProfileSnapshot } from "./auth-profile.fixture.js";
 
 export const CODEX_PLUGIN_CURRENT_VERSION = "2026.5.20";
 export const CODEX_PLUGIN_HEAD_VERSION = "head";

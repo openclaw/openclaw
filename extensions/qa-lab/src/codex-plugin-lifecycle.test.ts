@@ -7,7 +7,7 @@ import {
   resolveCodexAuthProfile,
   seedAuthProfiles,
   snapshotAuthProfiles,
-} from "./auth-profile-fixture.js";
+} from "./auth-profile.fixture.js";
 import {
   CODEX_PLUGIN_CURRENT_VERSION,
   CODEX_PLUGIN_LIFECYCLE_MESSAGES,
@@ -15,7 +15,7 @@ import {
   evaluateCodexPluginLifecycle,
   seedCodexPluginAt,
   snapshotCodexPluginState,
-} from "./codex-plugin-fixture.js";
+} from "./codex-plugin.fixture.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const tempDirs = createTempDirHarness();

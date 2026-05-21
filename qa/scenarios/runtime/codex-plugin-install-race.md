@@ -18,7 +18,7 @@ successCriteria:
 docsRefs:
   - docs/cli/plugins.md
 codeRefs:
-  - extensions/qa-lab/src/codex-plugin-fixture.ts
+  - extensions/qa-lab/src/codex-plugin.fixture.ts
   - extensions/qa-lab/src/codex-plugin-lifecycle.test.ts
 execution:
   kind: flow
@@ -34,7 +34,7 @@ steps:
     actions:
       - set: plugin
         value:
-          expr: await qaImport("./codex-plugin-fixture.js")
+          expr: await qaImport("./codex-plugin.fixture.js")
       - set: gate
         value:
           expr: plugin.createCodexPluginInstallGate()
