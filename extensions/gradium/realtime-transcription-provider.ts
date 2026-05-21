@@ -7,7 +7,7 @@ import {
   type RealtimeTranscriptionWebSocketTransport,
 } from "openclaw/plugin-sdk/realtime-transcription";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { DEFAULT_GRADIUM_BASE_URL, normalizeGradiumBaseUrl } from "./shared.js";
 
 type GradiumRealtimeInputFormat = "pcm" | "wav" | "opus" | "ulaw_8000" | "alaw_8000";
