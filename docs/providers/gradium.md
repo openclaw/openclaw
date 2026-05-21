@@ -1,12 +1,13 @@
 ---
-summary: "Use Gradium text-to-speech in OpenClaw"
+summary: "Use Gradium text-to-speech and realtime speech-to-text in OpenClaw"
 read_when:
   - You want Gradium for text-to-speech
+  - You want Gradium for realtime speech-to-text on Voice Call
   - You need Gradium API key, voice, or directive token configuration
 title: "Gradium"
 ---
 
-[Gradium](https://gradium.ai) is a bundled text-to-speech provider for OpenClaw. The plugin can render normal audio replies (WAV), voice-note-compatible Opus output, and 8 kHz u-law audio for telephony surfaces.
+[Gradium](https://gradium.ai) is a bundled speech provider for OpenClaw. The plugin can render normal audio replies (WAV), voice-note-compatible Opus output, and 8 kHz u-law audio for telephony surfaces. It can also stream Voice Call audio through Gradium's realtime ASR WebSocket for live transcription.
 
 | Property      | Value                                |
 | ------------- | ------------------------------------ |
@@ -116,6 +117,45 @@ The runtime picks the output format from the target surface. The provider does n
 ## Auto-select order
 
 Among configured TTS providers, Gradium's auto-select order is `30`. See [Text-to-Speech](/tools/tts) for how OpenClaw picks the active provider when `messages.tts.provider` is not pinned.
+
+## Realtime speech-to-text
+
+Gradium's realtime ASR WebSocket (`wss://api.gradium.ai/api/speech/asr`) is registered as a Voice Call streaming STT provider. Configure it under the voice-call plugin:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "voice-call": {
+        config: {
+          streaming: {
+            enabled: true,
+            provider: "gradium",
+            providers: {
+              gradium: {
+                // apiKey: "${GRADIUM_API_KEY}",
+                modelName: "default",
+                inputFormat: "ulaw_8000",
+                language: "en",
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+| Key                                                                         | Type   | Description                                                                                     |
+| --------------------------------------------------------------------------- | ------ | ----------------------------------------------------------------------------------------------- |
+| `plugins.entries.voice-call.config.streaming.providers.gradium.apiKey`      | string | Resolved API key. Supports `${ENV}` and secret refs; falls back to `GRADIUM_API_KEY`.           |
+| `plugins.entries.voice-call.config.streaming.providers.gradium.baseUrl`     | string | Override the API origin. Trailing slashes are stripped. Defaults to `https://api.gradium.ai`.   |
+| `plugins.entries.voice-call.config.streaming.providers.gradium.modelName`   | string | Gradium ASR model name. Defaults to `default`.                                                  |
+| `plugins.entries.voice-call.config.streaming.providers.gradium.inputFormat` | string | Audio input format: `pcm`, `wav`, `opus`, `ulaw_8000`, or `alaw_8000`. Defaults to `ulaw_8000`. |
+| `plugins.entries.voice-call.config.streaming.providers.gradium.language`    | string | Optional language hint passed in Gradium's setup payload.                                       |
+
+The default `ulaw_8000` input format matches the audio format Voice Call telephony bridges send.
 
 ## Related
 

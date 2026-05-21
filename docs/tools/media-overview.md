@@ -62,7 +62,7 @@ telephony, meetings, browser realtime, and native push-to-talk clients.
 | ElevenLabs  |       |       |       |  ✓  |  ✓  |                |                     |
 | fal         |   ✓   |   ✓   |   ✓   |     |     |                |                     |
 | Google      |   ✓   |   ✓   |   ✓   |  ✓  |     |       ✓        |          ✓          |
-| Gradium     |       |       |       |  ✓  |     |                |                     |
+| Gradium     |       |       |       |  ✓  |  ✓  |                |                     |
 | Local CLI   |       |       |       |  ✓  |     |                |                     |
 | Microsoft   |       |       |       |  ✓  |     |                |                     |
 | MiniMax     |   ✓   |   ✓   |   ✓   |  ✓  |     |                |                     |
@@ -111,9 +111,9 @@ parsing mark the transcribed attachment on the inbound context, so the shared
 media-understanding pass reuses that transcript instead of making a second
 STT call for the same audio.
 
-Deepgram, ElevenLabs, Mistral, OpenAI, and xAI also register Voice Call
-streaming STT providers, so live phone audio can be forwarded to the selected
-vendor without waiting for a completed recording.
+Deepgram, ElevenLabs, Gradium, Mistral, OpenAI, and xAI also register Voice
+Call streaming STT providers, so live phone audio can be forwarded to the
+selected vendor without waiting for a completed recording.
 
 For live user conversations, prefer [Talk mode](/nodes/talk). Batch audio
 attachments stay on the media path; browser realtime, native push-to-talk,
