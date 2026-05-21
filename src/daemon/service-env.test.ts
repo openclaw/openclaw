@@ -27,6 +27,8 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     expect(result).toContain("/home/testuser/.volta/bin");
     expect(result).toContain("/home/testuser/.asdf/shims");
     expect(result).toContain("/home/testuser/.local/share/pnpm");
+    expect(result).toContain("/home/testuser/.local/share/fnm/aliases/default/bin"); // fnm XDG default
+    expect(result).toContain("/home/testuser/.local/share/fnm/current/bin"); // fnm XDG legacy
     expect(result).toContain("/home/testuser/.bun/bin");
   });
 

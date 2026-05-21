@@ -384,8 +384,12 @@ function wrapTelegramChatNotFoundError(err: unknown, params: { chatId: string; i
   const safeInputPreview = (() => {
     const input = params.input;
     const MAX_INPUT_PREVIEW_LENGTH = 128;
-    const truncated = input.length > MAX_INPUT_PREVIEW_LENGTH ? input.slice(0, MAX_INPUT_PREVIEW_LENGTH) + "…" : input;
-    return redactSensitiveText(JSON.stringify(truncated));
+    const redacted = redactSensitiveText(JSON.stringify(input));
+    const truncated =
+      redacted.length > MAX_INPUT_PREVIEW_LENGTH
+        ? redacted.slice(0, MAX_INPUT_PREVIEW_LENGTH) + "…"
+        : redacted;
+    return truncated;
   })();
   return new Error(
     [

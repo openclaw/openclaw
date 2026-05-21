@@ -169,6 +169,9 @@ export function resolveLinuxUserBinDirs(
   dirs.push(`${home}/.fnm/aliases/default/bin`); // fnm
   dirs.push(`${home}/.fnm/current/bin`); // fnm legacy
   dirs.push(`${home}/.local/share/pnpm`); // pnpm global bin
+  // XDG compatible paths for Linux fnm
+  dirs.push(`${home}/.local/share/fnm/aliases/default/bin`); // fnm XDG default
+  dirs.push(`${home}/.local/share/fnm/current/bin`); // fnm XDG legacy
 
   return dirs;
 }
