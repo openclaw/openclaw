@@ -74,6 +74,7 @@ function hasAnyDiscordChannelAllowlist(
 
 type DiscordReadTargetContext = {
   channelId: string;
+  guildId?: string;
   channelName?: string;
   channelSlug: string;
   parentId?: string;
@@ -135,6 +136,23 @@ function isDiscordReadTargetAllowedInGuild(params: {
   });
 }
 
+function isDiscordReadTargetExplicitlyAllowedById(params: {
+  groupPolicy: "open" | "disabled" | "allowlist";
+  guildInfo: DiscordGuildEntryResolved | null;
+  target: DiscordReadTargetContext;
+}): boolean {
+  const channelEntry = params.guildInfo?.channels?.[params.target.channelId];
+  if (!channelEntry || channelEntry.enabled === false) {
+    return false;
+  }
+  return isDiscordGroupAllowedByPolicy({
+    groupPolicy: params.groupPolicy,
+    guildAllowlisted: Boolean(params.guildInfo),
+    channelAllowlistConfigured: true,
+    channelAllowed: true,
+  });
+}
+
 export function createDiscordMessagingActionContext(params: {
   action: string;
   input: Record<string, unknown>;
@@ -182,6 +200,10 @@ export function createDiscordMessagingActionContext(params: {
       channelId,
       channelSlug: channelName ? normalizeDiscordSlug(channelName) : fallback.channelSlug,
     };
+    const targetGuildId = readDiscordChannelStringField(channelInfo, "guild_id", "guildId");
+    if (targetGuildId) {
+      target.guildId = targetGuildId;
+    }
     if (channelName) {
       target.channelName = channelName;
     }
@@ -228,6 +250,9 @@ export function createDiscordMessagingActionContext(params: {
       }
       const target = await resolveReadTargetContext(targetChannelId);
       if (guildId) {
+        if (target.guildId && target.guildId !== guildId) {
+          throw new Error("Discord read target channel is not allowed.");
+        }
         const guildInfo = resolveDiscordActionGuildEntry({ guilds, guildId });
         if (
           !isDiscordReadTargetAllowedInGuild({
@@ -240,8 +265,21 @@ export function createDiscordMessagingActionContext(params: {
         }
         return;
       }
+      if (target.guildId) {
+        const guildInfo = resolveDiscordActionGuildEntry({ guilds, guildId: target.guildId });
+        if (
+          !isDiscordReadTargetAllowedInGuild({
+            groupPolicy,
+            guildInfo,
+            target,
+          })
+        ) {
+          throw new Error("Discord read target channel is not allowed.");
+        }
+        return;
+      }
       const allowed = Object.values(guilds ?? {}).some((guildInfo) =>
-        isDiscordReadTargetAllowedInGuild({
+        isDiscordReadTargetExplicitlyAllowedById({
           groupPolicy,
           guildInfo: guildInfo ?? null,
           target,

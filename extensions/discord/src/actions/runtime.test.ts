@@ -561,6 +561,75 @@ describe("handleDiscordMessagingAction", () => {
     expect(fetchMessageDiscord).toHaveBeenCalledWith("333", "444", { cfg });
   });
 
+  it("rejects Discord message links when the fetched channel belongs to a different guild", async () => {
+    fetchChannelInfoDiscord.mockImplementation(async (channelId: string) => ({
+      id: channelId,
+      guild_id: "222",
+      name: "allowed-channel",
+      type: 0,
+    }));
+    const cfg = {
+      channels: {
+        discord: {
+          token: "token",
+          groupPolicy: "allowlist",
+          guilds: {
+            "111": {
+              channels: {
+                "allowed-channel": { enabled: true },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      handleMessagingAction(
+        "fetchMessage",
+        { messageLink: "https://discord.com/channels/111/333/444" },
+        enableAllActions,
+        cfg,
+      ),
+    ).rejects.toThrow("Discord read target channel is not allowed.");
+    expect(fetchMessageDiscord).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { action: "readMessages", runtimeCall: readMessagesDiscord },
+    { action: "listPins", runtimeCall: listPinsDiscord },
+  ])(
+    "rejects Discord $action when the fetched guild is not allowlisted by a matching channel name",
+    async ({ action, runtimeCall }) => {
+      fetchChannelInfoDiscord.mockImplementation(async (channelId: string) => ({
+        id: channelId,
+        guild_id: "222",
+        name: "allowed-channel",
+        type: 0,
+      }));
+      const cfg = {
+        channels: {
+          discord: {
+            token: "token",
+            groupPolicy: "allowlist",
+            guilds: {
+              "111": {
+                channels: {
+                  "allowed-channel": { enabled: true },
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      await expect(
+        handleMessagingAction(action, { channelId: "333" }, enableAllActions, cfg),
+      ).rejects.toThrow("Discord read target channel is not allowed.");
+      expect(runtimeCall).not.toHaveBeenCalled();
+    },
+  );
+
   it("adds normalized timestamps to listPins payloads", async () => {
     listPinsDiscord.mockResolvedValueOnce([{ id: "1", timestamp: "2026-01-15T12:00:00.000Z" }]);
 
