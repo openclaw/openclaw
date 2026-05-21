@@ -106,7 +106,10 @@ import {
 } from "./compaction-safety-timeout.js";
 import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
-import { hasMessagingToolDeliveryEvidence } from "./delivery-evidence.js";
+import {
+  hasMessagingToolDeliveryEvidence,
+  hasOutboundDeliveryEvidence,
+} from "./delivery-evidence.js";
 import { resolveEmbeddedRunFailureSignal } from "./failure-signal.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
@@ -251,6 +254,7 @@ function normalizeEmbeddedRunAttemptResult(
   const raw = attempt as EmbeddedRunAttemptForRunner & {
     assistantTexts?: EmbeddedRunAttemptForRunner["assistantTexts"] | null;
     toolMetas?: EmbeddedRunAttemptForRunner["toolMetas"] | null;
+    acceptedSessionSpawns?: EmbeddedRunAttemptForRunner["acceptedSessionSpawns"] | null;
     messagesSnapshot?: EmbeddedRunAttemptForRunner["messagesSnapshot"] | null;
     messagingToolSentTexts?: EmbeddedRunAttemptForRunner["messagingToolSentTexts"] | null;
     messagingToolSentMediaUrls?: EmbeddedRunAttemptForRunner["messagingToolSentMediaUrls"] | null;
@@ -264,6 +268,7 @@ function normalizeEmbeddedRunAttemptResult(
     ...attempt,
     assistantTexts: raw.assistantTexts ?? [],
     toolMetas: raw.toolMetas ?? [],
+    acceptedSessionSpawns: raw.acceptedSessionSpawns ?? [],
     messagesSnapshot: raw.messagesSnapshot ?? [],
     messagingToolSentTexts: raw.messagingToolSentTexts ?? [],
     messagingToolSentMediaUrls: raw.messagingToolSentMediaUrls ?? [],
@@ -283,7 +288,7 @@ function hasCompletedModelProgressForIdleBreaker(attempt: EmbeddedRunAttemptForR
     attempt.assistantTexts.some((text) => text.trim().length > 0) ||
     attempt.toolMetas.length > 0 ||
     (attempt.clientToolCalls?.length ?? 0) > 0 ||
-    hasMessagingToolDeliveryEvidence(attempt) ||
+    hasOutboundDeliveryEvidence(attempt) ||
     attempt.itemLifecycle.completedCount > 0
   );
 }
@@ -1652,7 +1657,7 @@ export async function runEmbeddedPiAgent(
               ? sessionLastAssistant.errorMessage?.trim() || formattedAssistantErrorText
               : undefined;
           const canRestartForLiveSwitch =
-            !hasMessagingToolDeliveryEvidence(attempt) &&
+            !hasOutboundDeliveryEvidence(attempt) &&
             !attempt.didSendDeterministicApprovalPrompt &&
             !attempt.lastToolError &&
             (attempt.toolMetas?.length ?? 0) === 0 &&
@@ -2739,6 +2744,7 @@ export async function runEmbeddedPiAgent(
               messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
               heartbeatToolResponse: attempt.heartbeatToolResponse,
               successfulCronAdds: attempt.successfulCronAdds,
+              acceptedSessionSpawns: attempt.acceptedSessionSpawns,
             };
           }
 
@@ -2962,6 +2968,7 @@ export async function runEmbeddedPiAgent(
               messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
               heartbeatToolResponse: attempt.heartbeatToolResponse,
               successfulCronAdds: attempt.successfulCronAdds,
+              acceptedSessionSpawns: attempt.acceptedSessionSpawns,
             };
           }
           if (reasoningOnlyRetriesExhausted && !finalAssistantVisibleText) {
@@ -3014,6 +3021,7 @@ export async function runEmbeddedPiAgent(
               messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
               heartbeatToolResponse: attempt.heartbeatToolResponse,
               successfulCronAdds: attempt.successfulCronAdds,
+              acceptedSessionSpawns: attempt.acceptedSessionSpawns,
             };
           }
           if (
@@ -3125,6 +3133,7 @@ export async function runEmbeddedPiAgent(
               messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
               heartbeatToolResponse: attempt.heartbeatToolResponse,
               successfulCronAdds: attempt.successfulCronAdds,
+              acceptedSessionSpawns: attempt.acceptedSessionSpawns,
             };
           }
 
@@ -3241,6 +3250,7 @@ export async function runEmbeddedPiAgent(
             messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
             heartbeatToolResponse: attempt.heartbeatToolResponse,
             successfulCronAdds: attempt.successfulCronAdds,
+            acceptedSessionSpawns: attempt.acceptedSessionSpawns,
           };
         }
       } finally {
