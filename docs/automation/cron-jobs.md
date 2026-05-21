@@ -226,7 +226,8 @@ Gateway can expose HTTP webhook endpoints for external triggers. Enable in confi
 {
   hooks: {
     enabled: true,
-    token: "shared-secret",
+    // Use either token or tokenFile. Prefer tokenFile for secret-manager mounts.
+    tokenFile: "/run/secrets/openclaw-hooks-token",
     path: "/hooks",
   },
 }
@@ -234,7 +235,12 @@ Gateway can expose HTTP webhook endpoints for external triggers. Enable in confi
 
 ### Authentication
 
-Every request must include the hook token via header:
+Every request must include the hook token via header. Configure exactly one of `hooks.token`
+(inline) or `hooks.tokenFile` (path to a local file containing the token). Use
+`hooks.tokenFile` for secret-manager mounts or locked-down local files so the token
+is not stored directly in the config.
+
+The request token can be sent as:
 
 - `Authorization: Bearer <token>` (recommended)
 - `x-openclaw-token: <token>`
@@ -282,6 +288,7 @@ Query-string tokens are rejected.
 Keep hook endpoints behind loopback, tailnet, or trusted reverse proxy.
 
 - Use a dedicated hook token; do not reuse gateway auth tokens.
+- Prefer `hooks.tokenFile` over inline `hooks.token` when deploying with mounted secrets; configure only one of them.
 - Keep `hooks.path` on a dedicated subpath; `/` is rejected.
 - Set `hooks.allowedAgentIds` to limit explicit `agentId` routing.
 - Keep `hooks.allowRequestSessionKey=false` unless you require caller-selected sessions.

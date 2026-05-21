@@ -653,7 +653,8 @@ See [Multiple Gateways](/gateway/multiple-gateways).
 {
   hooks: {
     enabled: true,
-    token: "shared-secret",
+    // Use either token or tokenFile. Prefer tokenFile for mounted secrets.
+    tokenFile: "/run/secrets/openclaw-hooks-token",
     path: "/hooks",
     maxBodyBytes: 262144,
     defaultSessionKey: "hook:ingress",
@@ -685,8 +686,8 @@ Query-string hook tokens are rejected.
 
 Validation and safety notes:
 
-- `hooks.enabled=true` requires a non-empty `hooks.token`.
-- `hooks.token` must be **distinct** from `gateway.auth.token`; reusing the Gateway token is rejected.
+- `hooks.enabled=true` requires exactly one of `hooks.token` or `hooks.tokenFile`.
+- The resolved hook token must be **distinct** from `gateway.auth.token`; reusing the Gateway token is rejected.
 - `hooks.path` cannot be `/`; use a dedicated subpath such as `/hooks`.
 - If `hooks.allowRequestSessionKey=true`, constrain `hooks.allowedSessionKeyPrefixes` (for example `["hook:"]`).
 - If a mapping or preset uses a templated `sessionKey`, set `hooks.allowedSessionKeyPrefixes` and `hooks.allowRequestSessionKey=true`. Static mapping keys do not require that opt-in.

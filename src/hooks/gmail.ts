@@ -5,6 +5,7 @@ import {
   type HooksGmailTailscaleMode,
   resolveGatewayPort,
 } from "../config/config.js";
+import { resolveHookTokenFromConfig } from "./token.js";
 
 export const DEFAULT_GMAIL_LABEL = "INBOX";
 export const DEFAULT_GMAIL_TOPIC = "gog-gmail-watch";
@@ -63,6 +64,30 @@ export function generateHookToken(bytes = 24): string {
   return randomBytes(bytes).toString("hex");
 }
 
+export function resolveGmailSetupHookToken(
+  hooks: OpenClawConfig["hooks"] | undefined,
+  overrideHookToken?: string,
+): {
+  hookToken: string;
+  hooksAuth: Pick<NonNullable<OpenClawConfig["hooks"]>, "token" | "tokenFile">;
+} {
+  if (overrideHookToken !== undefined) {
+    const hookToken = overrideHookToken.trim();
+    return { hookToken, hooksAuth: { token: hookToken, tokenFile: undefined } };
+  }
+
+  if (hooks?.tokenFile) {
+    return {
+      hookToken: resolveHookTokenFromConfig(hooks),
+      hooksAuth: { token: undefined, tokenFile: hooks.tokenFile },
+    };
+  }
+
+  const existingToken = resolveHookTokenFromConfig(hooks);
+  const hookToken = existingToken || generateHookToken();
+  return { hookToken, hooksAuth: { token: hookToken, tokenFile: undefined } };
+}
+
 export function mergeHookPresets(existing: string[] | undefined, preset: string): string[] {
   const next = new Set((existing ?? []).map((item) => item.trim()).filter(Boolean));
   next.add(preset);
@@ -104,9 +129,9 @@ export function resolveGmailHookRuntimeConfig(
 ): { ok: true; value: GmailHookRuntimeConfig } | { ok: false; error: string } {
   const hooks = cfg.hooks;
   const gmail = hooks?.gmail;
-  const hookToken = overrides.hookToken ?? hooks?.token ?? "";
+  const hookToken = overrides.hookToken ?? resolveHookTokenFromConfig(hooks);
   if (!hookToken) {
-    return { ok: false, error: "hooks.token missing (needed for gmail hook)" };
+    return { ok: false, error: "hooks.token or hooks.tokenFile missing (needed for gmail hook)" };
   }
 
   const account = overrides.account ?? gmail?.account ?? "";

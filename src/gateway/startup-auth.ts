@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import type { GatewayAuthConfig, GatewayTailscaleConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveHookTokenFromConfig } from "../hooks/token.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   hasConfiguredGatewayAuthSecretInput,
@@ -228,7 +229,7 @@ export function assertHooksTokenSeparateFromGatewayAuth(params: {
   if (params.cfg.hooks?.enabled !== true) {
     return;
   }
-  const hooksToken = normalizeOptionalString(params.cfg.hooks.token) ?? "";
+  const hooksToken = normalizeOptionalString(resolveHookTokenFromConfig(params.cfg.hooks)) ?? "";
   if (!hooksToken) {
     return;
   }

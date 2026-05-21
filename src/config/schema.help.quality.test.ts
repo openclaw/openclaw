@@ -227,6 +227,7 @@ const TARGET_KEYS = [
   "hooks.enabled",
   "hooks.path",
   "hooks.token",
+  "hooks.tokenFile",
   "hooks.defaultSessionKey",
   "hooks.allowRequestSessionKey",
   "hooks.allowedSessionKeyPrefixes",

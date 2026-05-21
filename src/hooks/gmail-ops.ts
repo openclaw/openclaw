@@ -47,6 +47,7 @@ import {
   normalizeServePath,
   parseTopicPath,
   resolveGmailHookRuntimeConfig,
+  resolveGmailSetupHookToken,
 } from "./gmail.js";
 
 type GmailCommonOptions = {
@@ -128,7 +129,8 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
 
   const baseConfig = configSnapshot.config;
   const hooksPath = normalizeHooksPath(baseConfig.hooks?.path);
-  const hookToken = opts.hookToken ?? baseConfig.hooks?.token ?? generateHookToken();
+  const setupHookToken = resolveGmailSetupHookToken(baseConfig.hooks, opts.hookToken);
+  const hookToken = setupHookToken.hookToken;
   const pushToken = opts.pushToken ?? baseConfig.hooks?.gmail?.pushToken ?? generateHookToken();
 
   const topicInput = opts.topic ?? baseConfig.hooks?.gmail?.topic ?? DEFAULT_GMAIL_TOPIC;
@@ -240,7 +242,7 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
       ...baseConfig.hooks,
       enabled: true,
       path: hooksPath,
-      token: hookToken,
+      ...setupHookToken.hooksAuth,
       presets: mergeHookPresets(baseConfig.hooks?.presets, "gmail"),
       gmail: {
         ...baseConfig.hooks?.gmail,

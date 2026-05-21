@@ -1692,6 +1692,8 @@ export const FIELD_HELP: Record<string, string> = {
     "HTTP path used by the hooks endpoint (for example `/hooks`) on the gateway control server. Use a non-guessable path and combine it with token validation for defense in depth.",
   "hooks.token":
     "Shared bearer token checked by hooks ingress for request authentication before mappings run. Treat holders as full-trust callers for the hook ingress surface, not as a separate non-owner role. Use environment substitution and rotate regularly when webhook endpoints are internet-accessible.",
+  "hooks.tokenFile":
+    "Path to a local file containing the hooks bearer token, read at runtime instead of storing the secret inline in config. Use this for secret-manager mounts or locked-down files, and do not configure it together with hooks.token.",
   "hooks.defaultSessionKey":
     "Fallback session key used for hook deliveries when a request does not provide one through allowed channels. Use a stable but scoped key to avoid mixing unrelated automation conversations.",
   "hooks.allowRequestSessionKey":

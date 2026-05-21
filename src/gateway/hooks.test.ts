@@ -1,4 +1,7 @@
+import fs from "node:fs";
 import type { IncomingMessage } from "node:http";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -79,6 +82,49 @@ describe("gateway hooks helpers", () => {
     expect(resolved?.basePath).toBe("/hooks");
     expect(resolved?.token).toBe("secret");
     expect(resolved?.sessionPolicy.allowRequestSessionKey).toBe(false);
+  });
+
+  test("resolveHooksConfig reads hooks token from tokenFile", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-token-"));
+    const tokenFile = path.join(dir, "hooks.token");
+    fs.writeFileSync(tokenFile, "file-secret\n", { mode: 0o600 });
+    try {
+      const resolved = resolveHooksConfig({
+        hooks: {
+          enabled: true,
+          tokenFile,
+          path: "hooks///",
+        },
+      } as OpenClawConfig);
+      expect(resolved?.basePath).toBe("/hooks");
+      expect(resolved?.token).toBe("file-secret");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("resolveHooksConfig rejects symlinked hook tokenFile", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-token-link-"));
+    const tokenFile = path.join(dir, "hooks.token");
+    const linkFile = path.join(dir, "hooks-link.token");
+    fs.writeFileSync(tokenFile, "file-secret\n", { mode: 0o600 });
+    fs.symlinkSync(tokenFile, linkFile);
+    try {
+      expect(() =>
+        resolveHooksConfig({
+          hooks: {
+            enabled: true,
+            tokenFile: linkFile,
+            path: "hooks///",
+          },
+        } as OpenClawConfig),
+      ).toThrow(`Hooks token file at ${linkFile} must not be a symlink.`);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("resolveHooksConfig rejects root path", () => {

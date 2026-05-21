@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { KNOWN_WEAK_GATEWAY_TOKEN_PLACEHOLDERS } from "./known-weak-gateway-secrets.js";
@@ -578,6 +581,32 @@ describe("assertHooksTokenSeparateFromGatewayAuth", () => {
         },
       }),
     ).toThrow(/hooks\.token must not match gateway auth token/i);
+  });
+
+  it("throws when hooks tokenFile resolves to the gateway token auth", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-token-"));
+    const tokenFile = path.join(dir, "hooks.token");
+    fs.writeFileSync(tokenFile, "shared-gateway-token-1234567890\n", { mode: 0o600 });
+    try {
+      expect(() =>
+        assertHooksTokenSeparateFromGatewayAuth({
+          cfg: {
+            hooks: {
+              enabled: true,
+              tokenFile,
+            },
+          },
+          auth: {
+            mode: "token",
+            modeSource: "config",
+            token: "shared-gateway-token-1234567890",
+            allowTailscale: false,
+          },
+        }),
+      ).toThrow(/hooks\.token must not match gateway auth token/i);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("allows hooks token when gateway auth is not token mode", () => {
