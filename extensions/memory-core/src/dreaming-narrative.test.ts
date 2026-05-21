@@ -1152,7 +1152,7 @@ describe("runDetachedDreamNarrative", () => {
       d.resolve({ runId: "drain" });
     }
     await vi.waitFor(() => {
-      expect(subagent.deleteSession).toHaveBeenCalledTimes(5);
+      expect(subagent.deleteSession).toHaveBeenCalledTimes(10);
     });
     expect(subagent.run).toHaveBeenCalledTimes(5);
     expect(subagent.waitForRun).toHaveBeenCalledTimes(5);
