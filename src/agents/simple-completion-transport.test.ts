@@ -7,6 +7,7 @@ const ensureCustomApiRegistered = vi.fn();
 const resolveProviderStreamFn = vi.fn();
 const buildTransportAwareSimpleStreamFn = vi.fn();
 const prepareTransportAwareSimpleModel = vi.fn();
+const prepareGoogleSimpleCompletionModel = vi.fn((model: unknown) => model);
 
 vi.mock("./anthropic-vertex-stream.js", () => ({
   createAnthropicVertexStreamFnForModel,
@@ -14,6 +15,10 @@ vi.mock("./anthropic-vertex-stream.js", () => ({
 
 vi.mock("./custom-api-registry.js", () => ({
   ensureCustomApiRegistered,
+}));
+
+vi.mock("./google-simple-completion-stream.js", () => ({
+  prepareGoogleSimpleCompletionModel,
 }));
 
 vi.mock("./provider-transport-stream.js", () => ({
@@ -44,6 +49,8 @@ describe("prepareModelForSimpleCompletion", () => {
     resolveProviderStreamFn.mockReset();
     buildTransportAwareSimpleStreamFn.mockReset();
     prepareTransportAwareSimpleModel.mockReset();
+    prepareGoogleSimpleCompletionModel.mockReset();
+    prepareGoogleSimpleCompletionModel.mockImplementation((model) => model);
     createAnthropicVertexStreamFnForModel.mockReturnValue("vertex-stream");
     resolveProviderStreamFn.mockReturnValue("ollama-stream");
     buildTransportAwareSimpleStreamFn.mockReturnValue(undefined);
@@ -124,6 +131,35 @@ describe("prepareModelForSimpleCompletion", () => {
       ...model,
       api: "openclaw-anthropic-vertex-simple:https%3A%2F%2Fus-central1-aiplatform.googleapis.com",
     });
+  });
+
+  it("swaps Google generative-ai models onto the OpenClaw simple-completion alias", () => {
+    const model: Model<"google-generative-ai"> = {
+      id: "gemini-flash-latest",
+      name: "Gemini Flash Latest",
+      api: "google-generative-ai",
+      provider: "google",
+      baseUrl: "https://generativelanguage.googleapis.com",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1_000_000,
+      maxTokens: 8192,
+      headers: {},
+    };
+    resolveProviderStreamFn.mockReturnValueOnce(undefined);
+    prepareGoogleSimpleCompletionModel.mockImplementationOnce((m: Model<"google-generative-ai">) => ({
+      ...m,
+      api: "openclaw-google-generative-ai-simple",
+    }));
+
+    const result = prepareModelForSimpleCompletion({ model });
+
+    expect(prepareGoogleSimpleCompletionModel).toHaveBeenCalledWith(model);
+    expect(result.api).toBe("openclaw-google-generative-ai-simple");
+    // Should not have fallen through to transport-aware or Anthropic Vertex.
+    expect(prepareTransportAwareSimpleModel).not.toHaveBeenCalled();
+    expect(createAnthropicVertexStreamFnForModel).not.toHaveBeenCalled();
   });
 
   it("uses a transport-aware custom api alias when llm request transport overrides are present", () => {
