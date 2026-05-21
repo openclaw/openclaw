@@ -1,11 +1,7 @@
-import os from "node:os";
-import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildDiskSpaceWarnings,
-  findExistingAncestor,
   formatBytes,
-  getAvailableBytes,
   noteDiskSpace,
 } from "./doctor-disk-space.js";
 
@@ -30,6 +26,10 @@ describe("formatBytes", () => {
     expect(formatBytes(50 * 1024 * 1024)).toBe("50 MB");
   });
 
+  it("floors megabytes to avoid crossing a threshold (99.6 MB -> 99 MB)", () => {
+    expect(formatBytes(Math.floor(99.6 * 1024 * 1024))).toBe("99 MB");
+  });
+
   it("formats gigabytes with one decimal", () => {
     expect(formatBytes(2.5 * 1024 * 1024 * 1024)).toBe("2.5 GB");
   });
@@ -44,61 +44,6 @@ describe("formatBytes", () => {
 
   it("returns unknown for Infinity", () => {
     expect(formatBytes(Number.POSITIVE_INFINITY)).toBe("unknown");
-  });
-});
-
-describe("findExistingAncestor", () => {
-  const tmpDir = os.tmpdir();
-  const fsRoot = path.parse(tmpDir).root;
-
-  it("returns the path itself when it exists", () => {
-    const result = findExistingAncestor(tmpDir);
-    expect(result).toBe(path.resolve(tmpDir));
-  });
-
-  it("returns parent when child does not exist", () => {
-    const result = findExistingAncestor(path.join(tmpDir, "nonexistent-openclaw-test-dir-12345"));
-    expect(result).toBe(path.resolve(tmpDir));
-  });
-
-  it("walks up multiple levels", () => {
-    const result = findExistingAncestor(
-      path.join(tmpDir, "nonexistent-a", "nonexistent-b", "nonexistent-c"),
-    );
-    expect(result).toBe(path.resolve(tmpDir));
-  });
-
-  it("returns root for deeply nonexistent paths", () => {
-    const result = findExistingAncestor(
-      path.join(fsRoot, "nonexistent-openclaw-root-test", "deep", "path"),
-    );
-    expect(result).toBe(path.resolve(fsRoot));
-  });
-});
-
-describe("getAvailableBytes", () => {
-  const tmpDir = os.tmpdir();
-
-  it("returns available bytes from statfsSync", () => {
-    const mockStatfs = vi.fn().mockReturnValue({ bavail: 1000n, bsize: 4096n });
-    const result = getAvailableBytes("/some/path", { statfsSync: mockStatfs });
-    expect(result).toBe(4096000);
-  });
-
-  it("returns null when statfsSync throws", () => {
-    const mockStatfs = vi.fn().mockImplementation(() => {
-      throw new Error("ENOENT");
-    });
-    const result = getAvailableBytes("/missing/path", { statfsSync: mockStatfs });
-    expect(result).toBeNull();
-  });
-
-  it("probes ancestor when target dir does not exist", () => {
-    const nonexistent = path.join(tmpDir, "nonexistent-openclaw-test-dir-67890");
-    const mockStatfs = vi.fn().mockReturnValue({ bavail: 500n, bsize: 4096n });
-    const result = getAvailableBytes(nonexistent, { statfsSync: mockStatfs });
-    expect(result).toBe(2048000);
-    expect(mockStatfs).toHaveBeenCalledWith(path.resolve(tmpDir));
   });
 });
 
@@ -171,13 +116,11 @@ describe("buildDiskSpaceWarnings", () => {
 describe("noteDiskSpace", () => {
   it("calls note when space is below warning threshold", async () => {
     const { note: mockNote } = await import("../terminal/note.js");
-
     vi.mocked(mockNote).mockClear();
 
-    const mockStatfs = vi.fn().mockReturnValue({ bavail: 100n, bsize: 1048576n });
     noteDiskSpace({ gateway: { mode: "local" } } as never, {
       env: { HOME: "/home/test" },
-      statfsSync: mockStatfs,
+      readDiskSpace: () => ({ availableBytes: 300 * 1024 * 1024 }),
     });
 
     expect(mockNote).toHaveBeenCalledOnce();
@@ -186,31 +129,39 @@ describe("noteDiskSpace", () => {
     expect(message).toContain("Low disk space");
   });
 
-  it("does not call note when space is sufficient", async () => {
+  it("calls note with CRITICAL when space is very low", async () => {
     const { note: mockNote } = await import("../terminal/note.js");
-
     vi.mocked(mockNote).mockClear();
 
-    const mockStatfs = vi.fn().mockReturnValue({ bavail: 10000n, bsize: 1048576n });
     noteDiskSpace({ gateway: { mode: "local" } } as never, {
       env: { HOME: "/home/test" },
-      statfsSync: mockStatfs,
+      readDiskSpace: () => ({ availableBytes: 50 * 1024 * 1024 }),
+    });
+
+    expect(mockNote).toHaveBeenCalledOnce();
+    const [message] = vi.mocked(mockNote).mock.calls[0];
+    expect(message).toContain("CRITICAL");
+  });
+
+  it("does not call note when space is sufficient", async () => {
+    const { note: mockNote } = await import("../terminal/note.js");
+    vi.mocked(mockNote).mockClear();
+
+    noteDiskSpace({ gateway: { mode: "local" } } as never, {
+      env: { HOME: "/home/test" },
+      readDiskSpace: () => ({ availableBytes: 10 * 1024 * 1024 * 1024 }),
     });
 
     expect(mockNote).not.toHaveBeenCalled();
   });
 
-  it("does not call note when statfsSync fails", async () => {
+  it("does not call note when disk space cannot be read", async () => {
     const { note: mockNote } = await import("../terminal/note.js");
-
     vi.mocked(mockNote).mockClear();
 
-    const mockStatfs = vi.fn().mockImplementation(() => {
-      throw new Error("ENOENT");
-    });
     noteDiskSpace({ gateway: { mode: "local" } } as never, {
       env: { HOME: "/home/test" },
-      statfsSync: mockStatfs,
+      readDiskSpace: () => null,
     });
 
     expect(mockNote).not.toHaveBeenCalled();

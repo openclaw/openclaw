@@ -1,9 +1,8 @@
-import fs from "node:fs";
 import os from "node:os";
-import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
+import { tryReadDiskSpace } from "../infra/disk-space.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
 
@@ -35,63 +34,6 @@ export function formatBytes(bytes: number): string {
     return `${Math.floor(bytes / 1024)} KB`;
   }
   return `${bytes} B`;
-}
-
-/**
- * Walk up from `dirPath` to find the nearest existing ancestor directory.
- * Returns the directory itself if it exists, otherwise tries parent
- * directories up to the filesystem root. Returns `null` only if no
- * ancestor exists (should not happen in practice).
- * Exported for testing.
- */
-export function findExistingAncestor(dirPath: string): string | null {
-  let current = path.resolve(dirPath);
-  // Safety bound: stop after a reasonable depth to avoid infinite loops
-  // on pathological inputs (e.g. circular symlinks resolved to long paths).
-  const maxDepth = 64;
-  for (let i = 0; i < maxDepth; i++) {
-    try {
-      const stat = fs.statSync(current);
-      if (stat.isDirectory()) {
-        return current;
-      }
-    } catch {
-      // directory does not exist — try parent
-    }
-    const parent = path.dirname(current);
-    if (parent === current) {
-      // reached filesystem root
-      return null;
-    }
-    current = parent;
-  }
-  return null;
-}
-
-/**
- * Read available bytes on the partition that contains `dirPath`.
- * If `dirPath` does not exist, walks up to the nearest existing ancestor
- * so that disk pressure is still reported even before the state directory
- * is created (e.g. on first run).
- * Returns `null` when no ancestor exists or `statfsSync` fails
- * (for example on a platform where it is unsupported).
- */
-export function getAvailableBytes(
-  dirPath: string,
-  deps?: { statfsSync?: (p: string) => fs.StatsFs },
-): number | null {
-  const statfs = deps?.statfsSync ?? fs.statfsSync;
-  const probePath = findExistingAncestor(dirPath) ?? dirPath;
-  try {
-    const stats = statfs(probePath);
-    // `bavail` is the number of free blocks available to unprivileged users.
-    // Multiply by `bsize` (optimal transfer / filesystem block size in Node's
-    // StatsFs, equal to `f_bsize` from the underlying statfs syscall) to get
-    // available bytes.
-    return Number(stats.bavail) * Number(stats.bsize);
-  } catch {
-    return null;
-  }
 }
 
 /**
@@ -128,30 +70,38 @@ export function buildDiskSpaceWarnings(params: {
  *
  * This catches a common operational failure mode where OpenClaw silently
  * fails to write config, sessions, or logs because the disk is full.
+ *
+ * Disk-space probing (statfs + nearest-existing-ancestor resolution) is
+ * delegated to the shared src/infra/disk-space.ts helper so this Doctor
+ * check and the install/update diagnostics stay on one implementation.
+ * The two-tier warning/critical thresholds and Doctor-facing formatting
+ * are specific to this health contribution.
  */
 export function noteDiskSpace(
   _cfg: OpenClawConfig, // reserved for API consistency with other Doctor contributions
   deps?: {
     env?: NodeJS.ProcessEnv;
-    statfsSync?: (p: string) => fs.StatsFs;
+    readDiskSpace?: (targetPath: string) => { availableBytes: number } | null;
   },
 ): void {
   const env = deps?.env ?? process.env;
   const homedir = () => resolveRequiredHomeDir(env, os.homedir);
   const stateDir = resolveStateDir(env, homedir);
 
-  const availableBytes = getAvailableBytes(stateDir, {
-    statfsSync: deps?.statfsSync,
-  });
+  const readDiskSpace = deps?.readDiskSpace ?? tryReadDiskSpace;
+  const snapshot = readDiskSpace(stateDir);
   // If we cannot determine free space (no existing ancestor, unsupported FS,
   // or permission error), skip silently — other contributions already
   // handle missing directories.
-  if (availableBytes === null) {
+  if (!snapshot) {
     return;
   }
 
   const displayStateDir = shortenHomePath(stateDir);
-  const warnings = buildDiskSpaceWarnings({ availableBytes, displayStateDir });
+  const warnings = buildDiskSpaceWarnings({
+    availableBytes: snapshot.availableBytes,
+    displayStateDir,
+  });
 
   if (warnings.length > 0) {
     note(warnings.join("\n"), "Disk space");
