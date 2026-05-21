@@ -139,6 +139,30 @@ export async function runClaudeAppServerAttempt(
     //    we don't duplicate workspace context into the transcript.
     const accumulated = await runTurn(client, params, threadId, cfg, ac);
 
+    // 5b. Emit the canonical end-of-turn assistant event so downstream
+    //     delivery (auto-reply dispatcher + message_sending hooks like the
+    //     provenance trust footer) get a chance to run on the final reply.
+    //     Codex emits the same shape at runAttempt:2640 — see
+    //     extensions/codex/src/app-server/run-attempt.ts. Per-delta emits
+    //     carry both {text, delta}; this one carries only {text} as the
+    //     final marker.
+    if (accumulated.assistantTexts.length > 0 && !ac.signal.aborted) {
+      const terminal = accumulated.assistantTexts.join("");
+      if (terminal.length > 0) {
+        try {
+          emitAgentEvent({
+            runId: params.runId,
+            stream: "assistant",
+            data: { text: terminal },
+          });
+        } catch (err) {
+          embeddedAgentLog.debug("claude-app-server: emit terminal assistant threw", {
+            error: err,
+          });
+        }
+      }
+    }
+
     // 6. Populate result.
     result.assistantTexts = accumulated.assistantTexts;
     result.toolMetas = accumulated.toolMetas;
@@ -427,15 +451,28 @@ async function runTurn(
           const item = p.item as Record<string, unknown> | undefined;
           if (!item) return;
           if (notif.method === "item/completed") acc.itemCount += 1;
+          const isTool =
+            item.type === "dynamicToolCall" ||
+            item.type === "toolCall" ||
+            item.type === "mcpToolCall";
           if (notif.method === "item/started") {
-            if (item.type === "dynamicToolCall" || item.type === "toolCall") {
-              const toolName =
-                typeof item.name === "string"
-                  ? item.name
-                  : typeof item.tool === "string"
-                    ? item.tool
-                    : "unknown";
+            if (isTool) {
+              const toolName = extractItemName(item) ?? "unknown";
               acc.toolMetas.push({ toolName });
+              // Mirror codex's stream:"tool" phase:"start" emission so Discord/
+              // Slack/etc. can render "🛠️ <tool> <preview>" stubs in real time
+              // instead of waiting for the whole turn to finish.
+              emitToolEvent(params, "start", item);
+            } else {
+              // Item lifecycle for non-tool items (agentMessage, plan, file,
+              // shell, etc.) — codex emits these as stream:"item" phase:"start".
+              emitItemEvent(params, "start", item);
+            }
+          } else {
+            if (isTool) {
+              emitToolEvent(params, "result", item);
+            } else {
+              emitItemEvent(params, "end", item);
             }
           }
           break;
@@ -460,7 +497,12 @@ async function runTurn(
           break;
         }
         case "item/reasoning/delta": {
-          if (typeof p.delta === "string") reasoningParts.push(p.delta);
+          if (typeof p.delta === "string") {
+            reasoningParts.push(p.delta);
+            // Mirror codex: surface thinking deltas as their own stream so
+            // downstream UIs can render a thinking indicator.
+            emitReasoningDeltaEvent(params, p.delta, reasoningParts.join(""));
+          }
           break;
         }
         case "turn/error": {
@@ -503,6 +545,88 @@ async function runTurn(
   if (textParts.length > 0) acc.assistantTexts = [textParts.join("")];
   if (reasoningParts.length > 0) acc.reasoning = reasoningParts.join("");
   return acc;
+}
+
+// ─── Agent-event emission helpers ───────────────────────────────────────────
+// Mirror codex's event-projector emissions so Discord/Slack/etc. show tool-use
+// stubs and reasoning indicators live, instead of just the final reply.
+
+function extractItemName(item: Record<string, unknown>): string | undefined {
+  if (typeof item.name === "string") return item.name;
+  if (typeof item.tool === "string") return item.tool;
+  return undefined;
+}
+
+function emitToolEvent(
+  params: EmbeddedRunAttemptParams,
+  phase: "start" | "result",
+  item: Record<string, unknown>,
+): void {
+  const toolName = extractItemName(item);
+  if (!toolName) return;
+  const itemId = typeof item.id === "string" ? item.id : undefined;
+  const status = typeof item.status === "string" ? item.status : undefined;
+  const args =
+    item.arguments && typeof item.arguments === "object" && !Array.isArray(item.arguments)
+      ? (item.arguments as Record<string, unknown>)
+      : item.input && typeof item.input === "object" && !Array.isArray(item.input)
+        ? (item.input as Record<string, unknown>)
+        : undefined;
+  const data: Record<string, unknown> = { phase, name: toolName };
+  if (itemId) {
+    data.itemId = itemId;
+    data.toolCallId = itemId;
+  }
+  if (phase === "start" && args) data.args = args;
+  if (phase === "result") {
+    if (status) data.status = status;
+    data.isError = status === "failed" || item.error != null;
+    if (item.result && typeof item.result === "object" && !Array.isArray(item.result)) {
+      data.result = item.result as Record<string, unknown>;
+    }
+  }
+  try {
+    emitAgentEvent({ runId: params.runId, stream: "tool", data });
+  } catch (err) {
+    embeddedAgentLog.debug("claude-app-server: emit tool event threw", { error: err });
+  }
+}
+
+function emitItemEvent(
+  params: EmbeddedRunAttemptParams,
+  phase: "start" | "end",
+  item: Record<string, unknown>,
+): void {
+  const itemId = typeof item.id === "string" ? item.id : undefined;
+  const kind = typeof item.type === "string" ? item.type : undefined;
+  const title = extractItemName(item) ?? kind;
+  const status = typeof item.status === "string" ? item.status : undefined;
+  const data: Record<string, unknown> = { phase };
+  if (itemId) data.itemId = itemId;
+  if (kind) data.kind = kind;
+  if (title) data.title = title;
+  if (status) data.status = status;
+  try {
+    emitAgentEvent({ runId: params.runId, stream: "item", data });
+  } catch (err) {
+    embeddedAgentLog.debug("claude-app-server: emit item event threw", { error: err });
+  }
+}
+
+function emitReasoningDeltaEvent(
+  params: EmbeddedRunAttemptParams,
+  delta: string,
+  accumulated: string,
+): void {
+  try {
+    emitAgentEvent({
+      runId: params.runId,
+      stream: "reasoning",
+      data: { delta, text: accumulated },
+    });
+  } catch (err) {
+    embeddedAgentLog.debug("claude-app-server: emit reasoning event threw", { error: err });
+  }
 }
 
 // ─── Developer instructions ─────────────────────────────────────────────────
