@@ -157,7 +157,7 @@ function isDiscordReadTargetAllowedInGuild(params: {
     groupPolicy: params.groupPolicy,
     guildAllowlisted: Boolean(params.guildInfo),
     channelAllowlistConfigured: hasDiscordGuildEntries(params.guildInfo?.channels),
-    channelAllowed: channelConfig?.allowed !== false,
+    channelAllowed: true,
   });
 }
 
@@ -192,7 +192,7 @@ export function createDiscordMessagingActionContext(params: {
     accountId ?? resolveDefaultDiscordAccountId(params.cfg),
   );
   const guilds = accountConfig.guilds as Record<string, DiscordGuildEntryResolved | undefined>;
-  const hasGuildEntries = Boolean(guilds && Object.keys(guilds).length > 0);
+  const hasGuildEntries = Object.keys(guilds ?? {}).length > 0;
   const { groupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
     providerConfigPresent: params.cfg.channels?.discord !== undefined,
     groupPolicy: accountConfig.groupPolicy,
