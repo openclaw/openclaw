@@ -61,7 +61,11 @@ function createSession() {
   };
 }
 
-function createBackendSandboxConfig(params?: { binds?: string[]; target?: string }): SandboxConfig {
+function createBackendSandboxConfig(params?: {
+  binds?: string[];
+  target?: string;
+  identityData?: string;
+}): SandboxConfig {
   return {
     mode: "all",
     backend: "ssh",
@@ -84,6 +88,7 @@ function createBackendSandboxConfig(params?: { binds?: string[]; target?: string
         "/remote/openclaw",
         params?.target ? { target: params.target } : {},
       ),
+      ...(params?.identityData ? { identityData: params.identityData } : {}),
     },
     browser: createSandboxBrowserConfig({
       image: "img",
@@ -101,6 +106,7 @@ function createBackendSandboxConfig(params?: { binds?: string[]; target?: string
 async function expectBackendCreationToReject(params: {
   binds?: string[];
   target?: string;
+  identityData?: string;
   error: string;
 }) {
   await expect(
@@ -112,6 +118,7 @@ async function expectBackendCreationToReject(params: {
       cfg: createBackendSandboxConfig({
         binds: params.binds,
         target: params.target,
+        identityData: params.identityData,
       }),
     }),
   ).rejects.toThrow(params.error);
@@ -338,6 +345,14 @@ describe("ssh sandbox backend", () => {
 
     await expectBackendCreationToReject({
       error: "requires agents.defaults.sandbox.ssh.target",
+    });
+  });
+
+  it("rejects production ssh identityData materialization without resolve-v2 metadata", async () => {
+    await expectBackendCreationToReject({
+      target: "peter@example.com:22",
+      identityData: "PRIVATE KEY",
+      error: "does not materialize identityData in production",
     });
   });
 });

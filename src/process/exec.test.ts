@@ -118,6 +118,31 @@ describe("runCommandWithTimeout", () => {
     expect(resolved.OPENCLAW_CLI).toBe(OPENCLAW_CLI_ENV_VALUE);
   });
 
+  it("defaults to owned child env instead of inheriting process secrets", async () => {
+    const previousApiKey = process.env.OPENAI_API_KEY;
+    const previousPath = process.env.PATH;
+    try {
+      process.env.OPENAI_API_KEY = "sk-process-secret";
+      process.env.PATH = "/usr/bin";
+      const resolved = resolveCommandEnv({ argv: ["node", "script.js"] });
+
+      expect(resolved.PATH).toBe("/usr/bin");
+      expect(resolved.OPENAI_API_KEY).toBeUndefined();
+      expect(resolved.OPENCLAW_CLI).toBe(OPENCLAW_CLI_ENV_VALUE);
+    } finally {
+      if (previousApiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = previousApiKey;
+      }
+      if (previousPath === undefined) {
+        delete process.env.PATH;
+      } else {
+        process.env.PATH = previousPath;
+      }
+    }
+  });
+
   it("suppresses npm fund prompts for npm argv", async () => {
     const resolved = resolveCommandEnv({
       argv: ["npm", "--version"],
@@ -204,13 +229,10 @@ describe("runCommandWithTimeout", () => {
     { timeout: 5_000 },
     async () => {
       await loadExecModules();
-      const result = await runCommandWithTimeout(
-        [process.execPath, "-e", "process.exit(0)"],
-        {
-          timeoutMs: 3_000,
-          input: "this input will EPIPE because the child ignores stdin\n",
-        },
-      );
+      const result = await runCommandWithTimeout([process.execPath, "-e", "process.exit(0)"], {
+        timeoutMs: 3_000,
+        input: "this input will EPIPE because the child ignores stdin\n",
+      });
       expect(result.code).toBe(0);
     },
   );

@@ -1,5 +1,6 @@
 import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { spawn } from "node:child_process";
+import { assertOwnedChildEnv } from "../infra/owned-child-env.js";
 
 export type SpawnFallback = {
   label: string;
@@ -42,6 +43,7 @@ async function spawnAndWaitForSpawn(
   argv: string[],
   options: SpawnOptions,
 ): Promise<ChildProcess> {
+  assertOwnedChildEnv(options.env, "spawnWithFallback");
   const child = spawnImpl(argv[0], argv.slice(1), options);
 
   return await new Promise((resolve, reject) => {

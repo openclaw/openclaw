@@ -70,7 +70,7 @@ async function createAdapterHarness(params?: {
   });
   const adapter = await createChildAdapter({
     argv: params?.argv ?? ["node", "-e", "setTimeout(() => {}, 1000)"],
-    env: params?.env,
+    env: params?.env ?? { PATH: "/usr/bin" },
     stdinMode: "pipe-open",
   });
   return { adapter, killMock };
@@ -156,6 +156,7 @@ describe("createChildAdapter", () => {
     });
     const adapter = await createChildAdapter({
       argv: ["node", "-e", "setTimeout(() => {}, 1000)"],
+      env: { PATH: "/usr/bin" },
       stdinMode: "pipe-open",
     });
 
@@ -205,6 +206,7 @@ describe("createChildAdapter", () => {
       });
       const adapter = await createChildAdapter({
         argv: ["node", "-e", "setTimeout(() => {}, 1000)"],
+        env: { PATH: "/usr/bin" },
         stdinMode: "pipe-open",
       });
       return { ...stub, adapter };
@@ -235,6 +237,7 @@ describe("createChildAdapter", () => {
       });
       const adapter = await createChildAdapter({
         argv: ["openclaw", "version"],
+        env: { PATH: "/usr/bin" },
         stdinMode: "pipe-closed",
       });
       return { ...stub, adapter };
@@ -266,7 +269,7 @@ describe("createChildAdapter", () => {
     expect(spawnArgs.fallbacks ?? []).toEqual([]);
   });
 
-  it("keeps inherited env when no override env is provided on non-Linux", async () => {
+  it("requires explicit env on non-Linux", async () => {
     setPlatform("darwin");
 
     await createAdapterHarness({
@@ -279,7 +282,7 @@ describe("createChildAdapter", () => {
       options?: { env?: NodeJS.ProcessEnv };
     };
     expect(spawnArgs.argv).toEqual(["node", "-e", "process.exit(0)"]);
-    expect(spawnArgs.options?.env).toBeUndefined();
+    expect(spawnArgs.options?.env).toEqual({ PATH: "/usr/bin" });
   });
 
   it("wraps Linux child spawns and strips shell-init env", async () => {
@@ -359,6 +362,7 @@ describe("createChildAdapter", () => {
     });
     const adapter = await createChildAdapter({
       argv: ["node", "-e", "process.exit(0)"],
+      env: { PATH: "/usr/bin" },
       stdinMode: "pipe-open",
     });
     const first = vi.fn();

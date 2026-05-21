@@ -7,6 +7,7 @@ import { resolveGatewayWindowsTaskName } from "../daemon/constants.js";
 import { renderCmdRestartLogSetup } from "../daemon/restart-logs.js";
 import { resolveTaskScriptPath } from "../daemon/schtasks.js";
 import { formatErrorMessage } from "./errors.js";
+import { buildOwnedChildEnv } from "./owned-child-env.js";
 import type { RestartAttempt } from "./restart.types.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 
@@ -81,6 +82,7 @@ export function relaunchGatewayScheduledTask(env: NodeJS.ProcessEnv = process.en
     );
     const child = spawn("cmd.exe", ["/d", "/s", "/c", quotedScriptPath], {
       detached: true,
+      env: buildOwnedChildEnv(),
       stdio: "ignore",
       windowsHide: true,
     });

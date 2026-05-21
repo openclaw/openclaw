@@ -30,7 +30,7 @@ freshest queue activity. The lab list comes from
 Reads two env vars set by `overlay/multitenant/entrypoint.sh`:
 
   ROCKIELAB_API_BASE        — e.g. https://api.rockielab.com
-  ROCKIELAB_TENANT_TOKEN    — passed as X-Tenant-Token
+  ROCKIELAB_TENANT_ID       — passed as X-Tenant-Token
 
 And the broker is on localhost (same Fly machine):
 
@@ -75,7 +75,7 @@ from typing import Any, Optional
 DEFAULT_API_BASE = os.environ.get(
     "ROCKIELAB_API_BASE", "https://api.rockielab.com"
 )
-TENANT_TOKEN = os.environ.get("ROCKIELAB_TENANT_TOKEN", "")
+TENANT_TOKEN = os.environ.get("ROCKIELAB_TENANT_ID", "").strip()
 # Bearer for PasswordAuthMiddleware on platform-context. Mirrors the
 # env-var fallback chain mcp-rockie uses.
 API_PASSWORD = os.environ.get("ROCKIELAB_API_PASSWORD") or os.environ.get(
@@ -145,8 +145,9 @@ def _build_request(
     if API_PASSWORD:
         headers["Authorization"] = f"Bearer {API_PASSWORD}"
     token = token if token is not None else TENANT_TOKEN
-    if token:
-        headers["X-Tenant-Token"] = token
+    if not token:
+        raise CLIError("ROCKIELAB_TENANT_ID is required", exit_code=2)
+    headers["X-Tenant-Token"] = token
     data: Optional[bytes] = None
     if body is not None:
         data = json.dumps(body).encode("utf-8")

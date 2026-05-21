@@ -31,7 +31,7 @@ describe("spawnWithFallback", () => {
 
     const result = await spawnWithFallback({
       argv: ["echo", "ok"],
-      options: { stdio: ["pipe", "pipe", "pipe"] },
+      options: { stdio: ["pipe", "pipe", "pipe"], env: { PATH: "/usr/bin" } },
       fallbacks: [{ label: "safe-stdin", options: { stdio: ["ignore", "pipe", "pipe"] } }],
       spawnImpl: spawnMock,
     });
@@ -53,7 +53,7 @@ describe("spawnWithFallback", () => {
     await expect(
       spawnWithFallback({
         argv: ["missing"],
-        options: { stdio: ["pipe", "pipe", "pipe"] },
+        options: { stdio: ["pipe", "pipe", "pipe"], env: { PATH: "/usr/bin" } },
         fallbacks: [{ label: "safe-stdin", options: { stdio: ["ignore", "pipe", "pipe"] } }],
         spawnImpl: spawnMock,
       }),

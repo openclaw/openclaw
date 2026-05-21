@@ -44,6 +44,7 @@ import { createMusicGenerateTool } from "./tools/music-generate-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
 import { coercePdfModelConfig } from "./tools/pdf-tool.helpers.js";
 import { createPdfTool } from "./tools/pdf-tool.js";
+import { createSaveSecretTool } from "./tools/save-secret-tool.js";
 import { createSessionStatusTool } from "./tools/session-status-tool.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
@@ -590,6 +591,7 @@ export function createOpenClawTools(
       sessionId: options?.sessionId,
       onYield: options?.onYield,
     }),
+    createSaveSecretTool(),
     createSubagentsTool({
       agentSessionKey: options?.agentSessionKey,
     }),

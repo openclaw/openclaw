@@ -80,6 +80,7 @@ describe("createPtyAdapter", () => {
       const adapter = await createPtyAdapter({
         shell: "bash",
         args: ["-lc", "sleep 10"],
+        env: { PATH: "/usr/bin" },
       });
 
       adapter.kill("SIGTERM");
@@ -98,6 +99,7 @@ describe("createPtyAdapter", () => {
     const adapter = await createPtyAdapter({
       shell: "bash",
       args: ["-lc", "sleep 10"],
+      env: { PATH: "/usr/bin" },
     });
 
     adapter.kill();
@@ -112,6 +114,7 @@ describe("createPtyAdapter", () => {
     const adapter = await createPtyAdapter({
       shell: "bash",
       args: ["-lc", "sleep 10"],
+      env: { PATH: "/usr/bin" },
     });
 
     await expectWaitStaysPendingUntilSigkillFallback(adapter.wait(), () => {
@@ -127,6 +130,7 @@ describe("createPtyAdapter", () => {
     const adapter = await createPtyAdapter({
       shell: "bash",
       args: ["-lc", "sleep 10"],
+      env: { PATH: "/usr/bin" },
     });
 
     await expectRealExitWinsOverSigkillFallback({
@@ -148,6 +152,7 @@ describe("createPtyAdapter", () => {
     const adapter = await createPtyAdapter({
       shell: "bash",
       args: ["-lc", "exit 3"],
+      env: { PATH: "/usr/bin" },
     });
 
     expect(stub.onExit).toHaveBeenCalledTimes(1);
@@ -162,6 +167,7 @@ describe("createPtyAdapter", () => {
     const adapter = await createPtyAdapter({
       shell: "bash",
       args: ["-lc", "echo ok"],
+      env: { PATH: "/usr/bin" },
     });
     adapter.onStdout(() => undefined);
 
@@ -171,7 +177,7 @@ describe("createPtyAdapter", () => {
     expect(stub.disposeExit).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps inherited env when no override env is provided on non-Linux", async () => {
+  it("requires explicit env on non-Linux", async () => {
     const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
     Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
     try {
@@ -181,11 +187,12 @@ describe("createPtyAdapter", () => {
       await createPtyAdapter({
         shell: "bash",
         args: ["-lc", "env"],
+        env: { PATH: "/usr/bin" },
       });
 
       expect(expectSpawnCommand()).toBe("bash");
       expect(expectSpawnArgs()).toEqual(["-lc", "env"]);
-      expect(expectSpawnEnv()).toBeUndefined();
+      expect(expectSpawnEnv()).toEqual({ PATH: "/usr/bin" });
     } finally {
       if (originalPlatform) {
         Object.defineProperty(process, "platform", originalPlatform);
@@ -244,6 +251,7 @@ describe("createPtyAdapter", () => {
       const adapter = await createPtyAdapter({
         shell: "powershell.exe",
         args: ["-NoLogo"],
+        env: { PATH: "/usr/bin" },
       });
 
       adapter.kill("SIGTERM");
@@ -265,6 +273,7 @@ describe("createPtyAdapter", () => {
       const adapter = await createPtyAdapter({
         shell: "powershell.exe",
         args: ["-NoLogo"],
+        env: { PATH: "/usr/bin" },
       });
 
       adapter.kill("SIGKILL");

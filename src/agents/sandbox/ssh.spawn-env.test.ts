@@ -49,6 +49,9 @@ function mockSuccessfulSpawnCalls(times = 1) {
 
 let runSshSandboxCommand: typeof import("./ssh.js").runSshSandboxCommand;
 let uploadDirectoryToSshTarget: typeof import("./ssh.js").uploadDirectoryToSshTarget;
+let buildFixedSshHeredocRemoteCommand: typeof import("./ssh.js").buildFixedSshHeredocRemoteCommand;
+let runFixedSshHeredocScript: typeof import("./ssh.js").runFixedSshHeredocScript;
+let writeResolvedSshKeyTempfile: typeof import("./ssh.js").writeResolvedSshKeyTempfile;
 
 describe("ssh subprocess env sanitization", () => {
   const originalEnv = { ...process.env };
@@ -57,7 +60,13 @@ describe("ssh subprocess env sanitization", () => {
   beforeEach(async () => {
     vi.resetModules();
     vi.clearAllMocks();
-    ({ runSshSandboxCommand, uploadDirectoryToSshTarget } = await import("./ssh.js"));
+    ({
+      runSshSandboxCommand,
+      uploadDirectoryToSshTarget,
+      buildFixedSshHeredocRemoteCommand,
+      runFixedSshHeredocScript,
+      writeResolvedSshKeyTempfile,
+    } = await import("./ssh.js"));
   });
 
   afterEach(async () => {
@@ -114,9 +123,13 @@ describe("ssh subprocess env sanitization", () => {
     });
 
     const sshSpawnOptions = spawnMock.mock.calls[1]?.[2] as SpawnOptions | undefined;
+    const sshArgs = spawnMock.mock.calls[1]?.[1] as string[] | undefined;
     const env = sshSpawnOptions?.env;
     expect(env?.ANTHROPIC_API_KEY).toBeUndefined();
     expect(env?.NODE_ENV).toBe("test");
+    expect(sshArgs?.join(" ")).toContain("bash");
+    expect(sshArgs?.join(" ")).toContain("openclaw-sandbox-upload");
+    expect(sshArgs?.join(" ")).not.toContain("mkdir -p");
   });
 
   it.runIf(process.platform !== "win32")(
@@ -143,4 +156,110 @@ describe("ssh subprocess env sanitization", () => {
       expect(spawnMock).toHaveBeenCalledTimes(2);
     },
   );
+
+  it("rejects unreviewed fixed heredoc script ids", () => {
+    expect(() =>
+      buildFixedSshHeredocRemoteCommand({ scriptId: "user-controlled", args: [] }),
+    ).toThrow(/Unreviewed SSH heredoc script id/);
+  });
+
+  it("runs fixed heredoc scripts without placing secrets in argv and redacts output", async () => {
+    const stdinChunks: Buffer[] = [];
+    spawnMock.mockImplementationOnce(
+      (_command: string, _args: readonly string[], _options: SpawnOptions): ChildProcess => {
+        const child = createMockChildProcess();
+        child.stdin.on("data", (chunk) => stdinChunks.push(Buffer.from(chunk)));
+        process.nextTick(() => {
+          child.stdout.write("leaked CANARY_SECRET_VALUE\n");
+          child.stderr.write("stderr CANARY_SECRET_VALUE\n");
+          child.emit("close", 0);
+        });
+        return child as unknown as ChildProcess;
+      },
+    );
+    const result = await runFixedSshHeredocScript({
+      session: {
+        command: "ssh",
+        configPath: "/tmp/openclaw-test-ssh-config",
+        host: "openclaw-sandbox",
+      },
+      scriptId: "rockie-secret-runtime",
+      stdin: "CANARY_SECRET_VALUE",
+      secretValues: { DEPLOY_KEY: "CANARY_SECRET_VALUE" },
+    });
+    const argv = spawnMock.mock.calls[0]?.slice(0, 2).flat() as string[];
+    expect(argv.join("\0")).not.toContain("CANARY_SECRET_VALUE");
+    expect(argv.join("\0")).not.toContain('cat > "$secret_file"');
+    expect(Buffer.concat(stdinChunks).toString("utf8")).toContain("CANARY_SECRET_VALUE");
+    expect(result.stdout.toString("utf8")).toContain("<redacted:DEPLOY_KEY>");
+    expect(result.stderr.toString("utf8")).toContain("<redacted:DEPLOY_KEY>");
+  });
+
+  it("rejects ssh argv containing resolved secret values", async () => {
+    await expect(
+      runSshSandboxCommand({
+        session: {
+          command: "ssh",
+          configPath: "/tmp/CANARY_SECRET_VALUE/config",
+          host: "openclaw-sandbox",
+        },
+        remoteCommand: "true",
+        secretValues: { DEPLOY_KEY: "CANARY_SECRET_VALUE" },
+      }),
+    ).rejects.toThrow(/resolved secret in argv/);
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("redacts rejected ssh command errors and attached output", async () => {
+    spawnMock.mockImplementationOnce(
+      (_command: string, _args: readonly string[], _options: SpawnOptions): ChildProcess => {
+        const child = createMockChildProcess();
+        process.nextTick(() => {
+          child.stdout.write("stdout CANARY_SECRET_VALUE\n");
+          child.stderr.write("stderr CANARY_SECRET_VALUE\n");
+          child.emit("close", 1);
+        });
+        return child as unknown as ChildProcess;
+      },
+    );
+
+    let rejected: unknown;
+    try {
+      await runSshSandboxCommand({
+        session: {
+          command: "ssh",
+          configPath: "/tmp/openclaw-test-ssh-config",
+          host: "openclaw-sandbox",
+        },
+        remoteCommand: "true",
+        secretValues: { DEPLOY_KEY: "CANARY_SECRET_VALUE" },
+      });
+    } catch (error) {
+      rejected = error;
+    }
+
+    expect(rejected).toBeInstanceOf(Error);
+    const error = rejected as Error & { stdout?: Buffer; stderr?: Buffer };
+    expect(error.message).toContain("<redacted:DEPLOY_KEY>");
+    expect(error.message).not.toContain("CANARY_SECRET_VALUE");
+    expect(error.stdout?.toString("utf8")).toContain("<redacted:DEPLOY_KEY>");
+    expect(error.stdout?.toString("utf8")).not.toContain("CANARY_SECRET_VALUE");
+    expect(error.stderr?.toString("utf8")).toContain("<redacted:DEPLOY_KEY>");
+    expect(error.stderr?.toString("utf8")).not.toContain("CANARY_SECRET_VALUE");
+  });
+
+  it("gates resolved ssh key tempfiles on ssh_key category and writes 0600", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ssh-key-category-"));
+    tempDirs.push(dir);
+    await expect(
+      writeResolvedSshKeyTempfile({ dir, value: "key", category: "token" }),
+    ).rejects.toThrow(/ssh_key/);
+    const keyPath = await writeResolvedSshKeyTempfile({
+      dir,
+      value: "-----BEGIN KEY-----\\nabc\\n-----END KEY-----",
+      category: "ssh_key",
+    });
+    const stat = await fs.stat(keyPath);
+    expect(stat.mode & 0o777).toBe(0o600);
+  });
 });

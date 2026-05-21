@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { buildOwnedChildEnv } from "./owned-child-env.js";
 import type { SshParsedTarget } from "./ssh-tunnel.js";
 
 export type SshResolvedConfig = {
@@ -73,6 +74,7 @@ export async function resolveSshConfig(
   return await new Promise<SshResolvedConfig | null>((resolve) => {
     const child = spawn(sshPath, args, {
       stdio: ["ignore", "pipe", "ignore"],
+      env: buildOwnedChildEnv(),
     });
     let stdout = "";
     child.stdout?.setEncoding("utf8");

@@ -5,6 +5,7 @@ import { getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js
 import { ReadBuffer, serializeMessage } from "@modelcontextprotocol/sdk/shared/stdio.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
+import { buildOwnedChildEnv } from "../infra/owned-child-env.js";
 import { killProcessTree } from "../process/kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../process/linux-oom-score.js";
 
@@ -47,10 +48,10 @@ export class OpenClawStdioClientTransport implements Transport {
     }
 
     await new Promise<void>((resolve, reject) => {
-      const baseEnv = {
-        ...getDefaultEnvironment(),
-        ...this.serverParams.env,
-      };
+      const baseEnv = buildOwnedChildEnv({
+        baseEnv: getDefaultEnvironment(),
+        overrides: this.serverParams.env,
+      });
       const preparedSpawn = prepareOomScoreAdjustedSpawn(
         this.serverParams.command,
         this.serverParams.args ?? [],

@@ -12,13 +12,11 @@ Hits the platform-context HTTP surface under ``/api/gpu``. Subcommands:
 Output: JSON-lines by default (one JSON object per line on stdout).
 Pass ``--human`` for k:v dicts and ascii-table lists.
 
-Resolution order for the tenant token (first hit wins):
+Tenant identity:
 
-  1. ``ROCKIELAB_TENANT_TOKEN`` env var (canonical; set by the per-tenant
-     runtime image's ``overlay/multitenant/entrypoint.sh``)
-  2. ``BROKER_TENANT_TOKEN`` env var (legacy alias; still honored)
-  3. ``~/.rockie/config.json`` key ``tenant_token`` (local-shell install)
-  4. error (exit code 2 — same class as "bad argv / usage error")
+  ``ROCKIELAB_TENANT_ID`` env var only. Broker tokens, legacy
+  ``ROCKIELAB_TENANT_TOKEN`` values, and local config are not accepted
+  as tenant identity.
 
 Same ladder for the API base URL:
 
@@ -28,7 +26,7 @@ Same ladder for the API base URL:
 Exit codes:
     0  success
     1  network error / connection refused
-    2  argparse / usage error / missing tenant token
+    2  argparse / usage error / missing tenant id
     3  HTTP 4xx (provider error, insufficient credits, etc.)
     4  HTTP 5xx (provider outage, retryable)
 """
@@ -89,22 +87,13 @@ def _load_local_config(path: str = CONFIG_PATH_DEFAULT) -> dict:
 
 
 def _get_token() -> str:
-    """Resolve the tenant token. Raises ``CLIError`` with exit code 2
-    when no source is set (same class as argparse usage errors —
-    "you need to configure auth before this CLI can do anything")."""
-    tok = os.environ.get("ROCKIELAB_TENANT_TOKEN") or os.environ.get(
-        "BROKER_TENANT_TOKEN"
-    )
-    if tok:
-        return tok
-    cfg = _load_local_config()
-    tok = cfg.get("tenant_token")
-    if tok:
-        return tok
+    """Resolve tenant identity. Raises ``CLIError`` with exit code 2
+    when ``ROCKIELAB_TENANT_ID`` is not set."""
+    tok = os.environ.get("ROCKIELAB_TENANT_ID")
+    if tok and tok.strip():
+        return tok.strip()
     raise CLIError(
-        "no tenant token configured — set ROCKIELAB_TENANT_TOKEN, "
-        "BROKER_TENANT_TOKEN, or write ~/.rockie/config.json with "
-        '{"tenant_token": "t-..."}',
+        "ROCKIELAB_TENANT_ID is required",
         exit_code=2,
     )
 

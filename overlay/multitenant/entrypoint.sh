@@ -25,44 +25,16 @@ MODE="${MODE:-byok}"
 
 # rockie-gpu CLI (Phase 5 step 5) reads these to talk to platform-context.
 # ROCKIELAB_API_BASE defaults to the prod control-plane; per-tenant Fly
-# env can override (e.g. https://api.dev.rockielab.com). The tenant
-# token is the same BROKER_TENANT_TOKEN that authenticates the broker
-# WS — both surfaces are tenant-scoped against the platform-context
-# X-Tenant-Token header.
+# env can override (e.g. https://api.dev.rockielab.com).
 export ROCKIELAB_API_BASE="${ROCKIELAB_API_BASE:-https://api.rockielab.com}"
-# ROCKIELAB_TENANT_TOKEN is the value the in-machine CLIs (rockie-loop,
-# rockie-gpu, rockie-compute) send as `X-Tenant-Token` on every API
-# call. platform-context's `api.tenant_context.tenant_id_dep` reads that
-# header literally as the tenant_id for tenant-scoped queries (see
-# tenant_context.py). So this MUST be the tenant's actual id (e.g.
-# `t-95a34ff7c78c`), not the platform-wide broker token.
-#
-# Source order (most specific wins):
-#   1. ROCKIELAB_TENANT_TOKEN — explicit override (Fly secret).
-#   2. ROCKIELAB_TENANT_ID    — staged by fly_provisioning_service at
-#                               machine create + image-roll time.
-#   3. BROKER_TENANT_TOKEN    — legacy fallback. WRONG semantically
-#                               (broker token != tenant id), but kept
-#                               so old tenants without ROCKIELAB_TENANT_ID
-#                               in env still launch the daemon (it'll
-#                               just be a no-op because /api/notebooks
-#                               returns []). New tenants always have
-#                               ROCKIELAB_TENANT_ID. Task #64.
-# ROCKIELAB_TENANT_ID wins unconditionally when set, because pre-fix
-# tenants may have ROCKIELAB_TENANT_TOKEN already staged as a Fly secret
-# pointing at the broker token (the MVP9 closer set this thinking it
-# was the right value). We force-overwrite that legacy value so the
-# daemon's X-Tenant-Token always resolves to the tenant_id server-side.
-if [ -n "${ROCKIELAB_TENANT_ID:-}" ]; then
-  export ROCKIELAB_TENANT_TOKEN="$ROCKIELAB_TENANT_ID"
-elif [ -z "${ROCKIELAB_TENANT_TOKEN:-}" ] && [ -n "${BROKER_TENANT_TOKEN:-}" ]; then
-  export ROCKIELAB_TENANT_TOKEN="$BROKER_TENANT_TOKEN"
-  # `log` is defined further down (after the OpenClaw vars); use a
-  # direct echo here so the warning still surfaces.
-  printf '[entrypoint] %s\n' \
-    "WARN: ROCKIELAB_TENANT_ID unset; falling back to BROKER_TENANT_TOKEN for X-Tenant-Token. Daemon /api/notebooks will return [] until ROCKIELAB_TENANT_ID is staged (task #64)." \
-    >&2
+# ROCKIELAB_TENANT_ID is the sole tenant identity source. The context
+# API reads X-Tenant-Token literally as the tenant id, so broker tokens
+# and legacy ROCKIELAB_TENANT_TOKEN secrets must never supply identity.
+if [ -z "${ROCKIELAB_TENANT_ID:-}" ]; then
+  printf '[entrypoint] ERROR: ROCKIELAB_TENANT_ID is required\n' >&2
+  exit 1
 fi
+export ROCKIELAB_TENANT_TOKEN="$ROCKIELAB_TENANT_ID"
 # OpenClaw gateway needs to listen on the Fly machine's external
 # interface so platform-context can HTTP-proxy to it through the
 # WireGuard tunnel. Fly's 6PN private network is IPv6-ONLY (addresses

@@ -35,13 +35,13 @@ import (
 
 // Framing scheme (binary WebSocket frames):
 //
-//   client -> server:
-//     0x01 <bytes...>            stdin write
-//     0x02 <rows:uint16><cols:uint16>   TTY resize (network byte order)
+//	client -> server:
+//	  0x01 <bytes...>            stdin write
+//	  0x02 <rows:uint16><cols:uint16>   TTY resize (network byte order)
 //
-//   server -> client:
-//     0x01 <bytes...>            stdout/stderr (combined)
-//     0x03 <code:int32>          process exit (network byte order, signed)
+//	server -> client:
+//	  0x01 <bytes...>            stdout/stderr (combined)
+//	  0x03 <code:int32>          process exit (network byte order, signed)
 const (
 	frameStdin  = 0x01
 	frameResize = 0x02
@@ -86,34 +86,21 @@ func jsonError(w http.ResponseWriter, status int, code, msg string) {
 	})
 }
 
-// redact returns a length-only summary, never the value itself.
+// redact returns a fixed marker, never the value itself or its length.
 func redact(s string) string {
 	if s == "" {
 		return "<empty>"
 	}
-	return "<redacted len=" + itoa(len(s)) + ">"
+	return "<redacted>"
 }
 
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
+func requireTenantID(w http.ResponseWriter) bool {
+	if tenantID() != "" {
+		return true
 	}
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	var buf [20]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	if neg {
-		i--
-		buf[i] = '-'
-	}
-	return string(buf[i:])
+	jsonError(w, http.StatusInternalServerError, "tenant_id_unset",
+		"ROCKIELAB_TENANT_ID is required")
+	return false
 }
 
 // healthHandler returns 200 {"status":"ok"}.
@@ -147,6 +134,9 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 			"missing or invalid token")
 		return
 	}
+	if !requireTenantID(w) {
+		return
+	}
 
 	binary := r.URL.Query().Get("binary")
 	if binary == "" {
@@ -173,11 +163,7 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 	cmd := exec.Command(binary)
 	cmd.Dir = cwd
 
-	// Avoid leaking parent secrets into the child if requested. We pass
-	// through the parent env intentionally so claude / codex can find their
-	// auth state under HOME, but we strip BROKER_TENANT_TOKEN so the child
-	// process never sees it.
-	cmd.Env = filteredEnv(os.Environ(), []string{"BROKER_TENANT_TOKEN"})
+	cmd.Env = ownedChildEnv()
 
 	ptmx, err := pty.Start(cmd)
 	if err != nil {
@@ -347,39 +333,6 @@ func asFile(fd uintptr) *os.File {
 	return os.NewFile(fd, "pty")
 }
 
-// filteredEnv returns parent env with the named keys removed.
-func filteredEnv(env []string, drop []string) []string {
-	out := make([]string, 0, len(env))
-	for _, kv := range env {
-		i := indexByte(kv, '=')
-		if i < 0 {
-			out = append(out, kv)
-			continue
-		}
-		k := kv[:i]
-		skip := false
-		for _, d := range drop {
-			if k == d {
-				skip = true
-				break
-			}
-		}
-		if !skip {
-			out = append(out, kv)
-		}
-	}
-	return out
-}
-
-func indexByte(s string, c byte) int {
-	for i := 0; i < len(s); i++ {
-		if s[i] == c {
-			return i
-		}
-	}
-	return -1
-}
-
 // spawnRequest is the body of POST /spawn.
 type spawnRequest struct {
 	Binary string   `json:"binary"`
@@ -424,6 +377,9 @@ func spawnHandler(w http.ResponseWriter, r *http.Request) {
 			"missing or invalid token")
 		return
 	}
+	if !requireTenantID(w) {
+		return
+	}
 
 	var req spawnRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -443,13 +399,29 @@ func spawnHandler(w http.ResponseWriter, r *http.Request) {
 		req.Cwd = os.Getenv("HOME")
 	}
 
+	if req.Binary == "bash" && len(req.Args) == 2 && req.Args[0] == "-c" {
+		if resp, handled, err := executeSecretAwareSpawnCommand(r.Context(), req.Args[1]); handled || err != nil {
+			if err != nil {
+				jsonError(w, http.StatusBadRequest, "secret_command_rejected", err.Error())
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+			log("spawn: exact secret form accepted name=redacted")
+			return
+		}
+	} else if err := rejectDisallowedSecretReferences(r.Context(), strings.Join(req.Args, " ")); err != nil {
+		jsonError(w, http.StatusBadRequest, "secret_command_rejected", err.Error())
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(r.Context(),
 		time.Duration(req.TimeoutSec)*time.Second)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, req.Binary, req.Args...)
 	cmd.Dir = req.Cwd
-	cmd.Env = filteredEnv(os.Environ(), []string{"BROKER_TENANT_TOKEN"})
+	cmd.Env = ownedChildEnv()
 
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout
@@ -479,10 +451,10 @@ func spawnHandler(w http.ResponseWriter, r *http.Request) {
 
 // chatRequest is the JSON body for POST /chat.
 type chatRequest struct {
-	Prompt  string        `json:"prompt"`
-	History []chatTurn    `json:"history"`
-	Cwd     string        `json:"cwd"`     // optional; defaults to $HOME
-	Timeout int           `json:"timeout"` // optional seconds; default 600
+	Prompt  string     `json:"prompt"`
+	History []chatTurn `json:"history"`
+	Cwd     string     `json:"cwd"`     // optional; defaults to $HOME
+	Timeout int        `json:"timeout"` // optional seconds; default 600
 	// SessionID, when set, causes claude to resume that session instead
 	// of starting a fresh one. Preserves slash-command + MCP + skill
 	// state + conversation history across turns. The first turn omits
@@ -523,10 +495,11 @@ func flattenHistory(history []chatTurn, current string) string {
 // HTTP response body.
 //
 // POST /chat?binary=claude|codex
-//   body:    {"prompt": str, "history": [...], "cwd": str?, "timeout": int?}
-//   auth:    Bearer BROKER_TENANT_TOKEN OR ?token=
-//   reply:   200 + Content-Type: application/x-ndjson, one JSON event
-//            per line, terminated when the binary exits.
+//
+//	body:    {"prompt": str, "history": [...], "cwd": str?, "timeout": int?}
+//	auth:    Bearer BROKER_TENANT_TOKEN OR ?token=
+//	reply:   200 + Content-Type: application/x-ndjson, one JSON event
+//	         per line, terminated when the binary exits.
 //
 // On invocation failure: 4xx/5xx with a JSON error body (not ndjson).
 // Once streaming has started, errors are emitted as a final ndjson
@@ -586,6 +559,9 @@ func chatHandler(w http.ResponseWriter, r *http.Request) {
 	if !constantTimeStringEq(tok, expected) {
 		jsonError(w, http.StatusUnauthorized, "invalid_token",
 			"missing or invalid token")
+		return
+	}
+	if !requireTenantID(w) {
 		return
 	}
 
@@ -676,7 +652,7 @@ func chatHandler(w http.ResponseWriter, r *http.Request) {
 
 	cmd := exec.CommandContext(ctx, binary, args...)
 	cmd.Dir = req.Cwd
-	cmd.Env = filteredEnv(os.Environ(), []string{"BROKER_TENANT_TOKEN"})
+	cmd.Env = ownedChildEnv()
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

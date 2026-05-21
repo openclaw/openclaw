@@ -1,4 +1,5 @@
 import path from "node:path";
+import { buildOwnedChildEnv } from "../../infra/owned-child-env.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import type {
   SandboxBackendCommandParams,
@@ -47,6 +48,7 @@ export const sshSandboxBackendManager: SandboxBackendManager = {
         configLabelMatch: false,
       };
     }
+    assertProductionSshConfigDoesNotMaterializeIdentityData(cfg.ssh);
     const runtimePaths = resolveSshRuntimePaths(cfg.ssh.workspaceRoot, entry.sessionKey);
     const session = await createSshSandboxSessionFromSettings({
       ...cfg.ssh,
@@ -77,6 +79,7 @@ export const sshSandboxBackendManager: SandboxBackendManager = {
     if (cfg.backend !== "ssh" || !cfg.ssh.target) {
       return;
     }
+    assertProductionSshConfigDoesNotMaterializeIdentityData(cfg.ssh);
     const runtimePaths = resolveSshRuntimePaths(cfg.ssh.workspaceRoot, entry.sessionKey);
     const session = await createSshSandboxSessionFromSettings({
       ...cfg.ssh,
@@ -110,6 +113,7 @@ export async function createSshSandboxBackend(
   if (!target) {
     throw new Error('Sandbox backend "ssh" requires agents.defaults.sandbox.ssh.target.');
   }
+  assertProductionSshConfigDoesNotMaterializeIdentityData(params.cfg.ssh);
 
   const runtimePaths = resolveSshRuntimePaths(params.cfg.ssh.workspaceRoot, params.scopeKey);
   const impl = new SshSandboxBackendImpl({
@@ -156,7 +160,7 @@ class SshSandboxBackendImpl {
             remoteCommand,
             tty: usePty,
           }),
-          env: sanitizeEnvVars(process.env).allowed,
+          env: sanitizeEnvVars(buildOwnedChildEnv()).allowed,
           stdinMode: "pipe-open",
           finalizeToken: { sshSession } satisfies PendingExec,
         };
@@ -259,6 +263,10 @@ class SshSandboxBackendImpl {
   async runRemoteShellScript(
     params: SandboxBackendCommandParams,
   ): Promise<SandboxBackendCommandResult> {
+    // Platform-secret SSH commands are not materialized by this production backend.
+    // The exec tool handles the exact accepted platform-secret form before sandbox
+    // selection and rejects other stored-secret references. The fixed heredoc helper
+    // in ssh.ts stays isolated until a resolve-v2 caller can provide category metadata.
     await this.ensureRuntime();
     const session = await this.createSession();
     try {
@@ -279,6 +287,17 @@ class SshSandboxBackendImpl {
       await disposeSshSandboxSession(session);
     }
   }
+}
+
+function assertProductionSshConfigDoesNotMaterializeIdentityData(params: {
+  identityData?: string;
+}): void {
+  if (!params.identityData) {
+    return;
+  }
+  throw new Error(
+    "SSH sandbox backend does not materialize identityData in production without resolve-v2 ssh_key metadata. Use identityFile for path-based SSH identities.",
+  );
 }
 
 function resolveSshRuntimePaths(workspaceRoot: string, scopeKey: string): ResolvedSshRuntimePaths {

@@ -8,6 +8,7 @@ import { slugifySessionKey } from "../../agents/sandbox/shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { copyFileWithinRoot, SafeOpenError } from "../../infra/fs-safe.js";
+import { buildOwnedChildEnv } from "../../infra/owned-child-env.js";
 import { normalizeScpRemoteHost, normalizeScpRemotePath } from "../../infra/scp-host.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { resolveChannelRemoteInboundAttachmentRoots } from "../../media/channel-inbound-roots.js";
@@ -323,7 +324,7 @@ async function scpFile(remoteHost: string, remotePath: string, localPath: string
         `${safeRemoteHost}:${safeRemotePath}`,
         localPath,
       ],
-      { stdio: ["ignore", "ignore", "pipe"] },
+      { stdio: ["ignore", "ignore", "pipe"], env: buildOwnedChildEnv() },
     );
 
     let stderr = "";

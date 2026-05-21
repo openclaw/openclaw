@@ -6,6 +6,7 @@ import path from "node:path";
 import type { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { FileIdentityStat } from "./file-identity.js";
+import { buildOwnedChildEnv } from "./owned-child-env.js";
 
 type PinnedWriteInput =
   | { kind: "buffer"; data: string | Buffer; encoding?: BufferEncoding }
@@ -172,6 +173,7 @@ export async function runPinnedWriteHelper(params: {
     ],
     {
       stdio: ["pipe", "pipe", "pipe"],
+      env: buildOwnedChildEnv(),
     },
   );
 

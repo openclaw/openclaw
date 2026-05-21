@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { getShellConfig } from "../../agents/shell-utils.js";
+import { assertOwnedChildEnv } from "../../infra/owned-child-env.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { createChildAdapter } from "./adapters/child.js";
 import { createPtyAdapter } from "./adapters/pty.js";
@@ -128,6 +129,7 @@ export function createProcessSupervisor(): ProcessSupervisor {
       if (input.mode === "child" && input.argv.length === 0) {
         throw new Error("spawn argv cannot be empty");
       }
+      assertOwnedChildEnv(input.env, "process supervisor spawn");
       const adapter =
         input.mode === "pty"
           ? await (async () => {

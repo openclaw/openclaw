@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveSandboxConfigForAgent } from "./config.js";
 
 const dockerMocks = vi.hoisted(() => ({
   dockerContainerState: vi.fn(),
@@ -19,7 +20,8 @@ vi.mock("./docker.js", async () => {
   };
 });
 
-const { dockerSandboxBackendManager } = await import("./docker-backend.js");
+const { createDockerSandboxBackend, dockerSandboxBackendManager } =
+  await import("./docker-backend.js");
 
 function createConfig(): OpenClawConfig {
   return {
@@ -44,8 +46,16 @@ function createConfig(): OpenClawConfig {
 }
 
 describe("docker sandbox backend manager", () => {
+  const originalEnv = { ...process.env };
+
   beforeEach(() => {
     vi.clearAllMocks();
+    for (const key of Object.keys(process.env)) {
+      if (!(key in originalEnv)) {
+        delete process.env[key];
+      }
+    }
+    Object.assign(process.env, originalEnv);
     dockerMocks.dockerContainerState.mockResolvedValue({
       exists: true,
       running: true,
@@ -141,5 +151,28 @@ describe("docker sandbox backend manager", () => {
       actualConfigLabel: "openclaw-sandbox:bookworm-slim",
       configLabelMatch: true,
     });
+  });
+
+  it("builds docker exec specs with an owned child env", async () => {
+    process.env.OPENAI_API_KEY = "sk-docker-secret";
+    process.env.LANG = "en_US.UTF-8";
+    dockerMocks.ensureSandboxContainer.mockResolvedValueOnce("sandbox-owned-env");
+
+    const handle = await createDockerSandboxBackend({
+      sessionKey: "agent:coder:main",
+      scopeKey: "agent:coder:main",
+      workspaceDir: "/tmp/workspace",
+      agentWorkspaceDir: "/tmp/workspace",
+      cfg: resolveSandboxConfigForAgent(createConfig()),
+    });
+    const spec = await handle.buildExecSpec({
+      command: "true",
+      env: {},
+      usePty: false,
+    });
+
+    expect(spec.env.OPENAI_API_KEY).toBeUndefined();
+    expect(spec.env.LANG).toBe("en_US.UTF-8");
+    expect(spec.env.PATH).toBeTruthy();
   });
 });

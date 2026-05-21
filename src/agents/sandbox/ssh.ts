@@ -3,8 +3,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resolveBoundaryPath } from "../../infra/boundary-path.js";
+import { buildOwnedChildEnv, containsSecretValueInArgv } from "../../infra/owned-child-env.js";
 import { parseSshTarget } from "../../infra/ssh-tunnel.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
+import {
+  createRuntimeSecretRedactor,
+  type SecretCategory,
+} from "../../secrets/platform-runtime.js";
 import { resolveUserPath } from "../../utils.js";
 import type { SandboxBackendCommandResult } from "./backend-handle.types.js";
 import { sanitizeEnvVars } from "./sanitize-env-vars.js";
@@ -18,6 +23,7 @@ export type SshSandboxSettings = {
   certificateFile?: string;
   knownHostsFile?: string;
   identityData?: string;
+  identityDataCategory?: SecretCategory;
   certificateData?: string;
   knownHostsData?: string;
 };
@@ -35,7 +41,46 @@ export type RunSshSandboxCommandParams = {
   allowFailure?: boolean;
   signal?: AbortSignal;
   tty?: boolean;
+  secretValues?: Record<string, string>;
 };
+
+const FIXED_HEREDOC_SCRIPTS = {
+  "openclaw-sandbox-upload": [
+    "set -euo pipefail",
+    'script_id="${1:?script id required}"',
+    'remote_dir="${2:?remote dir required}"',
+    'if [ "$script_id" != "openclaw-sandbox-upload" ]; then exit 64; fi',
+    'mkdir -p -- "$remote_dir"',
+    'tar -xf - -C "$remote_dir"',
+    "",
+  ].join("\n"),
+  "rockie-secret-runtime": [
+    "set -euo pipefail",
+    'script_id="${1:?script id required}"',
+    'secret_name="${2:-SECRET}"',
+    'if [ "$script_id" != "rockie-secret-runtime" ]; then exit 64; fi',
+    "umask 077",
+    'secret_file="$(mktemp)"',
+    "trap 'rm -f \"$secret_file\"' EXIT",
+    'cat > "$secret_file"',
+    'printf "<redacted:%s>\\n" "$secret_name"',
+    "",
+  ].join("\n"),
+} as const;
+
+const FIXED_HEREDOC_REMOTE_WRAPPER = [
+  "set -euo pipefail",
+  'script_id="${1:?script id required}"',
+  "shift",
+  'case "$script_id" in openclaw-sandbox-upload|rockie-secret-runtime) ;; *) exit 64 ;; esac',
+  "IFS= read -r script_size",
+  'case "$script_size" in ""|*[!0-9]*) exit 64 ;; esac',
+  "umask 077",
+  'script_file="$(mktemp)"',
+  "trap 'rm -f \"$script_file\"' EXIT",
+  'dd bs=1 count="$script_size" of="$script_file" 2>/dev/null',
+  'bash "$script_file" "$script_id" "$@"',
+].join("\n");
 
 function normalizeInlineSshMaterial(contents: string, filename: string): string {
   const withoutBom = contents.replace(/^\uFEFF/, "");
@@ -64,6 +109,52 @@ function buildSshFailureMessage(stderr: string, exitCode?: number): string {
       ? `ssh exited with code ${exitCode}`
       : "ssh exited with a non-zero status")
   );
+}
+
+type RuntimeSecretRedactor = ReturnType<typeof createRuntimeSecretRedactor>;
+
+function redactBuffer(buffer: Buffer, redactor: RuntimeSecretRedactor | null): Buffer {
+  if (!redactor) {
+    return buffer;
+  }
+  return Buffer.from(redactor.redact(buffer.toString("utf8")), "utf8");
+}
+
+function redactErrorOutputValue(value: unknown, redactor: RuntimeSecretRedactor): unknown {
+  if (Buffer.isBuffer(value)) {
+    return redactBuffer(value, redactor);
+  }
+  if (typeof value === "string") {
+    return redactor.redact(value);
+  }
+  return redactor.redactUnknown(value);
+}
+
+function redactSshError(error: unknown, redactor: RuntimeSecretRedactor | null): unknown {
+  if (!redactor) {
+    return error;
+  }
+  if (error instanceof Error) {
+    error.message = redactor.redact(error.message);
+    const record = error as Error & { stdout?: unknown; stderr?: unknown };
+    if (record.stdout !== undefined) {
+      record.stdout = redactErrorOutputValue(record.stdout, redactor);
+    }
+    if (record.stderr !== undefined) {
+      record.stderr = redactErrorOutputValue(record.stderr, redactor);
+    }
+    return error;
+  }
+  return redactor.redactUnknown(error);
+}
+
+function requireSshIdentityDataCategory(category: SecretCategory | undefined): SecretCategory {
+  if (!category) {
+    throw new Error(
+      "SSH identityData requires resolve-v2 category metadata before materialization. Use identityFile for path-based SSH identities until a platform-secret ssh_key path is wired.",
+    );
+  }
+  return category;
 }
 
 export function shellEscape(value: string): string {
@@ -112,6 +203,78 @@ export function buildSshSandboxArgv(params: {
   ];
 }
 
+export function assertNoSecretValuesInArgv(
+  argv: readonly string[],
+  secretValues: Record<string, string> | undefined,
+): void {
+  if (!secretValues || Object.keys(secretValues).length === 0) {
+    return;
+  }
+  if (containsSecretValueInArgv(argv, Object.values(secretValues))) {
+    throw new Error("Refusing to spawn SSH child with a resolved secret in argv.");
+  }
+}
+
+export function buildFixedSshHeredocRemoteCommand(params: {
+  scriptId: string;
+  args?: readonly string[];
+}): string {
+  if (!(params.scriptId in FIXED_HEREDOC_SCRIPTS)) {
+    throw new Error(`Unreviewed SSH heredoc script id: ${params.scriptId}`);
+  }
+  return buildRemoteCommand([
+    "bash",
+    "-c",
+    FIXED_HEREDOC_REMOTE_WRAPPER,
+    "openclaw-fixed-heredoc",
+    params.scriptId,
+    ...(params.args ?? []),
+  ]);
+}
+
+function buildFixedSshHeredocPayloadPrefix(scriptId: keyof typeof FIXED_HEREDOC_SCRIPTS): Buffer {
+  const script = FIXED_HEREDOC_SCRIPTS[scriptId];
+  const scriptBuffer = Buffer.from(script.endsWith("\n") ? script : `${script}\n`, "utf8");
+  return Buffer.concat([Buffer.from(`${scriptBuffer.length}\n`, "utf8"), scriptBuffer]);
+}
+
+export async function runFixedSshHeredocScript(params: {
+  session: SshSandboxSession;
+  scriptId: keyof typeof FIXED_HEREDOC_SCRIPTS;
+  args?: readonly string[];
+  stdin?: Buffer | string;
+  secretValues: Record<string, string>;
+  signal?: AbortSignal;
+}): Promise<SandboxBackendCommandResult> {
+  const remoteCommand = buildFixedSshHeredocRemoteCommand({
+    scriptId: params.scriptId,
+    args: params.args,
+  });
+  const payload = Buffer.concat([
+    buildFixedSshHeredocPayloadPrefix(params.scriptId),
+    typeof params.stdin === "string"
+      ? Buffer.from(params.stdin, "utf8")
+      : (params.stdin ?? Buffer.alloc(0)),
+  ]);
+  const redactor = createRuntimeSecretRedactor(params.secretValues);
+  try {
+    const result = await runSshSandboxCommand({
+      session: params.session,
+      remoteCommand,
+      stdin: payload,
+      signal: params.signal,
+      secretValues: params.secretValues,
+    });
+    return {
+      ...result,
+      stdout: Buffer.from(redactor.redact(result.stdout.toString("utf8")), "utf8"),
+      stderr: Buffer.from(redactor.redact(result.stderr.toString("utf8")), "utf8"),
+    };
+  } finally {
+    redactor.close();
+  }
+}
+
 export async function createSshSandboxSessionFromConfigText(params: {
   configText: string;
   host?: string;
@@ -143,7 +306,11 @@ export async function createSshSandboxSessionFromSettings(
   const configDir = await fs.mkdtemp(path.join(resolveSshTmpRoot(), "openclaw-sandbox-ssh-"));
   try {
     const materializedIdentity = settings.identityData
-      ? await writeSecretMaterial(configDir, "identity", settings.identityData)
+      ? await writeResolvedSshKeyTempfile({
+          dir: configDir,
+          value: settings.identityData,
+          category: requireSshIdentityDataCategory(settings.identityDataCategory),
+        })
       : undefined;
     const materializedCertificate = settings.certificateData
       ? await writeSecretMaterial(configDir, "certificate.pub", settings.certificateData)
@@ -214,42 +381,51 @@ export async function runSshSandboxCommand(
     remoteCommand: params.remoteCommand,
     tty: params.tty,
   });
-  const sshEnv = sanitizeEnvVars(process.env).allowed;
-  return await new Promise<SandboxBackendCommandResult>((resolve, reject) => {
-    const child = spawn(argv[0], argv.slice(1), {
-      stdio: ["pipe", "pipe", "pipe"],
-      env: sshEnv,
-      signal: params.signal,
-    });
-    const stdoutChunks: Buffer[] = [];
-    const stderrChunks: Buffer[] = [];
+  assertNoSecretValuesInArgv(argv, params.secretValues);
+  const sshEnv = sanitizeEnvVars(buildOwnedChildEnv()).allowed;
+  const redactor =
+    params.secretValues && Object.keys(params.secretValues).length > 0
+      ? createRuntimeSecretRedactor(params.secretValues)
+      : null;
+  try {
+    return await new Promise<SandboxBackendCommandResult>((resolve, reject) => {
+      const child = spawn(argv[0], argv.slice(1), {
+        stdio: ["pipe", "pipe", "pipe"],
+        env: sshEnv,
+        signal: params.signal,
+      });
+      const stdoutChunks: Buffer[] = [];
+      const stderrChunks: Buffer[] = [];
 
-    child.stdout.on("data", (chunk) => stdoutChunks.push(Buffer.from(chunk)));
-    child.stderr.on("data", (chunk) => stderrChunks.push(Buffer.from(chunk)));
-    child.on("error", reject);
-    child.on("close", (code) => {
-      const stdout = Buffer.concat(stdoutChunks);
-      const stderr = Buffer.concat(stderrChunks);
-      const exitCode = code ?? 0;
-      if (exitCode !== 0 && !params.allowFailure) {
-        reject(
-          Object.assign(new Error(buildSshFailureMessage(stderr.toString("utf8"), exitCode)), {
-            code: exitCode,
-            stdout,
-            stderr,
-          }),
-        );
+      child.stdout.on("data", (chunk) => stdoutChunks.push(Buffer.from(chunk)));
+      child.stderr.on("data", (chunk) => stderrChunks.push(Buffer.from(chunk)));
+      child.on("error", (error) => reject(redactSshError(error, redactor)));
+      child.on("close", (code) => {
+        const stdout = redactBuffer(Buffer.concat(stdoutChunks), redactor);
+        const stderr = redactBuffer(Buffer.concat(stderrChunks), redactor);
+        const exitCode = code ?? 0;
+        if (exitCode !== 0 && !params.allowFailure) {
+          reject(
+            Object.assign(new Error(buildSshFailureMessage(stderr.toString("utf8"), exitCode)), {
+              code: exitCode,
+              stdout,
+              stderr,
+            }),
+          );
+          return;
+        }
+        resolve({ stdout, stderr, code: exitCode });
+      });
+
+      if (params.stdin !== undefined) {
+        child.stdin.end(params.stdin);
         return;
       }
-      resolve({ stdout, stderr, code: exitCode });
+      child.stdin.end();
     });
-
-    if (params.stdin !== undefined) {
-      child.stdin.end(params.stdin);
-      return;
-    }
-    child.stdin.end();
-  });
+  } finally {
+    redactor?.close();
+  }
 }
 
 export async function uploadDirectoryToSshTarget(params: {
@@ -259,21 +435,19 @@ export async function uploadDirectoryToSshTarget(params: {
   signal?: AbortSignal;
 }): Promise<void> {
   await assertSafeUploadSymlinks(params.localDir);
-  const remoteCommand = buildRemoteCommand([
-    "/bin/sh",
-    "-c",
-    'mkdir -p -- "$1" && tar -xf - -C "$1"',
-    "openclaw-sandbox-upload",
-    params.remoteDir,
-  ]);
+  const remoteCommand = buildFixedSshHeredocRemoteCommand({
+    scriptId: "openclaw-sandbox-upload",
+    args: [params.remoteDir],
+  });
   const sshArgv = buildSshSandboxArgv({
     session: params.session,
     remoteCommand,
   });
-  const sshEnv = sanitizeEnvVars(process.env).allowed;
+  const sshEnv = sanitizeEnvVars(buildOwnedChildEnv()).allowed;
   await new Promise<void>((resolve, reject) => {
     const tar = spawn("tar", ["-C", params.localDir, "-cf", "-", "."], {
       stdio: ["ignore", "pipe", "pipe"],
+      env: buildOwnedChildEnv(),
       signal: params.signal,
     });
     const ssh = spawn(sshArgv[0], sshArgv.slice(1), {
@@ -301,7 +475,14 @@ export async function uploadDirectoryToSshTarget(params: {
 
     tar.on("error", fail);
     ssh.on("error", fail);
-    tar.stdout.pipe(ssh.stdin);
+    const pipeTarArchive = () => {
+      tar.stdout.pipe(ssh.stdin);
+    };
+    if (!ssh.stdin.write(buildFixedSshHeredocPayloadPrefix("openclaw-sandbox-upload"))) {
+      ssh.stdin.once("drain", pipeTarArchive);
+    } else {
+      pipeTarArchive();
+    }
 
     tar.on("close", (code) => {
       tarClosed = true;
@@ -396,4 +577,15 @@ async function writeSecretMaterial(
   });
   await fs.chmod(pathname, 0o600);
   return pathname;
+}
+
+export async function writeResolvedSshKeyTempfile(params: {
+  dir: string;
+  value: string;
+  category: SecretCategory;
+}): Promise<string> {
+  if (params.category !== "ssh_key") {
+    throw new Error("SSH key material requires secret category ssh_key.");
+  }
+  return await writeSecretMaterial(params.dir, "identity", params.value);
 }

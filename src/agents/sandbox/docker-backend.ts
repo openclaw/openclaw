@@ -1,3 +1,4 @@
+import { buildOwnedChildEnv } from "../../infra/owned-child-env.js";
 import { buildDockerExecArgs } from "../bash-tools.shared.js";
 import type { SandboxBackendCommandParams } from "./backend-handle.types.js";
 import type {
@@ -75,7 +76,7 @@ function createDockerSandboxBackendHandle(params: {
             tty: usePty,
           }),
         ],
-        env: process.env,
+        env: buildOwnedChildEnv(),
         stdinMode: usePty ? "pipe-open" : "pipe-closed",
       };
     },

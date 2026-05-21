@@ -27,6 +27,18 @@ afterEach(async () => {
 });
 
 describe("sandbox ssh helpers", () => {
+  it("rejects inline private key material without resolve-v2 category metadata", async () => {
+    await expect(
+      createSshSandboxSessionFromSettings({
+        command: "ssh",
+        target: "peter@example.com:2222",
+        strictHostKeyChecking: true,
+        updateHostKeys: false,
+        identityData: "PRIVATE KEY",
+      }),
+    ).rejects.toThrow(/requires resolve-v2 category metadata/i);
+  });
+
   it("materializes inline ssh auth data into a temp config", async () => {
     const session = await createSshSandboxSessionFromSettings({
       command: "ssh",
@@ -34,6 +46,7 @@ describe("sandbox ssh helpers", () => {
       strictHostKeyChecking: true,
       updateHostKeys: false,
       identityData: "PRIVATE KEY",
+      identityDataCategory: "ssh_key",
       certificateData: "SSH CERT",
       knownHostsData: "example.com ssh-ed25519 AAAATEST",
     });
@@ -48,6 +61,8 @@ describe("sandbox ssh helpers", () => {
     expect(config).toContain("UpdateHostKeys no");
 
     const configDir = session.configPath.slice(0, session.configPath.lastIndexOf("/"));
+    const identityStat = await fs.stat(`${configDir}/identity`);
+    expect(identityStat.mode & 0o777).toBe(0o600);
     expect(await fs.readFile(`${configDir}/identity`, "utf8")).toBe("PRIVATE KEY\n");
     expect(await fs.readFile(`${configDir}/certificate.pub`, "utf8")).toBe("SSH CERT\n");
     expect(await fs.readFile(`${configDir}/known_hosts`, "utf8")).toBe(
@@ -63,6 +78,7 @@ describe("sandbox ssh helpers", () => {
       updateHostKeys: false,
       identityData:
         "-----BEGIN OPENSSH PRIVATE KEY-----\\nbGluZTE=\\r\\nbGluZTI=\\r\\n-----END OPENSSH PRIVATE KEY-----",
+      identityDataCategory: "ssh_key",
       knownHostsData: "example.com ssh-ed25519 AAAATEST",
     });
     sessions.push(session);
@@ -84,6 +100,7 @@ describe("sandbox ssh helpers", () => {
       updateHostKeys: false,
       identityData:
         "-----BEGIN OPENSSH PRIVATE KEY-----\nline-1\\nline-2\n-----END OPENSSH PRIVATE KEY-----",
+      identityDataCategory: "ssh_key",
       knownHostsData: "example.com ssh-ed25519 AAAATEST",
     });
     sessions.push(session);

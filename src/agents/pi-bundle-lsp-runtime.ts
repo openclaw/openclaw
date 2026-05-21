@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { buildOwnedChildEnv } from "../infra/owned-child-env.js";
 import { logDebug, logWarn } from "../logger.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
 import { killProcessTree } from "../process/kill-tree.js";
@@ -67,7 +68,7 @@ function delay(ms: number): Promise<void> {
 function spawnLspServerProcess(config: StdioMcpServerLaunchConfig): ChildProcess {
   return spawn(config.command, config.args ?? [], {
     stdio: ["pipe", "pipe", "pipe"],
-    env: { ...process.env, ...config.env },
+    env: buildOwnedChildEnv({ overrides: config.env }),
     cwd: config.cwd,
     detached: process.platform !== "win32",
     windowsHide: process.platform === "win32",

@@ -93,7 +93,7 @@ func TestSniffLoginTrigger(t *testing.T) {
 // when /chat is hit while a /login flow is marked active for that
 // binary. This is the user-facing contract that fixes fleet-task #234.
 func TestChatHandlerRefusesDuringLogin(t *testing.T) {
-	t.Setenv("BROKER_TENANT_TOKEN", "tt")
+	setBrokerTestEnv(t, "tt")
 	withTempHome(t)
 
 	// Mark codex as logging-in.
@@ -217,7 +217,7 @@ func TestAuthFileExistsZeroByteTreatedAsMissing(t *testing.T) {
 // nobody.
 func TestChatHandlerRefusesWhenAuthMissing(t *testing.T) {
 	withTempHome(t)
-	t.Setenv("BROKER_TENANT_TOKEN", "tt")
+	setBrokerTestEnv(t, "tt")
 
 	req := httptest.NewRequest(http.MethodPost,
 		"/chat?binary=codex&token=tt",
@@ -260,7 +260,7 @@ func TestChatHandlerRefusesWhenAuthMissing(t *testing.T) {
 func TestChatHandlerProceedsWhenAuthPresent(t *testing.T) {
 	withTempHome(t)
 	writeAuthFile(t, "codex")
-	t.Setenv("BROKER_TENANT_TOKEN", "tt")
+	setBrokerTestEnv(t, "tt")
 
 	req := httptest.NewRequest(http.MethodPost,
 		"/chat?binary=codex&token=tt",
@@ -285,7 +285,7 @@ func TestChatHandlerProceedsWhenAuthPresent(t *testing.T) {
 // In CI the binary is absent, so cmd.Start() fails with `spawn_failed`,
 // which serves as the proof the gate did not fire.
 func TestChatHandlerIsolatesBinariesDuringLogin(t *testing.T) {
-	t.Setenv("BROKER_TENANT_TOKEN", "tt")
+	setBrokerTestEnv(t, "tt")
 	// #292: also bypass the missing-auth gate so we exercise the
 	// per-binary isolation of the login gate, not the auth file check.
 	withTempHome(t)

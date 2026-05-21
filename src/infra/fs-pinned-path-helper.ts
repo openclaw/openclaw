@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import fsSync from "node:fs";
+import { buildOwnedChildEnv } from "./owned-child-env.js";
 
 const LOCAL_PINNED_PATH_PYTHON = [
   "import errno",
@@ -147,6 +148,7 @@ export async function runPinnedPathHelper(params: {
     ["-c", LOCAL_PINNED_PATH_PYTHON, params.operation, params.rootPath, params.relativePath],
     {
       stdio: ["ignore", "ignore", "pipe"],
+      env: buildOwnedChildEnv(),
     },
   );
 

@@ -10,6 +10,7 @@ import {
 } from "../infra/exec-approvals.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { isDangerousHostInheritedEnvVarName } from "../infra/host-env-security.js";
+import { buildOwnedChildEnv } from "../infra/owned-child-env.js";
 import { findPathKey, mergePathPrepend } from "../infra/path-prepend.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { scopedHeartbeatWakeOptions } from "../routing/session-key.js";
@@ -717,7 +718,7 @@ export async function runExecProcess(opts: {
             tty: opts.usePty,
           }),
         ],
-        env: backendExecSpec?.env ?? process.env,
+        env: backendExecSpec?.env ?? buildOwnedChildEnv(),
         stdinMode:
           backendExecSpec?.stdinMode ??
           (opts.usePty ? ("pipe-open" as const) : ("pipe-closed" as const)),

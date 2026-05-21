@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { buildOwnedChildEnv } from "../infra/owned-child-env.js";
 
 const DEFAULT_GRACE_MS = 3000;
 const MAX_GRACE_MS = 60_000;
@@ -101,6 +102,7 @@ function runTaskkill(args: string[]): void {
   try {
     spawn("taskkill", args, {
       stdio: "ignore",
+      env: buildOwnedChildEnv(),
       detached: true,
       windowsHide: true,
     });

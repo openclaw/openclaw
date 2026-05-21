@@ -18,7 +18,10 @@ let createProcessSupervisor: typeof import("./supervisor.js").createProcessSuper
 
 type ProcessSupervisor = ReturnType<typeof createProcessSupervisor>;
 type SpawnOptions = Parameters<ProcessSupervisor["spawn"]>[0];
-type ChildSpawnOptions = Omit<Extract<SpawnOptions, { mode: "child" }>, "backendId" | "mode">;
+type ChildSpawnOptions = Omit<
+  Extract<SpawnOptions, { mode: "child" }>,
+  "backendId" | "mode" | "env"
+> & { env?: NodeJS.ProcessEnv };
 type ChildAdapter = SpawnProcessAdapter<NodeJS.Signals | null>;
 type StubChildAdapter = ChildAdapter & {
   emitStdout: (chunk: string) => void;
@@ -100,6 +103,7 @@ async function spawnChild(supervisor: ProcessSupervisor, options: ChildSpawnOpti
     ...options,
     backendId: "test",
     mode: "child",
+    env: options.env ?? { PATH: "/usr/bin" },
   });
 }
 

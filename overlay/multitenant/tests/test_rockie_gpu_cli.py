@@ -1,4 +1,4 @@
-"""Tests for the rockie-gpu CLI token/api-base resolution + `list` alias.
+"""Tests for the rockie-gpu CLI tenant/api-base resolution + `list` alias.
 
 The CLI file lives at ``overlay/multitenant/rockie-gpu`` (no ``.py``
 extension, hyphen in name), so we load it via ``SourceFileLoader``
@@ -35,8 +35,9 @@ def cli():
 
 @pytest.fixture(autouse=True)
 def _isolate_env(monkeypatch, tmp_path):
-    """Every test starts with no token env vars and HOME pointed at a
+    """Every test starts with no tenant env vars and HOME pointed at a
     tmp dir, so we never touch the real ``~/.rockie/config.json``."""
+    monkeypatch.delenv("ROCKIELAB_TENANT_ID", raising=False)
     monkeypatch.delenv("ROCKIELAB_TENANT_TOKEN", raising=False)
     monkeypatch.delenv("BROKER_TENANT_TOKEN", raising=False)
     monkeypatch.delenv("ROCKIELAB_API_BASE", raising=False)
@@ -58,24 +59,23 @@ def _write_config(home: Path, payload) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# Token resolution
+# Tenant identity resolution
 # ---------------------------------------------------------------------------
 
 
-def test_canonical_env_var_wins_over_legacy(cli, monkeypatch):
-    monkeypatch.setenv("ROCKIELAB_TENANT_TOKEN", "t-aaa")
-    monkeypatch.setenv("BROKER_TENANT_TOKEN", "t-bbb")
+def test_tenant_id_env_var_is_used(cli, monkeypatch):
+    monkeypatch.setenv("ROCKIELAB_TENANT_ID", "t-aaa")
+    monkeypatch.setenv("ROCKIELAB_TENANT_TOKEN", "legacy-token")
+    monkeypatch.setenv("BROKER_TENANT_TOKEN", "broker-token")
     assert cli._get_token() == "t-aaa"
 
 
-def test_legacy_env_var_used_when_canonical_unset(cli, monkeypatch):
-    monkeypatch.setenv("BROKER_TENANT_TOKEN", "t-bbb")
-    assert cli._get_token() == "t-bbb"
-
-
-def test_config_file_used_when_both_env_vars_unset(cli, tmp_path):
+def test_config_file_tenant_token_is_not_identity(cli, tmp_path):
     _write_config(tmp_path, {"tenant_token": "t-ccc"})
-    assert cli._get_token() == "t-ccc"
+    with pytest.raises(cli.CLIError) as excinfo:
+        cli._get_token()
+    assert excinfo.value.exit_code == 2
+    assert "rockielab_tenant_id" in str(excinfo.value).lower()
 
 
 def test_get_token_raises_when_nothing_set(cli):
@@ -83,10 +83,10 @@ def test_get_token_raises_when_nothing_set(cli):
     with pytest.raises(cli.CLIError) as excinfo:
         cli._get_token()
     # Exit code 2 — same class as argparse usage errors. The CLI cannot
-    # do anything useful without a tenant token, so we surface it as a
+    # do anything useful without a tenant id, so we surface it as a
     # configuration/usage problem rather than a network error (1).
     assert excinfo.value.exit_code == 2
-    assert "tenant token" in str(excinfo.value).lower()
+    assert "rockielab_tenant_id" in str(excinfo.value).lower()
 
 
 # ---------------------------------------------------------------------------
@@ -139,5 +139,4 @@ def test_list_alias_dispatches_to_list_prices_handler(cli):
     # argparse aliases display the canonical name in --help, so a
     # textual comparison would be misleading.
     assert alias.func is canonical.func
-
 

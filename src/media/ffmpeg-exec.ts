@@ -1,5 +1,6 @@
 import { execFile, type ExecFileOptions } from "node:child_process";
 import { promisify } from "node:util";
+import { buildOwnedChildEnv } from "../infra/owned-child-env.js";
 import { resolveSystemBin } from "../infra/resolve-system-bin.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
@@ -46,25 +47,35 @@ function isBrokenPipeError(error: Error): boolean {
 }
 
 export async function runFfprobe(args: string[], options?: MediaExecOptions): Promise<string> {
-  const execOptions = resolveExecOptions(MEDIA_FFPROBE_TIMEOUT_MS, options);
   if (options?.input == null) {
-    const { stdout } = await execFileAsync(requireSystemBin("ffprobe"), args, execOptions);
+    const { stdout } = await execFileAsync(requireSystemBin("ffprobe"), args, {
+      ...resolveExecOptions(MEDIA_FFPROBE_TIMEOUT_MS, options),
+      env: buildOwnedChildEnv(),
+    });
     return stdout.toString();
   }
 
   return await new Promise<string>((resolve, reject) => {
     let stdinWriteError: Error | undefined;
-    const proc = execFile(requireSystemBin("ffprobe"), args, execOptions, (err, stdout) => {
-      if (err) {
-        reject(err);
-        return;
-      }
-      if (stdinWriteError && !isBrokenPipeError(stdinWriteError)) {
-        reject(stdinWriteError);
-        return;
-      }
-      resolve(stdout.toString());
-    });
+    const proc = execFile(
+      requireSystemBin("ffprobe"),
+      args,
+      {
+        ...resolveExecOptions(MEDIA_FFPROBE_TIMEOUT_MS, options),
+        env: buildOwnedChildEnv(),
+      },
+      (err, stdout) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        if (stdinWriteError && !isBrokenPipeError(stdinWriteError)) {
+          reject(stdinWriteError);
+          return;
+        }
+        resolve(stdout.toString());
+      },
+    );
     proc.stdin?.once("error", (err: Error) => {
       stdinWriteError = err;
     });
@@ -73,11 +84,10 @@ export async function runFfprobe(args: string[], options?: MediaExecOptions): Pr
 }
 
 export async function runFfmpeg(args: string[], options?: MediaExecOptions): Promise<string> {
-  const { stdout } = await execFileAsync(
-    requireSystemBin("ffmpeg"),
-    args,
-    resolveExecOptions(MEDIA_FFMPEG_TIMEOUT_MS, options),
-  );
+  const { stdout } = await execFileAsync(requireSystemBin("ffmpeg"), args, {
+    ...resolveExecOptions(MEDIA_FFMPEG_TIMEOUT_MS, options),
+    env: buildOwnedChildEnv(),
+  });
   return stdout.toString();
 }
 

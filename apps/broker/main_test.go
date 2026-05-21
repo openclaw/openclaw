@@ -92,13 +92,22 @@ func TestRedactNeverLeaksValue(t *testing.T) {
 	if strings.Contains(r, "super") || strings.Contains(r, "secret") {
 		t.Fatalf("redact leaked the value: %q", r)
 	}
+	if strings.Contains(r, "18") {
+		t.Fatalf("redact leaked value length: %q", r)
+	}
 	if !strings.Contains(r, "redacted") {
 		t.Fatalf("redact output should mention 'redacted', got %q", r)
 	}
 }
 
+func setBrokerTestEnv(t *testing.T, token string) {
+	t.Helper()
+	t.Setenv("BROKER_TENANT_TOKEN", token)
+	t.Setenv("ROCKIELAB_TENANT_ID", "tenant-test")
+}
+
 func TestSpawnRequiresToken(t *testing.T) {
-	t.Setenv("BROKER_TENANT_TOKEN", "test-token")
+	setBrokerTestEnv(t, "test-token")
 	body := strings.NewReader(`{"binary":"bash","args":["-c","echo hi"]}`)
 	req := httptest.NewRequest(http.MethodPost, "/spawn", body)
 	rec := httptest.NewRecorder()
@@ -112,8 +121,22 @@ func TestSpawnRequiresToken(t *testing.T) {
 	}
 }
 
-func TestSpawnRejectsInvalidBinary(t *testing.T) {
+func TestSpawnFailsClosedWithoutTenantID(t *testing.T) {
 	t.Setenv("BROKER_TENANT_TOKEN", "tt")
+	body := strings.NewReader(`{"binary":"bash","args":["-c","echo hi"]}`)
+	req := httptest.NewRequest(http.MethodPost, "/spawn?token=tt", body)
+	rec := httptest.NewRecorder()
+	spawnHandler(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 without tenant id, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "tenant_id_unset") {
+		t.Fatalf("expected tenant_id_unset, got %s", rec.Body.String())
+	}
+}
+
+func TestSpawnRejectsInvalidBinary(t *testing.T) {
+	setBrokerTestEnv(t, "tt")
 	body := strings.NewReader(`{"binary":"rm","args":["-rf","/"]}`)
 	req := httptest.NewRequest(http.MethodPost, "/spawn?token=tt", body)
 	rec := httptest.NewRecorder()
@@ -127,7 +150,7 @@ func TestSpawnRejectsInvalidBinary(t *testing.T) {
 }
 
 func TestSpawnHappyPath(t *testing.T) {
-	t.Setenv("BROKER_TENANT_TOKEN", "tt")
+	setBrokerTestEnv(t, "tt")
 	body := strings.NewReader(`{"binary":"bash","args":["-c","echo hello && echo err 1>&2 && exit 7"],"timeout_sec":5}`)
 	req := httptest.NewRequest(http.MethodPost, "/spawn?token=tt", body)
 	rec := httptest.NewRecorder()
@@ -156,7 +179,7 @@ func TestSpawnHappyPath(t *testing.T) {
 // frame at the end. This is the "one PTY framing roundtrip with a mocked
 // binary" called for in the Phase 2 spec.
 func TestChatRequiresToken(t *testing.T) {
-	t.Setenv("BROKER_TENANT_TOKEN", "tt")
+	setBrokerTestEnv(t, "tt")
 	req := httptest.NewRequest(http.MethodPost, "/chat?binary=claude", strings.NewReader(`{"prompt":"hi"}`))
 	rec := httptest.NewRecorder()
 	chatHandler(rec, req)
@@ -166,7 +189,7 @@ func TestChatRequiresToken(t *testing.T) {
 }
 
 func TestChatRejectsInvalidBinary(t *testing.T) {
-	t.Setenv("BROKER_TENANT_TOKEN", "tt")
+	setBrokerTestEnv(t, "tt")
 	req := httptest.NewRequest(http.MethodPost, "/chat?binary=python&token=tt", strings.NewReader(`{"prompt":"hi"}`))
 	rec := httptest.NewRecorder()
 	chatHandler(rec, req)
@@ -176,7 +199,7 @@ func TestChatRejectsInvalidBinary(t *testing.T) {
 }
 
 func TestChatRejectsEmptyPrompt(t *testing.T) {
-	t.Setenv("BROKER_TENANT_TOKEN", "tt")
+	setBrokerTestEnv(t, "tt")
 	req := httptest.NewRequest(http.MethodPost, "/chat?binary=claude&token=tt", strings.NewReader(`{"prompt":""}`))
 	rec := httptest.NewRecorder()
 	chatHandler(rec, req)
@@ -213,7 +236,7 @@ func TestPTYFramingRoundtrip(t *testing.T) {
 	if _, err := os.Stat("/bin/bash"); err != nil {
 		t.Skipf("bash not available on this host: %v", err)
 	}
-	t.Setenv("BROKER_TENANT_TOKEN", "tt")
+	setBrokerTestEnv(t, "tt")
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", wsHandler)

@@ -71,7 +71,7 @@ type SpawnBaseInput = {
   scopeKey?: string;
   replaceExistingScope?: boolean;
   cwd?: string;
-  env?: NodeJS.ProcessEnv;
+  env: NodeJS.ProcessEnv;
   timeoutMs?: number;
   noOutputTimeoutMs?: number;
   /**

@@ -212,7 +212,7 @@ func spawnSession(ctx context.Context, sessionID, binary, cwd string) (*ptySessi
 	args := claudePTYArgs(sessionID)
 	cmd := exec.Command(binary, args...)
 	cmd.Dir = cwd
-	cmd.Env = filteredEnv(os.Environ(), []string{"BROKER_TENANT_TOKEN"})
+	cmd.Env = ownedChildEnv()
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -354,9 +354,10 @@ type chatPTYRequest struct {
 // claude emits its `result` frame.
 //
 // POST /chat-pty?session_id=<uuid>&binary=claude
-//   body:    {"prompt": str, "cwd": str?}
-//   auth:    Bearer BROKER_TENANT_TOKEN OR ?token=
-//   reply:   200 + Content-Type: application/x-ndjson
+//
+//	body:    {"prompt": str, "cwd": str?}
+//	auth:    Bearer BROKER_TENANT_TOKEN OR ?token=
+//	reply:   200 + Content-Type: application/x-ndjson
 //
 // Concurrency: one turn at a time per session_id (the session's mu).
 // Multiple session_ids stream in parallel.
@@ -383,6 +384,9 @@ func chatPTYHandler(w http.ResponseWriter, r *http.Request) {
 	if !constantTimeStringEq(tok, expected) {
 		jsonError(w, http.StatusUnauthorized, "invalid_token",
 			"missing or invalid token")
+		return
+	}
+	if !requireTenantID(w) {
 		return
 	}
 
@@ -566,4 +570,3 @@ func isResultFrame(line []byte) bool {
 	}
 	return probe.Type == "result"
 }
-

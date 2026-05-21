@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import net from "node:net";
 import { formatErrorMessage, isErrno } from "./errors.js";
+import { buildOwnedChildEnv } from "./owned-child-env.js";
 import { ensurePortAvailable } from "./ports.js";
 
 export type SshParsedTarget = {
@@ -154,6 +155,7 @@ export async function startSshPortForward(opts: {
   const stderr: string[] = [];
   const child = spawn("/usr/bin/ssh", args, {
     stdio: ["ignore", "ignore", "pipe"],
+    env: buildOwnedChildEnv(),
   });
   child.stderr?.setEncoding("utf8");
   child.stderr?.on("data", (chunk) => {

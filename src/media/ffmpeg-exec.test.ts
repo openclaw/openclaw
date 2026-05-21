@@ -1,10 +1,11 @@
 import type { ChildProcess, ExecFileOptions } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   parseFfprobeCodecAndSampleRate,
   parseFfprobeCsvFields,
+  runFfmpeg,
   runFfprobe,
 } from "./ffmpeg-exec.js";
 
@@ -60,6 +61,10 @@ beforeEach(() => {
   resolveSystemBinMock.mockReturnValue("/usr/bin/ffprobe");
 });
 
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 describe("parseFfprobeCsvFields", () => {
   function expectParsedFfprobeCsvCase(input: string, fieldCount: number, expected: string[]) {
     expect(parseFfprobeCsvFields(input, fieldCount)).toEqual(expected);
@@ -104,6 +109,27 @@ describe("parseFfprobeCodecAndSampleRate", () => {
 });
 
 describe("runFfprobe", () => {
+  it("passes a sanitized owned env to ffprobe without stdin", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "sk-test-secret");
+    vi.stubEnv("LANG", "en_US.UTF-8");
+    execFileMock.mockImplementationOnce(
+      (_file: string, _args: string[], _options: ExecFileOptions, callback: ExecFileCallback) => {
+        callback(
+          null,
+          { stdout: Buffer.from("ok"), stderr: Buffer.alloc(0) } as unknown as Buffer,
+          Buffer.alloc(0),
+        );
+        return createExecFileChild();
+      },
+    );
+
+    await expect(runFfprobe(["-version"])).resolves.toBe("ok");
+
+    const options = execFileMock.mock.calls[0]?.[2] as ExecFileOptions | undefined;
+    expect(options?.env?.OPENAI_API_KEY).toBeUndefined();
+    expect(options?.env?.LANG).toBe("en_US.UTF-8");
+  });
+
   it("handles stdin EPIPE without overriding successful ffprobe stdout", async () => {
     const child = createExecFileChild();
     const { execCallback } = mockFfprobeExecFile(child);
@@ -129,5 +155,28 @@ describe("runFfprobe", () => {
     execCallback()(childError, "", "");
 
     await expect(promise).rejects.toBe(childError);
+  });
+});
+
+describe("runFfmpeg", () => {
+  it("passes a sanitized owned env to ffmpeg", async () => {
+    vi.stubEnv("ANTHROPIC_API_KEY", "sk-test-secret");
+    vi.stubEnv("NODE_ENV", "test");
+    execFileMock.mockImplementationOnce(
+      (_file: string, _args: string[], _options: ExecFileOptions, callback: ExecFileCallback) => {
+        callback(
+          null,
+          { stdout: Buffer.from("ok"), stderr: Buffer.alloc(0) } as unknown as Buffer,
+          Buffer.alloc(0),
+        );
+        return createExecFileChild();
+      },
+    );
+
+    await expect(runFfmpeg(["-version"])).resolves.toBe("ok");
+
+    const options = execFileMock.mock.calls[0]?.[2] as ExecFileOptions | undefined;
+    expect(options?.env?.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(options?.env?.NODE_ENV).toBe("test");
   });
 });

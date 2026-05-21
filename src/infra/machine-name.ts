@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import os from "node:os";
 import { promisify } from "node:util";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { buildOwnedChildEnv } from "./owned-child-env.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -10,6 +11,7 @@ let cachedPromise: Promise<string> | null = null;
 async function tryScutil(key: "ComputerName" | "LocalHostName") {
   try {
     const { stdout } = await execFileAsync("/usr/sbin/scutil", ["--get", key], {
+      env: buildOwnedChildEnv(),
       timeout: 1000,
       windowsHide: true,
     });

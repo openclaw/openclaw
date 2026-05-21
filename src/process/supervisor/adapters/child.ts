@@ -1,4 +1,5 @@
 import type { ChildProcessWithoutNullStreams, SpawnOptions } from "node:child_process";
+import { assertOwnedChildEnv } from "../../../infra/owned-child-env.js";
 import { createWindowsOutputDecoder } from "../../../infra/windows-encoding.js";
 import { killProcessTree } from "../../kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../../linux-oom-score.js";
@@ -26,13 +27,14 @@ function isServiceManagedRuntime(): boolean {
 export async function createChildAdapter(params: {
   argv: string[];
   cwd?: string;
-  env?: NodeJS.ProcessEnv;
+  env: NodeJS.ProcessEnv;
   windowsVerbatimArguments?: boolean;
   input?: string;
   stdinMode?: "inherit" | "pipe-open" | "pipe-closed";
 }): Promise<ChildAdapter> {
   const resolvedArgv = [...params.argv];
   resolvedArgv[0] = resolveCommand(resolvedArgv[0] ?? "");
+  assertOwnedChildEnv(params.env, "createChildAdapter");
   const baseEnv = params.env ? toStringEnv(params.env) : undefined;
   const preparedSpawn = prepareOomScoreAdjustedSpawn(resolvedArgv[0] ?? "", resolvedArgv.slice(1), {
     env: baseEnv,

@@ -53,6 +53,7 @@ describe("process supervisor PTY command contract", () => {
       backendId: "test",
       mode: "pty",
       ptyCommand: command,
+      env: { PATH: "/usr/bin" },
       timeoutMs: 1_000,
     });
     const exit = await run.wait();
@@ -73,6 +74,7 @@ describe("process supervisor PTY command contract", () => {
         backendId: "test",
         mode: "pty",
         ptyCommand: "   ",
+        env: { PATH: "/usr/bin" },
       }),
     ).rejects.toThrow("PTY command cannot be empty");
     expect(createPtyAdapterMock).not.toHaveBeenCalled();

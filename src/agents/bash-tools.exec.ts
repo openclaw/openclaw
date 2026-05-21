@@ -13,12 +13,14 @@ import {
 } from "../infra/exec-approvals.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import { sanitizeHostExecEnvWithDiagnostics } from "../infra/host-env-security.js";
+import { buildOwnedChildEnv } from "../infra/owned-child-env.js";
 import {
   getShellPathFromLoginShell,
   resolveShellEnvFallbackTimeoutMs,
 } from "../infra/shell-env.js";
 import { logInfo } from "../logger.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { evaluateSecretAwareExecCommand } from "../secrets/platform-runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -1404,7 +1406,23 @@ export function createExecTool(
       }
       rejectUnsafeControlShellCommand(params.command);
 
-      const inheritedBaseEnv = coerceEnv(process.env);
+      const secretCommand = await evaluateSecretAwareExecCommand({ command: params.command });
+      if (secretCommand.action === "reject") {
+        throw new Error(secretCommand.reason);
+      }
+      if (secretCommand.action === "handled") {
+        return textResult(secretCommand.text, {
+          status: "completed",
+          exitCode: 0,
+          durationMs: 0,
+          aggregated: secretCommand.text,
+          accepted: true,
+          name: secretCommand.details.name,
+          requestedCount: secretCommand.details.requestedCount,
+        });
+      }
+
+      const inheritedBaseEnv = coerceEnv(buildOwnedChildEnv());
       const hostEnvResult =
         host === "sandbox"
           ? null
@@ -1460,7 +1478,7 @@ export function createExecTool(
 
       if (!sandbox && host === "gateway" && !params.env?.PATH) {
         const shellPath = getShellPathFromLoginShell({
-          env: process.env,
+          env: inheritedBaseEnv,
           timeoutMs: resolveShellEnvFallbackTimeoutMs(process.env),
         });
         applyShellPath(env, shellPath);

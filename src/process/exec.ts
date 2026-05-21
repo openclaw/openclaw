@@ -5,6 +5,7 @@ import process from "node:process";
 import { promisify } from "node:util";
 import { danger, shouldLogVerbose } from "../globals.js";
 import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
+import { buildOwnedChildEnv } from "../infra/owned-child-env.js";
 import {
   decodeWindowsOutputBuffer,
   resolveWindowsConsoleEncoding,
@@ -158,6 +159,7 @@ export async function runExec(
     const invocation = resolveChildProcessInvocation({ argv: [command, ...args] });
     const { stdout, stderr } = (await execFileAsync(invocation.command, invocation.args, {
       ...options,
+      env: buildOwnedChildEnv(),
       windowsHide: invocation.windowsHide,
       windowsVerbatimArguments: invocation.windowsVerbatimArguments,
     })) as { stdout: Buffer; stderr: Buffer };
@@ -247,7 +249,7 @@ export function resolveCommandEnv(params: {
   env?: NodeJS.ProcessEnv;
   baseEnv?: NodeJS.ProcessEnv;
 }): NodeJS.ProcessEnv {
-  const baseEnv = params.baseEnv ?? process.env;
+  const baseEnv = params.baseEnv ?? buildOwnedChildEnv();
   const argv = params.argv;
   const shouldSuppressNpmFund = (() => {
     const cmd = path.basename(argv[0] ?? "");
@@ -345,6 +347,7 @@ export async function runCommandWithTimeout(
         try {
           spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
             stdio: "ignore",
+            env: buildOwnedChildEnv(),
             windowsHide: true,
           });
           return;

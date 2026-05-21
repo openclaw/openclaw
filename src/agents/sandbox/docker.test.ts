@@ -6,6 +6,7 @@ import { DEFAULT_SANDBOX_IMAGE } from "./constants.js";
 type SpawnCall = {
   command: string;
   args: string[];
+  options?: { env?: NodeJS.ProcessEnv };
 };
 
 type MockDockerChild = EventEmitter & {
@@ -30,8 +31,12 @@ function createMockDockerChild(): MockDockerChild {
   return child;
 }
 
-function spawnDockerProcess(command: string, args: string[]) {
-  spawnState.calls.push({ command, args });
+function spawnDockerProcess(
+  command: string,
+  args: string[],
+  options?: { env?: NodeJS.ProcessEnv },
+) {
+  spawnState.calls.push({ command, args, options });
   const child = createMockDockerChild();
 
   let code = 0;
@@ -78,21 +83,40 @@ async function loadFreshDockerModuleForTest() {
   ({ ensureDockerImage } = await import("./docker.js"));
 }
 
+function dockerCallsWithoutOptions(): Array<Pick<SpawnCall, "command" | "args">> {
+  return spawnState.calls.map(({ command, args }) => ({ command, args }));
+}
+
 describe("ensureDockerImage", () => {
+  const originalEnv = { ...process.env };
+
   beforeEach(async () => {
     spawnState.calls.length = 0;
     spawnState.imageExists = true;
     spawnState.inspectError = "";
+    for (const key of Object.keys(process.env)) {
+      if (!(key in originalEnv)) {
+        delete process.env[key];
+      }
+    }
+    Object.assign(process.env, originalEnv);
     await loadFreshDockerModuleForTest();
   });
 
   it("returns when the configured image already exists", async () => {
+    process.env.OPENAI_API_KEY = "sk-docker-secret";
+
     await ensureDockerImage(DEFAULT_SANDBOX_IMAGE);
 
     expect(spawnState.calls).toEqual([
       {
         command: "docker",
         args: ["image", "inspect", DEFAULT_SANDBOX_IMAGE],
+        options: expect.objectContaining({
+          env: expect.not.objectContaining({
+            OPENAI_API_KEY: expect.anything(),
+          }),
+        }),
       },
     ]);
   });
@@ -110,7 +134,7 @@ describe("ensureDockerImage", () => {
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).message).toContain("scripts/sandbox-setup.sh");
     expect((err as Error).message).toContain("python3");
-    expect(spawnState.calls).toEqual([
+    expect(dockerCallsWithoutOptions()).toEqual([
       {
         command: "docker",
         args: ["image", "inspect", DEFAULT_SANDBOX_IMAGE],
@@ -127,7 +151,7 @@ describe("ensureDockerImage", () => {
       "Docker daemon is not available",
     );
 
-    expect(spawnState.calls).toEqual([
+    expect(dockerCallsWithoutOptions()).toEqual([
       {
         command: "docker",
         args: ["image", "inspect", DEFAULT_SANDBOX_IMAGE],

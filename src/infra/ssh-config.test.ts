@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 type MockSpawnChild = EventEmitter & {
   stdout?: EventEmitter & { setEncoding?: (enc: string) => void };
@@ -50,8 +50,19 @@ let parseSshConfigOutput: typeof import("./ssh-config.js").parseSshConfigOutput;
 let resolveSshConfig: typeof import("./ssh-config.js").resolveSshConfig;
 
 describe("ssh-config", () => {
+  const originalEnv = { ...process.env };
+
   beforeAll(async () => {
     ({ parseSshConfigOutput, resolveSshConfig } = await import("./ssh-config.js"));
+  });
+
+  afterEach(() => {
+    for (const key of Object.keys(process.env)) {
+      if (!(key in originalEnv)) {
+        delete process.env[key];
+      }
+    }
+    Object.assign(process.env, originalEnv);
   });
 
   it("parses ssh -G output", () => {
@@ -76,13 +87,18 @@ describe("ssh-config", () => {
   });
 
   it("resolves ssh config via ssh -G", async () => {
+    process.env.OPENAI_API_KEY = "sk-ssh-config-secret";
+    process.env.LANG = "en_US.UTF-8";
     const config = await resolveSshConfig({ user: "me", host: "alias", port: 22 });
     expect(config?.user).toBe("steipete");
     expect(config?.host).toBe("peters-mac-studio-1.sheep-coho.ts.net");
     expect(config?.port).toBe(2222);
     expect(config?.identityFiles).toEqual(["/tmp/id_ed25519"]);
     const args = spawnMock.mock.calls[0]?.[1] as string[] | undefined;
+    const env = (spawnMock.mock.calls[0]?.[2] as SpawnOptions | undefined)?.env;
     expect(args?.slice(-2)).toEqual(["--", "me@alias"]);
+    expect(env?.OPENAI_API_KEY).toBeUndefined();
+    expect(env?.LANG).toBe("en_US.UTF-8");
   });
 
   it("adds non-default port and trimmed identity arguments", async () => {

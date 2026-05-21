@@ -4,7 +4,7 @@ import { execDockerRaw } from "./docker.js";
 
 describe("execDockerRaw", () => {
   it("wraps docker ENOENT with an actionable configuration error", async () => {
-    await withEnvAsync({ PATH: "" }, async () => {
+    await withEnvAsync({ PATH: "/tmp/openclaw-missing-docker-bin" }, async () => {
       let err: unknown;
       try {
         await execDockerRaw(["version"]);

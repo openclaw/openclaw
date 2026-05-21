@@ -25,6 +25,7 @@ function isTruthy(value: string | undefined): boolean {
 function spawnDetachedGatewayProcess(): { child: ChildProcess; pid?: number } {
   const args = [...process.execArgv, ...process.argv.slice(1)];
   const child = spawn(process.execPath, args, {
+    // owned-child-env: reviewed non-owned - trusted self-respawn must preserve the gateway environment.
     env: process.env,
     detached: true,
     stdio: "inherit",

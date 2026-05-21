@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { buildOwnedChildEnv } from "../../infra/owned-child-env.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   materializeWindowsSpawnProgram,
@@ -72,6 +73,7 @@ export function execDockerRaw(
     const spawnInvocation = resolveDockerSpawnInvocation(args);
     const child = spawn(spawnInvocation.command, spawnInvocation.args, {
       stdio: ["pipe", "pipe", "pipe"],
+      env: buildOwnedChildEnv(),
       shell: spawnInvocation.shell,
       windowsHide: spawnInvocation.windowsHide,
     });

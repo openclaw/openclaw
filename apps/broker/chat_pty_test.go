@@ -228,7 +228,7 @@ func TestSessionPoolShutdownKillsAll(t *testing.T) {
 // should both stream out a `result` frame and the second turn should
 // reuse the warm process (no respawn).
 func TestChatPTYEndToEndWithStub(t *testing.T) {
-	t.Setenv("BROKER_TENANT_TOKEN", "tt")
+	setBrokerTestEnv(t, "tt")
 	// The #292 auth_required gate runs before the spawn pool — point
 	// HOME at a tmpdir and synthesise a credentials file so the test
 	// exercises the actual end-to-end pool path rather than the gate.
@@ -326,7 +326,7 @@ func TestChatPTYEndToEndWithStub(t *testing.T) {
 }
 
 func TestChatPTYRequiresToken(t *testing.T) {
-	t.Setenv("BROKER_TENANT_TOKEN", "tt")
+	setBrokerTestEnv(t, "tt")
 	req := httptest.NewRequest(http.MethodPost, "/chat-pty?binary=claude",
 		strings.NewReader(`{"prompt":"hi"}`))
 	rec := httptest.NewRecorder()
@@ -337,7 +337,7 @@ func TestChatPTYRequiresToken(t *testing.T) {
 }
 
 func TestChatPTYRejectsNonClaudeBinary(t *testing.T) {
-	t.Setenv("BROKER_TENANT_TOKEN", "tt")
+	setBrokerTestEnv(t, "tt")
 	req := httptest.NewRequest(http.MethodPost,
 		"/chat-pty?binary=codex&token=tt",
 		strings.NewReader(`{"prompt":"hi"}`))
@@ -352,7 +352,7 @@ func TestChatPTYRejectsNonClaudeBinary(t *testing.T) {
 }
 
 func TestChatPTYRejectsEmptyPrompt(t *testing.T) {
-	t.Setenv("BROKER_TENANT_TOKEN", "tt")
+	setBrokerTestEnv(t, "tt")
 	req := httptest.NewRequest(http.MethodPost,
 		"/chat-pty?binary=claude&token=tt",
 		strings.NewReader(`{"prompt":""}`))
@@ -368,7 +368,7 @@ func TestChatPTYRejectsEmptyPrompt(t *testing.T) {
 // their stdin writes. We sniff for "echo: A" and "echo: B" appearing
 // in their own response bodies, not bled across.
 func TestSessionMutexSerialisesConcurrentTurns(t *testing.T) {
-	t.Setenv("BROKER_TENANT_TOKEN", "tt")
+	setBrokerTestEnv(t, "tt")
 	// #292: bypass the auth-required gate so the test reaches the
 	// session pool.
 	withTempHome(t)
