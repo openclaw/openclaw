@@ -159,7 +159,7 @@ describe("createFailoverDecisionLogger", () => {
     logDecision("rotate_profile");
 
     const observation = firstWarnDetails(warnSpy);
-    expect(observation.providerRuntimeFailureKind).toBe("auth_html_401");
+    expect(observation.providerRuntimeFailureKind).toBe("auth_html");
     expect(observation.rawErrorPreview).toBe(
       "401 <!DOCTYPE html><html><body>Unauthorized</body></html>",
     );
