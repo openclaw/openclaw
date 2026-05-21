@@ -3394,16 +3394,21 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
       input.runAbortController.abort("sessions_yield");
     },
   });
-  const codexFilteredTools = addSandboxShellDynamicToolsIfAvailable(
-    filterCodexDynamicTools(allTools, input.pluginConfig),
+  const toolsAllow = includeForcedMessageToolAllow(params.toolsAllow, params);
+  const codexFilteredTools = addRestrictedNativeToolDynamicFallbacksIfNeeded(
+    addSandboxShellDynamicToolsIfAvailable(
+      filterCodexDynamicTools(allTools, input.pluginConfig),
+      allTools,
+      input,
+    ),
     allTools,
     input,
+    toolsAllow,
   );
   const visionFilteredTools = filterToolsForVisionInputs(codexFilteredTools, {
     modelHasVision,
     hasInboundImages: (params.images?.length ?? 0) > 0,
   });
-  const toolsAllow = includeForcedMessageToolAllow(params.toolsAllow, params);
   const filteredTools = filterCodexDynamicToolsForAllowlist(visionFilteredTools, toolsAllow);
   return normalizeAgentRuntimeTools({
     runtimePlan: params.runtimePlan,
@@ -3525,6 +3530,62 @@ function addSandboxShellDynamicToolsIfAvailable(
   return [...filteredTools, sandboxExecTool, sandboxProcessTool];
 }
 
+const RESTRICTED_NATIVE_TOOL_DYNAMIC_FALLBACKS = [
+  "read",
+  "write",
+  "edit",
+  "apply_patch",
+  "exec",
+  "process",
+  "update_plan",
+] as const;
+
+function addRestrictedNativeToolDynamicFallbacksIfNeeded(
+  filteredTools: OpenClawDynamicTool[],
+  allTools: OpenClawDynamicTool[],
+  input: DynamicToolBuildParams,
+  toolsAllow: string[] | undefined,
+): OpenClawDynamicTool[] {
+  if (input.nativeToolSurfaceEnabled !== false || !toolsAllow || toolsAllow.length === 0) {
+    return filteredTools;
+  }
+  const allowSet = new Set(
+    toolsAllow.map((name) => normalizeCodexDynamicToolName(name)).filter(Boolean),
+  );
+  if (allowSet.size === 0 || hasWildcardCodexToolsAllow(toolsAllow)) {
+    return filteredTools;
+  }
+  const explicitExcludes = new Set(
+    (input.pluginConfig.codexDynamicToolsExclude ?? [])
+      .map((name) => normalizeCodexDynamicToolName(name))
+      .filter(Boolean),
+  );
+  const existingNames = new Set(
+    filteredTools.map((tool) => normalizeCodexDynamicToolName(tool.name)),
+  );
+  const fallbackNames = new Set<string>();
+  for (const name of RESTRICTED_NATIVE_TOOL_DYNAMIC_FALLBACKS) {
+    if (allowSet.has(name)) {
+      fallbackNames.add(name);
+    }
+  }
+  if (allowSet.has("exec") && !explicitExcludes.has("exec") && !explicitExcludes.has("process")) {
+    fallbackNames.add("process");
+  }
+  if (fallbackNames.size === 0) {
+    return filteredTools;
+  }
+  const fallbackTools = allTools.filter((tool) => {
+    const normalized = normalizeCodexDynamicToolName(tool.name);
+    return (
+      fallbackNames.has(normalized) &&
+      !existingNames.has(normalized) &&
+      !explicitExcludes.has(normalized)
+    );
+  });
+  return fallbackTools.length === 0 ? filteredTools : [...filteredTools, ...fallbackTools];
+}
+
 function shouldExposeSandboxExecDynamicTool(input: DynamicToolBuildParams): boolean {
   const backendId = input.sandbox?.enabled ? input.sandbox.backendId.trim().toLowerCase() : "";
   return Boolean(backendId && (backendId !== "docker" || input.nativeToolSurfaceEnabled === false));
@@ -3562,6 +3623,7 @@ function filterCodexDynamicToolsForAllowlist<T extends { name: string }>(
     const normalized = normalizeCodexDynamicToolName(tool.name);
     return (
       allowSet.has(normalized) ||
+      (normalized === "process" && allowSet.has("exec")) ||
       (normalized === "sandbox_exec" && allowSet.has("exec")) ||
       (normalized === "sandbox_process" && (allowSet.has("exec") || allowSet.has("process")))
     );
