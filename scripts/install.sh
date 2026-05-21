@@ -88,6 +88,27 @@ run_remote_bash() {
     local tmp
     tmp="$(mktempfile)"
     download_file "$url" "$tmp"
+    # Validate the downloaded file is a non-empty shell script before executing.
+    # A full checksum pin is impractical for third-party scripts that update
+    # frequently (e.g., Homebrew installer), but structural validation catches
+    # truncated downloads, HTML error pages, and empty responses.
+    if [[ ! -s "$tmp" ]]; then
+        ui_error "Downloaded script is empty: ${url}"
+        return 1
+    fi
+    local first_line
+    first_line="$(head -c 256 "$tmp" | head -1)"
+    if [[ "$first_line" != "#!"* ]]; then
+        # Sanitize before logging: strip control chars and escape backslashes
+        # so untrusted content cannot inject terminal escapes through
+        # ui_error's echo -e path (which interprets \033[...] sequences).
+        local safe_line
+        safe_line="$(printf '%s' "${first_line:0:80}" | LC_ALL=C tr -d '\000-\037\177')"
+        safe_line="${safe_line//\\/\\\\}"
+        ui_error "Downloaded file does not look like a shell script (no shebang): ${url}"
+        ui_error "First line: ${safe_line}"
+        return 1
+    fi
     /bin/bash "$tmp"
 }
 
