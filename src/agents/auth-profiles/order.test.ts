@@ -2,6 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { clearLoadPluginMetadataSnapshotMemo } from "../../plugins/plugin-metadata-snapshot.js";
 import { resetProviderAuthAliasMapCacheForTest } from "../provider-auth-aliases.js";
 import { saveAuthProfileStore } from "./store.js";
 import type { AuthProfileStore } from "./types.js";
@@ -32,6 +33,7 @@ import { markAuthProfileSuccess } from "./profiles.js";
 
 describe("resolveAuthProfileOrder", () => {
   beforeEach(() => {
+    clearLoadPluginMetadataSnapshotMemo();
     resetProviderAuthAliasMapCacheForTest();
     loadPluginManifestRegistry.mockClear();
   });
@@ -54,6 +56,31 @@ describe("resolveAuthProfileOrder", () => {
     });
 
     expect(order).toEqual(["fixture-provider:default"]);
+  });
+
+  it("carries workspace context into provider auth alias metadata", async () => {
+    const workspaceDir = path.join(os.tmpdir(), "openclaw-auth-profile-workspace");
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "fixture-provider:default": {
+          type: "api_key",
+          provider: "fixture-provider",
+          key: "sk-test",
+        },
+      },
+    };
+
+    const order = resolveAuthProfileOrder({
+      workspaceDir,
+      store,
+      provider: "fixture-provider-plan",
+    });
+
+    expect(order).toEqual(["fixture-provider:default"]);
+    expect(loadPluginManifestRegistry).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceDir }),
+    );
   });
 
   it("uses canonical provider auth order for alias providers", async () => {

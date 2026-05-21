@@ -286,6 +286,7 @@ function profileTypeToAuthMode(type: AuthProfileCredential["type"]): ResolvedPro
 
 function resolveConfiguredAwsSdkProfileAuth(params: {
   cfg?: OpenClawConfig;
+  workspaceDir?: string;
   provider: string;
   profileId: string;
 }): ResolvedProviderAuth | null {
@@ -649,7 +650,12 @@ export async function resolveApiKeyForProvider(params: {
   let scopedStore: AuthProfileStore | undefined = params.store;
 
   if (profileId) {
-    const awsSdkProfileAuth = resolveConfiguredAwsSdkProfileAuth({ cfg, provider, profileId });
+    const awsSdkProfileAuth = resolveConfiguredAwsSdkProfileAuth({
+      cfg,
+      workspaceDir: params.workspaceDir,
+      provider,
+      profileId,
+    });
     if (awsSdkProfileAuth) {
       return awsSdkProfileAuth;
     }
@@ -709,6 +715,7 @@ export async function resolveApiKeyForProvider(params: {
     });
     const configuredProfileOrder = resolveAuthProfileOrder({
       cfg,
+      workspaceDir: params.workspaceDir,
       store: scopedStore,
       provider,
       preferredProfile,
@@ -716,6 +723,7 @@ export async function resolveApiKeyForProvider(params: {
     for (const candidate of configuredProfileOrder) {
       const awsSdkProfileAuth = resolveConfiguredAwsSdkProfileAuth({
         cfg,
+        workspaceDir: params.workspaceDir,
         provider,
         profileId: candidate,
       });
@@ -785,6 +793,7 @@ export async function resolveApiKeyForProvider(params: {
     });
   const order = resolveAuthProfileOrder({
     cfg,
+    workspaceDir: params.workspaceDir,
     store,
     provider,
     preferredProfile,
@@ -794,6 +803,7 @@ export async function resolveApiKeyForProvider(params: {
     try {
       const awsSdkProfileAuth = resolveConfiguredAwsSdkProfileAuth({
         cfg,
+        workspaceDir: params.workspaceDir,
         provider,
         profileId: candidate,
       });
@@ -1016,13 +1026,21 @@ export async function hasAvailableAuthForProvider(params: {
     });
   const order = resolveAuthProfileOrder({
     cfg,
+    workspaceDir: params.workspaceDir,
     store,
     provider,
     preferredProfile,
   });
   for (const candidate of order) {
     try {
-      if (resolveConfiguredAwsSdkProfileAuth({ cfg, provider, profileId: candidate })) {
+      if (
+        resolveConfiguredAwsSdkProfileAuth({
+          cfg,
+          workspaceDir: params.workspaceDir,
+          provider,
+          profileId: candidate,
+        })
+      ) {
         return true;
       }
       const resolved = await resolveApiKeyForProfile({

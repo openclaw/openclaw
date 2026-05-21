@@ -29,6 +29,7 @@ const OPENAI_CODEX_PROVIDER_ID = "openai-codex";
 
 function isOpenAIApiKeyCompatibleWithCodexAuth(params: {
   cfg?: OpenClawConfig;
+  workspaceDir?: string;
   providerAuthKey: string;
   credential?: AuthProfileCredential;
   profileProvider?: string;
@@ -39,6 +40,7 @@ function isOpenAIApiKeyCompatibleWithCodexAuth(params: {
   }
   const providerKey = resolveProviderIdForAuth(params.profileProvider ?? "", {
     config: params.cfg,
+    workspaceDir: params.workspaceDir,
   });
   const mode = params.credential?.type ?? params.profileMode;
   return providerKey === OPENAI_PROVIDER_ID && mode === "api_key";
@@ -46,16 +48,19 @@ function isOpenAIApiKeyCompatibleWithCodexAuth(params: {
 
 function isCredentialProviderCompatibleWithAuthProvider(params: {
   cfg?: OpenClawConfig;
+  workspaceDir?: string;
   providerAuthKey: string;
   credential: AuthProfileCredential;
 }): boolean {
   const credentialProviderKey = resolveProviderIdForAuth(params.credential.provider, {
     config: params.cfg,
+    workspaceDir: params.workspaceDir,
   });
   return (
     credentialProviderKey === params.providerAuthKey ||
     isOpenAIApiKeyCompatibleWithCodexAuth({
       cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
       providerAuthKey: params.providerAuthKey,
       credential: params.credential,
       profileProvider: params.credential.provider,
@@ -65,28 +70,38 @@ function isCredentialProviderCompatibleWithAuthProvider(params: {
 
 export function isStoredCredentialCompatibleWithAuthProvider(params: {
   cfg?: OpenClawConfig;
+  workspaceDir?: string;
   provider: string;
   credential: AuthProfileCredential;
 }): boolean {
   return isCredentialProviderCompatibleWithAuthProvider({
     cfg: params.cfg,
-    providerAuthKey: resolveProviderIdForAuth(params.provider, { config: params.cfg }),
+    workspaceDir: params.workspaceDir,
+    providerAuthKey: resolveProviderIdForAuth(params.provider, {
+      config: params.cfg,
+      workspaceDir: params.workspaceDir,
+    }),
     credential: params.credential,
   });
 }
 
 function isConfiguredProfileCompatibleWithAuthProvider(params: {
   cfg?: OpenClawConfig;
+  workspaceDir?: string;
   providerAuthKey: string;
   provider: string;
   mode?: string;
   credential?: AuthProfileCredential;
 }): boolean {
-  const configProviderKey = resolveProviderIdForAuth(params.provider, { config: params.cfg });
+  const configProviderKey = resolveProviderIdForAuth(params.provider, {
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+  });
   return (
     configProviderKey === params.providerAuthKey ||
     isOpenAIApiKeyCompatibleWithCodexAuth({
       cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
       providerAuthKey: params.providerAuthKey,
       credential: params.credential,
       profileProvider: params.provider,
@@ -97,6 +112,7 @@ function isConfiguredProfileCompatibleWithAuthProvider(params: {
 
 function listProfilesCompatibleWithAuthProvider(params: {
   cfg?: OpenClawConfig;
+  workspaceDir?: string;
   store: AuthProfileStore;
   provider: string;
   providerAuthKey: string;
@@ -108,6 +124,7 @@ function listProfilesCompatibleWithAuthProvider(params: {
     .filter(([, credential]) =>
       isCredentialProviderCompatibleWithAuthProvider({
         cfg: params.cfg,
+        workspaceDir: params.workspaceDir,
         providerAuthKey: params.providerAuthKey,
         credential,
       }),
@@ -138,6 +155,7 @@ function providerAllowsAwsSdkAuth(cfg: OpenClawConfig | undefined, provider: str
 
 export function isConfiguredAwsSdkAuthProfileForProvider(params: {
   cfg?: OpenClawConfig;
+  workspaceDir?: string;
   provider: string;
   profileId: string;
 }): boolean {
@@ -145,9 +163,15 @@ export function isConfiguredAwsSdkAuthProfileForProvider(params: {
   if (!profileConfig || profileConfig.mode !== "aws-sdk") {
     return false;
   }
-  const providerAuthKey = resolveProviderIdForAuth(params.provider, { config: params.cfg });
+  const providerAuthKey = resolveProviderIdForAuth(params.provider, {
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+  });
   if (
-    resolveProviderIdForAuth(profileConfig.provider, { config: params.cfg }) !== providerAuthKey
+    resolveProviderIdForAuth(profileConfig.provider, {
+      config: params.cfg,
+      workspaceDir: params.workspaceDir,
+    }) !== providerAuthKey
   ) {
     return false;
   }
@@ -156,17 +180,22 @@ export function isConfiguredAwsSdkAuthProfileForProvider(params: {
 
 export function resolveAuthProfileEligibility(params: {
   cfg?: OpenClawConfig;
+  workspaceDir?: string;
   store: AuthProfileStore;
   provider: string;
   profileId: string;
   now?: number;
 }): AuthProfileEligibility {
-  const providerAuthKey = resolveProviderIdForAuth(params.provider, { config: params.cfg });
+  const providerAuthKey = resolveProviderIdForAuth(params.provider, {
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+  });
   const cred = params.store.profiles[params.profileId];
   if (!cred) {
     if (
       isConfiguredAwsSdkAuthProfileForProvider({
         cfg: params.cfg,
+        workspaceDir: params.workspaceDir,
         provider: params.provider,
         profileId: params.profileId,
       })
@@ -178,6 +207,7 @@ export function resolveAuthProfileEligibility(params: {
   if (
     !isCredentialProviderCompatibleWithAuthProvider({
       cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
       providerAuthKey,
       credential: cred,
     })
@@ -189,6 +219,7 @@ export function resolveAuthProfileEligibility(params: {
     if (
       !isConfiguredProfileCompatibleWithAuthProvider({
         cfg: params.cfg,
+        workspaceDir: params.workspaceDir,
         providerAuthKey,
         provider: profileConfig.provider,
         mode: profileConfig.mode,
@@ -216,13 +247,17 @@ export function resolveAuthProfileEligibility(params: {
 
 export function resolveAuthProfileOrder(params: {
   cfg?: OpenClawConfig;
+  workspaceDir?: string;
   store: AuthProfileStore;
   provider: string;
   preferredProfile?: string;
 }): string[] {
   const { cfg, store, provider, preferredProfile } = params;
   const providerKey = normalizeProviderId(provider);
-  const providerAuthKey = resolveProviderIdForAuth(provider, { config: cfg });
+  const providerAuthKey = resolveProviderIdForAuth(provider, {
+    config: cfg,
+    workspaceDir: params.workspaceDir,
+  });
   const now = Date.now();
 
   // Clear any cooldowns that have expired since the last check so profiles
@@ -251,6 +286,7 @@ export function resolveAuthProfileOrder(params: {
         .filter(([profileId, profile]) =>
           isConfiguredProfileCompatibleWithAuthProvider({
             cfg,
+            workspaceDir: params.workspaceDir,
             providerAuthKey,
             provider: profile.provider,
             mode: profile.mode,
@@ -261,6 +297,7 @@ export function resolveAuthProfileOrder(params: {
     : [];
   const storeProfiles = listProfilesCompatibleWithAuthProvider({
     cfg,
+    workspaceDir: params.workspaceDir,
     store,
     provider,
     providerAuthKey,
@@ -270,6 +307,7 @@ export function resolveAuthProfileOrder(params: {
       ? storeProfiles.filter((profileId) =>
           isNativeCredentialProviderCompatibleWithAuthProvider({
             cfg,
+            workspaceDir: params.workspaceDir,
             providerAuthKey,
             credential: store.profiles[profileId],
           }),
@@ -292,6 +330,7 @@ export function resolveAuthProfileOrder(params: {
   const isValidProfile = (profileId: string): boolean =>
     resolveAuthProfileEligibility({
       cfg,
+      workspaceDir: params.workspaceDir,
       store,
       provider,
       profileId,
@@ -362,6 +401,7 @@ function resolveAuthOrder(
 
 function isNativeCredentialProviderCompatibleWithAuthProvider(params: {
   cfg?: OpenClawConfig;
+  workspaceDir?: string;
   providerAuthKey: string;
   credential: AuthProfileCredential | undefined;
 }): boolean {
@@ -369,8 +409,10 @@ function isNativeCredentialProviderCompatibleWithAuthProvider(params: {
     return false;
   }
   return (
-    resolveProviderIdForAuth(params.credential.provider, { config: params.cfg }) ===
-    params.providerAuthKey
+    resolveProviderIdForAuth(params.credential.provider, {
+      config: params.cfg,
+      workspaceDir: params.workspaceDir,
+    }) === params.providerAuthKey
   );
 }
 
