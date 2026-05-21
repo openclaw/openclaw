@@ -333,29 +333,38 @@ export function buildWSLDiagnosticNotes(diag: WSLDiagnostics): string[] {
   }
 
   // ── Resource limit checks (WSL2 only) ──
-  if (diag.wslconfig) {
-    const memoryMB = parseMemoryToMB(diag.wslconfig.memory);
-    if (memoryMB !== null && memoryMB < 4096) {
+  // 4GB threshold compared in bytes, before rounding, so values like
+  // 3.5GB are not rounded up to 4 and silently pass the check.
+  const fourGiB = 4 * 1024 * 1024 * 1024;
+  const visibleBytes = diag.wslVisibleMemoryBytes;
+  const visibleGB = Math.round(visibleBytes / (1024 * 1024 * 1024));
+  const memoryMB = diag.wslconfig ? parseMemoryToMB(diag.wslconfig.memory) : null;
+
+  if (diag.wslconfig && memoryMB !== null) {
+    if (memoryMB < 4096) {
       notes.push(
         `WSL memory limit is ${diag.wslconfig.memory} — this may be too low for OpenClaw.`,
       );
       notes.push("Recommended: at least 4GB. Edit %USERPROFILE%\\.wslconfig [wsl2] memory=8GB");
     }
-    if (diag.wslconfig.processors !== null && diag.wslconfig.processors < 2) {
-      notes.push(
-        `WSL processor limit is ${diag.wslconfig.processors} — OpenClaw performs better with 2+ cores.`,
-      );
-      notes.push("Edit %USERPROFILE%\\.wslconfig [wsl2] processors=4");
-    }
-  } else {
-    // No .wslconfig found (or file has no [wsl2] section).
-    // os.totalmem() inside WSL reflects the VM allocation directly,
-    // so compare against the 4GB threshold without halving.
-    const wslMemGB = Math.round(diag.wslVisibleMemoryBytes / (1024 * 1024 * 1024));
-    if (wslMemGB > 0 && wslMemGB < 4) {
-      notes.push(`No .wslconfig found. WSL is currently limited to ~${wslMemGB}GB memory.`);
+  } else if (visibleBytes > 0 && visibleBytes < fourGiB) {
+    // Either no .wslconfig, or a .wslconfig with no explicit memory key:
+    // fall back to the VM-visible memory (os.totalmem reflects the VM
+    // allocation directly inside WSL2, so compare without halving).
+    if (diag.wslconfig) {
+      notes.push(`WSL .wslconfig has no memory limit set; WSL is currently limited to ~${visibleGB}GB.`);
+      notes.push("Recommended: at least 4GB. Edit %USERPROFILE%\\.wslconfig [wsl2] memory=8GB");
+    } else {
+      notes.push(`No .wslconfig found. WSL is currently limited to ~${visibleGB}GB memory.`);
       notes.push("Tip: create %USERPROFILE%\\.wslconfig to set explicit resource limits.");
     }
+  }
+
+  if (diag.wslconfig && diag.wslconfig.processors !== null && diag.wslconfig.processors < 2) {
+    notes.push(
+      `WSL processor limit is ${diag.wslconfig.processors} — OpenClaw performs better with 2+ cores.`,
+    );
+    notes.push("Edit %USERPROFILE%\\.wslconfig [wsl2] processors=4");
   }
 
   return notes;
@@ -375,10 +384,10 @@ export function buildWSLInfoSummary(diag: WSLDiagnostics): string | null {
     parts.push(`kernel ${diag.kernelVersion}`);
   }
   parts.push(diag.systemdAvailable ? "systemd ✓" : "systemd ✗");
-  if (diag.wslconfig?.memory) {
+  if (diag.isWSL2 && diag.wslconfig?.memory) {
     parts.push(`memory limit ${diag.wslconfig.memory}`);
   }
-  if (diag.wslconfig?.processors) {
+  if (diag.isWSL2 && diag.wslconfig?.processors) {
     parts.push(`${diag.wslconfig.processors} processors`);
   }
   return parts.join(" · ");
