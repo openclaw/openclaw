@@ -226,6 +226,98 @@ describe("gesahni plugin", () => {
     });
   });
 
+  it("defaults shorthand option contracts to the upcoming Friday expiry", async () => {
+    await withTmpState(async (stateDir) => {
+      const marketDataClient = createMarketDataClient();
+      const command = __testing.createContractCommand({
+        pluginConfig: {},
+        stateDir,
+        marketDataClient,
+        now: () => new Date("2026-05-21T15:00:00Z"),
+      });
+
+      const result = await command.handler(createContext("AAPL 210C"));
+
+      expect(result.text).toContain("AAPL 210C 2026-05-22");
+      expect(result.text).toContain("OCC: AAPL260522C00210000");
+      expect(marketDataClient.optionQuote).toHaveBeenCalledWith(
+        expect.objectContaining({
+          symbol: "AAPL",
+          expiry: "2026-05-22",
+          strike: 210,
+          right: "call",
+        }),
+      );
+    });
+  });
+
+  it("keeps explicit option expiries ahead of the default expiry", async () => {
+    await withTmpState(async (stateDir) => {
+      const marketDataClient = createMarketDataClient();
+      const command = __testing.createContractCommand({
+        pluginConfig: {},
+        stateDir,
+        marketDataClient,
+        now: () => new Date("2026-05-21T15:00:00Z"),
+      });
+
+      const result = await command.handler(createContext("AAPL 210P 5/29"));
+
+      expect(result.text).toContain("AAPL 210P 2026-05-29");
+      expect(result.text).toContain("OCC: AAPL260529P00210000");
+      expect(marketDataClient.optionQuote).toHaveBeenCalledWith(
+        expect.objectContaining({
+          symbol: "AAPL",
+          expiry: "2026-05-29",
+          strike: 210,
+          right: "put",
+        }),
+      );
+    });
+  });
+
+  it("rejects malformed explicit expiries instead of applying the default expiry", async () => {
+    await withTmpState(async (stateDir) => {
+      const marketDataClient = createMarketDataClient();
+      const command = __testing.createContractCommand({
+        pluginConfig: {},
+        stateDir,
+        marketDataClient,
+        now: () => new Date("2026-05-21T15:00:00Z"),
+      });
+
+      const result = await command.handler(createContext("AAPL 210C 13/99"));
+
+      expect(result.text).toContain("Usage: /contract AAPL 210C or /contract MU 647.5C 5/8");
+      expect(marketDataClient.optionQuote).not.toHaveBeenCalled();
+    });
+  });
+
+  it("uses the upcoming Friday date for same-day and weekend shorthand defaults", async () => {
+    await withTmpState(async (stateDir) => {
+      const fridayClient = createMarketDataClient();
+      const fridayCommand = __testing.createContractCommand({
+        pluginConfig: {},
+        stateDir,
+        marketDataClient: fridayClient,
+        now: () => new Date("2026-05-22T15:00:00Z"),
+      });
+      const saturdayClient = createMarketDataClient();
+      const saturdayCommand = __testing.createContractCommand({
+        pluginConfig: {},
+        stateDir,
+        marketDataClient: saturdayClient,
+        now: () => new Date("2026-05-23T15:00:00Z"),
+      });
+
+      const friday = await fridayCommand.handler(createContext("AAPL 210C"));
+      const saturday = await saturdayCommand.handler(createContext("AAPL 210C"));
+
+      expect(friday.text).toContain("AAPL 210C 2026-05-22");
+      expect(saturday.text).toContain("AAPL 210C 2026-05-29");
+    });
+  });
+
   it("analyzes option trade references with underlying context", async () => {
     await withTmpState(async (stateDir) => {
       const marketDataClient = createMarketDataClient();

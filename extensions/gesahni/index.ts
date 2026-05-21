@@ -21,7 +21,7 @@ import {
   type MarketDataClient,
   type MarketQuote,
 } from "./src/market-data.js";
-import { parseOptionContract, parseOptionTradeContext } from "./src/options.js";
+import { parseOptionContractWithDefaultExpiry, parseOptionTradeContext } from "./src/options.js";
 
 function formatCurrency(value: number | undefined): string {
   return value === undefined ? "unavailable" : `$${value.toFixed(2)}`;
@@ -162,6 +162,7 @@ function createContractCommand(options: {
   pluginConfig: unknown;
   stateDir: string;
   marketDataClient?: MarketDataClient;
+  now?: () => Date;
 }): OpenClawPluginCommandDefinition {
   return {
     name: "contract",
@@ -170,9 +171,9 @@ function createContractCommand(options: {
     channels: ["discord"],
     requireAuth: true,
     handler: async (ctx) => {
-      const contract = parseOptionContract(ctx.args ?? "");
+      const contract = parseOptionContractWithDefaultExpiry(ctx.args ?? "", options.now?.());
       if (!contract) {
-        return { text: "Usage: /contract MU 647.5C 5/8" };
+        return { text: "Usage: /contract AAPL 210C or /contract MU 647.5C 5/8" };
       }
       const { marketData } = createCommandContext(options);
       try {
@@ -418,7 +419,7 @@ function createStockHelpCommand(): OpenClawPluginCommandDefinition {
       text: [
         "Gesahni stock commands:",
         "/quote AAPL - current stock quote.",
-        "/contract sold 1 MU 647.5C 5/8 for 19.50 - option math with live underlying context.",
+        "/contract AAPL 210C - option math with live underlying context; expiry defaults to the upcoming Friday.",
         "/alert group AAPL above 210 - preview a shared alert.",
         "/alert confirm <id> - save an alert after preview.",
         "/alerts group - list shared alerts.",

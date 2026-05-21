@@ -97,6 +97,45 @@ export function parseOptionContract(
   };
 }
 
+export function upcomingFridayExpiry(now: Date = new Date()): string {
+  const todayUtc = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  const today = new Date(todayUtc);
+  const day = today.getUTCDay();
+  const daysUntilFriday = (5 - day + 7) % 7;
+  const expiry = new Date(todayUtc + daysUntilFriday * 24 * 60 * 60 * 1000);
+  return `${expiry.getUTCFullYear().toString().padStart(4, "0")}-${(expiry.getUTCMonth() + 1)
+    .toString()
+    .padStart(2, "0")}-${expiry.getUTCDate().toString().padStart(2, "0")}`;
+}
+
+export function parseOptionContractWithDefaultExpiry(
+  input: string,
+  now: Date = new Date(),
+): ParsedOptionContract | null {
+  const explicit = parseOptionContract(input, now);
+  if (explicit) {
+    return explicit;
+  }
+  const trimmed = input.trim();
+  const compact = /^([A-Za-z]{1,6})\s+\$?(\d+(?:\.\d+)?)\s*([CP])$/i.exec(trimmed);
+  const verbose = compact ?? /^([A-Za-z]{1,6})\s+\$?(\d+(?:\.\d+)?)\s+(call|put)$/i.exec(trimmed);
+  if (!verbose) {
+    return null;
+  }
+  const symbol = normalizeSymbol(verbose[1]);
+  const strike = Number.parseFloat(verbose[2]);
+  const rightToken = verbose[3].toLowerCase();
+  const right: OptionRight = rightToken === "p" || rightToken === "put" ? "put" : "call";
+  if (!symbol || !Number.isFinite(strike) || strike <= 0) {
+    return null;
+  }
+  const normalized = { symbol, expiry: upcomingFridayExpiry(now), strike, right };
+  return {
+    ...normalized,
+    occSymbol: toOccOptionSymbol(normalized),
+  };
+}
+
 export function parseEntryPrice(input: string): number | undefined {
   const match =
     /(?:for|at|@)\s+\$?(\d+(?:\.\d+)?)/i.exec(input) ?? /\bentry\s+\$?(\d+(?:\.\d+)?)/i.exec(input);
