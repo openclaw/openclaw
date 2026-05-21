@@ -27,6 +27,7 @@ Use when:
 - Stop as soon as the review command/helper exits 0 with no accepted/actionable findings. Do not run an extra direct `codex review` just to get a nicer "clean" line, a second opinion, or clearer closeout wording.
 - Treat the helper's successful exit plus absence of actionable findings as the clean review result, even if the underlying Codex CLI output is terse.
 - If rejecting a finding as intentional/not worth fixing, add a brief inline code comment only when it explains a real invariant or ownership decision that future reviewers should know.
+- If creating or updating a PR while rejecting any autoreview finding, record the rejected finding and reason in the PR description so later reviewers can distinguish intentional design decisions from missed review output.
 - Do not push just to review. Push only when the user requested push/ship/PR update.
 - For OpenClaw maintainers, keep autoreview validation Crabbox/Testbox-aware when maintainer validation mode is enabled (`OPENCLAW_TESTBOX=1` or `AUTOREVIEW_OPENCLAW_MAINTAINER_VALIDATION=1`). A review pass may inspect files and run cheap non-Node probes, but it must not start local `pnpm`, Vitest, `tsgo`, `npm test`, or `node scripts/run-vitest.mjs` from a Codex/worktree review unless the operator explicitly requested local proof. For runtime proof, use existing evidence or route through Crabbox/Testbox and report the id. Do not apply this rule to ordinary contributors who do not have maintainer Testbox access.
 
