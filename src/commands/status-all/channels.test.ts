@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { lineConfigAdapter } from "../../../extensions/line/src/config-adapter.js";
 import { buildChannelsTable } from "./channels.js";
 
 const mocks = vi.hoisted(() => ({
@@ -19,6 +20,16 @@ const discordPlugin = {
     listAccountIds: () => ["default"],
   },
 };
+
+const linePlugin = {
+  id: "line",
+  meta: { label: "LINE" },
+  config: lineConfigAdapter,
+};
+
+function envRef(id: string) {
+  return { source: "env" as const, provider: "default" as const, id };
+}
 
 vi.mock("../../channels/account-inspection.js", () => ({
   resolveInspectedChannelAccount: mocks.resolveInspectedChannelAccount,
@@ -158,5 +169,27 @@ describe("buildChannelsTable", () => {
 
     expect(table.rows).toStrictEqual([]);
     expect(mocks.resolveInspectedChannelAccount).not.toHaveBeenCalled();
+  });
+
+  it("keeps LINE allowlist status read-only when credentials are unresolved SecretRefs", async () => {
+    const cfg = {
+      channels: {
+        line: {
+          channelAccessToken: envRef("LINE_CHANNEL_ACCESS_TOKEN"),
+          channelSecret: envRef("LINE_CHANNEL_SECRET"),
+          allowFrom: ["line:user:U123"],
+        },
+      },
+    };
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([linePlugin]);
+    mocks.resolveInspectedChannelAccount.mockImplementationOnce(async () => ({
+      account: lineConfigAdapter.inspectAccount?.(cfg, "default"),
+      enabled: true,
+      configured: true,
+    }));
+
+    const table = await buildChannelsTable(cfg);
+
+    expect(table.details[0]?.rows[0]?.Notes).toContain("allow:U123");
   });
 });
