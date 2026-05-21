@@ -139,7 +139,7 @@ export async function runClaudeAppServerAttempt(
     //    we don't duplicate workspace context into the transcript.
     const accumulated = await runTurn(client, params, threadId, cfg, ac);
 
-    // 5. Populate result.
+    // 6. Populate result.
     result.assistantTexts = accumulated.assistantTexts;
     result.toolMetas = accumulated.toolMetas;
     // accumulated.reasoning is collected for diagnostics but not surfaced
