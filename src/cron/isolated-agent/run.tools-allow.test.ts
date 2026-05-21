@@ -8,7 +8,7 @@ import {
   runWithModelFallbackMock,
 } from "./run.test-harness.js";
 
-const RUN_OWNER_AUTH_TIMEOUT_MS = 300_000;
+const RUN_TOOLS_ALLOW_TIMEOUT_MS = 300_000;
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 
@@ -17,15 +17,15 @@ function makeParams() {
     cfg: {},
     deps: {} as never,
     job: {
-      id: "owner-auth",
-      name: "Owner Auth",
+      id: "tools-allow",
+      name: "Tools Allow",
       schedule: { kind: "every", everyMs: 60_000 },
       sessionTarget: "isolated",
-      payload: { kind: "agentTurn", message: "check owner tools" },
+      payload: { kind: "agentTurn", message: "check allowed tools" },
       delivery: { mode: "none" },
     } as never,
-    message: "check owner tools",
-    sessionKey: "cron:owner-auth",
+    message: "check allowed tools",
+    sessionKey: "cron:tools-allow",
   };
 }
 
@@ -38,7 +38,7 @@ function makeParamsWithToolsAllow(toolsAllow: string[]) {
       ...job,
       payload: {
         kind: "agentTurn",
-        message: "check owner tools",
+        message: "check allowed tools",
         toolsAllow,
       },
     } as never,
@@ -56,12 +56,12 @@ function requireEmbeddedAgentCall(): {
       }
     | undefined;
   if (!call) {
-    throw new Error("Expected embedded PI agent call for owner auth");
+    throw new Error("Expected embedded PI agent call for toolsAllow passthrough");
   }
   return call;
 }
 
-describe("runCronIsolatedAgentTurn owner auth", () => {
+describe("runCronIsolatedAgentTurn toolsAllow passthrough", () => {
   let previousFastTestEnv: string | undefined;
 
   beforeEach(() => {
@@ -91,33 +91,33 @@ describe("runCronIsolatedAgentTurn owner auth", () => {
 
   it(
     "passes through isolated cron toolsAllow=cron self-removal path",
-    { timeout: RUN_OWNER_AUTH_TIMEOUT_MS },
+    { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
     async () => {
       await runCronIsolatedAgentTurn(makeParamsWithToolsAllow(["cron"]));
 
       expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
       const call = requireEmbeddedAgentCall();
-      expect(call.jobId).toBe("owner-auth");
+      expect(call.jobId).toBe("tools-allow");
       expect(call.toolsAllow).toEqual(["cron"]);
     },
   );
 
   it(
     "preserves cron toolsAllow casing for downstream policy resolution",
-    { timeout: RUN_OWNER_AUTH_TIMEOUT_MS },
+    { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
     async () => {
       await runCronIsolatedAgentTurn(makeParamsWithToolsAllow([" CRON "]));
 
       expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
       const call = requireEmbeddedAgentCall();
-      expect(call.jobId).toBe("owner-auth");
+      expect(call.jobId).toBe("tools-allow");
       expect(call.toolsAllow).toEqual([" CRON "]);
     },
   );
 
   it(
     "passes through non-cron toolsAllow entries",
-    { timeout: RUN_OWNER_AUTH_TIMEOUT_MS },
+    { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
     async () => {
       await runCronIsolatedAgentTurn(makeParamsWithToolsAllow(["maniple__check_idle_workers"]));
 
