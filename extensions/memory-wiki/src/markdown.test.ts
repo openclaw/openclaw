@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   createWikiPageFilename,
+  formatWikiLink,
   renderWikiMarkdown,
   slugifyWikiSegment,
   toWikiPageSummary,
@@ -45,6 +46,17 @@ describe("slugifyWikiSegment", () => {
       Buffer.byteLength(`.${fileName}.00000000-0000-4000-8000-000000000000.fallback.tmp`),
     ).toBeLessThanOrEqual(255);
     expect(createWikiPageFilename(stem)).toBe(fileName);
+  });
+});
+
+describe("formatWikiLink", () => {
+  it("uses extensionless targets for native and Obsidian links", () => {
+    expect(
+      formatWikiLink({ renderMode: "native", relativePath: "entities/alice.md", title: "Alice" }),
+    ).toBe("[Alice](entities/alice)");
+    expect(
+      formatWikiLink({ renderMode: "obsidian", relativePath: "entities/alice.md", title: "Alice" }),
+    ).toBe("[[entities/alice|Alice]]");
   });
 });
 

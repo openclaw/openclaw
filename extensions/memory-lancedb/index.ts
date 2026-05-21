@@ -8,9 +8,15 @@
 
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
 import type * as LanceDB from "@lancedb/lancedb";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { MemoryEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import {
+  listMemoryWorkspacePublicArtifacts,
+  type MemoryPluginPublicArtifact,
+} from "openclaw/plugin-sdk/memory-host-core";
 import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -499,6 +505,83 @@ export function normalizeEmbeddingVector(value: unknown): number[] {
   throw new Error("Embedding response is missing a vector");
 }
 
+function formatMemoryArtifactTimestamp(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) {
+    return "unknown";
+  }
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "unknown" : date.toISOString();
+}
+
+function renderMemoryTextFence(text: string): string {
+  const fenceSize = Math.max(
+    3,
+    ...Array.from(text.matchAll(/`+/g), (match) => match[0].length + 1),
+  );
+  const fence = "`".repeat(fenceSize);
+  return `${fence}text\n${text}\n${fence}`;
+}
+
+function renderLanceDbPublicArtifactMarkdown(entries: MemoryListEntry[]): string {
+  const lines = [
+    "# LanceDB Memories",
+    "",
+    "Generated from the local OpenClaw `memory-lancedb` table for `memory-wiki` bridge import.",
+    "",
+    `Exported memories: ${entries.length}`,
+    "",
+    "## Memories",
+    "",
+  ];
+  if (entries.length === 0) {
+    lines.push("_No memories exported._", "");
+    return `${lines.join("\n").trimEnd()}\n`;
+  }
+
+  for (const entry of entries) {
+    lines.push(`### ${entry.id}`);
+    lines.push("");
+    lines.push(`- Category: \`${entry.category}\``);
+    lines.push(`- Importance: ${entry.importance}`);
+    lines.push(`- Created: ${formatMemoryArtifactTimestamp(entry.createdAt)}`);
+    lines.push("");
+    lines.push(renderMemoryTextFence(entry.text));
+    lines.push("");
+  }
+  return `${lines.join("\n").trimEnd()}\n`;
+}
+
+async function writeFileIfChanged(filePath: string, content: string): Promise<void> {
+  const current = await fs.readFile(filePath, "utf8").catch((error: unknown) => {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  });
+  if (current !== content) {
+    await fs.writeFile(filePath, content, "utf8");
+  }
+}
+
+async function collectLanceDbPublicArtifact(params: {
+  resolvedDbPath: string;
+  db: MemoryDB;
+}): Promise<MemoryPluginPublicArtifact> {
+  const bridgeDir = path.join(params.resolvedDbPath, "wiki-bridge");
+  const bridgeFile = path.join(bridgeDir, "lancedb-memories.md");
+  await fs.mkdir(bridgeDir, { recursive: true });
+  const entries = await params.db.list(undefined, { orderByCreatedAt: true });
+  await writeFileIfChanged(bridgeFile, renderLanceDbPublicArtifactMarkdown(entries));
+  return {
+    kind: "memory-root",
+    workspaceDir: bridgeDir,
+    relativePath: "lancedb-memories.md",
+    absolutePath: bridgeFile,
+    agentIds: ["main"],
+    contentType: "markdown",
+  };
+}
+
 // ============================================================================
 // Rule-based capture filter
 // ============================================================================
@@ -694,6 +777,18 @@ export default definePluginEntry({
     };
 
     api.logger.info(`memory-lancedb: plugin registered (db: ${resolvedDbPath}, lazy init)`);
+    if (typeof api.registerMemoryCapability === "function") {
+      api.registerMemoryCapability({
+        publicArtifacts: {
+          async listArtifacts(params) {
+            return [
+              await collectLanceDbPublicArtifact({ resolvedDbPath, db }),
+              ...(await listMemoryWorkspacePublicArtifacts(params)),
+            ];
+          },
+        },
+      });
+    }
 
     // ========================================================================
     // Tools

@@ -2424,12 +2424,13 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         );
         // Snapshot loads should not replace process-global runtime prompt state.
         if (!shouldActivate) {
+          const discoveredMemoryCapability = getMemoryCapabilityRegistration();
           restoreRegisteredAgentHarnesses(previousAgentHarnesses);
           restoreRegisteredCompactionProviders(previousCompactionProviders);
           restoreDetachedTaskLifecycleRuntimeRegistration(previousDetachedTaskRuntimeRegistration);
           restoreRegisteredMemoryEmbeddingProviders(previousMemoryEmbeddingProviders);
           restoreMemoryPluginState({
-            capability: previousMemoryCapability,
+            capability: previousMemoryCapability ?? discoveredMemoryCapability,
             corpusSupplements: previousMemoryCorpusSupplements,
             promptSupplements: previousMemoryPromptSupplements,
           });

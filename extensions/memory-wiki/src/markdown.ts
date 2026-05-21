@@ -400,7 +400,7 @@ export function formatWikiLink(params: {
   const withoutExtension = params.relativePath.replace(/\.md$/i, "");
   return params.renderMode === "obsidian"
     ? `[[${withoutExtension}|${params.title}]]`
-    : `[${params.title}](${params.relativePath})`;
+    : `[${params.title}](${withoutExtension})`;
 }
 
 export function renderMarkdownFence(content: string, infoString = "text"): string {

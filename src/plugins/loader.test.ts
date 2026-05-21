@@ -3215,6 +3215,61 @@ module.exports = { id: "throws-after-import", register() {} };`,
     );
   });
 
+  it("preserves memory capability discovered by fresh activate:false snapshot loads", async () => {
+    useNoBundledPlugins();
+    const workspaceDir = makeTempDir();
+    const absolutePath = path.join(workspaceDir, "MEMORY.md");
+    fs.writeFileSync(absolutePath, "# Memory\n");
+    const memoryPlugin = writePlugin({
+      id: "capability-discovered-memory",
+      filename: "capability-discovered-memory.cjs",
+      body: `module.exports = {
+        id: "capability-discovered-memory",
+        kind: "memory",
+        register(api) {
+          api.registerMemoryCapability({
+            publicArtifacts: {
+              async listArtifacts() {
+                return [{
+                  kind: "memory-root",
+                  workspaceDir: ${JSON.stringify(workspaceDir)},
+                  relativePath: "MEMORY.md",
+                  absolutePath: ${JSON.stringify(absolutePath)},
+                  agentIds: ["main"],
+                  contentType: "markdown",
+                }];
+              },
+            },
+          });
+        },
+      };`,
+    });
+
+    loadOpenClawPlugins({
+      cache: false,
+      activate: false,
+      workspaceDir: memoryPlugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [memoryPlugin.file] },
+          allow: ["capability-discovered-memory"],
+          slots: { memory: "capability-discovered-memory" },
+        },
+      },
+    });
+
+    await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual([
+      {
+        kind: "memory-root",
+        workspaceDir,
+        relativePath: "MEMORY.md",
+        absolutePath,
+        agentIds: ["main"],
+        contentType: "markdown" as const,
+      },
+    ]);
+  });
+
   it("uses discovery registration mode for non-activating loads", () => {
     useNoBundledPlugins();
     const marker = "__openclawDiscoveryModeTest";

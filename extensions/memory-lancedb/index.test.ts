@@ -9,6 +9,8 @@
  */
 
 import { Buffer } from "node:buffer";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { describe, test, expect, vi } from "vitest";
 import memoryPlugin, {
   detectCategory,
@@ -302,6 +304,135 @@ describe("memory plugin e2e", () => {
     expect(logger.warn).toHaveBeenCalledWith(
       "memory-lancedb: disabled until configured (embedding config required)",
     );
+  });
+
+  test("exports LanceDB and workspace memory artifacts for the wiki bridge", async () => {
+    const dbPath = getDbPath();
+    const workspaceDir = path.join(dbPath, "workspace");
+    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "# Durable Memory\n", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "memory", "2026-05-21.md"), "# Daily\n", "utf8");
+
+    const toArray = vi.fn(async () => [
+      {
+        id: "older-memory",
+        text: "Use the old bridge only as a fallback.",
+        importance: 0.4,
+        category: "decision",
+        createdAt: 1_000,
+      },
+      {
+        id: "newer-memory",
+        text: "I prefer Helix for editing code.",
+        importance: 0.9,
+        category: "preference",
+        createdAt: 2_000,
+      },
+    ]);
+    const select = vi.fn(() => ({ toArray }));
+    const query = vi.fn(() => ({ select }));
+    const openTable = vi.fn(async () => ({
+      query,
+      vectorSearch: vi.fn(),
+      countRows: vi.fn(async () => 0),
+      add: vi.fn(async () => undefined),
+      delete: vi.fn(async () => undefined),
+    }));
+    const loadLanceDbModule = vi.fn(async () => ({
+      connect: vi.fn(async () => ({
+        tableNames: vi.fn(async () => ["memories"]),
+        openTable,
+      })),
+    }));
+
+    await withMockedOpenAiMemoryPlugin({
+      ensureGlobalUndiciEnvProxyDispatcher: vi.fn(),
+      loadLanceDbModule,
+      run: async (dynamicMemoryPlugin) => {
+        const registerMemoryCapability = vi.fn();
+        const mockApi = {
+          id: "memory-lancedb",
+          name: "Memory (LanceDB)",
+          source: "test",
+          config: {},
+          pluginConfig: {
+            embedding: {
+              apiKey: OPENAI_API_KEY,
+              model: "text-embedding-3-small",
+            },
+            dbPath,
+            autoCapture: false,
+            autoRecall: false,
+          },
+          runtime: {},
+          logger: {
+            info: vi.fn(),
+            warn: vi.fn(),
+            error: vi.fn(),
+            debug: vi.fn(),
+          },
+          registerTool: vi.fn(),
+          registerCli: vi.fn(),
+          registerService: vi.fn(),
+          registerMemoryCapability,
+          on: vi.fn(),
+          resolvePath: (p: string) => p,
+        };
+
+        dynamicMemoryPlugin.register(mockApi as any);
+
+        expect(registerMemoryCapability).toHaveBeenCalledTimes(1);
+        const capability = firstObjectArg(
+          registerMemoryCapability as unknown as MockCallSource,
+          "memory capability",
+        );
+        const provider = capability.publicArtifacts as {
+          listArtifacts(params: { cfg: Record<string, unknown> }): Promise<unknown[]>;
+        };
+        const artifacts = await provider.listArtifacts({
+          cfg: {
+            agents: {
+              list: [{ id: "main", default: true, workspace: workspaceDir }],
+            },
+          },
+        });
+
+        const bridgeDir = path.join(dbPath, "wiki-bridge");
+        const bridgeFile = path.join(bridgeDir, "lancedb-memories.md");
+        expect(artifacts).toEqual([
+          {
+            kind: "memory-root",
+            workspaceDir: bridgeDir,
+            relativePath: "lancedb-memories.md",
+            absolutePath: bridgeFile,
+            agentIds: ["main"],
+            contentType: "markdown",
+          },
+          {
+            kind: "memory-root",
+            workspaceDir,
+            relativePath: "MEMORY.md",
+            absolutePath: path.join(workspaceDir, "MEMORY.md"),
+            agentIds: ["main"],
+            contentType: "markdown",
+          },
+          {
+            kind: "daily-note",
+            workspaceDir,
+            relativePath: "memory/2026-05-21.md",
+            absolutePath: path.join(workspaceDir, "memory", "2026-05-21.md"),
+            agentIds: ["main"],
+            contentType: "markdown",
+          },
+        ]);
+        expect(select).toHaveBeenCalledWith(["id", "text", "importance", "category", "createdAt"]);
+
+        const exported = await fs.readFile(bridgeFile, "utf8");
+        expect(exported).toContain("Exported memories: 2");
+        expect(exported.indexOf("newer-memory")).toBeLessThan(exported.indexOf("older-memory"));
+        expect(exported).toContain("I prefer Helix for editing code.");
+      },
+    });
   });
 
   test("registers auto-recall on before_prompt_build instead of the legacy hook", () => {
