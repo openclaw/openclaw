@@ -184,6 +184,65 @@ describe("workspace path resolution", () => {
     });
   });
 
+  it("writes through in-workspace symlink directories when workspaceOnly is enabled", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    await withTempDir("openclaw-ws-", async (workspaceDir) => {
+      const realDir = path.join(workspaceDir, "oc_system", "memory");
+      const linkDir = path.join(workspaceDir, "memory");
+      await fs.mkdir(realDir, { recursive: true });
+      await fs.symlink(path.relative(workspaceDir, realDir), linkDir);
+
+      const cfg: OpenClawConfig = { tools: { fs: { workspaceOnly: true } } };
+      const tools = createOpenClawCodingTools({ workspaceDir, config: cfg });
+      const { writeTool, editTool } = expectReadWriteEditTools(tools);
+
+      await writeTool.execute("ws-write-symlink-dir", {
+        path: "memory/2026-05-20.md",
+        content: "workspace symlink write ok",
+      });
+      await editTool.execute("ws-edit-symlink-dir", {
+        path: "memory/2026-05-20.md",
+        edits: [{ oldText: "write", newText: "edit" }],
+      });
+      await writeTool.execute("ws-write-symlink-missing-child-dir", {
+        path: "memory/nested/new.md",
+        content: "nested symlink write ok",
+      });
+
+      await expect(fs.readFile(path.join(realDir, "2026-05-20.md"), "utf8")).resolves.toBe(
+        "workspace symlink edit ok",
+      );
+      await expect(fs.readFile(path.join(realDir, "nested", "new.md"), "utf8")).resolves.toBe(
+        "nested symlink write ok",
+      );
+    });
+  });
+
+  it("rejects workspaceOnly writes through symlink directories that escape the workspace", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    await withTempDir("openclaw-ws-", async (workspaceDir) => {
+      await withTempDir("openclaw-outside-", async (outsideDir) => {
+        await fs.symlink(outsideDir, path.join(workspaceDir, "outside-link"));
+
+        const cfg: OpenClawConfig = { tools: { fs: { workspaceOnly: true } } };
+        const tools = createOpenClawCodingTools({ workspaceDir, config: cfg });
+        const { writeTool } = expectReadWriteEditTools(tools);
+
+        await expect(
+          writeTool.execute("ws-write-symlink-escape", {
+            path: "outside-link/secret.txt",
+            content: "must not escape",
+          }),
+        ).rejects.toThrow(/sandbox|outside|escape|alias/i);
+        await expect(fs.access(path.join(outsideDir, "secret.txt"))).rejects.toThrow();
+      });
+    });
+  });
+
   it("rejects hardlinked file aliases when workspaceOnly is enabled", async () => {
     if (process.platform === "win32") {
       return;
