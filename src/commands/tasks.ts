@@ -665,9 +665,9 @@ export async function tasksMaintenanceCommand(
   const taskMaintenance = opts.apply
     ? await runTaskRegistryMaintenance()
     : previewTaskRegistryMaintenance();
-  // Diagnostics explain the task-maintenance decision above, before the
+  // JSON diagnostics explain the task-maintenance decision above, before the
   // separate session-registry sweep can prune backing session rows.
-  const diagnostics = getTaskRegistryMaintenanceDiagnostics();
+  const diagnostics = opts.json ? getTaskRegistryMaintenanceDiagnostics() : undefined;
   const flowMaintenance = opts.apply
     ? await runTaskFlowRegistryMaintenance()
     : previewTaskFlowRegistryMaintenance();

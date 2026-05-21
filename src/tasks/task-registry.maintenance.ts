@@ -173,7 +173,9 @@ export type TaskRegistryMaintenanceTaskDiagnostic = {
     | "backing_session_missing"
     | "backing_session_present"
     | "cron_runtime_not_authoritative"
-    | "lost_grace_pending";
+    | "lost_grace_pending"
+    | "subagent_recovery_wedged";
+  detail?: string;
   ageMs: number;
   childSessionKey?: string;
   runId?: string;
@@ -981,9 +983,19 @@ function explainActiveTaskRetention(params: {
   task: TaskRecord;
   now: number;
   context: BackingSessionLookupContext;
-}): Pick<TaskRegistryMaintenanceTaskDiagnostic, "decision" | "reason"> {
+}): Pick<TaskRegistryMaintenanceTaskDiagnostic, "decision" | "reason" | "detail"> {
   if (!hasLostGraceExpired(params.task, params.now)) {
     return { decision: "retained", reason: "lost_grace_pending" };
+  }
+  if (params.task.runtime === "subagent") {
+    const entry = findTaskSessionEntry(params.task, params.context);
+    if (entry && isSubagentRecoveryWedgedEntry(entry)) {
+      return {
+        decision: "would_reconcile",
+        reason: "subagent_recovery_wedged",
+        detail: formatSubagentRecoveryWedgedReason(entry),
+      };
+    }
   }
   if (!hasBackingSession(params.task, params.context)) {
     return { decision: "would_reconcile", reason: "backing_session_missing" };
@@ -1025,6 +1037,7 @@ export function getTaskRegistryMaintenanceDiagnostics(): TaskRegistryMaintenance
       decision: decision.decision,
       reason: decision.reason,
       ageMs,
+      ...(decision.detail ? { detail: decision.detail } : {}),
       ...(task.childSessionKey ? { childSessionKey: task.childSessionKey } : {}),
       ...(task.runId ? { runId: task.runId } : {}),
     });

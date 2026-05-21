@@ -316,10 +316,14 @@ describe("task-registry maintenance issue #60299", () => {
 
   it("marks subagent tasks lost when their child session recovery is tombstoned", async () => {
     const childSessionKey = "agent:main:subagent:wedged-child";
+    const staleAt = Date.now() - 45 * 60_000;
     const task = makeStaleTask({
       runtime: "subagent",
       runId: "run-wedged-child",
       childSessionKey,
+      createdAt: staleAt,
+      startedAt: staleAt,
+      lastEventAt: staleAt,
     });
 
     const { currentTasks } = createTaskRegistryMaintenanceHarness({
@@ -341,6 +345,14 @@ describe("task-registry maintenance issue #60299", () => {
     });
 
     expectMaintenanceCounts(previewTaskRegistryMaintenance(), { reconciled: 1 });
+    expect(getTaskRegistryMaintenanceDiagnostics().staleRunningTasks).toContainEqual(
+      expect.objectContaining({
+        taskId: task.taskId,
+        decision: "would_reconcile",
+        reason: "subagent_recovery_wedged",
+        detail: "subagent orphan recovery blocked after 2 rapid accepted resume attempts",
+      }),
+    );
     expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 1 });
     const storedTask = requireTaskRecord(currentTasks, task.taskId);
     expect(storedTask.status).toBe("lost");
