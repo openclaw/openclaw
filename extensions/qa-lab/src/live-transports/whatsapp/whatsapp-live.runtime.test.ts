@@ -295,6 +295,31 @@ describe("WhatsApp QA live runtime", () => {
     ).toBe(true);
   });
 
+  it("settles after WhatsApp heap checkpoints before starting RTT timing", () => {
+    expect(
+      __testing.resolveWhatsAppHeapCheckpointSettleMs({
+        OPENCLAW_QA_GATEWAY_HEAP_CHECKPOINTS: "0",
+      }),
+    ).toBe(0);
+    expect(
+      __testing.resolveWhatsAppHeapCheckpointSettleMs({
+        OPENCLAW_QA_GATEWAY_HEAP_CHECKPOINTS: "1",
+      }),
+    ).toBe(10_000);
+    expect(
+      __testing.resolveWhatsAppHeapCheckpointSettleMs({
+        OPENCLAW_QA_GATEWAY_HEAP_CHECKPOINTS: "1",
+        OPENCLAW_QA_WHATSAPP_HEAP_CHECKPOINT_SETTLE_MS: "2500",
+      }),
+    ).toBe(2500);
+    expect(
+      __testing.resolveWhatsAppHeapCheckpointSettleMs({
+        OPENCLAW_QA_GATEWAY_HEAP_CHECKPOINTS: "1",
+        OPENCLAW_QA_WHATSAPP_HEAP_CHECKPOINT_SETTLE_MS: "nope",
+      }),
+    ).toBe(0);
+  });
+
   it("detects complete heap snapshot files before copying", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-wa-heap-test-"));
     try {

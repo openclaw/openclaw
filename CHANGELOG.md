@@ -757,6 +757,7 @@ Docs: https://docs.openclaw.ai
 - QA-Lab: disable background agent heartbeats in WhatsApp live probes so RTT artifacts measure the canary reply lane without heartbeat contention.
 - QA-Lab: add an explicit `whatsapp-canary-rtt` live scenario id so repeated WhatsApp RTT proof runs can target the canary lane directly.
 - QA-Lab: include a redacted WhatsApp credential fingerprint in live RTT artifacts so maintainers can correlate logged-out Convex leases without exposing credential ids.
+- QA-Lab: settle WhatsApp live heap checkpoints before starting RTT timing so heap snapshots do not inflate the measured ping/pong send path.
 - Replies: skip provider thinking-catalog hydration when thinking is off so messaging replies avoid unnecessary model-runtime setup before dispatch.
 - Providers: reuse already-loaded provider runtime hooks for synthetic auth before falling back to provider discovery loads.
 - QA-Lab: include the gateway diagnostic timeline in WhatsApp live trace artifacts so RTT probes expose reply setup, compaction, and model-run phase costs.

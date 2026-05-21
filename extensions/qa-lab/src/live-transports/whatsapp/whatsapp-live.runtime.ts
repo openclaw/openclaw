@@ -203,6 +203,7 @@ const QA_REDACT_PUBLIC_METADATA_ENV = "OPENCLAW_QA_REDACT_PUBLIC_METADATA";
 const WHATSAPP_QA_TRANSIENT_DRIVER_ATTEMPTS = 5;
 const WHATSAPP_QA_READY_TIMEOUT_MS = 150_000;
 const WHATSAPP_QA_READY_STABILITY_MS = 20_000;
+const WHATSAPP_QA_HEAP_CHECKPOINT_SETTLE_MS = 10_000;
 const WHATSAPP_QA_DRIVER_RECONNECT_DELAY_MS = 10_000;
 const WHATSAPP_QA_ENV_KEYS = [
   "OPENCLAW_QA_WHATSAPP_DRIVER_PHONE_E164",
@@ -355,6 +356,18 @@ function inferWhatsAppCredentialRole(value: string | undefined): QaCredentialRol
 function resolveWhatsAppMetadataRedaction(env: NodeJS.ProcessEnv = process.env) {
   const raw = env[QA_REDACT_PUBLIC_METADATA_ENV];
   return raw === undefined ? true : isTruthyOptIn(raw);
+}
+
+function resolveWhatsAppHeapCheckpointSettleMs(env: NodeJS.ProcessEnv = process.env) {
+  if (!isTruthyOptIn(env[WHATSAPP_QA_GATEWAY_HEAP_CHECKPOINTS_ENV])) {
+    return 0;
+  }
+  const raw = env.OPENCLAW_QA_WHATSAPP_HEAP_CHECKPOINT_SETTLE_MS?.trim();
+  if (raw === undefined || raw === "") {
+    return WHATSAPP_QA_HEAP_CHECKPOINT_SETTLE_MS;
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.trunc(parsed) : 0;
 }
 
 function normalizePhone(value: string, label: string) {
@@ -604,20 +617,37 @@ async function waitForWhatsAppChannelRunning(
 async function waitForWhatsAppChannelStable(
   gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
   accountId: string,
+  options: {
+    onFirstRunning?: () => Promise<void>;
+    settleAfterFirstRunningMs?: number;
+  } = {},
 ) {
   const startedAt = Date.now();
+  let firstRunningObservedAt: number | undefined;
   while (Date.now() - startedAt < WHATSAPP_QA_READY_TIMEOUT_MS) {
     const status = await waitForWhatsAppChannelRunning(gateway, accountId);
+    if (firstRunningObservedAt === undefined) {
+      await options.onFirstRunning?.();
+      firstRunningObservedAt = Date.now();
+    }
     const connectedAt =
       typeof status.lastConnectedAt === "number" && status.lastConnectedAt > 0
         ? status.lastConnectedAt
         : Date.now();
     const connectedForMs = Date.now() - connectedAt;
-    if (connectedForMs >= WHATSAPP_QA_READY_STABILITY_MS) {
+    const settledAfterFirstRunningMs =
+      firstRunningObservedAt === undefined ? 0 : Date.now() - firstRunningObservedAt;
+    const remainingStableMs = Math.max(0, WHATSAPP_QA_READY_STABILITY_MS - connectedForMs);
+    const remainingSettleMs = Math.max(
+      0,
+      (options.settleAfterFirstRunningMs ?? 0) - settledAfterFirstRunningMs,
+    );
+    if (remainingStableMs === 0 && remainingSettleMs === 0) {
       return;
     }
+    const positiveRemaining = [remainingStableMs, remainingSettleMs].filter((value) => value > 0);
     await new Promise((resolve) =>
-      setTimeout(resolve, Math.max(750, WHATSAPP_QA_READY_STABILITY_MS - connectedForMs)),
+      setTimeout(resolve, Math.max(750, Math.min(...positiveRemaining))),
     );
   }
   throw new Error(
@@ -869,13 +899,17 @@ async function runWhatsAppScenario(params: {
   let preservedGatewayDebug = false;
   try {
     const channelReadyStartedAtMs = Date.now();
-    await waitForWhatsAppChannelStable(gatewayHarness.gateway, params.sutAccountId);
+    await waitForWhatsAppChannelStable(gatewayHarness.gateway, params.sutAccountId, {
+      settleAfterFirstRunningMs: resolveWhatsAppHeapCheckpointSettleMs(),
+      onFirstRunning: async () => {
+        params.sampleGatewayProcessRss?.(gatewayHarness.gateway, `${params.scenario.id}:ready`);
+        await params.captureGatewayHeapCheckpoint?.(
+          gatewayHarness.gateway,
+          `${params.scenario.id}:ready`,
+        );
+      },
+    });
     const channelReadyMs = Date.now() - channelReadyStartedAtMs;
-    params.sampleGatewayProcessRss?.(gatewayHarness.gateway, `${params.scenario.id}:ready`);
-    await params.captureGatewayHeapCheckpoint?.(
-      gatewayHarness.gateway,
-      `${params.scenario.id}:ready`,
-    );
     let quietWindowMs: number | undefined;
     if (scenarioRun.quietInput) {
       const quietStartedAt = new Date();
@@ -1478,6 +1512,7 @@ export const testing = {
   heapSnapshotLooksComplete,
   isTransientWhatsAppQaDriverError,
   parseWhatsAppQaCredentialPayload,
+  resolveWhatsAppHeapCheckpointSettleMs,
   renderWhatsAppQaMarkdown,
   resolveWhatsAppQaRuntimeEnv,
   resolveWhatsAppMetadataRedaction,
