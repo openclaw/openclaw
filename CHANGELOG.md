@@ -2,6 +2,12 @@
 
 Docs: https://docs.openclaw.ai
 
+## Unreleased
+
+### Changes
+
+- Tests/perf: isolate doctor core health check unit coverage from real skills/workspace discovery so `doctor-core-checks` no longer dominates unit perf while keeping one real skills-readiness smoke. (#84493) Thanks @frankekn.
+
 ## 2026.5.20
 
 ### Changes
@@ -68,7 +74,6 @@ Docs: https://docs.openclaw.ai
 - CLI/gateway: include the running Gateway version in `gateway status` JSON output, preserving existing server metadata while falling back to status RPC data for read probes. Fixes #56222. Thanks @galiniliev.
 - Memory/search: close local embedding providers when active-memory searches time out so pending local model loads and embedding contexts are aborted and released. (#83858) Thanks @brokemac79.
 - CLI/nodes: request pending node surface approval scopes before `openclaw nodes approve` so exec-capable node approval can use admin-scoped Gateway credentials instead of failing with `missing scope: operator.admin`. (#84392) Thanks @joshavant.
-
 - Agents: include bounded trajectory queued-writer diagnostics in `pi-trajectory-flush` timeout warnings so flush stalls show pending writes, queued bytes, and append state. Fixes #82961. (#82962) Thanks @galiniliev.
 - Agents/subagents: recover stale completion announces by retrying unsupported transcript-wait wakes without transcript waiting and forcing a message-tool handoff when the requester run is already stale. Fixes #83699. (#83700) Thanks @galiniliev.
 - Agents/subagents: constrain wildcard subagent target allowlists to configured agents while preserving explicitly listed compatibility targets. Fixes #84040. (#84357) Thanks @joshavant.
