@@ -198,6 +198,17 @@ type CronModelCatalogRuntime = typeof import("./run-model-catalog.runtime.js");
 type CronDeliveryRuntime = typeof import("./run-delivery.runtime.js");
 type ResolvedCronDeliveryTarget = Awaited<ReturnType<CronDeliveryRuntime["resolveDeliveryTarget"]>>;
 
+const MIN_CRON_FALLBACK_REMAINING_MS = 1_000;
+const MAX_CRON_FALLBACK_REMAINING_MS = 30_000;
+
+function resolveCronFallbackMinRemainingMs(timeoutMs: number): number {
+  const quarterTimeoutMs = Math.floor(timeoutMs / 4);
+  return Math.max(
+    MIN_CRON_FALLBACK_REMAINING_MS,
+    Math.min(MAX_CRON_FALLBACK_REMAINING_MS, quarterTimeoutMs),
+  );
+}
+
 function normalizeCronTraceTarget(
   target: CronDeliveryTraceTarget | undefined,
 ): CronDeliveryTraceTarget | undefined {
@@ -442,6 +453,8 @@ type RunCronAgentTurnParams = {
   job: CronJob;
   message: string;
   abortSignal?: AbortSignal;
+  deadlineAtMs?: number;
+  getDeadlineAtMs?: () => number | undefined;
   signal?: AbortSignal;
   onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
   onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
@@ -1212,6 +1225,8 @@ export async function runCronIsolatedAgentTurn(params: {
   job: CronJob;
   message: string;
   abortSignal?: AbortSignal;
+  deadlineAtMs?: number;
+  getDeadlineAtMs?: () => number | undefined;
   signal?: AbortSignal;
   onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
   onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
@@ -1276,6 +1291,8 @@ export async function runCronIsolatedAgentTurn(params: {
 
   let outcome: "completed" | "error" = "completed";
   let outcomeError: string | undefined;
+
+  const fallbackMinRemainingMs = resolveCronFallbackMinRemainingMs(prepared.context.timeoutMs);
   try {
     const { executeCronRun } = await loadCronExecutorRuntime();
     const execution = await executeCronRun({
@@ -1313,6 +1330,10 @@ export async function runCronIsolatedAgentTurn(params: {
       timeoutMs: prepared.context.timeoutMs,
       runTimeoutOverrideMs: prepared.context.runTimeoutOverrideMs,
       suppressExecNotifyOnExit: prepared.context.suppressExecNotifyOnExit,
+      senderIsOwner: prepared.context.senderIsOwner,
+      deadlineAtMs: params.deadlineAtMs,
+      getDeadlineAtMs: params.getDeadlineAtMs,
+      fallbackMinRemainingMs,
     });
     if (isAborted()) {
       outcome = "error";

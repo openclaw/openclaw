@@ -154,6 +154,7 @@ export async function executeJobCoreWithTimeout(
   const corePromise = executeJobCore(state, job, runAbortController.signal, {
     onExecutionStarted: deferTimeoutUntilExecutionStart ? watchdog.noteRunnerStarted : undefined,
     onExecutionPhase: deferTimeoutUntilExecutionStart ? watchdog.notePhase : undefined,
+    getDeadlineAtMs: watchdog.getDeadlineAtMs,
   });
   watchdog.start();
   void corePromise.catch((err: unknown) => {
@@ -1321,6 +1322,8 @@ export async function executeJobCore(
   options?: {
     onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
     onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
+    deadlineAtMs?: number;
+    getDeadlineAtMs?: () => number | undefined;
   },
 ): Promise<
   CronRunOutcome &
@@ -1500,6 +1503,8 @@ async function executeDetachedCronJob(
   options?: {
     onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
     onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
+    deadlineAtMs?: number;
+    getDeadlineAtMs?: () => number | undefined;
   },
 ): Promise<
   CronRunOutcome &
@@ -1536,6 +1541,8 @@ async function executeDetachedCronJob(
     abortSignal,
     onExecutionStarted: options?.onExecutionStarted,
     onExecutionPhase: options?.onExecutionPhase,
+    deadlineAtMs: options?.deadlineAtMs,
+    getDeadlineAtMs: options?.getDeadlineAtMs,
   });
 
   if (abortSignal?.aborted) {
