@@ -112,7 +112,9 @@ function listStaleManagedNpmBundledPlugins(
   const dependencies = readStringMap(readJsonObject(npmPackageJsonPath)?.dependencies);
   const stale: StaleManagedNpmBundledPlugin[] = [];
 
-  for (const packageName of Object.keys(dependencies).toSorted()) {
+  for (const packageName of Object.keys(dependencies).toSorted((left, right) =>
+    left.localeCompare(right),
+  )) {
     if (!packageName.startsWith("@openclaw/")) {
       continue;
     }

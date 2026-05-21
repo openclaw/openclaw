@@ -12,10 +12,6 @@ export type StaleLocalBundledPluginInstallRecord = {
   bundledPath: string;
 };
 
-function escapeRegExp(input: string): string {
-  return input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 function normalizePathForCompare(rawPath: string, env?: NodeJS.ProcessEnv): string {
   return path.resolve(normalizeBundledLookupPath(resolveUserPath(rawPath, env)));
 }
@@ -34,11 +30,14 @@ function primaryInstallRecordPath(record: PluginInstallRecord): {
 }
 
 function looksLikeCompiledBundledPluginPath(targetPath: string, pluginId: string): boolean {
-  const normalized = normalizeBundledLookupPath(targetPath).split(path.sep).join("/");
-  const escapedPluginId = escapeRegExp(pluginId);
-  return new RegExp(`(?:^|/)(?:dist|dist-runtime)/extensions/${escapedPluginId}(?:$|/)`).test(
-    normalized,
-  );
+  const segments = normalizeBundledLookupPath(targetPath).split(/[\\/]+/u);
+  return segments.some((segment, index) => {
+    return (
+      (segment === "dist" || segment === "dist-runtime") &&
+      segments[index + 1] === "extensions" &&
+      segments[index + 2] === pluginId
+    );
+  });
 }
 
 function hasStaleBundledVersion(
@@ -64,7 +63,9 @@ export function listStaleLocalBundledPluginInstallRecords(params: {
     });
   const stale: StaleLocalBundledPluginInstallRecord[] = [];
 
-  for (const [pluginId, record] of Object.entries(params.installRecords).toSorted()) {
+  for (const [pluginId, record] of Object.entries(params.installRecords).toSorted(
+    ([left], [right]) => left.localeCompare(right),
+  )) {
     if (record.source !== "path") {
       continue;
     }
