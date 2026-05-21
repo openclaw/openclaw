@@ -120,7 +120,7 @@ export function readGesahniConfig(raw: unknown): GesahniConfig {
     },
     stockRoom: {
       publicChannelIds: asStringArray(stockRoomRaw.publicChannelIds) ?? [],
-      passiveTickerRead: stockRoomRaw.passiveTickerRead === false ? false : true,
+      passiveTickerRead: stockRoomRaw.passiveTickerRead !== false,
       passiveTickerCooldownSeconds:
         asPositiveNumber(stockRoomRaw.passiveTickerCooldownSeconds) ?? 60,
     },
