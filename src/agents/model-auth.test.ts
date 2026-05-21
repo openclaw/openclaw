@@ -1093,6 +1093,7 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 8192,
+        maxTokens: 4096,
       },
       cfg: {
         models: {
