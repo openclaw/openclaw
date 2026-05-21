@@ -72,54 +72,74 @@ function resolveRootHelpBundleIdentity(
   };
 }
 
-function updateHashFromFiles(hash: ReturnType<typeof createHash>, files: string[]) {
+function updateHashFromFiles(
+  hash: ReturnType<typeof createHash>,
+  files: string[],
+  sourceRootDir: string = rootDir,
+): void {
   for (const file of files.toSorted()) {
-    hash.update(`${path.relative(rootDir, file)}\0`);
+    hash.update(`${path.relative(sourceRootDir, file)}\0`);
     hash.update(readFileSync(file));
     hash.update("\0");
   }
 }
 
-function resolveBrowserHelpSourceSignature(): string {
+function resolveBrowserHelpSourceSignature(sourceRootDir: string = rootDir): string {
   const hash = createHash("sha1");
-  const browserCliDir = path.join(rootDir, "extensions/browser/src/cli");
+  const browserCliDir = path.join(sourceRootDir, "extensions/browser/src/cli");
   const browserCliFiles = readdirSync(browserCliDir)
     .filter((entry) => entry.endsWith(".ts"))
     .map((entry) => path.join(browserCliDir, entry));
-  updateHashFromFiles(hash, browserCliFiles);
-  updateHashFromFiles(hash, [
-    path.join(rootDir, "src/cli/program/help.ts"),
-    path.join(rootDir, "src/cli/program/context.ts"),
-    path.join(rootDir, "src/cli/banner.ts"),
-  ]);
+  updateHashFromFiles(hash, browserCliFiles, sourceRootDir);
+  updateHashFromFiles(
+    hash,
+    [
+      path.join(sourceRootDir, "src/cli/program/help.ts"),
+      path.join(sourceRootDir, "src/cli/program/context.ts"),
+      path.join(sourceRootDir, "src/cli/banner.ts"),
+    ],
+    sourceRootDir,
+  );
   return hash.digest("hex");
 }
 
-function resolveSecretsHelpSourceSignature(): string {
+function resolveSecretsHelpSourceSignature(sourceRootDir: string = rootDir): string {
   const hash = createHash("sha1");
-  updateHashFromFiles(hash, [
-    path.join(rootDir, "src/cli/secrets-cli.ts"),
-    path.join(rootDir, "src/cli/program/help.ts"),
-    path.join(rootDir, "src/cli/program/context.ts"),
-    path.join(rootDir, "src/cli/banner.ts"),
-  ]);
+  updateHashFromFiles(
+    hash,
+    [
+      path.join(sourceRootDir, "src/cli/secrets-cli.ts"),
+      path.join(sourceRootDir, "src/cli/program/help.ts"),
+      path.join(sourceRootDir, "src/cli/program/context.ts"),
+      path.join(sourceRootDir, "src/cli/banner.ts"),
+    ],
+    sourceRootDir,
+  );
   return hash.digest("hex");
 }
 
-function resolveNodesHelpSourceSignature(): string {
+function resolveNodesHelpSourceSignature(sourceRootDir: string = rootDir): string {
   const hash = createHash("sha1");
-  const nodesCliDir = path.join(rootDir, "src/cli/nodes-cli");
+  const nodesCliDir = path.join(sourceRootDir, "src/cli/nodes-cli");
   const nodesCliFiles = readdirSync(nodesCliDir)
     .filter((entry) => entry.endsWith(".ts") && !entry.endsWith(".test.ts"))
     .map((entry) => path.join(nodesCliDir, entry));
-  updateHashFromFiles(hash, nodesCliFiles);
-  updateHashFromFiles(hash, [
-    path.join(rootDir, "extensions/canvas/cli-metadata.ts"),
-    path.join(rootDir, "src/cli/program/help.ts"),
-    path.join(rootDir, "src/cli/program/context.ts"),
-    path.join(rootDir, "src/cli/banner.ts"),
-    path.join(rootDir, "src/plugins/register-plugin-cli-command-groups.ts"),
-  ]);
+  updateHashFromFiles(hash, nodesCliFiles, sourceRootDir);
+  updateHashFromFiles(
+    hash,
+    [
+      path.join(sourceRootDir, "extensions/canvas/cli-metadata.ts"),
+      path.join(sourceRootDir, "extensions/canvas/index.ts"),
+      path.join(sourceRootDir, "extensions/canvas/src/a2ui-jsonl.ts"),
+      path.join(sourceRootDir, "extensions/canvas/src/cli-helpers.ts"),
+      path.join(sourceRootDir, "extensions/canvas/src/cli.ts"),
+      path.join(sourceRootDir, "src/cli/program/help.ts"),
+      path.join(sourceRootDir, "src/cli/program/context.ts"),
+      path.join(sourceRootDir, "src/cli/banner.ts"),
+      path.join(sourceRootDir, "src/plugins/register-plugin-cli-command-groups.ts"),
+    ],
+    sourceRootDir,
+  );
   return hash.digest("hex");
 }
 
@@ -387,6 +407,7 @@ export async function writeCliStartupMetadata(options?: {
   distDir?: string;
   outputPath?: string;
   extensionsDir?: string;
+  sourceRootDir?: string;
   renderBundledRootHelpText?: typeof renderBundledRootHelpText;
   renderSourceRootHelpText?: typeof renderSourceRootHelpText;
   renderSourceBrowserHelpText?: typeof renderSourceBrowserHelpText;
@@ -396,11 +417,12 @@ export async function writeCliStartupMetadata(options?: {
   const resolvedDistDir = options?.distDir ?? distDir;
   const resolvedOutputPath = options?.outputPath ?? outputPath;
   const resolvedExtensionsDir = options?.extensionsDir ?? extensionsDir;
+  const resolvedSourceRootDir = options?.sourceRootDir ?? rootDir;
   const channelCatalog = readBundledChannelCatalog(resolvedExtensionsDir);
   const bundleIdentity = resolveRootHelpBundleIdentity(resolvedDistDir);
-  const browserHelpSourceSignature = resolveBrowserHelpSourceSignature();
-  const secretsHelpSourceSignature = resolveSecretsHelpSourceSignature();
-  const nodesHelpSourceSignature = resolveNodesHelpSourceSignature();
+  const browserHelpSourceSignature = resolveBrowserHelpSourceSignature(resolvedSourceRootDir);
+  const secretsHelpSourceSignature = resolveSecretsHelpSourceSignature(resolvedSourceRootDir);
+  const nodesHelpSourceSignature = resolveNodesHelpSourceSignature(resolvedSourceRootDir);
   const bundledPluginsDir = path.join(resolvedDistDir, "extensions");
   const renderContext = createIsolatedRootHelpRenderContext(
     existsSync(bundledPluginsDir) ? bundledPluginsDir : resolvedExtensionsDir,
