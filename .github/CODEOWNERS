@@ -15,6 +15,7 @@
 /test/scripts/dependency-change-awareness-workflow.test.ts @openclaw/openclaw-secops
 /package-lock.json @openclaw/openclaw-secops
 /npm-shrinkwrap.json @openclaw/openclaw-secops
+/extensions/*/npm-shrinkwrap.json @openclaw/openclaw-secops
 /pnpm-lock.yaml @openclaw/openclaw-secops
 /scripts/generate-npm-shrinkwrap.mjs @openclaw/openclaw-secops
 /src/security/ @openclaw/openclaw-secops

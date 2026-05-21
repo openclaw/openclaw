@@ -45,6 +45,7 @@ describe("dependency-changes-report", () => {
 
   it("treats shrinkwrap and package-lock as dependency files", () => {
     expect(isDependencyFile("npm-shrinkwrap.json")).toBe(true);
+    expect(isDependencyFile("extensions/discord/npm-shrinkwrap.json")).toBe(true);
     expect(isDependencyFile("package-lock.json")).toBe(true);
     expect(isDependencyFile("pnpm-lock.yaml")).toBe(true);
     expect(isDependencyFile("docs/gateway/security/index.md")).toBe(false);

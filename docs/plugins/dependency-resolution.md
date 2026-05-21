@@ -57,6 +57,23 @@ the plugin package. OpenClaw scans the managed npm root before trusting the
 install and uses npm to remove npm-managed packages during uninstall, so hoisted
 runtime dependencies stay inside the managed cleanup boundary.
 
+Published npm plugin packages can ship `npm-shrinkwrap.json`. npm uses that
+publishable lockfile during install, and OpenClaw's managed npm root supports it
+through the normal npm install path. OpenClaw-owned publishable plugin packages
+must include a package-local shrinkwrap generated from that plugin package's
+published dependency graph:
+
+```bash
+pnpm deps:shrinkwrap:generate
+pnpm deps:shrinkwrap:check
+```
+
+The generator strips plugin `devDependencies`, applies the workspace override
+policy, and writes `extensions/<id>/npm-shrinkwrap.json` for each
+`publishToNpm` plugin. Third-party plugin packages may also ship shrinkwrap;
+OpenClaw does not require it for community packages, but npm will respect it
+when present.
+
 Plugins that import `openclaw/plugin-sdk/*` declare `openclaw` as a peer
 dependency. OpenClaw does not let npm install a separate registry copy of the
 host package into the managed root, because stale host packages can affect npm

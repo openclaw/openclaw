@@ -56,9 +56,10 @@ Start with the smallest access that still works, then widen it as you gain confi
 ### Published package dependency lock
 
 OpenClaw source checkouts use `pnpm-lock.yaml`. The published `openclaw` npm
-package also includes `npm-shrinkwrap.json`, npm's publishable dependency
-lockfile, so package installs use the reviewed transitive dependency graph
-from the release instead of resolving a fresh graph at install time.
+package and OpenClaw-owned npm plugin packages include `npm-shrinkwrap.json`,
+npm's publishable dependency lockfile, so package installs use the reviewed
+transitive dependency graph from the release instead of resolving a fresh graph
+at install time.
 
 This is a supply-chain hardening measure:
 
@@ -74,23 +75,37 @@ does not replace `openclaw security audit`, host isolation, npm provenance,
 signature/audit checks, or `--ignore-scripts` install smoke tests when those are
 appropriate. Treat it as a release reproducibility and review-control boundary.
 
-Maintainers should update and verify the shrinkwrap whenever the root package's
-published dependency graph changes:
+Maintainers should update and verify shrinkwrap whenever the root package or an
+OpenClaw-owned published plugin package changes its published dependency graph:
 
 ```bash
 pnpm deps:shrinkwrap:generate
 pnpm deps:shrinkwrap:check
 ```
 
+Use `pnpm deps:shrinkwrap:root:generate` and
+`pnpm deps:shrinkwrap:root:check` only when you intentionally want to refresh
+the root `openclaw` package without touching plugin packages.
+
 Review `pnpm-lock.yaml`, `npm-shrinkwrap.json`, and any `package-lock.json`
 diff as security-sensitive. The package validators require shrinkwrap in new
-tarballs and reject `package-lock.json`.
+root package tarballs and the plugin npm publish path checks plugin-local
+shrinkwrap before packing or publishing. Package validators reject
+`package-lock.json`.
 
 To inspect a published package:
 
 ```bash
 npm pack openclaw@<version> --json --pack-destination /tmp/openclaw-pack
 tar -tf /tmp/openclaw-pack/openclaw-<version>.tgz | grep '^package/npm-shrinkwrap.json$'
+```
+
+To inspect an OpenClaw-owned plugin package, replace the package spec and check
+the same tar entry:
+
+```bash
+npm pack @openclaw/discord@<version> --json --pack-destination /tmp/openclaw-plugin-pack
+tar -tf /tmp/openclaw-plugin-pack/openclaw-discord-<version>.tgz | grep '^package/npm-shrinkwrap.json$'
 ```
 
 Background: [npm-shrinkwrap.json](https://docs.npmjs.com/cli/v11/configuring-npm/npm-shrinkwrap-json).

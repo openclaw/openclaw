@@ -18,7 +18,9 @@ type WorkspaceDependencyPolicy = WorkspaceConfig & {
   overrides?: Record<string, string | number>;
 };
 type NpmShrinkwrap = {
-  packages?: Record<string, { version?: string }>;
+  name?: string;
+  version?: string;
+  packages?: Record<string, { name?: string; version?: string; dev?: boolean }>;
 };
 
 function readJson(filePath: string): unknown {
@@ -51,6 +53,38 @@ describe("package manager build policy", () => {
       expect(shrinkwrap.packages?.[`node_modules/${packageName}`]?.version).toBe(
         String(workspace.overrides?.[packageName]),
       );
+    }
+  });
+
+  it("ships shrinkwrap for every publishable plugin package", () => {
+    for (const entry of fs.readdirSync("extensions", { withFileTypes: true })) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      const packageJsonPath = `extensions/${entry.name}/package.json`;
+      if (!fs.existsSync(packageJsonPath)) {
+        continue;
+      }
+      const packageJson = readJson(packageJsonPath) as {
+        name?: string;
+        version?: string;
+        openclaw?: { release?: { publishToNpm?: boolean } };
+      };
+      if (packageJson.openclaw?.release?.publishToNpm !== true) {
+        continue;
+      }
+
+      const shrinkwrapPath = `extensions/${entry.name}/npm-shrinkwrap.json`;
+      const shrinkwrap = readJson(shrinkwrapPath) as NpmShrinkwrap;
+      const devLockedPackages = Object.entries(shrinkwrap.packages ?? {}).filter(
+        ([, lockedPackage]) => lockedPackage.dev === true,
+      );
+
+      expect(shrinkwrap.name, shrinkwrapPath).toBe(packageJson.name);
+      expect(shrinkwrap.version, shrinkwrapPath).toBe(packageJson.version);
+      expect(shrinkwrap.packages?.[""]?.name, shrinkwrapPath).toBe(packageJson.name);
+      expect(shrinkwrap.packages?.[""]?.version, shrinkwrapPath).toBe(packageJson.version);
+      expect(devLockedPackages, shrinkwrapPath).toEqual([]);
     }
   });
 });

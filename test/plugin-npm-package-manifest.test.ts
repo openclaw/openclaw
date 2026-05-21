@@ -157,6 +157,17 @@ describe("plugin npm package manifest staging", () => {
     const packageDir = writePublishablePluginPackage(repoDir);
     writeFileText(join(packageDir, "dist", "index.js"), "export {};\n");
     writeFileText(join(packageDir, "dist", "setup-entry.js"), "export {};\n");
+    writeJsonFile(join(packageDir, "npm-shrinkwrap.json"), {
+      name: "@openclaw/diffs",
+      version: "2026.5.3",
+      lockfileVersion: 3,
+      packages: {
+        "": {
+          name: "@openclaw/diffs",
+          version: "2026.5.3",
+        },
+      },
+    });
 
     const resolved = resolveAugmentedPluginNpmPackageJson({
       repoRoot: repoDir,
@@ -167,7 +178,14 @@ describe("plugin npm package manifest staging", () => {
       name: "@openclaw/diffs",
       version: "2026.5.3",
       type: "module",
-      files: ["dist/**", "openclaw.plugin.json", "README.md", "SKILL.md", "skills/**"],
+      files: [
+        "dist/**",
+        "openclaw.plugin.json",
+        "npm-shrinkwrap.json",
+        "README.md",
+        "SKILL.md",
+        "skills/**",
+      ],
       peerDependencies: {
         openclaw: ">=2026.4.30",
       },
@@ -197,6 +215,7 @@ describe("plugin npm package manifest staging", () => {
       expect(stagedPackageJson.openclaw.runtimeExtensions).toEqual(["./dist/index.js"]);
       expect(stagedPackageJson.openclaw.runtimeSetupEntry).toBe("./dist/setup-entry.js");
       expect(stagedPackageJson.files).toContain("dist/**");
+      expect(stagedPackageJson.files).toContain("npm-shrinkwrap.json");
       expect(stagedPackageJson.files).toContain("skills/**");
       expect(stagedPackageJson.peerDependencies.openclaw).toBe(">=2026.4.30");
       expect(stagedPackageJson.peerDependenciesMeta.openclaw.optional).toBe(true);

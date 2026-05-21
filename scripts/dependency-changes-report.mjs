@@ -13,6 +13,7 @@ const DEPENDENCY_FILE_PATTERNS = [
   /^package\.json$/u,
   /^package-lock\.json$/u,
   /^npm-shrinkwrap\.json$/u,
+  /\/npm-shrinkwrap\.json$/u,
   /^pnpm-lock\.yaml$/u,
   /^pnpm-workspace\.yaml$/u,
   /^patches\//u,
