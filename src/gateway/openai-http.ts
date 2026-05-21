@@ -12,7 +12,7 @@ import {
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
 import type { GatewayHttpChatCompletionsConfig } from "../config/types.gateway.js";
-import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
+import { emitAgentEvent, onAgentEvent, type AgentEventPayload } from "../infra/agent-events.js";
 import { logWarn } from "../logger.js";
 import { estimateBase64DecodedBytes } from "../media/base64.js";
 import {
@@ -99,6 +99,18 @@ type ResolvedOpenAiChatCompletionsLimits = {
   maxTotalImageBytes: number;
   images: InputImageLimits;
 };
+
+function resolveAssistantStreamDeltaTextAfter(
+  evt: AgentEventPayload,
+  previousText: string,
+): { content: string; nextText: string } {
+  const text = evt.data.text;
+  if (typeof text === "string" && text.startsWith(previousText)) {
+    return { content: text.slice(previousText.length), nextText: text };
+  }
+  const content = resolveAssistantStreamDeltaText(evt);
+  return { content, nextText: `${previousText}${content}` };
+}
 
 function resolveOpenAiChatCompletionsLimits(
   config: GatewayHttpChatCompletionsConfig | undefined,
@@ -1056,6 +1068,7 @@ export async function handleOpenAiHttpRequest(
   let wroteRole = false;
   let wroteStopChunk = false;
   let sawAssistantDelta = false;
+  let streamedAssistantText = "";
   let finalUsage:
     | {
         prompt_tokens: number;
@@ -1064,13 +1077,14 @@ export async function handleOpenAiHttpRequest(
       }
     | undefined;
   let finalizeRequested = false;
+  let finalizeScheduled = false;
   let finalizeFinishReason: "stop" | "tool_calls" = "stop";
   let resultResolved = false;
   let closed = false;
   let stopWatchingDisconnect = () => {};
 
   const maybeFinalize = () => {
-    if (closed || !finalizeRequested) {
+    if (closed || finalizeScheduled || !finalizeRequested) {
       return;
     }
     if (!resultResolved) {
@@ -1079,22 +1093,30 @@ export async function handleOpenAiHttpRequest(
     if (streamIncludeUsage && !finalUsage) {
       return;
     }
-    closed = true;
-    stopWatchingDisconnect();
-    unsubscribe();
-    if (!wroteStopChunk) {
-      writeAssistantFinishChunk(res, { runId, model, finishReason: finalizeFinishReason });
-      wroteStopChunk = true;
-    }
-    if (streamIncludeUsage && finalUsage) {
-      writeUsageChunk(res, { runId, model, usage: finalUsage });
-    }
-    writeDone(res);
-    res.end();
+    finalizeScheduled = true;
+    void Promise.resolve().then(() => {
+      if (closed) {
+        return;
+      }
+      closed = true;
+      stopWatchingDisconnect();
+      unsubscribe();
+      if (!wroteStopChunk) {
+        writeAssistantFinishChunk(res, { runId, model, finishReason: finalizeFinishReason });
+        wroteStopChunk = true;
+      }
+      if (streamIncludeUsage && finalUsage) {
+        writeUsageChunk(res, { runId, model, usage: finalUsage });
+      }
+      writeDone(res);
+      res.end();
+    });
   };
 
   const requestFinalize = (finishReason: "stop" | "tool_calls" = "stop") => {
-    finalizeFinishReason = finishReason;
+    if (!finalizeRequested || finishReason === "tool_calls") {
+      finalizeFinishReason = finishReason;
+    }
     finalizeRequested = true;
     maybeFinalize();
   };
@@ -1108,7 +1130,8 @@ export async function handleOpenAiHttpRequest(
     }
 
     if (evt.stream === "assistant") {
-      const content = resolveAssistantStreamDeltaText(evt) ?? "";
+      const resolved = resolveAssistantStreamDeltaTextAfter(evt, streamedAssistantText);
+      const content = resolved.content;
       if (!content) {
         return;
       }
@@ -1119,6 +1142,7 @@ export async function handleOpenAiHttpRequest(
       }
 
       sawAssistantDelta = true;
+      streamedAssistantText = resolved.nextText;
       writeAssistantContentChunk(res, {
         runId,
         model,

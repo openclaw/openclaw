@@ -1622,6 +1622,41 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
       {
         agentCommand.mockClear();
+        agentCommand.mockImplementationOnce(((opts: unknown) => {
+          const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+          emitAgentEvent({
+            runId,
+            stream: "assistant",
+            data: {
+              text: "<xiaohai-banli>milk tea</xiaohai-banli>",
+              delta: "xiaohai-banli>milk tea</xiaohai-banli>",
+            },
+          });
+          return Promise.resolve({
+            payloads: [{ text: "<xiaohai-banli>milk tea</xiaohai-banli>" }],
+          });
+        }) as never);
+
+        const cumulativeRes = await postChatCompletions(port, {
+          stream: true,
+          model: "openclaw",
+          messages: [{ role: "user", content: "hi" }],
+        });
+        expect(cumulativeRes.status).toBe(200);
+        const cumulativeData = parseSseDataLines(await cumulativeRes.text());
+        const cumulativeChunks = cumulativeData
+          .filter((d) => d !== "[DONE]")
+          .map((d) => JSON.parse(d) as Record<string, unknown>);
+        const cumulativeContent = cumulativeChunks
+          .flatMap((c) => (c.choices as Array<Record<string, unknown>> | undefined) ?? [])
+          .map((choice) => (choice.delta as Record<string, unknown> | undefined)?.content)
+          .filter((v): v is string => typeof v === "string")
+          .join("");
+        expect(cumulativeContent).toBe("<xiaohai-banli>milk tea</xiaohai-banli>");
+      }
+
+      {
+        agentCommand.mockClear();
         agentCommand.mockResolvedValueOnce({
           payloads: [{ text: "hello" }],
         } as never);
@@ -1635,6 +1670,40 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         const fallbackText = await fallbackRes.text();
         expect(fallbackText).toContain("[DONE]");
         expect(fallbackText).toContain("hello");
+      }
+
+      {
+        agentCommand.mockClear();
+        agentCommand.mockImplementationOnce(((opts: unknown) => {
+          const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+          emitAgentEvent({ runId, stream: "assistant", data: { delta: "start " } });
+          const result = Promise.resolve({ payloads: [{ text: "start finish" }] });
+          void result.then(() => {
+            emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
+            void Promise.resolve().then(() => {
+              emitAgentEvent({ runId, stream: "assistant", data: { delta: "finish" } });
+            });
+          });
+          return result;
+        }) as never);
+
+        const microtaskFlushRes = await postChatCompletions(port, {
+          stream: true,
+          model: "openclaw",
+          messages: [{ role: "user", content: "hi" }],
+        });
+        expect(microtaskFlushRes.status).toBe(200);
+        const microtaskFlushData = parseSseDataLines(await microtaskFlushRes.text());
+        expect(microtaskFlushData[microtaskFlushData.length - 1]).toBe("[DONE]");
+        const microtaskFlushChunks = microtaskFlushData
+          .filter((d) => d !== "[DONE]")
+          .map((d) => JSON.parse(d) as Record<string, unknown>);
+        const microtaskFlushContent = microtaskFlushChunks
+          .flatMap((c) => (c.choices as Array<Record<string, unknown>> | undefined) ?? [])
+          .map((choice) => (choice.delta as Record<string, unknown> | undefined)?.content)
+          .filter((v): v is string => typeof v === "string")
+          .join("");
+        expect(microtaskFlushContent).toBe("start finish");
       }
 
       {
