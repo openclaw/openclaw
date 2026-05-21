@@ -22,10 +22,22 @@ type RemoteNodeRecord = {
   remoteIp?: string;
 };
 
+type RemoteNodeProbeState = {
+  signature: string;
+  lastProbeAtMs?: number;
+  nextProbeAfterMs?: number;
+  failedProbeCount?: number;
+  bins?: Set<string>;
+};
+
 const log = createSubsystemLogger("gateway/skills-remote");
 const remoteNodes = new Map<string, RemoteNodeRecord>();
+const remoteNodeProbeStates = new Map<string, RemoteNodeProbeState>();
 const remoteBinProbeInflight = new Map<string, Promise<void>>();
 let remoteRegistry: NodeRegistry | null = null;
+const REMOTE_BIN_PROBE_SUCCESS_TTL_MS = 24 * 60 * 60 * 1000;
+const REMOTE_BIN_PROBE_FAILURE_BASE_BACKOFF_MS = 60 * 60 * 1000;
+const REMOTE_BIN_PROBE_FAILURE_MAX_BACKOFF_MS = 24 * 60 * 60 * 1000;
 
 function describeNode(nodeId: string): string {
   const record = remoteNodes.get(nodeId);
@@ -154,7 +166,8 @@ function upsertNode(record: {
   connected?: boolean;
 }) {
   const existing = remoteNodes.get(record.nodeId);
-  const bins = new Set<string>(record.bins ?? existing?.bins ?? []);
+  const cachedBins = remoteNodeProbeStates.get(record.nodeId)?.bins;
+  const bins = new Set<string>(record.bins ?? existing?.bins ?? cachedBins ?? []);
   remoteNodes.set(record.nodeId, {
     nodeId: record.nodeId,
     displayName: record.displayName ?? existing?.displayName,
@@ -174,6 +187,83 @@ function clearRemoteNodeBins(nodeId: string): boolean {
   }
   existing.bins = new Set();
   return true;
+}
+
+function buildRemoteProbeSignature(params: {
+  command: string;
+  platform?: string;
+  deviceFamily?: string;
+  commands?: string[];
+  bins: string[];
+}): string {
+  const commands = [...(params.commands ?? [])].sort().join(",");
+  const bins = [...params.bins].sort().join(",");
+  return [
+    params.command,
+    normalizeLowercaseStringOrEmpty(params.platform),
+    normalizeLowercaseStringOrEmpty(params.deviceFamily),
+    commands,
+    bins,
+  ].join("|");
+}
+
+function shouldSkipRemoteNodeProbe(
+  state: RemoteNodeProbeState | undefined,
+  signature: string,
+  nowMs: number,
+  force: boolean,
+): boolean {
+  if (force) {
+    return false;
+  }
+  if (!state || state.signature !== signature) {
+    return false;
+  }
+  if (typeof state.nextProbeAfterMs !== "number") {
+    return false;
+  }
+  return nowMs < state.nextProbeAfterMs;
+}
+
+function applyCachedRemoteNodeProbeBins(nodeId: string) {
+  const existing = remoteNodes.get(nodeId);
+  const cachedBins = remoteNodeProbeStates.get(nodeId)?.bins;
+  if (!existing || !cachedBins) {
+    return;
+  }
+  existing.bins = new Set(cachedBins);
+}
+
+function markRemoteNodeProbeSuccess(
+  nodeId: string,
+  signature: string,
+  nowMs: number,
+  bins: string[],
+) {
+  remoteNodeProbeStates.set(nodeId, {
+    signature,
+    lastProbeAtMs: nowMs,
+    nextProbeAfterMs: nowMs + REMOTE_BIN_PROBE_SUCCESS_TTL_MS,
+    failedProbeCount: 0,
+    bins: new Set(bins),
+  });
+}
+
+function markRemoteNodeProbeFailure(nodeId: string, signature: string, nowMs: number) {
+  const existing = remoteNodeProbeStates.get(nodeId);
+  const failedProbeCount =
+    existing?.signature === signature ? (existing.failedProbeCount ?? 0) + 1 : 1;
+  const exponent = Math.max(0, failedProbeCount - 1);
+  const backoffMs = Math.min(
+    REMOTE_BIN_PROBE_FAILURE_MAX_BACKOFF_MS,
+    REMOTE_BIN_PROBE_FAILURE_BASE_BACKOFF_MS * 2 ** exponent,
+  );
+  remoteNodeProbeStates.set(nodeId, {
+    signature,
+    lastProbeAtMs: nowMs,
+    nextProbeAfterMs: nowMs + backoffMs,
+    failedProbeCount,
+  });
 }
 
 export function setSkillsRemoteRegistry(registry: NodeRegistry | null) {
@@ -318,6 +408,7 @@ export async function refreshRemoteNodeBins(params: {
   commands?: string[];
   cfg: OpenClawConfig;
   timeoutMs?: number;
+  force?: boolean;
 }) {
   const existing = remoteBinProbeInflight.get(params.nodeId);
   if (existing) {
@@ -340,6 +431,7 @@ async function refreshRemoteNodeBinsUncoalesced(params: {
   commands?: string[];
   cfg: OpenClawConfig;
   timeoutMs?: number;
+  force?: boolean;
 }) {
   if (!remoteRegistry) {
     return;
@@ -368,6 +460,25 @@ async function refreshRemoteNodeBinsUncoalesced(params: {
   const binsList = [...requiredBins];
   const timeoutMs = params.timeoutMs ?? 15_000;
   const command = canWhich ? "system.which" : "system.run";
+  const probeSignature = buildRemoteProbeSignature({
+    command,
+    platform: params.platform,
+    deviceFamily: params.deviceFamily,
+    commands: params.commands,
+    bins: binsList,
+  });
+  const nowMs = Date.now();
+  if (
+    shouldSkipRemoteNodeProbe(
+      remoteNodeProbeStates.get(params.nodeId),
+      probeSignature,
+      nowMs,
+      params.force === true,
+    )
+  ) {
+    applyCachedRemoteNodeProbeBins(params.nodeId);
+    return;
+  }
   const logContext = { command, timeoutMs, requiredBinCount: binsList.length };
   const connectivityTimeoutMs = Math.min(timeoutMs, 2_000);
   if (typeof remoteRegistry.checkConnectivity === "function") {
@@ -421,6 +532,7 @@ async function refreshRemoteNodeBinsUncoalesced(params: {
     );
     if (!res.ok) {
       const cleared = clearRemoteNodeBins(params.nodeId);
+      markRemoteNodeProbeFailure(params.nodeId, probeSignature, nowMs);
       logRemoteBinProbeFailure(params.nodeId, res.error?.message ?? "unknown", logContext);
       if (cleared) {
         bumpSkillsSnapshotVersion({ reason: "remote-node" });
@@ -432,6 +544,7 @@ async function refreshRemoteNodeBinsUncoalesced(params: {
     const nextBins = new Set(bins);
     const hasChanged = !areBinSetsEqual(existingBins, nextBins);
     recordRemoteNodeBins(params.nodeId, bins);
+    markRemoteNodeProbeSuccess(params.nodeId, probeSignature, nowMs, bins);
     if (!hasChanged) {
       return;
     }
@@ -439,6 +552,7 @@ async function refreshRemoteNodeBinsUncoalesced(params: {
     bumpSkillsSnapshotVersion({ reason: "remote-node" });
   } catch (err) {
     const cleared = clearRemoteNodeBins(params.nodeId);
+    markRemoteNodeProbeFailure(params.nodeId, probeSignature, nowMs);
     logRemoteBinProbeFailure(params.nodeId, err, logContext);
     if (cleared) {
       bumpSkillsSnapshotVersion({ reason: "remote-node" });
