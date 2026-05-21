@@ -19,7 +19,6 @@ import {
   LiveSessionModelSwitchError,
   logWarn,
   normalizeVerboseLevel,
-  clearAgentRunContext,
   registerAgentRunContext,
   resolveBootstrapWarningSignaturesSeen,
   resolveCronAgentLane,
