@@ -122,9 +122,9 @@ future feature plugins can consume embeddings without depending on the memory
 engine.
 
 Memory search can consume generic `embeddingProviders`. The older
-`memoryEmbeddingProviders` contract remains for compatibility while existing
-memory-specific providers migrate, but new reusable embedding providers should
-use `embeddingProviders`.
+`memoryEmbeddingProviders` contract is deprecated compatibility while existing
+memory-specific providers migrate; new reusable embedding providers should use
+`embeddingProviders`.
 
 ## Review checklist
 
