@@ -318,6 +318,46 @@ describe("normalizeProviders", () => {
     }
   });
 
+  it("does not persist plaintext auth profile keys into provider config", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    try {
+      await fs.writeFile(
+        path.join(agentDir, "auth-profiles.json"),
+        `${JSON.stringify(
+          {
+            version: 1,
+            profiles: {
+              "openai:default": {
+                type: "api_key",
+                provider: "openai",
+                key: "sk-profile-plaintext-value",
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+
+      const normalized = normalizeProviders({
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-completions",
+            models: [createModel()],
+          },
+        },
+        agentDir,
+        env: {},
+      });
+
+      expect(normalized?.openai?.apiKey).toBeUndefined();
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
   it("normalizes SecretRef-backed provider headers to non-secret marker values", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
     try {

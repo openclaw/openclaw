@@ -306,7 +306,9 @@ export function resolveMissingProviderApiKey(params: {
   }
 
   const fromEnv = resolveEnvApiKeyVarName(params.providerKey, params.env);
-  const apiKey = fromEnv ?? params.profileApiKey?.apiKey;
+  const profileApiKey =
+    params.profileApiKey?.source === "plaintext" ? undefined : params.profileApiKey?.apiKey;
+  const apiKey = fromEnv ?? profileApiKey;
   if (!apiKey?.trim()) {
     return params.provider;
   }
