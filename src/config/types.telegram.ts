@@ -155,7 +155,7 @@ export type TelegramAccountConfig = {
   conversationContext?: boolean;
   /** Default max recent observed group messages to include in conversation context (0 disables). */
   groupRecentLimit?: number;
-  /** Default max recent observed DM messages to include in conversation context (0 disables). Default: 0. */
+  /** Default max recent observed DM messages to include in conversation context (0 disables). Default: 10. */
   dmRecentLimit?: number;
   /** Max group messages to keep as history context (0 disables). */
   historyLimit?: number;
