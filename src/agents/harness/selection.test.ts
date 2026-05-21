@@ -8,12 +8,14 @@ import type {
 import { clearAgentHarnesses, registerAgentHarness } from "./registry.js";
 import {
   maybeCompactAgentHarnessSession,
+  resolveAvailableAgentHarnessPolicy,
+  resolveAgentHarnessPolicy,
   runAgentHarnessAttempt,
   selectAgentHarness,
 } from "./selection.js";
 import type { AgentHarness } from "./types.js";
 
-const piRunAttempt = vi.fn(async () => createAttemptResult("pi"));
+const piRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async () => createAttemptResult("pi"));
 
 vi.mock("./builtin-pi.js", () => ({
   createPiAgentHarness: (): AgentHarness => ({
@@ -114,6 +116,36 @@ function registerSuccessfulCodexHarness(): void {
   );
 }
 
+function groupSenderDenyAllConfig(): OpenClawConfig {
+  return {
+    channels: {
+      telegram: {
+        groups: {
+          "test-deny-room": {
+            toolsBySender: {
+              "id:test-denied-sender": { deny: ["*"] },
+            },
+          },
+        },
+      },
+    },
+  } as OpenClawConfig;
+}
+
+function groupDenyAllConfig(): OpenClawConfig {
+  return {
+    channels: {
+      telegram: {
+        groups: {
+          "test-deny-room": {
+            tools: { deny: ["*"] },
+          },
+        },
+      },
+    },
+  } as OpenClawConfig;
+}
+
 function providerRuntimeConfig(provider: string, runtime: string): OpenClawConfig {
   return {
     models: {
@@ -201,6 +233,11 @@ describe("runAgentHarnessAttempt", () => {
   it("uses the Codex harness by default for OpenAI agent model runs", async () => {
     registerSuccessfulCodexHarness();
 
+    expect(resolveAgentHarnessPolicy({ provider: "openai", modelId: "gpt-5.4" })).toEqual({
+      runtime: "codex",
+      runtimeSource: "implicit",
+    });
+
     const result = await runAgentHarnessAttempt({
       ...createAttemptParams(),
       provider: "openai",
@@ -210,9 +247,41 @@ describe("runAgentHarnessAttempt", () => {
     expect(piRunAttempt).not.toHaveBeenCalled();
   });
 
+  it("falls back to PI when the implicit OpenAI Codex harness is unavailable", async () => {
+    expect(resolveAgentHarnessPolicy({ provider: "openai", modelId: "gpt-5.4" })).toEqual({
+      runtime: "codex",
+      runtimeSource: "implicit",
+    });
+    expect(resolveAvailableAgentHarnessPolicy({ provider: "openai", modelId: "gpt-5.4" })).toEqual({
+      runtime: "pi",
+      runtimeSource: "implicit",
+    });
+
+    const result = await runAgentHarnessAttempt({
+      ...createAttemptParams(),
+      provider: "openai",
+      modelId: "gpt-5.4",
+    });
+
+    expect(result.sessionIdUsed).toBe("pi");
+    expect(piRunAttempt).toHaveBeenCalledTimes(1);
+  });
+
   it("honors explicit PI runtime for OpenAI agent model runs", async () => {
     const result = await runAgentHarnessAttempt({
       ...createAttemptParams(providerRuntimeConfig("openai", "pi")),
+      provider: "openai",
+      modelId: "gpt-5.4",
+    });
+    expect(result.sessionIdUsed).toBe("pi");
+    expect(piRunAttempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("honors provider wildcard PI runtime policy for OpenAI agent model runs", async () => {
+    registerSuccessfulCodexHarness();
+
+    const result = await runAgentHarnessAttempt({
+      ...createAttemptParams(agentModelRuntimeConfig("openai/*", "pi")),
       provider: "openai",
       modelId: "gpt-5.4",
     });
@@ -237,11 +306,80 @@ describe("runAgentHarnessAttempt", () => {
     const params = createAttemptParams();
     const result = await runAgentHarnessAttempt(params);
 
-    const classifyCall = classify.mock.calls[0];
+    const classifyCall = classify.mock.calls.at(0);
     expect(classifyCall?.[0].sessionIdUsed).toBe("codex");
     expect(classifyCall?.[1]).toBe(params);
     expect(result.agentHarnessId).toBe("codex");
     expect(result.agentHarnessResultClassification).toBe("empty");
+  });
+
+  it("collapses channel group sender deny-all to empty toolsAllow for plugin harnesses", async () => {
+    const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () => createAttemptResult("codex"));
+    registerAgentHarness(
+      {
+        id: "codex",
+        label: "Codex",
+        supports: (ctx) =>
+          ctx.provider === "codex" ? { supported: true, priority: 100 } : { supported: false },
+        runAttempt,
+      },
+      { ownerPluginId: "codex" },
+    );
+
+    await runAgentHarnessAttempt({
+      ...createAttemptParams(groupSenderDenyAllConfig()),
+      sessionKey: "agent:main:telegram:group:test-deny-room",
+      messageProvider: "telegram",
+      groupId: "test-deny-room",
+      senderId: "test-denied-sender",
+      extraSystemPrompt: "Existing operator note.",
+    });
+
+    expect(runAttempt).toHaveBeenCalledTimes(1);
+    const attempt = runAttempt.mock.calls[0]?.[0];
+    expect(attempt?.toolsAllow).toEqual([]);
+    expect(attempt?.extraSystemPrompt).toContain("Existing operator note.");
+    expect(attempt?.extraSystemPrompt).toContain("this sender is not allowed by policy");
+  });
+
+  it("adds chat policy wording for plugin harness group deny-all", async () => {
+    const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () => createAttemptResult("codex"));
+    registerAgentHarness(
+      {
+        id: "codex",
+        label: "Codex",
+        supports: (ctx) =>
+          ctx.provider === "codex" ? { supported: true, priority: 100 } : { supported: false },
+        runAttempt,
+      },
+      { ownerPluginId: "codex" },
+    );
+
+    await runAgentHarnessAttempt({
+      ...createAttemptParams(groupDenyAllConfig()),
+      sessionKey: "agent:main:telegram:group:test-deny-room",
+      messageProvider: "telegram",
+      groupId: "test-deny-room",
+      senderId: "test-denied-sender",
+    });
+
+    expect(runAttempt).toHaveBeenCalledTimes(1);
+    const attempt = runAttempt.mock.calls[0]?.[0];
+    expect(attempt?.toolsAllow).toEqual([]);
+    expect(attempt?.extraSystemPrompt).toContain("this chat is not allowed by policy");
+  });
+
+  it("leaves PI harness params unchanged for channel group sender deny-all policy", async () => {
+    await runAgentHarnessAttempt({
+      ...createAttemptParams(groupSenderDenyAllConfig()),
+      sessionKey: "agent:main:telegram:group:test-deny-room",
+      messageProvider: "telegram",
+      groupId: "test-deny-room",
+      senderId: "test-denied-sender",
+    });
+
+    expect(piRunAttempt).toHaveBeenCalledTimes(1);
+    expect(piRunAttempt.mock.calls[0]?.[0].toolsAllow).toBeUndefined();
   });
 
   it("fails for config-forced plugin harnesses when fallback is omitted", async () => {
@@ -354,6 +492,26 @@ describe("selectAgentHarness", () => {
     expect(supports).toHaveBeenCalledTimes(1);
   });
 
+  it("honors explicit PI runtime overrides when selecting a harness", async () => {
+    registerSuccessfulCodexHarness();
+
+    const harness = selectAgentHarness({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      agentHarnessRuntimeOverride: "pi",
+    });
+
+    expect(harness.id).toBe("pi");
+
+    const result = await runAgentHarnessAttempt({
+      ...createAttemptParams(),
+      provider: "openai",
+      modelId: "gpt-5.4",
+      agentHarnessRuntimeOverride: "pi",
+    });
+    expect(result.sessionIdUsed).toBe("pi");
+  });
+
   it("allows per-agent model runtime policy overrides", () => {
     const config = agentModelRuntimeConfig("anthropic/sonnet-4.6", "codex", "strict");
 
@@ -368,6 +526,10 @@ describe("selectAgentHarness", () => {
     expect(selectAgentHarness({ provider: "anthropic", modelId: "sonnet-4.6", config }).id).toBe(
       "pi",
     );
+  });
+
+  it("selects PI when the implicit OpenAI Codex harness is unavailable", () => {
+    expect(selectAgentHarness({ provider: "openai", modelId: "gpt-5.4" }).id).toBe("pi");
   });
 
   it("ignores legacy agentRuntime as a runtime policy source", () => {

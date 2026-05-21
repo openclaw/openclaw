@@ -103,6 +103,93 @@ describe("qa scenario catalog", () => {
     expect(scenario.gatewayRuntime?.forwardHostHome).toBe(true);
   });
 
+  it("loads runtime parity tier metadata for first-hour and soak lanes", () => {
+    const firstHour = readQaScenarioById("runtime-first-hour-20-turn");
+    const soak = readQaScenarioById("runtime-soak-100-turn");
+
+    expect(firstHour.runtimeParityTier).toBe("standard");
+    expect(readQaScenarioExecutionConfig(firstHour.id)).toMatchObject({
+      runtimeParityComparison: "outcome-only",
+      turnCount: 20,
+    });
+    expect(soak.runtimeParityTier).toBe("soak");
+    expect(readQaScenarioExecutionConfig(soak.id)).toMatchObject({ turnCount: 100 });
+  });
+
+  it("loads runtime tool fixture metadata for standard and optional lanes", () => {
+    const applyPatch = readQaScenarioById("runtime-tool-apply-patch");
+    const messageTool = readQaScenarioById("runtime-tool-message-tool");
+    const tavilySearch = readQaScenarioById("runtime-tool-tavily-search");
+    const webSearch = readQaScenarioById("runtime-tool-web-search");
+
+    expect(applyPatch.runtimeParityTier).toBe("standard");
+    expect(messageTool.runtimeParityTier).toBe("optional");
+    expect(tavilySearch.runtimeParityTier).toBe("optional");
+    expect(readQaScenarioExecutionConfig(applyPatch.id)).toMatchObject({
+      toolName: "apply_patch",
+      toolCoverage: {
+        bucket: "codex-native-workspace",
+        expectedLayer: "codex-native-workspace",
+      },
+    });
+    expect(readQaScenarioExecutionConfig(messageTool.id)).toMatchObject({
+      toolName: "message",
+      expectedAvailable: false,
+      toolCoverage: {
+        bucket: "optional-profile-or-plugin",
+        expectedLayer: "profile-or-plugin",
+        required: false,
+      },
+    });
+    expect(readQaScenarioExecutionConfig(webSearch.id)).toMatchObject({
+      toolName: "web_search",
+      toolCoverage: {
+        bucket: "openclaw-dynamic-integration",
+        expectedLayer: "openclaw-dynamic",
+        capabilityLayer: "openclaw-dynamic-direct",
+        required: true,
+      },
+    });
+    expect(readQaScenarioExecutionConfig(webSearch.id)).not.toHaveProperty("knownHarnessGap");
+  });
+
+  it("loads the Codex Pi-shaped Read vocabulary live parity canary", () => {
+    const scenario = readQaScenarioById("codex-pi-shaped-read-vocabulary");
+    const config = readQaScenarioExecutionConfig(scenario.id) as
+      | {
+          runtimeParityComparison?: string;
+          fixtureFile?: string;
+          expectedMarker?: string;
+          unavailableNeedles?: string[];
+        }
+      | undefined;
+
+    expect(scenario.sourcePath).toBe("qa/scenarios/runtime/codex-pi-shaped-read-vocabulary.md");
+    expect(scenario.runtimeParityTier).toBe("live-only");
+    expect(config?.runtimeParityComparison).toBe("codex-native-workspace");
+    expect(config?.fixtureFile).toBe("PI_SHAPED_READ_FIXTURE.txt");
+    expect(config?.expectedMarker).toBe("PI_SHAPED_READ_OK");
+    expect(config?.unavailableNeedles).toContain("not in my available tool surface");
+  });
+
+  it("loads live gateway sentinel scenarios for harness self-health", () => {
+    const scenarioIds = [
+      "plugin-hook-health-sentinel",
+      "plugin-manifest-contract-health",
+      "webchat-direct-reply-routing",
+    ];
+
+    for (const scenarioId of scenarioIds) {
+      const scenario = readQaScenarioById(scenarioId);
+      expect(scenario.runtimeParityTier).toBe("live-only");
+      expect(scenario.execution.flow?.steps.length).toBeGreaterThan(0);
+      expect(scenario.coverage?.primary.length).toBeGreaterThan(0);
+    }
+    expect(readQaScenarioById("webchat-direct-reply-routing").sourcePath).toBe(
+      "qa/scenarios/channels/webchat-direct-reply-routing.md",
+    );
+  });
+
   it("keeps the character eval scenario natural and task-shaped", () => {
     const characterConfig = readQaScenarioExecutionConfig("character-vibes-gollum") as
       | {
@@ -329,6 +416,34 @@ describe("qa scenario catalog", () => {
     expect(config?.expectedArtifactAll).toEqual(["repo contract"]);
     expect(config?.expectedArtifactAny).toContain("evidence path");
     expect(scenario.title).toBe("Instruction followthrough repo contract");
+  });
+
+  it("adds a dreaming shadow trial report scenario", () => {
+    const scenario = readQaScenarioById("dreaming-shadow-trial-report");
+    const config = readQaScenarioExecutionConfig("dreaming-shadow-trial-report") as
+      | {
+          prompt?: string;
+          reportName?: string;
+          expectedReportAll?: string[];
+          forbiddenReplyNeedles?: string[];
+          seededMemory?: string;
+        }
+      | undefined;
+    const flow = JSON.stringify(scenario.execution.flow);
+
+    expect(scenario.sourcePath).toBe("qa/scenarios/memory/dreaming-shadow-trial-report.md");
+    expect(scenario.coverage?.primary).toContain("memory.dreaming");
+    expect(config?.prompt).toContain("Dreaming shadow trial report check");
+    expect(config?.reportName).toBe("dreaming-shadow-trial-report.md");
+    expect(config?.seededMemory).toBe("# Memory\n\n");
+    expect(config?.expectedReportAll).toContain("verdict: helpful");
+    expect(config?.expectedReportAll).toContain("exact verification commands and remaining risk");
+    expect(config?.expectedReportAll).toContain("omits the exact command and remaining risk");
+    expect(config?.expectedReportAll).toContain("calls out the remaining review risk");
+    expect(config?.forbiddenReplyNeedles).toContain("candidate was promoted to MEMORY.md");
+    expect(flow).toContain("plannedToolName === 'write'");
+    expect(flow).toContain("readIndices[1] < firstWrite");
+    expect(flow).toContain("String(memoryAfter) === config.seededMemory");
   });
 
   it("rejects malformed string matcher lists before running a flow", () => {

@@ -461,10 +461,13 @@ function resolvePackageRuntimeEntrySource(params: {
   packageDir: string;
   packageRootRealPath?: string;
   entryPath: string;
+  sourceEntryLabel?: string;
   runtimeEntryPath?: string;
   runtimeEntryLabel?: string;
   pluginIdHint?: string;
   origin: PluginOrigin;
+  // undefined preserves the origin default; false explicitly allows source fallback.
+  requireBuiltRuntimeEntry?: boolean;
   sourceLabel: string;
   diagnostics: PluginDiagnostic[];
   rejectHardlinks?: boolean;
@@ -530,7 +533,7 @@ function resolvePackageRuntimeEntrySource(params: {
       }
     }
     if (
-      shouldRequireBuiltRuntimeEntry(params.origin) &&
+      (params.requireBuiltRuntimeEntry ?? shouldRequireBuiltRuntimeEntry(params.origin)) &&
       isTypeScriptPackageEntry(safeEntry.relativePath)
     ) {
       params.diagnostics.push({
@@ -551,17 +554,30 @@ function resolvePackageRuntimeEntrySource(params: {
     return safeEntry.existingSource;
   }
 
-  return resolvePackageEntrySource({
-    packageDir: params.packageDir,
-    ...(params.packageRootRealPath !== undefined
-      ? { packageRootRealPath: params.packageRootRealPath }
-      : {}),
-    entryPath: params.entryPath,
-    pluginIdHint: params.pluginIdHint,
-    sourceLabel: params.sourceLabel,
-    diagnostics: params.diagnostics,
-    rejectHardlinks: params.rejectHardlinks,
+  if (params.rejectHardlinks === false) {
+    const trustedFallbackSource = resolvePackageEntrySource({
+      packageDir: params.packageDir,
+      ...(params.packageRootRealPath !== undefined
+        ? { packageRootRealPath: params.packageRootRealPath }
+        : {}),
+      entryPath: params.entryPath,
+      pluginIdHint: params.pluginIdHint,
+      sourceLabel: params.sourceLabel,
+      diagnostics: params.diagnostics,
+      rejectHardlinks: params.rejectHardlinks,
+    });
+    if (trustedFallbackSource) {
+      return trustedFallbackSource;
+    }
+  }
+
+  params.diagnostics.push({
+    level: "error",
+    ...(params.pluginIdHint ? { pluginId: params.pluginIdHint } : {}),
+    message: `${params.sourceEntryLabel ?? "extension entry"} not found: ${safeEntry.relativePath}`,
+    source: params.sourceLabel,
   });
+  return null;
 }
 
 export function resolvePackageSetupSource(params: {
@@ -569,6 +585,7 @@ export function resolvePackageSetupSource(params: {
   packageRootRealPath?: string;
   manifest: PackageManifest | null;
   origin: PluginOrigin;
+  requireBuiltRuntimeEntry?: boolean;
   sourceLabel: string;
   diagnostics: PluginDiagnostic[];
   rejectHardlinks?: boolean;
@@ -584,10 +601,14 @@ export function resolvePackageSetupSource(params: {
       ? { packageRootRealPath: params.packageRootRealPath }
       : {}),
     entryPath: setupEntryPath,
+    sourceEntryLabel: "setup entry",
     runtimeEntryPath: normalizeOptionalString(packageManifest?.runtimeSetupEntry),
     runtimeEntryLabel: "runtime setup entry",
     pluginIdHint: packageManifest?.plugin?.id ?? packageManifest?.channel?.id,
     origin: params.origin,
+    ...(params.requireBuiltRuntimeEntry !== undefined
+      ? { requireBuiltRuntimeEntry: params.requireBuiltRuntimeEntry }
+      : {}),
     sourceLabel: params.sourceLabel,
     diagnostics: params.diagnostics,
     rejectHardlinks: params.rejectHardlinks,
@@ -601,6 +622,7 @@ export function resolvePackageRuntimeExtensionSources(params: {
   extensions: readonly string[];
   origin: PluginOrigin;
   pluginIdHint?: string;
+  requireBuiltRuntimeEntry?: boolean;
   sourceLabel: string;
   diagnostics: PluginDiagnostic[];
   rejectHardlinks?: boolean;
@@ -626,10 +648,14 @@ export function resolvePackageRuntimeExtensionSources(params: {
         ? { packageRootRealPath: params.packageRootRealPath }
         : {}),
       entryPath,
+      sourceEntryLabel: "extension entry",
       runtimeEntryPath: runtimeResolution.runtimeExtensions[index],
       runtimeEntryLabel: "runtime extension entry",
       pluginIdHint: params.pluginIdHint,
       origin: params.origin,
+      ...(params.requireBuiltRuntimeEntry !== undefined
+        ? { requireBuiltRuntimeEntry: params.requireBuiltRuntimeEntry }
+        : {}),
       sourceLabel: params.sourceLabel,
       diagnostics: params.diagnostics,
       rejectHardlinks: params.rejectHardlinks,

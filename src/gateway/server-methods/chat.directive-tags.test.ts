@@ -39,6 +39,7 @@ const mockState = vi.hoisted(() => ({
       mediaUrl?: string;
       mediaUrls?: string[];
       spokenText?: string;
+      ttsSupplement?: { spokenText: string };
       audioAsVoice?: boolean;
       trustedLocalMedia?: boolean;
       replyToId?: string;
@@ -389,20 +390,43 @@ function getMessageContent(payload: unknown): Array<Record<string, any>> {
   return Array.isArray(content) ? (content as Array<Record<string, any>>) : [];
 }
 
+function mockCallAt(
+  mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } },
+  index: number,
+): ReadonlyArray<unknown> | undefined {
+  const calls = mock.mock.calls;
+  const normalizedIndex = index < 0 ? calls.length + index : index;
+  return calls[normalizedIndex];
+}
+
 function lastRespondCall(respond: ReturnType<typeof vi.fn>) {
-  return respond.mock.calls.at(-1) as
+  return mockCallAt(respond, -1) as
     | [boolean, Record<string, any> | undefined, Record<string, any> | undefined]
     | undefined;
 }
 
+function responseErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (error && typeof error === "object") {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === "string") {
+      return message;
+    }
+    return JSON.stringify(error);
+  }
+  return String(error);
+}
+
 function lastBroadcastPayload(context: ChatContext): Record<string, any> | undefined {
-  const chatCall = (context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls.at(-1);
+  const chatCall = mockCallAt(context.broadcast as unknown as ReturnType<typeof vi.fn>, -1);
   expect(chatCall?.[0]).toBe("chat");
   return chatCall?.[1] as Record<string, any> | undefined;
 }
 
 function lastNodeSendCall(context: ChatContext) {
-  return (context.nodeSendToSession as unknown as ReturnType<typeof vi.fn>).mock.calls.at(-1) as
+  return mockCallAt(context.nodeSendToSession as unknown as ReturnType<typeof vi.fn>, -1) as
     | [string, string, Record<string, any>]
     | undefined;
 }
@@ -479,6 +503,9 @@ function createChatContext(): Pick<
   | "chatRunBuffers"
   | "chatDeltaSentAt"
   | "chatDeltaLastBroadcastLen"
+  | "chatDeltaLastBroadcastText"
+  | "agentDeltaSentAt"
+  | "bufferedAgentEvents"
   | "chatAbortedRuns"
   | "addChatRun"
   | "removeChatRun"
@@ -495,6 +522,9 @@ function createChatContext(): Pick<
     chatRunBuffers: new Map(),
     chatDeltaSentAt: new Map(),
     chatDeltaLastBroadcastLen: new Map(),
+    chatDeltaLastBroadcastText: new Map(),
+    agentDeltaSentAt: new Map(),
+    bufferedAgentEvents: new Map(),
     chatAbortedRuns: new Map(),
     addChatRun: vi.fn(),
     removeChatRun: vi.fn(),
@@ -539,7 +569,7 @@ async function runNonStreamingChatSend(params: {
   waitForCompletion?: boolean;
   waitForDedupe?: boolean;
   waitFor?: NonStreamingChatSendWaitFor;
-}) {
+}): Promise<Record<string, any> | undefined> {
   const sendParams: {
     sessionKey: string;
     message: string;
@@ -590,9 +620,9 @@ async function runNonStreamingChatSend(params: {
     ).toBe(1);
   });
 
-  const chatCall = (params.context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+  const chatCall = mockCallAt(params.context.broadcast as unknown as ReturnType<typeof vi.fn>, 0);
   expect(chatCall?.[0]).toBe("chat");
-  return chatCall?.[1];
+  return chatCall?.[1] as Record<string, any> | undefined;
 }
 
 describe("chat directive tag stripping for non-streaming final payloads", () => {
@@ -628,6 +658,30 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.deleteMediaBufferCalls = [];
     mockState.hasBeforeAgentRunHooks = false;
     mockState.dispatchBlockedByBeforeAgentRun = false;
+  });
+
+  it("persists non-agent delivery mirrors with the chat send idempotency key", async () => {
+    createTranscriptFixture("openclaw-chat-send-final-idem-");
+    mockState.finalText = "mirror text";
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-final-mirror",
+      expectBroadcast: false,
+    });
+
+    const persistedAssistant = readTranscriptJsonLines(mockState.transcriptPath)
+      .map((entry) => entry.message)
+      .find(
+        (message): message is Record<string, unknown> =>
+          Boolean(message) &&
+          typeof message === "object" &&
+          (message as { role?: unknown }).role === "assistant",
+      );
+    expect(persistedAssistant?.idempotencyKey).toBe("idem-final-mirror");
   });
 
   it("registers tool-event recipients for clients advertising tool-events capability", async () => {
@@ -727,7 +781,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
 
     await waitForAssertion(() => {
-      const assistantUpdate = findAssistantUpdateWithBlock((block) => block.type === "audio");
+      const assistantUpdate = findAssistantUpdateWithBlock((block) => block.type === "attachment");
       const message = assistantUpdate?.message as Record<string, any> | undefined;
       const content = Array.isArray(message?.content)
         ? (message.content as Array<Record<string, any>>)
@@ -735,9 +789,15 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect(message?.role).toBe("assistant");
       expect(message?.idempotencyKey).toBe("idem-agent-audio:assistant-media");
       expect(content[0]).toEqual({ type: "text", text: "Audio reply" });
-      expect(content[1]?.type).toBe("audio");
-      expect(content[1]?.source?.type).toBe("base64");
-      expect(content[1]?.source?.media_type).toBe("audio/mpeg");
+      expect(content[1]).toEqual({
+        type: "attachment",
+        attachment: {
+          url: fs.realpathSync(audioPath),
+          kind: "audio",
+          label: "reply.mp3",
+          mimeType: "audio/mpeg",
+        },
+      });
     });
   });
 
@@ -763,6 +823,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           mediaUrls: [audioPath],
           trustedLocalMedia: true,
           audioAsVoice: true,
+          ttsSupplement: { spokenText: "This text is already in the model transcript." },
         },
       },
     ];
@@ -791,9 +852,16 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(message?.role).toBe("assistant");
     expect(message?.idempotencyKey).toBe("idem-agent-tts:assistant-media");
     expect(content[0]).toEqual({ type: "text", text: "Audio reply" });
-    expect(content[1]?.type).toBe("audio");
-    expect(content[1]?.source?.type).toBe("base64");
-    expect(content[1]?.source?.media_type).toBe("audio/mpeg");
+    expect(content[1]).toEqual({
+      type: "attachment",
+      attachment: {
+        url: fs.realpathSync(audioPath),
+        kind: "audio",
+        label: "tts.mp3",
+        mimeType: "audio/mpeg",
+        isVoiceNote: true,
+      },
+    });
     expect(JSON.stringify(assistantUpdates[0]?.message)).not.toContain(
       "This text is already in the model transcript.",
     );
@@ -928,9 +996,16 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const content = getMessageContent(payload);
     expect(getMessage(payload)?.role).toBe("assistant");
     expect(content[0]).toEqual({ type: "text", text: "Command result with TTS." });
-    expect(content[1]?.type).toBe("audio");
-    expect(content[1]?.source?.type).toBe("base64");
-    expect(content[1]?.source?.media_type).toBe("audio/mpeg");
+    expect(content[1]).toEqual({
+      type: "attachment",
+      attachment: {
+        url: fs.realpathSync(audioPath),
+        kind: "audio",
+        label: "tts.mp3",
+        mimeType: "audio/mpeg",
+        isVoiceNote: true,
+      },
+    });
     const assistantUpdates = mockState.emittedTranscriptUpdates.filter(
       (update) =>
         typeof update.message === "object" &&
@@ -1080,7 +1155,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
 
     expect(respond).toHaveBeenCalled();
-    const chatCall = (context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls.at(-1);
+    const chatCall = mockCallAt(context.broadcast as unknown as ReturnType<typeof vi.fn>, -1);
     expect(chatCall?.[0]).toBe("chat");
     expect(extractFirstTextBlock(chatCall?.[1])).toBe("hello");
   });
@@ -2856,6 +2931,62 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
   });
 
+  it("routes image-named generic container bytes as non-image media paths for chat.send", async () => {
+    createTranscriptFixture("openclaw-chat-send-spoofed-image-container-");
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      modelProvider: "test-provider",
+      model: "vision-model",
+    };
+    mockState.modelCatalog = [
+      {
+        provider: "test-provider",
+        id: "vision-model",
+        name: "Vision model",
+        input: ["text", "image"],
+      },
+    ];
+    mockState.savedMediaResults = [
+      { path: "/home/user/.openclaw/media/inbound/fake.zip", contentType: "application/zip" },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+    const zip = Buffer.from("PK\u0003\u0004zip-archive-bytes").toString("base64");
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-spoofed-image-container",
+      message: "inspect this",
+      requestParams: {
+        attachments: [
+          {
+            type: "image",
+            mimeType: "image/png",
+            fileName: "fake.png",
+            content: zip,
+          },
+        ],
+      },
+      expectBroadcast: false,
+    });
+
+    expect(mockState.savedMediaCalls).toEqual([
+      {
+        contentType: "application/zip",
+        subdir: "inbound",
+        size: mockState.savedMediaCalls[0]?.size ?? 0,
+      },
+    ]);
+    expect(mockState.lastDispatchCtx?.MediaPaths).toEqual([
+      "/home/user/.openclaw/media/inbound/fake.zip",
+    ]);
+    expect(mockState.lastDispatchCtx?.MediaTypes).toEqual(["application/zip"]);
+    expect(mockState.lastDispatchImages).toBeUndefined();
+    expect(mockState.lastDispatchCtx?.Body).not.toContain("media://");
+    expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
+  });
+
   it("preserves sandbox-relative MediaPaths and stores workspace context for media-understanding", async () => {
     createTranscriptFixture("openclaw-chat-send-non-image-absolutize-");
     mockState.finalText = "ok";
@@ -2957,13 +3088,15 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     // so the client retries instead of treating it as a bad request.
     expect(mockState.lastDispatchCtx).toBeUndefined();
     expect(respond).toHaveBeenCalledTimes(1);
-    const [ok, payload, error] = respond.mock.calls[0] ?? [];
+    const [ok, payload, error] = lastRespondCall(respond) ?? [];
     expect(ok).toBe(false);
     expect(payload).toBeUndefined();
     expect(error?.code).toBe(ErrorCodes.UNAVAILABLE);
-    expect(error?.message ?? String(error)).toMatch(/ENOSPC|non-image attachments/i);
-    const unavailableLogCall = (context.logGateway.error as unknown as ReturnType<typeof vi.fn>)
-      .mock.calls[0] as [string, Record<string, string>] | undefined;
+    expect(responseErrorMessage(error)).toMatch(/ENOSPC|non-image attachments/i);
+    const unavailableLogCall = mockCallAt(
+      context.logGateway.error as unknown as ReturnType<typeof vi.fn>,
+      0,
+    ) as [string, Record<string, string>] | undefined;
     expect(unavailableLogCall?.[0]).toBe("chat.send attachment parse/stage failed");
     expect(unavailableLogCall?.[1].consoleMessage).toContain(
       "chat.send attachment parse/stage failed: MediaOffloadError",
@@ -3067,11 +3200,11 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     expect(mockState.lastDispatchCtx).toBeUndefined();
     expect(respond).toHaveBeenCalledTimes(1);
-    const [ok, payload, error] = respond.mock.calls[0] ?? [];
+    const [ok, payload, error] = lastRespondCall(respond) ?? [];
     expect(ok).toBe(false);
     expect(payload).toBeUndefined();
     expect(error?.code).toBe(ErrorCodes.UNAVAILABLE);
-    expect(error?.message ?? String(error)).toMatch(/staging incomplete/i);
+    expect(responseErrorMessage(error)).toMatch(/staging incomplete/i);
     // Both media-store entries are cleaned up before the 5xx surfaces.
     expect(mockState.deleteMediaBufferCalls.map((c) => c.id).toSorted()).toEqual([
       "saved-media",
@@ -3127,13 +3260,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     expect(mockState.lastDispatchCtx).toBeUndefined();
     expect(respond).toHaveBeenCalledTimes(1);
-    const [ok, payload, error] = respond.mock.calls[0] ?? [];
+    const [ok, payload, error] = lastRespondCall(respond) ?? [];
     expect(ok).toBe(false);
     expect(payload).toBeUndefined();
     // 4xx, not 5xx — retrying a file that exceeds the staging cap cannot
     // succeed, so the failure must be surfaced as a client-side rejection.
     expect(error?.code).toBe(ErrorCodes.INVALID_REQUEST);
-    expect(error?.message ?? String(error)).toMatch(/sandbox staging limit/i);
+    expect(responseErrorMessage(error)).toMatch(/sandbox staging limit/i);
     // Orphaned media-store entries are cleaned up before the 4xx surfaces.
     expect(mockState.deleteMediaBufferCalls).toEqual([{ id: "saved-media", subdir: "inbound" }]);
   });

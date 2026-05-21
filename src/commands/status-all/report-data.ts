@@ -16,6 +16,7 @@ import {
   resolveStatusGatewayHealthSafe,
   type resolveStatusServiceSummaries,
 } from "../status-runtime-shared.ts";
+import { formatUpdateRestartStatusValue } from "../status-update-restart.ts";
 import { resolveStatusAllConnectionDetails } from "../status.gateway-connection.ts";
 import type { NodeOnlyGatewayInfo } from "../status.node-mode.js";
 import type { StatusScanOverviewResult } from "../status.scan-overview.ts";
@@ -192,6 +193,7 @@ export async function buildStatusAllReportData(params: {
     osLabel: params.overview.osSummary.label,
     configPath,
     secretDiagnosticsCount: params.overview.secretDiagnostics.length,
+    updateRestartValue: formatUpdateRestartStatusValue(diagnosis.sentinel?.payload),
     agentStatus: params.overview.agentStatus,
     tailscaleBackendState: diagnosis.tailscale.backendState,
   });

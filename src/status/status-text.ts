@@ -11,6 +11,8 @@ import { resolveContextTokensForModel } from "../agents/context.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import { resolveModelAuthLabel } from "../agents/model-auth-label.js";
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
+import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
+import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../agents/openai-codex-routing.js";
 import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
@@ -147,7 +149,7 @@ async function resolveStatusHarnessId(params: {
       agentHarnessId: params.sessionEntry?.agentHarnessId,
     });
     const id = normalizeOptionalLowercaseString(selected.id);
-    return id && id !== "pi" ? id : undefined;
+    return id || undefined;
   } catch {
     return undefined;
   }
@@ -234,15 +236,26 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     provider,
     effectiveHarness,
   });
+  const selectedAuthProviders = listOpenAIAuthProfileProvidersForAgentRuntime({
+    provider,
+    harnessRuntime: effectiveHarness,
+    config: cfg,
+  });
   const activeProvider = modelRefs.active.provider || provider;
   const activeStatusProvider = resolveStatusRuntimeProvider({
     provider: activeProvider,
     effectiveHarness,
   });
+  const activeAuthProviders = listOpenAIAuthProfileProvidersForAgentRuntime({
+    provider: activeProvider,
+    harnessRuntime: effectiveHarness,
+    config: cfg,
+  });
   let selectedModelAuth = Object.hasOwn(params, "modelAuthOverride")
     ? params.modelAuthOverride
     : resolveModelAuthLabel({
         provider: selectedStatusProvider,
+        acceptedProviderIds: selectedAuthProviders,
         cfg,
         sessionEntry,
         agentDir: statusAgentDir,
@@ -254,6 +267,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     : modelRefs.activeDiffers
       ? resolveModelAuthLabel({
           provider: activeStatusProvider,
+          acceptedProviderIds: activeAuthProviders,
           cfg,
           sessionEntry,
           agentDir: statusAgentDir,
@@ -367,6 +381,12 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
       sessionEntry,
     }).enabled;
   const agentFallbacksOverride = resolveAgentModelFallbacksOverride(cfg, statusAgentId);
+  const configuredDefaultRef = resolveDefaultModelForAgent({
+    cfg,
+    agentId: statusAgentId,
+    allowPluginNormalization: false,
+  });
+  const configuredDefaultModelLabel = `${configuredDefaultRef.provider}/${configuredDefaultRef.model}`;
   const { buildStatusMessage } = await loadStatusMessageRuntime();
   const explicitThinkingDefault =
     (agentConfig?.thinkingDefault as ThinkLevel | undefined) ??
@@ -392,6 +412,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
       elevatedDefault: agentDefaults.elevatedDefault,
     },
     agentId: statusAgentId,
+    configuredDefaultModelLabel,
     explicitConfiguredContextTokens:
       typeof agentDefaults.contextTokens === "number" && agentDefaults.contextTokens > 0
         ? agentDefaults.contextTokens

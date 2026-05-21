@@ -7,6 +7,8 @@ import YAML from "yaml";
 
 const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 const dockerfilePath = join(repoRoot, "Dockerfile");
+const dockerReleaseWorkflowPath = join(repoRoot, ".github/workflows/docker-release.yml");
+const dockerSetupDockerfilePaths = ["Dockerfile", "scripts/docker/sandbox/Dockerfile"] as const;
 const pnpmWorkspacePath = join(repoRoot, "pnpm-workspace.yaml");
 
 function collapseDockerContinuations(dockerfile: string): string {
@@ -14,6 +16,13 @@ function collapseDockerContinuations(dockerfile: string): string {
 }
 
 describe("Dockerfile", () => {
+  it("does not force an external Dockerfile frontend pull", async () => {
+    for (const path of dockerSetupDockerfilePaths) {
+      const dockerfile = await readFile(join(repoRoot, path), "utf8");
+      expect(dockerfile, path).not.toMatch(/^#\s*syntax=/m);
+    }
+  });
+
   it("uses full bookworm for build stages and slim bookworm for runtime", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     expect(dockerfile).toContain(
@@ -208,8 +217,19 @@ describe("Dockerfile", () => {
     expect(dockerfile).toContain(finalWorkspaceCopy);
     expect(dockerfile.indexOf(pruneProd)).toBeLessThan(dockerfile.indexOf(finalWorkspaceCopy));
     expect(dockerfile).toContain(
+      "COPY --from=runtime-assets --chown=node:node /app/pnpm-workspace.yaml .",
+    );
+    expect(dockerfile).toContain(
       "COPY --from=runtime-assets --chown=node:node /app/patches ./patches",
     );
+  });
+
+  it("keeps the Codex plugin in official Docker release images", async () => {
+    const workflow = await readFile(dockerReleaseWorkflowPath, "utf8");
+    const releaseKeepList = "OPENCLAW_EXTENSIONS=diagnostics-otel,codex";
+
+    expect(workflow.match(new RegExp(releaseKeepList, "g"))).toHaveLength(2);
+    expect(workflow).not.toContain("OPENCLAW_EXTENSIONS=diagnostics-otel\n");
   });
 
   it("does not override bundled plugin discovery in runtime images", async () => {

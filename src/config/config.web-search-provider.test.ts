@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { __testing as webSearchTesting } from "../agents/tools/web-search.js";
+import { testing as webSearchTesting } from "../agents/tools/web-search.js";
 import { buildWebSearchProviderConfig } from "./test-helpers.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
@@ -479,6 +479,41 @@ describe("web search provider config", () => {
       'web_search provider is not available: brave (install or enable plugin "brave", then run openclaw doctor --fix)',
     );
     expectAllowedValuesInclude(issue, ["brave"]);
+  });
+
+  it("warns for installable provider ids when stale plugin config is present", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        ...buildWebSearchProviderConfig({
+          provider: "brave",
+        }),
+        plugins: {
+          entries: {
+            brave: {
+              config: {
+                webSearch: {},
+              },
+            },
+          },
+        },
+      },
+      {
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            plugins: [],
+            diagnostics: [],
+          },
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    const warning = findValidationMessage(res.warnings, "tools.web.search.provider");
+    expect(warning.message).toContain("web_search provider is not available: brave");
+    expect(warning.message).toContain('configured plugin "brave" is unavailable');
   });
 
   it("rejects unknown provider ids without plugin evidence", () => {
