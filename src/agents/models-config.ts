@@ -30,7 +30,7 @@ import {
   type AuthProfileCredential,
   upsertAuthProfileWithLock,
 } from "./auth-profiles.js";
-import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
+import { isKnownEnvApiKeyMarker, isNonSecretApiKeyMarker } from "./model-auth-markers.js";
 import { MODELS_JSON_STATE } from "./models-config-state.js";
 import { planOpenClawModelsJson } from "./models-config.plan.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "./provider-id.js";
@@ -116,12 +116,18 @@ function resolveProviderCatalog(value: unknown): Record<string, unknown> {
   return value.providers;
 }
 
-function resolvePlaintextProviderApiKey(provider: unknown): string | undefined {
+function resolveMigratableProviderApiKey(provider: unknown): string | undefined {
   if (!isRecord(provider) || typeof provider.apiKey !== "string") {
     return undefined;
   }
   const apiKey = provider.apiKey.trim();
-  if (!apiKey || isNonSecretApiKeyMarker(apiKey)) {
+  if (!apiKey) {
+    return undefined;
+  }
+  if (isKnownEnvApiKeyMarker(apiKey)) {
+    return apiKey;
+  }
+  if (isNonSecretApiKeyMarker(apiKey, { includeEnvVarName: false })) {
     return undefined;
   }
   return apiKey;
@@ -148,6 +154,7 @@ function resolveMigratedModelsJsonProfileId(providerKey: string): string {
 function resolveMigratedModelsJsonApiKeyCredential(
   providerKey: string,
   existingApiKey: string,
+  env: NodeJS.ProcessEnv,
 ): AuthProfileCredential {
   const base = {
     type: "api_key",
@@ -155,7 +162,11 @@ function resolveMigratedModelsJsonApiKeyCredential(
     copyToAgents: false,
     displayName: "Migrated from models.json",
   } as const;
-  if (isValidEnvSecretRefId(existingApiKey)) {
+  if (
+    isKnownEnvApiKeyMarker(existingApiKey) ||
+    (isValidEnvSecretRefId(existingApiKey) &&
+      normalizeOptionalSecretInput(env[existingApiKey]) !== undefined)
+  ) {
     return {
       ...base,
       keyRef: {
@@ -174,6 +185,7 @@ function resolveMigratedModelsJsonApiKeyCredential(
 async function migrateExistingModelsJsonOnlyProviderApiKeys(params: {
   cfg: OpenClawConfig;
   agentDir: string;
+  env: NodeJS.ProcessEnv;
   existingParsed: unknown;
   nextContents: string;
 }): Promise<void> {
@@ -191,14 +203,14 @@ async function migrateExistingModelsJsonOnlyProviderApiKeys(params: {
 
   const candidates = Object.entries(existingProviders).flatMap(
     ([providerKey, existingProvider]) => {
-      const existingApiKey = resolvePlaintextProviderApiKey(existingProvider);
+      const existingApiKey = resolveMigratableProviderApiKey(existingProvider);
       if (!existingApiKey) {
         return [];
       }
       if (hasConfiguredProviderApiKey(params.cfg, providerKey)) {
         return [];
       }
-      if (resolvePlaintextProviderApiKey(nextProviders[providerKey])) {
+      if (resolveMigratableProviderApiKey(nextProviders[providerKey])) {
         return [];
       }
       return [{ providerKey, existingApiKey }];
@@ -220,7 +232,11 @@ async function migrateExistingModelsJsonOnlyProviderApiKeys(params: {
     }
 
     const profileId = resolveMigratedModelsJsonProfileId(providerKey);
-    const credential = resolveMigratedModelsJsonApiKeyCredential(providerKey, existingApiKey);
+    const credential = resolveMigratedModelsJsonApiKeyCredential(
+      providerKey,
+      existingApiKey,
+      params.env,
+    );
     const updatedStore = await upsertAuthProfileWithLock({
       agentDir: params.agentDir,
       profileId,
@@ -383,6 +399,7 @@ export async function ensureOpenClawModelsJson(
     await migrateExistingModelsJsonOnlyProviderApiKeys({
       cfg,
       agentDir,
+      env,
       existingParsed: existingModelsFile.parsed,
       nextContents: plan.contents,
     });

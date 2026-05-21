@@ -405,7 +405,16 @@ describe("models-config write serialization", () => {
         )}\n`,
       }));
 
-      await ensureOpenClawModelsJson({}, agentDir);
+      await ensureOpenClawModelsJson(
+        {
+          env: {
+            vars: {
+              LITELLM_KEY: "sk-resolved-from-env",
+            },
+          },
+        },
+        agentDir,
+      );
 
       const modelsJson = JSON.parse(
         await fs.readFile(path.join(agentDir, "models.json"), "utf8"),
@@ -428,7 +437,7 @@ describe("models-config write serialization", () => {
     });
   });
 
-  it("migrates env-name catalog-only provider api keys to env-backed auth profiles", async () => {
+  it("migrates env-present catalog-only provider api keys to env-backed auth profiles", async () => {
     await withModelsTempHome(async (home) => {
       const agentDir = path.join(home, "agent");
       await fs.mkdir(agentDir, { recursive: true });
@@ -497,6 +506,66 @@ describe("models-config write serialization", () => {
         source: "profile",
         profileId: "custom:models-json",
       });
+    });
+  });
+
+  it("preserves env-shaped catalog-only provider api keys without an env signal", async () => {
+    await withModelsTempHome(async (home) => {
+      const agentDir = path.join(home, "agent");
+      await fs.mkdir(agentDir, { recursive: true });
+      await fs.writeFile(
+        path.join(agentDir, "models.json"),
+        `${JSON.stringify(
+          {
+            providers: {
+              custom: {
+                baseUrl: "https://custom.example/v1",
+                api: "openai-completions",
+                apiKey: "ALLCAPS_EXAMPLE",
+                models: [],
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      planOpenClawModelsJsonMock.mockImplementation(async () => ({
+        action: "write",
+        contents: `${JSON.stringify(
+          {
+            providers: {
+              custom: {
+                baseUrl: "https://custom.example/v1",
+                api: "openai-completions",
+                models: [],
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+      }));
+
+      await ensureOpenClawModelsJson({}, agentDir);
+
+      const modelsJson = JSON.parse(
+        await fs.readFile(path.join(agentDir, "models.json"), "utf8"),
+      ) as {
+        providers: Record<string, { apiKey?: string }>;
+      };
+      expect(modelsJson.providers.custom?.apiKey).toBeUndefined();
+
+      const authProfiles = JSON.parse(
+        await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf8"),
+      ) as AuthProfileStore;
+      expect(authProfiles.profiles["custom:models-json"]).toMatchObject({
+        type: "api_key",
+        provider: "custom",
+        key: "ALLCAPS_EXAMPLE",
+        copyToAgents: false,
+      });
+      expect(authProfiles.profiles["custom:models-json"]).not.toHaveProperty("keyRef");
     });
   });
 
