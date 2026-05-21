@@ -115,13 +115,36 @@ function hasPackageRuntimeDependencies(packageJson) {
   );
 }
 
+function listPackageRuntimeDependencyNames(packageJson) {
+  return [
+    ...Object.keys(packageJson.dependencies ?? {}),
+    ...Object.keys(packageJson.optionalDependencies ?? {}),
+  ].toSorted((left, right) => left.localeCompare(right));
+}
+
+function listConfiguredBundledDependencyNames(packageJson) {
+  if (Array.isArray(packageJson.bundledDependencies)) {
+    return packageJson.bundledDependencies.filter((name) => typeof name === "string");
+  }
+  if (Array.isArray(packageJson.bundleDependencies)) {
+    return packageJson.bundleDependencies.filter((name) => typeof name === "string");
+  }
+  if (packageJson.bundleDependencies === true) {
+    return listPackageRuntimeDependencyNames(packageJson);
+  }
+  return [];
+}
+
 function shouldBundleDependencies(value) {
   return value === true || value === "1" || value === "true";
 }
 
 function installPackageLocalBundledDependencies(params) {
   const packageJson = params.packageJson;
-  if (packageJson.bundleDependencies !== true || !hasPackageRuntimeDependencies(packageJson)) {
+  if (
+    !hasPackageRuntimeDependencies(packageJson) ||
+    listConfiguredBundledDependencyNames(packageJson).length === 0
+  ) {
     return () => {};
   }
 
@@ -212,8 +235,8 @@ export function resolveAugmentedPluginNpmPackageJson(params) {
     },
   };
   if (shouldBundleDependencies(params.bundleDependencies)) {
-    packageJson.bundleDependencies = true;
-    delete packageJson.bundledDependencies;
+    packageJson.bundledDependencies = listPackageRuntimeDependencyNames(packageJson);
+    delete packageJson.bundleDependencies;
     delete packageJson.devDependencies;
   }
   const changed = JSON.stringify(packageJson) !== JSON.stringify(plan.packageJson);
