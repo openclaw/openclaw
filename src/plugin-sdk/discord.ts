@@ -14,6 +14,7 @@ import {
   createLazyFacadeObjectValue,
   loadBundledPluginPublicSurfaceModuleSync,
 } from "./facade-loader.js";
+import type { PollInput } from "./poll-runtime.js";
 import { getRuntimeConfig, getRuntimeConfigSnapshot } from "./runtime-config-snapshot.js";
 
 /**
@@ -24,6 +25,7 @@ export type { ChannelMessageActionAdapter, ChannelMessageActionName } from "./ch
 export type { ChannelPlugin } from "./channel-core.js";
 export type { OpenClawConfig } from "./config-types.js";
 export type { OpenClawPluginApi, PluginRuntime } from "./channel-plugin-common.js";
+export type { PollInput } from "./poll-runtime.js";
 
 export {
   DEFAULT_ACCOUNT_ID,
@@ -126,6 +128,18 @@ type EditDiscordComponentMessage = (
   opts: DiscordComponentSendOpts,
 ) => Promise<DiscordComponentSendResult>;
 
+type SendDiscordComponentMessage = (
+  to: string,
+  spec: DiscordComponentMessageSpec,
+  opts: DiscordComponentSendOpts,
+) => Promise<DiscordComponentSendResult>;
+
+type SendPollDiscord = (
+  to: string,
+  poll: PollInput,
+  opts: DiscordComponentSendOpts & { content?: string },
+) => Promise<DiscordComponentSendResult>;
+
 type RegisterBuiltDiscordComponentMessage = (params: {
   buildResult: DiscordComponentBuildResult;
   messageId: string;
@@ -158,6 +172,8 @@ type DiscordApiFacadeModule = {
 type DiscordRuntimeFacadeModule = {
   editDiscordComponentMessage: EditDiscordComponentMessage;
   registerBuiltDiscordComponentMessage: RegisterBuiltDiscordComponentMessage;
+  sendDiscordComponentMessage: SendDiscordComponentMessage;
+  sendPollDiscord: SendPollDiscord;
   autoBindSpawnedDiscordSubagent: (params: {
     cfg: OpenClawConfig;
     accountId?: string;
@@ -290,6 +306,17 @@ export const editDiscordComponentMessage: DiscordRuntimeFacadeModule["editDiscor
     loadDiscordRuntimeFacadeModule().editDiscordComponentMessage(
       ...args,
     )) as DiscordRuntimeFacadeModule["editDiscordComponentMessage"];
+
+export const sendDiscordComponentMessage: DiscordRuntimeFacadeModule["sendDiscordComponentMessage"] =
+  ((...args) =>
+    loadDiscordRuntimeFacadeModule().sendDiscordComponentMessage(
+      ...args,
+    )) as DiscordRuntimeFacadeModule["sendDiscordComponentMessage"];
+
+export const sendPollDiscord: DiscordRuntimeFacadeModule["sendPollDiscord"] = ((...args) =>
+  loadDiscordRuntimeFacadeModule().sendPollDiscord(
+    ...args,
+  )) as DiscordRuntimeFacadeModule["sendPollDiscord"];
 
 export const registerBuiltDiscordComponentMessage: DiscordRuntimeFacadeModule["registerBuiltDiscordComponentMessage"] =
   ((...args) =>

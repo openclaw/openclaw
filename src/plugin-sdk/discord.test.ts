@@ -40,6 +40,8 @@ const mocks = vi.hoisted(() => {
     editDiscordComponentMessage: vi.fn(async () => ({ id: "message" })),
     listThreadBindingsBySessionKey: vi.fn(() => []),
     registerBuiltDiscordComponentMessage: vi.fn(),
+    sendDiscordComponentMessage: vi.fn(async () => ({ id: "component" })),
+    sendPollDiscord: vi.fn(async () => ({ id: "poll" })),
     unbindThreadBindingsBySessionKey: vi.fn(() => []),
   };
 
@@ -107,6 +109,8 @@ describe("discord plugin-sdk facade", () => {
       "editDiscordComponentMessage",
       "registerBuiltDiscordComponentMessage",
       "resolveConfiguredFromCredentialStatuses",
+      "sendDiscordComponentMessage",
+      "sendPollDiscord",
       "resolveDefaultDiscordAccountId",
       "resolveDiscordAccount",
       "resolveDiscordGroupRequireMention",
@@ -117,11 +121,13 @@ describe("discord plugin-sdk facade", () => {
     }
   });
 
-  it("forwards Discord component helpers through the facade", async () => {
+  it("forwards Discord component and poll helpers through the facade", async () => {
     const {
       buildDiscordComponentMessage,
       editDiscordComponentMessage,
       registerBuiltDiscordComponentMessage,
+      sendDiscordComponentMessage,
+      sendPollDiscord,
     } = await import("./discord.js");
 
     const built = buildDiscordComponentMessage({ spec: { text: "hello" } });
@@ -130,6 +136,12 @@ describe("discord plugin-sdk facade", () => {
       "message",
       { text: "edited" },
       { cfg: mocks.runtimeConfig },
+    );
+    await sendDiscordComponentMessage("channel", { text: "sent" }, { cfg: mocks.runtimeConfig });
+    await sendPollDiscord(
+      "channel",
+      { question: "Ship?", options: ["Yes", "No"] },
+      { cfg: mocks.runtimeConfig, content: "Vote" },
     );
     registerBuiltDiscordComponentMessage({
       buildResult: built,
@@ -144,6 +156,16 @@ describe("discord plugin-sdk facade", () => {
       "message",
       { text: "edited" },
       { cfg: mocks.runtimeConfig },
+    );
+    expect(mocks.runtimeModule.sendDiscordComponentMessage).toHaveBeenCalledWith(
+      "channel",
+      { text: "sent" },
+      { cfg: mocks.runtimeConfig },
+    );
+    expect(mocks.runtimeModule.sendPollDiscord).toHaveBeenCalledWith(
+      "channel",
+      { question: "Ship?", options: ["Yes", "No"] },
+      { cfg: mocks.runtimeConfig, content: "Vote" },
     );
     expect(mocks.runtimeModule.registerBuiltDiscordComponentMessage).toHaveBeenCalledWith({
       buildResult: built,
