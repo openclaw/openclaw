@@ -11,6 +11,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Mac app: show OpenClaw Foundation as the About settings copyright owner and align the root MIT license notice.
 - Memory/search: stop recall tracking from writing dreaming side-effect artifacts when `dreaming.enabled=false`, while preserving normal search results. Fixes #84436. (#84444) Thanks @NianJiuZst.
 - fix(config): validate browser sandbox bind sources [AI]. (#84799) Thanks @pgondhi987.
 - doctor: constrain legacy plugin cleanup paths [AI]. (#84801) Thanks @pgondhi987.
