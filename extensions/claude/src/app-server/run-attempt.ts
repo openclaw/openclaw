@@ -190,13 +190,20 @@ export async function runClaudeAppServerAttempt(
     });
 
     // 4. Project to DynamicToolSpec[] + register the server→client tool-call bridge.
+    //    Per-turn handlers filter incoming server requests by threadId
+    //    (codex pattern: extensions/codex/src/app-server/run-attempt.ts
+    //    isCurrentThreadOptionalTurnRequestParams) so concurrent turns on
+    //    the shared client don't cross-route tool calls / approvals. We
+    //    use a mutable ref because handlers register here but threadId
+    //    isn't known until ensureThread runs (step 6). Tank P1 review.
+    const turnIdentity: { threadId?: string; turnId?: string } = {};
     const bridge = createClaudeDynamicToolBridge({
       tools,
       signal: ac.signal,
       excludeNames: cfg.dynamicTools.excludeNames,
       hookContext: sharedHookContext,
     });
-    unregisterServerRequest = registerToolCallHandler(client, bridge);
+    unregisterServerRequest = registerToolCallHandler(client, bridge, turnIdentity);
     // Register a parallel handler for native-tool approval requests
     // (item/commandExecution/requestApproval, item/fileChange/requestApproval)
     // so the SDK's claude_code preset tools (Bash/Read/Edit/etc.) go through
@@ -207,11 +214,15 @@ export async function runClaudeAppServerAttempt(
     // rewrites from BeforeToolCall are detected and declined rather than
     // silently dropped (the SDK approval response can't carry them) —
     // codex does the same at codex/approval-bridge.ts:353.
-    const unregisterApproval = registerApprovalHandler(client, {
-      ...sharedHookContext,
-      cwd: effectiveWorkspace,
-      signal: ac.signal,
-    });
+    const unregisterApproval = registerApprovalHandler(
+      client,
+      {
+        ...sharedHookContext,
+        cwd: effectiveWorkspace,
+        signal: ac.signal,
+      },
+      turnIdentity,
+    );
     const composedUnregister = unregisterServerRequest;
     unregisterServerRequest = () => {
       composedUnregister?.();
@@ -242,9 +253,17 @@ export async function runClaudeAppServerAttempt(
       dynamicToolsFingerprint,
       effectiveWorkspace,
     );
+    // Bind the threadId for this turn's handler filters now that it's
+    // known. turnId comes later (set inside runTurn after turn/start
+    // resolves) so concurrent turns can't grab each other's tool-call /
+    // approval requests.
+    turnIdentity.threadId = threadId;
 
     // 7. Run the turn. Per-turn user prompt is just the user's actual message;
-    //    we don't duplicate workspace context into the transcript.
+    //    we don't duplicate workspace context into the transcript. turnId
+    //    becomes available inside runTurn (after turn/start resolves) —
+    //    it writes turnIdentity.turnId so the filter on subsequent
+    //    server-requests (tool calls / approvals) can also match turnId.
     const accumulated = await runTurn(
       client,
       params,
@@ -253,6 +272,7 @@ export async function runClaudeAppServerAttempt(
       ac,
       effectiveWorkspace,
       sharedHookContext,
+      turnIdentity,
     );
 
     // 7b. Emit the canonical end-of-turn assistant event so downstream
@@ -319,6 +339,16 @@ export async function runClaudeAppServerAttempt(
     }
     if (bridge.telemetry.heartbeatToolResponse) {
       result.heartbeatToolResponse = bridge.telemetry.heartbeatToolResponse;
+    }
+    // Tank P2 review: replayMetadata was hardcoded to
+    // {hadPotentialSideEffects:false, replaySafe:true}. If a messaging
+    // tool fired during the turn we already pushed an external
+    // Discord/Slack/etc. message, so the turn is NOT replay-safe — a
+    // replay would re-send it. Mirror codex's policy: when the bridge
+    // observed a messaging-tool send, mark the turn as having had side
+    // effects and refuse replay.
+    if (bridge.telemetry.didSendViaMessagingTool) {
+      result.replayMetadata = { hadPotentialSideEffects: true, replaySafe: false };
     }
     const hasText = result.assistantTexts.length > 0;
     const hasTools = result.toolMetas.length > 0;
@@ -602,11 +632,25 @@ function shouldForceMessageTool(params: EmbeddedRunAttemptParams): boolean {
 function registerToolCallHandler(
   client: ClaudeAppServerClient,
   bridge: ClaudeDynamicToolBridge,
+  turnIdentity: { threadId?: string; turnId?: string },
 ): () => void {
   return client.onServerRequest(async (req) => {
     if (req.method !== "item/tool/call") return undefined;
     const call = req.params as DynamicToolCallParams | undefined;
     if (!call || typeof call.tool !== "string") return undefined;
+    // Tank P1: filter by turn identity so concurrent turns on the shared
+    // client don't cross-route tool calls. Return undefined (let next
+    // handler in chain try) when not for our turn. When turnIdentity
+    // hasn't been bound yet (ensureThread hadn't returned), we also
+    // return undefined to avoid claiming requests for other turns.
+    const callThreadId = typeof call.threadId === "string" ? call.threadId : undefined;
+    const callTurnId = typeof call.turnId === "string" ? call.turnId : undefined;
+    if (turnIdentity.threadId && callThreadId && callThreadId !== turnIdentity.threadId) {
+      return undefined;
+    }
+    if (turnIdentity.turnId && callTurnId && callTurnId !== turnIdentity.turnId) {
+      return undefined;
+    }
     const response = await bridge.handleToolCall(call);
     return response as unknown as JsonValue;
   });
@@ -810,6 +854,7 @@ async function runTurn(
     runId?: string;
     channelId?: string;
   },
+  turnIdentity: { threadId?: string; turnId?: string },
 ): Promise<Accumulator> {
   const effort = resolveReasoningEffort(params.thinkLevel, params.modelId);
   const turnParams: TurnStartParams = {
@@ -824,6 +869,10 @@ async function runTurn(
   };
   const startResp = await client.request<{ turn: Turn }>("turn/start", turnParams, ac.signal);
   const turnId = startResp.turn.id;
+  // Bind turnId on the shared turnIdentity ref so the tool-call / approval
+  // request handlers can filter incoming server requests by exact turn,
+  // not just threadId. Tank P1 review (concurrent turns on shared client).
+  turnIdentity.turnId = turnId;
   const acc: Accumulator = {
     assistantTexts: [],
     toolMetas: [],
@@ -1384,6 +1433,7 @@ type ApprovalRegistrationContext = {
 function registerApprovalHandler(
   client: ClaudeAppServerClient,
   ctx: ApprovalRegistrationContext,
+  turnIdentity: { threadId?: string; turnId?: string },
 ): () => void {
   return client.onServerRequest(async (req) => {
     if (
@@ -1393,6 +1443,16 @@ function registerApprovalHandler(
       return undefined;
     }
     const params = (req.params ?? {}) as Record<string, unknown>;
+    // Tank P1: same turn-identity filter as registerToolCallHandler so
+    // approval requests don't cross-route between concurrent turns.
+    const reqThreadId = typeof params.threadId === "string" ? params.threadId : undefined;
+    const reqTurnId = typeof params.turnId === "string" ? params.turnId : undefined;
+    if (turnIdentity.threadId && reqThreadId && reqThreadId !== turnIdentity.threadId) {
+      return undefined;
+    }
+    if (turnIdentity.turnId && reqTurnId && reqTurnId !== turnIdentity.turnId) {
+      return undefined;
+    }
     const toolName = typeof params.toolName === "string" ? params.toolName : "unknown";
     const toolInput =
       params.toolInput && typeof params.toolInput === "object" && !Array.isArray(params.toolInput)
