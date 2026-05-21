@@ -1,19 +1,29 @@
 /**
  * Drives a single Claude turn through @openclaw/claude-app-server.
  *
- * Lifecycle:
- *   1. Get/spawn the shared client (cheap; reused across turns).
- *   2. Build OpenClaw's full tool registry via createOpenClawCodingTools.
- *   3. Project tools into DynamicToolSpec[] and wire the server→client
- *      item/tool/call handler so Claude can call them.
- *   4. Look up or create the codex-shaped thread binding for params.sessionFile.
- *   5. Send turn/start with the dynamicTools, prompt, and configured options.
- *   6. Stream notifications, materialize them into EmbeddedRunAttemptResult
- *      fields, return when turn/completed arrives (or on abort/idle).
+ * Lifecycle (inside runClaudeAppServerAttempt):
+ *   1. Resolve sandbox + effectiveWorkspace via resolveSandboxContext.
+ *   2. Materialize OpenClaw's tool registry (buildTools with gating +
+ *      vision/allowlist filters + runtime-plan normalization).
+ *   3. Build sharedHookContext from sandboxSessionKey +
+ *      buildAgentHookContextChannelFields.
+ *   4. Project tools into DynamicToolSpec[]; register tool-call + approval
+ *      server-request handlers.
+ *   5. Build developerInstructions; compute developer/dynamic-tools
+ *      fingerprints.
+ *   6. ensureThread — resume or fresh thread/start with cwd=effectiveWorkspace
+ *      + projected disallowedTools.
+ *   7. runTurn — turn/start; stream item/started + item/completed + delta
+ *      notifications, emit stream:"tool"/"reasoning"/"item"/"assistant"
+ *      events for live downstream rendering; capture per-tool args+results
+ *      for messagesSnapshot + AfterToolCall hook firing.
+ *   8. Emit terminal stream:"assistant" marker; populate
+ *      EmbeddedRunAttemptResult fields (assistantTexts, messagesSnapshot,
+ *      lastAssistant, toolMetas, telemetry).
  *
- * Codex parity scope: minimum viable. We don't yet wire compact, side-question,
- * native-hook-relay, messaging-tool telemetry tracking, computer-use, or
- * plugin-thread-config — those layer on later.
+ * Codex parity scope: tool policy / sandboxed cwd / hook context / native
+ * approvals / message_sending hook chain. NOT yet: compact, side-question,
+ * native-hook-relay, computer-use, plugin-thread-config.
  */
 
 import { createHash } from "node:crypto";
@@ -30,6 +40,7 @@ import {
   resolveAttemptSpawnWorkspaceDir,
   resolveBootstrapContextForRun,
   resolveSandboxContext,
+  runAgentHarnessAfterToolCallHook,
   runBeforeToolCallHook,
   supportsModelTools,
   type AgentMessage,
@@ -184,7 +195,7 @@ export async function runClaudeAppServerAttempt(
       unregisterApproval();
     };
 
-    // 4. Build developerInstructions ONCE per turn (cheap; reads bootstrap
+    // 5. Build developerInstructions ONCE per turn (cheap; reads bootstrap
     //    files). Hash to detect SOUL.md / workspace changes; if the hash
     //    differs from the existing binding, ensureThread rotates to a fresh
     //    thread so the new persona reaches the model. The SDK pins
@@ -197,7 +208,7 @@ export async function runClaudeAppServerAttempt(
     // toggled). Codex does the same at thread-lifecycle.ts:102/219.
     const dynamicToolsFingerprint = fingerprintDynamicTools(bridge.specs);
 
-    // 5. Ensure thread binding for this session.
+    // 6. Ensure thread binding for this session.
     const threadId = await ensureThread(
       client,
       params,
@@ -209,11 +220,19 @@ export async function runClaudeAppServerAttempt(
       effectiveWorkspace,
     );
 
-    // 6. Run the turn. Per-turn user prompt is just the user's actual message;
+    // 7. Run the turn. Per-turn user prompt is just the user's actual message;
     //    we don't duplicate workspace context into the transcript.
-    const accumulated = await runTurn(client, params, threadId, cfg, ac, effectiveWorkspace);
+    const accumulated = await runTurn(
+      client,
+      params,
+      threadId,
+      cfg,
+      ac,
+      effectiveWorkspace,
+      sharedHookContext,
+    );
 
-    // 5b. Emit the canonical end-of-turn assistant event so downstream
+    // 7b. Emit the canonical end-of-turn assistant event so downstream
     //     delivery (auto-reply dispatcher + message_sending hooks like the
     //     provenance trust footer) get a chance to run on the final reply.
     //     Codex emits the same shape at runAttempt:2640 — see
@@ -237,7 +256,7 @@ export async function runClaudeAppServerAttempt(
       }
     }
 
-    // 7. Populate result.
+    // 8. Populate result.
     result.assistantTexts = accumulated.assistantTexts;
     result.toolMetas = accumulated.toolMetas;
     // Populate messagesSnapshot + lastAssistant so the auto-reply dispatcher
@@ -636,7 +655,22 @@ type Accumulator = {
   itemCount: number;
   // Captured tool calls + results for messagesSnapshot construction.
   // Keyed by item id so item/completed can pair with its earlier item/started.
-  toolCalls: Map<string, { name: string; args?: unknown; result?: unknown; isError?: boolean }>;
+  // `startedAt` enables the AfterToolCall hook to record real durations for
+  // native tools (dynamic tools are timed by the bridge itself).
+  // `isDynamic` distinguishes native (claude_code preset) tool items from
+  // dynamicToolCall items — only native ones need the AfterToolCall fire from
+  // here; dynamic ones are handled in dynamic-tools.ts.
+  toolCalls: Map<
+    string,
+    {
+      name: string;
+      args?: unknown;
+      result?: unknown;
+      isError?: boolean;
+      startedAt?: number;
+      isDynamic?: boolean;
+    }
+  >;
 };
 
 async function runTurn(
@@ -646,6 +680,14 @@ async function runTurn(
   cfg: ResolvedConfig,
   ac: AbortController,
   effectiveWorkspace: string,
+  hookContext: {
+    agentId?: string;
+    config?: EmbeddedRunAttemptParams["config"];
+    sessionId?: string;
+    sessionKey?: string;
+    runId?: string;
+    channelId?: string;
+  },
 ): Promise<Accumulator> {
   const effort = resolveReasoningEffort(params.thinkLevel, params.modelId);
   const turnParams: TurnStartParams = {
@@ -727,11 +769,17 @@ async function runTurn(
             if (isTool) {
               const toolName = extractItemName(item) ?? "unknown";
               acc.toolMetas.push({ toolName });
-              // Stash for messagesSnapshot construction; item/completed will
-              // fill in result/status.
+              // Stash for messagesSnapshot construction + AfterToolCall hook.
+              // item/completed will fill in result/status.
               const itemId = typeof item.id === "string" ? item.id : undefined;
-              if (itemId)
-                acc.toolCalls.set(itemId, { name: toolName, args: item.arguments ?? item.input });
+              if (itemId) {
+                acc.toolCalls.set(itemId, {
+                  name: toolName,
+                  args: item.arguments ?? item.input,
+                  startedAt: Date.now(),
+                  isDynamic: item.type === "dynamicToolCall",
+                });
+              }
               // Mirror codex's stream:"tool" phase:"start" emission so Discord/
               // Slack/etc. can render "🛠️ <tool> <preview>" stubs in real time
               // instead of waiting for the whole turn to finish.
@@ -752,11 +800,36 @@ async function runTurn(
                 // makes it into messagesSnapshot for replay/provenance.
                 // Native tool items use `result`; both are accepted.
                 const payload = item.contentItems ?? item.result;
-                acc.toolCalls.set(itemId, {
+                const merged = {
                   ...(prev ?? { name: extractItemName(item) ?? "unknown" }),
                   result: payload,
                   isError: item.status === "failed" || item.error != null,
-                });
+                };
+                acc.toolCalls.set(itemId, merged);
+                // Fire AfterToolCall for NATIVE tools only. Dynamic tool calls
+                // already fire AfterToolCall inside dynamic-tools.ts when the
+                // openclaw bridge invokes the AnyAgentTool, so firing here too
+                // would double-count. Native tools (Bash/Read/Edit/etc.) have
+                // no other AfterToolCall path under the claude_code preset.
+                // Closes the observability half of openclaw-ggv.
+                if (!merged.isDynamic) {
+                  void runAgentHarnessAfterToolCallHook({
+                    toolName: merged.name,
+                    toolCallId: itemId,
+                    runId: hookContext.runId,
+                    agentId: hookContext.agentId,
+                    sessionId: hookContext.sessionId,
+                    sessionKey: hookContext.sessionKey,
+                    channelId: hookContext.channelId,
+                    startArgs:
+                      merged.args && typeof merged.args === "object" && !Array.isArray(merged.args)
+                        ? (merged.args as Record<string, unknown>)
+                        : {},
+                    result: payload,
+                    ...(merged.isError ? { error: String(item.error ?? "tool failed") } : {}),
+                    ...(merged.startedAt != null ? { startedAt: merged.startedAt } : {}),
+                  });
+                }
               }
               emitToolEvent(params, "result", item);
             } else {
@@ -1087,9 +1160,8 @@ function safeStringify(value: unknown): string {
 // still hits the highest-risk surface. Includes a few extended SDK tools
 // (BashOutput / KillBash / KillShell / MultiEdit) that are part of the
 // claude_code preset but don't have dedicated *Input types in the d.ts
-// today. The sdk-native-tool-list contract test (TODO) should fail if the
-// SDK adds a new *Input type that's not present here.
-const NATIVE_TOOLS_FULL_SET = [
+// today. Locked against drift by native-tools-coverage.test.ts.
+export const NATIVE_TOOLS_FULL_SET = [
   // Shell
   "Bash",
   "BashOutput",
