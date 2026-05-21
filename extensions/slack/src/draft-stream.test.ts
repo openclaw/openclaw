@@ -127,6 +127,19 @@ describe("createSlackDraftStream", () => {
     expect(edit).toHaveBeenCalledTimes(0);
   });
 
+  it("does not send duplicate rich draft updates", async () => {
+    const { stream, send, edit } = createDraftStreamHarness();
+    const blocks = [{ type: "section", text: { type: "mrkdwn", text: "same" } }] as const;
+
+    stream.update({ text: "same", blocks: [...blocks] });
+    await stream.flush();
+    stream.update({ text: "same", blocks: [...blocks] });
+    await stream.flush();
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(edit).not.toHaveBeenCalled();
+  });
+
   it("supports forceNewMessage for subsequent assistant messages", async () => {
     const send = vi
       .fn<DraftSendFn>()

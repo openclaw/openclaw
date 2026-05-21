@@ -5,7 +5,8 @@ const flushKeyMock = vi.fn(async (_key: string) => {});
 const resolveThreadTsMock = vi.fn(async ({ message }: { message: Record<string, unknown> }) => ({
   ...message,
 }));
-const { createSlackMessageHandler } = await import("./message-handler.js");
+const { createSlackMessageHandler, slackMessageHandlerTesting } =
+  await import("./message-handler.js");
 
 vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
@@ -199,5 +200,18 @@ describe("createSlackMessageHandler", () => {
     );
 
     expect(flushKeyMock).toHaveBeenCalledWith("slack:default:C111:1709000000.000100:U111");
+  });
+
+  it("bounds app mention race key maps while pruning expired entries", () => {
+    const entries = new Map<string, number>([
+      ["expired", 5],
+      ["fresh-1", 20],
+      ["fresh-2", 30],
+      ["fresh-3", 40],
+    ]);
+
+    slackMessageHandlerTesting.pruneExpiringSlackKeyMap(entries, 10, 2);
+
+    expect([...entries.keys()]).toEqual(["fresh-2", "fresh-3"]);
   });
 });

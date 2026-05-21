@@ -17,6 +17,9 @@ export const SLACK_WRITE_RETRY_OPTIONS: RetryOptions = {
   retries: 0,
 };
 
+// send.ts preserves per-recipient ordering; keep unrelated Slack writes from blocking each other.
+export const SLACK_WRITE_MAX_REQUEST_CONCURRENCY = 4;
+
 /**
  * Check whether a hostname is excluded from proxying by `NO_PROXY` / `no_proxy`.
  * Supports comma-separated entries with optional leading dots (e.g. `.slack.com`).
@@ -96,6 +99,6 @@ export function resolveSlackWriteClientOptions(options: WebClientOptions = {}): 
     ...options,
     agent: options.agent ?? resolveSlackProxyAgent(),
     retryConfig: options.retryConfig ?? SLACK_WRITE_RETRY_OPTIONS,
-    maxRequestConcurrency: options.maxRequestConcurrency ?? 1,
+    maxRequestConcurrency: options.maxRequestConcurrency ?? SLACK_WRITE_MAX_REQUEST_CONCURRENCY,
   };
 }

@@ -9,7 +9,7 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
 }));
 
 installSlackBlockTestMocks();
-const { sendMessageSlack } = await import("./send.js");
+const { clearSlackCustomizeScopeDeniedCacheForTest, sendMessageSlack } = await import("./send.js");
 const SLACK_TEST_CFG = { channels: { slack: { botToken: "xoxb-test" } } };
 
 type SlackMissingScopeError = Error & {
@@ -59,6 +59,7 @@ function readPostMessagePayload(
 describe("sendMessageSlack customize-scope fallback", () => {
   beforeEach(() => {
     vi.mocked(logVerbose).mockClear();
+    clearSlackCustomizeScopeDeniedCacheForTest();
   });
 
   it("retries without identity when needed contains chat:write.customize", async () => {
@@ -135,6 +136,44 @@ describe("sendMessageSlack customize-scope fallback", () => {
     expect(vi.mocked(logVerbose)).toHaveBeenCalledWith(
       "slack send: missing chat:write.customize, retrying without custom identity",
     );
+  });
+
+  it("skips custom identity after the token has already proven customize scope is missing", async () => {
+    const client = createSlackSendTestClient();
+    vi.mocked(client.chat.postMessage)
+      .mockRejectedValueOnce(buildMissingScopeError({ needed: "chat:write.customize" }))
+      .mockResolvedValueOnce({ ts: "171234.567" })
+      .mockResolvedValueOnce({ ts: "171234.568" });
+
+    await sendMessageSlack("channel:C123", "first", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      identity: { username: "Bot", iconUrl: "https://example.com/bot.png" },
+    });
+    await sendMessageSlack("channel:C123", "second", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      identity: { username: "Bot", iconUrl: "https://example.com/bot.png" },
+    });
+
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(3);
+    expect(readPostMessagePayload(client, 0)).toMatchObject({
+      text: "first",
+      username: "Bot",
+      icon_url: "https://example.com/bot.png",
+    });
+    expect(readPostMessagePayload(client, 1)).toEqual({
+      channel: "C123",
+      text: "first",
+      unfurl_links: false,
+    });
+    expect(readPostMessagePayload(client, 2)).toEqual({
+      channel: "C123",
+      text: "second",
+      unfurl_links: false,
+    });
   });
 
   it("rethrows missing_scope errors that reference a different scope", async () => {

@@ -10,6 +10,11 @@ on:
         required: true
         default: main
         type: string
+      lanes:
+        description: Space or comma separated lane ids; use slack for focused Slack diagnostics
+        required: false
+        default: all
+        type: string
       scenario:
         description: Optional comma-separated Telegram scenario ids
         required: false
@@ -26,6 +31,19 @@ on:
         description: Optional comma-separated Slack scenario ids
         required: false
         type: string
+      slack_provider_mode:
+        description: Provider mode for the Slack lane
+        required: false
+        default: live-frontier
+        type: choice
+        options:
+          - live-frontier
+          - mock-openai
+      slack_heap_checkpoints:
+        description: Capture Slack gateway heap snapshots at QA checkpoints
+        required: false
+        default: false
+        type: boolean
       matrix_profile:
         description: Matrix QA profile for the live Matrix lane
         required: false
@@ -159,6 +177,7 @@ jobs:
   run_mock_parity:
     name: Run QA Lab mock parity lane
     needs: [validate_selected_ref]
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.lanes == 'all' || contains(inputs.lanes, 'parity') }}
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 30
     env:
@@ -322,7 +341,7 @@ jobs:
   run_live_matrix:
     name: Run Matrix live QA lane
     needs: [authorize_actor, validate_selected_ref]
-    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.matrix_profile == 'all') }}
+    if: ${{ (github.event_name != 'workflow_dispatch' || inputs.lanes == 'all' || contains(inputs.lanes, 'matrix')) && !(github.event_name == 'workflow_dispatch' && inputs.matrix_profile == 'all') }}
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 60
     environment: qa-live-shared
@@ -399,7 +418,7 @@ jobs:
   run_live_matrix_sharded:
     name: Run Matrix live QA lane (${{ matrix.profile }})
     needs: [authorize_actor, validate_selected_ref]
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.matrix_profile == 'all' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.matrix_profile == 'all' && (inputs.lanes == 'all' || contains(inputs.lanes, 'matrix')) }}
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 60
     environment: qa-live-shared
@@ -484,6 +503,7 @@ jobs:
   run_live_telegram:
     name: Run Telegram live QA lane with Convex leases
     needs: [authorize_actor, validate_selected_ref]
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.lanes == 'all' || contains(inputs.lanes, 'telegram') }}
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 60
     environment: qa-live-shared
@@ -579,6 +599,7 @@ jobs:
   run_live_discord:
     name: Run Discord live QA lane with Convex leases
     needs: [authorize_actor, validate_selected_ref]
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.lanes == 'all' || contains(inputs.lanes, 'discord') }}
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 60
     environment: qa-live-shared
@@ -674,6 +695,7 @@ jobs:
   run_live_whatsapp:
     name: Run WhatsApp live QA lane with Convex leases
     needs: [authorize_actor, validate_selected_ref]
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.lanes == 'all' || contains(inputs.lanes, 'whatsapp') }}
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 60
     concurrency:
@@ -772,6 +794,7 @@ jobs:
   run_live_slack:
     name: Run Slack live QA lane with Convex leases
     needs: [authorize_actor, validate_selected_ref]
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.lanes == 'all' || contains(inputs.lanes, 'slack') }}
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 60
     environment: qa-live-shared
@@ -795,6 +818,7 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+          INPUT_PROVIDER_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.slack_provider_mode || 'live-frontier' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -807,7 +831,9 @@ jobs:
             fi
           }
 
-          require_var OPENAI_API_KEY
+          if [[ "${INPUT_PROVIDER_MODE}" != "mock-openai" ]]; then
+            require_var OPENAI_API_KEY
+          fi
           require_var OPENCLAW_QA_CONVEX_SITE_URL
           require_var OPENCLAW_QA_CONVEX_SECRET_CI
 
@@ -825,12 +851,22 @@ jobs:
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
           OPENCLAW_QA_SLACK_CAPTURE_CONTENT: "1"
+          OPENCLAW_QA_GATEWAY_HEAP_CHECKPOINTS: ${{ github.event_name == 'workflow_dispatch' && inputs.slack_heap_checkpoints && '1' || '0' }}
+          INPUT_PROVIDER_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.slack_provider_mode || 'live-frontier' }}
           INPUT_SCENARIO: ${{ github.event_name == 'workflow_dispatch' && inputs.slack_scenario || '' }}
         run: |
           set -euo pipefail
 
           output_dir=".artifacts/qa-e2e/slack-live-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           scenario_args=()
+          provider_mode="${INPUT_PROVIDER_MODE:-live-frontier}"
+          model="${OPENCLAW_CI_OPENAI_MODEL}"
+          alt_model="${OPENCLAW_CI_OPENAI_MODEL}"
+
+          if [[ "${provider_mode}" == "mock-openai" ]]; then
+            model="mock-openai/gpt-5.5"
+            alt_model="mock-openai/gpt-5.5-alt"
+          fi
 
           if [[ -n "${INPUT_SCENARIO// }" ]]; then
             IFS=',' read -r -a raw_scenarios <<<"${INPUT_SCENARIO}"
@@ -847,9 +883,9 @@ jobs:
           pnpm openclaw qa slack \
             --repo-root . \
             --output-dir "${output_dir}" \
-            --provider-mode live-frontier \
-            --model "${OPENCLAW_CI_OPENAI_MODEL}" \
-            --alt-model "${OPENCLAW_CI_OPENAI_MODEL}" \
+            --provider-mode "${provider_mode}" \
+            --model "${model}" \
+            --alt-model "${alt_model}" \
             --fast \
             --credential-source convex \
             --credential-role ci \

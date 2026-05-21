@@ -136,6 +136,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/subagents: store channel delivery routes as canonical session metadata and deprecate ad hoc subagent hook delivery-origin fields in favor of core route projection.
 - Proxy: support HTTPS managed forward-proxy endpoints and scoped `proxy.tls.caFile` CA trust for proxy endpoint TLS. (#79171) Thanks @jesse-merhi.
 - QA-Lab: add first-hour 20-turn and optional 100-turn runtime parity scenarios, with tier metadata for standard and soak QA gates. Fixes #80338; refs #80337. Thanks @100yenadmin.
+- QA-Lab/Slack: measure live RTT from Slack-accepted ping/pong timestamps, run the canary on a single non-mention inbound path without debounce, record observer lag plus gateway phase/RSS/heap checkpoints, cap app-mention race bookkeeping, trim draft-preview retention, reduce Slack write head-of-line blocking, remove repeated custom-identity fallback calls, remove non-reply reaction traffic from the canary lane, and allow focused Slack Convex workflow reruns.
 - QA-Lab: add `openclaw qa suite --runtime-parity-tier` and wire the standard Codex-vs-Pi tier into release checks separately from optional/live-only/soak lanes. Fixes #80337. Thanks @100yenadmin.
 - QA-Lab: add a live-only Codex Pi-shaped Read vocabulary canary so runtime parity catches native workspace-read prompt compatibility drift. (#80323) Thanks @100yenadmin.
 - QA-Lab: add live-only harness self-health scenarios for plugin hook crashes, manifest contract errors, and WebChat direct-reply self-message routing. (#80323) Thanks @100yenadmin.

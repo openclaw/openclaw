@@ -1,6 +1,8 @@
+import { writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { testing, runSlackQaLive } from "./slack-live.runtime.js";
 
@@ -64,6 +66,206 @@ describe("Slack live QA runtime helpers", () => {
     expect(testing.findScenario(["slack-canary"]).map((scenario) => scenario.id)).toEqual([
       "slack-canary",
     ]);
+  });
+
+  it("formats the canary as a ping/pong marker exchange", () => {
+    const scenario = testing.findScenario(["slack-canary"])[0];
+    const run = scenario?.buildRun("U999999999");
+    expect(run?.input).toContain("ping SLACK_QA_PING_");
+    expect(run?.input).not.toContain("<@U999999999>");
+    expect(run?.input).toContain("PONG_SLACK_QA_PING_");
+    expect(run?.matchText).toContain("PONG_SLACK_QA_PING_");
+    expect(run?.beforeRun).toBeTypeOf("function");
+    expect(run?.replySearchMode).toBe("channel");
+    expect(scenario?.configOverrides?.requireMention).toBe(false);
+  });
+
+  it("injects low-noise Slack RTT config", () => {
+    const baseCfg: OpenClawConfig = {
+      plugins: {
+        allow: ["memory-core"],
+        entries: {
+          "memory-core": { enabled: true },
+        },
+      },
+      messages: {
+        inbound: {
+          debounceMs: 5_000,
+          byChannel: {
+            discord: 750,
+          },
+        },
+        statusReactions: { enabled: true },
+      },
+    };
+
+    const next = testing.buildSlackQaConfig(baseCfg, {
+      channelId: "C123456789",
+      driverBotUserId: "U123456789",
+      overrides: { requireMention: false },
+      sutAccountId: "sut",
+      sutAppToken: "xapp-sut",
+      sutBotToken: "xoxb-sut",
+    });
+
+    expect(next.plugins?.allow).toContain("slack");
+    expect(next.messages?.ackReactionScope).toBe("off");
+    expect(next.messages?.inbound?.debounceMs).toBe(5_000);
+    expect(next.messages?.inbound?.byChannel).toEqual({
+      discord: 750,
+      slack: 0,
+    });
+    expect(next.messages?.statusReactions?.enabled).toBe(false);
+    expect(next.messages?.groupChat?.visibleReplies).toBe("automatic");
+    expect(next.channels?.slack?.accounts?.sut?.channels?.C123456789?.requireMention).toBe(false);
+  });
+
+  it("parses gateway phase trace lines from sanitized logs", () => {
+    expect(
+      testing.parseSlackQaGatewayPhaseTrace(
+        [
+          "noise",
+          'openclaw:slack-qa-trace {"at":"2026-05-18T00:00:00.000Z","phase":"dispatch.model.end","durationMs":1234,"streaming":false}',
+          "openclaw:slack-qa-trace not-json",
+        ].join("\n"),
+      ),
+    ).toEqual([
+      {
+        at: "2026-05-18T00:00:00.000Z",
+        durationMs: 1234,
+        phase: "dispatch.model.end",
+        streaming: false,
+      },
+    ]);
+  });
+
+  it("records gateway heap checkpoint metadata without preserving raw dumps", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(tmpdir(), "openclaw-slack-heap-"));
+    const snapshotPath = path.join(tempRoot, "Heap.123.heapsnapshot");
+    const snapshotBody = '{"token":"xoxb-secret"}';
+    let rssBytes = 10_000;
+
+    try {
+      const snapshot = await testing.captureSlackGatewayHeapSnapshotCheckpoint({
+        gateway: {
+          tempRoot,
+          signalProcess: () => {
+            writeFileSync(snapshotPath, snapshotBody);
+          },
+          getProcessRssBytes: () => {
+            const next = rssBytes;
+            rssBytes += 512;
+            return next;
+          },
+        } as never,
+        label: "slack-canary:ready",
+      });
+
+      expect(snapshot).toEqual({
+        label: "slack-canary:ready",
+        at: expect.any(String),
+        bytes: Buffer.byteLength(snapshotBody),
+        durationMs: expect.any(Number),
+        gatewayProcessRssBeforeBytes: 10_000,
+        gatewayProcessRssAfterBytes: 10_512,
+        gatewayProcessRssDeltaBytes: 512,
+      });
+      expect(snapshot).not.toHaveProperty("path");
+      await expect(fs.stat(snapshotPath)).rejects.toThrow();
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("stops every scenario gateway with distinct RTT debug artifact dirs", async () => {
+    const stops: unknown[] = [];
+    const gatewayDebugDirPath = path.join(tmpdir(), "openclaw-slack-debug");
+    let preservedGatewayDebugArtifacts = false;
+    const createGatewayHarness = (label: string) =>
+      ({
+        stop: async (options?: unknown) => {
+          stops.push({ label, options });
+        },
+      }) as never;
+    const cleanupIssues: string[] = [];
+
+    const first = await testing.stopSlackQaScenarioGateway({
+      cleanupIssues,
+      gatewayDebugArtifactDirPath: path.join(gatewayDebugDirPath, "slack-canary-attempt-1"),
+      gatewayHarness: createGatewayHarness("first"),
+      issueLabel: "gateway debug preservation failed",
+      preserveDebugArtifacts: true,
+    });
+    preservedGatewayDebugArtifacts ||= first.preservedDebugArtifacts;
+    const second = await testing.stopSlackQaScenarioGateway({
+      cleanupIssues,
+      gatewayDebugArtifactDirPath: path.join(gatewayDebugDirPath, "slack-canary-attempt-2"),
+      gatewayHarness: createGatewayHarness("second"),
+      issueLabel: "gateway debug preservation failed",
+      preserveDebugArtifacts: true,
+    });
+
+    expect(first).toEqual({ preservedDebugArtifacts: true, stopped: true });
+    expect(preservedGatewayDebugArtifacts).toBe(true);
+    expect(second).toEqual({ preservedDebugArtifacts: true, stopped: true });
+    expect(cleanupIssues).toEqual([]);
+    expect(stops).toEqual([
+      {
+        label: "first",
+        options: { preserveToDir: path.join(gatewayDebugDirPath, "slack-canary-attempt-1") },
+      },
+      {
+        label: "second",
+        options: { preserveToDir: path.join(gatewayDebugDirPath, "slack-canary-attempt-2") },
+      },
+    ]);
+  });
+
+  it("records Slack accepted timestamps without thread polling for top-level replies", async () => {
+    let historyCalls = 0;
+    let threadCalls = 0;
+    const observedMessages: Array<unknown> = [];
+    const reply = await testing.waitForSlackScenarioReply({
+      channelId: "C123456789",
+      client: {
+        conversations: {
+          history: async () => {
+            historyCalls += 1;
+            return {
+              messages: [
+                {
+                  text: "PONG_SLACK_QA_PING_TEST",
+                  ts: "1001.234000",
+                  user: "U999999999",
+                },
+              ],
+            };
+          },
+          replies: async () => {
+            threadCalls += 1;
+            return { messages: [] };
+          },
+        },
+      } as never,
+      matchText: "PONG_SLACK_QA_PING_TEST",
+      observedMessages: observedMessages as never,
+      observationScenarioId: "slack-canary",
+      observationScenarioTitle: "Slack canary echo",
+      pollIntervalMs: 50,
+      replySearchMode: "channel",
+      sentTs: "1000.000000",
+      threadTs: "1000.000000",
+      sutIdentity: { userId: "U999999999" },
+      timeoutMs: 1_000,
+    });
+
+    expect(historyCalls).toBe(1);
+    expect(threadCalls).toBe(0);
+    expect(reply.channelHistoryCalls).toBe(1);
+    expect(reply.threadHistoryCalls).toBe(0);
+    expect(reply.responseSlackAcceptedAtMs).toBe(1_001_234);
+    expect(reply.responseSlackAcceptedAt).toBe("1970-01-01T00:16:41.234Z");
+    expect(reply.observerLagMs).toBeGreaterThanOrEqual(0);
   });
 
   it("ignores delayed unrelated SUT replies during mention-gating", async () => {

@@ -30,6 +30,7 @@ import { validateSlackBlocksArray } from "./blocks-input.js";
 import { createSlackTokenCacheKey, getSlackWriteClient } from "./client.js";
 import { markdownToSlackMrkdwnChunks } from "./format.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
+import { traceSlackQaPhase } from "./qa-trace.js";
 import { loadOutboundMediaFromUrl } from "./runtime-api.js";
 import { recordSlackThreadParticipation } from "./sent-thread-cache.js";
 import { parseSlackTarget } from "./targets.js";
@@ -41,10 +42,13 @@ const SLACK_UPLOAD_SSRF_POLICY = {
   allowRfc2544BenchmarkRange: true,
 };
 const SLACK_DM_CHANNEL_CACHE_MAX = 1024;
+const SLACK_CUSTOMIZE_SCOPE_DENIED_CACHE_MAX = 512;
+const SLACK_CUSTOMIZE_SCOPE_DENIED_TTL_MS = 15 * 60 * 1000;
 const SLACK_DNS_RETRY_CODES = new Set(["EAI_AGAIN", "ENOTFOUND", "UND_ERR_DNS_RESOLVE_FAILED"]);
 const SLACK_DNS_RETRY_ATTEMPTS = 2;
 const SLACK_DNS_RETRY_BASE_DELAY_MS = 250;
 const slackDmChannelCache = new Map<string, string>();
+const slackCustomizeScopeDeniedCache = new Map<string, number>();
 const slackSendQueues = new Map<string, Promise<void>>();
 
 type SlackRecipient =
@@ -311,6 +315,43 @@ function isSlackCustomizeScopeError(err: unknown): boolean {
   return scopes.includes("chat:write.customize");
 }
 
+function createSlackCustomizeScopeCacheKey(params: { accountId: string; token: string }): string {
+  return `${params.accountId}:${createSlackTokenCacheKey(params.token)}`;
+}
+
+function pruneExpiredSlackCustomizeScopeDenied(now: number): void {
+  for (const [key, expiresAt] of slackCustomizeScopeDeniedCache) {
+    if (expiresAt <= now) {
+      slackCustomizeScopeDeniedCache.delete(key);
+    }
+  }
+}
+
+function rememberSlackCustomizeScopeDenied(cacheKey: string, now = Date.now()): void {
+  pruneExpiredSlackCustomizeScopeDenied(now);
+  if (slackCustomizeScopeDeniedCache.has(cacheKey)) {
+    slackCustomizeScopeDeniedCache.delete(cacheKey);
+  } else if (slackCustomizeScopeDeniedCache.size >= SLACK_CUSTOMIZE_SCOPE_DENIED_CACHE_MAX) {
+    const oldest = slackCustomizeScopeDeniedCache.keys().next().value;
+    if (oldest !== undefined) {
+      slackCustomizeScopeDeniedCache.delete(oldest);
+    }
+  }
+  slackCustomizeScopeDeniedCache.set(cacheKey, now + SLACK_CUSTOMIZE_SCOPE_DENIED_TTL_MS);
+}
+
+function hasSlackCustomizeScopeDenied(cacheKey: string, now = Date.now()): boolean {
+  const expiresAt = slackCustomizeScopeDeniedCache.get(cacheKey);
+  if (expiresAt === undefined) {
+    return false;
+  }
+  if (expiresAt <= now) {
+    slackCustomizeScopeDeniedCache.delete(cacheKey);
+    return false;
+  }
+  return true;
+}
+
 async function postSlackMessageBestEffort(params: {
   client: WebClient;
   channelId: string;
@@ -321,44 +362,58 @@ async function postSlackMessageBestEffort(params: {
   blocks?: (Block | KnownBlock)[];
   metadata?: MessageMetadata;
   unfurl?: SlackUnfurlOptions;
+  customizeScopeCacheKey?: string;
 }) {
   const basePayload = buildSlackPostMessagePayload(params);
   const postChatMessage = params.client.chat.postMessage.bind(params.client.chat);
-  try {
-    // Slack Web API types model icon_url and icon_emoji as mutually exclusive.
-    // Build payloads in explicit branches so TS and runtime stay aligned.
-    const identity = params.identity;
-    if (identity?.iconUrl) {
+  const identity =
+    params.customizeScopeCacheKey && hasSlackCustomizeScopeDenied(params.customizeScopeCacheKey)
+      ? undefined
+      : params.identity;
+  const post = async () => {
+    try {
+      // Slack Web API types model icon_url and icon_emoji as mutually exclusive.
+      // Build payloads in explicit branches so TS and runtime stay aligned.
+      if (identity?.iconUrl) {
+        return await withSlackDnsRequestRetry("chat.postMessage", () =>
+          postChatMessage({
+            ...basePayload,
+            ...(identity.username ? { username: identity.username } : {}),
+            icon_url: identity.iconUrl,
+          }),
+        );
+      }
+      if (identity?.iconEmoji) {
+        return await withSlackDnsRequestRetry("chat.postMessage", () =>
+          postChatMessage({
+            ...basePayload,
+            ...(identity.username ? { username: identity.username } : {}),
+            icon_emoji: identity.iconEmoji,
+          }),
+        );
+      }
       return await withSlackDnsRequestRetry("chat.postMessage", () =>
         postChatMessage({
           ...basePayload,
-          ...(identity.username ? { username: identity.username } : {}),
-          icon_url: identity.iconUrl,
+          ...(identity?.username ? { username: identity.username } : {}),
         }),
       );
+    } catch (err) {
+      if (!hasCustomIdentity(identity) || !isSlackCustomizeScopeError(err)) {
+        throw err;
+      }
+      if (params.customizeScopeCacheKey) {
+        rememberSlackCustomizeScopeDenied(params.customizeScopeCacheKey);
+      }
+      logVerbose("slack send: missing chat:write.customize, retrying without custom identity");
+      return withSlackDnsRequestRetry("chat.postMessage", () => postChatMessage(basePayload));
     }
-    if (identity?.iconEmoji) {
-      return await withSlackDnsRequestRetry("chat.postMessage", () =>
-        postChatMessage({
-          ...basePayload,
-          ...(identity.username ? { username: identity.username } : {}),
-          icon_emoji: identity.iconEmoji,
-        }),
-      );
-    }
-    return await withSlackDnsRequestRetry("chat.postMessage", () =>
-      postChatMessage({
-        ...basePayload,
-        ...(identity?.username ? { username: identity.username } : {}),
-      }),
-    );
-  } catch (err) {
-    if (!hasCustomIdentity(params.identity) || !isSlackCustomizeScopeError(err)) {
-      throw err;
-    }
-    logVerbose("slack send: missing chat:write.customize, retrying without custom identity");
-    return withSlackDnsRequestRetry("chat.postMessage", () => postChatMessage(basePayload));
-  }
+  };
+  return await traceSlackQaPhase("slack.api.chat_post_message", post, {
+    hasBlocks: Boolean(params.blocks?.length),
+    hasIdentity: hasCustomIdentity(identity),
+    hasThread: Boolean(params.threadTs),
+  });
 }
 
 export type SlackSendResult = {
@@ -535,6 +590,10 @@ export function clearSlackSendQueuesForTest(): void {
   slackSendQueues.clear();
 }
 
+export function clearSlackCustomizeScopeDeniedCacheForTest(): void {
+  slackCustomizeScopeDeniedCache.clear();
+}
+
 async function uploadSlackFile(params: {
   client: WebClient;
   channelId: string;
@@ -692,6 +751,10 @@ async function sendMessageSlackQueuedInner(params: {
 }): Promise<SlackSendResult> {
   const { opts, cfg, account, token, recipient, blocks, trimmedMessage } = params;
   const client = opts.client ?? getSlackWriteClient(token);
+  const customizeScopeCacheKey = createSlackCustomizeScopeCacheKey({
+    accountId: account.accountId,
+    token,
+  });
   if (opts.replyBroadcast && opts.mediaUrl) {
     throw new Error("Slack replyBroadcast is only supported for text or block thread replies.");
   }
@@ -728,6 +791,7 @@ async function sendMessageSlackQueuedInner(params: {
       blocks,
       metadata: opts.metadata,
       unfurl,
+      customizeScopeCacheKey,
     });
     const messageId = response.ts ?? "unknown";
     return {
@@ -792,6 +856,7 @@ async function sendMessageSlackQueuedInner(params: {
         identity: opts.identity,
         metadata: sentMessageIds.length === 0 ? opts.metadata : undefined,
         unfurl,
+        customizeScopeCacheKey,
       });
       lastMessageId = response.ts ?? lastMessageId;
       if (response.ts) {
@@ -809,6 +874,7 @@ async function sendMessageSlackQueuedInner(params: {
         identity: opts.identity,
         metadata: sentMessageIds.length === 0 ? opts.metadata : undefined,
         unfurl,
+        customizeScopeCacheKey,
       });
       lastMessageId = response.ts ?? lastMessageId;
       if (response.ts) {

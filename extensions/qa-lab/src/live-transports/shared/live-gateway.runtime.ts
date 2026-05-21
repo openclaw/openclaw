@@ -9,6 +9,40 @@ import { startQaProviderServer } from "../../providers/server-runtime.js";
 import type { QaThinkingLevel } from "../../qa-gateway-config.js";
 import { appendLiveLaneIssue } from "./live-lane-helpers.js";
 
+function appendNodeOption(raw: string | undefined, option: string) {
+  const parts = (raw ?? "").split(/\s+/u).filter(Boolean);
+  return parts.includes(option) ? parts.join(" ") : [...parts, option].join(" ");
+}
+
+function isTruthyQaEnv(value: string | undefined) {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes";
+}
+
+function buildQaLiveGatewayHeapCheckpointRuntimeEnvPatch(
+  env: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv | undefined {
+  if (!isTruthyQaEnv(env.OPENCLAW_QA_GATEWAY_HEAP_CHECKPOINTS)) {
+    return undefined;
+  }
+  return {
+    NODE_OPTIONS: appendNodeOption(env.NODE_OPTIONS, "--heapsnapshot-signal=SIGUSR2"),
+  };
+}
+
+function mergeQaRuntimeEnvPatches(
+  ...patches: Array<NodeJS.ProcessEnv | undefined>
+): NodeJS.ProcessEnv | undefined {
+  const merged: NodeJS.ProcessEnv = {};
+  for (const patch of patches) {
+    if (!patch) {
+      continue;
+    }
+    Object.assign(merged, patch);
+  }
+  return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
 async function stopQaLiveLaneResources(
   resources: {
     gateway: Awaited<ReturnType<typeof startQaGatewayChild>>;
@@ -98,6 +132,7 @@ export async function startQaLiveLaneGateway(params: {
   thinkingDefault?: QaThinkingLevel;
   claudeCliAuthMode?: QaCliBackendAuthMode;
   controlUiEnabled?: boolean;
+  runtimeEnvPatch?: NodeJS.ProcessEnv;
   mutateConfig?: (cfg: OpenClawConfig) => OpenClawConfig;
 }) {
   const mock = await startQaProviderServer(params.providerMode);
@@ -116,6 +151,10 @@ export async function startQaLiveLaneGateway(params: {
       thinkingDefault: params.thinkingDefault,
       claudeCliAuthMode: params.claudeCliAuthMode,
       controlUiEnabled: params.controlUiEnabled,
+      runtimeEnvPatch: mergeQaRuntimeEnvPatches(
+        buildQaLiveGatewayHeapCheckpointRuntimeEnvPatch(),
+        params.runtimeEnvPatch,
+      ),
       mutateConfig: (cfg) =>
         prepareLiveTransportGatewayConfig(params.mutateConfig ? params.mutateConfig(cfg) : cfg),
     });

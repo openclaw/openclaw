@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { MessageMetadata } from "@slack/types";
 import type { Block, KnownBlock } from "@slack/web-api";
 import { createDraftStreamLoop } from "openclaw/plugin-sdk/channel-lifecycle";
@@ -29,6 +30,16 @@ export type SlackDraftStreamUpdate =
       blocks?: (Block | KnownBlock)[];
     };
 
+function createDraftSentFingerprint(text: string, blocks: (Block | KnownBlock)[] | undefined) {
+  const hash = createHash("sha256");
+  hash.update(text);
+  hash.update("\0");
+  if (blocks?.length) {
+    hash.update(JSON.stringify(blocks));
+  }
+  return hash.digest("base64url");
+}
+
 export function createSlackDraftStream(params: {
   target: string;
   cfg: OpenClawConfig;
@@ -54,7 +65,7 @@ export function createSlackDraftStream(params: {
 
   let streamMessageId: string | undefined;
   let streamChannelId: string | undefined;
-  let lastSentKey = "";
+  let lastSentFingerprint = "";
   let pendingUpdate: SlackDraftStreamUpdate | undefined;
   let stopped = false;
 
@@ -71,16 +82,21 @@ export function createSlackDraftStream(params: {
     }
     if (trimmed.length > maxChars) {
       stopped = true;
+      pendingUpdate = undefined;
       params.warn?.(`slack stream preview stopped (text length ${trimmed.length} > ${maxChars})`);
       return;
     }
-    const update = normalizeUpdate(pendingUpdate ?? text);
+    const pendingUpdateAtStart = pendingUpdate;
+    const update = normalizeUpdate(pendingUpdateAtStart ?? text);
     const blocks = update.text === text ? update.blocks : undefined;
-    const sentKey = `${trimmed}\n${blocks ? JSON.stringify(blocks) : ""}`;
-    if (sentKey === lastSentKey) {
+    const sentFingerprint = createDraftSentFingerprint(trimmed, blocks);
+    if (sentFingerprint === lastSentFingerprint) {
+      if (pendingUpdate === pendingUpdateAtStart) {
+        pendingUpdate = undefined;
+      }
       return;
     }
-    lastSentKey = sentKey;
+    lastSentFingerprint = sentFingerprint;
     try {
       if (streamChannelId && streamMessageId) {
         await edit(streamChannelId, streamMessageId, trimmed, {
@@ -111,6 +127,10 @@ export function createSlackDraftStream(params: {
     } catch (err) {
       stopped = true;
       params.warn?.(`slack stream preview failed: ${formatSlackError(err)}`);
+    } finally {
+      if (pendingUpdate === pendingUpdateAtStart) {
+        pendingUpdate = undefined;
+      }
     }
   };
   const loop = createDraftStreamLoop({
@@ -126,6 +146,7 @@ export function createSlackDraftStream(params: {
 
   const discardPending = async () => {
     stop();
+    pendingUpdate = undefined;
     await loop.waitForInFlight();
   };
 
@@ -135,7 +156,7 @@ export function createSlackDraftStream(params: {
     const messageId = streamMessageId;
     streamChannelId = undefined;
     streamMessageId = undefined;
-    lastSentKey = "";
+    lastSentFingerprint = "";
     pendingUpdate = undefined;
     if (!channelId || !messageId) {
       return;
@@ -153,7 +174,7 @@ export function createSlackDraftStream(params: {
   const forceNewMessage = () => {
     streamMessageId = undefined;
     streamChannelId = undefined;
-    lastSentKey = "";
+    lastSentFingerprint = "";
     pendingUpdate = undefined;
     loop.resetPending();
   };

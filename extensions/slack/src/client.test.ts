@@ -23,6 +23,7 @@ let clearSlackWriteClientCacheForTest: typeof import("./client.js").clearSlackWr
 let resolveSlackWebClientOptions: typeof import("./client.js").resolveSlackWebClientOptions;
 let resolveSlackWriteClientOptions: typeof import("./client.js").resolveSlackWriteClientOptions;
 let SLACK_DEFAULT_RETRY_OPTIONS: typeof import("./client.js").SLACK_DEFAULT_RETRY_OPTIONS;
+let SLACK_WRITE_MAX_REQUEST_CONCURRENCY: typeof import("./client.js").SLACK_WRITE_MAX_REQUEST_CONCURRENCY;
 let SLACK_WRITE_RETRY_OPTIONS: typeof import("./client.js").SLACK_WRITE_RETRY_OPTIONS;
 let WebClient: ReturnType<typeof vi.fn>;
 
@@ -81,6 +82,7 @@ beforeAll(async () => {
     resolveSlackWebClientOptions,
     resolveSlackWriteClientOptions,
     SLACK_DEFAULT_RETRY_OPTIONS,
+    SLACK_WRITE_MAX_REQUEST_CONCURRENCY,
     SLACK_WRITE_RETRY_OPTIONS,
   } = await import("./client.js"));
   WebClient = slackWebApi.WebClient as unknown as ReturnType<typeof vi.fn>;
@@ -138,10 +140,10 @@ describe("slack web client config", () => {
     expect(options.retryConfig).toEqual(SLACK_WRITE_RETRY_OPTIONS);
   });
 
-  it("serializes write client requests by default", () => {
+  it("allows bounded concurrent write client requests by default", () => {
     const options = resolveSlackWriteClientOptions();
 
-    expect(options.maxRequestConcurrency).toBe(1);
+    expect(options.maxRequestConcurrency).toBe(SLACK_WRITE_MAX_REQUEST_CONCURRENCY);
   });
 
   it("respects explicit write client concurrency overrides", () => {
@@ -157,7 +159,7 @@ describe("slack web client config", () => {
 
     expect(WebClient).toHaveBeenCalledWith("xoxb-test", {
       agent: customAgent,
-      maxRequestConcurrency: 1,
+      maxRequestConcurrency: SLACK_WRITE_MAX_REQUEST_CONCURRENCY,
       retryConfig: SLACK_WRITE_RETRY_OPTIONS,
       timeout: 4321,
     });
@@ -173,7 +175,7 @@ describe("slack web client config", () => {
       expect(WebClient).toHaveBeenCalledTimes(1);
       expect(WebClient).toHaveBeenCalledWith("xoxb-test", {
         agent: undefined,
-        maxRequestConcurrency: 1,
+        maxRequestConcurrency: SLACK_WRITE_MAX_REQUEST_CONCURRENCY,
         retryConfig: SLACK_WRITE_RETRY_OPTIONS,
       });
     } finally {

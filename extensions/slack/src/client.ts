@@ -9,6 +9,7 @@ export {
   resolveSlackWebClientOptions,
   resolveSlackWriteClientOptions,
   SLACK_DEFAULT_RETRY_OPTIONS,
+  SLACK_WRITE_MAX_REQUEST_CONCURRENCY,
   SLACK_WRITE_RETRY_OPTIONS,
 } from "./client-options.js";
 
