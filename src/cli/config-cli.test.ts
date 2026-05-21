@@ -181,6 +181,27 @@ function createPluginMetadataSnapshot(
   };
 }
 
+function configRecordWithRequireMentionSchema() {
+  return {
+    type: "object",
+    additionalProperties: {
+      type: "object",
+      properties: {
+        requireMention: { type: "boolean" },
+      },
+    },
+  };
+}
+
+function configChannelSchemaWithRecord(recordKey: string) {
+  return {
+    type: "object",
+    properties: {
+      [recordKey]: configRecordWithRequireMentionSchema(),
+    },
+  };
+}
+
 function setConfigMutationShapeSchema() {
   mockReadBestEffortRuntimeConfigSchema.mockResolvedValue({
     schema: {
@@ -205,34 +226,8 @@ function setConfigMutationShapeSchema() {
         channels: {
           type: "object",
           properties: {
-            discord: {
-              type: "object",
-              properties: {
-                guilds: {
-                  type: "object",
-                  additionalProperties: {
-                    type: "object",
-                    properties: {
-                      requireMention: { type: "boolean" },
-                    },
-                  },
-                },
-              },
-            },
-            telegram: {
-              type: "object",
-              properties: {
-                groups: {
-                  type: "object",
-                  additionalProperties: {
-                    type: "object",
-                    properties: {
-                      requireMention: { type: "boolean" },
-                    },
-                  },
-                },
-              },
-            },
+            discord: configChannelSchemaWithRecord("guilds"),
+            telegram: configChannelSchemaWithRecord("groups"),
           },
         },
       },

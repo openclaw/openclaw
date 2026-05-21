@@ -488,7 +488,14 @@ function schemaTypes(schema: JsonSchemaRecord): Set<string> {
   return new Set();
 }
 
-function schemaAlternatives(schema: JsonSchemaRecord): JsonSchemaRecord[] {
+function schemaAlternatives(
+  schema: JsonSchemaRecord,
+  seen = new Set<JsonSchemaRecord>(),
+): JsonSchemaRecord[] {
+  if (seen.has(schema)) {
+    return [];
+  }
+  seen.add(schema);
   const alternatives: JsonSchemaRecord[] = [schema];
   for (const key of ["anyOf", "oneOf", "allOf"] as const) {
     const entries = schema[key];
@@ -497,7 +504,7 @@ function schemaAlternatives(schema: JsonSchemaRecord): JsonSchemaRecord[] {
     }
     for (const entry of entries) {
       if (isSchemaRecord(entry)) {
-        alternatives.push(...schemaAlternatives(entry));
+        alternatives.push(...schemaAlternatives(entry, seen));
       }
     }
   }
@@ -505,7 +512,11 @@ function schemaAlternatives(schema: JsonSchemaRecord): JsonSchemaRecord[] {
 }
 
 function schemaLooksArray(schema: JsonSchemaRecord): boolean {
-  return schemaTypes(schema).has("array") || isSchemaRecord(schema.items);
+  return (
+    schemaTypes(schema).has("array") ||
+    isSchemaRecord(schema.items) ||
+    Array.isArray(schema.items)
+  );
 }
 
 function schemaLooksObject(schema: JsonSchemaRecord): boolean {
@@ -522,8 +533,14 @@ function propertySchema(schema: JsonSchemaRecord, segment: PathSegment): JsonSch
   const schemas: JsonSchemaRecord[] = [];
   for (const alternative of schemaAlternatives(schema)) {
     if (schemaLooksArray(alternative)) {
-      if (isIndexSegment(segment) && isSchemaRecord(alternative.items)) {
-        schemas.push(alternative.items);
+      if (isIndexSegment(segment)) {
+        const index = Number.parseInt(segment, 10);
+        const indexedItem = Array.isArray(alternative.items)
+          ? alternative.items[index]
+          : alternative.items;
+        if (isSchemaRecord(indexedItem)) {
+          schemas.push(indexedItem);
+        }
       }
       continue;
     }
