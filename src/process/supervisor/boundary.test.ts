@@ -4,12 +4,9 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   createInlineBoundary,
-  createLaunchdJobBoundary,
   createSystemdScopeBoundary,
-  isLaunchdAvailable,
   isSystemdUserScopeAvailable,
   resolveSupervisorBoundary,
-  sanitizeLaunchdLabelFragment,
   sanitizeSystemdUnitFragment,
 } from "./boundary.js";
 
@@ -50,26 +47,6 @@ describe("supervisor boundary: systemd scope", () => {
   });
 });
 
-describe("supervisor boundary: launchd job", () => {
-  it("submits a transient per-user job that survives restart", () => {
-    const plan = createLaunchdJobBoundary().plan({ argv: WORKER_ARGV, runId: "run-123" });
-
-    expect(plan.kind).toBe("launchd-job");
-    expect(plan.command).toBe("launchctl");
-    expect(plan.unitId).toBe("ai.openclaw.worker.run-123");
-    expect(plan.survivesSupervisorRestart).toBe(true);
-    expect(plan.args).toEqual(["submit", "-l", "ai.openclaw.worker.run-123", "--", ...WORKER_ARGV]);
-  });
-
-  it("removes the worker by label", () => {
-    const plan = createLaunchdJobBoundary().plan({ argv: WORKER_ARGV, runId: "run-123" });
-    expect(plan.stopCommand).toEqual({
-      command: "launchctl",
-      args: ["remove", "ai.openclaw.worker.run-123"],
-    });
-  });
-});
-
 describe("supervisor boundary: inline", () => {
   it("spawns the worker directly with no survival guarantee", () => {
     const plan = createInlineBoundary().plan({ argv: WORKER_ARGV, runId: "run-123" });
@@ -100,16 +77,11 @@ describe("unit/label fragment sanitization", () => {
   it("falls back to anon for empty or all-invalid runIds", () => {
     expect(sanitizeSystemdUnitFragment("")).toBe("anon");
     expect(sanitizeSystemdUnitFragment("///")).toBe("anon");
-    expect(sanitizeLaunchdLabelFragment("@@@")).toBe("anon");
   });
 
   it("strips leading/trailing dashes and caps very long ids", () => {
     expect(sanitizeSystemdUnitFragment("-x-")).toBe("x");
     expect(sanitizeSystemdUnitFragment("a".repeat(500)).length).toBe(180);
-  });
-
-  it("keeps launchd reverse-DNS dots but drops colons", () => {
-    expect(sanitizeLaunchdLabelFragment("a:b.c")).toBe("a-b.c");
   });
 
   it("produces a valid full systemd scope name shorter than the systemd limit", () => {
@@ -163,11 +135,6 @@ describe("availability probes", () => {
     expect(isSystemdUserScopeAvailable(process.env, "darwin")).toBe(false);
     expect(isSystemdUserScopeAvailable(process.env, "win32")).toBe(false);
   });
-
-  it("launchd is never available off macOS", () => {
-    expect(isLaunchdAvailable(process.env, "linux")).toBe(false);
-    expect(isLaunchdAvailable(process.env, "win32")).toBe(false);
-  });
 });
 
 describe("resolveSupervisorBoundary", () => {
@@ -181,13 +148,11 @@ describe("resolveSupervisorBoundary", () => {
     expect(boundary.kind).toBe("inline");
   });
 
-  it("uses the launchd job on macOS when available", () => {
-    const boundary = resolveSupervisorBoundary({ platform: "darwin", launchdAvailable: true });
-    expect(boundary.kind).toBe("launchd-job");
-  });
-
-  it("falls back to inline on macOS when launchd is unavailable", () => {
-    const boundary = resolveSupervisorBoundary({ platform: "darwin", launchdAvailable: false });
+  it("is inline on macOS (launchctl submit cannot preserve worker lifetime)", () => {
+    // No survival boundary on macOS yet: launchctl submit returns immediately and
+    // detaches stdout/lifetime tracking, so darwin must resolve to inline rather
+    // than a survivable-but-broken boundary. See boundary.ts header.
+    const boundary = resolveSupervisorBoundary({ platform: "darwin" });
     expect(boundary.kind).toBe("inline");
   });
 

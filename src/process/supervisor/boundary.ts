@@ -16,23 +16,28 @@ import { delimiter, join } from "node:path";
  *    under the user manager (`app.slice`), a sibling of the gateway service, so
  *    `systemctl --user stop <gateway>` kills only the gateway cgroup and the
  *    scope worker survives, finishes, and writes its terminal event.
- *  - macOS: a transient `launchctl submit` job owned by the per-user launchd
- *    domain (`gui/<uid>`), the analog of the systemd scope — launchd, not the
- *    gateway, owns the job, so it outlives the gateway process tree.
  *  - Other / unavailable: the `inline` boundary, which spawns the worker
  *    directly with no survival guarantee (preserves legacy behavior).
  *
- * Because a survivable worker lives in a separate cgroup/launchd domain, a
- * process-group or process-tree kill cannot reach it. Explicit cancellation
- * must instead stop the unit/job (`stopCommand`).
+ * macOS has no survival boundary yet and resolves to `inline`. The obvious
+ * `launchctl submit` analog of the systemd scope is unsafe here: it returns
+ * immediately and hands the worker to launchd, so the supervisor loses the
+ * child's lifetime, stdout/stderr, and terminal-event tracking. A correct macOS
+ * boundary needs a bootstrapped launchd job (plist in `gui/<uid>`) with output
+ * redirection and a real survival proof. See
+ * `docs/superpowers/plans/2026-05-18-openclaw-multitasking-dgap1-supervisor-survival.md`.
+ *
+ * Because a survivable worker lives in a separate cgroup, a process-group or
+ * process-tree kill cannot reach it. Explicit cancellation must instead stop the
+ * unit (`stopCommand`).
  */
 
-export type SupervisorBoundaryKind = "systemd-scope" | "launchd-job" | "inline";
+export type SupervisorBoundaryKind = "systemd-scope" | "inline";
 
 export type SupervisorBoundaryPlanInput = {
   /** Fully resolved worker command + args to launch inside the boundary. */
   argv: string[];
-  /** Stable run identifier; used to derive the transient unit/job name. */
+  /** Stable run identifier; used to derive the transient unit name. */
   runId: string;
 };
 
@@ -47,17 +52,17 @@ export type SupervisorLaunchPlan = {
   command: string;
   args: string[];
   /**
-   * True when the launched worker runs in a lifecycle domain (cgroup scope /
-   * launchd job) independent of the supervisor, so it survives a supervisor
-   * (gateway) restart or `systemctl stop`.
+   * True when the launched worker runs in a lifecycle domain (cgroup scope)
+   * independent of the supervisor, so it survives a supervisor (gateway) restart
+   * or `systemctl stop`.
    */
   survivesSupervisorRestart: boolean;
-  /** Transient unit/job identity, when the boundary creates one. */
+  /** Transient unit identity, when the boundary creates one. */
   unitId?: string;
   /**
    * Best-effort command that stops the detached worker. A process-group/tree
-   * kill cannot reach a worker in a separate cgroup/launchd domain, so explicit
-   * cancellation must target the unit. `null` for the inline boundary.
+   * kill cannot reach a worker in a separate cgroup, so explicit cancellation
+   * must target the unit. `null` for the inline boundary.
    */
   stopCommand: SupervisorStopCommand | null;
 };
@@ -68,7 +73,6 @@ export interface SupervisorBoundary {
 }
 
 const SYSTEMD_UNIT_PREFIX = "openclaw-worker-";
-const LAUNCHD_LABEL_PREFIX = "ai.openclaw.worker.";
 const MAX_UNIT_FRAGMENT = 180;
 
 function squashSeparators(value: string): string {
@@ -82,13 +86,6 @@ function squashSeparators(value: string): string {
  */
 export function sanitizeSystemdUnitFragment(runId: string): string {
   const cleaned = squashSeparators(runId.replace(/[^A-Za-z0-9:_.-]/g, "-"));
-  const fragment = cleaned.length > 0 ? cleaned : "anon";
-  return fragment.slice(0, MAX_UNIT_FRAGMENT);
-}
-
-/** launchd labels are conventionally reverse-DNS; allow `[A-Za-z0-9._-]`. */
-export function sanitizeLaunchdLabelFragment(runId: string): string {
-  const cleaned = squashSeparators(runId.replace(/[^A-Za-z0-9._-]/g, "-"));
   const fragment = cleaned.length > 0 ? cleaned : "anon";
   return fragment.slice(0, MAX_UNIT_FRAGMENT);
 }
@@ -110,27 +107,6 @@ export function createSystemdScopeBoundary(): SupervisorBoundary {
         survivesSupervisorRestart: true,
         unitId,
         stopCommand: { command: "systemctl", args: ["--user", "stop", unitId] },
-      };
-    },
-  };
-}
-
-export function createLaunchdJobBoundary(): SupervisorBoundary {
-  return {
-    kind: "launchd-job",
-    plan: ({ argv, runId }) => {
-      const label = `${LAUNCHD_LABEL_PREFIX}${sanitizeLaunchdLabelFragment(runId)}`;
-      // `launchctl submit` registers a transient job in the per-user launchd
-      // domain, so the worker is owned by launchd rather than the gateway and
-      // outlives a gateway restart. Stop via `launchctl remove <label>`.
-      const args = ["submit", "-l", label, "--", ...argv];
-      return {
-        kind: "launchd-job",
-        command: "launchctl",
-        args,
-        survivesSupervisorRestart: true,
-        unitId: label,
-        stopCommand: { command: "launchctl", args: ["remove", label] },
       };
     },
   };
@@ -199,28 +175,18 @@ export function isSystemdUserScopeAvailable(
   return false;
 }
 
-export function isLaunchdAvailable(
-  env: NodeJS.ProcessEnv = process.env,
-  platform: NodeJS.Platform = process.platform,
-): boolean {
-  if (platform !== "darwin") {
-    return false;
-  }
-  return commandExistsOnPath("launchctl", env, platform);
-}
-
 export type SupervisorBoundaryResolution = {
   platform?: NodeJS.Platform;
   env?: NodeJS.ProcessEnv;
   /** Override the systemd availability probe (tests / explicit gating). */
   systemdAvailable?: boolean;
-  /** Override the launchd availability probe (tests / explicit gating). */
-  launchdAvailable?: boolean;
 };
 
 /**
  * Picks the survival boundary for the current platform, falling back to the
  * inline (no-survival) boundary when the platform integration is unavailable.
+ * Only Linux has a survival boundary; macOS and other platforms resolve to
+ * inline (see the file header for the macOS launchd gap).
  */
 export function resolveSupervisorBoundary(
   opts: SupervisorBoundaryResolution = {},
@@ -231,18 +197,13 @@ export function resolveSupervisorBoundary(
     const available = opts.systemdAvailable ?? isSystemdUserScopeAvailable(env, platform);
     return available ? createSystemdScopeBoundary() : createInlineBoundary();
   }
-  if (platform === "darwin") {
-    const available = opts.launchdAvailable ?? isLaunchdAvailable(env, platform);
-    return available ? createLaunchdJobBoundary() : createInlineBoundary();
-  }
   return createInlineBoundary();
 }
 
 /**
- * Fire-and-forget unit/job stop for a detached, survivable worker. Cancellation
- * of a worker that lives in its own cgroup/launchd domain is advisory: the
- * supervisor still kills its local launcher process, but only the unit stop can
- * reach the survivor.
+ * Fire-and-forget unit stop for a detached, survivable worker. Cancellation of a
+ * worker that lives in its own cgroup is advisory: the supervisor still kills
+ * its local launcher process, but only the unit stop can reach the survivor.
  */
 export function runBoundaryStopCommand(stop: SupervisorStopCommand | null | undefined): void {
   if (!stop) {

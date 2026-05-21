@@ -20,7 +20,9 @@ import { createSystemdScopeBoundary, isSystemdUserScopeAvailable } from "./bound
  * Skipped when no per-user systemd manager is reachable (e.g. CI without a user
  * bus). See the matching boundary unit tests for always-on coverage and
  * `docs/superpowers/plans/2026-05-18-openclaw-multitasking-dgap1-supervisor-survival.md`
- * for the macOS launchd manual-verification gap.
+ * for the design and the macOS survival gap (macOS resolves to the inline,
+ * non-survivable boundary because `launchctl submit` cannot preserve the
+ * worker's lifetime/stdout/terminal tracking).
  */
 
 function systemctlUserReachable(): boolean {
