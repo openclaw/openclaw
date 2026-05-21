@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/nearai-provider",
+  "version": "2026.5.20",
+  "private": true,
+  "description": "OpenClaw NEAR AI Cloud provider plugin",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
