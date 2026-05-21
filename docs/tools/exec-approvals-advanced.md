@@ -304,9 +304,12 @@ Shared behavior:
 - for Discord and Telegram, only resolved approvers can approve or deny
 - Discord approvers can be explicit (`execApprovals.approvers`) or inferred from `commands.ownerAllowFrom`
 - Telegram approvers can be explicit (`execApprovals.approvers`) or inferred from `commands.ownerAllowFrom`
-- Slack approvers can be explicit (`execApprovals.approvers`) or inferred from `commands.ownerAllowFrom`
-- Slack native buttons preserve approval id kind, so `plugin:` ids can resolve plugin approvals
-  without a second Slack-local fallback layer
+- Slack exec approvers can be explicit (`execApprovals.approvers`) or inferred from `commands.ownerAllowFrom`
+- Slack native approval delivery handles both exec and plugin approval events; `execApprovals.*`
+  remains the native client enablement and target config, while plugin approval DMs use Slack
+  plugin approvers from `allowFrom` / account defaults instead of `execApprovals.approvers`
+- Slack native buttons preserve approval id kind, so `plugin:` ids resolve plugin approvals
+  with the plugin approval decision set and without a second Slack-local fallback layer
 - Matrix native DM/channel routing and reaction shortcuts handle both exec and plugin approvals;
   plugin authorization still comes from `channels.matrix.dm.allowFrom`
 - Matrix native prompts include `com.openclaw.approval` custom event content on the first prompt
