@@ -23,6 +23,8 @@ const EVENT = {
   transcriptPath: "/tmp/session.jsonl",
   stopHookActive: false,
   lastAssistantMessage: "done",
+  messages: [],
+  success: true,
 };
 
 describe("agent harness lifecycle hook helpers", () => {
@@ -52,7 +54,7 @@ describe("agent harness lifecycle hook helpers", () => {
 
   it("ignores legacy hook runners that advertise agent_end without a runner method", () => {
     const hookRunner = createLegacyHookRunner();
-    void runAgentHarnessAgentEndHook({
+    runAgentHarnessAgentEndHook({
       ctx: {},
       event: {},
       hookRunner,
