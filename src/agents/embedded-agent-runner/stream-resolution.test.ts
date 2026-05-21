@@ -115,6 +115,19 @@ describe("describeEmbeddedAgentStreamStrategy", () => {
       }),
     ).toBe("boundary-aware:anthropic-messages");
   });
+
+  it("describes Anthropic custom session streams as boundary-aware without pre-resolved auth", () => {
+    expect(
+      describeEmbeddedAgentStreamStrategy({
+        currentStreamFn: vi.fn() as never,
+        model: {
+          api: "anthropic-messages",
+          provider: "anthropic",
+          id: "claude-sonnet-4-6",
+        } as never,
+      }),
+    ).toBe("boundary-aware:anthropic-messages");
+  });
 });
 
 describe("resolveEmbeddedAgentStreamFn", () => {
@@ -243,6 +256,36 @@ describe("resolveEmbeddedAgentStreamFn", () => {
       "runtime auth result",
     );
     expect(result.apiKey).toBe("anthropic-runtime-key");
+    expect(currentStreamFn).not.toHaveBeenCalled();
+    expect(innerStreamFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("routes Anthropic custom session streams through OpenClaw tool shaping without pre-resolved auth", async () => {
+    const currentStreamFn = vi.fn(async (_model, _context, options) => options);
+    const innerStreamFn = vi.fn(async (_model, _context, options) => options);
+    const authStorage = {
+      getApiKey: vi.fn(async () => "stored-anthropic-key"),
+    };
+    overrideBoundaryAwareStreamFnOnce(innerStreamFn as never);
+
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: currentStreamFn as never,
+      sessionId: "session-1",
+      model: {
+        api: "anthropic-messages",
+        provider: "anthropic",
+        id: "claude-sonnet-4-6",
+      } as never,
+      authStorage,
+    });
+
+    expect(streamFn).not.toBe(currentStreamFn);
+    const result = await expectStreamResultRecord(
+      streamFn({ provider: "anthropic", id: "claude-sonnet-4-6" } as never, {} as never, {}),
+      "anthropic custom stream result",
+    );
+    expect(result.apiKey).toBe("stored-anthropic-key");
+    expect(authStorage.getApiKey).toHaveBeenCalledWith("anthropic");
     expect(currentStreamFn).not.toHaveBeenCalled();
     expect(innerStreamFn).toHaveBeenCalledTimes(1);
   });
