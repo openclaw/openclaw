@@ -87,4 +87,20 @@ describe("secret target registry", () => {
 
     expect(target?.entry?.id).toBe("plugins.entries.voice-call.config.tts.providers.*.apiKey");
   });
+
+  it("derives bundled LINE credential target paths from the channel contract", () => {
+    const target = resolveConfigSecretTargetByPath([
+      "channels",
+      "line",
+      "accounts",
+      "work",
+      "channelAccessToken",
+    ]);
+
+    expect(target?.entry?.id).toBe("channels.line.accounts.*.channelAccessToken");
+    expect(target?.accountId).toBe("work");
+
+    const secretTarget = resolveConfigSecretTargetByPath(["channels", "line", "channelSecret"]);
+    expect(secretTarget?.entry?.id).toBe("channels.line.channelSecret");
+  });
 });
