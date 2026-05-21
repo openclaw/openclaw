@@ -763,6 +763,64 @@ function normalizeEmptyPayloadForDelivery(payload: ReplyPayload): ReplyPayload |
   return payload;
 }
 
+const PRODUCT_PLAIN_LANGUAGE_CONTEXT_RE =
+  /\b(?:product|customer|user|users|app|site|website|page|screen|checkout|sign[- ]?up|onboarding|dashboard|pricing|landing|workflow|feature|launch|mvp|conversion|ux|ui)\b/i;
+const PRODUCT_PLAIN_LANGUAGE_SOURCE_PATH_RE =
+  /\b(?:src|app|components|pages|lib|server|client|api|routes|migrations|supabase)\/[A-Za-z0-9._/-]+/i;
+const PRODUCT_PLAIN_LANGUAGE_JARGON_PATTERNS = [
+  /\bAPI\b/i,
+  /\bendpoint\b/i,
+  /\bpayload\b/i,
+  /\bschema\b/i,
+  /\bconfig(?:uration)?\b/i,
+  /\benv(?:ironment)? variable\b/i,
+  /\bJSON\b/i,
+  /\bHTTP\b/i,
+  /\bstatus code\b/i,
+  /\bCLI\b/i,
+  /\bSDK\b/i,
+  /\bwebhook\b/i,
+  /\bdatabase\b/i,
+  /\bquery\b/i,
+  /\bmigration\b/i,
+  /\bdeploy(?:ment)? logs?\b/i,
+  /\bserverless\b/i,
+  /\bmiddleware\b/i,
+  /\broute handler\b/i,
+  /\bcomponent\b/i,
+  /\bprops?\b/i,
+  /\bTypeScript\b/i,
+  /\bReact\b/i,
+  /\bNext\.?js\b/i,
+] as const;
+
+function assertTelegramProductPlainLanguage(params: {
+  channel: Exclude<OutboundChannel, "none">;
+  payloadSummary: NormalizedOutboundPayload;
+}): void {
+  if (params.channel !== "telegram") {
+    return;
+  }
+  const content = params.payloadSummary.hookContent ?? params.payloadSummary.text;
+  if (!PRODUCT_PLAIN_LANGUAGE_CONTEXT_RE.test(content)) {
+    return;
+  }
+  if (PRODUCT_PLAIN_LANGUAGE_SOURCE_PATH_RE.test(content)) {
+    throw new Error(
+      "Telegram product/customer message includes source paths; rewrite as user-visible outcomes, decisions, and risks.",
+    );
+  }
+  const jargonCount = PRODUCT_PLAIN_LANGUAGE_JARGON_PATTERNS.reduce(
+    (count, pattern) => count + (pattern.test(content) ? 1 : 0),
+    0,
+  );
+  if (jargonCount >= 3) {
+    throw new Error(
+      "Telegram product/customer message is too technical; rewrite in user-visible product language.",
+    );
+  }
+}
+
 type NormalizedPayloadForChannelDelivery = {
   index: number;
   payload: ReplyPayload;
@@ -1559,6 +1617,7 @@ async function deliverOutboundPayloadsCore(
         continue;
       }
       payloadSummary = buildPayloadSummary(effectivePayload);
+      assertTelegramProductPlainLanguage({ channel, payloadSummary });
       startDeliveryDiagnostics(deliveryKindForPayload(effectivePayload, payloadSummary));
 
       params.onPayload?.(payloadSummary);

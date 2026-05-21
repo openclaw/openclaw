@@ -748,6 +748,73 @@ describe("deliverOutboundPayloads", () => {
     expect(queueMocks.ackDelivery).toHaveBeenCalledWith("mock-queue-id");
   });
 
+  it("blocks technical product updates before Telegram platform send", async () => {
+    const sendTelegram = vi.fn(async () => ({ channel: "telegram", messageId: "m1" }));
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "telegram",
+            outbound: {
+              deliveryMode: "direct",
+              sendText: sendTelegram,
+            },
+          }),
+        },
+      ]),
+    );
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {},
+        channel: "telegram",
+        to: "12345",
+        payloads: [
+          {
+            text: "The app checkout screen now calls the API endpoint with a JSON payload and database query.",
+          },
+        ],
+      }),
+    ).rejects.toThrow(/too technical/i);
+
+    expect(sendTelegram).not.toHaveBeenCalled();
+  });
+
+  it("allows product updates written in user-visible language on Telegram", async () => {
+    const sendTelegram = vi.fn(async () => ({ channel: "telegram", messageId: "m1" }));
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "telegram",
+            outbound: {
+              deliveryMode: "direct",
+              sendText: sendTelegram,
+            },
+          }),
+        },
+      ]),
+    );
+
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "telegram",
+      to: "12345",
+      payloads: [
+        {
+          text: "The checkout screen now shows the right price before payment. No decision needed.",
+        },
+      ],
+    });
+
+    expect(sendTelegram).toHaveBeenCalledTimes(1);
+    expect(results[0]?.messageId).toBe("m1");
+  });
+
   it("runs message adapter failure cleanup for failed sends with pending attempt tokens", async () => {
     const messageSendText = vi.fn(async () => {
       throw new Error("native send failed");
