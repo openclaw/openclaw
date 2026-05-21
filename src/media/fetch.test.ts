@@ -515,7 +515,7 @@ describe("readRemoteMediaBuffer", () => {
         },
       });
 
-    const result = await fetchRemoteMedia({
+    const result = await readRemoteMediaBuffer({
       url: "https://example.com/download",
       fetchImpl,
       lookupFn: makeLookupFn(),
@@ -534,7 +534,7 @@ describe("readRemoteMediaBuffer", () => {
         },
       });
 
-    const result = await fetchRemoteMedia({
+    const result = await readRemoteMediaBuffer({
       url: "https://example.com/download",
       fetchImpl,
       lookupFn: makeLookupFn(),
