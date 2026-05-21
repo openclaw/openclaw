@@ -47,10 +47,7 @@ function resolveMistralCompatRoute(params: {
         : undefined,
   });
 
-  if (
-    capabilities.knownProviderFamily === "mistral" ||
-    capabilities.endpointClass === "mistral-public"
-  ) {
+  if (capabilities.endpointClass === "mistral-public") {
     return "direct";
   }
   if (isMistralModelHint(params.modelId)) {

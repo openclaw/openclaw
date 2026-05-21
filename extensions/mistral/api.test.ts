@@ -180,7 +180,10 @@ describe("applyMistralModelCompat", () => {
           baseUrl: "https://proxy.example/v1",
         },
       }),
-    ).toEqual(MISTRAL_MODEL_TRANSPORT_PATCH);
+    ).toEqual({
+      ...MISTRAL_MODEL_TRANSPORT_PATCH,
+      supportsPromptCacheKey: false,
+    });
 
     expect(
       contributeMistralResolvedModelCompat({
