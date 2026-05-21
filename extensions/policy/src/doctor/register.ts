@@ -19,6 +19,11 @@ const CHECK_IDS = {
   policyHashMismatch: "policy/policy-hash-mismatch",
   policyInvalidFile: "policy/policy-jsonc-invalid",
   policyMissingFile: "policy/policy-jsonc-missing",
+  policyMissingToolOwner: "policy/tools-missing-owner",
+  policyMissingToolRisk: "policy/tools-missing-risk-level",
+  policyMissingToolSensitivity: "policy/tools-missing-sensitivity-token",
+  policyUnknownToolRisk: "policy/tools-unknown-risk-level",
+  policyUnknownToolSensitivity: "policy/tools-unknown-sensitivity-token",
 } as const;
 
 export const POLICY_CHECK_IDS = [
@@ -27,7 +32,16 @@ export const POLICY_CHECK_IDS = [
   CHECK_IDS.policyHashMismatch,
   CHECK_IDS.policyAttestationMismatch,
   CHECK_IDS.policyDeniedChannelProvider,
+  CHECK_IDS.policyMissingToolRisk,
+  CHECK_IDS.policyUnknownToolRisk,
+  CHECK_IDS.policyMissingToolSensitivity,
+  CHECK_IDS.policyMissingToolOwner,
+  CHECK_IDS.policyUnknownToolSensitivity,
 ] as const;
+
+const KNOWN_RISK_LEVELS = ["low", "medium", "high", "critical"] as const;
+const KNOWN_SENSITIVITY_LEVELS = ["public", "internal", "confidential", "restricted"] as const;
+const SUPPORTED_TOOL_METADATA = ["risk", "sensitivity", "owner"] as const;
 
 let registered = false;
 const policyEvaluationCache = new WeakMap<HealthCheckContext, Promise<PolicyEvaluation>>();
@@ -58,6 +72,11 @@ export function registerPolicyDoctorChecks(host?: PolicyDoctorRegistrationHost):
   registerHealthCheck(policyHashMismatchCheck);
   registerHealthCheck(policyAttestationMismatchCheck);
   registerHealthCheck(policyChannelsDeniedProviderCheck);
+  registerHealthCheck(policyToolsMissingRiskCheck);
+  registerHealthCheck(policyToolsUnknownRiskCheck);
+  registerHealthCheck(policyToolsMissingSensitivityCheck);
+  registerHealthCheck(policyToolsMissingOwnerCheck);
+  registerHealthCheck(policyToolsUnknownSensitivityCheck);
   registered = true;
 }
 
@@ -78,7 +97,7 @@ export function evaluatePolicy(ctx: HealthCheckContext): Promise<PolicyEvaluatio
 const policyMissingFileCheck: HealthCheck = {
   id: CHECK_IDS.policyMissingFile,
   kind: "plugin",
-  description: "The enabled policy extension has a policy file to verify.",
+  description: "The enabled Policy plugin has a policy file to verify.",
   source: "policy",
   async detect(ctx) {
     return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyMissingFile);
@@ -150,10 +169,60 @@ const policyChannelsDeniedProviderCheck: HealthCheck = {
   },
 };
 
+const policyToolsMissingRiskCheck: HealthCheck = {
+  id: CHECK_IDS.policyMissingToolRisk,
+  kind: "plugin",
+  description: "TOOLS.md policy entries declare explicit risk levels.",
+  source: "policy",
+  async detect(ctx) {
+    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyMissingToolRisk);
+  },
+};
+
+const policyToolsUnknownRiskCheck: HealthCheck = {
+  id: CHECK_IDS.policyUnknownToolRisk,
+  kind: "plugin",
+  description: "TOOLS.md policy entries use known risk levels.",
+  source: "policy",
+  async detect(ctx) {
+    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyUnknownToolRisk);
+  },
+};
+
+const policyToolsMissingSensitivityCheck: HealthCheck = {
+  id: CHECK_IDS.policyMissingToolSensitivity,
+  kind: "plugin",
+  description: "TOOLS.md policy entries declare default artifact sensitivity.",
+  source: "policy",
+  async detect(ctx) {
+    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyMissingToolSensitivity);
+  },
+};
+
+const policyToolsUnknownSensitivityCheck: HealthCheck = {
+  id: CHECK_IDS.policyUnknownToolSensitivity,
+  kind: "plugin",
+  description: "TOOLS.md policy entries use known sensitivity levels.",
+  source: "policy",
+  async detect(ctx) {
+    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyUnknownToolSensitivity);
+  },
+};
+
+const policyToolsMissingOwnerCheck: HealthCheck = {
+  id: CHECK_IDS.policyMissingToolOwner,
+  kind: "plugin",
+  description: "TOOLS.md policy entries declare an accountable owner.",
+  source: "policy",
+  async detect(ctx) {
+    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyMissingToolOwner);
+  },
+};
+
 async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEvaluation> {
   const settings = policySettings(ctx);
   const policyPath = policyDisplayName(ctx);
-  const evidence = collectPolicyEvidence(ctx.cfg as Record<string, unknown>);
+  let evidence: PolicyEvidence = collectPolicyEvidence(ctx.cfg as Record<string, unknown>);
   const findings: HealthFinding[] = [];
 
   if (!policyChecksEnabled(ctx, settings)) {
@@ -171,7 +240,7 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
     findings.push({
       checkId: CHECK_IDS.policyMissingFile,
       severity: "warning",
-      message: `${policyPath} is missing for the enabled policy extension.`,
+      message: `${policyPath} is missing for the enabled Policy plugin.`,
       source: "policy",
       path: policyPath,
       fixHint: `Restore ${policyPath} or add the policy artifact for this workspace.`,
@@ -225,12 +294,34 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
     };
   }
 
-  const policyFindings = channelFindings(
+  const metadataRequirementFindings = toolMetadataRequirementFindings(
     policy,
     policyFile.displayName,
     policyFile.ocDocName,
-    evidence,
   );
+  const requiredMetadata =
+    metadataRequirementFindings.length === 0 ? requiredToolMetadata(policy) : new Set<string>();
+  if (requiredMetadata.size > 0) {
+    const toolsFile = await readWorkspaceFile(ctx, "TOOLS.md");
+    evidence = await collectPolicyEvidence(ctx.cfg as Record<string, unknown>, {
+      toolsRaw: toolsFile?.raw ?? "",
+    });
+  }
+  const policyFindings: HealthFinding[] = [
+    ...policyContainerShapeFindings(policy, policyFile.displayName, policyFile.ocDocName),
+    ...channelFindings(policy, policyFile.displayName, policyFile.ocDocName, evidence),
+    ...metadataRequirementFindings,
+  ];
+  if (requiredMetadata.has("risk")) {
+    policyFindings.push(...toolRiskFindings(policyFile.ocDocName, evidence));
+    policyFindings.push(...toolUnknownRiskFindings(policyFile.ocDocName, evidence));
+  }
+  if (requiredMetadata.has("sensitivity")) {
+    policyFindings.push(...toolSensitivityFindings(policyFile.ocDocName, evidence));
+  }
+  if (requiredMetadata.has("owner")) {
+    policyFindings.push(...toolOwnerFindings(policyFile.ocDocName, evidence));
+  }
   const attestationFindings = policyAttestationFindings(
     policyFile.displayName,
     policyHash,
@@ -375,6 +466,127 @@ function toAttestedFinding(finding: HealthFinding): Record<string, unknown> {
   };
 }
 
+function toolMetadataRequirementFindings(
+  policy: unknown,
+  policyPath: string,
+  policyDocName: string,
+): readonly HealthFinding[] {
+  if (!isRecord(policy) || !isRecord(policy.tools) || policy.tools.requireMetadata === undefined) {
+    return [];
+  }
+  if (!Array.isArray(policy.tools.requireMetadata)) {
+    return [
+      {
+        checkId: CHECK_IDS.policyInvalidFile,
+        severity: "error",
+        message: `${policyPath} tools.requireMetadata must be an array of metadata keys.`,
+        source: "policy",
+        path: policyPath,
+        target: `oc://${policyDocName}/tools/requireMetadata`,
+        fixHint: `Use supported metadata keys: ${SUPPORTED_TOOL_METADATA.join(", ")}.`,
+      },
+    ];
+  }
+  const invalidIndex = policy.tools.requireMetadata.findIndex(
+    (entry) =>
+      typeof entry !== "string" ||
+      !SUPPORTED_TOOL_METADATA.includes(
+        entry.trim().toLowerCase() as (typeof SUPPORTED_TOOL_METADATA)[number],
+      ),
+  );
+  if (invalidIndex < 0) {
+    return [];
+  }
+  return [
+    {
+      checkId: CHECK_IDS.policyInvalidFile,
+      severity: "error",
+      message: `${policyPath} tools.requireMetadata[${invalidIndex}] must be a supported metadata key.`,
+      source: "policy",
+      path: policyPath,
+      target: `oc://${policyDocName}/tools/requireMetadata/#${invalidIndex}`,
+      fixHint: `Use supported metadata keys: ${SUPPORTED_TOOL_METADATA.join(", ")}.`,
+    },
+  ];
+}
+
+function policyContainerShapeFindings(
+  policy: unknown,
+  policyPath: string,
+  policyDocName: string,
+): readonly HealthFinding[] {
+  if (!isRecord(policy)) {
+    return [
+      policyShapeFinding(
+        policyPath,
+        `oc://${policyDocName}`,
+        `${policyPath} must contain a policy object.`,
+        `Fix ${policyPath} so the top-level policy is an object.`,
+      ),
+    ];
+  }
+  if (policy.tools !== undefined && !isRecord(policy.tools)) {
+    return [
+      policyShapeFinding(
+        policyPath,
+        `oc://${policyDocName}/tools`,
+        `${policyPath} tools must be an object.`,
+        `Fix ${policyPath} so tools is an object.`,
+      ),
+    ];
+  }
+  if (isRecord(policy.tools)) {
+    if (policy.tools.settings !== undefined && !isRecord(policy.tools.settings)) {
+      return [
+        policyShapeFinding(
+          policyPath,
+          `oc://${policyDocName}/tools/settings`,
+          `${policyPath} tools.settings must be an object.`,
+          `Fix ${policyPath} so tools.settings is an object.`,
+        ),
+      ];
+    }
+    if (policy.tools.entries !== undefined && !Array.isArray(policy.tools.entries)) {
+      return [
+        policyShapeFinding(
+          policyPath,
+          `oc://${policyDocName}/tools/entries`,
+          `${policyPath} tools.entries must be an array.`,
+          `Fix ${policyPath} so tools.entries is an array.`,
+        ),
+      ];
+    }
+  }
+  if (policy.channels !== undefined && !isRecord(policy.channels)) {
+    return [
+      policyShapeFinding(
+        policyPath,
+        `oc://${policyDocName}/channels`,
+        `${policyPath} channels must be an object.`,
+        `Fix ${policyPath} so channels is an object.`,
+      ),
+    ];
+  }
+  return [];
+}
+
+function policyShapeFinding(
+  policyPath: string,
+  target: string,
+  message: string,
+  fixHint: string,
+): HealthFinding {
+  return {
+    checkId: CHECK_IDS.policyInvalidFile,
+    severity: "error",
+    message,
+    source: "policy",
+    path: policyPath,
+    target,
+    fixHint,
+  };
+}
+
 function invalidChannelDenyRuleFindings(
   policy: unknown,
   policyPath: string,
@@ -413,6 +625,122 @@ function invalidChannelDenyRuleFindings(
   ];
 }
 
+function toolRiskFindings(
+  policyDocName: string,
+  evidence: PolicyEvidence,
+): readonly HealthFinding[] {
+  return (evidence.tools ?? [])
+    .filter((tool) => tool.risk === undefined)
+    .map((tool): HealthFinding => {
+      return {
+        checkId: CHECK_IDS.policyMissingToolRisk,
+        severity: "error",
+        message: `TOOLS.md tool '${tool.id}' has no explicit risk classification.`,
+        source: "policy",
+        path: "TOOLS.md",
+        line: tool.line,
+        ocPath: tool.source,
+        target: tool.source,
+        requirement: `oc://${policyDocName}/tools/requireMetadata`,
+        fixHint:
+          "Declare risk:low, risk:medium, risk:high, risk:critical, or an R0-R5 review alias.",
+      };
+    });
+}
+
+function toolUnknownRiskFindings(
+  policyDocName: string,
+  evidence: PolicyEvidence,
+): readonly HealthFinding[] {
+  return (evidence.tools ?? [])
+    .filter(
+      (tool) =>
+        tool.risk !== undefined &&
+        !KNOWN_RISK_LEVELS.includes(tool.risk as (typeof KNOWN_RISK_LEVELS)[number]),
+    )
+    .map((tool): HealthFinding => {
+      return {
+        checkId: CHECK_IDS.policyUnknownToolRisk,
+        severity: "error",
+        message: `TOOLS.md tool '${tool.id}' declares unknown risk '${tool.risk}'.`,
+        source: "policy",
+        path: "TOOLS.md",
+        line: tool.line,
+        ocPath: tool.source,
+        target: tool.source,
+        requirement: `oc://${policyDocName}/tools/requireMetadata`,
+        fixHint: `Use one of: ${KNOWN_RISK_LEVELS.join(", ")}.`,
+      };
+    });
+}
+
+function toolSensitivityFindings(
+  policyDocName: string,
+  evidence: PolicyEvidence,
+): readonly HealthFinding[] {
+  return (evidence.tools ?? []).flatMap((tool): HealthFinding[] => {
+    if (tool.sensitivity === undefined) {
+      return [
+        {
+          checkId: CHECK_IDS.policyMissingToolSensitivity,
+          severity: "error",
+          message: `TOOLS.md tool '${tool.id}' has no declared artifact sensitivity.`,
+          source: "policy",
+          path: "TOOLS.md",
+          line: tool.line,
+          ocPath: tool.source,
+          target: tool.source,
+          requirement: `oc://${policyDocName}/tools/requireMetadata`,
+          fixHint: `Declare sensitivity as one of: ${KNOWN_SENSITIVITY_LEVELS.join(", ")}.`,
+        },
+      ];
+    }
+    if (
+      KNOWN_SENSITIVITY_LEVELS.includes(
+        tool.sensitivity as (typeof KNOWN_SENSITIVITY_LEVELS)[number],
+      )
+    ) {
+      return [];
+    }
+    return [
+      {
+        checkId: CHECK_IDS.policyUnknownToolSensitivity,
+        severity: "error",
+        message: `TOOLS.md tool '${tool.id}' declares unknown sensitivity '${tool.sensitivity}'.`,
+        source: "policy",
+        path: "TOOLS.md",
+        line: tool.line,
+        ocPath: tool.source,
+        target: tool.source,
+        requirement: `oc://${policyDocName}/tools/requireMetadata`,
+        fixHint: `Use one of: ${KNOWN_SENSITIVITY_LEVELS.join(", ")}.`,
+      },
+    ];
+  });
+}
+
+function toolOwnerFindings(
+  policyDocName: string,
+  evidence: PolicyEvidence,
+): readonly HealthFinding[] {
+  return (evidence.tools ?? [])
+    .filter((tool) => tool.owner === undefined)
+    .map((tool): HealthFinding => {
+      return {
+        checkId: CHECK_IDS.policyMissingToolOwner,
+        severity: "error",
+        message: `TOOLS.md tool '${tool.id}' has no declared owner.`,
+        source: "policy",
+        path: "TOOLS.md",
+        line: tool.line,
+        ocPath: tool.source,
+        target: tool.source,
+        requirement: `oc://${policyDocName}/tools/requireMetadata`,
+        fixHint: "Declare owner:<team-or-person> for this tool.",
+      };
+    });
+}
+
 async function readPolicyFile(
   ctx: HealthCheckContext,
 ): Promise<{ raw: string; path: string; displayName: string; ocDocName: string } | null> {
@@ -426,6 +754,22 @@ async function readPolicyFile(
       displayName,
       ocDocName: basename(displayName),
     };
+  } catch (err) {
+    if (isNotFound(err)) {
+      return null;
+    }
+    throw err;
+  }
+}
+
+async function readWorkspaceFile(
+  ctx: HealthCheckContext,
+  fileName: string,
+): Promise<{ raw: string; path: string } | null> {
+  const path = resolveWorkspacePath(ctx, fileName);
+  try {
+    const fs = await import("node:fs/promises");
+    return { raw: await fs.readFile(path, "utf-8"), path };
   } catch (err) {
     if (isNotFound(err)) {
       return null;
@@ -603,6 +947,26 @@ function policyChecksEnabled(ctx: HealthCheckContext, settings: PolicySettings):
   return settings.enabled !== false;
 }
 
+function requiredToolMetadata(policy: unknown): ReadonlySet<string> {
+  return new Set(readPolicyStringArray(policy, ["tools", "requireMetadata"]) ?? []);
+}
+
+function readPolicyStringArray(
+  policy: unknown,
+  path: readonly string[],
+): readonly string[] | undefined {
+  let current: unknown = policy;
+  for (const part of path) {
+    if (!isRecord(current)) {
+      return undefined;
+    }
+    current = current[part];
+  }
+  if (!Array.isArray(current) || !current.every((entry) => typeof entry === "string")) {
+    return undefined;
+  }
+  return current.map((entry) => entry.trim().toLowerCase()).filter(Boolean);
+}
 function policyPathSetting(ctx: HealthCheckContext): string {
   const configured = policySettings(ctx).path;
   return typeof configured === "string" && configured.trim() !== ""
@@ -616,5 +980,5 @@ function policyDisplayName(ctx: HealthCheckContext): string {
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
