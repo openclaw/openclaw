@@ -1,4 +1,4 @@
-import type { createSubsystemLogger } from "../logging/subsystem.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
