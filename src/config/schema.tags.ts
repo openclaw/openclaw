@@ -57,6 +57,7 @@ const TAG_OVERRIDES: Record<string, ConfigTag[]> = {
   "gateway.nodes.pairing.autoApproveCidrs": ["security", "access", "network", "advanced"],
   "proxy.tls.caFile": ["security", "network", "storage", "advanced"],
   "tools.exec.applyPatch.workspaceOnly": ["tools", "security", "access", "advanced"],
+  "tools.exec.deniedPaths": ["tools", "security", "access", "advanced"],
 };
 
 const PREFIX_RULES: Array<{ prefix: string; tags: ConfigTag[] }> = [

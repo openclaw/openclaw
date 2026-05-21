@@ -30,6 +30,7 @@ import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { splitShellArgs } from "../utils/shell-argv.js";
 import { markBackgrounded } from "./bash-process-registry.js";
 import { describeExecTool } from "./bash-tools.descriptions.js";
+import { assertExecDeniedPaths } from "./bash-tools.exec-denied-paths.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
 import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
 import { renderExecOutputText } from "./bash-tools.exec-output.js";
@@ -1521,6 +1522,16 @@ export function createExecTool(
         applyPathPrepend(env, defaultPathPrepend);
       }
 
+      if (host !== "node") {
+        assertExecDeniedPaths({
+          deniedPaths: defaults?.deniedPaths,
+          command: params.command,
+          workdir: sandbox && host === "sandbox" ? containerWorkdir : workdir,
+          env,
+          namespace: sandbox && host === "sandbox" ? "sandbox" : "host",
+        });
+      }
+
       if (host === "node") {
         return executeNodeHostCommand({
           command: params.command,
@@ -1548,6 +1559,7 @@ export function createExecTool(
           notifySessionKey,
           notifyOnExit,
           trustedSafeBinDirs,
+          deniedPaths: defaults?.deniedPaths,
         });
       }
 

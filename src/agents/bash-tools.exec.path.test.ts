@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { normalizeConfigPaths } from "../config/normalize-paths.js";
 import type { ExecApprovalsResolved } from "../infra/exec-approvals.js";
 import { captureEnv } from "../test-utils/env.js";
 import { sanitizeBinaryOutput } from "./shell-utils.js";
@@ -12,6 +13,11 @@ type GetShellPathFromLoginShell = typeof import("../infra/shell-env.js").getShel
 const shellEnvMocks = vi.hoisted(() => ({
   getShellPathFromLoginShell: vi.fn<GetShellPathFromLoginShell>(() => "/custom/bin:/opt/bin"),
   resolveShellEnvFallbackTimeoutMs: vi.fn(() => 1234),
+}));
+const nodeMocks = vi.hoisted(() => ({
+  callGatewayTool: vi.fn(),
+  listNodes: vi.fn(),
+  resolveNodeIdFromList: vi.fn(() => "node-1"),
 }));
 
 vi.mock("../infra/shell-env.js", async () => {
@@ -30,6 +36,15 @@ vi.mock("../infra/exec-approvals.js", async () => {
   );
   return { ...mod, resolveExecApprovals: () => createExecApprovals() };
 });
+
+vi.mock("./tools/gateway.js", () => ({
+  callGatewayTool: nodeMocks.callGatewayTool,
+}));
+
+vi.mock("./tools/nodes-utils.js", () => ({
+  listNodes: nodeMocks.listNodes,
+  resolveNodeIdFromList: nodeMocks.resolveNodeIdFromList,
+}));
 
 vi.mock("../process/supervisor/index.js", () => ({
   getProcessSupervisor: () => ({
@@ -260,6 +275,311 @@ describe("exec PATH login shell merge", () => {
 });
 
 describe("exec host env validation", () => {
+  it("blocks commands that target configured denied paths before host execution", async () => {
+    const deniedRoot = path.join(os.tmpdir(), "openclaw-denied-secrets");
+    const deniedFile = path.join(deniedRoot, "provider.key");
+    const tool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      deniedPaths: [path.join(deniedRoot, "**")],
+    });
+
+    await expect(
+      tool.execute("call-denied-path", {
+        command: `cat "${deniedFile}"`,
+      }),
+    ).rejects.toThrow(`Security Violation: exec command references denied path ${deniedFile}`);
+  });
+
+  it("blocks denied paths inside shell wrapper payloads before host execution", async () => {
+    const deniedRoot = path.join(os.tmpdir(), "openclaw-denied-shell-secrets");
+    const deniedFile = path.join(deniedRoot, "provider.key");
+    const tool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      deniedPaths: [path.join(deniedRoot, "**")],
+    });
+
+    await expect(
+      tool.execute("call-denied-shell-path", {
+        command: `bash -lc 'cat "${deniedFile}"'`,
+      }),
+    ).rejects.toThrow(`Security Violation: exec command references denied path ${deniedFile}`);
+  });
+
+  it("blocks denied paths inside shell command substitutions before host execution", async () => {
+    const deniedRoot = path.join(os.tmpdir(), "openclaw-denied-substitution-secrets");
+    const deniedFile = path.join(deniedRoot, "provider.key");
+    const tool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      deniedPaths: [path.join(deniedRoot, "**")],
+    });
+
+    await expect(
+      tool.execute("call-denied-substitution-path", {
+        command: `bash -lc 'echo "$(cat "${deniedFile}")"'`,
+      }),
+    ).rejects.toThrow(`Security Violation: exec command references denied path ${deniedFile}`);
+  });
+
+  it("blocks sandbox relative denied paths in the container namespace before execution", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sandbox-denied-"));
+    const workspaceDir = path.join(tempRoot, "host", "workspace");
+    fs.mkdirSync(workspaceDir, { recursive: true });
+    const buildExecSpec = vi.fn(async (params) => ({
+      argv: ["sh", "-c", "echo should-not-run"],
+      env: params.env,
+      stdinMode: "pipe-closed" as const,
+    }));
+    const tool = createExecTool({
+      host: "sandbox",
+      security: "full",
+      ask: "off",
+      deniedPaths: ["/run/secrets/**"],
+      sandbox: {
+        containerName: "openclaw-test-sandbox",
+        workspaceDir,
+        containerWorkdir: "/workspace",
+        buildExecSpec,
+      },
+    });
+
+    try {
+      await expect(
+        tool.execute("call-denied-sandbox-path", {
+          command: "cat ../../run/secrets/provider.key",
+          workdir: "/workspace",
+        }),
+      ).rejects.toThrow(
+        "Security Violation: exec command references denied path /run/secrets/provider.key",
+      );
+      expect(buildExecSpec).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps config-loaded home-relative denied paths in the sandbox HOME namespace", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sandbox-home-denied-"));
+    const workspaceDir = path.join(tempRoot, "host", "workspace");
+    fs.mkdirSync(workspaceDir, { recursive: true });
+    const config = normalizeConfigPaths({
+      tools: {
+        exec: {
+          deniedPaths: ["~/.openclaw/credentials/**"],
+        },
+      },
+    });
+    const buildExecSpec = vi.fn(async (params) => ({
+      argv: ["sh", "-c", "echo should-not-run"],
+      env: params.env,
+      stdinMode: "pipe-closed" as const,
+    }));
+    const tool = createExecTool({
+      host: "sandbox",
+      security: "full",
+      ask: "off",
+      deniedPaths: config.tools?.exec?.deniedPaths,
+      sandbox: {
+        containerName: "openclaw-test-sandbox",
+        workspaceDir,
+        containerWorkdir: "/workspace",
+        buildExecSpec,
+      },
+    });
+
+    try {
+      await expect(
+        tool.execute("call-denied-sandbox-home-path", {
+          command: 'cat "$HOME/.openclaw/credentials/provider.key"',
+          workdir: "/workspace",
+        }),
+      ).rejects.toThrow(
+        "Security Violation: exec command references denied path /workspace/.openclaw/credentials/provider.key",
+      );
+      expect(buildExecSpec).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks sandbox home denied paths when request env overrides HOME", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sandbox-home-override-"));
+    const workspaceDir = path.join(tempRoot, "host", "workspace");
+    fs.mkdirSync(workspaceDir, { recursive: true });
+    const config = normalizeConfigPaths({
+      tools: {
+        exec: {
+          deniedPaths: ["~/.openclaw/credentials/**"],
+        },
+      },
+    });
+    const buildExecSpec = vi.fn(async (params) => ({
+      argv: ["sh", "-c", "echo should-not-run"],
+      env: params.env,
+      stdinMode: "pipe-closed" as const,
+    }));
+    const tool = createExecTool({
+      host: "sandbox",
+      security: "full",
+      ask: "off",
+      deniedPaths: config.tools?.exec?.deniedPaths,
+      sandbox: {
+        containerName: "openclaw-test-sandbox",
+        workspaceDir,
+        containerWorkdir: "/workspace",
+        buildExecSpec,
+      },
+    });
+
+    try {
+      await expect(
+        tool.execute("call-denied-sandbox-home-override", {
+          command: 'cat "$HOME/.openclaw/credentials/provider.key"',
+          env: { HOME: "/tmp" },
+          workdir: "/workspace",
+        }),
+      ).rejects.toThrow(
+        "Security Violation: exec command references denied path /tmp/.openclaw/credentials/provider.key",
+      );
+      expect(buildExecSpec).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects host=node home-relative denied paths without a trusted node HOME", async () => {
+    const config = normalizeConfigPaths({
+      tools: {
+        exec: {
+          deniedPaths: ["~/.openclaw/credentials/**"],
+        },
+      },
+    });
+    nodeMocks.listNodes.mockReset();
+    nodeMocks.listNodes.mockResolvedValueOnce([
+      {
+        nodeId: "node-1",
+        commands: ["system.run"],
+        platform: "win32",
+      },
+    ]);
+    nodeMocks.resolveNodeIdFromList.mockClear();
+    nodeMocks.callGatewayTool.mockReset();
+    nodeMocks.callGatewayTool.mockResolvedValue({
+      payload: {
+        success: true,
+        stdout: "should-not-run",
+        stderr: "",
+        exitCode: 0,
+      },
+    });
+    const tool = createExecTool({
+      host: "node",
+      security: "full",
+      ask: "off",
+      deniedPaths: config.tools?.exec?.deniedPaths,
+    });
+
+    await expect(
+      tool.execute("call-denied-node-home-path", {
+        command: "type C:\\Users\\agent\\.openclaw\\credentials\\provider.key",
+        workdir: "C:\\Work",
+      }),
+    ).rejects.toThrow(
+      "Security Violation: exec host=node denied path pattern ~/.openclaw/credentials requires a trusted node HOME to resolve.",
+    );
+    expect(nodeMocks.callGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("blocks home-relative denied path patterns against the resolved home directory", async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-denied-home-"));
+    const originalHome = process.env.HOME;
+    process.env.HOME = homeDir;
+    const deniedFile = path.join(homeDir, ".openclaw", "credentials", "provider.key");
+    const tool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      deniedPaths: ["~/.openclaw/credentials/**"],
+    });
+
+    try {
+      await expect(
+        tool.execute("call-denied-home-path", {
+          command: `cat "${deniedFile}"`,
+        }),
+      ).rejects.toThrow(`Security Violation: exec command references denied path ${deniedFile}`);
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+      fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks HOME-prefixed command paths against home-relative denied path patterns", async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-denied-env-home-"));
+    const originalHome = process.env.HOME;
+    process.env.HOME = homeDir;
+    const deniedFile = path.join(homeDir, ".openclaw", "credentials", "provider.key");
+    const tool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      deniedPaths: ["~/.openclaw/credentials/**"],
+    });
+
+    try {
+      await expect(
+        tool.execute("call-denied-env-home-path", {
+          command: 'cat "$HOME/.openclaw/credentials/provider.key"',
+        }),
+      ).rejects.toThrow(`Security Violation: exec command references denied path ${deniedFile}`);
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+      fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks braced HOME-prefixed command paths inside shell wrapper payloads", async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-denied-braced-home-"));
+    const originalHome = process.env.HOME;
+    process.env.HOME = homeDir;
+    const deniedFile = path.join(homeDir, ".openclaw", "credentials", "provider.key");
+    const tool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      deniedPaths: ["~/.openclaw/credentials/**"],
+    });
+
+    try {
+      await expect(
+        tool.execute("call-denied-braced-home-path", {
+          command: `bash -lc 'cat "\${HOME}/.openclaw/credentials/provider.key"'`,
+        }),
+      ).rejects.toThrow(`Security Violation: exec command references denied path ${deniedFile}`);
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+      fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
   it("blocks LD_/DYLD_ env vars on host execution", async () => {
     const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
 

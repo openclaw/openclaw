@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { normalizeConfigPaths } from "../config/normalize-paths.js";
 
 type StrictInlineEvalBoundary =
   typeof import("./bash-tools.exec-host-shared.js").enforceStrictInlineEvalApprovalBoundary;
@@ -426,6 +427,167 @@ describe("executeNodeHostCommand", () => {
     expect(runParams.suppressNotifyOnExit).toBe(true);
     expect(runParams.timeoutMs).toBe(30_000);
     expect(Object.hasOwn(runParams, "systemRunPlan")).toBe(false);
+  });
+
+  it("blocks denied Windows node paths using the node platform namespace", async () => {
+    listNodesMock.mockResolvedValueOnce([
+      {
+        nodeId: "node-1",
+        commands: ["system.run"],
+        platform: "win32",
+      },
+    ]);
+
+    await expect(
+      executeNodeHostCommand({
+        command: "type C:\\Secrets\\provider.key",
+        workdir: "C:\\Work",
+        env: {},
+        security: "full",
+        ask: "off",
+        defaultTimeoutSec: 30,
+        approvalRunningNoticeMs: 0,
+        warnings: [],
+        agentId: "requested-agent",
+        sessionKey: "requested-session",
+        deniedPaths: ["C:\\Secrets\\**"],
+      }),
+    ).rejects.toThrow(
+      "Security Violation: exec command references denied path C:\\Secrets\\provider.key",
+    );
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks Windows node drive-root denied paths", async () => {
+    listNodesMock.mockResolvedValueOnce([
+      {
+        nodeId: "node-1",
+        commands: ["system.run"],
+        platform: "win32",
+      },
+    ]);
+
+    await expect(
+      executeNodeHostCommand({
+        command: "C:\\Users\\agent\\secret.txt",
+        workdir: "D:\\Work",
+        env: {},
+        security: "full",
+        ask: "off",
+        defaultTimeoutSec: 30,
+        approvalRunningNoticeMs: 0,
+        warnings: [],
+        agentId: "requested-agent",
+        sessionKey: "requested-session",
+        deniedPaths: ["C:\\**"],
+      }),
+    ).rejects.toThrow(
+      "Security Violation: exec command references denied path C:\\Users\\agent\\secret.txt",
+    );
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects config-loaded home-relative denied paths for Windows node without trusted HOME", async () => {
+    const config = normalizeConfigPaths({
+      tools: {
+        exec: {
+          deniedPaths: ["~/.openclaw/credentials/**"],
+        },
+      },
+    });
+    listNodesMock.mockResolvedValueOnce([
+      {
+        nodeId: "node-1",
+        commands: ["system.run"],
+        platform: "win32",
+      },
+    ]);
+
+    await expect(
+      executeNodeHostCommand({
+        command: "type C:\\Users\\agent\\.openclaw\\credentials\\provider.key",
+        workdir: "C:\\Work",
+        env: { HOME: "C:\\Users\\agent" },
+        requestedEnv: { HOME: "C:\\Users\\agent" },
+        security: "full",
+        ask: "off",
+        defaultTimeoutSec: 30,
+        approvalRunningNoticeMs: 0,
+        warnings: [],
+        agentId: "requested-agent",
+        sessionKey: "requested-session",
+        deniedPaths: config.tools?.exec?.deniedPaths,
+      }),
+    ).rejects.toThrow(
+      "Security Violation: exec host=node denied path pattern ~/.openclaw/credentials requires a trusted node HOME to resolve.",
+    );
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects Windows node home denied paths before trusting requested HOME", async () => {
+    const config = normalizeConfigPaths({
+      tools: {
+        exec: {
+          deniedPaths: ["~/.openclaw/credentials/**"],
+        },
+      },
+    });
+    listNodesMock.mockResolvedValueOnce([
+      {
+        nodeId: "node-1",
+        commands: ["system.run"],
+        platform: "win32",
+      },
+    ]);
+
+    await expect(
+      executeNodeHostCommand({
+        command: "type C:\\Users\\agent\\.openclaw\\credentials\\provider.key",
+        workdir: "C:\\Work",
+        env: { HOME: "C:\\Users\\agent" },
+        requestedEnv: { HOME: "C:\\Temp" },
+        security: "full",
+        ask: "off",
+        defaultTimeoutSec: 30,
+        approvalRunningNoticeMs: 0,
+        warnings: [],
+        agentId: "requested-agent",
+        sessionKey: "requested-session",
+        deniedPaths: config.tools?.exec?.deniedPaths,
+      }),
+    ).rejects.toThrow(
+      "Security Violation: exec host=node denied path pattern ~/.openclaw/credentials requires a trusted node HOME to resolve.",
+    );
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
+
+  it("matches denied Windows node paths case-insensitively", async () => {
+    listNodesMock.mockResolvedValueOnce([
+      {
+        nodeId: "node-1",
+        commands: ["system.run"],
+        platform: "win32",
+      },
+    ]);
+
+    await expect(
+      executeNodeHostCommand({
+        command: "type c:\\secrets\\provider.key",
+        workdir: "C:\\Work",
+        env: {},
+        security: "full",
+        ask: "off",
+        defaultTimeoutSec: 30,
+        approvalRunningNoticeMs: 0,
+        warnings: [],
+        agentId: "requested-agent",
+        sessionKey: "requested-session",
+        deniedPaths: ["C:\\Secrets\\**"],
+      }),
+    ).rejects.toThrow(
+      "Security Violation: exec command references denied path c:\\secrets\\provider.key",
+    );
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 
   it("rejects disconnected node targets before invoking system.run", async () => {

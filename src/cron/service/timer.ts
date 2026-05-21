@@ -1,12 +1,12 @@
 import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
 import { formatEmbeddedAgentExecutionPhase } from "../../agents/pi-embedded-runner/execution-phase.js";
+import { loadSessionStore } from "../../config/sessions/store-load.js";
 import type { CronConfig, CronRetryOn } from "../../config/types.cron.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import {
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
   isRetryableHeartbeatBusySkipReason,
 } from "../../infra/heartbeat-wake.js";
-import { loadSessionStore } from "../../config/sessions/store-load.js";
 import {
   DEFAULT_AGENT_ID,
   isSubagentSessionKey,
@@ -438,9 +438,7 @@ function normalizeCronLaneSegment(value: string | undefined, fallback: string): 
 
 function resolveMainSessionCronRunSessionKey(job: CronJob, startedAt: number): string {
   const explicitAgentId = job.agentId?.trim();
-  const agentId = normalizeAgentId(
-    explicitAgentId || resolveAgentIdFromSessionKey(job.sessionKey),
-  );
+  const agentId = normalizeAgentId(explicitAgentId || resolveAgentIdFromSessionKey(job.sessionKey));
   const jobSegment = normalizeCronLaneSegment(job.id, "job");
   const runSegment = normalizeCronLaneSegment(String(Math.max(0, Math.floor(startedAt))), "run");
   return `agent:${agentId}:cron:${jobSegment}:run:${runSegment}`;
