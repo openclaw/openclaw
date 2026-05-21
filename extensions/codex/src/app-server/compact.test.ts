@@ -56,6 +56,16 @@ function startCompaction(sessionFile: string, options: { currentTokenCount?: num
   });
 }
 
+function startSandboxedCompaction(sessionFile: string) {
+  return maybeCompactCodexAppServerSession({
+    sessionId: "session-1",
+    sessionKey: "agent:main:session-1",
+    sessionFile,
+    workspaceDir: tempDir,
+    config: { agents: { defaults: { sandbox: { mode: "all" } } } },
+  });
+}
+
 type CompactResult = NonNullable<Awaited<ReturnType<typeof maybeCompactCodexAppServerSession>>>;
 
 function requireCompactResult(result: CompactResult | undefined): CompactResult {
@@ -110,6 +120,21 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(details.threadId).toBe("thread-1");
     expect(details.signal).toBe("thread/compacted");
     expect(details.turnId).toBe("turn-1");
+  });
+
+  it("blocks native app-server compaction when the current OpenClaw session is sandboxed", async () => {
+    const fake = createFakeCodexClient();
+    setCodexAppServerClientFactoryForTest(async () => fake.client);
+    const sessionFile = await writeTestBinding();
+
+    const result = requireCompactResult(await startSandboxedCompaction(sessionFile));
+
+    expect(result.ok).toBe(false);
+    expect(result.compacted).toBe(false);
+    expect(result.reason).toContain(
+      "Codex-native native compaction is unavailable because OpenClaw sandboxing is active for this session.",
+    );
+    expect(fake.request).not.toHaveBeenCalled();
   });
 
   it("accepts native context-compaction item completion as success", async () => {

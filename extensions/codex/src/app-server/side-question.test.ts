@@ -495,6 +495,21 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(result).toEqual({ text: "Nested answer." });
   });
 
+  it("rejects /btw before forking when the current OpenClaw session is sandboxed", async () => {
+    await expect(
+      runCodexAppServerSideQuestion(
+        sideParams({
+          cfg: { agents: { defaults: { sandbox: { mode: "all" } } } } as never,
+          sessionKey: "sandboxed-session",
+        }),
+      ),
+    ).rejects.toThrow(
+      "Codex-native /btw side-question mode is unavailable because OpenClaw sandboxing is active for this session.",
+    );
+
+    expect(getSharedCodexAppServerClientMock).not.toHaveBeenCalled();
+  });
+
   it("installs native hook relay config for opted-in side threads", async () => {
     const client = createFakeClient();
     let relayIdDuringFork: string | undefined;

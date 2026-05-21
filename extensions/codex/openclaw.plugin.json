@@ -190,6 +190,16 @@
           "serviceTier": { "type": ["string", "null"] },
           "defaultWorkspaceDir": {
             "type": "string"
+          },
+          "experimental": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "sandboxExecServer": {
+                "type": "boolean",
+                "default": false
+              }
+            }
           }
         }
       }
@@ -368,6 +378,16 @@
     "appServer.defaultWorkspaceDir": {
       "label": "Default Workspace",
       "help": "Workspace used by /codex bind when --cwd is omitted.",
+      "advanced": true
+    },
+    "appServer.experimental": {
+      "label": "Experimental",
+      "help": "Experimental Codex app-server integrations.",
+      "advanced": true
+    },
+    "appServer.experimental.sandboxExecServer": {
+      "label": "Sandbox Exec Server",
+      "help": "Route native Codex execution through an OpenClaw sandbox-backed exec-server when OpenClaw sandboxing is active.",
       "advanced": true
     }
   }

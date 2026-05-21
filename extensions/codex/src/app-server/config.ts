@@ -72,6 +72,10 @@ export type CodexPluginsConfig = {
   plugins?: Record<string, CodexPluginEntryConfig>;
 };
 
+export type CodexAppServerExperimentalConfig = {
+  sandboxExecServer?: boolean;
+};
+
 export type ResolvedCodexPluginPolicy = {
   configKey: string;
   marketplaceName: typeof CODEX_PLUGINS_MARKETPLACE_NAME;
@@ -136,6 +140,7 @@ export type CodexPluginConfig = {
     approvalsReviewer?: CodexAppServerApprovalsReviewer;
     serviceTier?: CodexServiceTier | null;
     defaultWorkspaceDir?: string;
+    experimental?: CodexAppServerExperimentalConfig;
   };
 };
 
@@ -156,7 +161,10 @@ export const CODEX_APP_SERVER_CONFIG_KEYS = [
   "approvalsReviewer",
   "serviceTier",
   "defaultWorkspaceDir",
+  "experimental",
 ] as const;
+
+export const CODEX_APP_SERVER_EXPERIMENTAL_CONFIG_KEYS = ["sandboxExecServer"] as const;
 
 export const CODEX_COMPUTER_USE_CONFIG_KEYS = [
   "enabled",
@@ -203,6 +211,11 @@ const codexAppServerServiceTierSchema = z
     z.string().trim().min(1).nullable().optional(),
   )
   .optional();
+const codexAppServerExperimentalSchema = z
+  .object({
+    sandboxExecServer: z.boolean().optional(),
+  })
+  .strict();
 
 const codexPluginEntryConfigSchema = z
   .object({
@@ -264,6 +277,7 @@ const codexPluginConfigSchema = z
         approvalsReviewer: codexAppServerApprovalsReviewerSchema.optional(),
         serviceTier: codexAppServerServiceTierSchema,
         defaultWorkspaceDir: z.string().optional(),
+        experimental: codexAppServerExperimentalSchema.optional(),
       })
       .strict()
       .optional(),
@@ -281,6 +295,10 @@ export function readCodexPluginConfig(value: unknown): CodexPluginConfig {
     return config;
   }
   return { ...config, ...(plugins.data ? { codexPlugins: plugins.data } : {}) };
+}
+
+export function isCodexSandboxExecServerEnabled(pluginConfig?: unknown): boolean {
+  return readCodexPluginConfig(pluginConfig).appServer?.experimental?.sandboxExecServer === true;
 }
 
 export function resolveCodexPluginsPolicy(pluginConfig?: unknown): ResolvedCodexPluginsPolicy {
