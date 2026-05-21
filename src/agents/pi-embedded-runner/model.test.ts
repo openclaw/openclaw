@@ -597,6 +597,7 @@ describe("resolveModel", () => {
       models: {
         providers: {
           openai: {
+            baseUrl: "",
             api: "openai-responses",
             models: [
               {
@@ -605,6 +606,7 @@ describe("resolveModel", () => {
                 api: "openai-responses",
                 reasoning: true,
                 input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                 contextWindow: 400_000,
                 maxTokens: 128_000,
               },
@@ -678,7 +680,7 @@ describe("resolveModel", () => {
       "typoProvider",
       "typoed-model",
       "/tmp/agent",
-      cfg as OpenClawConfig,
+      cfg as unknown as OpenClawConfig,
     );
 
     expect(result.model).toBeUndefined();
@@ -700,7 +702,7 @@ describe("resolveModel", () => {
       "openai",
       "typoed-model",
       "/tmp/agent",
-      cfg as OpenClawConfig,
+      cfg as unknown as OpenClawConfig,
     );
 
     expect(result.model).toBeUndefined();
@@ -1220,7 +1222,12 @@ describe("resolveModel", () => {
       },
     } satisfies OpenClawConfigInput;
 
-    const result = resolveModelForTest("openai", "gpt-5.5", "/tmp/agent", cfg as OpenClawConfig);
+    const result = resolveModelForTest(
+      "openai",
+      "gpt-5.5",
+      "/tmp/agent",
+      cfg as unknown as OpenClawConfig,
+    );
 
     expect(result.error).toBeUndefined();
     expect((result.model as { requestTimeoutMs?: number } | undefined)?.requestTimeoutMs).toBe(
