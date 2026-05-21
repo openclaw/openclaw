@@ -1,4 +1,5 @@
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { formatBlockedLivenessError, isBlockedLivenessState } from "../shared/agent-liveness.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { wrapPromptDataBlock } from "./sanitize-for-prompt.js";
 import {
@@ -376,7 +377,10 @@ export function applySubagentWaitOutcome(params: {
   }
   const waitError = typeof params.wait?.error === "string" ? params.wait.error : undefined;
   let outcome = next.outcome;
-  if (params.wait?.status === "timeout") {
+  // Capture/announcement callers can pass raw wait snapshots that bypass the primary normalizers.
+  if (isBlockedLivenessState(params.wait?.livenessState)) {
+    outcome = { status: "error", error: formatBlockedLivenessError(waitError) };
+  } else if (params.wait?.status === "timeout") {
     outcome = { status: "timeout" };
   } else if (params.wait?.status === "error") {
     outcome = { status: "error", error: waitError };
