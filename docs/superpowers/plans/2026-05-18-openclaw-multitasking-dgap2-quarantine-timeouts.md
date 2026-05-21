@@ -13,10 +13,10 @@ configurable `maxTurnMs` per channel that aborts the turn and emits a single
 
 **Parent plans:**
 
-- [`2026-05-18-openclaw-multitasking.md`](./2026-05-18-openclaw-multitasking.md)
-  — Phase 1 items 4 (surface quarantined messages) + 5 (turn timeouts).
-- [`2026-05-20-agentos-operator-dispatcher-loop.md`](./2026-05-20-agentos-operator-dispatcher-loop.md)
-  — consumes `briefing.*` events as operator-loop escalation inputs.
+- `2026-05-18-openclaw-multitasking.md` — Phase 1 items 4 (surface
+  quarantined messages) + 5 (turn timeouts).
+- `2026-05-20-agentos-operator-dispatcher-loop.md` — consumes `briefing.*`
+  events as operator-loop escalation inputs.
 
 **Roadmap ref (100% Roadmap Gap Audit, 2026-05-20):**
 
