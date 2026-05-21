@@ -178,7 +178,13 @@ export async function planOpenClawModelsJsonWithDeps(
       secretRefManagedProviders,
     }) ?? normalizedMergedProviders;
   const finalProviders = applyNativeStreamingUsageCompat(secretEnforcedProviders);
-  const nextContents = `${JSON.stringify({ providers: finalProviders }, null, 2)}\n`;
+  // Strip apiKey from providers before writing to models.json (Layer 1 security).
+  // API keys are resolved at runtime via env vars / auth profiles.
+  // Storing them in models.json creates a leak vector to LLM prompt context.
+  const sanitizedProviders = Object.fromEntries(
+    Object.entries(finalProviders).map(([key, { apiKey: _, ...rest }]) => [key, rest]),
+  );
+  const nextContents = `${JSON.stringify({ providers: sanitizedProviders }, null, 2)}\n`;
 
   if (params.existingRaw === nextContents) {
     return { action: "noop" };
