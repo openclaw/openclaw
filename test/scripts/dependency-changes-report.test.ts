@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { createDependencyChangesReport } from "../../scripts/dependency-changes-report.mjs";
+import {
+  createDependencyChangesReport,
+  isDependencyFile,
+} from "../../scripts/dependency-changes-report.mjs";
 
 describe("dependency-changes-report", () => {
   it("reports added, removed, and changed packages", () => {
@@ -38,5 +41,12 @@ describe("dependency-changes-report", () => {
     expect(report.changedPackages).toEqual([
       { packageName: "changed", addedVersions: ["2.0.0"], removedVersions: ["1.0.0"] },
     ]);
+  });
+
+  it("treats shrinkwrap and package-lock as dependency files", () => {
+    expect(isDependencyFile("npm-shrinkwrap.json")).toBe(true);
+    expect(isDependencyFile("package-lock.json")).toBe(true);
+    expect(isDependencyFile("pnpm-lock.yaml")).toBe(true);
+    expect(isDependencyFile("docs/gateway/security/index.md")).toBe(false);
   });
 });
