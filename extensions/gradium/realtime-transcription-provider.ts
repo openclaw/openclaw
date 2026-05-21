@@ -214,8 +214,9 @@ export function buildGradiumRealtimeTranscriptionProvider(): RealtimeTranscripti
   };
 }
 
-export const __testing = {
+export const testing = {
   normalizeProviderConfig,
   toGradiumRealtimeWsUrl,
   buildSetupPayload,
 };
+export { testing as __testing };
