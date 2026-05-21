@@ -323,6 +323,11 @@ function stripMarkdownLeadingMarkers(raw: string): string {
   return raw.replace(/^(?:[-*+>]\s*)+/, "").trim();
 }
 
+function markdownHeadingHasInlinePayload(raw: string): boolean {
+  const headingText = raw.replace(/^#{1,6}\s+/, "").trim();
+  return /:\s*\S/.test(headingText);
+}
+
 function isMarkdownMarkerOnlyLine(raw: string): boolean {
   const line = raw.trim();
   if (!line) {
@@ -352,6 +357,9 @@ function isMarkdownSkeletonSnippet(raw: string): boolean {
     }
     const withoutLeadingMarkers = stripMarkdownLeadingMarkers(line);
     if (/^#{1,6}\s+\S/.test(withoutLeadingMarkers)) {
+      if (markdownHeadingHasInlinePayload(withoutLeadingMarkers)) {
+        return false;
+      }
       if (withoutLeadingMarkers !== line) {
         hasPlaceholderLine = true;
       }

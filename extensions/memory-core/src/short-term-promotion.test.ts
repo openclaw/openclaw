@@ -1161,6 +1161,7 @@ describe("short-term promotion", () => {
     expect(testing.isUnpromotableShortTermSnippet("- Keep gateway restarts supervised.")).toBe(
       false,
     );
+    expect(testing.isUnpromotableShortTermSnippet("- ## Decision: Move backups to S3")).toBe(false);
   });
 
   it("does not record placeholder-only grounded candidates for promotion", async () => {
