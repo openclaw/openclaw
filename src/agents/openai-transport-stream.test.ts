@@ -2776,7 +2776,218 @@ describe("openai transport stream", () => {
     expect(functionCall?.id).toBeUndefined();
   });
 
-  it("preserves prior Responses replay item ids for custom Codex-compatible responses", () => {
+  it("omits Responses replay item ids when OpenAI Responses requests disable store", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-responses",
+        provider: "mycodex",
+        baseUrl: "http://127.0.0.1:8317/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_000_000,
+        maxTokens: 128_000,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            api: "openai-responses",
+            provider: "mycodex",
+            model: "gpt-5.5",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            timestamp: 1,
+            content: [
+              {
+                type: "thinking",
+                thinking: "Need a tool.",
+                thinkingSignature: JSON.stringify({
+                  type: "reasoning",
+                  id: "rs_prior",
+                  encrypted_content: "ciphertext",
+                }),
+              },
+              {
+                type: "text",
+                text: "Checking the price.",
+                textSignature: JSON.stringify({
+                  v: 1,
+                  id: "msg_prior",
+                  phase: "commentary",
+                }),
+              },
+              {
+                type: "toolCall",
+                id: "call_abc|fc_prior",
+                name: "price_lookup",
+                arguments: { symbol: "SOL" },
+              },
+            ],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_abc|fc_prior",
+            toolName: "price_lookup",
+            content: [{ type: "text", text: "$83.95" }],
+            isError: false,
+            timestamp: 2,
+          },
+        ],
+        tools: [],
+      } as never,
+      { sessionId: "session-123" },
+    ) as {
+      store?: boolean;
+      input?: Array<{
+        type?: string;
+        role?: string;
+        id?: string;
+        call_id?: string;
+        phase?: string;
+        encrypted_content?: string;
+      }>;
+    };
+
+    expect(params.store).toBe(false);
+    const reasoningItem = params.input?.find((item) => item.type === "reasoning");
+    expectRecordFields(reasoningItem, {
+      type: "reasoning",
+    });
+    expect(reasoningItem?.id).toBeUndefined();
+    expect(reasoningItem).not.toHaveProperty("encrypted_content");
+    const assistantMessage = params.input?.find(
+      (item) => item.type === "message" && item.role === "assistant",
+    );
+    expectRecordFields(assistantMessage, {
+      type: "message",
+      role: "assistant",
+      phase: "commentary",
+    });
+    expect(assistantMessage?.id).toBeUndefined();
+    const functionCall = params.input?.find((item) => item.type === "function_call");
+    expectRecordFields(functionCall, {
+      type: "function_call",
+      call_id: "call_abc",
+    });
+    expect(functionCall?.id).toBeUndefined();
+  });
+
+  it("preserves Responses replay item ids when a store-enabled wrapper requests replay", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            api: "openai-responses",
+            provider: "openai",
+            model: "gpt-5.4",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            timestamp: 1,
+            content: [
+              {
+                type: "thinking",
+                thinking: "Need a tool.",
+                thinkingSignature: JSON.stringify({
+                  type: "reasoning",
+                  id: "rs_prior",
+                  encrypted_content: "ciphertext",
+                }),
+              },
+              {
+                type: "text",
+                text: "Checking the price.",
+                textSignature: JSON.stringify({
+                  v: 1,
+                  id: "msg_prior",
+                  phase: "commentary",
+                }),
+              },
+              {
+                type: "toolCall",
+                id: "call_abc|fc_prior",
+                name: "price_lookup",
+                arguments: { symbol: "SOL" },
+              },
+            ],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_abc|fc_prior",
+            toolName: "price_lookup",
+            content: [{ type: "text", text: "$83.95" }],
+            isError: false,
+            timestamp: 2,
+          },
+        ],
+        tools: [],
+      } as never,
+      { replayResponsesItemIds: true, sessionId: "session-123" },
+    ) as {
+      input?: Array<{
+        type?: string;
+        role?: string;
+        id?: string;
+        call_id?: string;
+        phase?: string;
+        encrypted_content?: string;
+      }>;
+    };
+
+    const reasoningItem = params.input?.find((item) => item.type === "reasoning");
+    expectRecordFields(reasoningItem, {
+      type: "reasoning",
+      id: "rs_prior",
+    });
+    const assistantMessage = params.input?.find(
+      (item) => item.type === "message" && item.role === "assistant",
+    );
+    expectRecordFields(assistantMessage, {
+      type: "message",
+      role: "assistant",
+      id: "msg_prior",
+      phase: "commentary",
+    });
+    const functionCall = params.input?.find((item) => item.type === "function_call");
+    expectRecordFields(functionCall, {
+      type: "function_call",
+      id: "fc_prior",
+      call_id: "call_abc",
+    });
+  });
+
+  it("omits prior Responses replay item ids when store is disabled for custom Codex-compatible responses", () => {
     const model = {
       id: "gpt-5.4",
       name: "GPT-5.4",
@@ -2862,9 +3073,9 @@ describe("openai transport stream", () => {
     const reasoningItem = params.input?.find((item) => item.type === "reasoning");
     expectRecordFields(reasoningItem, {
       type: "reasoning",
-      id: "rs_prior",
       encrypted_content: "ciphertext",
     });
+    expect(reasoningItem?.id).toBeUndefined();
     expect(reasoningItem).not.toHaveProperty("__openclaw_replay");
     const assistantMessage = params.input?.find(
       (item) => item.type === "message" && item.role === "assistant",
@@ -2872,15 +3083,15 @@ describe("openai transport stream", () => {
     expectRecordFields(assistantMessage, {
       type: "message",
       role: "assistant",
-      id: "msg_prior",
       phase: "commentary",
     });
+    expect(assistantMessage?.id).toBeUndefined();
     const functionCall = params.input?.find((item) => item.type === "function_call");
     expectRecordFields(functionCall, {
       type: "function_call",
-      id: "fc_prior",
       call_id: "call_abc",
     });
+    expect(functionCall?.id).toBeUndefined();
   });
 
   it("drops oversized GitHub Copilot Responses reasoning replay items before send", () => {
@@ -3012,8 +3223,8 @@ describe("openai transport stream", () => {
     const reasoningItem = params.input?.find((item) => item.type === "reasoning");
     expectRecordFields(reasoningItem, {
       type: "reasoning",
-      id: "rs_prior",
     });
+    expect(reasoningItem?.id).toBeUndefined();
     expect(reasoningItem).not.toHaveProperty("encrypted_content");
   });
 
@@ -3085,8 +3296,8 @@ describe("openai transport stream", () => {
     const reasoningItem = params.input?.find((item) => item.type === "reasoning");
     expectRecordFields(reasoningItem, {
       type: "reasoning",
-      id: "rs_prior",
     });
+    expect(reasoningItem?.id).toBeUndefined();
     expect(reasoningItem).not.toHaveProperty("encrypted_content");
   });
 
@@ -3160,9 +3371,9 @@ describe("openai transport stream", () => {
     const reasoningItem = params.input?.find((item) => item.type === "reasoning");
     expectRecordFields(reasoningItem, {
       type: "reasoning",
-      id: "rs_prior",
       encrypted_content: "ciphertext",
     });
+    expect(reasoningItem?.id).toBeUndefined();
     expect(reasoningItem).not.toHaveProperty("__openclaw_replay");
   });
 
@@ -3269,8 +3480,7 @@ describe("openai transport stream", () => {
     const functionOutput = params.input?.find((item) => item.type === "function_call_output");
     expect(functionCall).toBeDefined();
     expect(functionOutput).toBeDefined();
-    expect(functionCall?.id).toMatch(/^fc_/);
-    expect(functionCall?.id?.length).toBeLessThanOrEqual(64);
+    expect(functionCall?.id).toBeUndefined();
     expect(functionCall?.call_id).toBe("call_ug6lFGKwZDjHfzW8H0PDQRwN");
     expect(functionOutput?.call_id).toBe(functionCall?.call_id);
     for (const item of params.input ?? []) {
@@ -3283,7 +3493,7 @@ describe("openai transport stream", () => {
     }
   });
 
-  it("keeps distinct overlong Copilot Responses replay item ids distinct", () => {
+  it("omits distinct overlong Copilot Responses replay item ids when store is disabled", () => {
     const sharedToolItemPrefix = "iVec" + "A".repeat(160);
     const firstToolCallId = `call_first|${sharedToolItemPrefix}Aa`;
     const secondToolCallId = `call_second|${sharedToolItemPrefix}BB`;
@@ -3353,14 +3563,7 @@ describe("openai transport stream", () => {
       params.input?.filter((item) => item.type === "function_call_output") ?? [];
     expect(functionCalls).toHaveLength(2);
     expect(functionOutputs).toHaveLength(2);
-    expect(functionCalls.map((item) => item.id)).toEqual([
-      expect.stringMatching(/^fc_/),
-      expect.stringMatching(/^fc_/),
-    ]);
-    expect(new Set(functionCalls.map((item) => item.id)).size).toBe(2);
-    for (const item of functionCalls) {
-      expect(item.id?.length).toBeLessThanOrEqual(64);
-    }
+    expect(functionCalls.map((item) => item.id)).toEqual([undefined, undefined]);
     expect(functionOutputs.map((item) => item.call_id)).toEqual(["call_first", "call_second"]);
   });
 

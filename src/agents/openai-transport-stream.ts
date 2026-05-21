@@ -173,6 +173,7 @@ type OpenAIResponsesOptions = BaseStreamOptions & {
   reasoning?: OpenAIReasoningEffort;
   reasoningEffort?: OpenAIReasoningEffort;
   reasoningSummary?: "auto" | "detailed" | "concise" | null;
+  replayResponsesItemIds?: boolean;
   serviceTier?: ResponseCreateParamsStreaming["service_tier"];
   toolChoice?: ResponseCreateParamsStreaming["tool_choice"];
 };
@@ -2077,6 +2078,12 @@ export function buildOpenAIResponsesParams(
   const compat = getCompat(model as OpenAIModeModel);
   const supportsDeveloperRole =
     typeof compat.supportsDeveloperRole === "boolean" ? compat.supportsDeveloperRole : undefined;
+  const payloadPolicy = resolveOpenAIResponsesPayloadPolicy(model, {
+    storeMode: "disable",
+  });
+  const policyAllowsReplayIds = payloadPolicy.explicitStore !== false;
+  const replayResponsesItemIds =
+    !isNativeCodexResponses && (options?.replayResponsesItemIds ?? policyAllowsReplayIds);
   const messages = convertResponsesMessages(
     model,
     context,
@@ -2085,7 +2092,7 @@ export function buildOpenAIResponsesParams(
       includeSystemPrompt: !isCodexResponses,
       supportsDeveloperRole,
       replayReasoningItems: true,
-      replayResponsesItemIds: !isNativeCodexResponses,
+      replayResponsesItemIds,
       authProfileId: options?.authProfileId,
       sessionId: options?.sessionId,
     },
@@ -2095,9 +2102,6 @@ export function buildOpenAIResponsesParams(
   }
   const cacheRetention = resolveCacheRetention(options?.cacheRetention);
   const promptCacheKey = resolvePromptCacheKey(options, cacheRetention);
-  const payloadPolicy = resolveOpenAIResponsesPayloadPolicy(model, {
-    storeMode: "disable",
-  });
   const params: OpenAIResponsesRequestParams = {
     model: model.id,
     input: messages,
