@@ -6,6 +6,7 @@ import type {
   SandboxBackendManager,
   SandboxBackendRegistration,
 } from "./backend.types.js";
+import { resolveGlobalMap } from "../../shared/global-singleton.js";
 
 export type {
   CreateSandboxBackendParams,
@@ -22,7 +23,11 @@ export type {
   SandboxBackendHandle,
 } from "./backend-handle.types.js";
 
-const SANDBOX_BACKEND_FACTORIES = new Map<SandboxBackendId, RegisteredSandboxBackend>();
+const SANDBOX_BACKEND_STATE = Symbol.for("openclaw.sandboxBackendState");
+
+const SANDBOX_BACKEND_FACTORIES = resolveGlobalMap<SandboxBackendId, RegisteredSandboxBackend>(
+  SANDBOX_BACKEND_STATE,
+);
 
 function normalizeSandboxBackendId(id: string): SandboxBackendId {
   const normalized = normalizeOptionalLowercaseString(id);
