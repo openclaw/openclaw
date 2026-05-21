@@ -29,6 +29,9 @@ import { createMemoryCoreTestHarness } from "./test-helpers.js";
 
 const { createTempWorkspace } = createMemoryCoreTestHarness();
 const DREAMS_FILE_LOCKS_KEY = Symbol.for("openclaw.memoryCore.dreamingNarrative.fileLocks");
+const NARRATIVE_SESSION_LOCKS_KEY = Symbol.for(
+  "openclaw.memoryCore.dreamingNarrative.sessionLocks",
+);
 const EXPECTS_POSIX_PRIVATE_FILE_MODE = process.platform !== "win32";
 
 type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
@@ -80,6 +83,7 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 afterEach(() => {
   vi.restoreAllMocks();
   resolveGlobalMap<string, unknown>(DREAMS_FILE_LOCKS_KEY).clear();
+  resolveGlobalMap<string, unknown>(NARRATIVE_SESSION_LOCKS_KEY).clear();
 });
 
 describe("buildNarrativePrompt", () => {
@@ -1115,10 +1119,12 @@ describe("runDetachedDreamNarrative", () => {
 
   it("caps the number of in-flight detached narratives at 3", async () => {
     const { subagent, runDeferreds } = createBlockingSubagent();
-    const workspaceDir = await createTempWorkspace("openclaw-dreaming-detach-");
+    const workspaceDirs = await Promise.all(
+      Array.from({ length: 5 }, () => createTempWorkspace("openclaw-dreaming-detach-")),
+    );
     const logger = createMockLogger();
 
-    for (let i = 0; i < 5; i += 1) {
+    for (const [i, workspaceDir] of workspaceDirs.entries()) {
       runDetachedDreamNarrative({
         subagent,
         workspaceDir,
@@ -1151,6 +1157,64 @@ describe("runDetachedDreamNarrative", () => {
     for (const d of runDeferreds) {
       d.resolve({ runId: "drain" });
     }
+    await vi.waitFor(() => {
+      expect(subagent.deleteSession).toHaveBeenCalledTimes(10);
+    });
+    expect(subagent.run).toHaveBeenCalledTimes(5);
+    expect(subagent.waitForRun).toHaveBeenCalledTimes(5);
+  });
+
+  it("serializes detached narratives that reuse a workspace and phase session", async () => {
+    let nextRunId = 0;
+    const waitDeferreds: Array<Deferred<{ status: string }>> = [];
+    const subagent = {
+      run: vi.fn(() => {
+        nextRunId += 1;
+        return Promise.resolve({ runId: `run-${nextRunId}` });
+      }),
+      waitForRun: vi.fn(() => {
+        const d = deferred<{ status: string }>();
+        waitDeferreds.push(d);
+        return d.promise;
+      }),
+      getSessionMessages: vi.fn().mockResolvedValue({ messages: [] }),
+      deleteSession: vi.fn().mockResolvedValue(undefined),
+    };
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-detach-");
+    const logger = createMockLogger();
+
+    for (let i = 0; i < 5; i += 1) {
+      runDetachedDreamNarrative({
+        subagent,
+        workspaceDir,
+        data: { phase: "light", snippets: [`fragment-${i}`] },
+        nowMs: Date.parse("2026-04-28T03:00:00Z"),
+        logger,
+      });
+    }
+
+    await vi.waitFor(() => {
+      expect(waitDeferreds.length).toBe(1);
+    });
+
+    expect(subagent.run).toHaveBeenCalledTimes(1);
+    expect(subagent.waitForRun).toHaveBeenCalledTimes(1);
+    // The first run is still active, so later same-key jobs must not pre-delete its session.
+    expect(subagent.deleteSession).toHaveBeenCalledTimes(1);
+
+    for (let i = 0; i < 5; i += 1) {
+      const currentDeferred = waitDeferreds[i];
+      if (!currentDeferred) {
+        throw new Error(`Expected wait deferred ${i} to exist`);
+      }
+      currentDeferred.resolve({ status: "timeout" });
+      if (i < 4) {
+        await vi.waitFor(() => {
+          expect(waitDeferreds.length).toBeGreaterThan(i + 1);
+        });
+      }
+    }
+
     await vi.waitFor(() => {
       expect(subagent.deleteSession).toHaveBeenCalledTimes(10);
     });
