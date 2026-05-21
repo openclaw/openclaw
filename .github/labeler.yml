@@ -382,6 +382,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/codex/**"
+"extensions: claude":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/claude/**"
 "extensions: kimi-coding":
   - changed-files:
       - any-glob-to-any-file:
