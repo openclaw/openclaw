@@ -64,7 +64,10 @@ describe("daily session reset scheduler", () => {
     });
 
     expect(result).toEqual({ checked: 1, reset: 1, errors: 0 });
-    expect(performReset).toHaveBeenCalledWith(sessionKey);
+    expect(performReset).toHaveBeenCalledWith(sessionKey, {
+      sessionId: "old-session",
+      updatedAt: beforeReset,
+    });
   });
 
   it("does not reset fresh daily sessions before the next reset boundary", async () => {
@@ -219,6 +222,48 @@ describe("daily session reset scheduler", () => {
     expect(performReset).not.toHaveBeenCalled();
   });
 
+  it("skips a stale selection when a fresh session is written before reset mutation", async () => {
+    const beforeReset = new Date(2026, 4, 18, 23, 0, 0, 0).getTime();
+    const afterReset = new Date(2026, 4, 19, 8, 0, 0, 0).getTime();
+    const sessionKey = "agent:main:telegram:direct:user-1";
+    const { cfg, storePath } = await makeStore({
+      [sessionKey]: {
+        sessionId: "old-session",
+        updatedAt: beforeReset,
+        sessionStartedAt: beforeReset,
+      },
+    });
+    const performReset = vi.fn(async (_key, expected) => {
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [sessionKey]: {
+            sessionId: "fresh-session",
+            updatedAt: afterReset,
+            sessionStartedAt: afterReset,
+          },
+        }),
+        "utf8",
+      );
+      const current = JSON.parse(await fs.readFile(storePath, "utf8"))[sessionKey];
+      return current.sessionId === expected?.sessionId && current.updatedAt === expected.updatedAt
+        ? { ok: true }
+        : { ok: false, skipped: true };
+    });
+
+    const result = await resetStaleDailySessions({
+      cfg,
+      nowMs: afterReset,
+      performReset,
+    });
+
+    expect(result).toEqual({ checked: 1, reset: 0, errors: 0 });
+    expect(performReset).toHaveBeenCalledWith(sessionKey, {
+      sessionId: "old-session",
+      updatedAt: beforeReset,
+    });
+  });
+
   it("preserves provider-owned CLI sessions when reset policy is implicit", async () => {
     const beforeReset = new Date(2026, 4, 18, 23, 0, 0, 0).getTime();
     const afterReset = new Date(2026, 4, 19, 8, 0, 0, 0).getTime();
@@ -315,7 +360,10 @@ describe("daily session reset scheduler", () => {
     currentConfig = staleAtFour;
     await vi.advanceTimersByTimeAsync(60_000);
 
-    expect(performReset).toHaveBeenCalledWith(sessionKey);
+    expect(performReset).toHaveBeenCalledWith(sessionKey, {
+      sessionId: "old-session",
+      updatedAt: beforeReset,
+    });
     clearInterval(timer);
   });
 });

@@ -28,21 +28,40 @@ export type DailySessionResetResult = {
   errors: number;
 };
 
+export type DailySessionResetExpectedEntry = {
+  sessionId: string;
+  updatedAt: number;
+};
+
 export async function resetStaleDailySessions(params: {
   cfg: OpenClawConfig;
   nowMs?: number;
   activeSessionKeys?: ReadonlySet<string>;
-  performReset?: (key: string) => Promise<{ ok: boolean }>;
+  performReset?: (
+    key: string,
+    expectedEntry?: DailySessionResetExpectedEntry,
+  ) => Promise<{ ok: boolean; skipped?: boolean }>;
 }): Promise<DailySessionResetResult> {
   const now = params.nowMs ?? Date.now();
   const performReset =
     params.performReset ??
-    ((key: string) =>
-      performGatewaySessionReset({
+    (async (key: string, expectedEntry?: DailySessionResetExpectedEntry) => {
+      const result = await performGatewaySessionReset({
         key,
         reason: "daily",
         commandSource: "daily-session-reset-scheduler",
-      }));
+        expectedDailySession: expectedEntry,
+      });
+      if (
+        !result.ok &&
+        result.error.details &&
+        typeof result.error.details === "object" &&
+        (result.error.details as { skippedDailyReset?: unknown }).skippedDailyReset === true
+      ) {
+        return { ok: false, skipped: true };
+      }
+      return result;
+    });
   let checked = 0;
   let reset = 0;
   let errors = 0;
@@ -153,10 +172,13 @@ export async function resetStaleDailySessions(params: {
       if (latestFreshness.fresh) {
         continue;
       }
-      const result = await performReset(resetSessionKey);
+      const result = await performReset(resetSessionKey, {
+        sessionId: latestEntry.sessionId,
+        updatedAt: latestEntry.updatedAt,
+      });
       if (result.ok) {
         reset += 1;
-      } else {
+      } else if (!result.skipped) {
         errors += 1;
       }
     }
