@@ -962,29 +962,46 @@ jobs:
           }
 
           failed=0
-          required_after_preflight=1
+          normal_ci_required=0
+          plugin_prerelease_required=0
+          release_checks_required=0
           if [[ "$RERUN_GROUP" == "all" && "$DOCKER_RUNTIME_ASSETS_PREFLIGHT_RESULT" != "success" ]]; then
             echo "::error::Docker runtime-assets preflight ended with ${DOCKER_RUNTIME_ASSETS_PREFLIGHT_RESULT}."
             failed=1
-            required_after_preflight=0
+          elif [[ "$RERUN_GROUP" == "all" ]]; then
+            normal_ci_required=1
+            plugin_prerelease_required=1
+            release_checks_required=1
+          else
+            case "$RERUN_GROUP" in
+              ci)
+                normal_ci_required=1
+                ;;
+              plugin-prerelease)
+                plugin_prerelease_required=1
+                ;;
+              release-checks|install-smoke|cross-os|live-e2e|package|qa|qa-parity|qa-live)
+                release_checks_required=1
+                ;;
+            esac
           fi
 
           append_child_overview
 
           if [[ "$NORMAL_CI_RESULT" == "skipped" && -z "${NORMAL_CI_RUN_ID// }" ]]; then
-            check_child "normal_ci" "" "$required_after_preflight" || failed=1
+            check_child "normal_ci" "" "$normal_ci_required" || failed=1
           else
             check_child "normal_ci" "$NORMAL_CI_RUN_ID" 1 || failed=1
           fi
 
           if [[ "$PLUGIN_PRERELEASE_RESULT" == "skipped" && -z "${PLUGIN_PRERELEASE_RUN_ID// }" ]]; then
-            check_child "plugin_prerelease" "" "$required_after_preflight" || failed=1
+            check_child "plugin_prerelease" "" "$plugin_prerelease_required" || failed=1
           else
             check_child "plugin_prerelease" "$PLUGIN_PRERELEASE_RUN_ID" 1 || failed=1
           fi
 
           if [[ "$RELEASE_CHECKS_RESULT" == "skipped" && -z "${RELEASE_CHECKS_RUN_ID// }" ]]; then
-            check_child "release_checks" "" "$required_after_preflight" || failed=1
+            check_child "release_checks" "" "$release_checks_required" || failed=1
           else
             check_child "release_checks" "$RELEASE_CHECKS_RUN_ID" 1 || failed=1
           fi
