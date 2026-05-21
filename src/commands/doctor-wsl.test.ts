@@ -197,6 +197,33 @@ describe("buildWSLDiagnosticNotes", () => {
     };
     expect(buildWSLDiagnosticNotes(diag)).toEqual([]);
   });
+
+  it("warns at 3.5GB visible memory (below 4GB when compared before rounding)", () => {
+    // Regression: Math.round(3.5) === 4 would previously pass the < 4 check.
+    const diag = healthyWSL2Diag();
+    diag.wslconfig = null;
+    diag.wslVisibleMemoryBytes = Math.round(3.5 * 1024 * 1024 * 1024);
+    const notes = buildWSLDiagnosticNotes(diag);
+    expect(notes.some((n) => n.includes("No .wslconfig found"))).toBe(true);
+  });
+
+  it("falls back to visible memory when .wslconfig omits the memory key", () => {
+    // A [wsl2] section without an explicit memory= line previously skipped
+    // the memory check entirely (memoryMB null took the if-branch, no else).
+    const diag = healthyWSL2Diag();
+    diag.wslconfig = { memory: null as unknown as string, processors: 4, swap: null };
+    diag.wslVisibleMemoryBytes = 3 * 1024 * 1024 * 1024;
+    const notes = buildWSLDiagnosticNotes(diag);
+    expect(notes.some((n) => n.includes("no memory limit set"))).toBe(true);
+    expect(notes.some((n) => n.includes("~3GB"))).toBe(true);
+  });
+
+  it("does not warn when .wslconfig omits memory but visible memory is ample", () => {
+    const diag = healthyWSL2Diag();
+    diag.wslconfig = { memory: null as unknown as string, processors: 4, swap: null };
+    diag.wslVisibleMemoryBytes = 16 * 1024 * 1024 * 1024;
+    expect(buildWSLDiagnosticNotes(diag)).toEqual([]);
+  });
 });
 
 // ─── buildWSLInfoSummary ────────────────────────────────────────
@@ -230,6 +257,21 @@ describe("buildWSLInfoSummary", () => {
       wslVisibleMemoryBytes: 32 * 1024 * 1024 * 1024,
     });
     expect(summary).toContain("systemd ✗");
+  });
+
+  it("omits .wslconfig resource fields from summary on WSL1", () => {
+    const summary = buildWSLInfoSummary({
+      isWSL: true,
+      isWSL2: false,
+      systemdAvailable: true,
+      wslConfSystemdEnabled: true,
+      wslconfig: { memory: "8GB", processors: 4, swap: "4GB" },
+      kernelVersion: "5.15.153.1-microsoft-standard-WSL2",
+      wslVisibleMemoryBytes: 32 * 1024 * 1024 * 1024,
+    });
+    expect(summary).toContain("WSL1");
+    expect(summary).not.toContain("memory limit");
+    expect(summary).not.toContain("processors");
   });
 
   it("identifies WSL1 correctly", () => {
