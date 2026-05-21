@@ -36,7 +36,6 @@ describe("cron session store disposal", () => {
       storePath: "/fake/path",
       store: mockStore,
       sessionEntry: { sessionId: "abc" },
-      storePath: "/fake",
       systemSent: false,
       isNewSession: false,
       previousSessionId: undefined,
