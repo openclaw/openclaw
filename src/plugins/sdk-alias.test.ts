@@ -1291,6 +1291,16 @@ describe("plugin sdk alias helpers", () => {
     expect("alias" in options).toBe(false);
   });
 
+  it("forces native require() for our own openclaw package paths so jiti doesn't dual-evaluate dist chunks", () => {
+    // Regression guard: without nativeModules:["openclaw"], a jiti-loaded
+    // plugin runtime chunk's transitive static imports of sibling dist chunks
+    // (e.g. dist/gateway/call.js → dist/gateway/client.js) get evaluated in
+    // jiti's separate module cache, producing duplicate class definitions and
+    // wasted load time.
+    const options = buildPluginLoaderJitiOptions({});
+    expect(options.nativeModules).toEqual(["openclaw"]);
+  });
+
   it("uses transpiled module loads for source TypeScript plugin entries", () => {
     expect(shouldPreferNativeModuleLoad("/repo/dist/plugins/runtime/index.js")).toBe(true);
     expect(

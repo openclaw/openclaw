@@ -897,6 +897,12 @@ export function buildPluginLoaderJitiOptions(aliasMap: Record<string, string>) {
     // Prefer Node's native sync ESM loader for built dist/*.js modules so
     // bundled plugins and plugin-sdk subpaths stay on the canonical module graph.
     tryNative: true,
+    // Force native require() for paths inside our own `openclaw` package. Without
+    // this, a jiti-loaded plugin chunk's static imports of sibling dist chunks
+    // (e.g. gateway/call.js → gateway/client.js) get re-evaluated through jiti's
+    // separate module cache, producing duplicate class definitions and several
+    // seconds of redundant per-load overhead.
+    nativeModules: ["openclaw"],
     extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
     ...(hasAliases
       ? {
