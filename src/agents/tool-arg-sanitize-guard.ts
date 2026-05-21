@@ -167,6 +167,26 @@ export function readFalseNegativeGuardConfig(
 // Bounded length 0..32 to avoid runaway regex backtracking on edge inputs.
 const RE_SENTINEL_DOUBLE = /<<\|[^|<>]{0,32}\|>/g;
 const RE_SENTINEL_SINGLE = /<\|[^|<>]{0,32}\|>/g;
+// R1.2 open sentinel variant: P2.18.2 (2026-05-21 18:58) live reproduction.
+// User sent clonari URL to gemma; model serialized web_fetch args.url as
+// "<<|\"|https://clonari.craftbay.io/s/...". The closing ">" of the sentinel
+// is dropped and the inner "|" is followed directly by the payload, so neither
+// RE_SENTINEL_DOUBLE (requires "|>" terminator) nor RE_SENTINEL_HEREDOC
+// ([^|>\s] inner bans pipe) catches it. RE_SENTINEL_OPEN_* matches the open
+// form "<<|inner|" or "<|inner|" only when NOT followed by ">" (lookahead
+// (?!>) keeps DOUBLE/SINGLE behavior orthogonal — closed forms still flow
+// through R1). Inner also bans whitespace so natural "<< foo |" prose is safe.
+const RE_SENTINEL_OPEN_DOUBLE = /<<\|[^|<>\s]{0,32}\|(?!>)/g;
+const RE_SENTINEL_OPEN_SINGLE = /<\|[^|<>\s]{0,32}\|(?!>)/g;
+// R1.3 nested sentinel variant: P2.18.3 (2026-05-21 19:24) live reproduction.
+// Model serialized write args.content as "<|<|\"# ...". The outer "<|"
+// opens a sentinel marker but inner contains "<" (the second "<|" start),
+// so RE_SENTINEL_OPEN_SINGLE inner ban [^|<>\s] rejects "<". Relax inner
+// to ban only "|" and whitespace — preserving the {1,64} length cap. False
+// positives in natural prose are unlikely because "<...|" with no whitespace
+// for up to 64 chars is rare. Length 1+ so empty inner cannot match.
+const RE_SENTINEL_NESTED_DOUBLE = /<<\|[^|\s]{1,64}\|(?!>)/g;
+const RE_SENTINEL_NESTED_SINGLE = /<\|[^|\s]{1,64}\|(?!>)/g;
 // R1.1 heredoc variant: P2.18 TD18-2 (2026-05-21 17:12) reproduced
 // "<<//code>" - model serializing "</code>" into args ended up adding an
 // extra "<" prefix, which bash then interprets as a here-doc delimiter
@@ -208,7 +228,11 @@ export function sanitizeString(
     const before = current;
     const next = current
       .replace(RE_SENTINEL_DOUBLE, "")
+      .replace(RE_SENTINEL_OPEN_DOUBLE, "")
+      .replace(RE_SENTINEL_NESTED_DOUBLE, "")
       .replace(RE_SENTINEL_SINGLE, "")
+      .replace(RE_SENTINEL_OPEN_SINGLE, "")
+      .replace(RE_SENTINEL_NESTED_SINGLE, "")
       .replace(RE_SENTINEL_HEREDOC, "");
     if (next !== before) {
       mutations.push({
@@ -306,12 +330,20 @@ export function sanitizeToolArgs(
       // Also sanitize any string field whose value looks contaminated.
       const looksContaminated =
         RE_SENTINEL_DOUBLE.test(value) ||
+        RE_SENTINEL_OPEN_DOUBLE.test(value) ||
+        RE_SENTINEL_NESTED_DOUBLE.test(value) ||
         RE_SENTINEL_SINGLE.test(value) ||
+        RE_SENTINEL_OPEN_SINGLE.test(value) ||
+        RE_SENTINEL_NESTED_SINGLE.test(value) ||
         RE_SENTINEL_HEREDOC.test(value) ||
         RE_HTML_TAG.test(value);
       // Reset global regex state after .test().
       RE_SENTINEL_DOUBLE.lastIndex = 0;
+      RE_SENTINEL_OPEN_DOUBLE.lastIndex = 0;
+      RE_SENTINEL_NESTED_DOUBLE.lastIndex = 0;
       RE_SENTINEL_SINGLE.lastIndex = 0;
+      RE_SENTINEL_OPEN_SINGLE.lastIndex = 0;
+      RE_SENTINEL_NESTED_SINGLE.lastIndex = 0;
       RE_SENTINEL_HEREDOC.lastIndex = 0;
       RE_HTML_TAG.lastIndex = 0;
       if (!looksContaminated) {

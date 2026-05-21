@@ -319,3 +319,95 @@ describe("R1.1 heredoc-variant sentinel (TD18-2 regression)", () => {
     expect(out.includes("끝")).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// P2.18.2 open-sentinel variant: 18:58 KST live regression (clonari URL).
+// Model serialized web_fetch args.url as:
+//   "<<|\"|https://clonari.craftbay.io/s/36eea1ea48c1505b\""
+// Sentinel marker "<<|\"|" lacks closing ">" so neither RE_SENTINEL_DOUBLE
+// (requires "|>") nor RE_SENTINEL_HEREDOC ([^|>\s] bans pipe) catches it.
+// RE_SENTINEL_OPEN_* matches "<<|inner|" / "<|inner|" when NOT followed by ">".
+// ---------------------------------------------------------------------------
+
+describe("R1.2 open-sentinel variant (clonari URL 18:58 live regression)", () => {
+  it('O1 removes <<|"|payload open-double sentinel (TD18.2 live args)', () => {
+    const r = sanitizeString(
+      '<<|"|https://clonari.craftbay.io/s/36eea1ea48c1505b"',
+      "url",
+      baseCfg,
+    );
+    // sentinel stripped; trailing unescaped quote balance-quote will add one
+    // more " to make pair (we only assert sentinel removal + payload preserved).
+    expect(r.value.includes("<<|")).toBe(false);
+    expect(r.value.includes("https://clonari.craftbay.io/s/36eea1ea48c1505b")).toBe(true);
+    expect(r.mutations.some((m) => m.rule === "sentinel")).toBe(true);
+  });
+
+  it("O2 removes <|x|payload open-single sentinel", () => {
+    const r = sanitizeString("<|x|https://example.com/path", "url", baseCfg);
+    expect(r.value).toBe("https://example.com/path");
+    expect(r.mutations.some((m) => m.rule === "sentinel")).toBe(true);
+  });
+
+  it("O3 closed form <<|x|> still flows through RE_SENTINEL_DOUBLE (no regression)", () => {
+    const r = sanitizeString("<<|x|>https://example.com", "url", baseCfg);
+    expect(r.value).toBe("https://example.com");
+    expect(r.mutations.some((m) => m.rule === "sentinel")).toBe(true);
+  });
+
+  it("O4 natural prose '<< foo |' with whitespace is NOT matched", () => {
+    // Inner bans whitespace so '<< foo |' (space after '<<' or in inner) skipped.
+    // We pick a shape that would only match if whitespace-gating were broken.
+    const r = sanitizeString("see <<x | y stuff", "text", baseCfg);
+    // The opening "<<x" has no closing "|" right after the inner, so even
+    // without whitespace gating it would not match; this case is purely a
+    // canary that benign prose containing < and | is untouched.
+    expect(r.value).toBe("see <<x | y stuff");
+    expect(r.mutations.length).toBe(0);
+  });
+
+  it("O5 detects contamination on web_fetch args.url and sanitizes (TD18.2)", () => {
+    const r = sanitizeToolArgs(
+      { url: '<<|"|https://clonari.craftbay.io/s/36eea1ea48c1505b"' },
+      "web_fetch",
+      baseCfg,
+    );
+    expect(r.changed).toBe(true);
+    const out = String(r.args.url);
+    expect(out.includes("<<|")).toBe(false);
+    expect(out.includes("https://clonari.craftbay.io/s/36eea1ea48c1505b")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P2.18.3 nested-sentinel variant: 19:24 KST live regression.
+// Model serialized write args.content as: "<|<|\"# 오로라 소민..."
+// Outer "<|" opens marker; inner contains another "<" which RE_SENTINEL_
+// OPEN_SINGLE's inner ban [^|<>\s] rejects. NESTED variants relax inner to
+// ban only "|" and whitespace.
+// ---------------------------------------------------------------------------
+
+describe("R1.3 nested-sentinel variant (write content args 19:24 live regression)", () => {
+  it('N1 removes <|<|\\"payload nested-single sentinel (TD-RAW-2 live args)', () => {
+    const r = sanitizeString(
+      '<|<|"# 오로라 소민(이서현) 방문 후기 2026-05-18(월)',
+      "content",
+      baseCfg,
+    );
+    expect(r.value.includes("<|<|")).toBe(false);
+    expect(r.value.includes("오로라 소민(이서현) 방문 후기")).toBe(true);
+    expect(r.mutations.some((m) => m.rule === "sentinel")).toBe(true);
+  });
+
+  it("N2 removes <<|<|payload nested-double sentinel", () => {
+    const r = sanitizeString("<<|<|payload here", "content", baseCfg);
+    expect(r.value.includes("<<|<|")).toBe(false);
+    expect(r.value.includes("payload here")).toBe(true);
+  });
+
+  it("N3 natural prose '<x| y' with space inside is NOT matched (whitespace guard)", () => {
+    const r = sanitizeString("see <x| y stuff", "text", baseCfg);
+    expect(r.value).toBe("see <x| y stuff");
+    expect(r.mutations.length).toBe(0);
+  });
+});
