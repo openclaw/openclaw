@@ -29,6 +29,7 @@ import {
   resolveAttemptSpawnWorkspaceDir,
   resolveBootstrapContextForRun,
   resolveSandboxContext,
+  runBeforeToolCallHook,
   supportsModelTools,
   type AgentMessage,
   type EmbeddedRunAttemptParams,
@@ -149,6 +150,27 @@ export async function runClaudeAppServerAttempt(
       },
     });
     unregisterServerRequest = registerToolCallHandler(client, bridge);
+    // Register a parallel handler for native-tool approval requests
+    // (item/commandExecution/requestApproval, item/fileChange/requestApproval)
+    // so the SDK's claude_code preset tools (Bash/Read/Edit/etc.) go through
+    // OpenClaw's BeforeToolCall policy chain instead of falling through to
+    // the default-decline path. Without this, promoting approvalPolicy to
+    // "untrusted" would blanket-block every native tool call. Bypass-mode
+    // turns (allowAll=true on the server) never invoke this path.
+    const unregisterApproval = registerApprovalHandler(client, {
+      agentId: params.agentId,
+      config: params.config,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      runId: params.runId,
+      channelId: params.currentChannelId,
+      signal: ac.signal,
+    });
+    const composedUnregister = unregisterServerRequest;
+    unregisterServerRequest = () => {
+      composedUnregister?.();
+      unregisterApproval();
+    };
 
     // 4. Build developerInstructions ONCE per turn (cheap; reads bootstrap
     //    files). Hash to detect SOUL.md / workspace changes; if the hash
@@ -511,6 +533,13 @@ async function ensureThread(
     });
   }
 
+  // Project OpenClaw's tool policy onto the SDK's native (claude_code
+  // preset) tools that bypass the dynamic-tools bridge. When openclaw says
+  // disableTools, or restricts toolsAllow to a specific non-wildcard set,
+  // block all native tools so the model can only use the openclaw MCP
+  // surface. The server merges this with its env default
+  // (OPENCLAW_CLAUDE_APP_SERVER_DISALLOWED_TOOLS, typically "Agent,Task").
+  const nativeDisallowed = computeNativeDisallowedTools(params);
   const startParams: ThreadStartParams = {
     cwd: params.workspaceDir ?? process.cwd(),
     model: params.modelId,
@@ -520,6 +549,7 @@ async function ensureThread(
     sandbox: cfg.appServer.sandbox,
     dynamicTools: bridge.specs,
     developerInstructions,
+    ...(nativeDisallowed.length > 0 ? { disallowedTools: nativeDisallowed } : {}),
   };
   const response = await client.request<ThreadStartResponse>("thread/start", startParams);
   const threadId = response.thread?.id;
@@ -1005,6 +1035,136 @@ function safeStringify(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+// ─── Native (claude_code preset) tool policy projection ────────────────────
+
+// Comprehensive list of native tools the Claude Code preset exposes. Listed
+// in priority of "destructive-first" so a partial block (e.g. operator only
+// adds the first half via env) still covers the highest-risk surface. Kept
+// here rather than fetched dynamically because the SDK doesn't expose a
+// stable enumeration and getting it wrong fails safe (over-block, not
+// under-block).
+const NATIVE_TOOLS_FULL_SET = [
+  "Bash",
+  "BashOutput",
+  "KillBash",
+  "KillShell",
+  "Write",
+  "Edit",
+  "MultiEdit",
+  "NotebookEdit",
+  "Read",
+  "Glob",
+  "Grep",
+  "WebFetch",
+  "WebSearch",
+  "Task",
+  "Agent",
+  "ToolSearch",
+  "EnterPlanMode",
+  "ExitPlanMode",
+  "EnterWorktree",
+  "ExitWorktree",
+  "CronCreate",
+  "CronDelete",
+  "CronList",
+  "TaskCreate",
+  "TaskGet",
+  "TaskList",
+  "TaskOutput",
+  "TaskStop",
+  "TaskUpdate",
+  "Monitor",
+  "PushNotification",
+  "RemoteTrigger",
+  "ListMcpResourcesTool",
+  "ReadMcpResourceTool",
+];
+
+function computeNativeDisallowedTools(params: EmbeddedRunAttemptParams): string[] {
+  // disableTools = hard-block everything native.
+  if (params.disableTools) return NATIVE_TOOLS_FULL_SET;
+  // toolsAllow restricts the surface to a specific set of openclaw tool
+  // names. If it's wildcard / empty / undefined, no implication for native
+  // tools. If it's a real allowlist, treat it as restrictive of the WHOLE
+  // surface — block all native tools so the model has only the allowed
+  // openclaw subset. (Codex doesn't have native tools so this case doesn't
+  // arise there; for Claude we have to make the call.)
+  if (Array.isArray(params.toolsAllow) && params.toolsAllow.length > 0) {
+    if (params.toolsAllow.some((n) => n.trim() === "*")) return [];
+    return NATIVE_TOOLS_FULL_SET;
+  }
+  return [];
+}
+
+// ─── Native-tool approval routing (BeforeToolCall policy chain) ────────────
+
+type ApprovalRegistrationContext = {
+  agentId?: string;
+  config?: EmbeddedRunAttemptParams["config"];
+  sessionId?: string;
+  sessionKey?: string;
+  runId?: string;
+  channelId?: string;
+  signal?: AbortSignal;
+};
+
+function registerApprovalHandler(
+  client: ClaudeAppServerClient,
+  ctx: ApprovalRegistrationContext,
+): () => void {
+  return client.onServerRequest(async (req) => {
+    if (
+      req.method !== "item/commandExecution/requestApproval" &&
+      req.method !== "item/fileChange/requestApproval"
+    ) {
+      return undefined;
+    }
+    const params = (req.params ?? {}) as Record<string, unknown>;
+    const toolName = typeof params.toolName === "string" ? params.toolName : "unknown";
+    const toolInput =
+      params.toolInput && typeof params.toolInput === "object" && !Array.isArray(params.toolInput)
+        ? (params.toolInput as Record<string, unknown>)
+        : {};
+    const callId = typeof params.callId === "string" ? params.callId : undefined;
+    try {
+      const outcome = await runBeforeToolCallHook({
+        toolName,
+        params: toolInput,
+        toolCallId: callId,
+        ctx: {
+          agentId: ctx.agentId,
+          config: ctx.config,
+          sessionId: ctx.sessionId,
+          sessionKey: ctx.sessionKey,
+          runId: ctx.runId,
+          channelId: ctx.channelId,
+        },
+        signal: ctx.signal,
+        approvalMode: "request",
+      });
+      if (outcome.blocked) {
+        return {
+          decision: "decline",
+          reason: outcome.reason || `OpenClaw policy declined ${toolName}`,
+        } as unknown as JsonValue;
+      }
+      return { decision: "approve" } as unknown as JsonValue;
+    } catch (err) {
+      // Fail closed — a hook error blocks the call rather than silently
+      // allowing through. Same posture as codex's BeforeToolCall wrapper.
+      const message = err instanceof Error ? err.message : String(err);
+      embeddedAgentLog.warn("claude-app-server: approval hook threw; declining", {
+        toolName,
+        error: message,
+      });
+      return {
+        decision: "decline",
+        reason: `OpenClaw approval hook failed: ${message}`,
+      } as unknown as JsonValue;
+    }
+  });
 }
 
 // ─── Developer instructions ─────────────────────────────────────────────────

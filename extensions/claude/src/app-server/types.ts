@@ -76,6 +76,15 @@ export type ThreadStartParams = {
   dynamicTools?: DynamicToolSpec[];
   developerInstructions?: string;
   config?: JsonObject;
+  /**
+   * Plugin-supplied native (Claude Code preset) tool names to block for
+   * this thread. Merged on the server with the env-derived default
+   * (OPENCLAW_CLAUDE_APP_SERVER_DISALLOWED_TOOLS, typically "Agent,Task").
+   * Use this to project OpenClaw's `disableTools` / restrictive
+   * `toolsAllow` policy onto the SDK's native tools, which bypass the
+   * dynamic-tools bridge.
+   */
+  disallowedTools?: string[];
 };
 
 export type ThreadResumeParams = {
