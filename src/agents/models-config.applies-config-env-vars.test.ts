@@ -246,6 +246,64 @@ describe("models-config", () => {
     ]);
   });
 
+  it("strips plaintext api keys from planned models.json contents", async () => {
+    const plan = await planOpenClawModelsJsonWithDeps(
+      {
+        cfg: {
+          models: {
+            mode: "merge",
+            providers: {
+              custom: {
+                baseUrl: "https://custom.example/v1",
+                api: "openai-completions",
+                apiKey: "plain-config-key",
+                models: [{ id: "custom-model", name: "Custom Model", input: ["text"] }],
+              },
+              vllm: {
+                baseUrl: "http://127.0.0.1:8000/v1",
+                api: "openai-completions",
+                apiKey: "${MY_VLLM_KEY}",
+                models: [{ id: "vllm-model", name: "vLLM Model", input: ["text"] }],
+              },
+            },
+          },
+        },
+        agentDir: "/tmp/openclaw-models-config-env-vars-test",
+        env: {
+          MY_VLLM_KEY: "resolved-vllm-key",
+        } as NodeJS.ProcessEnv,
+        existingRaw: "",
+        existingParsed: {
+          providers: {
+            legacy: {
+              baseUrl: "https://legacy.example/v1",
+              api: "openai-completions",
+              apiKey: "plain-existing-key",
+              models: [{ id: "legacy-model", name: "Legacy Model", input: ["text"] }],
+            },
+          },
+        },
+      },
+      {
+        resolveImplicitProviders: async () => ({}),
+      },
+    );
+
+    expect(plan.action).toBe("write");
+    if (plan.action !== "write") {
+      throw new Error("Expected models.json write plan");
+    }
+    expect(plan.contents).not.toContain("plain-config-key");
+    expect(plan.contents).not.toContain("plain-existing-key");
+
+    const parsed = JSON.parse(plan.contents) as {
+      providers?: Record<string, { apiKey?: string }>;
+    };
+    expect(parsed.providers?.custom?.apiKey).toBeUndefined();
+    expect(parsed.providers?.legacy?.apiKey).toBeUndefined();
+    expect(parsed.providers?.vllm?.apiKey).toBe("MY_VLLM_KEY");
+  });
+
   it("uses config env.vars entries for implicit provider discovery without mutating process.env", async () => {
     await withTempEnv(["OPENROUTER_API_KEY", TEST_ENV_VAR], async () => {
       unsetEnv(["OPENROUTER_API_KEY", TEST_ENV_VAR]);
