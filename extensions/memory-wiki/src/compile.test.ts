@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { compileMemoryWikiVault } from "./compile.js";
+import { compileMemoryWikiVault, refreshMemoryWikiIndexesAfterImport } from "./compile.js";
 import { renderWikiMarkdown } from "./markdown.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
@@ -267,6 +267,99 @@ describe("compileMemoryWikiVault", () => {
     );
   });
 
+  it("keeps fallback claim ids stable when an earlier id-less claim is inserted", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+    });
+    const pagePath = path.join(rootDir, "sources", "inserted.md");
+
+    async function writeClaims(claims: Array<{ text: string }>) {
+      await fs.writeFile(
+        pagePath,
+        renderWikiMarkdown({
+          frontmatter: {
+            pageType: "source",
+            id: "source.inserted",
+            title: "Inserted",
+            claims,
+          },
+          body: "# Inserted\n",
+        }),
+        "utf8",
+      );
+    }
+
+    async function claimIdsByStatement() {
+      const claimsDigestPath = path.join(rootDir, ".openclaw-wiki", "cache", "claims.jsonl");
+      return new Map(
+        (await fs.readFile(claimsDigestPath, "utf8"))
+          .trim()
+          .split(/\r?\n/)
+          .map((line) => JSON.parse(line) as { claim_id: string; statement: string })
+          .map((claim) => [claim.statement, claim.claim_id] as const),
+      );
+    }
+
+    await writeClaims([
+      { text: "Alpha fallback identity survives insertion." },
+      { text: "Beta fallback identity survives insertion." },
+    ]);
+    await compileMemoryWikiVault(config);
+    const before = await claimIdsByStatement();
+
+    await writeClaims([
+      { text: "New earlier fallback claim." },
+      { text: "Alpha fallback identity survives insertion." },
+      { text: "Beta fallback identity survives insertion." },
+    ]);
+    await compileMemoryWikiVault(config);
+    const after = await claimIdsByStatement();
+
+    expect(after.get("Alpha fallback identity survives insertion.")).toBe(
+      before.get("Alpha fallback identity survives insertion."),
+    );
+    expect(after.get("Beta fallback identity survives insertion.")).toBe(
+      before.get("Beta fallback identity survives insertion."),
+    );
+  });
+
+  it("disambiguates identical id-less fallback claim rows", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+    });
+
+    await fs.writeFile(
+      path.join(rootDir, "sources", "fallback-duplicates.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          id: "source.fallback-duplicates",
+          title: "Fallback Duplicates",
+          claims: [
+            { text: "Duplicate fallback text needs two rows." },
+            { text: "Duplicate fallback text needs two rows." },
+          ],
+        },
+        body: "# Fallback Duplicates\n",
+      }),
+      "utf8",
+    );
+
+    await compileMemoryWikiVault(config);
+
+    const claimsDigestPath = path.join(rootDir, ".openclaw-wiki", "cache", "claims.jsonl");
+    const duplicateRows = (await fs.readFile(claimsDigestPath, "utf8"))
+      .trim()
+      .split(/\r?\n/)
+      .map((line) => JSON.parse(line) as { claim_id: string; statement: string })
+      .filter((claim) => claim.statement === "Duplicate fallback text needs two rows.");
+
+    expect(duplicateRows).toHaveLength(2);
+    expect(new Set(duplicateRows.map((claim) => claim.claim_id)).size).toBe(2);
+  });
+
   it("preserves duplicate explicit claim ids as distinct digest rows", async () => {
     const { rootDir, config } = await createVault({
       rootDir: nextCaseRoot(),
@@ -366,6 +459,70 @@ describe("compileMemoryWikiVault", () => {
       removed_count: 4,
       artifact_count: 5,
       workspace_count: 6,
+      page_path_count: 1,
+      indexes_refreshed: true,
+      index_refresh_reason: "import-changed",
+    });
+  });
+
+  it("writes source-import provenance into auto-refresh manifests", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+    });
+
+    await fs.writeFile(
+      path.join(rootDir, "sources", "refresh-provenance.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          id: "source.refresh-provenance",
+          title: "Refresh Provenance",
+          claims: [
+            {
+              id: "claim.refresh-provenance",
+              text: "Auto refresh provenance is tracked.",
+            },
+          ],
+        },
+        body: "# Refresh Provenance\n",
+      }),
+      "utf8",
+    );
+
+    const result = await refreshMemoryWikiIndexesAfterImport({
+      config,
+      syncResult: {
+        importedCount: 7,
+        updatedCount: 6,
+        skippedCount: 5,
+        removedCount: 4,
+        artifactCount: 3,
+        workspaces: 2,
+        pagePaths: ["sources/refresh-provenance.md"],
+      },
+    });
+
+    expect(result).toMatchObject({
+      refreshed: true,
+      reason: "import-changed",
+    });
+
+    const manifest = JSON.parse(
+      await fs.readFile(
+        path.join(rootDir, ".openclaw-wiki", "cache", "wiki-cache-manifest.json"),
+        "utf8",
+      ),
+    ) as { source_import: Record<string, unknown> };
+
+    expect(manifest.source_import).toMatchObject({
+      operation: "refresh",
+      imported_count: 7,
+      updated_count: 6,
+      skipped_count: 5,
+      removed_count: 4,
+      artifact_count: 3,
+      workspace_count: 2,
       page_path_count: 1,
       indexes_refreshed: true,
       index_refresh_reason: "import-changed",

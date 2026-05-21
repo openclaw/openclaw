@@ -1,10 +1,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
-import { createWikiApplyTool, createWikiLintTool } from "./tool.js";
 import { lintMemoryWikiVault } from "./lint.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
+import { createWikiApplyTool, createWikiLintTool, createWikiStatusTool } from "./tool.js";
+
+const syncMemoryWikiImportedSourcesMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./source-sync.js", () => ({
+  syncMemoryWikiImportedSources: syncMemoryWikiImportedSourcesMock,
+}));
 
 function asSchemaObject(value: unknown): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -15,6 +21,34 @@ function asSchemaObject(value: unknown): Record<string, unknown> {
 
 describe("memory-wiki tools", () => {
   const harness = createMemoryWikiTestHarness();
+
+  beforeEach(() => {
+    syncMemoryWikiImportedSourcesMock.mockReset();
+    syncMemoryWikiImportedSourcesMock.mockResolvedValue({
+      importedCount: 0,
+      updatedCount: 0,
+      skippedCount: 0,
+      removedCount: 0,
+      artifactCount: 0,
+      workspaces: 0,
+      pagePaths: [],
+      indexesRefreshed: false,
+      indexUpdatedFiles: [],
+      indexRefreshReason: "no-import-changes",
+    });
+  });
+
+  it("keeps wiki_status pure read", async () => {
+    const { config } = await harness.createVault({ initialize: true });
+    const tool = createWikiStatusTool(config);
+
+    const result = await tool.execute("status-call", {});
+
+    expect(syncMemoryWikiImportedSourcesMock).not.toHaveBeenCalled();
+    expect(asSchemaObject(result.details)).toMatchObject({
+      vaultExists: true,
+    });
+  });
 
   it("allows provenance metadata in wiki_apply claim evidence", () => {
     const tool = createWikiApplyTool({} as ResolvedMemoryWikiConfig);

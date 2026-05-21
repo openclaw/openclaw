@@ -118,7 +118,6 @@ export function createWikiStatusTool(
       "Inspect the current memory wiki vault mode, health, and Obsidian CLI availability.",
     parameters: WikiStatusSchema,
     execute: async () => {
-      await syncImportedSourcesIfNeeded(config, appConfig);
       const status = await resolveMemoryWikiStatus(config, {
         appConfig,
       });

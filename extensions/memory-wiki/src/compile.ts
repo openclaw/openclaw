@@ -1250,19 +1250,77 @@ function timestampFromCandidates(candidates: Array<string | undefined>): string 
   return bestValue;
 }
 
-function buildStableClaimId(
-  page: WikiPageSummary,
-  claim: WikiClaim,
-  originalIndex: number,
-): string {
-  if (claim.id?.trim()) {
-    return claim.id.trim();
+function hashClaimIdParts(parts: string[], length = 16): string {
+  return createHash("sha256").update(parts.join("\n")).digest("hex").slice(0, length);
+}
+
+function buildFallbackClaimIdBase(page: WikiPageSummary, claim: WikiClaim): string {
+  return `claim.${hashClaimIdParts([page.relativePath, claim.claimKey ?? "", claim.text])}`;
+}
+
+function buildFallbackClaimDisambiguator(claim: WikiClaim): string {
+  return hashClaimIdParts(
+    [
+      claim.status ?? "",
+      typeof claim.confidence === "number" ? claim.confidence.toString() : "",
+      claim.sourcePath ?? "",
+      claim.sourceRepo ?? "",
+      claim.sourceCommit ?? "",
+      claim.sourceClass ?? "",
+      typeof claim.authorityTier === "number" ? claim.authorityTier.toString() : "",
+      claim.assertedAt ?? "",
+      claim.extractedAt ?? "",
+      claim.validFrom ?? "",
+      claim.validUntil ?? "",
+      JSON.stringify(claim.evidence),
+    ],
+    10,
+  );
+}
+
+function buildStableClaimIdsForPage(page: WikiPageSummary): Map<WikiClaim, string> {
+  const baseCounts = new Map<string, number>();
+  const fingerprintCounts = new Map<string, number>();
+
+  for (const claim of page.claims) {
+    if (claim.id?.trim()) {
+      continue;
+    }
+    const base = buildFallbackClaimIdBase(page, claim);
+    const fingerprint = `${base}\n${buildFallbackClaimDisambiguator(claim)}`;
+    baseCounts.set(base, (baseCounts.get(base) ?? 0) + 1);
+    fingerprintCounts.set(fingerprint, (fingerprintCounts.get(fingerprint) ?? 0) + 1);
   }
-  const digest = createHash("sha256")
-    .update([page.relativePath, originalIndex.toString(), claim.text].join("\n"))
-    .digest("hex")
-    .slice(0, 16);
-  return `claim.${digest}`;
+
+  const occurrences = new Map<string, number>();
+  const claimIds = new Map<WikiClaim, string>();
+  for (const claim of page.claims) {
+    const explicitId = claim.id?.trim();
+    if (explicitId) {
+      claimIds.set(claim, explicitId);
+      continue;
+    }
+
+    const base = buildFallbackClaimIdBase(page, claim);
+    if ((baseCounts.get(base) ?? 0) === 1) {
+      claimIds.set(claim, base);
+      continue;
+    }
+
+    const disambiguator = buildFallbackClaimDisambiguator(claim);
+    const fingerprint = `${base}\n${disambiguator}`;
+    const disambiguated = `${base}.${disambiguator}`;
+    if ((fingerprintCounts.get(fingerprint) ?? 0) === 1) {
+      claimIds.set(claim, disambiguated);
+      continue;
+    }
+
+    const occurrence = (occurrences.get(fingerprint) ?? 0) + 1;
+    occurrences.set(fingerprint, occurrence);
+    claimIds.set(claim, `${disambiguated}.${occurrence}`);
+  }
+
+  return claimIds;
 }
 
 function resolveClaimSourceClass(page: WikiPageSummary, claim: WikiClaim): string {
@@ -1343,13 +1401,12 @@ type ClaimsDigestRecord = {
 
 function buildClaimsDigestRecords(params: { pages: WikiPageSummary[] }): ClaimsDigestRecord[] {
   const raw = params.pages.flatMap((page) => {
-    const originalIndexes = new Map(page.claims.map((claim, index) => [claim, index]));
+    const claimIds = buildStableClaimIdsForPage(page);
     return sortClaims(page).map((claim) => {
-      const originalIndex = originalIndexes.get(claim);
-      if (originalIndex === undefined) {
-        throw new Error(`Unable to resolve original claim index for ${page.relativePath}`);
+      const claimId = claimIds.get(claim);
+      if (!claimId) {
+        throw new Error(`Unable to resolve stable claim id for ${page.relativePath}`);
       }
-      const claimId = buildStableClaimId(page, claim, originalIndex);
       const sourceClass = resolveClaimSourceClass(page, claim);
       const assertedAt = timestampFromCandidates([
         claim.assertedAt,
@@ -1733,7 +1790,10 @@ async function hasMissingWikiIndexes(rootDir: string): Promise<boolean> {
 
 export async function refreshMemoryWikiIndexesAfterImport(params: {
   config: ResolvedMemoryWikiConfig;
-  syncResult: { importedCount: number; updatedCount: number; removedCount: number };
+  syncResult: Omit<
+    CompileMemoryWikiSourceImport,
+    "operation" | "indexesRefreshed" | "indexRefreshReason"
+  > & { importedCount: number; updatedCount: number; removedCount: number };
 }): Promise<RefreshMemoryWikiIndexesResult> {
   await initializeMemoryWikiVault(params.config);
   if (!params.config.ingest.autoCompile) {
@@ -1753,10 +1813,24 @@ export async function refreshMemoryWikiIndexesAfterImport(params: {
       reason: "no-import-changes",
     };
   }
-  const compile = await compileMemoryWikiVault(params.config);
+  const reason = missingIndexes && !importChanged ? "missing-indexes" : "import-changed";
+  const compile = await compileMemoryWikiVault(params.config, {
+    sourceImport: {
+      operation: "refresh",
+      importedCount: params.syncResult.importedCount,
+      updatedCount: params.syncResult.updatedCount,
+      skippedCount: params.syncResult.skippedCount,
+      removedCount: params.syncResult.removedCount,
+      artifactCount: params.syncResult.artifactCount,
+      workspaces: params.syncResult.workspaces,
+      pagePaths: params.syncResult.pagePaths,
+      indexesRefreshed: true,
+      indexRefreshReason: reason,
+    },
+  });
   return {
     refreshed: true,
-    reason: missingIndexes && !importChanged ? "missing-indexes" : "import-changed",
+    reason,
     compile,
   };
 }
