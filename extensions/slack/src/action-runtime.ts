@@ -186,12 +186,11 @@ function assertSlackReadTargetAllowed(params: {
         groupPolicy,
         channelAllowlistConfigured: channelKeys.length > 0,
         channelAllowed,
-      })) ||
-    (channelKeys.length > 0 && !channelConfig?.matchSource)
+      }))
   ) {
     throw new Error("Slack read target channel is not allowed.");
   }
-  if (!channelAllowed && channelConfig?.matchSource) {
+  if (!channelAllowed && (groupPolicy !== "open" || channelConfig?.matchSource)) {
     throw new Error("Slack read target channel is not allowed.");
   }
 }

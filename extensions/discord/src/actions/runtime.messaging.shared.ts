@@ -2,7 +2,8 @@ import { mergeDiscordAccountConfig, resolveDefaultDiscordAccountId } from "../ac
 import { createDiscordRuntimeAccountContext } from "../client.js";
 import {
   isDiscordGroupAllowedByPolicy,
-  resolveDiscordChannelConfig,
+  normalizeDiscordSlug,
+  resolveDiscordChannelConfigWithFallback,
   type DiscordGuildEntryResolved,
 } from "../monitor/allow-list.js";
 import {
@@ -34,7 +35,7 @@ export type DiscordMessagingActionContext = {
   options?: DiscordMessagingActionOptions;
   accountId?: string;
   resolveChannelId: () => string;
-  assertReadTargetAllowed: (params: { guildId?: string; channelId: string }) => void;
+  assertReadTargetAllowed: (params: { guildId?: string; channelId: string }) => Promise<void>;
   resolveReactionChannelId: () => Promise<string>;
   withOpts: (extra?: Record<string, unknown>) => { cfg: OpenClawConfig; accountId?: string };
   withReactionRuntimeOptions: <T extends Record<string, unknown> = Record<string, never>>(
@@ -70,15 +71,57 @@ function hasAnyDiscordChannelAllowlist(
   return Object.values(guilds ?? {}).some((guild) => hasDiscordGuildEntries(guild?.channels));
 }
 
+type DiscordReadTargetContext = {
+  channelId: string;
+  channelName?: string;
+  channelSlug: string;
+  parentId?: string;
+  parentName?: string;
+  parentSlug?: string;
+  scope?: "channel" | "thread";
+};
+
+function readDiscordChannelStringField(value: unknown, ...keys: string[]): string | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  for (const key of keys) {
+    const candidate = record[key];
+    if (typeof candidate === "string" && candidate.trim()) {
+      return candidate.trim();
+    }
+  }
+  return undefined;
+}
+
+function readDiscordChannelType(value: unknown): number | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const type = (value as Record<string, unknown>).type;
+  return typeof type === "number" ? type : undefined;
+}
+
+function isDiscordThreadChannel(value: unknown): boolean {
+  const type = readDiscordChannelType(value);
+  return type === 10 || type === 11 || type === 12;
+}
+
 function isDiscordReadTargetAllowedInGuild(params: {
   groupPolicy: "open" | "disabled" | "allowlist";
   guildInfo: DiscordGuildEntryResolved | null;
-  channelId: string;
+  target: DiscordReadTargetContext;
 }): boolean {
-  const channelConfig = resolveDiscordChannelConfig({
+  const channelConfig = resolveDiscordChannelConfigWithFallback({
     guildInfo: params.guildInfo,
-    channelId: params.channelId,
-    channelSlug: params.channelId,
+    channelId: params.target.channelId,
+    channelName: params.target.channelName,
+    channelSlug: params.target.channelSlug,
+    parentId: params.target.parentId,
+    parentName: params.target.parentName,
+    parentSlug: params.target.parentSlug,
+    scope: params.target.scope,
   });
   if (channelConfig?.allowed === false) {
     return false;
@@ -119,6 +162,51 @@ export function createDiscordMessagingActionContext(params: {
         accountId: resolvedReactionAccountId,
       })
     : cfgOptions;
+  const resolveReadTargetContext = async (channelId: string): Promise<DiscordReadTargetContext> => {
+    const fallback: DiscordReadTargetContext = {
+      channelId,
+      channelSlug: normalizeDiscordSlug(channelId) || channelId,
+    };
+    let channelInfo: unknown;
+    try {
+      channelInfo = await discordMessagingActionRuntime.fetchChannelInfoDiscord(
+        channelId,
+        withOpts(),
+      );
+    } catch {
+      return fallback;
+    }
+    const channelName = readDiscordChannelStringField(channelInfo, "name");
+    const target: DiscordReadTargetContext = {
+      channelId,
+      channelSlug: channelName ? normalizeDiscordSlug(channelName) : fallback.channelSlug,
+    };
+    if (channelName) {
+      target.channelName = channelName;
+    }
+    if (!isDiscordThreadChannel(channelInfo)) {
+      return target;
+    }
+    target.scope = "thread";
+    target.parentId = readDiscordChannelStringField(channelInfo, "parent_id", "parentId");
+    if (!target.parentId) {
+      return target;
+    }
+    try {
+      const parentInfo = await discordMessagingActionRuntime.fetchChannelInfoDiscord(
+        target.parentId,
+        withOpts(),
+      );
+      const parentName = readDiscordChannelStringField(parentInfo, "name");
+      if (parentName) {
+        target.parentName = parentName;
+        target.parentSlug = normalizeDiscordSlug(parentName);
+      }
+    } catch {
+      // Parent id fallback is enough for allowlist checks when the parent fetch is unavailable.
+    }
+    return target;
+  };
   return {
     action: params.action,
     params: params.input,
@@ -132,29 +220,30 @@ export function createDiscordMessagingActionContext(params: {
           required: true,
         }),
       ),
-    assertReadTargetAllowed: ({ guildId, channelId }) => {
+    assertReadTargetAllowed: async ({ guildId, channelId }) => {
       const targetChannelId = discordMessagingActionRuntime.resolveDiscordChannelId(channelId);
+      if (!hasGuildEntries && groupPolicy !== "disabled" && groupPolicy !== "allowlist") {
+        return;
+      }
+      const target = await resolveReadTargetContext(targetChannelId);
       if (guildId) {
         const guildInfo = resolveDiscordActionGuildEntry({ guilds, guildId });
         if (
           !isDiscordReadTargetAllowedInGuild({
             groupPolicy,
             guildInfo,
-            channelId: targetChannelId,
+            target,
           })
         ) {
           throw new Error("Discord read target channel is not allowed.");
         }
         return;
       }
-      if (!hasGuildEntries && groupPolicy !== "disabled" && groupPolicy !== "allowlist") {
-        return;
-      }
       const allowed = Object.values(guilds ?? {}).some((guildInfo) =>
         isDiscordReadTargetAllowedInGuild({
           groupPolicy,
           guildInfo: guildInfo ?? null,
-          channelId: targetChannelId,
+          target,
         }),
       );
       if (!allowed) {

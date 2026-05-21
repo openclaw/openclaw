@@ -525,6 +525,42 @@ describe("handleDiscordMessagingAction", () => {
     expect(fetchMessageDiscord).not.toHaveBeenCalled();
   });
 
+  it("allows Discord message links in threads under allowlisted parent channels", async () => {
+    fetchChannelInfoDiscord.mockImplementation(async (channelId: string) => {
+      if (channelId === "333") {
+        return { id: "333", name: "incident-thread", parent_id: "222", type: 11 };
+      }
+      if (channelId === "222") {
+        return { id: "222", name: "team-updates", type: 0 };
+      }
+      return { id: channelId, type: 0 };
+    });
+    const cfg = {
+      channels: {
+        discord: {
+          token: "token",
+          groupPolicy: "allowlist",
+          guilds: {
+            "111": {
+              channels: {
+                "222": { enabled: true },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await handleMessagingAction(
+      "fetchMessage",
+      { messageLink: "https://discord.com/channels/111/333/444" },
+      enableAllActions,
+      cfg,
+    );
+
+    expect(fetchMessageDiscord).toHaveBeenCalledWith("333", "444", { cfg });
+  });
+
   it("adds normalized timestamps to listPins payloads", async () => {
     listPinsDiscord.mockResolvedValueOnce([{ id: "1", timestamp: "2026-01-15T12:00:00.000Z" }]);
 

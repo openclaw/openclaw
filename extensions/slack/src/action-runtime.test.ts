@@ -856,6 +856,34 @@ describe("handleSlackAction", () => {
     expect(readSlackMessages).not.toHaveBeenCalled();
   });
 
+  it("allows Slack reads from unlisted targets when group policy is open", async () => {
+    readSlackMessages.mockResolvedValueOnce({ messages: [], hasMore: false });
+
+    const cfg = slackConfig({
+      groupPolicy: "open",
+      channels: {
+        C_CONFIGURED: { enabled: true },
+      },
+    });
+    await handleSlackAction({ action: "readMessages", channelId: "C_OTHER" }, cfg);
+
+    expect(requireMockArg(readSlackMessages, "readSlackMessages", 0, 0)).toBe("C_OTHER");
+  });
+
+  it("rejects Slack reads from disabled targets when group policy is open", async () => {
+    const cfg = slackConfig({
+      groupPolicy: "open",
+      channels: {
+        C_DISABLED: { enabled: false },
+      },
+    });
+
+    await expect(
+      handleSlackAction({ action: "readMessages", channelId: "C_DISABLED" }, cfg),
+    ).rejects.toThrow("Slack read target channel is not allowed.");
+    expect(readSlackMessages).not.toHaveBeenCalled();
+  });
+
   it("passes messageId through to readSlackMessages", async () => {
     readSlackMessages.mockResolvedValueOnce({ messages: [], hasMore: false });
 
