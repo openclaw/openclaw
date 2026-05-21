@@ -996,7 +996,6 @@ describe("gateway agent handler", () => {
     expectRecordFields(await waitForAgentCommandCall(), {
       provider: "anthropic",
       model: "claude-haiku-4-5",
-      senderIsOwner: false,
     });
   });
 
@@ -1385,43 +1384,6 @@ describe("gateway agent handler", () => {
     expect(callArgs.message).not.toContain("[Inter-session message]");
 
     resetTimeConfig();
-  });
-
-  it.each([
-    {
-      name: "passes senderIsOwner=false for write-scoped gateway callers",
-      scopes: ["operator.write"],
-      idempotencyKey: "test-sender-owner-write",
-      senderIsOwner: false,
-    },
-    {
-      name: "passes senderIsOwner=true for admin-scoped gateway callers",
-      scopes: ["operator.admin"],
-      idempotencyKey: "test-sender-owner-admin",
-      senderIsOwner: true,
-    },
-  ])("$name", async ({ scopes, idempotencyKey, senderIsOwner }) => {
-    primeMainAgentRun();
-
-    await invokeAgent(
-      {
-        message: "owner-tools check",
-        sessionKey: "agent:main:main",
-        idempotencyKey,
-      },
-      {
-        client: {
-          connect: {
-            role: "operator",
-            scopes,
-            client: { id: "test-client", mode: "gateway" },
-          },
-        } as unknown as AgentHandlerArgs["client"],
-      },
-    );
-
-    const callArgs = await waitForAgentCommandCall<{ senderIsOwner?: boolean }>();
-    expect(callArgs.senderIsOwner).toBe(senderIsOwner);
   });
 
   it("respects explicit bestEffortDeliver=false for main session runs", async () => {

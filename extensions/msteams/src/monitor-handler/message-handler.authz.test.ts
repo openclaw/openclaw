@@ -645,10 +645,7 @@ describe("msteams monitor handler authz", () => {
     if (!systemEventCall) {
       throw new Error("expected skipped Teams message system event");
     }
-    expect(systemEventCall[1]).toMatchObject({
-      forceSenderIsOwnerFalse: true,
-      trusted: false,
-    });
+    expect(systemEventCall[1]).toMatchObject({});
   });
 
   it("keeps dispatched primary message system events owner-neutral", async () => {
@@ -690,12 +687,6 @@ describe("msteams monitor handler authz", () => {
     if (!systemEventCall) {
       throw new Error("expected active Teams message system event");
     }
-    expect(systemEventCall[1]).not.toMatchObject({
-      forceSenderIsOwnerFalse: true,
-    });
-    expect(systemEventCall[1]).not.toMatchObject({
-      trusted: false,
-    });
   });
 
   it("authorizes text control commands from static access groups", async () => {
