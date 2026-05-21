@@ -131,7 +131,14 @@ export type TuiStateAccess = {
   currentSessionKey: string;
   currentSessionId: string | null;
   activeChatRunId: string | null;
-  pendingOptimisticUserMessage?: boolean;
+  /**
+   * Count of optimistic user messages sent locally that have not yet been
+   * paired with a gateway run id. Each new run observed in `handleChatEvent`
+   * decrements this counter and tags that run as locally-initiated, which
+   * prevents stray `loadHistory` reloads while bursts of messages are still
+   * in flight (NemoClaw #3145).
+   */
+  pendingOptimisticUserMessage?: number;
   pendingChatRunId?: string | null;
   queuedMessages?: QueuedMessage[];
   historyLoaded: boolean;

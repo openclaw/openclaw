@@ -62,7 +62,7 @@ function createHarness(params?: {
   setActivityStatus?: SetActivityStatusMock;
   isConnected?: boolean;
   activeChatRunId?: string | null;
-  pendingOptimisticUserMessage?: boolean;
+  pendingOptimisticUserMessage?: number;
   opts?: { local?: boolean };
   currentSessionId?: string | null;
 }) {
@@ -96,7 +96,7 @@ function createHarness(params?: {
     currentSessionKey: "agent:main:main",
     currentSessionId: params?.currentSessionId ?? null,
     activeChatRunId: params?.activeChatRunId ?? null,
-    pendingOptimisticUserMessage: params?.pendingOptimisticUserMessage ?? false,
+    pendingOptimisticUserMessage: params?.pendingOptimisticUserMessage ?? 0,
     pendingChatRunId: null as string | null,
     isConnected: params?.isConnected ?? true,
     sessionInfo: {},
@@ -362,7 +362,23 @@ describe("tui command handlers", () => {
 
     expect(noteLocalRunId).not.toHaveBeenCalled();
     expect(state.activeChatRunId).toBeNull();
-    expect(state.pendingOptimisticUserMessage).toBe(true);
+    expect(state.pendingOptimisticUserMessage).toBe(1);
+  });
+
+  it("keeps burst-sent messages blocked while the first send is pending (#3145)", async () => {
+    const { handleCommand, sendChat, addUser, addSystem, state } = createHarness();
+
+    await handleCommand("first");
+    await handleCommand("second");
+    await handleCommand("third");
+
+    expect(sendChat).toHaveBeenCalledTimes(1);
+    expect(addUser).toHaveBeenCalledTimes(1);
+    expect(addSystem).toHaveBeenCalledTimes(2);
+    expect(addSystem).toHaveBeenCalledWith(
+      "agent is busy — press Esc to abort before sending a new message",
+    );
+    expect(state.pendingOptimisticUserMessage).toBe(1);
   });
 
   it("tracks the in-flight runId so escape can abort during the wait", async () => {
@@ -385,7 +401,7 @@ describe("tui command handlers", () => {
     await handleCommand("hello");
 
     expect(state.pendingChatRunId).toBeNull();
-    expect(state.pendingOptimisticUserMessage).toBe(false);
+    expect(state.pendingOptimisticUserMessage).toBe(0);
   });
 
   it("sends /btw without hijacking the active main run", async () => {
@@ -460,7 +476,7 @@ describe("tui command handlers", () => {
 
     expect(addSystem).toHaveBeenCalledWith("send failed: Error: gateway down");
     expect(setActivityStatus).toHaveBeenLastCalledWith("error");
-    expect(state.pendingOptimisticUserMessage).toBe(false);
+    expect(state.pendingOptimisticUserMessage).toBe(0);
   });
 
   it("sanitizes control sequences in /new and /reset failures", async () => {
@@ -539,7 +555,7 @@ describe("tui command handlers", () => {
     const runAuthFlow = vi.fn().mockResolvedValue({ exitCode: 0, signal: null });
     const { handleCommand, addSystem } = createHarness({
       opts: { local: true },
-      pendingOptimisticUserMessage: true,
+      pendingOptimisticUserMessage: 1,
       runAuthFlow,
     });
 
