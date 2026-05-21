@@ -254,7 +254,7 @@ const UNKNOWN_STATUS_DETAIL =
 const SCHEDULED_TASK_FALLBACK_POLL_MS = 250;
 const SCHEDULED_TASK_FALLBACK_TIMEOUT_MS = 15_000;
 
-export function deriveScheduledTaskRuntimeStatus(parsed: ScheduledTaskInfo): {
+function deriveScheduledTaskRuntimeStatus(parsed: ScheduledTaskInfo): {
   status: GatewayServiceRuntime["status"];
   detail?: string;
 } {
