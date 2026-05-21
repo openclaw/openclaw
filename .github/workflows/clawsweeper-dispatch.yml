@@ -13,6 +13,9 @@ on:
     types: [submitted, edited, dismissed]
   pull_request_review_comment:
     types: [created, edited]
+  workflow_run: # zizmor: ignore[dangerous-triggers] CI failure dispatch to ClawSweeper; no checkout or code execution
+    workflows: [CI]
+    types: [completed]
 
 permissions:
   contents: read
@@ -286,4 +289,40 @@ jobs:
             echo "Dispatched ClawSweeper commit review."
           else
             echo "::warning::Skipping ClawSweeper commit dispatch because the configured credential could not dispatch to openclaw/clawsweeper."
+          fi
+
+      - name: Dispatch ClawSweeper CI failure
+        if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.event == 'pull_request' }}
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          TARGET_REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          ACTOR: ${{ github.event.workflow_run.actor.login }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::notice::Skipping ClawSweeper CI failure dispatch because no ClawSweeper app token is configured."
+            exit 0
+          fi
+          # Resolve PR number from head SHA
+          pr_number="$(GH_TOKEN="${GITHUB_TOKEN}" gh api \
+            "repos/${TARGET_REPO}/commits/${HEAD_SHA}/pulls" \
+            --jq '.[0].number // 0' 2>/dev/null || echo 0)"
+          payload="$(jq -nc \
+            --arg target_repo "$TARGET_REPO" \
+            --argjson pr_number "$pr_number" \
+            --arg head_sha "$HEAD_SHA" \
+            --arg head_branch "$HEAD_BRANCH" \
+            --argjson run_id "$RUN_ID" \
+            --arg run_url "$RUN_URL" \
+            --arg actor "$ACTOR" \
+            '{event_type:"clawsweeper_ci_fix",client_payload:{target_repo:$target_repo,pr_number:$pr_number,head_sha:$head_sha,head_branch:$head_branch,run_id:$run_id,run_url:$run_url,actor:$actor}}')"
+          if gh api repos/openclaw/clawsweeper/dispatches \
+            --method POST \
+            --input - <<< "$payload"; then
+            echo "Dispatched ClawSweeper CI failure for PR #${pr_number}."
+          else
+            echo "::warning::Skipping ClawSweeper CI failure dispatch because the configured credential could not dispatch to openclaw/clawsweeper."
           fi
