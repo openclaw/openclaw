@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/openai-compatible-embeddings-provider",
+  "version": "2026.5.20",
+  "private": true,
+  "description": "OpenClaw embedding provider for any local OpenAI-compatible HTTP server (llama.cpp's llama-server, Ollama via /v1, vLLM, TGI, LocalAI, llamafile)",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

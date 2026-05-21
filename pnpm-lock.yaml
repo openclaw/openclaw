@@ -1185,6 +1185,12 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/openai-compatible-embeddings:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/openai:
     dependencies:
       '@earendil-works/pi-ai':
