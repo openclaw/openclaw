@@ -660,6 +660,7 @@ describe("scoped vitest configs", () => {
       "mistral/**/*.test.ts",
       "qwen/**/*.test.ts",
       "moonshot/**/*.test.ts",
+      "nearai/**/*.test.ts",
       "nvidia/**/*.test.ts",
       "ollama/**/*.test.ts",
       "openrouter/**/*.test.ts",
