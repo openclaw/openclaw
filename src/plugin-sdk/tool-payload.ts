@@ -60,11 +60,20 @@ const END_TOOL_REQUEST = "[END_TOOL_REQUEST]";
 const HARMONY_CHANNEL_MARKER = "<|channel|>";
 const HARMONY_MESSAGE_MARKER = "<|message|>";
 const HARMONY_CALL_MARKER = "<|call|>";
+const GEMMA_CALL_OPENING = "<|tool_call>call:";
+const GEMMA_CALL_CLOSING = "<tool_call|>";
+const GEMMA_CALL_CLOSING_RESPONSE = "<|tool_response>";
+
+enum ToolCallFormat {
+  Bracket,
+  Harmony,
+  Gemma,
+}
 
 type PlainTextToolCallOpening = {
+  format: ToolCallFormat;
   end: number;
   name: string;
-  requiresClosing: boolean;
 };
 
 function isToolNameChar(char: string | undefined): boolean {
@@ -116,7 +125,7 @@ function parseBracketOpening(text: string, start: number): PlainTextToolCallOpen
   if (afterLineBreak === null) {
     return null;
   }
-  return { end: afterLineBreak, name, requiresClosing: true };
+  return { format: ToolCallFormat.Bracket, end: afterLineBreak, name };
 }
 
 function parseHarmonyOpening(text: string, start: number): PlainTextToolCallOpening | null {
@@ -154,11 +163,35 @@ function parseHarmonyOpening(text: string, start: number): PlainTextToolCallOpen
   if (text.startsWith(HARMONY_MESSAGE_MARKER, cursor)) {
     cursor = skipWhitespace(text, cursor + HARMONY_MESSAGE_MARKER.length);
   }
-  return { end: cursor, name, requiresClosing: false };
+  return { format: ToolCallFormat.Harmony, end: cursor, name };
+}
+
+function parseGemmaOpening(text: string, start: number): PlainTextToolCallOpening | null {
+  let cursor = start;
+  if (!text.startsWith(GEMMA_CALL_OPENING, cursor)) {
+    return null;
+  }
+  cursor += GEMMA_CALL_OPENING.length;
+  let nameStart = cursor;
+  while (isToolNameChar(text[cursor])) {
+    cursor += 1;
+  }
+  if (cursor === nameStart) {
+    return null;
+  }
+  const name = text.slice(nameStart, cursor);
+  if (text[cursor] !== "{") {
+    return null;
+  }
+  return { format: ToolCallFormat.Gemma, end: cursor, name };
 }
 
 function parseOpening(text: string, start: number): PlainTextToolCallOpening | null {
-  return parseBracketOpening(text, start) ?? parseHarmonyOpening(text, start);
+  return (
+    parseBracketOpening(text, start) ??
+    parseHarmonyOpening(text, start) ??
+    parseGemmaOpening(text, start)
+  );
 }
 
 function consumeJsonObject(
@@ -213,6 +246,113 @@ function consumeJsonObject(
   return null;
 }
 
+/**
+ * Recursively parses Gemma's proprietary argument format, converting
+ * `<|"|>string<|"|>`, unquoted keys, standard strings, and primitives into a JS object.
+ * Ref: https://ai.google.dev/gemma/docs/core/prompt-formatting-gemma4
+ */
+function parseGemmaValue(text: string, cursor: number): { value: unknown; end: number } | null {
+  cursor = skipWhitespace(text, cursor);
+  if (cursor >= text.length) {
+    return null;
+  }
+  if (text.startsWith('<|"|>', cursor)) {
+    const startStr = cursor + 5;
+    const endStr = text.indexOf('<|"|>', startStr);
+    if (endStr === -1) {
+      return null;
+    }
+    return { value: text.slice(startStr, endStr), end: endStr + 5 };
+  }
+  if (text[cursor] === '"' || text[cursor] === "'") {
+    const quoteChar = text[cursor];
+    let strEnd = cursor + 1;
+    while (strEnd < text.length) {
+      if (text[strEnd] === quoteChar && text[strEnd - 1] !== "\\") {
+        break;
+      }
+      strEnd++;
+    }
+    if (strEnd >= text.length) {
+      return null;
+    }
+    const rawVal = text.slice(cursor + 1, strEnd).replace(/\\(.)/g, "$1");
+    return { value: rawVal, end: strEnd + 1 };
+  }
+  if (text[cursor] === "{") {
+    const obj: Record<string, unknown> = {};
+    cursor++;
+    while (cursor < text.length) {
+      cursor = skipWhitespace(text, cursor);
+      if (text[cursor] === "}") {
+        return { value: obj, end: cursor + 1 };
+      }
+      const keyMatch = text.slice(cursor).match(/^(?:["'])?([A-Za-z0-9_-]+)(?:["'])?\s*:/);
+      if (!keyMatch) {
+        return null;
+      }
+      const key = keyMatch[1];
+      cursor += keyMatch[0].length;
+      const valResult = parseGemmaValue(text, cursor);
+      if (!valResult) {
+        return null;
+      }
+      obj[key] = valResult.value;
+      cursor = valResult.end;
+      cursor = skipWhitespace(text, cursor);
+      if (text[cursor] === ",") {
+        cursor++;
+      } else if (text[cursor] !== "}") {
+        return null;
+      }
+    }
+    return null;
+  }
+  if (text[cursor] === "[") {
+    const arr: unknown[] = [];
+    cursor++;
+    while (cursor < text.length) {
+      cursor = skipWhitespace(text, cursor);
+      if (text[cursor] === "]") {
+        return { value: arr, end: cursor + 1 };
+      }
+      const valResult = parseGemmaValue(text, cursor);
+      if (!valResult) {
+        return null;
+      }
+      arr.push(valResult.value);
+      cursor = valResult.end;
+      cursor = skipWhitespace(text, cursor);
+      if (text[cursor] === ",") {
+        cursor++;
+      } else if (text[cursor] !== "]") {
+        return null;
+      }
+    }
+    return null;
+  }
+  const primitiveMatch = text.slice(cursor).match(/^[^,}\]\s]+/);
+  if (!primitiveMatch) {
+    return null;
+  }
+  const rawVal = primitiveMatch[0];
+  cursor += rawVal.length;
+  if (rawVal === "true") {
+    return { value: true, end: cursor };
+  }
+  if (rawVal === "false") {
+    return { value: false, end: cursor };
+  }
+  if (rawVal === "null") {
+    return { value: null, end: cursor };
+  }
+  const num = Number(rawVal);
+  if (!Number.isNaN(num)) {
+    return { value: num, end: cursor };
+  }
+  return { value: rawVal, end: cursor };
+}
+
 function parseClosing(text: string, start: number, name: string): number | null {
   const cursor = skipWhitespace(text, start);
   if (text.startsWith(END_TOOL_REQUEST, cursor)) {
@@ -248,27 +388,57 @@ function parsePlainTextToolCallBlockAt(
   if (allowedToolNames && !allowedToolNames.has(opening.name)) {
     return null;
   }
-  const payload = consumeJsonObject(
-    text,
-    opening.end,
-    options?.maxPayloadBytes ?? DEFAULT_MAX_PLAIN_TEXT_TOOL_PAYLOAD_BYTES,
-  );
-  if (!payload) {
-    return null;
+  if (opening.format == ToolCallFormat.Bracket || opening.format == ToolCallFormat.Harmony) {
+    const payload = consumeJsonObject(
+      text,
+      opening.end,
+      options?.maxPayloadBytes ?? DEFAULT_MAX_PLAIN_TEXT_TOOL_PAYLOAD_BYTES,
+    );
+    if (!payload) {
+      return null;
+    }
+    const closingEnd =
+      opening.format == ToolCallFormat.Bracket
+        ? parseClosing(text, payload.end, opening.name)
+        : parseOptionalHarmonyClosing(text, payload.end);
+    if (closingEnd === null) {
+      return null;
+    }
+    return {
+      arguments: payload.value,
+      end: closingEnd,
+      name: opening.name,
+      raw: text.slice(start, closingEnd),
+      start,
+    };
+  } else if (opening.format == ToolCallFormat.Gemma) {
+    const parsedPayload = parseGemmaValue(text, opening.end);
+    if (!parsedPayload) {
+      return null;
+    }
+    let cursor = skipWhitespace(text, parsedPayload.end);
+    if (!text.startsWith(GEMMA_CALL_CLOSING, cursor)) {
+      return null;
+    }
+    let closingEnd = cursor + GEMMA_CALL_CLOSING.length;
+    if (text.startsWith(GEMMA_CALL_CLOSING_RESPONSE, closingEnd)) {
+      closingEnd += GEMMA_CALL_CLOSING_RESPONSE.length;
+    }
+    if (
+      closingEnd - start >
+      (options?.maxPayloadBytes ?? DEFAULT_MAX_PLAIN_TEXT_TOOL_PAYLOAD_BYTES)
+    ) {
+      return null;
+    }
+    return {
+      arguments: parsedPayload.value as Record<string, unknown>,
+      end: closingEnd,
+      name: opening.name,
+      raw: text.slice(start, closingEnd),
+      start,
+    };
   }
-  const closingEnd = opening.requiresClosing
-    ? parseClosing(text, payload.end, opening.name)
-    : parseOptionalHarmonyClosing(text, payload.end);
-  if (closingEnd === null) {
-    return null;
-  }
-  return {
-    arguments: payload.value,
-    end: closingEnd,
-    name: opening.name,
-    raw: text.slice(start, closingEnd),
-    start,
-  };
+  return null;
 }
 
 export function parseStandalonePlainTextToolCallBlocks(
@@ -292,7 +462,8 @@ export function stripPlainTextToolCallBlocks(text: string): string {
   if (
     !text ||
     (!/\[[A-Za-z0-9_-]+\]/.test(text) &&
-      !/(?:^|\n)\s*(?:<\|channel\|>)?(?:commentary|analysis|final)\s+to=/.test(text))
+      !/(?:^|\n)\s*(?:<\|channel\|>)?(?:commentary|analysis|final)\s+to=/.test(text) &&
+      !text.includes("<|tool_call>call:"))
   ) {
     return text;
   }
