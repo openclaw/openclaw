@@ -229,15 +229,24 @@ These keys apply inside the `image`, `video`, or `music` sections:
 
 The `image` and `video` sections also support:
 
-| Key                   | Required                             | Default    | Description                                         |
-| --------------------- | ------------------------------------ | ---------- | --------------------------------------------------- |
-| `inputImageNodeId`    | Yes (when passing a reference image) | --         | Node ID that receives the uploaded reference image. |
-| `inputImageInputName` | No                                   | `"image"`  | Input name on the image node.                       |
-| `widthNodeId`         | No                                   | --         | Node ID that receives the width value.              |
-| `heightNodeId`        | No                                   | --         | Node ID that receives the height value.             |
-| `widthInputName`      | No                                   | `"width"`  | Input field within the width node.                  |
-| `heightInputName`     | No                                   | `"height"` | Input value within the height node.                 |
-| `baseSize`            | No                                   | `1024`     | Default size or minimum dimension for output image. |
+| Key                   | Required                             | Default   | Description                                         |
+| --------------------- | ------------------------------------ | --------- | --------------------------------------------------- |
+| `inputImageNodeId`    | Yes (when passing a reference image) | --        | Node ID that receives the uploaded reference image. |
+| `inputImageInputName` | No                                   | `"image"` | Input name on the image node.                       |
+
+#### `dimensions` sub-object
+
+To enable size and aspect-ratio support, add a `dimensions` object inside the capability section. All keys are optional unless noted:
+
+| Key               | Required | Default    | Description                                                                                    |
+| ----------------- | -------- | ---------- | ---------------------------------------------------------------------------------------------- |
+| `widthNodeId`     | Yes      | --         | Node ID that receives the width value.                                                         |
+| `heightNodeId`    | Yes      | --         | Node ID that receives the height value.                                                        |
+| `widthInputName`  | No       | `"width"`  | Input field name on the width node.                                                            |
+| `heightInputName` | No       | `"height"` | Input field name on the height node.                                                           |
+| `baseSize`        | No       | `1024`     | Long-edge size in pixels used when computing width/height from an aspect ratio or size string. |
+
+Both `widthNodeId` and `heightNodeId` must be present for dimension injection to activate. They may point to the same node when a single node controls both dimensions.
 
 ## Workflow details
 
