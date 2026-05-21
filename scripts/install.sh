@@ -736,16 +736,74 @@ auto_install_build_tools_for_npm_failure() {
     return 0
 }
 
+resolve_npm_config_path() {
+    local raw="$1"
+    if [[ -z "$raw" || "$raw" == "null" || "$raw" == "undefined" ]]; then
+        return 1
+    fi
+    if [[ "$raw" == \~/* && -n "${HOME:-}" ]]; then
+        printf '%s\n' "${HOME}/${raw#"~/"}"
+        return 0
+    fi
+    if [[ "$raw" == "\${HOME}/"* && -n "${HOME:-}" ]]; then
+        printf '%s\n' "${HOME}/${raw#"\${HOME}/"}"
+        return 0
+    fi
+    printf '%s\n' "$raw"
+}
+
+npm_config_file_has_key() {
+    local file="$1"
+    local key="$2"
+    [[ -f "$file" ]] || return 1
+    grep -Eiq "^[[:space:]]*${key}[[:space:]]*=" "$file"
+}
+
+npm_config_has_raw_key() {
+    local npm_cmd="$1"
+    local key="$2"
+    local raw=""
+    local file=""
+    local -a files=()
+
+    raw="${NPM_CONFIG_USERCONFIG:-${npm_config_userconfig:-}}"
+    if [[ -n "$raw" ]]; then
+        file="$(resolve_npm_config_path "$raw" 2>/dev/null || true)"
+        [[ -n "$file" ]] && files+=("$file")
+    elif [[ -n "${HOME:-}" ]]; then
+        files+=("${HOME}/.npmrc")
+    fi
+
+    raw="${NPM_CONFIG_GLOBALCONFIG:-${npm_config_globalconfig:-}}"
+    if [[ -n "$raw" ]]; then
+        file="$(resolve_npm_config_path "$raw" 2>/dev/null || true)"
+        [[ -n "$file" ]] && files+=("$file")
+    fi
+
+    raw="$(env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$npm_cmd" config get globalconfig --global 2>/dev/null || true)"
+    file="$(resolve_npm_config_path "$raw" 2>/dev/null || true)"
+    [[ -n "$file" ]] && files+=("$file")
+
+    for file in "${files[@]}"; do
+        if npm_config_file_has_key "$file" "$key"; then
+            return 0
+        fi
+    done
+    return 1
+}
+
 run_npm_global_install() {
     local spec="$1"
     local log="$2"
 
     local freshness_flag="--min-release-age=0"
     local min_release_age=""
-    min_release_age="$(env -u NPM_CONFIG_BEFORE -u npm_config_before npm config get min-release-age 2>/dev/null || true)"
-    if [[ -z "$min_release_age" || "$min_release_age" == "null" || "$min_release_age" == "undefined" ]]; then
+    min_release_age="$(env -u NPM_CONFIG_BEFORE -u npm_config_before npm config get min-release-age --global 2>/dev/null || true)"
+    if npm_config_has_raw_key npm "min-release-age"; then
+        freshness_flag="--min-release-age=0"
+    elif [[ -z "$min_release_age" || "$min_release_age" == "null" || "$min_release_age" == "undefined" ]]; then
         local before_value=""
-        before_value="$(env -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age npm config get before 2>/dev/null || true)"
+        before_value="$(env -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age npm config get before --global 2>/dev/null || true)"
         if [[ -n "$before_value" && "$before_value" != "null" && "$before_value" != "undefined" ]]; then
             freshness_flag="--before=$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')"
         fi
