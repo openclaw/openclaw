@@ -10,11 +10,6 @@ coverage:
     - runtime.first-hour-20
   secondary:
     - runtime.long-context
-evidence:
-  github:
-    - https://github.com/openclaw/openclaw/issues/80171
-    - https://github.com/openclaw/openclaw/issues/80337
-    - https://github.com/openclaw/openclaw/issues/80364
 objective: Verify both runtimes preserve a same-session conversation across the required 20-turn maintainer gate.
 successCriteria:
   - The same QA session accepts 20 sequential user turns.

@@ -5,8 +5,8 @@ Single source of truth for repo-backed QA suite bootstrap data.
 
 - `index.md` defines pack-level bootstrap data
 - each nested `*.md` scenario defines one runnable test via `qa-scenario` + `qa-flow`
-- scenario markdown may also define coverage IDs, evidence links, category metadata,
-  required plugins, lane filters, runtime parity tiers, and gateway config patching
+- scenario markdown may also define coverage IDs, category metadata, required plugins,
+  lane filters, runtime parity tiers, and gateway config patching
 
 - kickoff mission
 - QA operator identity
@@ -20,9 +20,6 @@ Coverage tracking:
 - prefer reusing an existing feature ID over minting a scenario-shaped ID
 - avoid copying the scenario title into coverage IDs
 - use `pnpm openclaw qa coverage` to render the current inventory
-- use `evidence.github` for full `https://github.com/openclaw/openclaw/issues/<n>` or
-  `https://github.com/openclaw/openclaw/pull/<n>` links when a scenario directly protects
-  a reported regression, RFC, or accepted PR behavior
 - use `runtimeParityTier` for runtime-pair gate membership: `standard`,
   `optional`, `live-only`, or `soak`
 - treat the old `coverage: ["id"]` / `coverage: - id` list shape as invalid
