@@ -14,9 +14,11 @@ const MISTRAL_MAX_TOKENS_FIELD = "max_tokens";
 
 export const MISTRAL_MODEL_TRANSPORT_PATCH = {
   supportsStore: false,
+  supportsPromptCacheKey: true,
   maxTokensField: MISTRAL_MAX_TOKENS_FIELD,
 } as const satisfies {
   supportsStore: boolean;
+  supportsPromptCacheKey: boolean;
   maxTokensField: "max_tokens";
 };
 
@@ -36,6 +38,7 @@ export const MISTRAL_MEDIUM_3_5_ID = "mistral-medium-3-5";
 
 export function resolveMistralCompatPatch(model: { id?: string }): {
   supportsStore: boolean;
+  supportsPromptCacheKey: boolean;
   supportsReasoningEffort: boolean;
   maxTokensField: "max_tokens";
   reasoningEffortMap?: Record<string, string>;
@@ -56,6 +59,7 @@ function compatMatchesResolved(
   const expected = resolveMistralCompatPatch({ id: modelId });
   return (
     compat?.supportsStore === expected.supportsStore &&
+    compat?.supportsPromptCacheKey === expected.supportsPromptCacheKey &&
     compat?.supportsReasoningEffort === expected.supportsReasoningEffort &&
     compat?.maxTokensField === expected.maxTokensField &&
     compat?.reasoningEffortMap === expected.reasoningEffortMap
