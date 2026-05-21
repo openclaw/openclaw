@@ -155,6 +155,30 @@ Use your own automatic label pool:
 }
 ```
 
+Add an ellipsis suffix to the label:
+
+```json5
+{
+  channels: {
+    telegram: {
+      streaming: {
+        mode: "progress",
+        progress: {
+          label: "auto",
+          ellipsis: "animated",
+        },
+      },
+    },
+  },
+}
+```
+
+`streaming.progress.ellipsis` is optional and defaults to `off`.
+Use `static` to render `Working...`, or `animated` to cycle the progress label
+through `Working`, `Working.`, `Working..`, and `Working...` while supported
+channels update the draft. Telegram refreshes animated progress labels even
+when no new tool progress lines arrive.
+
 Hide the label and show only progress lines:
 
 ```json5
