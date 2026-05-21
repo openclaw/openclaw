@@ -11,6 +11,10 @@ import {
 } from "./constants.js";
 import { shouldMirrorRefreshedOAuthCredential } from "./oauth-identity.js";
 import {
+  findFreshOAuthCredentialForCoordinationKey,
+  resolveOAuthRefreshCoordinationKey,
+} from "./oauth-refresh-coordination.js";
+import {
   buildRefreshContentionError,
   isGlobalRefreshLockTimeoutError,
 } from "./oauth-refresh-lock-errors.js";
@@ -354,8 +358,19 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
 
   const refreshQueues = new Map<string, Promise<unknown>>();
 
-  function refreshQueueKey(provider: string, profileId: string): string {
-    return `${provider}\u0000${profileId}`;
+  function refreshQueueKey(
+    provider: string,
+    profileId: string,
+    credential?: OAuthCredential,
+  ): string {
+    const coordinationKey = credential
+      ? resolveOAuthRefreshCoordinationKey({
+          provider,
+          profileId,
+          credential,
+        })
+      : null;
+    return `${provider}\u0000${coordinationKey?.value ?? profileId}`;
   }
 
   async function withRefreshCallTimeout<T>(
@@ -430,7 +445,20 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     const ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir(params);
     const authPath = resolveAuthStorePath(ownerAgentDir);
     ensureAuthStoreFile(authPath);
-    const globalRefreshLockPath = resolveOAuthRefreshLockPath(params.provider, params.profileId);
+    const initialStore = loadAuthProfileStoreWithoutExternalProfiles(ownerAgentDir);
+    const initialCredential = initialStore.profiles[params.profileId];
+    const coordinationKey =
+      initialCredential?.type === "oauth"
+        ? resolveOAuthRefreshCoordinationKey({
+            provider: params.provider,
+            profileId: params.profileId,
+            credential: initialCredential,
+          })
+        : null;
+    const globalRefreshLockPath = resolveOAuthRefreshLockPath(
+      params.provider,
+      coordinationKey?.value ?? params.profileId,
+    );
 
     try {
       return await withFileLock(globalRefreshLockPath, OAUTH_REFRESH_LOCK_OPTIONS, async () =>
@@ -439,6 +467,33 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
           const cred = store.profiles[params.profileId];
           if (!cred || cred.type !== "oauth") {
             return null;
+          }
+          const freshPeer = coordinationKey
+            ? findFreshOAuthCredentialForCoordinationKey({
+                store,
+                provider: params.provider,
+                coordinationKey,
+                previous: cred,
+              })
+            : null;
+          if (freshPeer) {
+            log.info("adopted fresh OAuth credential from same refresh coordination group", {
+              profileId: params.profileId,
+              adoptedProfileId: freshPeer.profileId,
+              agentDir: params.agentDir,
+              expires: new Date(freshPeer.credential.expires).toISOString(),
+            });
+            return {
+              apiKey: await adapter.buildApiKey(
+                freshPeer.credential.provider,
+                freshPeer.credential,
+                {
+                  cfg: params.cfg,
+                  agentDir: params.agentDir,
+                },
+              ),
+              credential: freshPeer.credential,
+            };
           }
           let credentialToRefresh = cred;
 
@@ -556,6 +611,21 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
             return null;
           }
           store.profiles[params.profileId] = refreshedCredentials;
+          if (coordinationKey?.kind === "refresh_hash") {
+            for (const [profileId, candidate] of Object.entries(store.profiles)) {
+              if (
+                profileId !== params.profileId &&
+                candidate.type === "oauth" &&
+                candidate.provider === cred.provider &&
+                candidate.refresh === cred.refresh
+              ) {
+                store.profiles[profileId] = {
+                  ...candidate,
+                  ...refreshedCredentials,
+                };
+              }
+            }
+          }
           saveAuthProfileStore(store, ownerAgentDir);
           if (ownerAgentDir) {
             const mainPath = resolveAuthStorePath(undefined);
@@ -590,12 +660,13 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
   async function refreshOAuthTokenWithLock(params: {
     profileId: string;
     provider: string;
+    credential?: OAuthCredential;
     agentDir?: string;
     cfg?: OpenClawConfig;
     forceRefresh?: boolean;
     attemptedCredentials?: OAuthCredential[];
   }): Promise<ResolvedOAuthAccess | null> {
-    const key = refreshQueueKey(params.provider, params.profileId);
+    const key = refreshQueueKey(params.provider, params.profileId, params.credential);
     const prev = refreshQueues.get(key) ?? Promise.resolve();
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
@@ -649,6 +720,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
       const refreshed = await refreshOAuthTokenWithLock({
         profileId: params.profileId,
         provider: params.credential.provider,
+        credential: effectiveCredential,
         agentDir: params.agentDir,
         cfg: params.cfg,
         forceRefresh: params.forceRefresh,
@@ -701,6 +773,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
           const retried = await refreshOAuthTokenWithLock({
             profileId: params.profileId,
             provider: params.credential.provider,
+            credential: params.credential,
             agentDir: params.agentDir,
             cfg: params.cfg,
             forceRefresh: params.forceRefresh,

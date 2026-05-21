@@ -663,4 +663,280 @@ describe("createOAuthManager", () => {
       expect(surfacedCauseMessage).not.toContain("external-attempt-id-token");
     }
   });
+  it("serializes different Codex profile IDs for the same account and adopts the first refresh", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "oauth-manager-account-lock-"));
+    tempDirs.push(tempRoot);
+    process.env.OPENCLAW_STATE_DIR = tempRoot;
+    const mainAgentDir = path.join(tempRoot, "agents", "main", "agent");
+    process.env.OPENCLAW_AGENT_DIR = mainAgentDir;
+    process.env.PI_CODING_AGENT_DIR = mainAgentDir;
+    await fs.mkdir(mainAgentDir, { recursive: true });
+
+    const profileA = "openai-codex:default";
+    const profileB = "openai-codex:admin@dolbodahealth.com";
+    const credentialA = createCredential({
+      access: "expired-a-access",
+      refresh: "expired-a-refresh",
+      expires: Date.now() - 60_000,
+      accountId: "acct-shared",
+    });
+    const credentialB = createCredential({
+      access: "expired-b-access",
+      refresh: "expired-b-refresh",
+      expires: Date.now() - 60_000,
+      accountId: "acct-shared",
+      email: "admin@dolbodahealth.com",
+    });
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        [profileA]: credentialA,
+        [profileB]: credentialB,
+      },
+    };
+    saveAuthProfileStore(store, mainAgentDir, { filterExternalAuthProfiles: false });
+
+    let refreshCalls = 0;
+    const refreshCredential = vi.fn(async (credential: OAuthCredential) => {
+      refreshCalls += 1;
+      expect(credential.accountId).toBe("acct-shared");
+      return {
+        access: `rotated-access-${refreshCalls}`,
+        refresh: `rotated-refresh-${refreshCalls}`,
+        expires: Date.now() + 10 * 60_000,
+        accountId: "acct-shared",
+        email: credential.email,
+      };
+    });
+    const manager = createOAuthManager({
+      buildApiKey: async (_provider, credential) => credential.access,
+      refreshCredential,
+      readBootstrapCredential: () => null,
+      isRefreshTokenReusedError: () => false,
+    });
+
+    const [resultA, resultB] = await Promise.all([
+      manager.resolveOAuthAccess({
+        store: ensureAuthProfileStoreWithoutExternalProfiles(mainAgentDir),
+        profileId: profileA,
+        credential: credentialA,
+        agentDir: mainAgentDir,
+      }),
+      manager.resolveOAuthAccess({
+        store: ensureAuthProfileStoreWithoutExternalProfiles(mainAgentDir),
+        profileId: profileB,
+        credential: credentialB,
+        agentDir: mainAgentDir,
+      }),
+    ]);
+
+    expect(refreshCredential).toHaveBeenCalledTimes(1);
+    expect(resultA?.credential.access).toBe("rotated-access-1");
+    expect(resultB?.credential.access).toBe("rotated-access-1");
+  });
+
+  it("keeps same-account different-profile refreshes in the same in-process queue", async () => {
+    const tempRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "oauth-manager-account-process-queue-"),
+    );
+    tempDirs.push(tempRoot);
+    process.env.OPENCLAW_STATE_DIR = tempRoot;
+    const mainAgentDir = path.join(tempRoot, "agents", "main", "agent");
+    process.env.OPENCLAW_AGENT_DIR = mainAgentDir;
+    process.env.PI_CODING_AGENT_DIR = mainAgentDir;
+    await fs.mkdir(mainAgentDir, { recursive: true });
+
+    const profileA = "openai-codex:default";
+    const profileB = "openai-codex:admin@dolbodahealth.com";
+    const credentialA = createCredential({
+      access: "expired-a-access",
+      refresh: "expired-a-refresh",
+      expires: Date.now() - 60_000,
+      accountId: "acct-shared",
+    });
+    const credentialB = createCredential({
+      access: "expired-b-access",
+      refresh: "expired-b-refresh",
+      expires: Date.now() - 60_000,
+      accountId: "acct-shared",
+      email: "admin@dolbodahealth.com",
+    });
+    saveAuthProfileStore(
+      { version: 1, profiles: { [profileA]: credentialA, [profileB]: credentialB } },
+      mainAgentDir,
+      { filterExternalAuthProfiles: false },
+    );
+
+    let firstRefreshStarted!: () => void;
+    let releaseFirstRefresh!: () => void;
+    const firstRefreshStartedPromise = new Promise<void>((resolve) => {
+      firstRefreshStarted = resolve;
+    });
+    const releaseFirstRefreshPromise = new Promise<void>((resolve) => {
+      releaseFirstRefresh = resolve;
+    });
+    const refreshCredential = vi.fn(async (credential: OAuthCredential) => {
+      if (refreshCredential.mock.calls.length > 1) {
+        throw new Error("second same-account refresh should wait for the first result");
+      }
+      expect(credential.accountId).toBe("acct-shared");
+      firstRefreshStarted();
+      await releaseFirstRefreshPromise;
+      return {
+        access: "rotated-access",
+        refresh: "rotated-refresh",
+        expires: Date.now() + 10 * 60_000,
+        accountId: "acct-shared",
+      };
+    });
+    const manager = createOAuthManager({
+      buildApiKey: async (_provider, credential) => credential.access,
+      refreshCredential,
+      readBootstrapCredential: () => null,
+      isRefreshTokenReusedError: () => false,
+    });
+
+    const first = manager.resolveOAuthAccess({
+      store: ensureAuthProfileStoreWithoutExternalProfiles(mainAgentDir),
+      profileId: profileA,
+      credential: credentialA,
+      agentDir: mainAgentDir,
+    });
+    await firstRefreshStartedPromise;
+
+    const second = manager.resolveOAuthAccess({
+      store: ensureAuthProfileStoreWithoutExternalProfiles(mainAgentDir),
+      profileId: profileB,
+      credential: credentialB,
+      agentDir: mainAgentDir,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(refreshCredential).toHaveBeenCalledTimes(1);
+
+    releaseFirstRefresh();
+    const [resultA, resultB] = await Promise.all([first, second]);
+
+    expect(refreshCredential).toHaveBeenCalledTimes(1);
+    expect(resultA?.credential.access).toBe("rotated-access");
+    expect(resultB?.credential.access).toBe("rotated-access");
+  });
+
+  it("adopts a same-account fresh credential from main store under a different profile id", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "oauth-manager-cross-store-account-"));
+    tempDirs.push(tempRoot);
+    process.env.OPENCLAW_STATE_DIR = tempRoot;
+    const mainAgentDir = path.join(tempRoot, "agents", "main", "agent");
+    const subAgentDir = path.join(tempRoot, "agents", "sub", "agent");
+    process.env.OPENCLAW_AGENT_DIR = mainAgentDir;
+    process.env.PI_CODING_AGENT_DIR = mainAgentDir;
+    await fs.mkdir(mainAgentDir, { recursive: true });
+    await fs.mkdir(subAgentDir, { recursive: true });
+
+    const mainProfile = "openai-codex:default";
+    const subProfile = "openai-codex:admin@dolbodahealth.com";
+    const mainFresh = createCredential({
+      access: "main-fresh-access",
+      refresh: "main-fresh-refresh",
+      expires: Date.now() + 10 * 60_000,
+      accountId: "acct-shared",
+    });
+    const subStale = createCredential({
+      access: "sub-stale-access",
+      refresh: "sub-stale-refresh",
+      expires: Date.now() - 60_000,
+      accountId: "acct-shared",
+      email: "admin@dolbodahealth.com",
+    });
+    saveAuthProfileStore({ version: 1, profiles: { [mainProfile]: mainFresh } }, mainAgentDir, {
+      filterExternalAuthProfiles: false,
+    });
+    saveAuthProfileStore({ version: 1, profiles: { [subProfile]: subStale } }, subAgentDir, {
+      filterExternalAuthProfiles: false,
+    });
+
+    const refreshCredential = vi.fn(async () => ({
+      access: "should-not-refresh",
+      refresh: "should-not-refresh",
+      expires: Date.now() + 10 * 60_000,
+    }));
+    const manager = createOAuthManager({
+      buildApiKey: async (_provider, credential) => credential.access,
+      refreshCredential,
+      readBootstrapCredential: () => null,
+      isRefreshTokenReusedError: () => false,
+    });
+
+    const result = await manager.resolveOAuthAccess({
+      store: ensureAuthProfileStoreWithoutExternalProfiles(subAgentDir),
+      profileId: subProfile,
+      credential: subStale,
+      agentDir: subAgentDir,
+    });
+
+    expect(refreshCredential).not.toHaveBeenCalled();
+    expect(result?.credential.access).toBe("main-fresh-access");
+  });
+
+  it("updates same-store duplicate refresh-hash profiles after one identity-less refresh", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "oauth-manager-refresh-hash-"));
+    tempDirs.push(tempRoot);
+    process.env.OPENCLAW_STATE_DIR = tempRoot;
+    const mainAgentDir = path.join(tempRoot, "agents", "main", "agent");
+    process.env.OPENCLAW_AGENT_DIR = mainAgentDir;
+    process.env.PI_CODING_AGENT_DIR = mainAgentDir;
+    await fs.mkdir(mainAgentDir, { recursive: true });
+
+    const profileA = "openai-codex:default";
+    const profileB = "openai-codex:legacy-copy";
+    const credentialA = createCredential({
+      access: "expired-a-access",
+      refresh: "shared-stale-refresh",
+      expires: Date.now() - 60_000,
+      accountId: undefined,
+      email: undefined,
+    });
+    const credentialB = createCredential({
+      access: "expired-b-access",
+      refresh: "shared-stale-refresh",
+      expires: Date.now() - 60_000,
+      accountId: undefined,
+      email: undefined,
+    });
+    saveAuthProfileStore(
+      { version: 1, profiles: { [profileA]: credentialA, [profileB]: credentialB } },
+      mainAgentDir,
+      { filterExternalAuthProfiles: false },
+    );
+
+    const refreshCredential = vi.fn(async () => ({
+      access: "rotated-access",
+      refresh: "rotated-refresh",
+      expires: Date.now() + 10 * 60_000,
+    }));
+    const manager = createOAuthManager({
+      buildApiKey: async (_provider, credential) => credential.access,
+      refreshCredential,
+      readBootstrapCredential: () => null,
+      isRefreshTokenReusedError: () => false,
+    });
+
+    const [resultA, resultB] = await Promise.all([
+      manager.resolveOAuthAccess({
+        store: ensureAuthProfileStoreWithoutExternalProfiles(mainAgentDir),
+        profileId: profileA,
+        credential: credentialA,
+        agentDir: mainAgentDir,
+      }),
+      manager.resolveOAuthAccess({
+        store: ensureAuthProfileStoreWithoutExternalProfiles(mainAgentDir),
+        profileId: profileB,
+        credential: credentialB,
+        agentDir: mainAgentDir,
+      }),
+    ]);
+
+    expect(refreshCredential).toHaveBeenCalledTimes(1);
+    expect(resultA?.credential.access).toBe("rotated-access");
+    expect(resultB?.credential.access).toBe("rotated-access");
+  });
 });
