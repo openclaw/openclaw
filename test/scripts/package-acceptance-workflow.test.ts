@@ -885,6 +885,7 @@ describe("package artifact reuse", () => {
     const npmWorkflow = readFileSync(".github/workflows/openclaw-npm-release.yml", "utf8");
 
     expect(workflow).toContain("timeout-minutes: 60");
+    expect(workflow).toContain("environment: npm-release");
     expect(workflow).toContain("Download OpenClaw npm preflight manifest");
     expect(workflow).toContain("Validate OpenClaw npm preflight manifest");
     expect(workflow).toContain("Download full release validation manifest");
@@ -897,8 +898,12 @@ describe("package artifact reuse", () => {
     expect(npmWorkflow).toContain("preflight-manifest.json");
     expect(npmWorkflow).toContain("Verify full release validation run metadata");
     expect(npmWorkflow).toContain("Verify full release validation target");
+    expect(npmWorkflow).toContain("Verify Docker runtime-assets prune path");
+    expect(npmWorkflow).toContain("--target runtime-assets");
     expect(npmWorkflow).toContain("full_release_validation_run_id");
+    expect(npmWorkflow).toContain("release_publish_run_id");
     expect(npmWorkflow).toContain("Real publish requires full_release_validation_run_id");
+    expect(npmWorkflow).toContain("Real publish requires release_publish_run_id");
     expect(npmWorkflow).toContain("tarballSha256");
     expect(workflow).toContain("Checkout release SHA");
     expect(workflow).toContain('git show "${TARGET_SHA}:CHANGELOG.md" > "${changelog_file}"');
@@ -914,6 +919,8 @@ describe("package artifact reuse", () => {
     };
     const releaseWorkflow = readFileSync(RELEASE_PUBLISH_WORKFLOW, "utf8");
     const clawHubWorkflow = readFileSync(".github/workflows/plugin-clawhub-release.yml", "utf8");
+    const pluginNpmWorkflow = readFileSync(".github/workflows/plugin-npm-release.yml", "utf8");
+    const openclawNpmWorkflow = readFileSync(".github/workflows/openclaw-npm-release.yml", "utf8");
 
     expect(packageJson.scripts?.["release:verify-beta"]).toBe(
       "node --import tsx scripts/release-verify-beta.ts",
@@ -934,7 +941,15 @@ describe("package artifact reuse", () => {
     expect(releaseWorkflow).toContain("Plugin ClawHub run ID");
     expect(releaseWorkflow).toContain("OpenClaw npm run ID");
     expect(releaseWorkflow).toContain("npm_telegram_run_id");
-    expect(releaseWorkflow).toContain("Approve release gate from OpenClaw Release Publish wrapper");
+    expect(releaseWorkflow).toContain('release_publish_run_id="${GITHUB_RUN_ID}"');
+    expect(releaseWorkflow).toContain("append_release_proof_to_github_release");
+    expect(releaseWorkflow).toContain("registry tarball");
+    expect(releaseWorkflow).toContain("not awaited by this proof");
+    expect(releaseWorkflow).toContain("wait_for_job_success");
+    expect(releaseWorkflow).toContain("Validate release publish approval");
+    expect(releaseWorkflow).toContain('conclusion" == "skipped"');
+    expect(releaseWorkflow).toContain("approve_child_publish_environment");
+    expect(releaseWorkflow).toContain("Approve child release gate after parent release approval");
     expect(releaseWorkflow).toContain("release:verify-beta");
     expect(releaseWorkflow).toContain('--workflow-ref "${CHILD_WORKFLOW_REF}"');
     expect(releaseWorkflow).toContain('verify_args+=(--plugins "${PLUGINS}")');
@@ -944,6 +959,18 @@ describe("package artifact reuse", () => {
     expect(releaseWorkflow).toContain("Workflow completion does not wait for ClawHub");
     expect(releaseWorkflow).toContain('[[ "${WAIT_FOR_CLAWHUB}" == "true" ]]');
     expect(releaseWorkflow).toContain("--skip-clawhub");
+    expect(pluginNpmWorkflow).toContain("Validate release publish approval run");
+    expect(clawHubWorkflow).toContain("Validate release publish approval run");
+    expect(openclawNpmWorkflow).toContain("Validate release publish approval run");
+    expect(pluginNpmWorkflow).toContain('GITHUB_ACTOR}" != "github-actions[bot]"');
+    expect(clawHubWorkflow).toContain('GITHUB_ACTOR}" != "github-actions[bot]"');
+    expect(openclawNpmWorkflow).toContain('GITHUB_ACTOR}" != "github-actions[bot]"');
+    expect(pluginNpmWorkflow).toContain("must still be in_progress");
+    expect(clawHubWorkflow).toContain("must still be in_progress");
+    expect(openclawNpmWorkflow).toContain("must still be in_progress");
+    expect(pluginNpmWorkflow).toContain("environment: npm-release");
+    expect(clawHubWorkflow).toContain("environment: clawhub-plugin-release");
+    expect(openclawNpmWorkflow).toContain("environment: npm-release");
     expect(releaseWorkflow.lastIndexOf("create_or_update_github_release")).toBeLessThan(
       releaseWorkflow.indexOf('if [[ -n "${clawhub_pid}" ]] && ! wait "${clawhub_pid}"'),
     );
