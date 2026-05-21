@@ -51,3 +51,19 @@ Example:
 ```text
 /ask grill 曖昧な依頼をSPECと実装タスクまで詰めたい
 ```
+
+## Runtime smoke test
+
+After merge and runtime rollout, verify the Discord path in a private test channel:
+
+1. Restart the gateway/runtime process that loads bundled plugins.
+2. Run `/ask Minimal /ask smoke? --options=GO:go,STOP:stop`.
+3. Confirm the command renders Discord components.
+4. Click an allowed answer as the requester and confirm the session records the answer, clears components, and does not execute any action.
+5. Run `/ask grill Build a small dashboard`.
+6. Submit one Grill modal answer and confirm the next Grill question is shown with progress.
+7. Finish the Grill sequence and confirm the final summary keeps `log_only`, `requires_second_go=true`, and `action_scope=answer_capture_only`.
+8. Confirm a non-requester interaction is rejected privately and does not overwrite the shared prompt.
+
+Rollback is to revert the merge commit or disable/remove the bundled `ask` plugin from the deployed runtime, then restart the gateway/runtime process.
+No data migration is required because the initial Ask sessions are keyed runtime records and no external action is executed.
