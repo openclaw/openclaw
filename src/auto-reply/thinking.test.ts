@@ -169,7 +169,9 @@ describe("listThinkingLevels", () => {
             : undefined;
         }
         const overridesCatalogReasoning =
-          context.modelId === "gpt-5.4" || context.modelId === "gpt-5.5";
+          context.modelId === "gpt-5.3" ||
+          context.modelId === "gpt-5.4" ||
+          context.modelId === "gpt-5.5";
         return {
           levels: [
             { id: "off" },
@@ -185,6 +187,12 @@ describe("listThinkingLevels", () => {
       },
     );
     const staleCatalog = [
+      {
+        provider: "openai",
+        id: "gpt-5.3",
+        name: "GPT-5.3",
+        reasoning: false,
+      },
       {
         provider: "openai",
         id: "gpt-5.4",
@@ -205,12 +213,26 @@ describe("listThinkingLevels", () => {
       },
       {
         provider: "openai",
+        id: "gpt-5.3-chat-latest",
+        name: "GPT-5.3 Chat Latest",
+        reasoning: false,
+      },
+      {
+        provider: "openai",
         id: "gpt-5-chat-latest",
         name: "GPT-5 Chat Latest",
         reasoning: false,
       },
     ];
 
+    expect(
+      isThinkingLevelSupported({
+        provider: "openai",
+        model: "gpt-5.3",
+        level: "high",
+        catalog: staleCatalog,
+      }),
+    ).toBe(true);
     expect(
       isThinkingLevelSupported({
         provider: "openai",
@@ -239,6 +261,7 @@ describe("listThinkingLevels", () => {
       "off, minimal, low, medium, high, xhigh",
     );
     expect(listThinkingLevels("openai", "gpt-4.1-mini", staleCatalog)).toEqual(["off"]);
+    expect(listThinkingLevels("openai", "gpt-5.3-chat-latest", staleCatalog)).toEqual(["off"]);
     expect(listThinkingLevels("openai", "gpt-5-chat-latest", staleCatalog)).toEqual(["off"]);
   });
 

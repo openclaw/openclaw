@@ -446,6 +446,12 @@ describe("buildOpenAIProvider", () => {
     expect(
       provider.resolveThinkingProfile?.({
         provider: "openai",
+        modelId: "gpt-5.3",
+      } as never)?.overridesCatalogReasoning,
+    ).toBe(true);
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "openai",
         modelId: "gpt-5.3-chat-latest",
       } as never)?.overridesCatalogReasoning,
     ).toBeUndefined();
