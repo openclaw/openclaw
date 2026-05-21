@@ -28,6 +28,18 @@ describe("resolveWebhooksPluginConfig", () => {
           provider: "default",
           id: "OPENCLAW_WEBHOOK_SECRET",
         },
+        auth: {
+          mode: "bearer",
+          secret: {
+            source: "env",
+            provider: "default",
+            id: "OPENCLAW_WEBHOOK_SECRET",
+          },
+          prefix: "Bearer",
+          legacySharedHeader: true,
+        },
+        dispatchMode: "taskflow",
+        event: {},
         controllerId: "webhooks/zapier",
       },
     ]);
@@ -59,9 +71,116 @@ describe("resolveWebhooksPluginConfig", () => {
           provider: "default",
           id: "MISSING_SECRET",
         },
+        auth: {
+          mode: "bearer",
+          secret: {
+            source: "env",
+            provider: "default",
+            id: "MISSING_SECRET",
+          },
+          prefix: "Bearer",
+          legacySharedHeader: true,
+        },
+        dispatchMode: "taskflow",
+        event: {},
         controllerId: "webhooks/missing",
       },
     ]);
+  });
+
+  it("keeps ack routes without TaskFlow session binding", () => {
+    const routes = resolveWebhooksPluginConfig({
+      pluginConfig: {
+        routes: {
+          alerts: {
+            path: "/plugins/webhooks/alerts",
+            dispatch: { mode: "ack" },
+            auth: {
+              mode: "header",
+              header: "x-alert-token",
+              secret: "shared-secret",
+            },
+            event: {
+              header: "x-alert-event",
+              payloadPath: "event.type",
+            },
+            events: ["incident.created", "incident.updated"],
+            idempotency: {
+              header: "x-alert-delivery",
+              ttlHours: 2,
+            },
+          },
+        },
+      },
+    });
+
+    expect(routes).toEqual([
+      {
+        routeId: "alerts",
+        path: "/plugins/webhooks/alerts",
+        dispatchMode: "ack",
+        auth: {
+          mode: "header",
+          header: "x-alert-token",
+          secret: "shared-secret",
+        },
+        event: {
+          header: "x-alert-event",
+          payloadPath: "event.type",
+        },
+        events: ["incident.created", "incident.updated"],
+        idempotency: {
+          header: "x-alert-delivery",
+          ttlMs: 2 * 60 * 60 * 1000,
+        },
+      },
+    ]);
+  });
+
+  it("normalizes hmac routes", () => {
+    const routes = resolveWebhooksPluginConfig({
+      pluginConfig: {
+        routes: {
+          github: {
+            dispatch: { mode: "ack" },
+            auth: {
+              mode: "hmac-sha256",
+              header: "x-hub-signature-256",
+              prefix: "sha256=",
+              secret: {
+                source: "env",
+                provider: "default",
+                id: "GITHUB_WEBHOOK_SECRET",
+              },
+            },
+            idempotency: {
+              payloadPath: "delivery.id",
+            },
+          },
+        },
+      },
+    });
+
+    expect(routes[0]).toMatchObject({
+      routeId: "github",
+      path: "/plugins/webhooks/github",
+      dispatchMode: "ack",
+      auth: {
+        mode: "hmac-sha256",
+        header: "x-hub-signature-256",
+        prefix: "sha256=",
+        secret: {
+          source: "env",
+          provider: "default",
+          id: "GITHUB_WEBHOOK_SECRET",
+        },
+      },
+      event: {},
+      idempotency: {
+        payloadPath: "delivery.id",
+        ttlMs: 24 * 60 * 60 * 1000,
+      },
+    });
   });
 
   it("rejects duplicate normalized paths", () => {

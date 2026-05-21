@@ -1,10 +1,15 @@
 import { EventEmitter } from "node:events";
+import { createHmac } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import { createRuntimeTaskFlow } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createMockServerResponse } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
-import { createTaskFlowWebhookRequestHandler, type TaskFlowWebhookTarget } from "./http.js";
+import {
+  createTaskFlowWebhookRequestHandler,
+  type TaskFlowWebhookTarget,
+  type WebhookTarget,
+} from "./http.js";
 
 const hoisted = vi.hoisted(() => {
   const resolveConfiguredSecretInputStringMock = vi.fn();
@@ -36,6 +41,7 @@ function createJsonRequest(params: {
   path: string;
   secret?: string;
   body: unknown;
+  headers?: Record<string, string>;
 }): MockIncomingMessage {
   const req = new EventEmitter() as MockIncomingMessage;
   req.method = "POST";
@@ -43,6 +49,7 @@ function createJsonRequest(params: {
   req.headers = {
     "content-type": "application/json",
     ...(params.secret ? { "x-openclaw-webhook-secret": params.secret } : {}),
+    ...(params.headers ?? {}),
   };
   req.socket = { remoteAddress: "127.0.0.1" } as MockIncomingMessage["socket"];
   req.destroyed = false;
@@ -53,6 +60,33 @@ function createJsonRequest(params: {
 
   setImmediate(() => {
     req.emit("data", Buffer.from(JSON.stringify(params.body), "utf8"));
+    req.emit("end");
+  });
+
+  return req;
+}
+
+function createRawJsonRequest(params: {
+  path: string;
+  rawBody: string;
+  headers?: Record<string, string>;
+}): MockIncomingMessage {
+  const req = new EventEmitter() as MockIncomingMessage;
+  req.method = "POST";
+  req.url = params.path;
+  req.headers = {
+    "content-type": "application/json",
+    ...(params.headers ?? {}),
+  };
+  req.socket = { remoteAddress: "127.0.0.1" } as MockIncomingMessage["socket"];
+  req.destroyed = false;
+  req.destroy = (() => {
+    req.destroyed = true;
+    return req;
+  }) as MockIncomingMessage["destroy"];
+
+  setImmediate(() => {
+    req.emit("data", Buffer.from(params.rawBody, "utf8"));
     req.emit("end");
   });
 
@@ -89,10 +123,10 @@ function createHandler(): {
 }
 
 function createHandlerWithTarget(
-  target: TaskFlowWebhookTarget,
+  target: WebhookTarget,
   cfg: OpenClawConfig = {} as OpenClawConfig,
 ): ReturnType<typeof createTaskFlowWebhookRequestHandler> {
-  const targetsByPath = new Map<string, TaskFlowWebhookTarget[]>([[target.path, [target]]]);
+  const targetsByPath = new Map<string, WebhookTarget[]>([[target.path, [target]]]);
   return createTaskFlowWebhookRequestHandler({
     cfg,
     targetsByPath,
@@ -104,11 +138,13 @@ async function dispatchJsonRequest(params: {
   path: string;
   secret?: string;
   body: unknown;
+  headers?: Record<string, string>;
 }) {
   const req = createJsonRequest({
     path: params.path,
     secret: params.secret,
     body: params.body,
+    headers: params.headers,
   });
   const res = createMockServerResponse();
   await params.handler(req, res);
@@ -416,5 +452,219 @@ describe("createTaskFlowWebhookRequestHandler", () => {
     expect(parsed.result.found).toBe(true);
     expect(parsed.result.cancelled).toBe(false);
     expect(parsed.result.reason).toBe("Flow is already succeeded.");
+  });
+
+  it("acknowledges generic routes authenticated by a configured header", async () => {
+    const target: WebhookTarget = {
+      routeId: "alerts",
+      path: "/plugins/webhooks/alerts",
+      dispatchMode: "ack",
+      auth: {
+        mode: "header",
+        header: "x-alert-token",
+        secret: "shared-secret",
+      },
+      event: {
+        header: "x-alert-event",
+        payloadPath: "event.type",
+      },
+      events: ["incident.created"],
+    };
+    const handler = createHandlerWithTarget(target);
+
+    const res = await dispatchJsonRequest({
+      handler,
+      path: target.path,
+      headers: {
+        "x-alert-token": "shared-secret",
+        "x-alert-event": "incident.created",
+      },
+      body: {
+        event: {
+          type: "incident.created",
+        },
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(parseJsonBody(res)).toEqual({
+      ok: true,
+      routeId: "alerts",
+      result: {
+        action: "ack",
+        eventType: "incident.created",
+      },
+    });
+  });
+
+  it("acknowledges and skips events outside a route allowlist", async () => {
+    const target: WebhookTarget = {
+      routeId: "alerts",
+      path: "/plugins/webhooks/alerts",
+      dispatchMode: "ack",
+      auth: {
+        mode: "bearer",
+        prefix: "Bearer",
+        secret: "shared-secret",
+      },
+      event: {
+        payloadPath: "event.type",
+      },
+      events: ["incident.created"],
+    };
+    const handler = createHandlerWithTarget(target);
+
+    const res = await dispatchJsonRequest({
+      handler,
+      path: target.path,
+      headers: {
+        authorization: "Bearer shared-secret",
+      },
+      body: {
+        event: {
+          type: "incident.closed",
+        },
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(parseJsonBody(res)).toEqual({
+      ok: true,
+      routeId: "alerts",
+      skipped: true,
+      reason: "event_not_allowed",
+      eventType: "incident.closed",
+    });
+  });
+
+  it("validates hmac-sha256 auth against the raw JSON body", async () => {
+    const target: WebhookTarget = {
+      routeId: "github",
+      path: "/plugins/webhooks/github",
+      dispatchMode: "ack",
+      auth: {
+        mode: "hmac-sha256",
+        header: "x-hub-signature-256",
+        prefix: "sha256=",
+        secret: "signing-secret",
+      },
+      event: {
+        header: "x-github-event",
+      },
+    };
+    const handler = createHandlerWithTarget(target);
+    const rawBody = JSON.stringify({
+      delivery: {
+        id: "evt-1",
+      },
+    });
+    const goodSignature = createHmac("sha256", "signing-secret")
+      .update(rawBody)
+      .digest("hex");
+
+    const acceptedReq = createRawJsonRequest({
+      path: target.path,
+      rawBody,
+      headers: {
+        "x-github-event": "issues",
+        "x-hub-signature-256": `sha256=${goodSignature}`,
+      },
+    });
+    const acceptedRes = createMockServerResponse();
+    await handler(acceptedReq, acceptedRes);
+
+    expect(acceptedRes.statusCode).toBe(200);
+    expect(parseJsonBody(acceptedRes)).toEqual({
+      ok: true,
+      routeId: "github",
+      result: {
+        action: "ack",
+        eventType: "issues",
+      },
+    });
+
+    const rejectedReq = createRawJsonRequest({
+      path: target.path,
+      rawBody,
+      headers: {
+        "x-github-event": "issues",
+        "x-hub-signature-256": "sha256=bad",
+      },
+    });
+    const rejectedRes = createMockServerResponse();
+    await handler(rejectedReq, rejectedRes);
+
+    expect(rejectedRes.statusCode).toBe(401);
+    expect(rejectedRes.body).toBe("unauthorized");
+  });
+
+  it("deduplicates ack routes with configured idempotency keys", async () => {
+    const target: WebhookTarget = {
+      routeId: "alerts",
+      path: "/plugins/webhooks/alerts",
+      dispatchMode: "ack",
+      auth: {
+        mode: "bearer",
+        prefix: "Bearer",
+        secret: "shared-secret",
+      },
+      event: {
+        payloadPath: "event.type",
+      },
+      idempotency: {
+        payloadPath: "delivery.id",
+        ttlMs: 60_000,
+      },
+    };
+    const handler = createHandlerWithTarget(target);
+
+    const first = await dispatchJsonRequest({
+      handler,
+      path: target.path,
+      headers: {
+        authorization: "Bearer shared-secret",
+      },
+      body: {
+        delivery: {
+          id: "evt-1",
+        },
+        event: {
+          type: "incident.created",
+        },
+      },
+    });
+    const second = await dispatchJsonRequest({
+      handler,
+      path: target.path,
+      headers: {
+        authorization: "Bearer shared-secret",
+      },
+      body: {
+        delivery: {
+          id: "evt-1",
+        },
+        event: {
+          type: "incident.created",
+        },
+      },
+    });
+
+    expect(first.statusCode).toBe(200);
+    expect(parseJsonBody(first)).toEqual({
+      ok: true,
+      routeId: "alerts",
+      result: {
+        action: "ack",
+        eventType: "incident.created",
+        idempotencyKey: "evt-1",
+      },
+    });
+    expect(second.statusCode).toBe(200);
+    expect(parseJsonBody(second)).toEqual({
+      ok: true,
+      routeId: "alerts",
+      duplicate: true,
+      idempotencyKey: "evt-1",
+    });
   });
 });

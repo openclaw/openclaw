@@ -7,6 +7,7 @@ function createApi(params?: {
   pluginConfig?: OpenClawPluginApi["pluginConfig"];
   registerHttpRoute?: OpenClawPluginApi["registerHttpRoute"];
   logger?: OpenClawPluginApi["logger"];
+  bindSession?: ReturnType<typeof vi.fn>;
 }): OpenClawPluginApi {
   return createTestPluginApi({
     id: "webhooks",
@@ -16,7 +17,9 @@ function createApi(params?: {
     runtime: {
       tasks: {
         managedFlows: {
-          bindSession: vi.fn(({ sessionKey }: { sessionKey: string }) => ({ sessionKey })),
+          bindSession:
+            params?.bindSession ??
+            vi.fn(({ sessionKey }: { sessionKey: string }) => ({ sessionKey })),
         },
       },
     } as unknown as OpenClawPluginApi["runtime"],
@@ -69,6 +72,37 @@ describe("webhooks plugin registration", () => {
     expect(route.auth).toBe("plugin");
     expect(route.match).toBe("exact");
     expect(route.replaceExisting).toBe(true);
+    expect(route.handler).toBeTypeOf("function");
+  });
+
+  it("registers ack-only routes without binding TaskFlow sessions", () => {
+    const registerHttpRoute = vi.fn();
+    const bindSession = vi.fn(({ sessionKey }: { sessionKey: string }) => ({ sessionKey }));
+
+    const result = plugin.register(
+      createApi({
+        pluginConfig: {
+          routes: {
+            alerts: {
+              dispatch: { mode: "ack" },
+              auth: {
+                mode: "header",
+                header: "x-alert-token",
+                secret: "shared-secret",
+              },
+            },
+          },
+        },
+        registerHttpRoute,
+        bindSession,
+      }),
+    );
+
+    expect(result).toBeUndefined();
+    expect(registerHttpRoute).toHaveBeenCalledTimes(1);
+    expect(bindSession).not.toHaveBeenCalled();
+    const route = requireFirstRouteRegistration(registerHttpRoute);
+    expect(route.path).toBe("/plugins/webhooks/alerts");
     expect(route.handler).toBeTypeOf("function");
   });
 });

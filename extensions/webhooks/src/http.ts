@@ -1,3 +1,4 @@
+import { createHmac, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -6,7 +7,7 @@ import type { PluginRuntime } from "../api.js";
 import {
   createFixedWindowRateLimiter,
   createWebhookInFlightLimiter,
-  readJsonWebhookBodyOrReject,
+  readWebhookBodyOrReject,
   resolveRequestClientIp,
   resolveConfiguredSecretInputString,
   resolveWebhookTargetWithAuthOrReject,
@@ -16,7 +17,12 @@ import {
   type OpenClawConfig,
   type WebhookInFlightLimiter,
 } from "../runtime-api.js";
-import type { WebhookSecretInput } from "./config.js";
+import type {
+  ConfiguredWebhookAuth,
+  ConfiguredWebhookEventConfig,
+  ConfiguredWebhookIdempotencyConfig,
+  WebhookSecretInput,
+} from "./config.js";
 
 type BoundTaskFlowRuntime = ReturnType<PluginRuntime["tasks"]["managedFlows"]["bindSession"]>;
 
@@ -176,11 +182,29 @@ type WebhookAction = z.infer<typeof webhookActionSchema>;
 export type TaskFlowWebhookTarget = {
   routeId: string;
   path: string;
+  dispatchMode?: "taskflow";
+  auth?: ConfiguredWebhookAuth;
   secretInput: WebhookSecretInput;
   secretConfigPath: string;
   defaultControllerId: string;
+  event?: ConfiguredWebhookEventConfig;
+  events?: string[];
+  idempotency?: ConfiguredWebhookIdempotencyConfig;
   taskFlow: BoundTaskFlowRuntime;
 };
+
+export type AckWebhookTarget = {
+  routeId: string;
+  path: string;
+  dispatchMode: "ack";
+  auth: ConfiguredWebhookAuth;
+  secretConfigPath?: string;
+  event?: ConfiguredWebhookEventConfig;
+  events?: string[];
+  idempotency?: ConfiguredWebhookIdempotencyConfig;
+};
+
+export type WebhookTarget = TaskFlowWebhookTarget | AckWebhookTarget;
 
 type FlowView = {
   flowId: string;
@@ -309,20 +333,200 @@ function writeJson(res: ServerResponse, statusCode: number, body: unknown): void
   res.end(JSON.stringify(body));
 }
 
-function extractSharedSecret(req: IncomingMessage): string {
-  const authHeader = Array.isArray(req.headers.authorization)
-    ? (req.headers.authorization[0] ?? "")
-    : (req.headers.authorization ?? "");
-  if (normalizeLowercaseStringOrEmpty(authHeader).startsWith("bearer ")) {
-    return authHeader.slice("bearer ".length).trim();
+function firstHeaderValue(value: string | string[] | undefined): string {
+  return Array.isArray(value) ? (value[0] ?? "") : (value ?? "");
+}
+
+function getHeader(req: IncomingMessage, name: string): string {
+  return firstHeaderValue(req.headers[normalizeLowercaseStringOrEmpty(name)]).trim();
+}
+
+function extractBearerSecret(req: IncomingMessage, prefix: string): string {
+  const authHeader = firstHeaderValue(req.headers.authorization);
+  const normalizedPrefix = normalizeLowercaseStringOrEmpty(prefix);
+  const normalizedAuthHeader = normalizeLowercaseStringOrEmpty(authHeader);
+  const tokenPrefix = `${normalizedPrefix} `;
+  if (normalizedPrefix.length > 0 && normalizedAuthHeader.startsWith(tokenPrefix)) {
+    return authHeader.slice(prefix.length + 1).trim();
   }
-  const sharedHeader = req.headers["x-openclaw-webhook-secret"];
-  return Array.isArray(sharedHeader) ? (sharedHeader[0] ?? "").trim() : (sharedHeader ?? "").trim();
+  return "";
+}
+
+function extractPresentedSecret(params: {
+  req: IncomingMessage;
+  auth: ConfiguredWebhookAuth;
+}): string {
+  const { req, auth } = params;
+  if (auth.mode === "bearer") {
+    const bearerSecret = extractBearerSecret(req, auth.prefix);
+    if (bearerSecret || !auth.legacySharedHeader) {
+      return bearerSecret;
+    }
+    return getHeader(req, "x-openclaw-webhook-secret");
+  }
+  const value = getHeader(req, auth.header);
+  if (!auth.prefix) {
+    return value;
+  }
+  return value.startsWith(auth.prefix) ? value.slice(auth.prefix.length).trim() : "";
 }
 
 function timingSafeEquals(left: string, right: string): boolean {
   // Reuse the shared helper so webhook auth semantics stay aligned across plugins.
   return safeEqualSecret(left, right);
+}
+
+function timingSafeAsciiEquals(left: string, right: string): boolean {
+  const leftBuffer = Buffer.from(left, "utf8");
+  const rightBuffer = Buffer.from(right, "utf8");
+  const maxLength = Math.max(leftBuffer.length, rightBuffer.length);
+  const paddedLeft = Buffer.alloc(maxLength);
+  const paddedRight = Buffer.alloc(maxLength);
+  leftBuffer.copy(paddedLeft);
+  rightBuffer.copy(paddedRight);
+  const equal = timingSafeEqual(paddedLeft, paddedRight);
+  return leftBuffer.length === rightBuffer.length && equal;
+}
+
+function isTaskFlowTarget(target: WebhookTarget): target is TaskFlowWebhookTarget {
+  return target.dispatchMode !== "ack";
+}
+
+function targetAuth(target: WebhookTarget): ConfiguredWebhookAuth {
+  if (target.auth) {
+    return target.auth;
+  }
+  if (!isTaskFlowTarget(target)) {
+    throw new Error("Ack webhook target is missing auth config.");
+  }
+  return {
+    mode: "bearer",
+    secret: target.secretInput,
+    prefix: "Bearer",
+    legacySharedHeader: true,
+  };
+}
+
+function targetSecretConfigPath(target: WebhookTarget): string {
+  return target.secretConfigPath ?? `plugins.entries.webhooks.routes.${target.routeId}.auth.secret`;
+}
+
+function parseJsonBody(rawBody: string): { ok: true; value: unknown } | { ok: false } {
+  try {
+    return { ok: true, value: JSON.parse(rawBody) };
+  } catch {
+    return { ok: false };
+  }
+}
+
+function writeInvalidJsonBody(res: ServerResponse): void {
+  res.statusCode = 400;
+  res.end("invalid request body");
+}
+
+const BLOCKED_PATH_SEGMENTS = new Set(["__proto__", "prototype", "constructor"]);
+
+function readPayloadPath(value: unknown, path: string | undefined): unknown {
+  if (!path) {
+    return undefined;
+  }
+  let current = value;
+  for (const rawSegment of path.split(".")) {
+    const segment = rawSegment.trim();
+    if (!segment || BLOCKED_PATH_SEGMENTS.has(segment)) {
+      return undefined;
+    }
+    if (current === null || typeof current !== "object" || Array.isArray(current)) {
+      return undefined;
+    }
+    current = (current as Record<string, unknown>)[segment];
+  }
+  return current;
+}
+
+function normalizePathString(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed || undefined;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  return undefined;
+}
+
+function extractEventType(params: {
+  req: IncomingMessage;
+  body: unknown;
+  config: ConfiguredWebhookEventConfig | undefined;
+}): string | undefined {
+  const fromHeader = params.config?.header ? getHeader(params.req, params.config.header) : "";
+  if (fromHeader) {
+    return fromHeader;
+  }
+  return normalizePathString(readPayloadPath(params.body, params.config?.payloadPath));
+}
+
+function extractIdempotencyKey(params: {
+  req: IncomingMessage;
+  body: unknown;
+  config: ConfiguredWebhookIdempotencyConfig | undefined;
+}): string | undefined {
+  const fromHeader = params.config?.header ? getHeader(params.req, params.config.header) : "";
+  if (fromHeader) {
+    return fromHeader;
+  }
+  return normalizePathString(readPayloadPath(params.body, params.config?.payloadPath));
+}
+
+type IdempotencyRecord = {
+  expiresAt: number;
+};
+
+function pruneExpiredIdempotencyRecords(
+  records: Map<string, IdempotencyRecord>,
+  nowMs: number,
+): void {
+  for (const [key, record] of records) {
+    if (record.expiresAt <= nowMs) {
+      records.delete(key);
+    }
+  }
+}
+
+function checkAndStoreIdempotencyKey(params: {
+  records: Map<string, IdempotencyRecord>;
+  routeId: string;
+  key: string | undefined;
+  ttlMs: number;
+  nowMs: number;
+}): { duplicate: boolean } {
+  const key = params.key?.trim();
+  if (!key) {
+    return { duplicate: false };
+  }
+  pruneExpiredIdempotencyRecords(params.records, params.nowMs);
+  const storageKey = `${params.routeId}:${key}`;
+  const existing = params.records.get(storageKey);
+  if (existing && existing.expiresAt > params.nowMs) {
+    return { duplicate: true };
+  }
+  params.records.set(storageKey, {
+    expiresAt: params.nowMs + params.ttlMs,
+  });
+  return { duplicate: false };
+}
+
+function hmacMatches(params: {
+  rawBody: string;
+  secret: string;
+  presentedSignature: string;
+}): boolean {
+  const expected = createHmac("sha256", params.secret).update(params.rawBody).digest("hex");
+  return timingSafeAsciiEquals(
+    normalizeLowercaseStringOrEmpty(expected),
+    normalizeLowercaseStringOrEmpty(params.presentedSignature),
+  );
 }
 
 function formatZodError(error: z.ZodError): string {
@@ -664,7 +868,7 @@ async function executeWebhookAction(params: {
 
 export function createTaskFlowWebhookRequestHandler(params: {
   cfg: OpenClawConfig;
-  targetsByPath: Map<string, TaskFlowWebhookTarget[]>;
+  targetsByPath: Map<string, WebhookTarget[]>;
   inFlightLimiter?: WebhookInFlightLimiter;
 }): (req: IncomingMessage, res: ServerResponse) => Promise<boolean> {
   const rateLimiter = createFixedWindowRateLimiter({
@@ -678,17 +882,17 @@ export function createTaskFlowWebhookRequestHandler(params: {
       maxInFlightPerKey: WEBHOOK_IN_FLIGHT_DEFAULTS.maxInFlightPerKey,
       maxTrackedKeys: WEBHOOK_IN_FLIGHT_DEFAULTS.maxTrackedKeys,
     });
-  const resolveTargetSecret = async (
-    target: TaskFlowWebhookTarget,
-  ): Promise<string | undefined> => {
-    if (typeof target.secretInput === "string") {
-      return target.secretInput;
+  const idempotencyRecords = new Map<string, IdempotencyRecord>();
+  const resolveTargetSecret = async (target: WebhookTarget): Promise<string | undefined> => {
+    const secretInput = targetAuth(target).secret;
+    if (typeof secretInput === "string") {
+      return secretInput;
     }
     const resolved = await resolveConfiguredSecretInputString({
       config: params.cfg,
       env: process.env,
-      value: target.secretInput,
-      path: target.secretConfigPath,
+      value: secretInput,
+      path: targetSecretConfigPath(target),
     });
     return resolved.value;
   };
@@ -714,35 +918,104 @@ export function createTaskFlowWebhookRequestHandler(params: {
       })(),
       inFlightLimiter,
       handle: async ({ targets }) => {
-        const presentedSecret = extractSharedSecret(req);
+        const body = await readWebhookBodyOrReject({
+          req,
+          res,
+          maxBytes: 256 * 1024,
+          timeoutMs: 15_000,
+          invalidBodyMessage: "invalid request body",
+        });
+        if (!body.ok) {
+          return true;
+        }
+
         const target = await resolveWebhookTargetWithAuthOrReject({
           targets,
           res,
           isMatch: async (candidate) => {
+            const auth = targetAuth(candidate);
+            const presentedSecret = extractPresentedSecret({ req, auth });
             if (presentedSecret.length === 0) {
               return false;
             }
             const resolvedSecret = await resolveTargetSecret(candidate);
-            return Boolean(resolvedSecret && timingSafeEquals(resolvedSecret, presentedSecret));
+            if (!resolvedSecret) {
+              return false;
+            }
+            if (auth.mode === "hmac-sha256") {
+              return hmacMatches({
+                rawBody: body.value,
+                secret: resolvedSecret,
+                presentedSignature: presentedSecret,
+              });
+            }
+            return timingSafeEquals(resolvedSecret, presentedSecret);
           },
         });
         if (!target) {
           return true;
         }
 
-        const body = await readJsonWebhookBodyOrReject({
-          req,
-          res,
-          maxBytes: 256 * 1024,
-          timeoutMs: 15_000,
-          emptyObjectOnEmpty: false,
-          invalidJsonMessage: "invalid request body",
-        });
-        if (!body.ok) {
+        const parsedBody = parseJsonBody(body.value);
+        if (!parsedBody.ok) {
+          writeInvalidJsonBody(res);
           return true;
         }
 
-        const parsed = webhookActionSchema.safeParse(body.value);
+        const eventType = extractEventType({
+          req,
+          body: parsedBody.value,
+          config: target.event,
+        });
+        if (target.events?.length && (!eventType || !target.events.includes(eventType))) {
+          writeJson(res, 200, {
+            ok: true,
+            routeId: target.routeId,
+            skipped: true,
+            reason: "event_not_allowed",
+            ...(eventType ? { eventType } : {}),
+          });
+          return true;
+        }
+
+        const idempotencyKey = extractIdempotencyKey({
+          req,
+          body: parsedBody.value,
+          config: target.idempotency,
+        });
+        if (target.idempotency) {
+          const dedupe = checkAndStoreIdempotencyKey({
+            records: idempotencyRecords,
+            routeId: target.routeId,
+            key: idempotencyKey,
+            ttlMs: target.idempotency.ttlMs,
+            nowMs: Date.now(),
+          });
+          if (dedupe.duplicate) {
+            writeJson(res, 200, {
+              ok: true,
+              routeId: target.routeId,
+              duplicate: true,
+              ...(idempotencyKey ? { idempotencyKey } : {}),
+            });
+            return true;
+          }
+        }
+
+        if (!isTaskFlowTarget(target)) {
+          writeJson(res, 200, {
+            ok: true,
+            routeId: target.routeId,
+            result: {
+              action: "ack",
+              ...(eventType ? { eventType } : {}),
+              ...(idempotencyKey ? { idempotencyKey } : {}),
+            },
+          });
+          return true;
+        }
+
+        const parsed = webhookActionSchema.safeParse(parsedBody.value);
         if (!parsed.success) {
           writeJson(res, 400, {
             ok: false,

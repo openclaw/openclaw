@@ -25,6 +25,48 @@
       "secretInput": {
         "anyOf": [{ "type": "string", "minLength": 1 }, { "$ref": "#/$defs/secretRef" }]
       },
+      "auth": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": ["bearer", "header", "hmac-sha256"]
+          },
+          "secret": { "$ref": "#/$defs/secretInput" },
+          "header": { "type": "string", "minLength": 1 },
+          "prefix": { "type": "string" }
+        },
+        "required": ["mode", "secret"]
+      },
+      "dispatch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": ["ack", "taskflow"]
+          }
+        },
+        "required": ["mode"]
+      },
+      "event": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "header": { "type": "string", "minLength": 1 },
+          "payloadPath": { "type": "string", "minLength": 1 }
+        }
+      },
+      "idempotency": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "header": { "type": "string", "minLength": 1 },
+          "payloadPath": { "type": "string", "minLength": 1 },
+          "ttlHours": { "type": "number", "exclusiveMinimum": 0 }
+        }
+      },
       "route": {
         "type": "object",
         "additionalProperties": false,
@@ -33,10 +75,17 @@
           "path": { "type": "string", "minLength": 1 },
           "sessionKey": { "type": "string", "minLength": 1 },
           "secret": { "$ref": "#/$defs/secretInput" },
+          "auth": { "$ref": "#/$defs/auth" },
+          "dispatch": { "$ref": "#/$defs/dispatch" },
+          "events": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 }
+          },
+          "event": { "$ref": "#/$defs/event" },
+          "idempotency": { "$ref": "#/$defs/idempotency" },
           "controllerId": { "type": "string", "minLength": 1 },
           "description": { "type": "string" }
-        },
-        "required": ["sessionKey", "secret"]
+        }
       }
     },
     "properties": {
