@@ -12,6 +12,8 @@ import {
   hasMessagePresentationBlocks,
   hasReplyChannelData,
   hasReplyPayloadContent,
+  normalizeInteractiveReply,
+  normalizeMessagePresentation,
   type InteractiveReply,
   type MessagePresentation,
   type ReplyPayloadDelivery,
@@ -135,9 +137,11 @@ function resolveOutboundMirrorText(entry: OutboundPayloadPlan): string {
   if (text?.trim()) {
     return text;
   }
+  const presentation = normalizeMessagePresentation(entry.payload.presentation);
+  const interactive = normalizeInteractiveReply(entry.payload.interactive);
   return [
-    ...collectPresentationMirrorText(entry.payload.presentation),
-    ...collectInteractiveMirrorText(entry.payload.interactive),
+    ...collectPresentationMirrorText(presentation),
+    ...collectInteractiveMirrorText(interactive),
   ].join("\n");
 }
 
