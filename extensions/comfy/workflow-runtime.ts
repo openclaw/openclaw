@@ -337,7 +337,7 @@ function calculateDimensions(params: {
     return null;
   }
 
-  // Use a configurable base resolution (default 1024px) for the shorter side, then scale up
+  // Use a configurable base resolution (default 1024px) along the long edge
   const baseSize = params.baseConfig?.baseSize ?? 1024;
   let width: number, height: number;
 
@@ -728,6 +728,15 @@ function resolveComfyDimensionConfig(
     heightInputName: normalizeOptionalString(dims.heightInputName),
     baseSize: readConfigInteger(dims as ComfyProviderConfig, "baseSize"),
   };
+}
+
+export function isComfyDimensionsConfigured(params: {
+  cfg?: OpenClawConfig;
+  capability: ComfyCapability;
+}): boolean {
+  const config = getComfyConfig(params.cfg);
+  const capabilityConfig = getComfyCapabilityConfig(config, params.capability);
+  return resolveComfyDimensionConfig(capabilityConfig) !== undefined;
 }
 
 export async function runComfyWorkflow(params: {

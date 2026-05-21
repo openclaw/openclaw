@@ -11,10 +11,12 @@ import type {
   ImageGenerationNormalization,
   ImageGenerationOutputFormat,
   ImageGenerationProvider,
+  ImageGenerationProviderConfiguredContext,
   ImageGenerationQuality,
   ImageGenerationResolution,
   ImageGenerationSourceImage,
 } from "./types.js";
+import { resolveProviderCapabilities } from "./types.js";
 
 type ResolvedImageGenerationOverrides = {
   size?: string;
@@ -39,6 +41,7 @@ function finalizeImageNormalization(
 
 export function resolveImageGenerationOverrides(params: {
   provider: ImageGenerationProvider;
+  ctx?: ImageGenerationProviderConfiguredContext;
   size?: string;
   aspectRatio?: string;
   resolution?: ImageGenerationResolution;
@@ -48,10 +51,9 @@ export function resolveImageGenerationOverrides(params: {
   inputImages?: ImageGenerationSourceImage[];
 }): ResolvedImageGenerationOverrides {
   const hasInputImages = (params.inputImages?.length ?? 0) > 0;
-  const modeCaps = hasInputImages
-    ? params.provider.capabilities.edit
-    : params.provider.capabilities.generate;
-  const geometry = params.provider.capabilities.geometry;
+  const capabilities = resolveProviderCapabilities(params.provider.capabilities, params.ctx);
+  const modeCaps = hasInputImages ? capabilities.edit : capabilities.generate;
+  const geometry = capabilities.geometry;
   const ignoredOverrides: ImageGenerationIgnoredOverride[] = [];
   const normalization: ImageGenerationNormalization = {};
   let size = params.size;
@@ -167,19 +169,19 @@ export function resolveImageGenerationOverrides(params: {
     resolution = undefined;
   }
 
-  const supportedQualities = params.provider.capabilities.output?.qualities;
+  const supportedQualities = capabilities.output?.qualities;
   if (quality && !(supportedQualities ?? []).includes(quality)) {
     ignoredOverrides.push({ key: "quality", value: quality });
     quality = undefined;
   }
 
-  const supportedFormats = params.provider.capabilities.output?.formats;
+  const supportedFormats = capabilities.output?.formats;
   if (outputFormat && !(supportedFormats ?? []).includes(outputFormat)) {
     ignoredOverrides.push({ key: "outputFormat", value: outputFormat });
     outputFormat = undefined;
   }
 
-  const supportedBackgrounds = params.provider.capabilities.output?.backgrounds;
+  const supportedBackgrounds = capabilities.output?.backgrounds;
   if (background && !(supportedBackgrounds ?? []).includes(background)) {
     ignoredOverrides.push({ key: "background", value: background });
     background = undefined;

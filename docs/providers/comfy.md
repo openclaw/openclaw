@@ -238,13 +238,13 @@ The `image` and `video` sections also support:
 
 To enable size and aspect-ratio support, add a `dimensions` object inside the capability section. All keys are optional unless noted:
 
-| Key               | Required | Default    | Description                                                                                    |
-| ----------------- | -------- | ---------- | ---------------------------------------------------------------------------------------------- |
-| `widthNodeId`     | Yes      | --         | Node ID that receives the width value.                                                         |
-| `heightNodeId`    | Yes      | --         | Node ID that receives the height value.                                                        |
-| `widthInputName`  | No       | `"width"`  | Input field name on the width node.                                                            |
-| `heightInputName` | No       | `"height"` | Input field name on the height node.                                                           |
-| `baseSize`        | No       | `1024`     | Long-edge size in pixels used when computing width/height from an aspect ratio or size string. |
+| Key               | Required | Default    | Description                                                                     |
+| ----------------- | -------- | ---------- | ------------------------------------------------------------------------------- |
+| `widthNodeId`     | Yes      | --         | Node ID that receives the width value.                                          |
+| `heightNodeId`    | Yes      | --         | Node ID that receives the height value.                                         |
+| `widthInputName`  | No       | `"width"`  | Input field name on the width node.                                             |
+| `heightInputName` | No       | `"height"` | Input field name on the height node.                                            |
+| `baseSize`        | No       | `1024`     | Long-edge size in pixels used when computing width/height from an aspect ratio. |
 
 Both `widthNodeId` and `heightNodeId` must be present for dimension injection to activate. They may point to the same node when a single node controls both dimensions.
 

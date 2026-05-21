@@ -1,4 +1,3 @@
-import { resolveProviderCapabilities } from "openclaw/plugin-sdk/image-generation";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { buildLitellmImageGenerationProvider } from "./image-generation-provider.js";
 
@@ -91,15 +90,14 @@ describe("litellm image generation provider", () => {
 
   it("declares litellm id and OpenAI-compatible size hints", () => {
     const provider = buildLitellmImageGenerationProvider();
-    const caps = resolveProviderCapabilities(provider.capabilities);
 
     expect(provider.id).toBe("litellm");
     expect(provider.label).toBe("LiteLLM");
     expect(provider.defaultModel).toBe("gpt-image-2");
-    expect(caps.geometry?.sizes).toContain("1024x1024");
-    expect(caps.geometry?.sizes).toContain("2048x2048");
-    expect(caps.geometry?.sizes).toContain("3840x2160");
-    expect(caps.edit?.enabled).toBe(true);
+    expect(provider.capabilities.geometry?.sizes).toContain("1024x1024");
+    expect(provider.capabilities.geometry?.sizes).toContain("2048x2048");
+    expect(provider.capabilities.geometry?.sizes).toContain("3840x2160");
+    expect(provider.capabilities.edit?.enabled).toBe(true);
   });
 
   it("defaults to the loopback proxy and allows private network for localhost", async () => {
