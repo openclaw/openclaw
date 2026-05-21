@@ -944,6 +944,10 @@ export function handleToolExecutionUpdate(
   const isExecTool = isExecToolName(toolName);
   const liveResult = isExecTool ? capLiveExecResult(sanitized) : sanitized;
   const emitDetailedLiveUpdate = !isExecTool || shouldEmitLiveExecUpdate(ctx, toolCallId);
+  if (isExecTool && !emitDetailedLiveUpdate) {
+    // Throttled exec updates carry no new visible state; the final result closes the command item.
+    return;
+  }
   if (emitDetailedLiveUpdate) {
     emitAgentEvent({
       runId: ctx.params.runId,

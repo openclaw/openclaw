@@ -1103,6 +1103,62 @@ describe("handleToolExecutionEnd derived tool events", () => {
     resetAgentEventsForTest();
   });
 
+  it("does not emit generic exec update events while live output is throttled", async () => {
+    resetAgentEventsForTest();
+    const events: Array<{ stream?: string; data?: Record<string, unknown> }> = [];
+    registerAgentEventListener((evt) => {
+      events.push(evt as never);
+    });
+    const { ctx, onAgentEvent } = createTestContext();
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "tool-exec-throttled-update",
+        args: { command: "yes" },
+      } as never,
+    );
+
+    handleToolExecutionUpdate(
+      ctx as never,
+      {
+        type: "tool_execution_update",
+        toolName: "exec",
+        toolCallId: "tool-exec-throttled-update",
+        partialResult: {
+          details: {
+            status: "running",
+            aggregated: "first chunk",
+          },
+        },
+      } as never,
+    );
+    const eventCountAfterFirstUpdate = events.length;
+    const onAgentEventCountAfterFirstUpdate = onAgentEvent.mock.calls.length;
+
+    handleToolExecutionUpdate(
+      ctx as never,
+      {
+        type: "tool_execution_update",
+        toolName: "exec",
+        toolCallId: "tool-exec-throttled-update",
+        partialResult: {
+          details: {
+            status: "running",
+            aggregated: "second chunk",
+          },
+        },
+      } as never,
+    );
+
+    expect(events).toHaveLength(eventCountAfterFirstUpdate);
+    expect(onAgentEvent).toHaveBeenCalledTimes(onAgentEventCountAfterFirstUpdate);
+
+    resetAgentEventsForTest();
+  });
+
   it("caps exec final output before result and command output events", async () => {
     resetAgentEventsForTest();
     const events: Array<{ stream?: string; data?: Record<string, unknown> }> = [];
