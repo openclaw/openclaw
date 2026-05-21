@@ -318,6 +318,46 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expect(result.meta.replayInvalid).toBe(false);
   });
 
+  it("promotes successful final assistant text when a prompt timeout races completion", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    const finalText =
+      "1. Verdict: the answer completed cleanly. 2. Evidence: the runner captured final text.";
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        timedOut: true,
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai-codex",
+          model: "gpt-5.5",
+          content: [{ type: "text", text: finalText }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      provider: "openai-codex",
+      model: "gpt-5.5",
+      runId: "run-prompt-timeout-final-assistant-recovered",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads).toEqual([{ text: finalText }]);
+    expect(result.meta.finalAssistantVisibleText).toBe(finalText);
+    expect(result.meta.finalAssistantRawText).toBe(finalText);
+    expect(result.meta.livenessState).toBe("working");
+    expect(result.meta.completion).toEqual({
+      stopReason: "stop",
+      finishReason: "stop",
+    });
+    expect(result.meta.executionTrace?.attempts?.at(-1)).toMatchObject({
+      result: "success",
+      stage: "assistant",
+    });
+  });
+
   it("auto-activates strict-agentic for unconfigured GPT-5 openai runs and surfaces the blocked state", async () => {
     // Criterion 1 of the GPT-5.4 parity gate ("no stalls after planning") must
     // cover out-of-the-box installs, not only users who opted in. An
