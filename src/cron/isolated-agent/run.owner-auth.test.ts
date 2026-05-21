@@ -46,16 +46,12 @@ function makeParamsWithToolsAllow(toolsAllow: string[]) {
 }
 
 function requireEmbeddedAgentCall(): {
-  senderIsOwner?: boolean;
   jobId?: string;
-  ownerOnlyToolAllowlist?: string[];
   toolsAllow?: string[];
 } {
   const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as
     | {
-        senderIsOwner?: boolean;
         jobId?: string;
-        ownerOnlyToolAllowlist?: string[];
         toolsAllow?: string[];
       }
     | undefined;
@@ -94,56 +90,39 @@ describe("runCronIsolatedAgentTurn owner auth", () => {
   });
 
   it(
-    "passes senderIsOwner=false to isolated cron agent runs",
-    { timeout: RUN_OWNER_AUTH_TIMEOUT_MS },
-    async () => {
-      await runCronIsolatedAgentTurn(makeParams());
-
-      expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-      expect(requireEmbeddedAgentCall().senderIsOwner).toBe(false);
-    },
-  );
-
-  it(
-    "authorizes the exact isolated cron toolsAllow=cron self-removal path",
+    "passes through isolated cron toolsAllow=cron self-removal path",
     { timeout: RUN_OWNER_AUTH_TIMEOUT_MS },
     async () => {
       await runCronIsolatedAgentTurn(makeParamsWithToolsAllow(["cron"]));
 
       expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
       const call = requireEmbeddedAgentCall();
-      expect(call.senderIsOwner).toBe(false);
       expect(call.jobId).toBe("owner-auth");
-      expect(call.ownerOnlyToolAllowlist).toEqual(["cron"]);
       expect(call.toolsAllow).toEqual(["cron"]);
     },
   );
 
   it(
-    "normalizes toolsAllow before authorizing isolated cron self-removal",
+    "preserves cron toolsAllow casing for downstream policy resolution",
     { timeout: RUN_OWNER_AUTH_TIMEOUT_MS },
     async () => {
       await runCronIsolatedAgentTurn(makeParamsWithToolsAllow([" CRON "]));
 
       expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
       const call = requireEmbeddedAgentCall();
-      expect(call.senderIsOwner).toBe(false);
       expect(call.jobId).toBe("owner-auth");
-      expect(call.ownerOnlyToolAllowlist).toEqual(["cron"]);
       expect(call.toolsAllow).toEqual([" CRON "]);
     },
   );
 
   it(
-    "does not authorize cron when isolated cron toolsAllow omits cron",
+    "passes through non-cron toolsAllow entries",
     { timeout: RUN_OWNER_AUTH_TIMEOUT_MS },
     async () => {
       await runCronIsolatedAgentTurn(makeParamsWithToolsAllow(["maniple__check_idle_workers"]));
 
       expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
       const call = requireEmbeddedAgentCall();
-      expect(call.senderIsOwner).toBe(false);
-      expect(call.ownerOnlyToolAllowlist).toBeUndefined();
       expect(call.toolsAllow).toEqual(["maniple__check_idle_workers"]);
     },
   );
