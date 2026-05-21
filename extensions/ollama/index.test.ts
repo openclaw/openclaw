@@ -572,28 +572,31 @@ describe("ollama plugin", () => {
     expect(buildOllamaProviderMock).not.toHaveBeenCalled();
   });
 
-  it("skips implicit localhost discovery when a custom Orb host Ollama provider is configured", async () => {
-    const provider = registerProvider();
+  it.each(["docker.orb.internal", "host.orb.internal"])(
+    "skips implicit localhost discovery when a custom Orb host Ollama provider is configured for %s",
+    async (hostname) => {
+      const provider = registerProvider();
 
-    const result = await provider.catalog.run({
-      config: {
-        models: {
-          providers: {
-            "ollama-orb": {
-              api: "ollama",
-              baseUrl: "http://host.orb.internal:11434",
-              models: [{ id: "qwen3.5:27b", name: "Qwen 3.5 27B" }],
+      const result = await provider.catalog.run({
+        config: {
+          models: {
+            providers: {
+              "ollama-orb": {
+                api: "ollama",
+                baseUrl: `http://${hostname}:11434`,
+                models: [{ id: "qwen3.5:27b", name: "Qwen 3.5 27B" }],
+              },
             },
           },
         },
-      },
-      env: { NODE_ENV: "development", OLLAMA_API_KEY: "ollama-live" },
-      resolveProviderApiKey: () => ({ apiKey: "ollama-live" }),
-    } as never);
+        env: { NODE_ENV: "development", OLLAMA_API_KEY: "ollama-live" },
+        resolveProviderApiKey: () => ({ apiKey: "ollama-live" }),
+      } as never);
 
-    expect(result).toBeNull();
-    expect(buildOllamaProviderMock).not.toHaveBeenCalled();
-  });
+      expect(result).toBeNull();
+      expect(buildOllamaProviderMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("treats custom 127/8 Ollama providers as loopback for implicit discovery", async () => {
     const provider = registerProvider();
