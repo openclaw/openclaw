@@ -317,3 +317,43 @@ export async function describeBrowserImageWithVision(
     errorMessage(lastError);
   throw new Error(`browser screenshot vision failed: ${aggregate}`);
 }
+
+/**
+ * Defang line-start `MEDIA:` directives in vision-provider descriptions before
+ * the text is returned as a browser tool-result text block.
+ *
+ * The agent media extractor (`splitMediaFromOutput`) treats any text content
+ * block whose line starts with `MEDIA:` (case-insensitive, after trimming
+ * leading whitespace) as a local-media delivery directive, and the `browser`
+ * tool is on the trusted-media tool allowlist. Vision descriptions reflect
+ * untrusted page content plus untrusted model output, so a page like
+ * `MEDIA:/tmp/secret.png` could otherwise synthesize a channel-deliverable
+ * media artifact from outside content.
+ *
+ * The parser anchors the directive to the start of the trimmed line; inserting
+ * a marker before the keyword removes the anchor while keeping the original
+ * text human-readable. Markdown image extraction is not enabled for
+ * tool-result text blocks, so `![alt](path)` does not need neutralization.
+ */
+export function neutralizeMediaDirectives(text: string): string {
+  if (!text) {
+    return text;
+  }
+  // Cheap fast path: bail out without splitting/joining when no `media:` token
+  // appears anywhere in the description.
+  if (!/media:/i.test(text)) {
+    return text;
+  }
+  const lines = text.split("\n");
+  let changed = false;
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    const leading = line.length - line.trimStart().length;
+    const rest = line.slice(leading);
+    if (/^MEDIA:/i.test(rest)) {
+      lines[i] = `${line.slice(0, leading)}[neutralized] ${rest}`;
+      changed = true;
+    }
+  }
+  return changed ? lines.join("\n") : text;
+}

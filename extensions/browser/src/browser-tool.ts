@@ -47,7 +47,11 @@ import {
   untrackSessionBrowserTab,
 } from "./browser-tool.runtime.js";
 import { DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS } from "./browser/constants.js";
-import { describeBrowserImageWithVision, isBrowserVisionEnabled } from "./browser/vision.js";
+import {
+  describeBrowserImageWithVision,
+  isBrowserVisionEnabled,
+  neutralizeMediaDirectives,
+} from "./browser/vision.js";
 import { wrapExternalContent } from "./sdk-security-runtime.js";
 
 const browserToolDeps = {
@@ -793,7 +797,18 @@ export function createBrowserTool(opts?: {
               // Vision model descriptions contain web page content which is
               // untrusted external input — wrap it the same way snapshot and
               // tabs results are wrapped to mitigate prompt injection.
-              const wrappedDescription = wrapExternalContent(described.text.trim(), {
+              //
+              // SECURITY: Neutralize any `MEDIA:` directives in the vision
+              // text before wrapping. `splitMediaFromOutput` (called on every
+              // browser tool-result text block by the agent media extractor)
+              // treats line-start `MEDIA:` as a trusted local-media delivery
+              // directive, and `browser` is on the trusted-media tool
+              // allowlist. Without this guard, a page or vision-provider
+              // response containing `MEDIA:/tmp/secret.png` would synthesize
+              // a channel-deliverable media artifact from untrusted content.
+              // `wrapExternalContent` does not strip line-start directives.
+              const neutralizedDescription = neutralizeMediaDirectives(described.text.trim());
+              const wrappedDescription = wrapExternalContent(neutralizedDescription, {
                 source: "browser",
                 includeWarning: true,
               });
@@ -818,6 +833,10 @@ export function createBrowserTool(opts?: {
               // Fall back to returning the raw image block so the agent loop
               // can still recover (multimodal models will still read it, and
               // text-only models will see "[image omitted]" rather than nothing).
+              //
+              // Pass the same image sanitization options the non-vision
+              // screenshot path uses so the failure fallback does not silently
+              // bypass `agents.defaults.imageMaxDimensionPx`.
               const reason = err instanceof Error ? err.message : String(err);
               const extraText = `[browser screenshot vision failed: ${reason}]`;
               return await browserToolDeps.imageResultFromFile({
@@ -825,6 +844,7 @@ export function createBrowserTool(opts?: {
                 path: screenshotPath,
                 extraText,
                 details: result,
+                imageSanitization: resolveRuntimeImageSanitization(),
               });
             }
           }
