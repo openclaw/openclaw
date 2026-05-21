@@ -808,6 +808,7 @@ export async function runCodexAppServerAttempt(
   await fs.mkdir(resolvedWorkspace, { recursive: true });
   const sandboxSessionKey =
     params.sandboxSessionKey?.trim() || params.sessionKey?.trim() || params.sessionId;
+  const contextEngineSessionKey = params.contextEngineSessionKey?.trim() || sandboxSessionKey;
   const sandbox = await resolveSandboxContext({
     config: params.config,
     sessionKey: sandboxSessionKey,
@@ -1001,6 +1002,7 @@ export async function runCodexAppServerAttempt(
       contextEngine: activeContextEngine,
       sessionId: activeSessionId,
       sessionKey: sandboxSessionKey,
+      contextEngineSessionKey,
       sessionFile: activeSessionFile,
       runtimeContext: buildActiveContextEngineRuntimeContext(),
       runMaintenance: runHarnessContextEngineMaintenance,
@@ -1048,6 +1050,7 @@ export async function runCodexAppServerAttempt(
       contextEngine: activeContextEngine,
       sessionId: activeSessionId,
       sessionKey: sandboxSessionKey,
+      contextEngineSessionKey,
       messages: historyMessages,
       tokenBudget: params.contextTokenBudget,
       availableTools: new Set(toolBridge.specs.map((tool) => tool.name).filter(isNonEmptyString)),
@@ -2273,7 +2276,7 @@ export async function runCodexAppServerAttempt(
         activeContextEngine,
         {
           sessionId: activeSessionId,
-          sessionKey: sandboxSessionKey,
+          sessionKey: contextEngineSessionKey,
           sessionFile: activeSessionFile,
           tokenBudget: params.contextTokenBudget,
           force: true,
@@ -2307,7 +2310,7 @@ export async function runCodexAppServerAttempt(
       await runHarnessContextEngineMaintenance({
         contextEngine: activeContextEngine,
         sessionId: activeSessionId,
-        sessionKey: sandboxSessionKey,
+        sessionKey: contextEngineSessionKey,
         sessionFile: activeSessionFile,
         reason: "compaction",
         runtimeContext: maintenanceRuntimeContext,
@@ -2716,6 +2719,7 @@ export async function runCodexAppServerAttempt(
         yieldAborted: Boolean(result.yieldDetected),
         sessionIdUsed: activeSessionId,
         sessionKey: sandboxSessionKey,
+        contextEngineSessionKey,
         sessionFile: activeSessionFile,
         messagesSnapshot: finalMessages,
         prePromptMessageCount,

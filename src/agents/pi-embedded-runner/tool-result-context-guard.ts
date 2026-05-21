@@ -236,6 +236,7 @@ export function installContextEngineLoopHook(params: {
   contextEngine: ContextEngine;
   sessionId: string;
   sessionKey?: string;
+  contextEngineSessionKey?: string;
   sessionFile: string;
   tokenBudget?: number;
   modelId: string;
@@ -247,6 +248,7 @@ export function installContextEngineLoopHook(params: {
   }) => ContextEngineRuntimeContext | undefined;
 }): () => void {
   const { contextEngine, sessionId, sessionKey, sessionFile, tokenBudget, modelId } = params;
+  const contextEngineSessionKey = params.contextEngineSessionKey?.trim() || sessionKey;
   const mutableAgent = params.agent as GuardableAgentRecord;
   const originalTransformContext = mutableAgent.transformContext;
   let lastSeenLength: number | null = null;
@@ -294,7 +296,7 @@ export function installContextEngineLoopHook(params: {
       if (typeof contextEngine.afterTurn === "function") {
         await contextEngine.afterTurn({
           sessionId,
-          sessionKey,
+          sessionKey: contextEngineSessionKey,
           sessionFile,
           messages: sourceMessages,
           prePromptMessageCount,
@@ -310,14 +312,14 @@ export function installContextEngineLoopHook(params: {
           if (typeof contextEngine.ingestBatch === "function") {
             await contextEngine.ingestBatch({
               sessionId,
-              sessionKey,
+              sessionKey: contextEngineSessionKey,
               messages: newMessages,
             });
           } else {
             for (const message of newMessages) {
               await contextEngine.ingest({
                 sessionId,
-                sessionKey,
+                sessionKey: contextEngineSessionKey,
                 message,
               });
             }
@@ -329,7 +331,7 @@ export function installContextEngineLoopHook(params: {
       lastSourceMessages = sourceMessages;
       const assembled = await contextEngine.assemble({
         sessionId,
-        sessionKey,
+        sessionKey: contextEngineSessionKey,
         messages: sourceMessages,
         tokenBudget,
         model: modelId,

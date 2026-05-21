@@ -51,6 +51,7 @@ function makeForwardingCase(internalEvents: AgentInternalEvent[]) {
       ownerOnlyToolAllowlist: ["cron"],
       bootstrapContextMode: "lightweight",
       bootstrapContextRunKind: "cron",
+      contextEngineSessionKey: "agent:main:test-key:heartbeat-run:test-session",
       disableMessageTool: true,
       forceMessageTool: true,
       requireExplicitMessageTarget: true,
@@ -61,6 +62,7 @@ function makeForwardingCase(internalEvents: AgentInternalEvent[]) {
       ownerOnlyToolAllowlist: ["cron"],
       bootstrapContextMode: "lightweight",
       bootstrapContextRunKind: "cron",
+      contextEngineSessionKey: "agent:main:test-key:heartbeat-run:test-session",
       disableMessageTool: true,
       forceMessageTool: true,
       requireExplicitMessageTarget: true,
@@ -1621,6 +1623,40 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     expectRecordFields(maintenanceParams.runtimeContext, {
       trigger: "overflow",
       authProfileId: "test-profile",
+    });
+  });
+
+  it("uses contextEngineSessionKey for overflow compaction and maintenance", async () => {
+    const contextEngineSessionKey = "agent:main:test-key:heartbeat-run:test-session";
+    mockedContextEngine.info.ownsCompaction = true;
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: makeOverflowError() }))
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+    mockedCompactDirect.mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      result: {
+        summary: "engine-owned compaction",
+        tokensAfter: 50,
+      },
+    });
+
+    await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      contextEngineSessionKey,
+    });
+
+    expectMockCallFields(mockedCompactDirect, {
+      sessionId: "test-session",
+      sessionKey: contextEngineSessionKey,
+      sessionFile: "/tmp/session.json",
+    });
+    expectMockCallFields(mockedRunContextEngineMaintenance, {
+      contextEngine: mockedContextEngine,
+      sessionId: "test-session",
+      sessionKey: contextEngineSessionKey,
+      sessionFile: "/tmp/session.json",
+      reason: "compaction",
     });
   });
 

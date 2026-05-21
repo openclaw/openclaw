@@ -1179,6 +1179,7 @@ export async function runEmbeddedPiAgent(
         workspaceDir: resolvedWorkspace,
       });
       const contextEnginePluginId = resolveContextEngineOwnerPluginId(contextEngine);
+      const contextEngineSessionKey = params.contextEngineSessionKey?.trim() || resolvedSessionKey;
       startupStages.mark("context-engine");
       notifyExecutionPhase("context_engine", { provider, model: modelId });
       try {
@@ -1415,6 +1416,7 @@ export async function runEmbeddedPiAgent(
             config: params.config,
             allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
             contextEngine,
+            contextEngineSessionKey,
             contextTokenBudget: ctxInfo.tokens,
             contextWindowInfo: ctxInfo,
             skillsSnapshot: params.skillsSnapshot,
@@ -1754,7 +1756,7 @@ export async function runEmbeddedPiAgent(
                   }),
                   ...resolveContextEngineCapabilities({
                     config: params.config,
-                    sessionKey: params.sessionKey,
+                    sessionKey: contextEngineSessionKey,
                     agentId: sessionAgentId,
                     contextEnginePluginId,
                     purpose: "context-engine.timeout-compaction",
@@ -1776,7 +1778,7 @@ export async function runEmbeddedPiAgent(
                   contextEngine,
                   {
                     sessionId: activeSessionId,
-                    sessionKey: params.sessionKey,
+                    sessionKey: contextEngineSessionKey,
                     sessionFile: activeSessionFile,
                     tokenBudget: ctxInfo.tokens,
                     force: true,
@@ -1936,7 +1938,7 @@ export async function runEmbeddedPiAgent(
                   }),
                   ...resolveContextEngineCapabilities({
                     config: params.config,
-                    sessionKey: params.sessionKey,
+                    sessionKey: contextEngineSessionKey,
                     agentId: sessionAgentId,
                     contextEnginePluginId,
                     purpose: "context-engine.overflow-compaction",
@@ -1961,7 +1963,7 @@ export async function runEmbeddedPiAgent(
                   contextEngine,
                   {
                     sessionId: activeSessionId,
-                    sessionKey: params.sessionKey,
+                    sessionKey: contextEngineSessionKey,
                     sessionFile: activeSessionFile,
                     tokenBudget: ctxInfo.tokens,
                     ...(observedOverflowTokens !== undefined
@@ -1979,7 +1981,7 @@ export async function runEmbeddedPiAgent(
                   await runContextEngineMaintenance({
                     contextEngine,
                     sessionId: activeSessionId,
-                    sessionKey: params.sessionKey,
+                    sessionKey: contextEngineSessionKey,
                     sessionFile: activeSessionFile,
                     reason: "compaction",
                     runtimeContext: overflowCompactionRuntimeContext,

@@ -28,8 +28,19 @@ type HeartbeatReplyContext = {
   SessionKey?: string;
 };
 
+type HeartbeatReplyOptions = {
+  contextEngineSessionKey?: string;
+};
+
 function replyCall(replySpy: { mock: { calls: unknown[][] } }, index = 0): HeartbeatReplyContext {
   return (replySpy.mock.calls[index]?.at(0) ?? {}) as HeartbeatReplyContext;
+}
+
+function replyOptsCall(
+  replySpy: { mock: { calls: unknown[][] } },
+  index = 0,
+): HeartbeatReplyOptions {
+  return (replySpy.mock.calls[index]?.at(1) ?? {}) as HeartbeatReplyOptions;
 }
 
 describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
@@ -162,6 +173,59 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
       });
 
       expect(ctx?.SessionKey).toBe(`${baseSessionKey}:heartbeat`);
+    });
+  });
+
+  it("keeps the routing SessionKey stable while issuing a fresh context-engine key per isolated tick", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
+      const cfg = makeIsolatedHeartbeatConfig(tmpDir, storePath);
+      const baseSessionKey = resolveMainSessionKey(cfg);
+      await seedSessionStore(storePath, baseSessionKey, {
+        lastChannel: "whatsapp",
+        lastProvider: "whatsapp",
+        lastTo: "+1555",
+      });
+
+      const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+
+      await runHeartbeatOnce({
+        cfg,
+        sessionKey: baseSessionKey,
+        deps: {
+          getQueueSize: () => 0,
+          nowMs: () => 1,
+        },
+      });
+
+      await runHeartbeatOnce({
+        cfg,
+        sessionKey: baseSessionKey,
+        deps: {
+          getQueueSize: () => 0,
+          nowMs: () => 2,
+        },
+      });
+
+      expect(replySpy).toHaveBeenCalledTimes(2);
+      const firstCtx = replyCall(replySpy);
+      const secondCtx = replyCall(replySpy, 1);
+      const firstOpts = replyOptsCall(replySpy);
+      const secondOpts = replyOptsCall(replySpy, 1);
+
+      expect(firstCtx.SessionKey).toBe(`${baseSessionKey}:heartbeat`);
+      expect(secondCtx.SessionKey).toBe(`${baseSessionKey}:heartbeat`);
+      expect(firstOpts.contextEngineSessionKey).toBeDefined();
+      expect(secondOpts.contextEngineSessionKey).toBeDefined();
+      expect(firstOpts.contextEngineSessionKey).toMatch(
+        new RegExp(`^${baseSessionKey}:heartbeat-run:`),
+      );
+      expect(secondOpts.contextEngineSessionKey).toMatch(
+        new RegExp(`^${baseSessionKey}:heartbeat-run:`),
+      );
+      expect(firstOpts.contextEngineSessionKey).not.toBe(`${baseSessionKey}:heartbeat`);
+      expect(secondOpts.contextEngineSessionKey).not.toBe(`${baseSessionKey}:heartbeat`);
+      expect(firstOpts.contextEngineSessionKey).not.toBe(secondOpts.contextEngineSessionKey);
     });
   });
 

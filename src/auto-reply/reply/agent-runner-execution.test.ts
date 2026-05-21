@@ -799,6 +799,27 @@ describe("runAgentTurnWithFallback", () => {
     });
   });
 
+  it("forwards contextEngineSessionKey into embedded runs", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({
+        opts: {
+          contextEngineSessionKey: "agent:main:main:heartbeat-run:test-session",
+        } satisfies GetReplyOptions,
+      }),
+    );
+
+    expect(result.kind).toBe("success");
+    expectMockCallArgFields(state.runEmbeddedPiAgentMock, 0, "embedded run", {
+      contextEngineSessionKey: "agent:main:main:heartbeat-run:test-session",
+    });
+  });
+
   it("keeps the primary origin when an auto pin is cleared before fallback persists", async () => {
     const probe = {
       provider: "anthropic",

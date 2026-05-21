@@ -38,6 +38,8 @@ export type CurrentInboundPromptContext = {
 export type RunEmbeddedPiAgentParams = {
   sessionId: string;
   sessionKey?: string;
+  /** Optional context-engine-only identity. Defaults to sessionKey. */
+  contextEngineSessionKey?: string;
   /** Session-like key for sandbox and tool-policy resolution. Defaults to sessionKey. */
   sandboxSessionKey?: string;
   agentId?: string;
