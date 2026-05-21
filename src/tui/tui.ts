@@ -443,7 +443,7 @@ export function resolveTuiCtrlCAction(params: {
 
 export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   const isLocalMode = opts.local === true || opts.backend !== undefined;
-  const config = opts.config ?? getRuntimeConfig();
+  const config = opts.config ?? getRuntimeConfig({ skipPluginValidation: !isLocalMode });
   const initialSessionInput = (opts.session ?? "").trim();
   let sessionScope: SessionScope = (config.session?.scope ?? "per-sender") as SessionScope;
   let sessionMainKey = normalizeMainKey(config.session?.mainKey);

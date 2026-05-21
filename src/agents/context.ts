@@ -219,7 +219,7 @@ function primeConfiguredContextWindows(): OpenClawConfig | undefined {
   }
 }
 
-function ensureContextWindowCacheLoaded(): Promise<void> {
+export function ensureContextWindowCacheLoaded(): Promise<void> {
   if (CONTEXT_WINDOW_RUNTIME_STATE.loadPromise) {
     return CONTEXT_WINDOW_RUNTIME_STATE.loadPromise;
   }
@@ -285,12 +285,6 @@ export function lookupContextTokens(
     void ensureContextWindowCacheLoaded();
   }
   return lookupCachedContextTokens(modelId);
-}
-
-if (shouldEagerWarmContextWindowCache()) {
-  // Keep startup warmth for the real CLI, but avoid import-time side effects
-  // when this module is pulled in through library/plugin-sdk surfaces.
-  void ensureContextWindowCacheLoaded();
 }
 
 function resolveProviderModelRef(params: {
