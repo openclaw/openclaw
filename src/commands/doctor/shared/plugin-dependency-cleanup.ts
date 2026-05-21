@@ -7,6 +7,10 @@ import { removeStalePluginRuntimeSymlinks } from "./plugin-runtime-symlinks.js";
 
 const LEGACY_DIRECT_CHILD_NAMES = new Set(["plugin-runtime-deps", "bundled-plugin-runtime-deps"]);
 
+interface CleanupRoot {
+  readonly realPath: string;
+}
+
 function uniqueSorted(values: Iterable<string | null | undefined>): string[] {
   return [
     ...new Set(
@@ -52,12 +56,43 @@ function isLegacyDependencyDebrisName(name: string): boolean {
   );
 }
 
+function isExpectedLegacyCleanupTargetName(name: string): boolean {
+  return (
+    name === "node_modules" ||
+    LEGACY_DIRECT_CHILD_NAMES.has(name) ||
+    isLegacyDependencyDebrisName(name)
+  );
+}
+
+function isPathInsideRoot(candidate: string, root: string): boolean {
+  const relativePath = path.relative(root, candidate);
+  return relativePath === "" || (!relativePath.startsWith("..") && !path.isAbsolute(relativePath));
+}
+
 async function collectDirectChildren(root: string): Promise<string[]> {
   const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => []);
   return entries.map((entry) => path.join(root, entry.name));
 }
 
-async function collectLegacyExtensionDebris(extensionsRoot: string): Promise<string[]> {
+async function isDirectoryInCleanupRoot(
+  candidate: string,
+  cleanupRootRealPath: string,
+): Promise<boolean> {
+  const stat = await fs.lstat(candidate).catch(() => null);
+  if (!stat?.isDirectory() && !stat?.isSymbolicLink()) {
+    return false;
+  }
+  const realPath = await fs.realpath(candidate).catch(() => null);
+  return realPath !== null && isPathInsideRoot(realPath, cleanupRootRealPath);
+}
+
+async function collectLegacyExtensionDebris(
+  extensionsRoot: string,
+  cleanupRootRealPath: string,
+): Promise<string[]> {
+  if (!(await isDirectoryInCleanupRoot(extensionsRoot, cleanupRootRealPath))) {
+    return [];
+  }
   const pluginDirs = await fs.readdir(extensionsRoot, { withFileTypes: true }).catch(() => []);
   const targets: string[] = [];
   for (const entry of pluginDirs) {
@@ -65,6 +100,9 @@ async function collectLegacyExtensionDebris(extensionsRoot: string): Promise<str
       continue;
     }
     const pluginRoot = path.join(extensionsRoot, entry.name);
+    if (!(await isDirectoryInCleanupRoot(pluginRoot, cleanupRootRealPath))) {
+      continue;
+    }
     const children = await collectDirectChildren(pluginRoot);
     const hasRuntimeDepsMarker = children.some((childPath) =>
       isRuntimeDependencyMarkerName(path.basename(childPath)),
@@ -81,6 +119,84 @@ async function collectLegacyExtensionDebris(extensionsRoot: string): Promise<str
     }
   }
   return targets;
+}
+
+function collectCleanupRootPaths(
+  env: NodeJS.ProcessEnv,
+  packageRoot: string | null | undefined,
+): string[] {
+  const stateDirectoryRoots = splitPathList(env.STATE_DIRECTORY).map((entry) =>
+    resolveUserPath(entry, env),
+  );
+  return uniqueSorted([
+    resolveStateDir(env),
+    resolveConfigDir(env),
+    packageRoot,
+    ...stateDirectoryRoots,
+  ]);
+}
+
+async function collectExistingCleanupRoots(
+  cleanupRootPaths: readonly string[],
+): Promise<CleanupRoot[]> {
+  const roots: CleanupRoot[] = [];
+  for (const rootPath of cleanupRootPaths) {
+    const stat = await fs.stat(rootPath).catch(() => null);
+    if (!stat?.isDirectory()) {
+      continue;
+    }
+    const realPath = await fs.realpath(rootPath).catch(() => null);
+    if (realPath === null) {
+      continue;
+    }
+    roots.push({ realPath });
+  }
+  return roots;
+}
+
+function filterLegacyStaleRootCandidates(
+  targets: readonly string[],
+  cleanupRootPaths: readonly string[],
+): { targets: string[]; warnings: string[] } {
+  const safeTargets: string[] = [];
+  const warnings: string[] = [];
+  for (const target of targets) {
+    const targetPath = path.resolve(target);
+    if (!isExpectedLegacyCleanupTargetName(path.basename(targetPath))) {
+      warnings.push(`Skipped legacy plugin dependency state ${targetPath}: unexpected path name`);
+      continue;
+    }
+    if (!cleanupRootPaths.some((rootPath) => isPathInsideRoot(targetPath, rootPath))) {
+      warnings.push(
+        `Skipped legacy plugin dependency state ${targetPath}: outside OpenClaw cleanup roots`,
+      );
+      continue;
+    }
+    safeTargets.push(targetPath);
+  }
+  return {
+    targets: uniqueSorted(safeTargets),
+    warnings,
+  };
+}
+
+async function resolveSafeRemovalTarget(
+  target: string,
+  cleanupRoots: readonly CleanupRoot[],
+): Promise<{ target: string } | { warning: string }> {
+  const targetPath = path.resolve(target);
+  const realPath = await fs.realpath(targetPath).catch(() => null);
+  if (realPath === null) {
+    return {
+      warning: `Skipped legacy plugin dependency state ${targetPath}: could not resolve path`,
+    };
+  }
+  if (!cleanupRoots.some((root) => isPathInsideRoot(realPath, root.realPath))) {
+    return {
+      warning: `Skipped legacy plugin dependency state ${targetPath}: resolved outside OpenClaw cleanup roots`,
+    };
+  }
+  return { target: targetPath };
 }
 
 async function collectLegacyPluginDependencyTargets(
@@ -110,8 +226,16 @@ async function collectLegacyPluginDependencyTargets(
     ]),
   ];
   for (const root of roots) {
-    targets.push(...(await collectLegacyExtensionDebris(path.join(root, "extensions"))));
-    targets.push(...(await collectLegacyExtensionDebris(path.join(root, "dist", "extensions"))));
+    const rootRealPath = await fs.realpath(root).catch(() => null);
+    if (rootRealPath === null) {
+      continue;
+    }
+    targets.push(
+      ...(await collectLegacyExtensionDebris(path.join(root, "extensions"), rootRealPath)),
+    );
+    targets.push(
+      ...(await collectLegacyExtensionDebris(path.join(root, "dist", "extensions"), rootRealPath)),
+    );
   }
   return uniqueSorted(targets);
 }
@@ -133,20 +257,31 @@ export async function cleanupLegacyPluginDependencyState(params: {
   const targets = await collectLegacyPluginDependencyTargets(env, {
     packageRoot,
   });
+  const cleanupRootPaths = collectCleanupRootPaths(env, packageRoot);
+  const cleanupRoots = await collectExistingCleanupRoots(cleanupRootPaths);
+  const staleRootCandidates = filterLegacyStaleRootCandidates(targets, cleanupRootPaths);
+  warnings.push(...staleRootCandidates.warnings);
   const staleSymlinks = await removeStalePluginRuntimeSymlinks(packageRoot, {
-    staleRoots: targets,
+    staleRoots: staleRootCandidates.targets,
   });
   changes.push(...staleSymlinks.changes);
   warnings.push(...staleSymlinks.warnings);
-  for (const target of targets) {
+  for (const target of staleRootCandidates.targets) {
     if (!(await pathExists(target))) {
       continue;
     }
+    const safeTarget = await resolveSafeRemovalTarget(target, cleanupRoots);
+    if ("warning" in safeTarget) {
+      warnings.push(safeTarget.warning);
+      continue;
+    }
     try {
-      await fs.rm(target, { recursive: true, force: true });
-      changes.push(`Removed legacy plugin dependency state: ${target}`);
+      await fs.rm(safeTarget.target, { recursive: true, force: true });
+      changes.push(`Removed legacy plugin dependency state: ${safeTarget.target}`);
     } catch (error) {
-      warnings.push(`Failed to remove legacy plugin dependency state ${target}: ${String(error)}`);
+      warnings.push(
+        `Failed to remove legacy plugin dependency state ${safeTarget.target}: ${String(error)}`,
+      );
     }
   }
   return { changes, warnings };
