@@ -108,9 +108,11 @@ methods:
 
 Embedding providers registered with `api.registerEmbeddingProvider(...)` must
 also be listed in `contracts.embeddingProviders` in the plugin manifest. This
-is the generic embedding surface for reusable vector generation. Memory-only
-adapters still use `api.registerMemoryEmbeddingProvider(...)` and
-`contracts.memoryEmbeddingProviders`.
+is the generic embedding surface for reusable vector generation. Memory search
+can consume this generic provider surface. The older
+`api.registerMemoryEmbeddingProvider(...)` and
+`contracts.memoryEmbeddingProviders` seam remains as compatibility while
+existing memory-specific providers migrate.
 
 ### Tools and commands
 

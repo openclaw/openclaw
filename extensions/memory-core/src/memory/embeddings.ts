@@ -1,6 +1,12 @@
 import {
-  getMemoryEmbeddingProvider,
-  listMemoryEmbeddingProviders,
+  getEmbeddingProvider,
+  type EmbeddingProviderAdapter,
+  type EmbeddingProvider as GenericEmbeddingProvider,
+  type EmbeddingProviderRuntime as GenericEmbeddingProviderRuntime,
+} from "openclaw/plugin-sdk/embedding-providers";
+import {
+  getMemoryEmbeddingProvider as getLegacyMemoryEmbeddingProvider,
+  listMemoryEmbeddingProviders as listLegacyMemoryEmbeddingProviders,
   type MemoryEmbeddingProvider,
   type MemoryEmbeddingProviderAdapter,
   type MemoryEmbeddingProviderCreateOptions,
@@ -29,6 +35,76 @@ type CreateEmbeddingProviderOptions = MemoryEmbeddingProviderCreateOptions & {
   fallback: EmbeddingProviderFallback;
 };
 
+function adaptGenericEmbeddingProvider(
+  provider: GenericEmbeddingProvider,
+): MemoryEmbeddingProvider {
+  return {
+    id: provider.id,
+    model: provider.model,
+    ...(typeof provider.maxInputTokens === "number"
+      ? { maxInputTokens: provider.maxInputTokens }
+      : {}),
+    embedQuery: async (text, options) =>
+      await provider.embed(text, {
+        ...options,
+        inputType: "query",
+      }),
+    embedBatch: async (texts, options) =>
+      await provider.embedBatch(texts, {
+        ...options,
+        inputType: "document",
+      }),
+    embedBatchInputs: async (inputs, options) =>
+      await provider.embedBatch(inputs, {
+        ...options,
+        inputType: "document",
+      }),
+    ...(provider.close ? { close: provider.close } : {}),
+  };
+}
+
+function adaptGenericRuntime(
+  runtime: GenericEmbeddingProviderRuntime | undefined,
+): MemoryEmbeddingProviderRuntime | undefined {
+  if (!runtime) {
+    return undefined;
+  }
+  return {
+    id: runtime.id,
+    ...(runtime.cacheKeyData ? { cacheKeyData: runtime.cacheKeyData } : {}),
+    ...(typeof runtime.inlineQueryTimeoutMs === "number"
+      ? { inlineQueryTimeoutMs: runtime.inlineQueryTimeoutMs }
+      : {}),
+    ...(typeof runtime.inlineBatchTimeoutMs === "number"
+      ? { inlineBatchTimeoutMs: runtime.inlineBatchTimeoutMs }
+      : {}),
+  };
+}
+
+function adaptGenericEmbeddingAdapter(
+  adapter: EmbeddingProviderAdapter,
+): MemoryEmbeddingProviderAdapter {
+  return {
+    id: adapter.id,
+    ...(adapter.defaultModel ? { defaultModel: adapter.defaultModel } : {}),
+    ...(adapter.transport ? { transport: adapter.transport } : {}),
+    ...(adapter.authProviderId ? { authProviderId: adapter.authProviderId } : {}),
+    ...(adapter.formatSetupError ? { formatSetupError: adapter.formatSetupError } : {}),
+    create: async (options) => {
+      const result = await adapter.create({
+        ...options,
+        ...(typeof options.outputDimensionality === "number"
+          ? { dimensions: options.outputDimensionality }
+          : {}),
+      });
+      return {
+        provider: result.provider ? adaptGenericEmbeddingProvider(result.provider) : null,
+        runtime: adaptGenericRuntime(result.runtime),
+      };
+    },
+  };
+}
+
 function formatProviderError(adapter: MemoryEmbeddingProviderAdapter, err: unknown): string {
   return adapter.formatSetupError?.(err) ?? formatErrorMessage(err);
 }
@@ -44,17 +120,21 @@ function getAdapter(
   id: string,
   config?: MemoryEmbeddingProviderCreateOptions["config"],
 ): MemoryEmbeddingProviderAdapter {
-  const adapter = getMemoryEmbeddingProvider(id, config);
-  if (!adapter) {
-    throw new Error(`Unknown memory embedding provider: ${id}`);
+  const adapter = getLegacyMemoryEmbeddingProvider(id, config);
+  if (adapter) {
+    return adapter;
   }
-  return adapter;
+  const genericAdapter = getEmbeddingProvider(id, config);
+  if (genericAdapter) {
+    return adaptGenericEmbeddingAdapter(genericAdapter);
+  }
+  throw new Error(`Unknown memory embedding provider: ${id}`);
 }
 
 function listAutoSelectAdapters(
   options: CreateEmbeddingProviderOptions,
 ): MemoryEmbeddingProviderAdapter[] {
-  return listMemoryEmbeddingProviders(options.config)
+  return listLegacyMemoryEmbeddingProviders(options.config)
     .filter((adapter) => typeof adapter.autoSelectPriority === "number")
     .filter((adapter) =>
       adapter.id === "local" ? canAutoSelectLocal(options.local?.modelPath) : true,
@@ -82,7 +162,9 @@ export function resolveEmbeddingProviderFallbackModel(
   fallbackSourceModel: string,
   config?: MemoryEmbeddingProviderCreateOptions["config"],
 ): string {
-  const adapter = getMemoryEmbeddingProvider(providerId, config);
+  const adapter =
+    getLegacyMemoryEmbeddingProvider(providerId, config) ??
+    getEmbeddingProvider(providerId, config);
   return adapter?.defaultModel ?? fallbackSourceModel;
 }
 
