@@ -88,7 +88,8 @@ vi.mock("../../agents/pi-embedded-helpers.js", () => ({
     return undefined;
   },
   isCompactionFailureError: () => false,
-  isContextOverflowError: () => false,
+  isContextOverflowError: (msg?: string) =>
+    typeof msg === "string" && msg.toLowerCase().includes("overflow"),
   isBillingErrorMessage: () => false,
   isLikelyContextOverflowError: () => false,
   isOverloadedErrorMessage: (message: string) => /overloaded|capacity/i.test(message),
@@ -5065,5 +5066,131 @@ describe("runAgentTurnWithFallback", () => {
       modelOverrideFallbackOriginProvider: "anthropic",
       modelOverrideFallbackOriginModel: "claude-opus",
     });
+  });
+
+  it("does NOT call resetSessionAfterCompactionFailure when error kind is context_overflow_exhausted", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {
+        error: {
+          kind: "context_overflow_exhausted",
+          message: "Context overflow occurred",
+        },
+      },
+    });
+
+    const resetSessionAfterCompactionFailure = vi.fn().mockResolvedValue(true);
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("final");
+    expect(resetSessionAfterCompactionFailure).not.toHaveBeenCalled();
+  });
+
+  it("does NOT call resetSessionAfterCompactionFailure when error kind is irreducible_overflow", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {
+        error: {
+          kind: "irreducible_overflow",
+          message: "Context overflow occurred",
+        },
+      },
+    });
+
+    const resetSessionAfterCompactionFailure = vi.fn().mockResolvedValue(true);
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("final");
+    expect(resetSessionAfterCompactionFailure).not.toHaveBeenCalled();
+  });
+
+  it("calls resetSessionAfterCompactionFailure for standard context overflow error kinds", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {
+        error: {
+          kind: "context_overflow",
+          message: "Context overflow occurred",
+        },
+      },
+    });
+
+    const resetSessionAfterCompactionFailure = vi.fn().mockResolvedValue(true);
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("final");
+    expect(resetSessionAfterCompactionFailure).toHaveBeenCalledWith("Context overflow occurred");
   });
 });
