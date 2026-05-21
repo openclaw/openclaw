@@ -52,7 +52,7 @@ Configured MCP servers are exposed as plugin-owned tools under the `bundle-mcp` 
 - `bundle-mcp` for OpenClaw-managed MCP servers from `mcp.servers`
 - the plugin id for a specific native plugin
 - `group:plugins` for all loaded plugin-owned tools
-- exact MCP server globs such as `outlook__*` when you only want one server
+- exact MCP server tool names or server globs such as `outlook__send_mail` or `outlook__*` when you only want one server
 
 Server globs use the provider-safe MCP server prefix, not necessarily the raw `mcp.servers` key. Non-`[A-Za-z0-9_-]` characters become `-`, names that do not start with a letter get an `mcp-` prefix, and long or duplicate prefixes may be truncated or suffixed; for example, `mcp.servers["Outlook Graph"]` uses a glob like `outlook-graph__*`.
 

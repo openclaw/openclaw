@@ -296,6 +296,15 @@ function buildMcpProbeToolNames(serverNames: readonly string[]): string[] {
   );
 }
 
+function buildMcpToolNamePrefixes(serverNames: readonly string[]): string[] {
+  const usedNames = new Set<string>();
+  return serverNames
+    .map((serverName) =>
+      normalizeToolName(`${sanitizeServerName(serverName, usedNames)}${TOOL_NAME_SEPARATOR}`),
+    )
+    .filter(Boolean);
+}
+
 function entriesMatchAnyMcpTool(
   entries: readonly string[],
   serverNames: readonly string[],
@@ -304,6 +313,14 @@ function entriesMatchAnyMcpTool(
   if (
     normalizedEntries.some(
       (entry) => entry === "*" || entry === "bundle-mcp" || entry === "group:plugins",
+    )
+  ) {
+    return true;
+  }
+  const serverPrefixes = buildMcpToolNamePrefixes(serverNames);
+  if (
+    normalizedEntries.some((entry) =>
+      serverPrefixes.some((prefix) => entry.length > prefix.length && entry.startsWith(prefix)),
     )
   ) {
     return true;
@@ -378,7 +395,7 @@ function collectSandboxMcpAllowlistWarnings(cfg: OpenClawConfig): string[] {
   }
   const sourceSubject = formatSourceLabelSubject(issueSources);
   return [
-    `- mcp.servers defines ${formatMcpServerSummary(serverNames)}, but ${sourceSubject.text} ${sourceSubject.verb} not include "bundle-mcp", "group:plugins", or a matching "<server>${TOOL_NAME_SEPARATOR}*" MCP tool pattern. Sandboxed agents will filter bundled MCP tools before provider requests. Add "bundle-mcp" to tools.sandbox.tools.alsoAllow (or use "group:plugins" / server globs) if those MCP tools should be visible; use tools.sandbox.tools.allow: [] only when you intentionally want no sandbox allow gate.`,
+    `- mcp.servers defines ${formatMcpServerSummary(serverNames)}, but ${sourceSubject.text} ${sourceSubject.verb} not include "bundle-mcp", "group:plugins", or a matching server-prefixed MCP tool name/glob such as "<server>${TOOL_NAME_SEPARATOR}*". Sandboxed agents will filter bundled MCP tools before provider requests. Add "bundle-mcp" to tools.sandbox.tools.alsoAllow (or use "group:plugins" / server globs) if those MCP tools should be visible; use tools.sandbox.tools.allow: [] only when you intentionally want no sandbox allow gate.`,
   ];
 }
 
