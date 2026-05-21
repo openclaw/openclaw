@@ -15,6 +15,7 @@ type ActiveSandboxToolPolicy = {
   labels: string[];
   dedupeKey: string;
   policy: Record<string, unknown>;
+  nonSandboxToolPolicyBlocksMcp: boolean;
 };
 
 type PickedSandboxToolPolicyField = {
@@ -182,6 +183,7 @@ function buildEffectiveSandboxToolPolicy(params: {
   agentPolicy?: unknown;
   agentLabel?: string;
   globalPolicy: unknown;
+  nonSandboxToolPolicyBlocksMcp: boolean;
 }): ActiveSandboxToolPolicy {
   const agentLabel = params.agentLabel ?? "agents.list[].tools.sandbox.tools";
   const allow = pickSandboxToolPolicyField({
@@ -224,17 +226,31 @@ function buildEffectiveSandboxToolPolicy(params: {
     labels,
     dedupeKey: dedupeLabels.join("\u0000"),
     policy,
+    nonSandboxToolPolicyBlocksMcp: params.nonSandboxToolPolicyBlocksMcp,
   };
 }
 
-function collectActiveSandboxToolPolicies(cfg: OpenClawConfig): ActiveSandboxToolPolicy[] {
+function collectActiveSandboxToolPolicies(
+  cfg: OpenClawConfig,
+  serverNames: readonly string[],
+): ActiveSandboxToolPolicy[] {
   const out = new Map<string, ActiveSandboxToolPolicy>();
   const globalPolicy = cfg.tools?.sandbox?.tools;
+  const globalToolPolicyBlocksMcp = nonSandboxToolPolicyBlocksMcp(cfg.tools, serverNames);
   const addPolicy = (entry: ActiveSandboxToolPolicy) => {
+    const existing = out.get(entry.dedupeKey);
+    if (existing && !existing.nonSandboxToolPolicyBlocksMcp) {
+      return;
+    }
     out.set(entry.dedupeKey, entry);
   };
   const addGlobalPolicy = () => {
-    addPolicy(buildEffectiveSandboxToolPolicy({ globalPolicy }));
+    addPolicy(
+      buildEffectiveSandboxToolPolicy({
+        globalPolicy,
+        nonSandboxToolPolicyBlocksMcp: globalToolPolicyBlocksMcp,
+      }),
+    );
   };
 
   const defaultSandboxActive = isSandboxModeActive(cfg.agents?.defaults?.sandbox?.mode);
@@ -263,6 +279,8 @@ function collectActiveSandboxToolPolicies(cfg: OpenClawConfig): ActiveSandboxToo
           agentPolicy,
           agentLabel: `agents.list[${index}].tools.sandbox.tools`,
           globalPolicy,
+          nonSandboxToolPolicyBlocksMcp:
+            globalToolPolicyBlocksMcp || nonSandboxToolPolicyBlocksMcp(agent.tools, serverNames),
         }),
       );
     });
@@ -316,6 +334,18 @@ function sandboxPolicyIntentionallyDeniesMcp(
   return entriesMatchAnyMcpTool(deny, serverNames);
 }
 
+function nonSandboxToolPolicyBlocksMcp(policy: unknown, serverNames: readonly string[]): boolean {
+  if (sandboxPolicyIntentionallyDeniesMcp(policy, serverNames)) {
+    return true;
+  }
+  const allow = getList(policy, "allow");
+  if (!Array.isArray(allow) || allow.length === 0) {
+    return false;
+  }
+  const entries = [...allow, ...(getList(policy, "alsoAllow") ?? [])];
+  return !entriesMatchAnyMcpTool(entries, serverNames);
+}
+
 function formatMcpServerSummary(serverNames: readonly string[]): string {
   const noun = serverNames.length === 1 ? "server" : "servers";
   const listed = serverNames
@@ -331,7 +361,7 @@ function collectSandboxMcpAllowlistWarnings(cfg: OpenClawConfig): string[] {
   if (serverNames.length === 0) {
     return [];
   }
-  const sandboxPolicies = collectActiveSandboxToolPolicies(cfg);
+  const sandboxPolicies = collectActiveSandboxToolPolicies(cfg, serverNames);
   if (sandboxPolicies.length === 0) {
     return [];
   }
@@ -341,6 +371,7 @@ function collectSandboxMcpAllowlistWarnings(cfg: OpenClawConfig): string[] {
         !sandboxAllowGateAllowsMcp(policy, serverNames) &&
         !sandboxPolicyIntentionallyDeniesMcp(policy, serverNames),
     )
+    .filter(({ nonSandboxToolPolicyBlocksMcp }) => !nonSandboxToolPolicyBlocksMcp)
     .flatMap(({ labels }) => labels);
   if (issueSources.length === 0) {
     return [];

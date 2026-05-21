@@ -261,6 +261,32 @@ describe("collectPluginToolAllowlistWarnings", () => {
     expect(warnings).toStrictEqual([]);
   });
 
+  it("does not warn when regular tool policy explicitly denies bundled MCP tools", () => {
+    const warnings = collectPluginToolAllowlistWarnings({
+      cfg: {
+        agents: { defaults: { sandbox: { mode: "all" } } },
+        mcp: { servers: { outlook: { command: "node", args: ["outlook-server.js"] } } },
+        tools: { deny: ["bundle-mcp"] },
+      },
+      manifestRegistry,
+    });
+
+    expect(warnings).toStrictEqual([]);
+  });
+
+  it("does not warn when regular tool allowlist intentionally omits MCP tools", () => {
+    const warnings = collectPluginToolAllowlistWarnings({
+      cfg: {
+        agents: { defaults: { sandbox: { mode: "all" } } },
+        mcp: { servers: { outlook: { command: "node", args: ["outlook-server.js"] } } },
+        tools: { allow: ["read"] },
+      },
+      manifestRegistry,
+    });
+
+    expect(warnings).toStrictEqual([]);
+  });
+
   it("does not warn about MCP sandbox allowlists when sandbox mode is off", () => {
     const warnings = collectPluginToolAllowlistWarnings({
       cfg: {
