@@ -325,8 +325,8 @@ export async function hydrateViewer(): Promise<void> {
         ...getHydrateProps(payload),
       });
       const controller = { payload, diff };
-      controllers.push(controller);
       applyState(controller);
+      controllers.push(controller);
     } catch (error) {
       console.warn("Skipping diff card that failed to hydrate", error);
     }

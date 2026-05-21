@@ -148,4 +148,27 @@ describe("hydrateViewer", () => {
     expect(document.documentElement.dataset.openclawDiffsError).toBeUndefined();
     warn.mockRestore();
   });
+
+  it("does not retain controllers when initial state application throws", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    renderCard();
+    renderCard();
+    fileDiffSetOptionsMock.mockImplementationOnce(() => {
+      throw new Error("broken options");
+    });
+    const { controllers, hydrateViewer } = await import("./viewer-client.js");
+    controllers.splice(0);
+
+    await hydrateViewer();
+
+    expect(fileDiffHydrateMock).toHaveBeenCalledTimes(2);
+    expect(fileDiffSetOptionsMock).toHaveBeenCalledTimes(2);
+    expect(controllers).toHaveLength(1);
+    expect(warn).toHaveBeenCalledWith(
+      "Skipping diff card that failed to hydrate",
+      expect.any(Error),
+    );
+    expect(document.documentElement.dataset.openclawDiffsError).toBeUndefined();
+    warn.mockRestore();
+  });
 });
