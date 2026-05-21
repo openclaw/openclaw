@@ -16,8 +16,10 @@ import { enablePluginInConfig } from "./enable.js";
 import {
   applyProviderAuthConfigPatch,
   applyDefaultModel,
+  buildMinimalProviderAuthConfigPatch,
   pickAuthMethod,
   resolveProviderMatch,
+  restoreConfiguredPrimaryModel,
 } from "./provider-auth-choice-helpers.js";
 import {
   resolveManifestProviderAuthChoice,
@@ -30,6 +32,9 @@ import { isRemoteEnvironment, openUrl } from "./setup-browser.js";
 import type { ProviderAuthMethod, ProviderAuthOptionBag, ProviderPlugin } from "./types.js";
 
 type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
+type ProviderAuthMethodResult = Awaited<ReturnType<ProviderAuthMethod["run"]>>;
+type ProviderAuthConfigUpdate = (cfg: OpenClawConfig) => OpenClawConfig;
+type ProviderAuthProfileConfig = Parameters<typeof applyAuthProfileConfig>[1];
 
 export type ApplyProviderAuthChoiceParams = {
   authChoice: string;
@@ -63,38 +68,6 @@ function formatModelRefForDisplay(modelRef: string, provider: ProviderPlugin): s
     return modelRef;
   }
   return formatLiteralProviderPrefixedModelRef(provider.id, modelRef);
-}
-
-function restoreConfiguredPrimaryModel(
-  nextConfig: OpenClawConfig,
-  originalConfig: OpenClawConfig,
-): OpenClawConfig {
-  const originalModel = originalConfig.agents?.defaults?.model;
-  const nextAgents = nextConfig.agents;
-  const nextDefaults = nextAgents?.defaults;
-  if (!nextDefaults) {
-    return nextConfig;
-  }
-  if (originalModel !== undefined) {
-    return {
-      ...nextConfig,
-      agents: {
-        ...nextAgents,
-        defaults: {
-          ...nextDefaults,
-          model: originalModel,
-        },
-      },
-    };
-  }
-  const { model: _model, ...restDefaults } = nextDefaults;
-  return {
-    ...nextConfig,
-    agents: {
-      ...nextAgents,
-      defaults: restDefaults,
-    },
-  };
 }
 
 function resolveConfiguredDefaultModelPrimary(cfg: OpenClawConfig): string | undefined {
@@ -256,7 +229,12 @@ export async function runProviderPluginAuthMethod(params: {
   secretInputMode?: ProviderAuthOptionBag["secretInputMode"];
   allowSecretRefPrompt?: boolean;
   opts?: Partial<ProviderAuthOptionBag>;
-}): Promise<{ config: OpenClawConfig; defaultModel?: string }> {
+  openUrl?: (url: string) => Promise<void>;
+}): Promise<{
+  config: OpenClawConfig;
+  defaultModel?: string;
+  applyToConfig: ProviderAuthConfigUpdate;
+}> {
   const agentId = params.agentId ?? resolveDefaultAgentId(params.config);
   const agentDir = params.agentDir ?? resolveAgentDir(params.config, agentId);
   const workspaceDir =
@@ -275,20 +253,15 @@ export async function runProviderPluginAuthMethod(params: {
     secretInputMode: params.secretInputMode,
     allowSecretRefPrompt: params.allowSecretRefPrompt,
     isRemote: isRemoteEnvironment(),
-    openUrl: async (url) => {
-      await openUrl(url);
-    },
+    openUrl:
+      params.openUrl ??
+      (async (url) => {
+        await openUrl(url);
+      }),
     oauth: {
       createVpsAwareHandlers: (opts) => createVpsAwareOAuthHandlers(opts),
     },
   });
-
-  let nextConfig = params.config;
-  if (result.configPatch) {
-    nextConfig = applyProviderAuthConfigPatch(nextConfig, result.configPatch, {
-      replaceDefaultModels: result.replaceDefaultModels,
-    });
-  }
 
   for (const profile of result.profiles) {
     await upsertAuthProfileWithLockOrThrow({
@@ -296,19 +269,9 @@ export async function runProviderPluginAuthMethod(params: {
       credential: profile.credential,
       agentDir,
     });
-
-    nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId: profile.profileId,
-      provider: profile.credential.provider,
-      mode: profile.credential.type === "token" ? "token" : profile.credential.type,
-      ...("email" in profile.credential && profile.credential.email
-        ? { email: profile.credential.email }
-        : {}),
-      ...("displayName" in profile.credential && profile.credential.displayName
-        ? { displayName: profile.credential.displayName }
-        : {}),
-    });
   }
+  const applyToConfig = buildProviderAuthConfigUpdate(result, params.config);
+  const nextConfig = applyToConfig(params.config);
 
   if (params.emitNotes !== false && result.notes && result.notes.length > 0) {
     await params.prompter.note(result.notes.join("\n"), "Provider notes");
@@ -321,6 +284,45 @@ export async function runProviderPluginAuthMethod(params: {
   return {
     config: nextConfig,
     ...(defaultModel ? { defaultModel } : {}),
+    applyToConfig,
+  };
+}
+
+function buildProviderAuthConfigUpdate(
+  result: ProviderAuthMethodResult,
+  baseConfig: OpenClawConfig,
+): ProviderAuthConfigUpdate {
+  const profileConfigs: ProviderAuthProfileConfig[] = result.profiles.map((profile) => ({
+    profileId: profile.profileId,
+    provider: profile.credential.provider,
+    mode: profile.credential.type,
+    ...("email" in profile.credential && profile.credential.email
+      ? { email: profile.credential.email }
+      : {}),
+    ...("displayName" in profile.credential && profile.credential.displayName
+      ? { displayName: profile.credential.displayName }
+      : {}),
+  }));
+  const configPatch = result.configPatch
+    ? buildMinimalProviderAuthConfigPatch({
+        baseConfig,
+        nextConfig: applyProviderAuthConfigPatch(baseConfig, result.configPatch, {
+          replaceDefaultModels: result.replaceDefaultModels,
+        }),
+        replaceDefaultModels: result.replaceDefaultModels,
+      })
+    : undefined;
+  return (cfg) => {
+    let nextConfig = cfg;
+    if (configPatch) {
+      nextConfig = applyProviderAuthConfigPatch(nextConfig, configPatch, {
+        replaceDefaultModels: result.replaceDefaultModels,
+      });
+    }
+    for (const profileConfig of profileConfigs) {
+      nextConfig = applyAuthProfileConfig(nextConfig, profileConfig);
+    }
+    return nextConfig;
   };
 }
 

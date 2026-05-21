@@ -905,6 +905,16 @@ export function buildBuiltinChatCommands(
       category: "options",
     }),
     defineChatCommand({
+      key: "providers",
+      nativeName: "providers",
+      description: "Manage model provider authentication.",
+      textAlias: "/providers",
+      tier: "standard",
+      argsParsing: "none",
+      acceptsArgs: true,
+      category: "management",
+    }),
+    defineChatCommand({
       key: "queue",
       nativeName: "queue",
       description: "Adjust queue settings.",

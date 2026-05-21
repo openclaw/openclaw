@@ -3,5 +3,6 @@
   "qa-channel-protocol",
   "qa-lab",
   "qa-runtime",
+  "provider-setup-runtime",
   "test-utils"
 ]

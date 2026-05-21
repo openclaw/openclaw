@@ -119,27 +119,30 @@ class WizardSessionPrompter implements WizardPrompter {
     validate?: (value: string) => string | undefined;
     sensitive?: boolean;
   }): Promise<string> {
-    const res = await this.prompt({
-      type: "text",
-      message: params.message,
-      initialValue: params.initialValue,
-      placeholder: params.placeholder,
-      sensitive: params.sensitive,
-      executor: "client",
-    });
-    const value =
-      res === null || res === undefined
-        ? ""
-        : typeof res === "string"
-          ? res
-          : typeof res === "number" || typeof res === "boolean" || typeof res === "bigint"
-            ? String(res)
-            : "";
-    const error = params.validate?.(value);
-    if (error) {
-      throw new Error(error);
+    let message = params.message;
+    for (;;) {
+      const res = await this.prompt({
+        type: "text",
+        message,
+        initialValue: params.initialValue,
+        placeholder: params.placeholder,
+        sensitive: params.sensitive,
+        executor: "client",
+      });
+      const value =
+        res === null || res === undefined
+          ? ""
+          : typeof res === "string"
+            ? res
+            : typeof res === "number" || typeof res === "boolean" || typeof res === "bigint"
+              ? String(res)
+              : "";
+      const error = params.validate?.(value);
+      if (!error) {
+        return value;
+      }
+      message = `${error}\n\n${params.message}`;
     }
-    return value;
   }
 
   async confirm(params: { message: string; initialValue?: boolean }): Promise<boolean> {

@@ -15,6 +15,13 @@ import {
 } from "../shared/string-coerce.js";
 import type { ProviderAuthMethod, ProviderPlugin } from "./types.js";
 
+type ConfigPatchDiff =
+  | { changed: false }
+  | {
+      changed: true;
+      value: unknown;
+    };
+
 export function resolveProviderMatch(
   providers: ProviderPlugin[],
   rawProvider?: string,
@@ -94,6 +101,80 @@ function mergeConfigPatch<T>(base: T, patch: unknown): T {
     }
   }
   return next as T;
+}
+
+function diffConfigPatchValue(base: unknown, next: unknown): ConfigPatchDiff {
+  if (Object.is(base, next)) {
+    return { changed: false };
+  }
+  if (Array.isArray(base) && Array.isArray(next)) {
+    if (
+      base.length === next.length &&
+      next.every((value, index) => !diffConfigPatchValue(base[index], value).changed)
+    ) {
+      return { changed: false };
+    }
+    return { changed: true, value: sanitizeConfigPatchValue(next) };
+  }
+  if (!isPlainRecord(base) || !isPlainRecord(next)) {
+    return { changed: true, value: sanitizeConfigPatchValue(next) };
+  }
+
+  const patch: Record<string, unknown> = {};
+  for (const key of Object.keys(next)) {
+    if (BLOCKED_MERGE_KEYS.has(key)) {
+      continue;
+    }
+    const diff = diffConfigPatchValue(base[key], next[key]);
+    if (diff.changed) {
+      patch[key] = diff.value;
+    }
+  }
+  return Object.keys(patch).length > 0 ? { changed: true, value: patch } : { changed: false };
+}
+
+function withDefaultModelsReplacementPatch(params: {
+  patch: Partial<OpenClawConfig> | undefined;
+  nextConfig: OpenClawConfig;
+  replaceDefaultModels?: boolean;
+}): Partial<OpenClawConfig> | undefined {
+  if (!params.replaceDefaultModels) {
+    return params.patch;
+  }
+  const replacementModels = params.nextConfig.agents?.defaults?.models;
+  if (!replacementModels) {
+    return params.patch;
+  }
+  const patch = params.patch ?? {};
+  const patchAgents = isPlainRecord(patch.agents) ? patch.agents : {};
+  const patchDefaults = isPlainRecord(patchAgents.defaults) ? patchAgents.defaults : {};
+  return {
+    ...patch,
+    agents: {
+      ...patchAgents,
+      defaults: {
+        ...patchDefaults,
+        models: sanitizeConfigPatchValue(replacementModels) as NonNullable<
+          NonNullable<OpenClawConfig["agents"]>["defaults"]
+        >["models"],
+      },
+    },
+  };
+}
+
+export function buildMinimalProviderAuthConfigPatch(params: {
+  baseConfig: OpenClawConfig;
+  nextConfig: OpenClawConfig;
+  replaceDefaultModels?: boolean;
+}): Partial<OpenClawConfig> | undefined {
+  const diff = diffConfigPatchValue(params.baseConfig, params.nextConfig);
+  const patch =
+    diff.changed && isPlainRecord(diff.value) ? (diff.value as Partial<OpenClawConfig>) : undefined;
+  return withDefaultModelsReplacementPatch({
+    patch,
+    nextConfig: params.nextConfig,
+    replaceDefaultModels: params.replaceDefaultModels,
+  });
 }
 
 function normalizeAgentModelConfigForWrite(value: unknown): unknown {
@@ -285,6 +366,38 @@ export function applyProviderAuthConfigPatch(
       },
     },
   });
+}
+
+export function restoreConfiguredPrimaryModel(
+  nextConfig: OpenClawConfig,
+  originalConfig: OpenClawConfig,
+): OpenClawConfig {
+  const originalModel = originalConfig.agents?.defaults?.model;
+  const nextAgents = nextConfig.agents;
+  const nextDefaults = nextAgents?.defaults;
+  if (!nextDefaults) {
+    return nextConfig;
+  }
+  if (originalModel !== undefined) {
+    return {
+      ...nextConfig,
+      agents: {
+        ...nextAgents,
+        defaults: {
+          ...nextDefaults,
+          model: originalModel,
+        },
+      },
+    };
+  }
+  const { model: _model, ...restDefaults } = nextDefaults;
+  return {
+    ...nextConfig,
+    agents: {
+      ...nextAgents,
+      defaults: restDefaults,
+    },
+  };
 }
 
 /**

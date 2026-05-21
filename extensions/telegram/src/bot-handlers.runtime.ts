@@ -31,6 +31,7 @@ import {
 import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
 import { applyModelOverrideToSessionEntry } from "openclaw/plugin-sdk/model-session-runtime";
 import { formatModelsAvailableHeader } from "openclaw/plugin-sdk/models-provider-runtime";
+import { submitProviderSetupTextInput } from "openclaw/plugin-sdk/provider-setup-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
@@ -1026,6 +1027,50 @@ export const registerTelegramHandlers = ({
       replyChain.push(toReplyChainEntry(node, mediaRef));
     }
     return { replyMedia, replyChain };
+  };
+
+  const handleProviderSetupTextReply = async (msg: Message, isGroup: boolean): Promise<boolean> => {
+    const text = typeof msg.text === "string" ? msg.text.trim() : "";
+    const senderId = msg.from?.id != null ? String(msg.from.id) : undefined;
+    if (!text || text.startsWith("/") || isGroup) {
+      return false;
+    }
+    const providerSetup = await submitProviderSetupTextInput({
+      channel: "telegram",
+      accountId,
+      conversationId: `telegram:${msg.chat.id}`,
+      ...(senderId ? { senderId } : {}),
+      text,
+    });
+    if (!providerSetup.handled) {
+      return false;
+    }
+    if (providerSetup.deleteInputMessage === true) {
+      await withTelegramApiErrorLogging({
+        operation: "deleteMessage",
+        runtime,
+        fn: () => bot.api.deleteMessage(msg.chat.id, msg.message_id),
+      }).catch(() => {});
+    }
+    const reply = providerSetup.reply;
+    if (reply?.text) {
+      const telegramData = reply.channelData?.telegram as
+        | { buttons?: Parameters<typeof buildInlineKeyboard>[0] }
+        | undefined;
+      const buttons = telegramData?.buttons;
+      const keyboard = Array.isArray(buttons) ? buildInlineKeyboard(buttons) : undefined;
+      await withTelegramApiErrorLogging({
+        operation: "sendMessage",
+        runtime,
+        fn: () =>
+          bot.api.sendMessage(
+            msg.chat.id,
+            reply.text ?? "",
+            keyboard ? { reply_markup: keyboard } : undefined,
+          ),
+      }).catch(() => {});
+    }
+    return true;
   };
 
   const processMessageWithReplyChain = async (
@@ -2703,6 +2748,9 @@ export const registerTelegramHandlers = ({
         }).sessionEntry?.sessionStartedAt,
       );
 
+      if (await handleProviderSetupTextReply(event.msg, event.isGroup)) {
+        return;
+      }
       recordMessageForReplyChain(event.msg, resolvedThreadId ?? dmThreadId);
       await processInboundMessage({
         ctx: event.ctx,

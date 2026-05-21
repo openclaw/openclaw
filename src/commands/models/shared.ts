@@ -60,14 +60,14 @@ export async function loadValidConfigOrThrow(): Promise<OpenClawConfig> {
 }
 
 export async function updateConfig(
-  mutator: (cfg: OpenClawConfig) => OpenClawConfig,
+  mutator: (cfg: OpenClawConfig) => OpenClawConfig | Promise<OpenClawConfig>,
 ): Promise<OpenClawConfig> {
   const snapshot = await readConfigFileSnapshot();
   if (!snapshot.valid) {
     const issues = formatConfigIssueLines(snapshot.issues, "-").join("\n");
     throw new Error(`Invalid config at ${snapshot.path}\n${issues}`);
   }
-  const next = mutator(structuredClone(snapshot.sourceConfig ?? snapshot.config));
+  const next = await mutator(structuredClone(snapshot.sourceConfig ?? snapshot.config));
   await replaceConfigFile({
     nextConfig: next,
     baseHash: snapshot.hash,

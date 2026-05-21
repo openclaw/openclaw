@@ -263,6 +263,7 @@
   "provider-auth-api-key",
   "provider-auth-result",
   "provider-auth-login",
+  "provider-setup-runtime",
   "provider-selection-runtime",
   "plugin-entry",
   "provider-catalog-runtime",
