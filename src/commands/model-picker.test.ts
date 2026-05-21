@@ -1445,7 +1445,7 @@ describe("applyModelAllowlist", () => {
     expect(next.agents?.defaults?.models).toEqual({
       "google/gemini-3.1-pro-preview": { alias: "gemini" },
       "google-gemini-cli/gemini-3.1-pro-preview": {},
-      "openrouter/google/gemini-3.1-pro-preview": {},
+      "openrouter/google/gemini-3-pro-preview": {},
     });
   });
 
@@ -1572,7 +1572,7 @@ describe("applyModelFallbacksFromSelection", () => {
     ]);
     expect(next.agents?.defaults?.model).toEqual({
       primary: "openai/gpt-5.5",
-      fallbacks: ["google/gemini-3.1-pro-preview", "openrouter/google/gemini-3.1-pro-preview"],
+      fallbacks: ["google/gemini-3.1-pro-preview", "openrouter/google/gemini-3-pro-preview"],
     });
   });
 

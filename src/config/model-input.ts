@@ -78,10 +78,9 @@ export function normalizeAgentModelRefForConfig(model: string): string {
 
   const provider = normalizeProviderId(trimmed.slice(0, slash));
   const modelSuffix = trimmed.slice(slash + 1);
-  const normalizedModel =
-    GOOGLE_PROVIDER_IDS.has(provider) || modelSuffix.startsWith("google/")
-      ? normalizeGooglePreviewModelId(modelSuffix)
-      : modelSuffix;
+  const normalizedModel = GOOGLE_PROVIDER_IDS.has(provider)
+    ? normalizeGooglePreviewModelId(modelSuffix)
+    : modelSuffix;
   return modelKeyForConfig(provider, normalizedModel);
 }
 
