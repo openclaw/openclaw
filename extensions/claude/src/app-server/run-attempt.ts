@@ -296,9 +296,22 @@ async function buildTools(
   const modelHasVision = params.model.input?.includes("image") ?? false;
   const agentDir =
     params.agentDir ?? resolveAgentDir(params.config ?? {}, params.agentId ?? "default");
+  // Session keys for sandbox/process-scope/subagent-envelope policy and the
+  // `session_status({sessionKey:"current"})` lookup. Codex computes the same
+  // pair at run-attempt.ts:3254 (resolveOpenClawCodingToolsSessionKeys).
+  // buildEmbeddedAttemptToolRunContext does NOT include these, so they have
+  // to be spread explicitly (after the spread so they win over any defaults).
+  const sandboxSessionKey =
+    params.sandboxSessionKey?.trim() || params.sessionKey?.trim() || params.sessionId;
   const allTools = createOpenClawCodingTools({
     agentId: params.agentId,
     ...buildEmbeddedAttemptToolRunContext(params),
+    sessionKey: sandboxSessionKey,
+    // Set runSessionKey when sandbox+run keys diverge — codex pattern at
+    // resolveOpenClawCodingToolsSessionKeys (run-attempt.ts:3220).
+    ...(params.sessionKey && params.sessionKey !== sandboxSessionKey
+      ? { runSessionKey: params.sessionKey }
+      : {}),
     exec: {
       ...(params.execOverrides ?? {}),
       elevated: params.bashElevated,
@@ -394,7 +407,16 @@ function filterToolsForAllowlist<T extends { name: string }>(
   if (toolsAllow.length === 0) return [];
   if (toolsAllow.some((n) => n.trim() === "*")) return tools;
   const allow = new Set(toolsAllow.map((n) => n.trim()).filter(Boolean));
-  return tools.filter((tool) => allow.has(tool.name));
+  // Mirror codex's alias handling at filterCodexDynamicToolsForAllowlist —
+  // ["exec"] should include both sandbox_exec and sandbox_process variants
+  // when openclaw's runtime-plan substitutes those names. Without this a
+  // literal "bash" / "exec" allowlist drops normalized variants.
+  return tools.filter((tool) => {
+    if (allow.has(tool.name)) return true;
+    if (tool.name === "sandbox_exec" && allow.has("exec")) return true;
+    if (tool.name === "sandbox_process" && (allow.has("exec") || allow.has("process"))) return true;
+    return false;
+  });
 }
 
 function includeForcedMessageToolAllow(
@@ -658,9 +680,15 @@ async function runTurn(
               const itemId = typeof item.id === "string" ? item.id : undefined;
               if (itemId) {
                 const prev = acc.toolCalls.get(itemId);
+                // The server's makeDynamicToolCallItem emits `contentItems`
+                // (an array of {type:"inputText"|"inputImage", ...}) — NOT
+                // `result`. Read whichever is present so dynamic-tool output
+                // makes it into messagesSnapshot for replay/provenance.
+                // Native tool items use `result`; both are accepted.
+                const payload = item.contentItems ?? item.result;
                 acc.toolCalls.set(itemId, {
                   ...(prev ?? { name: extractItemName(item) ?? "unknown" }),
-                  result: item.result,
+                  result: payload,
                   isError: item.status === "failed" || item.error != null,
                 });
               }
