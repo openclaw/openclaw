@@ -100,6 +100,22 @@ export function resolveModelTarget(params: { raw: string; cfg: OpenClawConfig })
   return resolved.ref;
 }
 
+function resolveAuthoredModelAliasTarget(params: {
+  raw: string;
+  cfg: OpenClawConfig;
+}): { provider: string; model: string } | undefined {
+  const aliasIndex = buildModelAliasIndex({
+    cfg: params.cfg,
+    defaultProvider: DEFAULT_PROVIDER,
+  });
+  const resolved = resolveModelRefFromString({
+    raw: params.raw,
+    defaultProvider: DEFAULT_PROVIDER,
+    aliasIndex,
+  });
+  return resolved?.alias ? resolved.ref : undefined;
+}
+
 export function resolveModelKeysFromEntries(params: {
   cfg: OpenClawConfig;
   entries: readonly string[];
@@ -219,10 +235,20 @@ export function applyDefaultModelPrimaryUpdate(params: {
   modelRaw: string;
   field: "model" | "imageModel";
 }): OpenClawConfig {
-  const resolved = resolveModelTarget({
-    raw: params.modelRaw,
-    cfg: params.resolveCfg ?? params.cfg,
-  });
+  const resolved =
+    params.resolveCfg && params.resolveCfg !== params.cfg
+      ? (resolveAuthoredModelAliasTarget({
+          raw: params.modelRaw,
+          cfg: params.cfg,
+        }) ??
+        resolveModelTarget({
+          raw: params.modelRaw,
+          cfg: params.resolveCfg,
+        }))
+      : resolveModelTarget({
+          raw: params.modelRaw,
+          cfg: params.cfg,
+        });
   const nextModels = {
     ...params.cfg.agents?.defaults?.models,
   } as Record<string, AgentModelEntryConfig>;
