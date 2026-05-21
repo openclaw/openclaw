@@ -669,7 +669,7 @@ async function runToolResultCapHealth(ctx: DoctorHealthFlowContext): Promise<voi
 
 async function runWSLEnvironmentHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteWSLEnvironment } = await import("../commands/doctor-wsl.js");
-  await noteWSLEnvironment(ctx);
+  await noteWSLEnvironment();
 }
 
 async function runSystemdLingerHealth(ctx: DoctorHealthFlowContext): Promise<void> {

@@ -21,7 +21,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import { promisify } from "node:util";
 import { isSystemdUserServiceAvailable } from "../daemon/systemd.js";
-import type { DoctorHealthFlowContext } from "../flows/doctor-health-contributions.js";
 import { isWSL, isWSL2Sync } from "../infra/wsl.js";
 import { note } from "../terminal/note.js";
 
@@ -398,7 +397,7 @@ export function buildWSLInfoSummary(diag: WSLDiagnostics): string | null {
  * flow to avoid duplicate messaging — this contribution focuses on
  * environment context and resource limits.
  */
-export async function noteWSLEnvironment(_ctx: DoctorHealthFlowContext): Promise<void> {
+export async function noteWSLEnvironment(): Promise<void> {
   if (process.platform !== "linux") {
     return;
   }
