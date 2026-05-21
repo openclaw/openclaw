@@ -190,7 +190,7 @@ describe("plugin npm package manifest staging", () => {
       name: "@openclaw/diffs",
       version: "2026.5.3",
       type: "module",
-      bundleDependencies: true,
+      bundledDependencies: [],
       files: [
         "dist/**",
         "openclaw.plugin.json",
@@ -231,7 +231,8 @@ describe("plugin npm package manifest staging", () => {
         expect(stagedPackageJson.openclaw.extensions).toEqual(["./index.ts"]);
         expect(stagedPackageJson.openclaw.runtimeExtensions).toEqual(["./dist/index.js"]);
         expect(stagedPackageJson.openclaw.runtimeSetupEntry).toBe("./dist/setup-entry.js");
-        expect(stagedPackageJson.bundleDependencies).toBe(true);
+        expect(stagedPackageJson.bundledDependencies).toEqual([]);
+        expect(stagedPackageJson.bundleDependencies).toBeUndefined();
         expect(stagedPackageJson.files).toContain("dist/**");
         expect(stagedPackageJson.files).toContain("npm-shrinkwrap.json");
         expect(stagedPackageJson.files).toContain("skills/**");
@@ -303,7 +304,8 @@ describe("plugin npm package manifest staging", () => {
         const stagedPackageJson = JSON.parse(
           readFileSync(join(packageDir, "package.json"), "utf8"),
         );
-        expect(stagedPackageJson.bundleDependencies).toBe(true);
+        expect(stagedPackageJson.bundledDependencies).toEqual(["local-runtime-dep"]);
+        expect(stagedPackageJson.bundleDependencies).toBeUndefined();
         expect(stagedPackageJson.devDependencies).toBeUndefined();
         expect(existsSync(join(nodeModulesPath, "local-runtime-dep", "package.json"))).toBe(true);
       },
