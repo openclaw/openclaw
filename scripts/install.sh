@@ -1718,6 +1718,7 @@ require_sudo() {
 
 install_git() {
     if [[ "$OS" == "macos" ]]; then
+        install_homebrew
         run_quiet_step "Installing Git" brew install git
     elif [[ "$OS" == "linux" ]]; then
         require_sudo

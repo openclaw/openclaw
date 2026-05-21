@@ -128,11 +128,58 @@ describe("install.sh", () => {
 
     expect(result?.status).toBe(0);
     expect(eventsText).toBe(
+      ["load_nvm_for_node_detection", "check_node", "install_homebrew", "install_node", ""].join(
+        "\n",
+      ),
+    );
+  });
+
+  it("ensures Homebrew before installing missing Git on macOS with supported Node", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-macos-git-"));
+    const events = join(tmp, "events.log");
+
+    let result: ReturnType<typeof runInstallShell> | undefined;
+    let eventsText = "";
+    try {
+      result = runInstallShell(`
+        set -euo pipefail
+        source "${SCRIPT_PATH}"
+        HELP=0
+        DRY_RUN=0
+        INSTALL_METHOD=npm
+        detect_os_or_die() { OS=macos; }
+        bootstrap_gum_temp() { :; }
+        print_installer_banner() { :; }
+        print_gum_status() { :; }
+        detect_openclaw_checkout() { return 1; }
+        show_install_plan() { :; }
+        check_existing_openclaw() { return 1; }
+        ui_stage() { :; }
+        load_nvm_for_node_detection() { printf 'load_nvm_for_node_detection\\n' >> ${JSON.stringify(events)}; }
+        check_node() { printf 'check_node\\n' >> ${JSON.stringify(events)}; return 0; }
+        activate_supported_node_on_path() { :; }
+        ensure_default_node_active_shell() { return 0; }
+        check_git() { printf 'check_git\\n' >> ${JSON.stringify(events)}; return 1; }
+        install_homebrew() { printf 'install_homebrew\\n' >> ${JSON.stringify(events)}; }
+        run_quiet_step() { printf 'run_quiet_step:%s:%s:%s\\n' "$1" "$2" "$3" >> ${JSON.stringify(events)}; }
+        fix_npm_permissions() { :; }
+        install_openclaw() { printf 'install_openclaw\\n' >> ${JSON.stringify(events)}; exit 0; }
+        main
+      `);
+      eventsText = readFileSync(events, "utf8");
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+
+    expect(result?.status).toBe(0);
+    expect(eventsText).toBe(
       [
         "load_nvm_for_node_detection",
         "check_node",
+        "check_git",
         "install_homebrew",
-        "install_node",
+        "run_quiet_step:Installing Git:brew:install",
+        "install_openclaw",
         "",
       ].join("\n"),
     );
