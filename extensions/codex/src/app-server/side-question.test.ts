@@ -186,6 +186,12 @@ function extractRelayIdFromThreadConfig(config: unknown): string {
   return match[1];
 }
 
+function enableBeforeToolCallPolicyForNativeHookRelayTest(): void {
+  initializeGlobalHookRunner(
+    createMockPluginRegistry([{ hookName: "before_tool_call", handler: vi.fn() }]),
+  );
+}
+
 function codexHookCommand(config: unknown, key: string) {
   const entries = (config as Record<string, unknown> | undefined)?.[key];
   if (!Array.isArray(entries)) {
@@ -459,6 +465,7 @@ describe("runCodexAppServerSideQuestion", () => {
   });
 
   it("installs native hook relay config for opted-in side threads", async () => {
+    enableBeforeToolCallPolicyForNativeHookRelayTest();
     const client = createFakeClient();
     let relayIdDuringFork: string | undefined;
     client.request.mockImplementation(async (method: string, requestParams: unknown) => {
@@ -537,6 +544,7 @@ describe("runCodexAppServerSideQuestion", () => {
   });
 
   it("forwards side-thread command approvals through the active native hook relay", async () => {
+    enableBeforeToolCallPolicyForNativeHookRelayTest();
     const client = createFakeClient();
     let relayIdDuringFork: string | undefined;
     let approvalResponse: unknown;
@@ -624,6 +632,7 @@ describe("runCodexAppServerSideQuestion", () => {
   });
 
   it("unregisters the native hook relay when side thread fork fails", async () => {
+    enableBeforeToolCallPolicyForNativeHookRelayTest();
     const client = createFakeClient();
     let relayIdDuringFork: string | undefined;
     client.request.mockImplementation(async (method: string, requestParams: unknown) => {
@@ -676,7 +685,7 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(codexHookCommand(config, "hooks.PermissionRequest")?.command).toContain(
       "--event permission_request",
     );
-    expect(codexHookCommand(config, "hooks.PreToolUse")?.command).toContain("--event pre_tool_use");
+    expect(config?.["hooks.PreToolUse"]).toEqual([]);
   });
 
   it("preserves explicitly configured side-thread native hook events", async () => {
@@ -745,6 +754,7 @@ describe("runCodexAppServerSideQuestion", () => {
   });
 
   it("keeps native hook relays alive across side-thread startup and completion timeouts", async () => {
+    enableBeforeToolCallPolicyForNativeHookRelayTest();
     const client = createFakeClient();
     const requestTimeoutMs = 400_000;
     const completionTimeoutMs = 700_000;
