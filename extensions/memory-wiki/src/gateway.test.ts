@@ -226,6 +226,36 @@ describe("memory-wiki gateway methods", () => {
     });
   });
 
+  it("passes import sync provenance into write-scoped wiki compile", async () => {
+    const { config } = await createVault({ prefix: "memory-wiki-gateway-" });
+    const { api, registerGatewayMethod } = createPluginApi();
+
+    registerMemoryWikiGatewayMethods({ api, config });
+    const handler = findGatewayHandler(registerGatewayMethod, "wiki.compile");
+    if (!handler) {
+      throw new Error("wiki.compile handler missing");
+    }
+    const respond = vi.fn();
+
+    await handler({
+      params: {},
+      respond,
+    });
+
+    expect(syncMemoryWikiImportedSources).toHaveBeenCalledWith({ config, appConfig: undefined });
+    expect(compileMemoryWikiVault).toHaveBeenCalledWith(config, {
+      sourceImport: expect.objectContaining({
+        operation: "compile",
+        importedCount: 0,
+      }),
+    });
+    expect(readRespondPayload(respond)).toEqual(
+      expect.objectContaining({
+        vaultRoot: "/tmp/wiki",
+      }),
+    );
+  });
+
   it("runs import sync and compile through write-scoped wiki refresh", async () => {
     const { config } = await createVault({ prefix: "memory-wiki-gateway-" });
     const { api, registerGatewayMethod } = createPluginApi();

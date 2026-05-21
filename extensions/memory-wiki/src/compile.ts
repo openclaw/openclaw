@@ -1250,12 +1250,16 @@ function timestampFromCandidates(candidates: Array<string | undefined>): string 
   return bestValue;
 }
 
-function buildStableClaimId(page: WikiPageSummary, claim: WikiClaim, index: number): string {
+function buildStableClaimId(
+  page: WikiPageSummary,
+  claim: WikiClaim,
+  originalIndex: number,
+): string {
   if (claim.id?.trim()) {
     return claim.id.trim();
   }
   const digest = createHash("sha256")
-    .update([page.relativePath, index.toString(), claim.text].join("\n"))
+    .update([page.relativePath, originalIndex.toString(), claim.text].join("\n"))
     .digest("hex")
     .slice(0, 16);
   return `claim.${digest}`;
@@ -1338,9 +1342,14 @@ type ClaimsDigestRecord = {
 };
 
 function buildClaimsDigestRecords(params: { pages: WikiPageSummary[] }): ClaimsDigestRecord[] {
-  const raw = params.pages.flatMap((page) =>
-    sortClaims(page).map((claim, index) => {
-      const claimId = buildStableClaimId(page, claim, index);
+  const raw = params.pages.flatMap((page) => {
+    const originalIndexes = new Map(page.claims.map((claim, index) => [claim, index]));
+    return sortClaims(page).map((claim) => {
+      const originalIndex = originalIndexes.get(claim);
+      if (originalIndex === undefined) {
+        throw new Error(`Unable to resolve original claim index for ${page.relativePath}`);
+      }
+      const claimId = buildStableClaimId(page, claim, originalIndex);
       const sourceClass = resolveClaimSourceClass(page, claim);
       const assertedAt = timestampFromCandidates([
         claim.assertedAt,
@@ -1368,20 +1377,21 @@ function buildClaimsDigestRecords(params: { pages: WikiPageSummary[] }): ClaimsD
         page_path: page.relativePath,
       };
       return { page, claim, input };
-    }),
-  );
-  const reconciledById = new Map(
-    reconcileClaims({ claims: raw.map((entry) => entry.input) }).map((claim) => [
-      claim.claim_id,
-      claim,
-    ]),
-  );
+    });
+  });
+
+  const reconciledClaims = reconcileClaims({ claims: raw.map((entry) => entry.input) });
+  if (reconciledClaims.length !== raw.length) {
+    throw new Error(
+      `Reconciled claim count mismatch: expected ${raw.length}, got ${reconciledClaims.length}`,
+    );
+  }
 
   return raw
-    .map(({ page, claim, input }) => {
-      const reconciled = reconciledById.get(input.claim_id ?? "");
+    .map(({ page, claim }, index) => {
+      const reconciled = reconciledClaims[index];
       if (!reconciled) {
-        throw new Error(`Missing reconciled claim for ${input.claim_id}`);
+        throw new Error(`Missing reconciled claim at index ${index}`);
       }
       const freshness = assessClaimFreshness({ page, claim });
       const record: ClaimsDigestRecord = {

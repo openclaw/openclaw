@@ -211,5 +211,5 @@ export function reconcileClaims(params: {
     }
   }
 
-  return reconciled.toSorted((left, right) => left.claim_id.localeCompare(right.claim_id));
+  return reconciled;
 }

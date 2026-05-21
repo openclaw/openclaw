@@ -208,6 +208,170 @@ describe("compileMemoryWikiVault", () => {
     });
   });
 
+  it("keeps fallback claim ids stable when sorted claim rank changes", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+    });
+    const pagePath = path.join(rootDir, "sources", "ranked.md");
+
+    async function writeRankedPage(alphaConfidence: number, betaConfidence: number) {
+      await fs.writeFile(
+        pagePath,
+        renderWikiMarkdown({
+          frontmatter: {
+            pageType: "source",
+            id: "source.ranked",
+            title: "Ranked",
+            claims: [
+              {
+                text: "Alpha fallback identity must stay stable.",
+                confidence: alphaConfidence,
+              },
+              {
+                text: "Beta fallback identity must stay stable.",
+                confidence: betaConfidence,
+              },
+            ],
+          },
+          body: "# Ranked\n",
+        }),
+        "utf8",
+      );
+    }
+
+    async function claimIdsByStatement() {
+      const claimsDigestPath = path.join(rootDir, ".openclaw-wiki", "cache", "claims.jsonl");
+      return new Map(
+        (await fs.readFile(claimsDigestPath, "utf8"))
+          .trim()
+          .split(/\r?\n/)
+          .map((line) => JSON.parse(line) as { claim_id: string; statement: string })
+          .map((claim) => [claim.statement, claim.claim_id] as const),
+      );
+    }
+
+    await writeRankedPage(0.1, 0.9);
+    await compileMemoryWikiVault(config);
+    const before = await claimIdsByStatement();
+
+    await writeRankedPage(0.9, 0.1);
+    await compileMemoryWikiVault(config);
+    const after = await claimIdsByStatement();
+
+    expect(after.get("Alpha fallback identity must stay stable.")).toBe(
+      before.get("Alpha fallback identity must stay stable."),
+    );
+    expect(after.get("Beta fallback identity must stay stable.")).toBe(
+      before.get("Beta fallback identity must stay stable."),
+    );
+  });
+
+  it("preserves duplicate explicit claim ids as distinct digest rows", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+    });
+
+    await fs.writeFile(
+      path.join(rootDir, "sources", "duplicates.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          id: "source.duplicates",
+          title: "Duplicates",
+          claims: [
+            {
+              id: "claim.duplicate",
+              text: "The first duplicate claim.",
+            },
+            {
+              id: "claim.duplicate",
+              text: "The second duplicate claim.",
+            },
+          ],
+        },
+        body: "# Duplicates\n",
+      }),
+      "utf8",
+    );
+
+    await compileMemoryWikiVault(config);
+
+    const claimsDigestPath = path.join(rootDir, ".openclaw-wiki", "cache", "claims.jsonl");
+    const duplicateRows = (await fs.readFile(claimsDigestPath, "utf8"))
+      .trim()
+      .split(/\r?\n/)
+      .map((line) => JSON.parse(line) as { claim_id: string; statement: string })
+      .filter((claim) => claim.claim_id === "claim.duplicate");
+
+    expect(duplicateRows.map((claim) => claim.statement)).toEqual([
+      "The first duplicate claim.",
+      "The second duplicate claim.",
+    ]);
+  });
+
+  it("writes source-import provenance into the cache manifest", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+    });
+
+    await fs.writeFile(
+      path.join(rootDir, "sources", "alpha.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          id: "source.alpha",
+          title: "Alpha",
+          claims: [
+            {
+              id: "claim.alpha",
+              text: "Alpha provenance is tracked.",
+            },
+          ],
+        },
+        body: "# Alpha\n",
+      }),
+      "utf8",
+    );
+
+    await compileMemoryWikiVault(config, {
+      sourceImport: {
+        operation: "compile",
+        importedCount: 2,
+        updatedCount: 1,
+        skippedCount: 3,
+        removedCount: 4,
+        artifactCount: 5,
+        workspaces: 6,
+        pagePaths: ["sources/alpha.md"],
+        indexesRefreshed: true,
+        indexRefreshReason: "import-changed",
+      },
+    });
+
+    const manifest = JSON.parse(
+      await fs.readFile(
+        path.join(rootDir, ".openclaw-wiki", "cache", "wiki-cache-manifest.json"),
+        "utf8",
+      ),
+    ) as { source_import: Record<string, unknown> };
+
+    expect(manifest.source_import).toMatchObject({
+      operation: "compile",
+      imported_count: 2,
+      updated_count: 1,
+      skipped_count: 3,
+      removed_count: 4,
+      artifact_count: 5,
+      workspace_count: 6,
+      page_path_count: 1,
+      indexes_refreshed: true,
+      index_refresh_reason: "import-changed",
+    });
+  });
+
   it("touches unchanged cache artifacts when requested", async () => {
     const { rootDir, config } = await createVault({
       rootDir: nextCaseRoot(),
@@ -416,7 +580,8 @@ describe("compileMemoryWikiVault", () => {
           confidence: 0.3,
           claims: [
             {
-              id: "claim.alpha.db",
+              id: "claim.alpha.db.postgres",
+              claimKey: "claim.alpha.db",
               text: "Alpha uses PostgreSQL for production writes.",
               status: "supported",
               confidence: 0.4,
@@ -439,7 +604,8 @@ describe("compileMemoryWikiVault", () => {
           updatedAt: "2025-10-01T00:00:00.000Z",
           claims: [
             {
-              id: "claim.alpha.db",
+              id: "claim.alpha.db.mysql",
+              claimKey: "claim.alpha.db",
               text: "Alpha uses MySQL for production writes.",
               status: "contested",
               confidence: 0.62,

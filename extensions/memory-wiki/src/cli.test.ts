@@ -8,6 +8,7 @@ import {
   runWikiBridgeImport,
   runWikiChatGptImport,
   runWikiChatGptRollback,
+  runWikiCompile,
   runWikiDoctor,
   runWikiStatus,
 } from "./cli.js";
@@ -170,6 +171,28 @@ describe("memory-wiki cli", () => {
     await expect(fs.readFile(path.join(rootDir, "index.md"), "utf8")).resolves.toContain(
       "[CLI Alpha](syntheses/cli-alpha.md)",
     );
+  });
+
+  it("records compile source-import provenance from synced CLI compile", async () => {
+    const { rootDir, config } = await createCliVault({ initialize: true });
+
+    await runWikiCompile({
+      config,
+      json: true,
+      stdout: { write: vi.fn(() => true) as never },
+    });
+
+    const manifest = JSON.parse(
+      await fs.readFile(
+        path.join(rootDir, ".openclaw-wiki", "cache", "wiki-cache-manifest.json"),
+        "utf8",
+      ),
+    ) as { source_import: { operation: string; imported_count: number } };
+
+    expect(manifest.source_import).toMatchObject({
+      operation: "compile",
+      imported_count: 0,
+    });
   });
 
   it("registers apply metadata and preserves the page body", async () => {

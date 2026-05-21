@@ -206,8 +206,13 @@ export function registerMemoryWikiGatewayMethods(params: {
     "wiki.compile",
     async ({ respond }) => {
       try {
-        await syncImportedSourcesIfNeeded(config, appConfig);
-        respond(true, await compileMemoryWikiVault(config));
+        const sync = await syncImportedSourcesIfNeeded(config, appConfig);
+        respond(
+          true,
+          await compileMemoryWikiVault(config, {
+            sourceImport: { operation: "compile", ...sync },
+          }),
+        );
       } catch (error) {
         respondError(respond, error);
       }

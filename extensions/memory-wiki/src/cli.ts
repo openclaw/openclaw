@@ -531,7 +531,10 @@ export async function runWikiCompile(params: {
     appConfig: params.appConfig,
     json: params.json,
     stdout: params.stdout,
-    run: () => compileMemoryWikiVault(params.config),
+    run: (sync) =>
+      compileMemoryWikiVault(params.config, {
+        sourceImport: { operation: "compile", ...sync },
+      }),
     render: (value) =>
       `Compiled wiki vault at ${value.vaultRoot} (${value.pages.length} pages, ${value.updatedFiles.length} indexes updated).`,
   });
