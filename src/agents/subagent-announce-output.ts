@@ -8,7 +8,7 @@ import {
 import {
   callGateway,
   getRuntimeConfig,
-  loadSessionStore,
+  readSessionEntry,
   resolveAgentIdFromSessionKey,
   resolveStorePath,
 } from "./subagent-announce.runtime.js";
@@ -573,7 +573,7 @@ export async function buildCompactAnnounceStatsLine(params: {
   const cfg = subagentAnnounceOutputDeps.getRuntimeConfig();
   const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
-  let entry = loadSessionStore(storePath)[params.sessionKey];
+  let entry = readSessionEntry(storePath, params.sessionKey);
   const tokenWaitAttempts = isFastTestMode() ? 1 : 3;
   for (let attempt = 0; attempt < tokenWaitAttempts; attempt += 1) {
     const hasTokenData =
@@ -586,7 +586,7 @@ export async function buildCompactAnnounceStatsLine(params: {
     if (!isFastTestMode()) {
       await new Promise((resolve) => setTimeout(resolve, 150));
     }
-    entry = loadSessionStore(storePath)[params.sessionKey];
+    entry = readSessionEntry(storePath, params.sessionKey);
   }
 
   const input = typeof entry?.inputTokens === "number" ? entry.inputTokens : 0;
