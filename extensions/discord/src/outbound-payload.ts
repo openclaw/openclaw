@@ -30,46 +30,57 @@ export async function sendDiscordOutboundPayload(params: {
   const sendContext = await createDiscordPayloadSendContext(ctx);
 
   if (payload.audioAsVoice && mediaUrls.length > 0) {
-    let lastResult = await sendContext.withRetry(
-      async () =>
-        await sendContext.sendVoice(sendContext.target, mediaUrls[0], {
-          cfg: ctx.cfg,
-          replyTo: sendContext.resolveReplyTo(),
-          accountId: ctx.accountId ?? undefined,
-          silent: ctx.silent ?? undefined,
-        }),
-    );
-    if (payload.text?.trim()) {
+    let voiceSent = false;
+    let lastResult;
+    try {
       lastResult = await sendContext.withRetry(
         async () =>
-          await sendContext.send(sendContext.target, payload.text, {
-            verbose: false,
+          await sendContext.sendVoice(sendContext.target, mediaUrls[0], {
+            cfg: ctx.cfg,
             replyTo: sendContext.resolveReplyTo(),
             accountId: ctx.accountId ?? undefined,
             silent: ctx.silent ?? undefined,
-            cfg: ctx.cfg,
-            ...sendContext.formatting,
           }),
       );
+      voiceSent = true;
+    } catch {
+      // Voice adapter unavailable (e.g. TTS auto=always but no voice
+      // connection). Fall through to text + audio attachment delivery.
     }
-    for (const mediaUrl of mediaUrls.slice(1)) {
-      lastResult = await sendContext.withRetry(
-        async () =>
-          await sendContext.send(sendContext.target, "", {
-            verbose: false,
-            mediaUrl,
-            mediaAccess: ctx.mediaAccess,
-            mediaLocalRoots: ctx.mediaLocalRoots,
-            mediaReadFile: ctx.mediaReadFile,
-            replyTo: sendContext.resolveReplyTo(),
-            accountId: ctx.accountId ?? undefined,
-            silent: ctx.silent ?? undefined,
-            cfg: ctx.cfg,
-            ...sendContext.formatting,
-          }),
-      );
+    if (voiceSent) {
+      if (payload.text?.trim()) {
+        lastResult = await sendContext.withRetry(
+          async () =>
+            await sendContext.send(sendContext.target, payload.text, {
+              verbose: false,
+              replyTo: sendContext.resolveReplyTo(),
+              accountId: ctx.accountId ?? undefined,
+              silent: ctx.silent ?? undefined,
+              cfg: ctx.cfg,
+              ...sendContext.formatting,
+            }),
+        );
+      }
+      for (const mediaUrl of mediaUrls.slice(1)) {
+        lastResult = await sendContext.withRetry(
+          async () =>
+            await sendContext.send(sendContext.target, "", {
+              verbose: false,
+              mediaUrl,
+              mediaAccess: ctx.mediaAccess,
+              mediaLocalRoots: ctx.mediaLocalRoots,
+              mediaReadFile: ctx.mediaReadFile,
+              replyTo: sendContext.resolveReplyTo(),
+              accountId: ctx.accountId ?? undefined,
+              silent: ctx.silent ?? undefined,
+              cfg: ctx.cfg,
+              ...sendContext.formatting,
+            }),
+        );
+      }
+      return attachChannelToResult("discord", lastResult!);
     }
-    return attachChannelToResult("discord", lastResult);
+    // Voice send failed — fall through to text + media attachment delivery
   }
 
   const componentSpec = await resolveDiscordComponentSpec(payload);

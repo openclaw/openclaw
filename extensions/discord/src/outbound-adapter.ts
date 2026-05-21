@@ -232,22 +232,17 @@ export const discordOutbound: ChannelOutboundAdapter = {
         const sendVoice =
           resolveOutboundSendDep<DiscordVoiceSendFn>(deps, "discordVoice") ??
           (await loadDiscordSendRuntime()).sendVoiceMessageDiscord;
-        try {
-          return await withDiscordDeliveryRetry({
-            cfg,
-            accountId,
-            fn: async () =>
-              await sendVoice(target, mediaUrl, {
-                cfg,
-                replyTo: replyToId ?? undefined,
-                accountId: accountId ?? undefined,
-                silent: silent ?? undefined,
-              }),
-          });
-        } catch {
-          // Voice adapter unavailable (e.g. TTS auto=always but no voice
-          // connection). Fall back to text + audio attachment delivery.
-        }
+        return await withDiscordDeliveryRetry({
+          cfg,
+          accountId,
+          fn: async () =>
+            await sendVoice(target, mediaUrl, {
+              cfg,
+              replyTo: replyToId ?? undefined,
+              accountId: accountId ?? undefined,
+              silent: silent ?? undefined,
+            }),
+        });
       }
       if (text.trim() && mediaUrl && isLikelyDiscordVideoMedia(mediaUrl)) {
         await withDiscordDeliveryRetry({
