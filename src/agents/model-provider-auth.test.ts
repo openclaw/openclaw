@@ -7,7 +7,8 @@ const modelCatalogMocks = vi.hoisted(() => ({
 }));
 
 const modelAuthMocks = vi.hoisted(() => ({
-  hasRuntimeAvailableProviderAuth: vi.fn<(params: { provider: string }) => boolean>(),
+  hasRuntimeAvailableProviderAuth:
+    vi.fn<(params: { provider: string; cfg?: OpenClawConfig; workspaceDir?: string }) => boolean>(),
 }));
 
 const authProfilesMocks = vi.hoisted(() => ({
@@ -44,6 +45,7 @@ const { clearCurrentProviderAuthState, hasAuthForModelProvider, warmCurrentProvi
 
 describe("prepared provider auth state", () => {
   afterEach(() => {
+    vi.useRealTimers();
     clearCurrentProviderAuthState();
     vi.clearAllMocks();
   });
@@ -105,6 +107,41 @@ describe("prepared provider auth state", () => {
     expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(2);
   });
 
+  it("hasAuthForModelProvider uses the prepared answer for equivalent runtime config clones", async () => {
+    const cfg = { gateway: { port: 18789 } } as OpenClawConfig;
+    const clonedCfg = structuredClone(cfg);
+    modelCatalogMocks.loadModelCatalog.mockResolvedValue([
+      { id: "gpt", name: "gpt", provider: "openai" },
+    ]);
+    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(true);
+    await warmCurrentProviderAuthState(cfg);
+    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(1);
+
+    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(false);
+    expect(hasAuthForModelProvider({ provider: "openai", cfg: clonedCfg })).toBe(true);
+    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(1);
+  });
+
+  it("hasAuthForModelProvider falls through after the prepared auth state TTL", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const cfg = {} as OpenClawConfig;
+    modelCatalogMocks.loadModelCatalog.mockResolvedValue([
+      { id: "gpt", name: "gpt", provider: "openai" },
+    ]);
+    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(false);
+    await warmCurrentProviderAuthState(cfg);
+    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(1);
+
+    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(true);
+    expect(hasAuthForModelProvider({ provider: "openai", cfg })).toBe(false);
+    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(1);
+
+    vi.setSystemTime(10_001);
+    expect(hasAuthForModelProvider({ provider: "openai", cfg })).toBe(true);
+    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(2);
+  });
+
   it("hasAuthForModelProvider falls through to compute when the caller passes a non-default workspaceDir", async () => {
     const cfg = {} as OpenClawConfig;
     modelCatalogMocks.loadModelCatalog.mockResolvedValue([
@@ -136,5 +173,43 @@ describe("prepared provider auth state", () => {
       }),
     ).toBe(true);
     expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not publish an older warm after the prepared auth state is cleared", async () => {
+    const firstCfg = { gateway: { port: 18789 } } as OpenClawConfig;
+    const secondCfg = { gateway: { port: 19001 } } as OpenClawConfig;
+    let resolveFirstCatalog: ((catalog: ModelCatalogEntry[]) => void) | undefined;
+    let resolveSecondCatalog: ((catalog: ModelCatalogEntry[]) => void) | undefined;
+    modelCatalogMocks.loadModelCatalog
+      .mockReturnValueOnce(
+        new Promise<ModelCatalogEntry[]>((resolve) => {
+          resolveFirstCatalog = resolve;
+        }),
+      )
+      .mockReturnValueOnce(
+        new Promise<ModelCatalogEntry[]>((resolve) => {
+          resolveSecondCatalog = resolve;
+        }),
+      );
+    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockImplementation(
+      ({ cfg }) => cfg === firstCfg,
+    );
+
+    const firstWarm = warmCurrentProviderAuthState(firstCfg);
+    await Promise.resolve();
+    clearCurrentProviderAuthState();
+    const secondWarm = warmCurrentProviderAuthState(secondCfg);
+
+    resolveSecondCatalog?.([{ id: "gpt", name: "gpt", provider: "openai" }]);
+    await secondWarm;
+    resolveFirstCatalog?.([{ id: "gpt", name: "gpt", provider: "openai" }]);
+    await firstWarm;
+    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(2);
+
+    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(true);
+    expect(hasAuthForModelProvider({ provider: "openai", cfg: secondCfg })).toBe(false);
+    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(2);
+    expect(hasAuthForModelProvider({ provider: "openai", cfg: firstCfg })).toBe(true);
+    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(3);
   });
 });

@@ -90,6 +90,12 @@ const MCP_RUNTIME_RELOAD_DISPOSE_TIMEOUT_MS = 5_000;
 const CHANNEL_RELOAD_DEFERRAL_POLL_MS = 500;
 const CHANNEL_RELOAD_STILL_PENDING_WARN_MS = 30_000;
 
+function resetPreparedModelRuntimeStateForHotReload(): void {
+  resetModelCatalogCache();
+  clearCurrentProviderAuthState();
+  markGatewayModelCatalogStaleForReload();
+}
+
 async function disposeMcpRuntimesWithTimeout(params: {
   dispose: () => Promise<void>;
   timeoutMs: number;
@@ -306,31 +312,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     const state = params.getState();
     const nextState = { ...state };
 
-    const modelConfigChanged = plan.changedPaths.some(
-      (path) =>
-        path === "models" ||
-        path.startsWith("models.") ||
-        path === "agents.defaults.model" ||
-        path.startsWith("agents.defaults.model.") ||
-        path === "agents.defaults.models" ||
-        path.startsWith("agents.defaults.models."),
-    );
-    if (modelConfigChanged) {
-      resetModelCatalogCache();
-      markGatewayModelCatalogStaleForReload();
-    }
-    // Provider-auth answers come from env/synthetic/plugin sources as well
-    // as the model catalog, so plugin config changes (e.g. plugins.entries.*
-    // env vars or synthetic-auth wiring) can also flip the answer. Clear
-    // up front so callers don't keep seeing the pre-reload answer; the
-    // matching rewarm runs after plan.reloadPlugins so it reads the new
-    // plugin runtime.
-    const providerAuthStateInvalidated =
-      modelConfigChanged ||
-      plan.changedPaths.some((path) => path === "plugins" || path.startsWith("plugins."));
-    if (providerAuthStateInvalidated) {
-      clearCurrentProviderAuthState();
-    }
+    resetPreparedModelRuntimeStateForHotReload();
 
     if (plan.reloadHooks) {
       try {
@@ -416,14 +398,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         channelsToRestart.add(channel);
       }
       activePluginChannelsAfterReload = pluginReloadResult.activeChannels;
-    }
-
-    if (providerAuthStateInvalidated) {
-      // Schedule the rewarm after plan.reloadPlugins so the warmer reads
-      // the new plugin runtime, not the pre-reload one.
-      void warmCurrentProviderAuthState(nextConfig).catch((err) => {
-        params.logReload.warn(`provider auth state rewarm failed: ${String(err)}`);
-      });
+      resetPreparedModelRuntimeStateForHotReload();
     }
 
     if (plan.restartCron) {
@@ -524,6 +499,10 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     }
 
     applyGatewayLaneConcurrency(nextConfig);
+
+    void warmCurrentProviderAuthState(nextConfig).catch((err) => {
+      params.logReload.warn(`provider auth state rewarm failed: ${String(err)}`);
+    });
 
     if (plan.hotReasons.length > 0) {
       params.logReload.info(`config hot reload applied (${plan.hotReasons.join(", ")})`);
