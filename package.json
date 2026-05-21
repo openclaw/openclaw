@@ -36,7 +36,6 @@
     "!dist/extensions/amazon-bedrock-mantle/**",
     "!dist/extensions/anthropic-vertex/**",
     "!dist/extensions/node_modules/**",
-    "dist/extensions/node_modules/@openclaw/oc-path/**",
     "!dist/extensions/*/node_modules/**",
     "!dist/extensions/brave/**",
     "!dist/extensions/codex/**",

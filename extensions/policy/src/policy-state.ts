@@ -137,20 +137,18 @@ export function scanPolicyChannels(cfg: Record<string, unknown>): readonly Polic
     });
 }
 
-export async function scanPolicyTools(raw: string): Promise<readonly PolicyToolEvidence[]> {
-  return scanPolicyToolHeaders(raw);
+export function scanPolicyTools(raw: string): Promise<readonly PolicyToolEvidence[]> {
+  return Promise.resolve(scanPolicyToolHeaders(raw));
 }
 
-async function scanPolicyToolHeaders(raw: string): Promise<readonly PolicyToolEvidence[]> {
-  const { parseMd } = await import("@openclaw/oc-path/api.js");
-  const toolsBlock = parseMd(raw).ast.blocks.find((block) => block.slug === "tools");
-  if (toolsBlock === undefined) {
+function scanPolicyToolHeaders(raw: string): readonly PolicyToolEvidence[] {
+  const section = markdownSectionLines(raw, "tools");
+  if (section.length === 0) {
     return [];
   }
-  const body = toolsBlock.bodyText.split(/\r?\n/);
   const tools: PolicyToolEvidence[] = [];
-  for (let index = 0; index < body.length; index += 1) {
-    const line = body[index];
+  for (let index = 0; index < section.length; index += 1) {
+    const line = section[index]?.text ?? "";
     const heading = /^###\s+([^\s#]+)(.*)$/.exec(line);
     const bullet = /^[-*+]\s+([^:\s][^:]*?)\s*:(.*)$/.exec(line);
     const match = heading ?? bullet;
@@ -169,11 +167,11 @@ async function scanPolicyToolHeaders(raw: string): Promise<readonly PolicyToolEv
     } = {
       id,
       source: `oc://TOOLS.md/tools/${id}`,
-      line: toolsBlock.line + index + 1,
+      line: section[index]?.line ?? index + 1,
     };
     const metaLines = [match[2] ?? ""];
-    for (let metaIndex = index + 1; metaIndex < body.length; metaIndex += 1) {
-      const metaLine = body[metaIndex];
+    for (let metaIndex = index + 1; metaIndex < section.length; metaIndex += 1) {
+      const metaLine = section[metaIndex]?.text ?? "";
       if (/^###\s+\S+/.test(metaLine.trim()) || /^[-*+]\s+[^:\s][^:]*?\s*:/.test(metaLine)) {
         break;
       }
@@ -199,6 +197,38 @@ async function scanPolicyToolHeaders(raw: string): Promise<readonly PolicyToolEv
     tools.push(entry);
   }
   return tools;
+}
+
+function markdownSectionLines(
+  raw: string,
+  sectionSlug: string,
+): readonly { readonly line: number; readonly text: string }[] {
+  const lines = raw.split(/\r?\n/);
+  let sectionDepth: number | undefined;
+  const section: { line: number; text: string }[] = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    const heading = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
+    if (heading !== null) {
+      const depth = heading[1]?.length ?? 0;
+      const slug = slugify(heading[2] ?? "");
+      if (sectionDepth !== undefined && depth <= sectionDepth) {
+        break;
+      }
+      if (sectionDepth !== undefined) {
+        section.push({ line: index + 1, text: line });
+        continue;
+      }
+      if (sectionDepth === undefined && slug === sectionSlug) {
+        sectionDepth = depth;
+      }
+      continue;
+    }
+    if (sectionDepth !== undefined) {
+      section.push({ line: index + 1, text: line });
+    }
+  }
+  return section;
 }
 
 function slugify(text: string): string {

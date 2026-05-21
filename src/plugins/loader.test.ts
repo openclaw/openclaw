@@ -1113,28 +1113,6 @@ describe("loadOpenClawPlugins", () => {
     expect(fs.readFileSync(path.join(aliasDir, "core.js"), "utf8")).toContain("core.js");
   });
 
-  it("writes bundled oc-path package aliases for dist plugin consumers", () => {
-    const distRoot = makeTempDir();
-    const ocPathDir = path.join(distRoot, "extensions", "oc-path");
-    fs.mkdirSync(ocPathDir, { recursive: true });
-    fs.writeFileSync(path.join(ocPathDir, "index.js"), "export const full = true;\n", "utf8");
-    fs.writeFileSync(path.join(ocPathDir, "api.js"), "export const md = true;\n", "utf8");
-
-    ensureOpenClawPluginSdkAlias(distRoot);
-
-    const aliasDir = path.join(distRoot, "extensions", "node_modules", "@openclaw", "oc-path");
-    expect(JSON.parse(fs.readFileSync(path.join(aliasDir, "package.json"), "utf8"))).toMatchObject({
-      name: "@openclaw/oc-path",
-      exports: {
-        ".": "./index.js",
-        "./api.js": "./api.js",
-      },
-    });
-    expect(fs.readFileSync(path.join(aliasDir, "api.js"), "utf8")).toContain(
-      "../../../oc-path/api.js",
-    );
-  });
-
   it("disables bundled plugins by default", () => {
     const bundledDir = makeTempDir();
     writePlugin({
