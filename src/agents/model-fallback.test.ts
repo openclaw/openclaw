@@ -753,6 +753,60 @@ describe("runWithModelFallback", () => {
     expect(run.mock.calls[0]).toEqual(["anthropic", "claude-sonnet-4-6"]);
   });
 
+  it("lets registered non-Codex plugin harnesses bypass stale provider auth cooldowns", async () => {
+    const { clearAgentHarnesses, registerAgentHarness } = await import("./harness/registry.js");
+    clearAgentHarnesses();
+    registerAgentHarness({
+      id: "claude-tmux",
+      label: "Claude tmux",
+      supports: () => ({ supported: true }),
+      runAttempt: async () => ({ result: { text: "" } }) as never,
+    });
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/*": { agentRuntime: { id: "claude-tmux" } },
+          },
+          model: {
+            primary: "anthropic/claude-sonnet-4-6",
+          },
+        },
+      },
+    });
+    const tempDir = await makeAuthTempDir();
+    setAuthRuntimeStore(tempDir, {
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        "anthropic:claude-cli": { type: "oauth", provider: "anthropic", token: "stale" },
+      },
+      usageStats: {
+        "anthropic:claude-cli": {
+          disabledUntil: Date.now() + 60_000,
+          disabledReason: "billing",
+          failureCounts: { billing: 1 },
+        },
+      },
+    });
+    const run = vi.fn().mockResolvedValueOnce("external cli ok");
+
+    try {
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        agentDir: tempDir,
+        run,
+      });
+
+      expect(result.result).toBe("external cli ok");
+      expect(run).toHaveBeenCalledTimes(1);
+      expect(run.mock.calls[0]).toEqual(["anthropic", "claude-sonnet-4-6"]);
+    } finally {
+      clearAgentHarnesses();
+    }
+  });
+
   it("does not treat command-lane watchdog timeouts as model fallback failures", async () => {
     const cfg = makeCfg();
     const timeoutError = new CommandLaneTaskTimeoutError("cron-nested", 330_000);

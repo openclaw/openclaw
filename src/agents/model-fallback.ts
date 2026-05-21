@@ -115,6 +115,13 @@ type ModelFallbackRunFn<T> = (
   options?: ModelFallbackRunOptions,
 ) => Promise<T>;
 
+type ModelFallbackCandidateHarnessInfo = {
+  agentRuntime?: string;
+  agentRuntimeSource?: string;
+  agentHarnessRuntimeOverride?: string;
+  registeredPluginHarness: boolean;
+};
+
 /**
  * Fallback abort check. Only treats explicit AbortError names as user aborts.
  * Message-based checks (e.g., "aborted") can mask timeouts and skip fallback.
@@ -348,18 +355,18 @@ function isCliAgentRuntime(runtime: string | undefined, cfg: OpenClawConfig | un
   return isCliRuntimeAlias(normalized) || isCliProvider(normalized, cfg);
 }
 
-async function assertModelFallbackCandidateHarnessAvailable(
+function resolveModelFallbackCandidateHarnessInfo(
   params: ModelFallbackRuntimeContext & ModelCandidate,
-): Promise<void> {
-  if (!params.cfg) {
-    return;
-  }
+): ModelFallbackCandidateHarnessInfo {
   const agentHarnessRuntimeOverride = params.resolveAgentHarnessRuntimeOverride?.(
     params.provider,
     params.model,
   );
-  if (isCliProvider(params.provider, params.cfg)) {
-    return;
+  if (!params.cfg || isCliProvider(params.provider, params.cfg)) {
+    return {
+      agentHarnessRuntimeOverride,
+      registeredPluginHarness: false,
+    };
   }
   const agentRuntimeOverride = normalizeOptionalString(agentHarnessRuntimeOverride);
   const harnessPolicy = resolveAgentHarnessPolicy({
@@ -371,8 +378,32 @@ async function assertModelFallbackCandidateHarnessAvailable(
   });
   const agentRuntime = agentRuntimeOverride ?? harnessPolicy.runtime;
   const agentRuntimeSource = agentRuntimeOverride ? "model" : harnessPolicy.runtimeSource;
+  return {
+    agentRuntime,
+    agentRuntimeSource,
+    agentHarnessRuntimeOverride,
+    registeredPluginHarness: Boolean(
+      agentRuntime &&
+      agentRuntime !== "auto" &&
+      agentRuntime !== "pi" &&
+      getRegisteredAgentHarness(agentRuntime),
+    ),
+  };
+}
+
+async function assertModelFallbackCandidateHarnessAvailable(
+  params: ModelFallbackRuntimeContext & ModelCandidate,
+): Promise<ModelFallbackCandidateHarnessInfo> {
+  const info = resolveModelFallbackCandidateHarnessInfo(params);
+  if (!params.cfg) {
+    return info;
+  }
+  const { agentRuntime, agentRuntimeSource, agentHarnessRuntimeOverride } = info;
+  if (isCliProvider(params.provider, params.cfg)) {
+    return info;
+  }
   if (isCliAgentRuntime(agentRuntime, params.cfg)) {
-    return;
+    return info;
   }
   await params.prepareAgentHarnessRuntime?.({
     provider: params.provider,
@@ -387,6 +418,24 @@ async function assertModelFallbackCandidateHarnessAvailable(
   ) {
     throw new MissingAgentHarnessError(agentRuntime);
   }
+  return {
+    ...info,
+    registeredPluginHarness: Boolean(
+      agentRuntime &&
+      agentRuntime !== "auto" &&
+      agentRuntime !== "pi" &&
+      getRegisteredAgentHarness(agentRuntime),
+    ),
+  };
+}
+
+function shouldBypassModelFallbackAuthCooldown(info: ModelFallbackCandidateHarnessInfo): boolean {
+  return Boolean(
+    info.registeredPluginHarness &&
+    info.agentRuntime &&
+    info.agentRuntime !== "codex" &&
+    info.agentRuntime !== "pi",
+  );
 }
 
 function recordFailedCandidateAttempt(params: {
@@ -977,7 +1026,7 @@ export async function runWithModelFallback<T>(
 
   for (let i = 0; i < candidates.length; i += 1) {
     const candidate = candidates[i];
-    await assertModelFallbackCandidateHarnessAvailable({
+    const harnessInfo = await assertModelFallbackCandidateHarnessAvailable({
       cfg: params.cfg,
       agentId: params.agentId,
       sessionKey: params.sessionKey,
@@ -985,6 +1034,7 @@ export async function runWithModelFallback<T>(
       prepareAgentHarnessRuntime: params.prepareAgentHarnessRuntime,
       ...candidate,
     });
+    const bypassAuthCooldown = shouldBypassModelFallbackAuthCooldown(harnessInfo);
     const isPrimary = i === 0;
     const requestedModel = requestedCandidate
       ? sameModelCandidate(candidate, requestedCandidate)
@@ -992,7 +1042,7 @@ export async function runWithModelFallback<T>(
     let runOptions: ModelFallbackRunOptions | undefined;
     let attemptedDuringCooldown = false;
     let transientProbeProviderForAttempt: string | null = null;
-    if (authRuntime && authStore) {
+    if (authRuntime && authStore && !bypassAuthCooldown) {
       const profileIds = authRuntime.resolveAuthProfileOrder({
         cfg: params.cfg,
         store: authStore,
