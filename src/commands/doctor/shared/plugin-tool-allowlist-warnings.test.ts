@@ -129,6 +129,82 @@ describe("collectPluginToolAllowlistWarnings", () => {
     ]);
   });
 
+  it("does not warn when the global profile blocks MCP tools before sandbox policy", () => {
+    const warnings = collectPluginToolAllowlistWarnings({
+      cfg: {
+        agents: { defaults: { sandbox: { mode: "all" } } },
+        mcp: { servers: { outlook: { command: "node", args: ["outlook-server.js"] } } },
+        tools: {
+          profile: "minimal",
+          sandbox: { tools: { alsoAllow: ["web_fetch"] } },
+        },
+      },
+      manifestRegistry,
+    });
+
+    expect(warnings).toStrictEqual([]);
+  });
+
+  it("still warns when the profile allows MCP tools but sandbox policy hides them", () => {
+    const warnings = collectPluginToolAllowlistWarnings({
+      cfg: {
+        agents: { defaults: { sandbox: { mode: "all" } } },
+        mcp: { servers: { outlook: { command: "node", args: ["outlook-server.js"] } } },
+        tools: {
+          profile: "minimal",
+          alsoAllow: ["bundle-mcp"],
+          sandbox: { tools: { alsoAllow: ["web_fetch"] } },
+        },
+      },
+      manifestRegistry,
+    });
+
+    expect(warnings).toEqual([
+      '- mcp.servers defines 1 MCP server ("outlook"), but tools.sandbox.tools.alsoAllow does not include "bundle-mcp", "group:plugins", or a matching server-prefixed MCP tool name/glob such as "<server>__*". Sandboxed agents will filter bundled MCP tools before provider requests. Add "bundle-mcp" to tools.sandbox.tools.alsoAllow (or use "group:plugins" / server globs) if those MCP tools should be visible; use tools.sandbox.tools.allow: [] only when you intentionally want no sandbox allow gate.',
+    ]);
+  });
+
+  it("does not warn when the agent profile blocks MCP tools before sandbox policy", () => {
+    const warnings = collectPluginToolAllowlistWarnings({
+      cfg: {
+        agents: {
+          list: [
+            {
+              id: "worker",
+              sandbox: { mode: "all" },
+              tools: {
+                profile: "minimal",
+                sandbox: { tools: { alsoAllow: ["web_fetch"] } },
+              },
+            },
+          ],
+        },
+        mcp: { servers: { outlook: { command: "node", args: ["outlook-server.js"] } } },
+      },
+      manifestRegistry,
+    });
+
+    expect(warnings).toStrictEqual([]);
+  });
+
+  it("does not warn when the active provider profile blocks MCP tools before sandbox policy", () => {
+    const warnings = collectPluginToolAllowlistWarnings({
+      cfg: {
+        agents: { defaults: { sandbox: { mode: "all" } } },
+        mcp: { servers: { outlook: { command: "node", args: ["outlook-server.js"] } } },
+        tools: {
+          byProvider: {
+            openai: { profile: "minimal" },
+          },
+          sandbox: { tools: { alsoAllow: ["web_fetch"] } },
+        },
+      },
+      manifestRegistry,
+    });
+
+    expect(warnings).toStrictEqual([]);
+  });
+
   it("uses plural grammar when multiple sandbox allow sources hide MCP servers", () => {
     const warnings = collectPluginToolAllowlistWarnings({
       cfg: {

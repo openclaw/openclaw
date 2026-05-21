@@ -1,10 +1,20 @@
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "../../../agents/glob-pattern.js";
+import { parseModelRef } from "../../../agents/model-selection-normalize.js";
 import { sanitizeServerName, TOOL_NAME_SEPARATOR } from "../../../agents/pi-bundle-mcp-names.js";
-import { normalizeToolName } from "../../../agents/tool-policy-shared.js";
+import { normalizeProviderId } from "../../../agents/provider-id.js";
+import {
+  mergeAlsoAllowPolicy,
+  normalizeToolName,
+  resolveToolProfilePolicy,
+} from "../../../agents/tool-policy.js";
+import { resolveAgentModelPrimaryValue } from "../../../config/model-input.js";
+import type { AgentModelConfig } from "../../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizePluginId } from "../../../plugins/config-state.js";
 import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
 import type { PluginManifestRegistry } from "../../../plugins/manifest-registry.js";
+import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 
 type ToolAllowlistSource = {
   label: string;
@@ -22,6 +32,14 @@ type PickedSandboxToolPolicyField = {
   value: unknown;
   label?: string;
   defined: boolean;
+};
+
+type ToolPolicyConfig = {
+  allow?: string[];
+  alsoAllow?: string[];
+  deny?: string[];
+  profile?: string;
+  byProvider?: unknown;
 };
 
 function hasRecord(value: unknown): value is Record<string, unknown> {
@@ -134,6 +152,59 @@ function collectConfiguredMcpServerNames(cfg: OpenClawConfig): string[] {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
+function normalizeProviderKey(value: string): string {
+  const normalized = normalizeLowercaseStringOrEmpty(value);
+  const slashIndex = normalized.indexOf("/");
+  if (slashIndex <= 0) {
+    return normalizeProviderId(normalized);
+  }
+  const provider = normalizeProviderId(normalized.slice(0, slashIndex));
+  const modelId = normalized.slice(slashIndex + 1);
+  return modelId ? `${provider}/${modelId}` : provider;
+}
+
+function asToolPolicyConfig(value: unknown): ToolPolicyConfig | undefined {
+  return hasRecord(value) ? (value as ToolPolicyConfig) : undefined;
+}
+
+function resolveProviderToolPolicy(params: {
+  byProvider: unknown;
+  modelProvider: string;
+  modelId: string;
+}): ToolPolicyConfig | undefined {
+  if (!hasRecord(params.byProvider)) {
+    return undefined;
+  }
+  const provider = normalizeProviderId(params.modelProvider);
+  const modelId = normalizeLowercaseStringOrEmpty(params.modelId);
+  const providerModel = modelId ? `${provider}/${modelId}` : undefined;
+  const lookup = new Map<string, ToolPolicyConfig>();
+  for (const [key, value] of Object.entries(params.byProvider)) {
+    const normalizedKey = normalizeProviderKey(key);
+    const policy = asToolPolicyConfig(value);
+    if (normalizedKey && policy) {
+      lookup.set(normalizedKey, policy);
+    }
+  }
+  return (providerModel ? lookup.get(providerModel) : undefined) ?? lookup.get(provider);
+}
+
+function resolvePrimaryModelRef(
+  cfg: OpenClawConfig,
+  agentModel?: AgentModelConfig,
+): { provider: string; model: string } {
+  const raw =
+    resolveAgentModelPrimaryValue(agentModel) ??
+    resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model) ??
+    DEFAULT_MODEL;
+  return (
+    parseModelRef(raw, DEFAULT_PROVIDER, { allowPluginNormalization: false }) ?? {
+      provider: DEFAULT_PROVIDER,
+      model: DEFAULT_MODEL,
+    }
+  );
+}
+
 function isSandboxModeActive(mode: unknown): boolean {
   return mode === "all" || mode === "non-main";
 }
@@ -236,7 +307,7 @@ function collectActiveSandboxToolPolicies(
 ): ActiveSandboxToolPolicy[] {
   const out = new Map<string, ActiveSandboxToolPolicy>();
   const globalPolicy = cfg.tools?.sandbox?.tools;
-  const globalToolPolicyBlocksMcp = nonSandboxToolPolicyBlocksMcp(cfg.tools, serverNames);
+  const globalToolPolicyBlocksMcp = nonSandboxToolPoliciesBlockMcp({ cfg, serverNames });
   const addPolicy = (entry: ActiveSandboxToolPolicy) => {
     const existing = out.get(entry.dedupeKey);
     if (existing && !existing.nonSandboxToolPolicyBlocksMcp) {
@@ -279,8 +350,11 @@ function collectActiveSandboxToolPolicies(
           agentPolicy,
           agentLabel: `agents.list[${index}].tools.sandbox.tools`,
           globalPolicy,
-          nonSandboxToolPolicyBlocksMcp:
-            globalToolPolicyBlocksMcp || nonSandboxToolPolicyBlocksMcp(agent.tools, serverNames),
+          nonSandboxToolPolicyBlocksMcp: nonSandboxToolPoliciesBlockMcp({
+            cfg,
+            serverNames,
+            agent,
+          }),
         }),
       );
     });
@@ -361,6 +435,52 @@ function nonSandboxToolPolicyBlocksMcp(policy: unknown, serverNames: readonly st
   }
   const entries = [...allow, ...(getList(policy, "alsoAllow") ?? [])];
   return !entriesMatchAnyMcpTool(entries, serverNames);
+}
+
+function profileToolPolicyBlocksMcp(policy: unknown, serverNames: readonly string[]): boolean {
+  const profile = hasRecord(policy) && typeof policy.profile === "string" ? policy.profile : "";
+  const profilePolicy = mergeAlsoAllowPolicy(
+    resolveToolProfilePolicy(profile),
+    getList(policy, "alsoAllow"),
+  );
+  return Boolean(profilePolicy && !sandboxAllowGateAllowsMcp(profilePolicy, serverNames));
+}
+
+function nonSandboxToolPoliciesBlockMcp(params: {
+  cfg: OpenClawConfig;
+  serverNames: readonly string[];
+  agent?: Record<string, unknown>;
+}): boolean {
+  const globalTools = params.cfg.tools;
+  const agentTools = asToolPolicyConfig(params.agent?.tools);
+  const modelRef = resolvePrimaryModelRef(params.cfg, params.agent?.model as AgentModelConfig);
+  const globalProviderPolicy = resolveProviderToolPolicy({
+    byProvider: globalTools?.byProvider,
+    modelProvider: modelRef.provider,
+    modelId: modelRef.model,
+  });
+  const agentProviderPolicy = resolveProviderToolPolicy({
+    byProvider: agentTools?.byProvider,
+    modelProvider: modelRef.provider,
+    modelId: modelRef.model,
+  });
+  const profilePolicy = {
+    profile: agentTools?.profile ?? globalTools?.profile,
+    alsoAllow: agentTools?.alsoAllow ?? globalTools?.alsoAllow,
+  };
+  const providerProfilePolicy = {
+    profile: agentProviderPolicy?.profile ?? globalProviderPolicy?.profile,
+    alsoAllow: agentProviderPolicy?.alsoAllow ?? globalProviderPolicy?.alsoAllow,
+  };
+
+  return (
+    profileToolPolicyBlocksMcp(profilePolicy, params.serverNames) ||
+    profileToolPolicyBlocksMcp(providerProfilePolicy, params.serverNames) ||
+    nonSandboxToolPolicyBlocksMcp(globalTools, params.serverNames) ||
+    nonSandboxToolPolicyBlocksMcp(globalProviderPolicy, params.serverNames) ||
+    nonSandboxToolPolicyBlocksMcp(agentTools, params.serverNames) ||
+    nonSandboxToolPolicyBlocksMcp(agentProviderPolicy, params.serverNames)
+  );
 }
 
 function formatMcpServerSummary(serverNames: readonly string[]): string {
