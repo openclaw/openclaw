@@ -5,7 +5,11 @@ import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { resolveApiKeyForProfile } from "../agents/auth-profiles/oauth.js";
 import { resolveAuthProfileOrder } from "../agents/auth-profiles/order.js";
 import { listProfilesForProvider } from "../agents/auth-profiles/profiles.js";
-import { ensureAuthProfileStore } from "../agents/auth-profiles/store.js";
+import {
+  ensureAuthProfileStore,
+  loadAuthProfileStoreForSecretsRuntime,
+  loadAuthProfileStoreWithoutExternalProfiles,
+} from "../agents/auth-profiles/store.js";
 import {
   COPILOT_INTEGRATION_ID,
   buildCopilotIdeHeaders,
@@ -285,14 +289,28 @@ export function listUsableProviderAuthProfileIds(params: {
 }): { agentDir: string; profileIds: string[] } {
   try {
     const agentDir = params.agentDir?.trim() || resolveDefaultAgentDir(params.cfg ?? {});
-    const store = ensureAuthProfileStore(agentDir, {
-      allowKeychainPrompt: false,
+    const store = loadAuthProfileStoreForSecretsRuntime(agentDir);
+    const profileIds = resolveAuthProfileOrder({
+      cfg: params.cfg,
+      store,
+      provider: params.provider,
+    });
+    if (profileIds.length > 0) {
+      return {
+        agentDir,
+        profileIds,
+      };
+    }
+
+    const refreshableStore = loadAuthProfileStoreWithoutExternalProfiles(agentDir, {
+      allowKeychainPrompt: true,
+      resolveLegacyOAuthSidecars: true,
     });
     return {
       agentDir,
       profileIds: resolveAuthProfileOrder({
         cfg: params.cfg,
-        store,
+        store: refreshableStore,
         provider: params.provider,
       }),
     };
@@ -318,9 +336,7 @@ export async function resolveProviderAuthProfileApiKey(params: {
   if (!agentDir || profileIds.length === 0) {
     return undefined;
   }
-  const store = ensureAuthProfileStore(agentDir, {
-    allowKeychainPrompt: false,
-  });
+  const store = loadAuthProfileStoreForSecretsRuntime(agentDir);
   for (const profileId of profileIds) {
     const resolved = await resolveApiKeyForProfile({
       cfg: params.cfg,
