@@ -331,7 +331,23 @@ async function main(): Promise<void> {
     // expose every concurrent run's overflow file to this run; the
     // per-run subdir is the narrowest scope that still satisfies claude's
     // workspace-restriction rule.
-    claudeArgs = [...claudeArgs, "--add-dir", perRunDir, shortPositional];
+    //
+    // Auto-allow Read for THIS turn only — the standard interactive backend
+    // ships `--allowedTools mcp__openclaw__*` which excludes Read, so the
+    // shortPositional below ("Read that file in full…") would otherwise
+    // stall on an unattended permission prompt for non-bypass operators.
+    // Multiple `--allowedTools` flags concatenate in claude-cli's argv
+    // parser, so this is additive — does NOT broaden the surface for any
+    // OTHER turn (overflow recovery is per-turn argv mutation, not a
+    // backend-config change). Closes ClawSweeper P2 on PR #81851.
+    claudeArgs = [
+      ...claudeArgs,
+      "--allowedTools",
+      "Read",
+      "--add-dir",
+      perRunDir,
+      shortPositional,
+    ];
     dbg(
       "spilled prompt recovered; chars:", spilledPrompt.length,
       "overflow-file:", overflowPromptFilePath,
