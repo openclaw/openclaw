@@ -283,6 +283,7 @@ describe("resolvePrecomputedSubcommandHelpFastPath", () => {
         "openclaw",
         "--profile",
         "work",
+        "--no-color",
         "models",
         "-h",
       ]),
@@ -295,6 +296,27 @@ describe("resolvePrecomputedSubcommandHelpFastPath", () => {
     ).toBeNull();
     expect(
       resolvePrecomputedSubcommandHelpFastPath(["node", "openclaw", "gateway", "-V"]),
+    ).toBeNull();
+    expect(
+      resolvePrecomputedSubcommandHelpFastPath([
+        "node",
+        "openclaw",
+        "doctor",
+        "--help",
+        "--version",
+      ]),
+    ).toBeNull();
+    expect(
+      resolvePrecomputedSubcommandHelpFastPath(["node", "openclaw", "doctor", "--version", "-h"]),
+    ).toBeNull();
+    expect(
+      resolvePrecomputedSubcommandHelpFastPath(["node", "openclaw", "--bogus", "doctor", "--help"]),
+    ).toBeNull();
+    expect(
+      resolvePrecomputedSubcommandHelpFastPath(["node", "openclaw", "doctor", "--help", "--bogus"]),
+    ).toBeNull();
+    expect(
+      resolvePrecomputedSubcommandHelpFastPath(["node", "openclaw", "doctor", "--help", "extra"]),
     ).toBeNull();
     expect(
       resolvePrecomputedSubcommandHelpFastPath(["node", "openclaw", "gateway", "status", "--help"]),
