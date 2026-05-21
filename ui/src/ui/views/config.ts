@@ -805,6 +805,14 @@ function importedThemeName(props: Pick<ConfigProps, "hasCustomTheme" | "customTh
     : uiText("Imported theme", "Theme đã import");
 }
 
+function resolveThemeDescription(description: ThemeOption["description"]): string {
+  if (typeof description === "string") {
+    return description;
+  }
+  const [en, vi] = description;
+  return uiText(en, vi);
+}
+
 function focusCustomThemeImportInput() {
   const schedule =
     typeof requestAnimationFrame === "function"
@@ -977,9 +985,7 @@ function renderAppearanceSection(props: ConfigProps) {
         </p>
         <div class="settings-theme-grid">
           ${themeOptions.map((opt) => {
-            const description = Array.isArray(opt.description)
-              ? uiText(...opt.description)
-              : opt.description;
+            const description = resolveThemeDescription(opt.description);
             return html`
               <button
                 class="settings-theme-card ${opt.id === props.theme
@@ -1305,7 +1311,7 @@ export function renderConfig(props: ConfigProps) {
     .filter((k) => !CATEGORISED_KEYS.has(k))
     .map((k) => ({ key: k, label: k.charAt(0).toUpperCase() + k.slice(1) }));
 
-  const otherCategory: SectionCategory | null =
+  const otherCategory =
     extraSections.length > 0
       ? { id: "other", label: uiText("Other", "Khác"), sections: extraSections }
       : null;
