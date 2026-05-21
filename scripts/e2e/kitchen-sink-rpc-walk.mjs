@@ -23,6 +23,10 @@ const COMMAND_TIMEOUT_MS = readPositiveInt(
   process.env.OPENCLAW_KITCHEN_SINK_RPC_COMMAND_MS,
   180000,
 );
+const INSTALL_TIMEOUT_MS = readPositiveInt(
+  process.env.OPENCLAW_KITCHEN_SINK_RPC_INSTALL_MS,
+  Math.max(COMMAND_TIMEOUT_MS, 600000),
+);
 const RPC_TIMEOUT_MS = readPositiveInt(process.env.OPENCLAW_KITCHEN_SINK_RPC_CALL_MS, 60000);
 const MAX_RSS_MIB = readPositiveInt(process.env.OPENCLAW_KITCHEN_SINK_MAX_RSS_MIB, 2048);
 const DEFAULT_PORT = 19000 + Math.floor(Math.random() * 1000);
@@ -90,7 +94,9 @@ function runCommand(command, args, options = {}) {
     let stdout = "";
     let stderr = "";
     const timeoutMs = options.timeoutMs ?? COMMAND_TIMEOUT_MS;
+    let timedOut = false;
     const timer = setTimeout(() => {
+      timedOut = true;
       child.kill("SIGTERM");
       setTimeout(() => child.kill("SIGKILL"), 2000).unref();
     }, timeoutMs);
@@ -111,9 +117,12 @@ function runCommand(command, args, options = {}) {
         return;
       }
       const detail = [stdout, stderr].filter(Boolean).join("\n").trim();
+      const failure = timedOut
+        ? `timed out after ${timeoutMs}ms`
+        : `failed with ${signal || status}`;
       reject(
         new Error(
-          `${command} ${args.join(" ")} failed with ${signal || status}${detail ? `\n${tailText(detail)}` : ""}`,
+          `${command} ${args.join(" ")} ${failure}${detail ? `\n${tailText(detail)}` : ""}`,
         ),
       );
     });
@@ -571,7 +580,9 @@ async function main() {
   const logPath = path.join(root, "gateway.log");
 
   console.log(`Kitchen Sink RPC walk using ${PLUGIN_SPEC} via ${runner.label}`);
-  await runOpenClaw(runner, ["plugins", "install", PLUGIN_SPEC], env, { timeoutMs: 240000 });
+  await runOpenClaw(runner, ["plugins", "install", PLUGIN_SPEC], env, {
+    timeoutMs: INSTALL_TIMEOUT_MS,
+  });
   configureKitchenSink(env, port);
   await runOpenClaw(runner, ["plugins", "enable", PLUGIN_ID], env, { timeoutMs: 60000 });
   const inspect = parseJsonOutput(
