@@ -21,7 +21,7 @@ type DiffController = {
   diff: FileDiff;
 };
 
-const controllers: DiffController[] = [];
+export const controllers: DiffController[] = [];
 
 const viewerState: ViewerState = {
   theme: "dark",
@@ -285,7 +285,7 @@ function syncAllControllers(): void {
   }
 }
 
-async function hydrateViewer(): Promise<void> {
+export async function hydrateViewer(): Promise<void> {
   const cards = await Promise.all(
     getCards().map(async ({ host, payload }) => ({
       host,
@@ -316,16 +316,20 @@ async function hydrateViewer(): Promise<void> {
   syncDocumentTheme();
 
   for (const { host, payload } of cards) {
-    ensureShadowRoot(host);
-    const diff = new FileDiff(createRenderOptions(payload));
-    diff.hydrate({
-      fileContainer: host,
-      prerenderedHTML: payload.prerenderedHTML,
-      ...getHydrateProps(payload),
-    });
-    const controller = { payload, diff };
-    controllers.push(controller);
-    applyState(controller);
+    try {
+      ensureShadowRoot(host);
+      const diff = new FileDiff(createRenderOptions(payload));
+      diff.hydrate({
+        fileContainer: host,
+        prerenderedHTML: payload.prerenderedHTML,
+        ...getHydrateProps(payload),
+      });
+      const controller = { payload, diff };
+      controllers.push(controller);
+      applyState(controller);
+    } catch (error) {
+      console.warn("Skipping diff card that failed to hydrate", error);
+    }
   }
 }
 
@@ -339,7 +343,11 @@ async function main(): Promise<void> {
   }
 }
 
-if (typeof document !== "undefined") {
+const autoStartDisabled = (
+  globalThis as typeof globalThis & { __OPENCLAW_DIFFS_DISABLE_AUTO_START__?: boolean }
+).__OPENCLAW_DIFFS_DISABLE_AUTO_START__;
+
+if (typeof document !== "undefined" && !autoStartDisabled) {
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", () => {
       void main();
