@@ -218,6 +218,7 @@ Docs: https://docs.openclaw.ai
 - CLI/update: guide root-owned npm install EACCES recovery by stopping the managed Gateway before manual package replacement, then reinstalling and restarting the service. Fixes #83747. (#83757) Thanks @brokemac79.
 - Twitch: register refreshing chat tokens with Twurple's chat intent so automatic token refresh keeps chat access available. (#83750) Thanks @TurboTheTurtle.
 - Agents/subagents: keep collect-mode announce queues batching unresolved-origin items with compatible same-route messages and resume collection after a true cross-channel drain when a later compatible batch remains. Fixes #83577.
+- CLI/config: preserve numeric-looking record keys such as Discord guild IDs when creating missing config containers with `config set`. (#83769) Thanks @TurboTheTurtle.
 - Skills: refresh existing session skill snapshots when watched skill roots change, so changed extra skill directories take effect without starting a new session. Fixes #83782. (#83800) Thanks @hclsys.
 - Providers/Anthropic: preserve native image input for current Claude model rows when stale local catalog data marks them text-only. (#83756) Thanks @TurboTheTurtle.
 - Providers/Anthropic: preserve Claude 4 image capability when configured model refs resolve through a stale local catalog row. (#83756) Thanks @TurboTheTurtle.
