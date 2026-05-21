@@ -1,5 +1,7 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
-import { resolveTelegramStreamMode } from "./bot/helpers.js";
+import { resolveTelegramGroupAllowFromContext, resolveTelegramStreamMode } from "./bot/helpers.js";
+import { resolveTelegramDraftStreamingChunking } from "./draft-chunking.js";
 
 describe("resolveTelegramStreamMode", () => {
   it("defaults to partial when telegram streaming is unset", () => {
@@ -18,7 +20,89 @@ describe("resolveTelegramStreamMode", () => {
     expect(resolveTelegramStreamMode({ streamMode: "block" })).toBe("block");
   });
 
-  it("maps unified progress mode to partial on Telegram", () => {
-    expect(resolveTelegramStreamMode({ streaming: "progress" })).toBe("partial");
+  it("preserves unified progress mode on Telegram", () => {
+    expect(resolveTelegramStreamMode({ streaming: "progress" })).toBe("progress");
+  });
+});
+
+describe("resolveTelegramGroupAllowFromContext", () => {
+  it("expands Telegram access groups before normalizing allowFrom entries", async () => {
+    const cfg: OpenClawConfig = {
+      accessGroups: {
+        maintainers: {
+          type: "message.senders",
+          members: {
+            telegram: ["12345"],
+          },
+        },
+      },
+    };
+
+    const context = await resolveTelegramGroupAllowFromContext({
+      cfg,
+      chatId: -100123,
+      accountId: "default",
+      senderId: "12345",
+      isGroup: true,
+      groupAllowFrom: ["accessGroup:maintainers"],
+      readChannelAllowFromStore: async () => [],
+      resolveTelegramGroupConfig: () => ({}),
+    });
+
+    expect(context.effectiveGroupAllow.entries).toEqual(["12345"]);
+    expect(context.effectiveGroupAllow.invalidEntries).toStrictEqual([]);
+  });
+});
+
+describe("resolveTelegramDraftStreamingChunking", () => {
+  it("uses smaller defaults than block streaming", () => {
+    const chunking = resolveTelegramDraftStreamingChunking(undefined, "default");
+    expect(chunking).toEqual({
+      minChars: 200,
+      maxChars: 800,
+      breakPreference: "paragraph",
+    });
+  });
+
+  it("clamps to telegram.textChunkLimit", () => {
+    const cfg: OpenClawConfig = {
+      channels: { telegram: { allowFrom: ["*"], textChunkLimit: 150 } },
+    };
+    const chunking = resolveTelegramDraftStreamingChunking(cfg, "default");
+    expect(chunking).toEqual({
+      minChars: 150,
+      maxChars: 150,
+      breakPreference: "paragraph",
+    });
+  });
+
+  it("supports per-account overrides", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          allowFrom: ["*"],
+          accounts: {
+            default: {
+              allowFrom: ["*"],
+              streaming: {
+                preview: {
+                  chunk: {
+                    minChars: 10,
+                    maxChars: 20,
+                    breakPreference: "sentence",
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+    const chunking = resolveTelegramDraftStreamingChunking(cfg, "default");
+    expect(chunking).toEqual({
+      minChars: 10,
+      maxChars: 20,
+      breakPreference: "sentence",
+    });
   });
 });

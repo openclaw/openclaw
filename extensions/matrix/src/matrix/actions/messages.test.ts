@@ -1,6 +1,62 @@
 import { describe, expect, it, vi } from "vitest";
+import { setMatrixRuntime } from "../../runtime.js";
 import type { MatrixClient } from "../sdk.js";
-import { readMatrixMessages } from "./messages.js";
+import * as sendModule from "../send.js";
+import { editMatrixMessage, readMatrixMessages } from "./messages.js";
+
+const MATRIX_ACTION_TEST_CFG = {
+  channels: {
+    matrix: {},
+  },
+};
+
+function installMatrixActionTestRuntime(): void {
+  setMatrixRuntime({
+    config: {
+      current: () => ({}),
+    },
+    channel: {
+      text: {
+        resolveMarkdownTableMode: () => "code",
+        convertMarkdownTables: (text: string) => text,
+      },
+    },
+  } as unknown as import("../../runtime-api.js").PluginRuntime);
+}
+
+function createPollResponseEvent(): Record<string, unknown> {
+  return {
+    event_id: "$vote",
+    sender: "@bob:example.org",
+    type: "m.poll.response",
+    origin_server_ts: 20,
+    content: {
+      "m.poll.response": { answers: ["a1"] },
+      "m.relates_to": { rel_type: "m.reference", event_id: "$poll" },
+    },
+  };
+}
+
+function createPollStartEvent(params?: {
+  answers?: Array<Record<string, unknown>>;
+  includeDisclosedKind?: boolean;
+  maxSelections?: number;
+}): Record<string, unknown> {
+  return {
+    event_id: "$poll",
+    sender: "@alice:example.org",
+    type: "m.poll.start",
+    origin_server_ts: 1,
+    content: {
+      "m.poll.start": {
+        question: { "m.text": "Favorite fruit?" },
+        ...(params?.includeDisclosedKind ? { kind: "m.poll.disclosed" } : {}),
+        ...(params?.maxSelections !== undefined ? { max_selections: params.maxSelections } : {}),
+        answers: params?.answers ?? [{ id: "a1", "m.text": "Apple" }],
+      },
+    },
+  };
+}
 
 function createMessagesClient(params: {
   chunk: Array<Record<string, unknown>>;
@@ -15,7 +71,7 @@ function createMessagesClient(params: {
   }));
   const hydrateEvents = vi.fn(
     async (_roomId: string, _events: Array<Record<string, unknown>>) =>
-      (params.hydratedChunk ?? params.chunk) as any,
+      (params.hydratedChunk ?? params.chunk) as unknown,
   );
   const getEvent = vi.fn(async () => params.pollRoot ?? null);
   const getRelations = vi.fn(async () => ({
@@ -39,20 +95,123 @@ function createMessagesClient(params: {
   };
 }
 
+function createEditClient(originalContent: Record<string, unknown>) {
+  const sendMessage = vi.fn().mockResolvedValue("evt-edit");
+  const client = {
+    getEvent: vi.fn().mockResolvedValue({ content: originalContent }),
+    getJoinedRoomMembers: vi.fn().mockResolvedValue([]),
+    getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
+    sendMessage,
+    prepareForOneOff: vi.fn(async () => undefined),
+    start: vi.fn(async () => undefined),
+    stop: vi.fn(() => undefined),
+    stopAndPersist: vi.fn(async () => undefined),
+  } as unknown as MatrixClient;
+
+  return { client, sendMessage };
+}
+
+function expectRecordFields(value: unknown, expected: Record<string, unknown>) {
+  if (!value || typeof value !== "object") {
+    throw new Error("Expected record");
+  }
+  const actual = value as Record<string, unknown>;
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(actual[key]).toEqual(expectedValue);
+  }
+  return actual;
+}
+
+function mockCallArg(
+  mockFn: { mock: { calls: unknown[][] } },
+  callIndex: number,
+  argIndex: number,
+) {
+  const call = mockFn.mock.calls.at(callIndex);
+  if (!call) {
+    throw new Error(`Expected mock call ${callIndex} to exist`);
+  }
+  if (!(argIndex in call)) {
+    throw new Error(`Expected mock call ${callIndex} argument ${argIndex} to exist`);
+  }
+  return call[argIndex];
+}
+
 describe("matrix message actions", () => {
+  it("forwards timeoutMs to the shared Matrix edit helper", async () => {
+    const editSpy = vi.spyOn(sendModule, "editMessageMatrix").mockResolvedValue("evt-edit");
+
+    try {
+      const cfg = {} as never;
+      const result = await editMatrixMessage("!room:example.org", "$original", "hello", {
+        cfg,
+        timeoutMs: 12_345,
+      });
+
+      expect(result).toEqual({ eventId: "evt-edit" });
+      expect(editSpy).toHaveBeenCalledWith("!room:example.org", "$original", "hello", {
+        cfg,
+        accountId: undefined,
+        client: undefined,
+        timeoutMs: 12_345,
+      });
+    } finally {
+      editSpy.mockRestore();
+    }
+  });
+
+  it("routes edits through the shared Matrix edit helper so mentions are preserved", async () => {
+    installMatrixActionTestRuntime();
+    const { client, sendMessage } = createEditClient({
+      body: "hello @alice:example.org",
+      "m.mentions": { user_ids: ["@alice:example.org"] },
+    });
+
+    const result = await editMatrixMessage(
+      "!room:example.org",
+      "$original",
+      "hello @alice:example.org and @bob:example.org",
+      { cfg: MATRIX_ACTION_TEST_CFG, client },
+    );
+
+    expect(result).toEqual({ eventId: "evt-edit" });
+    expect(mockCallArg(sendMessage, 0, 0)).toBe("!room:example.org");
+    const content = expectRecordFields(mockCallArg(sendMessage, 0, 1), {
+      "m.mentions": { user_ids: ["@bob:example.org"] },
+    });
+    expectRecordFields(content["m.new_content"], {
+      "m.mentions": { user_ids: ["@alice:example.org", "@bob:example.org"] },
+    });
+  });
+
+  it("does not re-notify legacy mentions when action edits target pre-m.mentions messages", async () => {
+    installMatrixActionTestRuntime();
+    const { client, sendMessage } = createEditClient({
+      body: "hello @alice:example.org",
+    });
+
+    const result = await editMatrixMessage(
+      "!room:example.org",
+      "$original",
+      "hello again @alice:example.org",
+      { cfg: MATRIX_ACTION_TEST_CFG, client },
+    );
+
+    expect(result).toEqual({ eventId: "evt-edit" });
+    expect(mockCallArg(sendMessage, 0, 0)).toBe("!room:example.org");
+    const content = expectRecordFields(mockCallArg(sendMessage, 0, 1), {
+      "m.mentions": {},
+    });
+    expectRecordFields(content["m.new_content"], {
+      body: "hello again @alice:example.org",
+      "m.mentions": { user_ids: ["@alice:example.org"] },
+    });
+  });
+
   it("includes poll snapshots when reading message history", async () => {
     const { client, doRequest, getEvent, getRelations } = createMessagesClient({
       chunk: [
-        {
-          event_id: "$vote",
-          sender: "@bob:example.org",
-          type: "m.poll.response",
-          origin_server_ts: 20,
-          content: {
-            "m.poll.response": { answers: ["a1"] },
-            "m.relates_to": { rel_type: "m.reference", event_id: "$poll" },
-          },
-        },
+        createPollResponseEvent(),
         {
           event_id: "$msg",
           sender: "@alice:example.org",
@@ -64,44 +223,22 @@ describe("matrix message actions", () => {
           },
         },
       ],
-      pollRoot: {
-        event_id: "$poll",
-        sender: "@alice:example.org",
-        type: "m.poll.start",
-        origin_server_ts: 1,
-        content: {
-          "m.poll.start": {
-            question: { "m.text": "Favorite fruit?" },
-            kind: "m.poll.disclosed",
-            max_selections: 1,
-            answers: [
-              { id: "a1", "m.text": "Apple" },
-              { id: "a2", "m.text": "Strawberry" },
-            ],
-          },
-        },
-      },
-      pollRelations: [
-        {
-          event_id: "$vote",
-          sender: "@bob:example.org",
-          type: "m.poll.response",
-          origin_server_ts: 20,
-          content: {
-            "m.poll.response": { answers: ["a1"] },
-            "m.relates_to": { rel_type: "m.reference", event_id: "$poll" },
-          },
-        },
-      ],
+      pollRoot: createPollStartEvent({
+        includeDisclosedKind: true,
+        maxSelections: 1,
+        answers: [
+          { id: "a1", "m.text": "Apple" },
+          { id: "a2", "m.text": "Strawberry" },
+        ],
+      }),
+      pollRelations: [createPollResponseEvent()],
     });
 
     const result = await readMatrixMessages("room:!room:example.org", { client, limit: 2.9 });
 
-    expect(doRequest).toHaveBeenCalledWith(
-      "GET",
-      expect.stringContaining("/rooms/!room%3Aexample.org/messages"),
-      expect.objectContaining({ limit: 2 }),
-    );
+    expect(mockCallArg(doRequest, 0, 0)).toBe("GET");
+    expect(String(mockCallArg(doRequest, 0, 1))).toContain("/rooms/!room%3Aexample.org/messages");
+    expectRecordFields(mockCallArg(doRequest, 0, 2), { limit: 2 });
     expect(getEvent).toHaveBeenCalledWith("!room:example.org", "$poll");
     expect(getRelations).toHaveBeenCalledWith(
       "!room:example.org",
@@ -112,69 +249,30 @@ describe("matrix message actions", () => {
         from: undefined,
       },
     );
-    expect(result.messages).toEqual([
-      expect.objectContaining({
-        eventId: "$poll",
-        body: expect.stringContaining("1. Apple (1 vote)"),
-        msgtype: "m.text",
-      }),
-      expect.objectContaining({
-        eventId: "$msg",
-        body: "hello",
-      }),
-    ]);
+    expect(result.messages).toHaveLength(2);
+    expectRecordFields(result.messages[0], {
+      eventId: "$poll",
+      msgtype: "m.text",
+    });
+    expect(result.messages[0]?.body).toContain("1. Apple (1 vote)");
+    expectRecordFields(result.messages[1], {
+      eventId: "$msg",
+      body: "hello",
+    });
   });
 
   it("dedupes multiple poll events for the same poll within one read page", async () => {
     const { client, getEvent } = createMessagesClient({
-      chunk: [
-        {
-          event_id: "$vote",
-          sender: "@bob:example.org",
-          type: "m.poll.response",
-          origin_server_ts: 20,
-          content: {
-            "m.poll.response": { answers: ["a1"] },
-            "m.relates_to": { rel_type: "m.reference", event_id: "$poll" },
-          },
-        },
-        {
-          event_id: "$poll",
-          sender: "@alice:example.org",
-          type: "m.poll.start",
-          origin_server_ts: 1,
-          content: {
-            "m.poll.start": {
-              question: { "m.text": "Favorite fruit?" },
-              answers: [{ id: "a1", "m.text": "Apple" }],
-            },
-          },
-        },
-      ],
-      pollRoot: {
-        event_id: "$poll",
-        sender: "@alice:example.org",
-        type: "m.poll.start",
-        origin_server_ts: 1,
-        content: {
-          "m.poll.start": {
-            question: { "m.text": "Favorite fruit?" },
-            answers: [{ id: "a1", "m.text": "Apple" }],
-          },
-        },
-      },
+      chunk: [createPollResponseEvent(), createPollStartEvent()],
+      pollRoot: createPollStartEvent(),
       pollRelations: [],
     });
 
     const result = await readMatrixMessages("room:!room:example.org", { client });
 
     expect(result.messages).toHaveLength(1);
-    expect(result.messages[0]).toEqual(
-      expect.objectContaining({
-        eventId: "$poll",
-        body: expect.stringContaining("[Poll]"),
-      }),
-    );
+    expectRecordFields(result.messages[0], { eventId: "$poll" });
+    expect(result.messages[0]?.body).toContain("[Poll]");
     expect(getEvent).toHaveBeenCalledTimes(1);
   });
 
@@ -189,39 +287,19 @@ describe("matrix message actions", () => {
           content: {},
         },
       ],
-      hydratedChunk: [
-        {
-          event_id: "$vote",
-          sender: "@bob:example.org",
-          type: "m.poll.response",
-          origin_server_ts: 20,
-          content: {
-            "m.poll.response": { answers: ["a1"] },
-            "m.relates_to": { rel_type: "m.reference", event_id: "$poll" },
-          },
-        },
-      ],
-      pollRoot: {
-        event_id: "$poll",
-        sender: "@alice:example.org",
-        type: "m.poll.start",
-        origin_server_ts: 1,
-        content: {
-          "m.poll.start": {
-            question: { "m.text": "Favorite fruit?" },
-            answers: [{ id: "a1", "m.text": "Apple" }],
-          },
-        },
-      },
+      hydratedChunk: [createPollResponseEvent()],
+      pollRoot: createPollStartEvent(),
       pollRelations: [],
     });
 
     const result = await readMatrixMessages("room:!room:example.org", { client });
 
-    expect(hydrateEvents).toHaveBeenCalledWith(
-      "!room:example.org",
-      expect.arrayContaining([expect.objectContaining({ event_id: "$enc" })]),
-    );
+    expect(mockCallArg(hydrateEvents, 0, 0)).toBe("!room:example.org");
+    expect(
+      (mockCallArg(hydrateEvents, 0, 1) as Array<Record<string, unknown>>).some(
+        (event) => event.event_id === "$enc",
+      ),
+    ).toBe(true);
     expect(result.messages).toHaveLength(1);
     expect(result.messages[0]?.eventId).toBe("$poll");
   });

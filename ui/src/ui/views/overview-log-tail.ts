@@ -36,7 +36,8 @@ export function renderOverviewLogTail(props: OverviewLogTailProps) {
             e.stopPropagation();
             props.onRefreshLogs();
           }}
-        >${icons.loader}</span>
+          >${icons.loader}</span
+        >
       </summary>
       <pre class="ov-log-tail-content">${displayLines}</pre>
     </details>

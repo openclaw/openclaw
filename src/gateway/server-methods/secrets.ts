@@ -8,9 +8,19 @@ import {
 } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function invalidSecretsResolveField(
   errors: ErrorObject[] | null | undefined,
-): "commandName" | "targetIds" {
+):
+  | "allowedPaths"
+  | "commandName"
+  | "forcedActivePaths"
+  | "optionalActivePaths"
+  | "providerOverrides"
+  | "targetIds" {
   for (const issue of errors ?? []) {
     if (
       issue.instancePath === "/commandName" ||
@@ -19,13 +29,35 @@ function invalidSecretsResolveField(
     ) {
       return "commandName";
     }
+    if (issue.instancePath.startsWith("/allowedPaths")) {
+      return "allowedPaths";
+    }
+    if (issue.instancePath.startsWith("/forcedActivePaths")) {
+      return "forcedActivePaths";
+    }
+    if (issue.instancePath.startsWith("/optionalActivePaths")) {
+      return "optionalActivePaths";
+    }
+    if (issue.instancePath.startsWith("/providerOverrides")) {
+      return "providerOverrides";
+    }
   }
   return "targetIds";
 }
 
 export function createSecretsHandlers(params: {
   reloadSecrets: () => Promise<{ warningCount: number }>;
-  resolveSecrets: (params: { commandName: string; targetIds: string[] }) => Promise<{
+  resolveSecrets: (params: {
+    commandName: string;
+    targetIds: string[];
+    allowedPaths?: string[];
+    forcedActivePaths?: string[];
+    optionalActivePaths?: string[];
+    providerOverrides?: {
+      webSearch?: string;
+      webFetch?: string;
+    };
+  }) => Promise<{
     assignments: Array<{
       path: string;
       pathSegments: string[];
@@ -34,14 +66,18 @@ export function createSecretsHandlers(params: {
     diagnostics: string[];
     inactiveRefPaths: string[];
   }>;
+  log?: {
+    warn?: (message: string) => void;
+  };
 }): GatewayRequestHandlers {
   return {
     "secrets.reload": async ({ respond }) => {
       try {
         const result = await params.reloadSecrets();
         respond(true, { ok: true, warningCount: result.warningCount });
-      } catch (err) {
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
+      } catch (error) {
+        params.log?.warn?.(`secrets.reload failed: ${errorMessage(error)}`);
+        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "secrets.reload failed"));
       }
     },
     "secrets.resolve": async ({ params: requestParams, respond }) => {
@@ -66,6 +102,23 @@ export function createSecretsHandlers(params: {
       const targetIds = requestParams.targetIds
         .map((entry) => entry.trim())
         .filter((entry) => entry.length > 0);
+      const allowedPaths = requestParams.allowedPaths
+        ?.map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0);
+      const forcedActivePaths = requestParams.forcedActivePaths
+        ?.map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0);
+      const optionalActivePaths = requestParams.optionalActivePaths
+        ?.map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0);
+      const providerOverrides = {
+        ...(requestParams.providerOverrides?.webSearch?.trim()
+          ? { webSearch: requestParams.providerOverrides.webSearch.trim() }
+          : {}),
+        ...(requestParams.providerOverrides?.webFetch?.trim()
+          ? { webFetch: requestParams.providerOverrides.webFetch.trim() }
+          : {}),
+      };
 
       for (const targetId of targetIds) {
         if (!isKnownSecretTargetId(targetId)) {
@@ -85,6 +138,10 @@ export function createSecretsHandlers(params: {
         const result = await params.resolveSecrets({
           commandName,
           targetIds,
+          ...(allowedPaths ? { allowedPaths } : {}),
+          ...(forcedActivePaths ? { forcedActivePaths } : {}),
+          ...(optionalActivePaths ? { optionalActivePaths } : {}),
+          ...(Object.keys(providerOverrides).length > 0 ? { providerOverrides } : {}),
         });
         const payload = {
           ok: true,
@@ -96,8 +153,9 @@ export function createSecretsHandlers(params: {
           throw new Error("secrets.resolve returned invalid payload.");
         }
         respond(true, payload);
-      } catch (err) {
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
+      } catch (error) {
+        params.log?.warn?.(`secrets.resolve failed: ${errorMessage(error)}`);
+        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "secrets.resolve failed"));
       }
     },
   };

@@ -3,7 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { expandHomePrefix, resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { resolveStateDir } from "../paths.js";
+import { isCompactionCheckpointTranscriptFileName } from "./artifacts.js";
 
 function resolveAgentSessionsDir(
   agentId?: string,
@@ -61,7 +63,10 @@ export const SAFE_SESSION_ID_RE = /^[a-z0-9][a-z0-9._-]{0,127}$/i;
 
 export function validateSessionId(sessionId: string): string {
   const trimmed = sessionId.trim();
-  if (!SAFE_SESSION_ID_RE.test(trimmed)) {
+  if (
+    !SAFE_SESSION_ID_RE.test(trimmed) ||
+    isCompactionCheckpointTranscriptFileName(`${trimmed}.jsonl`)
+  ) {
     throw new Error(`Invalid session ID: ${sessionId}`);
   }
   return trimmed;
@@ -142,7 +147,7 @@ function resolveStructuralSessionFallbackPath(
     return undefined;
   }
   const normalizedAgentId = normalizeAgentId(agentIdPart);
-  if (normalizedAgentId !== agentIdPart.toLowerCase()) {
+  if (normalizedAgentId !== normalizeLowercaseStringOrEmpty(agentIdPart)) {
     return undefined;
   }
   if (normalizedAgentId !== normalizeAgentId(expectedAgentId)) {

@@ -1,15 +1,19 @@
-import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveStateDir } from "../config/paths.js";
-import {
-  applyAgentBindings,
-  applyAgentConfig,
-  buildAgentSummaries,
-  pruneAgentConfig,
-  removeAgentBindings,
-} from "./agents.js";
+import { applyAgentBindings, removeAgentBindings } from "./agents.bindings.js";
+import { applyAgentConfig, buildAgentSummaries, pruneAgentConfig } from "./agents.config.js";
+
+function requireAgentSummary(
+  summaries: ReturnType<typeof buildAgentSummaries>,
+  id: string,
+): ReturnType<typeof buildAgentSummaries>[number] {
+  const summary = summaries.find((entry) => entry.id === id);
+  if (!summary) {
+    throw new Error(`expected agent summary ${id}`);
+  }
+  return summary;
+}
 
 describe("agents helpers", () => {
   it("buildAgentSummaries includes default + configured agents", () => {
@@ -41,23 +45,19 @@ describe("agents helpers", () => {
     };
 
     const summaries = buildAgentSummaries(cfg);
-    const main = summaries.find((summary) => summary.id === "main");
-    const work = summaries.find((summary) => summary.id === "work");
+    const main = requireAgentSummary(summaries, "main");
+    const work = requireAgentSummary(summaries, "work");
 
-    expect(main).toBeTruthy();
-    expect(main?.workspace).toBe(
-      path.join(resolveStateDir(process.env, os.homedir), "workspace-main"),
-    );
-    expect(main?.bindings).toBe(1);
-    expect(main?.model).toBe("anthropic/claude");
-    expect(main?.agentDir.endsWith(path.join("agents", "main", "agent"))).toBe(true);
+    expect(main.workspace).toBe(path.resolve("/main-ws/main"));
+    expect(main.bindings).toBe(1);
+    expect(main.model).toBe("anthropic/claude");
+    expect(main.agentDir.endsWith(path.join("agents", "main", "agent"))).toBe(true);
 
-    expect(work).toBeTruthy();
-    expect(work?.name).toBe("Work");
-    expect(work?.workspace).toBe(path.resolve("/work-ws"));
-    expect(work?.agentDir).toBe(path.resolve("/state/agents/work/agent"));
-    expect(work?.bindings).toBe(1);
-    expect(work?.isDefault).toBe(true);
+    expect(work.name).toBe("Work");
+    expect(work.workspace).toBe(path.resolve("/work-ws"));
+    expect(work.agentDir).toBe(path.resolve("/state/agents/work/agent"));
+    expect(work.bindings).toBe(1);
+    expect(work.isDefault).toBe(true);
   });
 
   it("applyAgentConfig merges updates", () => {
@@ -79,6 +79,39 @@ describe("agents helpers", () => {
     expect(work?.workspace).toBe("/new-ws");
     expect(work?.agentDir).toBe("/state/work/agent");
     expect(work?.model).toBe("anthropic/claude");
+  });
+
+  it("applyAgentConfig merges identity with existing", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "work", identity: { name: "Old", theme: "chill", emoji: "🐢" } }],
+      },
+    };
+
+    const next = applyAgentConfig(cfg, {
+      agentId: "work",
+      identity: { name: "New", emoji: "🦀" },
+    });
+
+    const work = next.agents?.list?.find((agent) => agent.id === "work");
+    expect(work?.identity?.name).toBe("New");
+    expect(work?.identity?.emoji).toBe("🦀");
+    expect(work?.identity?.theme).toBe("chill");
+  });
+
+  it("applyAgentConfig skips identity when not provided", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "work", identity: { name: "Keep", emoji: "🐢" } }],
+      },
+    };
+
+    const next = applyAgentConfig(cfg, { agentId: "work", name: "Renamed" });
+
+    const work = next.agents?.list?.find((agent) => agent.id === "work");
+    expect(work?.name).toBe("Renamed");
+    expect(work?.identity?.name).toBe("Keep");
+    expect(work?.identity?.emoji).toBe("🐢");
   });
 
   it("applyAgentBindings skips duplicates and reports conflicts", () => {
@@ -106,10 +139,37 @@ describe("agents helpers", () => {
       },
     ]);
 
-    expect(result.added).toHaveLength(1);
-    expect(result.skipped).toHaveLength(1);
-    expect(result.conflicts).toHaveLength(1);
-    expect(result.config.bindings).toHaveLength(2);
+    expect(result.added).toStrictEqual([
+      {
+        agentId: "work",
+        match: { channel: "telegram" },
+      },
+    ]);
+    expect(result.skipped).toStrictEqual([
+      {
+        agentId: "main",
+        match: { channel: "whatsapp", accountId: "default" },
+      },
+    ]);
+    expect(result.conflicts).toStrictEqual([
+      {
+        binding: {
+          agentId: "work",
+          match: { channel: "whatsapp", accountId: "default" },
+        },
+        existingAgentId: "main",
+      },
+    ]);
+    expect(result.config.bindings).toStrictEqual([
+      {
+        agentId: "main",
+        match: { channel: "whatsapp", accountId: "default" },
+      },
+      {
+        agentId: "work",
+        match: { channel: "telegram" },
+      },
+    ]);
   });
 
   it("applyAgentBindings upgrades channel-only binding to account-specific binding for same agent", () => {
@@ -129,9 +189,14 @@ describe("agents helpers", () => {
       },
     ]);
 
-    expect(result.added).toHaveLength(0);
-    expect(result.updated).toHaveLength(1);
-    expect(result.conflicts).toHaveLength(0);
+    expect(result.added).toStrictEqual([]);
+    expect(result.updated).toStrictEqual([
+      {
+        agentId: "main",
+        match: { channel: "telegram", accountId: "work" },
+      },
+    ]);
+    expect(result.conflicts).toStrictEqual([]);
     expect(result.config.bindings).toEqual([
       {
         agentId: "main",
@@ -166,9 +231,83 @@ describe("agents helpers", () => {
       },
     ]);
 
-    expect(result.added).toHaveLength(1);
-    expect(result.conflicts).toHaveLength(0);
-    expect(result.config.bindings).toHaveLength(2);
+    expect(result.added).toStrictEqual([
+      {
+        agentId: "work",
+        match: {
+          channel: "discord",
+          accountId: "guild-a",
+          guildId: "123",
+        },
+      },
+    ]);
+    expect(result.conflicts).toStrictEqual([]);
+    expect(result.config.bindings).toStrictEqual([
+      {
+        agentId: "main",
+        match: {
+          channel: "discord",
+          accountId: "guild-a",
+          guildId: "123",
+          roles: ["111", "222"],
+        },
+      },
+      {
+        agentId: "work",
+        match: {
+          channel: "discord",
+          accountId: "guild-a",
+          guildId: "123",
+        },
+      },
+    ]);
+  });
+
+  it("applyAgentBindings keeps distinct bindings when persisted match fields contain pipes", () => {
+    const cfg: OpenClawConfig = {};
+
+    const result = applyAgentBindings(cfg, [
+      {
+        agentId: "main",
+        match: {
+          channel: "discord",
+          peer: { kind: "direct", id: "a|b" },
+          accountId: "default",
+        },
+      },
+      {
+        agentId: "main",
+        match: {
+          channel: "discord",
+          peer: { kind: "direct", id: "a" },
+          guildId: "b",
+          accountId: "|default",
+        },
+      },
+    ]);
+
+    expect(result.added).toStrictEqual([
+      {
+        agentId: "main",
+        match: {
+          channel: "discord",
+          peer: { kind: "direct", id: "a|b" },
+          accountId: "default",
+        },
+      },
+      {
+        agentId: "main",
+        match: {
+          channel: "discord",
+          peer: { kind: "direct", id: "a" },
+          guildId: "b",
+          accountId: "|default",
+        },
+      },
+    ]);
+    expect(result.skipped).toStrictEqual([]);
+    expect(result.conflicts).toStrictEqual([]);
+    expect(result.config.bindings).toStrictEqual(result.added);
   });
 
   it("removeAgentBindings does not remove role-based bindings when removing channel-level routes", () => {
@@ -205,8 +344,17 @@ describe("agents helpers", () => {
       },
     ]);
 
-    expect(result.removed).toHaveLength(1);
-    expect(result.conflicts).toHaveLength(0);
+    expect(result.removed).toStrictEqual([
+      {
+        agentId: "main",
+        match: {
+          channel: "discord",
+          accountId: "guild-a",
+          guildId: "123",
+        },
+      },
+    ]);
+    expect(result.conflicts).toStrictEqual([]);
     expect(result.config.bindings).toEqual([
       {
         agentId: "main",
@@ -238,10 +386,11 @@ describe("agents helpers", () => {
     };
 
     const result = pruneAgentConfig(cfg, "work");
-    expect(result.config.agents?.list?.some((agent) => agent.id === "work")).toBe(false);
-    expect(result.config.agents?.list?.some((agent) => agent.id === "home")).toBe(true);
-    expect(result.config.bindings).toHaveLength(1);
-    expect(result.config.bindings?.[0]?.agentId).toBe("home");
+    expect(result.config.agents?.list?.map((agent) => agent.id)).not.toContain("work");
+    expect(result.config.agents?.list?.map((agent) => agent.id)).toContain("home");
+    expect(result.config.bindings).toStrictEqual([
+      { agentId: "home", match: { channel: "telegram" } },
+    ]);
     expect(result.config.tools?.agentToAgent?.allow).toEqual(["home"]);
     expect(result.removedBindings).toBe(1);
     expect(result.removedAllow).toBe(1);

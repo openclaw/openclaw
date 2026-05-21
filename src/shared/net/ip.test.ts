@@ -3,12 +3,15 @@ import { blockedIpv6MulticastLiterals } from "./ip-test-fixtures.js";
 import {
   extractEmbeddedIpv4FromIpv6,
   isBlockedSpecialUseIpv4Address,
+  isBlockedSpecialUseIpv6Address,
   isCanonicalDottedDecimalIPv4,
   isCarrierGradeNatIpv4Address,
+  isCloudMetadataIpAddress,
   isIpInCidr,
   isIpv4Address,
   isIpv6Address,
   isLegacyIpv4Literal,
+  isLinkLocalIpAddress,
   isLoopbackIpAddress,
   isPrivateOrLoopbackIpAddress,
   isRfc1918Ipv4Address,
@@ -57,6 +60,10 @@ describe("shared ip helpers", () => {
 
   it("treats blocked IPv6 classes as private/internal", () => {
     expect(isPrivateOrLoopbackIpAddress("fec0::1")).toBe(true);
+    expect(isPrivateOrLoopbackIpAddress("2001:db8::1")).toBe(true);
+    expect(isPrivateOrLoopbackIpAddress("2001:2::1")).toBe(true);
+    expect(isPrivateOrLoopbackIpAddress("100::1")).toBe(true);
+    expect(isPrivateOrLoopbackIpAddress("2001:20::1")).toBe(true);
     for (const literal of blockedIpv6MulticastLiterals) {
       expect(isPrivateOrLoopbackIpAddress(literal)).toBe(true);
     }
@@ -68,6 +75,36 @@ describe("shared ip helpers", () => {
     expect(normalizeIpAddress("  [2001:DB8::1]  ")).toBe("2001:db8::1");
     expect(isLoopbackIpAddress("::ffff:127.0.0.1")).toBe(true);
     expect(isLoopbackIpAddress("198.18.0.1")).toBe(false);
+  });
+
+  it("detects link-local addresses without treating normal private ranges as link-local", () => {
+    expect(isLinkLocalIpAddress("169.254.169.254")).toBe(true);
+    expect(isLinkLocalIpAddress("::ffff:169.254.169.254")).toBe(true);
+    expect(isLinkLocalIpAddress("2852039166")).toBe(true);
+    expect(isLinkLocalIpAddress("0xa9fea9fe")).toBe(true);
+    expect(isLinkLocalIpAddress("0xa9.0xfe.0xa9.0xfe")).toBe(true);
+    expect(isLinkLocalIpAddress("64:ff9b::169.254.169.254")).toBe(true);
+    expect(isLinkLocalIpAddress("64:ff9b:1::a9fe:a9fe")).toBe(true);
+    expect(isLinkLocalIpAddress("2002:a9fe:a9fe::")).toBe(true);
+    expect(isLinkLocalIpAddress("fe80::1%lo0")).toBe(true);
+    expect(isLinkLocalIpAddress("[fe80::1]")).toBe(true);
+    expect(isLinkLocalIpAddress("10.0.0.5")).toBe(false);
+    expect(isLinkLocalIpAddress("127.0.0.1")).toBe(false);
+    expect(isLinkLocalIpAddress("fd00::1")).toBe(false);
+  });
+
+  it("detects known non-link-local cloud metadata IPs", () => {
+    expect(isCloudMetadataIpAddress("100.100.100.200")).toBe(true);
+    expect(isCloudMetadataIpAddress("::ffff:100.100.100.200")).toBe(true);
+    expect(isCloudMetadataIpAddress("64:ff9b::100.100.100.200")).toBe(true);
+    expect(isCloudMetadataIpAddress("64:ff9b:1::6464:64c8")).toBe(true);
+    expect(isCloudMetadataIpAddress("2002:6464:64c8::")).toBe(true);
+    expect(isCloudMetadataIpAddress("1684301000")).toBe(true);
+    expect(isCloudMetadataIpAddress("fd00:ec2::254")).toBe(true);
+    expect(isCloudMetadataIpAddress("[fd00:ec2::254]")).toBe(true);
+    expect(isCloudMetadataIpAddress("100.100.100.201")).toBe(false);
+    expect(isCloudMetadataIpAddress("169.254.169.254")).toBe(false);
+    expect(isCloudMetadataIpAddress("fd00::1")).toBe(false);
   });
 
   it("parses loose legacy IPv4 literals that canonical parsing rejects", () => {
@@ -98,5 +135,53 @@ describe("shared ip helpers", () => {
     expect(isBlockedSpecialUseIpv4Address(benchmark, { allowRfc2544BenchmarkRange: true })).toBe(
       false,
     );
+  });
+
+  it("blocks IPv6 unique-local addresses by default and exempts them on opt-in (#74351)", () => {
+    // fc00::/7 is the IPv6 ULA range. Sing-box / Clash / Surge fake-ip
+    // proxies resolve foreign domains here, alongside the IPv4 198.18.0.0/15
+    // benchmark range. Operators using those proxies need both ranges
+    // exempted to keep web_fetch working.
+    const ula = parseCanonicalIpAddress("fc00::1");
+    expect(ula?.kind()).toBe("ipv6");
+    if (!ula || !isIpv6Address(ula)) {
+      throw new Error("expected ipv6 fixture");
+    }
+
+    // Default policy (no options) must continue to block the ULA range.
+    expect(isBlockedSpecialUseIpv6Address(ula)).toBe(true);
+    expect(isBlockedSpecialUseIpv6Address(ula, {})).toBe(true);
+    expect(isBlockedSpecialUseIpv6Address(ula, { allowUniqueLocalRange: false })).toBe(true);
+
+    // Opt-in flag — the only path the SSRF policy uses to thread fake-ip
+    // proxy intent through to the address classifier.
+    expect(isBlockedSpecialUseIpv6Address(ula, { allowUniqueLocalRange: true })).toBe(false);
+  });
+
+  it("opt-in unique-local exemption does NOT bleed into other special-use IPv6 ranges (#74351)", () => {
+    // The exemption must be scoped: loopback (::1), unspecified (::), and
+    // multicast (ff00::/8) all stay blocked even when `allowUniqueLocalRange`
+    // is set, otherwise the flag silently widens the SSRF escape hatch
+    // beyond what operators opted into.
+    const loopback = parseCanonicalIpAddress("::1");
+    const multicast = parseCanonicalIpAddress("ff02::1");
+    const siteLocal = parseCanonicalIpAddress("fec0::1"); // deprecated fec0::/10
+
+    if (
+      !loopback ||
+      !isIpv6Address(loopback) ||
+      !multicast ||
+      !isIpv6Address(multicast) ||
+      !siteLocal ||
+      !isIpv6Address(siteLocal)
+    ) {
+      throw new Error("expected ipv6 fixtures");
+    }
+
+    for (const options of [{}, { allowUniqueLocalRange: true }] as const) {
+      expect(isBlockedSpecialUseIpv6Address(loopback, options)).toBe(true);
+      expect(isBlockedSpecialUseIpv6Address(multicast, options)).toBe(true);
+      expect(isBlockedSpecialUseIpv6Address(siteLocal, options)).toBe(true);
+    }
   });
 });

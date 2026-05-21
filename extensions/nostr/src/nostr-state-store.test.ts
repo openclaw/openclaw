@@ -5,7 +5,9 @@ import { describe, expect, it } from "vitest";
 import type { PluginRuntime } from "../runtime-api.js";
 import {
   readNostrBusState,
+  readNostrProfileState,
   writeNostrBusState,
+  writeNostrProfileState,
   computeSinceTimestamp,
 } from "./nostr-state-store.js";
 import { setNostrRuntime } from "./runtime.js";
@@ -18,7 +20,7 @@ async function withTempStateDir<T>(fn: (dir: string) => Promise<T>) {
     state: {
       resolveStateDir: (env, homedir) => {
         const stateEnv = env ?? process.env;
-        const override = stateEnv.OPENCLAW_STATE_DIR?.trim() || stateEnv.CLAWDBOT_STATE_DIR?.trim();
+        const override = stateEnv.OPENCLAW_STATE_DIR?.trim();
         if (override) {
           return override;
         }
@@ -81,6 +83,108 @@ describe("nostr bus state store", () => {
 
       expect(stateA?.lastProcessedAt).toBe(1000);
       expect(stateB?.lastProcessedAt).toBe(2000);
+    });
+  });
+
+  it("upgrades v1 bus state files on read", async () => {
+    await withTempStateDir(async (dir) => {
+      const filePath = path.join(dir, "nostr", "bus-state-test-bot.json");
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+      await fs.writeFile(
+        filePath,
+        JSON.stringify({
+          version: 1,
+          lastProcessedAt: 1700000000,
+          gatewayStartedAt: 1700000100,
+        }),
+        "utf-8",
+      );
+
+      const state = await readNostrBusState({ accountId: "test-bot" });
+      expect(state).toEqual({
+        version: 2,
+        lastProcessedAt: 1700000000,
+        gatewayStartedAt: 1700000100,
+        recentEventIds: [],
+      });
+    });
+  });
+
+  it("drops malformed recent event ids while keeping the state", async () => {
+    await withTempStateDir(async (dir) => {
+      const filePath = path.join(dir, "nostr", "bus-state-test-bot.json");
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+      await fs.writeFile(
+        filePath,
+        JSON.stringify({
+          version: 2,
+          lastProcessedAt: 1700000000,
+          gatewayStartedAt: 1700000100,
+          recentEventIds: ["evt-1", 2, null],
+        }),
+        "utf-8",
+      );
+
+      const state = await readNostrBusState({ accountId: "test-bot" });
+      expect(state).toEqual({
+        version: 2,
+        lastProcessedAt: 1700000000,
+        gatewayStartedAt: 1700000100,
+        recentEventIds: ["evt-1"],
+      });
+    });
+  });
+});
+
+describe("nostr profile state store", () => {
+  it("persists and reloads profile publish state", async () => {
+    await withTempStateDir(async () => {
+      await writeNostrProfileState({
+        accountId: "test-bot",
+        lastPublishedAt: 1700000000,
+        lastPublishedEventId: "evt-1",
+        lastPublishResults: {
+          "wss://relay.example": "ok",
+        },
+      });
+
+      const state = await readNostrProfileState({ accountId: "test-bot" });
+      expect(state).toEqual({
+        version: 1,
+        lastPublishedAt: 1700000000,
+        lastPublishedEventId: "evt-1",
+        lastPublishResults: {
+          "wss://relay.example": "ok",
+        },
+      });
+    });
+  });
+
+  it("drops malformed relay results while keeping valid state fields", async () => {
+    await withTempStateDir(async (dir) => {
+      const filePath = path.join(dir, "nostr", "profile-state-test-bot.json");
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+      await fs.writeFile(
+        filePath,
+        JSON.stringify({
+          version: 1,
+          lastPublishedAt: 1700000000,
+          lastPublishedEventId: "evt-1",
+          lastPublishResults: {
+            "wss://relay.example": "ok",
+            "wss://relay.bad": "unknown",
+          },
+        }),
+        "utf-8",
+      );
+
+      const state = await readNostrProfileState({ accountId: "test-bot" });
+      expect(state).toEqual({
+        version: 1,
+        lastPublishedAt: 1700000000,
+        lastPublishedEventId: "evt-1",
+        lastPublishResults: null,
+      });
     });
   });
 });

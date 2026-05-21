@@ -24,6 +24,9 @@ export function createBlockReplyCoalescer(params: {
   let bufferText = "";
   let bufferReplyToId: ReplyPayload["replyToId"];
   let bufferAudioAsVoice: ReplyPayload["audioAsVoice"];
+  let bufferIsReasoning: ReplyPayload["isReasoning"];
+  let bufferIsCompactionNotice: ReplyPayload["isCompactionNotice"];
+  let bufferIsFallbackNotice: ReplyPayload["isFallbackNotice"];
   let idleTimer: NodeJS.Timeout | undefined;
 
   const clearIdleTimer = () => {
@@ -38,6 +41,9 @@ export function createBlockReplyCoalescer(params: {
     bufferText = "";
     bufferReplyToId = undefined;
     bufferAudioAsVoice = undefined;
+    bufferIsReasoning = undefined;
+    bufferIsCompactionNotice = undefined;
+    bufferIsFallbackNotice = undefined;
   };
 
   const scheduleIdleFlush = () => {
@@ -67,6 +73,9 @@ export function createBlockReplyCoalescer(params: {
       text: bufferText,
       replyToId: bufferReplyToId,
       audioAsVoice: bufferAudioAsVoice,
+      isReasoning: bufferIsReasoning,
+      isCompactionNotice: bufferIsCompactionNotice,
+      isFallbackNotice: bufferIsFallbackNotice,
     };
     resetBuffer();
     await onFlush(payload);
@@ -97,6 +106,9 @@ export function createBlockReplyCoalescer(params: {
       }
       bufferReplyToId = payload.replyToId;
       bufferAudioAsVoice = payload.audioAsVoice;
+      bufferIsReasoning = payload.isReasoning;
+      bufferIsCompactionNotice = payload.isCompactionNotice;
+      bufferIsFallbackNotice = payload.isFallbackNotice;
       bufferText = text;
       void flush({ force: true });
       return;
@@ -107,13 +119,24 @@ export function createBlockReplyCoalescer(params: {
       payload.replyToId &&
       (!bufferReplyToId || bufferReplyToId !== payload.replyToId),
     );
-    if (bufferText && (replyToConflict || bufferAudioAsVoice !== payload.audioAsVoice)) {
+    const visibilityConflict =
+      bufferText &&
+      (bufferIsReasoning !== payload.isReasoning ||
+        bufferIsCompactionNotice !== payload.isCompactionNotice ||
+        bufferIsFallbackNotice !== payload.isFallbackNotice);
+    if (
+      bufferText &&
+      (replyToConflict || bufferAudioAsVoice !== payload.audioAsVoice || visibilityConflict)
+    ) {
       void flush({ force: true });
     }
 
     if (!bufferText) {
       bufferReplyToId = payload.replyToId;
       bufferAudioAsVoice = payload.audioAsVoice;
+      bufferIsReasoning = payload.isReasoning;
+      bufferIsCompactionNotice = payload.isCompactionNotice;
+      bufferIsFallbackNotice = payload.isFallbackNotice;
     }
 
     const nextText = bufferText ? `${bufferText}${joiner}${text}` : text;
@@ -122,6 +145,9 @@ export function createBlockReplyCoalescer(params: {
         void flush({ force: true });
         bufferReplyToId = payload.replyToId;
         bufferAudioAsVoice = payload.audioAsVoice;
+        bufferIsReasoning = payload.isReasoning;
+        bufferIsCompactionNotice = payload.isCompactionNotice;
+        bufferIsFallbackNotice = payload.isFallbackNotice;
         if (text.length >= maxChars) {
           void onFlush(payload);
           return;

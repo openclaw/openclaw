@@ -1,13 +1,18 @@
 import path from "node:path";
 import { isPathInside } from "../../infra/path-guards.js";
-import type { SandboxBackendCommandParams, SandboxBackendCommandResult } from "./backend.js";
+import type {
+  SandboxBackendCommandParams,
+  SandboxBackendCommandResult,
+  SandboxFsBridgeContext,
+} from "./backend-handle.types.js";
 import { SANDBOX_PINNED_MUTATION_PYTHON } from "./fs-bridge-mutation-helper.js";
-import type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "./fs-bridge.js";
+import { createWritableRenameTargetResolver } from "./fs-bridge-rename-targets.js";
+import type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "./fs-bridge.types.js";
 import {
   isPathInsideContainerRoot,
   normalizeContainerPath as normalizeSandboxContainerPath,
+  relativePathEscapesContainerRoot,
 } from "./path-utils.js";
-import type { SandboxContext } from "./types.js";
 
 type ResolvedRemotePath = SandboxResolvedPath & {
   writable: boolean;
@@ -28,15 +33,20 @@ export type RemoteShellSandboxHandle = {
 };
 
 export function createRemoteShellSandboxFsBridge(params: {
-  sandbox: SandboxContext;
+  sandbox: SandboxFsBridgeContext;
   runtime: RemoteShellSandboxHandle;
 }): SandboxFsBridge {
   return new RemoteShellSandboxFsBridge(params.sandbox, params.runtime);
 }
 
 class RemoteShellSandboxFsBridge implements SandboxFsBridge {
+  private readonly resolveRenameTargets = createWritableRenameTargetResolver(
+    (target) => this.resolveTarget(target),
+    (target, action) => this.ensureWritable(target, action),
+  );
+
   constructor(
-    private readonly sandbox: SandboxContext,
+    private readonly sandbox: SandboxFsBridgeContext,
     private readonly runtime: RemoteShellSandboxHandle,
   ) {}
 
@@ -54,19 +64,21 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     signal?: AbortSignal;
   }): Promise<Buffer> {
     const target = this.resolveTarget(params);
-    const canonical = await this.resolveCanonicalPath({
-      containerPath: target.containerPath,
-      action: "read files",
-      signal: params.signal,
-    });
-    await this.assertNoHardlinkedFile({
-      containerPath: canonical,
-      action: "read files",
-      signal: params.signal,
-    });
-    const result = await this.runRemoteScript({
-      script: 'set -eu\ncat -- "$1"',
-      args: [canonical],
+    const relativePath = path.posix.relative(target.mountRootPath, target.containerPath);
+    if (
+      relativePath === "" ||
+      relativePath === "." ||
+      relativePathEscapesContainerRoot(relativePath)
+    ) {
+      throw new Error(`Invalid sandbox entry target: ${target.containerPath}`);
+    }
+    const result = await this.runMutation({
+      args: [
+        "read",
+        target.mountRootPath,
+        path.posix.dirname(relativePath) === "." ? "" : path.posix.dirname(relativePath),
+        path.posix.basename(relativePath),
+      ],
       signal: params.signal,
     });
     return result.stdout;
@@ -112,7 +124,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     const target = this.resolveTarget(params);
     this.ensureWritable(target, "create directories");
     const relativePath = path.posix.relative(target.mountRootPath, target.containerPath);
-    if (relativePath.startsWith("..") || path.posix.isAbsolute(relativePath)) {
+    if (relativePathEscapesContainerRoot(relativePath)) {
       throw new Error(
         `Sandbox path escapes allowed mounts; cannot create directories: ${target.containerPath}`,
       );
@@ -165,10 +177,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     cwd?: string;
     signal?: AbortSignal;
   }): Promise<void> {
-    const from = this.resolveTarget({ filePath: params.from, cwd: params.cwd });
-    const to = this.resolveTarget({ filePath: params.to, cwd: params.cwd });
-    this.ensureWritable(from, "rename files");
-    this.ensureWritable(to, "rename files");
+    const { from, to } = this.resolveRenameTargets(params);
     const fromPinned = await this.resolvePinnedParent({
       containerPath: from.containerPath,
       action: "rename files",
@@ -310,7 +319,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
 
   private toResolvedPath(params: { mount: MountInfo; containerPath: string }): ResolvedRemotePath {
     const relative = path.posix.relative(params.mount.containerRoot, params.containerPath);
-    if (relative.startsWith("..") || path.posix.isAbsolute(relative)) {
+    if (relativePathEscapesContainerRoot(relative)) {
       throw new Error(
         `Sandbox path escapes allowed mounts; cannot access: ${params.containerPath}`,
       );
@@ -451,7 +460,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       );
     }
     const relativeParentPath = path.posix.relative(mount.containerRoot, canonicalParent);
-    if (relativeParentPath.startsWith("..") || path.posix.isAbsolute(relativeParentPath)) {
+    if (relativePathEscapesContainerRoot(relativeParentPath)) {
       throw new Error(
         `Sandbox path escapes allowed mounts; cannot ${params.action}: ${params.containerPath}`,
       );
@@ -468,8 +477,8 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     stdin?: Buffer | string;
     signal?: AbortSignal;
     allowFailure?: boolean;
-  }) {
-    await this.runRemoteScript({
+  }): Promise<SandboxBackendCommandResult> {
+    return await this.runRemoteScript({
       script: [
         "set -eu",
         "python3 /dev/fd/3 \"$@\" 3<<'PY'",

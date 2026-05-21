@@ -1,39 +1,46 @@
 package ai.openclaw.app.node
 
+import ai.openclaw.app.BuildConfig
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.os.Looper
+import android.util.Base64
 import android.util.Log
 import android.webkit.WebView
 import androidx.core.graphics.createBitmap
 import androidx.core.graphics.scale
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import java.io.ByteArrayOutputStream
-import android.util.Base64
-import org.json.JSONObject
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import ai.openclaw.app.BuildConfig
+import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import kotlin.coroutines.resume
 
 class CanvasController {
-  enum class SnapshotFormat(val rawValue: String) {
+  enum class SnapshotFormat(
+    val rawValue: String,
+  ) {
     Png("png"),
     Jpeg("jpeg"),
   }
 
   @Volatile private var webView: WebView? = null
+
   @Volatile private var url: String? = null
+
   @Volatile private var debugStatusEnabled: Boolean = false
+
   @Volatile private var debugStatusTitle: String? = null
+
   @Volatile private var debugStatusSubtitle: String? = null
+
   @Volatile private var homeCanvasStateJson: String? = null
   private val _currentUrl = MutableStateFlow<String?>(null)
   val currentUrl: StateFlow<String?> = _currentUrl.asStateFlow()
@@ -82,7 +89,10 @@ class CanvasController {
     applyDebugStatus()
   }
 
-  fun setDebugStatus(title: String?, subtitle: String?) {
+  fun setDebugStatus(
+    title: String?,
+    subtitle: String?,
+  ) {
     debugStatusTitle = title
     debugStatusSubtitle = subtitle
     applyDebugStatus()
@@ -131,7 +141,8 @@ class CanvasController {
     withWebViewOnMain { wv ->
       val titleJs = title?.let { JSONObject.quote(it) } ?: "null"
       val subtitleJs = subtitle?.let { JSONObject.quote(it) } ?: "null"
-      val js = """
+      val js =
+        """
         (() => {
           try {
             const api = globalThis.__openclaw;
@@ -145,7 +156,7 @@ class CanvasController {
             }
           } catch (_) {}
         })();
-      """.trimIndent()
+        """.trimIndent()
       wv.evaluateJavascript(js, null)
     }
   }
@@ -153,7 +164,8 @@ class CanvasController {
   private fun applyHomeCanvasState() {
     val payload = homeCanvasStateJson ?: "null"
     withWebViewOnMain { wv ->
-      val js = """
+      val js =
+        """
         (() => {
           try {
             const api = globalThis.__openclaw;
@@ -161,7 +173,7 @@ class CanvasController {
             api.renderHome($payload);
           } catch (_) {}
         })();
-      """.trimIndent()
+        """.trimIndent()
       wv.evaluateJavascript(js, null)
     }
   }
@@ -180,27 +192,45 @@ class CanvasController {
     withContext(Dispatchers.Main) {
       val wv = webView ?: throw IllegalStateException("no webview")
       val bmp = wv.captureBitmap()
-      val scaled = bmp.scaleForMaxWidth(maxWidth)
-
-      val out = ByteArrayOutputStream()
-      scaled.compress(Bitmap.CompressFormat.PNG, 100, out)
-      Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
+      try {
+        val scaled = bmp.scaleForMaxWidth(maxWidth)
+        try {
+          val out = ByteArrayOutputStream()
+          scaled.compress(Bitmap.CompressFormat.PNG, 100, out)
+          Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
+        } finally {
+          if (scaled !== bmp) scaled.recycle()
+        }
+      } finally {
+        bmp.recycle()
+      }
     }
 
-  suspend fun snapshotBase64(format: SnapshotFormat, quality: Double?, maxWidth: Int?): String =
+  suspend fun snapshotBase64(
+    format: SnapshotFormat,
+    quality: Double?,
+    maxWidth: Int?,
+  ): String =
     withContext(Dispatchers.Main) {
       val wv = webView ?: throw IllegalStateException("no webview")
       val bmp = wv.captureBitmap()
-      val scaled = bmp.scaleForMaxWidth(maxWidth)
-
-      val out = ByteArrayOutputStream()
-      val (compressFormat, compressQuality) =
-        when (format) {
-          SnapshotFormat.Png -> Bitmap.CompressFormat.PNG to 100
-          SnapshotFormat.Jpeg -> Bitmap.CompressFormat.JPEG to clampJpegQuality(quality)
+      try {
+        val scaled = bmp.scaleForMaxWidth(maxWidth)
+        try {
+          val out = ByteArrayOutputStream()
+          val (compressFormat, compressQuality) =
+            when (format) {
+              SnapshotFormat.Png -> Bitmap.CompressFormat.PNG to 100
+              SnapshotFormat.Jpeg -> Bitmap.CompressFormat.JPEG to clampJpegQuality(quality)
+            }
+          scaled.compress(compressFormat, compressQuality, out)
+          Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
+        } finally {
+          if (scaled !== bmp) scaled.recycle()
         }
-      scaled.compress(compressFormat, compressQuality, out)
-      Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
+      } finally {
+        bmp.recycle()
+      }
     }
 
   private suspend fun WebView.captureBitmap(): Bitmap =
@@ -216,7 +246,11 @@ class CanvasController {
     }
 
   companion object {
-    data class SnapshotParams(val format: SnapshotFormat, val quality: Double?, val maxWidth: Int?)
+    data class SnapshotParams(
+      val format: SnapshotFormat,
+      val quality: Double?,
+      val maxWidth: Int?,
+    )
 
     fun parseNavigateUrl(paramsJson: String?): String {
       val obj = parseParamsObject(paramsJson) ?: return ""
@@ -255,13 +289,12 @@ class CanvasController {
       return q.coerceIn(0.1, 1.0)
     }
 
-    fun parseSnapshotParams(paramsJson: String?): SnapshotParams {
-      return SnapshotParams(
+    fun parseSnapshotParams(paramsJson: String?): SnapshotParams =
+      SnapshotParams(
         format = parseSnapshotFormat(paramsJson),
         quality = parseSnapshotQuality(paramsJson),
         maxWidth = parseSnapshotMaxWidth(paramsJson),
       )
-    }
 
     private val json = Json { ignoreUnknownKeys = true }
 

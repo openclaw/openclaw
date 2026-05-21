@@ -1,16 +1,13 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { formatCliBannerLine } from "./banner.js";
 
-const readCliBannerTaglineModeMock = vi.fn();
+const readCliBannerTaglineModeMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./banner-config-lite.js", () => ({
+  parseTaglineMode: (value: unknown) =>
+    value === "random" || value === "default" || value === "off" ? value : undefined,
   readCliBannerTaglineMode: readCliBannerTaglineModeMock,
 }));
-
-let formatCliBannerLine: typeof import("./banner.js").formatCliBannerLine;
-
-beforeAll(async () => {
-  ({ formatCliBannerLine } = await import("./banner.js"));
-});
 
 beforeEach(() => {
   readCliBannerTaglineModeMock.mockReset();
@@ -23,6 +20,9 @@ describe("formatCliBannerLine", () => {
 
     const line = formatCliBannerLine("2026.3.7", {
       commit: "abc1234",
+      env: { LANG: "en_US.UTF-8" },
+      isTty: true,
+      platform: "darwin",
       richTty: false,
     });
 
@@ -34,6 +34,9 @@ describe("formatCliBannerLine", () => {
 
     const line = formatCliBannerLine("2026.3.7", {
       commit: "abc1234",
+      env: { LANG: "en_US.UTF-8" },
+      isTty: true,
+      platform: "darwin",
       richTty: false,
     });
 
@@ -45,10 +48,27 @@ describe("formatCliBannerLine", () => {
 
     const line = formatCliBannerLine("2026.3.7", {
       commit: "abc1234",
+      env: { LANG: "en_US.UTF-8" },
+      isTty: true,
+      platform: "darwin",
       richTty: false,
       mode: "default",
     });
 
     expect(line).toBe("🦞 OpenClaw 2026.3.7 (abc1234) — All your chats, one OpenClaw.");
+  });
+
+  it("drops decorative emoji for generic Linux terminals", () => {
+    readCliBannerTaglineModeMock.mockReturnValue("off");
+
+    const line = formatCliBannerLine("2026.3.7", {
+      commit: "abc1234",
+      env: { TERM: "xterm-256color", LANG: "en_US.UTF-8" },
+      isTty: true,
+      platform: "linux",
+      richTty: false,
+    });
+
+    expect(line).toBe("OpenClaw 2026.3.7 (abc1234)");
   });
 });

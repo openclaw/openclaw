@@ -1,11 +1,8 @@
-export type AllowFromMode = "topOnly" | "topOrNested" | "nestedOnly";
+import { getDoctorChannelCapabilities } from "../channel-capabilities.js";
+import type { AllowFromMode } from "./allow-from-mode.types.js";
+
+export type { AllowFromMode } from "./allow-from-mode.types.js";
 
 export function resolveAllowFromMode(channelName: string): AllowFromMode {
-  if (channelName === "googlechat") {
-    return "nestedOnly";
-  }
-  if (channelName === "discord" || channelName === "slack") {
-    return "topOrNested";
-  }
-  return "topOnly";
+  return getDoctorChannelCapabilities(channelName).dmAllowFromMode;
 }

@@ -13,6 +13,25 @@ import {
 } from "./isolated-agent.test-harness.js";
 import { setupIsolatedAgentTurnMocks } from "./isolated-agent.test-setup.js";
 
+vi.mock("../plugins/provider-runtime.js", () => ({
+  resolveExternalAuthProfilesWithPlugins: () => [],
+}));
+
+function getEmbeddedPiAgentParams(): {
+  authProfileId?: string;
+  authProfileIdSource?: string;
+} {
+  const [call] = vi.mocked(runEmbeddedPiAgent).mock.calls;
+  if (!call) {
+    throw new Error("Expected embedded PI agent call for auth profile propagation");
+  }
+  const [params] = call;
+  if (typeof params !== "object" || params === null || Array.isArray(params)) {
+    throw new Error("Expected embedded PI agent params to be an object");
+  }
+  return params;
+}
+
 describe("runCronIsolatedAgentTurn auth profile propagation (#20624)", () => {
   beforeEach(() => {
     setupIsolatedAgentTurnMocks({ fast: true });
@@ -67,7 +86,10 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624)", () => {
       const res = await runCronIsolatedAgentTurn({
         cfg,
         deps: createCliDeps(),
-        job: makeJob({ kind: "agentTurn", message: "check status", deliver: false }),
+        job: {
+          ...makeJob({ kind: "agentTurn", message: "check status" }),
+          delivery: { mode: "none" },
+        },
         message: "check status",
         sessionKey: "cron:job-1",
         lane: "cron",
@@ -77,12 +99,9 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624)", () => {
       expect(vi.mocked(runEmbeddedPiAgent)).toHaveBeenCalledTimes(1);
 
       // 5. Check that authProfileId was passed
-      const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0] as {
-        authProfileId?: string;
-        authProfileIdSource?: string;
-      };
+      const callArgs = getEmbeddedPiAgentParams();
 
-      expect(callArgs?.authProfileId).toBe("openrouter:default");
+      expect(callArgs.authProfileId).toBe("openrouter:default");
     });
   });
 });

@@ -1,13 +1,16 @@
 package ai.openclaw.app.ui
 
-import androidx.compose.foundation.background
+import ai.openclaw.app.HomeDestination
+import ai.openclaw.app.MainViewModel
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -17,7 +20,6 @@ import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ScreenShare
@@ -30,8 +32,8 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -41,12 +43,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.zIndex
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import ai.openclaw.app.MainViewModel
+import androidx.compose.ui.zIndex
 
 private enum class HomeTab(
   val label: String,
@@ -68,10 +69,27 @@ private enum class StatusVisual {
 }
 
 @Composable
-fun PostOnboardingTabs(viewModel: MainViewModel, modifier: Modifier = Modifier) {
+fun PostOnboardingTabs(
+  viewModel: MainViewModel,
+  modifier: Modifier = Modifier,
+) {
   var activeTab by rememberSaveable { mutableStateOf(HomeTab.Connect) }
   var chatTabStarted by rememberSaveable { mutableStateOf(false) }
   var screenTabStarted by rememberSaveable { mutableStateOf(false) }
+  val requestedHomeDestination by viewModel.requestedHomeDestination.collectAsState()
+
+  LaunchedEffect(requestedHomeDestination) {
+    val destination = requestedHomeDestination ?: return@LaunchedEffect
+    activeTab =
+      when (destination) {
+        HomeDestination.Connect -> HomeTab.Connect
+        HomeDestination.Chat -> HomeTab.Chat
+        HomeDestination.Voice -> HomeTab.Voice
+        HomeDestination.Screen -> HomeTab.Screen
+        HomeDestination.Settings -> HomeTab.Settings
+      }
+    viewModel.clearRequestedHomeDestination()
+  }
 
   // Stop TTS when user navigates away from voice tab, and lazily keep the Chat/Screen tabs
   // alive after the first visit so repeated tab switches do not rebuild their UI trees.
@@ -167,7 +185,11 @@ fun PostOnboardingTabs(viewModel: MainViewModel, modifier: Modifier = Modifier) 
 }
 
 @Composable
-private fun ScreenTabScreen(viewModel: MainViewModel, visible: Boolean, modifier: Modifier = Modifier) {
+private fun ScreenTabScreen(
+  viewModel: MainViewModel,
+  visible: Boolean,
+  modifier: Modifier = Modifier,
+) {
   val isConnected by viewModel.isConnected.collectAsState()
   var refreshedForCurrentConnection by rememberSaveable(isConnected) { mutableStateOf(false) }
 
