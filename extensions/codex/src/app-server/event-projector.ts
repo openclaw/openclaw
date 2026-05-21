@@ -896,6 +896,7 @@ export class CodexAppServerEventProjector {
     }
     const meta = itemMeta(item, this.toolProgressDetailMode());
     const suppressChannelProgress = shouldSuppressChannelProgressForItem(item);
+    const sideEffecting = item.type === "mcpToolCall" && isSideEffectingNativeToolItem(item);
     this.emitAgentEvent({
       stream: "item",
       data: {
@@ -907,6 +908,7 @@ export class CodexAppServerEventProjector {
         ...(itemName(item) ? { name: itemName(item) } : {}),
         ...(meta ? { meta } : {}),
         ...(suppressChannelProgress ? { suppressChannelProgress: true } : {}),
+        ...(sideEffecting ? { sideEffecting: true } : {}),
       },
     });
   }
@@ -926,6 +928,7 @@ export class CodexAppServerEventProjector {
     const status = params.phase === "result" ? itemStatus(item) : "running";
     const args = itemToolArgs(item);
     const meta = itemMeta(item, this.toolProgressDetailMode());
+    const sideEffecting = item.type === "mcpToolCall" && isSideEffectingNativeToolItem(item);
     this.recordToolTrajectoryEvent({ phase: params.phase, item, name, args, status });
     this.emitDiagnosticToolExecutionEvent({ phase: params.phase, item, name, status });
     if (params.phase === "result") {
@@ -946,6 +949,7 @@ export class CodexAppServerEventProjector {
         toolCallId: item.id,
         ...(meta ? { meta } : {}),
         ...(params.phase === "start" && args ? { args } : {}),
+        ...(sideEffecting ? { sideEffecting: true } : {}),
         ...(params.phase === "result"
           ? {
               status,

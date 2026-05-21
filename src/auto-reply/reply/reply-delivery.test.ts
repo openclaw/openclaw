@@ -190,6 +190,7 @@ describe("createBlockReplyDeliveryHandler", () => {
     const blockReplyPipeline = {
       enqueue: vi.fn(),
     } as unknown as BlockReplyPipelineLike;
+    const onVisibleBlockReplyQueued = vi.fn();
 
     const handler = createBlockReplyDeliveryHandler({
       onBlockReply: vi.fn(async () => {}),
@@ -201,6 +202,7 @@ describe("createBlockReplyDeliveryHandler", () => {
       blockStreamingEnabled: true,
       blockReplyPipeline,
       directlySentBlockKeys: new Set(),
+      onVisibleBlockReplyQueued,
     });
 
     await handler({ text: "\n\n  Hello from stream" });
@@ -214,6 +216,7 @@ describe("createBlockReplyDeliveryHandler", () => {
       audioAsVoice: false,
       mediaUrls: undefined,
     });
+    expect(onVisibleBlockReplyQueued).toHaveBeenCalledOnce();
   });
 
   it("suppresses implicit current-message threading for block replies when reply threading denies it", async () => {

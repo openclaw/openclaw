@@ -42,6 +42,8 @@ export type AgentItemEventData = {
   progressText?: string;
   /** Preserve item telemetry while letting channel progress render a sibling tool event instead. */
   suppressChannelProgress?: boolean;
+  /** Tool execution is not safe to replay after the host observes this item. */
+  sideEffecting?: boolean;
   approvalId?: string;
   approvalSlug?: string;
 };

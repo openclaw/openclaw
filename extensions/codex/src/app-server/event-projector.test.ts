@@ -2264,6 +2264,13 @@ describe("CodexAppServerEventProjector", () => {
       }),
     );
 
+    const itemStart = findAgentEvent(onAgentEvent, {
+      stream: "item",
+      phase: "start",
+      itemId: "mcp-email-send-1",
+      name: "email.send",
+    }).data;
+    expect(itemStart.sideEffecting).toBe(true);
     const toolStart = findAgentEvent(onAgentEvent, {
       stream: "tool",
       phase: "start",
@@ -2271,6 +2278,7 @@ describe("CodexAppServerEventProjector", () => {
       name: "email.send",
     }).data;
     expect(toolStart.toolCallId).toBe("mcp-email-send-1");
+    expect(toolStart.sideEffecting).toBe(true);
     expect(onToolResult).toHaveBeenCalledWith({
       text: "🧩 Email.send: `user@example.com`",
     });

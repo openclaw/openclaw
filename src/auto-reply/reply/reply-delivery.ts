@@ -83,6 +83,7 @@ export function createBlockReplyDeliveryHandler(params: {
   blockStreamingEnabled: boolean;
   blockReplyPipeline: BlockReplyPipeline | null;
   directlySentBlockKeys: Set<string>;
+  onVisibleBlockReplyQueued?: () => void;
 }): (payload: ReplyPayload) => Promise<void> {
   return async (payload) => {
     const { text, skip } = params.normalizeStreamingText(payload);
@@ -150,10 +151,12 @@ export function createBlockReplyDeliveryHandler(params: {
 
     // Use pipeline if available (block streaming enabled), otherwise send directly.
     if (params.blockStreamingEnabled && params.blockReplyPipeline) {
+      params.onVisibleBlockReplyQueued?.();
       params.blockReplyPipeline.enqueue(blockPayload);
     } else if (params.blockStreamingEnabled) {
       // Send directly when flushing before tool execution (no pipeline but streaming enabled).
       // Track sent key to avoid duplicate in final payloads.
+      params.onVisibleBlockReplyQueued?.();
       await sendDirectBlockReply({
         onBlockReply: params.onBlockReply,
         directlySentBlockKeys: params.directlySentBlockKeys,
@@ -161,6 +164,7 @@ export function createBlockReplyDeliveryHandler(params: {
         payload: blockPayload,
       });
     } else if (blockHasNonTextContent) {
+      params.onVisibleBlockReplyQueued?.();
       await sendDirectBlockReply({
         onBlockReply: params.onBlockReply,
         directlySentBlockKeys: params.directlySentBlockKeys,
