@@ -19,9 +19,15 @@ import { resolveDefaultAgentWorkspaceDir } from "./workspace.js";
 // discovery and external-CLI probing on the hot path.
 
 let currentProviderAuthState: ReadonlyMap<string, boolean> | null = null;
+let currentProviderAuthStateWorkspaceDir: string | undefined;
+// Generation counter guards against an in-flight warm publishing stale
+// state after a subsequent clear/reload has invalidated it.
+let currentProviderAuthStateGeneration = 0;
 
 export function clearCurrentProviderAuthState(): void {
   currentProviderAuthState = null;
+  currentProviderAuthStateWorkspaceDir = undefined;
+  currentProviderAuthStateGeneration += 1;
 }
 
 export function hasAuthForModelProvider(params: {
@@ -36,17 +42,20 @@ export function hasAuthForModelProvider(params: {
 }): boolean {
   const provider = normalizeProviderId(params.provider);
   // The prepared map is built by warmCurrentProviderAuthState with broad
-  // auth discovery (external CLI + plugin synthetic auth enabled, no
-  // caller-supplied agentDir/env/store). Only consult it when the caller's
-  // scope matches; otherwise fall through to compute so callers that
-  // explicitly narrow the auth scope — e.g. gateway `models.list` with
-  // `runtimeAuthDiscovery: false` — get the answer they asked for.
+  // auth discovery (external CLI + plugin synthetic auth enabled) and the
+  // default-agent workspace dir. Only consult it when the caller's full
+  // auth context matches; otherwise fall through to compute so callers
+  // that narrow the scope — e.g. gateway `models.list` with
+  // `runtimeAuthDiscovery: false`, or per-agent picker calls that pass a
+  // non-default workspaceDir — get the answer they asked for.
   const matchesWarmedScope =
     params.discoverExternalCliAuth !== false &&
     params.allowPluginSyntheticAuth !== false &&
     params.agentDir === undefined &&
     params.env === undefined &&
-    params.store === undefined;
+    params.store === undefined &&
+    (params.workspaceDir === undefined ||
+      params.workspaceDir === currentProviderAuthStateWorkspaceDir);
   if (matchesWarmedScope) {
     const preparedAnswer = currentProviderAuthState?.get(provider);
     if (preparedAnswer !== undefined) {
@@ -109,6 +118,10 @@ export function createProviderAuthChecker(params: {
 }
 
 export async function warmCurrentProviderAuthState(cfg: OpenClawConfig): Promise<void> {
+  // Claim a fresh generation; any concurrent warm or clear bumps this and
+  // turns our published state stale.
+  currentProviderAuthStateGeneration += 1;
+  const ownGeneration = currentProviderAuthStateGeneration;
   const catalog = await loadModelCatalog({ config: cfg });
   const providers = new Set<string>();
   for (const entry of catalog) {
@@ -134,5 +147,11 @@ export async function warmCurrentProviderAuthState(cfg: OpenClawConfig): Promise
     });
     state.set(provider, value);
   }
+  if (ownGeneration !== currentProviderAuthStateGeneration) {
+    // A newer warm or clear ran while we were building; skip publication so
+    // the newer answer wins.
+    return;
+  }
   currentProviderAuthState = state;
+  currentProviderAuthStateWorkspaceDir = workspaceDir;
 }

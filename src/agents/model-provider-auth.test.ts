@@ -36,7 +36,7 @@ vi.mock("./auth-profiles.js", () => ({
 }));
 
 vi.mock("./workspace.js", () => ({
-  resolveDefaultAgentWorkspaceDir: () => undefined,
+  resolveDefaultAgentWorkspaceDir: () => "/warm/default-workspace",
 }));
 
 const { clearCurrentProviderAuthState, hasAuthForModelProvider, warmCurrentProviderAuthState } =
@@ -102,6 +102,39 @@ describe("prepared provider auth state", () => {
 
     // Broad-scope caller (default flags) still hits the prepared map.
     expect(hasAuthForModelProvider({ provider: "openai", cfg })).toBe(true);
+    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(2);
+  });
+
+  it("hasAuthForModelProvider falls through to compute when the caller passes a non-default workspaceDir", async () => {
+    const cfg = {} as OpenClawConfig;
+    modelCatalogMocks.loadModelCatalog.mockResolvedValue([
+      { id: "gpt", name: "gpt", provider: "openai" },
+    ]);
+    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(true);
+    await warmCurrentProviderAuthState(cfg);
+    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(1);
+
+    // Per-agent picker calls pass an agent-specific workspaceDir that the
+    // warmer did not cover; the prepared answer must not leak across
+    // workspaces because env/plugin auth resolution depends on workspaceDir.
+    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(false);
+    expect(
+      hasAuthForModelProvider({
+        provider: "openai",
+        cfg,
+        workspaceDir: "/different/agent-workspace",
+      }),
+    ).toBe(false);
+    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(2);
+
+    // Same workspaceDir as the warmer (the default) still hits the prepared map.
+    expect(
+      hasAuthForModelProvider({
+        provider: "openai",
+        cfg,
+        workspaceDir: "/warm/default-workspace",
+      }),
+    ).toBe(true);
     expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(2);
   });
 });
