@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { getModelProviderRequestTransport } from "../provider-request-config.js";
 import { buildInlineProviderModels, resolveProviderModelInput } from "./model.inline-provider.js";
 import { makeModel } from "./model.test-harness.js";
 
@@ -256,6 +257,43 @@ describe("buildInlineProviderModels", () => {
     const result = buildInlineProviderModels(providers);
 
     expect(result).toHaveLength(1);
+    expect(result[0].headers).toEqual({
+      "X-Static": "tenant-a",
+    });
+  });
+
+  it("drops SecretRef marker request values before attaching inline provider transport", () => {
+    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
+      custom: {
+        request: {
+          headers: {
+            Authorization: "secretref-env:OPENAI_REQUEST_AUTH_HEADER",
+            "X-Static": "tenant-a",
+          },
+          auth: {
+            mode: "authorization-bearer",
+            token: "secretref-env:OPENAI_REQUEST_AUTH_TOKEN",
+          },
+          tls: {
+            cert: "secretref-env:OPENAI_REQUEST_CERT",
+            key: "client-key",
+          },
+        },
+        models: [makeModel("custom-model")],
+      },
+    };
+
+    const result = buildInlineProviderModels(providers);
+
+    expect(result).toHaveLength(1);
+    expect(getModelProviderRequestTransport(result[0])).toEqual({
+      headers: {
+        "X-Static": "tenant-a",
+      },
+      tls: {
+        key: "client-key",
+      },
+    });
     expect(result[0].headers).toEqual({
       "X-Static": "tenant-a",
     });

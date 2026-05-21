@@ -8,6 +8,7 @@ import { assertSecretInputResolved } from "../config/types.secrets.js";
 import type { PinnedDispatcherPolicy } from "../infra/net/ssrf.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { COPILOT_INTEGRATION_ID, buildCopilotIdeHeaders } from "./copilot-dynamic-headers.js";
+import { isSecretRefHeaderValueMarker } from "./model-auth-markers.js";
 import type {
   ProviderRequestCapabilities,
   ProviderRequestCapability,
@@ -195,6 +196,9 @@ function sanitizeConfiguredRequestString(value: unknown, path: string): string |
     return undefined;
   }
   const trimmed = value.trim();
+  if (isSecretRefHeaderValueMarker(trimmed)) {
+    return undefined;
+  }
   return trimmed ? trimmed : undefined;
 }
 
