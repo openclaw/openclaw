@@ -4,6 +4,7 @@ import {
   normalizeMemoryWikiMutationInput,
   type ApplyMemoryWikiMutation,
 } from "./apply.js";
+import { compileMemoryWikiVault } from "./compile.js";
 import { registerMemoryWikiGatewayMethods } from "./gateway.js";
 import { listMemoryWikiImportInsights } from "./import-insights.js";
 import { listMemoryWikiImportRuns } from "./import-runs.js";
@@ -119,6 +120,13 @@ describe("memory-wiki gateway methods", () => {
       indexUpdatedFiles: [],
       indexRefreshReason: "no-import-changes",
     });
+    vi.mocked(compileMemoryWikiVault).mockResolvedValue({
+      vaultRoot: "/tmp/wiki",
+      pages: [],
+      updatedFiles: [],
+      reportPaths: {},
+      claimCount: 0,
+    } as never);
     vi.mocked(resolveMemoryWikiStatus).mockResolvedValue({
       vaultMode: "isolated",
       vaultExists: true,
@@ -182,7 +190,7 @@ describe("memory-wiki gateway methods", () => {
     });
   });
 
-  it("returns wiki status over the gateway", async () => {
+  it("returns wiki status over the gateway without syncing imported sources", async () => {
     const { config } = await createVault({ prefix: "memory-wiki-gateway-" });
     const { api, registerGatewayMethod } = createPluginApi();
 
@@ -198,7 +206,7 @@ describe("memory-wiki gateway methods", () => {
       respond,
     });
 
-    expect(syncMemoryWikiImportedSources).toHaveBeenCalledWith({ config, appConfig: undefined });
+    expect(syncMemoryWikiImportedSources).not.toHaveBeenCalled();
     expect(resolveMemoryWikiStatus).toHaveBeenCalledWith(config, {
       appConfig: undefined,
     });
@@ -206,6 +214,37 @@ describe("memory-wiki gateway methods", () => {
       vaultMode: "isolated",
       vaultExists: true,
     });
+  });
+
+  it("runs import sync and compile through write-scoped wiki refresh", async () => {
+    const { config } = await createVault({ prefix: "memory-wiki-gateway-" });
+    const { api, registerGatewayMethod } = createPluginApi();
+
+    registerMemoryWikiGatewayMethods({ api, config });
+    const handler = findGatewayHandler(registerGatewayMethod, "wiki.refresh");
+    if (!handler) {
+      throw new Error("wiki.refresh handler missing");
+    }
+    const respond = vi.fn();
+
+    await handler({
+      params: {},
+      respond,
+    });
+
+    expect(syncMemoryWikiImportedSources).toHaveBeenCalledWith({ config, appConfig: undefined });
+    expect(compileMemoryWikiVault).toHaveBeenCalledWith(config, { touchCacheArtifacts: true });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        sync: expect.objectContaining({
+          importedCount: 0,
+        }),
+        compile: expect.objectContaining({
+          vaultRoot: "/tmp/wiki",
+        }),
+      }),
+    );
   });
 
   it("returns recent import runs over the gateway", async () => {

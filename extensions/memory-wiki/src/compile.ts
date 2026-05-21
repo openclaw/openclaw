@@ -331,6 +331,10 @@ export type CompileMemoryWikiResult = {
   updatedFiles: string[];
 };
 
+export type CompileMemoryWikiOptions = {
+  touchCacheArtifacts?: boolean;
+};
+
 export type RefreshMemoryWikiIndexesResult = {
   refreshed: boolean;
   reason: "auto-compile-disabled" | "no-import-changes" | "missing-indexes" | "import-changed";
@@ -1254,6 +1258,7 @@ async function writeAgentDigestArtifacts(params: {
   rootDir: string;
   pages: WikiPageSummary[];
   pageCounts: Record<WikiPageKind, number>;
+  touchCacheArtifacts?: boolean;
 }): Promise<string[]> {
   const updatedFiles: string[] = [];
   const agentDigestPath = path.join(params.rootDir, AGENT_DIGEST_PATH);
@@ -1270,14 +1275,19 @@ async function writeAgentDigestArtifacts(params: {
     buildClaimsDigestLines({ pages: params.pages }).join("\n"),
   );
 
+  const root = await fsRoot(params.rootDir);
   for (const [filePath, content] of [
     [agentDigestPath, agentDigest],
     [claimsDigestPath, claimsDigest],
   ] as const) {
     const relativePath = path.relative(params.rootDir, filePath);
-    const root = await fsRoot(params.rootDir);
-    const existing = await root.readText(relativePath).catch(() => "");
+    const existing = await root.readText(relativePath).catch(() => undefined);
     if (existing === content) {
+      if (params.touchCacheArtifacts) {
+        const now = new Date();
+        await fs.utimes(filePath, now, now);
+        updatedFiles.push(filePath);
+      }
       continue;
     }
     await root.write(relativePath, content);
@@ -1288,6 +1298,7 @@ async function writeAgentDigestArtifacts(params: {
 
 export async function compileMemoryWikiVault(
   config: ResolvedMemoryWikiConfig,
+  options: CompileMemoryWikiOptions = {},
 ): Promise<CompileMemoryWikiResult> {
   await initializeMemoryWikiVault(config);
   const rootDir = config.vault.path;
@@ -1306,6 +1317,7 @@ export async function compileMemoryWikiVault(
     rootDir,
     pages,
     pageCounts: counts,
+    touchCacheArtifacts: options.touchCacheArtifacts,
   });
   updatedFiles.push(...digestUpdatedFiles);
 

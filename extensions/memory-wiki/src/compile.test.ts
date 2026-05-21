@@ -110,6 +110,52 @@ describe("compileMemoryWikiVault", () => {
     ).resolves.toContain('"text":"Alpha is the canonical source page."');
   });
 
+  it("touches unchanged cache artifacts when requested", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+    });
+
+    await fs.writeFile(
+      path.join(rootDir, "sources", "alpha.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          id: "source.alpha",
+          title: "Alpha",
+          claims: [
+            {
+              id: "claim.alpha.doc",
+              text: "Alpha is the canonical source page.",
+              status: "supported",
+              evidence: [{ sourceId: "source.alpha", lines: "1-3" }],
+            },
+          ],
+        },
+        body: "# Alpha\n",
+      }),
+      "utf8",
+    );
+
+    await compileMemoryWikiVault(config);
+
+    const agentDigestPath = path.join(rootDir, ".openclaw-wiki", "cache", "agent-digest.json");
+    const claimsDigestPath = path.join(rootDir, ".openclaw-wiki", "cache", "claims.jsonl");
+    const stale = new Date("2000-01-01T00:00:00.000Z");
+    await fs.utimes(agentDigestPath, stale, stale);
+    await fs.utimes(claimsDigestPath, stale, stale);
+
+    const result = await compileMemoryWikiVault(config, { touchCacheArtifacts: true });
+
+    expect(result.updatedFiles).toEqual(
+      expect.arrayContaining([agentDigestPath, claimsDigestPath]),
+    );
+    await expect(fs.stat(agentDigestPath)).resolves.toMatchObject({ size: expect.any(Number) });
+    await expect(fs.stat(claimsDigestPath)).resolves.toMatchObject({ size: expect.any(Number) });
+    expect((await fs.stat(agentDigestPath)).mtimeMs).toBeGreaterThan(stale.getTime());
+    expect((await fs.stat(claimsDigestPath)).mtimeMs).toBeGreaterThan(stale.getTime());
+  });
+
   it("renders obsidian-friendly links when configured", async () => {
     const { rootDir, config } = await createVault({
       rootDir: nextCaseRoot(),

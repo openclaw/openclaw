@@ -103,7 +103,7 @@ async function syncImportedSourcesIfNeeded(
   config: ResolvedMemoryWikiConfig,
   appConfig?: OpenClawConfig,
 ) {
-  await syncMemoryWikiImportedSources({ config, appConfig });
+  return await syncMemoryWikiImportedSources({ config, appConfig });
 }
 
 export function registerMemoryWikiGatewayMethods(params: {
@@ -117,7 +117,6 @@ export function registerMemoryWikiGatewayMethods(params: {
     "wiki.status",
     async ({ respond }) => {
       try {
-        await syncImportedSourcesIfNeeded(config, appConfig);
         respond(
           true,
           await resolveMemoryWikiStatus(config, {
@@ -204,6 +203,20 @@ export function registerMemoryWikiGatewayMethods(params: {
       try {
         await syncImportedSourcesIfNeeded(config, appConfig);
         respond(true, await compileMemoryWikiVault(config));
+      } catch (error) {
+        respondError(respond, error);
+      }
+    },
+    { scope: WRITE_SCOPE },
+  );
+
+  api.registerGatewayMethod(
+    "wiki.refresh",
+    async ({ respond }) => {
+      try {
+        const sync = await syncImportedSourcesIfNeeded(config, appConfig);
+        const compile = await compileMemoryWikiVault(config, { touchCacheArtifacts: true });
+        respond(true, { sync, compile });
       } catch (error) {
         respondError(respond, error);
       }

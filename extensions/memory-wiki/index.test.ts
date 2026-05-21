@@ -27,6 +27,7 @@ describe("memory-wiki plugin", () => {
       "wiki.init",
       "wiki.doctor",
       "wiki.compile",
+      "wiki.refresh",
       "wiki.ingest",
       "wiki.lint",
       "wiki.bridge.import",
