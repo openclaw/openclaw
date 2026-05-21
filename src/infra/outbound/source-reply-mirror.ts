@@ -1,3 +1,4 @@
+import type { ReplyPayload } from "../../auto-reply/types.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type {
   ChannelId,
@@ -145,6 +146,9 @@ export async function mirrorDeliveredSourceReplyToTranscript(
         "fileUrl",
       ]),
       mediaUrls: readStringArray(params.actionParams.mediaUrls),
+      presentation: params.actionParams.presentation as ReplyPayload["presentation"],
+      interactive: params.actionParams.interactive as ReplyPayload["interactive"],
+      channelData: params.actionParams.channelData as ReplyPayload["channelData"],
     },
   ]);
   const mirror = projectOutboundPayloadPlanForMirror(plan);
