@@ -110,6 +110,7 @@ const pluginConversationBindingMocks = vi.hoisted(() => ({
 const sessionStoreMocks = vi.hoisted(() => ({
   currentEntry: undefined as Record<string, unknown> | undefined,
   loadSessionStore: vi.fn(() => ({})),
+  readSessionEntry: vi.fn(() => sessionStoreMocks.currentEntry),
   resolveStorePath: vi.fn(() => "/tmp/mock-sessions.json"),
   resolveSessionStoreEntry: vi.fn(() => ({ existing: sessionStoreMocks.currentEntry })),
   updateSessionStoreEntry: vi.fn(
@@ -381,6 +382,7 @@ vi.mock("../../config/sessions/thread-info.js", () => ({
 vi.mock("./dispatch-from-config.runtime.js", () => ({
   createInternalHookEvent: internalHookMocks.createInternalHookEvent,
   loadSessionStore: sessionStoreMocks.loadSessionStore,
+  readSessionEntry: sessionStoreMocks.readSessionEntry,
   resolveSessionStoreEntry: sessionStoreMocks.resolveSessionStoreEntry,
   resolveStorePath: sessionStoreMocks.resolveStorePath,
   triggerInternalHook: internalHookMocks.triggerInternalHook,
@@ -880,6 +882,8 @@ describe("dispatchReplyFromConfig", () => {
     sessionBindingMocks.touch.mockReset();
     sessionStoreMocks.currentEntry = undefined;
     sessionStoreMocks.loadSessionStore.mockClear();
+    sessionStoreMocks.readSessionEntry.mockReset();
+    sessionStoreMocks.readSessionEntry.mockImplementation(() => sessionStoreMocks.currentEntry);
     sessionStoreMocks.resolveStorePath.mockClear();
     sessionStoreMocks.resolveSessionStoreEntry.mockClear();
     threadInfoMocks.parseSessionThreadInfo.mockReset();
@@ -1873,6 +1877,55 @@ describe("dispatchReplyFromConfig", () => {
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
+  });
+
+  it("refreshes verbose progress with session entry snapshots", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      verboseLevel: "on",
+    };
+    sessionStoreMocks.readSessionEntry.mockReturnValue({ verboseLevel: "off" });
+    const cfg = {
+      ...emptyConfig,
+      agents: {
+        defaults: {
+          verboseDefault: "on",
+        },
+      },
+    } satisfies OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      ChatType: "direct",
+      SessionKey: "agent:main:main",
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      sessionStoreMocks.loadSessionStore.mockClear();
+      sessionStoreMocks.resolveSessionStoreEntry.mockClear();
+      sessionStoreMocks.readSessionEntry.mockClear();
+      await opts?.onPlanUpdate?.({
+        phase: "update",
+        explanation: "Inspect code, patch it, run tests.",
+        steps: ["Inspect code", "Patch code", "Run tests"],
+      });
+      return { text: "done" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(sessionStoreMocks.readSessionEntry).toHaveBeenCalledWith(
+      "/tmp/mock-sessions.json",
+      "agent:main:main",
+    );
+    expect(sessionStoreMocks.loadSessionStore).not.toHaveBeenCalled();
+    expect(sessionStoreMocks.resolveSessionStoreEntry).not.toHaveBeenCalled();
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
   });

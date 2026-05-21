@@ -191,6 +191,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     internalHookMocks.triggerInternalHook.mockReset();
     sessionStoreMocks.currentEntry = undefined;
     sessionStoreMocks.loadSessionStore.mockReset().mockReturnValue({});
+    sessionStoreMocks.readSessionEntry.mockReset().mockReturnValue(undefined);
     sessionStoreMocks.resolveStorePath.mockReset().mockReturnValue("/tmp/mock-sessions.json");
     sessionStoreMocks.resolveSessionStoreEntry.mockReset().mockReturnValue({ existing: undefined });
     acpMocks.listAcpSessionEntries.mockReset().mockResolvedValue([]);
