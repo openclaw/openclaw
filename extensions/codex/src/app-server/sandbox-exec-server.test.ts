@@ -168,6 +168,37 @@ describe("OpenClaw Codex sandbox exec-server", () => {
     socket.close();
   });
 
+  it("rejects unsupported arg0 overrides instead of dropping them", async () => {
+    const buildExecSpec = vi.fn(async () => ({
+      argv: ["/bin/sh", "-lc", "true"],
+      env: process.env,
+      stdinMode: "pipe-closed" as const,
+    }));
+    const sandbox = createSandboxContext({ buildExecSpec });
+    const client = createClient();
+    await ensureCodexSandboxExecServerEnvironment({
+      client: client as never,
+      sandbox,
+    });
+    const socket = await openSocket(execServerUrlFromClient(client));
+    await rpc(socket, "initialize", { clientName: "test" });
+    socket.send(JSON.stringify({ method: "initialized" }));
+
+    await expect(
+      rpc(socket, "process/start", {
+        processId: "proc-arg0",
+        argv: ["/bin/sh", "-lc", "true"],
+        cwd: "/workspace",
+        env: {},
+        tty: false,
+        pipeStdin: false,
+        arg0: "codex-linux-sandbox",
+      }),
+    ).rejects.toThrow("does not support arg0 overrides");
+    expect(buildExecSpec).not.toHaveBeenCalled();
+    socket.close();
+  });
+
   it("accepts stdin writes for pipe-backed processes", async () => {
     const sandbox = createSandboxContext({
       buildExecSpec: async () => ({

@@ -110,7 +110,7 @@ class JsonRpcProtocolError extends Error {
 }
 
 export async function closeCodexSandboxExecServersForTests(): Promise<void> {
-  const servers = await Promise.allSettled([...SANDBOX_EXEC_SERVERS.values()]);
+  const servers = await Promise.allSettled(SANDBOX_EXEC_SERVERS.values());
   SANDBOX_EXEC_SERVERS.clear();
   await Promise.all(
     servers.map(async (entry) => {
@@ -432,6 +432,7 @@ async function startProcess(
   }
   const argv = requireStringArray(record.argv, "argv");
   const cwd = requireString(record.cwd, "cwd");
+  rejectUnsupportedArg0(record.arg0);
   const env = readProcessEnv(record);
   const tty = record.tty === true;
   const pipeStdin = record.pipeStdin === true;
@@ -1689,6 +1690,16 @@ function requireStringArray(value: unknown, label: string): string[] {
     throw new Error(`${label} must not be empty.`);
   }
   return value;
+}
+
+function rejectUnsupportedArg0(value: unknown): void {
+  if (value === undefined || value === null) {
+    return;
+  }
+  if (typeof value === "string") {
+    throw new Error("Codex sandbox exec-server does not support arg0 overrides.");
+  }
+  throw new Error("arg0 must be a string or null.");
 }
 
 function readEnv(value: unknown): Record<string, string> {
