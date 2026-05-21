@@ -32,10 +32,38 @@ function matchesExactOrPrefix(id: string, values: readonly string[]): boolean {
   });
 }
 
+const OPENAI_REASONING_MODEL_PREFIXES = [
+  "gpt-5.5",
+  "gpt-5.4",
+  "gpt-5.3",
+  "gpt-5.2",
+  "gpt-5.1",
+  "gpt-5.1-codex",
+  "gpt-5-codex",
+  "gpt-5-mini",
+  "gpt-5-nano",
+  "gpt-5-pro",
+  "o1",
+  "o3",
+  "o4",
+] as const;
+
+const OPENAI_NON_REASONING_MODEL_IDS = ["gpt-5-chat-latest", "gpt-5.3-chat-latest"] as const;
+
+function isOpenAIReasoningModelId(modelId: string): boolean {
+  const normalizedId = normalizeModelId(modelId);
+  if (OPENAI_NON_REASONING_MODEL_IDS.includes(normalizedId)) {
+    return false;
+  }
+  return normalizedId === "gpt-5" ||
+    matchesExactOrPrefix(normalizedId, OPENAI_REASONING_MODEL_PREFIXES);
+}
+
 function buildOpenAIThinkingProfile(params: {
   modelId: string;
   xhighModelIds: readonly string[];
 }): ProviderThinkingProfile {
+  const overridesCatalogReasoning = isOpenAIReasoningModelId(params.modelId);
   return {
     levels: [
       ...OPENAI_THINKING_BASE_LEVELS,
@@ -43,6 +71,7 @@ function buildOpenAIThinkingProfile(params: {
         ? [{ id: "xhigh" as const }]
         : []),
     ],
+    ...(overridesCatalogReasoning ? { overridesCatalogReasoning } : {}),
   };
 }
 
