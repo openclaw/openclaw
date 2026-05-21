@@ -88,6 +88,11 @@ on:
         required: false
         default: ""
         type: string
+      codex_plugin_spec:
+        description: Optional Codex plugin install spec for live Docker package checks; blank derives from release_package_spec or packs the selected ref
+        required: false
+        default: ""
+        type: string
       npm_telegram_provider_mode:
         description: Provider mode for the package Telegram E2E lane
         required: false
@@ -151,6 +156,7 @@ jobs:
           RELEASE_PACKAGE_SPEC: ${{ inputs.release_package_spec }}
           EVIDENCE_PACKAGE_SPEC: ${{ inputs.evidence_package_spec }}
           PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
+          CODEX_PLUGIN_SPEC: ${{ inputs.codex_plugin_spec }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
           RUN_RELEASE_SOAK: ${{ inputs.run_release_soak || inputs.release_profile == 'full' }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
@@ -207,6 +213,9 @@ jobs:
               echo "- Package Acceptance package spec: \`${RELEASE_PACKAGE_SPEC}\`"
             else
               echo "- Package Acceptance package spec: SHA-built release artifact"
+            fi
+            if [[ -n "${CODEX_PLUGIN_SPEC// }" ]]; then
+              echo "- Codex plugin spec: \`${CODEX_PLUGIN_SPEC}\`"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -463,6 +472,7 @@ jobs:
           CROSS_OS_SUITE_FILTER: ${{ inputs.cross_os_suite_filter }}
           RELEASE_PACKAGE_SPEC: ${{ inputs.release_package_spec }}
           PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
+          CODEX_PLUGIN_SPEC: ${{ inputs.codex_plugin_spec }}
         run: |
           set -euo pipefail
 
@@ -558,6 +568,9 @@ jobs:
             if [[ -n "${PACKAGE_ACCEPTANCE_PACKAGE_SPEC// }" ]]; then
               echo "- Package Acceptance package spec: \`${PACKAGE_ACCEPTANCE_PACKAGE_SPEC}\`"
             fi
+            if [[ -n "${CODEX_PLUGIN_SPEC// }" ]]; then
+              echo "- Codex plugin spec: \`${CODEX_PLUGIN_SPEC}\`"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
           child_rerun_group="$RERUN_GROUP"
@@ -585,6 +598,9 @@ jobs:
           fi
           if [[ -n "${PACKAGE_ACCEPTANCE_PACKAGE_SPEC// }" ]]; then
             args+=(-f package_acceptance_package_spec="$PACKAGE_ACCEPTANCE_PACKAGE_SPEC")
+          fi
+          if [[ -n "${CODEX_PLUGIN_SPEC// }" ]]; then
+            args+=(-f codex_plugin_spec="$CODEX_PLUGIN_SPEC")
           fi
 
           dispatch_and_wait openclaw-release-checks.yml "${args[@]}"
