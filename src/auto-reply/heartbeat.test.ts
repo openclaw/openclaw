@@ -213,6 +213,20 @@ Keep this file empty unless you want a tiny checklist. Keep it small.
     expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(true);
   });
 
+  it("returns true for default HEARTBEAT.md with Related doc-link footer (#84675)", () => {
+    // The Related section in the default template includes a doc-link that
+    // should not be treated as actionable content.
+    const content = `# Keep this file empty (or with only comments) to skip heartbeat API calls.
+
+# Add tasks below when you want the agent to check something periodically.
+
+## Related
+
+- [Heartbeat config](/gateway/config-agents)
+`;
+    expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(true);
+  });
+
   it("returns false when fenced heartbeat content includes a real task", () => {
     const content = `\`\`\`markdown
 # Keep this file empty when you want to skip.
