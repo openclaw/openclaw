@@ -105,4 +105,3 @@ peerDependencyRules:
 
 patchedDependencies:
   "@agentclientprotocol/claude-agent-acp@0.36.1": "patches/@agentclientprotocol__claude-agent-acp@0.36.1.patch"
-  "baileys@7.0.0-rc13": "patches/baileys@7.0.0-rc13.patch"

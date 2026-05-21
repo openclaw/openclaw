@@ -35,7 +35,6 @@ packageExtensionsChecksum: sha256-oc/FAHkBR844HBfph1RZWyRMHHBpIFya25tyv5SGf6s=
 
 patchedDependencies:
   '@agentclientprotocol/claude-agent-acp@0.36.1': f4f95d000b8694ca27dbbb969a7ebbfa9e45001e245a927201cb8bc43b6be641
-  baileys@7.0.0-rc13: f2bd4db8403598ce9e4efafe859a27443a41c5ce25d97218de69169b4c03e18c
 
 importers:
 
@@ -1649,7 +1648,7 @@ importers:
         version: 2.2.3
       baileys:
         specifier: 7.0.0-rc13
-        version: 7.0.0-rc13(patch_hash=f2bd4db8403598ce9e4efafe859a27443a41c5ce25d97218de69169b4c03e18c)(audio-decode@2.2.3)(jimp@1.6.1)(sharp@0.34.5)
+        version: 7.0.0-rc13(audio-decode@2.2.3)(jimp@1.6.1)(sharp@0.34.5)
       https-proxy-agent:
         specifier: 9.0.0
         version: 9.0.0
@@ -10560,7 +10559,7 @@ snapshots:
 
   bail@2.0.2: {}
 
-  baileys@7.0.0-rc13(patch_hash=f2bd4db8403598ce9e4efafe859a27443a41c5ce25d97218de69169b4c03e18c)(audio-decode@2.2.3)(jimp@1.6.1)(sharp@0.34.5):
+  baileys@7.0.0-rc13(audio-decode@2.2.3)(jimp@1.6.1)(sharp@0.34.5):
     dependencies:
       '@cacheable/node-cache': 1.7.6
       '@hapi/boom': 9.1.4
