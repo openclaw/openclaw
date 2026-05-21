@@ -898,10 +898,11 @@ describe("startHeartbeatRunner", () => {
       .map((call) => call[1])
       .filter((d): d is number => typeof d === "number");
 
-    // There should be a delay close to the interval (within a small tolerance
-    // for phase alignment). It must NOT be capped to 2_000 ms.
-    const intervalDelays = delays.filter((d) => d > 5_000);
-    expect(intervalDelays.length).toBeGreaterThan(0);
+    // The post-run scheduleNext timer should use the natural interval delay,
+    // not the 2s minimum refire floor.
+    const postRunDelay = delays[delays.length - 1];
+    expect(postRunDelay).toBeGreaterThanOrEqual(intervalMs - 1_000);
+    expect(postRunDelay).toBeLessThanOrEqual(intervalMs);
 
     timeoutSpy.mockRestore();
     runner.stop();
