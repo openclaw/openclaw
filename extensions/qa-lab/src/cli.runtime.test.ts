@@ -782,6 +782,7 @@ describe("qa cli runtime", () => {
         "personal-task-followthrough-status",
         "personal-share-safe-diagnostics-artifact",
         "personal-no-fake-progress",
+        "personal-failure-recovery",
       ],
     });
   });
