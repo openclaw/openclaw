@@ -1,16 +1,34 @@
 import "./fs-safe-defaults.js";
-import { readSecretFileSync as readSecretFileSyncImpl } from "@openclaw/fs-safe/secret";
-import { resolveUserPath } from "../utils.js";
-
-export {
+import {
   DEFAULT_SECRET_FILE_MAX_BYTES,
   PRIVATE_SECRET_DIR_MODE,
   PRIVATE_SECRET_FILE_MODE,
-  readSecretFileSync,
-  tryReadSecretFileSync,
+  readSecretFileSync as readSecretFileSyncImpl,
   type SecretFileReadOptions,
 } from "@openclaw/fs-safe/secret";
+import { resolveUserPath } from "../utils.js";
+
+export { type SecretFileReadOptions } from "@openclaw/fs-safe/secret";
+export { DEFAULT_SECRET_FILE_MAX_BYTES, PRIVATE_SECRET_DIR_MODE, PRIVATE_SECRET_FILE_MODE };
 export { writeSecretFileAtomic as writePrivateSecretFileAtomic } from "@openclaw/fs-safe/secret";
+
+export const readSecretFileSync = readSecretFileSyncImpl;
+
+export function tryReadSecretFileSync(
+  filePath: string | undefined,
+  label: string,
+  options?: SecretFileReadOptions,
+): string | undefined {
+  if (!filePath || filePath.trim().length === 0) {
+    return undefined;
+  }
+
+  try {
+    return readSecretFileSyncImpl(filePath, label, options);
+  } catch {
+    return undefined;
+  }
+}
 
 export type SecretFileReadResult =
   | {
