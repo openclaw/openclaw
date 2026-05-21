@@ -60,6 +60,20 @@ describe("telegramOutbound", () => {
     sendMessageTelegramMock.mockReset();
   });
 
+  it("resolves markdown table config for outbound chunking", () => {
+    const input = ["| Name | Status |", "| --- | --- |", "| Bot | OK |"].join("\n");
+
+    const chunks = telegramOutbound.chunker!(input, 4096, {
+      cfg: { channels: { telegram: { markdown: { tables: "bullets" } } } } as never,
+      accountId: "ops",
+    });
+    const rendered = chunks.join("");
+
+    expect(rendered).toContain("<b>Bot</b>");
+    expect(rendered).toContain("• Status: OK");
+    expect(rendered).not.toContain("| --- | --- |");
+  });
+
   it("forwards mediaLocalRoots in direct media sends", async () => {
     sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-media" });
 

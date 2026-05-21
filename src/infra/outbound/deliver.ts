@@ -1412,6 +1412,8 @@ async function deliverOutboundPayloadsCore(
       textLimit,
       chunkMode,
       formatting: params.formatting,
+      cfg,
+      accountId,
       consumeReplyTo: (value) =>
         applyReplyToConsumption(value, {
           consumeImplicitReply: value.replyToIdSource === "implicit",

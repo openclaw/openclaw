@@ -3,6 +3,7 @@ import {
   chunkMarkdownTextWithMode,
   type ChunkMode,
 } from "../../auto-reply/chunk.js";
+import type { OpenClawConfig } from "../../config/types.js";
 import type { OutboundDeliveryFormattingOptions } from "./formatting.js";
 import type { ReplyToOverride } from "./reply-policy.js";
 
@@ -29,7 +30,11 @@ export type OutboundMessageUnit =
 export type OutboundMessageChunker = (
   text: string,
   limit: number,
-  ctx?: { formatting?: OutboundDeliveryFormattingOptions },
+  ctx?: {
+    formatting?: OutboundDeliveryFormattingOptions;
+    cfg?: OpenClawConfig;
+    accountId?: string | null;
+  },
 ) => string[];
 
 type PlanReplyToConsumption = <T extends OutboundMessageSendOverrides>(overrides: T) => T;
@@ -55,10 +60,14 @@ function chunkTextForPlan(params: {
   limit: number;
   chunker: OutboundMessageChunker;
   formatting?: OutboundDeliveryFormattingOptions;
+  cfg?: OpenClawConfig;
+  accountId?: string | null;
 }): string[] {
-  return params.formatting
-    ? params.chunker(params.text, params.limit, { formatting: params.formatting })
-    : params.chunker(params.text, params.limit);
+  return params.chunker(params.text, params.limit, {
+    formatting: params.formatting,
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
 }
 
 export function planOutboundTextMessageUnits(params: {
@@ -70,6 +79,8 @@ export function planOutboundTextMessageUnits(params: {
   textLimit?: number;
   chunkMode?: ChunkMode;
   formatting?: OutboundDeliveryFormattingOptions;
+  cfg?: OpenClawConfig;
+  accountId?: string | null;
   consumeReplyTo?: PlanReplyToConsumption;
 }): OutboundMessageUnit[] {
   const planTextUnit = (text: string): OutboundMessageUnit => ({
@@ -106,6 +117,8 @@ export function planOutboundTextMessageUnits(params: {
         limit: params.textLimit,
         chunker: params.chunker,
         formatting: params.formatting,
+        cfg: params.cfg,
+        accountId: params.accountId,
       });
       if (!chunks.length && blockChunk) {
         chunks.push(blockChunk);
@@ -122,6 +135,8 @@ export function planOutboundTextMessageUnits(params: {
     limit: params.textLimit,
     chunker: params.chunker,
     formatting: params.formatting,
+    cfg: params.cfg,
+    accountId: params.accountId,
   }).map(planChunkedTextUnit);
 }
 

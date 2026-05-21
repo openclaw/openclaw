@@ -132,6 +132,8 @@ export type ChannelOutboundFormattedContext = ChannelOutboundContext & {
 
 export type ChannelOutboundChunkContext = {
   formatting?: OutboundDeliveryFormattingOptions;
+  cfg?: OpenClawConfig;
+  accountId?: string | null;
 };
 
 export type ChannelOutboundNormalizePayloadParams = {

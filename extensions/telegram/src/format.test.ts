@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   markdownToTelegramChunks,
   markdownToTelegramHtml,
+  markdownToTelegramHtmlChunks,
   renderTelegramHtmlText,
   splitTelegramHtmlChunks,
   telegramHtmlToPlainTextFallback,
@@ -172,6 +173,17 @@ describe("markdownToTelegramHtml", () => {
       .join("");
 
     expect(res).toContain("report/draft.\n\n3. Cognee");
+  });
+
+  it("applies tableMode when rendering Telegram HTML chunks", () => {
+    const input = ["| Name | Status |", "| --- | --- |", "| Bot | OK |"].join("\n");
+
+    const chunks = markdownToTelegramHtmlChunks(input, 4096, { tableMode: "bullets" });
+    const rendered = chunks.join("");
+
+    expect(rendered).toContain("<b>Bot</b>");
+    expect(rendered).toContain("• Status: OK");
+    expect(rendered).not.toContain("| --- | --- |");
   });
 
   it("does not insert Telegram list boundary spacing inside fenced code", () => {

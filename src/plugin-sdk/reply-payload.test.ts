@@ -210,6 +210,35 @@ describe("sendTextMediaPayload", () => {
       "explicit-reply",
     ]);
   });
+
+  it("passes config and account context to text payload chunkers", async () => {
+    const sendText = vi.fn(async ({ text }) => ({ channel: "test", messageId: text }));
+    const chunker = vi.fn(() => ["ab", "cd"]);
+    const cfg = { channels: { telegram: { markdown: { tables: "bullets" } } } };
+
+    await sendTextMediaPayload({
+      channel: "test",
+      ctx: {
+        cfg: cfg as never,
+        accountId: "ops",
+        to: "target",
+        text: "",
+        payload: { text: "abcd" },
+        formatting: { parseMode: "HTML" },
+      },
+      adapter: {
+        textChunkLimit: 2,
+        chunker,
+        sendText,
+      },
+    });
+
+    expect(chunker).toHaveBeenCalledWith("abcd", 2, {
+      formatting: { parseMode: "HTML" },
+      cfg,
+      accountId: "ops",
+    });
+  });
 });
 
 describe("normalizeOutboundReplyPayload", () => {
