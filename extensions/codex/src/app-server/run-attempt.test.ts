@@ -7071,12 +7071,16 @@ describe("runCodexAppServerAttempt", () => {
         return {
           marketplaces: [
             {
-              name: "openai-curated",
-              path: "/marketplaces/openai-curated",
+              name: "openai-bundled",
+              path: "/marketplaces/openai-bundled",
               plugins: [
                 {
-                  id: "computer-use",
+                  id: "computer-use@openai-bundled",
                   name: "computer-use",
+                  source: {
+                    type: "local",
+                    path: "/marketplaces/openai-bundled/plugins/computer-use",
+                  },
                   installed: true,
                   enabled: true,
                 },
@@ -7090,11 +7094,15 @@ describe("runCodexAppServerAttempt", () => {
       if (method === "plugin/read") {
         return {
           plugin: {
-            marketplaceName: "openai-curated",
-            marketplacePath: "/marketplaces/openai-curated",
+            marketplaceName: "openai-bundled",
+            marketplacePath: "/marketplaces/openai-bundled",
             summary: {
-              id: "computer-use",
+              id: "computer-use@openai-bundled",
               name: "computer-use",
+              source: {
+                type: "local",
+                path: "/marketplaces/openai-bundled/plugins/computer-use",
+              },
               installed: true,
               enabled: true,
             },
@@ -7109,7 +7117,7 @@ describe("runCodexAppServerAttempt", () => {
         return {
           data: [
             {
-              name: "computer-use",
+              name: "desktop-control",
               tools: {
                 "computer-use.get_app_state": {},
               },
@@ -7153,7 +7161,8 @@ describe("runCodexAppServerAttempt", () => {
         pluginConfig: {
           computerUse: {
             enabled: true,
-            marketplaceName: "openai-curated",
+            marketplaceName: "openai-bundled",
+            mcpServerName: "desktop-control",
           },
         },
       },
@@ -7166,7 +7175,7 @@ describe("runCodexAppServerAttempt", () => {
       params: {
         threadId: "thread-1",
         turnId: "turn-1",
-        serverName: "computer-use",
+        serverName: "desktop-control",
         mode: "form",
       },
     });
@@ -7179,13 +7188,15 @@ describe("runCodexAppServerAttempt", () => {
     const [bridgeCall] = mockCall(bridgeSpy, "elicitation bridge") as [
       {
         requestParams?: { serverName?: string };
+        computerUseMcpServerName?: string;
         threadId?: string;
         turnId?: string;
       },
     ];
     expect(bridgeCall.threadId).toBe("thread-1");
     expect(bridgeCall.turnId).toBe("turn-1");
-    expect(bridgeCall.requestParams?.serverName).toBe("computer-use");
+    expect(bridgeCall.requestParams?.serverName).toBe("desktop-control");
+    expect(bridgeCall.computerUseMcpServerName).toBe("desktop-control");
     const requestCalls = request.mock.calls as unknown as Array<[string, unknown, unknown?]>;
     const threadStart = requestCalls.find(([method]) => method === "thread/start");
     const threadStartParams = threadStart?.[1] as
