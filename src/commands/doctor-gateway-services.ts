@@ -109,6 +109,7 @@ async function buildExpectedGatewayServicePlan(params: {
     runtime: params.runtime,
     nodePath: params.nodePath,
     existingEnvironment: params.command.environment,
+    existingProgramArguments: params.command.programArguments,
     existingEnvironmentValueSources: params.command.environmentValueSources,
     warn: (message, title) => note(message, title),
     config: params.cfg,

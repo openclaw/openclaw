@@ -29,11 +29,17 @@ vi.mock("../daemon/runtime-paths.js", () => ({
   renderSystemNodeWarning: mocks.renderSystemNodeWarning,
 }));
 
-vi.mock("../daemon/program-args.js", () => ({
-  OPENCLAW_WRAPPER_ENV_KEY: "OPENCLAW_WRAPPER",
-  resolveGatewayProgramArguments: mocks.resolveGatewayProgramArguments,
-  resolveOpenClawWrapperPath: mocks.resolveOpenClawWrapperPath,
-}));
+vi.mock("../daemon/program-args.js", async () => {
+  const actual = await vi.importActual<typeof import("../daemon/program-args.js")>(
+    "../daemon/program-args.js",
+  );
+  return {
+    OPENCLAW_WRAPPER_ENV_KEY: "OPENCLAW_WRAPPER",
+    looksLikeExternalGatewayWrapperArg: actual.looksLikeExternalGatewayWrapperArg,
+    resolveGatewayProgramArguments: mocks.resolveGatewayProgramArguments,
+    resolveOpenClawWrapperPath: mocks.resolveOpenClawWrapperPath,
+  };
+});
 
 vi.mock("../daemon/service-env.js", () => ({
   buildServiceEnvironment: mocks.buildServiceEnvironment,
@@ -249,6 +255,292 @@ describe("buildGatewayInstallPlan", () => {
       firstMockArg(mocks.buildServiceEnvironment, "buildServiceEnvironment").env?.OPENCLAW_WRAPPER,
     ).toBe(wrapperPath);
     expect(plan.environment.OPENCLAW_WRAPPER).toBe(wrapperPath);
+  });
+
+  it("preserves OPENCLAW_WRAPPER carried only in the existing service environment", async () => {
+    // Regression: 2026.5.19 update-mode doctor would silently rewrite a
+    // wrapper-driven service to a direct `[node, entrypoint, gateway]`
+    // command because buildGatewayInstallPlan only consulted explicit
+    // --wrapper / OPENCLAW_WRAPPER in the invocation env, not the wrapper
+    // already recorded in the existing service env.
+    const wrapperPath = path.resolve("/usr/local/bin/openclaw-doppler");
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        OPENCLAW_PORT: "3000",
+        OPENCLAW_WRAPPER: wrapperPath,
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: isolatedPlanEnv(),
+      existingEnvironment: { OPENCLAW_WRAPPER: wrapperPath },
+      port: 3000,
+      runtime: "node",
+    });
+
+    expect(
+      firstMockArg(mocks.resolveGatewayProgramArguments, "resolveGatewayProgramArguments")
+        .wrapperPath,
+    ).toBe(wrapperPath);
+    expect(plan.environment.OPENCLAW_WRAPPER).toBe(wrapperPath);
+  });
+
+  it("infers the wrapper from existing argv[0] when no other source supplies it", async () => {
+    // Regression: on 2026-05-20 an `openclaw update --yes` rewrote a plist
+    // whose ProgramArguments was [launch_gateway.sh] (wrapper-only, no
+    // OPENCLAW_WRAPPER env recorded). The updater regenerated it as
+    // [node, entrypoint, gateway, --port], which dropped the Keychain
+    // secret-loading prologue and broke gateway startup with
+    // "OPENCLAW_GATEWAY_TOKEN is missing or empty".
+    const wrapperDir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-wrapper-test-"));
+    const wrapperPath = path.join(wrapperDir, "launch_gateway.sh");
+    fs.writeFileSync(wrapperPath, "#!/bin/sh\nexec openclaw gateway\n", { mode: 0o755 });
+    try {
+      mockNodeGatewayPlanFixture({
+        serviceEnvironment: { OPENCLAW_PORT: "3000" },
+      });
+      const warn = vi.fn();
+
+      const plan = await buildGatewayInstallPlan({
+        env: isolatedPlanEnv(),
+        existingProgramArguments: [wrapperPath],
+        port: 3000,
+        runtime: "node",
+        warn,
+      });
+
+      expect(
+        firstMockArg(mocks.resolveGatewayProgramArguments, "resolveGatewayProgramArguments")
+          .wrapperPath,
+      ).toBe(wrapperPath);
+      expect(
+        firstMockArg(mocks.buildServiceEnvironment, "buildServiceEnvironment").env
+          ?.OPENCLAW_WRAPPER,
+      ).toBe(wrapperPath);
+      expect(plan).toBeDefined();
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("Preserving existing gateway wrapper"),
+        "Gateway",
+      );
+    } finally {
+      fs.rmSync(wrapperDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not infer a wrapper when existing argv[0] is the gateway dist entrypoint", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: { OPENCLAW_PORT: "3000" },
+    });
+
+    await buildGatewayInstallPlan({
+      env: isolatedPlanEnv(),
+      existingProgramArguments: [
+        "/opt/homebrew/lib/node_modules/openclaw/dist/entry.js",
+        "gateway",
+        "--port",
+        "3000",
+      ],
+      port: 3000,
+      runtime: "node",
+    });
+
+    expect(
+      firstMockArg(mocks.resolveGatewayProgramArguments, "resolveGatewayProgramArguments")
+        .wrapperPath,
+    ).toBeUndefined();
+  });
+
+  it("does not infer a wrapper from a node runtime argv[0]", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: { OPENCLAW_PORT: "3000" },
+    });
+
+    await buildGatewayInstallPlan({
+      env: isolatedPlanEnv(),
+      existingProgramArguments: [
+        "/opt/homebrew/opt/node/bin/node",
+        "/opt/homebrew/lib/node_modules/openclaw/dist/entry.js",
+        "gateway",
+        "--port",
+        "3000",
+      ],
+      port: 3000,
+      runtime: "node",
+    });
+
+    expect(
+      firstMockArg(mocks.resolveGatewayProgramArguments, "resolveGatewayProgramArguments")
+        .wrapperPath,
+    ).toBeUndefined();
+  });
+
+  it("preserves a wrapper path that contains spaces", async () => {
+    const wrapperDir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-wrapper space test-"));
+    const wrapperPath = path.join(wrapperDir, "launch gateway.sh");
+    fs.writeFileSync(wrapperPath, "#!/bin/sh\nexec openclaw gateway\n", { mode: 0o755 });
+    try {
+      mockNodeGatewayPlanFixture({
+        serviceEnvironment: { OPENCLAW_PORT: "3000" },
+      });
+
+      await buildGatewayInstallPlan({
+        env: isolatedPlanEnv(),
+        existingProgramArguments: [wrapperPath],
+        port: 3000,
+        runtime: "node",
+      });
+
+      expect(
+        firstMockArg(mocks.resolveGatewayProgramArguments, "resolveGatewayProgramArguments")
+          .wrapperPath,
+      ).toBe(wrapperPath);
+    } finally {
+      fs.rmSync(wrapperDir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves the wrapper even when audit-driven rewrites fire for unrelated issues (e.g. missing PATH)", async () => {
+    // Regression sentinel: the audit's `gateway-path-missing` (recommended)
+    // and `launchd-run-at-load` (recommended) checks still trigger a
+    // service rewrite under `openclaw update --yes`. That rewrite must
+    // route through buildGatewayInstallPlan with the existing wrapper
+    // inferred, so the regenerated plist keeps the wrapper as argv[0].
+    const wrapperDir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-wrapper-audit-test-"));
+    const wrapperPath = path.join(wrapperDir, "launch_gateway.sh");
+    fs.writeFileSync(wrapperPath, "#!/bin/sh\nexec openclaw gateway\n", { mode: 0o755 });
+    try {
+      mockNodeGatewayPlanFixture({
+        // Simulate the audit-induced rewrite: no existing env, but the
+        // plan builder produces a managed serviceEnvironment with PATH.
+        serviceEnvironment: {
+          OPENCLAW_PORT: "3000",
+          PATH: "/usr/local/bin:/usr/bin:/bin",
+        },
+      });
+
+      const plan = await buildGatewayInstallPlan({
+        env: isolatedPlanEnv(),
+        existingProgramArguments: [wrapperPath],
+        existingEnvironment: undefined,
+        port: 3000,
+        runtime: "node",
+      });
+
+      expect(
+        firstMockArg(mocks.resolveGatewayProgramArguments, "resolveGatewayProgramArguments")
+          .wrapperPath,
+      ).toBe(wrapperPath);
+      // The plan adds managed env (PATH, OPENCLAW_PORT) while keeping the
+      // wrapper as the program to execute — the wrapper sources its own
+      // env on top, so this is non-destructive.
+      expect(plan.environment.PATH).toBe("/usr/local/bin:/usr/bin:/bin");
+    } finally {
+      fs.rmSync(wrapperDir, { recursive: true, force: true });
+    }
+  });
+
+  it("infers a wrapper even when the existing service argv looks like a plain custom binary", async () => {
+    // A user-supplied gateway launcher need not be a `.sh` script — it
+    // could be a compiled binary at /usr/local/bin/openclaw-launcher.
+    // looksLikeExternalGatewayWrapperArg only filters by extension/path
+    // shape (not node/bun/dist), so it must still treat this as a wrapper
+    // candidate. The runtime check (executable + exists) then validates.
+    const wrapperDir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-custom-bin-test-"));
+    const wrapperPath = path.join(wrapperDir, "openclaw-launcher");
+    fs.writeFileSync(wrapperPath, "#!/bin/sh\nexec openclaw gateway\n", { mode: 0o755 });
+    try {
+      mockNodeGatewayPlanFixture({ serviceEnvironment: { OPENCLAW_PORT: "3000" } });
+
+      await buildGatewayInstallPlan({
+        env: isolatedPlanEnv(),
+        existingProgramArguments: [wrapperPath],
+        port: 3000,
+        runtime: "node",
+      });
+
+      expect(
+        firstMockArg(mocks.resolveGatewayProgramArguments, "resolveGatewayProgramArguments")
+          .wrapperPath,
+      ).toBe(wrapperPath);
+    } finally {
+      fs.rmSync(wrapperDir, { recursive: true, force: true });
+    }
+  });
+
+  it("hard-fails when the operator removed or replaced the wrapper file", async () => {
+    // The user deletes the wrapper script (or moves it) before running
+    // an update. The install plan must NOT silently regenerate a direct
+    // `[node, entrypoint, gateway]` command — that is exactly the
+    // 2026-05-20 failure mode. Refuse and require the operator to
+    // explicitly reinstall.
+    const wrapperDir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-removed-wrapper-test-"));
+    const removedWrapperPath = path.join(wrapperDir, "launch_gateway.sh");
+    // Intentionally do NOT create the file.
+    try {
+      mockNodeGatewayPlanFixture({ serviceEnvironment: { OPENCLAW_PORT: "3000" } });
+      mocks.resolveOpenClawWrapperPath.mockImplementation(async (value: string | undefined) => {
+        if (!value?.trim()) {
+          return undefined;
+        }
+        const resolved = path.resolve(value);
+        try {
+          fs.accessSync(resolved, fs.constants.X_OK);
+          return resolved;
+        } catch {
+          throw new Error(`OPENCLAW_WRAPPER must point to an executable file: ${resolved}`);
+        }
+      });
+
+      await expect(
+        buildGatewayInstallPlan({
+          env: isolatedPlanEnv(),
+          existingProgramArguments: [removedWrapperPath],
+          port: 3000,
+          runtime: "node",
+        }),
+      ).rejects.toThrow(/Refusing to rewrite a wrapper-backed gateway service/);
+
+      // And critically: the direct-exec plan was never generated.
+      expect(mocks.resolveGatewayProgramArguments).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(wrapperDir, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses to rewrite a wrapper-backed service when the inferred wrapper file is missing", async () => {
+    // Direct exec is exactly the dangerous fallback the original incident
+    // exposed: a previously wrapper-backed service that loses its wrapper
+    // also loses its secret-loading prologue and crashes on startup. The
+    // install plan must refuse instead of silently regenerating a direct
+    // `[node, entrypoint, gateway, …]` command.
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: { OPENCLAW_PORT: "3000" },
+    });
+    mocks.resolveOpenClawWrapperPath.mockImplementation(async (value: string | undefined) => {
+      if (!value?.trim()) {
+        return undefined;
+      }
+      const resolved = path.resolve(value);
+      try {
+        fs.accessSync(resolved, fs.constants.X_OK);
+        return resolved;
+      } catch {
+        throw new Error(`OPENCLAW_WRAPPER must point to an executable file: ${resolved}`);
+      }
+    });
+
+    await expect(
+      buildGatewayInstallPlan({
+        env: isolatedPlanEnv(),
+        existingProgramArguments: ["/nonexistent/launch_gateway.sh"],
+        port: 3000,
+        runtime: "node",
+      }),
+    ).rejects.toThrow(
+      /Refusing to rewrite a wrapper-backed gateway service.*\/nonexistent\/launch_gateway\.sh/,
+    );
+
+    expect(mocks.resolveGatewayProgramArguments).not.toHaveBeenCalled();
   });
 
   it("tracks safe config env keys without embedding literal values", async () => {

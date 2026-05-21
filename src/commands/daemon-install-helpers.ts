@@ -9,6 +9,7 @@ import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
 import { resolveGatewayStateDir } from "../daemon/paths.js";
 import {
+  looksLikeExternalGatewayWrapperArg,
   OPENCLAW_WRAPPER_ENV_KEY,
   resolveGatewayProgramArguments,
   resolveOpenClawWrapperPath,
@@ -494,11 +495,90 @@ async function buildGatewayInstallEnvironment(params: {
   };
 }
 
+/**
+ * Resolves the wrapper path the install plan should use, consulting
+ * (in priority order):
+ *   1. an explicit `--wrapper` arg,
+ *   2. {@link OPENCLAW_WRAPPER_ENV_KEY} in the invocation env,
+ *   3. {@link OPENCLAW_WRAPPER_ENV_KEY} recorded in the existing service env,
+ *   4. argv[0] of the existing service, if it looks like an external wrapper.
+ *
+ * Sources 3 and 4 preserve a wrapper across update-mode service refreshes
+ * for plists installed before the env-var was recorded. Source 4 is a
+ * heuristic — `looksLikeExternalGatewayWrapperArg` only filters by
+ * extension/path shape, so `resolveOpenClawWrapperPath` still validates
+ * that the file exists and is executable.
+ */
+async function resolveWrapperPathFromAllSources(params: {
+  explicit?: string;
+  env: Record<string, string | undefined>;
+  existingEnvironment?: Record<string, string | undefined>;
+  existingProgramArguments?: string[];
+  warn?: DaemonInstallWarnFn;
+}): Promise<string | undefined> {
+  const explicit = await resolveOpenClawWrapperPath(
+    params.explicit ?? params.env[OPENCLAW_WRAPPER_ENV_KEY],
+  );
+  if (explicit) {
+    return explicit;
+  }
+  const fromExistingEnv = await resolveOpenClawWrapperPath(
+    params.existingEnvironment?.[OPENCLAW_WRAPPER_ENV_KEY],
+  ).catch(() => undefined);
+  if (fromExistingEnv) {
+    return fromExistingEnv;
+  }
+  const candidate = params.existingProgramArguments?.[0];
+  if (!looksLikeExternalGatewayWrapperArg(candidate)) {
+    return undefined;
+  }
+  let resolved: string | undefined;
+  let resolutionError: unknown;
+  try {
+    resolved = await resolveOpenClawWrapperPath(candidate);
+  } catch (err) {
+    resolutionError = err;
+  }
+  if (resolved) {
+    if (params.warn) {
+      params.warn(
+        `Preserving existing gateway wrapper detected in service argv[0]: ${resolved}. ` +
+          `Reinstall with \`openclaw gateway install --force --wrapper ${resolved}\` to make this explicit.`,
+        "Gateway",
+      );
+    }
+    return resolved;
+  }
+  // The previously-installed service is wrapper-backed, but the wrapper
+  // file is no longer usable. Falling back to a direct `[node, entrypoint,
+  // gateway, …]` plan is exactly the failure mode that prompted this fix
+  // (#2026-05-20 incident) — it silently drops the wrapper's
+  // secret-loading prologue. Refuse instead and let the operator repair
+  // explicitly.
+  const detail = resolutionError instanceof Error ? ` (${resolutionError.message})` : "";
+  throw new Error(
+    `Refusing to rewrite a wrapper-backed gateway service: the existing wrapper ` +
+      `at ${candidate} is missing or not executable${detail}. ` +
+      `Restore the wrapper, or reinstall explicitly with \`openclaw gateway install --force --wrapper <path>\` ` +
+      `(or pass \`--wrapper\` to whatever invoked this install).`,
+    resolutionError instanceof Error ? { cause: resolutionError } : undefined,
+  );
+}
+
 export async function buildGatewayInstallPlan(params: {
   env: Record<string, string | undefined>;
   port: number;
   runtime: GatewayDaemonRuntime;
   existingEnvironment?: Record<string, string | undefined>;
+  /**
+   * argv of the currently-installed service, if any. Used to recover an
+   * external wrapper that was set as argv[0] before
+   * {@link OPENCLAW_WRAPPER_ENV_KEY} was recorded in the service
+   * environment, so an update-mode repair does not silently rewrite the
+   * plist with a direct `[node, entrypoint, gateway, …]` command and lose
+   * the wrapper's secret-loading shell prologue.
+   */
+  existingProgramArguments?: string[];
   devMode?: boolean;
   nodePath?: string;
   wrapperPath?: string;
@@ -519,9 +599,13 @@ export async function buildGatewayInstallPlan(params: {
     devMode: params.devMode,
     nodePath: params.nodePath,
   });
-  const wrapperPath = await resolveOpenClawWrapperPath(
-    params.wrapperPath ?? params.env[OPENCLAW_WRAPPER_ENV_KEY],
-  );
+  const wrapperPath = await resolveWrapperPathFromAllSources({
+    explicit: params.wrapperPath,
+    env: params.env,
+    existingEnvironment: params.existingEnvironment,
+    existingProgramArguments: params.existingProgramArguments,
+    warn: params.warn,
+  });
   const serviceInputEnv: Record<string, string | undefined> = wrapperPath
     ? { ...params.env, [OPENCLAW_WRAPPER_ENV_KEY]: wrapperPath }
     : params.env;

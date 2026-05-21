@@ -3,6 +3,10 @@ import path from "node:path";
 import { normalizeEnvVarKey } from "../infra/host-env-security.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveLaunchAgentPlistPath } from "./launchd.js";
+import {
+  looksLikeExternalGatewayWrapperArg,
+  OPENCLAW_WRAPPER_ENV_KEY,
+} from "./program-args.js";
 import { isBunRuntime, isNodeRuntime } from "./runtime-binary.js";
 import {
   isSystemNodePath,
@@ -205,17 +209,43 @@ async function auditLaunchdPlist(
   }
 }
 
-function auditGatewayCommand(programArguments: string[] | undefined, issues: ServiceConfigIssue[]) {
+/**
+ * Returns true when the service is launched through an external wrapper
+ * — either recorded in the service env as {@link OPENCLAW_WRAPPER_ENV_KEY}
+ * or detected as argv[0]. Wrappers exec the gateway internally, so an
+ * audit that only inspects argv cannot see the `gateway` subcommand and
+ * must not assume it is missing.
+ */
+function isWrapperDrivenServiceCommand(command: GatewayServiceCommand): boolean {
+  if (!command) {
+    return false;
+  }
+  if (normalizeOptionalString(command.environment?.[OPENCLAW_WRAPPER_ENV_KEY])) {
+    return true;
+  }
+  return looksLikeExternalGatewayWrapperArg(command.programArguments[0]);
+}
+
+function auditGatewayCommand(command: GatewayServiceCommand, issues: ServiceConfigIssue[]) {
+  const programArguments = command?.programArguments;
   if (!programArguments || programArguments.length === 0) {
     return;
   }
-  if (!hasGatewaySubcommand(programArguments)) {
-    issues.push({
-      code: SERVICE_AUDIT_CODES.gatewayCommandMissing,
-      message: "Service command does not include the gateway subcommand",
-      level: "aggressive",
-    });
+  if (hasGatewaySubcommand(programArguments)) {
+    return;
   }
+  if (isWrapperDrivenServiceCommand(command)) {
+    // The wrapper is opaque from this side — it may or may not exec the
+    // gateway subcommand. Treat it as user-managed and skip the audit
+    // rather than triggering an "aggressive" rewrite that would clobber
+    // the wrapper.
+    return;
+  }
+  issues.push({
+    code: SERVICE_AUDIT_CODES.gatewayCommandMissing,
+    message: "Service command does not include the gateway subcommand",
+    level: "aggressive",
+  });
 }
 
 function parseGatewayPortArg(value: string | undefined): number | undefined {
@@ -414,6 +444,14 @@ function auditGatewayServicePath(
   }
   const servicePath = command?.environment?.PATH;
   if (!servicePath) {
+    if (isWrapperDrivenServiceCommand(command)) {
+      // Wrapper-backed services set their own PATH inside the wrapper
+      // (e.g. via `. load_openclaw_runtime_env.sh`). A missing PATH in
+      // the plist's EnvironmentVariables is expected, not a defect — flagging
+      // it would auto-trigger update-mode service rewrites that clobber the
+      // wrapper for the same incident this fix addresses.
+      return;
+    }
     issues.push({
       code: SERVICE_AUDIT_CODES.gatewayPathMissing,
       message: "Gateway service PATH is not set; the daemon should use a minimal PATH.",
@@ -556,7 +594,7 @@ export async function auditGatewayServiceConfig(params: {
   const issues: ServiceConfigIssue[] = [];
   const platform = params.platform ?? process.platform;
 
-  auditGatewayCommand(params.command?.programArguments, issues);
+  auditGatewayCommand(params.command, issues);
   auditGatewayServicePort({
     programArguments: params.command?.programArguments,
     issues,

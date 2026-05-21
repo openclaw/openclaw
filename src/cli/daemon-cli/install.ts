@@ -245,6 +245,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       runtime: runtimeRaw,
       wrapperPath,
       existingEnvironment: existingServiceEnv,
+      existingProgramArguments: existingServiceCommand?.programArguments,
       existingEnvironmentValueSources: existingServiceCommand?.environmentValueSources,
       warn: (message) => {
         if (json) {
@@ -299,6 +300,7 @@ async function getGatewayServiceAutoRefreshMessage(params: {
         runtime: params.runtime,
         wrapperPath: params.wrapperPath,
         existingEnvironment: params.existingEnvironment,
+        existingProgramArguments: params.currentCommand?.programArguments,
         existingEnvironmentValueSources: params.existingEnvironmentValueSources,
         warn: () => undefined,
         config: params.config,
@@ -320,6 +322,7 @@ async function getGatewayServiceAutoRefreshMessage(params: {
         runtime: params.runtime,
         wrapperPath: params.wrapperPath,
         existingEnvironment: params.existingEnvironment,
+        existingProgramArguments: params.currentCommand?.programArguments,
         existingEnvironmentValueSources: params.existingEnvironmentValueSources,
         warn: () => undefined,
         config: params.config,

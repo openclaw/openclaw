@@ -460,6 +460,86 @@ describe("auditGatewayServiceConfig", () => {
 
     expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayProxyEnvEmbedded)).toBe(true);
   });
+
+  describe("wrapper-driven service command", () => {
+    // Regression: 2026.5.19 update-mode doctor flagged
+    // gateway-command-missing (aggressive) for any LaunchAgent whose
+    // argv didn't contain the literal "gateway" subcommand. That auto-
+    // confirmed a plist rewrite under `openclaw update --yes`, dropping
+    // a user-supplied Keychain wrapper. The audit must treat wrapper-
+    // driven services as opaque rather than broken.
+    it("does not flag gateway-command-missing when OPENCLAW_WRAPPER is set in service env", async () => {
+      const audit = await auditGatewayServiceConfig({
+        env: { HOME: "/tmp" },
+        platform: "darwin",
+        command: {
+          programArguments: ["/Users/me/.openclaw/credentials/launch_gateway.sh"],
+          environment: {
+            PATH: "/usr/local/bin:/usr/bin:/bin",
+            OPENCLAW_WRAPPER: "/Users/me/.openclaw/credentials/launch_gateway.sh",
+          },
+        },
+      });
+      expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayCommandMissing)).toBe(false);
+    });
+
+    it("does not flag gateway-command-missing when argv[0] looks like an external wrapper", async () => {
+      // The pre-2026.5.19 install at /Users/cedric/.openclaw had no
+      // EnvironmentVariables key at all — only the wrapper as argv[0].
+      // The audit must detect that shape and skip the aggressive flag.
+      const audit = await auditGatewayServiceConfig({
+        env: { HOME: "/tmp" },
+        platform: "darwin",
+        command: {
+          programArguments: ["/Users/me/.openclaw/credentials/launch_gateway.sh"],
+          environment: { PATH: "/usr/local/bin:/usr/bin:/bin" },
+        },
+      });
+      expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayCommandMissing)).toBe(false);
+    });
+
+    it("does not flag gateway-path-missing when service is wrapper-driven (wrapper sets its own PATH)", async () => {
+      // 2026-05-21 follow-up: live status on the recovered install still
+      // reported gateway-path-missing in addition to gateway-command-missing
+      // because the wrapper-only plist has no EnvironmentVariables dict at
+      // all. The wrapper sources its own env via the Keychain helper, so
+      // the missing PATH is expected, not a defect.
+      const audit = await auditGatewayServiceConfig({
+        env: { HOME: "/tmp" },
+        platform: "darwin",
+        command: {
+          programArguments: ["/Users/me/.openclaw/credentials/launch_gateway.sh"],
+          environment: {}, // no PATH, no OPENCLAW_WRAPPER
+        },
+      });
+      expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayPathMissing)).toBe(false);
+      expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayCommandMissing)).toBe(false);
+    });
+
+    it("still flags gateway-path-missing when service is a direct node invocation", async () => {
+      const audit = await auditGatewayServiceConfig({
+        env: { HOME: "/tmp" },
+        platform: "linux",
+        command: {
+          programArguments: ["/usr/bin/node", "/opt/openclaw/dist/entry.js", "gateway"],
+          environment: {},
+        },
+      });
+      expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayPathMissing)).toBe(true);
+    });
+
+    it("still flags gateway-command-missing when argv[0] is a known runtime without a gateway subcommand", async () => {
+      const audit = await auditGatewayServiceConfig({
+        env: { HOME: "/tmp" },
+        platform: "linux",
+        command: {
+          programArguments: ["/usr/bin/node", "/opt/openclaw/dist/entry.js", "run"],
+          environment: { PATH: "/usr/local/bin:/usr/bin:/bin" },
+        },
+      });
+      expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayCommandMissing)).toBe(true);
+    });
+  });
 });
 
 describe("checkTokenDrift", () => {

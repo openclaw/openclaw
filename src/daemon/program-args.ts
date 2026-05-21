@@ -180,6 +180,32 @@ async function resolveBinaryPath(binary: string): Promise<string> {
   }
 }
 
+/**
+ * Heuristic: does the first ProgramArguments entry look like an external
+ * wrapper (e.g. a user-supplied launch script) rather than a managed
+ * runtime binary or the gateway dist entrypoint?
+ *
+ * Used to recover the wrapper from an existing service definition when the
+ * plist was installed before {@link OPENCLAW_WRAPPER_ENV_KEY} was recorded
+ * in the service environment (in that case argv[0] is the wrapper itself
+ * and nothing else records the fact). Returning true does NOT prove the
+ * path is an exec'able file — call {@link resolveOpenClawWrapperPath} on
+ * the result to validate.
+ */
+export function looksLikeExternalGatewayWrapperArg(value: string | undefined): boolean {
+  const trimmed = value?.trim();
+  if (!trimmed || !path.isAbsolute(trimmed)) {
+    return false;
+  }
+  if (isNodeRuntime(trimmed) || isBunRuntime(trimmed)) {
+    return false;
+  }
+  if (isGatewayDistEntrypointPath(trimmed)) {
+    return false;
+  }
+  return true;
+}
+
 export async function resolveOpenClawWrapperPath(
   inputPath: string | undefined,
 ): Promise<string | undefined> {

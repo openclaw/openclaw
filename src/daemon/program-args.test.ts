@@ -35,7 +35,10 @@ vi.mock("node:child_process", async () => {
   };
 });
 
-import { resolveGatewayProgramArguments } from "./program-args.js";
+import {
+  looksLikeExternalGatewayWrapperArg,
+  resolveGatewayProgramArguments,
+} from "./program-args.js";
 
 const originalArgv = [...process.argv];
 
@@ -204,5 +207,42 @@ describe("resolveGatewayProgramArguments", () => {
         wrapperPath,
       }),
     ).rejects.toThrow("OPENCLAW_WRAPPER must point to an executable file");
+  });
+});
+
+describe("looksLikeExternalGatewayWrapperArg", () => {
+  it("accepts an absolute path that isn't a node/bun binary or dist entrypoint", () => {
+    expect(
+      looksLikeExternalGatewayWrapperArg("/Users/me/.openclaw/credentials/launch_gateway.sh"),
+    ).toBe(true);
+    expect(looksLikeExternalGatewayWrapperArg("/usr/local/bin/openclaw-doppler")).toBe(true);
+  });
+
+  it("rejects node and bun runtime paths", () => {
+    expect(looksLikeExternalGatewayWrapperArg("/opt/homebrew/opt/node/bin/node")).toBe(false);
+    expect(looksLikeExternalGatewayWrapperArg("/usr/bin/node")).toBe(false);
+    expect(looksLikeExternalGatewayWrapperArg("/opt/homebrew/bin/bun")).toBe(false);
+    expect(looksLikeExternalGatewayWrapperArg("C:\\Program Files\\nodejs\\node.exe")).toBe(false);
+  });
+
+  it("rejects the gateway dist entrypoint", () => {
+    expect(
+      looksLikeExternalGatewayWrapperArg(
+        "/opt/homebrew/lib/node_modules/openclaw/dist/entry.js",
+      ),
+    ).toBe(false);
+    expect(
+      looksLikeExternalGatewayWrapperArg(
+        "/opt/homebrew/lib/node_modules/openclaw/dist/index.js",
+      ),
+    ).toBe(false);
+  });
+
+  it("rejects relative paths, empty input, and undefined", () => {
+    expect(looksLikeExternalGatewayWrapperArg(undefined)).toBe(false);
+    expect(looksLikeExternalGatewayWrapperArg("")).toBe(false);
+    expect(looksLikeExternalGatewayWrapperArg("   ")).toBe(false);
+    expect(looksLikeExternalGatewayWrapperArg("./launch_gateway.sh")).toBe(false);
+    expect(looksLikeExternalGatewayWrapperArg("launch_gateway.sh")).toBe(false);
   });
 });
