@@ -66,21 +66,6 @@ async function expectOkResolution(
   return result;
 }
 
-function firstMockArg(
-  mock: { mock: { calls: readonly unknown[][] } },
-  label: string,
-): Record<string, unknown> {
-  const [call] = mock.mock.calls;
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  const [arg] = call;
-  if (typeof arg !== "object" || arg === null || Array.isArray(arg)) {
-    throw new Error(`expected ${label} input to be an object`);
-  }
-  return arg as Record<string, unknown>;
-}
-
 describe("resolveMessagingTarget (directory fallback)", () => {
   const cfg = {} as OpenClawConfig;
 
@@ -126,6 +111,73 @@ describe("resolveMessagingTarget (directory fallback)", () => {
     expect(mocks.listGroupsLive).toHaveBeenCalledTimes(1);
   });
 
+  it("preserves the matched directory entry kind for single matches", async () => {
+    const entry: ChannelDirectoryEntry = { kind: "user", id: "staff_bob", name: "Bob" };
+    mocks.listGroups.mockResolvedValue([entry]);
+    mocks.listGroupsLive.mockResolvedValue([]);
+
+    const result = await expectOkResolution({
+      cfg,
+      channel: "dingtalk",
+      input: "Bob",
+    });
+
+    expect(result.target).toEqual({
+      to: "staff_bob",
+      kind: "user",
+      display: "Bob",
+      source: "directory",
+      resolutionSource: "directory",
+    });
+  });
+
+  it('preserves "channel" directory entries as channel targets', async () => {
+    const entry: ChannelDirectoryEntry = {
+      kind: "channel",
+      id: "channel:support-room",
+      name: "Support Room",
+    };
+    mocks.listGroups.mockResolvedValue([entry]);
+    mocks.listGroupsLive.mockResolvedValue([]);
+
+    const result = await expectOkResolution({
+      cfg,
+      channel: "dingtalk",
+      input: "Support Room",
+    });
+
+    expect(result.target).toEqual({
+      to: "channel:support-room",
+      kind: "channel",
+      display: "Support Room",
+      source: "directory",
+      resolutionSource: "directory",
+    });
+  });
+
+  it("preserves the selected directory entry kind for non-error ambiguous matches", async () => {
+    mocks.listGroups.mockResolvedValue([
+      { kind: "group", id: "group:support", name: "Support", rank: 1 },
+      { kind: "channel", id: "channel:support", name: "Support", rank: 5 },
+    ] satisfies ChannelDirectoryEntry[]);
+    mocks.listGroupsLive.mockResolvedValue([]);
+
+    const result = await expectOkResolution({
+      cfg,
+      channel: "dingtalk",
+      input: "Support",
+      resolveAmbiguous: "best",
+    });
+
+    expect(result.target).toEqual({
+      to: "channel:support",
+      kind: "channel",
+      display: "Support",
+      source: "directory",
+      resolutionSource: "directory",
+    });
+  });
+
   it("skips directory lookup for direct ids", async () => {
     const result = await expectOkResolution({
       cfg,
@@ -165,9 +217,10 @@ describe("resolveMessagingTarget (directory fallback)", () => {
       resolutionSource: "plugin",
       display: undefined,
     });
-    expect(mocks.resolveTarget).toHaveBeenCalledOnce();
-    expect(firstMockArg(mocks.resolveTarget, "target resolver").input).toBe(
-      "dthcxgoxhifn3pwh65cut3ud3w",
+    expect(mocks.resolveTarget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: "dthcxgoxhifn3pwh65cut3ud3w",
+      }),
     );
     expect(mocks.listGroups).not.toHaveBeenCalled();
     expect(mocks.listGroupsLive).not.toHaveBeenCalled();
@@ -244,8 +297,11 @@ describe("resolveMessagingTarget (directory fallback)", () => {
     expect(mocks.listPeers).toHaveBeenCalledTimes(1);
     expect(mocks.listPeersLive).toHaveBeenCalledTimes(1);
     expect(mocks.listGroups).not.toHaveBeenCalled();
-    expect(mocks.resolveTarget).toHaveBeenCalledOnce();
-    expect(firstMockArg(mocks.resolveTarget, "target resolver").input).toBe("+15551234567");
+    expect(mocks.resolveTarget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: "+15551234567",
+      }),
+    );
   });
 
   it("keeps plugin-owned id casing when resolver returns a normalized target", async () => {
