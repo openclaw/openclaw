@@ -1,5 +1,5 @@
 ---
-summary: "Policy-backed doctor checks for workspace conformance."
+summary: "Adds policy-backed doctor checks for workspace conformance."
 read_when:
   - You are installing, configuring, or auditing the policy plugin
 title: "Policy plugin"
@@ -7,7 +7,7 @@ title: "Policy plugin"
 
 # Policy plugin
 
-Policy-backed doctor checks for workspace conformance.
+Adds policy-backed doctor checks for workspace conformance.
 
 ## Distribution
 
@@ -16,22 +16,8 @@ Policy-backed doctor checks for workspace conformance.
 
 ## Surface
 
-plugin; CLI command: [`openclaw policy`](/cli/policy)
-
-## Behavior
-
-The Policy plugin contributes doctor health checks for policy-managed OpenClaw
-settings and governed workspace declarations. Policy currently covers channel
-conformance, governed tool metadata, MCP server posture, model-provider posture,
-and private-network access posture.
-
-Policy stores authored requirements in `policy.jsonc`, observes existing
-OpenClaw settings and workspace declarations as evidence, and reports drift
-through `openclaw policy check` and `openclaw doctor --lint`. A clean policy
-check emits policy, evidence, findings, and attestation hashes that operators
-can record for audit.
+plugin
 
 ## Related docs
 
-- [Policy CLI](/cli/policy)
-- [Doctor lint mode](/cli/doctor#lint-mode)
+- [policy](/cli/policy)
