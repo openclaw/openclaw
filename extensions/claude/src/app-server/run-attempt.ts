@@ -41,6 +41,8 @@ import {
   resolveBootstrapContextForRun,
   resolveSandboxContext,
   runAgentHarnessAfterToolCallHook,
+  runAgentHarnessAgentEndHook,
+  runAgentHarnessLlmOutputHook,
   runBeforeToolCallHook,
   supportsModelTools,
   type AgentMessage,
@@ -99,6 +101,7 @@ export async function runClaudeAppServerAttempt(
   params: EmbeddedRunAttemptParams,
   options: RunClaudeAppServerAttemptOptions,
 ): Promise<EmbeddedRunAttemptResult> {
+  const attemptStartedAt = Date.now();
   const result = emptyResult(params);
   const cfg = resolveConfig(options.pluginConfig);
   const client = getSharedClaudeAppServerClient({
@@ -316,6 +319,49 @@ export async function runClaudeAppServerAttempt(
     } else if (!hasText && !hasTools && !hasReasoning) {
       result.agentHarnessResultClassification = "empty";
     }
+
+    // 9. Fire the harness lifecycle hooks codex fires at the end of its
+    //    run-attempt (run-attempt.ts:2686 + :2704). Without these, the
+    //    provenance plugin's agent_end → finalTaintBySession path never
+    //    gets populated for claude turns, which is why message_sending
+    //    couldn't attach a trust footer to Tabitha's replies. The hooks
+    //    are fire-and-forget (codex does the same).
+    const hookCtxForHarness = {
+      runId: params.runId,
+      agentId: params.agentId,
+      sessionKey: sandboxSessionKey,
+      sessionId: params.sessionId,
+      workspaceDir: params.workspaceDir,
+      messageProvider: params.messageProvider ?? undefined,
+      trigger: params.trigger,
+      channelId: hookChannelFields.channelId,
+    };
+    const resolvedRef = `${params.model.provider}/${params.modelId}`;
+    runAgentHarnessLlmOutputHook({
+      event: {
+        runId: params.runId,
+        sessionId: params.sessionId,
+        provider: params.model.provider,
+        model: params.modelId,
+        resolvedRef,
+        ...(params.runtimePlan?.observability?.harnessId
+          ? { harnessId: params.runtimePlan.observability.harnessId }
+          : { harnessId: "claude-app-server" }),
+        assistantTexts: result.assistantTexts,
+        ...(result.lastAssistant ? { lastAssistant: result.lastAssistant } : {}),
+      },
+      ctx: hookCtxForHarness,
+    });
+    runAgentHarnessAgentEndHook({
+      event: {
+        messages: result.messagesSnapshot,
+        success: !result.aborted && !result.promptError,
+        ...(result.promptError ? { error: formatPromptError(result.promptError) } : {}),
+        durationMs: Date.now() - attemptStartedAt,
+      },
+      ctx: hookCtxForHarness,
+    });
+
     return result;
   } catch (err) {
     const externalAbort = params.abortSignal?.aborted ?? false;
@@ -1193,6 +1239,17 @@ function safeStringify(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+function formatPromptError(err: unknown): string {
+  if (err == null) return "unknown error";
+  if (typeof err === "string") return err;
+  if (err instanceof Error) return err.message || String(err);
+  if (typeof err === "object" && "message" in err) {
+    const m = (err as { message?: unknown }).message;
+    if (typeof m === "string") return m;
+  }
+  return String(err);
 }
 
 // Detect whether a BeforeToolCall hook rewrote the approval params.
