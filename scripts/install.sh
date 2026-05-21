@@ -90,6 +90,16 @@ is_non_interactive_shell() {
     return 1
 }
 
+has_controlling_tty() {
+    if [[ ! -r /dev/tty || ! -w /dev/tty ]]; then
+        return 1
+    fi
+    if ! { : </dev/tty; } 2>/dev/null; then
+        return 1
+    fi
+    return 0
+}
+
 gum_is_tty() {
     if [[ -n "${NO_COLOR:-}" ]]; then
         return 1
@@ -100,7 +110,7 @@ gum_is_tty() {
     if [[ -t 2 || -t 1 ]]; then
         return 0
     fi
-    if [[ -r /dev/tty && -w /dev/tty ]]; then
+    if has_controlling_tty; then
         return 0
     fi
     return 1
@@ -1152,7 +1162,7 @@ is_promptable() {
     if [[ "$NO_PROMPT" == "1" ]]; then
         return 1
     fi
-    if [[ -r /dev/tty && -w /dev/tty ]]; then
+    if has_controlling_tty; then
         return 0
     fi
     return 1
@@ -2577,7 +2587,7 @@ run_bootstrap_onboarding_if_needed() {
         return
     fi
 
-    if [[ ! -r /dev/tty || ! -w /dev/tty ]]; then
+    if ! is_promptable; then
         local user_claw
         user_claw="$(openclaw_command_for_user "${OPENCLAW_BIN:-}")"
         ui_info "BOOTSTRAP.md found but no TTY; run ${user_claw} onboard to finish setup"
@@ -2962,7 +2972,7 @@ main() {
         ui_kv "Switch to npm" "curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --install-method npm"
     elif [[ "$is_upgrade" == "true" ]]; then
         ui_info "Upgrade complete"
-        if [[ -r /dev/tty && -w /dev/tty ]]; then
+        if has_controlling_tty || [[ "$NO_ONBOARD" == "1" || "$NO_PROMPT" == "1" ]]; then
             local claw="${OPENCLAW_BIN:-}"
             if [[ -z "$claw" ]]; then
                 claw="$(resolve_openclaw_bin || true)"
@@ -3010,7 +3020,7 @@ main() {
             fi
             ui_info "Starting setup"
             echo ""
-            if [[ -r /dev/tty && -w /dev/tty ]]; then
+            if is_promptable; then
                 local claw="${OPENCLAW_BIN:-}"
                 if [[ -z "$claw" ]]; then
                     claw="$(resolve_openclaw_bin || true)"

@@ -431,6 +431,19 @@ describe("install.sh", () => {
     expect(script).toContain('corepack prepare "pnpm@${version}" --activate');
     expect(script).toContain('activate_repo_pnpm_version "$repo_dir"');
   });
+
+  it("does not treat /dev/tty permissions as a controlling terminal", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      if has_controlling_tty; then echo "has_tty=1"; else echo "has_tty=0"; fi
+      if is_promptable; then echo "promptable=1"; else echo "promptable=0"; fi
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("has_tty=0");
+    expect(result.stdout).toContain("promptable=0");
+  });
 });
 
 describe("install.sh macOS Homebrew Node behavior", () => {
