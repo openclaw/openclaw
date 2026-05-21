@@ -76,6 +76,23 @@
       }
     },
     {
+      "name": "@openclaw/claude",
+      "description": "OpenClaw Claude harness plugin — delegates Anthropic turns to @openclaw/claude-app-server via codex-shaped JSON-RPC over stdio.",
+      "source": "official",
+      "kind": "harness",
+      "openclaw": {
+        "plugin": {
+          "id": "claude",
+          "label": "Claude"
+        },
+        "install": {
+          "npmSpec": "@openclaw/claude",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.5.1-beta.1"
+        }
+      }
+    },
+    {
       "name": "@openclaw/codex",
       "description": "OpenClaw Codex harness and model provider plugin",
       "source": "official",

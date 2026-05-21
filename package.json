@@ -38,6 +38,7 @@
     "!dist/extensions/node_modules/**",
     "!dist/extensions/*/node_modules/**",
     "!dist/extensions/brave/**",
+    "!dist/extensions/claude/**",
     "!dist/extensions/codex/**",
     "!dist/extensions/diagnostics-otel/**",
     "!dist/extensions/diagnostics-prometheus/**",

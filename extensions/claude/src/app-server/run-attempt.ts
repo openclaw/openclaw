@@ -436,22 +436,6 @@ export async function runClaudeAppServerAttempt(
     //    couldn't attach a trust footer to Tabitha's replies. The hooks
     //    are fire-and-forget (codex does the same).
     const resolvedRef = `${params.model.provider}/${params.modelId}`;
-    // TEMPORARY DIAGNOSTIC for provenance footer chain (Tank live-test
-    // 2026-05-21): log what we pass to agent_end so we can confirm the
-    // hook fires + cross-check the sessionKey against what
-    // message_sending sees on outbound delivery. Remove once verified.
-    embeddedAgentLog.info("[claude-app-server] firing agent_end harness hooks", {
-      runId: params.runId,
-      sessionId: params.sessionId,
-      sessionKey: harnessHookCtx.sessionKey,
-      channelId: harnessHookCtx.channelId,
-      messageProvider: harnessHookCtx.messageProvider,
-      assistantTextsLen: result.assistantTexts.length,
-      lastAssistantHasContent: Boolean(result.lastAssistant),
-      messagesSnapshotLen: result.messagesSnapshot.length,
-      didSendViaMessagingTool: result.didSendViaMessagingTool,
-      resolvedRef,
-    });
     runAgentHarnessLlmOutputHook({
       event: {
         runId: params.runId,
@@ -696,19 +680,20 @@ function registerToolCallHandler(
     if (req.method !== "item/tool/call") return undefined;
     const call = req.params as DynamicToolCallParams | undefined;
     if (!call || typeof call.tool !== "string") return undefined;
-    // Tank P1: filter by turn identity so concurrent turns on the shared
-    // client don't cross-route tool calls. Return undefined (let next
-    // handler in chain try) when not for our turn. When turnIdentity
-    // hasn't been bound yet (ensureThread hadn't returned), we also
-    // return undefined to avoid claiming requests for other turns.
+    // Tank P1/P2: strict turn-identity filter. Require BOTH the turn
+    // identity to be fully bound (threadId + turnId, set in runAttempt
+    // step 6/7) AND the incoming params to carry matching ids. Permissive
+    // matching (accept-when-unbound or accept-when-missing) lets the
+    // first registered handler claim a request that wasn't meant for it
+    // under concurrency. Return undefined so the next handler in the
+    // chain tries; ultimate fallback is the server's
+    // defaultServerRequestResponse which rejects with "no dynamic-tool
+    // handler registered".
+    if (!turnIdentity.threadId || !turnIdentity.turnId) return undefined;
     const callThreadId = typeof call.threadId === "string" ? call.threadId : undefined;
     const callTurnId = typeof call.turnId === "string" ? call.turnId : undefined;
-    if (turnIdentity.threadId && callThreadId && callThreadId !== turnIdentity.threadId) {
-      return undefined;
-    }
-    if (turnIdentity.turnId && callTurnId && callTurnId !== turnIdentity.turnId) {
-      return undefined;
-    }
+    if (callThreadId !== turnIdentity.threadId) return undefined;
+    if (callTurnId !== turnIdentity.turnId) return undefined;
     const response = await bridge.handleToolCall(call);
     return response as unknown as JsonValue;
   });
@@ -740,9 +725,18 @@ async function ensureThread(
   // Rotation reasons that the server CAN'T patch via applyResumeOverrides.
   // Today the only such reason is a dynamicTools-catalog shift — the SDK's
   // MCP server registration happens at thread/start and isn't refreshable
-  // on resume. Rotating for that case still drops the SDK transcript;
-  // tracked as a follow-up (need a server-side "thread/fork" or in-place
-  // mcpServers refresh path).
+  // on resume. Rotating for that case still drops the SDK transcript.
+  //
+  // KNOWN LIMITATION (tracked as a follow-up; surface in PR notes when
+  // upstreaming): a tool-catalog change mid-session resets conversation
+  // history. Mitigations to consider:
+  //   (a) Implement thread/fork on the server side and use it here, since
+  //       fork copies the SDK transcript across the new thread id.
+  //   (b) Teach the server to refresh sdkOptions.mcpServers on resume
+  //       (probably requires SDK support — the SDK's MCP registration
+  //       isn't refreshable today AFAICT).
+  // In practice the catalog churn is rare for stable plugin sets, but it
+  // should be called out.
   //
   // Reasons we used to rotate for but now patch in-place via resume:
   //  - cwd (Tank-#6 fix; server applyResumeOverrides patches meta.cwd)
@@ -1512,16 +1506,14 @@ function registerApprovalHandler(
       return undefined;
     }
     const params = (req.params ?? {}) as Record<string, unknown>;
-    // Tank P1: same turn-identity filter as registerToolCallHandler so
-    // approval requests don't cross-route between concurrent turns.
+    // Tank P1/P2: strict turn-identity filter (see registerToolCallHandler
+    // for the rationale). Approval requests carry threadId+turnId in
+    // their params; both must exactly match the bound active turn.
+    if (!turnIdentity.threadId || !turnIdentity.turnId) return undefined;
     const reqThreadId = typeof params.threadId === "string" ? params.threadId : undefined;
     const reqTurnId = typeof params.turnId === "string" ? params.turnId : undefined;
-    if (turnIdentity.threadId && reqThreadId && reqThreadId !== turnIdentity.threadId) {
-      return undefined;
-    }
-    if (turnIdentity.turnId && reqTurnId && reqTurnId !== turnIdentity.turnId) {
-      return undefined;
-    }
+    if (reqThreadId !== turnIdentity.threadId) return undefined;
+    if (reqTurnId !== turnIdentity.turnId) return undefined;
     const toolName = typeof params.toolName === "string" ? params.toolName : "unknown";
     const toolInput =
       params.toolInput && typeof params.toolInput === "object" && !Array.isArray(params.toolInput)
