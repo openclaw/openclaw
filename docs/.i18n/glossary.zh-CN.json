@@ -996,6 +996,14 @@
     "target": "ACP Agents 设置"
   },
   {
+    "source": "Policy CLI",
+    "target": "Policy CLI"
+  },
+  {
+    "source": "Doctor lint mode",
+    "target": "Doctor lint mode"
+  },
+  {
     "source": "ds4 (local DeepSeek V4)",
     "target": "ds4（本地 DeepSeek V4）"
   },

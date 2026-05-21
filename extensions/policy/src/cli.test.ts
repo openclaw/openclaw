@@ -78,6 +78,8 @@ describe("policy commands", () => {
       modelProviders: [],
       modelRefs: [],
       network: [],
+      secrets: [],
+      authProfiles: [],
     };
     const workspaceHash = policyWorkspaceHash(evidence);
     const findingsHash = policyFindingsHash([]);

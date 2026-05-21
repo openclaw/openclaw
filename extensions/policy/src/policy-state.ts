@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
+import { coerceSecretRef } from "openclaw/plugin-sdk/secret-input";
 
 export type PolicyAttestation = {
   readonly checkedAt: string;
@@ -22,6 +23,8 @@ export type PolicyEvidence = {
   readonly modelProviders: readonly PolicyModelProviderEvidence[];
   readonly modelRefs: readonly PolicyModelRefEvidence[];
   readonly network: readonly PolicyNetworkEvidence[];
+  readonly secrets: readonly PolicySecretEvidence[];
+  readonly authProfiles: readonly PolicyAuthProfileEvidence[];
 };
 
 export type PolicyChannelEvidence = {
@@ -66,6 +69,32 @@ export type PolicyNetworkEvidence = {
   readonly source: string;
   readonly value: boolean;
 };
+
+export type PolicySecretEvidence = {
+  readonly id: string;
+  readonly kind: "input" | "provider";
+  readonly source: string;
+  readonly provenance?: "inline" | "secretRef";
+  readonly refSource?: "env" | "file" | "exec";
+  readonly refProvider?: string;
+  readonly providerSource?: string;
+  readonly insecure?: readonly string[];
+};
+
+export type PolicyAuthProfileEvidence = {
+  readonly id: string;
+  readonly source: string;
+  readonly validMetadata: boolean;
+  readonly provider?: string;
+  readonly mode?: string;
+};
+
+type SecretRefEvidence = {
+  readonly source: "env" | "file" | "exec";
+  readonly provider: string;
+  readonly id: string;
+};
+type SecretRefDefaults = NonNullable<Parameters<typeof coerceSecretRef>[1]>;
 
 const RESERVED_CHANNEL_CONFIG_KEYS = new Set(["defaults", "modelByChannel"]);
 const NON_SLUG_CHARS = /[^a-z0-9-]+/g;
@@ -145,6 +174,8 @@ export function collectPolicyEvidence(
     modelProviders: scanPolicyModelProviders(cfg),
     modelRefs: scanPolicyModelRefs(cfg),
     network: scanPolicyNetwork(cfg),
+    secrets: scanPolicySecrets(cfg),
+    authProfiles: scanPolicyAuthProfiles(cfg),
   };
   if (options.toolsRaw === undefined) {
     return evidence;
@@ -266,6 +297,197 @@ export function scanPolicyNetwork(cfg: Record<string, unknown>): readonly Policy
       "oc://openclaw.config/tools/web/fetch/ssrfPolicy/allowIpv6UniqueLocalRange",
     ),
   ].filter((entry): entry is PolicyNetworkEvidence => entry !== undefined);
+}
+
+export function scanPolicySecrets(cfg: Record<string, unknown>): readonly PolicySecretEvidence[] {
+  return [...scanPolicySecretProviders(cfg), ...scanPolicySecretInputs(cfg)].toSorted((a, b) =>
+    a.source.localeCompare(b.source),
+  );
+}
+
+export function scanPolicyAuthProfiles(
+  cfg: Record<string, unknown>,
+): readonly PolicyAuthProfileEvidence[] {
+  const auth = isRecord(cfg.auth) ? cfg.auth : {};
+  const profiles = isRecord(auth.profiles) ? auth.profiles : {};
+  return Object.entries(profiles)
+    .toSorted(([a], [b]) => a.localeCompare(b))
+    .map(([id, value]) => {
+      const entry: {
+        id: string;
+        source: string;
+        validMetadata: boolean;
+        provider?: string;
+        mode?: string;
+      } = {
+        id,
+        source: `oc://openclaw.config/auth/profiles/${ocPathSegment(id)}`,
+        validMetadata: isValidAuthProfileMetadata(value),
+      };
+      if (isRecord(value)) {
+        if (typeof value.provider === "string") {
+          entry.provider = value.provider;
+        }
+        if (typeof value.mode === "string") {
+          entry.mode = value.mode;
+        }
+      }
+      return entry;
+    });
+}
+
+function scanPolicySecretProviders(cfg: Record<string, unknown>): readonly PolicySecretEvidence[] {
+  const secrets = isRecord(cfg.secrets) ? cfg.secrets : {};
+  const providers = isRecord(secrets.providers) ? secrets.providers : {};
+  return Object.entries(providers).map(([id, value]) => {
+    const insecure = secretProviderInsecureFlags(value);
+    const entry: {
+      id: string;
+      kind: "provider";
+      source: string;
+      providerSource?: string;
+      insecure?: readonly string[];
+    } = {
+      id,
+      kind: "provider",
+      source: `oc://openclaw.config/secrets/providers/${ocPathSegment(id)}`,
+    };
+    if (isRecord(value) && typeof value.source === "string") {
+      entry.providerSource = value.source;
+    }
+    if (insecure.length > 0) {
+      entry.insecure = insecure;
+    }
+    return entry;
+  });
+}
+
+function scanPolicySecretInputs(cfg: Record<string, unknown>): readonly PolicySecretEvidence[] {
+  const entries: PolicySecretEvidence[] = [];
+  const secrets = isRecord(cfg.secrets) ? cfg.secrets : {};
+  collectSecretInputs(entries, cfg, [], secretRefDefaults(secrets.defaults));
+  return entries;
+}
+
+function collectSecretInputs(
+  entries: PolicySecretEvidence[],
+  value: unknown,
+  path: readonly string[],
+  defaults: SecretRefDefaults | undefined,
+): void {
+  if (Array.isArray(value)) {
+    value.forEach((item, index) =>
+      collectSecretInputs(entries, item, [...path, `#${index}`], defaults),
+    );
+    return;
+  }
+  if (!isRecord(value)) {
+    return;
+  }
+  for (const [key, child] of Object.entries(value)) {
+    const childPath = [...path, key];
+    if (isSecretInputKey(key)) {
+      const source = configPathSource(childPath);
+      const ref = secretRefEvidence(child, defaults);
+      if (ref !== undefined) {
+        entries.push({
+          id: source,
+          kind: "input",
+          source,
+          provenance: "secretRef",
+          refSource: ref.source,
+          refProvider: ref.provider,
+        });
+        continue;
+      }
+      if (typeof child === "string" && child.trim() !== "") {
+        entries.push({
+          id: source,
+          kind: "input",
+          source,
+          provenance: "inline",
+        });
+        continue;
+      }
+    }
+    collectSecretInputs(entries, child, childPath, defaults);
+  }
+}
+
+function configPathSource(path: readonly string[]): string {
+  return `oc://openclaw.config/${path.map(ocPathSegment).join("/")}`;
+}
+
+function isSecretInputKey(key: string): boolean {
+  const normalized = key.toLowerCase();
+  return (
+    normalized === "apikey" ||
+    normalized === "keyref" ||
+    normalized === "token" ||
+    normalized === "tokenref" ||
+    normalized === "password" ||
+    normalized === "secret" ||
+    normalized === "webhooksecret" ||
+    normalized === "serviceaccount" ||
+    normalized === "serviceaccountref" ||
+    normalized === "privatekey" ||
+    normalized === "certificate" ||
+    normalized === "knownhosts" ||
+    normalized.endsWith("apikey") ||
+    normalized.endsWith("token") ||
+    normalized.endsWith("secret") ||
+    normalized.endsWith("password")
+  );
+}
+
+function secretRefDefaults(value: unknown): SecretRefDefaults | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const defaults: SecretRefDefaults = {};
+  if (typeof value.env === "string") {
+    defaults.env = value.env;
+  }
+  if (typeof value.file === "string") {
+    defaults.file = value.file;
+  }
+  if (typeof value.exec === "string") {
+    defaults.exec = value.exec;
+  }
+  return defaults;
+}
+
+function secretRefEvidence(
+  value: unknown,
+  defaults: SecretRefDefaults | undefined,
+): SecretRefEvidence | undefined {
+  const ref = coerceSecretRef(value, defaults);
+  return ref === null ? undefined : { source: ref.source, provider: ref.provider, id: ref.id };
+}
+
+function secretProviderInsecureFlags(value: unknown): readonly string[] {
+  if (!isRecord(value)) {
+    return [];
+  }
+  return [
+    ...(value.allowInsecurePath === true ? ["allowInsecurePath"] : []),
+    ...(value.allowSymlinkCommand === true ? ["allowSymlinkCommand"] : []),
+  ];
+}
+
+function isValidAuthProfileMetadata(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return (
+    typeof value.provider === "string" &&
+    value.provider.trim() !== "" &&
+    isAuthProfileMode(value.mode)
+  );
+}
+
+function isAuthProfileMode(value: unknown): boolean {
+  return value === "api_key" || value === "aws-sdk" || value === "oauth" || value === "token";
 }
 
 export function scanPolicyTools(raw: string): Promise<readonly PolicyToolEvidence[]> {
