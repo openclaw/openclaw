@@ -122,24 +122,13 @@ export type ImageGenerationProviderCapabilities = {
   output?: ImageGenerationOutputCapabilities;
 };
 
-export type ImageGenerationCapabilitiesResolver = (
-  ctx?: ImageGenerationProviderConfiguredContext,
-) => ImageGenerationProviderCapabilities;
-
 export type ImageGenerationProvider = {
   id: string;
   aliases?: string[];
   label?: string;
   defaultModel?: string;
   models?: string[];
-  capabilities: ImageGenerationProviderCapabilities | ImageGenerationCapabilitiesResolver;
+  capabilities: ImageGenerationProviderCapabilities;
   isConfigured?: (ctx: ImageGenerationProviderConfiguredContext) => boolean;
   generateImage: (req: ImageGenerationRequest) => Promise<ImageGenerationResult>;
 };
-
-export function resolveProviderCapabilities(
-  capabilities: ImageGenerationProviderCapabilities | ImageGenerationCapabilitiesResolver,
-  ctx?: ImageGenerationProviderConfiguredContext,
-): ImageGenerationProviderCapabilities {
-  return typeof capabilities === "function" ? capabilities(ctx) : capabilities;
-}

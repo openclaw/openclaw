@@ -730,15 +730,6 @@ function resolveComfyDimensionConfig(
   };
 }
 
-export function isComfyDimensionsConfigured(params: {
-  cfg?: OpenClawConfig;
-  capability: ComfyCapability;
-}): boolean {
-  const config = getComfyConfig(params.cfg);
-  const capabilityConfig = getComfyCapabilityConfig(config, params.capability);
-  return resolveComfyDimensionConfig(capabilityConfig) !== undefined;
-}
-
 export async function runComfyWorkflow(params: {
   cfg: OpenClawConfig;
   agentDir?: string;

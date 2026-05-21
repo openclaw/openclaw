@@ -19,7 +19,6 @@ import type {
   ImageGenerationResolution,
   ImageGenerationSourceImage,
 } from "../../image-generation/types.js";
-import { resolveProviderCapabilities } from "../../image-generation/types.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -413,7 +412,6 @@ function isInlineDirectiveControlCharacter(char: string): boolean {
 
 function validateImageGenerationCapabilities(params: {
   provider: ImageGenerationProvider | undefined;
-  ctx?: { cfg?: OpenClawConfig; agentDir?: string };
   count: number;
   inputImageCount: number;
   size?: string;
@@ -425,9 +423,8 @@ function validateImageGenerationCapabilities(params: {
   if (!provider) {
     return;
   }
-  const capabilities = resolveProviderCapabilities(provider.capabilities, params.ctx);
   const isEdit = params.inputImageCount > 0;
-  const modeCaps = isEdit ? capabilities.edit : capabilities.generate;
+  const modeCaps = isEdit ? provider.capabilities.edit : provider.capabilities.generate;
   const maxCount = modeCaps.maxCount ?? MAX_COUNT;
   if (params.count > maxCount) {
     throw new ToolInputError(
@@ -436,10 +433,10 @@ function validateImageGenerationCapabilities(params: {
   }
 
   if (isEdit) {
-    if (!capabilities.edit.enabled) {
+    if (!provider.capabilities.edit.enabled) {
       throw new ToolInputError(`${provider.id} does not support reference-image edits.`);
     }
-    const maxInputImages = capabilities.edit.maxInputImages ?? MAX_INPUT_IMAGES;
+    const maxInputImages = provider.capabilities.edit.maxInputImages ?? MAX_INPUT_IMAGES;
     if (params.inputImageCount > maxInputImages) {
       throw new ToolInputError(
         `${provider.id} edit supports at most ${maxInputImages} reference image${maxInputImages === 1 ? "" : "s"}.`,
@@ -858,11 +855,10 @@ export function createImageGenerateTool(options?: {
         ssrfPolicy: remoteMediaSsrfPolicy,
       });
       const inputImages = loadedReferenceImages.map((entry) => entry.sourceImage);
-      const ctx = { cfg: options?.config, agentDir: options?.agentDir };
-      const providerCaps = selectedProvider
-        ? resolveProviderCapabilities(selectedProvider.capabilities, ctx)
-        : undefined;
-      const modeCaps = inputImages.length > 0 ? providerCaps?.edit : providerCaps?.generate;
+      const modeCaps =
+        inputImages.length > 0
+          ? selectedProvider?.capabilities.edit
+          : selectedProvider?.capabilities.generate;
       const resolution =
         explicitResolution ??
         (size || modeCaps?.supportsResolution === false
@@ -872,7 +868,6 @@ export function createImageGenerateTool(options?: {
             : undefined);
       validateImageGenerationCapabilities({
         provider: selectedProvider,
-        ctx,
         count,
         inputImageCount: inputImages.length,
         size,

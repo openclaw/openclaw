@@ -1,13 +1,11 @@
 import type {
   GeneratedImageAsset,
   ImageGenerationProvider,
-  ImageGenerationRequest,
 } from "openclaw/plugin-sdk/image-generation";
 import {
   DEFAULT_COMFY_MODEL,
   setComfyFetchGuardForTesting,
   isComfyCapabilityConfigured,
-  isComfyDimensionsConfigured,
   runComfyWorkflow,
 } from "./workflow-runtime.js";
 
@@ -25,11 +23,11 @@ export function buildComfyImageGenerationProvider(): ImageGenerationProvider {
         agentDir,
         capability: "image",
       }),
-    capabilities: (ctx) => ({
+    capabilities: {
       generate: {
         maxCount: 1,
-        supportsSize: isComfyDimensionsConfigured({ cfg: ctx?.cfg, capability: "image" }),
-        supportsAspectRatio: isComfyDimensionsConfigured({ cfg: ctx?.cfg, capability: "image" }),
+        supportsSize: true,
+        supportsAspectRatio: true,
         supportsResolution: false,
       },
       edit: {
@@ -40,8 +38,8 @@ export function buildComfyImageGenerationProvider(): ImageGenerationProvider {
         supportsAspectRatio: false,
         supportsResolution: false,
       },
-    }),
-    async generateImage(req: ImageGenerationRequest) {
+    },
+    async generateImage(req) {
       if ((req.inputImages?.length ?? 0) > 1) {
         throw new Error("Comfy image generation currently supports at most one reference image");
       }
