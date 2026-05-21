@@ -31,6 +31,11 @@ import { resolveUserPath } from "../utils.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { listAgentIds, resolveAgentDir } from "./agent-scope-config.js";
 import type { BootstrapContextMode } from "./bootstrap-files.js";
+import {
+  resolveAgentExecutionPlacement,
+  type AgentExecutionPlacement,
+  type AgentExecutionPlacementRequest,
+} from "./execution-backends.js";
 import { resolveFastModeState } from "./fast-mode.js";
 import {
   inheritedToolAllowPatch,
@@ -178,6 +183,7 @@ type SpawnSubagentParams = {
   context?: SpawnSubagentContextMode;
   lightContext?: boolean;
   expectsCompletionMessage?: boolean;
+  execution?: AgentExecutionPlacementRequest;
   attachments?: Array<{
     name: string;
     content: string;
@@ -225,6 +231,7 @@ type SpawnSubagentResult = {
   resolvedProvider?: string;
   modelApplied?: boolean;
   error?: string;
+  execution?: AgentExecutionPlacement;
   attachments?: {
     count: number;
     totalBytes: number;
@@ -1204,6 +1211,11 @@ export async function spawnSubagentDirect(
   }
   try {
     const requestedCwd = normalizeOptionalString(params.cwd);
+    const executionResult = resolveAgentExecutionPlacement({ cfg, request: params.execution });
+    if (!executionResult.ok) {
+      return { status: "error", error: executionResult.error };
+    }
+    const executionPlacement = executionResult.execution;
     const spawnedCwd = requestedCwd ? resolveUserPath(requestedCwd) : undefined;
     const toolSpawnMetadata = mapToolContextToSpawnedRunMetadata({
       agentGroupId: ctx.agentGroupId,
@@ -1778,6 +1790,7 @@ export async function spawnSubagentDirect(
           attachmentsDir: attachmentAbsDir,
           attachmentsRootDir: attachmentRootDir,
           retainAttachmentsOnKeep: retainOnSessionKeep,
+          executionPlacement,
         };
       },
     });
@@ -1886,6 +1899,7 @@ export async function spawnSubagentDirect(
           : acceptedNote,
         ...resolvedModelMetadata,
         modelApplied: resolvedModel ? modelApplied : undefined,
+        execution: executionPlacement,
         attachments: attachmentsReceipt,
       };
     }
@@ -1915,6 +1929,7 @@ export async function spawnSubagentDirect(
         : acceptedNote,
       ...resolvedModelMetadata,
       modelApplied: resolvedModel ? modelApplied : undefined,
+      execution: executionPlacement,
       attachments: attachmentsReceipt,
     };
   } finally {

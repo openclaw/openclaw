@@ -146,6 +146,18 @@ function createSessionsSpawnToolSchema(params: {
       { description: 'Runtime; visible=true requires "subagent".' },
     ),
     agentId: Type.Optional(Type.String()),
+    execution: Type.Optional(
+      Type.Object(
+        {
+          backend: Type.Optional(Type.String({ description: 'Backend id; defaults to "local".' })),
+          profile: Type.Optional(Type.String({ description: "Optional backend profile id." })),
+        },
+        {
+          description:
+            "Execution placement request. Only process backends are executable in this release.",
+        },
+      ),
+    ),
     model: Type.Optional(Type.String()),
     thinking: Type.Optional(
       Type.String({ description: "Thinking override; unavailable with visible=true." }),
@@ -345,6 +357,13 @@ export function createSessionsSpawnTool(
         throw new ToolInputError('sessions_spawn collect=true supports runtime="subagent" only.');
       }
       const requestedAgentId = readStringParam(params, "agentId");
+      const execution =
+        params.execution && typeof params.execution === "object" && !Array.isArray(params.execution)
+          ? {
+              backend: readStringParam(params.execution as Record<string, unknown>, "backend"),
+              profile: readStringParam(params.execution as Record<string, unknown>, "profile"),
+            }
+          : undefined;
       const resumeSessionId = readStringParam(params, "resumeSessionId");
       const modelOverride = normalizeToolModelOverride(readStringParam(params, "model"));
       const thinkingOverrideRaw = readStringParam(params, "thinking");
@@ -449,6 +468,7 @@ export function createSessionsSpawnTool(
             expectsCompletionMessage,
             streamTo,
             attachments: acpAttachments?.attachments,
+            execution,
           },
           {
             agentSessionKey: opts?.agentSessionKey,
@@ -507,6 +527,7 @@ export function createSessionsSpawnTool(
           context,
           lightContext,
           expectsCompletionMessage,
+          execution,
           attachments,
           attachMountPath:
             params.attachAs && typeof params.attachAs === "object"

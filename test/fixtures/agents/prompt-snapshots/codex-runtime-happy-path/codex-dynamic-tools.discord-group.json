@@ -190,6 +190,20 @@
         "cwd": {
           "type": "string"
         },
+        "execution": {
+          "description": "Optional execution placement request. This release supports local process execution and rejects non-process backend types at spawn time.",
+          "properties": {
+            "backend": {
+              "description": "Execution placement backend id. Defaults to the built-in \"local\" process backend.",
+              "type": "string"
+            },
+            "profile": {
+              "description": "Optional profile id within the selected execution backend. Profiles are validated and recorded for status/readback.",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
         "label": {
           "type": "string"
         },

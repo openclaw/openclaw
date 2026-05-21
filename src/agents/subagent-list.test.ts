@@ -136,6 +136,43 @@ describe("buildSubagentList", () => {
     expect(list.active[0]?.line).toContain("review_subagents: Review worker");
   });
 
+  it("shows execution placement in list lines and structured views", () => {
+    const run = {
+      runId: "run-execution-placement",
+      childSessionKey: "agent:main:subagent:execution-placement",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "run with small local worker",
+      cleanup: "keep",
+      label: "Execution worker",
+      createdAt: 1000,
+      startedAt: 1000,
+      executionPlacement: {
+        backend: "local",
+        type: "process",
+        profile: "small",
+      },
+    } satisfies SubagentRunRecord;
+    addSubagentRunForTests(run);
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+
+    const list = buildSubagentList({
+      cfg,
+      runs: [run],
+      recentMinutes: 30,
+    });
+
+    expect(list.active[0]?.executionPlacement).toEqual({
+      backend: "local",
+      type: "process",
+      profile: "small",
+    });
+    expect(list.active[0]?.line).toContain("exec local/small");
+  });
+
   it("keeps ended orchestrators active while descendants remain pending", () => {
     // Parent orchestrators can finish their own turn before child workers do;
     // list output should keep them active until descendants settle.

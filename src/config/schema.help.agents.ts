@@ -1,5 +1,11 @@
 // Defines user-facing config field help text for docs and UI surfaces.
 export const AGENT_FIELD_HELP: Record<string, string> = {
+  "agents.executionBackends":
+    'Named execution placement backends selectable through sessions_spawn.execution. The shipped backend type is "process"; container and kubernetes configs are accepted as future placement contracts but rejected at spawn time until implemented.',
+  "agents.executionBackends.*.type":
+    'Execution backend implementation type. Use "process" for the current local backend.',
+  "agents.executionBackends.*.profiles":
+    "Named backend profiles selectable through sessions_spawn.execution.profile.",
   ui: "UI presentation settings for accenting and assistant identity shown in control surfaces. Use this for branding and readability customization without changing runtime behavior.",
   "ui.seamColor":
     "Primary accent color used by UI surfaces for emphasis, badges, and visual identity cues. Use high-contrast values that remain readable across light/dark themes.",

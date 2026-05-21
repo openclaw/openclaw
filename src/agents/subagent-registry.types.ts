@@ -4,6 +4,7 @@
  * Defines execution, completion, delivery, pending-delivery, and attachment state stored for child runs.
  */
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import type { AgentExecutionPlacement } from "./execution-backends.js";
 import type { AgentRunSessionTarget } from "./run-session-target.js";
 import type { SubagentRunOutcome } from "./subagent-announce-output.js";
 import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
@@ -212,6 +213,7 @@ export type SubagentRunRecord = {
   attachmentsDir?: string;
   attachmentsRootDir?: string;
   retainAttachmentsOnKeep?: boolean;
+  executionPlacement?: AgentExecutionPlacement;
   /** Collector-mode runs remain waitable and never announce to the requester. */
   collect?: boolean;
   /** Stable spawning-session owner for caps, scheduling, and wait authorization. */
