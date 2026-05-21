@@ -432,7 +432,10 @@ function isSecretInputKey(key: string): boolean {
     normalized === "serviceaccountref" ||
     normalized === "privatekey" ||
     normalized === "certificate" ||
+    normalized === "certificatedata" ||
+    normalized === "identitydata" ||
     normalized === "knownhosts" ||
+    normalized === "knownhostsdata" ||
     normalized.endsWith("apikey") ||
     normalized.endsWith("token") ||
     normalized.endsWith("secret") ||

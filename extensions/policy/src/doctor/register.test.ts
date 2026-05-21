@@ -1554,6 +1554,81 @@ describe("registerPolicyDoctorChecks", () => {
     expect(result.findings).toHaveLength(4);
   });
 
+  it("reports inline sandbox SSH secret data without leaking values", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      agents: {
+        defaults: {
+          sandbox: {
+            backend: "ssh",
+            mode: "on",
+            ssh: {
+              identityData: "inline-private-key",
+              certificateData: "inline-certificate",
+              knownHostsData: "inline-known-hosts",
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        secrets: {
+          disallowInline: true,
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+    const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>);
+
+    expect(JSON.stringify(evidence)).not.toContain("inline-private-key");
+    expect(JSON.stringify(result.findings)).not.toContain("inline-private-key");
+    expect(evidence.secrets).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "input",
+          provenance: "inline",
+          source: "oc://openclaw.config/agents/defaults/sandbox/ssh/identityData",
+        }),
+        expect.objectContaining({
+          kind: "input",
+          provenance: "inline",
+          source: "oc://openclaw.config/agents/defaults/sandbox/ssh/certificateData",
+        }),
+        expect.objectContaining({
+          kind: "input",
+          provenance: "inline",
+          source: "oc://openclaw.config/agents/defaults/sandbox/ssh/knownHostsData",
+        }),
+      ]),
+    );
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/secrets-inline-value",
+          ocPath: "oc://openclaw.config/agents/defaults/sandbox/ssh/identityData",
+          requirement: "oc://policy.jsonc/secrets/disallowInline",
+        }),
+        expect.objectContaining({
+          checkId: "policy/secrets-inline-value",
+          ocPath: "oc://openclaw.config/agents/defaults/sandbox/ssh/certificateData",
+          requirement: "oc://policy.jsonc/secrets/disallowInline",
+        }),
+        expect.objectContaining({
+          checkId: "policy/secrets-inline-value",
+          ocPath: "oc://openclaw.config/agents/defaults/sandbox/ssh/knownHostsData",
+          requirement: "oc://policy.jsonc/secrets/disallowInline",
+        }),
+      ]),
+    );
+  });
+
   it.each([
     ["dollar shorthand", "$OPENAI_API_KEY"],
     ["template shorthand", "${OPENAI_API_KEY}"],
