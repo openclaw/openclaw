@@ -1497,7 +1497,6 @@ export async function runCronIsolatedAgentTurn(params: {
       timeoutMs: prepared.context.timeoutMs,
       runTimeoutOverrideMs: prepared.context.runTimeoutOverrideMs,
       suppressExecNotifyOnExit: prepared.context.suppressExecNotifyOnExit,
-      senderIsOwner: prepared.context.senderIsOwner,
       deadlineAtMs: params.deadlineAtMs,
       getDeadlineAtMs: params.getDeadlineAtMs,
       fallbackMinRemainingMs,
