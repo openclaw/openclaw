@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { PluginManifestCommandAliasRegistry } from "../plugins/manifest-command-aliases.js";
 import {
+  resolvePrecomputedSubcommandHelpFastPath,
   rewriteUpdateFlagArgv,
   resolveMissingPluginCommandMessage,
   shouldEnsureCliPath,
@@ -211,6 +212,7 @@ describe("shouldUseBrowserHelpFastPath", () => {
     expect(shouldUseBrowserHelpFastPath(["node", "openclaw", "browser", "status", "--help"])).toBe(
       false,
     );
+    expect(shouldUseBrowserHelpFastPath(["node", "openclaw", "browser", "--version"])).toBe(false);
     expect(shouldUseBrowserHelpFastPath(["node", "openclaw", "status", "--help"])).toBe(false);
     expect(shouldUseBrowserHelpFastPath(["node", "openclaw", "browser", "--version"])).toBe(false);
   });
@@ -264,6 +266,47 @@ describe("shouldUseSetupOnboardConfigureHelpFastPath", () => {
     expect(
       shouldUseSetupOnboardConfigureHelpFastPath(["node", "openclaw", "status", "--help"]),
     ).toBe(false);
+  });
+});
+
+describe("resolvePrecomputedSubcommandHelpFastPath", () => {
+  it("uses the fast path only for allowlisted parent command help", () => {
+    expect(resolvePrecomputedSubcommandHelpFastPath(["node", "openclaw", "doctor", "--help"])).toBe(
+      "doctor",
+    );
+    expect(resolvePrecomputedSubcommandHelpFastPath(["node", "openclaw", "gateway", "-h"])).toBe(
+      "gateway",
+    );
+    expect(
+      resolvePrecomputedSubcommandHelpFastPath([
+        "node",
+        "openclaw",
+        "--profile",
+        "work",
+        "models",
+        "-h",
+      ]),
+    ).toBe("models");
+    expect(
+      resolvePrecomputedSubcommandHelpFastPath(["node", "openclaw", "plugins", "--help"]),
+    ).toBe("plugins");
+    expect(
+      resolvePrecomputedSubcommandHelpFastPath(["node", "openclaw", "doctor", "--version"]),
+    ).toBeNull();
+    expect(
+      resolvePrecomputedSubcommandHelpFastPath(["node", "openclaw", "gateway", "-V"]),
+    ).toBeNull();
+    expect(
+      resolvePrecomputedSubcommandHelpFastPath(["node", "openclaw", "gateway", "status", "--help"]),
+    ).toBeNull();
+    expect(
+      resolvePrecomputedSubcommandHelpFastPath(["node", "openclaw", "status", "--help"]),
+    ).toBeNull();
+    expect(
+      resolvePrecomputedSubcommandHelpFastPath(["node", "openclaw", "doctor", "--help"], {
+        OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH: "1",
+      }),
+    ).toBeNull();
   });
 });
 
