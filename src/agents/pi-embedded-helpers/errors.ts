@@ -758,6 +758,8 @@ function classifyFailoverReasonFromCode(raw: string | undefined): FailoverReason
     case "THROTTLINGEXCEPTION":
     case "THROTTLING_EXCEPTION":
       return "rate_limit";
+    case "DEACTIVATED_WORKSPACE":
+      return "auth_permanent";
     case "OVERLOADED":
     case "OVERLOADED_ERROR":
       return "overloaded";
@@ -919,6 +921,10 @@ export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassifi
   const messageClassification = signal.message
     ? classifyFailoverClassificationFromMessage(signal.message, signal.provider)
     : null;
+  const codeReason = classifyFailoverReasonFromCode(signal.code);
+  if (codeReason === "auth_permanent") {
+    return toReasonClassification(codeReason);
+  }
   const statusClassification = classifyFailoverClassificationFromHttpStatus(
     inferredStatus,
     signal.message,
@@ -929,7 +935,6 @@ export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassifi
   if (statusClassification) {
     return statusClassification;
   }
-  const codeReason = classifyFailoverReasonFromCode(signal.code);
   if (codeReason) {
     return toReasonClassification(codeReason);
   }

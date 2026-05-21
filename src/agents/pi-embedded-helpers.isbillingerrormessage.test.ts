@@ -88,6 +88,8 @@ describe("isAuthPermanentErrorMessage", () => {
         "OAuth authentication is currently not allowed for this organization",
         "API_KEY_REVOKED",
         "api_key_deleted",
+        "deactivated_workspace",
+        "deactivated workspace",
       ],
       expected: true,
     },
