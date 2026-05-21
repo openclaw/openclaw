@@ -636,6 +636,75 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
+  it("persists estimated context budget status without marking stale usage fresh", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-context-budget-status";
+      const sessionId = "test-context-budget-status-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          totalTokens: 21225,
+          totalTokensFresh: true,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      const result: EmbeddedPiRunResult = {
+        meta: {
+          durationMs: 500,
+          agentMeta: {
+            sessionId,
+            provider: "minimax",
+            model: "MiniMax-M2.7",
+            contextBudgetStatus: {
+              schemaVersion: 1,
+              source: "pre-prompt-estimate",
+              updatedAt: 123,
+              provider: "minimax",
+              model: "MiniMax-M2.7",
+              route: "fits",
+              shouldCompact: false,
+              estimatedPromptTokens: 18_000,
+              contextTokenBudget: 32_000,
+              promptBudgetBeforeReserve: 28_000,
+              reserveTokens: 4_000,
+              effectiveReserveTokens: 4_000,
+              remainingPromptBudgetTokens: 10_000,
+              overflowTokens: 0,
+              toolResultReducibleChars: 0,
+              messageCount: 4,
+              unwindowedMessageCount: 4,
+            },
+          },
+        },
+      };
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "minimax",
+        defaultModel: "MiniMax-M2.7",
+        result,
+      });
+
+      expect(sessionStore[sessionKey]?.totalTokens).toBe(21225);
+      expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(false);
+      expect(sessionStore[sessionKey]?.contextBudgetStatus).toMatchObject({
+        source: "pre-prompt-estimate",
+        estimatedPromptTokens: 18_000,
+        contextTokenBudget: 32_000,
+      });
+
+      const persisted = loadSessionStore(storePath);
+      expect(persisted[sessionKey]?.contextBudgetStatus?.estimatedPromptTokens).toBe(18_000);
+    });
+  });
+
   it("does not treat CLI cumulative usage as a fresh context snapshot", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {
@@ -1067,6 +1136,25 @@ describe("updateSessionStoreAfterAgentRun", () => {
           modelProvider: "anthropic",
           model: "claude-opus-4-6",
           contextTokens: 1_000_000,
+          contextBudgetStatus: {
+            schemaVersion: 1,
+            source: "pre-prompt-estimate",
+            updatedAt: 100,
+            provider: "anthropic",
+            model: "claude-opus-4-6",
+            route: "fits",
+            shouldCompact: false,
+            estimatedPromptTokens: 640_000,
+            contextTokenBudget: 1_000_000,
+            promptBudgetBeforeReserve: 900_000,
+            reserveTokens: 100_000,
+            effectiveReserveTokens: 100_000,
+            remainingPromptBudgetTokens: 260_000,
+            overflowTokens: 0,
+            toolResultReducibleChars: 0,
+            messageCount: 12,
+            unwindowedMessageCount: 12,
+          },
         },
       };
       await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
@@ -1080,6 +1168,25 @@ describe("updateSessionStoreAfterAgentRun", () => {
             provider: "ollama",
             model: "llama3.2:1b",
             contextTokens: 128_000,
+            contextBudgetStatus: {
+              schemaVersion: 1,
+              source: "pre-prompt-estimate",
+              updatedAt: 200,
+              provider: "ollama",
+              model: "llama3.2:1b",
+              route: "fits",
+              shouldCompact: false,
+              estimatedPromptTokens: 40_000,
+              contextTokenBudget: 128_000,
+              promptBudgetBeforeReserve: 112_000,
+              reserveTokens: 16_000,
+              effectiveReserveTokens: 16_000,
+              remainingPromptBudgetTokens: 72_000,
+              overflowTokens: 0,
+              toolResultReducibleChars: 0,
+              messageCount: 3,
+              unwindowedMessageCount: 3,
+            },
           },
         },
       };
@@ -1100,11 +1207,15 @@ describe("updateSessionStoreAfterAgentRun", () => {
       expect(sessionStore[sessionKey]?.model).toBe("claude-opus-4-6");
       expect(sessionStore[sessionKey]?.modelProvider).toBe("anthropic");
       expect(sessionStore[sessionKey]?.contextTokens).toBe(1_000_000);
+      expect(sessionStore[sessionKey]?.contextBudgetStatus?.provider).toBe("anthropic");
+      expect(sessionStore[sessionKey]?.contextBudgetStatus?.estimatedPromptTokens).toBe(640_000);
 
       const persisted = loadSessionStore(storePath);
       expect(persisted[sessionKey]?.model).toBe("claude-opus-4-6");
       expect(persisted[sessionKey]?.modelProvider).toBe("anthropic");
       expect(persisted[sessionKey]?.contextTokens).toBe(1_000_000);
+      expect(persisted[sessionKey]?.contextBudgetStatus?.provider).toBe("anthropic");
+      expect(persisted[sessionKey]?.contextBudgetStatus?.estimatedPromptTokens).toBe(640_000);
     });
   });
 
