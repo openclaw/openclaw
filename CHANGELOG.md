@@ -17,6 +17,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Codex app-server: keep system-prompt reports working when bootstrap hooks provide workspace files with only a path and content, so hook-supplied SOUL/IDENTITY/TOOLS/USER context still reports injected characters correctly. (#84736) Thanks @JARVIS-Glasses.
 - WhatsApp: update Baileys to `7.0.0-rc12`.
 - Build: suppress per-locale `rolldown-plugin-dts:fake-js` CommonJS dts warnings emitted while bundling the intentionally-inlined `zod/v4/locales/*.d.cts` files, so `pnpm build` output stays readable after the 0.25.1 plugin bump. Thanks @romneyda.
 - CLI/nodes: route lazy plugin-registration logs to stderr for JSON-mode `openclaw nodes` commands so stdout stays parseable. (#84684) Thanks @TurboTheTurtle.
