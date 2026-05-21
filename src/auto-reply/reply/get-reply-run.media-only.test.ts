@@ -1157,6 +1157,75 @@ describe("runPreparedReply media-only handling", () => {
     await expect(runPromise).resolves.toEqual({ text: "ok" });
     expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
   });
+
+  it("does not queue a run behind its provided pre-dispatch reply operation", async () => {
+    const piRuntime = await import("../../agents/pi-embedded.runtime.js");
+    const operation = createReplyOperation({
+      sessionId: "session-pre-dispatch-owner",
+      sessionKey: "session-key",
+      resetTriggered: false,
+    });
+    vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId).mockReturnValue(
+      "session-pre-dispatch-owner",
+    );
+    vi.mocked(piRuntime.isEmbeddedPiRunActive).mockReturnValue(true);
+
+    try {
+      await expect(
+        runPreparedReply(
+          baseParams({
+            isNewSession: false,
+            sessionId: "session-pre-dispatch-owner",
+            opts: { replyOperation: operation } as never,
+          }),
+        ),
+      ).resolves.toEqual({ text: "ok" });
+
+      const call = requireLastRunReplyAgentCall();
+      expect(call.replyOperation).toBe(operation);
+      expect(vi.mocked(piRuntime.isEmbeddedPiRunActive)).not.toHaveBeenCalled();
+    } finally {
+      operation.complete();
+      vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId).mockReset().mockReturnValue(undefined);
+      vi.mocked(piRuntime.isEmbeddedPiRunActive).mockReset().mockReturnValue(false);
+    }
+  });
+
+  it("does not interrupt its provided pre-dispatch reply operation for reset turns", async () => {
+    const queueSettings = await import("./queue/settings-runtime.js");
+    const piRuntime = await import("../../agents/pi-embedded.runtime.js");
+    const commandQueue = await import("../../process/command-queue.js");
+    const operation = createReplyOperation({
+      sessionId: "session-reset-owner",
+      sessionKey: "session-key",
+      resetTriggered: false,
+    });
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "followup" });
+    vi.mocked(commandQueue.getQueueSize).mockReturnValueOnce(0);
+    vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId).mockReturnValue("session-reset-owner");
+
+    try {
+      await expect(
+        runPreparedReply(
+          baseParams({
+            resetTriggered: true,
+            isNewSession: true,
+            sessionId: "session-reset-owner",
+            opts: { replyOperation: operation } as never,
+          }),
+        ),
+      ).resolves.toEqual({ text: "ok" });
+
+      const call = requireLastRunReplyAgentCall();
+      expect(call.replyOperation).toBe(operation);
+      expect(commandQueue.clearCommandLane).not.toHaveBeenCalled();
+      expect(piRuntime.abortEmbeddedPiRun).not.toHaveBeenCalled();
+    } finally {
+      operation.complete();
+      vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId).mockReset().mockReturnValue(undefined);
+    }
+  });
+
   it("re-resolves auth profile after waiting for a prior run", async () => {
     const { resolveSessionAuthProfileOverride } =
       await import("../../agents/auth-profiles/session-override.js");

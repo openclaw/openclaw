@@ -76,6 +76,7 @@ import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { buildReplyPromptEnvelope, buildReplyPromptEnvelopeBase } from "./prompt-prelude.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { resolveQueueSettings } from "./queue/settings-runtime.js";
+import type { ReplyOperation } from "./reply-run-registry.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import { resolveBareSessionResetPromptState } from "./session-reset-prompt.js";
@@ -86,6 +87,15 @@ import { resolveStoredModelOverride } from "./stored-model-override.js";
 import { resolveTypingMode } from "./typing-mode.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 import type { TypingController } from "./typing.js";
+
+type InternalGetReplyOptions = GetReplyOptions & {
+  /**
+   * Dispatch-owned pre-run operation. This is intentionally not part of the
+   * public reply API; it lets dispatch prep and hook work share the same
+   * diagnostic/abort ownership as the eventual agent run.
+   */
+  replyOperation?: ReplyOperation;
+};
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
@@ -822,7 +832,14 @@ export async function runPreparedReply(
       }
     }
   }
-  const sessionIdFinal = sessionId ?? crypto.randomUUID();
+  const internalOpts = opts as InternalGetReplyOptions | undefined;
+  const providedReplyOperation = internalOpts?.replyOperation;
+  const isOwnPreDispatchOperationSession = (candidateSessionId: string | undefined): boolean =>
+    providedReplyOperation !== undefined &&
+    providedReplyOperation.result === null &&
+    providedReplyOperation.phase === "queued" &&
+    candidateSessionId === providedReplyOperation.sessionId;
+  const sessionIdFinal = sessionId ?? providedReplyOperation?.sessionId ?? crypto.randomUUID();
   const sessionFilePathOptions = resolveSessionFilePathOptions({ agentId, storePath });
   const resolvePreparedSessionState = (): {
     sessionEntry: SessionEntry | undefined;
@@ -870,7 +887,12 @@ export async function runPreparedReply(
     : undefined;
   const laneSize = sessionLaneKey ? getQueueSize(sessionLaneKey) : 0;
   const activeRunQueueMode = effectiveResetTriggered ? "interrupt" : resolvedQueue.mode;
-  const activeSessionIdForInterrupt = piRuntime?.resolveActiveEmbeddedRunSessionId(sessionKey);
+  const rawActiveSessionIdForInterrupt = piRuntime?.resolveActiveEmbeddedRunSessionId(sessionKey);
+  const activeSessionIdForInterrupt = isOwnPreDispatchOperationSession(
+    rawActiveSessionIdForInterrupt,
+  )
+    ? undefined
+    : rawActiveSessionIdForInterrupt;
   if (
     activeRunQueueMode === "interrupt" &&
     !isRoomEvent &&
@@ -982,6 +1004,9 @@ export async function runPreparedReply(
     const activeSessionId = resolveActiveQueueSessionId();
     if (!activeSessionId || !piRuntime) {
       return { activeSessionId: undefined, isActive: false, isStreaming: false };
+    }
+    if (isOwnPreDispatchOperationSession(activeSessionId)) {
+      return { activeSessionId, isActive: false, isStreaming: false };
     }
     return {
       activeSessionId,
@@ -1209,5 +1234,6 @@ export async function runPreparedReply(
     typingMode,
     resetTriggered: effectiveResetTriggered,
     replyThreadingOverride,
+    replyOperation: providedReplyOperation,
   });
 }
