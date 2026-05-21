@@ -222,6 +222,14 @@ export type MatrixMonitorHandlerParams = {
   threadReplies: "off" | "inbound" | "always";
   /** DM-specific threadReplies override. Falls back to threadReplies when absent. */
   dmThreadReplies?: "off" | "inbound" | "always";
+  /**
+   * When true, in-thread replies skip the room-level `requireMention` gate if
+   * the bot already has a runtime session binding for the thread. Mirrors
+   * `channels.matrix.threadBindings.bypassMentionInBoundThreads` in user
+   * config; off by default to preserve the legacy contract that mention
+   * enforcement applies regardless of thread binding state.
+   */
+  bypassMentionInBoundThreads?: boolean;
   /** DM session grouping behavior. */
   dmSessionScope?: "per-user" | "per-room";
   streaming: MatrixStreamingMode;
@@ -436,6 +444,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     groupPolicy,
     replyToMode,
     threadReplies,
+    bypassMentionInBoundThreads = false,
     dmThreadReplies,
     dmSessionScope,
     streaming,
@@ -1036,14 +1045,38 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 ? roomConfig?.requireMention
                 : true
           : false;
+        // Thread-continuation bypass: when the user replies INSIDE an existing
+        // thread that the bot already has an active per-thread session binding
+        // for (typical when threadBindings.enabled creates per-thread sessions
+        // after the bot's first reply in the thread), skip the mention gate.
+        //
+        // Without this, the common bot UX of "mention to open a thread, then
+        // free conversation continues inside that thread" is broken on
+        // requireMention rooms — every in-thread reply gets dropped as
+        // "skipping room message: no-mention" even though the user is
+        // clearly addressing the bot via thread relation.
+        //
+        // Discriminators:
+        //  * threadRootId is set AND threadRootId !== messageId — this is an
+        //    in-thread reply (the message has an m.thread relation to a root
+        //    that is not itself), not a top-level message that would become
+        //    a new thread root under threadReplies: "always".
+        //  * _runtimeBindingId is non-null — resolveMatrixInboundRoute found
+        //    an existing per-thread session via sessionBindingService
+        //    (bindingConversationId = threadId), meaning the bot has prior
+        //    activity bound to this specific thread.
+        const inExistingBoundThread =
+          bypassMentionInBoundThreads &&
+          threadRootId !== undefined &&
+          threadRootId !== messageId &&
+          _runtimeBindingId !== null;
         const shouldBypassMention =
-          allowTextCommands &&
           isRoom &&
           shouldRequireMention &&
           !wasMentioned &&
           !hasExplicitMention &&
-          commandAuthorized &&
-          hasControlCommandInMessage;
+          ((allowTextCommands && commandAuthorized && hasControlCommandInMessage) ||
+            inExistingBoundThread);
         const canDetectMention = agentMentionRegexes.length > 0 || hasExplicitMention;
         if (isRoom && shouldRequireMention && !wasMentioned && !shouldBypassMention) {
           const pendingHistoryBody = pendingHistoryText || pendingHistoryPollText;

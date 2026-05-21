@@ -43,6 +43,7 @@ type MatrixHandlerTestHarnessOptions = {
   replyToMode?: ReplyToMode;
   threadReplies?: "off" | "inbound" | "always";
   dmThreadReplies?: "off" | "inbound" | "always";
+  bypassMentionInBoundThreads?: boolean;
   dmSessionScope?: "per-user" | "per-room";
   streaming?: MatrixStreamingMode;
   previewToolProgressEnabled?: boolean;
@@ -310,6 +311,7 @@ export function createMatrixHandlerTestHarness(
     replyToMode: options.replyToMode ?? "off",
     threadReplies: options.threadReplies ?? "inbound",
     dmThreadReplies: options.dmThreadReplies,
+    bypassMentionInBoundThreads: options.bypassMentionInBoundThreads,
     dmSessionScope: options.dmSessionScope,
     streaming: options.streaming ?? "off",
     previewToolProgressEnabled: options.previewToolProgressEnabled ?? false,

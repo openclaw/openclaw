@@ -277,6 +277,8 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   const replyToMode = opts.replyToMode ?? accountConfig.replyToMode ?? "off";
   const threadReplies = accountConfig.threadReplies ?? "inbound";
   const dmThreadReplies = accountConfig.dm?.threadReplies;
+  const bypassMentionInBoundThreads =
+    accountConfig.threadBindings?.bypassMentionInBoundThreads === true;
   const threadBindingIdleTimeoutMs = resolveThreadBindingIdleTimeoutMsForChannel({
     cfg,
     channel: "matrix",
@@ -418,6 +420,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       replyToMode,
       threadReplies,
       dmThreadReplies,
+      bypassMentionInBoundThreads,
       dmSessionScope,
       streaming,
       previewToolProgressEnabled,

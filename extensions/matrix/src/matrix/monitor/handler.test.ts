@@ -1103,6 +1103,112 @@ describe("matrix monitor handler pairing account scope", () => {
     expectMockCallWithFields(recordInboundSession, { sessionKey: "agent:ops:main:thread:$root" });
   });
 
+  it("bypasses requireMention for in-thread replies when the bot has an active per-thread session binding", async () => {
+    // User mentions the bot at thread root → bot replies → user continues
+    // in the thread without re-mentioning. The bot's first reply created a
+    // per-thread session binding (sessionBindingService.resolveByConversation
+    // for conversationId === threadId returns a record). On the follow-up
+    // in-thread reply, requireMention: true should be bypassed because the
+    // thread relation + active binding mean the user is clearly continuing
+    // the conversation the bot is already in.
+    registerSessionBindingAdapter({
+      channel: "matrix",
+      accountId: "ops",
+      listBySession: () => [],
+      resolveByConversation: (ref) =>
+        ref.conversationId === "$root"
+          ? {
+              bindingId: "ops:thread:$root",
+              targetSessionKey: "agent:ops:main:thread:$root",
+              targetKind: "session",
+              conversation: {
+                channel: "matrix",
+                accountId: "ops",
+                conversationId: "$root",
+              },
+              status: "active",
+              boundAt: Date.now(),
+              metadata: { boundBy: "matrix-monitor" },
+            }
+          : null,
+      touch: vi.fn(),
+    });
+
+    const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
+      isDirectMessage: false,
+      threadReplies: "always",
+      bypassMentionInBoundThreads: true,
+      roomsConfig: {
+        "!room:example.org": { requireMention: true },
+      },
+      mentionRegexes: [/@bot/i],
+      client: {
+        getEvent: async () =>
+          createMatrixTextMessageEvent({
+            eventId: "$root",
+            sender: "@alice:example.org",
+            body: "@bot please help",
+          }),
+      },
+      getMemberDisplayName: async () => "sender",
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$thread-reply-1",
+        body: "follow up without mention",
+        relatesTo: {
+          rel_type: "m.thread",
+          event_id: "$root",
+          "m.in_reply_to": { event_id: "$root" },
+        },
+      }),
+    );
+
+    expect(recordInboundSession).toHaveBeenCalled();
+  });
+
+  it("still drops in-thread replies without mention when bypassMentionInBoundThreads is off (default)", async () => {
+    // Same shape as above but no session-binding-adapter registration (so
+    // resolveByConversation returns null and runtimeBindingId is null). This
+    // pins the legacy behavior — bots that haven't been engaged in a thread
+    // do not start replying just because someone is having a thread
+    // conversation in their requireMention room.
+    const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
+      isDirectMessage: false,
+      threadReplies: "always",
+      roomsConfig: {
+        "!room:example.org": { requireMention: true },
+      },
+      mentionRegexes: [/@bot/i],
+      client: {
+        getEvent: async () =>
+          createMatrixTextMessageEvent({
+            eventId: "$root",
+            sender: "@alice:example.org",
+            body: "just chatting amongst ourselves",
+          }),
+      },
+      getMemberDisplayName: async () => "sender",
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$thread-reply-no-binding",
+        body: "follow up without mention",
+        relatesTo: {
+          rel_type: "m.thread",
+          event_id: "$root",
+          "m.in_reply_to": { event_id: "$root" },
+        },
+      }),
+    );
+
+    expect(recordInboundSession).not.toHaveBeenCalled();
+  });
+
   it("keeps threaded DMs flat when dm threadReplies is off", async () => {
     const { handler, finalizeInboundContext, recordInboundSession } =
       createMatrixHandlerTestHarness({
