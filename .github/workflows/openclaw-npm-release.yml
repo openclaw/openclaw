@@ -337,16 +337,6 @@ jobs:
           PACKAGE_VERSION="$(node -p "require('./package.json').version")"
           node --import tsx scripts/openclaw-npm-prepublish-verify.ts "$TARBALL_PATH" "$PACKAGE_VERSION"
 
-      - name: Verify Docker runtime-assets prune path
-        env:
-          DOCKER_BUILDKIT: "1"
-        run: |
-          set -euo pipefail
-          timeout --foreground --kill-after=30s 35m docker build \
-            --target runtime-assets \
-            --build-arg OPENCLAW_EXTENSIONS="matrix" \
-            .
-
       - name: Upload dependency release evidence
         uses: actions/upload-artifact@v7
         with:
@@ -415,8 +405,8 @@ jobs:
             echo "Real publish requires full_release_validation_run_id from a successful Full Release Validation run." >&2
             exit 1
           fi
-          if [[ -z "${RELEASE_PUBLISH_RUN_ID// }" ]]; then
-            echo "Real publish requires release_publish_run_id from the approved OpenClaw Release Publish workflow." >&2
+          if [[ -z "${RELEASE_PUBLISH_RUN_ID// }" && "${GITHUB_ACTOR}" == "github-actions[bot]" ]]; then
+            echo "Workflow-dispatched real publish requires release_publish_run_id from the approved OpenClaw Release Publish workflow." >&2
             exit 1
           fi
 
@@ -427,6 +417,14 @@ jobs:
           EXPECTED_WORKFLOW_BRANCH: ${{ github.ref_name }}
         run: |
           set -euo pipefail
+          if [[ -z "${RELEASE_PUBLISH_RUN_ID// }" ]]; then
+            if [[ "${GITHUB_ACTOR}" == "github-actions[bot]" ]]; then
+              echo "OpenClaw npm publish dispatched by another workflow must include release_publish_run_id." >&2
+              exit 1
+            fi
+            echo "Direct OpenClaw npm publish; relying on this workflow's npm-release environment approval."
+            exit 0
+          fi
           if [[ "${GITHUB_ACTOR}" != "github-actions[bot]" ]]; then
             echo "OpenClaw npm publish must be dispatched by the OpenClaw Release Publish workflow, not directly by ${GITHUB_ACTOR}." >&2
             exit 1

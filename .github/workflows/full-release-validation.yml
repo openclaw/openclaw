@@ -210,10 +210,36 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
+  docker_runtime_assets_preflight:
+    name: Verify Docker runtime-assets prune path
+    needs: [resolve_target]
+    if: inputs.rerun_group == 'all'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout target SHA
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve_target.outputs.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify Docker runtime-assets prune path
+        env:
+          DOCKER_BUILDKIT: "1"
+        run: |
+          set -euo pipefail
+          timeout --foreground --kill-after=30s 35m docker build \
+            --target runtime-assets \
+            --build-arg OPENCLAW_EXTENSIONS="matrix" \
+            .
+
   normal_ci:
     name: Run normal full CI
-    needs: [resolve_target]
-    if: contains(fromJSON('["all","ci"]'), inputs.rerun_group)
+    needs: [resolve_target, docker_runtime_assets_preflight]
+    if: ${{ always() && contains(fromJSON('["all","ci"]'), inputs.rerun_group) && (inputs.rerun_group != 'all' || needs.docker_runtime_assets_preflight.result == 'success') }}
     runs-on: ubuntu-24.04
     timeout-minutes: ${{ inputs.release_profile != 'minimum' && 240 || 60 }}
     outputs:
@@ -312,8 +338,8 @@ jobs:
 
   plugin_prerelease:
     name: Run plugin prerelease validation
-    needs: [resolve_target]
-    if: contains(fromJSON('["all","plugin-prerelease"]'), inputs.rerun_group)
+    needs: [resolve_target, docker_runtime_assets_preflight]
+    if: ${{ always() && contains(fromJSON('["all","plugin-prerelease"]'), inputs.rerun_group) && (inputs.rerun_group != 'all' || needs.docker_runtime_assets_preflight.result == 'success') }}
     runs-on: ubuntu-24.04
     timeout-minutes: ${{ inputs.release_profile == 'full' && 300 || inputs.release_profile == 'stable' && 240 || 60 }}
     outputs:
@@ -412,8 +438,8 @@ jobs:
 
   release_checks:
     name: Run release/live/Docker/QA validation
-    needs: [resolve_target]
-    if: contains(fromJSON('["all","release-checks","install-smoke","cross-os","live-e2e","package","qa","qa-parity","qa-live"]'), inputs.rerun_group)
+    needs: [resolve_target, docker_runtime_assets_preflight]
+    if: ${{ always() && contains(fromJSON('["all","release-checks","install-smoke","cross-os","live-e2e","package","qa","qa-parity","qa-live"]'), inputs.rerun_group) && (inputs.rerun_group != 'all' || needs.docker_runtime_assets_preflight.result == 'success') }}
     runs-on: ubuntu-24.04
     timeout-minutes: ${{ inputs.release_profile != 'minimum' && 240 || 60 }}
     outputs:
@@ -565,8 +591,8 @@ jobs:
 
   prepare_release_package:
     name: Prepare release package artifact
-    needs: [resolve_target]
-    if: ${{ inputs.npm_telegram_package_spec == '' && inputs.release_package_spec == '' && inputs.rerun_group == 'all' && inputs.release_profile == 'full' }}
+    needs: [resolve_target, docker_runtime_assets_preflight]
+    if: ${{ always() && inputs.npm_telegram_package_spec == '' && inputs.release_package_spec == '' && inputs.rerun_group == 'all' && inputs.release_profile == 'full' && needs.docker_runtime_assets_preflight.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -735,7 +761,7 @@ jobs:
 
   summary:
     name: Verify full validation
-    needs: [resolve_target, normal_ci, plugin_prerelease, release_checks, npm_telegram]
+    needs: [resolve_target, docker_runtime_assets_preflight, normal_ci, plugin_prerelease, release_checks, npm_telegram]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -751,6 +777,8 @@ jobs:
           PLUGIN_PRERELEASE_RESULT: ${{ needs.plugin_prerelease.result }}
           RELEASE_CHECKS_RESULT: ${{ needs.release_checks.result }}
           NPM_TELEGRAM_RESULT: ${{ needs.npm_telegram.result }}
+          DOCKER_RUNTIME_ASSETS_PREFLIGHT_RESULT: ${{ needs.docker_runtime_assets_preflight.result }}
+          RERUN_GROUP: ${{ inputs.rerun_group }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
           CHILD_WORKFLOW_REF: ${{ github.ref_name }}
         run: |
@@ -798,6 +826,7 @@ jobs:
               echo
               echo "| Child | Result | Minutes | Head SHA | Run |"
               echo "| --- | --- | ---: | --- | --- |"
+              echo "| \`docker_runtime_assets_preflight\` | \`${DOCKER_RUNTIME_ASSETS_PREFLIGHT_RESULT}\` |  | current workflow |  |"
             } >> "$GITHUB_STEP_SUMMARY"
 
             append_child_row() {
@@ -933,23 +962,29 @@ jobs:
           }
 
           failed=0
+          required_after_preflight=1
+          if [[ "$RERUN_GROUP" == "all" && "$DOCKER_RUNTIME_ASSETS_PREFLIGHT_RESULT" != "success" ]]; then
+            echo "::error::Docker runtime-assets preflight ended with ${DOCKER_RUNTIME_ASSETS_PREFLIGHT_RESULT}."
+            failed=1
+            required_after_preflight=0
+          fi
 
           append_child_overview
 
           if [[ "$NORMAL_CI_RESULT" == "skipped" && -z "${NORMAL_CI_RUN_ID// }" ]]; then
-            check_child "normal_ci" "" 0 || failed=1
+            check_child "normal_ci" "" "$required_after_preflight" || failed=1
           else
             check_child "normal_ci" "$NORMAL_CI_RUN_ID" 1 || failed=1
           fi
 
           if [[ "$PLUGIN_PRERELEASE_RESULT" == "skipped" && -z "${PLUGIN_PRERELEASE_RUN_ID// }" ]]; then
-            check_child "plugin_prerelease" "" 0 || failed=1
+            check_child "plugin_prerelease" "" "$required_after_preflight" || failed=1
           else
             check_child "plugin_prerelease" "$PLUGIN_PRERELEASE_RUN_ID" 1 || failed=1
           fi
 
           if [[ "$RELEASE_CHECKS_RESULT" == "skipped" && -z "${RELEASE_CHECKS_RUN_ID// }" ]]; then
-            check_child "release_checks" "" 0 || failed=1
+            check_child "release_checks" "" "$required_after_preflight" || failed=1
           else
             check_child "release_checks" "$RELEASE_CHECKS_RUN_ID" 1 || failed=1
           fi

@@ -194,8 +194,12 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -z "${RELEASE_PUBLISH_RUN_ID// }" ]]; then
-            echo "Plugin npm publish must be dispatched by OpenClaw Release Publish after its npm-release gate." >&2
-            exit 1
+            if [[ "${GITHUB_ACTOR}" == "github-actions[bot]" ]]; then
+              echo "Plugin npm publish dispatched by another workflow must include release_publish_run_id." >&2
+              exit 1
+            fi
+            echo "Direct Plugin NPM Release dispatch; relying on this workflow's npm-release environment approval."
+            exit 0
           fi
           if [[ "${GITHUB_ACTOR}" != "github-actions[bot]" ]]; then
             echo "Plugin npm publish must be dispatched by the OpenClaw Release Publish workflow, not directly by ${GITHUB_ACTOR}." >&2

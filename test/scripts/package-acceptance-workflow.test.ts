@@ -721,9 +721,12 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("CHILD_WORKFLOW_REF: ${{ github.ref_name }}");
     expect(workflow).toContain('gh workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@"');
     expect(preparePackageJob.name).toBe("Prepare release package artifact");
-    expect(preparePackageJob.needs).toEqual(["resolve_target"]);
+    expect(preparePackageJob.needs).toEqual(["resolve_target", "docker_runtime_assets_preflight"]);
     expect(preparePackageJob.if).toContain("inputs.rerun_group == 'all'");
     expect(preparePackageJob.if).toContain("inputs.release_profile == 'full'");
+    expect(preparePackageJob.if).toContain(
+      "needs.docker_runtime_assets_preflight.result == 'success'",
+    );
     expectTextToIncludeAll(
       workflowStep(preparePackageJob, "Resolve release package artifact").run,
       [
@@ -883,6 +886,7 @@ describe("package artifact reuse", () => {
   it("keeps release publish creation compatible with gh api and prerelease notes", () => {
     const workflow = readFileSync(RELEASE_PUBLISH_WORKFLOW, "utf8");
     const npmWorkflow = readFileSync(".github/workflows/openclaw-npm-release.yml", "utf8");
+    const fullReleaseWorkflow = readFileSync(FULL_RELEASE_VALIDATION_WORKFLOW, "utf8");
 
     expect(workflow).toContain("timeout-minutes: 60");
     expect(workflow).toContain("environment: npm-release");
@@ -898,12 +902,20 @@ describe("package artifact reuse", () => {
     expect(npmWorkflow).toContain("preflight-manifest.json");
     expect(npmWorkflow).toContain("Verify full release validation run metadata");
     expect(npmWorkflow).toContain("Verify full release validation target");
-    expect(npmWorkflow).toContain("Verify Docker runtime-assets prune path");
-    expect(npmWorkflow).toContain("--target runtime-assets");
+    expect(npmWorkflow).not.toContain("Verify Docker runtime-assets prune path");
+    expect(fullReleaseWorkflow).toContain("docker_runtime_assets_preflight");
+    expect(fullReleaseWorkflow).toContain("Verify Docker runtime-assets prune path");
+    expect(fullReleaseWorkflow).toContain("--target runtime-assets");
+    expect(fullReleaseWorkflow).toContain("inputs.rerun_group == 'all'");
+    expect(fullReleaseWorkflow).toContain(
+      "needs.docker_runtime_assets_preflight.result == 'success'",
+    );
     expect(npmWorkflow).toContain("full_release_validation_run_id");
     expect(npmWorkflow).toContain("release_publish_run_id");
     expect(npmWorkflow).toContain("Real publish requires full_release_validation_run_id");
-    expect(npmWorkflow).toContain("Real publish requires release_publish_run_id");
+    expect(npmWorkflow).toContain(
+      "Workflow-dispatched real publish requires release_publish_run_id",
+    );
     expect(npmWorkflow).toContain("tarballSha256");
     expect(workflow).toContain("Checkout release SHA");
     expect(workflow).toContain('git show "${TARGET_SHA}:CHANGELOG.md" > "${changelog_file}"');
@@ -962,6 +974,9 @@ describe("package artifact reuse", () => {
     expect(pluginNpmWorkflow).toContain("Validate release publish approval run");
     expect(clawHubWorkflow).toContain("Validate release publish approval run");
     expect(openclawNpmWorkflow).toContain("Validate release publish approval run");
+    expect(pluginNpmWorkflow).toContain("Direct Plugin NPM Release dispatch");
+    expect(clawHubWorkflow).toContain("Direct Plugin ClawHub Release dispatch");
+    expect(openclawNpmWorkflow).toContain("Direct OpenClaw npm publish");
     expect(pluginNpmWorkflow).toContain('GITHUB_ACTOR}" != "github-actions[bot]"');
     expect(clawHubWorkflow).toContain('GITHUB_ACTOR}" != "github-actions[bot]"');
     expect(openclawNpmWorkflow).toContain('GITHUB_ACTOR}" != "github-actions[bot]"');
