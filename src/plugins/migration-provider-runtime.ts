@@ -68,7 +68,7 @@ export function ensureStandaloneMigrationProviderRegistryLoaded(
   }
   const compatConfig = resolveMigrationProviderConfig({
     cfg: params.cfg,
-    bundledCompatPluginIds: resolution.bundledCompatPluginIds,
+    bundledCompatPluginIds: resolution.pluginIds,
   });
   ensureStandaloneRuntimePluginRegistryLoaded({
     surface: "active",

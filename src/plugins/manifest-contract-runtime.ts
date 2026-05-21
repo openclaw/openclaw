@@ -40,6 +40,7 @@ export function resolveManifestContractRuntimePluginResolution(params: {
     contract: params.contract,
     value: params.value,
     config: params.cfg,
+    allowDisabled: params.contract === "migrationProviders",
   }).map((plugin) => plugin.id);
   return {
     pluginIds: [...new Set(pluginIds)].toSorted((left, right) => left.localeCompare(right)),

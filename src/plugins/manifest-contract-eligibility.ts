@@ -16,8 +16,12 @@ export function isManifestPluginAvailableForControlPlane(params: {
     "id" | "origin" | "enabledByDefault" | "enabledByDefaultOnPlatforms"
   >;
   config?: OpenClawConfig;
+  allowDisabled?: boolean;
 }): boolean {
   if (params.plugin.origin === "bundled") {
+    return true;
+  }
+  if (params.allowDisabled) {
     return true;
   }
   return isInstalledPluginEnabled(params.snapshot.index, params.plugin.id, params.config);
@@ -37,6 +41,7 @@ export function listAvailableManifestContractPlugins(params: {
   contract: PluginManifestContractListKey;
   value?: string;
   config?: OpenClawConfig;
+  allowDisabled?: boolean;
 }): PluginManifestRecord[] {
   return params.snapshot.plugins.filter(
     (plugin) =>
@@ -49,6 +54,7 @@ export function listAvailableManifestContractPlugins(params: {
         snapshot: params.snapshot,
         plugin,
         config: params.config,
+        allowDisabled: params.allowDisabled,
       }),
   );
 }
