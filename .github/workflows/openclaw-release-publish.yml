@@ -892,7 +892,11 @@ jobs:
             clawhub_pid="${wait_run_pid}"
           else
             wait_for_job_success plugin-clawhub-release.yml "${plugin_clawhub_run_id}" "Validate release publish approval"
-            approve_child_publish_environment plugin-clawhub-release.yml "${plugin_clawhub_run_id}"
+            if approve_child_publish_environment plugin-clawhub-release.yml "${plugin_clawhub_run_id}"; then
+              :
+            else
+              echo "- plugin-clawhub-release.yml: child environment gate not ready; publish was left dispatched (${plugin_clawhub_run_id})" >> "$GITHUB_STEP_SUMMARY"
+            fi
             echo "- plugin-clawhub-release.yml: publish not awaited (${plugin_clawhub_run_id})" >> "$GITHUB_STEP_SUMMARY"
           fi
 
