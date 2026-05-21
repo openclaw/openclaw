@@ -9,7 +9,7 @@
   "type": "module",
   "dependencies": {
     "audio-decode": "2.2.3",
-    "baileys": "7.0.0-rc12",
+    "baileys": "7.0.0-rc13",
     "https-proxy-agent": "9.0.0",
     "jimp": "1.6.1",
     "typebox": "1.1.38"
