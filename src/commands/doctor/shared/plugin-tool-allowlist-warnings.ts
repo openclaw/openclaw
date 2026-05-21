@@ -389,9 +389,10 @@ function buildMcpToolNamePrefixes(serverNames: readonly string[]): string[] {
     .filter(Boolean);
 }
 
-function entriesMatchAnyMcpTool(
+function entriesMatchMcpTool(
   entries: readonly string[],
   serverNames: readonly string[],
+  mode: "any" | "every",
 ): boolean {
   const normalizedEntries = entries.map(normalizeToolName).filter(Boolean);
   if (
@@ -402,23 +403,43 @@ function entriesMatchAnyMcpTool(
     return true;
   }
   const serverPrefixes = buildMcpToolNamePrefixes(serverNames);
-  if (
-    normalizedEntries.some((entry) =>
-      serverPrefixes.some((prefix) => entry.length > prefix.length && entry.startsWith(prefix)),
-    )
-  ) {
-    return true;
-  }
   const patterns = compileGlobPatterns({ raw: normalizedEntries, normalize: normalizeToolName });
-  if (patterns.length === 0) {
-    return false;
-  }
-  return buildMcpProbeToolNames(serverNames).some((probeName) =>
-    matchesAnyGlobPattern(normalizeToolName(probeName), patterns),
-  );
+  const probeNames = buildMcpProbeToolNames(serverNames).map(normalizeToolName);
+  const prefixOrPatternMatches = (prefix: string, index: number) =>
+    normalizedEntries.some((entry) => entry.length > prefix.length && entry.startsWith(prefix)) ||
+    matchesAnyGlobPattern(probeNames[index] ?? "", patterns);
+  return mode === "every"
+    ? serverPrefixes.every((prefix, index) => prefixOrPatternMatches(prefix, index))
+    : serverPrefixes.some((prefix, index) => prefixOrPatternMatches(prefix, index));
 }
 
-function sandboxAllowGateAllowsMcp(policy: unknown, serverNames: readonly string[]): boolean {
+function entriesMatchAnyMcpTool(
+  entries: readonly string[],
+  serverNames: readonly string[],
+): boolean {
+  return entriesMatchMcpTool(entries, serverNames, "any");
+}
+
+function entriesMatchEveryMcpTool(
+  entries: readonly string[],
+  serverNames: readonly string[],
+): boolean {
+  return entriesMatchMcpTool(entries, serverNames, "every");
+}
+
+function sandboxPolicyAllowsAllMcpServers(
+  policy: unknown,
+  serverNames: readonly string[],
+): boolean {
+  const allow = getList(policy, "allow");
+  if (Array.isArray(allow) && allow.length === 0) {
+    return true;
+  }
+  const entries = [...(allow ?? []), ...(getList(policy, "alsoAllow") ?? [])];
+  return entriesMatchEveryMcpTool(entries, serverNames);
+}
+
+function toolPolicyAllowsAnyMcpServer(policy: unknown, serverNames: readonly string[]): boolean {
   const allow = getList(policy, "allow");
   if (Array.isArray(allow) && allow.length === 0) {
     return true;
@@ -427,16 +448,20 @@ function sandboxAllowGateAllowsMcp(policy: unknown, serverNames: readonly string
   return entriesMatchAnyMcpTool(entries, serverNames);
 }
 
-function sandboxPolicyIntentionallyDeniesMcp(
+function toolPolicyDeniesAllMcpServers(policy: unknown, serverNames: readonly string[]): boolean {
+  const deny = getList(policy, "deny") ?? [];
+  return entriesMatchEveryMcpTool(deny, serverNames);
+}
+
+function sandboxPolicyIntentionallyDeniesAllMcpServers(
   policy: unknown,
   serverNames: readonly string[],
 ): boolean {
-  const deny = getList(policy, "deny") ?? [];
-  return entriesMatchAnyMcpTool(deny, serverNames);
+  return toolPolicyDeniesAllMcpServers(policy, serverNames);
 }
 
 function nonSandboxToolPolicyBlocksMcp(policy: unknown, serverNames: readonly string[]): boolean {
-  if (sandboxPolicyIntentionallyDeniesMcp(policy, serverNames)) {
+  if (toolPolicyDeniesAllMcpServers(policy, serverNames)) {
     return true;
   }
   const allow = getList(policy, "allow");
@@ -453,7 +478,7 @@ function profileToolPolicyBlocksMcp(policy: unknown, serverNames: readonly strin
     resolveToolProfilePolicy(profile),
     getList(policy, "alsoAllow"),
   );
-  return Boolean(profilePolicy && !sandboxAllowGateAllowsMcp(profilePolicy, serverNames));
+  return Boolean(profilePolicy && !toolPolicyAllowsAnyMcpServer(profilePolicy, serverNames));
 }
 
 function nonSandboxToolPoliciesBlockMcp(params: {
@@ -515,8 +540,8 @@ function collectSandboxMcpAllowlistWarnings(cfg: OpenClawConfig): string[] {
   const issueSources = sandboxPolicies
     .filter(
       ({ policy }) =>
-        !sandboxAllowGateAllowsMcp(policy, serverNames) &&
-        !sandboxPolicyIntentionallyDeniesMcp(policy, serverNames),
+        !sandboxPolicyAllowsAllMcpServers(policy, serverNames) &&
+        !sandboxPolicyIntentionallyDeniesAllMcpServers(policy, serverNames),
     )
     .filter(({ nonSandboxToolPolicyBlocksMcp }) => !nonSandboxToolPolicyBlocksMcp)
     .flatMap(({ labels }) => labels);

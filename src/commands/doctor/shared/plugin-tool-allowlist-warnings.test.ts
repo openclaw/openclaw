@@ -115,6 +115,32 @@ describe("collectPluginToolAllowlistWarnings", () => {
     ]);
   });
 
+  it("warns when sandbox allowlist covers only one configured MCP server", () => {
+    const warnings = collectPluginToolAllowlistWarnings({
+      cfg: {
+        agents: { defaults: { sandbox: { mode: "all" } } },
+        mcp: {
+          servers: {
+            gmail: { command: "node", args: ["gmail-server.js"] },
+            outlook: { command: "node", args: ["outlook-server.js"] },
+          },
+        },
+        tools: {
+          sandbox: {
+            tools: {
+              alsoAllow: ["outlook__*"],
+            },
+          },
+        },
+      },
+      manifestRegistry,
+    });
+
+    expect(warnings).toEqual([
+      '- mcp.servers defines 2 MCP servers ("gmail", "outlook"), but tools.sandbox.tools.alsoAllow does not include "bundle-mcp", "group:plugins", or a matching server-prefixed MCP tool name/glob such as "<server>__*". Sandboxed agents will filter bundled MCP tools before provider requests. Add "bundle-mcp" to tools.sandbox.tools.alsoAllow (or use "group:plugins" / server globs) if those MCP tools should be visible; use tools.sandbox.tools.allow: [] only when you intentionally want no sandbox allow gate.',
+    ]);
+  });
+
   it("uses a config-path source label when sandbox allowlist is unset", () => {
     const warnings = collectPluginToolAllowlistWarnings({
       cfg: {
