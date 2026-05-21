@@ -448,7 +448,7 @@ async function runReleaseConfiguredPluginInstallsHealth(
 
 async function runDiskSpaceHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteDiskSpace } = await import("../commands/doctor-disk-space.js");
-  await noteDiskSpace(ctx.cfg);
+  noteDiskSpace(ctx.cfg);
 }
 
 async function runStateIntegrityHealth(ctx: DoctorHealthFlowContext): Promise<void> {
