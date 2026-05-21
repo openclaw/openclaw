@@ -1111,6 +1111,41 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
     });
   });
 
+  it("accepts ollama-local marker auth for Orb host aliases", async () => {
+    const auth = await resolveApiKeyForProvider({
+      provider: "ollama",
+      cfg: {
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "http://host.orb.internal:11434",
+              api: "ollama",
+              apiKey: "ollama-local",
+              models: [
+                {
+                  id: "qwen3.5:27b",
+                  name: "Qwen 3.5 27B",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 262144,
+                  maxTokens: 8192,
+                },
+              ],
+            },
+          },
+        },
+      },
+      store: { version: 1, profiles: {} },
+    });
+
+    expectAuthFields(auth, {
+      apiKey: "ollama-local",
+      source: "models.json (local marker)",
+      mode: "api-key",
+    });
+  });
+
   it("does not accept non-secret local markers for remote custom providers", async () => {
     await expect(
       resolveApiKeyForProvider({
