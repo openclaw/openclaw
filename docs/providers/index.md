@@ -89,6 +89,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 
 - [Deepgram (audio transcription)](/providers/deepgram)
 - [ElevenLabs](/providers/elevenlabs#speech-to-text)
+- [Gradium](/providers/gradium#realtime-speech-to-text)
 - [Mistral](/providers/mistral#audio-transcription-voxtral)
 - [OpenAI](/providers/openai#speech-to-text)
 - [SenseAudio](/providers/senseaudio)
