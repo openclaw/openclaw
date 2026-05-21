@@ -1,3 +1,4 @@
+import * as embeddingProviderSdk from "openclaw/plugin-sdk/embedding-providers";
 import {
   createPluginRegistryFixture,
   registerVirtualTestPlugin,
@@ -6,6 +7,15 @@ import { describe, expect, it } from "vitest";
 import { getRegisteredEmbeddingProvider } from "../embedding-providers.js";
 
 describe("embedding provider registration", () => {
+  it("keeps public SDK helpers read-only so plugins cannot bypass manifest ownership", () => {
+    expect(embeddingProviderSdk).not.toHaveProperty("registerEmbeddingProvider");
+    expect(embeddingProviderSdk).not.toHaveProperty("listRegisteredEmbeddingProviders");
+    expect(embeddingProviderSdk).not.toHaveProperty("clearEmbeddingProviders");
+    expect(embeddingProviderSdk).not.toHaveProperty("restoreEmbeddingProviders");
+    expect(embeddingProviderSdk).not.toHaveProperty("restoreRegisteredEmbeddingProviders");
+    expect(embeddingProviderSdk).not.toHaveProperty("resetEmbeddingProviders");
+  });
+
   it("rejects plugins that did not declare the capability contract", () => {
     const { config, registry } = createPluginRegistryFixture();
 
