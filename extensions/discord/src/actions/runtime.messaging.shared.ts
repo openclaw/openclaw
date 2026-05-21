@@ -36,7 +36,7 @@ export type DiscordMessagingActionContext = {
   accountId?: string;
   resolveChannelId: () => string;
   assertReadTargetAllowed: (params: { guildId?: string; channelId: string }) => Promise<void>;
-  assertGuildReadTargetAllowed: (params: { guildId: string }) => void;
+  assertGuildReadTargetAllowed: (params: { guildId: string }) => Promise<void>;
   resolveReactionChannelId: () => Promise<string>;
   withOpts: (extra?: Record<string, unknown>) => { cfg: OpenClawConfig; accountId?: string };
   withReactionRuntimeOptions: <T extends Record<string, unknown> = Record<string, never>>(
@@ -54,6 +54,8 @@ function hasDiscordGuildEntries(
 function resolveDiscordActionGuildEntry(params: {
   guilds?: Record<string, DiscordGuildEntryResolved | undefined>;
   guildId?: string;
+  guildName?: string;
+  includeWildcard?: boolean;
 }): DiscordGuildEntryResolved | null {
   const guildId = params.guildId?.trim();
   if (!params.guilds) {
@@ -61,6 +63,24 @@ function resolveDiscordActionGuildEntry(params: {
   }
   if (guildId && params.guilds[guildId]) {
     return { ...params.guilds[guildId], id: guildId };
+  }
+  if (guildId) {
+    const byConfiguredId = Object.values(params.guilds).find((guild) => guild?.id === guildId);
+    if (byConfiguredId) {
+      return { ...byConfiguredId, id: guildId };
+    }
+  }
+  const guildSlug = params.guildName ? normalizeDiscordSlug(params.guildName) : "";
+  if (guildSlug) {
+    const bySlug =
+      params.guilds[guildSlug] ??
+      Object.values(params.guilds).find((guild) => guild?.slug === guildSlug);
+    if (bySlug) {
+      return { ...bySlug, id: guildId, slug: guildSlug || bySlug.slug };
+    }
+  }
+  if (params.includeWildcard === false) {
+    return null;
   }
   const wildcard = params.guilds["*"];
   return wildcard ? { ...wildcard, id: guildId } : null;
@@ -181,6 +201,47 @@ export function createDiscordMessagingActionContext(params: {
         accountId: resolvedReactionAccountId,
       })
     : cfgOptions;
+  const guildNameById = new Map<string, string | null>();
+  const resolveGuildName = async (guildId: string): Promise<string | null> => {
+    if (guildNameById.has(guildId)) {
+      return guildNameById.get(guildId) ?? null;
+    }
+    try {
+      const guildInfo = await discordMessagingActionRuntime.fetchGuildInfoDiscord(
+        guildId,
+        withOpts(),
+      );
+      const guildName = readDiscordChannelStringField(guildInfo, "name") ?? null;
+      guildNameById.set(guildId, guildName);
+      return guildName;
+    } catch {
+      guildNameById.set(guildId, null);
+      return null;
+    }
+  };
+  const resolveReadGuildEntry = async (
+    guildId?: string,
+  ): Promise<DiscordGuildEntryResolved | null> => {
+    const direct = resolveDiscordActionGuildEntry({
+      guilds,
+      guildId,
+      includeWildcard: false,
+    });
+    if (direct || !guildId) {
+      return direct;
+    }
+    const guildName = await resolveGuildName(guildId);
+    const named = resolveDiscordActionGuildEntry({
+      guilds,
+      guildId,
+      guildName: guildName ?? undefined,
+      includeWildcard: false,
+    });
+    if (named) {
+      return named;
+    }
+    return resolveDiscordActionGuildEntry({ guilds, guildId });
+  };
   const resolveReadTargetContext = async (channelId: string): Promise<DiscordReadTargetContext> => {
     const fallback: DiscordReadTargetContext = {
       channelId,
@@ -253,7 +314,7 @@ export function createDiscordMessagingActionContext(params: {
         if (target.guildId && target.guildId !== guildId) {
           throw new Error("Discord read target channel is not allowed.");
         }
-        const guildInfo = resolveDiscordActionGuildEntry({ guilds, guildId });
+        const guildInfo = await resolveReadGuildEntry(guildId);
         if (
           !isDiscordReadTargetAllowedInGuild({
             groupPolicy,
@@ -266,7 +327,7 @@ export function createDiscordMessagingActionContext(params: {
         return;
       }
       if (target.guildId) {
-        const guildInfo = resolveDiscordActionGuildEntry({ guilds, guildId: target.guildId });
+        const guildInfo = await resolveReadGuildEntry(target.guildId);
         if (
           !isDiscordReadTargetAllowedInGuild({
             groupPolicy,
@@ -289,8 +350,8 @@ export function createDiscordMessagingActionContext(params: {
         throw new Error("Discord read target channel is not allowed.");
       }
     },
-    assertGuildReadTargetAllowed: ({ guildId }) => {
-      const guildInfo = resolveDiscordActionGuildEntry({ guilds, guildId });
+    assertGuildReadTargetAllowed: async ({ guildId }) => {
+      const guildInfo = await resolveReadGuildEntry(guildId);
       if (
         !isDiscordGroupAllowedByPolicy({
           groupPolicy,

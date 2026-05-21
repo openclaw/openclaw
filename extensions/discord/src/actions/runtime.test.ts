@@ -36,6 +36,10 @@ const discordSendMocks = {
   editMessageDiscord: vi.fn(async () => ({})),
   fetchChannelInfoDiscord: vi.fn(async () => ({ id: "C1", type: 0 })),
   fetchChannelPermissionsDiscord: vi.fn(async () => ({})),
+  fetchGuildInfoDiscord: vi.fn(async (guildId: string) => ({
+    id: guildId,
+    name: "Guild",
+  })),
   fetchMessageDiscord: vi.fn(async () => ({})),
   fetchReactionsDiscord: vi.fn(async () => ({})),
   kickMemberDiscord: vi.fn(async () => ({})),
@@ -67,6 +71,7 @@ const {
   editChannelDiscord,
   fetchChannelInfoDiscord,
   fetchChannelPermissionsDiscord,
+  fetchGuildInfoDiscord,
   fetchReactionsDiscord,
   fetchMessageDiscord,
   kickMemberDiscord,
@@ -491,6 +496,42 @@ describe("handleDiscordMessagingAction", () => {
     );
   });
 
+  it("reads from Discord target channels allowlisted under a guild slug", async () => {
+    fetchChannelInfoDiscord.mockResolvedValueOnce({
+      id: "222",
+      guild_id: "111",
+      type: 0,
+    });
+    fetchGuildInfoDiscord.mockResolvedValueOnce({
+      id: "111",
+      name: "Friends of OpenClaw",
+    });
+    const cfg = {
+      channels: {
+        discord: {
+          token: "token",
+          groupPolicy: "allowlist",
+          guilds: {
+            "friends-of-openclaw": {
+              channels: {
+                "222": { enabled: true },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await handleMessagingAction("readMessages", { channelId: "222" }, enableAllActions, cfg);
+
+    expect(fetchGuildInfoDiscord).toHaveBeenCalledWith("111", { cfg });
+    expect(readMessagesDiscord).toHaveBeenCalledWith(
+      "222",
+      { limit: undefined, before: undefined, after: undefined, around: undefined },
+      { cfg },
+    );
+  });
+
   it("rejects Discord reads for non-allowlisted target channels", async () => {
     const cfg = {
       channels: {
@@ -547,6 +588,43 @@ describe("handleDiscordMessagingAction", () => {
       cfg,
     );
     expect(fetchMessageDiscord).toHaveBeenCalledWith("C1", "M1", { cfg });
+  });
+
+  it("fetches Discord messages from channels allowlisted under a guild slug", async () => {
+    fetchChannelInfoDiscord.mockResolvedValueOnce({
+      id: "222",
+      guild_id: "111",
+      type: 0,
+    });
+    fetchGuildInfoDiscord.mockResolvedValueOnce({
+      id: "111",
+      name: "Friends of OpenClaw",
+    });
+    const cfg = {
+      channels: {
+        discord: {
+          token: "token",
+          groupPolicy: "allowlist",
+          guilds: {
+            "friends-of-openclaw": {
+              channels: {
+                "222": { enabled: true },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await handleMessagingAction(
+      "fetchMessage",
+      { messageLink: "https://discord.com/channels/111/222/333" },
+      enableAllActions,
+      cfg,
+    );
+
+    expect(fetchGuildInfoDiscord).toHaveBeenCalledWith("111", { cfg });
+    expect(fetchMessageDiscord).toHaveBeenCalledWith("222", "333", { cfg });
   });
 
   it("rejects Discord message links for non-allowlisted target channels", async () => {

@@ -200,7 +200,7 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
           await ctx.assertReadTargetAllowed({ guildId, channelId: targetChannelId });
         }
       } else {
-        ctx.assertGuildReadTargetAllowed({ guildId });
+        await ctx.assertGuildReadTargetAllowed({ guildId });
       }
       const authorIdList = [...(authorIds ?? []), ...(authorId ? [authorId] : [])];
       const results = await discordMessagingActionRuntime.searchMessagesDiscord(
