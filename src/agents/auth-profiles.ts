@@ -53,6 +53,7 @@ export {
   ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
   hasAnyAuthProfileStoreSource,
+  loadAuthProfileStoreForLocalAgent,
   loadAuthProfileStoreForSecretsRuntime,
   loadAuthProfileStoreWithoutExternalProfiles,
   loadAuthProfileStoreForRuntime,

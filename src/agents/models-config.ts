@@ -25,6 +25,7 @@ import {
 } from "./agent-scope.js";
 import {
   ensureAuthProfileStore,
+  loadAuthProfileStoreForLocalAgent,
   listProfilesForProvider,
   type AuthProfileCredential,
   upsertAuthProfileWithLock,
@@ -209,8 +210,12 @@ async function migrateExistingModelsJsonOnlyProviderApiKeys(params: {
   }
 
   const store = ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false });
+  const localStore = loadAuthProfileStoreForLocalAgent(params.agentDir, {
+    allowKeychainPrompt: false,
+    resolveLegacyOAuthSidecars: false,
+  });
   for (const { providerKey, existingApiKey } of candidates) {
-    if (listProfilesForProvider(store, providerKey).length > 0) {
+    if (listProfilesForProvider(localStore, providerKey).length > 0) {
       continue;
     }
 
@@ -227,6 +232,7 @@ async function migrateExistingModelsJsonOnlyProviderApiKeys(params: {
       );
     }
     store.profiles[profileId] = credential;
+    localStore.profiles[profileId] = credential;
   }
 }
 

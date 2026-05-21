@@ -24,6 +24,7 @@ let actualUpsertAuthProfileWithLock: UpsertAuthProfileWithLock | undefined;
 installModelsConfigTestHooks();
 
 let ensureOpenClawModelsJson: typeof import("./models-config.js").ensureOpenClawModelsJson;
+let ensureAuthProfileStore: typeof import("./auth-profiles.js").ensureAuthProfileStore;
 let clearCurrentPluginMetadataSnapshot: typeof import("../plugins/current-plugin-metadata-snapshot.js").clearCurrentPluginMetadataSnapshot;
 let setCurrentPluginMetadataSnapshot: typeof import("../plugins/current-plugin-metadata-snapshot.js").setCurrentPluginMetadataSnapshot;
 let createProviderAuthResolver: typeof import("./models-config.providers.secrets.js").createProviderAuthResolver;
@@ -134,6 +135,7 @@ beforeAll(async () => {
     };
   });
   ({ ensureOpenClawModelsJson } = await import("./models-config.js"));
+  ({ ensureAuthProfileStore } = await import("./auth-profiles.js"));
   ({ createProviderAuthResolver } = await import("./models-config.providers.secrets.js"));
   ({ clearCurrentPluginMetadataSnapshot, setCurrentPluginMetadataSnapshot } =
     await import("../plugins/current-plugin-metadata-snapshot.js"));
@@ -272,6 +274,95 @@ describe("models-config write serialization", () => {
         provider: "custom",
         key: "sk-existing-models-json-only",
         copyToAgents: false,
+      });
+    });
+  });
+
+  it("migrates local models.json keys when a non-main agent inherits the same profile", async () => {
+    await withModelsTempHome(async (home) => {
+      const mainAgentDir = path.join(home, ".openclaw", "agents", "main", "agent");
+      const agentDir = path.join(home, ".openclaw", "agents", "worker", "agent");
+      process.env.OPENCLAW_AGENT_DIR = mainAgentDir;
+      process.env.PI_CODING_AGENT_DIR = mainAgentDir;
+      await fs.mkdir(mainAgentDir, { recursive: true });
+      await fs.mkdir(agentDir, { recursive: true });
+      await fs.writeFile(
+        path.join(mainAgentDir, "auth-profiles.json"),
+        `${JSON.stringify(
+          {
+            version: 1,
+            profiles: {
+              "custom:models-json": {
+                type: "api_key",
+                provider: "custom",
+                key: "sk-main-inherited-profile", // pragma: allowlist secret
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      await fs.writeFile(
+        path.join(agentDir, "models.json"),
+        `${JSON.stringify(
+          {
+            providers: {
+              custom: {
+                baseUrl: "https://custom.example/v1",
+                api: "openai-completions",
+                apiKey: "sk-worker-local-models-json", // pragma: allowlist secret
+                models: [],
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+      );
+
+      await ensureOpenClawModelsJson(
+        {
+          models: {
+            mode: "merge",
+            providers: {
+              custom: {
+                baseUrl: "https://custom.example/v1",
+                api: "openai-completions",
+                models: [],
+              },
+            },
+          },
+        },
+        agentDir,
+      );
+
+      const modelsJson = JSON.parse(
+        await fs.readFile(path.join(agentDir, "models.json"), "utf8"),
+      ) as {
+        providers: Record<string, { apiKey?: string }>;
+      };
+      expect(modelsJson.providers.custom?.apiKey).toBeUndefined();
+
+      const localAuthProfiles = JSON.parse(
+        await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf8"),
+      ) as AuthProfileStore;
+      expect(localAuthProfiles.profiles["custom:models-json"]).toMatchObject({
+        type: "api_key",
+        provider: "custom",
+        key: "sk-worker-local-models-json",
+        copyToAgents: false,
+      });
+
+      const auth = createProviderAuthResolver(
+        {},
+        ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false }),
+      )("custom");
+      expect(auth).toMatchObject({
+        discoveryApiKey: "sk-worker-local-models-json",
+        mode: "api_key",
+        source: "profile",
+        profileId: "custom:models-json",
       });
     });
   });
