@@ -246,6 +246,56 @@ describe("models-config", () => {
     ]);
   });
 
+  it("does not serialize provider apiKey values into models.json", async () => {
+    const plan = await planOpenClawModelsJsonWithDeps(
+      {
+        cfg: {
+          models: {
+            providers: {
+              custom: {
+                baseUrl: "https://custom.example/v1",
+                api: "openai-completions",
+                apiKey: "literal-test-key",
+                models: [],
+              },
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                api: "openai-responses",
+                apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+                models: [],
+              },
+            },
+          },
+        },
+        agentDir: "/tmp/openclaw-models-config-env-vars-test",
+        env: { OPENAI_API_KEY: "resolved-openai-key" } as NodeJS.ProcessEnv,
+        existingRaw: "",
+        existingParsed: null,
+      },
+      {
+        resolveImplicitProviders: async () => ({
+          implicit: {
+            baseUrl: "https://implicit.example/v1",
+            api: "openai-completions",
+            apiKey: "IMPLICIT_API_KEY",
+            models: [],
+          },
+        }),
+      },
+    );
+
+    expect(plan.action).toBe("write");
+    if (plan.action !== "write") {
+      throw new Error("Expected models.json write plan");
+    }
+    const parsed = JSON.parse(plan.contents) as {
+      providers?: Record<string, { apiKey?: unknown }>;
+    };
+    expect(parsed.providers?.custom).not.toHaveProperty("apiKey");
+    expect(parsed.providers?.openai).not.toHaveProperty("apiKey");
+    expect(parsed.providers?.implicit).not.toHaveProperty("apiKey");
+  });
+
   it("uses config env.vars entries for implicit provider discovery without mutating process.env", async () => {
     await withTempEnv(["OPENROUTER_API_KEY", TEST_ENV_VAR], async () => {
       unsetEnv(["OPENROUTER_API_KEY", TEST_ENV_VAR]);
