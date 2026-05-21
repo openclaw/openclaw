@@ -381,6 +381,7 @@ export function installSessionExternalHookWriteLock(params: {
 export type EmbeddedAttemptSessionLockController = {
   releaseForPrompt(): Promise<void>;
   refreshAfterOwnedSessionWrite(): void;
+  reacquireAfterPrompt(): Promise<void>;
   waitForSessionEvents(session: unknown): Promise<void>;
   withSessionWriteLock<T>(
     run: () => Promise<T> | T,
@@ -511,6 +512,20 @@ export async function createEmbeddedAttemptSessionLockController(params: {
         fenceFingerprint = readSessionFileFingerprintSync(params.lockOptions.sessionFile);
       }
     },
+    async reacquireAfterPrompt(): Promise<void> {
+      if (takeoverDetected || heldLock) {
+        return;
+      }
+      const lock = await acquireLock();
+      try {
+        heldLock = lock;
+        await assertSessionFileFence();
+      } catch (err) {
+        heldLock = undefined;
+        await lock.release();
+        throw err;
+      }
+    },
     waitForSessionEvents: waitForSessionEventQueue,
     async withSessionWriteLock<T>(
       run: () => Promise<T> | T,
@@ -599,6 +614,7 @@ export function installPromptSubmissionLockRelease(params: {
   session: unknown;
   waitForSessionEvents: (session: unknown) => Promise<void>;
   releaseForPrompt: () => Promise<void>;
+  reacquireAfterPrompt: () => Promise<void>;
 }): void {
   const agent = (params.session as SessionWithAgentPrompt).agent;
   if (typeof agent?.streamFn !== "function") {
@@ -612,7 +628,11 @@ export function installPromptSubmissionLockRelease(params: {
   const wrappedStreamFn: PromptReleaseStreamFn = async (...args: unknown[]) => {
     await params.waitForSessionEvents(params.session);
     await params.releaseForPrompt();
-    return await originalStreamFn(...args);
+    try {
+      return await originalStreamFn(...args);
+    } finally {
+      await params.reacquireAfterPrompt();
+    }
   };
   wrappedStreamFn["__openclawSessionLockPromptReleaseInstalled"] = true;
   agent.streamFn = wrappedStreamFn;
