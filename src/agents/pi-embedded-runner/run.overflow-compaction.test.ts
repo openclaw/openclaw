@@ -1076,8 +1076,8 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
 
     expect(result.payloads).toBeDefined();
-    expect(result.payloads![0]?.isError).toBe(true);
-    expect(result.payloads![0]?.text).toContain("system prompt exceeds the model context window");
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(result.payloads?.[0]?.text).toContain("system prompt exceeds the model context window");
     expect(result.meta.error?.kind).toBe("irreducible_overflow");
   });
 
