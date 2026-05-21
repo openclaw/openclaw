@@ -1677,7 +1677,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 
   it("surfaces a Discord message-tool-only guard when the model ends with NO_REPLY without sending", async () => {
-    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "NO_REPLY" }],
       meta: { stopReason: "stop" },
     });
@@ -1710,7 +1710,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 
   it("surfaces a Discord message-tool-only guard when the model returns an empty final", async () => {
-    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [],
       meta: { stopReason: "stop" },
     });
@@ -1742,7 +1742,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 
   it("marks substantive Discord message-tool-only finals for source delivery when the model skipped message.send", async () => {
-    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "final should surface" }],
       meta: { stopReason: "stop" },
     });
@@ -1777,7 +1777,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       { text: "blocked should stay suppressed" },
       { beforeAgentRunBlocked: true },
     );
-    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [
         blockedPayload,
         { text: "fallback should stay suppressed", isFallbackNotice: true },
@@ -1823,7 +1823,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
   it("surfaces the Discord message-tool-only guard after tool progress without final delivery", async () => {
     const onBlockReply = vi.fn();
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
       await params.onBlockReply?.({ text: "🛠️ tool progress is visible" });
       return { payloads: [], meta: { stopReason: "stop" } };
     });
@@ -1860,8 +1860,51 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
   });
 
+  it("appends the Discord guard when tool work ends with only an incomplete-turn error payload", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [
+        { text: "⚠️ Agent couldn't generate a response. Please try again.", isError: true },
+      ],
+      meta: {
+        stopReason: "stop",
+        toolSummary: { calls: 2, tools: ["memory_search", "exec"] },
+      },
+    });
+
+    const { run } = createMinimalRun({
+      runOverrides: {
+        messageProvider: "discord",
+        sourceReplyDeliveryMode: "message_tool_only",
+        allowEmptyAssistantReplyAsSilent: true,
+      },
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:C1",
+        ChatType: "channel",
+        WasMentioned: false,
+        MessageSid: "1506801881224314910",
+      },
+    });
+
+    const res = await run();
+    expect(Array.isArray(res)).toBe(true);
+    const payloads = res as ReplyPayload[];
+
+    expect(payloads.map((payload) => payload.text)).toEqual([
+      "⚠️ Agent couldn't generate a response. Please try again.",
+      expect.stringContaining("Discord delivery guard"),
+    ]);
+    expect(payloads[0]?.isError).toBe(true);
+    expect(getReplyPayloadMetadata(payloads[0] ?? {})).toBeUndefined();
+    expect(payloads[1]?.isError).toBe(true);
+    expect(getReplyPayloadMetadata(payloads[1] ?? {})).toEqual({
+      deliverDespiteSourceReplySuppression: true,
+    });
+  });
+
   it("surfaces the Discord message-tool-only guard after cron side effects without final delivery", async () => {
-    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "NO_REPLY" }],
       successfulCronAdds: 1,
       meta: { stopReason: "stop" },
@@ -1894,7 +1937,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 
   it("does not surface the Discord message-tool-only guard after committed message.send evidence", async () => {
-    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "NO_REPLY" }],
       messagingToolSentTexts: ["visible result"],
       messagingToolSentTargets: [{ tool: "message", provider: "discord", to: "channel:C1" }],
@@ -1919,7 +1962,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 
   it("does not surface the Discord message-tool-only guard after target-only message.send evidence", async () => {
-    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "NO_REPLY" }],
       messagingToolSentTargets: [{ tool: "message", provider: "discord", to: "channel:C1" }],
       meta: { stopReason: "stop" },
@@ -1944,7 +1987,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
   it("does not surface the Discord message-tool-only guard after tool progress followed by message.send evidence", async () => {
     const onBlockReply = vi.fn();
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
       await params.onBlockReply?.({ text: "🛠️ tool progress is visible" });
       return {
         payloads: [{ text: "NO_REPLY" }],
@@ -1977,7 +2020,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 
   it("does not surface the Discord message-tool-only guard after an approval prompt", async () => {
-    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [],
       didSendDeterministicApprovalPrompt: true,
       meta: { stopReason: "stop" },
@@ -2003,7 +2046,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 
   it("does not surface the Discord message-tool-only guard after an unmentioned approval prompt", async () => {
-    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "NO_REPLY" }],
       didSendDeterministicApprovalPrompt: true,
       meta: {
@@ -2032,7 +2075,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 
   it("keeps unaddressed Discord message-tool-only silence quiet when empty replies are allowed", async () => {
-    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "NO_REPLY" }],
       meta: { stopReason: "stop" },
     });
@@ -2057,7 +2100,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 
   it("surfaces the Discord message-tool-only guard for non-mentioned tool work followed by NO_REPLY", async () => {
-    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "NO_REPLY" }],
       meta: {
         stopReason: "stop",
@@ -2093,7 +2136,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
   it("surfaces the Discord guard for non-message-tool-only tool progress followed by an empty final", async () => {
     const onBlockReply = vi.fn();
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
       await params.onBlockReply?.({ text: "🛠️ process still running" });
       return { payloads: [], meta: { stopReason: "stop" } };
     });
@@ -2127,7 +2170,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 
   it("surfaces the Discord message-tool-only guard for non-mentioned tool work followed by an empty final", async () => {
-    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [],
       meta: {
         stopReason: "stop",
@@ -2162,7 +2205,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 
   it("marks a non-mentioned substantive Discord message-tool-only final for source delivery", async () => {
-    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "final result should still be visible" }],
       meta: { stopReason: "stop" },
     });
@@ -2193,7 +2236,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 
   it("keeps non-mentioned non-message-tool-only substantive Discord finals on normal delivery", async () => {
-    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "automatic final result" }],
       meta: { stopReason: "stop" },
     });
