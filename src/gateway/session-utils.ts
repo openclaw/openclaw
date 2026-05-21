@@ -105,7 +105,6 @@ export {
   attachOpenClawTranscriptMeta,
   capArrayByJsonBytes,
   readFirstUserMessageFromTranscript,
-  readLastMessagePreviewFromTranscript,
   readLatestSessionUsageFromTranscriptAsync,
   readLatestRecentSessionUsageFromTranscriptAsync,
   readRecentSessionUsageFromTranscriptAsync,
