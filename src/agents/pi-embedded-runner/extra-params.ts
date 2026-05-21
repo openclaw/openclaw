@@ -36,6 +36,10 @@ import {
 import { resolveCacheRetention } from "./prompt-cache-retention.js";
 import { createOpenRouterSystemCacheWrapper } from "./proxy-stream-wrappers.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
+import {
+  clampMaxTokensToContextWindow,
+  clampModelMaxTokensToContextWindow,
+} from "./stream-max-tokens-context-window.js";
 
 const defaultProviderRuntimeDeps = {
   prepareProviderExtraParams: prepareProviderExtraParamsRuntime,
@@ -491,10 +495,20 @@ function createStreamFnWithExtraParams(
     if (Object.keys(streamParams).length === 0 && !cacheRetention) {
       return underlying(callModel, context, options);
     }
-    return underlying(callModel, context, {
+    const mergedOptions = {
       ...streamParams,
       ...(cacheRetention ? { cacheRetention } : {}),
       ...options,
+    };
+    const clampedMaxTokens = clampMaxTokensToContextWindow({
+      maxTokens: mergedOptions.maxTokens,
+      callModel,
+      configuredModel: model,
+      context,
+    });
+    return underlying(callModel, context, {
+      ...mergedOptions,
+      ...(clampedMaxTokens !== undefined ? { maxTokens: clampedMaxTokens } : {}),
     });
   };
 
@@ -708,6 +722,36 @@ function createOpenAICompletionsExtraBodyWrapper(
   };
 }
 
+function createContextWindowMaxTokensWrapper(
+  baseStreamFn: StreamFn | undefined,
+  configuredModel?: ProviderRuntimeModel,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (callModel, context, options) => {
+    const clampedModelMaxTokens = clampModelMaxTokensToContextWindow({
+      callModel,
+      configuredModel,
+      context,
+    });
+    const nextModel =
+      clampedModelMaxTokens !== undefined &&
+      clampedModelMaxTokens !== (callModel as { maxTokens?: unknown }).maxTokens
+        ? { ...callModel, maxTokens: clampedModelMaxTokens }
+        : callModel;
+    const clampedOptionMaxTokens = clampMaxTokensToContextWindow({
+      maxTokens: options?.maxTokens,
+      callModel,
+      configuredModel,
+      context,
+    });
+    const nextOptions =
+      clampedOptionMaxTokens !== undefined && clampedOptionMaxTokens !== options?.maxTokens
+        ? { ...options, maxTokens: clampedOptionMaxTokens }
+        : options;
+    return underlying(nextModel, context, nextOptions);
+  };
+}
+
 type ApplyExtraParamsContext = {
   agent: { streamFn?: StreamFn };
   cfg: OpenClawConfig | undefined;
@@ -757,6 +801,7 @@ function applyPrePluginStreamWrappers(ctx: ApplyExtraParamsContext): void {
 function applyPostPluginStreamWrappers(
   ctx: ApplyExtraParamsContext & { providerWrapperHandled: boolean },
 ): void {
+  ctx.agent.streamFn = createContextWindowMaxTokensWrapper(ctx.agent.streamFn, ctx.model);
   ctx.agent.streamFn = createOpenRouterSystemCacheWrapper(ctx.agent.streamFn);
   ctx.agent.streamFn = createOpenAIStringContentWrapper(ctx.agent.streamFn);
   ctx.agent.streamFn = createOpenAICompletionsStrictMessageKeysWrapper(ctx.agent.streamFn);
