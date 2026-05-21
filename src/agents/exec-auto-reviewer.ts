@@ -184,6 +184,29 @@ function buildReviewerTimeoutDecision(timeoutMs: number): ExecAutoReviewDecision
   };
 }
 
+async function raceWithReviewerTimeout<T>(
+  promise: Promise<T>,
+  params: {
+    timeoutMs: number;
+    onTimeout?: () => void;
+  },
+): Promise<T | typeof EXEC_REVIEWER_TIMEOUT> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<typeof EXEC_REVIEWER_TIMEOUT>((resolve) => {
+    timer = setTimeout(() => {
+      params.onTimeout?.();
+      resolve(EXEC_REVIEWER_TIMEOUT);
+    }, params.timeoutMs);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 export function createModelExecAutoReviewer(params: {
   cfg?: OpenClawConfig;
   agentId?: string;
@@ -203,24 +226,17 @@ export function createModelExecAutoReviewer(params: {
   const modelRef = resolveReviewerModelRef(params.reviewer);
   const timeoutMs = resolveReviewerTimeoutMs(params.reviewer);
   return async (input) => {
-    const controller = new AbortController();
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const timeout = new Promise<typeof EXEC_REVIEWER_TIMEOUT>((resolve) => {
-      timer = setTimeout(() => {
-        controller.abort();
-        resolve(EXEC_REVIEWER_TIMEOUT);
-      }, timeoutMs);
-    });
+    let completionController: AbortController | undefined;
     try {
-      const prepared = await Promise.race([
+      const prepared = await raceWithReviewerTimeout(
         prepareModel({
           cfg,
           agentId,
           modelRef,
           allowMissingApiKeyModes: ["aws-sdk"],
         }),
-        timeout,
-      ]);
+        { timeoutMs },
+      );
       if (prepared === EXEC_REVIEWER_TIMEOUT) {
         return buildReviewerTimeoutDecision(timeoutMs);
       }
@@ -232,7 +248,8 @@ export function createModelExecAutoReviewer(params: {
         };
       }
 
-      const result = await Promise.race([
+      completionController = new AbortController();
+      const result = await raceWithReviewerTimeout(
         complete({
           model: prepared.model,
           auth: prepared.auth,
@@ -250,17 +267,20 @@ export function createModelExecAutoReviewer(params: {
           options: {
             maxTokens: EXEC_REVIEWER_MAX_TOKENS,
             temperature: 0,
-            signal: controller.signal,
+            signal: completionController.signal,
           },
         }),
-        timeout,
-      ]);
+        {
+          timeoutMs,
+          onTimeout: () => completionController?.abort(),
+        },
+      );
       if (result === EXEC_REVIEWER_TIMEOUT) {
         return buildReviewerTimeoutDecision(timeoutMs);
       }
       return parseExecAutoReviewResponse(extractTextContent(result));
     } catch (err) {
-      if (controller.signal.aborted) {
+      if (completionController?.signal.aborted) {
         return buildReviewerTimeoutDecision(timeoutMs);
       }
       return {
@@ -268,10 +288,6 @@ export function createModelExecAutoReviewer(params: {
         risk: "unknown",
         rationale: `exec reviewer failed: ${formatErrorMessage(err)}`,
       };
-    } finally {
-      if (timer) {
-        clearTimeout(timer);
-      }
     }
   };
 }

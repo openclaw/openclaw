@@ -177,4 +177,72 @@ describe("createModelExecAutoReviewer", () => {
       vi.useRealTimers();
     }
   });
+
+  it("gives reviewer completion a fresh timeout after slow model preparation", async () => {
+    vi.useFakeTimers();
+    try {
+      const prepare = vi.fn(
+        () =>
+          new Promise<{
+            selection: { provider: string; modelId: string; agentDir: string };
+            model: { provider: string; id: string; api: "openai" };
+            auth: { apiKey: string; mode: "env" };
+          }>((resolve) => {
+            setTimeout(() => {
+              resolve({
+                selection: {
+                  provider: "openrouter",
+                  modelId: "anthropic/claude-sonnet-4-6",
+                  agentDir: "/agent",
+                },
+                model: { provider: "openrouter", id: "anthropic/claude-sonnet-4-6", api: "openai" },
+                auth: { apiKey: "key", mode: "env" },
+              });
+            }, 4_900);
+          }),
+      );
+      const complete = vi.fn(
+        () =>
+          new Promise<{ content: Array<{ type: "text"; text: string }> }>((resolve) => {
+            setTimeout(() => {
+              resolve({
+                content: [
+                  {
+                    type: "text",
+                    text: JSON.stringify({
+                      decision: "allow-once",
+                      risk: "low",
+                      rationale: "read-only inspection",
+                    }),
+                  },
+                ],
+              });
+            }, 2_000);
+          }),
+      );
+      const reviewer = createModelExecAutoReviewer({
+        cfg: {},
+        reviewer: { timeoutMs: 5_000 },
+        deps: {
+          prepareSimpleCompletionModelForAgent:
+            prepare as unknown as typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModelForAgent,
+          completeWithPreparedSimpleCompletionModel:
+            complete as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel,
+        },
+      });
+
+      const result = reviewer(input);
+      await vi.advanceTimersByTimeAsync(4_900);
+      expect(complete).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      await expect(result).resolves.toEqual({
+        decision: "allow-once",
+        risk: "low",
+        rationale: "read-only inspection",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
