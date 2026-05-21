@@ -1,8 +1,10 @@
 import path from "node:path";
 import {
+  assertNoSymlinkParents,
   assertNoSymlinkParentsSync,
   readRegularFile,
   readRegularFileSync,
+  statRegularFile,
   statRegularFileSync,
 } from "openclaw/plugin-sdk/security-runtime";
 
@@ -14,22 +16,30 @@ export function resolveWebCredsBackupPath(authDir: string): string {
   return path.join(authDir, "creds.json.bak");
 }
 
-function assertWebCredsParentPathSafe(filePath: string): void {
+function resolveWebCredsParentCheck(filePath: string) {
   const dir = path.resolve(path.dirname(filePath));
-  assertNoSymlinkParentsSync({
+  return {
     rootDir: path.parse(dir).root,
     targetPath: dir,
     allowMissing: true,
     allowRootChildSymlink: true,
     requireDirectories: true,
     messagePrefix: "WhatsApp credential file path",
-  });
+  } as const;
 }
 
-export function assertWebCredsPathRegularFileOrMissing(filePath: string): void {
+async function assertWebCredsParentPathSafe(filePath: string): Promise<void> {
+  await assertNoSymlinkParents(resolveWebCredsParentCheck(filePath));
+}
+
+function assertWebCredsParentPathSafeSync(filePath: string): void {
+  assertNoSymlinkParentsSync(resolveWebCredsParentCheck(filePath));
+}
+
+export async function assertWebCredsPathRegularFileOrMissing(filePath: string): Promise<void> {
   try {
-    assertWebCredsParentPathSafe(filePath);
-    statRegularFileSync(filePath);
+    await assertWebCredsParentPathSafe(filePath);
+    await statRegularFile(filePath);
   } catch (error) {
     throw new Error(
       `WhatsApp credential file path is unsafe; creds.json must be a regular file or missing: ${filePath}`,
@@ -38,18 +48,9 @@ export function assertWebCredsPathRegularFileOrMissing(filePath: string): void {
   }
 }
 
-export function isWebCredsPathRegularFileOrMissing(filePath: string): boolean {
-  try {
-    assertWebCredsPathRegularFileOrMissing(filePath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 export function readWebCredsJsonRawSync(filePath: string): string | null {
   try {
-    assertWebCredsParentPathSafe(filePath);
+    assertWebCredsParentPathSafeSync(filePath);
     const { buffer, stat } = readRegularFileSync({
       filePath,
     });
@@ -61,7 +62,7 @@ export function readWebCredsJsonRawSync(filePath: string): string | null {
 
 export async function readWebCredsJsonRaw(filePath: string): Promise<string | null> {
   try {
-    assertWebCredsParentPathSafe(filePath);
+    await assertWebCredsParentPathSafe(filePath);
     const { buffer, stat } = await readRegularFile({
       filePath,
     });
@@ -73,7 +74,7 @@ export async function readWebCredsJsonRaw(filePath: string): Promise<string | nu
 
 export function statWebCredsFileSync(filePath: string): { mtimeMs: number; size: number } | null {
   try {
-    assertWebCredsParentPathSafe(filePath);
+    assertWebCredsParentPathSafeSync(filePath);
     const result = statRegularFileSync(filePath);
     if (result.missing || result.stat.size <= 1) {
       return null;
@@ -90,7 +91,7 @@ export function statWebCredsFileSync(filePath: string): { mtimeMs: number; size:
 export function hasWebCredsRegularFileSync(authDir: string): boolean {
   try {
     const credsPath = resolveWebCredsPath(authDir);
-    assertWebCredsParentPathSafe(credsPath);
+    assertWebCredsParentPathSafeSync(credsPath);
     return !statRegularFileSync(credsPath).missing;
   } catch {
     return false;

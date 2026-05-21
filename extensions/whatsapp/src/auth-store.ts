@@ -7,8 +7,8 @@ import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import { defaultRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { resolveOAuthDir } from "./auth-store.runtime.js";
 import {
+  assertWebCredsPathRegularFileOrMissing,
   hasWebCredsSync,
-  isWebCredsPathRegularFileOrMissing,
   readWebCredsJsonRaw,
   readWebCredsJsonRawSync,
   resolveWebCredsBackupPath,
@@ -71,7 +71,9 @@ export async function restoreCredsFromBackupIfNeeded(authDir: string): Promise<b
   try {
     const credsPath = resolveWebCredsPath(authDir);
     const backupPath = resolveWebCredsBackupPath(authDir);
-    if (!isWebCredsPathRegularFileOrMissing(credsPath)) {
+    try {
+      await assertWebCredsPathRegularFileOrMissing(credsPath);
+    } catch {
       return false;
     }
     const raw = readCredsJsonRaw(credsPath);
