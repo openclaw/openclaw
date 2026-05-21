@@ -33,10 +33,22 @@ export type WikiClaimEvidence = {
 export type WikiClaim = {
   id?: string;
   text: string;
+  claimKey?: string;
   status?: string;
   confidence?: number;
   evidence: WikiClaimEvidence[];
   updatedAt?: string;
+  sourceClass?: string;
+  authorityTier?: number;
+  assertedAt?: string;
+  extractedAt?: string;
+  validFrom?: string;
+  validUntil?: string | null;
+  supersedes?: string[];
+  supersededBy?: string[];
+  sourcePath?: string;
+  sourceRepo?: string;
+  sourceCommit?: string;
 };
 
 type WikiPersonCard = {
@@ -194,6 +206,54 @@ export function normalizeSourceIds(value: unknown): string[] {
   return normalizeSingleOrTrimmedStringList(value);
 }
 
+function normalizeOptionalStringFromKeys(
+  record: Record<string, unknown>,
+  keys: string[],
+): string | undefined {
+  for (const key of keys) {
+    const normalized = normalizeOptionalString(record[key]);
+    if (normalized) {
+      return normalized;
+    }
+  }
+  return undefined;
+}
+
+function normalizeOptionalIntegerFromKeys(
+  record: Record<string, unknown>,
+  keys: string[],
+): number | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (Number.isInteger(value)) {
+      return value as number;
+    }
+    if (typeof value === "string" && value.trim()) {
+      const parsed = Number(value);
+      if (Number.isInteger(parsed)) {
+        return parsed;
+      }
+    }
+  }
+  return undefined;
+}
+
+function normalizeOptionalDateOrNullFromKeys(
+  record: Record<string, unknown>,
+  keys: string[],
+): string | null | undefined {
+  for (const key of keys) {
+    if (record[key] === null) {
+      return null;
+    }
+    const normalized = normalizeOptionalString(record[key]);
+    if (normalized) {
+      return normalized;
+    }
+  }
+  return undefined;
+}
+
 function normalizeWikiClaimEvidence(value: unknown): WikiClaimEvidence | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
@@ -244,7 +304,7 @@ export function normalizeWikiClaims(value: unknown): WikiClaim[] {
       return [];
     }
     const record = entry as Record<string, unknown>;
-    const text = normalizeOptionalString(record.text);
+    const text = normalizeOptionalString(record.text) ?? normalizeOptionalString(record.statement);
     if (!text) {
       return [];
     }
@@ -258,18 +318,46 @@ export function normalizeWikiClaims(value: unknown): WikiClaim[] {
       typeof record.confidence === "number" && Number.isFinite(record.confidence)
         ? record.confidence
         : undefined;
+    const id = normalizeOptionalStringFromKeys(record, ["id", "claim_id", "claimId"]);
+    const claimKey = normalizeOptionalStringFromKeys(record, ["claimKey", "claim_key"]);
+    const status = normalizeOptionalString(record.status);
+    const updatedAt = normalizeOptionalStringFromKeys(record, ["updatedAt", "updated_at"]);
+    const sourceClass = normalizeOptionalStringFromKeys(record, ["sourceClass", "source_class"]);
+    const authorityTier = normalizeOptionalIntegerFromKeys(record, [
+      "authorityTier",
+      "authority_tier",
+    ]);
+    const assertedAt = normalizeOptionalStringFromKeys(record, ["assertedAt", "asserted_at"]);
+    const extractedAt = normalizeOptionalStringFromKeys(record, ["extractedAt", "extracted_at"]);
+    const validFrom = normalizeOptionalStringFromKeys(record, ["validFrom", "valid_from"]);
+    const validUntil = normalizeOptionalDateOrNullFromKeys(record, ["validUntil", "valid_until"]);
+    const supersedes = normalizeSingleOrTrimmedStringList(record.supersedes);
+    const supersededBy = normalizeSingleOrTrimmedStringList(
+      record.supersededBy ?? record.superseded_by,
+    );
+    const sourcePath = normalizeOptionalStringFromKeys(record, ["sourcePath", "source_path"]);
+    const sourceRepo = normalizeOptionalStringFromKeys(record, ["sourceRepo", "source_repo"]);
+    const sourceCommit = normalizeOptionalStringFromKeys(record, ["sourceCommit", "source_commit"]);
     return [
       {
-        ...(normalizeOptionalString(record.id) ? { id: normalizeOptionalString(record.id) } : {}),
+        ...(id ? { id } : {}),
         text,
-        ...(normalizeOptionalString(record.status)
-          ? { status: normalizeOptionalString(record.status) }
-          : {}),
+        ...(claimKey ? { claimKey } : {}),
+        ...(status ? { status } : {}),
         ...(confidence !== undefined ? { confidence } : {}),
         evidence,
-        ...(normalizeOptionalString(record.updatedAt)
-          ? { updatedAt: normalizeOptionalString(record.updatedAt) }
-          : {}),
+        ...(updatedAt ? { updatedAt } : {}),
+        ...(sourceClass ? { sourceClass } : {}),
+        ...(authorityTier !== undefined ? { authorityTier } : {}),
+        ...(assertedAt ? { assertedAt } : {}),
+        ...(extractedAt ? { extractedAt } : {}),
+        ...(validFrom ? { validFrom } : {}),
+        ...(validUntil !== undefined ? { validUntil } : {}),
+        ...(supersedes.length > 0 ? { supersedes } : {}),
+        ...(supersededBy.length > 0 ? { supersededBy } : {}),
+        ...(sourcePath ? { sourcePath } : {}),
+        ...(sourceRepo ? { sourceRepo } : {}),
+        ...(sourceCommit ? { sourceCommit } : {}),
       },
     ];
   });

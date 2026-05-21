@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +8,12 @@ import { renderWikiMarkdown } from "./markdown.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const { createVault } = createMemoryWikiTestHarness();
+
+async function sha256File(filePath: string): Promise<string> {
+  return createHash("sha256")
+    .update(await fs.readFile(filePath))
+    .digest("hex");
+}
 
 describe("compileMemoryWikiVault", () => {
   let suiteRoot = "";
@@ -105,9 +112,100 @@ describe("compileMemoryWikiVault", () => {
     expect(alphaPage.topClaims.map((claim) => claim.text)).toEqual([
       "Alpha is the canonical source page.",
     ]);
-    await expect(
-      fs.readFile(path.join(rootDir, ".openclaw-wiki", "cache", "claims.jsonl"), "utf8"),
-    ).resolves.toContain('"text":"Alpha is the canonical source page."');
+    const claimsDigestPath = path.join(rootDir, ".openclaw-wiki", "cache", "claims.jsonl");
+    await expect(fs.readFile(claimsDigestPath, "utf8")).resolves.toContain(
+      '"statement":"Alpha is the canonical source page."',
+    );
+
+    const agentDigestPath = path.join(rootDir, ".openclaw-wiki", "cache", "agent-digest.json");
+    const manifestPath = path.join(rootDir, ".openclaw-wiki", "cache", "wiki-cache-manifest.json");
+    const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8")) as {
+      claim_extraction: { claim_count: number; missing_statement_count: number };
+      compile: {
+        page_count: number;
+        page_counts: { source: number };
+        managed_cache_file_count: number;
+      };
+      hashes: { agent_digest_sha256: string; claims_jsonl_sha256: string };
+      outputs: { agent_digest: { path: string }; claims_jsonl: { path: string } };
+    };
+    expect(result.manifestPath).toBe(manifestPath);
+    expect(manifest.claim_extraction).toMatchObject({
+      claim_count: 1,
+      missing_statement_count: 0,
+    });
+    expect(manifest.compile).toMatchObject({
+      page_count: result.pages.length,
+      page_counts: expect.objectContaining({ source: 1 }),
+      managed_cache_file_count: 2,
+    });
+    expect(manifest.hashes.agent_digest_sha256).toBe(await sha256File(agentDigestPath));
+    expect(manifest.hashes.claims_jsonl_sha256).toBe(await sha256File(claimsDigestPath));
+    expect(manifest.outputs.agent_digest.path).toBe(".openclaw-wiki/cache/agent-digest.json");
+    expect(manifest.outputs.claims_jsonl.path).toBe(".openclaw-wiki/cache/claims.jsonl");
+  });
+
+  it("writes reconciled claim supersession metadata to the claims digest", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+    });
+
+    await fs.writeFile(
+      path.join(rootDir, "sources", "candidate.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          id: "source.candidate",
+          title: "Candidate",
+          sourceType: "operator",
+          claims: [
+            {
+              id: "claim.old",
+              claimKey: "repo.openclaw.candidate.active",
+              text: "Candidate A is active.",
+              authorityTier: 1,
+              assertedAt: "2026-05-01T00:00:00.000Z",
+            },
+            {
+              id: "claim.new",
+              claimKey: "repo.openclaw.candidate.active",
+              text: "Candidate B is active.",
+              authorityTier: 3,
+              assertedAt: "2026-05-21T00:00:00.000Z",
+            },
+          ],
+        },
+        body: "# Candidate\n",
+      }),
+      "utf8",
+    );
+
+    await compileMemoryWikiVault(config);
+
+    const claimsDigestPath = path.join(rootDir, ".openclaw-wiki", "cache", "claims.jsonl");
+    const claims = (await fs.readFile(claimsDigestPath, "utf8"))
+      .trim()
+      .split(/\r?\n/)
+      .map(
+        (line) =>
+          JSON.parse(line) as {
+            claim_id: string;
+            status: string;
+            supersedes: string[];
+            superseded_by: string[];
+          },
+      );
+    const oldClaim = claims.find((claim) => claim.claim_id === "claim.old");
+    const newClaim = claims.find((claim) => claim.claim_id === "claim.new");
+    expect(oldClaim).toMatchObject({
+      status: "superseded",
+      superseded_by: ["claim.new"],
+    });
+    expect(newClaim).toMatchObject({
+      status: "current",
+      supersedes: ["claim.old"],
+    });
   });
 
   it("touches unchanged cache artifacts when requested", async () => {

@@ -233,7 +233,13 @@ describe("memory-wiki gateway methods", () => {
     });
 
     expect(syncMemoryWikiImportedSources).toHaveBeenCalledWith({ config, appConfig: undefined });
-    expect(compileMemoryWikiVault).toHaveBeenCalledWith(config, { touchCacheArtifacts: true });
+    expect(compileMemoryWikiVault).toHaveBeenCalledWith(config, {
+      touchCacheArtifacts: true,
+      sourceImport: expect.objectContaining({
+        operation: "refresh",
+        importedCount: 0,
+      }),
+    });
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({

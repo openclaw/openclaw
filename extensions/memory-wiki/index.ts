@@ -1,3 +1,10 @@
+export { isWikiInjectable } from "./src/freshness.js";
+export type {
+  WikiInjectableOutput,
+  WikiInjectableOutputName,
+  WikiInjectableResult,
+} from "./src/freshness.js";
+
 import { definePluginEntry } from "./api.js";
 import { registerWikiCli } from "./src/cli.js";
 import { memoryWikiConfigSchema, resolveMemoryWikiConfig } from "./src/config.js";

@@ -32,8 +32,10 @@ import {
   WIKI_SEARCH_MODES,
   type WikiSearchMode,
 } from "./query.js";
-import { syncMemoryWikiImportedSources } from "./source-sync.js";
-import type { MemoryWikiImportedSourceSyncResult } from "./source-sync.js";
+import {
+  syncMemoryWikiImportedSources,
+  type MemoryWikiImportedSourceSyncResult,
+} from "./source-sync.js";
 import {
   buildMemoryWikiDoctorReport,
   renderMemoryWikiDoctor,
@@ -416,11 +418,17 @@ async function runSyncedWikiCommandWithSummary<T>(params: {
   appConfig?: OpenClawConfig;
   json?: boolean;
   stdout?: Pick<NodeJS.WriteStream, "write">;
-  run: () => Promise<T>;
+  run: (sync: MemoryWikiImportedSourceSyncResult) => Promise<T>;
   render: (result: T) => string;
 }): Promise<T> {
-  await syncMemoryWikiImportedSources({ config: params.config, appConfig: params.appConfig });
-  return runWikiCommandWithSummary(params);
+  const sync = await syncMemoryWikiImportedSources({
+    config: params.config,
+    appConfig: params.appConfig,
+  });
+  return runWikiCommandWithSummary({
+    ...params,
+    run: () => params.run(sync),
+  });
 }
 
 function addWikiSearchConfigOptions<T extends Command>(command: T): T {
@@ -540,7 +548,11 @@ export async function runWikiRefresh(params: {
     appConfig: params.appConfig,
     json: params.json,
     stdout: params.stdout,
-    run: () => compileMemoryWikiVault(params.config, { touchCacheArtifacts: true }),
+    run: (sync) =>
+      compileMemoryWikiVault(params.config, {
+        touchCacheArtifacts: true,
+        sourceImport: { operation: "refresh", ...sync },
+      }),
     render: (value) =>
       `Refreshed wiki vault at ${value.vaultRoot} (${value.pages.length} pages, ${value.updatedFiles.length} indexes updated).`,
   });
