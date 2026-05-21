@@ -11,6 +11,7 @@ type ExecDockerRawOptions = {
   allowFailure?: boolean;
   input?: Buffer | string;
   signal?: AbortSignal;
+  timeoutMs?: number;
 };
 
 export type ExecDockerRawResult = {
@@ -25,10 +26,26 @@ type ExecDockerRawError = Error & {
   stderr: Buffer;
 };
 
-function createAbortError(): Error {
+function createAbortError(reason?: unknown): Error {
+  if (reason instanceof Error) {
+    return reason;
+  }
   const err = new Error("Aborted");
   err.name = "AbortError";
   return err;
+}
+
+function createDockerTimeoutError(timeoutMs: number): Error {
+  const err = new Error(`docker command timed out after ${timeoutMs}ms`);
+  err.name = "TimeoutError";
+  return err;
+}
+
+function resolveDockerRawTimeoutMs(timeoutMs: number | undefined): number | undefined {
+  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs)) {
+    return undefined;
+  }
+  return Math.max(1, Math.floor(timeoutMs));
 }
 
 type DockerSpawnRuntime = {
@@ -78,14 +95,55 @@ export function execDockerRaw(
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
     let aborted = false;
+    let abortError: Error | undefined;
+    let settled = false;
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    let forceKillHandle: ReturnType<typeof setTimeout> | undefined;
 
     const signal = opts?.signal;
-    const handleAbort = () => {
+    const cleanupAbortState = (cleanupOpts?: { clearForceKill?: boolean }) => {
+      if (signal) {
+        signal.removeEventListener("abort", handleAbort);
+      }
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+      }
+      if (cleanupOpts?.clearForceKill !== false && forceKillHandle) {
+        clearTimeout(forceKillHandle);
+      }
+    };
+    const settleReject = (error: unknown, cleanupOpts?: { clearForceKill?: boolean }) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanupAbortState(cleanupOpts);
+      reject(error);
+    };
+    const settleResolve = (result: ExecDockerRawResult) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanupAbortState();
+      resolve(result);
+    };
+    const abortChild = (error: Error) => {
       if (aborted) {
         return;
       }
       aborted = true;
+      abortError = error;
+      child.stdin?.destroy();
+      child.stdout?.destroy();
+      child.stderr?.destroy();
       child.kill("SIGTERM");
+      forceKillHandle = setTimeout(() => child.kill("SIGKILL"), 1000);
+      forceKillHandle.unref?.();
+      settleReject(error, { clearForceKill: false });
+    };
+    const handleAbort = () => {
+      abortChild(createAbortError(signal?.reason));
     };
     if (signal) {
       if (signal.aborted) {
@@ -93,6 +151,13 @@ export function execDockerRaw(
       } else {
         signal.addEventListener("abort", handleAbort, { once: true });
       }
+    }
+    const timeoutMs = resolveDockerRawTimeoutMs(opts?.timeoutMs);
+    if (timeoutMs !== undefined) {
+      timeoutHandle = setTimeout(() => {
+        abortChild(createDockerTimeoutError(timeoutMs));
+      }, timeoutMs);
+      timeoutHandle.unref?.();
     }
 
     child.stdout?.on("data", (chunk) => {
@@ -103,8 +168,9 @@ export function execDockerRaw(
     });
 
     child.on("error", (error) => {
-      if (signal) {
-        signal.removeEventListener("abort", handleAbort);
+      if (settled) {
+        cleanupAbortState();
+        return;
       }
       if (
         error &&
@@ -118,20 +184,21 @@ export function execDockerRaw(
           ),
           { code: "INVALID_CONFIG", cause: error },
         );
-        reject(friendly);
+        settleReject(friendly);
         return;
       }
-      reject(error);
+      settleReject(error);
     });
 
     child.on("close", (code) => {
-      if (signal) {
-        signal.removeEventListener("abort", handleAbort);
+      if (settled) {
+        cleanupAbortState();
+        return;
       }
       const stdout = Buffer.concat(stdoutChunks);
       const stderr = Buffer.concat(stderrChunks);
       if (aborted || signal?.aborted) {
-        reject(createAbortError());
+        settleReject(abortError ?? createAbortError(signal?.reason));
         return;
       }
       const exitCode = code ?? 0;
@@ -145,14 +212,14 @@ export function execDockerRaw(
             stderr,
           },
         );
-        reject(error);
+        settleReject(error);
         return;
       }
-      resolve({ stdout, stderr, code: exitCode });
+      settleResolve({ stdout, stderr, code: exitCode });
     });
 
     const stdin = child.stdin;
-    if (stdin) {
+    if (stdin && !aborted) {
       if (opts?.input !== undefined) {
         stdin.end(opts.input);
       } else {

@@ -7,7 +7,8 @@ function hasFinding(
   checkId:
     | "sandbox.browser_container.hash_label_missing"
     | "sandbox.browser_container.hash_epoch_stale"
-    | "sandbox.browser_container.non_loopback_publish",
+    | "sandbox.browser_container.non_loopback_publish"
+    | "sandbox.browser_container.docker_probe_timeout",
   severity: "warn" | "critical",
   findings: Array<{ checkId: string; severity: string; detail: string }>,
 ) {
@@ -15,7 +16,9 @@ function hasFinding(
 }
 
 function requireFinding(
-  checkId: "sandbox.browser_container.hash_epoch_stale",
+  checkId:
+    | "sandbox.browser_container.hash_epoch_stale"
+    | "sandbox.browser_container.docker_probe_timeout",
   findings: Array<{ checkId: string; severity: string; detail: string }>,
 ) {
   const finding = findings.find((entry) => entry.checkId === checkId);
@@ -23,6 +26,12 @@ function requireFinding(
     throw new Error(`Expected ${checkId} finding`);
   }
   return finding;
+}
+
+function createDockerTimeoutError() {
+  const err = new Error("docker command timed out after 1234ms");
+  err.name = "TimeoutError";
+  return err;
 }
 
 describe("security audit sandbox browser findings", () => {
@@ -74,6 +83,27 @@ describe("security audit sandbox browser findings", () => {
       false,
     );
     expect(hasFinding("sandbox.browser_container.hash_epoch_stale", "warn", findings)).toBe(false);
+  });
+
+  it("warns instead of hanging when the Docker sandbox browser probe times out", async () => {
+    let receivedTimeoutMs: number | undefined;
+    const findings = await collectSandboxBrowserHashLabelFindings({
+      timeoutMs: 1234,
+      execDockerRawFn: async (_args, opts) => {
+        receivedTimeoutMs = opts?.timeoutMs;
+        throw createDockerTimeoutError();
+      },
+    });
+
+    expect(receivedTimeoutMs).toBe(1234);
+    expect(hasFinding("sandbox.browser_container.docker_probe_timeout", "warn", findings)).toBe(
+      true,
+    );
+    const timeoutFinding = requireFinding(
+      "sandbox.browser_container.docker_probe_timeout",
+      findings,
+    );
+    expect(timeoutFinding.detail).toContain("1234ms");
   });
 
   it("flags sandbox browser containers with non-loopback published ports", async () => {

@@ -121,6 +121,25 @@ describe("status-runtime-shared", () => {
     });
   });
 
+  it("passes the status timeout into security audit subprocess probes", async () => {
+    await resolveStatusSecurityAudit({
+      config: { gateway: {} },
+      sourceConfig: { gateway: {} },
+      timeoutMs: 4321,
+    });
+
+    expect(mocks.runSecurityAudit).toHaveBeenCalledWith({
+      config: { gateway: {} },
+      sourceConfig: { gateway: {} },
+      deep: false,
+      includeFilesystem: true,
+      includeChannelSecurity: true,
+      loadPluginSecurityCollectors: false,
+      subprocessTimeoutMs: 4321,
+      plugins: [{ id: "telegram" }],
+    });
+  });
+
   it("resolves usage summaries with the provided timeout", async () => {
     await resolveStatusUsageSummary({
       timeoutMs: 1234,
@@ -329,6 +348,7 @@ describe("status-runtime-shared", () => {
       includeFilesystem: true,
       includeChannelSecurity: true,
       loadPluginSecurityCollectors: false,
+      subprocessTimeoutMs: 1234,
       plugins: [{ id: "telegram" }],
     });
   });

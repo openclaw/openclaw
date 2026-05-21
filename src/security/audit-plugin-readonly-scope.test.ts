@@ -38,6 +38,7 @@ function createAuditContext(params: {
     includeChannelSecurity: true,
     deep: false,
     deepTimeoutMs: 5000,
+    subprocessTimeoutMs: 5000,
     stateDir: "/tmp/openclaw-test-state",
     configPath: "/tmp/openclaw-test-config.json",
     plugins: params.plugins,

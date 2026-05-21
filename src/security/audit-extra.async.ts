@@ -36,10 +36,18 @@ type SkillScanSummary = Awaited<
 >;
 type ExecDockerRawFn = (
   args: string[],
-  opts?: { allowFailure?: boolean; input?: Buffer | string; signal?: AbortSignal },
+  opts?: {
+    allowFailure?: boolean;
+    input?: Buffer | string;
+    signal?: AbortSignal;
+    timeoutMs?: number;
+  },
 ) => Promise<import("../agents/sandbox/docker.js").ExecDockerRawResult>;
 
 type CodeSafetySummaryCache = Map<string, Promise<unknown>>;
+const DEFAULT_SANDBOX_BROWSER_DOCKER_AUDIT_TIMEOUT_MS = 5000;
+const MIN_SANDBOX_BROWSER_DOCKER_AUDIT_TIMEOUT_MS = 250;
+
 let skillsModulePromise: Promise<typeof import("../agents/skills.js")> | undefined;
 let configModulePromise: Promise<typeof import("../config/config.js")> | undefined;
 let agentScopeModulePromise: Promise<typeof import("../agents/agent-scope.js")> | undefined;
@@ -274,52 +282,115 @@ function normalizeDockerLabelValue(raw: string | undefined): string | null {
   return trimmed;
 }
 
+function resolveSandboxBrowserDockerAuditTimeoutMs(timeoutMs: number | undefined): number {
+  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs)) {
+    return DEFAULT_SANDBOX_BROWSER_DOCKER_AUDIT_TIMEOUT_MS;
+  }
+  return Math.max(MIN_SANDBOX_BROWSER_DOCKER_AUDIT_TIMEOUT_MS, Math.floor(timeoutMs));
+}
+
+function isDockerTimeoutError(err: unknown): boolean {
+  return (
+    err instanceof Error &&
+    (err.name === "TimeoutError" || err.name === "AbortError" || /\btimed out\b/i.test(err.message))
+  );
+}
+
+function buildSandboxBrowserDockerTimeoutFinding(timeoutMs: number): SecurityAuditFinding {
+  return {
+    checkId: "sandbox.browser_container.docker_probe_timeout",
+    severity: "warn",
+    title: "Sandbox browser Docker audit timed out",
+    detail:
+      `Docker did not respond within ${timeoutMs}ms while checking sandbox browser containers. ` +
+      "OpenClaw skipped the remaining container drift checks so status can finish.",
+    remediation:
+      "Check Docker daemon health and rerun " +
+      `${formatCliCommand("openclaw security audit --deep")}.`,
+  };
+}
+
+async function execSandboxBrowserDockerAuditCommand(params: {
+  execDockerRawFn: ExecDockerRawFn;
+  args: string[];
+  timeoutMs: number;
+}): Promise<{
+  result: Awaited<ReturnType<ExecDockerRawFn>> | null;
+  timedOut: boolean;
+}> {
+  try {
+    return {
+      result: await params.execDockerRawFn(params.args, {
+        allowFailure: true,
+        timeoutMs: params.timeoutMs,
+      }),
+      timedOut: false,
+    };
+  } catch (err) {
+    return {
+      result: null,
+      timedOut: isDockerTimeoutError(err),
+    };
+  }
+}
+
 async function listSandboxBrowserContainers(
   execDockerRawFn: ExecDockerRawFn,
-): Promise<string[] | null> {
-  try {
-    const result = await execDockerRawFn(
-      ["ps", "-a", "--filter", "label=openclaw.sandboxBrowser=1", "--format", "{{.Names}}"],
-      { allowFailure: true },
-    );
-    if (result.code !== 0) {
-      return null;
-    }
-    return result.stdout
+  timeoutMs: number,
+): Promise<{ containers: string[] | null; timedOut: boolean }> {
+  const probe = await execSandboxBrowserDockerAuditCommand({
+    execDockerRawFn,
+    timeoutMs,
+    args: ["ps", "-a", "--filter", "label=openclaw.sandboxBrowser=1", "--format", "{{.Names}}"],
+  });
+  if (probe.timedOut) {
+    return { containers: null, timedOut: true };
+  }
+  if (!probe.result || probe.result.code !== 0) {
+    return { containers: null, timedOut: false };
+  }
+  return {
+    containers: probe.result.stdout
       .toString("utf8")
       .split(/\r?\n/)
       .map((entry) => entry.trim())
-      .filter(Boolean);
-  } catch {
-    return null;
-  }
+      .filter(Boolean),
+    timedOut: false,
+  };
 }
 
 async function readSandboxBrowserHashLabels(params: {
   containerName: string;
   execDockerRawFn: ExecDockerRawFn;
-}): Promise<{ configHash: string | null; epoch: string | null } | null> {
-  try {
-    const result = await params.execDockerRawFn(
-      [
-        "inspect",
-        "-f",
-        '{{ index .Config.Labels "openclaw.configHash" }}\t{{ index .Config.Labels "openclaw.browserConfigEpoch" }}',
-        params.containerName,
-      ],
-      { allowFailure: true },
-    );
-    if (result.code !== 0) {
-      return null;
-    }
-    const [hashRaw, epochRaw] = result.stdout.toString("utf8").split("\t");
-    return {
+  timeoutMs: number;
+}): Promise<{
+  labels: { configHash: string | null; epoch: string | null } | null;
+  timedOut: boolean;
+}> {
+  const probe = await execSandboxBrowserDockerAuditCommand({
+    execDockerRawFn: params.execDockerRawFn,
+    timeoutMs: params.timeoutMs,
+    args: [
+      "inspect",
+      "-f",
+      '{{ index .Config.Labels "openclaw.configHash" }}\t{{ index .Config.Labels "openclaw.browserConfigEpoch" }}',
+      params.containerName,
+    ],
+  });
+  if (probe.timedOut) {
+    return { labels: null, timedOut: true };
+  }
+  if (!probe.result || probe.result.code !== 0) {
+    return { labels: null, timedOut: false };
+  }
+  const [hashRaw, epochRaw] = probe.result.stdout.toString("utf8").split("\t");
+  return {
+    labels: {
       configHash: normalizeDockerLabelValue(hashRaw),
       epoch: normalizeDockerLabelValue(epochRaw),
-    };
-  } catch {
-    return null;
-  }
+    },
+    timedOut: false,
+  };
 }
 
 function parsePublishedHostFromDockerPortLine(line: string): string | null {
@@ -349,33 +420,44 @@ function isLoopbackPublishHost(host: string): boolean {
 async function readSandboxBrowserPortMappings(params: {
   containerName: string;
   execDockerRawFn: ExecDockerRawFn;
-}): Promise<string[] | null> {
-  try {
-    const result = await params.execDockerRawFn(["port", params.containerName], {
-      allowFailure: true,
-    });
-    if (result.code !== 0) {
-      return null;
-    }
-    return result.stdout
+  timeoutMs: number;
+}): Promise<{ portMappings: string[] | null; timedOut: boolean }> {
+  const probe = await execSandboxBrowserDockerAuditCommand({
+    execDockerRawFn: params.execDockerRawFn,
+    timeoutMs: params.timeoutMs,
+    args: ["port", params.containerName],
+  });
+  if (probe.timedOut) {
+    return { portMappings: null, timedOut: true };
+  }
+  if (!probe.result || probe.result.code !== 0) {
+    return { portMappings: null, timedOut: false };
+  }
+  return {
+    portMappings: probe.result.stdout
       .toString("utf8")
       .split(/\r?\n/)
       .map((entry) => entry.trim())
-      .filter(Boolean);
-  } catch {
-    return null;
-  }
+      .filter(Boolean),
+    timedOut: false,
+  };
 }
 
 export async function collectSandboxBrowserHashLabelFindings(params?: {
   execDockerRawFn?: ExecDockerRawFn;
+  timeoutMs?: number;
 }): Promise<SecurityAuditFinding[]> {
   const findings: SecurityAuditFinding[] = [];
+  const timeoutMs = resolveSandboxBrowserDockerAuditTimeoutMs(params?.timeoutMs);
   const [execFn, browserHashEpoch] = await Promise.all([
     params?.execDockerRawFn ? Promise.resolve(params.execDockerRawFn) : loadExecDockerRaw(),
     loadSandboxBrowserSecurityHashEpoch(),
   ]);
-  const containers = await listSandboxBrowserContainers(execFn);
+  const containerResult = await listSandboxBrowserContainers(execFn, timeoutMs);
+  if (containerResult.timedOut) {
+    return [buildSandboxBrowserDockerTimeoutFinding(timeoutMs)];
+  }
+  const containers = containerResult.containers;
   if (!containers || containers.length === 0) {
     return findings;
   }
@@ -383,9 +465,19 @@ export async function collectSandboxBrowserHashLabelFindings(params?: {
   const missingHash: string[] = [];
   const staleEpoch: string[] = [];
   const nonLoopbackPublished: string[] = [];
+  let timedOut = false;
 
   for (const containerName of containers) {
-    const labels = await readSandboxBrowserHashLabels({ containerName, execDockerRawFn: execFn });
+    const labelResult = await readSandboxBrowserHashLabels({
+      containerName,
+      execDockerRawFn: execFn,
+      timeoutMs,
+    });
+    if (labelResult.timedOut) {
+      timedOut = true;
+      break;
+    }
+    const labels = labelResult.labels;
     if (!labels) {
       continue;
     }
@@ -398,17 +490,26 @@ export async function collectSandboxBrowserHashLabelFindings(params?: {
     const portMappings = await readSandboxBrowserPortMappings({
       containerName,
       execDockerRawFn: execFn,
+      timeoutMs,
     });
-    if (!portMappings?.length) {
+    if (portMappings.timedOut) {
+      timedOut = true;
+      break;
+    }
+    if (!portMappings.portMappings?.length) {
       continue;
     }
-    const exposedMappings = portMappings.filter((line) => {
+    const exposedMappings = portMappings.portMappings.filter((line) => {
       const host = parsePublishedHostFromDockerPortLine(line);
       return Boolean(host && !isLoopbackPublishHost(host));
     });
     if (exposedMappings.length > 0) {
       nonLoopbackPublished.push(`${containerName} (${exposedMappings.join("; ")})`);
     }
+  }
+
+  if (timedOut) {
+    findings.push(buildSandboxBrowserDockerTimeoutFinding(timeoutMs));
   }
 
   if (missingHash.length > 0) {

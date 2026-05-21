@@ -27,6 +27,7 @@ function loadGatewayCallModule() {
 export async function resolveStatusSecurityAudit(params: {
   config: OpenClawConfig;
   sourceConfig: OpenClawConfig;
+  timeoutMs?: number;
 }) {
   const { runSecurityAudit } = await loadSecurityAuditModule();
   const readOnlyPlugins = resolveReadOnlyChannelPluginsForConfig(params.config, {
@@ -40,6 +41,7 @@ export async function resolveStatusSecurityAudit(params: {
     includeFilesystem: true,
     includeChannelSecurity: true,
     loadPluginSecurityCollectors: false,
+    ...(params.timeoutMs !== undefined ? { subprocessTimeoutMs: params.timeoutMs } : {}),
     ...(readOnlyPlugins.missingConfiguredChannelIds.length === 0
       ? { plugins: readOnlyPlugins.plugins }
       : {}),
@@ -198,6 +200,7 @@ export async function resolveStatusRuntimeSnapshot(params: {
   resolveSecurityAudit?: (input: {
     config: OpenClawConfig;
     sourceConfig: OpenClawConfig;
+    timeoutMs?: number;
   }) => Promise<StatusSecurityAudit>;
   resolveUsage?: (input: StatusUsageSummaryOptions) => Promise<StatusUsageSummary>;
   resolveHealth?: (input: {
@@ -209,6 +212,7 @@ export async function resolveStatusRuntimeSnapshot(params: {
     ? await (params.resolveSecurityAudit ?? resolveStatusSecurityAudit)({
         config: params.config,
         sourceConfig: params.sourceConfig,
+        timeoutMs: params.timeoutMs,
       })
     : undefined;
   const runtimeDetails = await resolveStatusRuntimeDetails({

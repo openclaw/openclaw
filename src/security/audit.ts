@@ -56,6 +56,8 @@ export type SecurityAuditOptions = {
   configPath?: string;
   /** Time limit for deep gateway probe. */
   deepTimeoutMs?: number;
+  /** Time limit for audit subprocess probes. */
+  subprocessTimeoutMs?: number;
   /** Dependency injection for tests. */
   plugins?: ChannelPlugin[];
   /** Whether to import plugin modules to discover plugin security audit collectors. */
@@ -85,6 +87,7 @@ export type AuditExecutionContext = {
   includeChannelSecurity: boolean;
   deep: boolean;
   deepTimeoutMs: number;
+  subprocessTimeoutMs: number;
   stateDir: string;
   configPath: string;
   execIcacls?: ExecFn;
@@ -935,6 +938,7 @@ async function createAuditExecutionContext(
   const includeChannelSecurity = opts.includeChannelSecurity !== false;
   const deep = opts.deep === true;
   const deepTimeoutMs = Math.max(250, opts.deepTimeoutMs ?? 5000);
+  const subprocessTimeoutMs = Math.max(250, opts.subprocessTimeoutMs ?? deepTimeoutMs);
   const stateDir = opts.stateDir ?? resolveStateDir(env);
   const configPath = opts.configPath ?? resolveConfigPath(env, stateDir);
   const workspaceDir =
@@ -954,6 +958,7 @@ async function createAuditExecutionContext(
     includeChannelSecurity,
     deep,
     deepTimeoutMs,
+    subprocessTimeoutMs,
     stateDir,
     configPath,
     execIcacls: opts.execIcacls,
@@ -1029,6 +1034,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
     findings.push(
       ...(await auditNonDeep.collectSandboxBrowserHashLabelFindings({
         execDockerRawFn: context.execDockerRawFn,
+        timeoutMs: context.subprocessTimeoutMs,
       })),
     );
     findings.push(...(await auditNonDeep.collectPluginsTrustFindings({ cfg, stateDir })));

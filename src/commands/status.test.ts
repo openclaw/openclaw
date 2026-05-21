@@ -775,6 +775,7 @@ vi.mock("./status-runtime-shared.ts", () => ({
       resolveSecurityAudit?: (input: unknown) => Promise<unknown>;
       config: unknown;
       sourceConfig: unknown;
+      timeoutMs?: number;
     }) => {
       const securityAudit = params.includeSecurityAudit
         ? await (
@@ -790,6 +791,7 @@ vi.mock("./status-runtime-shared.ts", () => ({
           )({
             config: params.config,
             sourceConfig: params.sourceConfig,
+            timeoutMs: params.timeoutMs,
           })
         : undefined;
       return {
