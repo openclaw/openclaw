@@ -219,18 +219,24 @@ lowercase variants. This avoids routing the long-lived Feishu receive socket thr
 ambient proxy that may be intended only for unrelated provider or CLI traffic.
 
 If your deployment can reach Feishu/Lark only through an operator-controlled outbound
-HTTP(S) proxy, keep the standard proxy env configured and also opt Feishu WebSocket into
-ambient proxy routing:
+HTTP(S) proxy, keep the standard proxy env configured and also opt Feishu WebSocket
+into ambient proxy routing:
 
 ```bash
 export HTTPS_PROXY=http://proxy.example:8080
 export OPENCLAW_FEISHU_WS_USE_PROXY=1
-openclaw gateway restart
+openclaw gateway run
 ```
 
 After upgrading from a version where Feishu WebSocket inherited proxy env by default,
-proxy-only deployments must set `OPENCLAW_FEISHU_WS_USE_PROXY=1` to preserve that
-behavior. Leave it unset for direct egress.
+HTTP(S)-proxy-only deployments must set `OPENCLAW_FEISHU_WS_USE_PROXY=1` to
+preserve that behavior. Leave it unset for direct egress.
+
+For installed gateway services, put both the proxy env and
+`OPENCLAW_FEISHU_WS_USE_PROXY=1` in the service durable environment, such as
+`$OPENCLAW_STATE_DIR/.env` or `~/.openclaw/.env`, then reinstall/restart the
+service. Shell exports used only for `openclaw gateway restart` are not inherited
+by launchd, systemd, or Scheduled Tasks.
 
 ### QR setup does not react in the Feishu mobile app
 
