@@ -11,7 +11,6 @@ import { randomUUID } from "node:crypto";
 import type * as LanceDB from "@lancedb/lancedb";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { MemoryEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import { getMemoryCapabilityRegistration } from "openclaw/plugin-sdk/memory-host-core";
 import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -695,9 +694,7 @@ export default definePluginEntry({
     };
 
     api.logger.info(`memory-lancedb: plugin registered (db: ${resolvedDbPath}, lazy init)`);
-    const existingMemoryCapability = getMemoryCapabilityRegistration()?.capability;
     api.registerMemoryCapability?.({
-      ...existingMemoryCapability,
       publicArtifacts: {
         async listArtifacts(params) {
           const { listMemoryHostPublicArtifacts } = await loadMemoryHostCoreModule();
