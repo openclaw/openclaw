@@ -1199,6 +1199,30 @@ describe("sendChatMessage", () => {
 });
 
 describe("abortChatRun", () => {
+  it("clears stale local typing state when the gateway has no active run", async () => {
+    const request = vi.fn().mockResolvedValue({ ok: true, aborted: false, runIds: [] });
+    const state = createState({
+      connected: true,
+      chatRunId: "run-stale",
+      chatSending: true,
+      chatStream: "",
+      chatStreamStartedAt: 123,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const result = await abortChatRun(state);
+
+    expect(result).toBe(true);
+    expect(request).toHaveBeenCalledWith("chat.abort", {
+      sessionKey: "main",
+      runId: "run-stale",
+    });
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatStream).toBeNull();
+    expect(state.chatStreamStartedAt).toBeNull();
+    expect(state.chatSending).toBe(false);
+  });
+
   it("formats structured non-auth connect failures for chat abort", async () => {
     // Abort now shares the same structured connect-error formatter as send.
     const request = vi.fn().mockRejectedValue(

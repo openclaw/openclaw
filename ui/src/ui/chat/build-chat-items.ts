@@ -1,4 +1,5 @@
 import type { ChatItem, MessageGroup, NormalizedMessage, ToolCard } from "../types/chat-types.ts";
+import { viDashboardText as uiText } from "../vi-dashboard-text.ts";
 import {
   isAssistantHeartbeatAckForDisplay,
   stripHeartbeatTokenForDisplay,
@@ -498,12 +499,14 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
           typeof marker.id === "string"
             ? `divider:compaction:${marker.id}`
             : `divider:compaction:${normalized.timestamp}:${i}`,
-        label: "Compacted history",
-        description:
+        label: uiText("Compacted history", "Lịch sử đã compact"),
+        description: uiText(
           "Earlier turns are preserved in a compaction checkpoint. Open session checkpoints to branch or restore that pre-compaction view.",
+          "Các lượt trước được giữ trong checkpoint compact. Mở checkpoint phiên để rẽ nhánh hoặc khôi phục góc nhìn trước khi compact.",
+        ),
         action: {
           kind: "session-checkpoints",
-          label: "Open checkpoints",
+          label: uiText("Open checkpoints", "Mở checkpoint"),
         },
         timestamp: normalized.timestamp ?? Date.now(),
       });

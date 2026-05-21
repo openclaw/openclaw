@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../format.ts";
 import type { GoogleChatStatus } from "../types.ts";
+import { viDashboardText as uiText } from "../vi-dashboard-text.ts";
 import { renderChannelConfigSection } from "./channels.config.ts";
 import {
   formatNullableBoolean,
@@ -20,7 +21,10 @@ export function renderGoogleChatCard(params: {
 
   return renderSingleAccountChannelCard({
     title: "Google Chat",
-    subtitle: "Chat API webhook status and channel configuration.",
+    subtitle: uiText(
+      "Chat API webhook status and channel configuration.",
+      "Trạng thái webhook Chat API và cấu hình kênh.",
+    ),
     accountCountLabel,
     statusRows: [
       { label: t("common.configured"), value: formatNullableBoolean(configured) },

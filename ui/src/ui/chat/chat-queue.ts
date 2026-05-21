@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import { icons } from "../icons.ts";
 import type { ChatQueueItem } from "../ui-types.ts";
+import { viDashboardText as uiText } from "../vi-dashboard-text.ts";
 
 export type ChatQueueProps = {
   queue: ChatQueueItem[];
@@ -15,7 +16,9 @@ export function renderChatQueue(props: ChatQueueProps) {
   }
   return html`
     <div class="chat-queue" role="status" aria-live="polite">
-      <div class="chat-queue__title">Queued (${props.queue.length})</div>
+      <div class="chat-queue__title">
+        ${uiText(`Queued (${props.queue.length})`, `Đang chờ (${props.queue.length})`)}
+      </div>
       <div class="chat-queue__list">
         ${props.queue.map(
           (item) => html`
@@ -24,11 +27,16 @@ export function renderChatQueue(props: ChatQueueProps) {
             >
               <div class="chat-queue__main">
                 ${item.kind === "steered"
-                  ? html`<span class="chat-queue__badge">Steered</span>`
+                  ? html`<span class="chat-queue__badge">${uiText("Steered", "Đã lái")}</span>`
                   : nothing}
                 <div class="chat-queue__text">
                   ${item.text ||
-                  (item.attachments?.length ? `Image (${item.attachments.length})` : "")}
+                  (item.attachments?.length
+                    ? uiText(
+                        `Image (${item.attachments.length})`,
+                        `Ảnh (${item.attachments.length})`,
+                      )
+                    : "")}
                 </div>
               </div>
               <div class="chat-queue__actions">
@@ -40,19 +48,19 @@ export function renderChatQueue(props: ChatQueueProps) {
                       <button
                         class="btn chat-queue__steer"
                         type="button"
-                        title="Steer now"
-                        aria-label="Steer queued message"
+                        title=${uiText("Steer now", "Lái ngay")}
+                        aria-label=${uiText("Steer queued message", "Lái tin nhắn đang chờ")}
                         @click=${() => props.onQueueSteer?.(item.id)}
                       >
                         ${icons.cornerDownRight}
-                        <span>Steer</span>
+                        <span>${uiText("Steer", "Lái")}</span>
                       </button>
                     `
                   : nothing}
                 <button
                   class="btn chat-queue__remove"
                   type="button"
-                  aria-label="Remove queued message"
+                  aria-label=${uiText("Remove queued message", "Xóa tin nhắn đang chờ")}
                   @click=${() => props.onQueueRemove(item.id)}
                 >
                   ${icons.x}

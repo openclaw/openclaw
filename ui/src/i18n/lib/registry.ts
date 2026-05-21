@@ -1,6 +1,6 @@
 import type { Locale, TranslationMap } from "./types.ts";
 
-type LazyLocale = Exclude<Locale, "en">;
+type LazyLocale = Exclude<Locale, "en" | "vi">;
 type LocaleModule = Record<string, TranslationMap>;
 
 type LazyLocaleRegistration = {
@@ -9,6 +9,7 @@ type LazyLocaleRegistration = {
 };
 
 export const DEFAULT_LOCALE: Locale = "en";
+export const DEFAULT_APP_LOCALE: Locale = "vi";
 
 const LAZY_LOCALES: readonly LazyLocale[] = [
   "zh-CN",
@@ -26,7 +27,6 @@ const LAZY_LOCALES: readonly LazyLocale[] = [
   "id",
   "pl",
   "th",
-  "vi",
   "nl",
   "fa",
 ];
@@ -92,10 +92,6 @@ const LAZY_LOCALE_REGISTRY: Record<LazyLocale, LazyLocaleRegistration> = {
     exportName: "th",
     loader: () => import("../locales/th.ts"),
   },
-  vi: {
-    exportName: "vi",
-    loader: () => import("../locales/vi.ts"),
-  },
   nl: {
     exportName: "nl",
     loader: () => import("../locales/nl.ts"),
@@ -106,7 +102,11 @@ const LAZY_LOCALE_REGISTRY: Record<LazyLocale, LazyLocaleRegistration> = {
   },
 };
 
-export const SUPPORTED_LOCALES: ReadonlyArray<Locale> = [DEFAULT_LOCALE, ...LAZY_LOCALES];
+export const SUPPORTED_LOCALES: ReadonlyArray<Locale> = [
+  DEFAULT_APP_LOCALE,
+  DEFAULT_LOCALE,
+  ...LAZY_LOCALES,
+];
 
 export function isSupportedLocale(value: string | null | undefined): value is Locale {
   return value !== null && value !== undefined && SUPPORTED_LOCALES.includes(value as Locale);
@@ -168,7 +168,10 @@ export function resolveNavigatorLocale(navLang: string): Locale {
   if (navLang.startsWith("fa")) {
     return "fa";
   }
-  return DEFAULT_LOCALE;
+  if (navLang.startsWith("en")) {
+    return "en";
+  }
+  return DEFAULT_APP_LOCALE;
 }
 
 export async function loadLazyLocaleTranslation(locale: Locale): Promise<TranslationMap | null> {

@@ -18,6 +18,7 @@ import type {
   SessionCompactionCheckpoint,
   SessionsListResult,
 } from "../types.ts";
+import { viDashboardText as uiText } from "../vi-dashboard-text.ts";
 import { resolveAgentRuntimeLabel } from "./agents-utils.ts";
 
 export type SessionsProps = {
@@ -536,7 +537,7 @@ export function renderSessions(props: SessionsProps) {
               <div
                 id="sessions-filter-bar"
                 class="sessions-filter-bar"
-                aria-label="Session filters"
+                aria-label=${t("sessionsView.sourceFilters")}
               >
                 <div class="session-filter-primary-row">
                   <label class="session-filter-field" data-tooltip=${activeTooltip}>
@@ -728,7 +729,10 @@ export function renderSessions(props: SessionsProps) {
               <div class="data-table-pagination">
                 <div class="data-table-pagination__info">
                   ${page * props.pageSize + 1}-${Math.min((page + 1) * props.pageSize, totalRows)}
-                  of ${totalRows} row${totalRows === 1 ? "" : "s"}
+                  ${uiText(
+                    `of ${totalRows} row${totalRows === 1 ? "" : "s"}`,
+                    `trên ${totalRows} dòng`,
+                  )}
                 </div>
                 <div class="data-table-pagination__controls">
                   <select
@@ -737,10 +741,14 @@ export function renderSessions(props: SessionsProps) {
                     @change=${(e: Event) =>
                       props.onPageSizeChange(Number((e.target as HTMLSelectElement).value))}
                   >
-                    ${PAGE_SIZES.map((s) => html`<option value=${s}>${s} per page</option>`)}
+                    ${PAGE_SIZES.map(
+                      (s) => html`<option value=${s}>
+                        ${s} ${uiText("per page", "mỗi trang")}
+                      </option>`,
+                    )}
                   </select>
                   <button ?disabled=${page <= 0} @click=${() => props.onPageChange(page - 1)}>
-                    Previous
+                    ${uiText("Previous", "Trước")}
                   </button>
                   <button
                     ?disabled=${page >= totalPages - 1}

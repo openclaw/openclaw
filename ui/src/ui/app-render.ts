@@ -18,6 +18,7 @@ import {
   resolveAssistantAttachmentAuthToken,
   resolveDashboardHeaderContext,
   renderSidebarConnectionStatus,
+  renderTopbarLocaleSelect,
   renderTopbarThemeModeToggle,
   createChatSession,
   dismissChatError,
@@ -158,6 +159,7 @@ import {
 import { loadLocalAssistantIdentity } from "./storage.ts";
 import { normalizeOptionalString } from "./string-coerce.ts";
 import type { GatewaySessionRow } from "./types.ts";
+import { viDashboardText as uiText } from "./vi-dashboard-text.ts";
 import { isRenderableControlUiAvatarUrl } from "./views/agents-utils.ts";
 import { agentLogoUrl } from "./views/agents-utils.ts";
 import {
@@ -269,10 +271,13 @@ function renderSidebarSessions(state: AppViewState) {
   const recent = collapsed ? [] : resolveSidebarRecentSessions(state);
   const newSessionDisabled = !state.connected || state.sessionsLoading || busy || !state.client;
   const newSessionTitle = !state.connected
-    ? "Connect to create a new session"
+    ? uiText("Connect to create a new session", "Kết nối để tạo phiên mới")
     : busy
-      ? "Finish the active run before creating a new session"
-      : "New session";
+      ? uiText(
+          "Finish the active run before creating a new session",
+          "Hoàn tất lượt chạy hiện tại trước khi tạo phiên mới",
+        )
+      : t("chat.runControls.newSession");
 
   return html`
     <section class="sidebar-sessions ${collapsed ? "sidebar-sessions--collapsed" : ""}">
@@ -315,7 +320,7 @@ function renderSidebarSessions(state: AppViewState) {
 function renderSidebarRecentSession(state: AppViewState, row: GatewaySessionRow) {
   const active = row.key === state.sessionKey;
   const label = resolveSessionDisplayName(row.key, row);
-  const meta = row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : "n/a";
+  const meta = row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : uiText("n/a", "không có");
   const href = `${pathForTab("chat", state.basePath)}?session=${encodeURIComponent(row.key)}`;
   return html`
     <a
@@ -1434,13 +1439,23 @@ export function renderApp(state: AppViewState) {
           searchQuery: state.configSearchQuery,
           activeSection: configSelection.activeSection,
           activeSubsection: configSelection.activeSubsection,
-          onFormModeChange: (mode) => (state.configFormMode = mode),
-          onSearchChange: (query) => (state.configSearchQuery = query),
+          onFormModeChange: (mode) => {
+            state.configFormMode = mode;
+            requestHostUpdate?.();
+          },
+          onSearchChange: (query) => {
+            state.configSearchQuery = query;
+            requestHostUpdate?.();
+          },
           onSectionChange: (section) => {
             state.configActiveSection = section;
             state.configActiveSubsection = null;
+            requestHostUpdate?.();
           },
-          onSubsectionChange: (section) => (state.configActiveSubsection = section),
+          onSubsectionChange: (section) => {
+            state.configActiveSubsection = section;
+            requestHostUpdate?.();
+          },
           showModeToggle: true,
           settingsLayout: "accordion",
           onBackToQuick: () => {
@@ -1500,14 +1515,24 @@ export function renderApp(state: AppViewState) {
           searchQuery: state.communicationsSearchQuery,
           activeSection: communicationsSelection.activeSection,
           activeSubsection: communicationsSelection.activeSubsection,
-          onFormModeChange: (mode) => (state.communicationsFormMode = mode),
-          onSearchChange: (query) => (state.communicationsSearchQuery = query),
+          onFormModeChange: (mode) => {
+            state.communicationsFormMode = mode;
+            requestHostUpdate?.();
+          },
+          onSearchChange: (query) => {
+            state.communicationsSearchQuery = query;
+            requestHostUpdate?.();
+          },
           onSectionChange: (section) => {
             state.communicationsActiveSection = section;
             state.communicationsActiveSubsection = null;
+            requestHostUpdate?.();
           },
-          onSubsectionChange: (section) => (state.communicationsActiveSubsection = section),
-          navRootLabel: "Communication",
+          onSubsectionChange: (section) => {
+            state.communicationsActiveSubsection = section;
+            requestHostUpdate?.();
+          },
+          navRootLabel: t("tabs.communications"),
           includeSections: [...COMMUNICATION_SECTION_KEYS],
           includeVirtualSections: true,
           webPush: {
@@ -1526,13 +1551,23 @@ export function renderApp(state: AppViewState) {
           searchQuery: state.appearanceSearchQuery,
           activeSection: appearanceSelection.activeSection,
           activeSubsection: appearanceSelection.activeSubsection,
-          onFormModeChange: (mode) => (state.appearanceFormMode = mode),
-          onSearchChange: (query) => (state.appearanceSearchQuery = query),
+          onFormModeChange: (mode) => {
+            state.appearanceFormMode = mode;
+            requestHostUpdate?.();
+          },
+          onSearchChange: (query) => {
+            state.appearanceSearchQuery = query;
+            requestHostUpdate?.();
+          },
           onSectionChange: (section) => {
             state.appearanceActiveSection = section;
             state.appearanceActiveSubsection = null;
+            requestHostUpdate?.();
           },
-          onSubsectionChange: (section) => (state.appearanceActiveSubsection = section),
+          onSubsectionChange: (section) => {
+            state.appearanceActiveSubsection = section;
+            requestHostUpdate?.();
+          },
           navRootLabel: t("tabs.appearance"),
           includeSections: [...APPEARANCE_SECTION_KEYS],
           includeVirtualSections: true,
@@ -1543,14 +1578,24 @@ export function renderApp(state: AppViewState) {
           searchQuery: state.automationSearchQuery,
           activeSection: automationSelection.activeSection,
           activeSubsection: automationSelection.activeSubsection,
-          onFormModeChange: (mode) => (state.automationFormMode = mode),
-          onSearchChange: (query) => (state.automationSearchQuery = query),
+          onFormModeChange: (mode) => {
+            state.automationFormMode = mode;
+            requestHostUpdate?.();
+          },
+          onSearchChange: (query) => {
+            state.automationSearchQuery = query;
+            requestHostUpdate?.();
+          },
           onSectionChange: (section) => {
             state.automationActiveSection = section;
             state.automationActiveSubsection = null;
+            requestHostUpdate?.();
           },
-          onSubsectionChange: (section) => (state.automationActiveSubsection = section),
-          navRootLabel: "Automation",
+          onSubsectionChange: (section) => {
+            state.automationActiveSubsection = section;
+            requestHostUpdate?.();
+          },
+          navRootLabel: t("tabs.automation"),
           includeSections: [...AUTOMATION_SECTION_KEYS],
         });
       case "infrastructure":
@@ -1559,14 +1604,24 @@ export function renderApp(state: AppViewState) {
           searchQuery: state.infrastructureSearchQuery,
           activeSection: infrastructureSelection.activeSection,
           activeSubsection: infrastructureSelection.activeSubsection,
-          onFormModeChange: (mode) => (state.infrastructureFormMode = mode),
-          onSearchChange: (query) => (state.infrastructureSearchQuery = query),
+          onFormModeChange: (mode) => {
+            state.infrastructureFormMode = mode;
+            requestHostUpdate?.();
+          },
+          onSearchChange: (query) => {
+            state.infrastructureSearchQuery = query;
+            requestHostUpdate?.();
+          },
           onSectionChange: (section) => {
             state.infrastructureActiveSection = section;
             state.infrastructureActiveSubsection = null;
+            requestHostUpdate?.();
           },
-          onSubsectionChange: (section) => (state.infrastructureActiveSubsection = section),
-          navRootLabel: "Infrastructure",
+          onSubsectionChange: (section) => {
+            state.infrastructureActiveSubsection = section;
+            requestHostUpdate?.();
+          },
+          navRootLabel: t("tabs.infrastructure"),
           includeSections: [...INFRASTRUCTURE_SECTION_KEYS],
         });
       case "aiAgents":
@@ -1575,14 +1630,24 @@ export function renderApp(state: AppViewState) {
           searchQuery: state.aiAgentsSearchQuery,
           activeSection: aiAgentsSelection.activeSection,
           activeSubsection: aiAgentsSelection.activeSubsection,
-          onFormModeChange: (mode) => (state.aiAgentsFormMode = mode),
-          onSearchChange: (query) => (state.aiAgentsSearchQuery = query),
+          onFormModeChange: (mode) => {
+            state.aiAgentsFormMode = mode;
+            requestHostUpdate?.();
+          },
+          onSearchChange: (query) => {
+            state.aiAgentsSearchQuery = query;
+            requestHostUpdate?.();
+          },
           onSectionChange: (section) => {
             state.aiAgentsActiveSection = section;
             state.aiAgentsActiveSubsection = null;
+            requestHostUpdate?.();
           },
-          onSubsectionChange: (section) => (state.aiAgentsActiveSubsection = section),
-          navRootLabel: "AI & Agents",
+          onSubsectionChange: (section) => {
+            state.aiAgentsActiveSubsection = section;
+            requestHostUpdate?.();
+          },
+          navRootLabel: t("tabs.aiAgents"),
           includeSections: [...AI_AGENTS_SECTION_KEYS],
         });
       default:
@@ -1717,7 +1782,7 @@ export function renderApp(state: AppViewState) {
               <kbd class="topbar-search__kbd">⌘K</kbd>
             </button>
             <div class="topbar-status">
-              ${isChat ? renderChatMobileToggle(state) : nothing}
+              ${isChat ? renderChatMobileToggle(state) : nothing} ${renderTopbarLocaleSelect(state)}
               ${renderTopbarThemeModeToggle(state)}
             </div>
           </div>

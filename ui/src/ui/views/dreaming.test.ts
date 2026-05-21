@@ -311,7 +311,7 @@ describe("dreaming view", () => {
       { label: "Memory Palace", active: false },
     ]);
     expect(compactText(container.querySelector(".dreams-diary__date"))).toBe(
-      "Travel · 1 chats · 1 signals",
+      "Travel · 1 chat · 1 signal",
     );
     const insight = container.querySelector(".dreams-diary__insight-card");
     expect(insight?.querySelector(".dreams-diary__insight-title")?.textContent).toBe(
@@ -398,7 +398,7 @@ describe("dreaming view", () => {
     setDreamDiarySubTab("palace");
     const container = renderInto(buildProps());
     expect(compactText(container.querySelector(".dreams-diary__date"))).toBe(
-      "Syntheses · 1 pages · 2 claims · 1 questions · 1 contradictions",
+      "Syntheses · 1 page · 2 claims · 1 question · 1 contradiction",
     );
     const insight = container.querySelector(".dreams-diary__insight-card");
     expect(insight?.querySelector(".dreams-diary__insight-title")?.textContent).toBe(

@@ -6,6 +6,7 @@ import { icons } from "../icons.ts";
 import type { SidebarContent } from "../sidebar-content.ts";
 import { formatToolDetail, resolveToolDisplay } from "../tool-display.ts";
 import type { ToolCard } from "../types/chat-types.ts";
+import { viDashboardText as uiText } from "../vi-dashboard-text.ts";
 import { extractTextCached } from "./message-extract.ts";
 import { isToolResultMessage } from "./role-normalizer.ts";
 import { formatToolOutputForSidebar, getTruncatedPreview } from "./tool-helpers.ts";
@@ -220,23 +221,27 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
 export function buildToolCardSidebarContent(card: ToolCard): string {
   const display = resolveToolDisplay({ name: card.name, args: card.args });
   const detail = formatToolDetail(display);
-  const sections = [`## ${display.label}`, `**Tool:** \`${display.name}\``];
+  const sections = [`## ${display.label}`, `**${uiText("Tool", "Công cụ")}:** \`${display.name}\``];
 
   if (detail) {
-    sections.push(`**Summary:** ${detail}`);
+    sections.push(`**${uiText("Summary", "Tóm tắt")}:** ${detail}`);
   }
 
   if (card.inputText?.trim()) {
     const inputIsJson = typeof card.args === "object" && card.args !== null;
     sections.push(
-      `### Tool input\n${formatPayloadForSidebar(card.inputText, inputIsJson ? "json" : "text")}`,
+      `### ${uiText("Tool input", "Input công cụ")}\n${formatPayloadForSidebar(card.inputText, inputIsJson ? "json" : "text")}`,
     );
   }
 
   if (card.outputText?.trim()) {
-    sections.push(`### Tool output\n${formatToolOutputForSidebar(card.outputText)}`);
+    sections.push(
+      `### ${uiText("Tool output", "Output công cụ")}\n${formatToolOutputForSidebar(card.outputText)}`,
+    );
   } else {
-    sections.push(`### Tool output\n*No output — tool completed successfully.*`);
+    sections.push(
+      `### ${uiText("Tool output", "Output công cụ")}\n*${uiText("No output — tool completed successfully.", "Không có output - công cụ đã hoàn tất thành công.")}*`,
+    );
   }
 
   return sections.join("\n\n");
@@ -352,12 +357,12 @@ export function renderRawOutputToggle(text: string) {
         aria-expanded="false"
         @click=${handleRawDetailsToggle}
       >
-        <span>Raw details</span>
+        <span>${uiText("Raw details", "Chi tiết thô")}</span>
         <span class="chat-tool-card__raw-toggle-icon">${icons.chevronDown}</span>
       </button>
       <div class="chat-tool-card__raw-body" hidden>
         ${renderToolDataBlock({
-          label: "Tool output",
+          label: uiText("Tool output", "Output công cụ"),
           text,
           expanded: true,
         })}
@@ -500,8 +505,11 @@ export function renderExpandedToolCardContent(
                   class="chat-tool-card__action-btn"
                   type="button"
                   @click=${() => onOpenSidebar?.(sidebarActionContent)}
-                  title="Open in the side panel"
-                  aria-label="Open tool details in side panel"
+                  title=${uiText("Open in the side panel", "Mở trong panel bên")}
+                  aria-label=${uiText(
+                    "Open tool details in side panel",
+                    "Mở chi tiết công cụ trong panel bên",
+                  )}
                 >
                   <span class="chat-tool-card__action-icon">${icons.panelRightOpen}</span>
                 </button>
@@ -512,7 +520,7 @@ export function renderExpandedToolCardContent(
       ${detail ? html`<div class="chat-tool-card__detail">${detail}</div>` : nothing}
       ${hasInput
         ? renderToolDataBlock({
-            label: "Tool input",
+            label: uiText("Tool input", "Input công cụ"),
             text: card.inputText!,
             expanded: true,
           })
@@ -521,7 +529,7 @@ export function renderExpandedToolCardContent(
         ? card.preview
           ? html`${visiblePreview} ${renderRawOutputToggle(card.outputText!)}`
           : renderToolDataBlock({
-              label: "Tool output",
+              label: uiText("Tool output", "Output công cụ"),
               text: card.outputText!,
               expanded: true,
             })
@@ -576,7 +584,7 @@ export function renderToolCardSidebar(
         </div>
         ${canClick
           ? html`<span class="chat-tool-card__action"
-              >${hasText || hasPreview ? "View" : ""} ${icons.check}</span
+              >${hasText || hasPreview ? uiText("View", "Xem") : ""} ${icons.check}</span
             >`
           : nothing}
         ${isEmpty && !canClick
@@ -584,7 +592,11 @@ export function renderToolCardSidebar(
           : nothing}
       </div>
       ${detail ? html`<div class="chat-tool-card__detail">${detail}</div>` : nothing}
-      ${isEmpty ? html`<div class="chat-tool-card__status-text muted">Completed</div>` : nothing}
+      ${isEmpty
+        ? html`<div class="chat-tool-card__status-text muted">
+            ${uiText("Completed", "Đã hoàn tất")}
+          </div>`
+        : nothing}
       ${preview
         ? html`${renderToolPreview(preview, "chat_tool", {
             onOpenSidebar,

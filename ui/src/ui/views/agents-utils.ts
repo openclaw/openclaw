@@ -15,6 +15,7 @@ import type {
   ToolCatalogProfile,
   ToolsCatalogResult,
 } from "../types.ts";
+import { viDashboardText as uiText } from "../vi-dashboard-text.ts";
 
 export type AgentToolEntry = {
   id: string;
@@ -37,92 +38,274 @@ export type AgentToolSection = {
 export const FALLBACK_TOOL_SECTIONS: AgentToolSection[] = [
   {
     id: "fs",
-    label: "Files",
+    get label() {
+      return uiText("Files", "Tệp");
+    },
     tools: [
-      { id: "read", label: "read", description: "Read file contents" },
-      { id: "write", label: "write", description: "Create or overwrite files" },
-      { id: "edit", label: "edit", description: "Make precise edits" },
-      { id: "apply_patch", label: "apply_patch", description: "Patch files (OpenAI)" },
+      {
+        id: "read",
+        label: "read",
+        get description() {
+          return uiText("Read file contents", "Đọc nội dung tệp");
+        },
+      },
+      {
+        id: "write",
+        label: "write",
+        get description() {
+          return uiText("Create or overwrite files", "Tạo hoặc ghi đè tệp");
+        },
+      },
+      {
+        id: "edit",
+        label: "edit",
+        get description() {
+          return uiText("Make precise edits", "Sửa chính xác");
+        },
+      },
+      {
+        id: "apply_patch",
+        label: "apply_patch",
+        get description() {
+          return uiText("Patch files (OpenAI)", "Áp patch tệp (OpenAI)");
+        },
+      },
     ],
   },
   {
     id: "runtime",
     label: "Runtime",
     tools: [
-      { id: "exec", label: "exec", description: "Run shell commands" },
-      { id: "process", label: "process", description: "Manage background processes" },
+      {
+        id: "exec",
+        label: "exec",
+        get description() {
+          return uiText("Run shell commands", "Chạy lệnh shell");
+        },
+      },
+      {
+        id: "process",
+        label: "process",
+        get description() {
+          return uiText("Manage background processes", "Quản lý tiến trình nền");
+        },
+      },
     ],
   },
   {
     id: "web",
     label: "Web",
     tools: [
-      { id: "web_search", label: "web_search", description: "Search the web" },
-      { id: "web_fetch", label: "web_fetch", description: "Fetch web content" },
+      {
+        id: "web_search",
+        label: "web_search",
+        get description() {
+          return uiText("Search the web", "Tìm kiếm web");
+        },
+      },
+      {
+        id: "web_fetch",
+        label: "web_fetch",
+        get description() {
+          return uiText("Fetch web content", "Lấy nội dung web");
+        },
+      },
     ],
   },
   {
     id: "memory",
-    label: "Memory",
+    get label() {
+      return uiText("Memory", "Bộ nhớ");
+    },
     tools: [
-      { id: "memory_search", label: "memory_search", description: "Semantic search" },
-      { id: "memory_get", label: "memory_get", description: "Read memory files" },
+      {
+        id: "memory_search",
+        label: "memory_search",
+        get description() {
+          return uiText("Semantic search", "Tìm kiếm ngữ nghĩa");
+        },
+      },
+      {
+        id: "memory_get",
+        label: "memory_get",
+        get description() {
+          return uiText("Read memory files", "Đọc tệp bộ nhớ");
+        },
+      },
     ],
   },
   {
     id: "sessions",
-    label: "Sessions",
+    get label() {
+      return uiText("Sessions", "Phiên");
+    },
     tools: [
-      { id: "sessions_list", label: "sessions_list", description: "List sessions" },
-      { id: "sessions_history", label: "sessions_history", description: "Session history" },
-      { id: "sessions_send", label: "sessions_send", description: "Send to session" },
-      { id: "sessions_spawn", label: "sessions_spawn", description: "Spawn sub-agent" },
-      { id: "session_status", label: "session_status", description: "Session status" },
+      {
+        id: "sessions_list",
+        label: "sessions_list",
+        get description() {
+          return uiText("List sessions", "Liệt kê phiên");
+        },
+      },
+      {
+        id: "sessions_history",
+        label: "sessions_history",
+        get description() {
+          return uiText("Session history", "Lịch sử phiên");
+        },
+      },
+      {
+        id: "sessions_send",
+        label: "sessions_send",
+        get description() {
+          return uiText("Send to session", "Gửi tới phiên");
+        },
+      },
+      {
+        id: "sessions_spawn",
+        label: "sessions_spawn",
+        get description() {
+          return uiText("Spawn sub-agent", "Tạo sub-agent");
+        },
+      },
+      {
+        id: "session_status",
+        label: "session_status",
+        get description() {
+          return uiText("Session status", "Trạng thái phiên");
+        },
+      },
     ],
   },
   {
     id: "ui",
     label: "UI",
     tools: [
-      { id: "browser", label: "browser", description: "Control web browser" },
-      { id: "canvas", label: "canvas", description: "Control canvases" },
+      {
+        id: "browser",
+        label: "browser",
+        get description() {
+          return uiText("Control web browser", "Điều khiển trình duyệt web");
+        },
+      },
+      {
+        id: "canvas",
+        label: "canvas",
+        get description() {
+          return uiText("Control canvases", "Điều khiển canvas");
+        },
+      },
     ],
   },
   {
     id: "messaging",
-    label: "Messaging",
-    tools: [{ id: "message", label: "message", description: "Send messages" }],
+    get label() {
+      return uiText("Messaging", "Nhắn tin");
+    },
+    tools: [
+      {
+        id: "message",
+        label: "message",
+        get description() {
+          return uiText("Send messages", "Gửi tin nhắn");
+        },
+      },
+    ],
   },
   {
     id: "automation",
-    label: "Automation",
+    get label() {
+      return uiText("Automation", "Tự động hóa");
+    },
     tools: [
-      { id: "cron", label: "cron", description: "Schedule tasks" },
-      { id: "gateway", label: "gateway", description: "Gateway control" },
+      {
+        id: "cron",
+        label: "cron",
+        get description() {
+          return uiText("Schedule tasks", "Lên lịch tác vụ");
+        },
+      },
+      {
+        id: "gateway",
+        label: "gateway",
+        get description() {
+          return uiText("Gateway control", "Điều khiển Gateway");
+        },
+      },
     ],
   },
   {
     id: "nodes",
-    label: "Nodes",
-    tools: [{ id: "nodes", label: "nodes", description: "Nodes + devices" }],
+    get label() {
+      return uiText("Nodes", "Node");
+    },
+    tools: [
+      {
+        id: "nodes",
+        label: "nodes",
+        get description() {
+          return uiText("Nodes + devices", "Node + thiết bị");
+        },
+      },
+    ],
   },
   {
     id: "agents",
-    label: "Agents",
-    tools: [{ id: "agents_list", label: "agents_list", description: "List agents" }],
+    get label() {
+      return uiText("Agents", "Agent");
+    },
+    tools: [
+      {
+        id: "agents_list",
+        label: "agents_list",
+        get description() {
+          return uiText("List agents", "Liệt kê agent");
+        },
+      },
+    ],
   },
   {
     id: "media",
-    label: "Media",
-    tools: [{ id: "image", label: "image", description: "Image understanding" }],
+    get label() {
+      return uiText("Media", "Phương tiện");
+    },
+    tools: [
+      {
+        id: "image",
+        label: "image",
+        get description() {
+          return uiText("Image understanding", "Hiểu hình ảnh");
+        },
+      },
+    ],
   },
 ];
 
 export const PROFILE_OPTIONS = [
-  { id: "minimal", label: "Minimal" },
-  { id: "coding", label: "Coding" },
-  { id: "messaging", label: "Messaging" },
-  { id: "full", label: "Full" },
+  {
+    id: "minimal",
+    get label() {
+      return uiText("Minimal", "Tối thiểu");
+    },
+  },
+  {
+    id: "coding",
+    get label() {
+      return uiText("Coding", "Lập trình");
+    },
+  },
+  {
+    id: "messaging",
+    get label() {
+      return uiText("Messaging", "Nhắn tin");
+    },
+  },
+  {
+    id: "full",
+    get label() {
+      return uiText("Full", "Đầy đủ");
+    },
+  },
 ] as const;
 
 export function resolveToolSections(

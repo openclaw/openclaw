@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../format.ts";
 import type { ChannelAccountSnapshot, NostrStatus } from "../types.ts";
+import { viDashboardText as uiText } from "../vi-dashboard-text.ts";
 import { renderChannelConfigSection } from "./channels.config.ts";
 import {
   renderNostrProfileForm,
@@ -194,7 +195,12 @@ export function renderNostrCard(params: {
   return html`
     <div class="card">
       <div class="card-title">Nostr</div>
-      <div class="card-sub">Decentralized DMs via Nostr relays (NIP-04).</div>
+      <div class="card-sub">
+        ${uiText(
+          "Decentralized DMs via Nostr relays (NIP-04).",
+          "Tin nhắn riêng phi tập trung qua relay Nostr (NIP-04).",
+        )}
+      </div>
       ${accountCountLabel}
       ${hasMultipleAccounts
         ? html`

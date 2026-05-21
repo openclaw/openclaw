@@ -1,4 +1,5 @@
 import type { SkillStatusEntry } from "../types.ts";
+import { viDashboardText as uiText } from "../vi-dashboard-text.ts";
 
 export type SkillGroup = {
   id: string;
@@ -7,10 +8,26 @@ export type SkillGroup = {
 };
 
 const SKILL_SOURCE_GROUPS: Array<{ id: string; label: string; sources: string[] }> = [
-  { id: "workspace", label: "Workspace Skills", sources: ["openclaw-workspace"] },
-  { id: "built-in", label: "Built-in Skills", sources: ["openclaw-bundled"] },
-  { id: "installed", label: "Installed Skills", sources: ["openclaw-managed"] },
-  { id: "extra", label: "Extra Skills", sources: ["openclaw-extra"] },
+  {
+    id: "workspace",
+    label: uiText("Workspace Skills", "Kỹ năng workspace"),
+    sources: ["openclaw-workspace"],
+  },
+  {
+    id: "built-in",
+    label: uiText("Built-in Skills", "Kỹ năng tích hợp"),
+    sources: ["openclaw-bundled"],
+  },
+  {
+    id: "installed",
+    label: uiText("Installed Skills", "Kỹ năng đã cài"),
+    sources: ["openclaw-managed"],
+  },
+  {
+    id: "extra",
+    label: uiText("Extra Skills", "Kỹ năng bổ sung"),
+    sources: ["openclaw-extra"],
+  },
 ];
 
 export function groupSkills(skills: SkillStatusEntry[]): SkillGroup[] {
@@ -19,7 +36,11 @@ export function groupSkills(skills: SkillStatusEntry[]): SkillGroup[] {
     groups.set(def.id, { id: def.id, label: def.label, skills: [] });
   }
   const builtInGroup = SKILL_SOURCE_GROUPS.find((group) => group.id === "built-in");
-  const other: SkillGroup = { id: "other", label: "Other Skills", skills: [] };
+  const other: SkillGroup = {
+    id: "other",
+    label: uiText("Other Skills", "Kỹ năng khác"),
+    skills: [],
+  };
   for (const skill of skills) {
     const match = skill.bundled
       ? builtInGroup
