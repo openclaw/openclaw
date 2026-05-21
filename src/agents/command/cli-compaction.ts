@@ -127,7 +127,6 @@ async function compactCliTranscript(params: {
   skillsSnapshot?: SkillSnapshot;
   messageChannel?: string;
   agentAccountId?: string;
-  senderIsOwner?: boolean;
   thinkLevel?: Parameters<typeof buildEmbeddedCompactionRuntimeContext>[0]["thinkLevel"];
   extraSystemPrompt?: string;
 }) {
@@ -142,7 +141,6 @@ async function compactCliTranscript(params: {
       agentDir: params.agentDir,
       config: params.cfg,
       skillsSnapshot: params.skillsSnapshot,
-      senderIsOwner: params.senderIsOwner,
       provider: params.provider,
       modelId: params.model,
       thinkLevel: params.thinkLevel,
@@ -211,7 +209,6 @@ export async function runCliTurnCompactionLifecycle(params: {
   skillsSnapshot?: SkillSnapshot;
   messageChannel?: string;
   agentAccountId?: string;
-  senderIsOwner?: boolean;
   thinkLevel?: Parameters<typeof buildEmbeddedCompactionRuntimeContext>[0]["thinkLevel"];
   extraSystemPrompt?: string;
 }): Promise<SessionEntry | undefined> {
@@ -275,7 +272,6 @@ export async function runCliTurnCompactionLifecycle(params: {
     skillsSnapshot: params.skillsSnapshot,
     messageChannel: params.messageChannel,
     agentAccountId: params.agentAccountId,
-    senderIsOwner: params.senderIsOwner,
     thinkLevel: params.thinkLevel,
     extraSystemPrompt: params.extraSystemPrompt,
   });

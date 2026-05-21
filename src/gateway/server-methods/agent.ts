@@ -176,7 +176,7 @@ function logAttachmentFailure(
   });
 }
 
-function resolveSenderIsOwnerFromClient(client: GatewayRequestHandlerOptions["client"]): boolean {
+function clientHasAdminScope(client: GatewayRequestHandlerOptions["client"]): boolean {
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
   return scopes.includes(ADMIN_SCOPE);
 }
@@ -184,11 +184,11 @@ function resolveSenderIsOwnerFromClient(client: GatewayRequestHandlerOptions["cl
 function resolveAllowModelOverrideFromClient(
   client: GatewayRequestHandlerOptions["client"],
 ): boolean {
-  return resolveSenderIsOwnerFromClient(client) || client?.internal?.allowModelOverride === true;
+  return clientHasAdminScope(client) || client?.internal?.allowModelOverride === true;
 }
 
 function resolveCanResetSessionFromClient(client: GatewayRequestHandlerOptions["client"]): boolean {
-  return resolveSenderIsOwnerFromClient(client);
+  return clientHasAdminScope(client);
 }
 
 function resolveCanUseInternalRuntimeHandoff(
@@ -664,7 +664,6 @@ export const agentHandlers: GatewayRequestHandlers = {
       workspaceDir?: string;
       voiceWakeTrigger?: string;
     };
-    const senderIsOwner = resolveSenderIsOwnerFromClient(client);
     const allowModelOverride = resolveAllowModelOverrideFromClient(client);
     const canResetSession = resolveCanResetSessionFromClient(client);
     const canUseInternalRuntimeHandoff = resolveCanUseInternalRuntimeHandoff(client);
@@ -1655,7 +1654,6 @@ export const agentHandlers: GatewayRequestHandlers = {
                 spawnedBy: spawnedByValue,
                 workspaceDir: sessionEntry?.spawnedWorkspaceDir,
               }),
-              senderIsOwner,
               allowModelOverride,
             },
             runId,

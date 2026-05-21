@@ -773,7 +773,7 @@ describe("exec notifyOnExit", () => {
     expect(finished?.status).toBe(PROCESS_STATUS_COMPLETED);
     expect(finished?.exitCode).toBe(0);
     expect(hasEvent).toBe(true);
-    expect(queuedEvent?.forceSenderIsOwnerFalse).toBe(true);
+    expect(queuedEvent).toBeDefined();
     expect(formatted).toBeUndefined();
   });
 
@@ -793,7 +793,7 @@ describe("exec notifyOnExit", () => {
       event.text.includes(sessionId.slice(0, 8)),
     );
 
-    expect(queuedEvent?.forceSenderIsOwnerFalse).toBe(true);
+    expect(queuedEvent).toBeDefined();
     expect(queuedEvent?.deliveryContext?.channel).toBe("telegram");
     expect(queuedEvent?.deliveryContext?.to).toBe("telegram:-1003774691294:topic:47");
     expect(queuedEvent?.deliveryContext?.threadId).toBe("47");
