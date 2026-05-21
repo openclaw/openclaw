@@ -460,6 +460,7 @@ const BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS = new Set([
   "mistral",
   "modelstudio",
   "moonshot",
+  "nearai",
   "nvidia",
   "ollama",
   "openai",
