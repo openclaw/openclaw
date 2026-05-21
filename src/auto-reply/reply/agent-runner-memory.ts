@@ -738,7 +738,6 @@ export async function runPreflightCompactionIfNeeded(params: {
     bashElevated: params.followupRun.run.bashElevated,
     trigger: "budget",
     currentTokenCount: tokenCountForCompaction ?? freshPersistedTokens,
-    senderIsOwner: params.followupRun.run.senderIsOwner,
     ownerNumbers: params.followupRun.run.ownerNumbers,
     abortSignal: params.replyOperation.abortSignal,
   });

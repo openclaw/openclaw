@@ -25,7 +25,6 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       workspaceDir: "/tmp/workspace",
       agentDir: "/tmp/agent",
       config: {} as OpenClawConfig,
-      senderIsOwner: true,
       senderId: "user-123",
       provider: "openai-codex",
       modelId: "gpt-5.4",

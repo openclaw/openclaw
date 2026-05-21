@@ -355,6 +355,7 @@ import {
   wrapStreamFnRepairMalformedToolCallArguments,
 } from "./attempt.tool-call-argument-repair.js";
 import {
+  shouldApplyReplayToolCallIdSanitizer,
   sanitizeReplayToolCallIdsForStream,
   wrapStreamFnSanitizeMalformedToolCalls,
   wrapStreamFnTrimToolCallNames,
@@ -1393,7 +1394,6 @@ export async function runEmbeddedAttempt(
             senderUsername: params.senderUsername,
             senderE164: params.senderE164,
             senderIsOwner: params.senderIsOwner,
-            ownerOnlyToolAllowlist: params.ownerOnlyToolAllowlist,
             allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
             sessionKey: sandboxSessionKey,
             // When sandboxSessionKey differs from the real run session key (e.g. Telegram
@@ -1684,8 +1684,6 @@ export async function runEmbeddedAttempt(
       senderName: params.senderName,
       senderUsername: params.senderUsername,
       senderE164: params.senderE164,
-      senderIsOwner: params.senderIsOwner,
-      ownerOnlyToolAllowlist: params.ownerOnlyToolAllowlist,
       warn: (message) => log.warn(message),
     });
     const normalizedBundledTools =
@@ -2779,13 +2777,14 @@ export async function runEmbeddedAttempt(
         params.model.api === "azure-openai-responses" ||
         params.model.api === "openai-codex-responses";
 
-      if (
-        transcriptPolicy.sanitizeToolCallIds &&
-        transcriptPolicy.toolCallIdMode &&
-        !isOpenAIResponsesApi
-      ) {
+      const replayToolCallIdSanitizerDecision = {
+        sanitizeToolCallIds: transcriptPolicy.sanitizeToolCallIds,
+        toolCallIdMode: transcriptPolicy.toolCallIdMode,
+        isOpenAIResponsesApi,
+      };
+      if (shouldApplyReplayToolCallIdSanitizer(replayToolCallIdSanitizerDecision)) {
         const inner = activeSession.agent.streamFn;
-        const mode = transcriptPolicy.toolCallIdMode;
+        const mode = replayToolCallIdSanitizerDecision.toolCallIdMode;
         activeSession.agent.streamFn = (model, context, options) => {
           const ctx = context as unknown as { messages?: unknown };
           const messages = ctx?.messages;

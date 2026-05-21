@@ -745,26 +745,58 @@ function formatContextWindowLabel(tokens: number): string {
   return `${Math.round(tokens / 1024)}k`;
 }
 
+function normalizePositiveContextTokens(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+  return Math.floor(value);
+}
+
+function resolveAgentContextTokensForHint(params: {
+  cfg: FollowupRun["run"]["config"];
+  agentId?: string;
+}): number | undefined {
+  const defaultContextTokens = normalizePositiveContextTokens(
+    params.cfg.agents?.defaults?.contextTokens,
+  );
+  const agentId = normalizeLowercaseStringOrEmpty(params.agentId);
+  const agentContextTokens = agentId
+    ? normalizePositiveContextTokens(
+        params.cfg.agents?.list?.find(
+          (entry) => normalizeLowercaseStringOrEmpty(entry?.id) === agentId,
+        )?.contextTokens,
+      )
+    : undefined;
+  return agentContextTokens ?? defaultContextTokens;
+}
+
 function resolveContextWindowForHint(params: {
   cfg: FollowupRun["run"]["config"];
+  agentId?: string;
   ref: ModelRefLike;
   activeSessionEntry?: SessionEntry;
 }) {
-  const activeContextTokens =
-    typeof params.activeSessionEntry?.contextTokens === "number" &&
-    Number.isFinite(params.activeSessionEntry.contextTokens) &&
-    params.activeSessionEntry.contextTokens > 0
-      ? Math.floor(params.activeSessionEntry.contextTokens)
-      : undefined;
-  return (
-    activeContextTokens ??
-    resolveContextTokensForModel({
-      cfg: params.cfg,
-      provider: params.ref.provider,
-      model: params.ref.model,
-      allowAsyncLoad: false,
-    })
+  const sessionContextTokens = normalizePositiveContextTokens(
+    params.activeSessionEntry?.contextTokens,
   );
+  const modelContextTokens = resolveContextTokensForModel({
+    cfg: params.cfg,
+    provider: params.ref.provider,
+    model: params.ref.model,
+    allowAsyncLoad: false,
+  });
+  const contextTokens = modelContextTokens ?? sessionContextTokens;
+  if (contextTokens === undefined) {
+    return undefined;
+  }
+
+  const agentContextTokens = resolveAgentContextTokensForHint({
+    cfg: params.cfg,
+    agentId: params.agentId,
+  });
+  return agentContextTokens !== undefined
+    ? Math.min(agentContextTokens, contextTokens)
+    : contextTokens;
 }
 
 function resolveHeartbeatBleedHint(params: {
@@ -809,14 +841,14 @@ function resolveHeartbeatBleedHint(params: {
 
   const runtimeWindow = resolveContextWindowForHint({
     cfg: params.cfg,
+    agentId: params.agentId,
     ref: runtimeRef,
     activeSessionEntry: params.activeSessionEntry,
   });
-  const primaryWindow = resolveContextTokensForModel({
+  const primaryWindow = resolveContextWindowForHint({
     cfg: params.cfg,
-    provider: primaryRef.provider,
-    model: primaryRef.model,
-    allowAsyncLoad: false,
+    agentId: params.agentId,
+    ref: primaryRef,
   });
   if (
     typeof runtimeWindow === "number" &&

@@ -300,10 +300,7 @@ function normalizeExplicitOverrideInput(raw: string, kind: "provider" | "model")
   return trimmed;
 }
 
-async function prepareAgentCommandExecution(
-  opts: AgentCommandOpts & { senderIsOwner: boolean },
-  runtime: RuntimeEnv,
-) {
+async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: RuntimeEnv) {
   const isRawModelRun = opts.modelRun === true || opts.promptMode === "none";
   const message = opts.message ?? "";
   if (!message.trim()) {
@@ -483,7 +480,7 @@ async function prepareAgentCommandExecution(
 }
 
 async function agentCommandInternal(
-  opts: AgentCommandOpts & { senderIsOwner: boolean },
+  opts: AgentCommandOpts,
   runtime: RuntimeEnv = defaultRuntime,
   deps?: CliDeps,
 ) {
@@ -1474,7 +1471,6 @@ async function agentCommandInternal(
           skillsSnapshot,
           messageChannel,
           agentAccountId: runContext.accountId,
-          senderIsOwner: opts.senderIsOwner,
           thinkLevel: resolvedThinkLevel,
           extraSystemPrompt: opts.extraSystemPrompt,
         });
@@ -1606,7 +1602,7 @@ export async function agentCommand(
         {
           ...opts,
           // agentCommand is the trusted-operator entrypoint used by CLI/local flows.
-          // Ingress callers must opt into owner semantics explicitly via
+          // Ingress callers must opt into owner identity explicitly via
           // agentCommandFromIngress so network-facing paths cannot inherit this default by accident.
           senderIsOwner: opts.senderIsOwner ?? true,
           // Local/CLI callers are trusted by default for per-run model overrides.
@@ -1623,20 +1619,11 @@ export async function agentCommandFromIngress(
   runtime: RuntimeEnv = defaultRuntime,
   deps?: CliDeps,
 ) {
-  if (typeof opts.senderIsOwner !== "boolean") {
-    // HTTP/WS ingress must declare the trust level explicitly at the boundary.
-    // This keeps network-facing callers from silently picking up the local trusted default.
-    throw new Error("senderIsOwner must be explicitly set for ingress agent runs.");
-  }
   if (typeof opts.allowModelOverride !== "boolean") {
     throw new Error("allowModelOverride must be explicitly set for ingress agent runs.");
   }
   return await agentCommandInternal(
-    {
-      ...opts,
-      senderIsOwner: opts.senderIsOwner,
-      allowModelOverride: opts.allowModelOverride,
-    },
+    { ...opts, senderIsOwner: opts.senderIsOwner === true },
     runtime,
     deps,
   );

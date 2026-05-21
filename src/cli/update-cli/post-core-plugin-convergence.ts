@@ -3,6 +3,7 @@ import { UPDATE_POST_CORE_CONVERGENCE_ENV } from "../../commands/doctor/shared/u
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "../../plugins/config-state.js";
+import { pruneStaleLocalBundledPluginInstallRecords } from "../../plugins/stale-local-bundled-plugin-install-records.js";
 import {
   resolveTrustedSourceLinkedOfficialClawHubSpec,
   resolveTrustedSourceLinkedOfficialNpmSpec,
@@ -66,11 +67,17 @@ export async function runPostCorePluginConvergence(params: {
     OPENCLAW_COMPATIBILITY_HOST_VERSION: VERSION,
     [UPDATE_POST_CORE_CONVERGENCE_ENV]: "1",
   };
+  const prunedBaseline = params.baselineInstallRecords
+    ? pruneStaleLocalBundledPluginInstallRecords({
+        installRecords: params.baselineInstallRecords,
+        env,
+      })
+    : null;
 
   const repair = await repairMissingConfiguredPluginInstalls({
     cfg: params.cfg,
     env,
-    ...(params.baselineInstallRecords ? { baselineRecords: params.baselineInstallRecords } : {}),
+    ...(prunedBaseline ? { baselineRecords: prunedBaseline.records } : {}),
   });
 
   const warnings: PostCoreConvergenceWarning[] = repair.warnings.map((message) => ({
@@ -99,7 +106,12 @@ export async function runPostCorePluginConvergence(params: {
   }
 
   return {
-    changes: repair.changes,
+    changes: [
+      ...(prunedBaseline?.stale.map(
+        (record) => `Removed stale local bundled plugin install record "${record.pluginId}".`,
+      ) ?? []),
+      ...repair.changes,
+    ],
     warnings,
     errored: warnings.length > 0,
     smokeFailures: smoke.failures,
