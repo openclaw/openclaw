@@ -73,7 +73,10 @@ describe("perplexity web search provider", () => {
 
   it("resolves OpenRouter env auth and transport", () => {
     withEnv(
-      { [perplexityApiKeyEnv]: undefined, [openRouterApiKeyEnv]: openRouterPerplexityApiKey },
+      {
+        [perplexityApiKeyEnv]: undefined,
+        [openRouterApiKeyEnv]: openRouterPerplexityApiKey,
+      },
       () => {
         expect(testing.resolvePerplexityApiKey(undefined)).toEqual({
           apiKey: openRouterPerplexityApiKey,
@@ -92,7 +95,10 @@ describe("perplexity web search provider", () => {
 
   it("uses native Search API for direct Perplexity when no legacy overrides exist", () => {
     withEnv(
-      { [perplexityApiKeyEnv]: directPerplexityApiKey, [openRouterApiKeyEnv]: undefined },
+      {
+        [perplexityApiKeyEnv]: directPerplexityApiKey,
+        [openRouterApiKeyEnv]: undefined,
+      },
       () => {
         expect(testing.resolvePerplexityTransport(undefined)).toEqual({
           apiKey: directPerplexityApiKey,
@@ -106,9 +112,11 @@ describe("perplexity web search provider", () => {
   });
 
   it("switches direct Perplexity to chat completions when model override is configured", () => {
-    expect(testing.resolvePerplexityModel({ model: "perplexity/sonar-reasoning-pro" })).toBe(
-      "perplexity/sonar-reasoning-pro",
-    );
+    expect(
+      testing.resolvePerplexityModel({
+        model: "perplexity/sonar-reasoning-pro",
+      }),
+    ).toBe("perplexity/sonar-reasoning-pro");
     expect(
       testing.resolvePerplexityTransport({
         apiKey: directPerplexityApiKey,
@@ -147,5 +155,75 @@ describe("perplexity web search provider", () => {
     await expect(
       testing.readPerplexityJsonResponse(new Response("{ nope"), "Perplexity"),
     ).rejects.toThrow("Perplexity: malformed JSON response");
+  });
+
+  it("exposes search_context_size for Sonar chat-completions tool schemas", () => {
+    const provider = createPerplexityWebSearchProvider();
+    const tool = provider.createTool({
+      config: {},
+      searchConfig: { perplexity: { model: "perplexity/sonar-pro" } },
+      runtimeMetadata: { perplexityTransport: "chat_completions" },
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    const properties = (tool.parameters as { properties?: Record<string, unknown> }).properties;
+    expect(properties?.search_context_size).toEqual({
+      type: "string",
+      enum: ["low", "medium", "high"],
+      description:
+        "Perplexity Sonar only. Content budget hint passed as web_search_options.search_context_size.",
+    });
+  });
+
+  it("normalizes and validates Perplexity search context size", () => {
+    expect(testing.normalizePerplexitySearchContextSize("HIGH")).toBe("high");
+    expect(testing.normalizePerplexitySearchContextSize(" medium ")).toBe("medium");
+    expect(testing.normalizePerplexitySearchContextSize("deep")).toBeUndefined();
+  });
+
+  it("passes search_context_size through chat completions web_search_options", () => {
+    expect(
+      testing.buildPerplexityChatCompletionsBody({
+        query: "market sizing",
+        baseUrl: "https://api.perplexity.ai",
+        model: "perplexity/sonar-pro",
+        freshness: "week",
+        searchContextSize: "high",
+      }),
+    ).toEqual({
+      model: "sonar-pro",
+      messages: [{ role: "user", content: "market sizing" }],
+      search_recency_filter: "week",
+      web_search_options: { search_context_size: "high" },
+    });
+  });
+
+  it("rejects invalid search_context_size values before provider calls", async () => {
+    await withEnvAsync(
+      {
+        [perplexityApiKeyEnv]: directPerplexityApiKey,
+        [openRouterApiKeyEnv]: undefined,
+      },
+      async () => {
+        const provider = createPerplexityWebSearchProvider();
+        const tool = provider.createTool({
+          config: {},
+          searchConfig: { perplexity: { model: "perplexity/sonar-pro" } },
+        });
+        if (!tool) {
+          throw new Error("Expected tool definition");
+        }
+
+        await expect(
+          tool.execute({ query: "market sizing", search_context_size: "deep" }),
+        ).resolves.toEqual({
+          error: "invalid_search_context_size",
+          message: "search_context_size must be low, medium, or high.",
+          docs: "https://docs.openclaw.ai/tools/web",
+        });
+      },
+    );
   });
 });

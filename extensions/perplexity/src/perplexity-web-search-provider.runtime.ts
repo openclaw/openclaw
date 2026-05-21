@@ -33,6 +33,7 @@ import {
 
 const PERPLEXITY_SEARCH_ENDPOINT = "https://api.perplexity.ai/search";
 const DEFAULT_PERPLEXITY_MODEL = "perplexity/sonar-pro";
+const PERPLEXITY_SEARCH_CONTEXT_SIZES = new Set(["low", "medium", "high"]);
 
 type PerplexityConfig = {
   apiKey?: string;
@@ -197,6 +198,35 @@ function extractPerplexityCitations(data: PerplexitySearchResponse): string[] {
   return [...new Set(citations)];
 }
 
+function normalizePerplexitySearchContextSize(
+  value: unknown,
+): "low" | "medium" | "high" | undefined {
+  const normalized = normalizeOptionalString(value)?.toLowerCase();
+  return normalized && PERPLEXITY_SEARCH_CONTEXT_SIZES.has(normalized)
+    ? (normalized as "low" | "medium" | "high")
+    : undefined;
+}
+
+function buildPerplexityChatCompletionsBody(params: {
+  query: string;
+  baseUrl: string;
+  model: string;
+  freshness?: string;
+  searchContextSize?: "low" | "medium" | "high";
+}): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    model: resolvePerplexityRequestModel(params.baseUrl, params.model),
+    messages: [{ role: "user", content: params.query }],
+  };
+  if (params.freshness) {
+    body.search_recency_filter = params.freshness;
+  }
+  if (params.searchContextSize) {
+    body.web_search_options = { search_context_size: params.searchContextSize };
+  }
+  return body;
+}
+
 async function runPerplexitySearchApi(params: {
   query: string;
   apiKey: string;
@@ -276,15 +306,10 @@ async function runPerplexitySearch(params: {
   model: string;
   timeoutSeconds: number;
   freshness?: string;
+  searchContextSize?: "low" | "medium" | "high";
 }): Promise<{ content: string; citations: string[] }> {
   const endpoint = `${params.baseUrl.trim().replace(/\/$/, "")}/chat/completions`;
-  const body: Record<string, unknown> = {
-    model: resolvePerplexityRequestModel(params.baseUrl, params.model),
-    messages: [{ role: "user", content: params.query }],
-  };
-  if (params.freshness) {
-    body.search_recency_filter = params.freshness;
-  }
+  const body = buildPerplexityChatCompletionsBody(params);
 
   return withTrustedWebSearchEndpoint(
     {
@@ -344,7 +369,20 @@ export async function executePerplexitySearch(
   const rawDateBefore = readStringParam(args, "date_before");
   const domainFilter = readStringArrayParam(args, "domain_filter");
   const maxTokens = readNumberParam(args, "max_tokens", { integer: true });
-  const maxTokensPerPage = readNumberParam(args, "max_tokens_per_page", { integer: true });
+  const maxTokensPerPage = readNumberParam(args, "max_tokens_per_page", {
+    integer: true,
+  });
+  const rawSearchContextSize = readStringParam(args, "search_context_size");
+  const searchContextSize = rawSearchContextSize
+    ? normalizePerplexitySearchContextSize(rawSearchContextSize)
+    : undefined;
+  if (rawSearchContextSize && !searchContextSize) {
+    return {
+      error: "invalid_search_context_size",
+      message: "search_context_size must be low, medium, or high.",
+      docs: "https://docs.openclaw.ai/tools/web",
+    };
+  }
 
   if (!structured) {
     if (country) {
@@ -387,6 +425,13 @@ export async function executePerplexitySearch(
         docs: "https://docs.openclaw.ai/tools/web",
       };
     }
+  } else if (searchContextSize) {
+    return {
+      error: "unsupported_search_context_size",
+      message:
+        "search_context_size is only supported by Perplexity Sonar chat-completions mode. Configure a Perplexity model/baseUrl override to enable it.",
+      docs: "https://docs.openclaw.ai/tools/web",
+    };
   }
 
   if (language && !/^[a-z]{2}$/iu.test(language)) {
@@ -462,6 +507,7 @@ export async function executePerplexitySearch(
     domainFilter?.join(","),
     maxTokens,
     maxTokensPerPage,
+    searchContextSize,
   ]);
   const cached = readCachedSearchPayload(cacheKey);
   if (cached) {
@@ -491,6 +537,7 @@ export async function executePerplexitySearch(
               model: runtime.model,
               timeoutSeconds,
               freshness,
+              searchContextSize,
             });
             return {
               content: wrapWebContent(result.content, "web_search"),
@@ -545,6 +592,8 @@ export const testing = {
   resolvePerplexityRequestModel,
   resolvePerplexityApiKey,
   readPerplexityJsonResponse,
+  normalizePerplexitySearchContextSize,
+  buildPerplexityChatCompletionsBody,
   normalizeToIsoDate,
   isoToPerplexityDate,
 } as const;

@@ -73,6 +73,14 @@ function createPerplexityParameters(transport?: string): Record<string, unknown>
       minimum: 1,
     };
   }
+  if (transport === "chat_completions") {
+    properties.search_context_size = {
+      type: "string",
+      enum: ["low", "medium", "high"],
+      description:
+        "Perplexity Sonar only. Content budget hint passed as web_search_options.search_context_size.",
+    };
+  }
 
   return {
     type: "object",
