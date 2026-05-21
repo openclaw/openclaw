@@ -538,7 +538,10 @@ describe("diagnostics-otel service", () => {
     expect(telemetryState.histograms.get("openclaw.queue.depth")?.record).toHaveBeenCalledWith(3, {
       "openclaw.lane": "main",
     });
-    expect(telemetryState.counters.get("openclaw.message.processed")?.add).toHaveBeenCalled();
+    expect(telemetryState.counters.get("openclaw.message.processed")?.add).toHaveBeenCalledWith(1, {
+      "openclaw.channel": "telegram",
+      "openclaw.outcome": "completed",
+    });
     expect(
       telemetryState.histograms.get("openclaw.message.duration_ms")?.record,
     ).toHaveBeenCalledWith(55, {
