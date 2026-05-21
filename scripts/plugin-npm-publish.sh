@@ -140,7 +140,8 @@ build_package_runtime
 check_package_shrinkwrap
 
 if [[ "${mode}" == "--pack-dry-run" ]]; then
-  node scripts/lib/plugin-npm-package-manifest.mjs --run "${package_dir}" -- \
+  OPENCLAW_PLUGIN_NPM_BUNDLE_DEPENDENCIES=1 \
+    node scripts/lib/plugin-npm-package-manifest.mjs --run "${package_dir}" -- \
     npm pack --dry-run --json --ignore-scripts
   exit 0
 fi
@@ -149,7 +150,8 @@ fi
   cleanup_files=()
   trap 'rm -f "${cleanup_files[@]}"' EXIT
   run_with_manifest_overlay() {
-    node scripts/lib/plugin-npm-package-manifest.mjs --run "${package_dir}" -- "$@"
+    OPENCLAW_PLUGIN_NPM_BUNDLE_DEPENDENCIES=1 \
+      node scripts/lib/plugin-npm-package-manifest.mjs --run "${package_dir}" -- "$@"
   }
   publish_userconfig=""
   if [[ -n "${publish_auth_token}" ]]; then

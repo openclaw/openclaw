@@ -108,6 +108,70 @@ function assertPluginNpmRuntimeBuildExists(plan) {
   assertPackageFilesDoNotExcludeRequiredRuntimeArtifacts(plan);
 }
 
+function hasPackageRuntimeDependencies(packageJson) {
+  return (
+    Object.keys(packageJson.dependencies ?? {}).length > 0 ||
+    Object.keys(packageJson.optionalDependencies ?? {}).length > 0
+  );
+}
+
+function shouldBundleDependencies(value) {
+  return value === true || value === "1" || value === "true";
+}
+
+function installPackageLocalBundledDependencies(params) {
+  const packageJson = params.packageJson;
+  if (packageJson.bundleDependencies !== true || !hasPackageRuntimeDependencies(packageJson)) {
+    return () => {};
+  }
+
+  const shrinkwrapPath = path.join(params.packageDir, "npm-shrinkwrap.json");
+  if (!fs.existsSync(shrinkwrapPath)) {
+    throw new Error(
+      `package-local bundled dependency install requires npm-shrinkwrap.json for ${params.pluginDir}`,
+    );
+  }
+
+  const nodeModulesPath = path.join(params.packageDir, "node_modules");
+  if (fs.existsSync(nodeModulesPath)) {
+    throw new Error(
+      `package-local bundled dependency install refuses to replace existing node_modules for ${params.pluginDir}`,
+    );
+  }
+
+  console.error(`[plugin-npm-publish] installing bundled dependencies for ${params.pluginDir}`);
+  const result = spawnSync(
+    "npm",
+    [
+      "install",
+      "--omit=dev",
+      "--omit=peer",
+      "--legacy-peer-deps",
+      "--ignore-scripts",
+      "--no-audit",
+      "--no-fund",
+      "--package-lock=false",
+      "--loglevel=error",
+    ],
+    {
+      cwd: params.packageDir,
+      env: process.env,
+      stdio: ["ignore", "ignore", "inherit"],
+    },
+  );
+  if (result.error) {
+    throw result.error;
+  }
+  if ((result.status ?? 1) !== 0) {
+    throw new Error(
+      `package-local bundled dependency install failed for ${params.pluginDir} with exit ${result.status ?? 1}`,
+    );
+  }
+  return () => {
+    fs.rmSync(nodeModulesPath, { recursive: true, force: true });
+  };
+}
+
 export function resolveAugmentedPluginNpmPackageJson(params) {
   const repoRoot = path.resolve(params.repoRoot ?? ".");
   const packageDir = resolvePackageDir(repoRoot, params.packageDir);
@@ -147,6 +211,11 @@ export function resolveAugmentedPluginNpmPackageJson(params) {
       ...(plan.runtimeSetupEntry ? { runtimeSetupEntry: plan.runtimeSetupEntry } : {}),
     },
   };
+  if (shouldBundleDependencies(params.bundleDependencies)) {
+    packageJson.bundleDependencies = true;
+    delete packageJson.bundledDependencies;
+    delete packageJson.devDependencies;
+  }
   const changed = JSON.stringify(packageJson) !== JSON.stringify(plan.packageJson);
   return {
     packageJsonPath,
@@ -155,6 +224,7 @@ export function resolveAugmentedPluginNpmPackageJson(params) {
     changed,
     packageJson,
     pluginDir: plan.pluginDir,
+    bundleDependencies: shouldBundleDependencies(params.bundleDependencies),
     reason: changed ? "package-local-runtime" : "unchanged",
   };
 }
@@ -290,6 +360,7 @@ export function resolveAugmentedPluginNpmManifest(params) {
 export function withAugmentedPluginNpmManifestForPackage(params, callback) {
   const repoRoot = path.resolve(params.repoRoot ?? ".");
   const packageDir = resolvePackageDir(repoRoot, params.packageDir);
+  const bundleDependencies = shouldBundleDependencies(params.bundleDependencies);
   const resolvedManifest = resolveAugmentedPluginNpmManifest({
     repoRoot,
     packageDir,
@@ -297,6 +368,7 @@ export function withAugmentedPluginNpmManifestForPackage(params, callback) {
   const resolvedPackageJson = resolveAugmentedPluginNpmPackageJson({
     repoRoot,
     packageDir,
+    bundleDependencies,
   });
 
   if (
@@ -332,7 +404,15 @@ export function withAugmentedPluginNpmManifestForPackage(params, callback) {
     );
     writeJsonFile(resolvedPackageJson.packageJsonPath, resolvedPackageJson.packageJson);
   }
+  let cleanupBundledDependencies = () => {};
   try {
+    if (bundleDependencies && resolvedPackageJson.packageJson) {
+      cleanupBundledDependencies = installPackageLocalBundledDependencies({
+        packageDir,
+        packageJson: resolvedPackageJson.packageJson,
+        pluginDir: resolvedPackageJson.pluginDir ?? path.basename(packageDir),
+      });
+    }
     return callback({
       ...resolvedManifest,
       packageDir,
@@ -341,6 +421,7 @@ export function withAugmentedPluginNpmManifestForPackage(params, callback) {
       packageJsonApplied: resolvedPackageJson.changed && Boolean(resolvedPackageJson.packageJson),
     });
   } finally {
+    cleanupBundledDependencies();
     if (originalManifest !== undefined) {
       fs.writeFileSync(resolvedManifest.manifestPath, originalManifest, "utf8");
     }
@@ -372,17 +453,23 @@ function parseRunArgs(argv) {
 
 function main(argv = process.argv.slice(2)) {
   const { packageDir, command, args } = parseRunArgs(argv);
-  return withAugmentedPluginNpmManifestForPackage({ packageDir }, ({ packageDir: cwd }) => {
-    const result = spawnSync(command, args, {
-      cwd,
-      env: process.env,
-      stdio: "inherit",
-    });
-    if (result.error) {
-      throw result.error;
-    }
-    return result.status ?? 1;
-  });
+  return withAugmentedPluginNpmManifestForPackage(
+    {
+      packageDir,
+      bundleDependencies: process.env.OPENCLAW_PLUGIN_NPM_BUNDLE_DEPENDENCIES,
+    },
+    ({ packageDir: cwd }) => {
+      const result = spawnSync(command, args, {
+        cwd,
+        env: process.env,
+        stdio: "inherit",
+      });
+      if (result.error) {
+        throw result.error;
+      }
+      return result.status ?? 1;
+    },
+  );
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
