@@ -48,11 +48,13 @@ import {
   isSubagentSessionKey,
   normalizeAgentRuntimeTools,
   resolveAgentDir,
+  resolveAgentHarnessBeforePromptBuildResult,
   resolveAttemptSpawnWorkspaceDir,
   resolveBootstrapContextForRun,
   resolveSandboxContext,
   runAgentHarnessAfterToolCallHook,
   runAgentHarnessAgentEndHook,
+  runAgentHarnessLlmInputHook,
   runAgentHarnessLlmOutputHook,
   runBeforeToolCallHook,
   supportsModelTools,
@@ -235,7 +237,54 @@ export async function runClaudeAppServerAttempt(
     //    thread so the new persona reaches the model. The SDK pins
     //    developerInstructions as the cached static-prefix of the
     //    Claude-Code-preset systemPrompt for the thread's lifetime.
-    const developerInstructions = await buildClaudeDeveloperInstructions(params);
+    //
+    // Fire before_prompt_build so the openclaw plugin chain (provenance,
+    // vestige, etc.) gets to (a) inject inbound taint/context headers into
+    // the prompt + developer instructions, and (b) seed per-turn state
+    // that later hooks (llm_input, agent_end, message_sending) consume.
+    // Without this, provenance has no turn-start state when agent_end
+    // fires, so finalTaintBySession stays unset and the outbound footer
+    // never attaches. Codex fires the same helper at run-attempt.ts:~700.
+    // Reusable hook context for all lifecycle hook calls (before_prompt_build,
+    // llm_input, llm_output, agent_end). Codex builds this once at run-
+    // attempt.ts:955.
+    const harnessHookCtx = {
+      runId: params.runId,
+      agentId: params.agentId,
+      sessionKey: sandboxSessionKey,
+      sessionId: params.sessionId,
+      workspaceDir: params.workspaceDir,
+      messageProvider: params.messageProvider ?? undefined,
+      trigger: params.trigger,
+      channelId: hookChannelFields.channelId,
+    };
+    let developerInstructions = await buildClaudeDeveloperInstructions(params);
+    let openclawPromptPrefix = "";
+    const userPromptText = params.prompt;
+    try {
+      const promptBuild = await resolveAgentHarnessBeforePromptBuildResult({
+        prompt: userPromptText,
+        developerInstructions,
+        messages: [],
+        ctx: harnessHookCtx,
+      });
+      if (promptBuild.developerInstructions !== developerInstructions) {
+        developerInstructions = promptBuild.developerInstructions;
+      }
+      if (promptBuild.prompt !== userPromptText && promptBuild.prompt.endsWith(userPromptText)) {
+        // Plugin (e.g., provenance) added an inbound header before the
+        // user's text. Stash for buildInput to prepend into the per-turn
+        // user message; the diff is the prefix the plugin injected.
+        openclawPromptPrefix = promptBuild.prompt.slice(
+          0,
+          promptBuild.prompt.length - userPromptText.length,
+        );
+      }
+    } catch (err) {
+      embeddedAgentLog.warn("claude-app-server: before_prompt_build threw", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
     const developerInstructionsFingerprint = fingerprintString(developerInstructions);
     // Tool-catalog fingerprint so we can rotate when the projected tool set
     // changes (plugin enabled/disabled/upgraded, allowlist edited, sandbox
@@ -259,11 +308,29 @@ export async function runClaudeAppServerAttempt(
     // approval requests.
     turnIdentity.threadId = threadId;
 
-    // 7. Run the turn. Per-turn user prompt is just the user's actual message;
-    //    we don't duplicate workspace context into the transcript. turnId
-    //    becomes available inside runTurn (after turn/start resolves) —
-    //    it writes turnIdentity.turnId so the filter on subsequent
-    //    server-requests (tool calls / approvals) can also match turnId.
+    // 7. Run the turn. Per-turn user prompt is just the user's actual message
+    //    (plus any header before_prompt_build injected, e.g., provenance's
+    //    inbound taint banner). We don't duplicate workspace context into the
+    //    transcript. turnId becomes available inside runTurn (after
+    //    turn/start resolves) — it writes turnIdentity.turnId so the filter
+    //    on subsequent server-requests (tool calls / approvals) can also
+    //    match turnId.
+    const finalPromptForModel = openclawPromptPrefix + userPromptText;
+    // Fire llm_input so provenance can observe the LLM request and update
+    // its trust state. Codex fires this at run-attempt.ts before turn/start.
+    runAgentHarnessLlmInputHook({
+      event: {
+        runId: params.runId,
+        sessionId: params.sessionId,
+        provider: params.model.provider,
+        model: params.modelId,
+        systemPrompt: developerInstructions,
+        prompt: finalPromptForModel,
+        historyMessages: [],
+        imagesCount: params.images?.length ?? 0,
+      },
+      ctx: harnessHookCtx,
+    });
     const accumulated = await runTurn(
       client,
       params,
@@ -273,6 +340,7 @@ export async function runClaudeAppServerAttempt(
       effectiveWorkspace,
       sharedHookContext,
       turnIdentity,
+      openclawPromptPrefix,
     );
 
     // 7b. Emit the canonical end-of-turn assistant event so downstream
@@ -367,16 +435,6 @@ export async function runClaudeAppServerAttempt(
     //    gets populated for claude turns, which is why message_sending
     //    couldn't attach a trust footer to Tabitha's replies. The hooks
     //    are fire-and-forget (codex does the same).
-    const hookCtxForHarness = {
-      runId: params.runId,
-      agentId: params.agentId,
-      sessionKey: sandboxSessionKey,
-      sessionId: params.sessionId,
-      workspaceDir: params.workspaceDir,
-      messageProvider: params.messageProvider ?? undefined,
-      trigger: params.trigger,
-      channelId: hookChannelFields.channelId,
-    };
     const resolvedRef = `${params.model.provider}/${params.modelId}`;
     // TEMPORARY DIAGNOSTIC for provenance footer chain (Tank live-test
     // 2026-05-21): log what we pass to agent_end so we can confirm the
@@ -385,9 +443,9 @@ export async function runClaudeAppServerAttempt(
     embeddedAgentLog.info("[claude-app-server] firing agent_end harness hooks", {
       runId: params.runId,
       sessionId: params.sessionId,
-      sessionKey: hookCtxForHarness.sessionKey,
-      channelId: hookCtxForHarness.channelId,
-      messageProvider: hookCtxForHarness.messageProvider,
+      sessionKey: harnessHookCtx.sessionKey,
+      channelId: harnessHookCtx.channelId,
+      messageProvider: harnessHookCtx.messageProvider,
       assistantTextsLen: result.assistantTexts.length,
       lastAssistantHasContent: Boolean(result.lastAssistant),
       messagesSnapshotLen: result.messagesSnapshot.length,
@@ -407,7 +465,7 @@ export async function runClaudeAppServerAttempt(
         assistantTexts: result.assistantTexts,
         ...(result.lastAssistant ? { lastAssistant: result.lastAssistant } : {}),
       },
-      ctx: hookCtxForHarness,
+      ctx: harnessHookCtx,
     });
     runAgentHarnessAgentEndHook({
       event: {
@@ -416,7 +474,7 @@ export async function runClaudeAppServerAttempt(
         ...(result.promptError ? { error: formatPromptError(result.promptError) } : {}),
         durationMs: Date.now() - attemptStartedAt,
       },
-      ctx: hookCtxForHarness,
+      ctx: harnessHookCtx,
     });
 
     return result;
@@ -865,11 +923,12 @@ async function runTurn(
     channelId?: string;
   },
   turnIdentity: { threadId?: string; turnId?: string },
+  promptPrefix = "",
 ): Promise<Accumulator> {
   const effort = resolveReasoningEffort(params.thinkLevel, params.modelId);
   const turnParams: TurnStartParams = {
     threadId,
-    input: buildInput(params),
+    input: buildInput(params, promptPrefix),
     // effectiveWorkspace — see ensureThread cwd comment. Per-turn cwd lets
     // the server pin SDK cwd on the resume path too, in case the SDK reads
     // it from turn rather than thread-create.
@@ -1558,12 +1617,15 @@ async function buildClaudeDeveloperInstructions(params: EmbeddedRunAttemptParams
   return sections.filter((s) => s.trim().length > 0).join("\n\n");
 }
 
-function buildInput(params: EmbeddedRunAttemptParams): UserInput[] {
+function buildInput(params: EmbeddedRunAttemptParams, promptPrefix = ""): UserInput[] {
   // Per-turn message is just the user's text + any attached images.
   // OpenClaw bootstrap context (SOUL.md, workspace files, skills) is delivered
   // ONCE at thread/start via developerInstructions; we do not prepend it here
   // or it would duplicate into the transcript on every turn.
-  const blocks: UserInput[] = [{ type: "text", text: params.prompt }];
+  // `promptPrefix` is whatever before_prompt_build plugins injected ahead of
+  // the user's text (e.g., provenance's inbound taint header).
+  const text = promptPrefix ? `${promptPrefix}${params.prompt}` : params.prompt;
+  const blocks: UserInput[] = [{ type: "text", text }];
   if (params.images && params.images.length > 0) {
     for (const img of params.images) {
       const url = `data:${img.mimeType};base64,${img.data}`;
