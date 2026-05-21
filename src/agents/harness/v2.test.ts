@@ -1,5 +1,6 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ContextEngine } from "../../context-engine/types.js";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -63,6 +64,29 @@ function createAttemptResult(): EmbeddedRunAttemptResult {
     cloudCodeAssistFormatError: false,
     replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
     itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
+  };
+}
+
+function createContextEngineRequiringAssembly(): ContextEngine {
+  return {
+    info: {
+      id: "lossless-claw",
+      name: "Lossless",
+      hostRequirements: {
+        "agent-run": {
+          requiredCapabilities: ["assemble-before-prompt"],
+        },
+      },
+    },
+    async ingest() {
+      return { ingested: true };
+    },
+    async assemble({ messages }) {
+      return { messages, estimatedTokens: 0 };
+    },
+    async compact() {
+      return { ok: true, compacted: false };
+    },
   };
 }
 
@@ -148,6 +172,43 @@ describe("AgentHarness V2 compatibility adapter", () => {
       "outcome:started",
       "cleanup:started",
     ]);
+  });
+
+  it("rejects V1-adapted harnesses that do not advertise required context-engine capabilities", async () => {
+    const params = createAttemptParams();
+    params.contextEngine = createContextEngineRequiringAssembly();
+    const runAttempt = vi.fn(async () => createAttemptResult());
+    const harness = adaptAgentHarnessToV2({
+      id: "custom",
+      label: "Custom",
+      supports: () => ({ supported: true }),
+      runAttempt,
+    });
+
+    await expect(runAgentHarnessV2LifecycleAttempt(harness, params)).rejects.toThrow(
+      'Context engine "lossless-claw" cannot run operation "agent-run" on agent harness "custom".',
+    );
+    expect(runAttempt).not.toHaveBeenCalled();
+  });
+
+  it("allows V1-adapted harnesses that advertise required context-engine capabilities", async () => {
+    const params = createAttemptParams();
+    params.contextEngine = createContextEngineRequiringAssembly();
+    const result = createAttemptResult();
+    const runAttempt = vi.fn(async () => result);
+    const harness = adaptAgentHarnessToV2({
+      id: "codex",
+      label: "Codex",
+      contextEngineHostCapabilities: ["assemble-before-prompt"],
+      supports: () => ({ supported: true }),
+      runAttempt,
+    });
+
+    await expect(runAgentHarnessV2LifecycleAttempt(harness, params)).resolves.toEqual({
+      ...result,
+      agentHarnessId: "codex",
+    });
+    expect(runAttempt).toHaveBeenCalledOnce();
   });
 
   it("emits trusted harness lifecycle diagnostics for successful attempts", async () => {
