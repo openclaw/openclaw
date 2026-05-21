@@ -233,6 +233,8 @@ export async function setupSkills(
       );
       runtime.log(t("wizard.skills.docsLine"));
     }
+  } else {
+    await prompter.note(t("wizard.skills.noDepsToInstall"));
   }
 
   for (const skill of missing) {

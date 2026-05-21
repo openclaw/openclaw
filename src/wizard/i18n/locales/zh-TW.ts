@@ -318,6 +318,7 @@ export const zh_TW = {
       setEnv: "為 {name} 設定 {env}？",
       skipDepsHint: "繼續，不安裝依賴",
       statusTitle: "技能狀態",
+      noDepsToInstall: "沒有需要安裝的缺失技能依賴。\n要檢查可用技能，請運行：openclaw skills list --verbose",
     },
     channels: {
       account: "{label} 帳號",
