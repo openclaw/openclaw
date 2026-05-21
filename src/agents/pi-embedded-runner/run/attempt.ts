@@ -90,6 +90,10 @@ import {
 } from "../../skills.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
+import {
+  readEnvConfig as readToolArgSanitizeEnvConfig,
+  wrapStreamFnSanitizeToolCallArguments,
+} from "../../tool-arg-sanitize-guard.js";
 import { sanitizeToolCallIdsForCloudCodeAssist } from "../../tool-call-id.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../../tool-fs-policy.js";
 import { normalizeToolName } from "../../tool-policy.js";
@@ -2053,6 +2057,19 @@ export async function runEmbeddedAttempt(
         activeSession.agent.streamFn = wrapStreamFnDecodeXaiToolCallArguments(
           activeSession.agent.streamFn,
         );
+      }
+
+      // P2.18: tool-arg sanitize guard (sentinel/html-tag/balance-quote).
+      // Runs on every provider; gated by
+      // OPENCLAW_TOOL_ARG_SANITIZE_GUARD_ENABLED (default on).
+      {
+        const __p218cfg = readToolArgSanitizeEnvConfig();
+        if (__p218cfg.enabled) {
+          activeSession.agent.streamFn = wrapStreamFnSanitizeToolCallArguments(
+            activeSession.agent.streamFn as unknown as (...args: unknown[]) => unknown,
+            __p218cfg,
+          ) as typeof activeSession.agent.streamFn;
+        }
       }
 
       if (anthropicPayloadLogger) {

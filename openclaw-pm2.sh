@@ -22,6 +22,18 @@ export OPENCLAW_HALLUCINATION_GUARD_CHAT_ID=8324629902
 export OPENCLAW_HALLUCINATION_GUARD_API=http://127.0.0.1:9087/api/send
 export OPENCLAW_HALLUCINATION_GUARD_LOG_LEVEL=info
 
+# P2.18 (2026-05-21): tool_call arguments sanitize guard + false-negative
+# retry-promise watcher. 13:45 KST 사고 (gemma assistantText 채널의
+# 마크업 토큰 "<<|...|>" / "</code>" 가 tool_call args 채널까지
+# 전파되어 shell syntax error 박제 실패) 대응.
+export OPENCLAW_TOOL_ARG_SANITIZE_GUARD_ENABLED=1
+export OPENCLAW_TOOL_ARG_SANITIZE_REMOVE_SENTINEL=1
+export OPENCLAW_TOOL_ARG_SANITIZE_REMOVE_HTML_TAGS=1
+export OPENCLAW_TOOL_ARG_SANITIZE_BALANCE_QUOTE=1
+export OPENCLAW_FALSE_NEGATIVE_GUARD_ENABLED=1
+export OPENCLAW_FALSE_NEGATIVE_GUARD_MODE=warn
+export OPENCLAW_FALSE_NEGATIVE_GUARD_WINDOW_MS=10000
+
 # P6-3a 옵션 B (2026-05-18): SIGUSR1 가 in-process restart 로 전환되어
 # plugins.allow 등 plugins.* 변경 시 게이트웨이 PID 유지 (세션 단절 회피).
 # 근거: src/infra/process-respawn.ts:29, src/entry.ts:84
