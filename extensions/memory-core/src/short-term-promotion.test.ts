@@ -1166,14 +1166,6 @@ describe("short-term promotion", () => {
 
   it("does not record placeholder-only grounded candidates for promotion", async () => {
     await withTempWorkspace(async (workspaceDir) => {
-      await writeDailyMemoryNote(workspaceDir, "2026-04-18", [
-        "## Tagesnotizen",
-        "-",
-        "",
-        "## Entscheidungen",
-        "-",
-      ]);
-
       await recordGroundedShortTermCandidates({
         workspaceDir,
         query: "__dreaming_grounded_backfill__",
@@ -1192,20 +1184,28 @@ describe("short-term promotion", () => {
         nowMs: Date.parse("2026-04-18T10:00:00.000Z"),
       });
 
-      const ranked = await rankShortTermPromotionCandidates({
-        workspaceDir,
-        minScore: 0,
-        minRecallCount: 0,
-        minUniqueQueries: 0,
-      });
-
-      expect(ranked).toStrictEqual([]);
+      await expectEnoent(fs.readFile(resolveShortTermRecallStorePath(workspaceDir), "utf-8"));
     });
   });
 
-  it("does not rank or apply already stored placeholder snippets", async () => {
+  it("skips stored placeholders while allowing durable heading bullets", async () => {
     await withTempWorkspace(async (workspaceDir) => {
-      await writeDailyMemoryNote(workspaceDir, "2026-04-18", ["## Tagesnotizen", "-"]);
+      const entry = (snippet: string, line: number) => ({
+        key: snippet,
+        path: "memory/2026-04-18.md",
+        startLine: line,
+        endLine: line,
+        source: "memory",
+        snippet,
+        recallCount: 3,
+        totalScore: 2.8,
+        maxScore: 0.95,
+      });
+      await writeDailyMemoryNote(workspaceDir, "2026-04-18", [
+        "## Tagesnotizen",
+        "- ## Entscheidungen",
+        "- ## Decision: Move backups to S3",
+      ]);
       await fs.writeFile(
         resolveShortTermRecallStorePath(workspaceDir),
         JSON.stringify(
@@ -1213,24 +1213,8 @@ describe("short-term promotion", () => {
             version: 1,
             updatedAt: "2026-04-18T10:00:00.000Z",
             entries: {
-              placeholder: {
-                key: "placeholder",
-                path: "memory/2026-04-18.md",
-                startLine: 2,
-                endLine: 2,
-                source: "memory",
-                snippet: "- ## Entscheidungen",
-                recallCount: 3,
-                dailyCount: 0,
-                groundedCount: 0,
-                totalScore: 2.8,
-                maxScore: 0.95,
-                firstRecalledAt: "2026-04-18T10:00:00.000Z",
-                lastRecalledAt: "2026-04-18T10:00:00.000Z",
-                queryHashes: ["a", "b"],
-                recallDays: ["2026-04-18"],
-                conceptTags: [],
-              },
+              placeholder: entry("- ## Entscheidungen", 2),
+              durable: entry("- ## Decision: Move backups to S3", 3),
             },
           },
           null,
@@ -1245,50 +1229,21 @@ describe("short-term promotion", () => {
         minRecallCount: 0,
         minUniqueQueries: 0,
       });
-      expect(ranked).toStrictEqual([]);
+      expect(ranked).toHaveLength(1);
+      expect(ranked[0]?.snippet).toBe("- ## Decision: Move backups to S3");
 
       const applied = await applyShortTermPromotions({
         workspaceDir,
         minScore: 0,
         minRecallCount: 0,
         minUniqueQueries: 0,
-        candidates: [
-          {
-            key: "manual-placeholder",
-            path: "memory/2026-04-18.md",
-            startLine: 2,
-            endLine: 2,
-            source: "memory",
-            snippet: "- ## Entscheidungen",
-            recallCount: 3,
-            dailyCount: 0,
-            groundedCount: 0,
-            signalCount: 3,
-            avgScore: 0.92,
-            maxScore: 0.95,
-            uniqueQueries: 2,
-            firstRecalledAt: "2026-04-18T10:00:00.000Z",
-            lastRecalledAt: "2026-04-18T10:00:00.000Z",
-            ageDays: 0,
-            score: 0.9,
-            recallDays: ["2026-04-18"],
-            conceptTags: [],
-            components: {
-              frequency: 1,
-              relevance: 0.9,
-              diversity: 1,
-              recency: 1,
-              consolidation: 1,
-              conceptual: 0,
-            },
-          },
-        ],
+        candidates: ranked,
       });
 
-      expect(applied.applied).toBe(0);
-      await expect(
-        fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"),
-      ).rejects.toMatchObject({ code: "ENOENT" });
+      expect(applied.applied).toBe(1);
+      const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+      expect(memoryText).toContain("- ## Decision: Move backups to S3");
+      expect(memoryText).not.toContain("- ## Entscheidungen");
     });
   });
 

@@ -319,27 +319,6 @@ function isContaminatedDreamingSnippet(raw: string): boolean {
   return hasNarrativeLead && hasConfidence && hasEvidence && hasStatus && hasRecalls;
 }
 
-function stripMarkdownLeadingMarkers(raw: string): string {
-  return raw.replace(/^(?:[-*+>]\s*)+/, "").trim();
-}
-
-function markdownHeadingHasInlinePayload(raw: string): boolean {
-  const headingText = raw.replace(/^#{1,6}\s+/, "").trim();
-  return /:\s*\S/.test(headingText);
-}
-
-function isMarkdownMarkerOnlyLine(raw: string): boolean {
-  const line = raw.trim();
-  if (!line) {
-    return true;
-  }
-  const withoutLeadingMarkers = stripMarkdownLeadingMarkers(line);
-  if (!withoutLeadingMarkers) {
-    return true;
-  }
-  return !/[\p{L}\p{N}]/u.test(withoutLeadingMarkers);
-}
-
 function isMarkdownSkeletonSnippet(raw: string): boolean {
   const nonEmptyLines = raw
     .split(/\r?\n/)
@@ -351,13 +330,13 @@ function isMarkdownSkeletonSnippet(raw: string): boolean {
 
   let hasPlaceholderLine = false;
   for (const line of nonEmptyLines) {
-    if (isMarkdownMarkerOnlyLine(line)) {
+    const withoutLeadingMarkers = line.replace(/^(?:[-*+>]\s*)+/, "").trim();
+    if (!withoutLeadingMarkers || !/[\p{L}\p{N}]/u.test(withoutLeadingMarkers)) {
       hasPlaceholderLine = true;
       continue;
     }
-    const withoutLeadingMarkers = stripMarkdownLeadingMarkers(line);
     if (/^#{1,6}\s+\S/.test(withoutLeadingMarkers)) {
-      if (markdownHeadingHasInlinePayload(withoutLeadingMarkers)) {
+      if (/^#{1,6}\s+.+:\s*\S/.test(withoutLeadingMarkers)) {
         return false;
       }
       if (withoutLeadingMarkers !== line) {
@@ -379,9 +358,6 @@ function isUnpromotableShortTermSnippet(raw: string): boolean {
     return true;
   }
   if (isContaminatedDreamingSnippet(snippet)) {
-    return true;
-  }
-  if (isMarkdownMarkerOnlyLine(snippet)) {
     return true;
   }
   return isMarkdownSkeletonSnippet(raw);
@@ -1484,12 +1460,6 @@ function compareCandidateWindow(
   windowSnippet: string,
 ): { matched: boolean; quality: number } {
   if (!targetSnippet || !windowSnippet) {
-    return { matched: false, quality: 0 };
-  }
-  if (
-    isUnpromotableShortTermSnippet(targetSnippet) ||
-    isUnpromotableShortTermSnippet(windowSnippet)
-  ) {
     return { matched: false, quality: 0 };
   }
   if (windowSnippet === targetSnippet) {
