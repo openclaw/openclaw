@@ -228,8 +228,13 @@ save_config() {
 
     mkdir -p "$CONFIG_DIR"
 
+    EXISTING_TIMEZONE=""
+    EXISTING_TIMEZONE_MICROSOFT=""
+
     if [ -f "$CONFIG_FILE" ]; then
         cp "$CONFIG_FILE" "$CONFIG_FILE.bak.$(date +%Y%m%d-%H%M%S)"
+        EXISTING_TIMEZONE="$(jq -r '.timezone // empty' "$CONFIG_FILE" 2>/dev/null || true)"
+        EXISTING_TIMEZONE_MICROSOFT="$(jq -r '.timezone_microsoft // empty' "$CONFIG_FILE" 2>/dev/null || true)"
     fi
 
     echo ""
@@ -238,11 +243,13 @@ save_config() {
     jq -n \
         --arg client_id "$CLIENT_ID" \
         --arg client_secret "$CLIENT_SECRET" \
-        --arg timezone "" \
+        --arg timezone "$EXISTING_TIMEZONE" \
+        --arg timezone_microsoft "$EXISTING_TIMEZONE_MICROSOFT" \
         '{
             "client_id": $client_id,
             "client_secret": $client_secret,
-            "timezone": $timezone
+            "timezone": $timezone,
+            "timezone_microsoft": $timezone_microsoft
         }' > "$CONFIG_FILE"
 
     chmod 600 "$CONFIG_FILE"
@@ -338,12 +345,16 @@ test_connection() {
         -H "Authorization: Bearer $ACCESS_TOKEN")"
 
     if echo "$MBOX_RESPONSE" | jq -e '.value' >/dev/null 2>&1; then
-        TIMEZONE="$(echo "$MBOX_RESPONSE" | jq -r '.value')"
-        jq --arg tz "$TIMEZONE" '.timezone = $tz' "$CONFIG_FILE" > /tmp/outlook-config.json \
+        TIMEZONE_MICROSOFT="$(echo "$MBOX_RESPONSE" | jq -r '.value')"
+
+        jq --arg tz "$TIMEZONE_MICROSOFT" '
+            .timezone_microsoft = $tz
+        ' "$CONFIG_FILE" > /tmp/outlook-config.json \
             && mv /tmp/outlook-config.json "$CONFIG_FILE"
+
         chmod 600 "$CONFIG_FILE"
         echo -e "${GREEN}✓ Mailbox settings (MailboxSettings.Read)${NC}"
-        echo -e "    Timezone cached: ${BLUE}$TIMEZONE${NC}"
+        echo -e "    Microsoft timezone cached: ${BLUE}$TIMEZONE_MICROSOFT${NC}"
     else
         echo -e "${YELLOW}⚠ Mailbox settings access failed (MailboxSettings.Read)${NC}"
         echo "$MBOX_RESPONSE" | jq '.error.message // .'

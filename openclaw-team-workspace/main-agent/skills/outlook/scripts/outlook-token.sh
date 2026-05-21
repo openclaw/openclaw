@@ -59,11 +59,13 @@ case "${1:-}" in
             echo "Token refreshed successfully"
 
             NEW_TOKEN="$(jq -r '.access_token' "$CREDS_FILE")"
-            TIMEZONE="$(curl -s "https://graph.microsoft.com/v1.0/me/mailboxSettings/timeZone" \
+            TIMEZONE_MICROSOFT="$(curl -s "https://graph.microsoft.com/v1.0/me/mailboxSettings/timeZone" \
                 -H "Authorization: Bearer $NEW_TOKEN" | jq -r '.value // empty')"
 
-            if [ -n "$TIMEZONE" ] && [ "$TIMEZONE" != "null" ]; then
-                jq --arg tz "$TIMEZONE" '.timezone = $tz' "$CONFIG_FILE" > /tmp/outlook-config.json \
+            if [ -n "$TIMEZONE_MICROSOFT" ] && [ "$TIMEZONE_MICROSOFT" != "null" ]; then
+                jq --arg tz "$TIMEZONE_MICROSOFT" '
+                    .timezone_microsoft = $tz
+                ' "$CONFIG_FILE" > /tmp/outlook-config.json \
                     && mv /tmp/outlook-config.json "$CONFIG_FILE"
                 chmod 600 "$CONFIG_FILE"
             fi

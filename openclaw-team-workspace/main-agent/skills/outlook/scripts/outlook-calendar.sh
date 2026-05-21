@@ -24,7 +24,7 @@ normalize_dt() {
 }
 
 get_timezone() {
-    TZ_VALUE=$(jq -r '.timezone // empty' "$CONFIG_FILE" 2>/dev/null)
+    TZ_VALUE=$(jq -r '.timezone_microsoft // .timezone // empty' "$CONFIG_FILE" 2>/dev/null)
     if [ -z "$TZ_VALUE" ] || [ "$TZ_VALUE" = "null" ]; then
         printf '%s' "UTC"
     else

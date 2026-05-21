@@ -4,6 +4,7 @@
 
 CONFIG_DIR="$HOME/.outlook-mcp"
 CREDS_FILE="$CONFIG_DIR/credentials.json"
+CONFIG_FILE="$CONFIG_DIR/config.json"
 
 # Load token
 ACCESS_TOKEN=$(jq -r '.access_token' "$CREDS_FILE" 2>/dev/null)
@@ -14,6 +15,35 @@ if [ -z "$ACCESS_TOKEN" ] || [ "$ACCESS_TOKEN" = "null" ]; then
 fi
 
 API="https://graph.microsoft.com/v1.0/me"
+
+get_timezone() {
+    TZ_VALUE=$(jq -r '.timezone // empty' "$CONFIG_FILE" 2>/dev/null)
+    if [ -z "$TZ_VALUE" ] || [ "$TZ_VALUE" = "null" ]; then
+        printf '%s' "UTC"
+    else
+        printf '%s' "$TZ_VALUE"
+    fi
+}
+
+TIMEZONE=$(get_timezone)
+export TZ="$TIMEZONE"
+
+# jq helper:
+# - Microsoft Graph mail timestamps are returned as UTC strings, usually ending in Z.
+# - This converts them to the configured IANA timezone via jq's strflocaltime().
+# - If parsing fails, it returns the original timestamp instead of breaking output.
+JQ_TIME_DEF='
+def graphdate:
+    if . == null or . == "" then
+        ""
+    else
+        try (
+            sub("\\.[0-9]+Z$"; "Z")
+            | fromdateiso8601
+            | strflocaltime("%Y-%m-%d %H:%M")
+        ) catch .
+    end;
+'
 
 # Folder-scoped base URLs
 INBOX="$API/mailFolders/inbox/messages"
@@ -28,21 +58,64 @@ case "$1" in
         # List inbox messages (received/got emails only)
         COUNT=${2:-10}
         curl -s "$INBOX?\$top=$COUNT&\$orderby=receivedDateTime%20desc&\$select=id,subject,from,receivedDateTime,isRead" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" | jq '.value | to_entries | .[] | {n: (.key + 1), subject: .value.subject, from: .value.from.emailAddress.address, date: .value.receivedDateTime[0:16], read: .value.isRead, id: .value.id[-20:]}'
+            -H "Authorization: Bearer $ACCESS_TOKEN" |
+            jq "$JQ_TIME_DEF"'
+                if .value then
+                    .value | to_entries | .[] | {
+                        n: (.key + 1),
+                        subject: .value.subject,
+                        from: .value.from.emailAddress.address,
+                        date: (.value.receivedDateTime | graphdate),
+                        timezone: env.TZ,
+                        read: .value.isRead,
+                        id: .value.id[-20:]
+                    }
+                else
+                    {error: .error.message}
+                end
+            '
         ;;
 
     unread)
         # List unread messages in inbox only
         COUNT=${2:-20}
         curl -s "$INBOX?\$filter=isRead%20eq%20false&\$top=$COUNT&\$orderby=receivedDateTime%20desc&\$select=id,subject,from,receivedDateTime" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" | jq '.value | to_entries | .[] | {n: (.key + 1), subject: .value.subject, from: .value.from.emailAddress.address, date: .value.receivedDateTime[0:16], id: .value.id[-20:]}'
+            -H "Authorization: Bearer $ACCESS_TOKEN" |
+            jq "$JQ_TIME_DEF"'
+                if .value then
+                    .value | to_entries | .[] | {
+                        n: (.key + 1),
+                        subject: .value.subject,
+                        from: .value.from.emailAddress.address,
+                        date: (.value.receivedDateTime | graphdate),
+                        timezone: env.TZ,
+                        id: .value.id[-20:]
+                    }
+                else
+                    {error: .error.message}
+                end
+            '
         ;;
 
     sent)
         # List sent emails
         COUNT=${2:-10}
         curl -s "$SENT?\$top=$COUNT&\$orderby=sentDateTime%20desc&\$select=id,subject,toRecipients,sentDateTime" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" | jq '.value | to_entries | .[] | {n: (.key + 1), subject: .value.subject, to: .value.toRecipients[0].emailAddress.address, date: .value.sentDateTime[0:16], id: .value.id[-20:]}'
+            -H "Authorization: Bearer $ACCESS_TOKEN" |
+            jq "$JQ_TIME_DEF"'
+                if .value then
+                    .value | to_entries | .[] | {
+                        n: (.key + 1),
+                        subject: .value.subject,
+                        to: .value.toRecipients[0].emailAddress.address,
+                        date: (.value.sentDateTime | graphdate),
+                        timezone: env.TZ,
+                        id: .value.id[-20:]
+                    }
+                else
+                    {error: .error.message}
+                end
+            '
         ;;
 
     search)
@@ -50,7 +123,21 @@ case "$1" in
         QUERY="$2"
         COUNT=${3:-20}
         curl -s "$INBOX?\$search=\"$QUERY\"&\$top=$COUNT&\$select=id,subject,from,receivedDateTime" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" | jq '.value | to_entries | .[] | {n: (.key + 1), subject: .value.subject, from: .value.from.emailAddress.address, date: .value.receivedDateTime[0:16], id: .value.id[-20:]}'
+            -H "Authorization: Bearer $ACCESS_TOKEN" |
+            jq "$JQ_TIME_DEF"'
+                if .value then
+                    .value | to_entries | .[] | {
+                        n: (.key + 1),
+                        subject: .value.subject,
+                        from: .value.from.emailAddress.address,
+                        date: (.value.receivedDateTime | graphdate),
+                        timezone: env.TZ,
+                        id: .value.id[-20:]
+                    }
+                else
+                    {error: .error.message}
+                end
+            '
         ;;
 
     search-sent)
@@ -58,15 +145,44 @@ case "$1" in
         QUERY="$2"
         COUNT=${3:-20}
         curl -s "$SENT?\$search=\"$QUERY\"&\$top=$COUNT&\$select=id,subject,toRecipients,sentDateTime" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" | jq '.value | to_entries | .[] | {n: (.key + 1), subject: .value.subject, to: .value.toRecipients[0].emailAddress.address, date: .value.sentDateTime[0:16], id: .value.id[-20:]}'
+            -H "Authorization: Bearer $ACCESS_TOKEN" |
+            jq "$JQ_TIME_DEF"'
+                if .value then
+                    .value | to_entries | .[] | {
+                        n: (.key + 1),
+                        subject: .value.subject,
+                        to: .value.toRecipients[0].emailAddress.address,
+                        date: (.value.sentDateTime | graphdate),
+                        timezone: env.TZ,
+                        id: .value.id[-20:]
+                    }
+                else
+                    {error: .error.message}
+                end
+            '
         ;;
 
     search-all)
         # Search across ALL folders (global) — use only when folder is unknown
         QUERY="$2"
         COUNT=${3:-20}
-        curl -s "$API/messages?\$search=\"$QUERY\"&\$top=$COUNT&\$select=id,subject,from,toRecipients,receivedDateTime" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" | jq '.value | to_entries | .[] | {n: (.key + 1), subject: .value.subject, from: .value.from.emailAddress.address, date: .value.receivedDateTime[0:16], id: .value.id[-20:]}'
+        curl -s "$API/messages?\$search=\"$QUERY\"&\$top=$COUNT&\$select=id,subject,from,toRecipients,receivedDateTime,sentDateTime" \
+            -H "Authorization: Bearer $ACCESS_TOKEN" |
+            jq "$JQ_TIME_DEF"'
+                if .value then
+                    .value | to_entries | .[] | {
+                        n: (.key + 1),
+                        subject: .value.subject,
+                        from: (.value.from.emailAddress.address // ""),
+                        to: (.value.toRecipients[0].emailAddress.address // ""),
+                        date: ((.value.receivedDateTime // .value.sentDateTime) | graphdate),
+                        timezone: env.TZ,
+                        id: .value.id[-20:]
+                    }
+                else
+                    {error: .error.message}
+                end
+            '
         ;;
 
     search-drafts)
@@ -74,7 +190,21 @@ case "$1" in
         QUERY="$2"
         COUNT=${3:-20}
         curl -s "$DRAFTS?\$search=\"$QUERY\"&\$top=$COUNT&\$select=id,subject,toRecipients,createdDateTime" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" | jq '.value | to_entries | .[] | {n: (.key + 1), subject: .value.subject, to: (.value.toRecipients[0].emailAddress.address // "no recipient"), date: .value.createdDateTime[0:16], id: .value.id[-20:]}'
+            -H "Authorization: Bearer $ACCESS_TOKEN" |
+            jq "$JQ_TIME_DEF"'
+                if .value then
+                    .value | to_entries | .[] | {
+                        n: (.key + 1),
+                        subject: .value.subject,
+                        to: (.value.toRecipients[0].emailAddress.address // "no recipient"),
+                        date: (.value.createdDateTime | graphdate),
+                        timezone: env.TZ,
+                        id: .value.id[-20:]
+                    }
+                else
+                    {error: .error.message}
+                end
+            '
         ;;
 
     search-deleted)
@@ -82,7 +212,21 @@ case "$1" in
         QUERY="$2"
         COUNT=${3:-20}
         curl -s "$DELETED?\$search=\"$QUERY\"&\$top=$COUNT&\$select=id,subject,from,receivedDateTime" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" | jq '.value | to_entries | .[] | {n: (.key + 1), subject: .value.subject, from: .value.from.emailAddress.address, date: .value.receivedDateTime[0:16], id: .value.id[-20:]}'
+            -H "Authorization: Bearer $ACCESS_TOKEN" |
+            jq "$JQ_TIME_DEF"'
+                if .value then
+                    .value | to_entries | .[] | {
+                        n: (.key + 1),
+                        subject: .value.subject,
+                        from: .value.from.emailAddress.address,
+                        date: (.value.receivedDateTime | graphdate),
+                        timezone: env.TZ,
+                        id: .value.id[-20:]
+                    }
+                else
+                    {error: .error.message}
+                end
+            '
         ;;
 
     from)
@@ -90,7 +234,22 @@ case "$1" in
         SENDER="$2"
         COUNT=${3:-20}
         curl -s "$INBOX?\$search=\"from:$SENDER\"&\$top=$COUNT&\$select=id,subject,from,receivedDateTime,isRead" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" | jq 'if .value then (.value | to_entries | .[] | {n: (.key + 1), subject: .value.subject, from: .value.from.emailAddress.address, date: .value.receivedDateTime[0:16], read: .value.isRead, id: .value.id[-20:]}) else {error: .error.message} end'
+            -H "Authorization: Bearer $ACCESS_TOKEN" |
+            jq "$JQ_TIME_DEF"'
+                if .value then
+                    .value | to_entries | .[] | {
+                        n: (.key + 1),
+                        subject: .value.subject,
+                        from: .value.from.emailAddress.address,
+                        date: (.value.receivedDateTime | graphdate),
+                        timezone: env.TZ,
+                        read: .value.isRead,
+                        id: .value.id[-20:]
+                    }
+                else
+                    {error: .error.message}
+                end
+            '
         ;;
 
     to)
@@ -98,7 +257,21 @@ case "$1" in
         RECIPIENT="$2"
         COUNT=${3:-20}
         curl -s "$SENT?\$search=\"to:$RECIPIENT\"&\$top=$COUNT&\$select=id,subject,toRecipients,sentDateTime" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" | jq 'if .value then (.value | to_entries | .[] | {n: (.key + 1), subject: .value.subject, to: .value.toRecipients[0].emailAddress.address, date: .value.sentDateTime[0:16], id: .value.id[-20:]}) else {error: .error.message} end'
+            -H "Authorization: Bearer $ACCESS_TOKEN" |
+            jq "$JQ_TIME_DEF"'
+                if .value then
+                    .value | to_entries | .[] | {
+                        n: (.key + 1),
+                        subject: .value.subject,
+                        to: .value.toRecipients[0].emailAddress.address,
+                        date: (.value.sentDateTime | graphdate),
+                        timezone: env.TZ,
+                        id: .value.id[-20:]
+                    }
+                else
+                    {error: .error.message}
+                end
+            '
         ;;
 
     read)
@@ -112,14 +285,32 @@ case "$1" in
             exit 1
         fi
 
-        curl -s "$API/messages/$FULL_ID?\$select=subject,from,receivedDateTime,body,toRecipients" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" | jq '{
-                subject,
-                from: .from.emailAddress,
-                to: [.toRecipients[].emailAddress.address],
-                date: .receivedDateTime,
-                body: (if .body.contentType == "html" then (.body.content | gsub("<[^>]*>"; "") | gsub("\\s+"; " ") | gsub("&nbsp;"; " ") | .[0:2000]) else .body.content[0:2000] end)
-            }'
+        curl -s "$API/messages/$FULL_ID?\$select=subject,from,receivedDateTime,sentDateTime,createdDateTime,body,toRecipients" \
+            -H "Authorization: Bearer $ACCESS_TOKEN" |
+            jq "$JQ_TIME_DEF"'
+                if .error then
+                    .error
+                else
+                    {
+                        subject,
+                        from: .from.emailAddress,
+                        to: [.toRecipients[].emailAddress.address],
+                        date: ((.receivedDateTime // .sentDateTime // .createdDateTime) | graphdate),
+                        timezone: env.TZ,
+                        body: (
+                            if .body.contentType == "html" then
+                                (.body.content
+                                    | gsub("<[^>]*>"; "")
+                                    | gsub("\\s+"; " ")
+                                    | gsub("&nbsp;"; " ")
+                                    | .[0:2000])
+                            else
+                                .body.content[0:2000]
+                            end
+                        )
+                    }
+                end
+            '
         ;;
 
     mark-read)
@@ -330,7 +521,21 @@ case "$1" in
     drafts)
         COUNT=${2:-10}
         curl -s "$DRAFTS?\$top=$COUNT&\$select=id,subject,toRecipients,createdDateTime" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" | jq '.value | to_entries | .[] | {n: (.key + 1), subject: .value.subject, to: (.value.toRecipients[0].emailAddress.address // "no recipient"), date: .value.createdDateTime[0:16], id: .value.id[-20:]}'
+            -H "Authorization: Bearer $ACCESS_TOKEN" |
+            jq "$JQ_TIME_DEF"'
+                if .value then
+                    .value | to_entries | .[] | {
+                        n: (.key + 1),
+                        subject: .value.subject,
+                        to: (.value.toRecipients[0].emailAddress.address // "no recipient"),
+                        date: (.value.createdDateTime | graphdate),
+                        timezone: env.TZ,
+                        id: .value.id[-20:]
+                    }
+                else
+                    {error: .error.message}
+                end
+            '
         ;;
 
     draft-attachment)
@@ -409,8 +614,6 @@ case "$1" in
 
         echo "{\"status\": \"draft created\", \"subject\": \"$SUBJECT\", \"to\": \"$TO\", \"cc\": \"$CC\", \"attachment\": \"$FILENAME\", \"id\": \"${DRAFT_ID: -20}\"}"
         ;;
-
-
 
     reply-draft-attachment)
         MSG_ID="$2"; BODY="$3"; FILE="$4"; CC="${5:-}"; BCC="${6:-}"
@@ -543,13 +746,41 @@ case "$1" in
     focused)
         COUNT=${2:-10}
         curl -s "$INBOX?\$filter=inferenceClassification%20eq%20'focused'&\$top=$COUNT&\$orderby=receivedDateTime%20desc&\$select=id,subject,from,receivedDateTime" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" | jq 'if .value then (.value | to_entries | .[] | {n: (.key + 1), subject: .value.subject, from: .value.from.emailAddress.address, date: .value.receivedDateTime[0:16], id: .value.id[-20:]}) else {info: "Focused inbox not available or empty"} end'
+            -H "Authorization: Bearer $ACCESS_TOKEN" |
+            jq "$JQ_TIME_DEF"'
+                if .value then
+                    .value | to_entries | .[] | {
+                        n: (.key + 1),
+                        subject: .value.subject,
+                        from: .value.from.emailAddress.address,
+                        date: (.value.receivedDateTime | graphdate),
+                        timezone: env.TZ,
+                        id: .value.id[-20:]
+                    }
+                else
+                    {info: "Focused inbox not available or empty"}
+                end
+            '
         ;;
 
     other)
         COUNT=${2:-10}
         curl -s "$INBOX?\$filter=inferenceClassification%20eq%20'other'&\$top=$COUNT&\$orderby=receivedDateTime%20desc&\$select=id,subject,from,receivedDateTime" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" | jq 'if .value then (.value | to_entries | .[] | {n: (.key + 1), subject: .value.subject, from: .value.from.emailAddress.address, date: .value.receivedDateTime[0:16], id: .value.id[-20:]}) else {info: "Other inbox not available or empty"} end'
+            -H "Authorization: Bearer $ACCESS_TOKEN" |
+            jq "$JQ_TIME_DEF"'
+                if .value then
+                    .value | to_entries | .[] | {
+                        n: (.key + 1),
+                        subject: .value.subject,
+                        from: .value.from.emailAddress.address,
+                        date: (.value.receivedDateTime | graphdate),
+                        timezone: env.TZ,
+                        id: .value.id[-20:]
+                    }
+                else
+                    {info: "Other inbox not available or empty"}
+                end
+            '
         ;;
 
     thread)
@@ -568,13 +799,44 @@ case "$1" in
         fi
 
         echo "Searching thread by keyword: $KEYWORD"
+        echo "Timezone: $TIMEZONE"
+
         # Search both inbox and sent for full thread picture
         echo "=== Inbox ==="
         curl -s "$INBOX?\$search=\"$KEYWORD\"&\$top=20&\$select=id,subject,from,receivedDateTime" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" | jq '.value | to_entries | .[] | {n: (.key + 1), subject: .value.subject, from: .value.from.emailAddress.address, date: .value.receivedDateTime[0:16], id: .value.id[-20:]}'
+            -H "Authorization: Bearer $ACCESS_TOKEN" |
+            jq "$JQ_TIME_DEF"'
+                if .value then
+                    .value | to_entries | .[] | {
+                        n: (.key + 1),
+                        subject: .value.subject,
+                        from: .value.from.emailAddress.address,
+                        date: (.value.receivedDateTime | graphdate),
+                        timezone: env.TZ,
+                        id: .value.id[-20:]
+                    }
+                else
+                    {error: .error.message}
+                end
+            '
+
         echo "=== Sent ==="
         curl -s "$SENT?\$search=\"$KEYWORD\"&\$top=20&\$select=id,subject,toRecipients,sentDateTime" \
-            -H "Authorization: Bearer $ACCESS_TOKEN" | jq '.value | to_entries | .[] | {n: (.key + 1), subject: .value.subject, to: .value.toRecipients[0].emailAddress.address, date: .value.sentDateTime[0:16], id: .value.id[-20:]}'
+            -H "Authorization: Bearer $ACCESS_TOKEN" |
+            jq "$JQ_TIME_DEF"'
+                if .value then
+                    .value | to_entries | .[] | {
+                        n: (.key + 1),
+                        subject: .value.subject,
+                        to: .value.toRecipients[0].emailAddress.address,
+                        date: (.value.sentDateTime | graphdate),
+                        timezone: env.TZ,
+                        id: .value.id[-20:]
+                    }
+                else
+                    {error: .error.message}
+                end
+            '
         ;;
 
     categories)
@@ -723,5 +985,8 @@ case "$1" in
         echo ""
         echo "INFO:"
         echo "  stats                            - Inbox statistics"
+        echo ""
+        echo "TIMEZONE:"
+        echo "  Uses $CONFIG_FILE field .timezone, currently: $TIMEZONE"
         ;;
 esac
