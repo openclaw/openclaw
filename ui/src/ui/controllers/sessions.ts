@@ -14,7 +14,15 @@ import {
   isMissingOperatorReadScopeError,
 } from "./scope-errors.ts";
 
-export type SessionsState = {
+type SessionsChatRunState = {
+  sessionKey?: string;
+  chatRunId?: string | null;
+  chatStream?: string | null;
+  chatStreamStartedAt?: number | null;
+  requestUpdate?: () => void;
+};
+
+export type SessionsState = SessionsChatRunState & {
   client: GatewayBrowserClient | null;
   connected: boolean;
   sessionsLoading: boolean;
@@ -61,6 +69,32 @@ type SessionsLoadControl = {
 };
 
 const sessionsLoadControls = new WeakMap<object, SessionsLoadControl>();
+
+function hasCurrentChatSession(
+  state: SessionsState,
+): state is SessionsState & { sessionKey: string } {
+  return typeof state.sessionKey === "string" && state.sessionKey.trim() !== "";
+}
+
+function sessionPatchTargetsCurrentChatRun(
+  state: SessionsState & { sessionKey: string },
+  options: { changedSessionKey: string; eventRunId?: string },
+): boolean {
+  if (state.sessionKey !== options.changedSessionKey) {
+    return false;
+  }
+  if (
+    options.eventRunId !== undefined &&
+    state.chatRunId &&
+    state.chatRunId !== options.eventRunId
+  ) {
+    return false;
+  }
+  if (options.eventRunId === undefined && state.chatRunId) {
+    return false;
+  }
+  return true;
+}
 
 const SESSION_EVENT_ROW_FIELDS = [
   "abortedLastRun",
@@ -270,7 +304,7 @@ async function runCompactionMutation<T>(
 
 export type SessionsChangedApplyResult =
   | { applied: false }
-  | { applied: true; change: "deleted" | "inserted" | "updated" };
+  | { applied: true; change: "deleted" | "inserted" | "updated"; clearedChatRun?: boolean };
 
 export function applySessionsChangedEvent(
   state: SessionsState,
@@ -354,17 +388,32 @@ export function applySessionsChangedEvent(
       : [nextRow, ...previousRows];
   const sessions = nextRows.toSorted(compareSessionRowsByUpdatedAt);
   const eventTs = typeof payload.ts === "number" && Number.isFinite(payload.ts) ? payload.ts : null;
+  const eventRunId =
+    typeof payload.clientRunId === "string" && payload.clientRunId.trim()
+      ? payload.clientRunId.trim()
+      : typeof payload.runId === "string" && payload.runId.trim()
+        ? payload.runId.trim()
+        : undefined;
   state.sessionsResult = {
     ...state.sessionsResult,
     ts: eventTs == null ? state.sessionsResult.ts : Math.max(state.sessionsResult.ts, eventTs),
     count: existingIndex >= 0 ? state.sessionsResult.count : state.sessionsResult.count + 1,
     sessions,
   };
+  const clearedChatRun =
+    nextRow.hasActiveRun !== true &&
+    hasCurrentChatSession(state) &&
+    sessionPatchTargetsCurrentChatRun(state, { changedSessionKey: key, eventRunId }) &&
+    reconcileChatRunFromCurrentSessionRow(state);
 
   if (previousCheckpointSignature !== checkpointSummarySignature(nextRow)) {
     invalidateCheckpointCacheForKey(state, key);
   }
-  return { applied: true, change: existingIndex >= 0 ? "updated" : "inserted" };
+  return {
+    applied: true,
+    change: existingIndex >= 0 ? "updated" : "inserted",
+    ...(clearedChatRun ? { clearedChatRun: true } : {}),
+  };
 }
 
 export async function subscribeSessions(state: SessionsState) {
@@ -452,9 +501,9 @@ async function loadSessionsOnce(
     const res = await client.request<SessionsListResult | undefined>("sessions.list", params);
     if (res) {
       state.sessionsResult = projectSessionsResultForAvailability(res, { showArchived });
-      reconcileChatRunFromCurrentSessionRow(
-        state as unknown as Parameters<typeof reconcileChatRunFromCurrentSessionRow>[0],
-      );
+      if (hasCurrentChatSession(state)) {
+        reconcileChatRunFromCurrentSessionRow(state);
+      }
       const nextKeys = new Set(state.sessionsResult.sessions.map((row) => row.key));
       for (const key of Object.keys(state.sessionsCheckpointItemsByKey)) {
         if (!nextKeys.has(key)) {
