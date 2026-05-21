@@ -435,6 +435,101 @@ describe("memory plugin e2e", () => {
     });
   });
 
+  test("skips LanceDB table artifact for URI-backed dbPath", async () => {
+    const workspaceDir = path.join(getDbPath(), "workspace-uri");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "# Remote Durable Memory\n", "utf8");
+    await fs.rm(path.join(process.cwd(), "s3:"), { recursive: true, force: true });
+
+    const loadLanceDbModule = vi.fn(async () => {
+      throw new Error("remote URI dbPath should not be opened while listing public artifacts");
+    });
+
+    try {
+      await withMockedOpenAiMemoryPlugin({
+        ensureGlobalUndiciEnvProxyDispatcher: vi.fn(),
+        loadLanceDbModule,
+        run: async (dynamicMemoryPlugin) => {
+          const registerMemoryCapability = vi.fn();
+          const resolvePath = vi.fn((p: string) => p);
+          const logger = {
+            info: vi.fn(),
+            warn: vi.fn(),
+            error: vi.fn(),
+            debug: vi.fn(),
+          };
+          const mockApi = {
+            id: "memory-lancedb",
+            name: "Memory (LanceDB)",
+            source: "test",
+            config: {},
+            pluginConfig: {
+              embedding: {
+                apiKey: OPENAI_API_KEY,
+                model: "text-embedding-3-small",
+              },
+              dbPath: "s3://memory-bucket/openclaw",
+              storageOptions: {
+                region: "us-east-1",
+                accessKeyId: "test-access-key",
+                secretAccessKey: "test-secret-key",
+              },
+              autoCapture: false,
+              autoRecall: false,
+            },
+            runtime: {},
+            logger,
+            registerTool: vi.fn(),
+            registerCli: vi.fn(),
+            registerService: vi.fn(),
+            registerMemoryCapability,
+            on: vi.fn(),
+            resolvePath,
+          };
+
+          dynamicMemoryPlugin.register(mockApi as any);
+
+          expect(resolvePath).not.toHaveBeenCalled();
+          expect(registerMemoryCapability).toHaveBeenCalledTimes(1);
+          const capability = firstObjectArg(
+            registerMemoryCapability as unknown as MockCallSource,
+            "memory capability",
+          );
+          const provider = capability.publicArtifacts as {
+            listArtifacts(params: { cfg: Record<string, unknown> }): Promise<unknown[]>;
+          };
+          const artifacts = await provider.listArtifacts({
+            cfg: {
+              agents: {
+                list: [{ id: "main", default: true, workspace: workspaceDir }],
+              },
+            },
+          });
+
+          expect(artifacts).toEqual([
+            {
+              kind: "memory-root",
+              workspaceDir,
+              relativePath: "MEMORY.md",
+              absolutePath: path.join(workspaceDir, "MEMORY.md"),
+              agentIds: ["main"],
+              contentType: "markdown",
+            },
+          ]);
+          expect(loadLanceDbModule).not.toHaveBeenCalled();
+          await expect(fs.stat(path.join(process.cwd(), "s3:"))).rejects.toMatchObject({
+            code: "ENOENT",
+          });
+          expect(logger.warn).toHaveBeenCalledWith(
+            "memory-lancedb: skipping LanceDB table wiki bridge artifact for URI dbPath; workspace memory artifacts remain available",
+          );
+        },
+      });
+    } finally {
+      await fs.rm(path.join(process.cwd(), "s3:"), { recursive: true, force: true });
+    }
+  });
+
   test("registers auto-recall on before_prompt_build instead of the legacy hook", () => {
     const on = vi.fn();
     const mockApi = {

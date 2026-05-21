@@ -563,6 +563,10 @@ async function writeFileIfChanged(filePath: string, content: string): Promise<vo
   }
 }
 
+function isFilesystemDbPath(value: string): boolean {
+  return !/^[a-z][a-z0-9+.-]*:\/\//i.test(value);
+}
+
 async function collectLanceDbPublicArtifact(params: {
   resolvedDbPath: string;
   db: MemoryDB;
@@ -777,14 +781,22 @@ export default definePluginEntry({
     };
 
     api.logger.info(`memory-lancedb: plugin registered (db: ${resolvedDbPath}, lazy init)`);
+    let loggedUriArtifactSkip = false;
     if (typeof api.registerMemoryCapability === "function") {
       api.registerMemoryCapability({
         publicArtifacts: {
           async listArtifacts(params) {
-            return [
-              await collectLanceDbPublicArtifact({ resolvedDbPath, db }),
-              ...(await listMemoryWorkspacePublicArtifacts(params)),
-            ];
+            const artifacts: MemoryPluginPublicArtifact[] = [];
+            if (isFilesystemDbPath(resolvedDbPath)) {
+              artifacts.push(await collectLanceDbPublicArtifact({ resolvedDbPath, db }));
+            } else if (!loggedUriArtifactSkip) {
+              loggedUriArtifactSkip = true;
+              api.logger.warn(
+                "memory-lancedb: skipping LanceDB table wiki bridge artifact for URI dbPath; workspace memory artifacts remain available",
+              );
+            }
+            artifacts.push(...(await listMemoryWorkspacePublicArtifacts(params)));
+            return artifacts;
           },
         },
       });
