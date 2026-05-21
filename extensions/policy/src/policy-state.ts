@@ -521,11 +521,37 @@ function collectModelRefsFromAgentAllowlist(
   agents: Record<string, unknown>,
 ): void {
   const defaults = agents.defaults;
-  if (!isRecord(defaults) || !isRecord(defaults.models)) {
+  if (isRecord(defaults) && isRecord(defaults.models)) {
+    collectModelRefsFromModelMap(
+      refs,
+      defaults.models,
+      "oc://openclaw.config/agents/defaults/models",
+    );
+  }
+
+  const list = agents.list;
+  if (!Array.isArray(list)) {
     return;
   }
-  for (const ref of Object.keys(defaults.models)) {
-    pushModelRef(refs, ref, `oc://openclaw.config/agents/defaults/models/${ocPathSegment(ref)}`);
+  for (const [index, agent] of list.entries()) {
+    if (!isRecord(agent) || !isRecord(agent.models)) {
+      continue;
+    }
+    collectModelRefsFromModelMap(
+      refs,
+      agent.models,
+      `oc://openclaw.config/agents/list/#${index}/models`,
+    );
+  }
+}
+
+function collectModelRefsFromModelMap(
+  refs: PolicyModelRefEvidence[],
+  models: Record<string, unknown>,
+  source: string,
+): void {
+  for (const ref of Object.keys(models)) {
+    pushModelRef(refs, ref, `${source}/${ocPathSegment(ref)}`);
   }
 }
 

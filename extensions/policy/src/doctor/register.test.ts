@@ -985,6 +985,44 @@ describe("registerPolicyDoctorChecks", () => {
     ]);
   });
 
+  it("reports per-agent model allowlist keys outside the policy allowlist", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      agents: {
+        list: [
+          {
+            id: "research",
+            models: {
+              "openrouter/*": {},
+            },
+          },
+        ],
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        models: {
+          providers: { allow: ["openai"] },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyDoctorLint(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/models-unapproved-provider",
+        severity: "error",
+        ocPath: 'oc://openclaw.config/agents/list/#0/models/"openrouter/*"',
+        requirement: "oc://policy.jsonc/models/providers/allow",
+      }),
+    ]);
+  });
+
   it("reports configured model providers outside the policy allowlist", async () => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
