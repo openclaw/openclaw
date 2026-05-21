@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import fs, { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import path, { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
@@ -22,6 +22,9 @@ import {
   shouldPrepareExtensionPackageBoundaryArtifacts,
   shouldRunNativeTypeAwareOxlint,
 } from "../../scripts/run-oxlint.mjs";
+import { createScriptTestHarness } from "./test-helpers.js";
+
+const { createTempDir } = createScriptTestHarness();
 
 describe("run-oxlint", () => {
   it("prepares extension package boundary artifacts for normal lint runs", () => {
@@ -609,5 +612,26 @@ describe("run-oxlint", () => {
       skippedTargets: [],
       skippedConfigs: [],
     });
+  });
+
+  it("does not create local heavy-check temp directories when sharded oxlint is refused", () => {
+    const tmpDir = path.join(createTempDir("openclaw-run-oxlint-refused-"), "heavy-tmp");
+    const result = spawnSync(process.execPath, ["scripts/run-oxlint-shards.mjs"], {
+      cwd: path.resolve("."),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        CI: "",
+        GITHUB_ACTIONS: "",
+        OPENCLAW_LOCAL_CHECK_MODE: "",
+        OPENCLAW_LOCAL_HEAVY_CHECK_TMPDIR: tmpDir,
+      },
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "Refusing to start sharded type-aware oxlint on this local host",
+    );
+    expect(fs.existsSync(tmpDir)).toBe(false);
   });
 });

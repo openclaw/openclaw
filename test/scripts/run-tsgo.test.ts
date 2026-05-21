@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -208,6 +208,25 @@ describe("run-tsgo pressure guard", () => {
         },
       }),
     ).toBeNull();
+  });
+
+  it("does not create local heavy-check temp directories when local tsgo is refused", () => {
+    const tmpDir = path.join(createTempDir("openclaw-run-tsgo-refused-"), "heavy-tmp");
+    const result = spawnSync(process.execPath, ["scripts/run-tsgo.mjs", "--extendedDiagnostics"], {
+      cwd: path.resolve("."),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        CI: "",
+        GITHUB_ACTIONS: "",
+        OPENCLAW_LOCAL_CHECK_MODE: "",
+        OPENCLAW_LOCAL_HEAVY_CHECK_TMPDIR: tmpDir,
+      },
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Refusing to start tsgo on this local host");
+    expect(fs.existsSync(tmpDir)).toBe(false);
   });
 
   it("routes local heavy-check temp files into the worktree artifact directory", () => {
