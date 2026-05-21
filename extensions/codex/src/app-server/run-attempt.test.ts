@@ -1164,6 +1164,10 @@ describe("runCodexAppServerAttempt", () => {
     expect((factoryOptions[0] as { authProfileStore?: unknown }).authProfileStore).toBe(
       authProfileStore,
     );
+    expect(
+      (factoryOptions[0] as { retainUnauthorizedOwnerOnlyTools?: unknown })
+        .retainUnauthorizedOwnerOnlyTools,
+    ).toBe(true);
   });
 
   it("uses the tool auth profile store for Codex dynamic tool construction", async () => {
