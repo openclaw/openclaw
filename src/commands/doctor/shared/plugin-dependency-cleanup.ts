@@ -11,6 +11,12 @@ interface CleanupRoot {
   readonly realPath: string;
 }
 
+interface CleanupTarget {
+  readonly kind: "explicit-stage" | "legacy";
+  readonly path: string;
+  readonly rawPath?: string;
+}
+
 function uniqueSorted(values: Iterable<string | null | undefined>): string[] {
   return [
     ...new Set(
@@ -28,6 +34,10 @@ function splitPathList(value: string | undefined): string[] {
         .map((entry) => entry.trim())
         .filter(Boolean)
     : [];
+}
+
+function hasParentPathSegment(value: string): boolean {
+  return value.split(/[\\/]+/u).includes("..");
 }
 
 async function pathExists(targetPath: string): Promise<boolean> {
@@ -154,14 +164,37 @@ async function collectExistingCleanupRoots(
   return roots;
 }
 
+function collectExplicitStageTargets(env: NodeJS.ProcessEnv): CleanupTarget[] {
+  return splitPathList(env.OPENCLAW_PLUGIN_STAGE_DIR).map((entry) => ({
+    kind: "explicit-stage",
+    path: resolveUserPath(entry, env),
+    rawPath: entry,
+  }));
+}
+
 function filterLegacyStaleRootCandidates(
-  targets: readonly string[],
+  targets: readonly CleanupTarget[],
   cleanupRootPaths: readonly string[],
-): { targets: string[]; warnings: string[] } {
-  const safeTargets: string[] = [];
+): { targets: CleanupTarget[]; warnings: string[] } {
+  const safeTargets: CleanupTarget[] = [];
   const warnings: string[] = [];
+  const seen = new Set<string>();
   for (const target of targets) {
-    const targetPath = path.resolve(target);
+    const targetPath = path.resolve(target.path);
+    if (seen.has(targetPath)) {
+      continue;
+    }
+    seen.add(targetPath);
+    if (target.kind === "explicit-stage") {
+      if (target.rawPath && hasParentPathSegment(target.rawPath)) {
+        warnings.push(
+          `Skipped legacy plugin dependency state ${targetPath}: parent path segments are not allowed`,
+        );
+        continue;
+      }
+      safeTargets.push({ ...target, path: targetPath });
+      continue;
+    }
     if (!isExpectedLegacyCleanupTargetName(path.basename(targetPath))) {
       warnings.push(`Skipped legacy plugin dependency state ${targetPath}: unexpected path name`);
       continue;
@@ -172,24 +205,33 @@ function filterLegacyStaleRootCandidates(
       );
       continue;
     }
-    safeTargets.push(targetPath);
+    safeTargets.push({ ...target, path: targetPath });
   }
   return {
-    targets: uniqueSorted(safeTargets),
+    targets: safeTargets.toSorted((left, right) => left.path.localeCompare(right.path)),
     warnings,
   };
 }
 
 async function resolveSafeRemovalTarget(
-  target: string,
+  target: CleanupTarget,
   cleanupRoots: readonly CleanupRoot[],
 ): Promise<{ target: string } | { warning: string }> {
-  const targetPath = path.resolve(target);
+  const targetPath = path.resolve(target.path);
+  const stat = await fs.lstat(targetPath).catch(() => null);
+  if (target.kind === "explicit-stage" && stat?.isSymbolicLink()) {
+    return {
+      warning: `Skipped legacy plugin dependency state ${targetPath}: symbolic link roots are not removed`,
+    };
+  }
   const realPath = await fs.realpath(targetPath).catch(() => null);
   if (realPath === null) {
     return {
       warning: `Skipped legacy plugin dependency state ${targetPath}: could not resolve path`,
     };
+  }
+  if (target.kind === "explicit-stage") {
+    return { target: targetPath };
   }
   if (!cleanupRoots.some((root) => isPathInsideRoot(realPath, root.realPath))) {
     return {
@@ -199,10 +241,10 @@ async function resolveSafeRemovalTarget(
   return { target: targetPath };
 }
 
-async function collectLegacyPluginDependencyTargets(
+async function collectLegacyPluginDependencyTargetEntries(
   env: NodeJS.ProcessEnv = process.env,
   options: { packageRoot?: string | null } = {},
-): Promise<string[]> {
+): Promise<CleanupTarget[]> {
   const packageRoot =
     options.packageRoot ??
     resolveOpenClawPackageRootSync({
@@ -211,18 +253,26 @@ async function collectLegacyPluginDependencyTargets(
       cwd: process.cwd(),
     });
   const roots = uniqueSorted([resolveStateDir(env), resolveConfigDir(env), packageRoot]);
-  const explicitStageRoots = splitPathList(env.OPENCLAW_PLUGIN_STAGE_DIR).map((entry) =>
-    resolveUserPath(entry, env),
+  const stateDirectoryRoots = splitPathList(env.STATE_DIRECTORY).map(
+    (entry): CleanupTarget => ({
+      kind: "legacy",
+      path: path.join(resolveUserPath(entry, env), "plugin-runtime-deps"),
+    }),
   );
-  const stateDirectoryRoots = splitPathList(env.STATE_DIRECTORY).map((entry) =>
-    path.join(resolveUserPath(entry, env), "plugin-runtime-deps"),
-  );
-  const targets = [
-    ...explicitStageRoots,
+  const targets: CleanupTarget[] = [
+    ...collectExplicitStageTargets(env),
     ...stateDirectoryRoots,
     ...roots.flatMap((root) => [
-      ...[...LEGACY_DIRECT_CHILD_NAMES].map((name) => path.join(root, name)),
-      path.join(root, ".local", "bundled-plugin-runtime-deps"),
+      ...[...LEGACY_DIRECT_CHILD_NAMES].map(
+        (name): CleanupTarget => ({
+          kind: "legacy",
+          path: path.join(root, name),
+        }),
+      ),
+      {
+        kind: "legacy",
+        path: path.join(root, ".local", "bundled-plugin-runtime-deps"),
+      },
     ]),
   ];
   for (const root of roots) {
@@ -231,13 +281,26 @@ async function collectLegacyPluginDependencyTargets(
       continue;
     }
     targets.push(
-      ...(await collectLegacyExtensionDebris(path.join(root, "extensions"), rootRealPath)),
+      ...(await collectLegacyExtensionDebris(path.join(root, "extensions"), rootRealPath)).map(
+        (targetPath): CleanupTarget => ({ kind: "legacy", path: targetPath }),
+      ),
     );
     targets.push(
-      ...(await collectLegacyExtensionDebris(path.join(root, "dist", "extensions"), rootRealPath)),
+      ...(
+        await collectLegacyExtensionDebris(path.join(root, "dist", "extensions"), rootRealPath)
+      ).map((targetPath): CleanupTarget => ({ kind: "legacy", path: targetPath })),
     );
   }
-  return uniqueSorted(targets);
+  return targets.toSorted((left, right) => left.path.localeCompare(right.path));
+}
+
+async function collectLegacyPluginDependencyTargets(
+  env: NodeJS.ProcessEnv = process.env,
+  options: { packageRoot?: string | null } = {},
+): Promise<string[]> {
+  return uniqueSorted(
+    (await collectLegacyPluginDependencyTargetEntries(env, options)).map((target) => target.path),
+  );
 }
 
 export async function cleanupLegacyPluginDependencyState(params: {
@@ -254,7 +317,7 @@ export async function cleanupLegacyPluginDependencyState(params: {
       moduleUrl: import.meta.url,
       cwd: process.cwd(),
     });
-  const targets = await collectLegacyPluginDependencyTargets(env, {
+  const targets = await collectLegacyPluginDependencyTargetEntries(env, {
     packageRoot,
   });
   const cleanupRootPaths = collectCleanupRootPaths(env, packageRoot);
@@ -262,12 +325,12 @@ export async function cleanupLegacyPluginDependencyState(params: {
   const staleRootCandidates = filterLegacyStaleRootCandidates(targets, cleanupRootPaths);
   warnings.push(...staleRootCandidates.warnings);
   const staleSymlinks = await removeStalePluginRuntimeSymlinks(packageRoot, {
-    staleRoots: staleRootCandidates.targets,
+    staleRoots: staleRootCandidates.targets.map((target) => target.path),
   });
   changes.push(...staleSymlinks.changes);
   warnings.push(...staleSymlinks.warnings);
   for (const target of staleRootCandidates.targets) {
-    if (!(await pathExists(target))) {
+    if (!(await pathExists(target.path))) {
       continue;
     }
     const safeTarget = await resolveSafeRemovalTarget(target, cleanupRoots);
