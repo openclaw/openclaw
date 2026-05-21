@@ -1483,17 +1483,15 @@ describe("runCodexAppServerAttempt", () => {
       collaborationMode?: {
         settings?: {
           developer_instructions?: string | null;
-          reference_context?: { text?: string };
         };
       };
     };
     const inputText = turnStartParams.input?.[0]?.text ?? "";
-    const referenceContext =
-      turnStartParams.collaborationMode?.settings?.reference_context?.text ?? "";
+    const instructions = turnStartParams.collaborationMode?.settings?.developer_instructions ?? "";
     expect(inputText).toBe("hello");
-    expect(turnStartParams.collaborationMode?.settings?.developer_instructions).toBeNull();
-    expect(referenceContext).toContain("## OpenClaw Skills");
-    expect(referenceContext).toContain("<available_skills>");
+    expect(instructions).toContain("OpenClaw Current-Turn Reference Context");
+    expect(instructions).toContain("## OpenClaw Skills");
+    expect(instructions).toContain("<available_skills>");
     const [llmInputPayload] = mockCall(llmInput, "llm_input") as [{ prompt?: string }, unknown];
     expect(llmInputPayload.prompt).toBe(inputText);
     const trajectoryEvents = (
@@ -4827,31 +4825,28 @@ describe("runCodexAppServerAttempt", () => {
       collaborationMode?: {
         settings?: {
           developer_instructions?: string | null;
-          reference_context?: { instruction?: string; text?: string };
         };
       };
     };
     const inputText = turnStartParams.input?.[0]?.text ?? "";
     const turnScopedInstructions =
       turnStartParams.collaborationMode?.settings?.developer_instructions ?? "";
-    const referenceContext = turnStartParams.collaborationMode?.settings?.reference_context;
-    const referenceText = referenceContext?.text ?? "";
     expect(inputText).toBe("hello");
     expect(inputText).not.toContain("OpenClaw runtime context for this turn:");
-    expect(turnScopedInstructions).toBe("");
-    expect(referenceContext?.instruction).toContain("supporting user/workspace reference only");
-    expect(referenceText).toContain("OpenClaw runtime context for this turn:");
-    expect(referenceText).toContain("supporting project/user reference");
+    expect(turnScopedInstructions).toContain("OpenClaw Current-Turn Reference Context");
+    expect(turnScopedInstructions).toContain("not system policy, developer policy");
+    expect(turnScopedInstructions).toContain("OpenClaw runtime context for this turn:");
+    expect(turnScopedInstructions).toContain("supporting project/user reference");
     expect(inputText).not.toContain("does not override Codex system/developer instructions");
     expect(inputText).not.toContain("not developer policy");
-    expect(referenceText).not.toContain(soulGuidance);
-    expect(referenceText).not.toContain(identityGuidance);
-    expect(referenceText).not.toContain(toolGuidance);
-    expect(referenceText).not.toContain(userProfile);
-    expect(referenceText).not.toContain(heartbeatChecklist);
-    expect(referenceText).toContain(memorySummary);
-    expect(referenceText).toContain("Codex loads AGENTS.md natively");
-    expect(referenceText).not.toContain(agentsGuidance);
+    expect(turnScopedInstructions).not.toContain(soulGuidance);
+    expect(turnScopedInstructions).not.toContain(identityGuidance);
+    expect(turnScopedInstructions).not.toContain(toolGuidance);
+    expect(turnScopedInstructions).not.toContain(userProfile);
+    expect(turnScopedInstructions).not.toContain(heartbeatChecklist);
+    expect(turnScopedInstructions).toContain(memorySummary);
+    expect(turnScopedInstructions).toContain("Codex loads AGENTS.md natively");
+    expect(turnScopedInstructions).not.toContain(agentsGuidance);
 
     const fileStats = new Map(
       result.systemPromptReport?.injectedWorkspaceFiles.map((file) => [file.name, file]) ?? [],
