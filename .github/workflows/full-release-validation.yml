@@ -215,7 +215,7 @@ jobs:
     needs: [resolve_target]
     if: contains(fromJSON('["all","ci"]'), inputs.rerun_group)
     runs-on: ubuntu-24.04
-    timeout-minutes: ${{ inputs.release_profile == 'full' && 240 || 60 }}
+    timeout-minutes: ${{ inputs.release_profile != 'minimum' && 240 || 60 }}
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
       url: ${{ steps.dispatch.outputs.url }}
@@ -315,7 +315,7 @@ jobs:
     needs: [resolve_target]
     if: contains(fromJSON('["all","plugin-prerelease"]'), inputs.rerun_group)
     runs-on: ubuntu-24.04
-    timeout-minutes: ${{ inputs.release_profile == 'full' && 300 || 60 }}
+    timeout-minutes: ${{ inputs.release_profile == 'full' && 300 || inputs.release_profile == 'stable' && 240 || 60 }}
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
       url: ${{ steps.dispatch.outputs.url }}
@@ -415,7 +415,7 @@ jobs:
     needs: [resolve_target]
     if: contains(fromJSON('["all","release-checks","install-smoke","cross-os","live-e2e","package","qa","qa-parity","qa-live"]'), inputs.rerun_group)
     runs-on: ubuntu-24.04
-    timeout-minutes: ${{ inputs.release_profile == 'full' && 240 || 60 }}
+    timeout-minutes: ${{ inputs.release_profile != 'minimum' && 240 || 60 }}
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
       url: ${{ steps.dispatch.outputs.url }}

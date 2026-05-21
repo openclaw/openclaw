@@ -978,7 +978,7 @@ describe("package artifact reuse", () => {
     }
 
     expect(fullRelease.jobs?.release_checks?.["timeout-minutes"]).toBe(
-      "${{ inputs.release_profile == 'full' && 240 || 60 }}",
+      "${{ inputs.release_profile != 'minimum' && 240 || 60 }}",
     );
     expect(fullRelease.jobs?.prepare_release_package?.["timeout-minutes"]).toBe(15);
     expect(releaseChecks.jobs?.prepare_release_package?.["timeout-minutes"]).toBe(15);

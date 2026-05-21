@@ -4440,12 +4440,14 @@ function buildCodexBootstrapInjectionStats(params: {
     params.developerInstructionFiles ?? [],
   );
   return params.bootstrapFiles.map((file) => {
-    const pathValue = readNonEmptyString(file.path) ?? file.name;
-    const baseName = getCodexContextFileBasename(pathValue || file.name);
+    const fileName = readNonEmptyString(file.name);
+    const pathValue = readNonEmptyString(file.path) ?? fileName ?? "";
+    const displayName = (fileName ?? getCodexContextFileDisplayBasename(pathValue)) || pathValue;
+    const baseName = getCodexContextFileBasename(pathValue || fileName || "");
     const rawChars = file.missing ? 0 : (file.content ?? "").trimEnd().length;
     const injected =
-      readCodexIndexedContextFileContent(injectedIndex, pathValue, file.name) ??
-      readCodexIndexedContextFileContent(developerInstructionIndex, pathValue, file.name);
+      readCodexIndexedContextFileContent(injectedIndex, pathValue, fileName) ??
+      readCodexIndexedContextFileContent(developerInstructionIndex, pathValue, fileName);
     let injectedChars = injected?.length ?? 0;
     let truncated = !file.missing && injectedChars < rawChars;
     if (injected === undefined) {
@@ -4458,7 +4460,7 @@ function buildCodexBootstrapInjectionStats(params: {
       }
     }
     return {
-      name: file.name,
+      name: displayName,
       path: pathValue,
       missing: file.missing,
       rawChars,
@@ -4493,13 +4495,20 @@ function indexCodexContextFileContent(files: EmbeddedContextFile[]): {
 function readCodexIndexedContextFileContent(
   index: { byPath: Map<string, string>; byBaseName: Map<string, string> },
   pathValue: string,
-  fileName: string,
+  fileName: string | undefined,
 ): string | undefined {
-  return (
-    index.byPath.get(pathValue) ??
-    index.byPath.get(fileName) ??
-    index.byBaseName.get(getCodexContextFileBasename(fileName))
-  );
+  const pathContent = index.byPath.get(pathValue);
+  if (pathContent !== undefined) {
+    return pathContent;
+  }
+  if (fileName) {
+    const nameContent = index.byPath.get(fileName);
+    if (nameContent !== undefined) {
+      return nameContent;
+    }
+  }
+  const baseName = getCodexContextFileBasename(fileName ?? pathValue);
+  return baseName ? index.byBaseName.get(baseName) : undefined;
 }
 
 function readPositiveNumber(value: unknown): number | undefined {
@@ -4703,6 +4712,10 @@ function compareCodexContextFiles(left: EmbeddedContextFile, right: EmbeddedCont
 
 function normalizeCodexContextFilePath(filePath: string): string {
   return filePath.trim().replaceAll("\\", "/").toLowerCase();
+}
+
+function getCodexContextFileDisplayBasename(filePath: string): string {
+  return filePath.trim().replaceAll("\\", "/").split("/").pop()?.trim() ?? "";
 }
 
 function getCodexContextFileBasename(filePath: string): string {
