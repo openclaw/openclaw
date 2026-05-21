@@ -17,14 +17,14 @@
     "lit": "3.3.3",
     "markdown-it": "14.1.1",
     "markdown-it-task-lists": "2.1.1",
-    "marked": "18.0.3"
+    "marked": "18.0.4"
   },
   "devDependencies": {
     "@types/markdown-it": "14.1.2",
-    "@vitest/browser-playwright": "4.1.6",
+    "@vitest/browser-playwright": "4.1.7",
     "jsdom": "29.1.1",
     "playwright": "1.60.0",
-    "vite": "8.0.13",
-    "vitest": "4.1.6"
+    "vite": "8.0.14",
+    "vitest": "4.1.7"
   }
 }
