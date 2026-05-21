@@ -316,16 +316,7 @@ describe("cron cli", () => {
         enqueued: true,
         runId: "manual:job-1:123:0",
         runStatus: status,
-        args: [
-          "cron",
-          "run",
-          "job-1",
-          "--wait",
-          "--wait-timeout",
-          "1s",
-          "--poll-interval",
-          "1ms",
-        ],
+        args: ["cron", "run", "job-1", "--wait", "--wait-timeout", "1s", "--poll-interval", "1ms"],
       });
 
       expect(exitSpy).toHaveBeenCalledWith(expectedExitCode);

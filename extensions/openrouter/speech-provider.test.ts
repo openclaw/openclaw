@@ -7,18 +7,18 @@ const {
   readProviderBinaryResponseMock,
   resolveProviderHttpRequestConfigMock,
 } = vi.hoisted(() => ({
-    assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
-    postJsonRequestMock: vi.fn(),
-    readProviderBinaryResponseMock: vi.fn(async (response: Response) => {
-      return new Uint8Array(await response.arrayBuffer());
-    }),
-    resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => ({
-      baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://openrouter.ai/api/v1",
-      allowPrivateNetwork: false,
-      headers: new Headers(params.defaultHeaders as HeadersInit | undefined),
-      dispatcherPolicy: undefined,
-    })),
-  }));
+  assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
+  postJsonRequestMock: vi.fn(),
+  readProviderBinaryResponseMock: vi.fn(async (response: Response) => {
+    return new Uint8Array(await response.arrayBuffer());
+  }),
+  resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => ({
+    baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://openrouter.ai/api/v1",
+    allowPrivateNetwork: false,
+    headers: new Headers(params.defaultHeaders as HeadersInit | undefined),
+    dispatcherPolicy: undefined,
+  })),
+}));
 
 vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,

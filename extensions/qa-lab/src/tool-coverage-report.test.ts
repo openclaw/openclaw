@@ -327,9 +327,7 @@ describe("qa tool coverage report", () => {
     });
 
     expect(report.pass).toBe(false);
-    expect(report.failures).toEqual([
-      "web-search missing codex tool call web_search",
-    ]);
+    expect(report.failures).toEqual(["web-search missing codex tool call web_search"]);
   });
 
   it("fails required OpenClaw dynamic tool coverage when the fixture failure mode is preserved", () => {
