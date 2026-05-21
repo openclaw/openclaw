@@ -4,7 +4,9 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { PluginCandidate } from "../plugins/discovery.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
+import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { listSecretProviderIntegrationPresets } from "./provider-integrations.js";
+import { resolveSecretRefString } from "./resolve.js";
 
 const tempDirs: string[] = [];
 
@@ -14,12 +16,16 @@ function makeTempDir(): string {
   return dir;
 }
 
-function createCandidate(rootDir: string, idHint: string): PluginCandidate {
+function createCandidate(
+  rootDir: string,
+  idHint: string,
+  origin: PluginOrigin = "global",
+): PluginCandidate {
   return {
     idHint,
     source: path.join(rootDir, "index.ts"),
     rootDir,
-    origin: "workspace",
+    origin,
   };
 }
 
@@ -34,6 +40,7 @@ describe("secret provider integration presets", () => {
     const rootDir = makeTempDir();
     fs.writeFileSync(path.join(rootDir, "index.ts"), "export default {};\n", "utf8");
     fs.mkdirSync(path.join(rootDir, "bin"));
+    fs.writeFileSync(path.join(rootDir, "bin", "resolve.mjs"), "process.stdin.resume();\n");
     fs.writeFileSync(
       path.join(rootDir, "openclaw.plugin.json"),
       JSON.stringify({
@@ -54,7 +61,6 @@ describe("secret provider integration presets", () => {
             env: {
               ACME_PROFILE: "work",
             },
-            trustedDirs: ["./bin"],
             jsonOnly: false,
             allowSymlinkCommand: true,
           },
@@ -91,7 +97,7 @@ describe("secret provider integration presets", () => {
           env: {
             ACME_PROFILE: "work",
           },
-          trustedDirs: [path.join(rootDir, "bin")],
+          trustedDirs: [path.dirname(process.execPath), rootDir],
           jsonOnly: false,
           allowSymlinkCommand: true,
         },
@@ -102,6 +108,7 @@ describe("secret provider integration presets", () => {
   it("normalizes manifest exec provider options to SecretRef provider schema limits", () => {
     const rootDir = makeTempDir();
     fs.writeFileSync(path.join(rootDir, "index.ts"), "export default {};\n", "utf8");
+    fs.writeFileSync(path.join(rootDir, "resolve.mjs"), "process.stdin.resume();\n");
     fs.writeFileSync(
       path.join(rootDir, "openclaw.plugin.json"),
       JSON.stringify({
@@ -110,7 +117,7 @@ describe("secret provider integration presets", () => {
           bounded: {
             source: "exec",
             command: "${node}",
-            args: ["ok", "x".repeat(1025)],
+            args: ["./resolve.mjs", "ok", "x".repeat(1025)],
             timeoutMs: 120001,
             noOutputTimeoutMs: 1.5,
             maxOutputBytes: 20 * 1024 * 1024 + 1,
@@ -139,7 +146,8 @@ describe("secret provider integration presets", () => {
         providerConfig: {
           source: "exec",
           command: process.execPath,
-          args: ["ok"],
+          args: [path.join(rootDir, "resolve.mjs"), "ok"],
+          trustedDirs: [path.dirname(process.execPath), rootDir],
           passEnv: ["GOOD_ENV"],
         },
       },
@@ -175,4 +183,450 @@ describe("secret provider integration presets", () => {
 
     expect(listSecretProviderIntegrationPresets({ manifestRegistry: registry })).toEqual([]);
   });
+
+  it.each<PluginOrigin>(["bundled", "global"])(
+    "materializes plugin-root relative paths for %s plugin roots",
+    (origin) => {
+      const rootDir = makeTempDir();
+      fs.writeFileSync(path.join(rootDir, "index.ts"), "export default {};\n", "utf8");
+      fs.mkdirSync(path.join(rootDir, "bin"));
+      fs.writeFileSync(
+        path.join(rootDir, "openclaw.plugin.json"),
+        JSON.stringify({
+          id: `${origin}-secrets`,
+          ...(origin === "bundled" ? { enabledByDefault: true } : {}),
+          secretProviderIntegrations: {
+            vault: {
+              providerAlias: "vault",
+              source: "exec",
+              command: "./bin/vault-resolver",
+            },
+          },
+          configSchema: {
+            type: "object",
+            additionalProperties: false,
+            properties: {},
+          },
+        }),
+        "utf8",
+      );
+
+      const registry = loadPluginManifestRegistry({
+        candidates: [createCandidate(rootDir, `${origin}-secrets`, origin)],
+      });
+
+      expect(listSecretProviderIntegrationPresets({ manifestRegistry: registry })).toEqual([
+        {
+          id: "vault",
+          pluginId: `${origin}-secrets`,
+          providerAlias: "vault",
+          displayName: "vault",
+          providerConfig: {
+            source: "exec",
+            command: path.join(rootDir, "bin", "vault-resolver"),
+            trustedDirs: [rootDir],
+          },
+        },
+      ]);
+    },
+  );
+
+  it("skips presets from disabled installed plugins", () => {
+    const rootDir = makeTempDir();
+    fs.writeFileSync(path.join(rootDir, "index.ts"), "export default {};\n", "utf8");
+    fs.writeFileSync(path.join(rootDir, "resolve.mjs"), "process.stdin.resume();\n");
+    fs.writeFileSync(
+      path.join(rootDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "disabled-secrets",
+        secretProviderIntegrations: {
+          vault: {
+            providerAlias: "vault",
+            source: "exec",
+            command: "${node}",
+            args: ["./resolve.mjs"],
+          },
+        },
+        configSchema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {},
+        },
+      }),
+      "utf8",
+    );
+
+    const registry = loadPluginManifestRegistry({
+      candidates: [createCandidate(rootDir, "disabled-secrets", "global")],
+      config: {
+        plugins: {
+          entries: {
+            "disabled-secrets": {
+              enabled: false,
+            },
+          },
+        },
+      },
+    });
+
+    expect(
+      listSecretProviderIntegrationPresets({
+        manifestRegistry: registry,
+        config: {
+          plugins: {
+            entries: {
+              "disabled-secrets": {
+                enabled: false,
+              },
+            },
+          },
+        },
+      }),
+    ).toEqual([]);
+  });
+
+  it("applies plugin id aliases when filtering disabled presets", () => {
+    const rootDir = makeTempDir();
+    fs.writeFileSync(path.join(rootDir, "index.ts"), "export default {};\n", "utf8");
+    fs.writeFileSync(path.join(rootDir, "resolve.mjs"), "process.stdin.resume();\n");
+    fs.writeFileSync(
+      path.join(rootDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "openai",
+        secretProviderIntegrations: {
+          vault: {
+            providerAlias: "vault",
+            source: "exec",
+            command: "${node}",
+            args: ["./resolve.mjs"],
+          },
+        },
+        configSchema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {},
+        },
+      }),
+      "utf8",
+    );
+    const config = {
+      plugins: {
+        entries: {
+          "openai-codex": {
+            enabled: false,
+          },
+        },
+      },
+    };
+    const registry = loadPluginManifestRegistry({
+      candidates: [createCandidate(rootDir, "openai", "global")],
+      config,
+    });
+
+    expect(listSecretProviderIntegrationPresets({ manifestRegistry: registry, config })).toEqual(
+      [],
+    );
+  });
+
+  it("exposes bundled presets enabled by platform default", () => {
+    const rootDir = makeTempDir();
+    fs.writeFileSync(path.join(rootDir, "index.ts"), "export default {};\n", "utf8");
+    fs.writeFileSync(path.join(rootDir, "resolve.mjs"), "process.stdin.resume();\n");
+    fs.writeFileSync(
+      path.join(rootDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "platform-secrets",
+        enabledByDefaultOnPlatforms: [process.platform],
+        secretProviderIntegrations: {
+          vault: {
+            providerAlias: "vault",
+            source: "exec",
+            command: "${node}",
+            args: ["./resolve.mjs"],
+          },
+        },
+        configSchema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {},
+        },
+      }),
+      "utf8",
+    );
+    const registry = loadPluginManifestRegistry({
+      candidates: [createCandidate(rootDir, "platform-secrets", "bundled")],
+    });
+
+    expect(listSecretProviderIntegrationPresets({ manifestRegistry: registry })).toEqual([
+      {
+        id: "vault",
+        pluginId: "platform-secrets",
+        providerAlias: "vault",
+        displayName: "vault",
+        providerConfig: {
+          source: "exec",
+          command: process.execPath,
+          args: [path.join(rootDir, "resolve.mjs")],
+          trustedDirs: [path.dirname(process.execPath), rootDir],
+        },
+      },
+    ]);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "materializes node presets from symlinked plugin roots",
+    () => {
+      const rootDir = makeTempDir();
+      const linkParent = makeTempDir();
+      const linkRoot = path.join(linkParent, "plugin-link");
+      fs.writeFileSync(path.join(rootDir, "index.ts"), "export default {};\n", "utf8");
+      fs.writeFileSync(path.join(rootDir, "resolve.mjs"), "process.stdin.resume();\n");
+      fs.writeFileSync(
+        path.join(rootDir, "openclaw.plugin.json"),
+        JSON.stringify({
+          id: "linked-secrets",
+          secretProviderIntegrations: {
+            vault: {
+              providerAlias: "vault",
+              source: "exec",
+              command: "${node}",
+              args: ["./resolve.mjs"],
+            },
+          },
+          configSchema: {
+            type: "object",
+            additionalProperties: false,
+            properties: {},
+          },
+        }),
+        "utf8",
+      );
+      fs.symlinkSync(rootDir, linkRoot);
+
+      const registry = loadPluginManifestRegistry({
+        candidates: [createCandidate(linkRoot, "linked-secrets", "global")],
+      });
+
+      expect(listSecretProviderIntegrationPresets({ manifestRegistry: registry })).toEqual([
+        {
+          id: "vault",
+          pluginId: "linked-secrets",
+          providerAlias: "vault",
+          displayName: "vault",
+          providerConfig: {
+            source: "exec",
+            command: process.execPath,
+            args: [path.join(linkRoot, "resolve.mjs")],
+            trustedDirs: [path.dirname(process.execPath), linkRoot],
+          },
+        },
+      ]);
+    },
+  );
+
+  it.each<PluginOrigin>(["workspace", "config"])(
+    "skips secret provider presets from %s plugin roots",
+    (origin) => {
+      const rootDir = makeTempDir();
+      fs.writeFileSync(path.join(rootDir, "index.ts"), "export default {};\n", "utf8");
+      fs.writeFileSync(
+        path.join(rootDir, "openclaw.plugin.json"),
+        JSON.stringify({
+          id: `${origin}-secrets`,
+          secretProviderIntegrations: {
+            vault: {
+              providerAlias: "vault",
+              source: "exec",
+              command: "${node}",
+              args: ["./resolve.mjs"],
+            },
+          },
+          configSchema: {
+            type: "object",
+            additionalProperties: false,
+            properties: {},
+          },
+        }),
+        "utf8",
+      );
+
+      const registry = loadPluginManifestRegistry({
+        candidates: [createCandidate(rootDir, `${origin}-secrets`, origin)],
+      });
+
+      expect(listSecretProviderIntegrationPresets({ manifestRegistry: registry })).toEqual([]);
+    },
+  );
+
+  it("resolves a node-based plugin preset with plugin trusted dirs", async () => {
+    const rootDir = makeTempDir();
+    const resolverPath = path.join(rootDir, "bin", "resolve.mjs");
+    fs.writeFileSync(path.join(rootDir, "index.ts"), "export default {};\n", "utf8");
+    fs.mkdirSync(path.dirname(resolverPath));
+    fs.writeFileSync(
+      resolverPath,
+      [
+        "let input = '';",
+        "process.stdin.setEncoding('utf8');",
+        "process.stdin.on('data', (chunk) => { input += chunk; });",
+        "process.stdin.on('end', () => {",
+        "  const request = JSON.parse(input);",
+        "  const values = Object.fromEntries(request.ids.map((id) => [id, `value:${id}`]));",
+        "  process.stdout.write(JSON.stringify({ protocolVersion: 1, values }));",
+        "});",
+      ].join("\n"),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(rootDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "vault-secrets",
+        secretProviderIntegrations: {
+          vault: {
+            providerAlias: "vault",
+            source: "exec",
+            command: "${node}",
+            args: ["./bin/resolve.mjs"],
+            allowInsecurePath: true,
+          },
+        },
+        configSchema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {},
+        },
+      }),
+      "utf8",
+    );
+
+    const registry = loadPluginManifestRegistry({
+      candidates: [createCandidate(rootDir, "vault-secrets", "global")],
+    });
+    const [preset] = listSecretProviderIntegrationPresets({ manifestRegistry: registry });
+    if (!preset) {
+      throw new Error("Expected vault preset");
+    }
+
+    expect(preset.providerConfig).toEqual({
+      source: "exec",
+      command: process.execPath,
+      args: [resolverPath],
+      trustedDirs: [path.dirname(process.execPath), rootDir],
+      allowInsecurePath: true,
+    });
+    await expect(
+      resolveSecretRefString(
+        { source: "exec", provider: "vault", id: "providers/openrouter/apiKey" },
+        {
+          config: {
+            secrets: {
+              providers: {
+                vault: preset.providerConfig,
+              },
+            },
+          },
+        },
+      ),
+    ).resolves.toBe("value:providers/openrouter/apiKey");
+  });
+
+  it("skips plugin-root relative preset paths that escape the plugin root", () => {
+    const rootDir = makeTempDir();
+    fs.writeFileSync(path.join(rootDir, "index.ts"), "export default {};\n", "utf8");
+    fs.writeFileSync(
+      path.join(rootDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "escape-secrets",
+        secretProviderIntegrations: {
+          bad: {
+            source: "exec",
+            command: "../outside",
+          },
+        },
+        configSchema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {},
+        },
+      }),
+      "utf8",
+    );
+
+    const registry = loadPluginManifestRegistry({
+      candidates: [createCandidate(rootDir, "escape-secrets")],
+    });
+
+    expect(listSecretProviderIntegrationPresets({ manifestRegistry: registry })).toEqual([]);
+  });
+
+  it("skips node presets without a plugin-root relative entrypoint arg", () => {
+    const rootDir = makeTempDir();
+    fs.writeFileSync(path.join(rootDir, "index.ts"), "export default {};\n", "utf8");
+    fs.writeFileSync(
+      path.join(rootDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "bad-trust-secrets",
+        secretProviderIntegrations: {
+          bad: {
+            source: "exec",
+            command: "${node}",
+            args: ["--import", "./bin/hook.mjs", "./bin/resolve.mjs"],
+          },
+        },
+        configSchema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {},
+        },
+      }),
+      "utf8",
+    );
+
+    const registry = loadPluginManifestRegistry({
+      candidates: [createCandidate(rootDir, "bad-trust-secrets")],
+    });
+
+    expect(listSecretProviderIntegrationPresets({ manifestRegistry: registry })).toEqual([]);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "skips node presets whose entrypoint symlink leaves the plugin root",
+    () => {
+      const rootDir = makeTempDir();
+      const outsideDir = makeTempDir();
+      fs.writeFileSync(path.join(rootDir, "index.ts"), "export default {};\n", "utf8");
+      fs.mkdirSync(path.join(rootDir, "bin"));
+      fs.writeFileSync(path.join(outsideDir, "resolve.mjs"), "process.stdin.resume();\n");
+      fs.symlinkSync(
+        path.join(outsideDir, "resolve.mjs"),
+        path.join(rootDir, "bin", "resolve.mjs"),
+      );
+      fs.writeFileSync(
+        path.join(rootDir, "openclaw.plugin.json"),
+        JSON.stringify({
+          id: "symlink-secrets",
+          secretProviderIntegrations: {
+            vault: {
+              providerAlias: "vault",
+              source: "exec",
+              command: "${node}",
+              args: ["./bin/resolve.mjs"],
+            },
+          },
+          configSchema: {
+            type: "object",
+            additionalProperties: false,
+            properties: {},
+          },
+        }),
+        "utf8",
+      );
+
+      const registry = loadPluginManifestRegistry({
+        candidates: [createCandidate(rootDir, "symlink-secrets")],
+      });
+
+      expect(listSecretProviderIntegrationPresets({ manifestRegistry: registry })).toEqual([]);
+    },
+  );
 });

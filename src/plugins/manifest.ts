@@ -41,7 +41,6 @@ const MAX_SECRET_PROVIDER_EXEC_ARG_BYTES = 1024;
 const MAX_SECRET_PROVIDER_EXEC_TIMEOUT_MS = 120_000;
 const MAX_SECRET_PROVIDER_EXEC_OUTPUT_BYTES = 20 * 1024 * 1024;
 const MAX_SECRET_PROVIDER_EXEC_PASS_ENV = 128;
-const MAX_SECRET_PROVIDER_EXEC_TRUSTED_DIRS = 64;
 
 type PluginManifestLoadCacheEntry = {
   result: PluginManifestLoadResult;
@@ -174,7 +173,6 @@ export type PluginManifestSecretProviderIntegration = {
   jsonOnly?: boolean;
   env?: Record<string, string>;
   passEnv?: string[];
-  trustedDirs?: string[];
   allowInsecurePath?: boolean;
   allowSymlinkCommand?: boolean;
 };
@@ -1322,9 +1320,6 @@ function normalizeManifestSecretProviderIntegrations(
       maxItems: MAX_SECRET_PROVIDER_EXEC_PASS_ENV,
       pattern: ENV_SECRET_REF_ID_RE,
     });
-    const trustedDirs = normalizeManifestTrimmedStringArray(rawIntegration.trustedDirs, {
-      maxItems: MAX_SECRET_PROVIDER_EXEC_TRUSTED_DIRS,
-    });
     normalized[id] = {
       ...(providerAlias ? { providerAlias } : {}),
       ...(displayName ? { displayName } : {}),
@@ -1340,7 +1335,6 @@ function normalizeManifestSecretProviderIntegrations(
         : {}),
       ...(env ? { env } : {}),
       ...(passEnv ? { passEnv } : {}),
-      ...(trustedDirs ? { trustedDirs } : {}),
       ...(rawIntegration.allowInsecurePath === true ? { allowInsecurePath: true } : {}),
       ...(rawIntegration.allowSymlinkCommand === true ? { allowSymlinkCommand: true } : {}),
     };

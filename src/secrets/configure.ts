@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretProviderConfig, SecretRef, SecretRefSource } from "../config/types.secrets.js";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
+import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
   normalizeOptionalLowercaseString,
@@ -27,6 +28,10 @@ import {
 import { getSkippedExecRefStaticError } from "./exec-resolution-policy.js";
 import type { SecretsApplyPlan } from "./plan.js";
 import { getProviderEnvVars } from "./provider-env-vars.js";
+import {
+  listSecretProviderIntegrationPresets,
+  type SecretProviderIntegrationPreset,
+} from "./provider-integrations.js";
 import {
   formatExecSecretRefIdValidationMessage,
   isValidExecSecretRefId,
@@ -139,6 +144,29 @@ function providerHint(provider: SecretProviderConfig): string {
     return `file (${provider.mode ?? "json"})`;
   }
   return `exec (${provider.jsonOnly === false ? "json+text" : "json"})`;
+}
+
+function providerPresetKey(preset: SecretProviderIntegrationPreset): string {
+  return `${preset.pluginId}:${preset.id}:${preset.providerAlias}`;
+}
+
+function providerPresetHint(preset: SecretProviderIntegrationPreset): string {
+  return `${preset.providerAlias} | ${preset.pluginId} | ${providerHint(preset.providerConfig)}`;
+}
+
+function loadSecretProviderIntegrationPresets(params: {
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}): SecretProviderIntegrationPreset[] {
+  const manifestRegistry = loadPluginManifestRegistry({
+    config: params.config,
+    env: params.env,
+  });
+  return listSecretProviderIntegrationPresets({
+    manifestRegistry,
+    config: params.config,
+    env: params.env,
+  });
 }
 
 function toSourceChoices(config: OpenClawConfig): Array<{ value: SecretRefSource; label: string }> {
@@ -619,12 +647,20 @@ async function promptProviderConfig(
   return await promptExecProvider(current?.source === "exec" ? current : undefined);
 }
 
-async function configureProvidersInteractive(config: OpenClawConfig): Promise<void> {
+async function configureProvidersInteractive(
+  config: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+): Promise<void> {
+  const presets = loadSecretProviderIntegrationPresets({ config, env });
   while (true) {
     const providers = getSecretProviders(config);
     const providerEntries = Object.entries(providers).toSorted(([left], [right]) =>
       left.localeCompare(right),
     );
+    const presetEntries = presets.filter((preset) => {
+      const current = providers[preset.providerAlias];
+      return !current || !isDeepStrictEqual(current, preset.providerConfig);
+    });
 
     const actionOptions: Array<{ value: string; label: string; hint?: string }> = [
       {
@@ -633,6 +669,13 @@ async function configureProvidersInteractive(config: OpenClawConfig): Promise<vo
         hint: "Define a new env/file/exec provider",
       },
     ];
+    if (presetEntries.length > 0) {
+      actionOptions.push({
+        value: "preset",
+        label: "Use plugin preset",
+        hint: "Configure a provider declared by an installed plugin",
+      });
+    }
     if (providerEntries.length > 0) {
       actionOptions.push({
         value: "edit",
@@ -673,6 +716,39 @@ async function configureProvidersInteractive(config: OpenClawConfig): Promise<vo
       });
       const providerConfig = await promptProviderConfig(source);
       setSecretProvider(config, alias, providerConfig);
+      continue;
+    }
+
+    if (action === "preset") {
+      const selectedPresetKey = assertNoCancel(
+        await select({
+          message: "Select plugin preset",
+          options: presetEntries.map((preset) => ({
+            value: providerPresetKey(preset),
+            label: preset.displayName,
+            hint: providerPresetHint(preset),
+          })),
+        }),
+        "Secrets configure cancelled.",
+      );
+      const preset = presetEntries.find((entry) => providerPresetKey(entry) === selectedPresetKey);
+      if (!preset) {
+        throw new Error(`Unknown secret provider preset: ${selectedPresetKey}`);
+      }
+      const current = providers[preset.providerAlias];
+      if (current) {
+        const shouldReplace = assertNoCancel(
+          await confirm({
+            message: `Replace provider "${preset.providerAlias}" with the ${preset.displayName} preset?`,
+            initialValue: false,
+          }),
+          "Secrets configure cancelled.",
+        );
+        if (!shouldReplace) {
+          continue;
+        }
+      }
+      setSecretProvider(config, preset.providerAlias, structuredClone(preset.providerConfig));
       continue;
     }
 
@@ -753,7 +829,7 @@ export async function runSecretsConfigureInteractive(
 
   const stagedConfig = structuredClone(snapshot.config);
   if (!params.skipProviderSetup) {
-    await configureProvidersInteractive(stagedConfig);
+    await configureProvidersInteractive(stagedConfig, env);
   }
 
   const providerChanges = collectConfigureProviderChanges({
