@@ -10,11 +10,7 @@ import {
   resolveEnabledConfiguredAccountId,
 } from "openclaw/plugin-sdk/status-helpers";
 
-// Keep in lockstep with `DEFAULT_CHANNEL_CONNECT_GRACE_MS` in
-// `src/gateway/channel-health-policy.ts`. The Telegram status diagnostic and the
-// shared health policy must agree on how long a polling start can run without a
-// successful getUpdates before either surface reports unhealthy.
-const TELEGRAM_POLLING_CONNECT_GRACE_MS = 300_000;
+const TELEGRAM_POLLING_CONNECT_GRACE_MS = 120_000;
 const TELEGRAM_POLLING_STALE_TRANSPORT_MS = 30 * 60_000;
 const TELEGRAM_WEBHOOK_CONNECT_GRACE_MS = 120_000;
 
