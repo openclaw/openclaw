@@ -2250,7 +2250,14 @@ export async function runEmbeddedAttempt(
     });
     systemPromptStages.mark("tool-diagnostics");
 
-    const machineName = await getMachineDisplayName();
+    const machineNamePromise = getMachineDisplayName();
+    const openClawReferencesPromise = resolveOpenClawReferencePaths({
+      workspaceDir: effectiveWorkspace,
+      argv1: process.argv[1],
+      cwd: effectiveWorkspace,
+      moduleUrl: import.meta.url,
+    });
+    const machineName = await machineNamePromise;
     const runtimeChannel = normalizeMessageChannel(params.messageChannel ?? params.messageProvider);
     const runtimeCapabilities = collectRuntimeChannelCapabilities({
       cfg: params.config,
@@ -2350,12 +2357,7 @@ export async function runEmbeddedAttempt(
       skillsPrompt,
     });
     systemPromptStages.mark("prompt-params");
-    const openClawReferences = await resolveOpenClawReferencePaths({
-      workspaceDir: effectiveWorkspace,
-      argv1: process.argv[1],
-      cwd: effectiveWorkspace,
-      moduleUrl: import.meta.url,
-    });
+    const openClawReferences = await openClawReferencesPromise;
     systemPromptStages.mark("reference-paths");
     const heartbeatPrompt = shouldInjectHeartbeatPrompt({
       config: params.config,
