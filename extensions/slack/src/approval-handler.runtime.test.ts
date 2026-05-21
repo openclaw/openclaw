@@ -133,6 +133,12 @@ describe("slackApprovalNativeRuntime", () => {
             style: "success",
           },
           {
+            decision: "allow-always",
+            label: "Allow Always",
+            command: "/approve plugin:req-1 allow-always",
+            style: "success",
+          },
+          {
             decision: "deny",
             label: "Deny",
             command: "/approve plugin:req-1 deny",
@@ -158,7 +164,7 @@ describe("slackApprovalNativeRuntime", () => {
         : "",
     );
 
-    expect(labels).toEqual(["Allow Once", "Deny"]);
+    expect(labels).toEqual(["Allow Once", "Allow Always", "Deny"]);
     expect(JSON.stringify(payload.blocks)).toContain("plugin:req-1");
   });
 

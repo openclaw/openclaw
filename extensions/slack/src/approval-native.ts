@@ -165,6 +165,9 @@ function shouldConsiderSlackNativeForwardingSuppression(
   if (channel !== "slack") {
     return false;
   }
+  if (input.approvalKind === "plugin") {
+    return true;
+  }
   const turnSourceChannel = normalizeMessageChannel(input.request.request.turnSourceChannel);
   return turnSourceChannel === "slack";
 }
