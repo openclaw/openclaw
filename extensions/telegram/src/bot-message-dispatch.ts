@@ -23,6 +23,7 @@ import {
   formatChannelProgressDraftText,
   isChannelProgressDraftWorkToolName,
   mergeChannelProgressDraftLine,
+  resolveChannelProgressDraftEllipsis,
   resolveChannelProgressDraftMaxLines,
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingPreviewNativeToolProgress,
@@ -622,8 +623,20 @@ export const dispatchTelegramMessage = async ({
   let streamToolProgressLines: Array<string | ChannelProgressDraftLine> = [];
   let lastAnswerPartialText = "";
   let activeAnswerDraftIsToolProgressOnly = false;
+  let progressEllipsisTimer: ReturnType<typeof setInterval> | undefined;
+  let progressEllipsisFrame = 0;
+  const progressEllipsisAnimated = resolveChannelProgressDraftEllipsis(telegramCfg) === "animated";
+  const clearProgressEllipsisTimer = () => {
+    if (!progressEllipsisTimer) {
+      return;
+    }
+    clearInterval(progressEllipsisTimer);
+    progressEllipsisTimer = undefined;
+  };
   function resetAnswerToolProgressDraft() {
     activeAnswerDraftIsToolProgressOnly = false;
+    progressEllipsisFrame = 0;
+    clearProgressEllipsisTimer();
   }
   async function prepareAnswerLaneForToolProgress() {
     if (activeAnswerDraftIsToolProgressOnly) {
@@ -642,6 +655,7 @@ export const dispatchTelegramMessage = async ({
       entry: telegramCfg,
       lines: streamToolProgressLines,
       seed: progressSeed,
+      progressLabelFrame: progressEllipsisFrame,
       formatLine: formatProgressAsMarkdownCode,
     });
     if (!streamText || streamText === answerLane.lastPartialText) {
@@ -654,6 +668,25 @@ export const dispatchTelegramMessage = async ({
     answerLane.stream.update(streamText);
     if (options?.flush) {
       await answerLane.stream.flush();
+    }
+    if (progressEllipsisAnimated && activeAnswerDraftIsToolProgressOnly && !progressEllipsisTimer) {
+      progressEllipsisTimer = setInterval(() => {
+        progressEllipsisFrame += 1;
+        void enqueueDraftLaneEvent(async () => {
+          if (
+            !activeAnswerDraftIsToolProgressOnly ||
+            !answerLane.stream ||
+            answerLane.finalized ||
+            finalAnswerDeliveryStarted ||
+            finalAnswerDelivered ||
+            isDispatchSuperseded()
+          ) {
+            clearProgressEllipsisTimer();
+            return;
+          }
+          await renderProgressDraft();
+        });
+      }, 1200);
     }
     return true;
   };
@@ -1766,6 +1799,7 @@ export const dispatchTelegramMessage = async ({
       dispatchError = err;
       runtime.error?.(danger(`telegram dispatch failed: ${String(err)}`));
     } finally {
+      clearProgressEllipsisTimer();
       progressDraftGate.cancel();
       await draftLaneEventQueue;
       nativeToolProgressDraft?.stop();

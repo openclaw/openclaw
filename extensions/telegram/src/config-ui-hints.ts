@@ -85,6 +85,10 @@ export const telegramChannelConfigUiHints = {
     label: "Telegram Progress Label Pool",
     help: 'Candidate labels for streaming.progress.label="auto". Leave unset to use OpenClaw built-in progress labels.',
   },
+  "streaming.progress.ellipsis": {
+    label: "Telegram Progress Ellipsis",
+    help: 'Progress label ellipsis suffix: "off" preserves the bare label, "static" appends "...", and "animated" cycles dots while the progress draft is active.',
+  },
   "streaming.progress.maxLines": {
     label: "Telegram Progress Max Lines",
     help: "Maximum number of compact progress lines to keep below the draft label (default: 8).",

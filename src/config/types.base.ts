@@ -11,6 +11,7 @@ export type ContextVisibilityMode = "all" | "allowlist" | "allowlist_quote";
 export type TextChunkMode = "length" | "newline";
 export type StreamingMode = "off" | "partial" | "block" | "progress";
 export type ChannelStreamingCommandTextMode = "raw" | "status";
+export type ChannelStreamingProgressEllipsisMode = "off" | "static" | "animated";
 
 export type OutboundRetryConfig = {
   /** Max retry attempts for outbound requests (default: 3). */
@@ -46,6 +47,11 @@ export type ChannelStreamingProgressConfig = {
   maxLineChars?: number;
   /** Progress draft renderer. "text" is the portable fallback; "rich" lets supported channels use structured UI. */
   render?: "text" | "rich";
+  /**
+   * Optional ellipsis suffix for the progress label. "static" appends "...";
+   * "animated" cycles "", ".", "..", "...". Default: "off".
+   */
+  ellipsis?: ChannelStreamingProgressEllipsisMode;
   /** Include compact tool/task progress in the draft. Default: true. */
   toolProgress?: boolean;
   /** Command/exec progress detail in the draft. "raw" preserves released behavior; "status" shows only the tool label. Default: "raw". */

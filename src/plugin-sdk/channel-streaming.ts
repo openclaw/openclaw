@@ -787,6 +787,29 @@ export function resolveChannelProgressDraftRender(
   return configured === "rich" || configured === "text" ? configured : defaultValue;
 }
 
+export function resolveChannelProgressDraftEllipsis(
+  entry: StreamingCompatEntry | null | undefined,
+): "off" | "static" | "animated" {
+  const configured = resolveChannelProgressDraftConfig(entry).ellipsis;
+  return configured === "static" || configured === "animated" ? configured : "off";
+}
+
+export function formatChannelProgressDraftLabel(
+  label: string,
+  entry: StreamingCompatEntry | null | undefined,
+  frame = 0,
+): string {
+  const mode = resolveChannelProgressDraftEllipsis(entry);
+  if (mode === "off" || /(?:\.{1,3}|…)$/u.test(label)) {
+    return label;
+  }
+  if (mode === "static") {
+    return `${label}...`;
+  }
+  const suffixes = ["", ".", "..", "..."] as const;
+  return `${label}${suffixes[Math.max(0, Math.floor(frame)) % suffixes.length]}`;
+}
+
 function sliceCodePoints(value: string, start: number, end?: number): string {
   return Array.from(value).slice(start, end).join("");
 }
@@ -942,6 +965,7 @@ export function formatChannelProgressDraftText(params: {
   lines: Array<string | ChannelProgressDraftLine>;
   seed?: string;
   random?: () => number;
+  progressLabelFrame?: number;
   formatLine?: (line: string) => string;
   bullet?: string;
 }): string {
@@ -950,7 +974,9 @@ export function formatChannelProgressDraftText(params: {
     seed: params.seed,
     random: params.random,
   });
-  const resolvedLabel = rawLabel;
+  const resolvedLabel = rawLabel
+    ? formatChannelProgressDraftLabel(rawLabel, params.entry, params.progressLabelFrame)
+    : rawLabel;
   const maxLines = resolveChannelProgressDraftMaxLines(params.entry);
   const maxLineChars = resolveChannelProgressDraftMaxLineChars(params.entry);
   const formatLine = params.formatLine ?? ((line: string) => line);

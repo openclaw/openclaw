@@ -3,6 +3,7 @@ import {
   buildChannelProgressDraftLine,
   createChannelProgressDraftGate,
   DEFAULT_PROGRESS_DRAFT_LABELS,
+  formatChannelProgressDraftLabel,
   formatChannelProgressDraftLine,
   formatChannelProgressDraftLineForEntry,
   formatChannelProgressDraftText,
@@ -11,6 +12,7 @@ import {
   isPotentialTruncatedFinal,
   mergeChannelProgressDraftLine,
   resolveChannelPreviewStreamMode,
+  resolveChannelProgressDraftEllipsis,
   resolveChannelProgressDraftMaxLineChars,
   resolveChannelProgressDraftLabel,
   resolveChannelProgressDraftMaxLines,
@@ -255,6 +257,30 @@ describe("channel-streaming", () => {
         entry: { streaming: { progress: { label: false } } },
       }),
     ).toBeUndefined();
+  });
+
+  it("supports static and animated progress label ellipsis", () => {
+    const staticEntry = { streaming: { progress: { label: "Working", ellipsis: "static" } } };
+    const animatedEntry = { streaming: { progress: { label: "Working", ellipsis: "animated" } } };
+
+    expect(resolveChannelProgressDraftEllipsis(staticEntry)).toBe("static");
+    expect(resolveChannelProgressDraftEllipsis(animatedEntry)).toBe("animated");
+    expect(
+      resolveChannelProgressDraftEllipsis({ streaming: { progress: { label: "Working" } } }),
+    ).toBe("off");
+    expect(formatChannelProgressDraftLabel("Working", staticEntry)).toBe("Working...");
+    expect(formatChannelProgressDraftLabel("Working...", staticEntry)).toBe("Working...");
+    expect(formatChannelProgressDraftLabel("Working", animatedEntry, 0)).toBe("Working");
+    expect(formatChannelProgressDraftLabel("Working", animatedEntry, 1)).toBe("Working.");
+    expect(formatChannelProgressDraftLabel("Working", animatedEntry, 2)).toBe("Working..");
+    expect(formatChannelProgressDraftLabel("Working", animatedEntry, 3)).toBe("Working...");
+    expect(
+      formatChannelProgressDraftText({
+        entry: animatedEntry,
+        lines: ["tool started"],
+        progressLabelFrame: 2,
+      }),
+    ).toBe("Working..\n\n• tool started");
   });
 
   it("formats bounded progress draft text", () => {
