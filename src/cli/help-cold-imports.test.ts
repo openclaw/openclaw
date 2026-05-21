@@ -150,6 +150,76 @@ vi.mock("../commands/setup.js", () => {
   return { setupCommand: vi.fn(async () => {}) };
 });
 
+vi.mock("../commands/agent-via-gateway.js", () => {
+  loaded.mark("agent-via-gateway-command");
+  return { agentCliCommand: vi.fn(async () => {}) };
+});
+
+vi.mock("../commands/agents.commands.add.js", () => {
+  loaded.mark("agents-add-command");
+  return { agentsAddCommand: vi.fn(async () => {}) };
+});
+
+vi.mock("../commands/agents.commands.bind.js", () => {
+  loaded.mark("agents-bind-command");
+  return {
+    agentsBindingsCommand: vi.fn(async () => {}),
+    agentsBindCommand: vi.fn(async () => {}),
+    agentsUnbindCommand: vi.fn(async () => {}),
+  };
+});
+
+vi.mock("../commands/agents.commands.delete.js", () => {
+  loaded.mark("agents-delete-command");
+  return { agentsDeleteCommand: vi.fn(async () => {}) };
+});
+
+vi.mock("../commands/agents.commands.identity.js", () => {
+  loaded.mark("agents-identity-command");
+  return { agentsSetIdentityCommand: vi.fn(async () => {}) };
+});
+
+vi.mock("../commands/agents.commands.list.js", () => {
+  loaded.mark("agents-list-command");
+  return { agentsListCommand: vi.fn(async () => {}) };
+});
+
+vi.mock("@clack/prompts", () => {
+  loaded.mark("clack-prompts");
+  return {
+    confirm: vi.fn(async () => true),
+  };
+});
+
+vi.mock("../secrets/apply.js", () => {
+  loaded.mark("secrets-apply-runtime");
+  return {
+    runSecretsApply: vi.fn(async () => ({})),
+  };
+});
+
+vi.mock("../secrets/audit.js", () => {
+  loaded.mark("secrets-audit-runtime");
+  return {
+    resolveSecretsAuditExitCode: vi.fn(() => 0),
+    runSecretsAudit: vi.fn(async () => ({})),
+  };
+});
+
+vi.mock("../secrets/configure.js", () => {
+  loaded.mark("secrets-configure-runtime");
+  return {
+    runSecretsConfigureInteractive: vi.fn(async () => ({})),
+  };
+});
+
+vi.mock("../secrets/plan.js", () => {
+  loaded.mark("secrets-plan-runtime");
+  return {
+    isSecretsApplyPlan: vi.fn(() => true),
+  };
+});
+
 function makeProgram(): Command {
   const program = new Command();
   program.name("openclaw");
@@ -247,5 +317,34 @@ describe("subcommand help cold imports", () => {
 
     expect(loaded.modules).not.toContain("onboard-command");
     expect(loaded.modules).not.toContain("default-runtime");
+  });
+
+  it("keeps agents help out of agent action modules", async () => {
+    const { registerAgentCommands } = await import("./program/register.agent.js");
+    const program = makeProgram();
+
+    registerAgentCommands(program, { agentChannelOptions: "last|telegram|discord" });
+    await expectHelpExit(program, ["agents", "--help"]);
+
+    expect(loaded.modules).not.toContain("agent-via-gateway-command");
+    expect(loaded.modules).not.toContain("agents-add-command");
+    expect(loaded.modules).not.toContain("agents-bind-command");
+    expect(loaded.modules).not.toContain("agents-delete-command");
+    expect(loaded.modules).not.toContain("agents-identity-command");
+    expect(loaded.modules).not.toContain("agents-list-command");
+  });
+
+  it("keeps secrets help out of secrets action modules", async () => {
+    const { registerSecretsCli } = await import("./secrets-cli.js");
+    const program = makeProgram();
+
+    registerSecretsCli(program);
+    await expectHelpExit(program, ["secrets", "--help"]);
+
+    expect(loaded.modules).not.toContain("clack-prompts");
+    expect(loaded.modules).not.toContain("secrets-apply-runtime");
+    expect(loaded.modules).not.toContain("secrets-audit-runtime");
+    expect(loaded.modules).not.toContain("secrets-configure-runtime");
+    expect(loaded.modules).not.toContain("secrets-plan-runtime");
   });
 });

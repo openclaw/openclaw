@@ -371,7 +371,6 @@ function buildCompactionContextEngineRuntimeContext(params: {
       agentDir: params.agentDir,
       config: params.params.config,
       skillsSnapshot: params.params.skillsSnapshot,
-      senderIsOwner: params.params.senderIsOwner,
       senderId: params.params.senderId,
       provider: params.params.provider,
       modelId: params.params.model,

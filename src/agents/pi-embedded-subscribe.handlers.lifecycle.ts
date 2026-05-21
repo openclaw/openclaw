@@ -4,6 +4,7 @@ import {
   buildApiErrorObservationFields,
   buildTextObservationFields,
   sanitizeForConsole,
+  shouldSuppressRawErrorConsoleSuffix,
 } from "./pi-embedded-error-observation.js";
 import { classifyFailoverReason, formatAssistantErrorText } from "./pi-embedded-helpers.js";
 import { hasCommittedMessagingToolDeliveryEvidence } from "./pi-embedded-runner/delivery-evidence.js";
@@ -92,12 +93,9 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
     const safeModel = sanitizeForConsole(lastAssistant.model) ?? "unknown";
     const safeProvider = sanitizeForConsole(lastAssistant.provider) ?? "unknown";
     const safeRawErrorPreview = sanitizeForConsole(observedError.rawErrorPreview);
-    const shouldSuppressRawErrorConsoleSuffix =
-      observedError.providerRuntimeFailureKind === "auth_html_403" ||
-      observedError.providerRuntimeFailureKind === "auth_scope" ||
-      observedError.providerRuntimeFailureKind === "auth_refresh";
     const rawErrorConsoleSuffix =
-      safeRawErrorPreview && !shouldSuppressRawErrorConsoleSuffix
+      safeRawErrorPreview &&
+      !shouldSuppressRawErrorConsoleSuffix(observedError.providerRuntimeFailureKind)
         ? ` rawError=${safeRawErrorPreview}`
         : "";
     ctx.log.warn("embedded run agent end", {

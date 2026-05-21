@@ -169,6 +169,7 @@ export type PluginLoadOptions = {
   activationSourceConfig?: OpenClawConfig;
   autoEnabledReasons?: Readonly<Record<string, string[]>>;
   workspaceDir?: string;
+  installRecords?: Record<string, PluginInstallRecord>;
   // Allows callers to resolve plugin roots and load paths against an explicit env
   // instead of the process-global environment.
   env?: NodeJS.ProcessEnv;
@@ -1117,7 +1118,7 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
   const runtimeSubagentMode = resolveRuntimeSubagentMode(options.runtimeOptions);
   const coreGatewayMethodNames = resolveCoreGatewayMethodNames(options);
   const installRecords = {
-    ...loadInstalledPluginIndexInstallRecordsSync({ env }),
+    ...(options.installRecords ?? loadInstalledPluginIndexInstallRecordsSync({ env })),
     ...cfg.plugins?.installs,
   };
   const cacheKey = buildCacheKey({
@@ -1231,11 +1232,19 @@ function getCompatibleActivePluginRegistry(
       activeCacheKey,
     );
   };
+  const matchesCompatibleActiveRegistry = (candidate: PluginLoadOptions): boolean => {
+    if (matchesActiveCacheKey(candidate)) {
+      return true;
+    }
+    if (
+      scopedPluginLoadOptionsMatchWiderActiveCacheKey(candidate, activeCacheKey, activeRegistry)
+    ) {
+      return true;
+    }
+    return pluginToolDiscoveryOptionsMatchActiveCacheKey(candidate, activeCacheKey);
+  };
 
-  if (matchesActiveCacheKey(options)) {
-    return activeRegistry;
-  }
-  if (scopedPluginLoadOptionsMatchWiderActiveCacheKey(options, activeCacheKey, activeRegistry)) {
+  if (matchesCompatibleActiveRegistry(options)) {
     return activeRegistry;
   }
   if (!loadContext.shouldActivate) {
@@ -1243,50 +1252,47 @@ function getCompatibleActivePluginRegistry(
       ...options,
       activate: true,
     };
-    if (matchesActiveCacheKey(activatingOptions)) {
-      return activeRegistry;
-    }
-    if (
-      scopedPluginLoadOptionsMatchWiderActiveCacheKey(
-        activatingOptions,
-        activeCacheKey,
-        activeRegistry,
-      )
-    ) {
+    if (matchesCompatibleActiveRegistry(activatingOptions)) {
       return activeRegistry;
     }
   }
-  if (pluginToolDiscoveryOptionsMatchActiveCacheKey(options, activeCacheKey)) {
-    return activeRegistry;
+  const activeRuntimeSubagentMode = getActivePluginRuntimeSubagentMode();
+  if (activeRuntimeSubagentMode === "gateway-bindable") {
+    const gatewayStartupOptions: PluginLoadOptions = {
+      ...options,
+      preferBuiltPluginArtifacts: true,
+    };
+    if (matchesCompatibleActiveRegistry(gatewayStartupOptions)) {
+      return activeRegistry;
+    }
+    if (!loadContext.shouldActivate) {
+      const activatingGatewayStartupOptions: PluginLoadOptions = {
+        ...options,
+        activate: true,
+        preferBuiltPluginArtifacts: true,
+      };
+      if (matchesCompatibleActiveRegistry(activatingGatewayStartupOptions)) {
+        return activeRegistry;
+      }
+    }
   }
   if (
     loadContext.runtimeSubagentMode === "default" &&
-    getActivePluginRuntimeSubagentMode() === "gateway-bindable"
+    activeRuntimeSubagentMode === "gateway-bindable"
   ) {
-    const gatewayBindableOptions = {
+    const gatewayBindableOptions: PluginLoadOptions = {
       ...options,
       runtimeOptions: {
         ...options.runtimeOptions,
         allowGatewaySubagentBinding: true,
       },
     };
-    if (matchesActiveCacheKey(gatewayBindableOptions)) {
-      return activeRegistry;
-    }
-    if (
-      scopedPluginLoadOptionsMatchWiderActiveCacheKey(
-        gatewayBindableOptions,
-        activeCacheKey,
-        activeRegistry,
-      )
-    ) {
-      return activeRegistry;
-    }
-    if (pluginToolDiscoveryOptionsMatchActiveCacheKey(gatewayBindableOptions, activeCacheKey)) {
-      return activeRegistry;
-    }
+    const gatewayStartupOptions: PluginLoadOptions = {
+      ...gatewayBindableOptions,
+      preferBuiltPluginArtifacts: true,
+    };
     if (!loadContext.shouldActivate) {
-      const activatingGatewayBindableOptions = {
+      const activatingGatewayBindableOptions: PluginLoadOptions = {
         ...options,
         activate: true,
         runtimeOptions: {
@@ -1294,18 +1300,23 @@ function getCompatibleActivePluginRegistry(
           allowGatewaySubagentBinding: true,
         },
       };
-      if (matchesActiveCacheKey(activatingGatewayBindableOptions)) {
-        return activeRegistry;
-      }
+      const activatingGatewayStartupOptions: PluginLoadOptions = {
+        ...activatingGatewayBindableOptions,
+        preferBuiltPluginArtifacts: true,
+      };
       if (
-        scopedPluginLoadOptionsMatchWiderActiveCacheKey(
-          activatingGatewayBindableOptions,
-          activeCacheKey,
-          activeRegistry,
-        )
+        matchesCompatibleActiveRegistry(gatewayBindableOptions) ||
+        matchesCompatibleActiveRegistry(gatewayStartupOptions) ||
+        matchesCompatibleActiveRegistry(activatingGatewayBindableOptions) ||
+        matchesCompatibleActiveRegistry(activatingGatewayStartupOptions)
       ) {
         return activeRegistry;
       }
+    } else if (
+      matchesCompatibleActiveRegistry(gatewayBindableOptions) ||
+      matchesCompatibleActiveRegistry(gatewayStartupOptions)
+    ) {
+      return activeRegistry;
     }
   }
   return undefined;

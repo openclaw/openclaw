@@ -1208,7 +1208,6 @@ export async function createContextEngineAttemptRunner(params: {
       authProfileStore: { version: 1, profiles: {} },
       modelRegistry: {} as never,
       thinkLevel: "off",
-      senderIsOwner: true,
       disableTools: true,
       disableMessageTool: true,
       contextTokenBudget: 2048,
