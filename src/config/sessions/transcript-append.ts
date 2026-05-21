@@ -10,6 +10,7 @@ import {
 import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { redactSecrets } from "../../logging/redact.js";
+import { runWithOwnedSessionTranscriptWriteLock } from "./transcript-write-context.js";
 
 const TRANSCRIPT_APPEND_SCAN_CHUNK_BYTES = 64 * 1024;
 const SESSION_MANAGER_APPEND_MAX_BYTES = 8 * 1024 * 1024;
@@ -254,8 +255,12 @@ function isTranscriptAgentMessage(value: unknown): value is AgentMessage {
 export async function appendSessionTranscriptMessage<TMessage>(
   params: AppendSessionTranscriptMessageParams<TMessage>,
 ): Promise<{ messageId: string; message: TMessage }> {
-  return await withTranscriptAppendQueue(params.transcriptPath, () =>
-    appendSessionTranscriptMessageLocked(params),
+  return await runWithOwnedSessionTranscriptWriteLock(
+    { sessionFile: params.transcriptPath },
+    async () =>
+      await withTranscriptAppendQueue(params.transcriptPath, () =>
+        appendSessionTranscriptMessageLocked(params),
+      ),
   );
 }
 

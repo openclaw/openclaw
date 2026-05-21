@@ -1,10 +1,14 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { statSync } from "node:fs";
 import fs from "node:fs/promises";
 import { isSessionWriteLockTimeoutError } from "../../session-write-lock-error.js";
 import type { acquireSessionWriteLock } from "../../session-write-lock.js";
 
 type SessionLock = Awaited<ReturnType<typeof acquireSessionWriteLock>>;
 type AcquireSessionWriteLock = typeof acquireSessionWriteLock;
+type ActiveWriteLockState = {
+  active: boolean;
+};
 
 type LockOptions = {
   sessionFile: string;
@@ -23,6 +27,16 @@ type SessionEventProcessor = {
 
 type SessionEventQueueOwner = {
   _agentEventQueue?: PromiseLike<unknown>;
+};
+
+type SessionEventQueueBridge = SessionEventQueueOwner & {
+  _handleAgentEvent?: AwaitableSessionEventHandler;
+  _disconnectFromAgent?: () => void;
+  _reconnectToAgent?: () => void;
+};
+
+type AwaitableSessionEventHandler = ((event: unknown, signal?: unknown) => unknown) & {
+  __openclawSessionEventQueueAwaitInstalled?: boolean;
 };
 
 type SessionWithAgentPrompt = {
@@ -147,6 +161,25 @@ async function readSessionFileFingerprint(sessionFile: string): Promise<SessionF
   }
 }
 
+function readSessionFileFingerprintSync(sessionFile: string): SessionFileFingerprint {
+  try {
+    const stat = statSync(sessionFile, { bigint: true });
+    return {
+      exists: true,
+      dev: stat.dev,
+      ino: stat.ino,
+      size: stat.size,
+      mtimeNs: stat.mtimeNs,
+      ctimeNs: stat.ctimeNs,
+    };
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return { exists: false };
+    }
+    throw err;
+  }
+}
+
 async function waitForSessionEventQueue(session: unknown): Promise<void> {
   const owner = session as SessionEventQueueOwner;
   for (let attempts = 0; attempts < 5; attempts += 1) {
@@ -165,6 +198,41 @@ async function waitForSessionEventQueue(session: unknown): Promise<void> {
   }
 }
 
+function installAwaitableSessionEventQueue(session: unknown): void {
+  const owner = session as SessionEventQueueBridge;
+  const original = owner["_handleAgentEvent"];
+  if (
+    typeof original !== "function" ||
+    original["__openclawSessionEventQueueAwaitInstalled"] === true
+  ) {
+    return;
+  }
+
+  const canReconnect =
+    typeof owner["_disconnectFromAgent"] === "function" &&
+    typeof owner["_reconnectToAgent"] === "function";
+  if (canReconnect) {
+    owner["_disconnectFromAgent"]?.();
+  }
+
+  const wrapped: AwaitableSessionEventHandler = function awaitableSessionEventQueue(
+    ...args: [event: unknown, signal?: unknown]
+  ) {
+    const result = original(...args);
+    const queue = owner["_agentEventQueue"];
+    if (queue && typeof queue.then === "function") {
+      return Promise.resolve(queue);
+    }
+    return result;
+  };
+  wrapped["__openclawSessionEventQueueAwaitInstalled"] = true;
+  owner["_handleAgentEvent"] = wrapped;
+
+  if (canReconnect) {
+    owner["_reconnectToAgent"]?.();
+  }
+}
+
 export class EmbeddedAttemptSessionTakeoverError extends Error {
   constructor(sessionFile: string) {
     super(`session file changed while embedded prompt lock was released: ${sessionFile}`);
@@ -176,6 +244,7 @@ export function installSessionEventWriteLock(params: {
   session: unknown;
   withSessionWriteLock: <T>(run: () => Promise<T> | T) => Promise<T>;
 }): void {
+  installAwaitableSessionEventQueue(params.session);
   const session = params.session as SessionEventProcessor;
   const original = session["_processAgentEvent"];
   if (
@@ -243,6 +312,7 @@ export function installSessionExternalHookWriteLock(params: {
 
 export type EmbeddedAttemptSessionLockController = {
   releaseForPrompt(): Promise<void>;
+  refreshAfterOwnedSessionWrite(): void;
   waitForSessionEvents(session: unknown): Promise<void>;
   withSessionWriteLock<T>(run: () => Promise<T> | T): Promise<T>;
   acquireForCleanup(params?: { session?: unknown }): Promise<SessionLock>;
@@ -262,7 +332,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     });
 
   let heldLock: SessionLock | undefined = await acquireLock();
-  const activeWriteLock = new AsyncLocalStorage<SessionLock>();
+  const activeWriteLock = new AsyncLocalStorage<ActiveWriteLockState>();
   let fenceFingerprint: SessionFileFingerprint | undefined;
   let fenceActive = false;
   let takeoverDetected = false;
@@ -311,24 +381,36 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       fenceActive = true;
       await lock.release();
     },
+    refreshAfterOwnedSessionWrite(): void {
+      if (fenceActive && !takeoverDetected) {
+        fenceFingerprint = readSessionFileFingerprintSync(params.lockOptions.sessionFile);
+      }
+    },
     waitForSessionEvents: waitForSessionEventQueue,
     async withSessionWriteLock<T>(run: () => Promise<T> | T): Promise<T> {
       if (takeoverDetected) {
         throw new EmbeddedAttemptSessionTakeoverError(params.lockOptions.sessionFile);
       }
-      if (activeWriteLock.getStore()) {
+      if (activeWriteLock.getStore()?.active === true) {
         return await run();
       }
       const { lock, owned } = await acquireWriteLock();
       try {
         await assertSessionFileFence();
         const runWithLock = async () => {
-          const result = await run();
-          await refreshSessionFileFence();
-          return result;
+          try {
+            return await run();
+          } finally {
+            await refreshSessionFileFence();
+          }
         };
         if (owned) {
-          return await activeWriteLock.run(lock, runWithLock);
+          const activeLockState: ActiveWriteLockState = { active: true };
+          try {
+            return await activeWriteLock.run(activeLockState, runWithLock);
+          } finally {
+            activeLockState.active = false;
+          }
         }
         return await runWithLock();
       } finally {

@@ -15,7 +15,10 @@ import {
   runQuotaSuspensionMaintenance,
   updateSessionStoreEntry,
 } from "../../../config/sessions/store.js";
-import { withOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
+import {
+  bindOwnedSessionTranscriptWrites,
+  withOwnedSessionTranscriptWrites,
+} from "../../../config/sessions/transcript-write-context.js";
 import { resolveContextEngineOwnerPluginId } from "../../../context-engine/registry.js";
 import type { AssembleResult } from "../../../context-engine/types.js";
 import { emitTrustedDiagnosticEvent } from "../../../infra/diagnostic-events.js";
@@ -2116,6 +2119,9 @@ export async function runEmbeddedAttempt(
         suppressTranscriptOnlyAssistantPersistence:
           params.suppressTranscriptOnlyAssistantPersistence,
         suppressAssistantErrorPersistence: params.suppressAssistantErrorPersistence,
+        onMessagePersisted: () => {
+          sessionLockController.refreshAfterOwnedSessionWrite();
+        },
         onUserMessagePersisted: (message) => {
           params.onUserMessagePersisted?.(message);
         },
@@ -3173,19 +3179,26 @@ export async function runEmbeddedAttempt(
       };
       const abortable = <T>(promise: Promise<T>): Promise<T> =>
         abortableWithSignal(runAbortController.signal, promise);
+      const ownedTranscriptWriteContext = {
+        sessionFile: params.sessionFile,
+        sessionKey: params.sessionKey,
+        withSessionWriteLock: <T>(operation: () => Promise<T> | T) =>
+          sessionLockController.withSessionWriteLock(operation),
+      };
       const promptActiveSession = (
         prompt: string,
         options?: Parameters<typeof activeSession.prompt>[1],
       ): Promise<void> =>
         withOwnedSessionTranscriptWrites(
-          {
-            sessionFile: params.sessionFile,
-            sessionKey: params.sessionKey,
-            withSessionWriteLock: (operation) =>
-              sessionLockController.withSessionWriteLock(operation),
-          },
+          ownedTranscriptWriteContext,
           async () => abortable(trackPromptSettlePromise(activeSession.prompt(prompt, options))),
         );
+      const onBlockReply = params.onBlockReply
+        ? bindOwnedSessionTranscriptWrites(ownedTranscriptWriteContext, params.onBlockReply)
+        : undefined;
+      const onBlockReplyFlush = params.onBlockReplyFlush
+        ? bindOwnedSessionTranscriptWrites(ownedTranscriptWriteContext, params.onBlockReplyFlush)
+        : undefined;
 
       const subscription = subscribeEmbeddedPiSession(
         buildEmbeddedSubscriptionParams({
@@ -3203,8 +3216,8 @@ export async function runEmbeddedAttempt(
           onToolResult: params.onToolResult,
           onReasoningStream: params.onReasoningStream,
           onReasoningEnd: params.onReasoningEnd,
-          onBlockReply: params.onBlockReply,
-          onBlockReplyFlush: params.onBlockReplyFlush,
+          onBlockReply,
+          onBlockReplyFlush,
           blockReplyBreak: params.blockReplyBreak,
           blockReplyChunking: params.blockReplyChunking,
           onPartialReply: params.onPartialReply,
@@ -4204,8 +4217,8 @@ export async function runEmbeddedAttempt(
           // user receives the assistant response immediately.  Without this,
           // coalesced/buffered blocks stay in the pipeline until compaction
           // finishes — which can take minutes on large contexts (#35074).
-          if (params.onBlockReplyFlush) {
-            await params.onBlockReplyFlush();
+          if (onBlockReplyFlush) {
+            await onBlockReplyFlush();
           }
 
           // Skip compaction wait when yield aborted the run — the signal is
