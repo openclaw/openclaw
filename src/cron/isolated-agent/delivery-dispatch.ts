@@ -1,7 +1,6 @@
 /** Dispatches isolated cron output to direct delivery, mirrors, and follow-up queues. */
 import { isAudioFileName } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import {
   isSilentReplyText,
@@ -39,7 +38,6 @@ import { normalizeTargetForProvider } from "../../infra/outbound/target-normaliz
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import {
-  isCronSessionKey,
   parseThreadSessionSuffix,
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
@@ -51,6 +49,7 @@ import type { CronJob, CronRunTelemetry } from "../types.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
 import { pickLastNonEmptyTextFromPayloads, pickSummaryFromOutput } from "./helpers.js";
 import type { RunCronAgentTurnResult } from "./run.types.js";
+import { cleanupCronRunSessionAfterRun } from "./session-cleanup.js";
 import { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
 function normalizeDeliveryTarget(channel: string, to: string): string {
@@ -172,9 +171,6 @@ type CompletedDirectCronDelivery = {
   results: OutboundDeliveryResult[];
 };
 
-const gatewayCallRuntimeLoader = createLazyImportLoader(
-  () => import("../../gateway/call.runtime.js"),
-);
 const deliveryOutboundRuntimeLoader = createLazyImportLoader(
   () => import("./delivery-outbound.runtime.js"),
 );
@@ -196,10 +192,6 @@ const subagentFollowupRuntimeLoader = createLazyImportLoader(
 const ttsRuntimeLoader = createLazyImportLoader(() => import("../../tts/tts.runtime.js"));
 
 const COMPLETED_DIRECT_CRON_DELIVERIES = new Map<string, CompletedDirectCronDelivery>();
-
-async function loadGatewayCallRuntime(): Promise<typeof import("../../gateway/call.runtime.js")> {
-  return await gatewayCallRuntimeLoader.load();
-}
 
 async function loadDeliveryOutboundRuntime(): Promise<
   typeof import("./delivery-outbound.runtime.js")
@@ -256,29 +248,12 @@ export async function cleanupDirectCronSession(params: {
   sessionId: string;
   retireReason: string;
 }): Promise<void> {
-  if (!params.job.deleteAfterRun) {
-    return;
-  }
-  if (!isCronSessionKey(params.agentSessionKey)) {
-    return;
-  }
-  try {
-    const { callGateway } = await loadGatewayCallRuntime();
-    await callGateway({
-      method: "sessions.delete",
-      params: {
-        key: params.agentSessionKey,
-        deleteTranscript: true,
-        emitLifecycleHooks: false,
-      },
-      timeoutMs: 10_000,
-    });
-  } catch {
-    await retireSessionMcpRuntime({
-      sessionId: params.sessionId,
-      reason: params.retireReason,
-    });
-  }
+  await cleanupCronRunSessionAfterRun({
+    job: params.job,
+    agentSessionKey: params.agentSessionKey,
+    sessionId: params.sessionId,
+    reason: params.retireReason,
+  });
 }
 
 function logCronDeliveryErrorDeferred(message: string): void {
@@ -959,13 +934,15 @@ export async function dispatchCronDelivery(
     if (directCronSessionDeleted) {
       return;
     }
-    directCronSessionDeleted = true;
-    await cleanupDirectCronSession({
+    const cleanupAttempted = await cleanupCronRunSessionAfterRun({
       job: params.job,
       agentSessionKey: params.agentSessionKey,
       sessionId: params.sessionId,
-      retireReason: "cron-delete-after-run-fallback",
+      reason: "cron-delete-after-run-fallback",
     });
+    if (cleanupAttempted) {
+      directCronSessionDeleted = true;
+    }
   };
   const finishSilentReplyDelivery = async (): Promise<RunCronAgentTurnResult> => {
     deliveryAttempted = true;

@@ -5,6 +5,7 @@ import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
   loadRunCronIsolatedAgentTurn,
   makeCronSession,
+  callGatewayMock,
   retireSessionMcpRuntimeMock,
   resolveFastModeStateMock,
   resolveCronSessionMock,
@@ -151,6 +152,29 @@ async function runFastModeCase(params: {
 
 describe("runCronIsolatedAgentTurn — fast mode", () => {
   setupRunCronIsolatedAgentTurnSuite({ fast: true });
+
+  it("deletes the run-scoped cron session after delivery-none deleteAfterRun jobs", async () => {
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentTurnParams({
+        job: makeIsolatedAgentTurnJob({
+          deleteAfterRun: true,
+          delivery: { mode: "none" },
+          payload: { kind: "agentTurn", message: "cleanup me", model: OPENAI_GPT4_MODEL },
+        }),
+      }),
+    );
+
+    expect(result.status).toBe("ok");
+    expect(callGatewayMock).toHaveBeenCalledWith({
+      method: "sessions.delete",
+      params: {
+        key: "agent:default:cron:test",
+        deleteTranscript: true,
+        emitLifecycleHooks: false,
+      },
+      timeoutMs: 10_000,
+    });
+  });
 
   it("passes config-driven fast mode into embedded cron runs", async () => {
     await runFastModeCase({
