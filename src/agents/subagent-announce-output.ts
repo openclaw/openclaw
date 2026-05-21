@@ -377,6 +377,7 @@ export function applySubagentWaitOutcome(params: {
   }
   const waitError = typeof params.wait?.error === "string" ? params.wait.error : undefined;
   let outcome = next.outcome;
+  // Capture/announcement callers can pass raw wait snapshots that bypass the primary normalizers.
   if (isBlockedLivenessState(params.wait?.livenessState)) {
     outcome = { status: "error", error: formatBlockedLivenessError(waitError) };
   } else if (params.wait?.status === "timeout") {
