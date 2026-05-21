@@ -459,6 +459,15 @@ function logAgentHarnessSelection(
 export async function maybeCompactAgentHarnessSession(
   params: CompactEmbeddedPiSessionParams,
 ): Promise<EmbeddedPiCompactResult | undefined> {
+  const runtime = resolveConfiguredAgentHarnessPolicy({
+    provider: params.provider,
+    modelId: params.model,
+    config: params.config,
+    sessionKey: params.sessionKey,
+  }).runtime;
+  if (isCliRuntimeAliasForProvider({ runtime, provider: params.provider })) {
+    return undefined;
+  }
   const harness = selectAgentHarness({
     provider: params.provider ?? "",
     modelId: params.model,
