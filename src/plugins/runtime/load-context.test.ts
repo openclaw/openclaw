@@ -112,6 +112,7 @@ describe("resolvePluginRuntimeLoadContext", () => {
       env,
       logger: context.logger,
       manifestRegistry,
+      installRecords: {},
     });
     expect(loadPluginMetadataSnapshotMock).toHaveBeenCalledWith({
       config: rawConfig,
@@ -155,6 +156,32 @@ describe("resolvePluginRuntimeLoadContext", () => {
     });
   });
 
+  it("threads install records from the metadata snapshot into the context and load options", () => {
+    const snapshotWithRecords = {
+      ...metadataSnapshot,
+      index: {
+        installRecords: {
+          demo: { source: "registry", version: "1.0.0" },
+        },
+        plugins: [],
+        policyHash: "policy",
+      },
+    };
+    loadPluginMetadataSnapshotMock.mockReturnValueOnce(snapshotWithRecords);
+
+    const context = resolvePluginRuntimeLoadContext({
+      config: { plugins: {} },
+      env: { HOME: "/tmp/openclaw-home" } as NodeJS.ProcessEnv,
+    });
+
+    expect(context.installRecords).toEqual({
+      demo: { source: "registry", version: "1.0.0" },
+    });
+    expect(buildPluginRuntimeLoadOptions(context).installRecords).toEqual({
+      demo: { source: "registry", version: "1.0.0" },
+    });
+  });
+
   it("builds plugin load options from the shared runtime context", () => {
     const context = resolvePluginRuntimeLoadContext({
       config: { plugins: {} },
@@ -176,6 +203,7 @@ describe("resolvePluginRuntimeLoadContext", () => {
       env: context.env,
       logger: context.logger,
       manifestRegistry,
+      installRecords: {},
       cache: false,
       activate: false,
       onlyPluginIds: ["demo"],
