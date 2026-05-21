@@ -9,6 +9,7 @@ import {
 } from "./session-daily-reset-scheduler.js";
 
 const tmpDirs: string[] = [];
+const originalOpenClawStateDir = process.env.OPENCLAW_STATE_DIR;
 
 async function makeStore(entries: Record<string, unknown>) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-daily-reset-"));
@@ -33,6 +34,11 @@ async function makeStore(entries: Record<string, unknown>) {
 describe("daily session reset scheduler", () => {
   afterEach(async () => {
     vi.useRealTimers();
+    if (originalOpenClawStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = originalOpenClawStateDir;
+    }
     for (const dir of tmpDirs.splice(0)) {
       await fs.rm(dir, { recursive: true, force: true });
     }
@@ -100,6 +106,77 @@ describe("daily session reset scheduler", () => {
         sessionStartedAt: afterReset,
       },
     });
+    const performReset = vi.fn(async () => ({ ok: true }));
+
+    const result = await resetStaleDailySessions({
+      cfg,
+      nowMs: afterReset,
+      performReset,
+    });
+
+    expect(result).toEqual({ checked: 1, reset: 0, errors: 0 });
+    expect(performReset).not.toHaveBeenCalled();
+  });
+
+  it("skips stale duplicate rows from non-authoritative discovered stores", async () => {
+    const beforeReset = new Date(2026, 4, 18, 23, 0, 0, 0).getTime();
+    const afterReset = new Date(2026, 4, 19, 8, 0, 0, 0).getTime();
+    const sessionKey = "agent:main:telegram:direct:user-1";
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-daily-reset-"));
+    tmpDirs.push(rootDir);
+    const configuredStorePath = path.join(
+      rootDir,
+      "configured",
+      "agents",
+      "main",
+      "sessions",
+      "sessions.json",
+    );
+    const discoveredStorePath = path.join(
+      rootDir,
+      "state",
+      "agents",
+      "main",
+      "sessions",
+      "sessions.json",
+    );
+    await fs.mkdir(path.dirname(configuredStorePath), { recursive: true });
+    await fs.mkdir(path.dirname(discoveredStorePath), { recursive: true });
+    await fs.writeFile(
+      configuredStorePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "fresh-canonical-session",
+          updatedAt: afterReset,
+          sessionStartedAt: afterReset,
+        },
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      discoveredStorePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "old-discovered-session",
+          updatedAt: beforeReset,
+          sessionStartedAt: beforeReset,
+        },
+      }),
+      "utf8",
+    );
+    process.env.OPENCLAW_STATE_DIR = path.join(rootDir, "state");
+    const cfg = {
+      session: {
+        store: path.join(rootDir, "configured", "agents", "{agentId}", "sessions", "sessions.json"),
+        reset: {
+          mode: "daily",
+          atHour: 4,
+        },
+      },
+      agents: {
+        list: [{ id: "main" }],
+      },
+    } as OpenClawConfig;
     const performReset = vi.fn(async () => ({ ok: true }));
 
     const result = await resetStaleDailySessions({

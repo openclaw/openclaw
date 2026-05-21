@@ -61,8 +61,11 @@ export async function resetStaleDailySessions(params: {
         cfg: params.cfg,
         key: sessionKey,
         agentId: target.agentId,
-        store,
       });
+      if (sessionTarget.storePath !== target.storePath) {
+        continue;
+      }
+      const authoritativeStore = loadSessionStore(sessionTarget.storePath, { skipCache: true });
       for (const storeKey of sessionTarget.storeKeys) {
         visitedStoreKeys.add(storeKey);
       }
@@ -74,13 +77,13 @@ export async function resetStaleDailySessions(params: {
         continue;
       }
       const freshestMatch = resolveFreshestSessionStoreMatchFromStoreKeys(
-        store,
+        authoritativeStore,
         sessionTarget.storeKeys,
-      ) ?? {
-        key: sessionKey,
-        entry,
-      };
-      const resetSessionKey = freshestMatch.key;
+      );
+      if (!freshestMatch) {
+        continue;
+      }
+      const resetSessionKey = sessionTarget.canonicalKey;
       const resetEntry = freshestMatch.entry;
       if (!resetEntry?.sessionId || typeof resetEntry.updatedAt !== "number") {
         continue;
@@ -112,6 +115,42 @@ export async function resetStaleDailySessions(params: {
         policy: resetPolicy,
       });
       if (freshness.fresh) {
+        continue;
+      }
+      const latestStore = loadSessionStore(sessionTarget.storePath, { skipCache: true });
+      const latestMatch = resolveFreshestSessionStoreMatchFromStoreKeys(
+        latestStore,
+        sessionTarget.storeKeys,
+      );
+      const latestEntry = latestMatch?.entry;
+      if (!latestEntry?.sessionId || typeof latestEntry.updatedAt !== "number") {
+        continue;
+      }
+      const latestResetPolicy = resolveSessionResetPolicy({
+        sessionCfg: params.cfg.session,
+        resetType: resolveSessionResetType({ sessionKey: resetSessionKey }),
+        resetOverride: resolveChannelResetConfig({
+          sessionCfg: params.cfg.session,
+          channel: latestEntry.lastChannel ?? latestEntry.channel ?? latestEntry.origin?.provider,
+        }),
+      });
+      if (
+        latestResetPolicy.mode !== "daily" ||
+        hasProviderOwnedSession(latestEntry, latestResetPolicy.configured === true)
+      ) {
+        continue;
+      }
+      const latestFreshness = evaluateSessionFreshness({
+        updatedAt: latestEntry.updatedAt,
+        ...resolveSessionLifecycleTimestamps({
+          entry: latestEntry,
+          agentId: sessionTarget.agentId,
+          storePath: sessionTarget.storePath,
+        }),
+        now,
+        policy: latestResetPolicy,
+      });
+      if (latestFreshness.fresh) {
         continue;
       }
       const result = await performReset(resetSessionKey);
