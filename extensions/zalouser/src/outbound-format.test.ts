@@ -118,6 +118,56 @@ describe("normalizeZalouserOutboundText", () => {
     });
   });
 
+  describe("fenced code block preservation (P1 review fix)", () => {
+    // The normalizer must NEVER rewrite content inside ``` / ~~~ fenced
+    // code blocks. YAML frontmatter, config snippets, and any code that
+    // happens to contain a `---` line or blank lines between bullets
+    // must pass through verbatim.
+    it("preserves a --- line inside a triple-backtick fence", () => {
+      const input = "Here is the config:\n```yaml\nfoo: bar\n---\nbaz: qux\n```\nDone.";
+      // The fence content is identical; only the surrounding prose is
+      // a candidate for transformation (and there is nothing to do here).
+      expect(normalizeZalouserOutboundText(input)).toBe(input);
+    });
+
+    it("preserves a --- line inside a triple-tilde fence", () => {
+      const input = "Snippet:\n~~~yaml\nfoo: bar\n---\nbaz: qux\n~~~\nThanks.";
+      expect(normalizeZalouserOutboundText(input)).toBe(input);
+    });
+
+    it("preserves blank lines between bullets inside a code fence", () => {
+      // A code fence containing what looks like a list with blank lines
+      // must keep that exact spacing - it might be a Python list, a
+      // YAML sequence with intentional spacing, etc.
+      const input = "```python\nfoo = [\n  - a\n\n  - b\n]\n```";
+      expect(normalizeZalouserOutboundText(input)).toBe(input);
+    });
+
+    it("preserves longer-than-3 backtick fences", () => {
+      const input = "````md\n---\nfront: matter\n---\n````";
+      expect(normalizeZalouserOutboundText(input)).toBe(input);
+    });
+
+    it("still normalizes prose AROUND a code fence", () => {
+      const input = "Intro\n\n\n- before\n\n- code follows\n```\n---\n```\n- after\n\n- final";
+      const out = normalizeZalouserOutboundText(input);
+      // Inside fence: `---` preserved. Outside: list blank lines collapse.
+      expect(out).toContain("```\n---\n```");
+      expect(out).toContain("- before\n- code follows");
+      expect(out).toContain("- after\n- final");
+    });
+
+    it("handles an unclosed fence by treating the rest as code (defensive)", () => {
+      // If the agent emits an unterminated fence, we should NOT
+      // aggressively normalize the tail - the content might be a
+      // truncated code block that the user can still read.
+      const input = "Intro\n```\nfoo\n---\nbar";
+      const out = normalizeZalouserOutboundText(input);
+      // The --- inside the open fence stays intact.
+      expect(out).toContain("foo\n---\nbar");
+    });
+  });
+
   describe("idempotency", () => {
     it("is stable: f(f(x)) === f(x) on a representative agent reply", () => {
       const input = [

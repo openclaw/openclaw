@@ -34,10 +34,16 @@ export async function sendMessageZalouser(
   // Normalize agent-emitted markdown for the Zalo client BEFORE chunking
   // or style parsing. The Zalo personal-account UI renders triple-dash
   // horizontal rules as literal text and preserves blank lines inside
-  // lists, both of which look broken to the recipient. The normalizer
-  // only removes characters (HR lines + redundant newlines), never adds,
-  // so it is safe for non-markdown text too.
-  const normalized = normalizeZalouserOutboundText(text);
+  // lists, both of which look broken to the recipient.
+  //
+  // The normalizer is fence-aware so fenced code blocks pass through
+  // verbatim. The remaining safety concern is non-markdown sends that
+  // carry caller-supplied textStyles - those style offsets describe the
+  // ORIGINAL text and the transport layer only clamps, never rebases,
+  // them. Skip normalization in that path to keep offsets aligned.
+  const hasManualPlainStyles =
+    options.textMode !== "markdown" && (options.textStyles?.length ?? 0) > 0;
+  const normalized = hasManualPlainStyles ? text : normalizeZalouserOutboundText(text);
   const prepared =
     options.textMode === "markdown"
       ? parseZalouserTextStyles(normalized)

@@ -121,6 +121,47 @@ describe("zalouser send helpers", () => {
     expect(result.receipt.primaryPlatformMessageId).toBe("mid-1");
   });
 
+  it("normalizes outbound markdown so blank-lined lists collapse before send", async () => {
+    // Regression test for the Zalo client rendering: agent emits a list
+    // with blank lines between items, the normalizer collapses them so
+    // the client renders one tight group.
+    mockSendText.mockResolvedValueOnce(sendResult("mid-norm-1", "thread-norm-1"));
+
+    await sendMessageZalouser("thread-norm-1", "- item one\n\n- item two\n\n- item three");
+
+    expect(requireSendTextCall(0)[1]).toBe("- item one\n- item two\n- item three");
+  });
+
+  it("preserves --- inside a fenced code block during outbound normalization", async () => {
+    // Regression test for review finding P1: the normalizer must skip
+    // fenced content so YAML frontmatter or any code snippet containing
+    // a `---` line keeps that line intact.
+    mockSendText.mockResolvedValueOnce(sendResult("mid-norm-2", "thread-norm-2"));
+
+    const input = "Config:\n```yaml\nfoo: bar\n---\nbaz: qux\n```";
+    await sendMessageZalouser("thread-norm-2", input);
+
+    expect(requireSendTextCall(0)[1]).toBe(input);
+  });
+
+  it("skips outbound normalization when plain-mode caller supplies textStyles", async () => {
+    // Regression test for review finding P2: in non-markdown mode, the
+    // caller-supplied textStyles describe offsets into the ORIGINAL text.
+    // Normalization could remove characters and shift those offsets onto
+    // the wrong content. We skip normalization in that exact path.
+    mockSendText.mockResolvedValueOnce(sendResult("mid-norm-3", "thread-norm-3"));
+
+    const original = "Greeting\n\n\n- bullet one\n\n- bullet two";
+    const callerStyles = [{ start: 0, len: 8, st: TextStyle.Bold }];
+    await sendMessageZalouser("thread-norm-3", original, {
+      textStyles: callerStyles,
+    });
+
+    // Text reaches the transport verbatim so style offsets stay aligned.
+    expect(requireSendTextCall(0)[1]).toBe(original);
+    expectSendTextOptions(0, { textStyles: callerStyles });
+  });
+
   it("formats markdown text when markdown mode is enabled", async () => {
     mockSendText.mockResolvedValueOnce(sendResult("mid-1b", "thread-1"));
 
