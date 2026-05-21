@@ -43,7 +43,8 @@
               "supportsTools": true,
               "supportsUsageInStreaming": true,
               "maxTokensField": "max_tokens",
-              "requiresStringContent": true
+              "requiresStringContent": true,
+              "legacyFunctionCallStreaming": true
             }
           },
           {
@@ -63,7 +64,8 @@
               "supportsTools": true,
               "supportsUsageInStreaming": true,
               "maxTokensField": "max_tokens",
-              "requiresStringContent": true
+              "requiresStringContent": true,
+              "legacyFunctionCallStreaming": true
             }
           },
           {
@@ -83,7 +85,8 @@
               "supportsTools": true,
               "supportsUsageInStreaming": true,
               "maxTokensField": "max_tokens",
-              "requiresStringContent": true
+              "requiresStringContent": true,
+              "legacyFunctionCallStreaming": true
             }
           }
         ]

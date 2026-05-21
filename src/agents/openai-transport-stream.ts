@@ -2344,7 +2344,8 @@ async function processOpenAICompletionsStream(
         appendThinkingDelta(reasoningDelta);
       }
     }
-    if (choiceDelta.tool_calls && choiceDelta.tool_calls.length > 0) {
+    const hasModernToolCalls = Boolean(choiceDelta.tool_calls && choiceDelta.tool_calls.length > 0);
+    if (hasModernToolCalls) {
       for (const toolCall of choiceDelta.tool_calls) {
         if (
           !currentBlock ||
@@ -2403,9 +2404,12 @@ async function processOpenAICompletionsStream(
         }
       }
     }
-    const legacyFunctionCall = readLegacyFunctionCallDelta(
-      (choiceDelta as unknown as { function_call?: unknown }).function_call,
-    );
+    const legacyFunctionCall =
+      compat.legacyFunctionCallStreaming && !hasModernToolCalls
+        ? readLegacyFunctionCallDelta(
+            (choiceDelta as unknown as { function_call?: unknown }).function_call,
+          )
+        : undefined;
     if (legacyFunctionCall) {
       if (!currentBlock || currentBlock.type !== "toolCall") {
         finishCurrentBlock();
@@ -2609,6 +2613,7 @@ function getCompat(model: OpenAIModeModel): {
   supportsPromptCacheKey: boolean;
   requiresStringContent: boolean;
   strictMessageKeys: boolean;
+  legacyFunctionCallStreaming: boolean;
   visibleReasoningDetailTypes: string[];
   requiresReasoningContentOnAssistantMessages: boolean;
 } {
@@ -2640,6 +2645,7 @@ function getCompat(model: OpenAIModeModel): {
     supportsPromptCacheKey: compat.supportsPromptCacheKey === true,
     requiresStringContent: compat.requiresStringContent ?? false,
     strictMessageKeys: compat.strictMessageKeys === true,
+    legacyFunctionCallStreaming: compat.legacyFunctionCallStreaming === true,
     visibleReasoningDetailTypes:
       compat.visibleReasoningDetailTypes ?? detected.visibleReasoningDetailTypes,
     requiresReasoningContentOnAssistantMessages:

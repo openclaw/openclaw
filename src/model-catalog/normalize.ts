@@ -170,6 +170,7 @@ function normalizeModelCatalogCompat(value: unknown): ModelCompatConfig | undefi
     "supportsStrictMode",
     "requiresStringContent",
     "strictMessageKeys",
+    "legacyFunctionCallStreaming",
     "requiresToolResultName",
     "requiresAssistantAfterToolResult",
     "requiresThinkingAsText",

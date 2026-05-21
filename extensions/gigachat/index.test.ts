@@ -56,6 +56,7 @@ describe("gigachat provider plugin", () => {
     ]);
     expect(models.every((model) => model.input.includes("text"))).toBe(true);
     expect(models.every((model) => model.compat?.supportsTools === true)).toBe(true);
+    expect(models.every((model) => model.compat?.legacyFunctionCallStreaming === true)).toBe(true);
   });
 
   it("uses the business endpoint when plugin config requests it", async () => {
