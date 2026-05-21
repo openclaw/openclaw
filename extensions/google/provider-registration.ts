@@ -6,6 +6,7 @@ import { GOOGLE_GEMINI_DEFAULT_MODEL, applyGoogleGeminiModelDefault } from "./on
 import { GOOGLE_GEMINI_PROVIDER_HOOKS } from "./provider-hooks.js";
 import { isModernGoogleModel, resolveGoogleGeminiForwardCompatModel } from "./provider-models.js";
 import {
+  isGoogleVertexBaseUrl,
   normalizeGoogleProviderConfig,
   resolveGoogleGenerativeAiTransport,
 } from "./provider-policy.js";
@@ -53,10 +54,10 @@ export function buildGoogleProvider(): ProviderPlugin {
         ctx,
       }),
     createStreamFn: ({ model }) => {
-      const vertexBaseUrl =
-        typeof model.baseUrl === "string" && /aiplatform\.googleapis\.com/i.test(model.baseUrl);
       const useVertexTransport =
-        model.provider === "google-vertex" || model.api === "google-vertex" || vertexBaseUrl;
+        model.provider === "google-vertex" ||
+        model.api === "google-vertex" ||
+        isGoogleVertexBaseUrl(model.baseUrl);
       if (useVertexTransport) {
         return createGoogleVertexTransportStreamFn();
       }

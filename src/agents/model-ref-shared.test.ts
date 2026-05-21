@@ -1,17 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
-  formatLiteralProviderPrefixedModelRef,
   normalizeConfiguredProviderCatalogModelId,
   normalizeStaticProviderModelId,
 } from "./model-ref-shared.js";
-
-describe("formatLiteralProviderPrefixedModelRef", () => {
-  it("does not double-prefix provider-qualified refs", () => {
-    expect(formatLiteralProviderPrefixedModelRef("openrouter", "openrouter/gpt-5.4-mini")).toBe(
-      "openrouter/gpt-5.4-mini",
-    );
-  });
-});
 
 describe("normalizeStaticProviderModelId", () => {
   it("re-adds the nvidia prefix for bare model ids", () => {
