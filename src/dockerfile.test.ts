@@ -291,7 +291,7 @@ describe("Dockerfile", () => {
     );
   });
 
-  it("pre-creates the OpenClaw home before switching to the node user", async () => {
+  it("pre-creates the OpenClaw default mount points before switching to the node user", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     const runtimeStageIndex = dockerfile.lastIndexOf("FROM base-runtime");
     const stateDirIndex = dockerfile.indexOf(
@@ -306,8 +306,25 @@ describe("Dockerfile", () => {
     expect(stateDirIndex).toBeGreaterThan(runtimeStageIndex);
     expect(stateDirIndex).toBeLessThan(userIndex);
     expect(dockerfile).not.toContain("mkdir -p /home/node/.openclaw");
+
+    // All three default mount paths from the bundled docker-compose.yml must be
+    // pre-created with node:node 0700 ownership before USER node, so Docker
+    // named volumes mounted at those paths inherit node ownership instead of
+    // coming up root-owned. Verified by paired stat checks in the RUN block.
+    expect(dockerfile).toContain(
+      "install -d -m 0700 -o node -g node /home/node/.openclaw/workspace",
+    );
+    expect(dockerfile).toContain(
+      "install -d -m 0700 -o node -g node /home/node/.config/openclaw",
+    );
     expect(dockerfile).toContain(
       "stat -c '%U:%G %a' /home/node/.openclaw | grep -qx 'node:node 700'",
+    );
+    expect(dockerfile).toContain(
+      "stat -c '%U:%G %a' /home/node/.openclaw/workspace | grep -qx 'node:node 700'",
+    );
+    expect(dockerfile).toContain(
+      "stat -c '%U:%G %a' /home/node/.config/openclaw | grep -qx 'node:node 700'",
     );
   });
 });
