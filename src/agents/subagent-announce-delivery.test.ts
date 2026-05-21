@@ -2561,6 +2561,81 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
   });
 
+  it("retries Telegram forum-topic subagent completions when the announce agent returns private final text", async () => {
+    const callGateway = createGatewaySequenceMock([
+      {
+        result: {
+          payloads: [{ text: "The delegated task is complete." }],
+        },
+      },
+      {
+        result: {
+          payloads: [],
+          messagingToolSentTargets: [
+            {
+              tool: "message",
+              provider: "telegram",
+              accountId: "bot-1",
+              to: "telegram:-1003871627242",
+              threadId: "6823",
+              text: "The delegated task is complete.",
+            },
+          ],
+        },
+      },
+    ]);
+
+    const result = await deliverTelegramDirectMessageCompletion({
+      callGateway,
+      requesterSessionKey: "agent:main:telegram:group:-1003871627242:topic:6823",
+      origin: {
+        channel: "telegram",
+        to: "telegram:-1003871627242",
+        accountId: "bot-1",
+        threadId: 6823,
+      },
+      sourceTool: "subagent_announce",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:codex:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "telegram forum completion smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "delegated task output",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expect(callGateway).toHaveBeenCalledTimes(2);
+    expectGatewayAgentParams(callGateway, {
+      deliver: false,
+      channel: "telegram",
+      accountId: "bot-1",
+      to: "telegram:-1003871627242",
+      threadId: "6823",
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+    const retryParams = expectRecordFields(mockCallArg(callGateway, 1).params, {
+      deliver: false,
+      channel: "telegram",
+      accountId: "bot-1",
+      to: "telegram:-1003871627242",
+      threadId: "6823",
+      sourceReplyDeliveryMode: "message_tool_only",
+      idempotencyKey: "announce-telegram-dm-fallback:message-tool",
+    });
+    expect(retryParams.extraSystemPrompt).toContain('message(action="send")');
+  });
+
   it("keeps automatic final delivery for direct subagent completions", async () => {
     const callGateway = createGatewayMock({
       result: {

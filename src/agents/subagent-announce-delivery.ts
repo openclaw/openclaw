@@ -71,6 +71,12 @@ const AGENT_MEDIATED_COMPLETION_TOOLS = new Set([
   "video_generate",
 ]);
 
+const MESSAGE_TOOL_COMPLETION_SYSTEM_PROMPT = [
+  "This completion handoff must produce visible source-channel output through the message tool.",
+  'Call message(action="send") to deliver the completion update to the current/default source channel.',
+  "Normal final text stays private for this handoff and does not count as delivery.",
+].join(" ");
+
 type SubagentAnnounceDeliveryDeps = {
   dispatchGatewayMethodInProcess: typeof dispatchGatewayMethodInProcess;
   getRuntimeConfig: typeof getRuntimeConfig;
@@ -927,6 +933,9 @@ async function sendSubagentAnnounceDirectly(params: {
       ...(completionSourceReplyDeliveryMode
         ? { sourceReplyDeliveryMode: completionSourceReplyDeliveryMode }
         : {}),
+      ...(requiresMessageToolDelivery
+        ? { extraSystemPrompt: MESSAGE_TOOL_COMPLETION_SYSTEM_PROMPT }
+        : {}),
       idempotencyKey: params.directIdempotencyKey,
     };
     let directAnnounceResponse: unknown;
@@ -980,11 +989,36 @@ async function sendSubagentAnnounceDirectly(params: {
       if (generatedMediaDelivery) {
         return generatedMediaDelivery;
       }
-      return {
-        delivered: false,
-        path: "direct",
-        error: "completion agent did not deliver through the message tool",
-      };
+      const forcedMessageToolResponse = await runAnnounceDeliveryWithRetry({
+        operation: "completion message-tool announce agent call",
+        signal: params.signal,
+        run: async () =>
+          await runAnnounceAgentCall({
+            agentParams: {
+              ...directAgentParams,
+              deliver: false,
+              sourceReplyDeliveryMode: "message_tool_only",
+              extraSystemPrompt: MESSAGE_TOOL_COMPLETION_SYSTEM_PROMPT,
+              idempotencyKey: `${params.directIdempotencyKey}:message-tool`,
+            },
+            expectFinal: true,
+            timeoutMs: announceTimeoutMs,
+          }),
+      });
+      if (isGatewayAgentRunPending(forcedMessageToolResponse)) {
+        return {
+          delivered: true,
+          path: "direct",
+        };
+      }
+      if (!hasGatewayAgentMessagingToolDelivery(forcedMessageToolResponse)) {
+        return {
+          delivered: false,
+          path: "direct",
+          error: "completion agent did not deliver through the message tool",
+        };
+      }
+      directAnnounceResponse = forcedMessageToolResponse;
     }
     if (
       agentMediatedCompletion &&
