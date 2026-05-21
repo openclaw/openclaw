@@ -158,15 +158,15 @@ export function createPolicyAttestation(input: {
 
 export function collectPolicyEvidence(
   cfg: Record<string, unknown>,
-  options?: { readonly toolsRaw?: undefined },
+  options?: { readonly toolsRaw?: undefined; readonly secretsConfig?: Record<string, unknown> },
 ): PolicyEvidence;
 export function collectPolicyEvidence(
   cfg: Record<string, unknown>,
-  options: { readonly toolsRaw: string },
+  options: { readonly toolsRaw: string; readonly secretsConfig?: Record<string, unknown> },
 ): Promise<PolicyEvidence>;
 export function collectPolicyEvidence(
   cfg: Record<string, unknown>,
-  options: { readonly toolsRaw?: string } = {},
+  options: { readonly toolsRaw?: string; readonly secretsConfig?: Record<string, unknown> } = {},
 ): PolicyEvidence | Promise<PolicyEvidence> {
   const evidence: PolicyEvidence = {
     channels: scanPolicyChannels(cfg),
@@ -174,7 +174,7 @@ export function collectPolicyEvidence(
     modelProviders: scanPolicyModelProviders(cfg),
     modelRefs: scanPolicyModelRefs(cfg),
     network: scanPolicyNetwork(cfg),
-    secrets: scanPolicySecrets(cfg),
+    secrets: scanPolicySecrets(options.secretsConfig ?? cfg),
     authProfiles: scanPolicyAuthProfiles(cfg),
   };
   if (options.toolsRaw === undefined) {
@@ -386,29 +386,28 @@ function collectSecretInputs(
   }
   for (const [key, child] of Object.entries(value)) {
     const childPath = [...path, key];
-    if (isSecretInputKey(key)) {
-      const source = configPathSource(childPath);
-      const ref = secretRefEvidence(child, defaults);
-      if (ref !== undefined) {
-        entries.push({
-          id: source,
-          kind: "input",
-          source,
-          provenance: "secretRef",
-          refSource: ref.source,
-          refProvider: ref.provider,
-        });
-        continue;
-      }
-      if (typeof child === "string" && child.trim() !== "") {
-        entries.push({
-          id: source,
-          kind: "input",
-          source,
-          provenance: "inline",
-        });
-        continue;
-      }
+    const source = configPathSource(childPath);
+    const secretInputPath = isSecretInputPath(childPath);
+    const ref = secretInputPath ? secretRefEvidence(child, defaults) : undefined;
+    if (ref !== undefined) {
+      entries.push({
+        id: source,
+        kind: "input",
+        source,
+        provenance: "secretRef",
+        refSource: ref.source,
+        refProvider: ref.provider,
+      });
+      continue;
+    }
+    if (secretInputPath && typeof child === "string" && child.trim() !== "") {
+      entries.push({
+        id: source,
+        kind: "input",
+        source,
+        provenance: "inline",
+      });
+      continue;
     }
     collectSecretInputs(entries, child, childPath, defaults);
   }
@@ -416,6 +415,32 @@ function collectSecretInputs(
 
 function configPathSource(path: readonly string[]): string {
   return `oc://openclaw.config/${path.map(ocPathSegment).join("/")}`;
+}
+
+function isSecretInputPath(path: readonly string[]): boolean {
+  const key = path.at(-1);
+  if (key === undefined) {
+    return false;
+  }
+  if (isSecretInputKey(key)) {
+    return true;
+  }
+  const joined = path.join(".");
+  return (
+    /^models\.providers\.[^.]+\.headers\.[^.]+$/.test(joined) ||
+    /^models\.providers\.[^.]+\.request\.headers\.[^.]+$/.test(joined) ||
+    /^models\.providers\.[^.]+\.request\.auth\.value$/.test(joined) ||
+    /^models\.providers\.[^.]+\.request\.(?:proxy\.)?tls\.(?:ca|cert|key|passphrase)$/.test(
+      joined,
+    ) ||
+    /^tools\.media\.audio\.request\.headers\.[^.]+$/.test(joined) ||
+    /^tools\.media\.audio\.request\.auth\.value$/.test(joined) ||
+    /^tools\.media\.audio\.request\.(?:proxy\.)?tls\.(?:ca|cert|key|passphrase)$/.test(joined) ||
+    /^agents\.defaults\.memorySearch\.remote\.headers\.[^.]+$/.test(joined) ||
+    /^diagnostics\.otel\.headers\.[^.]+$/.test(joined) ||
+    /^mcp\.servers\.[^.]+\.env\.[^.]+$/.test(joined) ||
+    /^plugins\.entries\.[^.]+\.config\.mcpServers\.[^.]+\.env\.[^.]+$/.test(joined)
+  );
 }
 
 function isSecretInputKey(key: string): boolean {

@@ -371,7 +371,10 @@ const policyToolsMissingOwnerCheck: HealthCheck = {
 async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEvaluation> {
   const settings = policySettings(ctx);
   const policyPath = policyDisplayName(ctx);
-  let evidence: PolicyEvidence = collectPolicyEvidence(ctx.cfg as Record<string, unknown>);
+  const secretsConfig = await readConfigFileForSecretEvidence(ctx);
+  let evidence: PolicyEvidence = collectPolicyEvidence(ctx.cfg as Record<string, unknown>, {
+    ...(secretsConfig ? { secretsConfig } : {}),
+  });
   const findings: HealthFinding[] = [];
 
   if (!policyChecksEnabled(ctx, settings)) {
@@ -459,6 +462,7 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
     const toolsFile = await readWorkspaceFile(ctx, "TOOLS.md");
     evidence = await collectPolicyEvidence(ctx.cfg as Record<string, unknown>, {
       toolsRaw: toolsFile?.raw ?? "",
+      ...(secretsConfig ? { secretsConfig } : {}),
     });
   }
   const policyFindings: HealthFinding[] = [
@@ -1567,6 +1571,41 @@ function toolOwnerFindings(
         fixHint: "Declare owner:<team-or-person> for this tool.",
       };
     });
+}
+
+async function readConfigFileForSecretEvidence(
+  ctx: HealthCheckContext,
+): Promise<Record<string, unknown> | undefined> {
+  if (ctx.configPath === undefined) {
+    return undefined;
+  }
+  try {
+    const fs = await import("node:fs/promises");
+    const parsed = JSON5.parse(await fs.readFile(ctx.configPath, "utf-8"));
+    if (!isRecord(parsed) || !hasSecretEvidenceSurface(parsed)) {
+      return undefined;
+    }
+    return parsed;
+  } catch {
+    return undefined;
+  }
+}
+
+function hasSecretEvidenceSurface(value: Record<string, unknown>): boolean {
+  return [
+    "agents",
+    "auth",
+    "channels",
+    "cron",
+    "diagnostics",
+    "gateway",
+    "mcp",
+    "models",
+    "plugins",
+    "secrets",
+    "skills",
+    "tools",
+  ].some((key) => value[key] !== undefined);
 }
 
 async function readPolicyFile(
