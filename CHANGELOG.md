@@ -109,6 +109,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/agents: use an agent's `identity.name` in Gateway agent summaries when `agents.list[].name` is unset, so configured agent labels remain visible in clients. (#84355; refs #57835) Thanks @luoyanglang.
 - Channels/replies: keep normal `/verbose` failed-tool progress compact in message-tool replies and prevent late text-only tool output from appearing after the final answer. (#84303) Thanks @VACInc.
 - Plugins/hooks: apply a default 30-second timeout to `before_compaction` and `after_compaction` hooks so a hung plugin handler no longer blocks compaction completion. (#84153)
+- Discord: preserve reusable presentation buttons through portable conversion and Discord component registration. (#84187) Thanks @100menotu001.
 - Discord: preserve disabled presentation buttons when adapting and rendering Discord message controls. (#84188) Thanks @100menotu001.
 - Twitch: add a test-only client-manager registry reset helper so non-isolated Twitch tests can clear cached managers between cases. Fixes #83887. (#84244) Thanks @hclsys.
 - Cron: run main-session scheduled work on a cron-owned wake lane while preserving reply delivery context, so background cron turns no longer block human main-session chat. Fixes #82766. (#82767) Thanks @galiniliev.
