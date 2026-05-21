@@ -67,6 +67,14 @@ export function toAgentModelListLike(model?: AgentModelConfig): AgentModelListLi
   return model;
 }
 
+function isGoogleProvider(provider: string): boolean {
+  return (
+    provider === "google" ||
+    provider === "google-gemini-cli" ||
+    provider === "google-vertex"
+  );
+}
+
 export function normalizeAgentModelRefForConfig(model: string): string {
   const trimmed = model.trim();
   const slash = trimmed.indexOf("/");
@@ -75,7 +83,10 @@ export function normalizeAgentModelRefForConfig(model: string): string {
   }
 
   const provider = normalizeProviderId(trimmed.slice(0, slash));
-  const normalizedModel = normalizeGooglePreviewModelId(trimmed.slice(slash + 1));
+  const modelSuffix = trimmed.slice(slash + 1);
+  const normalizedModel = isGoogleProvider(provider)
+    ? normalizeGooglePreviewModelId(modelSuffix)
+    : modelSuffix;
   return modelKeyForConfig(provider, normalizedModel);
 }
 
