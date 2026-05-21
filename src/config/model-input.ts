@@ -75,7 +75,11 @@ export function normalizeAgentModelRefForConfig(model: string): string {
   }
 
   const provider = normalizeProviderId(trimmed.slice(0, slash));
-  const normalizedModel = normalizeGooglePreviewModelId(trimmed.slice(slash + 1));
+  const modelSuffix = trimmed.slice(slash + 1);
+  const normalizedModel =
+    provider === "google" || provider === "google-gemini-cli" || provider === "google-vertex"
+      ? normalizeGooglePreviewModelId(modelSuffix)
+      : modelSuffix;
   return modelKeyForConfig(provider, normalizedModel);
 }
 
