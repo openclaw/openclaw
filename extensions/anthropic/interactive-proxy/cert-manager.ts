@@ -1,12 +1,31 @@
 import { execFileSync } from "node:child_process";
 import { chmodSync, closeSync, existsSync, mkdirSync, openSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 
-// Stored under the user's home dir rather than tmpdir() for stability; tmpdir
-// contents can be wiped on macOS between reboots, causing unnecessary regen.
+// Resolve the OpenClaw state-dir root. Mirrors src/utils.ts:resolveConfigDir
+// inline because this module runs in the bun-spawned wrapper child, not the
+// gateway process, and can't import from src/. The parent gateway's
+// OPENCLAW_STATE_DIR (if set) is inherited into the child env.
+// Falls back to homedir()/.openclaw to match the resolver's default. Stored
+// under the state dir rather than tmpdir() for stability — tmpdir contents
+// can be wiped on macOS between reboots, causing unnecessary cert regen.
 // The directory is user-private by OS default (700 on Unix, user-ACL on Windows).
-const CERT_DIR = join(homedir(), ".openclaw", "proxy-certs");
+export function resolveInteractiveProxyStateDir(env: NodeJS.ProcessEnv = process.env): string {
+  const override = env.OPENCLAW_STATE_DIR?.trim();
+  if (override) {
+    if (override === "~" || override.startsWith("~/") || override.startsWith("~\\")) {
+      const tail = override === "~" ? "" : override.slice(2);
+      return tail ? join(homedir(), tail) : homedir();
+    }
+    if (isAbsolute(override)) {
+      return override;
+    }
+  }
+  return join(homedir(), ".openclaw");
+}
+
+const CERT_DIR = join(resolveInteractiveProxyStateDir(), "proxy-certs");
 
 // CA lifetime matches the leaf (365 days) so both expire together and the
 // expiry check below forces a clean regen when either rolls over.
