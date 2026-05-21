@@ -51,7 +51,9 @@ const FENCE_LINE_RE = /^[ \t]*(?:`{3,}|~{3,})[^\n]*$/;
  *    line keeps that line intact.
  */
 export function normalizeZalouserOutboundText(text: string): string {
-  if (typeof text !== "string" || text.length === 0) return text;
+  if (typeof text !== "string" || text.length === 0) {
+    return text;
+  }
 
   // Split the text into alternating prose / fenced-code segments. Each
   // prose run is normalized independently; fenced runs pass through
@@ -64,7 +66,9 @@ export function normalizeZalouserOutboundText(text: string): string {
   let inFence = false;
 
   const flushProse = (): void => {
-    if (proseBuf.length === 0) return;
+    if (proseBuf.length === 0) {
+      return;
+    }
     out.push(normalizeProseSegment(proseBuf.join("\n")));
     proseBuf = [];
   };
@@ -97,7 +101,9 @@ export function normalizeZalouserOutboundText(text: string): string {
  * responsible for ensuring the segment contains NO fenced code blocks.
  */
 function normalizeProseSegment(text: string): string {
-  if (text.length === 0) return text;
+  if (text.length === 0) {
+    return text;
+  }
 
   // Strip horizontal-rule lines (--- or ***): match a whole line that is
   // nothing but 3+ dashes / asterisks with optional leading/trailing
