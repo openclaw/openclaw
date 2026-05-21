@@ -436,8 +436,6 @@ export async function collectDoctorPreviewWarnings(params: {
     const { collectCodexRouteWarnings } = await import("./codex-route-warnings.js");
     warnings.push(...collectCodexRouteWarnings({ cfg: params.cfg, env }));
   }
-  const { collectCodexNativeAssetWarnings } = await import("./codex-native-assets.js");
-  warnings.push(...(await collectCodexNativeAssetWarnings({ cfg: params.cfg, env })));
 
   if (hasPluginLoadPaths(params.cfg)) {
     const { collectBundledPluginLoadPathWarnings, scanBundledPluginLoadPathMigrations } =
@@ -533,4 +531,13 @@ export async function collectDoctorPreviewWarnings(params: {
   }
 
   return warnings;
+}
+
+export async function collectDoctorPreviewInfoNotes(params: {
+  cfg: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+}): Promise<string[]> {
+  const env = params.env ?? process.env;
+  const { collectCodexNativeAssetInfoNotes } = await import("./codex-native-assets.js");
+  return collectCodexNativeAssetInfoNotes({ cfg: params.cfg, env });
 }

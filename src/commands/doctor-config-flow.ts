@@ -250,12 +250,17 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       warningNotes: repairSequence.warningNotes,
     });
   } else {
-    const { collectDoctorPreviewWarnings } = await import("./doctor/shared/preview-warnings.js");
+    const { collectDoctorPreviewWarnings, collectDoctorPreviewInfoNotes } =
+      await import("./doctor/shared/preview-warnings.js");
     emitDoctorNotes({
       note,
       warningNotes: await collectDoctorPreviewWarnings({
         cfg: candidate,
         doctorFixCommand,
+        env: process.env,
+      }),
+      infoNotes: await collectDoctorPreviewInfoNotes({
+        cfg: candidate,
         env: process.env,
       }),
     });

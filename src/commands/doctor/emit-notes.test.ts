@@ -48,11 +48,42 @@ describe("doctor note emission", () => {
     ]);
   });
 
+  it("emits info notes with the Doctor info title", () => {
+    const note = vi.fn();
+
+    emitDoctorNotes({
+      note,
+      infoNotes: ["info one", "info two"],
+    });
+
+    expect(note.mock.calls).toEqual([
+      ["info one", "Doctor info"],
+      ["info two", "Doctor info"],
+    ]);
+  });
+
+  it("emits change, warning, and info notes in order", () => {
+    const note = vi.fn();
+
+    emitDoctorNotes({
+      note,
+      changeNotes: ["change one"],
+      warningNotes: ["warning one"],
+      infoNotes: ["info one"],
+    });
+
+    expect(note.mock.calls).toEqual([
+      ["change one", "Doctor changes"],
+      ["warning one", "Doctor warnings"],
+      ["info one", "Doctor info"],
+    ]);
+  });
+
   it("emits nothing when note groups are omitted or empty", () => {
     const note = vi.fn();
 
     emitDoctorNotes({ note });
-    emitDoctorNotes({ note, changeNotes: [], warningNotes: [] });
+    emitDoctorNotes({ note, changeNotes: [], warningNotes: [], infoNotes: [] });
 
     expect(note).not.toHaveBeenCalled();
   });
