@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
+import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import {
@@ -156,6 +157,7 @@ function createMinimalRun(params?: {
   resolvedQueueMode?: string;
   sessionCtx?: Partial<TemplateContext>;
   runOverrides?: Partial<FollowupRun["run"]>;
+  followupRunOverrides?: Partial<Omit<FollowupRun, "run">>;
 }) {
   const typing = createMockTypingController();
   const opts = params?.opts;
@@ -172,6 +174,7 @@ function createMinimalRun(params?: {
     prompt: "hello",
     summaryLine: "hello",
     enqueuedAt: Date.now(),
+    ...params?.followupRunOverrides,
     run: {
       sessionId: "session",
       sessionKey,
@@ -1472,6 +1475,382 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(payload?.text).toContain("configured model backend lmstudio/gemma-4-e4b-it");
     expect(payload?.text).toContain("Fallback used openai-codex/gpt-5.5");
     expect(payload?.text).toContain("no visible reply");
+  });
+
+  it("surfaces a neutral terminal checkpoint after an acknowledged Discord turn does more tool work without a final", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      messagingToolSentTexts: ["I will handle the remaining checks."],
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: "discord",
+          to: "channel:C1",
+          text: "I will handle the remaining checks.",
+        },
+      ],
+      toolActivityAfterMessagingToolDelivery: true,
+      meta: {
+        stopReason: "stop",
+        toolSummary: { calls: 4, tools: ["message", "exec", "write"] },
+      },
+    });
+
+    const { run } = createMinimalRun({
+      runOverrides: {
+        messageProvider: "discord",
+        allowEmptyAssistantReplyAsSilent: true,
+      },
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:C1",
+        ChatType: "channel",
+        WasMentioned: false,
+        MessageSid: "1506849058013184020",
+      },
+    });
+
+    const res = await run();
+    const payload = Array.isArray(res) ? res[0] : res;
+
+    expect(payload?.isError).not.toBe(true);
+    expect(payload?.text).toContain("sent an earlier update");
+    expect(payload?.text).toContain("without a final checkpoint");
+    expect(getReplyPayloadMetadata(payload ?? {})).toEqual({
+      deliverDespiteSourceReplySuppression: true,
+    });
+  });
+
+  it("does not surface an acknowledged-longwork checkpoint when message.send is the terminal delivery", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      messagingToolSentTexts: ["Final result delivered through the message tool."],
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: "discord",
+          to: "channel:C1",
+          text: "Final result delivered through the message tool.",
+        },
+      ],
+      toolActivityAfterMessagingToolDelivery: false,
+      meta: {
+        stopReason: "stop",
+        toolSummary: { calls: 3, tools: ["read", "exec", "message"] },
+      },
+    });
+
+    const { run } = createMinimalRun({
+      runOverrides: {
+        messageProvider: "discord",
+        allowEmptyAssistantReplyAsSilent: true,
+      },
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:C1",
+        ChatType: "channel",
+        MessageSid: "1506849058013184021",
+      },
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+  });
+
+  it("does not surface an acknowledged-longwork checkpoint for a final-looking message followed by cleanup tools", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      messagingToolSentTexts: ["Done — tests passed and the patch is ready."],
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: "discord",
+          to: "channel:C1",
+          text: "Done — tests passed and the patch is ready.",
+        },
+      ],
+      toolActivityAfterMessagingToolDelivery: true,
+      meta: {
+        stopReason: "stop",
+        toolSummary: { calls: 4, tools: ["exec", "message", "read"] },
+      },
+    });
+
+    const { run } = createMinimalRun({
+      runOverrides: {
+        messageProvider: "discord",
+        allowEmptyAssistantReplyAsSilent: true,
+      },
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:C1",
+        ChatType: "channel",
+        MessageSid: "1506849058013184022",
+      },
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+  });
+
+  it("does not surface an acknowledged-longwork checkpoint for target-only messaging evidence", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      messagingToolSentTargets: [{ tool: "message", provider: "discord", to: "channel:C1" }],
+      toolActivityAfterMessagingToolDelivery: true,
+      meta: {
+        stopReason: "stop",
+        toolSummary: { calls: 3, tools: ["message", "exec"] },
+      },
+    });
+
+    const { run } = createMinimalRun({
+      runOverrides: {
+        messageProvider: "discord",
+        allowEmptyAssistantReplyAsSilent: true,
+      },
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:C1",
+        ChatType: "channel",
+        MessageSid: "1506849058013184023",
+      },
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+  });
+
+  it("does not infer an acknowledged-longwork checkpoint from media-only messaging evidence", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      messagingToolSentMediaUrls: ["file:///tmp/result.png"],
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: "discord",
+          to: "channel:C1",
+          mediaUrls: ["file:///tmp/result.png"],
+        },
+      ],
+      toolActivityAfterMessagingToolDelivery: true,
+      meta: {
+        stopReason: "stop",
+        toolSummary: { calls: 3, tools: ["message", "read"] },
+      },
+    });
+
+    const { run } = createMinimalRun({
+      runOverrides: {
+        messageProvider: "discord",
+        allowEmptyAssistantReplyAsSilent: true,
+      },
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:C1",
+        ChatType: "channel",
+        MessageSid: "1506849058013184024",
+      },
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+  });
+
+  it("does not surface an acknowledged-longwork checkpoint when message.send failed", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      toolActivityAfterMessagingToolDelivery: true,
+      meta: {
+        stopReason: "stop",
+        toolSummary: { calls: 3, tools: ["message", "exec"] },
+      },
+    });
+
+    const { run } = createMinimalRun({
+      runOverrides: {
+        messageProvider: "discord",
+        allowEmptyAssistantReplyAsSilent: true,
+      },
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:C1",
+        ChatType: "channel",
+        MessageSid: "1506849058013184025",
+      },
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+  });
+
+  it("does not surface an acknowledged-longwork checkpoint during heartbeat turns", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      messagingToolSentTexts: ["I will keep checking."],
+      toolActivityAfterMessagingToolDelivery: true,
+      meta: { stopReason: "stop", toolSummary: { calls: 2, tools: ["message", "read"] } },
+    });
+
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: true },
+      runOverrides: {
+        messageProvider: "discord",
+        allowEmptyAssistantReplyAsSilent: true,
+      },
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:C1",
+        ChatType: "channel",
+        MessageSid: "1506849058013184026",
+      },
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+  });
+
+  it("does not surface an acknowledged-longwork checkpoint during room events", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      messagingToolSentTexts: ["I will keep checking."],
+      toolActivityAfterMessagingToolDelivery: true,
+      meta: { stopReason: "stop", toolSummary: { calls: 2, tools: ["message", "read"] } },
+    });
+
+    const { run } = createMinimalRun({
+      followupRunOverrides: { currentInboundEventKind: "room_event" },
+      runOverrides: {
+        messageProvider: "discord",
+        allowEmptyAssistantReplyAsSilent: true,
+      },
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:C1",
+        ChatType: "channel",
+        MessageSid: "1506849058013184027",
+      },
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+  });
+
+  it("does not surface an acknowledged-longwork checkpoint when silentExpected is set", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      messagingToolSentTexts: ["I will keep checking."],
+      toolActivityAfterMessagingToolDelivery: true,
+      meta: { stopReason: "stop", toolSummary: { calls: 2, tools: ["message", "read"] } },
+    });
+
+    const { run } = createMinimalRun({
+      runOverrides: {
+        messageProvider: "discord",
+        allowEmptyAssistantReplyAsSilent: true,
+        silentExpected: true,
+      },
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:C1",
+        ChatType: "channel",
+        MessageSid: "1506849058013184028",
+      },
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+  });
+
+  it("does not surface an acknowledged-longwork checkpoint when an approval prompt was delivered", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      messagingToolSentTexts: ["I will wait for approval."],
+      toolActivityAfterMessagingToolDelivery: true,
+      didSendDeterministicApprovalPrompt: true,
+      meta: { stopReason: "stop", toolSummary: { calls: 2, tools: ["message", "exec"] } },
+    });
+
+    const { run } = createMinimalRun({
+      runOverrides: {
+        messageProvider: "discord",
+        allowEmptyAssistantReplyAsSilent: true,
+      },
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:C1",
+        ChatType: "channel",
+        MessageSid: "1506849058013184029",
+      },
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+  });
+
+  it("does not surface an acknowledged-longwork checkpoint when a cron follow-up was created", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      messagingToolSentTexts: ["I scheduled a follow-up."],
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: "discord",
+          to: "channel:C1",
+          text: "I scheduled a follow-up.",
+        },
+      ],
+      toolActivityAfterMessagingToolDelivery: true,
+      successfulCronAdds: 1,
+      meta: {
+        stopReason: "stop",
+        toolSummary: { calls: 3, tools: ["message", "cron", "write"] },
+      },
+    });
+
+    const { run } = createMinimalRun({
+      runOverrides: {
+        messageProvider: "discord",
+        allowEmptyAssistantReplyAsSilent: true,
+      },
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:C1",
+        ChatType: "channel",
+        MessageSid: "1506849058013184030",
+      },
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+  });
+
+  it("does not surface an acknowledged-longwork checkpoint for non-Discord turns", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      messagingToolSentTexts: ["I will handle the remaining checks."],
+      toolActivityAfterMessagingToolDelivery: true,
+      meta: {
+        stopReason: "stop",
+        toolSummary: { calls: 3, tools: ["message", "exec"] },
+      },
+    });
+
+    const { run } = createMinimalRun({
+      runOverrides: {
+        allowEmptyAssistantReplyAsSilent: true,
+      },
+      sessionCtx: {
+        Provider: "whatsapp",
+        OriginatingChannel: "whatsapp",
+        OriginatingTo: "+15551234567",
+        ChatType: "dm",
+        MessageSid: "wamid-test",
+      },
+    });
+
+    await expect(run()).resolves.toBeUndefined();
   });
 
   it("announces fallback without silence failure when fallback already replied through a messaging tool", async () => {

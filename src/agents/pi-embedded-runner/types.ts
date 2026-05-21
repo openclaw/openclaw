@@ -204,6 +204,8 @@ export type EmbeddedPiRunResult = {
   messagingToolSourceReplyPayloads?: MessagingToolSourceReplyPayload[];
   // Child sessions successfully accepted by sessions_spawn during the run.
   acceptedSessionSpawns?: AcceptedSessionSpawn[];
+  // True when more tool calls completed after a committed messaging-tool delivery.
+  toolActivityAfterMessagingToolDelivery?: boolean;
   // Structured heartbeat outcome recorded by the heartbeat response tool.
   heartbeatToolResponse?: HeartbeatToolResponse;
   // Count of successful cron.add tool calls in this run.

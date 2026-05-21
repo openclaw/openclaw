@@ -48,6 +48,7 @@ function createTestContext(): {
       toolMetaById: new Map<string, ToolCallSummary>(),
       toolMetas: [],
       acceptedSessionSpawns: [],
+      completedToolCount: 0,
       toolSummaryById: new Set<string>(),
       itemActiveIds: new Set<string>(),
       itemStartedCount: 0,
@@ -1532,6 +1533,46 @@ describe("messaging tool media URL tracking", () => {
     });
   });
 
+  it("records the completed-tool count when messaging delivery commits so later tools can be detected", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-message",
+      args: { action: "send", to: "channel:123", content: "starting work" },
+    });
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-message",
+      isError: false,
+      result: { ok: true },
+    });
+
+    expect(ctx.state.toolMetas.map((entry) => entry.toolName)).toEqual(["message"]);
+    expect(ctx.state.completedToolCount).toBe(1);
+    expect(ctx.state.lastMessagingToolDeliveryCompletedToolCount).toBe(1);
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "exec",
+      toolCallId: "tool-exec",
+      args: { command: "npm test" },
+    });
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "exec",
+      toolCallId: "tool-exec",
+      isError: false,
+      result: { ok: true },
+    });
+
+    expect(ctx.state.toolMetas.map((entry) => entry.toolName)).toEqual(["message", "exec"]);
+    expect(ctx.state.completedToolCount).toBe(2);
+    expect(ctx.state.lastMessagingToolDeliveryCompletedToolCount).toBe(1);
+  });
+
   it("trims messagingToolSentMediaUrls to 200 on commit (FIFO)", async () => {
     const { ctx } = createTestContext();
 
@@ -1607,6 +1648,7 @@ describe("messaging tool media URL tracking", () => {
     await handleToolExecutionEnd(ctx, endEvt);
 
     expect(ctx.state.messagingToolSentMediaUrls).toHaveLength(0);
+    expect(ctx.state.lastMessagingToolDeliveryCompletedToolCount).toBeUndefined();
     expect(ctx.state.pendingMessagingMediaUrls.has("tool-m3")).toBe(false);
   });
 });

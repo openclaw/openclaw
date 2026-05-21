@@ -133,6 +133,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     assistantTexts: [],
     toolMetas: [],
     acceptedSessionSpawns: [],
+    completedToolCount: 0,
     toolMetaById: new Map(),
     toolSummaryById: new Set(),
     itemActiveIds: new Set(),
@@ -183,6 +184,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     messagingToolSentTexts: [],
     messagingToolSentTextsNormalized: [],
     messagingToolSentTargets: [],
+    lastMessagingToolDeliveryCompletedToolCount: undefined,
     heartbeatToolResponse: undefined,
     messagingToolSentMediaUrls: [],
     messagingToolSourceReplyPayloads: [],
@@ -966,6 +968,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       state.visibleBlockReplyCount > 0;
     assistantTexts.length = 0;
     toolMetas.length = 0;
+    state.completedToolCount = 0;
     toolMetaById.clear();
     toolSummaryById.clear();
     state.itemActiveIds.clear();
@@ -975,6 +978,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     messagingToolSentTexts.length = 0;
     messagingToolSentTextsNormalized.length = 0;
     messagingToolSentTargets.length = 0;
+    state.lastMessagingToolDeliveryCompletedToolCount = undefined;
     messagingToolSentMediaUrls.length = 0;
     messagingToolSourceReplyPayloads.length = 0;
     pendingMessagingTexts.clear();
@@ -1145,6 +1149,9 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     getMessagingToolSentMediaUrls: () => messagingToolSentMediaUrls.slice(),
     getMessagingToolSentTargets: () => messagingToolSentTargets.slice(),
     getMessagingToolSourceReplyPayloads: () => messagingToolSourceReplyPayloads.slice(),
+    hasToolActivityAfterMessagingToolDelivery: () =>
+      typeof state.lastMessagingToolDeliveryCompletedToolCount === "number" &&
+      state.completedToolCount > state.lastMessagingToolDeliveryCompletedToolCount,
     getHeartbeatToolResponse: () =>
       state.heartbeatToolResponse ? { ...state.heartbeatToolResponse } : undefined,
     getPendingToolMediaReply: () => readPendingToolMediaReply(state),

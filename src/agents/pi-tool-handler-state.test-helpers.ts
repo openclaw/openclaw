@@ -6,6 +6,7 @@ export function createBaseToolHandlerState() {
     toolMetaById: new Map<string, unknown>(),
     toolMetas: [] as Array<{ toolName?: string; meta?: string }>,
     acceptedSessionSpawns: [],
+    completedToolCount: 0,
     toolSummaryById: new Set<string>(),
     itemActiveIds: new Set<string>(),
     itemStartedCount: 0,
