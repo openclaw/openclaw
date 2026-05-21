@@ -83,6 +83,65 @@ describe("daily session reset scheduler", () => {
     expect(performReset).not.toHaveBeenCalled();
   });
 
+  it("evaluates duplicate session rows as one freshest alias group", async () => {
+    const beforeReset = new Date(2026, 4, 18, 23, 0, 0, 0).getTime();
+    const afterReset = new Date(2026, 4, 19, 8, 0, 0, 0).getTime();
+    const canonicalKey = "agent:main:telegram:direct:user-1";
+    const legacyCaseKey = "agent:main:Telegram:Direct:User-1";
+    const { cfg } = await makeStore({
+      [legacyCaseKey]: {
+        sessionId: "old-legacy-session",
+        updatedAt: beforeReset,
+        sessionStartedAt: beforeReset,
+      },
+      [canonicalKey]: {
+        sessionId: "fresh-canonical-session",
+        updatedAt: afterReset,
+        sessionStartedAt: afterReset,
+      },
+    });
+    const performReset = vi.fn(async () => ({ ok: true }));
+
+    const result = await resetStaleDailySessions({
+      cfg,
+      nowMs: afterReset,
+      performReset,
+    });
+
+    expect(result).toEqual({ checked: 1, reset: 0, errors: 0 });
+    expect(performReset).not.toHaveBeenCalled();
+  });
+
+  it("respects active-run guards for any duplicate session row", async () => {
+    const beforeReset = new Date(2026, 4, 18, 23, 0, 0, 0).getTime();
+    const afterReset = new Date(2026, 4, 19, 8, 0, 0, 0).getTime();
+    const canonicalKey = "agent:main:telegram:direct:user-1";
+    const legacyCaseKey = "agent:main:Telegram:Direct:User-1";
+    const { cfg } = await makeStore({
+      [canonicalKey]: {
+        sessionId: "old-canonical-session",
+        updatedAt: beforeReset,
+        sessionStartedAt: beforeReset,
+      },
+      [legacyCaseKey]: {
+        sessionId: "old-legacy-session",
+        updatedAt: beforeReset,
+        sessionStartedAt: beforeReset,
+      },
+    });
+    const performReset = vi.fn(async () => ({ ok: true }));
+
+    const result = await resetStaleDailySessions({
+      cfg,
+      nowMs: afterReset,
+      activeSessionKeys: new Set([legacyCaseKey]),
+      performReset,
+    });
+
+    expect(result).toEqual({ checked: 0, reset: 0, errors: 0 });
+    expect(performReset).not.toHaveBeenCalled();
+  });
+
   it("preserves provider-owned CLI sessions when reset policy is implicit", async () => {
     const beforeReset = new Date(2026, 4, 18, 23, 0, 0, 0).getTime();
     const afterReset = new Date(2026, 4, 19, 8, 0, 0, 0).getTime();

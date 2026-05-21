@@ -13,6 +13,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { performGatewaySessionReset } from "./session-reset-service.js";
+import {
+  resolveFreshestSessionStoreMatchFromStoreKeys,
+  resolveGatewaySessionStoreTarget,
+} from "./session-utils.js";
 
 const DAILY_SESSION_RESET_INTERVAL_MS = 60_000;
 
@@ -45,35 +49,64 @@ export async function resetStaleDailySessions(params: {
 
   for (const target of resolveAllAgentSessionStoreTargetsSync(params.cfg)) {
     const store = loadSessionStore(target.storePath, { skipCache: true });
+    const visitedStoreKeys = new Set<string>();
     for (const [sessionKey, entry] of Object.entries(store)) {
+      if (visitedStoreKeys.has(sessionKey)) {
+        continue;
+      }
       if (!entry?.sessionId || typeof entry.updatedAt !== "number") {
         continue;
       }
-      if (params.activeSessionKeys?.has(sessionKey)) {
+      const sessionTarget = resolveGatewaySessionStoreTarget({
+        cfg: params.cfg,
+        key: sessionKey,
+        agentId: target.agentId,
+        store,
+      });
+      for (const storeKey of sessionTarget.storeKeys) {
+        visitedStoreKeys.add(storeKey);
+      }
+      const activeSessionKeys = params.activeSessionKeys;
+      if (
+        activeSessionKeys &&
+        sessionTarget.storeKeys.some((storeKey) => activeSessionKeys.has(storeKey))
+      ) {
         continue;
       }
-      const resetType = resolveSessionResetType({ sessionKey });
+      const freshestMatch = resolveFreshestSessionStoreMatchFromStoreKeys(
+        store,
+        sessionTarget.storeKeys,
+      ) ?? {
+        key: sessionKey,
+        entry,
+      };
+      const resetSessionKey = freshestMatch.key;
+      const resetEntry = freshestMatch.entry;
+      if (!resetEntry?.sessionId || typeof resetEntry.updatedAt !== "number") {
+        continue;
+      }
+      const resetType = resolveSessionResetType({ sessionKey: resetSessionKey });
       const resetPolicy = resolveSessionResetPolicy({
         sessionCfg: params.cfg.session,
         resetType,
         resetOverride: resolveChannelResetConfig({
           sessionCfg: params.cfg.session,
-          channel: entry.lastChannel ?? entry.channel ?? entry.origin?.provider,
+          channel: resetEntry.lastChannel ?? resetEntry.channel ?? resetEntry.origin?.provider,
         }),
       });
       if (resetPolicy.mode !== "daily") {
         continue;
       }
-      if (hasProviderOwnedSession(entry, resetPolicy.configured === true)) {
+      if (hasProviderOwnedSession(resetEntry, resetPolicy.configured === true)) {
         continue;
       }
       checked += 1;
       const freshness = evaluateSessionFreshness({
-        updatedAt: entry.updatedAt,
+        updatedAt: resetEntry.updatedAt,
         ...resolveSessionLifecycleTimestamps({
-          entry,
-          agentId: target.agentId,
-          storePath: target.storePath,
+          entry: resetEntry,
+          agentId: sessionTarget.agentId,
+          storePath: sessionTarget.storePath,
         }),
         now,
         policy: resetPolicy,
@@ -81,7 +114,7 @@ export async function resetStaleDailySessions(params: {
       if (freshness.fresh) {
         continue;
       }
-      const result = await performReset(sessionKey);
+      const result = await performReset(resetSessionKey);
       if (result.ok) {
         reset += 1;
       } else {
