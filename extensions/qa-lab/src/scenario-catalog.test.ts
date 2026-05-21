@@ -178,6 +178,8 @@ describe("qa scenario catalog", () => {
       "plugin-manifest-contract-health",
       "webchat-direct-reply-routing",
       "long-context-progress-watchdog",
+      "gateway-restart-inflight-run",
+      "streaming-final-integrity",
     ];
 
     for (const scenarioId of scenarioIds) {
