@@ -931,6 +931,12 @@ Successfully processed 1 files`;
       expectTrustedOnly([aclEntry({ principal: "AUTORIDAD NT\\SYSTEM" })]);
     });
 
+    it("classifies principal with extra diacritic via stripped trusted match (line 145)", () => {
+      // Adds an accent to a known localized SYSTEM principal so the exact trusted set misses,
+      // then the diacritic-stripped form still matches TRUSTED_BASE_ASCII.
+      expectTrustedOnly([aclEntry({ principal: "NT-AUTORITÄT\\SÝSTEM" })]);
+    });
+
     it("French Windows full scenario: user + Système only → no untrusted", () => {
       const entries: WindowsAclEntry[] = [
         aclEntry({ principal: "MYPC\\Pierre" }),
