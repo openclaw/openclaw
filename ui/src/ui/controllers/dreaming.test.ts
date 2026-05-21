@@ -478,6 +478,52 @@ describe("dreaming controller", () => {
     expect(state.wikiMemoryPalaceLoading).toBe(false);
   });
 
+  it("derives memory palace page counts from clusters for older payloads", async () => {
+    const { state, request } = createState();
+    state.hello = {
+      type: "hello-ok",
+      protocol: 4,
+      auth: { role: "operator", scopes: [] },
+      features: { methods: ["wiki.palace"] },
+    };
+    request.mockResolvedValue({
+      totalItems: 3,
+      totalClaims: 2,
+      totalQuestions: 1,
+      clusters: [
+        {
+          key: "source",
+          label: "Sources",
+          itemCount: 2,
+          claimCount: 0,
+          questionCount: 0,
+          contradictionCount: 0,
+          items: [],
+        },
+        {
+          key: "synthesis",
+          label: "Syntheses",
+          itemCount: 1,
+          claimCount: 2,
+          questionCount: 1,
+          contradictionCount: 0,
+          items: [],
+        },
+      ],
+    });
+
+    await loadWikiMemoryPalace(state);
+
+    expect(state.wikiMemoryPalace?.pageCounts).toEqual({
+      source: 2,
+      entity: 0,
+      concept: 0,
+      synthesis: 1,
+      report: 0,
+    });
+    expect(state.wikiMemoryPalace?.totalPages).toBe(3);
+  });
+
   it("falls back to config gating for wiki memory palace when methods are not advertised", async () => {
     const { state, request } = createState();
     state.configSnapshot = {

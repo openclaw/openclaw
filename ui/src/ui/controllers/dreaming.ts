@@ -629,13 +629,23 @@ function normalizeWikiMemoryPalace(raw: unknown): WikiMemoryPalace {
         .map((entry) => normalizeWikiMemoryPalaceCluster(entry))
         .filter((entry): entry is WikiMemoryPalaceCluster => entry !== null)
     : [];
+  const clusterPageCounts = {
+    source: 0,
+    entity: 0,
+    concept: 0,
+    synthesis: 0,
+    report: 0,
+  };
+  for (const cluster of clusters) {
+    clusterPageCounts[cluster.key] += cluster.itemCount;
+  }
   const pageCountsRecord = asRecord(record?.pageCounts);
   const pageCounts = {
-    source: normalizeFiniteInt(pageCountsRecord?.source, 0),
-    entity: normalizeFiniteInt(pageCountsRecord?.entity, 0),
-    concept: normalizeFiniteInt(pageCountsRecord?.concept, 0),
-    synthesis: normalizeFiniteInt(pageCountsRecord?.synthesis, 0),
-    report: normalizeFiniteInt(pageCountsRecord?.report, 0),
+    source: normalizeFiniteInt(pageCountsRecord?.source, clusterPageCounts.source),
+    entity: normalizeFiniteInt(pageCountsRecord?.entity, clusterPageCounts.entity),
+    concept: normalizeFiniteInt(pageCountsRecord?.concept, clusterPageCounts.concept),
+    synthesis: normalizeFiniteInt(pageCountsRecord?.synthesis, clusterPageCounts.synthesis),
+    report: normalizeFiniteInt(pageCountsRecord?.report, clusterPageCounts.report),
   };
   const fallbackTotalPages = Object.values(pageCounts).reduce((sum, count) => sum + count, 0);
   const fallbackTotalItems = clusters.reduce((sum, cluster) => sum + cluster.itemCount, 0);
