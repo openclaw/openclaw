@@ -213,6 +213,37 @@ describe("qa scenario catalog", () => {
     ]);
   });
 
+  it("loads the Codex plugin lifecycle fixture scenarios into the standard runtime tier", () => {
+    const scenarioIds = [
+      "codex-plugin-cold-install",
+      "codex-plugin-install-race",
+      "codex-plugin-pinned-old",
+      "codex-plugin-pinned-new",
+      "auth-profile-codex-mixed-profiles",
+      "auth-profile-doctor-migration-safety",
+    ];
+
+    for (const scenarioId of scenarioIds) {
+      const scenario = readQaScenarioById(scenarioId);
+      expect(scenario.runtimeParityTier).toBe("standard");
+      expect(scenario.coverage?.primary.length).toBeGreaterThan(0);
+      expect(scenario.execution.flow?.steps.length).toBe(1);
+    }
+    expect(readQaScenarioExecutionConfig("codex-plugin-pinned-old")).toMatchObject({
+      pluginVersion: "2026.5.19",
+      hostVersion: "2026.5.20",
+      pluginRelation: "older",
+    });
+    expect(readQaScenarioExecutionConfig("auth-profile-doctor-migration-safety")).toMatchObject({
+      matrixCells: [
+        "oauth-only",
+        "mixed-no-pin",
+        "mixed-defaults-pi-pin",
+        "mixed-main-agent-pi-pin",
+      ],
+    });
+  });
+
   it("keeps the character eval scenario natural and task-shaped", () => {
     const characterConfig = readQaScenarioExecutionConfig("character-vibes-gollum") as
       | {
