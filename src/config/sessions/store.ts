@@ -30,6 +30,7 @@ import {
   capEntryCount,
   getActiveSessionMaintenanceWarning,
   pruneQuotaSuspensions,
+  pruneMissingTranscriptEntries,
   pruneStaleEntries,
   shouldRunSessionEntryMaintenance,
   type QuotaSuspensionMaintenanceResult,
@@ -101,6 +102,8 @@ export type SessionMaintenanceApplyReport = {
   afterCount: number;
   pruned: number;
   capped: number;
+  /** Number of entries removed because their transcript file was missing on disk. */
+  missing: number;
   diskBudget: SessionDiskBudgetSweepResult | null;
 };
 
@@ -281,6 +284,7 @@ async function saveSessionStoreUnlocked(
         afterCount: Object.keys(store).length,
         pruned: 0,
         capped: 0,
+        missing: 0,
         diskBudget,
       });
     } else {
@@ -306,6 +310,15 @@ async function saveSessionStoreUnlocked(
               rememberRemovedSessionFile(removedSessionFiles, entry);
             },
             preserveKeys: preserveSessionKeys,
+          })
+        : 0;
+      // Prune orphan pointers: store entries whose transcript file is missing on disk.
+      // This heals drift that accumulates when transcript files are removed without
+      // clearing their pointer in sessions.json (archive cleanup, disk-budget, manual rm).
+      const missing = maintenance.fixMissing
+        ? pruneMissingTranscriptEntries({
+            store,
+            storePath,
           })
         : 0;
       const archivedDirs = new Set<string>();
@@ -366,6 +379,7 @@ async function saveSessionStoreUnlocked(
         afterCount: Object.keys(store).length,
         pruned,
         capped,
+        missing,
         diskBudget,
       });
     }

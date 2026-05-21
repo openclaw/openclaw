@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { parseByteSize } from "../../cli/parse-bytes.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -12,6 +13,7 @@ import {
   normalizeStringifiedOptionalString,
 } from "../../shared/string-coerce.js";
 import type { SessionMaintenanceConfig, SessionMaintenanceMode } from "../types.base.js";
+import { resolveSessionFilePath, resolveSessionFilePathOptions } from "./paths.js";
 import { parseSessionThreadInfoFast } from "./thread-info.js";
 import type { SessionEntry } from "./types.js";
 
@@ -42,6 +44,8 @@ export type ResolvedSessionMaintenanceConfig = {
   resetArchiveRetentionMs: number | null;
   maxDiskBytes: number | null;
   highWaterBytes: number | null;
+  /** When true, maintenance will prune store entries whose transcript file is missing on disk. Default: false (opt-in for one release; see Rollout in PR #82xxx). */
+  fixMissing: boolean;
 };
 
 function resolvePruneAfterMs(maintenance?: SessionMaintenanceConfig): number {
@@ -140,7 +144,50 @@ export function resolveMaintenanceConfigFromInput(
     resetArchiveRetentionMs: resolveResetArchiveRetentionMs(maintenance, pruneAfterMs),
     maxDiskBytes,
     highWaterBytes: resolveHighWaterBytes(maintenance, maxDiskBytes),
+    fixMissing: maintenance?.fixMissing === true,
   };
+}
+
+/**
+ * Remove session store entries whose `.jsonl` transcript file no longer exists
+ * on disk. Heals "orphan pointer" drift that accumulates when transcript files
+ * are removed (archive cleanup, disk-budget enforcement, or manual deletion)
+ * without clearing the corresponding pointer in `sessions.json`.
+ *
+ * Mutates `store` in-place. Returns the number of entries removed.
+ */
+export function pruneMissingTranscriptEntries(params: {
+  store: Record<string, SessionEntry>;
+  storePath: string;
+  onPruned?: (key: string) => void;
+}): number {
+  const sessionPathOpts = resolveSessionFilePathOptions({
+    storePath: params.storePath,
+  });
+  let removed = 0;
+  for (const [key, entry] of Object.entries(params.store)) {
+    if (!entry?.sessionId) {
+      if (parseAgentSessionKey(key)) {
+        continue;
+      }
+      delete params.store[key];
+      removed += 1;
+      params.onPruned?.(key);
+      continue;
+    }
+    let transcriptPath: string | undefined;
+    try {
+      transcriptPath = resolveSessionFilePath(entry.sessionId, entry, sessionPathOpts);
+    } catch {
+      // Malformed legacy rows cannot resolve a transcript path; prune them.
+    }
+    if (!transcriptPath || !fs.existsSync(transcriptPath)) {
+      delete params.store[key];
+      removed += 1;
+      params.onPruned?.(key);
+    }
+  }
+  return removed;
 }
 
 export function resolveSessionEntryMaintenanceHighWater(maxEntries: number): number {

@@ -244,6 +244,17 @@ export type SessionMaintenanceConfig = {
    */
   resetArchiveRetention?: string | number | false;
   /**
+   * When `true`, the periodic maintenance pass will remove session store entries
+   * whose transcript file no longer exists on disk. This heals "orphan pointer" drift
+   * where a `.jsonl` was removed (by archive cleanup, disk-budget enforcement, or
+   * external tooling) but the matching pointer in `sessions.json` was never cleared.
+   *
+   * Default: `false`. Opt in for one release while we collect telemetry on how many
+   * entries get pruned in real installs; default may flip to `true` in a subsequent
+   * release once we confirm the prune counts are bounded.
+   */
+  fixMissing?: boolean;
+  /**
    * Optional per-agent sessions-directory disk budget (e.g. "500mb").
    * When exceeded, warn (mode=warn) or enforce oldest-first cleanup (mode=enforce).
    */

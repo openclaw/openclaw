@@ -36,6 +36,7 @@ const ENFORCED_MAINTENANCE_OVERRIDE = {
   resetArchiveRetentionMs: 7 * DAY_MS,
   maxDiskBytes: null,
   highWaterBytes: null,
+  fixMissing: false,
 };
 
 const archiveTimestamp = (ms: number) => new Date(ms).toISOString().replaceAll(":", "-");
@@ -1188,5 +1189,62 @@ describe("Integration: saveSessionStore with pruning", () => {
     } finally {
       await expectPathExists(externalTranscript);
     }
+  });
+
+  it("saveSessionStore prunes orphan store entries when fixMissing is enabled", async () => {
+    // Reproducer for atomic-session-prune scope:
+    // sessions.json pointer with no matching .jsonl on disk = orphan.
+    // With fixMissing: true in maintenance config, the periodic auto-maintenance
+    // pass during saveSessionStore should remove the orphan pointer.
+    applyEnforcedMaintenanceConfig(mockLoadConfig);
+
+    const now = Date.now();
+    const ghostSessionId = "ghost-session-no-jsonl";
+    const realSessionId = "real-session";
+    const store: Record<string, SessionEntry> = {
+      "agent:test:channel:CGHOST": { sessionId: ghostSessionId, updatedAt: now },
+      "agent:test:channel:CREAL": { sessionId: realSessionId, updatedAt: now },
+    };
+    // Only write the real transcript; the ghost is the orphan we want pruned.
+    await fs.writeFile(
+      path.join(testDir, `${realSessionId}.jsonl`),
+      '{"type":"session"}\n',
+      "utf-8",
+    );
+
+    await saveSessionStore(storePath, store, {
+      maintenanceOverride: { ...ENFORCED_MAINTENANCE_OVERRIDE, fixMissing: true },
+    });
+
+    const loaded = loadSessionStore(storePath, { skipCache: true });
+    expect(loaded["agent:test:channel:CGHOST"]).toBeUndefined();
+    expect(loaded["agent:test:channel:CREAL"]).toBeDefined();
+  });
+
+  it("saveSessionStore preserves orphan store entries when fixMissing is disabled", async () => {
+    // Default behavior (fixMissing: false). Same scenario as the previous test,
+    // but the orphan should remain because the operator has not opted in.
+    applyEnforcedMaintenanceConfig(mockLoadConfig);
+
+    const now = Date.now();
+    const ghostSessionId = "ghost-session-no-jsonl-2";
+    const realSessionId = "real-session-2";
+    const store: Record<string, SessionEntry> = {
+      "agent:test:channel:CGHOST2": { sessionId: ghostSessionId, updatedAt: now },
+      "agent:test:channel:CREAL2": { sessionId: realSessionId, updatedAt: now },
+    };
+    await fs.writeFile(
+      path.join(testDir, `${realSessionId}.jsonl`),
+      '{"type":"session"}\n',
+      "utf-8",
+    );
+
+    await saveSessionStore(storePath, store, {
+      maintenanceOverride: ENFORCED_MAINTENANCE_OVERRIDE,
+    });
+
+    const loaded = loadSessionStore(storePath, { skipCache: true });
+    expect(loaded["agent:test:channel:CGHOST2"]).toBeDefined();
+    expect(loaded["agent:test:channel:CREAL2"]).toBeDefined();
   });
 });
