@@ -88,18 +88,20 @@ export function runAgentHarnessLlmOutputHook(params: {
   });
 }
 
-export function runAgentHarnessAgentEndHook(params: {
+export async function runAgentHarnessAgentEndHook(params: {
   event: PluginHookAgentEndEvent;
   ctx: AgentHarnessHookContext;
   hookRunner?: AgentHarnessHookRunner;
-}): void {
+}): Promise<void> {
   const hookRunner = params.hookRunner ?? getGlobalHookRunner();
   if (!hookRunner?.hasHooks("agent_end") || typeof hookRunner.runAgentEnd !== "function") {
     return;
   }
-  void hookRunner.runAgentEnd(params.event, buildAgentHookContext(params.ctx)).catch((error) => {
+  try {
+    await hookRunner.runAgentEnd(params.event, buildAgentHookContext(params.ctx));
+  } catch (error) {
     log.warn(`agent_end hook failed: ${String(error)}`);
-  });
+  }
 }
 
 export type AgentHarnessBeforeAgentFinalizeOutcome =

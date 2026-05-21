@@ -2581,7 +2581,7 @@ export async function runCodexAppServerAttempt(
         },
         ctx: hookContext,
       });
-      runAgentHarnessAgentEndHook({
+      void runAgentHarnessAgentEndHook({
         event: {
           messages: buildTurnStartFailureMessages(),
           success: false,
@@ -2894,7 +2894,7 @@ export async function runCodexAppServerAttempt(
       },
       ctx: hookContext,
     });
-    runAgentHarnessAgentEndHook({
+    void runAgentHarnessAgentEndHook({
       event: {
         messages: result.messagesSnapshot,
         success: !finalAborted && !finalPromptError,

@@ -576,7 +576,7 @@ export async function runPreparedCliAgent(
           message: blockMessage,
           pluginId: "before_agent_run",
         });
-        runAgentHarnessAgentEndHook({
+        await runAgentHarnessAgentEndHook({
           event: buildBlockedAgentEndEvent(blockMessage),
           ctx: hookContext,
           hookRunner,
@@ -593,7 +593,7 @@ export async function runPreparedCliAgent(
           message: blockMessage,
           pluginId: beforeRunResult?.pluginId ?? "unknown",
         });
-        runAgentHarnessAgentEndHook({
+        await runAgentHarnessAgentEndHook({
           event: buildBlockedAgentEndEvent(blockMessage),
           ctx: hookContext,
           hookRunner,
@@ -619,7 +619,7 @@ export async function runPreparedCliAgent(
         assistantText,
         output,
       });
-      runAgentHarnessAgentEndHook({
+      await runAgentHarnessAgentEndHook({
         event: {
           messages: buildAgentEndMessages(lastAssistant),
           success: true,
@@ -651,7 +651,7 @@ export async function runPreparedCliAgent(
               assistantText,
               output,
             });
-            runAgentHarnessAgentEndHook({
+            await runAgentHarnessAgentEndHook({
               event: {
                 messages: buildAgentEndMessages(lastAssistant),
                 success: true,
@@ -663,7 +663,7 @@ export async function runPreparedCliAgent(
             return buildCliRunResult({ output, effectiveCliSessionId });
           } catch (retryErr) {
             const retryMessage = formatErrorMessage(retryErr);
-            runAgentHarnessAgentEndHook({
+            await runAgentHarnessAgentEndHook({
               event: buildFailedAgentEndEvent(retryMessage),
               ctx: hookContext,
               hookRunner,
@@ -671,7 +671,7 @@ export async function runPreparedCliAgent(
             return toCliRunFailure(retryErr);
           }
         }
-        runAgentHarnessAgentEndHook({
+        await runAgentHarnessAgentEndHook({
           event: buildFailedAgentEndEvent(formatErrorMessage(err)),
           ctx: hookContext,
           hookRunner,
@@ -679,7 +679,7 @@ export async function runPreparedCliAgent(
         throw err;
       }
       const message = formatErrorMessage(err);
-      runAgentHarnessAgentEndHook({
+      await runAgentHarnessAgentEndHook({
         event: buildFailedAgentEndEvent(message),
         ctx: hookContext,
         hookRunner,

@@ -51,12 +51,34 @@ describe("agent harness lifecycle hook helpers", () => {
 
   it("ignores legacy hook runners that advertise agent_end without a runner method", () => {
     const hookRunner = createLegacyHookRunner();
-    runAgentHarnessAgentEndHook({
+    void runAgentHarnessAgentEndHook({
       ctx: {},
       event: {},
       hookRunner,
     } as never);
     expect(hookRunner.hasHooks).toHaveBeenCalledWith("agent_end");
+  });
+
+  it("resolves after agent_end hooks settle", async () => {
+    let releaseHook: () => void = () => undefined;
+    const agentEndSettled = new Promise<void>((resolve) => {
+      releaseHook = resolve;
+    });
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "agent_end"),
+      runAgentEnd: vi.fn(() => agentEndSettled),
+    };
+
+    const run = runAgentHarnessAgentEndHook({
+      ctx: { runId: "run-1", sessionKey: "agent:main:session-1" },
+      event: EVENT,
+      hookRunner: hookRunner as never,
+    });
+
+    await Promise.resolve();
+    expect(hookRunner.runAgentEnd).toHaveBeenCalledTimes(1);
+    releaseHook();
+    await expect(run).resolves.toBeUndefined();
   });
 
   it("continues when legacy hook runners advertise before_agent_finalize without a runner method", async () => {
