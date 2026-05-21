@@ -167,6 +167,14 @@ export function readFalseNegativeGuardConfig(
 // Bounded length 0..32 to avoid runaway regex backtracking on edge inputs.
 const RE_SENTINEL_DOUBLE = /<<\|[^|<>]{0,32}\|>/g;
 const RE_SENTINEL_SINGLE = /<\|[^|<>]{0,32}\|>/g;
+// R1.1 heredoc variant: P2.18 TD18-2 (2026-05-21 17:12) reproduced
+// "<<//code>" - model serializing "</code>" into args ended up adding an
+// extra "<" prefix, which bash then interprets as a here-doc delimiter
+// and reads stdin until EOF (corrupting the command). Catch any
+// "<<TOKEN>" or "<<TOKEN<TOKEN>" shape where the inner content does NOT
+// contain pipe (pipe is reserved for the explicit |...|> sentinel form
+// above to keep the rules orthogonal).
+const RE_SENTINEL_HEREDOC = /<<[^|>\s]{1,64}>/g;
 
 // R2 html-tag: matches "</tag>", "<tag>", "<tag attr=value ...>".
 // Inner attr region bounded to 256 chars and may not contain "<" or ">".
@@ -198,7 +206,10 @@ export function sanitizeString(
 
   if (cfg.removeSentinel) {
     const before = current;
-    const next = current.replace(RE_SENTINEL_DOUBLE, "").replace(RE_SENTINEL_SINGLE, "");
+    const next = current
+      .replace(RE_SENTINEL_DOUBLE, "")
+      .replace(RE_SENTINEL_SINGLE, "")
+      .replace(RE_SENTINEL_HEREDOC, "");
     if (next !== before) {
       mutations.push({
         field,
@@ -294,10 +305,14 @@ export function sanitizeToolArgs(
     if (!DEFAULT_SANITIZED_FIELDS.includes(key as (typeof DEFAULT_SANITIZED_FIELDS)[number])) {
       // Also sanitize any string field whose value looks contaminated.
       const looksContaminated =
-        RE_SENTINEL_DOUBLE.test(value) || RE_SENTINEL_SINGLE.test(value) || RE_HTML_TAG.test(value);
+        RE_SENTINEL_DOUBLE.test(value) ||
+        RE_SENTINEL_SINGLE.test(value) ||
+        RE_SENTINEL_HEREDOC.test(value) ||
+        RE_HTML_TAG.test(value);
       // Reset global regex state after .test().
       RE_SENTINEL_DOUBLE.lastIndex = 0;
       RE_SENTINEL_SINGLE.lastIndex = 0;
+      RE_SENTINEL_HEREDOC.lastIndex = 0;
       RE_HTML_TAG.lastIndex = 0;
       if (!looksContaminated) {
         result[key] = value;

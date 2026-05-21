@@ -267,3 +267,55 @@ describe("false negative guard", () => {
     expect(r.detected).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// P2.18.1 heredoc-variant sentinel: TD18-2 (2026-05-21 17:12 KST live
+// regression) reproduced "<<//code>" where the model serialized "</code>"
+// into args with an extra "<" prefix. bash then interpreted "<<" as a
+// here-doc, reading stdin until EOF and corrupting the command.
+// ---------------------------------------------------------------------------
+
+describe("R1.1 heredoc-variant sentinel (TD18-2 regression)", () => {
+  it("H1 removes <<//code> heredoc-shaped leak", () => {
+    const r = sanitizeString("코드예시 <<//code> P218_MARKER_B_HTMLTAG 끝", "command", baseCfg);
+    expect(r.value).toBe("코드예시  P218_MARKER_B_HTMLTAG 끝");
+    expect(r.mutations.some((m) => m.rule === "sentinel")).toBe(true);
+  });
+
+  it("H2 removes <<TOKEN> heredoc-shaped leak (no slash)", () => {
+    const r = sanitizeString("payload <<EOF> body", "command", baseCfg);
+    expect(r.value).toBe("payload  body");
+  });
+
+  it("H3 does not touch legitimate `<<` in HTML-allowlisted regions (no-op when allowlisted token does not match heredoc shape)", () => {
+    // Heredoc shape requires no whitespace inside. "<< X >" has space, no match.
+    const r = sanitizeString("text << foo > rest", "command", baseCfg);
+    expect(r.value).toBe("text << foo > rest");
+  });
+
+  it("H4 detects contamination on non-standard field via heredoc variant", () => {
+    const r = sanitizeToolArgs(
+      { extra: "x <<//code> y" } as Record<string, unknown>,
+      "some_tool",
+      baseCfg,
+    );
+    expect(r.changed).toBe(true);
+    expect(r.args.extra).toBe("x  y");
+  });
+
+  it("H5 reproduces TD18-2 13:45-style mutated leak with complete sanitize", () => {
+    const r = sanitizeToolArgs(
+      {
+        command:
+          "bash scripts/person.sh new P218자가검증B -- 2026-05-21 코드예시 <<//code> P218_MARKER_B_HTMLTAG 끝",
+      },
+      "bash",
+      baseCfg,
+    );
+    expect(r.changed).toBe(true);
+    const out = String(r.args.command);
+    expect(out.includes("<<//code>")).toBe(false);
+    expect(out.includes("P218_MARKER_B_HTMLTAG")).toBe(true);
+    expect(out.includes("끝")).toBe(true);
+  });
+});
