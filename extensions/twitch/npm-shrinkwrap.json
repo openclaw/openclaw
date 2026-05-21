@@ -168,7 +168,6 @@
       "resolved": "https://registry.npmjs.org/@twurple/auth/-/auth-8.1.4.tgz",
       "integrity": "sha512-ylsJoPInCw9BwOqxKcx+1k2ce9QG3vJpKFzPdIyHh49HvM/ulQZ0CAGysydugDYXF0iO/TGryh7PluSwx5fIwA==",
       "license": "MIT",
-      "peer": true,
       "dependencies": {
         "@d-fischer/logger": "^4.2.1",
         "@d-fischer/shared-utils": "^3.6.1",
@@ -289,7 +288,6 @@
       "resolved": "https://registry.npmjs.org/ws/-/ws-8.20.1.tgz",
       "integrity": "sha512-It4dO0K5v//JtTXuPkfEOaI3uUN87iYPnqo/ZzqCoG3g8uhA66QUMs/SrM0YK7/NAu+r4LMh/9dq2A7k+rHs+w==",
       "license": "MIT",
-      "peer": true,
       "engines": {
         "node": ">=10.0.0"
       },
