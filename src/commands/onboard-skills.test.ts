@@ -169,6 +169,9 @@ describe("setupSkills", () => {
       expect(mocks.installSkill).not.toHaveBeenCalled();
       expect(notes.find((n) => n.title === "Container skill installs")).toBeDefined();
       expect(notes.find((n) => n.title === "Homebrew recommended")).toBeUndefined();
+      expect(
+        notes.find((n) => n.message.includes("No missing skill dependencies to install")),
+      ).toBeUndefined();
     } finally {
       Object.defineProperty(process, "platform", originalPlatformDescriptor);
     }

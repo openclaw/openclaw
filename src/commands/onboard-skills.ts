@@ -233,7 +233,7 @@ export async function setupSkills(
       );
       runtime.log(t("wizard.skills.docsLine"));
     }
-  } else {
+  } else if (baseInstallable.length === 0) {
     await prompter.note(t("wizard.skills.noDepsToInstall"));
   }
 
