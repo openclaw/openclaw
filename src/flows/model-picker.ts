@@ -730,7 +730,6 @@ export async function promptDefaultModel(
         catalog,
         defaultProvider: DEFAULT_PROVIDER,
         defaultModel: resolved.model,
-        agentDir: params.agentDir,
         workspaceDir: params.workspaceDir,
         env: params.env,
       });
@@ -771,7 +770,6 @@ export async function promptDefaultModel(
   const hasAuth = createProviderAuthChecker({
     cfg,
     workspaceDir: params.workspaceDir,
-    agentDir: params.agentDir,
     env: params.env,
   });
   const literalPrefixProviders = await resolveCachedLiteralPrefixProviders();
@@ -937,7 +935,6 @@ export async function promptModelAllowlist(params: {
   const hasAuth = createProviderAuthChecker({
     cfg,
     workspaceDir: params.workspaceDir,
-    agentDir: params.agentDir,
     env: params.env,
   });
   const matchesPreferredProvider = preferredProvider
