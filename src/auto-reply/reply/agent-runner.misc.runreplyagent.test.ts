@@ -100,8 +100,10 @@ vi.mock("../../runtime.js", () => {
   };
 });
 
-vi.mock("./queue.js", () => {
+vi.mock("./queue.js", async () => {
+  const actual = await vi.importActual<typeof import("./queue.js")>("./queue.js");
   return {
+    ...actual,
     enqueueFollowupRun: vi.fn(),
     scheduleFollowupDrain: vi.fn(),
     clearSessionQueues: (...args: unknown[]) => clearSessionQueuesMock(...args),
