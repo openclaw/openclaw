@@ -72,7 +72,19 @@ const DEFAULT_SANITIZED_FIELDS = [
   "content",
   "message",
   "query",
+  // P2.19b (2026-05-21 21:00 KST): path/file_path fields. Live failure case
+  // jsonl L34 - model auto-corrected to file_path: "\"notes/p219-retry.md\""
+  // (sentinel prefix stripped, but JSON-encoded quotes left a literal dquote
+  // file under workspace). Path-style fields get a dedicated quote/sentinel-
+  // prefix strip rule via PATH_SANITIZED_FIELDS + sanitizeString isPath opt.
+  "file_path",
+  "path",
 ] as const;
+
+// PATH_SANITIZED_FIELDS: subset of fields treated as filesystem paths. They
+// receive an extra "R4 path-quote-strip" rule and bypass R3 balance-quote
+// (which would corrupt a one-side-unbalanced path by appending a stray dquote).
+const PATH_SANITIZED_FIELDS = new Set<string>(["file_path", "path"]);
 
 const DEFAULT_MAX_FIELD_LEN = 65536;
 const DEFAULT_FN_WINDOW_MS = 10000;
@@ -205,7 +217,7 @@ const RE_UNESCAPED_DQUOTE = /(?<!\\)"/g;
 
 export type SanitizeMutation = {
   field: string;
-  rule: "sentinel" | "html-tag" | "balance-quote" | "truncate";
+  rule: "sentinel" | "html-tag" | "balance-quote" | "path-quote-strip" | "truncate";
   beforeLen: number;
   afterLen: number;
   sample?: string;
@@ -216,10 +228,16 @@ export type SanitizeStringResult = {
   mutations: SanitizeMutation[];
 };
 
+export type SanitizeStringOptions = {
+  /** When true, apply R4 path-quote-strip and bypass R3 balance-quote. */
+  isPath?: boolean;
+};
+
 export function sanitizeString(
   input: string,
   field: string,
   cfg: ToolArgSanitizeConfig,
+  options: SanitizeStringOptions = {},
 ): SanitizeStringResult {
   const mutations: SanitizeMutation[] = [];
   let current = input;
@@ -267,7 +285,62 @@ export function sanitizeString(
     }
   }
 
-  if (cfg.balanceQuote) {
+  // R4 path-quote-strip (P2.19b): for path-style fields only.
+  // Strips residual sentinel prefix variants ("<|", "<<|", leading "\\")
+  // and outer paired or one-side quotes/dquotes left by P2.18.x sanitize.
+  // Runs BEFORE R3 balance-quote so that a one-sided dquote at either end is
+  // removed rather than balanced (which would corrupt the path).
+  if (options.isPath) {
+    const before = current;
+    let next = before.trim();
+    // Sentinel prefix residue strip loop (defensive: P2.18.x normally catches
+    // closed sentinels; this handles open-end variants that escaped that pass).
+    let prefixGuard = 8;
+    while (prefixGuard-- > 0) {
+      if (next.startsWith("<<|")) {
+        next = next.slice(3).trimStart();
+        continue;
+      }
+      if (next.startsWith("<|")) {
+        next = next.slice(2).trimStart();
+        continue;
+      }
+      if (next.startsWith("\\")) {
+        next = next.slice(1).trimStart();
+        continue;
+      }
+      break;
+    }
+    // Paired outer quotes (same kind on both ends): strip in pairs.
+    let pairGuard = 4;
+    while (
+      pairGuard-- > 0 &&
+      next.length >= 2 &&
+      ((next.startsWith('"') && next.endsWith('"')) || (next.startsWith("'") && next.endsWith("'")))
+    ) {
+      next = next.slice(1, -1).trim();
+    }
+    // Unbalanced one-side leading/trailing quote.
+    if (next.startsWith('"') || next.startsWith("'")) {
+      next = next.slice(1).trim();
+    }
+    if (next.endsWith('"') || next.endsWith("'")) {
+      next = next.slice(0, -1).trim();
+    }
+    if (next !== before) {
+      mutations.push({
+        field,
+        rule: "path-quote-strip",
+        beforeLen: before.length,
+        afterLen: next.length,
+        sample: before.slice(0, 64),
+      });
+      current = next;
+    }
+  }
+
+  // R3 balance-quote: bypass when field is a path (R4 already normalized).
+  if (cfg.balanceQuote && !options.isPath) {
     const before = current;
     const matches = before.match(RE_UNESCAPED_DQUOTE);
     const count = matches ? matches.length : 0;
@@ -351,7 +424,8 @@ export function sanitizeToolArgs(
         continue;
       }
     }
-    const sanitized = sanitizeString(value, key, cfg);
+    const isPath = PATH_SANITIZED_FIELDS.has(key);
+    const sanitized = sanitizeString(value, key, cfg, { isPath });
     if (sanitized.mutations.length > 0) {
       changed = true;
       for (const m of sanitized.mutations) {

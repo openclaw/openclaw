@@ -411,3 +411,95 @@ describe("R1.3 nested-sentinel variant (write content args 19:24 live regression
     expect(r.mutations.length).toBe(0);
   });
 });
+
+describe("R4 path-quote-strip (P2.19b file_path quote sanitize)", () => {
+  it("P1 strips paired double quotes from file_path", () => {
+    const r = sanitizeString('"notes/foo.md"', "file_path", baseCfg, { isPath: true });
+    expect(r.value).toBe("notes/foo.md");
+    expect(r.mutations.some((m) => m.rule === "path-quote-strip")).toBe(true);
+  });
+
+  it("P2 strips paired single quotes from file_path", () => {
+    const r = sanitizeString("'~/relative.md'", "file_path", baseCfg, { isPath: true });
+    expect(r.value).toBe("~/relative.md");
+    expect(r.mutations.some((m) => m.rule === "path-quote-strip")).toBe(true);
+  });
+
+  it("P3 strips <| sentinel prefix from file_path", () => {
+    const r = sanitizeString("<|/abs/path.md", "file_path", baseCfg, { isPath: true });
+    expect(r.value).toBe("/abs/path.md");
+    expect(r.mutations.some((m) => m.rule === "path-quote-strip")).toBe(true);
+  });
+
+  it("P4 strips <<| sentinel prefix from file_path", () => {
+    const r = sanitizeString("<<|/abs/path.md", "file_path", baseCfg, { isPath: true });
+    expect(r.value).toBe("/abs/path.md");
+    expect(r.mutations.some((m) => m.rule === "path-quote-strip")).toBe(true);
+  });
+
+  it("P5 strips one-side leading dquote (NOT balance-quote appending)", () => {
+    const r = sanitizeString('"notes/foo.md', "file_path", baseCfg, { isPath: true });
+    expect(r.value).toBe("notes/foo.md");
+    expect(r.mutations.some((m) => m.rule === "path-quote-strip")).toBe(true);
+    expect(r.mutations.some((m) => m.rule === "balance-quote")).toBe(false);
+  });
+
+  it("P6 strips one-side trailing dquote (NOT balance-quote)", () => {
+    const r = sanitizeString('notes/foo.md"', "file_path", baseCfg, { isPath: true });
+    expect(r.value).toBe("notes/foo.md");
+    expect(r.mutations.some((m) => m.rule === "path-quote-strip")).toBe(true);
+    expect(r.mutations.some((m) => m.rule === "balance-quote")).toBe(false);
+  });
+
+  it("P7 reproduces jsonl L34 live case (paired dquotes wrapping path)", () => {
+    // Real failure: file_path: "\"notes/p219-retry.md\"" - model self-correction
+    // wrote a literal "notes/p219-retry.md" (with surrounding dquotes) file.
+    const r = sanitizeString('"notes/p219-retry.md"', "file_path", baseCfg, { isPath: true });
+    expect(r.value).toBe("notes/p219-retry.md");
+    expect(r.mutations.some((m) => m.rule === "path-quote-strip")).toBe(true);
+  });
+
+  it("P8 normal path unchanged (no false positive)", () => {
+    const r = sanitizeString("notes/normal.md", "file_path", baseCfg, { isPath: true });
+    expect(r.value).toBe("notes/normal.md");
+    expect(r.mutations.length).toBe(0);
+  });
+
+  it("P9 empty path unchanged", () => {
+    const r = sanitizeString("", "file_path", baseCfg, { isPath: true });
+    expect(r.value).toBe("");
+    expect(r.mutations.length).toBe(0);
+  });
+
+  it("P10 sanitizeToolArgs detects file_path field on write tool", () => {
+    const r = sanitizeToolArgs({ file_path: '"notes/foo.md"', content: "hello" }, "write");
+    expect(r.args.file_path).toBe("notes/foo.md");
+    expect(r.changed).toBe(true);
+  });
+
+  it("P11 sanitizeToolArgs handles 'path' field too (not just file_path)", () => {
+    const r = sanitizeToolArgs({ path: "'~/test.md'" }, "edit");
+    expect(r.args.path).toBe("~/test.md");
+    expect(r.changed).toBe(true);
+  });
+
+  it("P12 balance-quote bypassed on path field with one-side dquote", () => {
+    // Without isPath: balance-quote appends a stray dquote -> corrupted path.
+    // With isPath: path-quote-strip removes the lone dquote instead.
+    const r = sanitizeString('"notes/foo.md', "file_path", baseCfg, { isPath: true });
+    expect(r.value).toBe("notes/foo.md");
+    expect(r.mutations.some((m) => m.rule === "balance-quote")).toBe(false);
+  });
+
+  it("P13 path with spaces but no quotes is unchanged", () => {
+    const r = sanitizeString("notes/my file.md", "file_path", baseCfg, { isPath: true });
+    expect(r.value).toBe("notes/my file.md");
+    expect(r.mutations.length).toBe(0);
+  });
+
+  it("P14 double-wrapped quotes (paired-single around paired-double)", () => {
+    const r = sanitizeString("'\"x\"'", "file_path", baseCfg, { isPath: true });
+    expect(r.value).toBe("x");
+    expect(r.mutations.some((m) => m.rule === "path-quote-strip")).toBe(true);
+  });
+});
