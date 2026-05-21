@@ -4,6 +4,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
   CUSTOM_PROXY_MODELS_CONFIG,
   installModelsConfigTestHooks,
@@ -25,6 +26,7 @@ installModelsConfigTestHooks();
 let ensureOpenClawModelsJson: typeof import("./models-config.js").ensureOpenClawModelsJson;
 let clearCurrentPluginMetadataSnapshot: typeof import("../plugins/current-plugin-metadata-snapshot.js").clearCurrentPluginMetadataSnapshot;
 let setCurrentPluginMetadataSnapshot: typeof import("../plugins/current-plugin-metadata-snapshot.js").setCurrentPluginMetadataSnapshot;
+let createProviderAuthResolver: typeof import("./models-config.providers.secrets.js").createProviderAuthResolver;
 
 function createPluginMetadataSnapshot(workspaceDir: string): PluginMetadataSnapshot {
   const policyHash = resolveInstalledPluginIndexPolicyHash({});
@@ -132,6 +134,7 @@ beforeAll(async () => {
     };
   });
   ({ ensureOpenClawModelsJson } = await import("./models-config.js"));
+  ({ createProviderAuthResolver } = await import("./models-config.providers.secrets.js"));
   ({ clearCurrentPluginMetadataSnapshot, setCurrentPluginMetadataSnapshot } =
     await import("../plugins/current-plugin-metadata-snapshot.js"));
 });
@@ -330,6 +333,78 @@ describe("models-config write serialization", () => {
         provider: "custom",
         key: "sk-existing-catalog-only",
         copyToAgents: false,
+      });
+    });
+  });
+
+  it("migrates env-name catalog-only provider api keys to env-backed auth profiles", async () => {
+    await withModelsTempHome(async (home) => {
+      const agentDir = path.join(home, "agent");
+      await fs.mkdir(agentDir, { recursive: true });
+      await fs.writeFile(
+        path.join(agentDir, "models.json"),
+        `${JSON.stringify(
+          {
+            providers: {
+              custom: {
+                baseUrl: "https://custom.example/v1",
+                api: "openai-completions",
+                apiKey: "LITELLM_KEY",
+                models: [],
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      planOpenClawModelsJsonMock.mockImplementation(async () => ({
+        action: "write",
+        contents: `${JSON.stringify(
+          {
+            providers: {
+              custom: {
+                baseUrl: "https://custom.example/v1",
+                api: "openai-completions",
+                models: [],
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+      }));
+
+      await ensureOpenClawModelsJson({}, agentDir);
+
+      const modelsJson = JSON.parse(
+        await fs.readFile(path.join(agentDir, "models.json"), "utf8"),
+      ) as {
+        providers: Record<string, { apiKey?: string }>;
+      };
+      expect(modelsJson.providers.custom?.apiKey).toBeUndefined();
+
+      const authProfiles = JSON.parse(
+        await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf8"),
+      ) as AuthProfileStore;
+      expect(authProfiles.profiles["custom:models-json"]).toMatchObject({
+        type: "api_key",
+        provider: "custom",
+        keyRef: { source: "env", provider: "default", id: "LITELLM_KEY" },
+        copyToAgents: false,
+      });
+      expect(authProfiles.profiles["custom:models-json"]).not.toHaveProperty("key");
+
+      const auth = createProviderAuthResolver(
+        { LITELLM_KEY: "sk-resolved-from-env" } as NodeJS.ProcessEnv,
+        authProfiles,
+      )("custom");
+      expect(auth).toMatchObject({
+        apiKey: "LITELLM_KEY",
+        discoveryApiKey: "sk-resolved-from-env",
+        mode: "api_key",
+        source: "profile",
+        profileId: "custom:models-json",
       });
     });
   });

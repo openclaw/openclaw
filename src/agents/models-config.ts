@@ -7,7 +7,11 @@ import {
   type OpenClawConfig,
 } from "../config/config.js";
 import { createConfigRuntimeEnv } from "../config/env-vars.js";
-import { coerceSecretRef } from "../config/types.secrets.js";
+import {
+  DEFAULT_SECRET_PROVIDER_ALIAS,
+  coerceSecretRef,
+  isValidEnvSecretRefId,
+} from "../config/types.secrets.js";
 import { privateFileStore } from "../infra/private-file-store.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
@@ -22,6 +26,7 @@ import {
 import {
   ensureAuthProfileStore,
   listProfilesForProvider,
+  type AuthProfileCredential,
   upsertAuthProfileWithLock,
 } from "./auth-profiles.js";
 import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
@@ -139,6 +144,32 @@ function resolveMigratedModelsJsonProfileId(providerKey: string): string {
   return `${normalized || "provider"}:models-json`;
 }
 
+function resolveMigratedModelsJsonApiKeyCredential(
+  providerKey: string,
+  existingApiKey: string,
+): AuthProfileCredential {
+  const base = {
+    type: "api_key",
+    provider: providerKey,
+    copyToAgents: false,
+    displayName: "Migrated from models.json",
+  } as const;
+  if (isValidEnvSecretRefId(existingApiKey)) {
+    return {
+      ...base,
+      keyRef: {
+        source: "env",
+        provider: DEFAULT_SECRET_PROVIDER_ALIAS,
+        id: existingApiKey,
+      },
+    };
+  }
+  return {
+    ...base,
+    key: existingApiKey,
+  };
+}
+
 async function migrateExistingModelsJsonOnlyProviderApiKeys(params: {
   cfg: OpenClawConfig;
   agentDir: string;
@@ -184,13 +215,7 @@ async function migrateExistingModelsJsonOnlyProviderApiKeys(params: {
     }
 
     const profileId = resolveMigratedModelsJsonProfileId(providerKey);
-    const credential = {
-      type: "api_key",
-      provider: providerKey,
-      key: existingApiKey,
-      copyToAgents: false,
-      displayName: "Migrated from models.json",
-    } as const;
+    const credential = resolveMigratedModelsJsonApiKeyCredential(providerKey, existingApiKey);
     const updatedStore = await upsertAuthProfileWithLock({
       agentDir: params.agentDir,
       profileId,
