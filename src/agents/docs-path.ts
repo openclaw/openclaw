@@ -67,9 +67,19 @@ export async function resolveOpenClawReferencePaths(
   docsPath: string | null;
   sourcePath: string | null;
 }> {
-  const [docsPath, sourcePath] = await Promise.all([
-    resolveOpenClawDocsPath(params),
-    resolveOpenClawSourcePath(params),
-  ]);
+  const workspaceDir = params.workspaceDir?.trim();
+  const workspaceDocs =
+    workspaceDir && isUsableDocsDir(path.join(workspaceDir, "docs"))
+      ? path.join(workspaceDir, "docs")
+      : null;
+  const packageRoot = await resolveOpenClawPackageRoot({
+    cwd: params.cwd,
+    argv1: params.argv1,
+    moduleUrl: params.moduleUrl,
+  });
+  const packageDocs = packageRoot ? path.join(packageRoot, "docs") : null;
+  const docsPath =
+    workspaceDocs ?? (packageDocs && isUsableDocsDir(packageDocs) ? packageDocs : null);
+  const sourcePath = packageRoot && isGitCheckout(packageRoot) ? packageRoot : null;
   return { docsPath, sourcePath };
 }
