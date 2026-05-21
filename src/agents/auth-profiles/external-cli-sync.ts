@@ -1,12 +1,14 @@
 import {
   readClaudeCliCredentialsCached,
   readCodexCliCredentialsCached,
+  readGeminiCliCredentialsCached,
   readMiniMaxCliCredentialsCached,
 } from "../cli-credentials.js";
 import { normalizeProviderId } from "../provider-id.js";
 import {
   CLAUDE_CLI_PROFILE_ID,
   EXTERNAL_CLI_SYNC_TTL_MS,
+  GEMINI_CLI_PROFILE_ID,
   MINIMAX_CLI_PROFILE_ID,
   OPENAI_CODEX_DEFAULT_PROFILE_ID,
 } from "./constants.js";
@@ -126,6 +128,12 @@ const EXTERNAL_CLI_SYNC_PROVIDERS: ExternalCliSyncProvider[] = [
     provider: "minimax-portal",
     aliases: ["minimax", "minimax-cli"],
     readCredentials: () => readMiniMaxCliCredentialsCached({ ttlMs: EXTERNAL_CLI_SYNC_TTL_MS }),
+  },
+  {
+    profileId: GEMINI_CLI_PROFILE_ID,
+    provider: "google-gemini-cli",
+    aliases: ["gemini-cli"],
+    readCredentials: () => readGeminiCliCredentialsCached({ ttlMs: EXTERNAL_CLI_SYNC_TTL_MS }),
   },
 ];
 
