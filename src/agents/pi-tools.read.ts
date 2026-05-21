@@ -864,6 +864,24 @@ async function writeHostFile(absolutePath: string, content: string) {
   await fs.writeFile(resolved, content, "utf-8");
 }
 
+async function resolveSymlinksInWritePath(absolutePath: string): Promise<string> {
+  const dir = path.dirname(absolutePath);
+  const base = path.basename(absolutePath);
+  try {
+    return path.join(await fs.realpath(dir), base);
+  } catch {
+    return absolutePath;
+  }
+}
+
+async function resolveWorkspaceRoot(root: string): Promise<string> {
+  try {
+    return await fs.realpath(root);
+  } catch {
+    return root;
+  }
+}
+
 function createHostWriteOperations(root: string, options?: { workspaceOnly?: boolean }) {
   const workspaceOnly = options?.workspaceOnly ?? false;
 
@@ -879,7 +897,10 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
   }
 
   // When workspaceOnly is true, enforce workspace boundary
-  const rootPromise = fsRoot(root);
+  const rootPromise = resolveWorkspaceRoot(root).then((canonicalRoot) => ({
+    canonicalRoot,
+    fsSafeRoot: fsRoot(canonicalRoot),
+  }));
   return {
     mkdir: async (dir: string) => {
       const relative = toRelativeWorkspacePath(root, dir, { allowRoot: true });
@@ -888,8 +909,10 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
       await fs.mkdir(resolved, { recursive: true });
     },
     writeFile: async (absolutePath: string, content: string) => {
-      const relative = await toCanonicalRelativeWorkspacePath(root, absolutePath);
-      await (await rootPromise).write(relative, content, { mkdir: true });
+      const { canonicalRoot } = await rootPromise;
+      const resolvedPath = await resolveSymlinksInWritePath(absolutePath);
+      const relative = toRelativeWorkspacePath(canonicalRoot, resolvedPath);
+      await (await (await rootPromise).fsSafeRoot).write(relative, content, { mkdir: true });
     },
   } as const;
 }
@@ -913,21 +936,28 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
   }
 
   // When workspaceOnly is true, enforce workspace boundary
-  const rootPromise = fsRoot(root);
+  const rootPromise = resolveWorkspaceRoot(root).then((canonicalRoot) => ({
+    canonicalRoot,
+    fsSafeRoot: fsRoot(canonicalRoot),
+  }));
   return {
     readFile: async (absolutePath: string) => {
-      const relative = toRelativeWorkspacePath(root, absolutePath);
-      const safeRead = await (await rootPromise).read(relative);
+      const { canonicalRoot } = await rootPromise;
+      const relative = toRelativeWorkspacePath(canonicalRoot, absolutePath);
+      const safeRead = await (await (await rootPromise).fsSafeRoot).read(relative);
       return safeRead.buffer;
     },
     writeFile: async (absolutePath: string, content: string) => {
-      const relative = await toCanonicalRelativeWorkspacePath(root, absolutePath);
-      await (await rootPromise).write(relative, content, { mkdir: true });
+      const { canonicalRoot } = await rootPromise;
+      const resolvedPath = await resolveSymlinksInWritePath(absolutePath);
+      const relative = toRelativeWorkspacePath(canonicalRoot, resolvedPath);
+      await (await (await rootPromise).fsSafeRoot).write(relative, content, { mkdir: true });
     },
     access: async (absolutePath: string) => {
+      const { canonicalRoot } = await rootPromise;
       let relative: string;
       try {
-        relative = toRelativeWorkspacePath(root, absolutePath);
+        relative = toRelativeWorkspacePath(canonicalRoot, absolutePath);
       } catch {
         // Path escapes workspace root.  Don't throw here – the upstream
         // library replaces any `access` error with a misleading "File not
@@ -937,7 +967,7 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
         return;
       }
       try {
-        const opened = await (await rootPromise).open(relative);
+        const opened = await (await (await rootPromise).fsSafeRoot).open(relative);
         await opened.handle.close().catch(() => {});
       } catch (error) {
         if (error instanceof FsSafeError && error.code === "not-found") {
