@@ -8,7 +8,6 @@ import { assertSecretInputResolved } from "../config/types.secrets.js";
 import type { PinnedDispatcherPolicy } from "../infra/net/ssrf.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { COPILOT_INTEGRATION_ID, buildCopilotIdeHeaders } from "./copilot-dynamic-headers.js";
-import { isSecretRefHeaderValueMarker } from "./model-auth-markers.js";
 import type {
   ProviderRequestCapabilities,
   ProviderRequestCapability,
@@ -19,6 +18,7 @@ import {
   resolveProviderRequestPolicy,
   type ProviderRequestPolicyResolution,
 } from "./provider-attribution.js";
+import { isSecretRefHeaderValueMarker } from "./secret-ref-auth-markers.js";
 
 type RequestApi = Api | ModelDefinitionConfig["api"];
 

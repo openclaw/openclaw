@@ -2,13 +2,13 @@ import type { Api } from "@earendil-works/pi-ai";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.js";
 import { normalizeGoogleApiBaseUrl } from "../../infra/google-api-base-url.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
-import { isSecretRefHeaderValueMarker } from "../model-auth-markers.js";
 import { attachModelProviderLocalService } from "../provider-local-service.js";
 import {
   attachModelProviderRequestTransport,
   resolveProviderRequestConfig,
   sanitizeConfiguredModelProviderRequest,
 } from "../provider-request-config.js";
+import { isSecretRefHeaderValueMarker } from "../secret-ref-auth-markers.js";
 
 export type InlineModelEntry = Omit<ModelDefinitionConfig, "api"> & {
   api?: Api;

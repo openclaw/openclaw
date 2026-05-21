@@ -1,6 +1,14 @@
-import type { SecretRefSource } from "../config/types.secrets.js";
 import { listOpenClawPluginManifestMetadata } from "../plugins/manifest-metadata-scan.js";
 import { listKnownProviderEnvApiKeyNames } from "./model-auth-env-vars.js";
+import { NON_ENV_SECRETREF_MARKER } from "./secret-ref-auth-markers.js";
+export {
+  isSecretRefHeaderValueMarker,
+  NON_ENV_SECRETREF_MARKER,
+  resolveEnvSecretRefHeaderValueMarker,
+  resolveNonEnvSecretRefApiKeyMarker,
+  resolveNonEnvSecretRefHeaderValueMarker,
+  SECRETREF_ENV_HEADER_MARKER_PREFIX,
+} from "./secret-ref-auth-markers.js";
 
 /** @deprecated MiniMax provider-owned marker; do not use from third-party plugins. */
 export const MINIMAX_OAUTH_MARKER = "minimax-oauth";
@@ -9,8 +17,6 @@ export const OLLAMA_LOCAL_AUTH_MARKER = "ollama-local";
 /** @deprecated Bundled local-provider marker; do not use from third-party plugins. */
 export const CUSTOM_LOCAL_AUTH_MARKER = "custom-local";
 export const GCP_VERTEX_CREDENTIALS_MARKER = "gcp-vertex-credentials";
-export const NON_ENV_SECRETREF_MARKER = "secretref-managed"; // pragma: allowlist secret
-export const SECRETREF_ENV_HEADER_MARKER_PREFIX = "secretref-env:"; // pragma: allowlist secret
 
 const AWS_SDK_ENV_MARKERS = new Set([
   "AWS_BEARER_TOKEN_BEDROCK",
@@ -82,25 +88,6 @@ export function resolveOAuthApiKeyMarker(providerId: string): string {
 
 export function isOAuthApiKeyMarker(value: string): boolean {
   return value.trim().startsWith(OAUTH_API_KEY_MARKER_PREFIX);
-}
-
-export function resolveNonEnvSecretRefApiKeyMarker(_source: SecretRefSource): string {
-  return NON_ENV_SECRETREF_MARKER;
-}
-
-export function resolveNonEnvSecretRefHeaderValueMarker(_source: SecretRefSource): string {
-  return NON_ENV_SECRETREF_MARKER;
-}
-
-export function resolveEnvSecretRefHeaderValueMarker(envVarName: string): string {
-  return `${SECRETREF_ENV_HEADER_MARKER_PREFIX}${envVarName.trim()}`;
-}
-
-export function isSecretRefHeaderValueMarker(value: string): boolean {
-  const trimmed = value.trim();
-  return (
-    trimmed === NON_ENV_SECRETREF_MARKER || trimmed.startsWith(SECRETREF_ENV_HEADER_MARKER_PREFIX)
-  );
 }
 
 export function isNonSecretApiKeyMarker(
