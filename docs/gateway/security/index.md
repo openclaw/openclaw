@@ -53,6 +53,48 @@ OpenClaw is both a product and an experiment: you're wiring frontier-model behav
 
 Start with the smallest access that still works, then widen it as you gain confidence.
 
+### Published package dependency lock
+
+OpenClaw source checkouts use `pnpm-lock.yaml`. The published `openclaw` npm
+package also includes `npm-shrinkwrap.json`, npm's publishable dependency
+lockfile, so package installs use the reviewed transitive dependency graph
+from the release instead of resolving a fresh graph at install time.
+
+This is a supply-chain hardening measure:
+
+- release installs are more reproducible;
+- transitive dependency updates become visible review surfaces;
+- the package tarball contains the dependency graph that release validators
+  checked;
+- `package-lock.json` stays out of the published package, because npm does not
+  treat it as the publishable lock contract.
+
+Shrinkwrap is not a sandbox and does not make every dependency trustworthy. It
+does not replace `openclaw security audit`, host isolation, npm provenance,
+signature/audit checks, or `--ignore-scripts` install smoke tests when those are
+appropriate. Treat it as a release reproducibility and review-control boundary.
+
+Maintainers should update and verify the shrinkwrap whenever the root package's
+published dependency graph changes:
+
+```bash
+pnpm deps:shrinkwrap:generate
+pnpm deps:shrinkwrap:check
+```
+
+Review `pnpm-lock.yaml`, `npm-shrinkwrap.json`, and any `package-lock.json`
+diff as security-sensitive. The package validators require shrinkwrap in new
+tarballs and reject `package-lock.json`.
+
+To inspect a published package:
+
+```bash
+npm pack openclaw@<version> --json --pack-destination /tmp/openclaw-pack
+tar -tf /tmp/openclaw-pack/openclaw-<version>.tgz | grep '^package/npm-shrinkwrap.json$'
+```
+
+Background: [npm-shrinkwrap.json](https://docs.npmjs.com/cli/v11/configuring-npm/npm-shrinkwrap-json).
+
 ### Deployment and host trust
 
 OpenClaw assumes the host and config boundary are trusted:

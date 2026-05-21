@@ -23,6 +23,7 @@
   "files": [
     "CHANGELOG.md",
     "LICENSE",
+    "npm-shrinkwrap.json",
     "openclaw.mjs",
     "pnpm-workspace.yaml",
     "README.md",
@@ -1435,6 +1436,8 @@
     "deps:changes:report": "node scripts/dependency-changes-report.mjs",
     "deps:patches:check": "node scripts/check-package-patches.mjs",
     "deps:pins:check": "node scripts/check-dependency-pins.mjs",
+    "deps:shrinkwrap:check": "node scripts/generate-npm-shrinkwrap.mjs --check",
+    "deps:shrinkwrap:generate": "node scripts/generate-npm-shrinkwrap.mjs",
     "deps:ownership-surface:check": "node scripts/dependency-ownership-surface-report.mjs --check",
     "deps:ownership-surface:report": "node scripts/dependency-ownership-surface-report.mjs",
     "deps:transitive-risk:report": "node scripts/transitive-manifest-risk-report.mjs",

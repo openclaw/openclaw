@@ -11,6 +11,8 @@ import {
 
 const DEPENDENCY_FILE_PATTERNS = [
   /^package\.json$/u,
+  /^package-lock\.json$/u,
+  /^npm-shrinkwrap\.json$/u,
   /^pnpm-lock\.yaml$/u,
   /^pnpm-workspace\.yaml$/u,
   /^patches\//u,
@@ -108,8 +110,8 @@ function renderMarkdownReport(report) {
     "",
     "It reports two related but different things:",
     "",
-    "- Dependency file changes: package manifests, pnpm workspace config, lockfile, and patches.",
-    "- Resolved package changes: package versions added, removed, or changed in pnpm-lock.yaml.",
+    "- Dependency file changes: package manifests, npm shrinkwrap/package-lock, pnpm workspace config, lockfile, and patches.",
+    "- Resolved package changes: package versions added, removed, or changed in pnpm-lock.yaml; inspect shrinkwrap/package-lock diffs directly.",
     "",
     "## Summary",
     "",
@@ -168,7 +170,7 @@ function readGitFile(ref, filePath, cwd) {
   });
 }
 
-function isDependencyFile(filePath) {
+export function isDependencyFile(filePath) {
   return DEPENDENCY_FILE_PATTERNS.some((pattern) => pattern.test(filePath));
 }
 
@@ -181,6 +183,8 @@ function gitDiffDependencyFiles(baseRef, cwd) {
       baseRef,
       "--",
       "package.json",
+      "package-lock.json",
+      "npm-shrinkwrap.json",
       "pnpm-lock.yaml",
       "pnpm-workspace.yaml",
       "*package.json",
