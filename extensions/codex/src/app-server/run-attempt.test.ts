@@ -799,6 +799,44 @@ describe("runCodexAppServerAttempt", () => {
     expect(dockerTools.map((tool) => tool.name)).toEqual(["message"]);
   });
 
+  it("keeps OpenClaw shell tools for node-targeted Codex app-server runs", async () => {
+    testing.setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("exec"),
+      createRuntimeDynamicTool("process"),
+      createRuntimeDynamicTool("message"),
+    ]);
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.execOverrides = {
+      host: "node",
+      node: "mac-mini",
+      security: "full",
+      ask: "off",
+    };
+    const sandboxSessionKey = params.sessionKey;
+    if (!sandboxSessionKey) {
+      throw new Error("createParams must provide a sessionKey for Codex dynamic tool tests.");
+    }
+
+    const tools = await testing.buildDynamicTools({
+      params,
+      resolvedWorkspace: workspaceDir,
+      effectiveWorkspace: workspaceDir,
+      sandboxSessionKey,
+      sandbox: { enabled: false, backendId: "docker" } as never,
+      nativeToolSurfaceEnabled: false,
+      runAbortController: new AbortController(),
+      sessionAgentId: "main",
+      pluginConfig: {},
+      onYieldDetected: () => undefined,
+    });
+
+    expect(tools.map((tool) => tool.name)).toEqual(["message", "exec", "process"]);
+  });
+
   it("exposes Docker sandbox shell tools when native Code Mode cannot honor sandbox paths", async () => {
     testing.setOpenClawCodingToolsFactoryForTests(() => [
       createRuntimeDynamicTool("exec"),
@@ -944,8 +982,11 @@ describe("runCodexAppServerAttempt", () => {
       details: { status: "running" },
     });
     const processTool = createRuntimeDynamicTool("process");
+    const workspaceDir = path.join(tempDir, "workspace");
     const tools = testing.addSandboxShellDynamicToolsIfAvailable([], [execTool, processTool], {
+      params: createParams(path.join(tempDir, "session.jsonl"), workspaceDir),
       sandbox: { enabled: true, backendId: "ssh" },
+      sessionAgentId: "main",
       pluginConfig: {},
     } as never);
 
@@ -1345,6 +1386,44 @@ describe("runCodexAppServerAttempt", () => {
 
     params.toolsAllow = ["message"];
     expect(testing.shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
+  });
+
+  it("disables Codex native tool surface when session exec target is node", () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.execOverrides = {
+      host: "node",
+      node: "mac-mini",
+      security: "full",
+      ask: "off",
+    };
+
+    expect(testing.shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
+
+    params.toolsAllow = ["*"];
+    expect(testing.shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
+  });
+
+  it("disables Codex native tool surface when configured exec target is node", () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const globalParams = createParams(path.join(tempDir, "global-session.jsonl"), workspaceDir);
+    globalParams.disableTools = false;
+    globalParams.config = { tools: { exec: { host: "node" } } } as never;
+
+    expect(testing.shouldEnableCodexAppServerNativeToolSurface(globalParams)).toBe(false);
+
+    const agentParams = createParams(path.join(tempDir, "agent-session.jsonl"), workspaceDir);
+    agentParams.disableTools = false;
+    agentParams.config = {
+      agents: {
+        list: [{ id: "main", tools: { exec: { host: "node" } } }],
+      },
+    } as never;
+
+    expect(
+      testing.shouldEnableCodexAppServerNativeToolSurface(agentParams, undefined, "main"),
+    ).toBe(false);
   });
 
   it("disables Codex native tool surfaces when Docker bind targets need container paths", () => {

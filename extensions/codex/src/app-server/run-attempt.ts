@@ -48,7 +48,11 @@ import {
   type NativeHookRelayEvent,
   type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { markAuthProfileBlockedUntil, resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  markAuthProfileBlockedUntil,
+  resolveAgentConfig,
+  resolveAgentDir,
+} from "openclaw/plugin-sdk/agent-runtime";
 import {
   emitTrustedDiagnosticEvent,
   hasPendingInternalDiagnosticEvent,
@@ -921,7 +925,11 @@ export async function runCodexAppServerAttempt(
     disableTools: params.disableTools,
     toolsAllow: params.toolsAllow,
   });
-  const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(params, sandbox);
+  const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(
+    params,
+    sandbox,
+    sessionAgentId,
+  );
   for (const diagnostic of bundleMcpThreadConfig.diagnostics) {
     embeddedAgentLog.warn(`bundle-mcp: ${diagnostic.pluginId}: ${diagnostic.message}`);
   }
@@ -3394,8 +3402,12 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
       input.runAbortController.abort("sessions_yield");
     },
   });
-  const codexFilteredTools = addSandboxShellDynamicToolsIfAvailable(
-    filterCodexDynamicTools(allTools, input.pluginConfig),
+  const codexFilteredTools = addNodeShellDynamicToolsIfNeeded(
+    addSandboxShellDynamicToolsIfAvailable(
+      filterCodexDynamicTools(allTools, input.pluginConfig),
+      allTools,
+      input,
+    ),
     allTools,
     input,
   );
@@ -3439,7 +3451,11 @@ function includeForcedMessageToolAllow(
 function shouldEnableCodexAppServerNativeToolSurface(
   params: EmbeddedRunAttemptParams,
   sandbox?: OpenClawSandboxContext,
+  agentId?: string,
 ): boolean {
+  if (isEffectiveExecHostNode(params, agentId)) {
+    return false;
+  }
   const toolsAllow = includeForcedMessageToolAllow(params.toolsAllow, params);
   if (toolsAllow === undefined) {
     return canCodexAppServerNativeToolSurfaceHonorSandbox(sandbox);
@@ -3450,6 +3466,14 @@ function shouldEnableCodexAppServerNativeToolSurface(
   return (
     hasWildcardCodexToolsAllow(toolsAllow) &&
     canCodexAppServerNativeToolSurfaceHonorSandbox(sandbox)
+  );
+}
+
+function isEffectiveExecHostNode(params: EmbeddedRunAttemptParams, agentId?: string): boolean {
+  const agentExec =
+    params.config && agentId ? resolveAgentConfig(params.config, agentId)?.tools?.exec : undefined;
+  return (
+    (params.execOverrides?.host ?? agentExec?.host ?? params.config?.tools?.exec?.host) === "node"
   );
 }
 
@@ -3526,20 +3550,53 @@ function addSandboxShellDynamicToolsIfAvailable(
 }
 
 function shouldExposeSandboxExecDynamicTool(input: DynamicToolBuildParams): boolean {
+  if (isEffectiveExecHostNode(input.params, input.sessionAgentId)) {
+    return false;
+  }
   const backendId = input.sandbox?.enabled ? input.sandbox.backendId.trim().toLowerCase() : "";
   return Boolean(backendId && (backendId !== "docker" || input.nativeToolSurfaceEnabled === false));
 }
 
-function isSandboxShellDynamicToolExcluded(config: CodexPluginConfig): boolean {
+function isCodexDynamicToolExcluded(config: CodexPluginConfig, names: string[]): boolean {
+  const normalizedNames = new Set(names.map((name) => normalizeCodexDynamicToolName(name)));
   return (config.codexDynamicToolsExclude ?? []).some((name) => {
     const normalized = normalizeCodexDynamicToolName(name);
-    return (
-      normalized === "exec" ||
-      normalized === "sandbox_exec" ||
-      normalized === "process" ||
-      normalized === "sandbox_process"
-    );
+    return normalizedNames.has(normalized);
   });
+}
+
+function isSandboxShellDynamicToolExcluded(config: CodexPluginConfig): boolean {
+  return isCodexDynamicToolExcluded(config, ["exec", "sandbox_exec", "process", "sandbox_process"]);
+}
+
+function addNodeShellDynamicToolsIfNeeded(
+  filteredTools: OpenClawDynamicTool[],
+  allTools: OpenClawDynamicTool[],
+  input: DynamicToolBuildParams,
+): OpenClawDynamicTool[] {
+  if (!isEffectiveExecHostNode(input.params, input.sessionAgentId)) {
+    return filteredTools;
+  }
+  let next = filteredTools;
+  for (const toolName of ["exec", "process"]) {
+    if (isCodexDynamicToolExcluded(input.pluginConfig, [toolName])) {
+      continue;
+    }
+    if (next.some((tool) => normalizeCodexDynamicToolName(tool.name) === toolName)) {
+      continue;
+    }
+    const tool = allTools.find(
+      (candidate) => normalizeCodexDynamicToolName(candidate.name) === toolName,
+    );
+    if (!tool) {
+      continue;
+    }
+    if (next === filteredTools) {
+      next = [...filteredTools];
+    }
+    next.push(tool);
+  }
+  return next;
 }
 
 function filterCodexDynamicToolsForAllowlist<T extends { name: string }>(
