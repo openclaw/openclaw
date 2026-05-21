@@ -201,6 +201,13 @@ function collectNestedErrorCandidates(err: unknown): unknown[] {
         queue.push(nested);
       }
     }
+    if (Array.isArray(record.errors)) {
+      for (const nested of record.errors) {
+        if (nested != null && !seen.has(nested)) {
+          queue.push(nested);
+        }
+      }
+    }
   }
 
   return candidates;

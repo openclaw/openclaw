@@ -569,6 +569,14 @@ describe("diagnostics-otel service", () => {
     expect(handler?.(errorInstance)).toBe(true);
     expect(handler?.({ name: "OTLPExporterError", code: 410, data: "user_stop" })).toBe(true);
     expect(handler?.([{ name: "OTLPExporterError", code: 410, data: "user_stop" }])).toBe(true);
+    expect(
+      handler?.(
+        new AggregateError(
+          [{ name: "OTLPExporterError", code: 410, data: "user_stop" }],
+          "export failed",
+        ),
+      ),
+    ).toBe(true);
     expect(handler?.(new Error("other exporter error"))).toBe(false);
     expect(ctx.logger.warn).toHaveBeenCalledWith(
       "diagnostics-otel: suppressed OTLP exporter unhandled rejection (code=410)",
