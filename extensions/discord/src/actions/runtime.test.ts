@@ -3,7 +3,6 @@ import type { DiscordActionConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { clearPresences, setPresence } from "../monitor/presence-cache.js";
 import { DiscordThreadInitialMessageError } from "../send.js";
-import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
 import { discordGuildActionRuntime, handleDiscordGuildAction } from "./runtime.guild.js";
 import { handleDiscordAction } from "./runtime.js";
 import {
@@ -93,7 +92,14 @@ const {
 } = discordSendMocks;
 
 const enableAllActions = () => true;
-const DISCORD_TEST_CFG = EMPTY_DISCORD_TEST_CONFIG;
+const DISCORD_TEST_CFG = {
+  channels: {
+    discord: {
+      token: "token",
+      groupPolicy: "open",
+    },
+  },
+} as OpenClawConfig;
 
 type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
 
@@ -555,6 +561,25 @@ describe("handleDiscordMessagingAction", () => {
     expect(readMessagesDiscord).not.toHaveBeenCalled();
   });
 
+  it("fails closed for Discord message reads when provider config is missing", async () => {
+    const cfg = {} as OpenClawConfig;
+
+    await expect(
+      handleMessagingAction("readMessages", { channelId: "C1" }, enableAllActions, cfg),
+    ).rejects.toThrow("Discord read target channel is not allowed.");
+    expect(readMessagesDiscord).not.toHaveBeenCalled();
+
+    await expect(
+      handleMessagingAction(
+        "fetchMessage",
+        { messageLink: "https://discord.com/channels/111/222/333" },
+        enableAllActions,
+        cfg,
+      ),
+    ).rejects.toThrow("Discord read target channel is not allowed.");
+    expect(fetchMessageDiscord).not.toHaveBeenCalled();
+  });
+
   it("adds normalized timestamps to fetchMessage payloads", async () => {
     fetchMessageDiscord.mockResolvedValueOnce({
       id: "1",
@@ -873,6 +898,20 @@ describe("handleDiscordMessagingAction", () => {
     ).rejects.toThrow(
       "Discord message search requires channelId or channelIds so each read target can be authorized.",
     );
+    expect(searchMessagesDiscord).not.toHaveBeenCalled();
+  });
+
+  it("fails closed for Discord guild-wide searches when provider config is missing", async () => {
+    const cfg = {} as OpenClawConfig;
+
+    await expect(
+      handleMessagingAction(
+        "searchMessages",
+        { guildId: "111", content: "canary" },
+        enableAllActions,
+        cfg,
+      ),
+    ).rejects.toThrow("Discord read target channel is not allowed.");
     expect(searchMessagesDiscord).not.toHaveBeenCalled();
   });
 

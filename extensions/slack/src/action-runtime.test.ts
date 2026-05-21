@@ -931,6 +931,30 @@ describe("handleSlackAction", () => {
     expect(readSlackMessages).not.toHaveBeenCalled();
   });
 
+  it("fails closed for read-like Slack actions when provider config is missing", async () => {
+    const cfg = {} as OpenClawConfig;
+
+    await expect(
+      handleSlackAction({ action: "readMessages", channelId: "C1" }, cfg),
+    ).rejects.toThrow("Slack read target channel is not allowed.");
+    expect(readSlackMessages).not.toHaveBeenCalled();
+
+    await expect(
+      handleSlackAction({ action: "reactions", channelId: "C1", messageId: "123.456" }, cfg),
+    ).rejects.toThrow("Slack read target channel is not allowed.");
+    expect(listSlackReactions).not.toHaveBeenCalled();
+
+    await expect(
+      handleSlackAction({ action: "downloadFile", fileId: "F123", channelId: "C1" }, cfg),
+    ).rejects.toThrow("Slack read target channel is not allowed.");
+    expect(downloadSlackFile).not.toHaveBeenCalled();
+
+    await expect(handleSlackAction({ action: "listPins", channelId: "C1" }, cfg)).rejects.toThrow(
+      "Slack read target channel is not allowed.",
+    );
+    expect(listSlackPins).not.toHaveBeenCalled();
+  });
+
   it("rejects Slack file downloads for non-allowlisted target channels", async () => {
     const cfg = slackConfig({
       groupPolicy: "allowlist",

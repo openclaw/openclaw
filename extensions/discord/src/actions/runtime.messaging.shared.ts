@@ -1,3 +1,4 @@
+import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import { mergeDiscordAccountConfig, resolveDefaultDiscordAccountId } from "../accounts.js";
 import { createDiscordRuntimeAccountContext } from "../client.js";
 import {
@@ -96,12 +97,6 @@ function resolveDiscordActionGuildEntry(params: {
   return wildcard ? { ...wildcard, id: guildId } : null;
 }
 
-function hasAnyDiscordChannelAllowlist(
-  guilds?: Record<string, DiscordGuildEntryResolved | undefined>,
-): boolean {
-  return Object.values(guilds ?? {}).some((guild) => hasDiscordGuildEntries(guild?.channels));
-}
-
 type DiscordReadTargetContext = {
   channelId: string;
   guildId?: string;
@@ -198,10 +193,11 @@ export function createDiscordMessagingActionContext(params: {
   );
   const guilds = accountConfig.guilds as Record<string, DiscordGuildEntryResolved | undefined>;
   const hasGuildEntries = Boolean(guilds && Object.keys(guilds).length > 0);
-  const groupPolicy =
-    accountConfig.groupPolicy ??
-    params.cfg.channels?.defaults?.groupPolicy ??
-    (hasGuildEntries || hasAnyDiscordChannelAllowlist(guilds) ? "allowlist" : "open");
+  const { groupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
+    providerConfigPresent: params.cfg.channels?.discord !== undefined,
+    groupPolicy: accountConfig.groupPolicy,
+    defaultGroupPolicy: params.cfg.channels?.defaults?.groupPolicy,
+  });
   const withOpts = (extra?: Record<string, unknown>) =>
     createDiscordActionOptions({ cfg: params.cfg, accountId, extra });
   const resolvedReactionAccountId = accountId ?? resolveDefaultDiscordAccountId(params.cfg);

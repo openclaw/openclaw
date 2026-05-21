@@ -1,6 +1,7 @@
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
+import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ResolvedSlackAccount } from "./accounts.js";
 import { parseSlackBlocksInput } from "./blocks-input.js";
@@ -177,8 +178,11 @@ function assertSlackReadTargetAllowed(params: {
     defaultRequireMention: params.account.config.requireMention,
   });
   const channelAllowed = channelConfig?.allowed !== false;
-  const groupPolicy =
-    params.account.config.groupPolicy ?? params.cfg.channels?.defaults?.groupPolicy;
+  const { groupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
+    providerConfigPresent: params.cfg.channels?.slack !== undefined,
+    groupPolicy: params.account.config.groupPolicy,
+    defaultGroupPolicy: params.cfg.channels?.defaults?.groupPolicy,
+  });
   if (
     groupPolicy === "disabled" ||
     (groupPolicy === "allowlist" &&
