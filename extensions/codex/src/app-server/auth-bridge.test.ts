@@ -570,6 +570,47 @@ describe("bridgeCodexAppServerStartOptions", () => {
     }
   });
 
+  it("unwraps OpenAI Codex OAuth token wrappers before app-server login", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const request = vi.fn(async () => ({ type: "chatgptAuthTokens" }));
+    providerRuntimeMocks.formatProviderAuthProfileApiKeyWithPlugin.mockResolvedValueOnce(
+      JSON.stringify({
+        access_token: "wrapped-access-token",
+        account_id: "account-wrapped",
+      }),
+    );
+    try {
+      upsertAuthProfile({
+        agentDir,
+        profileId: "openai-codex:work",
+        credential: {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "stored-access-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 24 * 60 * 60_000,
+          accountId: "account-stored",
+          email: "codex@example.test",
+        },
+      });
+
+      await applyCodexAppServerAuthProfile({
+        client: { request } as never,
+        agentDir,
+        authProfileId: "openai-codex:work",
+      });
+
+      expect(request).toHaveBeenCalledWith("account/login/start", {
+        type: "chatgptAuthTokens",
+        accessToken: "wrapped-access-token",
+        chatgptAccountId: "account-wrapped",
+        chatgptPlanType: null,
+      });
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
   it("leaves native app-server auth untouched when auth bridging is disabled", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     const request = vi.fn(async () => ({ requiresOpenaiAuth: true }));
@@ -1116,6 +1157,47 @@ describe("bridgeCodexAppServerStartOptions", () => {
         type: "chatgptAuthTokens",
         accessToken: "ref-backed-access-token",
         chatgptAccountId: "codex@example.test",
+        chatgptPlanType: null,
+      });
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("unwraps OpenAI Codex token profile wrappers before app-server login", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const request = vi.fn(async () => ({ type: "chatgptAuthTokens" }));
+    vi.stubEnv(
+      "OPENAI_CODEX_TOKEN",
+      JSON.stringify({
+        tokens: {
+          access_token: "wrapped-ref-access-token",
+          account_id: "account-wrapped-ref",
+        },
+      }),
+    );
+    try {
+      upsertAuthProfile({
+        agentDir,
+        profileId: "openai-codex:work",
+        credential: {
+          type: "token",
+          provider: "openai-codex",
+          tokenRef: { source: "env", provider: "default", id: "OPENAI_CODEX_TOKEN" },
+          email: "codex@example.test",
+        },
+      });
+
+      await applyCodexAppServerAuthProfile({
+        client: { request } as never,
+        agentDir,
+        authProfileId: "openai-codex:work",
+      });
+
+      expect(request).toHaveBeenCalledWith("account/login/start", {
+        type: "chatgptAuthTokens",
+        accessToken: "wrapped-ref-access-token",
+        chatgptAccountId: "account-wrapped-ref",
         chatgptPlanType: null,
       });
     } finally {
