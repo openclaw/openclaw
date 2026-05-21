@@ -2896,6 +2896,13 @@ export const chatHandlers: GatewayRequestHandlers = {
                 const errorMessage = buildDeliveredReplyErrorMessage(deliveredReplies);
                 if (errorMessage) {
                   deliveredReplyErrorMessage = errorMessage;
+                  if (!hasBeforeAgentRunGate) {
+                    await emitUserTranscriptUpdate().catch((transcriptErr) => {
+                      context.logGateway.warn(
+                        `webchat user transcript update failed after agent run: ${formatForLog(transcriptErr)}`,
+                      );
+                    });
+                  }
                   broadcastChatError({
                     context,
                     runId: clientRunId,

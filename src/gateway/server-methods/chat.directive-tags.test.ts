@@ -65,6 +65,7 @@ const mockState = vi.hoisted(() => ({
     message?: unknown;
     messageId?: string;
   }>,
+  eventOrder: [] as string[],
   savedMediaResults: [] as Array<{ path: string; contentType?: string }>,
   saveMediaError: null as Error | null,
   savedMediaCalls: [] as Array<{ contentType?: string; subdir?: string; size: number }>,
@@ -254,6 +255,10 @@ vi.mock("../../sessions/transcript-events.js", () => ({
       messageId?: string;
     }) => {
       mockState.emittedTranscriptUpdates.push(update);
+      const message = update.message as { role?: unknown } | undefined;
+      if (message?.role === "user") {
+        mockState.eventOrder.push("user-transcript");
+      }
     },
   ),
 }));
@@ -517,7 +522,11 @@ function createChatContext(): Pick<
   | "logGateway"
 > {
   return {
-    broadcast: vi.fn() as unknown as GatewayRequestContext["broadcast"],
+    broadcast: vi.fn((event: string, payload: { state?: string }) => {
+      if (event === "chat" && payload.state === "error") {
+        mockState.eventOrder.push("chat-error");
+      }
+    }) as unknown as GatewayRequestContext["broadcast"],
     nodeSendToSession: vi.fn() as unknown as GatewayRequestContext["nodeSendToSession"],
     agentRunSeq: new Map<string, number>(),
     chatAbortControllers: new Map(),
@@ -645,6 +654,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.lastDispatchImageOrder = undefined;
     mockState.modelCatalog = null;
     mockState.emittedTranscriptUpdates = [];
+    mockState.eventOrder = [];
     mockState.savedMediaResults = [];
     mockState.saveMediaError = null;
     mockState.savedMediaCalls = [];
@@ -784,6 +794,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       state: "error",
       errorMessage: "LLM idle timeout (120s): no response from model",
     });
+    expect(findUserUpdate()).toBeDefined();
+    expect(mockState.eventOrder).toEqual(["user-transcript", "chat-error"]);
   });
 
   it("joins multiple agent-run error payloads before broadcasting", async () => {
