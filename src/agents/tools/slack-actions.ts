@@ -1,5 +1,6 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { OpenClawConfig } from "../../config/config.js";
+import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import { resolveSlackAccount } from "../../slack/accounts.js";
 import {
   deleteSlackMessage,
@@ -24,6 +25,17 @@ const messagingActions = new Set(["sendMessage", "editMessage", "deleteMessage",
 
 const reactionsActions = new Set(["react", "reactions"]);
 const pinActions = new Set(["pinMessage", "unpinMessage", "listPins"]);
+
+function readBooleanLike(value: unknown): boolean {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    return normalized === "true" || normalized === "1" || normalized === "yes";
+  }
+  return false;
+}
 
 export type SlackActionContext = {
   /** Current channel ID for auto-threading. */
@@ -169,16 +181,22 @@ export async function handleSlackAction(
       case "sendMessage": {
         const to = readStringParam(params, "to", { required: true });
         const content = readStringParam(params, "content", { required: true });
+        const parsedContent = parseReplyDirectives(content);
         const mediaUrl = readStringParam(params, "mediaUrl");
         const threadTs = resolveThreadTsFromContext(
           readStringParam(params, "threadTs"),
           to,
           context,
         );
-        const result = await sendSlackMessage(to, content, {
+        const replyBroadcast =
+          readBooleanLike(params.replyBroadcast) ||
+          readBooleanLike(params.slackReplyBroadcast) ||
+          Boolean(parsedContent.slackReplyBroadcast);
+        const result = await sendSlackMessage(to, parsedContent.text, {
           ...writeOpts,
           mediaUrl: mediaUrl ?? undefined,
           threadTs: threadTs ?? undefined,
+          ...(replyBroadcast ? { replyBroadcast: true } : {}),
         });
 
         // Keep "first" mode consistent even when the agent explicitly provided

@@ -88,6 +88,7 @@ function buildReplyTagsSection(isMinimal: boolean) {
     "To request a native reply/quote on supported surfaces, include one tag in your reply:",
     "- [[reply_to_current]] replies to the triggering message.",
     "- [[reply_to:<id>]] replies to a specific message id when you have it.",
+    "- [[slack_reply_broadcast]] (or [[reply_broadcast]]) also shares a Slack thread reply to the channel when a Slack thread is selected.",
     "Whitespace inside the tag is allowed (e.g. [[ reply_to_current ]] / [[ reply_to: 123 ]]).",
     "Tags are stripped before sending; support depends on the current channel config.",
     "",

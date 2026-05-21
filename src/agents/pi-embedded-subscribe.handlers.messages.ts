@@ -312,6 +312,7 @@ export function handleMessageEnd(
             replyToId,
             replyToTag,
             replyToCurrent,
+            slackReplyBroadcast,
           } = splitResult;
           // Emit if there's content OR audioAsVoice flag (to propagate the flag).
           if (cleanedText || (mediaUrls && mediaUrls.length > 0) || audioAsVoice) {
@@ -322,6 +323,7 @@ export function handleMessageEnd(
               replyToId,
               replyToTag,
               replyToCurrent,
+              slackReplyBroadcast,
             });
           }
         }
@@ -346,6 +348,7 @@ export function handleMessageEnd(
         replyToId,
         replyToTag,
         replyToCurrent,
+        slackReplyBroadcast,
       } = tailResult;
       if (cleanedText || (mediaUrls && mediaUrls.length > 0) || audioAsVoice) {
         void onBlockReply({
@@ -355,6 +358,7 @@ export function handleMessageEnd(
           replyToId,
           replyToTag,
           replyToCurrent,
+          slackReplyBroadcast,
         });
       }
     }

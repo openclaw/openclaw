@@ -3,6 +3,7 @@ import {
   formatOutboundPayloadLog,
   normalizeOutboundPayloads,
   normalizeOutboundPayloadsForJson,
+  normalizeReplyPayloadsForDelivery,
 } from "./payloads.js";
 
 describe("normalizeOutboundPayloadsForJson", () => {
@@ -42,6 +43,22 @@ describe("normalizeOutboundPayloadsForJson", () => {
         text: "",
         mediaUrl: null,
         mediaUrls: ["https://x.test/a.png", "https://x.test/b.png"],
+        channelData: undefined,
+      },
+    ]);
+  });
+
+  it("strips Slack reply broadcast directive from visible payload text", () => {
+    const [payload] = normalizeReplyPayloadsForDelivery([
+      { text: "hello [[slack_reply_broadcast]]" },
+    ]);
+
+    expect(payload).toMatchObject({ text: "hello", slackReplyBroadcast: true });
+    expect(normalizeOutboundPayloadsForJson([payload])).toEqual([
+      {
+        text: "hello",
+        mediaUrl: null,
+        mediaUrls: undefined,
         channelData: undefined,
       },
     ]);

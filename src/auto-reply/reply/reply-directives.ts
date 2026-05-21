@@ -9,6 +9,7 @@ export type ReplyDirectiveParseResult = {
   replyToId?: string;
   replyToCurrent: boolean;
   replyToTag: boolean;
+  slackReplyBroadcast?: boolean;
   audioAsVoice?: boolean;
   isSilent: boolean;
 };
@@ -26,7 +27,7 @@ export function parseReplyDirectives(
     stripReplyTags: true,
   });
 
-  if (replyParsed.hasReplyTag) {
+  if (replyParsed.hasReplyTag || replyParsed.hasSlackReplyBroadcastTag) {
     text = replyParsed.text;
   }
 
@@ -43,6 +44,7 @@ export function parseReplyDirectives(
     replyToId: replyParsed.replyToId,
     replyToCurrent: replyParsed.replyToCurrent,
     replyToTag: replyParsed.hasReplyTag,
+    slackReplyBroadcast: replyParsed.slackReplyBroadcast,
     audioAsVoice: split.audioAsVoice,
     isSilent,
   };

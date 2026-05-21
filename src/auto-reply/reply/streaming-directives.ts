@@ -7,6 +7,7 @@ type PendingReplyState = {
   explicitId?: string;
   sawCurrent: boolean;
   hasTag: boolean;
+  slackReplyBroadcast: boolean;
 };
 
 type ParsedChunk = ReplyDirectiveParseResult & {
@@ -42,7 +43,7 @@ const parseChunk = (raw: string, options?: { silentToken?: string }): ParsedChun
     stripReplyTags: true,
   });
 
-  if (replyParsed.hasReplyTag) {
+  if (replyParsed.hasReplyTag || replyParsed.hasSlackReplyBroadcastTag) {
     text = replyParsed.text;
   }
 
@@ -60,6 +61,7 @@ const parseChunk = (raw: string, options?: { silentToken?: string }): ParsedChun
     replyToExplicitId: replyParsed.replyToExplicitId,
     replyToCurrent: replyParsed.replyToCurrent,
     replyToTag: replyParsed.hasReplyTag,
+    slackReplyBroadcast: replyParsed.slackReplyBroadcast,
     audioAsVoice: split.audioAsVoice,
     isSilent,
   };
@@ -73,11 +75,15 @@ const hasRenderableContent = (parsed: ReplyDirectiveParseResult): boolean =>
 
 export function createStreamingDirectiveAccumulator() {
   let pendingTail = "";
-  let pendingReply: PendingReplyState = { sawCurrent: false, hasTag: false };
+  let pendingReply: PendingReplyState = {
+    sawCurrent: false,
+    hasTag: false,
+    slackReplyBroadcast: false,
+  };
 
   const reset = () => {
     pendingTail = "";
-    pendingReply = { sawCurrent: false, hasTag: false };
+    pendingReply = { sawCurrent: false, hasTag: false, slackReplyBroadcast: false };
   };
 
   const consume = (raw: string, options: ConsumeOptions = {}): ReplyDirectiveParseResult | null => {
@@ -97,6 +103,8 @@ export function createStreamingDirectiveAccumulator() {
     const parsed = parseChunk(combined, { silentToken: options.silentToken });
     const hasTag = pendingReply.hasTag || parsed.replyToTag;
     const sawCurrent = pendingReply.sawCurrent || parsed.replyToCurrent;
+    const slackReplyBroadcast =
+      pendingReply.slackReplyBroadcast || Boolean(parsed.slackReplyBroadcast);
     const explicitId = parsed.replyToExplicitId ?? pendingReply.explicitId;
 
     const combinedResult: ReplyDirectiveParseResult = {
@@ -104,20 +112,22 @@ export function createStreamingDirectiveAccumulator() {
       replyToId: explicitId,
       replyToCurrent: sawCurrent,
       replyToTag: hasTag,
+      slackReplyBroadcast,
     };
 
     if (!hasRenderableContent(combinedResult)) {
-      if (hasTag) {
+      if (hasTag || slackReplyBroadcast) {
         pendingReply = {
           explicitId,
           sawCurrent,
           hasTag,
+          slackReplyBroadcast,
         };
       }
       return null;
     }
 
-    pendingReply = { sawCurrent: false, hasTag: false };
+    pendingReply = { sawCurrent: false, hasTag: false, slackReplyBroadcast: false };
     return combinedResult;
   };
 

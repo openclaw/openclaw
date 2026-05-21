@@ -21,6 +21,7 @@ export type SubscribeEmbeddedPiSessionParams = {
     replyToId?: string;
     replyToTag?: boolean;
     replyToCurrent?: boolean;
+    slackReplyBroadcast?: boolean;
   }) => void | Promise<void>;
   /** Flush pending block replies (e.g., before tool execution to preserve message boundaries). */
   onBlockReplyFlush?: () => void | Promise<void>;

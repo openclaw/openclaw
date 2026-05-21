@@ -246,6 +246,16 @@ describe("createStreamingDirectiveAccumulator", () => {
     expect(result?.replyToTag).toBe(true);
   });
 
+  it("stashes Slack reply broadcast until a renderable chunk arrives", () => {
+    const accumulator = createStreamingDirectiveAccumulator();
+
+    expect(accumulator.consume("[[slack_reply_broadcast]]")).toBeNull();
+
+    const result = accumulator.consume("Hello");
+    expect(result?.text).toBe("Hello");
+    expect(result?.slackReplyBroadcast).toBe(true);
+  });
+
   it("propagates explicit reply ids across chunks", () => {
     const accumulator = createStreamingDirectiveAccumulator();
 
