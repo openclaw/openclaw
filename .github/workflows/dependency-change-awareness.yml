@@ -41,6 +41,7 @@ jobs:
               filename === "ui/package.json" ||
               filename.startsWith("patches/") ||
               /^packages\/[^/]+\/package\.json$/u.test(filename) ||
+              /^extensions\/[^/]+\/npm-shrinkwrap\.json$/u.test(filename) ||
               /^extensions\/[^/]+\/package\.json$/u.test(filename);
 
             const sanitizeDisplayValue = (value) =>
