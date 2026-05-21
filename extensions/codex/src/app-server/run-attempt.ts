@@ -2059,7 +2059,7 @@ export async function runCodexAppServerAttempt(
           armCompletionWatchOnResponse = true;
           markCurrentTurnRequestProgress();
         }
-        return handleCodexAppServerElicitationRequest({
+        return await handleCodexAppServerElicitationRequest({
           requestParams: request.params,
           paramsForRun: params,
           threadId: thread.threadId,
