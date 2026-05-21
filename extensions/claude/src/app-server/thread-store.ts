@@ -23,6 +23,14 @@ export type ClaudeAppServerBinding = {
   approvalsReviewer?: "user" | "auto_review";
   sandbox?: SandboxPolicy;
   dynamicToolsFingerprint?: string;
+  /**
+   * Hash of the developerInstructions sent at thread/start. Used to detect
+   * SOUL.md / workspace-file changes mid-session — if the current hash
+   * differs from the binding's stored value, we rotate to a fresh thread
+   * so the new persona reaches the model. Codex uses the same pattern via
+   * its context-engine binding fingerprint.
+   */
+  developerInstructionsFingerprint?: string;
   createdAt: number;
   updatedAt: number;
 };

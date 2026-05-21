@@ -16,6 +16,7 @@
  * plugin-thread-config — those layer on later.
  */
 
+import { createHash } from "node:crypto";
 import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
 import {
   buildEmbeddedAttemptToolRunContext,
@@ -115,15 +116,26 @@ export async function runClaudeAppServerAttempt(
     });
     unregisterServerRequest = registerToolCallHandler(client, bridge);
 
-    // 3. Ensure thread binding for this session. The thread/start carries the
-    //    OpenClaw bootstrap context (SOUL.md + workspace files + skills) in
-    //    developerInstructions so the SDK pins it as systemPrompt for the
-    //    thread's lifetime — we do not re-inject per turn. Edits to SOUL.md
-    //    propagate on the next thread reset (/reset, agent restart, or any
-    //    change that invalidates the binding).
-    const threadId = await ensureThread(client, params, cfg, bridge);
+    // 3. Build developerInstructions ONCE per turn (cheap; reads bootstrap
+    //    files). Hash to detect SOUL.md / workspace changes; if the hash
+    //    differs from the existing binding, ensureThread rotates to a fresh
+    //    thread so the new persona reaches the model. The SDK pins
+    //    developerInstructions as the cached static-prefix of the
+    //    Claude-Code-preset systemPrompt for the thread's lifetime.
+    const developerInstructions = await buildClaudeDeveloperInstructions(params);
+    const developerInstructionsFingerprint = fingerprintString(developerInstructions);
 
-    // 4. Run the turn. Per-turn user prompt is just the user's actual message;
+    // 4. Ensure thread binding for this session.
+    const threadId = await ensureThread(
+      client,
+      params,
+      cfg,
+      bridge,
+      developerInstructions,
+      developerInstructionsFingerprint,
+    );
+
+    // 5. Run the turn. Per-turn user prompt is just the user's actual message;
     //    we don't duplicate workspace context into the transcript.
     const accumulated = await runTurn(client, params, threadId, cfg, ac);
 
@@ -244,10 +256,29 @@ async function ensureThread(
   params: EmbeddedRunAttemptParams,
   cfg: ResolvedConfig,
   bridge: ClaudeDynamicToolBridge,
+  developerInstructions: string,
+  developerInstructionsFingerprint: string,
 ): Promise<string> {
   const sessionFile = params.sessionFile;
   const existing = sessionFile ? await readClaudeAppServerBinding(sessionFile) : null;
-  if (existing && existing.approvalPolicy === cfg.appServer.approvalPolicy) {
+
+  // Invalidation reasons (any of these forces a fresh thread):
+  //  - approvalPolicy changed (server pins it at thread/start)
+  //  - developerInstructions hash changed (SOUL.md edited, workspace files
+  //    changed, plugin guidance updated, etc.)
+  let rotationReason: string | undefined;
+  if (existing) {
+    if (existing.approvalPolicy !== cfg.appServer.approvalPolicy) {
+      rotationReason = `approvalPolicy ${existing.approvalPolicy ?? "unset"} → ${cfg.appServer.approvalPolicy}`;
+    } else if (
+      existing.developerInstructionsFingerprint &&
+      existing.developerInstructionsFingerprint !== developerInstructionsFingerprint
+    ) {
+      rotationReason = "developerInstructions changed (SOUL.md or workspace files edited)";
+    }
+  }
+
+  if (existing && !rotationReason) {
     try {
       await client.request("thread/resume", { threadId: existing.threadId });
       return existing.threadId;
@@ -258,11 +289,11 @@ async function ensureThread(
         threadId: existing.threadId,
       });
     }
-  } else if (existing) {
-    embeddedAgentLog.info("claude-app-server: approvalPolicy changed; starting fresh thread", {
+  } else if (existing && rotationReason) {
+    embeddedAgentLog.info("claude-app-server: rotating thread", {
       sessionFile,
-      previous: existing.approvalPolicy,
-      next: cfg.appServer.approvalPolicy,
+      previousThreadId: existing.threadId,
+      reason: rotationReason,
     });
   }
 
@@ -274,7 +305,7 @@ async function ensureThread(
     approvalsReviewer: "user",
     sandbox: cfg.appServer.sandbox,
     dynamicTools: bridge.specs,
-    developerInstructions: await buildClaudeDeveloperInstructions(params),
+    developerInstructions,
   };
   const response = await client.request<ThreadStartResponse>("thread/start", startParams);
   const threadId = response.thread?.id;
@@ -290,10 +321,15 @@ async function ensureThread(
       approvalPolicy: cfg.appServer.approvalPolicy,
       approvalsReviewer: "user",
       sandbox: cfg.appServer.sandbox,
+      developerInstructionsFingerprint,
     };
     await writeClaudeAppServerBinding(sessionFile, binding);
   }
   return threadId;
+}
+
+function fingerprintString(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
 function isThreadNotFound(err: unknown): boolean {
