@@ -95,6 +95,12 @@ describe("WhatsApp QA live runtime", () => {
     ]);
   });
 
+  it("hashes credential ids for redacted QA artifact correlation", () => {
+    expect(__testing.toCredentialFingerprint("cred-frc")).toBe("7e9678a23fc4");
+    expect(__testing.toCredentialFingerprint("")).toBeUndefined();
+    expect(__testing.toCredentialFingerprint(undefined)).toBeUndefined();
+  });
+
   it("unpacks auth archives into a caller-provided temp directory", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-wa-qa-test-"));
     try {
@@ -212,6 +218,7 @@ describe("WhatsApp QA live runtime", () => {
   it("renders WhatsApp live phase timings in the QA report", () => {
     const report = testing.renderWhatsAppQaMarkdown({
       cleanupIssues: [],
+      credentialFingerprint: "7e9678a23fc4",
       credentialSource: "convex",
       finishedAt: "2026-05-18T10:00:05.000Z",
       redactMetadata: true,
@@ -236,6 +243,7 @@ describe("WhatsApp QA live runtime", () => {
     expect(report).toContain(
       "- Timing: gatewayStart=1200ms, channelReady=21000ms, sendText=450ms, waitForReply=2760ms",
     );
+    expect(report).toContain("- Credential fingerprint: `7e9678a23fc4`");
   });
 
   it("arms WhatsApp gateway diagnostics only when requested", () => {
