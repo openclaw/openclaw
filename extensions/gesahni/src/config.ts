@@ -23,6 +23,11 @@ export type GesahniConfig = {
     pollSeconds?: number;
     cooldownSeconds?: number;
   };
+  stockRoom?: {
+    publicChannelIds?: string[];
+    passiveTickerRead?: boolean;
+    passiveTickerCooldownSeconds?: number;
+  };
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -35,6 +40,16 @@ function asString(value: unknown): string | undefined {
 
 function asPositiveNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function asStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const entries = value
+    .map((entry) => asString(entry))
+    .filter((entry): entry is string => Boolean(entry));
+  return entries.length ? entries : undefined;
 }
 
 function resolveConfigString(value: unknown, ...envNames: string[]): string | undefined {
@@ -67,6 +82,7 @@ export function readGesahniConfig(raw: unknown): GesahniConfig {
   const marketDataRaw = isRecord(record.marketData) ? record.marketData : {};
   const alpacaRaw = isRecord(marketDataRaw.alpaca) ? marketDataRaw.alpaca : {};
   const alertsRaw = isRecord(record.alerts) ? record.alerts : {};
+  const stockRoomRaw = isRecord(record.stockRoom) ? record.stockRoom : {};
   const envTimeout = Number(process.env.GESAHNI_DEFAULT_TIMEOUT_MS);
   return {
     bridge: {
@@ -101,6 +117,12 @@ export function readGesahniConfig(raw: unknown): GesahniConfig {
       groupCreation: alertsRaw.groupCreation === "owner" ? "owner" : "anyone",
       pollSeconds: asPositiveNumber(alertsRaw.pollSeconds) ?? 30,
       cooldownSeconds: asPositiveNumber(alertsRaw.cooldownSeconds) ?? 300,
+    },
+    stockRoom: {
+      publicChannelIds: asStringArray(stockRoomRaw.publicChannelIds) ?? [],
+      passiveTickerRead: stockRoomRaw.passiveTickerRead === false ? false : true,
+      passiveTickerCooldownSeconds:
+        asPositiveNumber(stockRoomRaw.passiveTickerCooldownSeconds) ?? 60,
     },
   };
 }

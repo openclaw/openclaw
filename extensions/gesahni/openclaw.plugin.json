@@ -125,6 +125,24 @@
             "type": "number"
           }
         }
+      },
+      "stockRoom": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "publicChannelIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "passiveTickerRead": {
+            "type": "boolean"
+          },
+          "passiveTickerCooldownSeconds": {
+            "type": "number"
+          }
+        }
       }
     }
   },
@@ -148,6 +166,14 @@
     "alerts.groupCreation": {
       "label": "Gesahni group alert creation",
       "help": "Who can create shared group alerts. Defaults to anyone; owner keeps the future gated path available."
+    },
+    "stockRoom.publicChannelIds": {
+      "label": "Gesahni stock-room public channel ids",
+      "help": "Discord channel ids where passive read-only ticker mentions such as $AAPL are allowed."
+    },
+    "stockRoom.passiveTickerRead": {
+      "label": "Gesahni passive ticker reads",
+      "help": "Allow compact read-only ticker replies in approved stock-room public channels."
     }
   }
 }

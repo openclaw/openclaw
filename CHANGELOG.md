@@ -12,6 +12,7 @@ Docs: https://docs.openclaw.ai
 - CLI/policy: add the bundled Policy plugin for policy-backed channel conformance checks, doctor lint findings, and opt-in workspace repair. (#80407) Thanks @giodl73-repo.
 - Plugins/Gesahni: restore the stock-room plugin with Discord slash commands for quotes, option contracts, charts, alert previews, alert listing, and market-data status.
 - Plugins/Gesahni: let Discord `/contract` quote shorthand such as `AAPL 210C` by defaulting the expiry to the upcoming Friday contract.
+- Plugins/Gesahni: add DM private watchlists, `list alerts` DM handling, approved-channel passive ticker reads, cleaned market-data failure text, and a Discord stock-room smoke script.
 - Plugins/Gesahni: restore local bridge role plugins, market-command skills, and Shopify inventory operations workspace plugin wiring.
 - Agents/config: allow `agents.list[].experimental.localModelLean` so lean local-model mode can be enabled for one configured agent instead of globally.
 - Providers/xAI: add device-code OAuth login so remote and headless setups can authorize xAI without a localhost browser callback. (#84005) Thanks @fuller-stack-dev.

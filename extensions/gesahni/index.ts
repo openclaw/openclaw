@@ -22,6 +22,9 @@ import {
   type MarketQuote,
 } from "./src/market-data.js";
 import { parseOptionContractWithDefaultExpiry, parseOptionTradeContext } from "./src/options.js";
+import { createWatchlistStore, formatWatchlist, parseWatchlistSymbol } from "./src/watchlist.js";
+
+const passiveTickerReadCache = new Map<string, number>();
 
 function formatCurrency(value: number | undefined): string {
   return value === undefined ? "unavailable" : `$${value.toFixed(2)}`;
@@ -38,6 +41,16 @@ function formatQuoteLine(quote: MarketQuote): string {
     "Educational only.",
   ];
   return lines.join("\n");
+}
+
+function formatCompactQuoteLine(quote: MarketQuote): string {
+  return `${quote.symbol} ${formatCurrency(readQuoteMark(quote))} | bid/ask ${formatCurrency(
+    quote.bid,
+  )}/${formatCurrency(quote.ask)} | ${quote.source} | educational only.`;
+}
+
+function unavailableText(label: string): string {
+  return `${label} unavailable right now. Check /stockstatus and try again.`;
 }
 
 function readQuoteMark(quote: MarketQuote): number | undefined {
@@ -129,7 +142,8 @@ function createCommandContext(options: {
   const config = readGesahniConfig(options.pluginConfig);
   const marketData = options.marketDataClient ?? createMarketDataClient(config);
   const alertStore = createAlertStore(options.stateDir);
-  return { config, marketData, alertStore };
+  const watchlistStore = createWatchlistStore(options.stateDir);
+  return { config, marketData, alertStore, watchlistStore };
 }
 
 function createQuoteCommand(options: {
@@ -151,8 +165,8 @@ function createQuoteCommand(options: {
       const { marketData } = createCommandContext(options);
       try {
         return { text: formatQuoteLine(await marketData.quote(symbol)) };
-      } catch (error) {
-        return { text: `Quote unavailable: ${(error as Error).message}` };
+      } catch {
+        return { text: unavailableText("Quote") };
       }
     },
   };
@@ -230,7 +244,7 @@ function createContractCommand(options: {
           }.`,
           quote
             ? `Option mark: ${formatCurrency(optionMark)}. Bid/ask: ${formatCurrency(quote.bid)} / ${formatCurrency(quote.ask)}.`
-            : `Option quote unavailable; using intrinsic value as a floor estimate (${quoteError?.message ?? "provider unavailable"}).`,
+            : "Option quote unavailable; using intrinsic value as a floor estimate (provider unavailable).",
           `Intrinsic: ${formatCurrency(intrinsic)}. Estimated time value: ${formatCurrency(timeValue)}.`,
           ...(breakeven === undefined ? [] : [`Entry breakeven: ${formatCurrency(breakeven)}.`]),
           ...(postureLine ? [postureLine] : []),
@@ -249,8 +263,8 @@ function createContractCommand(options: {
         return {
           text: analysis.join("\n"),
         };
-      } catch (error) {
-        return { text: `Contract quote unavailable: ${(error as Error).message}` };
+      } catch {
+        return { text: unavailableText("Contract quote") };
       }
     },
   };
@@ -276,8 +290,8 @@ function createChartCommand(options: {
       try {
         const bars = await marketData.bars(symbol, { timeframe: "5Min", limit: 20 });
         return await renderChartFile({ symbol, bars, stateDir: options.stateDir });
-      } catch (error) {
-        return { text: `Chart unavailable: ${(error as Error).message}` };
+      } catch {
+        return { text: unavailableText("Chart") };
       }
     },
   };
@@ -417,14 +431,18 @@ function createStockHelpCommand(): OpenClawPluginCommandDefinition {
     requireAuth: true,
     handler: () => ({
       text: [
-        "Gesahni stock commands:",
+        "Gesahni stock-room commands:",
+        "Public read-only:",
         "/quote AAPL - current stock quote.",
         "/contract AAPL 210C - option math with live underlying context; expiry defaults to the upcoming Friday.",
-        "/alert group AAPL above 210 - preview a shared alert.",
-        "/alert confirm <id> - save an alert after preview.",
-        "/alerts group - list shared alerts.",
-        "/alerts me - list private alerts in DM only.",
         "/chart AAPL - data chart when chart bars are configured.",
+        "$AAPL or watch AAPL - compact read-only ticker context in approved stock-room channels.",
+        "DM actions:",
+        "alert me if AAPL breaks 300 - preview a private alert.",
+        "confirm - save the latest private alert preview.",
+        "list alerts or /alerts - list private alerts.",
+        "delete the AAPL 300 alert - delete a private alert.",
+        "watch AAPL / unwatch AAPL / list watchlist - manage your private watchlist.",
         "/stockstatus - show market-data and alert setup.",
       ].join("\n"),
     }),
@@ -520,7 +538,10 @@ function isAlertCreateIntent(input: string): boolean {
 }
 
 function isAlertListIntent(input: string): boolean {
-  return /^\/?alerts(?:\s+(?:me|private|personal))?\s*$/i.test(input);
+  return (
+    /^\/?alerts(?:\s+(?:me|private|personal))?\s*$/i.test(input) ||
+    /^list\s+(?:my\s+)?alerts\s*$/i.test(input)
+  );
 }
 
 function isConfirmIntent(input: string): boolean {
@@ -533,6 +554,82 @@ function isPendingCancelIntent(input: string): boolean {
 
 function isAlertDeleteIntent(input: string): boolean {
   return /\b(?:delete|cancel|remove)\b/i.test(input) && /\balert\b/i.test(input);
+}
+
+function parseWatchlistAddIntent(input: string): string | null {
+  const match = /^\/?watch\s+(\$?[A-Za-z]{1,6})\s*$/i.exec(input.trim());
+  return match ? parseWatchlistSymbol(match[1]) : null;
+}
+
+function parseWatchlistRemoveIntent(input: string): string | null {
+  const match = /^\/?(?:unwatch|remove\s+from\s+watchlist)\s+(\$?[A-Za-z]{1,6})\s*$/i.exec(
+    input.trim(),
+  );
+  return match ? parseWatchlistSymbol(match[1]) : null;
+}
+
+function isWatchlistListIntent(input: string): boolean {
+  return /^\/?(?:watchlist|list\s+(?:my\s+)?watchlist)\s*$/i.test(input);
+}
+
+function parsePassiveTickerReadIntent(input: string): string | null {
+  const trimmed = input.trim();
+  const watchSymbol = parseWatchlistAddIntent(trimmed);
+  if (watchSymbol) {
+    return watchSymbol;
+  }
+  const cashtags = [...trimmed.matchAll(/\$([A-Za-z]{1,6})\b/g)].map((match) =>
+    parseWatchlistSymbol(match[1] ?? ""),
+  );
+  const unique = [...new Set(cashtags.filter((symbol): symbol is string => Boolean(symbol)))];
+  if (unique.length !== 1 || trimmed.length > 120) {
+    return null;
+  }
+  return unique[0] ?? null;
+}
+
+function resolveApprovedPublicChannelIds(
+  config: ReturnType<typeof readGesahniConfig>,
+): Set<string> {
+  const channelIds = new Set(config.stockRoom?.publicChannelIds ?? []);
+  if (config.alerts?.groupChannelId) {
+    channelIds.add(config.alerts.groupChannelId);
+  }
+  return channelIds;
+}
+
+function isApprovedPublicStockRoomChannel(params: {
+  config: ReturnType<typeof readGesahniConfig>;
+  channelId?: string;
+  conversationId?: string;
+}): boolean {
+  if (params.config.stockRoom?.passiveTickerRead === false) {
+    return false;
+  }
+  const approvedIds = resolveApprovedPublicChannelIds(params.config);
+  if (approvedIds.size === 0) {
+    return false;
+  }
+  const candidates = [params.channelId, params.conversationId?.replace(/^channel:/, "")]
+    .filter((candidate): candidate is string => Boolean(candidate))
+    .flatMap((candidate) => [candidate, `channel:${candidate}`]);
+  return candidates.some((candidate) => approvedIds.has(candidate));
+}
+
+function shouldSuppressPassiveTickerRead(params: {
+  channelId: string;
+  symbol: string;
+  cooldownSeconds: number;
+  nowMs?: number;
+}): boolean {
+  const nowMs = params.nowMs ?? Date.now();
+  const key = `${params.channelId}:${params.symbol}`;
+  const lastMs = passiveTickerReadCache.get(key);
+  if (lastMs !== undefined && nowMs - lastMs < params.cooldownSeconds * 1000) {
+    return true;
+  }
+  passiveTickerReadCache.set(key, nowMs);
+  return false;
 }
 
 function isPublicAlertMutationIntent(input: string): boolean {
@@ -609,12 +706,45 @@ async function handleStockAlertDispatch(
     conversationId: ctx.conversationId,
   });
   const senderId = ctx.senderId ?? event.senderId;
-  const { config, alertStore } = createCommandContext(options);
+  const { config, marketData, alertStore, watchlistStore } = createCommandContext(options);
 
   if (!isDirect) {
-    return isPublicAlertMutationIntent(input) || isAlertCreateIntent(input)
-      ? { handled: true, text: publicAlertMutationBlockedText() }
-      : undefined;
+    if (isPublicAlertMutationIntent(input) || isAlertCreateIntent(input)) {
+      return { handled: true, text: publicAlertMutationBlockedText() };
+    }
+    const symbol = parsePassiveTickerReadIntent(input);
+    if (
+      symbol &&
+      isApprovedPublicStockRoomChannel({
+        config,
+        channelId: event.channel,
+        conversationId: ctx.conversationId,
+      })
+    ) {
+      const channelId = event.channel ?? ctx.conversationId ?? "discord-public";
+      if (
+        shouldSuppressPassiveTickerRead({
+          channelId,
+          symbol,
+          cooldownSeconds: config.stockRoom?.passiveTickerCooldownSeconds ?? 60,
+        })
+      ) {
+        return { handled: true };
+      }
+      try {
+        return { handled: true, text: formatCompactQuoteLine(await marketData.quote(symbol)) };
+      } catch {
+        return { handled: true, text: unavailableText("Ticker read") };
+      }
+    }
+    if (
+      isWatchlistListIntent(input) ||
+      parseWatchlistAddIntent(input) ||
+      parseWatchlistRemoveIntent(input)
+    ) {
+      return { handled: true, text: "Private watchlist actions are DM-only." };
+    }
+    return undefined;
   }
 
   if (isAlertListIntent(input)) {
@@ -652,6 +782,28 @@ async function handleStockAlertDispatch(
         ? `Deleted private alert for ${formatAlertInstrument(deleted.instrument)}.`
         : "No matching private alert found.",
     };
+  }
+
+  const watchlistAddSymbol = parseWatchlistAddIntent(input);
+  if (watchlistAddSymbol) {
+    await watchlistStore.add({ senderId, symbol: watchlistAddSymbol });
+    return { handled: true, text: `Added ${watchlistAddSymbol} to your private watchlist.` };
+  }
+
+  const watchlistRemoveSymbol = parseWatchlistRemoveIntent(input);
+  if (watchlistRemoveSymbol) {
+    const removed = await watchlistStore.remove({ senderId, symbol: watchlistRemoveSymbol });
+    return {
+      handled: true,
+      text: removed
+        ? `Removed ${watchlistRemoveSymbol} from your private watchlist.`
+        : `${watchlistRemoveSymbol} is not on your private watchlist.`,
+    };
+  }
+
+  if (isWatchlistListIntent(input)) {
+    const records = await watchlistStore.list({ senderId });
+    return { handled: true, text: formatWatchlist(records) };
   }
 
   if (!isAlertCreateIntent(input)) {
@@ -763,4 +915,5 @@ export const __testing = {
   createAlertRunnerService,
   resolveScreenshotPromptGuidance,
   handleStockAlertDispatch,
+  resetPassiveTickerReadCache: () => passiveTickerReadCache.clear(),
 };

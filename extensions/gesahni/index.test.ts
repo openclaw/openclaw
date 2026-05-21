@@ -203,10 +203,32 @@ describe("gesahni plugin", () => {
 
     const result = await command.handler(createContext(""));
 
-    expect(result.text).toContain("Gesahni stock commands:");
+    expect(result.text).toContain("Gesahni stock-room commands:");
+    expect(result.text).toContain("Public read-only:");
+    expect(result.text).toContain("DM actions:");
     expect(result.text).toContain("/quote AAPL");
-    expect(result.text).toContain("/alert group AAPL above 210");
-    expect(result.text).toContain("/alerts me - list private alerts in DM only.");
+    expect(result.text).toContain("alert me if AAPL breaks 300");
+    expect(result.text).toContain("watch AAPL / unwatch AAPL / list watchlist");
+  });
+
+  it("does not expose internal market-data error text to Discord replies", async () => {
+    await withTmpState(async (stateDir) => {
+      const marketDataClient = createMarketDataClient();
+      vi.mocked(marketDataClient.quote).mockRejectedValue(
+        new Error("system.run failed: /bin/sh: secret-token leaked"),
+      );
+      const command = __testing.createQuoteCommand({
+        pluginConfig: {},
+        stateDir,
+        marketDataClient,
+      });
+
+      const result = await command.handler(createContext("AAPL"));
+
+      expect(result.text).toBe("Quote unavailable right now. Check /stockstatus and try again.");
+      expect(result.text).not.toContain("system.run");
+      expect(result.text).not.toContain("secret-token");
+    });
   });
 
   it("normalizes option-contract shorthand", async () => {
@@ -565,7 +587,7 @@ describe("gesahni plugin", () => {
       expect(confirmed?.text).toBe("Saved private alert for AAPL above 210.00.");
 
       const listed = await __testing.handleStockAlertDispatch(
-        { ...event, content: "/alerts" },
+        { ...event, content: "list alerts" },
         ctx,
         options,
       );
@@ -585,6 +607,104 @@ describe("gesahni plugin", () => {
         options,
       );
       expect(listedAfterDelete?.text).toBe("No private alerts are active.");
+    });
+  });
+
+  it("manages a private watchlist in DM only", async () => {
+    await withTmpState(async (stateDir) => {
+      const options = {
+        pluginConfig: {},
+        stateDir,
+        marketDataClient: createMarketDataClient(),
+      };
+      const event = {
+        channel: "discord",
+        sessionKey: "agent:gesahni-discord-dm:discord:direct:1309247958029701190",
+        senderId: "1309247958029701190",
+        isGroup: false,
+      };
+      const ctx = {
+        conversationId: "user:1309247958029701190",
+        sessionKey: event.sessionKey,
+        senderId: "1309247958029701190",
+      };
+
+      const added = await __testing.handleStockAlertDispatch(
+        { ...event, content: "watch AAPL" },
+        ctx,
+        options,
+      );
+      const listed = await __testing.handleStockAlertDispatch(
+        { ...event, content: "list watchlist" },
+        ctx,
+        options,
+      );
+      const removed = await __testing.handleStockAlertDispatch(
+        { ...event, content: "unwatch AAPL" },
+        ctx,
+        options,
+      );
+      const listedAfterRemove = await __testing.handleStockAlertDispatch(
+        { ...event, content: "list watchlist" },
+        ctx,
+        options,
+      );
+
+      expect(added?.text).toBe("Added AAPL to your private watchlist.");
+      expect(listed?.text).toBe("Private watchlist: AAPL");
+      expect(removed?.text).toBe("Removed AAPL from your private watchlist.");
+      expect(listedAfterRemove?.text).toBe("No private watchlist symbols are saved.");
+    });
+  });
+
+  it("keeps public watchlist mutations private but allows approved passive ticker reads", async () => {
+    await withTmpState(async (stateDir) => {
+      __testing.resetPassiveTickerReadCache();
+      const marketDataClient = createMarketDataClient();
+      const options = {
+        pluginConfig: {
+          stockRoom: {
+            publicChannelIds: ["1498120236770267187"],
+            passiveTickerCooldownSeconds: 60,
+          },
+        },
+        stateDir,
+        marketDataClient,
+      };
+      const event = {
+        channel: "1498120236770267187",
+        sessionKey: "agent:gesahni-discord-room:discord:channel:1498120236770267187",
+        senderId: "1309247958029701190",
+        isGroup: true,
+      };
+      const ctx = {
+        conversationId: "channel:1498120236770267187",
+        sessionKey: event.sessionKey,
+        senderId: "1309247958029701190",
+      };
+
+      const passive = await __testing.handleStockAlertDispatch(
+        { ...event, content: "$AAPL" },
+        ctx,
+        options,
+      );
+      const throttled = await __testing.handleStockAlertDispatch(
+        { ...event, content: "$AAPL" },
+        ctx,
+        options,
+      );
+      const blockedList = await __testing.handleStockAlertDispatch(
+        { ...event, content: "list watchlist" },
+        ctx,
+        options,
+      );
+
+      expect(passive?.text).toBe(
+        "AAPL $210.00 | bid/ask $209.90/$210.10 | TestData | educational only.",
+      );
+      expect(throttled).toEqual({ handled: true });
+      expect(blockedList?.text).toBe("Private watchlist actions are DM-only.");
+      expect(marketDataClient.quote).toHaveBeenCalledTimes(1);
     });
   });
 
