@@ -177,6 +177,7 @@ describe("qa scenario catalog", () => {
       "plugin-hook-health-sentinel",
       "plugin-manifest-contract-health",
       "webchat-direct-reply-routing",
+      "long-context-progress-watchdog",
     ];
 
     for (const scenarioId of scenarioIds) {
@@ -188,6 +189,15 @@ describe("qa scenario catalog", () => {
     expect(readQaScenarioById("webchat-direct-reply-routing").sourcePath).toBe(
       "qa/scenarios/channels/webchat-direct-reply-routing.md",
     );
+    expect(readQaScenarioById("long-context-progress-watchdog").sourcePath).toBe(
+      "qa/scenarios/runtime/long-context-progress-watchdog.md",
+    );
+    expect(readQaScenarioExecutionConfig("long-context-progress-watchdog")).toMatchObject({
+      requiredProviderMode: "live-frontier",
+      harnessRuntime: "codex",
+    });
+    expect(readQaScenarioById("long-context-progress-watchdog").plugins).toBeUndefined();
+    expect(readQaScenarioById("long-context-progress-watchdog").gatewayConfigPatch).toBeUndefined();
   });
 
   it("loads the opt-in update.run package self-upgrade sentinel", () => {
