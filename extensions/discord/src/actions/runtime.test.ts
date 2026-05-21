@@ -66,6 +66,7 @@ const {
   deleteChannelDiscord,
   editChannelDiscord,
   fetchChannelInfoDiscord,
+  fetchChannelPermissionsDiscord,
   fetchReactionsDiscord,
   fetchMessageDiscord,
   kickMemberDiscord,
@@ -283,6 +284,34 @@ describe("handleDiscordMessagingAction", () => {
     });
   });
 
+  it("rejects Discord reaction reads for non-allowlisted target channels", async () => {
+    const cfg = {
+      channels: {
+        discord: {
+          token: "token",
+          groupPolicy: "allowlist",
+          guilds: {
+            "111": {
+              channels: {
+                "222": { enabled: true },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      handleMessagingAction(
+        "reactions",
+        { channelId: "444", messageId: "M1" },
+        enableAllActions,
+        cfg,
+      ),
+    ).rejects.toThrow("Discord read target channel is not allowed.");
+    expect(fetchReactionsDiscord).not.toHaveBeenCalled();
+  });
+
   it("removes reactions on empty emoji", async () => {
     await handleMessagingAction(
       "react",
@@ -368,6 +397,29 @@ describe("handleDiscordMessagingAction", () => {
       },
       { cfg: DISCORD_TEST_CFG, content: undefined },
     );
+  });
+
+  it("rejects Discord permission reads for non-allowlisted target channels", async () => {
+    const cfg = {
+      channels: {
+        discord: {
+          token: "token",
+          groupPolicy: "allowlist",
+          guilds: {
+            "111": {
+              channels: {
+                "222": { enabled: true },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      handleMessagingAction("permissions", { channelId: "444" }, enableAllActions, cfg),
+    ).rejects.toThrow("Discord read target channel is not allowed.");
+    expect(fetchChannelPermissionsDiscord).not.toHaveBeenCalled();
   });
 
   it("adds normalized timestamps to readMessages payloads", async () => {

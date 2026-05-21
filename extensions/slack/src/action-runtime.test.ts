@@ -298,6 +298,20 @@ describe("handleSlackAction", () => {
     ).rejects.toThrow(/Slack reactions are disabled/);
   });
 
+  it("rejects Slack reaction reads for non-allowlisted target channels", async () => {
+    const cfg = slackConfig({
+      groupPolicy: "allowlist",
+      channels: {
+        C_ALLOWED: { enabled: true },
+      },
+    });
+
+    await expect(
+      handleSlackAction({ action: "reactions", channelId: "C_OTHER", messageId: "123.456" }, cfg),
+    ).rejects.toThrow("Slack read target channel is not allowed.");
+    expect(listSlackReactions).not.toHaveBeenCalled();
+  });
+
   it("passes threadTs to sendSlackMessage for thread replies", async () => {
     const cfg = slackConfig();
     await handleSlackAction(

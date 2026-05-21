@@ -54,6 +54,7 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
         throw new Error("Discord permissions are disabled.");
       }
       const channelId = ctx.resolveChannelId();
+      await ctx.assertReadTargetAllowed({ channelId });
       const permissions = await discordMessagingActionRuntime.fetchChannelPermissionsDiscord(
         channelId,
         ctx.withOpts(),

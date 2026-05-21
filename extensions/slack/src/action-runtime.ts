@@ -271,6 +271,7 @@ export async function handleSlackAction(
       }
       return jsonResult({ ok: true, added: emoji });
     }
+    assertSlackReadTargetAllowed({ account, cfg, channelId });
     const reactions = readOpts
       ? await slackActionRuntime.listSlackReactions(channelId, messageId, readOpts)
       : await slackActionRuntime.listSlackReactions(channelId, messageId);
