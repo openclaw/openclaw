@@ -223,4 +223,49 @@ describe("inbound dedupe", () => {
     expect(shouldSkipDuplicateInbound(first)).toBe(false);
     expect(shouldSkipDuplicateInbound(retry)).toBe(false);
   });
+
+  it("does not dedupe idless media-placeholder retries with MediaPath", () => {
+    const first = {
+      ...sharedInboundContext,
+      MessageSid: undefined,
+      Body: "<media:image>",
+      MediaPath: "/tmp/openclaw-image.png",
+      Timestamp: 1777207291784,
+    };
+    const retry = { ...first };
+
+    expect(buildInboundDedupeKey(first)).toBeNull();
+    expect(shouldSkipDuplicateInbound(first)).toBe(false);
+    expect(shouldSkipDuplicateInbound(retry)).toBe(false);
+  });
+
+  it("does not dedupe idless media-placeholder retries with MediaPaths", () => {
+    const first = {
+      ...sharedInboundContext,
+      MessageSid: undefined,
+      CommandBody: "<media:audio> (1 audio)",
+      MediaPaths: ["/tmp/openclaw-voice.ogg"],
+      Timestamp: 1777207291784,
+    };
+    const retry = { ...first };
+
+    expect(buildInboundDedupeKey(first)).toBeNull();
+    expect(shouldSkipDuplicateInbound(first)).toBe(false);
+    expect(shouldSkipDuplicateInbound(retry)).toBe(false);
+  });
+
+  it("still dedupes idless media turns with real text captions", () => {
+    const first = {
+      ...sharedInboundContext,
+      MessageSid: undefined,
+      Body: "caption for attached image",
+      MediaPath: "/tmp/openclaw-image.png",
+      Timestamp: 1777207291784,
+    };
+    const retry = { ...first };
+
+    expect(buildInboundDedupeKey(first)).not.toBeNull();
+    expect(shouldSkipDuplicateInbound(first)).toBe(false);
+    expect(shouldSkipDuplicateInbound(retry)).toBe(true);
+  });
 });

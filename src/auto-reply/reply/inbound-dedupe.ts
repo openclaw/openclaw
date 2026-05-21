@@ -10,6 +10,7 @@ import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { MsgContext } from "../templating.js";
+import { hasInboundMedia } from "./inbound-media.js";
 
 const DEFAULT_INBOUND_DEDUPE_TTL_MS = 20 * 60_000;
 const DEFAULT_INBOUND_DEDUPE_MAX = 5000;
@@ -20,6 +21,7 @@ const DEFAULT_INBOUND_DEDUPE_MAX = 5000;
  */
 const INBOUND_DEDUPE_CACHE_KEY = Symbol.for("openclaw.inboundDedupeCache");
 const INBOUND_DEDUPE_INFLIGHT_KEY = Symbol.for("openclaw.inboundDedupeInflight");
+const MEDIA_PLACEHOLDER_BODY_RE = /^<media:[a-z0-9_-]+>(?:\s*\([^)]*\))?$/i;
 
 const inboundDedupeCache: DedupeCache = resolveGlobalDedupeCache(INBOUND_DEDUPE_CACHE_KEY, {
   ttlMs: DEFAULT_INBOUND_DEDUPE_TTL_MS,
@@ -42,6 +44,9 @@ const resolveInboundPeerId = (ctx: MsgContext) =>
 function resolveInboundContentFingerprint(ctx: MsgContext): string | null {
   const body = normalizeOptionalString(ctx.CommandBody ?? ctx.RawBody ?? ctx.Body);
   if (!body) {
+    return null;
+  }
+  if (hasInboundMedia(ctx) && MEDIA_PLACEHOLDER_BODY_RE.test(body)) {
     return null;
   }
   const timestamp =
