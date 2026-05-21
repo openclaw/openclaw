@@ -886,7 +886,7 @@ export type PluginHookBeforeAgentRunEvent = {
   channelId?: string;
   /** Sender identity when available. */
   senderId?: string;
-  /** Whether the sender is an owner. */
+  /** Trusted sender identity bit when available. */
   senderIsOwner?: boolean;
 };
 
