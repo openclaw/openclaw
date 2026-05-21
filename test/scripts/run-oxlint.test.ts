@@ -634,4 +634,24 @@ describe("run-oxlint", () => {
     );
     expect(fs.existsSync(tmpDir)).toBe(false);
   });
+
+  it("delegates sharded metadata-only commands before heavy setup", () => {
+    const tmpDir = path.join(createTempDir("openclaw-run-oxlint-metadata-"), "heavy-tmp");
+    const result = spawnSync(process.execPath, ["scripts/run-oxlint-shards.mjs", "--help"], {
+      cwd: path.resolve("."),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        CI: "",
+        GITHUB_ACTIONS: "",
+        OPENCLAW_LOCAL_CHECK_MODE: "",
+        OPENCLAW_LOCAL_HEAVY_CHECK_TMPDIR: tmpDir,
+      },
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).not.toContain("prepare-extension-package-boundary-artifacts");
+    expect(result.stderr).not.toContain("Refusing to start sharded type-aware oxlint");
+    expect(fs.existsSync(tmpDir)).toBe(false);
+  });
 });
