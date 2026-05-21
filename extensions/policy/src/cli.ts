@@ -109,7 +109,11 @@ export async function policyWatchCommand(
       if (options.once === true) {
         return status === "stale" ? 1 : report.exitCode;
       }
-      await (runtime.sleep ?? sleep)(intervalMs);
+      if (runtime.sleep !== undefined) {
+        await runtime.sleep(intervalMs);
+      } else {
+        await sleep(intervalMs);
+      }
     }
   } catch (err) {
     runtime.error(err instanceof Error ? err.message : String(err));

@@ -354,9 +354,9 @@ hooks.
 
 ## Exit codes
 
-| Command        | `0`                                      | `1`                                               | `2`                          |
-| -------------- | ---------------------------------------- | ------------------------------------------------- | ---------------------------- |
-| `policy check` | No findings at the threshold.            | One or more findings met the threshold.           | Argument or runtime failure. |
+| Command        | `0`                                       | `1`                                              | `2`                          |
+| -------------- | ----------------------------------------- | ------------------------------------------------ | ---------------------------- |
+| `policy check` | No findings at the threshold.             | One or more findings met the threshold.          | Argument or runtime failure. |
 | `policy watch` | No findings and accepted hash is current. | Findings exist or accepted attestation is stale. | Argument or runtime failure. |
 
 ## Related
