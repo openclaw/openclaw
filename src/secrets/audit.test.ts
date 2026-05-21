@@ -203,6 +203,7 @@ describe("secrets audit", () => {
     overrides: Partial<{
       apiKey: unknown;
       headers: Record<string, unknown>;
+      request: Record<string, unknown>;
     }> = {},
   ) {
     await writeJsonFile(fixture.modelsPath, {
@@ -441,6 +442,37 @@ describe("secrets audit", () => {
     expectModelsFinding(report, {
       code: "PLAINTEXT_FOUND",
       jsonPath: "providers.openai.headers.Authorization",
+    });
+  });
+
+  it("scans agent models.json files for plaintext provider request secrets", async () => {
+    await writeModelsProvider({
+      request: {
+        headers: {
+          Authorization: "Bearer sk-request-header", // pragma: allowlist secret
+        },
+        auth: {
+          mode: "authorization-bearer",
+          token: "sk-request-auth-token", // pragma: allowlist secret
+        },
+        tls: {
+          key: "request-client-key", // pragma: allowlist secret
+        },
+      },
+    });
+
+    const report = await runSecretsAudit({ env: fixture.env });
+    expectModelsFinding(report, {
+      code: "PLAINTEXT_FOUND",
+      jsonPath: "providers.openai.request.headers.Authorization",
+    });
+    expectModelsFinding(report, {
+      code: "PLAINTEXT_FOUND",
+      jsonPath: "providers.openai.request.auth.token",
+    });
+    expectModelsFinding(report, {
+      code: "PLAINTEXT_FOUND",
+      jsonPath: "providers.openai.request.tls.key",
     });
   });
 

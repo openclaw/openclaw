@@ -9,6 +9,7 @@ import type { ProviderConfig, SecretDefaults } from "./models-config.providers.s
 import {
   normalizeConfiguredProviderApiKey,
   normalizeHeaderValues,
+  normalizeProviderRequestSecrets,
   normalizeResolvedEnvApiKey,
   resolveApiKeyFromProfiles,
   resolveMissingProviderApiKey,
@@ -149,6 +150,14 @@ export function normalizeProviders(params: {
     if (normalizedHeaders.mutated) {
       mutated = true;
       normalizedProvider = { ...normalizedProvider, headers: normalizedHeaders.headers };
+    }
+    const normalizedRequest = normalizeProviderRequestSecrets({
+      request: normalizedProvider.request,
+      secretDefaults: params.secretDefaults,
+    });
+    if (normalizedRequest.mutated) {
+      mutated = true;
+      normalizedProvider = { ...normalizedProvider, request: normalizedRequest.request };
     }
     const providerWithConfiguredApiKey = normalizeConfiguredProviderApiKey({
       providerKey: normalizedKey,

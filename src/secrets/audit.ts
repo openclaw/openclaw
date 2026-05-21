@@ -390,42 +390,162 @@ function collectModelsJsonSecrets(params: {
     }
 
     const headers = isRecord(providerValue.headers) ? providerValue.headers : undefined;
-    if (!headers) {
-      continue;
-    }
-    for (const [headerKey, headerValue] of Object.entries(headers)) {
-      const headerPath = `providers.${providerId}.headers.${headerKey}`;
-      if (coerceSecretRef(headerValue)) {
+    if (headers) {
+      for (const [headerKey, headerValue] of Object.entries(headers)) {
+        const headerPath = `providers.${providerId}.headers.${headerKey}`;
+        if (coerceSecretRef(headerValue)) {
+          addFinding(params.collector, {
+            code: "REF_UNRESOLVED",
+            severity: "error",
+            file: params.modelsJsonPath,
+            jsonPath: headerPath,
+            message:
+              "models.json contains an unresolved SecretRef object for provider headers; regenerate models.json.",
+            provider: providerId,
+          });
+          continue;
+        }
+        if (!isNonEmptyString(headerValue)) {
+          continue;
+        }
+        if (isSecretRefHeaderValueMarker(headerValue)) {
+          continue;
+        }
+        if (!isLikelySensitiveModelProviderHeaderName(headerKey)) {
+          continue;
+        }
         addFinding(params.collector, {
-          code: "REF_UNRESOLVED",
-          severity: "error",
+          code: "PLAINTEXT_FOUND",
+          severity: "warn",
           file: params.modelsJsonPath,
           jsonPath: headerPath,
-          message:
-            "models.json contains an unresolved SecretRef object for provider headers; regenerate models.json.",
+          message: "models.json provider header value is stored as plaintext.",
           provider: providerId,
         });
-        continue;
       }
-      if (!isNonEmptyString(headerValue)) {
-        continue;
-      }
-      if (isSecretRefHeaderValueMarker(headerValue)) {
-        continue;
-      }
-      if (!isLikelySensitiveModelProviderHeaderName(headerKey)) {
-        continue;
-      }
-      addFinding(params.collector, {
-        code: "PLAINTEXT_FOUND",
-        severity: "warn",
-        file: params.modelsJsonPath,
-        jsonPath: headerPath,
-        message: "models.json provider header value is stored as plaintext.",
-        provider: providerId,
+    }
+
+    collectModelsJsonRequestSecrets({
+      request: providerValue.request,
+      modelsJsonPath: params.modelsJsonPath,
+      providerId,
+      collector: params.collector,
+    });
+  }
+}
+
+function collectModelsJsonRequestSecretValue(params: {
+  value: unknown;
+  modelsJsonPath: string;
+  jsonPath: string;
+  providerId: string;
+  collector: AuditCollector;
+}): void {
+  if (isNonEmptyString(params.value) && isSecretRefHeaderValueMarker(params.value)) {
+    return;
+  }
+  if (coerceSecretRef(params.value)) {
+    addFinding(params.collector, {
+      code: "REF_UNRESOLVED",
+      severity: "error",
+      file: params.modelsJsonPath,
+      jsonPath: params.jsonPath,
+      message: "models.json contains an unresolved SecretRef object; regenerate models.json.",
+      provider: params.providerId,
+    });
+    return;
+  }
+  if (!isNonEmptyString(params.value)) {
+    return;
+  }
+  addFinding(params.collector, {
+    code: "PLAINTEXT_FOUND",
+    severity: "warn",
+    file: params.modelsJsonPath,
+    jsonPath: params.jsonPath,
+    message: "models.json provider request secret is stored as plaintext.",
+    provider: params.providerId,
+  });
+}
+
+function collectModelsJsonRequestTlsSecrets(params: {
+  tls: unknown;
+  modelsJsonPath: string;
+  jsonPath: string;
+  providerId: string;
+  collector: AuditCollector;
+}): void {
+  if (!isRecord(params.tls)) {
+    return;
+  }
+  for (const key of ["ca", "cert", "key", "passphrase"] as const) {
+    collectModelsJsonRequestSecretValue({
+      value: params.tls[key],
+      modelsJsonPath: params.modelsJsonPath,
+      jsonPath: `${params.jsonPath}.${key}`,
+      providerId: params.providerId,
+      collector: params.collector,
+    });
+  }
+}
+
+function collectModelsJsonRequestSecrets(params: {
+  request: unknown;
+  modelsJsonPath: string;
+  providerId: string;
+  collector: AuditCollector;
+}): void {
+  if (!isRecord(params.request)) {
+    return;
+  }
+  const headers = isRecord(params.request.headers) ? params.request.headers : undefined;
+  if (headers) {
+    for (const [headerKey, headerValue] of Object.entries(headers)) {
+      collectModelsJsonRequestSecretValue({
+        value: headerValue,
+        modelsJsonPath: params.modelsJsonPath,
+        jsonPath: `providers.${params.providerId}.request.headers.${headerKey}`,
+        providerId: params.providerId,
+        collector: params.collector,
       });
     }
   }
+
+  const auth = isRecord(params.request.auth) ? params.request.auth : undefined;
+  if (auth?.mode === "authorization-bearer") {
+    collectModelsJsonRequestSecretValue({
+      value: auth.token,
+      modelsJsonPath: params.modelsJsonPath,
+      jsonPath: `providers.${params.providerId}.request.auth.token`,
+      providerId: params.providerId,
+      collector: params.collector,
+    });
+  } else if (auth?.mode === "header") {
+    collectModelsJsonRequestSecretValue({
+      value: auth.value,
+      modelsJsonPath: params.modelsJsonPath,
+      jsonPath: `providers.${params.providerId}.request.auth.value`,
+      providerId: params.providerId,
+      collector: params.collector,
+    });
+  }
+
+  collectModelsJsonRequestTlsSecrets({
+    tls: params.request.tls,
+    modelsJsonPath: params.modelsJsonPath,
+    jsonPath: `providers.${params.providerId}.request.tls`,
+    providerId: params.providerId,
+    collector: params.collector,
+  });
+
+  const proxy = isRecord(params.request.proxy) ? params.request.proxy : undefined;
+  collectModelsJsonRequestTlsSecrets({
+    tls: proxy?.tls,
+    modelsJsonPath: params.modelsJsonPath,
+    jsonPath: `providers.${params.providerId}.request.proxy.tls`,
+    providerId: params.providerId,
+    collector: params.collector,
+  });
 }
 
 async function collectUnresolvedRefFindings(params: {
