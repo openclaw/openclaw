@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import {
   createCronRunDiagnosticsFromAgentResult,
   createCronRunDiagnosticsFromError,
@@ -147,6 +148,74 @@ describe("cron run diagnostics", () => {
     expect(
       createCronRunDiagnosticsFromAgentResult(result, { finalStatus: "error" }),
     ).toBeUndefined();
+  });
+
+  it("keeps non-terminal tool warnings as warning diagnostics for successful runs", () => {
+    const toolWarning = setReplyPayloadMetadata(
+      {
+        toolName: "exec",
+        text: "⚠️ Exec failed",
+        isError: true,
+      },
+      { nonTerminalToolErrorWarning: true },
+    );
+
+    const diagnostics = createCronRunDiagnosticsFromAgentResult(
+      {
+        payloads: [{ text: "Queued 3 topics." }, toolWarning],
+      },
+      { finalStatus: "ok", nowMs: () => 700 },
+    );
+
+    expect(diagnostics?.entries).toEqual([
+      {
+        ts: 700,
+        source: "tool",
+        severity: "warn",
+        message: "⚠️ Exec failed",
+        toolName: "exec",
+      },
+    ]);
+    expect(diagnostics?.summary).toBe("⚠️ Exec failed");
+  });
+
+  it("downgrades recovered tool errors for successful runs", () => {
+    const diagnostics = createCronRunDiagnosticsFromAgentResult(
+      {
+        payloads: [
+          {
+            toolName: "exec",
+            text: "⚠️ 🛠️ jq -s '{total:length}' (agent) failed",
+            isError: true,
+            details: {
+              status: "failed",
+              exitCode: 1,
+              aggregated: "jq syntax error",
+            },
+          },
+        ],
+      },
+      { finalStatus: "ok", nowMs: () => 800 },
+    );
+
+    expect(diagnostics?.entries).toEqual([
+      {
+        ts: 800,
+        source: "exec",
+        severity: "warn",
+        message: "jq syntax error",
+        toolName: "exec",
+        exitCode: 1,
+      },
+      {
+        ts: 800,
+        source: "tool",
+        severity: "warn",
+        message: "⚠️ 🛠️ jq -s '{total:length}' (agent) failed",
+        toolName: "exec",
+      },
+    ]);
+    expect(diagnostics?.summary).toBe("⚠️ 🛠️ jq -s '{total:length}' (agent) failed");
   });
 
   it("captures silent failed exec details with a fallback message", () => {

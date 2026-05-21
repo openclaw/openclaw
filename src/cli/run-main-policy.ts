@@ -16,8 +16,23 @@ import {
   resolveCliNetworkProxyPolicy,
 } from "./command-path-policy.js";
 import { isReservedNonPluginCommandRoot } from "./command-registration-policy.js";
+import { getCoreCliParentDefaultHelpCommands } from "./program/core-command-descriptors.js";
+import { getSubCliParentDefaultHelpCommands } from "./program/subcli-descriptors.js";
 
 const ROOT_HELP_ALIASES = new Set(["tools"]);
+const SETUP_ONBOARD_CONFIGURE_HELP_COMMANDS = new Set(["setup", "onboard", "configure"]);
+const BARE_PARENT_DEFAULT_HELP_COMMANDS = new Set([
+  ...getCoreCliParentDefaultHelpCommands(),
+  ...getSubCliParentDefaultHelpCommands(),
+]);
+
+function isBareParentDefaultHelpArgv(argv: string[]): boolean {
+  const invocation = resolveCliArgvInvocation(argv);
+  const [primary, extra] = invocation.commandPath;
+  return !invocation.hasHelpOrVersion && primary !== undefined && extra === undefined
+    ? BARE_PARENT_DEFAULT_HELP_COMMANDS.has(primary)
+    : false;
+}
 
 export function rewriteUpdateFlagArgv(argv: string[]): string[] {
   const index = argv.indexOf("--update");
@@ -32,7 +47,11 @@ export function rewriteUpdateFlagArgv(argv: string[]): string[] {
 
 export function shouldEnsureCliPath(argv: string[]): boolean {
   const invocation = resolveCliArgvInvocation(argv);
-  if (invocation.hasHelpOrVersion || shouldStartCrestodianForBareRoot(argv)) {
+  if (
+    invocation.hasHelpOrVersion ||
+    shouldStartCrestodianForBareRoot(argv) ||
+    isBareParentDefaultHelpArgv(argv)
+  ) {
     return false;
   }
   return resolveCliCommandPathPolicy(invocation.commandPath).ensureCliPath;
@@ -70,6 +89,21 @@ export function shouldUseBrowserHelpFastPath(
   );
 }
 
+export function shouldUseSetupOnboardConfigureHelpFastPath(
+  argv: string[],
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH === "1") {
+    return false;
+  }
+  const invocation = resolveCliArgvInvocation(argv);
+  return (
+    invocation.commandPath.length === 1 &&
+    SETUP_ONBOARD_CONFIGURE_HELP_COMMANDS.has(invocation.commandPath[0] ?? "") &&
+    invocation.hasHelpOrVersion
+  );
+}
+
 export function shouldStartCrestodianForBareRoot(argv: string[]): boolean {
   const invocation = resolveCliArgvInvocation(argv);
   return invocation.commandPath.length === 0 && !invocation.hasHelpOrVersion;
@@ -91,7 +125,7 @@ export function shouldStartProxyForCli(argv: string[]): boolean {
   if (invocation.hasHelpOrVersion || !primary) {
     return false;
   }
-  if (invocation.commandPath.length === 1 && primary === "channels") {
+  if (isBareParentDefaultHelpArgv(policyArgv)) {
     return false;
   }
   return resolveCliNetworkProxyPolicy(policyArgv) === "default";

@@ -400,7 +400,9 @@ async function expectNotifyOnExitWake(tool: ExecToolInstance, expected: Record<s
   );
   try {
     await startBackgroundCommand(tool, shellEcho("notify"));
-    await expect.poll(() => wakeHandler.mock.calls[0]?.[0], NOTIFY_POLL_OPTIONS).toEqual(expected);
+    await expect
+      .poll(() => wakeHandler.mock.calls.at(0)?.[0], NOTIFY_POLL_OPTIONS)
+      .toEqual(expected);
   } finally {
     dispose();
   }
@@ -771,7 +773,7 @@ describe("exec notifyOnExit", () => {
     expect(finished?.status).toBe(PROCESS_STATUS_COMPLETED);
     expect(finished?.exitCode).toBe(0);
     expect(hasEvent).toBe(true);
-    expect(queuedEvent?.trusted).toBe(false);
+    expect(queuedEvent?.forceSenderIsOwnerFalse).toBe(true);
     expect(formatted).toBeUndefined();
   });
 
@@ -791,7 +793,7 @@ describe("exec notifyOnExit", () => {
       event.text.includes(sessionId.slice(0, 8)),
     );
 
-    expect(queuedEvent?.trusted).toBe(false);
+    expect(queuedEvent?.forceSenderIsOwnerFalse).toBe(true);
     expect(queuedEvent?.deliveryContext?.channel).toBe("telegram");
     expect(queuedEvent?.deliveryContext?.to).toBe("telegram:-1003774691294:topic:47");
     expect(queuedEvent?.deliveryContext?.threadId).toBe("47");

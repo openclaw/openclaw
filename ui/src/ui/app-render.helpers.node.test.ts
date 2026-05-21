@@ -531,30 +531,28 @@ describe("resolveSessionOptionGroups", () => {
       ],
     });
 
-    expect(labels).toContain("Subagent: cron-config-check");
-    expect(labels).not.toContain(sessionKey);
-    expect(labels).not.toContain(
-      "subagent:4f2146de-887b-4176-9abe-91140082959b · webchat:g-agent-main-subagent-4f2146de-887b-4176-9abe-91140082959b",
-    );
+    expect(labels).toEqual(["Subagent: cron-config-check"]);
   });
 
-  it("does not synthesize active grouped sessions without a listed row", () => {
+  it("keeps the active subagent session visible when no row exists yet", () => {
     const sessionKey = "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b";
 
-    expect(labelsForSessionOptions({ sessionKey })).toStrictEqual([]);
+    expect(labelsForSessionOptions({ sessionKey })).toEqual([
+      "subagent:4f2146de-887b-4176-9abe-91140082959b",
+    ]);
     expect(
       labelsForSessionOptions({
         sessionKey,
         sessions: [row({ key: sessionKey })],
       }),
-    ).toContain("subagent:4f2146de-887b-4176-9abe-91140082959b");
+    ).toEqual(["subagent:4f2146de-887b-4176-9abe-91140082959b"]);
   });
 
   it("keeps the active agent main session visible when no row exists yet", () => {
     expect(labelsForSessionOptions({ sessionKey: "agent:main:main" })).toEqual(["main"]);
   });
 
-  it("disambiguates duplicate grouped labels with scoped suffixes", () => {
+  it("hides inactive subagent sessions from the picker", () => {
     const labels = labelsForSessionOptions({
       sessionKey: "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b",
       sessions: [
@@ -569,13 +567,7 @@ describe("resolveSessionOptionGroups", () => {
       ],
     });
 
-    expect(labels).toContain(
-      "Subagent: cron-config-check · subagent:4f2146de-887b-4176-9abe-91140082959b",
-    );
-    expect(labels).toContain(
-      "Subagent: cron-config-check · subagent:6fb8b84b-c31f-410f-b7df-1553c82e43c9",
-    );
-    expect(labels).not.toContain("Subagent: cron-config-check");
+    expect(labels).toEqual(["Subagent: cron-config-check"]);
   });
 
   it("filters the chat session options to the active agent", () => {
@@ -600,9 +592,7 @@ describe("resolveSessionOptionGroups", () => {
       ],
     });
 
-    expect(labels).toContain("main");
-    expect(labels).toContain("Deep Chat (alpha) / main");
-    expect(labels).not.toContain("Coding (beta) / main");
+    expect(labels).toEqual(["main", "Deep Chat (alpha) / main"]);
   });
 
   it("shows sessions for the selected agent after switching agent scope", () => {
@@ -649,7 +639,7 @@ describe("resolveSessionOptionGroups", () => {
     expect(labels).toEqual(["Beta main"]);
   });
 
-  it("nests subagent sessions under their parent with visual prefix", () => {
+  it("hides spawned subagent sessions under their parent", () => {
     const parentKey = "agent:main:main";
     const subagentKey = "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b";
     const labels = labelsForSessionOptions({
@@ -660,26 +650,24 @@ describe("resolveSessionOptionGroups", () => {
       ],
     });
 
-    expect(labels).toContain("Spock");
-    expect(labels).toContain("└─ PLC Coder");
+    expect(labels).toEqual(["Spock"]);
   });
 
-  it("uses raw key fallback for subagent without label when nested", () => {
+  it("keeps the active subagent session visible without nesting it", () => {
     const parentKey = "agent:main:main";
     const subagentKey = "agent:main:subagent:f4ac7ef1-1234-5678-9abc-def012345678";
     const labels = labelsForSessionOptions({
-      sessionKey: parentKey,
+      sessionKey: subagentKey,
       sessions: [
         row({ key: parentKey, label: "Spock" }),
-        row({ key: subagentKey, spawnedBy: parentKey }),
+        row({ key: subagentKey, label: "PLC Coder", spawnedBy: parentKey }),
       ],
     });
 
-    expect(labels).toContain("Spock");
-    expect(labels).toContain("└─ f4ac7ef1-1234-5678-9abc-def012345678");
+    expect(labels).toEqual(["Spock", "Subagent: PLC Coder"]);
   });
 
-  it("preserves sibling row order when nesting subagent sessions", () => {
+  it("hides spawned subagent siblings regardless of row order", () => {
     const parentKey = "agent:main:main";
     const newerSubagentKey = "agent:main:subagent:newer";
     const olderSubagentKey = "agent:main:subagent:older";
@@ -692,7 +680,7 @@ describe("resolveSessionOptionGroups", () => {
       ],
     });
 
-    expect(labels).toEqual(["Spock", "└─ Newer", "└─ Older"]);
+    expect(labels).toEqual(["Spock"]);
   });
 });
 

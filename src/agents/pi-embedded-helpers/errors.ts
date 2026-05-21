@@ -4,6 +4,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
+  isGenericProviderInternalError,
 } from "../../shared/assistant-error-format.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -13,6 +14,7 @@ export {
   extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
   isCloudflareOrHtmlErrorPage,
+  isGenericProviderInternalError,
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
 import { classifyOAuthRefreshFailure } from "../auth-profiles/oauth-refresh-failure.js";
@@ -610,7 +612,13 @@ export function classifyFailoverReasonFromHttpStatus(
     ? classifyFailoverClassificationFromMessage(message, opts?.provider)
     : null;
   return failoverReasonFromClassification(
-    classifyFailoverClassificationFromHttpStatus(status, message, messageClassification, status),
+    classifyFailoverClassificationFromHttpStatus(
+      status,
+      message,
+      messageClassification,
+      status,
+      opts?.provider,
+    ),
   );
 }
 
@@ -619,6 +627,7 @@ function classifyFailoverClassificationFromHttpStatus(
   message: string | undefined,
   messageClassification: FailoverClassification | null,
   explicitStatus: number | undefined,
+  provider?: string,
 ): FailoverClassification | null {
   const messageReason = failoverReasonFromClassification(messageClassification);
   if (typeof status !== "number" || !Number.isFinite(status)) {
@@ -642,6 +651,13 @@ function classifyFailoverClassificationFromHttpStatus(
     return toReasonClassification(classify402Message(message));
   }
   if (status === 429) {
+    if (
+      message &&
+      (isProvider(provider, "moonshot") || isProvider(provider, "kimi")) &&
+      isBillingErrorMessage(message)
+    ) {
+      return toReasonClassification("billing");
+    }
     return toReasonClassification("rate_limit");
   }
   if (status === 401 || status === 403) {
@@ -843,11 +859,18 @@ function classifyFailoverClassificationFromMessage(
     }
     return toReasonClassification("timeout");
   }
+  if (isGenericProviderInternalError(raw)) {
+    return toReasonClassification("timeout");
+  }
   // Billing and auth classifiers run before the broad isJsonApiInternalServerError
   // check so that provider errors like {"type":"api_error","message":"insufficient
   // balance"} are correctly classified as "billing"/"auth" rather than "timeout".
   if (isBillingErrorMessage(raw)) {
     return toReasonClassification("billing");
+  }
+  const oauthRefreshFailure = classifyOAuthRefreshFailure(raw);
+  if (oauthRefreshFailure?.reason) {
+    return toReasonClassification("auth_permanent");
   }
   if (isAuthPermanentErrorMessage(raw)) {
     return toReasonClassification("auth_permanent");
@@ -901,6 +924,7 @@ export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassifi
     signal.message,
     messageClassification,
     signal.status,
+    signal.provider,
   );
   if (statusClassification) {
     return statusClassification;
@@ -1126,6 +1150,10 @@ export function formatAssistantErrorText(
   const transientCopy = formatRateLimitOrOverloadedErrorCopy(raw);
   if (transientCopy) {
     return transientCopy;
+  }
+
+  if (isGenericProviderInternalError(raw)) {
+    return formatRawAssistantErrorForUi(raw);
   }
 
   const transportCopy = formatTransportErrorCopy(raw);

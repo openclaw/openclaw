@@ -34,7 +34,11 @@ import type {
   PluginHookGatewayCronService,
   PluginHookGatewayContext,
 } from "../plugins/hook-types.js";
-import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key.js";
+import {
+  normalizeAgentId,
+  resolveEventSessionKey,
+  toAgentStoreSessionKey,
+} from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import {
@@ -100,6 +104,12 @@ function toPluginCronJob(job: CronJob): PluginHookGatewayCronJob {
       lastRunStatus: job.state.lastRunStatus,
       lastError: job.state.lastError,
       lastDurationMs: job.state.lastDurationMs,
+      lastDelivered: job.state.lastDelivered,
+      lastDeliveryStatus: job.state.lastDeliveryStatus,
+      lastDeliveryError: job.state.lastDeliveryError,
+      lastFailureNotificationDelivered: job.state.lastFailureNotificationDelivered,
+      lastFailureNotificationDeliveryStatus: job.state.lastFailureNotificationDeliveryStatus,
+      lastFailureNotificationDeliveryError: job.state.lastFailureNotificationDeliveryError,
     },
     createdAtMs: job.createdAtMs,
     updatedAtMs: job.updatedAtMs,
@@ -222,13 +232,21 @@ export function buildGatewayCronService(params: {
       requestedAgentId ?? derivedAgentId,
     );
     const agentId = resolvedAgentId || undefined;
-    const sessionKey = agentId
+    const resolvedSessionKey = agentId
       ? resolveCronSessionKey({
           runtimeConfig,
           agentId,
           requestedSessionKey,
         })
       : undefined;
+    const sessionKey =
+      resolvedSessionKey && runtimeConfig.session?.scope === "global"
+        ? resolveEventSessionKey(
+            resolvedSessionKey,
+            runtimeConfig.session?.mainKey,
+            runtimeConfig.session?.scope,
+          )
+        : resolvedSessionKey;
     return { runtimeConfig, agentId, sessionKey };
   };
 
@@ -295,7 +313,9 @@ export function buildGatewayCronService(params: {
       enqueueSystemEvent(text, {
         sessionKey,
         contextKey: opts?.contextKey,
-        trusted: opts?.trusted,
+        deliveryContext: opts?.deliveryContext,
+        forceSenderIsOwnerFalse: opts?.forceSenderIsOwnerFalse,
+        trusted: opts?.forceSenderIsOwnerFalse !== true,
       });
     },
     requestHeartbeat: (opts) => {
@@ -463,6 +483,7 @@ export function buildGatewayCronService(params: {
             delivered: evt.delivered,
             deliveryStatus: evt.deliveryStatus,
             deliveryError: evt.deliveryError,
+            failureNotificationDelivery: evt.failureNotificationDelivery,
             delivery: evt.delivery,
             sessionId: evt.sessionId,
             sessionKey: evt.sessionKey,

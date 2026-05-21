@@ -30,14 +30,26 @@ async function createTempSessionPath() {
   return { dir, file: path.join(dir, "session.jsonl") };
 }
 
-function requireBackupPath(result: { backupPath?: string }): string {
-  if (!result.backupPath) {
-    throw new Error("expected session repair backup path");
+async function expectNoRetainedBackup(
+  file: string,
+  result: { backupPath?: string },
+): Promise<void> {
+  expect(result.backupPath).toBeUndefined();
+  const siblings = await fs.readdir(path.dirname(file));
+  const leftover = siblings.filter((name) => name.includes(".bak-"));
+  expect(leftover).toEqual([]);
+}
+
+function requireFirstLogMessage(log: ReturnType<typeof vi.fn>): string {
+  const message = log.mock.calls[0]?.[0];
+  if (typeof message !== "string") {
+    throw new Error("expected first log message");
   }
-  return result.backupPath;
+  return message;
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
@@ -52,7 +64,6 @@ describe("repairSessionFileIfNeeded", () => {
     const result = await repairSessionFileIfNeeded({ sessionFile: file });
     expect(result.repaired).toBe(true);
     expect(result.droppedLines).toBe(1);
-    const backupPath = requireBackupPath(result);
 
     const repaired = await fs.readFile(file, "utf-8");
     const repairedLines = repaired
@@ -61,8 +72,45 @@ describe("repairSessionFileIfNeeded", () => {
       .map((line) => JSON.parse(line));
     expect(repairedLines).toEqual([header, message]);
 
-    const backup = await fs.readFile(backupPath, "utf-8");
-    expect(backup).toBe(content);
+    await expectNoRetainedBackup(file, result);
+  });
+
+  it("does not accumulate backups across repeated repairs of a persistently corrupted file", async () => {
+    // Regression for #80960: a stuck session with a writer that keeps
+    // appending a malformed line caused every repair invocation to leave a
+    // ~1.8 MB `.bak-<pid>-<ts>` snapshot, accumulating 2,180 files / 2.1 GB
+    // on a single agent over ~25 hours.
+    const { file } = await createTempSessionPath();
+    const { header, message } = buildSessionHeaderAndMessage();
+    const malformedTail = '{"type":"message"';
+
+    for (let i = 0; i < 5; i++) {
+      const content = `${JSON.stringify(header)}\n${JSON.stringify(message)}\n${malformedTail}`;
+      await fs.writeFile(file, content, "utf-8");
+      const result = await repairSessionFileIfNeeded({ sessionFile: file });
+      expect(result.repaired).toBe(true);
+      expect(result.droppedLines).toBe(1);
+      await expectNoRetainedBackup(file, result);
+    }
+  });
+
+  it("reports retained backup path when successful repair backup cleanup fails", async () => {
+    const { file } = await createTempSessionPath();
+    const { header, message } = buildSessionHeaderAndMessage();
+    const content = `${JSON.stringify(header)}\n${JSON.stringify(message)}\n{"type":"message"`;
+    await fs.writeFile(file, content, "utf-8");
+    vi.spyOn(fs, "unlink").mockRejectedValueOnce(new Error("simulated cleanup failure"));
+
+    const debug = vi.fn();
+    const result = await repairSessionFileIfNeeded({ sessionFile: file, debug });
+
+    expect(result.repaired).toBe(true);
+    expect(result.backupPath).toMatch(/session\.jsonl\.bak-/);
+    expect(debug.mock.calls.some(([message]) => String(message).includes("cleanup failed"))).toBe(
+      true,
+    );
+    const siblings = await fs.readdir(path.dirname(file));
+    expect(siblings.filter((name) => name.includes(".bak-"))).toHaveLength(1);
   });
 
   it("does not drop CRLF-terminated JSONL lines", async () => {
@@ -93,7 +141,7 @@ describe("repairSessionFileIfNeeded", () => {
     expect(result.repaired).toBe(false);
     expect(result.reason).toBe("invalid session header");
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0]?.[0]).toContain("invalid session header");
+    expect(requireFirstLogMessage(warn)).toContain("invalid session header");
   });
 
   it("returns a detailed reason when read errors are not ENOENT", async () => {
@@ -143,9 +191,9 @@ describe("repairSessionFileIfNeeded", () => {
     expect(result.repaired).toBe(true);
     expect(result.droppedLines).toBe(0);
     expect(result.rewrittenAssistantMessages).toBe(1);
-    await expect(fs.readFile(requireBackupPath(result), "utf-8")).resolves.toBe(original);
+    await expectNoRetainedBackup(file, result);
     expect(debug).toHaveBeenCalledTimes(1);
-    const debugMessage = debug.mock.calls[0]?.[0] as string;
+    const debugMessage = requireFirstLogMessage(debug);
     expect(debugMessage).toContain("rewrote 1 assistant message(s)");
     expect(debugMessage).not.toContain("dropped");
 
@@ -182,7 +230,7 @@ describe("repairSessionFileIfNeeded", () => {
     expect(result.repaired).toBe(true);
     expect(result.rewrittenUserMessages).toBe(1);
     expect(result.droppedBlankUserMessages).toBe(0);
-    expect(debug.mock.calls[0]?.[0]).toContain("rewrote 1 user message(s)");
+    expect(requireFirstLogMessage(debug)).toContain("rewrote 1 user message(s)");
 
     const repaired = await fs.readFile(file, "utf-8");
     const repairedLines = repaired.trim().split("\n");
@@ -279,7 +327,7 @@ describe("repairSessionFileIfNeeded", () => {
     expect(result.repaired).toBe(true);
     expect(result.droppedLines).toBe(1);
     expect(result.rewrittenAssistantMessages).toBe(1);
-    const debugMessage = debug.mock.calls[0]?.[0] as string;
+    const debugMessage = requireFirstLogMessage(debug);
     expect(debugMessage).toContain("dropped 1 malformed line(s)");
     expect(debugMessage).toContain("rewrote 1 assistant message(s)");
   });
@@ -520,8 +568,7 @@ describe("repairSessionFileIfNeeded", () => {
 
     expect(result.repaired).toBe(true);
     expect(result.insertedToolResults).toBe(1);
-    const backup = await fs.readFile(requireBackupPath(result), "utf-8");
-    expect(backup).toBe(original);
+    await expectNoRetainedBackup(file, result);
 
     const lines = (await fs.readFile(file, "utf-8")).trimEnd().split("\n");
     expect(lines).toHaveLength(5);
@@ -765,7 +812,7 @@ describe("repairSessionFileIfNeeded", () => {
 
     expect(result.repaired).toBe(true);
     expect(result.droppedLines).toBe(3);
-    await expect(fs.readFile(requireBackupPath(result), "utf-8")).resolves.toBe(`${content}\n`);
+    await expectNoRetainedBackup(file, result);
 
     const after = await fs.readFile(file, "utf-8");
     const lines = after.trimEnd().split("\n");

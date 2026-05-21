@@ -1,5 +1,5 @@
 export {
-  __resetDiscordChannelInfoCacheForTest,
+  resetDiscordChannelInfoCacheForTest,
   resolveDiscordChannelInfo,
   resolveDiscordMessageChannelId,
   type DiscordChannelInfo,
@@ -12,6 +12,7 @@ export {
   resolveDiscordMessageSnapshots,
   resolveDiscordMessageStickers,
   resolveDiscordReferencedForwardMessage,
+  resolveDiscordReferencedReplyMessage,
   resolveDiscordSnapshotStickers,
   type DiscordMessageSnapshot,
   type DiscordSnapshotAuthor,
@@ -22,6 +23,7 @@ export {
   buildDiscordMediaPlaceholder,
   resolveForwardedMediaList,
   resolveMediaList,
+  resolveReferencedReplyMediaList,
   type DiscordMediaInfo,
   type DiscordMediaResolveOptions,
 } from "./message-media.js";

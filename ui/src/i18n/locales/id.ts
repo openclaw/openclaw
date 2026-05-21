@@ -348,6 +348,12 @@ export const id: TranslationMap = {
     eventLogSubtitle: "Latest gateway events.",
     noEvents: "No events yet.",
   },
+  quickSettings: {
+    security: {
+      browserEnabled: "Browser enabled",
+      toolProfile: "Tool profile",
+    },
+  },
   execApproval: {
     expiresIn: "expires in {time}",
     expired: "expired",
@@ -693,9 +699,6 @@ export const id: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle: "Lihat ke mana token digunakan, kapan sesi melonjak, dan apa yang mendorong biaya.",
-    },
     common: {
       emptyValue: "—",
       unknown: "tidak diketahui",
@@ -1041,6 +1044,10 @@ export const id: TranslationMap = {
     settings: "Pengaturan chat",
     thinkingToggle: "Alihkan output berpikir/bekerja asisten",
     toolCallsToggle: "Alihkan panggilan alat dan hasil alat",
+    autoScrollMode: "Mode gulir otomatis",
+    autoScrollAlways: "Selalu",
+    autoScrollNearBottom: "Dekat bagian bawah",
+    autoScrollOff: "Nonaktif",
     focusToggle: "Alihkan mode fokus (sembunyikan bilah samping + header halaman)",
     hideCronSessions: "Sembunyikan sesi cron",
     showCronSessions: "Tampilkan sesi cron",
@@ -1200,6 +1207,9 @@ export const id: TranslationMap = {
       ascending: "Naik",
       descending: "Turun",
       reset: "Atur Ulang",
+      emptyTitle: "No scheduled jobs yet.",
+      emptyHint: "Create one from a plain-language prompt; advanced fields can wait.",
+      emptyFilteredHint: "Clear or change filters to see scheduled jobs.",
       noMatching: "Tidak ada tugas yang cocok.",
       loading: "Memuat...",
       loadMore: "Muat lebih banyak tugas",
@@ -1235,6 +1245,7 @@ export const id: TranslationMap = {
     form: {
       editJob: "Edit Tugas",
       newJob: "Tugas Baru",
+      advancedJob: "Advanced job",
       updateSubtitle: "Perbarui tugas terjadwal yang dipilih.",
       createSubtitle: "Buat bangun terjadwal atau proses agen.",
       required: "Wajib",

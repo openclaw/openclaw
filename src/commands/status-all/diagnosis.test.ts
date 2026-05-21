@@ -11,6 +11,9 @@ const restartLogMocks = vi.hoisted(() => ({
   resolveGatewayLogPaths: vi.fn<() => GatewayLogPaths>(() => {
     throw new Error("skip log tail");
   }),
+  resolveGatewaySupervisorLogPaths: vi.fn<() => GatewayLogPaths>(() => {
+    throw new Error("skip log tail");
+  }),
   resolveGatewayRestartLogPath: vi.fn<() => string>(() => "/tmp/gateway-restart.log"),
 }));
 
@@ -25,6 +28,7 @@ const gatewayMocks = vi.hoisted(() => ({
 
 vi.mock("../../daemon/restart-logs.js", () => ({
   resolveGatewayLogPaths: restartLogMocks.resolveGatewayLogPaths,
+  resolveGatewaySupervisorLogPaths: restartLogMocks.resolveGatewaySupervisorLogPaths,
   resolveGatewayRestartLogPath: restartLogMocks.resolveGatewayRestartLogPath,
 }));
 
@@ -87,6 +91,9 @@ describe("status-all diagnosis port checks", () => {
     restartLogMocks.resolveGatewayLogPaths.mockImplementation(() => {
       throw new Error("skip log tail");
     });
+    restartLogMocks.resolveGatewaySupervisorLogPaths.mockImplementation(() => {
+      throw new Error("skip log tail");
+    });
     restartLogMocks.resolveGatewayRestartLogPath.mockReturnValue("/tmp/gateway-restart.log");
     gatewayMocks.readFileTailLines.mockResolvedValue([]);
     gatewayMocks.summarizeLogTail.mockImplementation((lines: string[]) => lines);
@@ -144,6 +151,59 @@ describe("status-all diagnosis port checks", () => {
     expect(output).toContain("Port 18789 is already in use.");
   });
 
+  it("adds direct update restart guidance for failed update sentinels", async () => {
+    const params = createBaseParams([]);
+    params.sentinel = {
+      payload: {
+        kind: "update",
+        status: "error",
+        ts: Date.now() - 60_000,
+        stats: {
+          mode: "npm",
+          reason: "managed-service-handoff-failed",
+          steps: [],
+        },
+      },
+    };
+
+    await appendStatusAllDiagnosis(params);
+
+    const output = params.lines.join("\n");
+    expect(output).toContain(
+      "Update restart: failed · managed-service-handoff-failed · run openclaw gateway status --deep",
+    );
+    expect(output).toContain("Update restart failed; run openclaw gateway status --deep.");
+    expect(output).toContain(
+      "If the service is down, run openclaw gateway restart or openclaw gateway install --force.",
+    );
+  });
+
+  it("adds direct update restart guidance for pending update sentinels", async () => {
+    const params = createBaseParams([]);
+    params.sentinel = {
+      payload: {
+        kind: "update",
+        status: "skipped",
+        ts: Date.now() - 60_000,
+        stats: {
+          mode: "npm",
+          reason: "restart-health-pending",
+          steps: [],
+        },
+      },
+    };
+
+    await appendStatusAllDiagnosis(params);
+
+    const output = params.lines.join("\n");
+    expect(output).toContain(
+      "Update restart: restart pending health verification · run openclaw gateway status --deep",
+    );
+    expect(output).toContain(
+      "Update restart is still pending; run openclaw update status --json for handoff state.",
+    );
+  });
+
   it("avoids unreachable gateway diagnosis in node-only mode", async () => {
     const params = createBaseParams([]);
     params.connectionDetailsForReport = [
@@ -179,10 +239,10 @@ describe("status-all diagnosis port checks", () => {
     const originalPlatform = process.platform;
     Object.defineProperty(process, "platform", { value: "darwin" });
     try {
-      restartLogMocks.resolveGatewayLogPaths.mockReturnValue({
-        logDir: "/tmp/openclaw/logs",
-        stdoutPath: "/tmp/openclaw/logs/gateway.log",
-        stderrPath: "/tmp/openclaw/logs/gateway.err.log",
+      restartLogMocks.resolveGatewaySupervisorLogPaths.mockReturnValue({
+        logDir: "/Users/test/Library/Logs/openclaw",
+        stdoutPath: "/Users/test/Library/Logs/openclaw/gateway.log",
+        stderrPath: "/Users/test/Library/Logs/openclaw/gateway.err.log",
       });
       restartLogMocks.resolveGatewayRestartLogPath.mockReturnValue(
         "/tmp/openclaw/logs/gateway-restart.log",
@@ -202,10 +262,10 @@ describe("status-all diagnosis port checks", () => {
 
       const output = params.lines.join("\n");
       expect(gatewayMocks.readFileTailLines).not.toHaveBeenCalledWith(
-        "/tmp/openclaw/logs/gateway.err.log",
+        "/Users/test/Library/Logs/openclaw/gateway.err.log",
         40,
       );
-      expect(output).toContain("# stdout: /tmp/openclaw/logs/gateway.log");
+      expect(output).toContain("# stdout: /Users/test/Library/Logs/openclaw/gateway.log");
       expect(output).toContain("gateway stdout current");
       expect(output).not.toContain("# stderr:");
       expect(output).not.toContain("failed to bind gateway socket stale");

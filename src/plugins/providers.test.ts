@@ -86,7 +86,6 @@ function setOwningProviderManifestPlugins() {
     createManifestProviderPlugin({
       id: "openai",
       providerIds: ["openai", "openai-codex"],
-      cliBackends: ["codex-cli"],
       modelSupport: {
         modelPrefixes: ["gpt-", "o1", "o3", "o4"],
       },
@@ -111,7 +110,6 @@ function setOwningProviderManifestPluginsWithWorkspace() {
     createManifestProviderPlugin({
       id: "openai",
       providerIds: ["openai", "openai-codex"],
-      cliBackends: ["codex-cli"],
       modelSupport: {
         modelPrefixes: ["gpt-", "o1", "o3", "o4"],
       },
@@ -224,12 +222,23 @@ function resolveProviderOwnersFixture(params: { providerId: string }): readonly 
   });
 }
 
-function getLastRuntimeRegistryCall(): Record<string, unknown> {
-  const call = resolveRuntimePluginRegistryMock.mock.calls.at(-1)?.[0];
+function getLastMockCallArg(
+  mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } },
+  label: string,
+): unknown {
+  const calls = mock.mock.calls;
+  const call = calls[calls.length - 1];
   if (!call) {
-    throw new Error("expected runtime plugin registry to be resolved");
+    throw new Error(`expected ${label} to be called`);
   }
-  return call as Record<string, unknown>;
+  return call[0];
+}
+
+function getLastRuntimeRegistryCall(): Record<string, unknown> {
+  return getLastMockCallArg(resolveRuntimePluginRegistryMock, "runtime plugin registry") as Record<
+    string,
+    unknown
+  >;
 }
 
 function cloneOptions<T>(value: T): T {
@@ -297,7 +306,7 @@ function expectLastSetupRegistryCall(params: {
     entries?: Record<string, { enabled?: boolean }>;
   };
 }) {
-  const call = loadOpenClawPluginsMock.mock.calls.at(-1)?.[0];
+  const call = getLastMockCallArg(loadOpenClawPluginsMock, "OpenClaw plugin setup loader");
   const options = expectRecordFields(call, {
     ...(params.onlyPluginIds !== undefined ? { onlyPluginIds: params.onlyPluginIds } : {}),
     ...(params.activate !== undefined ? { activate: params.activate } : {}),
@@ -327,7 +336,7 @@ function expectLastSetupRegistryLoad(params?: {
   env?: NodeJS.ProcessEnv;
   onlyPluginIds?: readonly string[];
 }) {
-  const call = loadOpenClawPluginsMock.mock.calls.at(-1)?.[0];
+  const call = getLastMockCallArg(loadOpenClawPluginsMock, "OpenClaw plugin setup loader");
   expectRecordFields(call, {
     cache: false,
     activate: false,
@@ -348,10 +357,10 @@ function getLastResolvedPluginConfig() {
 }
 
 function getLastSetupLoadedPluginConfig() {
-  const call = loadOpenClawPluginsMock.mock.calls.at(-1)?.[0];
-  if (!call) {
-    throw new Error("expected OpenClaw plugin setup loader to be called");
-  }
+  const call = expectRecordFields(
+    getLastMockCallArg(loadOpenClawPluginsMock, "OpenClaw plugin setup loader"),
+    {},
+  );
   return (call.config ?? undefined) as
     | {
         plugins?: {
@@ -505,7 +514,7 @@ describe("resolvePluginProviders", () => {
     setOwningProviderManifestPlugins();
 
     expectOwningPluginIds("claude-cli", ["anthropic"]);
-    expectOwningPluginIds("codex-cli", ["openai"]);
+    expectOwningPluginIds("codex-cli");
   });
 
   it("reflects provider ownership manifest changes on the next lookup", () => {

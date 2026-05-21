@@ -1,6 +1,6 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { filterHeartbeatPairs } from "../../../auto-reply/heartbeat-filter.js";
+import { filterHeartbeatTranscriptArtifacts } from "../../../auto-reply/heartbeat-filter.js";
 import { HEARTBEAT_PROMPT } from "../../../auto-reply/heartbeat.js";
 import { limitHistoryTurns } from "../history.js";
 import { buildEmbeddedMessageActionDiscoveryInput } from "../message-action-discovery-input.js";
@@ -208,7 +208,11 @@ describe("embedded attempt context injection", () => {
       { role: "assistant", content: "HEARTBEAT_OK", timestamp: 4 } as unknown as AgentMessage,
     ];
 
-    const heartbeatFiltered = filterHeartbeatPairs(sessionMessages, undefined, HEARTBEAT_PROMPT);
+    const heartbeatFiltered = filterHeartbeatTranscriptArtifacts(
+      sessionMessages,
+      undefined,
+      HEARTBEAT_PROMPT,
+    );
     const limited = limitHistoryTurns(heartbeatFiltered, 1);
     await assembleAttemptContextEngine({
       contextEngine: {
@@ -223,7 +227,9 @@ describe("embedded attempt context injection", () => {
       modelId: "gpt-test",
     });
 
-    const assembleInput = assemble.mock.calls[0]?.[0] as { messages?: AgentMessage[] } | undefined;
+    const assembleInput = assemble.mock.calls.at(0)?.[0] as
+      | { messages?: AgentMessage[] }
+      | undefined;
     const projectedMessages = assembleInput?.messages?.map((message) => ({
       role: message.role,
       content: (message as { content?: unknown }).content,

@@ -143,6 +143,30 @@ function expectPiStyleTruncation(text: string): void {
   expect(text).not.toContain("[truncated: output exceeded context limit]");
 }
 
+function mockCallArg(
+  mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } },
+  callIndex = 0,
+  argIndex = 0,
+): unknown {
+  const call = mock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected mock call ${callIndex + 1}`);
+  }
+  return call[argIndex];
+}
+
+function recordMockArg(
+  mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } },
+  callIndex = 0,
+  argIndex = 0,
+): Record<string, unknown> {
+  const arg = mockCallArg(mock, callIndex, argIndex);
+  if (!arg || typeof arg !== "object") {
+    throw new Error("expected mock argument record");
+  }
+  return arg as Record<string, unknown>;
+}
+
 describe("formatContextLimitTruncationNotice", () => {
   it("formats pi-style truncation wording with a count", () => {
     expect(formatContextLimitTruncationNotice(123)).toBe("[... 123 more characters truncated]");
@@ -347,6 +371,36 @@ describe("installToolResultContextGuard", () => {
       expect((err as MidTurnPrecheckSignal).request.route).toBe("compact_only");
     }
   });
+  it("does not count tool-result details toward the context budget", async () => {
+    const agent = makeGuardableAgent();
+    const contextForNextCall = [
+      makeToolResultWithDetails("call_small_text", "x".repeat(100), "d".repeat(50_000)),
+      makeToolResultWithDetails("call_another", "y".repeat(120), "e".repeat(80_000)),
+    ];
+
+    const transformed = (await applyGuardToContext(agent, contextForNextCall)) as AgentMessage[];
+
+    expect(transformed).toBe(contextForNextCall);
+    expect(getToolResultText(transformed[0])).toBe("x".repeat(100));
+    expect(getToolResultText(transformed[1])).toBe("y".repeat(120));
+    expect((contextForNextCall[0] as { details?: unknown }).details).toBeDefined();
+    expect((contextForNextCall[1] as { details?: unknown }).details).toBeDefined();
+  });
+
+  it("ignores large tool-result details when deciding preemptive overflow", async () => {
+    const agent = makeGuardableAgent();
+    const contextForNextCall = [
+      makeUser("small user prompt"),
+      makeToolResultWithDetails("call_1", "a".repeat(50), "d".repeat(30_000)),
+      makeToolResultWithDetails("call_2", "b".repeat(50), "d".repeat(30_000)),
+      makeToolResultWithDetails("call_3", "c".repeat(50), "d".repeat(30_000)),
+      makeToolResultWithDetails("call_4", "e".repeat(50), "d".repeat(30_000)),
+    ];
+
+    const transformed = (await applyGuardToContext(agent, contextForNextCall)) as AgentMessage[];
+
+    expect(transformed).toBe(contextForNextCall);
+  });
 });
 
 type MockedEngine = ContextEngine & {
@@ -486,7 +540,7 @@ describe("installContextEngineLoopHook", () => {
     await callTransform(agent, messages);
 
     expect(engine.afterTurn).toHaveBeenCalledTimes(1);
-    const afterTurnParams = engine.afterTurn.mock.calls[0]?.[0];
+    const afterTurnParams = recordMockArg(engine.afterTurn);
     expect(afterTurnParams?.prePromptMessageCount).toBe(1);
     expect(afterTurnParams?.messages).toBe(messages);
     expect(engine.assemble).toHaveBeenCalledTimes(1);
@@ -508,7 +562,7 @@ describe("installContextEngineLoopHook", () => {
     await callTransform(agent, messages);
 
     expect(engine.afterTurn).toHaveBeenCalledTimes(1);
-    const afterTurnParams = engine.afterTurn.mock.calls[0]?.[0];
+    const afterTurnParams = recordMockArg(engine.afterTurn);
     expect(afterTurnParams?.prePromptMessageCount).toBe(1);
     expect(afterTurnParams?.runtimeContext).toEqual({
       provider: "anthropic",
@@ -551,7 +605,7 @@ describe("installContextEngineLoopHook", () => {
     await callTransform(agent, withNew);
 
     expect(engine.afterTurn).toHaveBeenCalledTimes(1);
-    const afterTurnParams = engine.afterTurn.mock.calls[0]?.[0];
+    const afterTurnParams = recordMockArg(engine.afterTurn);
     expect(afterTurnParams?.prePromptMessageCount).toBe(2);
     expect(afterTurnParams?.messages).toBe(withNew);
     expect(engine.assemble).toHaveBeenCalledTimes(1);
@@ -572,8 +626,8 @@ describe("installContextEngineLoopHook", () => {
     await callTransform(agent, batch2);
 
     expect(engine.afterTurn).toHaveBeenCalledTimes(2);
-    expect(engine.afterTurn.mock.calls[0]?.[0]?.prePromptMessageCount).toBe(2);
-    expect(engine.afterTurn.mock.calls[1]?.[0]?.prePromptMessageCount).toBe(4);
+    expect(recordMockArg(engine.afterTurn).prePromptMessageCount).toBe(2);
+    expect(recordMockArg(engine.afterTurn, 1).prePromptMessageCount).toBe(4);
   });
 
   it("reports the latest delivered afterTurn checkpoint", async () => {
@@ -761,8 +815,12 @@ describe("installContextEngineLoopHook", () => {
     await callTransform(agent, batch2);
 
     expect(engine.ingestBatch).toHaveBeenCalledTimes(2);
-    expect(engine.ingestBatch?.mock.calls[0]?.[0]?.messages).toEqual(batch1.slice(2));
-    expect(engine.ingestBatch?.mock.calls[1]?.[0]?.messages).toEqual(batch2.slice(4));
+    const ingestBatch = engine.ingestBatch;
+    if (!ingestBatch) {
+      throw new Error("expected ingestBatch mock");
+    }
+    expect(recordMockArg(ingestBatch).messages).toEqual(batch1.slice(2));
+    expect(recordMockArg(ingestBatch, 1).messages).toEqual(batch2.slice(4));
     expect(engine.assemble).toHaveBeenCalledTimes(2);
   });
 
@@ -776,7 +834,7 @@ describe("installContextEngineLoopHook", () => {
     await callTransform(agent, messages);
 
     expect(engine.ingest).toHaveBeenCalledTimes(1);
-    const ingestParams = engine.ingest.mock.calls[0]?.[0];
+    const ingestParams = recordMockArg(engine.ingest);
     expect(ingestParams?.sessionId).toBe(sessionId);
     expect(ingestParams?.sessionKey).toBe(sessionKey);
     expect(ingestParams?.message).toBe(toolResult);

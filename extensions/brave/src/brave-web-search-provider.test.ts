@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { validateJsonSchemaValue } from "openclaw/plugin-sdk/config-schema";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import { __testing } from "../test-api.js";
+import { testing } from "../test-api.js";
 import { createBraveWebSearchProvider as createBraveWebSearchContractProvider } from "../web-search-contract-api.js";
 import { createBraveWebSearchProvider } from "./brave-web-search-provider.js";
 
@@ -58,7 +58,7 @@ function installBraveLlmContextFetch() {
         },
         sources: [],
       }),
-    } as Response;
+    } as unknown as Response;
   });
   global.fetch = mockFetch as typeof global.fetch;
   return mockFetch;
@@ -70,6 +70,22 @@ function readHeader(init: unknown, name: string): string | null {
     return null;
   }
   return new Headers(headers).get(name);
+}
+
+function fetchCall(mockFetch: { mock: { calls: Array<Array<unknown>> } }, index = 0) {
+  const call = mockFetch.mock.calls[index];
+  if (!call) {
+    throw new Error(`Expected fetch call ${index + 1}`);
+  }
+  return call;
+}
+
+function fetchRequestUrl(mockFetch: { mock: { calls: Array<Array<unknown>> } }, index = 0) {
+  return new URL(String(fetchCall(mockFetch, index)[0]));
+}
+
+function fetchRequestInit(mockFetch: { mock: { calls: Array<Array<unknown>> } }, index = 0) {
+  return fetchCall(mockFetch, index)[1];
 }
 
 describe("brave web search provider", () => {
@@ -88,6 +104,34 @@ describe("brave web search provider", () => {
     expect(createBraveWebSearchContractProvider().docsUrl).toBe(
       "https://docs.openclaw.ai/tools/brave-search",
     );
+  });
+
+  it("exposes legacy top-level apiKey as a Brave-owned compatibility fallback", () => {
+    const apiKey = { source: "env", provider: "default", id: "BRAVE_API_KEY" } as const;
+    const config = {
+      tools: {
+        web: {
+          search: {
+            apiKey,
+          },
+        },
+      },
+    };
+
+    expect(createBraveWebSearchProvider().getConfiguredCredentialValue?.(config)).toEqual(apiKey);
+    expect(createBraveWebSearchContractProvider().getConfiguredCredentialValue?.(config)).toEqual(
+      apiKey,
+    );
+    expect(createBraveWebSearchProvider().getConfiguredCredentialFallback?.(config)).toEqual({
+      path: "tools.web.search.apiKey",
+      value: apiKey,
+    });
+    expect(
+      createBraveWebSearchContractProvider().getConfiguredCredentialFallback?.(config),
+    ).toEqual({
+      path: "tools.web.search.apiKey",
+      value: apiKey,
+    });
   });
 
   it("points missing-key users to fetch/browser alternatives", async () => {
@@ -110,7 +154,7 @@ describe("brave web search provider", () => {
 
   it("normalizes brave language parameters and swaps reversed ui/search inputs", () => {
     expect(
-      __testing.normalizeBraveLanguageParams({
+      testing.normalizeBraveLanguageParams({
         search_lang: "en-US",
         ui_lang: "ja",
       }),
@@ -118,43 +162,39 @@ describe("brave web search provider", () => {
       search_lang: "jp",
       ui_lang: "en-US",
     });
-    expect(__testing.normalizeBraveLanguageParams({ search_lang: "tr-TR", ui_lang: "tr" })).toEqual(
-      {
-        search_lang: "tr",
-        ui_lang: "tr-TR",
-      },
-    );
-    expect(__testing.normalizeBraveLanguageParams({ search_lang: "EN", ui_lang: "en-us" })).toEqual(
-      {
-        search_lang: "en",
-        ui_lang: "en-US",
-      },
-    );
+    expect(testing.normalizeBraveLanguageParams({ search_lang: "tr-TR", ui_lang: "tr" })).toEqual({
+      search_lang: "tr",
+      ui_lang: "tr-TR",
+    });
+    expect(testing.normalizeBraveLanguageParams({ search_lang: "EN", ui_lang: "en-us" })).toEqual({
+      search_lang: "en",
+      ui_lang: "en-US",
+    });
   });
 
   it("flags invalid brave language fields", () => {
     expect(
-      __testing.normalizeBraveLanguageParams({
+      testing.normalizeBraveLanguageParams({
         search_lang: "xx",
       }),
     ).toEqual({ invalidField: "search_lang" });
-    expect(__testing.normalizeBraveLanguageParams({ search_lang: "en-US" })).toEqual({
+    expect(testing.normalizeBraveLanguageParams({ search_lang: "en-US" })).toEqual({
       invalidField: "search_lang",
     });
-    expect(__testing.normalizeBraveLanguageParams({ ui_lang: "en" })).toEqual({
+    expect(testing.normalizeBraveLanguageParams({ ui_lang: "en" })).toEqual({
       invalidField: "ui_lang",
     });
   });
 
   it("normalizes Brave country codes and falls back unsupported values to ALL", () => {
-    expect(__testing.normalizeBraveCountry("de")).toBe("DE");
-    expect(__testing.normalizeBraveCountry(" VN ")).toBe("ALL");
-    expect(__testing.normalizeBraveCountry("")).toBeUndefined();
+    expect(testing.normalizeBraveCountry("de")).toBe("DE");
+    expect(testing.normalizeBraveCountry(" VN ")).toBe("ALL");
+    expect(testing.normalizeBraveCountry("")).toBeUndefined();
   });
 
   it("defaults brave mode to web unless llm-context is explicitly selected", () => {
-    expect(__testing.resolveBraveMode()).toBe("web");
-    expect(__testing.resolveBraveMode({ mode: "llm-context" })).toBe("llm-context");
+    expect(testing.resolveBraveMode()).toBe("web");
+    expect(testing.resolveBraveMode({ mode: "llm-context" })).toBe("llm-context");
   });
 
   it("accepts llm-context in the Brave plugin config schema", () => {
@@ -199,7 +239,7 @@ describe("brave web search provider", () => {
       return {
         ok: true,
         json: async () => ({ web: { results: [] } }),
-      } as Response;
+      } as unknown as Response;
     });
     global.fetch = mockFetch as typeof global.fetch;
 
@@ -220,7 +260,7 @@ describe("brave web search provider", () => {
 
     await tool.execute({ query: "latest ai news" });
 
-    const requestUrl = new URL(String(mockFetch.mock.calls[0]?.[0]));
+    const requestUrl = fetchRequestUrl(mockFetch);
     expect(requestUrl.origin).toBe("https://api.search.brave.com");
     expect(requestUrl.pathname).toBe("/proxy/res/v1/web/search");
   });
@@ -245,8 +285,66 @@ describe("brave web search provider", () => {
 
     await tool.execute({ query: "latest ai news" });
 
-    const requestUrl = new URL(String(mockFetch.mock.calls[0]?.[0]));
+    const requestUrl = fetchRequestUrl(mockFetch);
     expect(requestUrl.pathname).toBe("/proxy/res/v1/llm/context");
+  });
+
+  it("reports malformed Brave web search JSON as a provider error", async () => {
+    vi.stubEnv("BRAVE_API_KEY", "");
+    const mockFetch = vi.fn(async (_input?: unknown, _init?: unknown) => {
+      return {
+        ok: true,
+        json: async () => {
+          throw new SyntaxError("Unexpected token");
+        },
+      } as unknown as Response;
+    });
+    global.fetch = mockFetch as typeof global.fetch;
+
+    const provider = createBraveWebSearchProvider();
+    const tool = provider.createTool({
+      config: {},
+      searchConfig: {
+        apiKey: "brave-test-key",
+        brave: { mode: "web" },
+      },
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    await expect(tool.execute({ query: "latest ai news" })).rejects.toThrow(
+      "Brave Search API error: malformed JSON response",
+    );
+  });
+
+  it("reports malformed Brave llm-context JSON as a provider error", async () => {
+    vi.stubEnv("BRAVE_API_KEY", "");
+    const mockFetch = vi.fn(async (_input?: unknown, _init?: unknown) => {
+      return {
+        ok: true,
+        json: async () => {
+          throw new SyntaxError("Unexpected token");
+        },
+      } as unknown as Response;
+    });
+    global.fetch = mockFetch as typeof global.fetch;
+
+    const provider = createBraveWebSearchProvider();
+    const tool = provider.createTool({
+      config: {},
+      searchConfig: {
+        apiKey: "brave-test-key",
+        brave: { mode: "llm-context" },
+      },
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    await expect(tool.execute({ query: "latest ai news" })).rejects.toThrow(
+      "Brave LLM Context API error: malformed JSON response",
+    );
   });
 
   it("keeps Brave cache entries isolated by baseUrl", async () => {
@@ -255,7 +353,7 @@ describe("brave web search provider", () => {
       return {
         ok: true,
         json: async () => ({ web: { results: [] } }),
-      } as Response;
+      } as unknown as Response;
     });
     global.fetch = mockFetch as typeof global.fetch;
 
@@ -288,12 +386,8 @@ describe("brave web search provider", () => {
     await secondTool.execute({ query: "base url cache identity" });
 
     expect(mockFetch).toHaveBeenCalledTimes(2);
-    expect(new URL(String(mockFetch.mock.calls[0]?.[0])).pathname).toBe(
-      "/proxy-one/res/v1/web/search",
-    );
-    expect(new URL(String(mockFetch.mock.calls[1]?.[0])).pathname).toBe(
-      "/proxy-two/res/v1/web/search",
-    );
+    expect(fetchRequestUrl(mockFetch).pathname).toBe("/proxy-one/res/v1/web/search");
+    expect(fetchRequestUrl(mockFetch, 1).pathname).toBe("/proxy-two/res/v1/web/search");
   });
 
   it("rejects invalid Brave mode values in the plugin config schema", () => {
@@ -328,7 +422,7 @@ describe("brave web search provider", () => {
 
   it("maps llm-context results into wrapped source entries", () => {
     expect(
-      __testing.mapBraveLlmContextResults({
+      testing.mapBraveLlmContextResults({
         grounding: {
           generic: [
             {
@@ -393,7 +487,7 @@ describe("brave web search provider", () => {
 
     await tool.execute({ query: "latest ai news", freshness: "week" });
 
-    const requestUrl = new URL(String(mockFetch.mock.calls[0]?.[0]));
+    const requestUrl = fetchRequestUrl(mockFetch);
     expect(requestUrl.pathname).toBe("/res/v1/llm/context");
     expect(requestUrl.searchParams.get("freshness")).toBe("pw");
   });
@@ -404,7 +498,7 @@ describe("brave web search provider", () => {
       return {
         ok: true,
         json: async () => ({ web: { results: [] } }),
-      } as Response;
+      } as unknown as Response;
     });
     global.fetch = mockFetch as typeof global.fetch;
 
@@ -422,10 +516,10 @@ describe("brave web search provider", () => {
 
     await tool.execute({ query: "latest ai news" });
 
-    const requestUrl = new URL(String(mockFetch.mock.calls[0]?.[0]));
+    const requestUrl = fetchRequestUrl(mockFetch);
     expect(requestUrl.searchParams.get("apikey")).toBeNull();
     expect(requestUrl.searchParams.get("key")).toBeNull();
-    expect(readHeader(mockFetch.mock.calls[0]?.[1], "X-Subscription-Token")).toBe("brave-test-key");
+    expect(readHeader(fetchRequestInit(mockFetch), "X-Subscription-Token")).toBe("brave-test-key");
   });
 
   it("sends Brave llm-context auth in the X-Subscription-Token header", async () => {
@@ -445,10 +539,10 @@ describe("brave web search provider", () => {
 
     await tool.execute({ query: "latest ai news" });
 
-    const requestUrl = new URL(String(mockFetch.mock.calls[0]?.[0]));
+    const requestUrl = fetchRequestUrl(mockFetch);
     expect(requestUrl.searchParams.get("apikey")).toBeNull();
     expect(requestUrl.searchParams.get("key")).toBeNull();
-    expect(readHeader(mockFetch.mock.calls[0]?.[1], "X-Subscription-Token")).toBe("brave-test-key");
+    expect(readHeader(fetchRequestInit(mockFetch), "X-Subscription-Token")).toBe("brave-test-key");
   });
 
   it("passes bounded date ranges to Brave llm-context endpoint", async () => {
@@ -472,7 +566,7 @@ describe("brave web search provider", () => {
       date_before: "2025-01-31",
     });
 
-    const requestUrl = new URL(String(mockFetch.mock.calls[0]?.[0]));
+    const requestUrl = fetchRequestUrl(mockFetch);
     expect(requestUrl.pathname).toBe("/res/v1/llm/context");
     expect(requestUrl.searchParams.get("freshness")).toBe("2025-01-01to2025-01-31");
   });
@@ -495,7 +589,7 @@ describe("brave web search provider", () => {
     await tool.execute({ query: "latest ai news", date_after: "2025-01-01" });
 
     const today = new Date().toISOString().slice(0, 10);
-    const requestUrl = new URL(String(mockFetch.mock.calls[0]?.[0]));
+    const requestUrl = fetchRequestUrl(mockFetch);
     expect(requestUrl.pathname).toBe("/res/v1/llm/context");
     expect(requestUrl.searchParams.get("freshness")).toBe(`2025-01-01to${today}`);
   });
@@ -563,7 +657,7 @@ describe("brave web search provider", () => {
       return {
         ok: true,
         json: async () => ({ web: { results: [] } }),
-      } as Response;
+      } as unknown as Response;
     });
     global.fetch = mockFetch as typeof global.fetch;
 
@@ -584,7 +678,7 @@ describe("brave web search provider", () => {
       country: "VN",
     });
 
-    const requestUrl = new URL(String(mockFetch.mock.calls[0]?.[0]));
+    const requestUrl = fetchRequestUrl(mockFetch);
     expect(requestUrl.searchParams.get("country")).toBe("ALL");
   });
 
@@ -605,7 +699,7 @@ describe("brave web search provider", () => {
             ],
           },
         }),
-      } as Response;
+      } as unknown as Response;
     });
     global.fetch = mockFetch as typeof global.fetch;
 

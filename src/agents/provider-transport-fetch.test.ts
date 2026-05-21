@@ -3,6 +3,14 @@ import { Stream } from "openai/streaming";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 
+type ProviderRequestPolicyConfigMockResult = {
+  allowPrivateNetwork: boolean;
+  privateNetworkExplicitlyDenied?: boolean;
+  policy?: {
+    endpointClass?: string;
+  };
+};
+
 const {
   buildProviderRequestDispatcherPolicyMock,
   fetchWithSsrFGuardMock,
@@ -21,7 +29,11 @@ const {
     ...current,
     ...overrides,
   })),
-  resolveProviderRequestPolicyConfigMock: vi.fn(() => ({ allowPrivateNetwork: false })),
+  resolveProviderRequestPolicyConfigMock: vi.fn<() => ProviderRequestPolicyConfigMockResult>(
+    () => ({
+      allowPrivateNetwork: false,
+    }),
+  ),
   shouldUseEnvHttpProxyForUrlMock: vi.fn(() => false),
   withTrustedEnvProxyGuardedFetchModeMock: vi.fn((params: Record<string, unknown>) => ({
     ...params,
@@ -50,7 +62,8 @@ vi.mock("./provider-request-config.js", () => ({
 }));
 
 function latestGuardedFetchParams(): Record<string, unknown> {
-  const params = fetchWithSsrFGuardMock.mock.calls.at(-1)?.[0];
+  const calls = fetchWithSsrFGuardMock.mock.calls;
+  const params = calls[calls.length - 1]?.[0];
   if (!params || typeof params !== "object") {
     throw new Error("Expected guarded fetch call");
   }
@@ -58,7 +71,8 @@ function latestGuardedFetchParams(): Record<string, unknown> {
 }
 
 function latestTrustedEnvProxyParams(): Record<string, unknown> {
-  const params = withTrustedEnvProxyGuardedFetchModeMock.mock.calls.at(-1)?.[0];
+  const calls = withTrustedEnvProxyGuardedFetchModeMock.mock.calls;
+  const params = calls[calls.length - 1]?.[0];
   if (!params || typeof params !== "object") {
     throw new Error("Expected trusted env proxy call");
   }
@@ -211,7 +225,7 @@ describe("buildGuardedModelFetch", () => {
     const fetcher = buildGuardedModelFetch(model);
     await fetcher("https://api.openai.com/v1/responses", { method: "POST" });
 
-    const policy = fetchWithSsrFGuardMock.mock.calls[0]?.[0]?.policy;
+    const policy = latestGuardedFetchParams().policy as Record<string, unknown> | undefined;
     expect(policy).toEqual({
       allowRfc2544BenchmarkRange: true,
       allowIpv6UniqueLocalRange: true,
@@ -233,12 +247,208 @@ describe("buildGuardedModelFetch", () => {
     const fetcher = buildGuardedModelFetch(model);
     await fetcher("https://uploads.openai.com/v1/files", { method: "POST" });
 
+    const policy = latestGuardedFetchParams().policy;
+    expect(policy).toBeUndefined();
+  });
+
+  it("trusts exact configured custom provider hosts without broad private-network opt-in", async () => {
+    resolveProviderRequestPolicyConfigMock.mockReturnValueOnce({
+      allowPrivateNetwork: false,
+      policy: { endpointClass: "custom" },
+    });
+    const model = {
+      id: "qwen3:32b",
+      provider: "lmstudio",
+      api: "openai-completions",
+      baseUrl: "http://10.0.0.5:1234/v1",
+    } as unknown as Model<"openai-completions">;
+
+    const fetcher = buildGuardedModelFetch(model);
+    await fetcher("http://10.0.0.5:1234/v1/chat/completions", { method: "POST" });
+
+    const policy = fetchWithSsrFGuardMock.mock.calls[0]?.[0]?.policy;
+    expect(policy).toEqual({
+      allowedOrigins: ["http://10.0.0.5:1234"],
+    });
+    expect(policy?.allowPrivateNetwork).toBeUndefined();
+    expect(policy?.dangerouslyAllowPrivateNetwork).toBeUndefined();
+  });
+
+  it("trusts exact configured HTTPS custom provider origins", async () => {
+    resolveProviderRequestPolicyConfigMock.mockReturnValueOnce({
+      allowPrivateNetwork: false,
+      policy: { endpointClass: "custom" },
+    });
+    const model = {
+      id: "qwen3:32b",
+      provider: "custom-vllm",
+      api: "openai-completions",
+      baseUrl: "https://10.0.0.5:1234/v1",
+    } as unknown as Model<"openai-completions">;
+
+    const fetcher = buildGuardedModelFetch(model);
+    await fetcher("https://10.0.0.5:1234/v1/chat/completions", { method: "POST" });
+
+    const policy = fetchWithSsrFGuardMock.mock.calls[0]?.[0]?.policy;
+    expect(policy).toEqual({
+      allowedOrigins: ["https://10.0.0.5:1234"],
+    });
+  });
+
+  it("keeps explicit private-network denial ahead of configured custom origin trust", async () => {
+    resolveProviderRequestPolicyConfigMock.mockReturnValueOnce({
+      allowPrivateNetwork: false,
+      privateNetworkExplicitlyDenied: true,
+      policy: { endpointClass: "custom" },
+    });
+    const model = {
+      id: "qwen3:32b",
+      provider: "lmstudio",
+      api: "openai-completions",
+      baseUrl: "http://10.0.0.5:1234/v1",
+    } as unknown as Model<"openai-completions">;
+
+    const fetcher = buildGuardedModelFetch(model);
+    await fetcher("http://10.0.0.5:1234/v1/chat/completions", { method: "POST" });
+
     const policy = fetchWithSsrFGuardMock.mock.calls[0]?.[0]?.policy;
     expect(policy).toBeUndefined();
   });
 
-  it("merges explicit private-network opt-in into the provider-host fake-IP policy", async () => {
-    resolveProviderRequestPolicyConfigMock.mockReturnValueOnce({ allowPrivateNetwork: true });
+  it("trusts exact configured local provider origins", async () => {
+    resolveProviderRequestPolicyConfigMock.mockReturnValueOnce({
+      allowPrivateNetwork: false,
+      policy: { endpointClass: "local" },
+    });
+    const model = {
+      id: "qwen3:32b",
+      provider: "lmstudio",
+      api: "openai-completions",
+      baseUrl: "http://127.0.0.1:1234/v1",
+    } as unknown as Model<"openai-completions">;
+
+    const fetcher = buildGuardedModelFetch(model);
+    await fetcher("http://127.0.0.1:1234/v1/chat/completions", { method: "POST" });
+
+    const policy = fetchWithSsrFGuardMock.mock.calls[0]?.[0]?.policy;
+    expect(policy).toEqual({
+      allowedOrigins: ["http://127.0.0.1:1234"],
+    });
+  });
+
+  it("does not trust a configured provider host on a different port", async () => {
+    resolveProviderRequestPolicyConfigMock.mockReturnValueOnce({
+      allowPrivateNetwork: false,
+      policy: { endpointClass: "custom" },
+    });
+    const model = {
+      id: "qwen3:32b",
+      provider: "lmstudio",
+      api: "openai-completions",
+      baseUrl: "http://10.0.0.5:1234/v1",
+    } as unknown as Model<"openai-completions">;
+
+    const fetcher = buildGuardedModelFetch(model);
+    await fetcher("http://10.0.0.5:4321/v1/chat/completions", { method: "POST" });
+
+    const policy = fetchWithSsrFGuardMock.mock.calls[0]?.[0]?.policy;
+    expect(policy).toBeUndefined();
+  });
+
+  it("does not add exact-origin trust for non-custom provider endpoints", async () => {
+    resolveProviderRequestPolicyConfigMock.mockReturnValueOnce({
+      allowPrivateNetwork: false,
+      policy: { endpointClass: "openai-public" },
+    });
+    const model = {
+      id: "qwen3:32b",
+      provider: "openai",
+      api: "openai-completions",
+      baseUrl: "http://10.0.0.5:1234/v1",
+    } as unknown as Model<"openai-completions">;
+
+    const fetcher = buildGuardedModelFetch(model);
+    await fetcher("http://10.0.0.5:1234/v1/chat/completions", { method: "POST" });
+
+    const policy = fetchWithSsrFGuardMock.mock.calls[0]?.[0]?.policy;
+    expect(policy).toBeUndefined();
+  });
+
+  it.each([
+    {
+      label: "link-local metadata IP",
+      baseUrl: "http://169.254.169.254/v1",
+      requestUrl: "http://169.254.169.254/v1/chat/completions",
+    },
+    {
+      label: "legacy link-local metadata IP",
+      baseUrl: "http://2852039166/v1",
+      requestUrl: "http://2852039166/v1/chat/completions",
+    },
+    {
+      label: "embedded IPv6 link-local metadata IP",
+      baseUrl: "http://[64:ff9b::a9fe:a9fe]/v1",
+      requestUrl: "http://[64:ff9b::a9fe:a9fe]/v1/chat/completions",
+    },
+    {
+      label: "non-link-local cloud metadata IP",
+      baseUrl: "http://100.100.100.200/v1",
+      requestUrl: "http://100.100.100.200/v1/chat/completions",
+    },
+    {
+      label: "IPv6 cloud metadata IP",
+      baseUrl: "http://[fd00:ec2::254]/v1",
+      requestUrl: "http://[fd00:ec2::254]/v1/chat/completions",
+    },
+    {
+      label: "embedded IPv6 cloud metadata IP",
+      baseUrl: "http://[64:ff9b::6464:64c8]/v1",
+      requestUrl: "http://[64:ff9b::6464:64c8]/v1/chat/completions",
+    },
+    {
+      label: "metadata hostname",
+      baseUrl: "http://metadata.google.internal/v1",
+      requestUrl: "http://metadata.google.internal/v1/chat/completions",
+    },
+    {
+      label: "metadata short hostname",
+      baseUrl: "http://metadata/v1",
+      requestUrl: "http://metadata/v1/chat/completions",
+    },
+    {
+      label: "metadata compound hostname",
+      baseUrl: "http://metadata-server.example/v1",
+      requestUrl: "http://metadata-server.example/v1/chat/completions",
+    },
+    {
+      label: "cloud instance-data hostname",
+      baseUrl: "http://instance-data.ec2.internal/v1",
+      requestUrl: "http://instance-data.ec2.internal/v1/chat/completions",
+    },
+  ])("does not add implicit exact-origin trust for $label", async (entry) => {
+    resolveProviderRequestPolicyConfigMock.mockReturnValueOnce({
+      allowPrivateNetwork: false,
+      policy: { endpointClass: "custom" },
+    });
+    const model = {
+      id: "qwen3:32b",
+      provider: "custom-metadata",
+      api: "openai-completions",
+      baseUrl: entry.baseUrl,
+    } as unknown as Model<"openai-completions">;
+
+    const fetcher = buildGuardedModelFetch(model);
+    await fetcher(entry.requestUrl, { method: "POST" });
+
+    const policy = fetchWithSsrFGuardMock.mock.calls[0]?.[0]?.policy;
+    expect(policy).toBeUndefined();
+  });
+
+  it("merges explicit private-network opt-in into the provider-host policies", async () => {
+    resolveProviderRequestPolicyConfigMock.mockReturnValueOnce({
+      allowPrivateNetwork: true,
+      policy: { endpointClass: "custom" },
+    });
     const model = {
       id: "qwen3:32b",
       provider: "ollama",
@@ -249,11 +459,9 @@ describe("buildGuardedModelFetch", () => {
     const fetcher = buildGuardedModelFetch(model);
     await fetcher("http://10.0.0.5:11434/api/chat", { method: "POST" });
 
-    const policy = fetchWithSsrFGuardMock.mock.calls[0]?.[0]?.policy;
+    const policy = latestGuardedFetchParams().policy;
     expect(policy).toEqual({
-      allowRfc2544BenchmarkRange: true,
-      allowIpv6UniqueLocalRange: true,
-      hostnameAllowlist: ["10.0.0.5"],
+      allowedOrigins: ["http://10.0.0.5:11434"],
       allowPrivateNetwork: true,
     });
   });
@@ -440,6 +648,53 @@ describe("buildGuardedModelFetch", () => {
     expect(items).toEqual([{ ok: true }]);
   });
 
+  it("continues reading until split SSE frames produce a parser-visible event", async () => {
+    const encoder = new TextEncoder();
+    let pulls = 0;
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        new ReadableStream({
+          pull(controller) {
+            pulls += 1;
+            if (pulls === 1) {
+              controller.enqueue(encoder.encode("event: response.created\n"));
+              return;
+            }
+            if (pulls === 2) {
+              controller.enqueue(encoder.encode('data: {"ok"'));
+              return;
+            }
+            if (pulls === 3) {
+              controller.enqueue(encoder.encode(": true}\n\n"));
+              return;
+            }
+            controller.close();
+          },
+        }),
+        { headers: { "content-type": "text/event-stream" } },
+      ),
+      finalUrl: "https://api.openai.com/v1/responses",
+      release: vi.fn(async () => undefined),
+    });
+    const model = {
+      id: "moonshotai/kimi-k2.6",
+      provider: "openrouter",
+      api: "openai-completions",
+      baseUrl: "https://openrouter.ai/api/v1",
+    } as unknown as Model<"openai-completions">;
+
+    const response = await buildGuardedModelFetch(model)(
+      "https://openrouter.ai/api/v1/chat/completions",
+      { method: "POST" },
+    );
+    const items = [];
+    for await (const item of Stream.fromSSEResponse(response, new AbortController())) {
+      items.push(item);
+    }
+
+    expect(items).toEqual([{ ok: true }]);
+  });
+
   it("synthesizes SSE frames for JSON bodies returned to streaming OpenAI SDK requests", async () => {
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: new Response('  {"ok": true}  ', {
@@ -497,6 +752,54 @@ describe("buildGuardedModelFetch", () => {
 
     expect(cloneSpy).not.toHaveBeenCalled();
     expect(response.headers.get("content-type")).toBe("application/json");
+  });
+
+  it("continues reading split JSON bodies before synthesizing streaming SSE frames", async () => {
+    const encoder = new TextEncoder();
+    let pulls = 0;
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        new ReadableStream({
+          pull(controller) {
+            pulls += 1;
+            if (pulls === 1) {
+              controller.enqueue(encoder.encode('{"ok"'));
+              return;
+            }
+            if (pulls === 2) {
+              controller.enqueue(encoder.encode(": true}"));
+              return;
+            }
+            controller.close();
+          },
+        }),
+        { headers: { "content-type": "application/json; charset=utf-8" } },
+      ),
+      finalUrl: "https://openrouter.ai/api/v1/chat/completions",
+      release: vi.fn(async () => undefined),
+    });
+    const model = {
+      id: "moonshotai/kimi-k2.6",
+      provider: "openrouter",
+      api: "openai-completions",
+      baseUrl: "https://openrouter.ai/api/v1",
+    } as unknown as Model<"openai-completions">;
+
+    const response = await buildGuardedModelFetch(model)(
+      "https://openrouter.ai/api/v1/chat/completions",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "moonshotai/kimi-k2.6", stream: true }),
+      },
+    );
+    const items = [];
+    for await (const item of Stream.fromSSEResponse(response, new AbortController())) {
+      items.push(item);
+    }
+
+    expect(response.headers.get("content-type")).toContain("text/event-stream");
+    expect(items).toEqual([{ ok: true }]);
   });
 
   it("preserves JSON bodies when the request is not streaming", async () => {

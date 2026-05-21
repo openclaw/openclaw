@@ -63,7 +63,9 @@ describe("telegramMessageActions", () => {
       {},
       {
         mediaLocalRoots: [],
+        mediaReadFile: undefined,
         sessionKey: "telegram-session",
+        gatewayClientScopes: undefined,
       },
     );
   });
@@ -297,7 +299,7 @@ describe("telegramMessageActions", () => {
         toolContext: "toolContext" in testCase ? testCase.toolContext : undefined,
       });
 
-      const call = handleTelegramActionMock.mock.calls[0]?.[0] as
+      const call = handleTelegramActionMock.mock.calls.at(0)?.[0] as
         | Record<string, unknown>
         | undefined;
       if (!call) {
