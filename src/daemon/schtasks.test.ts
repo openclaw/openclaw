@@ -149,8 +149,31 @@ describe("resolveTaskScriptPath", () => {
       env: { HOME: "/home/test", OPENCLAW_PROFILE: "default" },
       expected: path.join("/home/test", ".openclaw", "gateway.cmd"),
     },
+    {
+      name: "uses a custom task script file name inside the state directory",
+      env: {
+        USERPROFILE: "C:\\Users\\test",
+        OPENCLAW_TASK_SCRIPT_NAME: "gateway-node.cmd",
+      },
+      expected: path.join("C:\\Users\\test", ".openclaw", "gateway-node.cmd"),
+    },
   ])("$name", ({ env, expected }) => {
     expect(resolveTaskScriptPath(env)).toBe(expected);
+  });
+
+  it.each([
+    "../gateway.cmd",
+    "..\\gateway.cmd",
+    "nested/gateway.cmd",
+    "nested\\gateway.cmd",
+    "gateway..cmd",
+  ])("rejects non-file task script name %s", (scriptName) => {
+    expect(() =>
+      resolveTaskScriptPath({
+        USERPROFILE: "C:\\Users\\test",
+        OPENCLAW_TASK_SCRIPT_NAME: scriptName,
+      }),
+    ).toThrow("OPENCLAW_TASK_SCRIPT_NAME must be a file name only");
   });
 });
 

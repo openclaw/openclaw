@@ -50,6 +50,11 @@ export function resolveTaskScriptPath(env: GatewayServiceEnv): string {
     return override;
   }
   const scriptName = env.OPENCLAW_TASK_SCRIPT_NAME?.trim() || "gateway.cmd";
+  if (/[/\\]|\.\./.test(scriptName)) {
+    throw new Error(
+      `OPENCLAW_TASK_SCRIPT_NAME must be a file name only, not a path: ${scriptName}`,
+    );
+  }
   const stateDir = resolveGatewayStateDir(env);
   return path.join(stateDir, scriptName);
 }
