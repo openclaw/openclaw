@@ -1111,8 +1111,8 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
     });
   });
 
-  it.each(["docker.orb.internal", "host.orb.internal"])(
-    "accepts ollama-local marker auth for Orb host alias %s",
+  it.each(["docker.orb.internal", "host.docker.internal", "host.orb.internal"])(
+    "accepts ollama-local marker auth for host-backed alias %s",
     async (hostname) => {
       const auth = await resolveApiKeyForProvider({
         provider: "ollama",

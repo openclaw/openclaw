@@ -77,6 +77,7 @@ const LOCAL_OLLAMA_HOSTNAMES = new Set([
   "::1",
   "::",
   "docker.orb.internal",
+  "host.docker.internal",
   "host.orb.internal",
 ]);
 const LOOPBACK_OLLAMA_HOSTNAMES = new Set(["localhost", "127.0.0.1", "0.0.0.0", "::1", "::"]);

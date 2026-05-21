@@ -572,8 +572,8 @@ describe("ollama plugin", () => {
     expect(buildOllamaProviderMock).not.toHaveBeenCalled();
   });
 
-  it.each(["docker.orb.internal", "host.orb.internal"])(
-    "skips implicit localhost discovery when a custom Orb host Ollama provider is configured for %s",
+  it.each(["docker.orb.internal", "host.docker.internal", "host.orb.internal"])(
+    "skips implicit localhost discovery when a custom host-backed Ollama provider is configured for %s",
     async (hostname) => {
       const provider = registerProvider();
 

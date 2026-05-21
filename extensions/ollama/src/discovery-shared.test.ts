@@ -16,6 +16,7 @@ describe("isLocalOllamaBaseUrl", () => {
     "http://gpu-node-1:11434",
     "http://mac-studio.local:11434",
     "http://docker.orb.internal:11434",
+    "http://host.docker.internal:11434",
     "http://host.orb.internal:11434",
     "http://[fd00::1]:11434",
     "http://[fe90::1]:11434",
