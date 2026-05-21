@@ -64,6 +64,11 @@ import {
 import { resolveDefaultAgentId } from "./agent-scope.js";
 import { reserveChildAdmissionSlot } from "./child-admission.js";
 import {
+  resolveAgentExecutionPlacement,
+  type AgentExecutionPlacement,
+  type AgentExecutionPlacementRequest,
+} from "./execution-backends.js";
+import {
   findAcpUnsupportedInheritedToolAllow,
   findAcpUnsupportedInheritedToolDeny,
   formatAcpInheritedToolAllowError,
@@ -118,6 +123,7 @@ type SpawnAcpParams = {
   expectsCompletionMessage?: boolean;
   streamTo?: SpawnAcpStreamTarget;
   attachments?: AcpTurnAttachment[];
+  execution?: AgentExecutionPlacementRequest;
 };
 
 export type SpawnAcpContext = {
@@ -167,6 +173,7 @@ type SpawnAcpResultFields = {
   runTimeoutSeconds?: number;
   inlineDelivery?: boolean;
   note?: string;
+  execution?: AgentExecutionPlacement;
 };
 
 type SpawnAcpAcceptedResult = SpawnAcpResultFields & {
@@ -297,6 +304,16 @@ export async function spawnAcpDirect(
       error: formatAcpInheritedToolAllowError(acpUnsupportedInheritedAllow),
     });
   }
+
+  const executionResult = resolveAgentExecutionPlacement({ cfg, request: params.execution });
+  if (!executionResult.ok) {
+    return createAcpSpawnFailure({
+      status: "error",
+      errorCode: "runtime_policy",
+      error: executionResult.error,
+    });
+  }
+  const executionPlacement = executionResult.execution;
 
   const spawnMode = resolveSpawnMode({
     requestedMode: params.mode,
@@ -683,6 +700,7 @@ export async function spawnAcpDirect(
           ? false
           : params.expectsCompletionMessage !== false,
         spawnMode,
+        executionPlacement,
       };
     },
   });
@@ -725,5 +743,6 @@ export async function spawnAcpDirect(
     runTimeoutSeconds,
     ...(deliveryPlan?.useInlineDelivery ? { inlineDelivery: true } : {}),
     note: spawnMode === "session" ? ACP_SPAWN_SESSION_ACCEPTED_NOTE : ACP_SPAWN_ACCEPTED_NOTE,
+    execution: executionPlacement,
   };
 }

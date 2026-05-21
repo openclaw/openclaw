@@ -2,6 +2,7 @@ import type { SubagentEndReason } from "../context-engine/types.js";
 /** Persisted execution, completion, delivery, and attachment state for child runs. */
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { AgentRunTerminalReplySnapshot } from "./agent-run-terminal-reply.js";
+import type { AgentExecutionPlacement } from "./execution-backends.js";
 import type { AgentRunSessionTarget } from "./run-session-target.js";
 import type { SubagentRunOutcome } from "./subagent-announce-output.js";
 import type { SubagentLaunchAuthorization } from "./subagent-launch-authorization.js";
@@ -278,6 +279,7 @@ export type SubagentRunRecord = {
   attachmentsDir?: string;
   attachmentsRootDir?: string;
   retainAttachmentsOnKeep?: boolean;
+  executionPlacement?: AgentExecutionPlacement;
   /** Collector-mode runs remain waitable and never announce to the requester. */
   collect?: boolean;
   /** Stable spawning-session owner for caps, scheduling, and wait authorization. */
