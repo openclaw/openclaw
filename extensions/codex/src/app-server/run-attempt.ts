@@ -1240,7 +1240,7 @@ export async function runCodexAppServerAttempt(
           .map((plugin) => plugin.configKey)
           .toSorted()
       : undefined;
-    embeddedAgentLog.info(
+    embeddedAgentLog.debug(
       "codex plugin thread config eligibility",
       buildCodexPluginThreadConfigEligibilityLogData({
         sessionId: params.sessionId,
