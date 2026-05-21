@@ -63,6 +63,7 @@ type OpenAiChatMessage = {
   name?: unknown;
   tool_call_id?: unknown;
   tool_calls?: unknown;
+  reasoning_content?: unknown;
 };
 
 type OpenAiChatCompletionRequest = {
@@ -241,7 +242,13 @@ function writeAssistantRoleChunk(res: ServerResponse, params: { runId: string; m
 
 function writeAssistantContentChunk(
   res: ServerResponse,
-  params: { runId: string; model: string; content: string; finishReason: "stop" | null },
+  params: {
+    runId: string;
+    model: string;
+    content: string;
+    finishReason: "stop" | null;
+    reasoningContent?: string;
+  },
 ) {
   writeSse(res, {
     id: params.runId,
@@ -251,7 +258,10 @@ function writeAssistantContentChunk(
     choices: [
       {
         index: 0,
-        delta: { content: params.content },
+        delta: {
+          content: params.content,
+          ...(params.reasoningContent ? { reasoning_content: params.reasoningContent } : {}),
+        },
         finish_reason: params.finishReason,
       },
     ],
@@ -687,6 +697,19 @@ function resolveAgentResponseText(result: unknown): string {
   return content || "No response from OpenClaw.";
 }
 
+function resolveAgentResponseReasoningContent(result: unknown): string {
+  const payloads = (result as { payloads?: Array<{ reasoning_content?: string }> } | null)
+    ?.payloads;
+  if (!Array.isArray(payloads) || payloads.length === 0) {
+    return "";
+  }
+  const content = payloads
+    .map((p) => (typeof p.reasoning_content === "string" ? p.reasoning_content : ""))
+    .filter(Boolean)
+    .join("\n\n");
+  return content || "";
+}
+
 function resolveAgentResponseCommentary(result: unknown): string {
   const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
   if (!Array.isArray(payloads) || payloads.length === 0) {
@@ -905,6 +928,16 @@ export async function handleOpenAiHttpRequest(
     return true;
   }
   const activeTurnContext = resolveActiveTurnContext(payload.messages);
+
+  // Backfill reasoning_content on assistant messages missing it (MiMo compatibility)
+  if (Array.isArray(payload.messages)) {
+    for (const msg of payload.messages) {
+      if (normalizeOptionalString(msg.role) === "assistant" && !("reasoning_content" in msg)) {
+        msg.reasoning_content = "";
+      }
+    }
+  }
+
   const prompt = buildAgentPrompt(payload.messages, activeTurnContext.activeUserMessageIndex);
   let resolvedClientTools: ClientToolDefinition[] = [];
   let toolChoicePrompt: string | undefined;
@@ -1011,6 +1044,7 @@ export async function handleOpenAiHttpRequest(
         return true;
       }
       const content = resolveAgentResponseText(result);
+      const reasoningContent = resolveAgentResponseReasoningContent(result);
 
       sendJson(res, 200, {
         id: runId,
@@ -1020,7 +1054,11 @@ export async function handleOpenAiHttpRequest(
         choices: [
           {
             index: 0,
-            message: { role: "assistant", content },
+            message: {
+              role: "assistant",
+              content,
+              ...(reasoningContent ? { reasoning_content: reasoningContent } : {}),
+            },
             finish_reason: "stop",
           },
         ],
@@ -1109,7 +1147,9 @@ export async function handleOpenAiHttpRequest(
 
     if (evt.stream === "assistant") {
       const content = resolveAssistantStreamDeltaText(evt) ?? "";
-      if (!content) {
+      const reasoningContent =
+        typeof evt.data?.reasoning_content === "string" ? evt.data.reasoning_content : "";
+      if (!content && !reasoningContent) {
         return;
       }
 
@@ -1123,6 +1163,7 @@ export async function handleOpenAiHttpRequest(
         runId,
         model,
         content,
+        reasoningContent: reasoningContent || undefined,
         finishReason: null,
       });
       return;
@@ -1190,12 +1231,14 @@ export async function handleOpenAiHttpRequest(
         }
 
         const content = resolveAgentResponseText(result);
+        const reasoningContent = resolveAgentResponseReasoningContent(result);
 
         sawAssistantDelta = true;
         writeAssistantContentChunk(res, {
           runId,
           model,
           content,
+          reasoningContent: reasoningContent || undefined,
           finishReason: null,
         });
       }
