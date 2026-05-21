@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
+import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import {
@@ -1296,6 +1297,114 @@ describe("runReplyAgent typing (heartbeat)", () => {
     } finally {
       fallbackSpy.mockRestore();
     }
+  });
+
+  it("marks heartbeat replies only when generic message-tool delivery matches the reply route", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "fallback narration that would duplicate the message tool" }],
+      messagingToolSentTexts: ["message tool delivered"],
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: "telegram",
+          accountId: "primary",
+          to: "-100123",
+          text: "message tool delivered",
+        },
+      ],
+      meta: {},
+    });
+
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: true },
+      runOverrides: {
+        messageProvider: "telegram",
+      },
+      sessionCtx: {
+        Provider: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "-100123",
+        AccountId: "primary",
+      },
+    });
+
+    const res = await run();
+    const payload = requireRecord(res, "heartbeat reply payload");
+    const metadata = getReplyPayloadMetadata(payload) as
+      | { messageToolDeliveredForReplyRoute?: boolean }
+      | undefined;
+
+    expect(payload.text).toBe("fallback narration that would duplicate the message tool");
+    expect(metadata?.messageToolDeliveredForReplyRoute).toBe(true);
+  });
+
+  it("does not mark heartbeat replies when generic message-tool delivery targets another route", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "fallback text still needs delivery" }],
+      messagingToolSentTexts: ["message tool delivered elsewhere"],
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: "telegram",
+          accountId: "primary",
+          to: "-100999",
+          text: "message tool delivered elsewhere",
+        },
+      ],
+      meta: {},
+    });
+
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: true },
+      runOverrides: {
+        messageProvider: "telegram",
+      },
+      sessionCtx: {
+        Provider: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "-100123",
+        AccountId: "primary",
+      },
+    });
+
+    const res = await run();
+    const payload = requireRecord(res, "heartbeat reply payload");
+    const metadata = getReplyPayloadMetadata(payload) as
+      | { messageToolDeliveredForReplyRoute?: boolean }
+      | undefined;
+
+    expect(payload.text).toBe("fallback text still needs delivery");
+    expect(metadata?.messageToolDeliveredForReplyRoute).not.toBe(true);
+  });
+
+  it("does not mark heartbeat replies from global message-tool evidence without route targets", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "fallback text still needs delivery without route evidence" }],
+      messagingToolSentTexts: ["message tool delivered but route is unknown"],
+      meta: {},
+    });
+
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: true },
+      runOverrides: {
+        messageProvider: "telegram",
+      },
+      sessionCtx: {
+        Provider: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "-100123",
+        AccountId: "primary",
+      },
+    });
+
+    const res = await run();
+    const payload = requireRecord(res, "heartbeat reply payload");
+    const metadata = getReplyPayloadMetadata(payload) as
+      | { messageToolDeliveredForReplyRoute?: boolean }
+      | undefined;
+
+    expect(payload.text).toBe("fallback text still needs delivery without route evidence");
+    expect(metadata?.messageToolDeliveredForReplyRoute).not.toBe(true);
   });
 
   it("does not treat whitespace-only messaging evidence as fallback delivery", async () => {

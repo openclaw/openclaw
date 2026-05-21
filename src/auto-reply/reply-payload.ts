@@ -146,6 +146,13 @@ export function buildTtsSupplementMediaPayload(payload: ReplyPayload): ReplyPayl
 export type ReplyPayloadMetadata = {
   assistantMessageIndex?: number;
   /**
+   * A generic message tool delivery already reached the same provider/target
+   * route as this reply. Heartbeat uses this route-scoped evidence to avoid
+   * sending fallback narration after the message tool has delivered the
+   * visible response.
+   */
+  messageToolDeliveredForReplyRoute?: boolean;
+  /**
    * Internal OpenClaw notices generated after a runtime/provider failure are
    * not assistant source replies. Dispatch may deliver them even when normal
    * assistant source replies are message-tool-only; sendPolicy deny still wins.
@@ -189,14 +196,22 @@ export function copyReplyPayloadMetadata<T extends object>(source: object, paylo
   return metadata ? setReplyPayloadMetadata(payload, metadata) : payload;
 }
 
+export function isReplyPayloadStatusNotice(
+  payload: Pick<ReplyPayload, "isCompactionNotice" | "isFallbackNotice" | "isStatusNotice">,
+): boolean {
+  return Boolean(payload.isCompactionNotice || payload.isFallbackNotice || payload.isStatusNotice);
+}
+
 export function markReplyPayloadForSourceSuppressionDelivery<T extends object>(payload: T): T {
   return setReplyPayloadMetadata(payload, {
     deliverDespiteSourceReplySuppression: true,
   });
 }
 
-export function isReplyPayloadStatusNotice(
-  payload: Pick<ReplyPayload, "isCompactionNotice" | "isFallbackNotice" | "isStatusNotice">,
-): boolean {
-  return Boolean(payload.isCompactionNotice || payload.isFallbackNotice || payload.isStatusNotice);
+export function markReplyPayloadForMessageToolDeliveryForReplyRoute<T extends object>(
+  payload: T,
+): T {
+  return setReplyPayloadMetadata(payload, {
+    messageToolDeliveredForReplyRoute: true,
+  });
 }
