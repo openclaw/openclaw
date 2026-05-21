@@ -3,8 +3,10 @@ import "../../agents/test-helpers/fast-coding-tools.js";
 import {
   loadRunCronIsolatedAgentTurn,
   resetRunCronIsolatedAgentTurnHarness,
+  isCliProviderMock,
   resolveDeliveryTargetMock,
   runEmbeddedPiAgentMock,
+  runCliAgentMock,
   runWithModelFallbackMock,
 } from "./run.test-harness.js";
 
@@ -47,11 +49,13 @@ function makeParamsWithToolsAllow(toolsAllow: string[]) {
 
 function requireEmbeddedAgentCall(): {
   jobId?: string;
+  senderIsOwner?: boolean;
   toolsAllow?: string[];
 } {
   const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as
     | {
         jobId?: string;
+        senderIsOwner?: boolean;
         toolsAllow?: string[];
       }
     | undefined;
@@ -99,6 +103,41 @@ describe("runCronIsolatedAgentTurn toolsAllow passthrough", () => {
       const call = requireEmbeddedAgentCall();
       expect(call.jobId).toBe("tools-allow");
       expect(call.toolsAllow).toEqual(["cron"]);
+    },
+  );
+
+  it(
+    "marks embedded isolated cron runs as owner-authorized for explicitly allowed tools",
+    { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
+    async () => {
+      await runCronIsolatedAgentTurn(makeParamsWithToolsAllow(["exec"]));
+
+      expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+      const call = requireEmbeddedAgentCall();
+      expect(call.senderIsOwner).toBe(true);
+      expect(call.toolsAllow).toEqual(["exec"]);
+    },
+  );
+
+  it(
+    "marks CLI isolated cron runs as owner-authorized for explicitly allowed tools",
+    { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
+    async () => {
+      isCliProviderMock.mockReturnValue(true);
+      runCliAgentMock.mockResolvedValue({
+        payloads: [{ text: "cli output" }],
+        meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+      });
+
+      await runCronIsolatedAgentTurn(makeParamsWithToolsAllow(["exec"]));
+
+      expect(runCliAgentMock).toHaveBeenCalledTimes(1);
+      const call = runCliAgentMock.mock.calls[0]?.[0] as
+        | { senderIsOwner?: boolean; toolsAllow?: string[] }
+        | undefined;
+      expect(call?.senderIsOwner).toBe(true);
+      expect(call?.toolsAllow).toEqual(["exec"]);
+      expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     },
   );
 

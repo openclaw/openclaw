@@ -205,6 +205,8 @@ export function createCronPromptExecutor(params: {
             lane: resolveCronAgentLane(params.lane),
             cliSessionId,
             skillsSnapshot: params.skillsSnapshot,
+            senderIsOwner: true,
+            toolsAllow: params.agentPayload?.toolsAllow,
             messageChannel,
             sourceReplyDeliveryMode,
             abortSignal: params.abortSignal,
@@ -266,6 +268,7 @@ export function createCronPromptExecutor(params: {
           runTimeoutOverrideMs: params.runTimeoutOverrideMs,
           bootstrapContextMode,
           bootstrapContextRunKind: "cron",
+          senderIsOwner: true,
           toolsAllow: params.agentPayload?.toolsAllow,
           execOverrides: params.suppressExecNotifyOnExit
             ? {
