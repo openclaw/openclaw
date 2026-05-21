@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createDependencyChangesReport,
+  dependencyDiffPathspecs,
   isDependencyFile,
 } from "../../scripts/dependency-changes-report.mjs";
 
@@ -49,5 +50,9 @@ describe("dependency-changes-report", () => {
     expect(isDependencyFile("package-lock.json")).toBe(true);
     expect(isDependencyFile("pnpm-lock.yaml")).toBe(true);
     expect(isDependencyFile("docs/gateway/security/index.md")).toBe(false);
+  });
+
+  it("includes plugin shrinkwrap files in git diff pathspecs", () => {
+    expect(dependencyDiffPathspecs()).toContain("extensions/*/npm-shrinkwrap.json");
   });
 });
