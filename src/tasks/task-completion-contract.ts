@@ -31,11 +31,11 @@ export function isProgressOnlyCompletionText(value: string | null | undefined): 
   if (!normalized) {
     return false;
   }
-  if (PROGRESS_ONLY_PATTERN.test(normalized)) {
-    return true;
-  }
   if (FINAL_DELIVERABLE_INDICATOR_PATTERN.test(normalized)) {
     return false;
+  }
+  if (PROGRESS_ONLY_PATTERN.test(normalized)) {
+    return true;
   }
   return BARE_PROGRESS_ONLY_PATTERN.test(normalized);
 }

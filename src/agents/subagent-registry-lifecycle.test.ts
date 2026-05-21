@@ -384,6 +384,35 @@ describe("subagent registry lifecycle hardening", () => {
     expect(finalArg.terminalOutcome).toBeUndefined();
   });
 
+  it("keeps required completions successful when final output follows progress text", async () => {
+    const entry = createRunEntry({
+      expectsCompletionMessage: true,
+    });
+
+    await createLifecycleController({
+      entry,
+      captureSubagentCompletionReply: vi.fn(
+        async () => "I'll inspect the repo now. Fixed the crash and verified the tests pass.",
+      ),
+    }).completeSubagentRun({
+      runId: entry.runId,
+      endedAt: 4_000,
+      outcome: { status: "ok" },
+      reason: SUBAGENT_ENDED_REASON_COMPLETE,
+      triggerCleanup: false,
+    });
+
+    const finalArg = firstCallArg(taskExecutorMocks.completeTaskRunByRunId);
+    expectFields(finalArg, {
+      runId: entry.runId,
+      runtime: "subagent",
+      sessionKey: entry.childSessionKey,
+      progressSummary: "I'll inspect the repo now. Fixed the crash and verified the tests pass.",
+      terminalSummary: null,
+    });
+    expect(finalArg.terminalOutcome).toBeUndefined();
+  });
+
   it("does not reject cleanup give-up when task delivery status update throws", async () => {
     const persist = vi.fn();
     const warn = vi.fn();
