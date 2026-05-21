@@ -206,6 +206,21 @@ describe("handleModelsCommand", () => {
     expect(authCheckerParams?.workspaceDir).toBe("/tmp");
   });
 
+  it("uses read-only catalog loading and static auth checks for default browse", async () => {
+    await handleModelsCommand(buildParams("/models"), true);
+
+    expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]?.readOnly).toBe(true);
+    const authCheckerParams = firstAuthCheckerParams();
+    expect(authCheckerParams?.allowPluginSyntheticAuth).toBe(false);
+    expect(authCheckerParams?.discoverExternalCliAuth).toBe(false);
+  });
+
+  it("keeps explicit all browse on the full catalog path", async () => {
+    await handleModelsCommand(buildParams("/models openai all"), true);
+
+    expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]?.readOnly).toBe(false);
+  });
+
   it("hides unauthenticated providers by default and keeps all as explicit browse", async () => {
     modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic"]);
 

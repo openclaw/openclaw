@@ -149,7 +149,10 @@ export async function buildModelsProviderData(
     agentId,
   });
 
-  const catalog = await loadModelCatalog({ config: cfg });
+  const catalog = await loadModelCatalog({
+    config: cfg,
+    readOnly: options.view !== "all",
+  });
   const visibilityPolicy = createModelVisibilityPolicy({
     cfg,
     catalog,
@@ -168,6 +171,7 @@ export async function buildModelsProviderData(
       (agentId ? resolveAgentWorkspaceDir(cfg, agentId) : undefined) ??
       resolveDefaultAgentWorkspaceDir(),
     view: options.view,
+    runtimeAuthDiscovery: false,
   });
 
   const aliasIndex = buildModelAliasIndex({
