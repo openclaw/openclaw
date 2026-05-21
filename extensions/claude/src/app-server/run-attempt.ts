@@ -348,6 +348,22 @@ export async function runClaudeAppServerAttempt(
       channelId: hookChannelFields.channelId,
     };
     const resolvedRef = `${params.model.provider}/${params.modelId}`;
+    // TEMPORARY DIAGNOSTIC for provenance footer chain (Tank live-test
+    // 2026-05-21): log what we pass to agent_end so we can confirm the
+    // hook fires + cross-check the sessionKey against what
+    // message_sending sees on outbound delivery. Remove once verified.
+    embeddedAgentLog.info("[claude-app-server] firing agent_end harness hooks", {
+      runId: params.runId,
+      sessionId: params.sessionId,
+      sessionKey: hookCtxForHarness.sessionKey,
+      channelId: hookCtxForHarness.channelId,
+      messageProvider: hookCtxForHarness.messageProvider,
+      assistantTextsLen: result.assistantTexts.length,
+      lastAssistantHasContent: Boolean(result.lastAssistant),
+      messagesSnapshotLen: result.messagesSnapshot.length,
+      didSendViaMessagingTool: result.didSendViaMessagingTool,
+      resolvedRef,
+    });
     runAgentHarnessLlmOutputHook({
       event: {
         runId: params.runId,
