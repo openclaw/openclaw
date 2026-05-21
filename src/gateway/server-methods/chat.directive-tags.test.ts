@@ -796,6 +796,27 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
     expect(findUserUpdate()).toBeDefined();
     expect(mockState.eventOrder).toEqual(["user-transcript", "chat-error"]);
+
+    (context.broadcast as unknown as ReturnType<typeof vi.fn>).mockClear();
+    respond.mockClear();
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-agent-error-payload",
+      waitFor: "none",
+    });
+
+    const replay = lastRespondCall(respond);
+    expect(replay?.[0]).toBe(false);
+    expect(replay?.[1]).toMatchObject({
+      runId: "idem-agent-error-payload",
+      status: "error",
+      summary: "LLM idle timeout (120s): no response from model",
+    });
+    expect(responseErrorMessage(replay?.[2])).toBe(
+      "LLM idle timeout (120s): no response from model",
+    );
+    expect(context.broadcast).not.toHaveBeenCalled();
   });
 
   it("joins multiple agent-run error payloads before broadcasting", async () => {

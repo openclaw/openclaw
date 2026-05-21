@@ -2931,6 +2931,9 @@ export const chatHandlers: GatewayRequestHandlers = {
                           summary: deliveredReplyErrorMessage,
                         }
                       : { runId: clientRunId, status: "ok" as const },
+                    ...(deliveredReplyErrorMessage
+                      ? { error: errorShape(ErrorCodes.UNAVAILABLE, deliveredReplyErrorMessage) }
+                      : {}),
                   },
                 });
               }
