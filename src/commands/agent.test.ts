@@ -853,7 +853,7 @@ describe("agentCommand", () => {
     });
   });
 
-  it("does not use fallback list for user session model overrides", async () => {
+  it("uses fallback list for user session model overrides when the user-chosen model fails", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions-user-override.json");
       writeSessionStoreSeed(store, {
@@ -883,22 +883,24 @@ describe("agentCommand", () => {
         { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
         { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
       ]);
+      // First call (user-chosen model) fails, fallback should rescue
       vi.mocked(runEmbeddedPiAgent).mockRejectedValueOnce(new Error("connect ECONNREFUSED"));
 
-      await expect(
-        agentCommand(
-          {
-            message: "hi",
-            sessionKey: "agent:main:subagent:user-override",
-          },
-          runtime,
-        ),
-      ).rejects.toThrow("connect ECONNREFUSED");
+      await agentCommand(
+        {
+          message: "hi",
+          sessionKey: "agent:main:subagent:user-override",
+        },
+        runtime,
+      );
 
       const attempts = vi
         .mocked(runEmbeddedPiAgent)
         .mock.calls.map((call) => ({ provider: call[0]?.provider, model: call[0]?.model }));
-      expect(attempts).toEqual([{ provider: "ollama", model: "qwen3.5:27b" }]);
+      expect(attempts).toEqual([
+        { provider: "ollama", model: "qwen3.5:27b" },
+        { provider: "openai", model: "gpt-5.4" },
+      ]);
     });
   });
 
