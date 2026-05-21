@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { isCliRuntimeAlias } from "../model-runtime-aliases.js";
 import type { CompactEmbeddedPiSessionParams } from "../pi-embedded-runner/compact.types.js";
 import type {
   EmbeddedRunAttemptParams,
@@ -59,6 +60,9 @@ type AgentHarnessSelectionDecision = {
     | "forced_plugin"
     // Implicit Codex preference found no registered Codex harness, so PI handled the run.
     | "implicit_plugin_unavailable_pi"
+    // CLI backend alias (e.g. claude-cli, google-gemini-cli) is dispatched at the
+    // request layer; in-process consumers like compaction route through PI.
+    | "cli_backend_routed_via_pi"
     // Auto mode chose a registered plugin harness that supports the provider/model.
     | "auto_plugin"
     // Auto mode found no supporting plugin harness, so PI handled the run.
@@ -168,6 +172,27 @@ function selectAgentHarnessDecision(params: {
           runtime: "pi",
         },
         selectedReason: "implicit_plugin_unavailable_pi",
+        candidates: listHarnessCandidates(pluginHarnesses),
+      });
+    }
+    // CLI backend aliases (e.g. `claude-cli`, `google-gemini-cli`) are valid
+    // `agentRuntime.id` values per docs/schema, but they are not registered as
+    // plugin harnesses — they are CLI backends dispatched upstream by
+    // `attempt-execution` and `agent-runner` via `runCliAgent`. In-process
+    // consumers that reach this selector directly (notably preflight
+    // compaction and the `/compact` command via
+    // `maybeCompactAgentHarnessSession`) would otherwise throw
+    // `MissingAgentHarnessError`. Route those callers to the PI harness for
+    // the in-process step; this does not affect normal turn dispatch, which
+    // already short-circuits on `isCliProvider` before reaching here.
+    if (isCliRuntimeAlias(runtime)) {
+      return buildSelectionDecision({
+        harness: piHarness,
+        policy: {
+          ...policy,
+          runtime: "pi",
+        },
+        selectedReason: "cli_backend_routed_via_pi",
         candidates: listHarnessCandidates(pluginHarnesses),
       });
     }

@@ -616,4 +616,43 @@ describe("selectAgentHarness", () => {
       reason: 'Agent harness "codex" does not support compaction.',
     });
   });
+
+  it("routes CLI backend aliases to the PI harness so in-process compaction works", () => {
+    const claudeCliConfig = agentModelRuntimeConfig("anthropic/claude-sonnet-4-6", "claude-cli");
+    expect(
+      selectAgentHarness({
+        provider: "anthropic",
+        modelId: "claude-sonnet-4-6",
+        config: claudeCliConfig,
+      }).id,
+    ).toBe("pi");
+
+    const geminiCliConfig = agentModelRuntimeConfig("google/gemini-2.5-pro", "google-gemini-cli");
+    expect(
+      selectAgentHarness({
+        provider: "google",
+        modelId: "gemini-2.5-pro",
+        config: geminiCliConfig,
+      }).id,
+    ).toBe("pi");
+  });
+
+  it("lets maybeCompactAgentHarnessSession proceed for claude-cli model runs via PI", async () => {
+    const config = agentModelRuntimeConfig("anthropic/claude-sonnet-4-6", "claude-cli");
+    // PI is mocked to have no `compact`; the function should report no compaction
+    // rather than throwing MissingAgentHarnessError. Regression for #57326-class
+    // bug: compaction path used to throw because `claude-cli` is a CLI backend
+    // alias, not a registered plugin harness.
+    await expect(
+      maybeCompactAgentHarnessSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        config,
+      }),
+    ).resolves.toBeUndefined();
+  });
 });
