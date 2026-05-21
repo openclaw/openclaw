@@ -2,11 +2,13 @@ import crypto from "node:crypto";
 import { shouldLogVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { requestHeartbeat as requestHeartbeatImpl } from "../../infra/heartbeat-wake.js";
 import { sanitizeHostExecEnv } from "../../infra/host-env-security.js";
 import { enqueueSystemEvent as enqueueSystemEventImpl } from "../../infra/system-events.js";
 import { getProcessSupervisor as getProcessSupervisorImpl } from "../../process/supervisor/index.js";
 import { resolveEventSessionKey, scopedHeartbeatWakeOptions } from "../../routing/session-key.js";
+import { createTrajectoryRuntimeRecorder } from "../../trajectory/runtime.js";
 import { appendBootstrapPromptWarning } from "../bootstrap-budget.js";
 import {
   createCliJsonlStreamingParser,
@@ -268,99 +270,138 @@ export async function executePreparedCliRun(
   if (params.abortSignal?.aborted) {
     throw createCliAbortError();
   }
-  const backend = context.preparedBackend.backend;
-  const { sessionId: resolvedSessionId, isNew } = resolveSessionIdToSend({
-    backend,
+  // Wire the runtime trajectory recorder so pure CLI runs (notably the
+  // claude-cli live-session path) emit the same lifecycle events as the
+  // embedded provider dispatch. Without this, sessions that stay on the
+  // CLI executor for their entire lifetime never produce a trajectory
+  // sidecar even though the pointer file is written (#80667).
+  const trajectoryRecorder = createTrajectoryRuntimeRecorder({
+    cfg: params.config,
+    runId: params.runId,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    sessionFile: params.sessionFile,
+    provider: params.provider,
+    modelId: context.modelId,
+    workspaceDir: params.workspaceDir,
+  });
+  trajectoryRecorder?.recordEvent("session.started", {
+    trigger: params.trigger,
+    sessionFile: params.sessionFile,
+    workspaceDir: params.workspaceDir,
+    agentId: params.agentId,
+    messageProvider: params.messageProvider,
+    messageChannel: params.messageChannel,
+    backend: context.backendResolved.id,
     cliSessionId: cliSessionIdToUse,
   });
-  const useResume = Boolean(
-    cliSessionIdToUse && resolvedSessionId && backend.resumeArgs && backend.resumeArgs.length > 0,
-  );
-  const systemPromptArg = resolveSystemPromptUsage({
-    backend,
-    isNewSession: isNew,
-    systemPrompt: context.systemPrompt,
-  });
-  const systemPromptFile =
-    !useResume && systemPromptArg
-      ? await writeCliSystemPromptFile({
-          backend,
-          systemPrompt: systemPromptArg,
-        })
-      : undefined;
-
-  const basePrompt = cliSessionIdToUse
-    ? params.prompt
-    : (context.openClawHistoryPrompt ?? params.prompt);
-  let prompt = applyPluginTextReplacements(
-    appendBootstrapPromptWarning(basePrompt, context.bootstrapPromptWarningLines, {
-      preserveExactPrompt: context.heartbeatPrompt,
-    }),
-    context.backendResolved.textTransforms?.input,
-  );
-  const {
-    prompt: promptWithImages,
-    imagePaths,
-    cleanupImages,
-  } = await prepareCliPromptImagePayload({
-    backend,
-    prompt,
-    workspaceDir: context.workspaceDir,
-    images: params.images,
-  });
-  prompt = promptWithImages;
-
-  const { argsPrompt, stdin } = resolvePromptInput({
-    backend,
-    prompt,
-  });
-  const stdinPayload = stdin ?? "";
-  const baseArgs = useResume ? (backend.resumeArgs ?? backend.args ?? []) : (backend.args ?? []);
-  const resolvedArgs = useResume
-    ? baseArgs.map((entry) => entry.replaceAll("{sessionId}", resolvedSessionId ?? ""))
-    : baseArgs;
-  const claudeSkillsPlugin = await prepareClaudeCliSkillsPlugin({
-    backendId: context.backendResolved.id,
-    skillsSnapshot: params.skillsSnapshot,
-  });
+  let systemPromptFile: Awaited<ReturnType<typeof writeCliSystemPromptFile>> | undefined;
+  let cleanupImages: (() => Promise<void>) | undefined;
+  let claudeSkillsPlugin: Awaited<ReturnType<typeof prepareClaudeCliSkillsPlugin>> | undefined;
   let claudeSkillsPluginCleanupOwned = false;
-  const baseArgsWithSkills =
-    claudeSkillsPlugin.args.length > 0
-      ? [...resolvedArgs, ...claudeSkillsPlugin.args]
-      : resolvedArgs;
-  const executionBaseArgs =
-    context.backendResolved.resolveExecutionArgs?.({
-      config: params.config,
-      workspaceDir: context.workspaceDir,
-      provider: params.provider,
-      modelId: context.modelId,
-      authProfileId: context.effectiveAuthProfileId,
-      thinkingLevel: params.thinkLevel,
-      useResume,
-      baseArgs: baseArgsWithSkills,
-    }) ?? baseArgsWithSkills;
-  const args = buildCliArgs({
-    backend,
-    baseArgs: Array.from(executionBaseArgs),
-    modelId: context.normalizedModel,
-    sessionId: resolvedSessionId,
-    systemPrompt: systemPromptArg,
-    systemPromptFilePath: systemPromptFile?.filePath,
-    imagePaths,
-    promptArg: argsPrompt,
-    useResume,
-  });
-
-  const queueKey = resolveCliRunQueueKey({
-    backendId: context.backendResolved.id,
-    serialize: backend.serialize,
-    runId: params.runId,
-    workspaceDir: context.workspaceDir,
-    cliSessionId: useResume ? resolvedSessionId : undefined,
-  });
-
+  let runResult: CliOutput | undefined;
+  let trajectoryTerminalRecorded = false;
   try {
-    return await enqueueCliRun(queueKey, async () => {
+    const backend = context.preparedBackend.backend;
+    const { sessionId: resolvedSessionId, isNew } = resolveSessionIdToSend({
+      backend,
+      cliSessionId: cliSessionIdToUse,
+    });
+    const useResume = Boolean(
+      cliSessionIdToUse && resolvedSessionId && backend.resumeArgs && backend.resumeArgs.length > 0,
+    );
+    const systemPromptArg = resolveSystemPromptUsage({
+      backend,
+      isNewSession: isNew,
+      systemPrompt: context.systemPrompt,
+    });
+    systemPromptFile =
+      !useResume && systemPromptArg
+        ? await writeCliSystemPromptFile({
+            backend,
+            systemPrompt: systemPromptArg,
+          })
+        : undefined;
+
+    const basePrompt = cliSessionIdToUse
+      ? params.prompt
+      : (context.openClawHistoryPrompt ?? params.prompt);
+    let prompt = applyPluginTextReplacements(
+      appendBootstrapPromptWarning(basePrompt, context.bootstrapPromptWarningLines, {
+        preserveExactPrompt: context.heartbeatPrompt,
+      }),
+      context.backendResolved.textTransforms?.input,
+    );
+    const {
+      prompt: promptWithImages,
+      imagePaths,
+      cleanupImages: cleanupImagesFn,
+    } = await prepareCliPromptImagePayload({
+      backend,
+      prompt,
+      workspaceDir: context.workspaceDir,
+      images: params.images,
+    });
+    cleanupImages = cleanupImagesFn;
+    prompt = promptWithImages;
+
+    trajectoryRecorder?.recordEvent("prompt.submitted", {
+      prompt,
+      systemPrompt: context.systemPrompt,
+      useResume,
+      cliSessionId: cliSessionIdToUse,
+      imagesCount: params.images?.length ?? 0,
+    });
+
+    const { argsPrompt, stdin } = resolvePromptInput({
+      backend,
+      prompt,
+    });
+    const stdinPayload = stdin ?? "";
+    const baseArgs = useResume ? (backend.resumeArgs ?? backend.args ?? []) : (backend.args ?? []);
+    const resolvedArgs = useResume
+      ? baseArgs.map((entry) => entry.replaceAll("{sessionId}", resolvedSessionId ?? ""))
+      : baseArgs;
+    claudeSkillsPlugin = await prepareClaudeCliSkillsPlugin({
+      backendId: context.backendResolved.id,
+      skillsSnapshot: params.skillsSnapshot,
+    });
+    const baseArgsWithSkills =
+      claudeSkillsPlugin.args.length > 0
+        ? [...resolvedArgs, ...claudeSkillsPlugin.args]
+        : resolvedArgs;
+    const executionBaseArgs =
+      context.backendResolved.resolveExecutionArgs?.({
+        config: params.config,
+        workspaceDir: context.workspaceDir,
+        provider: params.provider,
+        modelId: context.modelId,
+        authProfileId: context.effectiveAuthProfileId,
+        thinkingLevel: params.thinkLevel,
+        useResume,
+        baseArgs: baseArgsWithSkills,
+      }) ?? baseArgsWithSkills;
+    const args = buildCliArgs({
+      backend,
+      baseArgs: Array.from(executionBaseArgs),
+      modelId: context.normalizedModel,
+      sessionId: resolvedSessionId,
+      systemPrompt: systemPromptArg,
+      systemPromptFilePath: systemPromptFile?.filePath,
+      imagePaths,
+      promptArg: argsPrompt,
+      useResume,
+    });
+
+    const queueKey = resolveCliRunQueueKey({
+      backendId: context.backendResolved.id,
+      serialize: backend.serialize,
+      runId: params.runId,
+      workspaceDir: context.workspaceDir,
+      cliSessionId: useResume ? resolvedSessionId : undefined,
+    });
+
+    runResult = await enqueueCliRun(queueKey, async () => {
       const restoreSkillEnv = params.skillsSnapshot
         ? applySkillEnvOverridesFromSnapshot({
             snapshot: params.skillsSnapshot,
@@ -483,7 +524,7 @@ export async function executePreparedCliRun(
             },
             cleanup: async () => {
               try {
-                await claudeSkillsPlugin.cleanup();
+                await claudeSkillsPlugin?.cleanup();
               } finally {
                 await ownedPreparedBackendCleanup?.();
               }
@@ -754,15 +795,75 @@ export async function executePreparedCliRun(
         restoreSkillEnv?.();
       }
     });
+    if (trajectoryRecorder) {
+      trajectoryRecorder.recordEvent("model.completed", {
+        usage: runResult.usage,
+        cliSessionId: runResult.sessionId,
+        assistantTexts: runResult.text ? [runResult.text] : [],
+        finalPromptText: runResult.finalPromptText,
+      });
+      trajectoryRecorder.recordEvent("session.ended", { status: "success" });
+      trajectoryTerminalRecorded = true;
+    }
+  } catch (error) {
+    if (trajectoryRecorder && !trajectoryTerminalRecorded) {
+      trajectoryRecorder.recordEvent("session.ended", {
+        status: "error",
+        error: formatErrorMessage(error),
+      });
+      trajectoryTerminalRecorded = true;
+    }
+    throw error;
   } finally {
-    if (!claudeSkillsPluginCleanupOwned) {
-      await claudeSkillsPlugin.cleanup();
+    // Each cleanup awaits in its own try/catch so a rejection in one cannot
+    // shortcut the finally and skip the remaining steps. In particular the
+    // trajectory flush at the end must always run, otherwise queued
+    // session.ended events for the current run are lost on disk. Cleanup
+    // rejections are surfaced via cliBackendLog.warn so that operators see
+    // them in CI/log capture rather than disappearing into a bare catch.
+    if (claudeSkillsPlugin && !claudeSkillsPluginCleanupOwned) {
+      try {
+        await claudeSkillsPlugin.cleanup();
+      } catch (cleanupError) {
+        cliBackendLog.warn(
+          `claudeSkillsPlugin.cleanup() rejected: ${formatErrorMessage(cleanupError)}`,
+        );
+      }
     }
     if (systemPromptFile) {
-      await systemPromptFile.cleanup();
+      try {
+        await systemPromptFile.cleanup();
+      } catch (cleanupError) {
+        cliBackendLog.warn(
+          `systemPromptFile.cleanup() rejected: ${formatErrorMessage(cleanupError)}`,
+        );
+      }
     }
     if (cleanupImages) {
-      await cleanupImages();
+      try {
+        await cleanupImages();
+      } catch (cleanupError) {
+        cliBackendLog.warn(`cleanupImages() rejected: ${formatErrorMessage(cleanupError)}`);
+      }
+    }
+    if (trajectoryRecorder) {
+      if (!trajectoryTerminalRecorded) {
+        trajectoryRecorder.recordEvent("session.ended", {
+          status: "error",
+          error: "executePreparedCliRun terminated without recording a terminal event",
+        });
+        trajectoryTerminalRecorded = true;
+      }
+      try {
+        await trajectoryRecorder.flush();
+      } catch (flushError) {
+        // Swallow flush errors so cleanup of other resources still completes;
+        // record the failure so operators don't silently lose trajectory data.
+        cliBackendLog.warn(
+          `trajectoryRecorder.flush() rejected: ${formatErrorMessage(flushError)}`,
+        );
+      }
     }
   }
+  return runResult;
 }
