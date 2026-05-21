@@ -1107,6 +1107,31 @@ for provider examples and precedence.
 - Sandbox inheritance guard: if the requester session is sandboxed, `sessions_spawn` rejects targets that would run unsandboxed.
 - `subagents.requireAgentId`: when true, block `sessions_spawn` calls that omit `agentId` (forces explicit profile selection; default: false).
 
+### Spawn execution backends
+
+`agents.executionBackends` defines named placement backends and profiles for spawned work. The first implementation supports the built-in `local` backend with `type: "process"` and preserves current local execution behavior. `container` and `kubernetes` backend configs are accepted as forward-compatible config, but `sessions_spawn` rejects them until those backends are implemented.
+
+```json5
+{
+  agents: {
+    executionBackends: {
+      local: {
+        type: "process",
+        profiles: {
+          small: {
+            resources: {
+              requests: { cpu: "500m", memory: "1Gi" },
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Use `sessions_spawn.execution.backend` and `sessions_spawn.execution.profile` to request a backend/profile explicitly. OpenClaw validates that request and records the resolved placement on the spawned run for registry/list readback. If omitted, OpenClaw uses the built-in `local` process backend. Non-local runner dispatch is not implemented in this release.
+
 ---
 
 ## Multi-agent routing

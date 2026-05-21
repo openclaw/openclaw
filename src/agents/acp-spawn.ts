@@ -77,6 +77,11 @@ import {
 } from "./acp-spawn-parent-stream.js";
 import { listAgentIds, resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
 import {
+  resolveAgentExecutionPlacement,
+  type AgentExecutionPlacement,
+  type AgentExecutionPlacementRequest,
+} from "./execution-backends.js";
+import {
   findAcpUnsupportedInheritedToolAllow,
   findAcpUnsupportedInheritedToolDeny,
   formatAcpInheritedToolAllowError,
@@ -133,6 +138,7 @@ export type SpawnAcpParams = {
   sandbox?: SpawnAcpSandboxMode;
   streamTo?: SpawnAcpStreamTarget;
   attachments?: AcpTurnAttachment[];
+  execution?: AgentExecutionPlacementRequest;
 };
 
 type GatewayImageAttachmentInput = {
@@ -202,6 +208,7 @@ type SpawnAcpResultFields = {
   inlineDelivery?: boolean;
   streamLogPath?: string;
   note?: string;
+  execution?: AgentExecutionPlacement;
 };
 
 type SpawnAcpAcceptedResult = SpawnAcpResultFields & {
@@ -1326,6 +1333,18 @@ export async function spawnAcpDirect(
       error: formatAcpInheritedToolAllowError(acpUnsupportedInheritedAllow),
     });
   }
+  const executionResult = resolveAgentExecutionPlacement({
+    cfg,
+    request: params.execution,
+  });
+  if (!executionResult.ok) {
+    return createAcpSpawnFailure({
+      status: "error",
+      errorCode: "runtime_policy",
+      error: executionResult.error,
+    });
+  }
+  const executionPlacement = executionResult.execution;
 
   const spawnMode = resolveSpawnMode({
     requestedMode: params.mode,
@@ -1664,6 +1683,7 @@ export async function spawnAcpDirect(
       runTimeoutSeconds,
       ...(streamLogPath ? { streamLogPath } : {}),
       note: spawnMode === "session" ? ACP_SPAWN_SESSION_ACCEPTED_NOTE : ACP_SPAWN_ACCEPTED_NOTE,
+      execution: executionPlacement,
     };
   }
 
@@ -1704,5 +1724,6 @@ export async function spawnAcpDirect(
     runTimeoutSeconds,
     ...(deliveryPlan.useInlineDelivery ? { inlineDelivery: true } : {}),
     note: spawnMode === "session" ? ACP_SPAWN_SESSION_ACCEPTED_NOTE : ACP_SPAWN_ACCEPTED_NOTE,
+    execution: executionPlacement,
   };
 }
