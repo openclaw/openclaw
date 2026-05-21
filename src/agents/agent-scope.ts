@@ -544,7 +544,7 @@ export function resolveEffectiveModelFallbacks(params: {
     // The fallback is per-call only; passivation does not persist it, so the
     // user's model preference is preserved for the next message.
     if (params.modelOverrideSource === "user") {
-      return agentFallbacksOverride ?? [];
+      return agentFallbacksOverride;
     }
     return [];
   }
