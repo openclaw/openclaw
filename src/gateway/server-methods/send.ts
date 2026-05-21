@@ -16,6 +16,7 @@ import {
   projectOutboundPayloadPlanForMirror,
 } from "../../infra/outbound/payloads.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
+import { mirrorDeliveredSourceReplyToTranscript } from "../../infra/outbound/source-reply-mirror.js";
 import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { extractToolPayload } from "../../infra/outbound/tool-payload.js";
@@ -371,6 +372,21 @@ export const sendHandlers: GatewayRequestHandlers = {
           return { ok: false, error, meta: { channel } };
         }
         const payload = extractToolPayload(handled);
+        const sessionKey = normalizeOptionalString(request.sessionKey) ?? undefined;
+        const agentId =
+          normalizeOptionalString(request.agentId) ??
+          (sessionKey ? resolveSessionAgentId({ sessionKey, config: cfg }) : undefined);
+        await mirrorDeliveredSourceReplyToTranscript({
+          action: request.action,
+          channel,
+          actionParams: request.params,
+          cfg,
+          sessionKey,
+          agentId,
+          toolContext: request.toolContext,
+          idempotencyKey: request.idempotencyKey,
+          deliveredPayload: payload,
+        });
         return createGatewayInflightSuccess({ context, dedupeKey, payload, channel });
       } catch (err) {
         return createGatewayInflightUnavailableFailure({ context, dedupeKey, channel, err });

@@ -1297,6 +1297,114 @@ describe("gateway send mirroring", () => {
     );
   });
 
+  it("mirrors successful source-conversation message.action sends into the assistant transcript", async () => {
+    const telegramPlugin: ChannelPlugin = {
+      id: "telegram",
+      meta: {
+        id: "telegram",
+        label: "Telegram",
+        selectionLabel: "Telegram",
+        docsPath: "/channels/telegram",
+        blurb: "Telegram source send transcript mirror test plugin.",
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => ["default"],
+        resolveAccount: () => ({ enabled: true }),
+        isConfigured: () => true,
+      },
+      actions: {
+        describeMessageTool: () => ({ actions: ["send"] }),
+        supportsAction: ({ action }) => action === "send",
+        handleAction: async () => jsonResult({ ok: true, messageId: "tg-1" }),
+      },
+    };
+    mocks.getChannelPlugin.mockReturnValue(telegramPlugin);
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramPlugin }]),
+      "send-test-source-message-action-mirror",
+    );
+    mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
+      jsonResult({ ok: true, messageId: "tg-1" }),
+    );
+
+    const { respond } = await runMessageActionRequest({
+      channel: "telegram",
+      action: "send",
+      params: {
+        to: "chat-123",
+        message: "visible source reply",
+      },
+      sessionKey: "agent:main:telegram:direct:chat-123",
+      agentId: "main",
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "chat-123",
+      },
+      idempotencyKey: "idem-source-message-action",
+    });
+
+    expect(firstRespondCall(respond)[0]).toBe(true);
+    expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionKey: "agent:main:telegram:direct:chat-123",
+      text: "visible source reply",
+      mediaUrls: undefined,
+      idempotencyKey: "idem-source-message-action",
+      config: {},
+    });
+  });
+
+  it("does not mirror message.action sends to a different target", async () => {
+    mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
+      jsonResult({ ok: true, messageId: "tg-external" }),
+    );
+
+    const { respond } = await runMessageActionRequest({
+      channel: "telegram",
+      action: "send",
+      params: {
+        to: "other-chat",
+        message: "external visible reply",
+      },
+      sessionKey: "agent:main:telegram:direct:chat-123",
+      agentId: "main",
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "chat-123",
+      },
+      idempotencyKey: "idem-external-message-action",
+    });
+
+    expect(firstRespondCall(respond)[0]).toBe(true);
+    expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+  });
+
+  it("does not mirror explicitly failed message.action sends", async () => {
+    mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
+      jsonResult({ ok: false, error: "delivery failed" }),
+    );
+
+    const { respond } = await runMessageActionRequest({
+      channel: "telegram",
+      action: "send",
+      params: {
+        to: "chat-123",
+        message: "failed source reply",
+      },
+      sessionKey: "agent:main:telegram:direct:chat-123",
+      agentId: "main",
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "chat-123",
+      },
+      idempotencyKey: "idem-failed-message-action",
+    });
+
+    expect(firstRespondCall(respond)[0]).toBe(true);
+    expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+  });
+
   it("passes agent-scoped media roots to gateway message actions", async () => {
     const mediaActionPlugin: ChannelPlugin = {
       id: "telegram",
