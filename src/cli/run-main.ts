@@ -38,6 +38,7 @@ import {
   shouldStartProxyForCli,
   shouldUseBrowserHelpFastPath,
   shouldUseRootHelpFastPath,
+  shouldUseSetupOnboardConfigureHelpFastPath,
 } from "./run-main-policy.js";
 import { normalizeWindowsArgv } from "./windows-argv.js";
 
@@ -49,6 +50,7 @@ export {
   shouldStartProxyForCli,
   shouldUseBrowserHelpFastPath,
   shouldUseRootHelpFastPath,
+  shouldUseSetupOnboardConfigureHelpFastPath,
 } from "./run-main-policy.js";
 
 type Awaitable<T> = T | Promise<T>;
@@ -545,6 +547,14 @@ export async function runCli(argv: string[] = process.argv) {
     if (shouldUseBrowserHelpFastPath(normalizedArgv)) {
       const { outputPrecomputedBrowserHelpText } = await import("./root-help-metadata.js");
       if (outputPrecomputedBrowserHelpText()) {
+        return;
+      }
+    }
+
+    if (shouldUseSetupOnboardConfigureHelpFastPath(normalizedArgv)) {
+      const { tryOutputSetupOnboardConfigureHelp } =
+        await import("./setup-onboard-configure-help-fast-path.js");
+      if (await tryOutputSetupOnboardConfigureHelp(normalizedArgv)) {
         return;
       }
     }

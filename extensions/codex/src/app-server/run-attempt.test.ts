@@ -22,7 +22,9 @@ import {
   type DiagnosticEventPayload,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import {
+  clearInternalHooks,
   initializeGlobalHookRunner,
+  registerInternalHook,
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/hook-runtime";
 import { clearPluginCommands, registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
@@ -646,6 +648,7 @@ function extractRelayIdFromThreadRequest(params: unknown): string {
 
 describe("runCodexAppServerAttempt", () => {
   beforeEach(async () => {
+    clearInternalHooks();
     resetAgentEventsForTest();
     resetDiagnosticEventsForTest();
     vi.stubEnv("OPENCLAW_TRAJECTORY", "0");
@@ -663,6 +666,7 @@ describe("runCodexAppServerAttempt", () => {
     resetAgentEventsForTest();
     resetDiagnosticEventsForTest();
     resetGlobalHookRunner();
+    clearInternalHooks();
     defaultCodexAppInventoryCache.clear();
     vi.useRealTimers();
     vi.restoreAllMocks();
@@ -4823,6 +4827,43 @@ describe("runCodexAppServerAttempt", () => {
       injectedChars: agentsGuidance.length,
       truncated: false,
     });
+  });
+
+  it("reports hook-supplied bootstrap files that only expose path and content", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const soulPath = path.join(workspaceDir, "SOUL.md");
+    const soulGuidance = "Hook supplied soul guidance.";
+    await fs.mkdir(workspaceDir, { recursive: true });
+    registerInternalHook("agent:bootstrap", (event) => {
+      const context = event.context as {
+        bootstrapFiles: Array<{ content: string; missing: boolean; path: string }>;
+      };
+      context.bootstrapFiles = [
+        {
+          path: soulPath,
+          content: soulGuidance,
+          missing: false,
+        },
+      ];
+    });
+    const harness = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    await harness.waitForMethod("turn/start");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    const result = await run;
+
+    expect(result.systemPromptReport?.injectedWorkspaceFiles).toEqual([
+      expect.objectContaining({
+        name: "SOUL.md",
+        path: soulPath,
+        rawChars: soulGuidance.length,
+        injectedChars: soulGuidance.length,
+        truncated: false,
+      }),
+    ]);
   });
 
   it("points heartbeat Codex turns at HEARTBEAT.md without injecting its contents", async () => {
