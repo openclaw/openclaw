@@ -163,6 +163,10 @@ function normalizeProviderKey(value: string): string {
   return modelId ? `${provider}/${modelId}` : provider;
 }
 
+function isCanonicalProviderKey(value: string): boolean {
+  return normalizeLowercaseStringOrEmpty(value) === normalizeProviderKey(value);
+}
+
 function asToolPolicyConfig(value: unknown): ToolPolicyConfig | undefined {
   return hasRecord(value) ? (value as ToolPolicyConfig) : undefined;
 }
@@ -178,15 +182,21 @@ function resolveProviderToolPolicy(params: {
   const provider = normalizeProviderId(params.modelProvider);
   const modelId = normalizeLowercaseStringOrEmpty(params.modelId);
   const providerModel = modelId ? `${provider}/${modelId}` : undefined;
-  const lookup = new Map<string, ToolPolicyConfig>();
+  const lookup = new Map<string, { canonical: boolean; policy: ToolPolicyConfig }>();
   for (const [key, value] of Object.entries(params.byProvider)) {
     const normalizedKey = normalizeProviderKey(key);
     const policy = asToolPolicyConfig(value);
     if (normalizedKey && policy) {
-      lookup.set(normalizedKey, policy);
+      const canonical = isCanonicalProviderKey(key);
+      const existing = lookup.get(normalizedKey);
+      if (!existing || (canonical && !existing.canonical)) {
+        lookup.set(normalizedKey, { canonical, policy });
+      }
     }
   }
-  return (providerModel ? lookup.get(providerModel) : undefined) ?? lookup.get(provider);
+  return (
+    (providerModel ? lookup.get(providerModel)?.policy : undefined) ?? lookup.get(provider)?.policy
+  );
 }
 
 function resolvePrimaryModelRef(

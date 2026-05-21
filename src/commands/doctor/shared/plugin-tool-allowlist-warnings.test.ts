@@ -205,6 +205,32 @@ describe("collectPluginToolAllowlistWarnings", () => {
     expect(warnings).toStrictEqual([]);
   });
 
+  it("prefers canonical provider policy over an alias when checking active profiles", () => {
+    const warnings = collectPluginToolAllowlistWarnings({
+      cfg: {
+        agents: {
+          defaults: {
+            model: { primary: "bedrock/claude-sonnet" },
+            sandbox: { mode: "all" },
+          },
+        },
+        mcp: { servers: { outlook: { command: "node", args: ["outlook-server.js"] } } },
+        tools: {
+          byProvider: {
+            bedrock: { profile: "minimal" },
+            "amazon-bedrock": { profile: "coding" },
+          },
+          sandbox: { tools: { alsoAllow: ["web_fetch"] } },
+        },
+      },
+      manifestRegistry,
+    });
+
+    expect(warnings).toEqual([
+      '- mcp.servers defines 1 MCP server ("outlook"), but tools.sandbox.tools.alsoAllow does not include "bundle-mcp", "group:plugins", or a matching server-prefixed MCP tool name/glob such as "<server>__*". Sandboxed agents will filter bundled MCP tools before provider requests. Add "bundle-mcp" to tools.sandbox.tools.alsoAllow (or use "group:plugins" / server globs) if those MCP tools should be visible; use tools.sandbox.tools.allow: [] only when you intentionally want no sandbox allow gate.',
+    ]);
+  });
+
   it("uses plural grammar when multiple sandbox allow sources hide MCP servers", () => {
     const warnings = collectPluginToolAllowlistWarnings({
       cfg: {
