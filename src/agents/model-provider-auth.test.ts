@@ -40,12 +40,18 @@ vi.mock("./workspace.js", () => ({
   resolveDefaultAgentWorkspaceDir: () => "/warm/default-workspace",
 }));
 
+vi.mock("./agent-scope-config.js", () => ({
+  listAgentIds: () => ["default"],
+  resolveAgentDir: () => "/warm/default-agent",
+  resolveAgentWorkspaceDir: () => "/warm/default-workspace",
+  resolveDefaultAgentId: () => "default",
+}));
+
 const { clearCurrentProviderAuthState, hasAuthForModelProvider, warmCurrentProviderAuthState } =
   await import("./model-provider-auth.js");
 
 describe("prepared provider auth state", () => {
   afterEach(() => {
-    vi.useRealTimers();
     clearCurrentProviderAuthState();
     vi.clearAllMocks();
   });
@@ -120,26 +126,6 @@ describe("prepared provider auth state", () => {
     modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(false);
     expect(hasAuthForModelProvider({ provider: "openai", cfg: clonedCfg })).toBe(true);
     expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(1);
-  });
-
-  it("hasAuthForModelProvider falls through after the prepared auth state TTL", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-    const cfg = {} as OpenClawConfig;
-    modelCatalogMocks.loadModelCatalog.mockResolvedValue([
-      { id: "gpt", name: "gpt", provider: "openai" },
-    ]);
-    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(false);
-    await warmCurrentProviderAuthState(cfg);
-    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(1);
-
-    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(true);
-    expect(hasAuthForModelProvider({ provider: "openai", cfg })).toBe(false);
-    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(1);
-
-    vi.setSystemTime(10_001);
-    expect(hasAuthForModelProvider({ provider: "openai", cfg })).toBe(true);
-    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(2);
   });
 
   it("hasAuthForModelProvider falls through to compute when the caller passes a non-default workspaceDir", async () => {

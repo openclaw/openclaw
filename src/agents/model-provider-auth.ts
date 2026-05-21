@@ -1,6 +1,12 @@
 import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  listAgentIds,
+  resolveAgentDir,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "./agent-scope-config.js";
+import {
   externalCliDiscoveryForProviderAuth,
   externalCliDiscoveryForProviders,
   ensureAuthProfileStore,
@@ -20,22 +26,41 @@ import { resolveDefaultAgentWorkspaceDir } from "./workspace.js";
 // discovery and external-CLI probing on the hot path.
 
 type PreparedProviderAuthState = {
+  agentId: string;
   configFingerprint: string;
-  workspaceDir: string;
-  preparedAtMs: number;
   providers: ReadonlyMap<string, boolean>;
 };
 
-const PREPARED_PROVIDER_AUTH_STATE_TTL_MS = 10_000;
-let currentProviderAuthState: PreparedProviderAuthState | null = null;
+// One entry per configured agent, keyed by agentId. Populated by
+// warmCurrentProviderAuthState at gateway startup / on reload; consulted by
+// hasAuthForModelProvider on every model-listing call.
+let currentProviderAuthStates: ReadonlyMap<string, PreparedProviderAuthState> | null = null;
 const configFingerprintCache = new WeakMap<OpenClawConfig, string>();
 // Generation counter guards against an in-flight warm publishing stale
 // state after a subsequent warm or clear has invalidated it.
 let currentProviderAuthStateGeneration = 0;
 
 export function clearCurrentProviderAuthState(): void {
-  currentProviderAuthState = null;
+  currentProviderAuthStates = null;
   currentProviderAuthStateGeneration += 1;
+}
+
+function resolvePreparedStateForCaller(params: {
+  states: ReadonlyMap<string, PreparedProviderAuthState> | null;
+  cfg: OpenClawConfig | undefined;
+  callerAgentId: string | undefined;
+}): PreparedProviderAuthState | null {
+  if (!params.states) {
+    return null;
+  }
+  if (params.callerAgentId !== undefined) {
+    return params.states.get(params.callerAgentId) ?? null;
+  }
+  // Caller didn't pass agentId: treat as a query against the default agent.
+  if (!params.cfg) {
+    return null;
+  }
+  return params.states.get(resolveDefaultAgentId(params.cfg)) ?? null;
 }
 
 function resolveProviderAuthConfigFingerprint(cfg: OpenClawConfig | undefined): string | null {
@@ -55,33 +80,41 @@ export function hasAuthForModelProvider(params: {
   provider: string;
   cfg?: OpenClawConfig;
   workspaceDir?: string;
-  agentDir?: string;
+  agentId?: string;
   env?: NodeJS.ProcessEnv;
   store?: AuthProfileStore;
   allowPluginSyntheticAuth?: boolean;
   discoverExternalCliAuth?: boolean;
 }): boolean {
   const provider = normalizeProviderId(params.provider);
-  // The prepared map is built by warmCurrentProviderAuthState with broad
-  // auth discovery (external CLI + plugin synthetic auth enabled) and the
-  // default-agent workspace dir. Only consult it when the caller's full
-  // auth context matches; otherwise fall through to compute so callers
-  // that narrow the scope — e.g. gateway `models.list` with
-  // `runtimeAuthDiscovery: false`, or per-agent picker calls that pass a
-  // non-default workspaceDir — get the answer they asked for.
-  const preparedState = currentProviderAuthState;
+  // The prepared map is built by warmCurrentProviderAuthState — one entry per
+  // configured agent, keyed by agentId. Only consult it when the caller's
+  // full auth context matches the warmed scope; otherwise fall through to
+  // compute so callers that narrow the scope — e.g. gateway `models.list`
+  // with `runtimeAuthDiscovery: false`, or callers with a non-warmed
+  // workspaceDir — get the answer they asked for.
+  const preparedStates = currentProviderAuthStates;
   const workspaceDir = params.workspaceDir ?? resolveDefaultAgentWorkspaceDir();
   const configFingerprint = resolveProviderAuthConfigFingerprint(params.cfg);
-  const preparedStateFresh =
-    preparedState !== null &&
-    Date.now() - preparedState.preparedAtMs <= PREPARED_PROVIDER_AUTH_STATE_TTL_MS;
+  const preparedState = resolvePreparedStateForCaller({
+    states: preparedStates,
+    cfg: params.cfg,
+    callerAgentId: params.agentId,
+  });
+  // workspaceDir is a pure function of (cfg, agentId), so we recompute the
+  // warmer's expected value at read time rather than storing it. Caller can
+  // still override workspaceDir explicitly — that forces a mismatch and
+  // falls through to the compute path.
+  const expectedWorkspaceDir =
+    preparedState !== null && params.cfg
+      ? resolveAgentWorkspaceDir(params.cfg, preparedState.agentId)
+      : null;
   const matchesWarmedScope =
-    preparedStateFresh &&
+    preparedState !== null &&
     configFingerprint === preparedState.configFingerprint &&
-    workspaceDir === preparedState.workspaceDir &&
+    workspaceDir === expectedWorkspaceDir &&
     params.discoverExternalCliAuth !== false &&
     params.allowPluginSyntheticAuth !== false &&
-    params.agentDir === undefined &&
     params.env === undefined &&
     params.store === undefined;
   if (matchesWarmedScope) {
@@ -101,13 +134,15 @@ export function hasAuthForModelProvider(params: {
   ) {
     return true;
   }
+  const slowPathAgentDir =
+    params.agentId && params.cfg ? resolveAgentDir(params.cfg, params.agentId) : undefined;
   const store =
     params.store ??
     (params.discoverExternalCliAuth === false
-      ? ensureAuthProfileStoreWithoutExternalProfiles(params.agentDir, {
+      ? ensureAuthProfileStoreWithoutExternalProfiles(slowPathAgentDir, {
           allowKeychainPrompt: false,
         })
-      : ensureAuthProfileStore(params.agentDir, {
+      : ensureAuthProfileStore(slowPathAgentDir, {
           externalCli: externalCliDiscoveryForProviderAuth({ cfg: params.cfg, provider }),
         }));
   if (listProfilesForProvider(store, provider).length > 0) {
@@ -119,7 +154,7 @@ export function hasAuthForModelProvider(params: {
 export function createProviderAuthChecker(params: {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
-  agentDir?: string;
+  agentId?: string;
   env?: NodeJS.ProcessEnv;
   allowPluginSyntheticAuth?: boolean;
   discoverExternalCliAuth?: boolean;
@@ -135,7 +170,7 @@ export function createProviderAuthChecker(params: {
       provider: key,
       cfg: params.cfg,
       workspaceDir: params.workspaceDir,
-      agentDir: params.agentDir,
+      agentId: params.agentId,
       env: params.env,
       allowPluginSyntheticAuth: params.allowPluginSyntheticAuth,
       discoverExternalCliAuth: params.discoverExternalCliAuth,
@@ -155,35 +190,45 @@ export async function warmCurrentProviderAuthState(cfg: OpenClawConfig): Promise
   for (const entry of catalog) {
     providers.add(normalizeProviderId(entry.provider));
   }
-  const workspaceDir = resolveDefaultAgentWorkspaceDir();
-  // One AuthProfileStore scoped to every candidate provider; without this the
-  // per-provider externalCli discovery rebuilds the store ~N times.
-  const store = ensureAuthProfileStore(undefined, {
-    config: cfg,
-    externalCli: externalCliDiscoveryForProviders({
-      cfg,
-      providers: [...providers],
-    }),
-  });
-  const state = new Map<string, boolean>();
-  for (const provider of providers) {
-    const value = hasAuthForModelProvider({
-      provider,
-      cfg,
-      workspaceDir,
-      store,
+  const providerList = [...providers];
+  const configFingerprint = resolveProviderAuthConfigFingerprint(cfg) ?? "";
+  const states = new Map<string, PreparedProviderAuthState>();
+  // Warm one entry per configured agent so callers hit the prepared map for
+  // any agentId. The catalog above is shared across agents; the per-agent
+  // work is the auth-discovery sweep against that agent's store.
+  for (const agentId of listAgentIds(cfg)) {
+    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+    const agentDir = resolveAgentDir(cfg, agentId);
+    // One AuthProfileStore scoped to every candidate provider; without this
+    // the per-provider externalCli discovery rebuilds the store ~N times.
+    const store = ensureAuthProfileStore(agentDir, {
+      config: cfg,
+      externalCli: externalCliDiscoveryForProviders({
+        cfg,
+        providers: providerList,
+      }),
     });
-    state.set(provider, value);
+    const state = new Map<string, boolean>();
+    for (const provider of providers) {
+      const value = hasAuthForModelProvider({
+        provider,
+        cfg,
+        workspaceDir,
+        agentId,
+        store,
+      });
+      state.set(provider, value);
+    }
+    states.set(agentId, {
+      agentId,
+      configFingerprint,
+      providers: state,
+    });
   }
   if (ownGeneration !== currentProviderAuthStateGeneration) {
     // A newer warm or clear ran while we were building; skip publication so
     // the newer answer wins.
     return;
   }
-  currentProviderAuthState = {
-    configFingerprint: resolveProviderAuthConfigFingerprint(cfg) ?? "",
-    workspaceDir,
-    preparedAtMs: Date.now(),
-    providers: state,
-  };
+  currentProviderAuthStates = states;
 }

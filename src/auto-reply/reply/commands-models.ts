@@ -254,7 +254,7 @@ export async function buildModelsProviderData(
             options.workspaceDir ??
             (agentId ? resolveAgentWorkspaceDir(cfg, agentId) : undefined) ??
             resolveDefaultAgentWorkspaceDir(),
-          agentDir: agentId ? resolveAgentDir(cfg, agentId) : undefined,
+          agentId,
         });
 
   for (const entry of catalog) {
