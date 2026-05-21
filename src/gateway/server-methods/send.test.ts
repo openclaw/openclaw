@@ -1318,6 +1318,10 @@ describe("gateway send mirroring", () => {
         supportsAction: ({ action }) => action === "send",
         handleAction: async () => jsonResult({ ok: true, messageId: "tg-1" }),
       },
+      threading: {
+        resolveCurrentChannelId: ({ to, threadId }) =>
+          threadId == null ? to : `${to}:topic:${threadId}`,
+      },
     };
     mocks.getChannelPlugin.mockReturnValue(telegramPlugin);
     setActivePluginRegistry(
@@ -1351,6 +1355,69 @@ describe("gateway send mirroring", () => {
       text: "visible source reply",
       mediaUrls: undefined,
       idempotencyKey: "idem-source-message-action",
+      config: {},
+    });
+  });
+
+  it("mirrors auto-threaded Telegram source sends into the topic transcript", async () => {
+    const telegramTopicPlugin: ChannelPlugin = {
+      id: "telegram",
+      meta: {
+        id: "telegram",
+        label: "Telegram",
+        selectionLabel: "Telegram",
+        docsPath: "/channels/telegram",
+        blurb: "Telegram topic source send transcript mirror test plugin.",
+      },
+      capabilities: { chatTypes: ["group"] },
+      config: {
+        listAccountIds: () => ["default"],
+        resolveAccount: () => ({ enabled: true }),
+        isConfigured: () => true,
+      },
+      actions: {
+        describeMessageTool: () => ({ actions: ["send"] }),
+        supportsAction: ({ action }) => action === "send",
+        handleAction: async () => jsonResult({ ok: true, messageId: "tg-topic-1" }),
+      },
+      threading: {
+        resolveCurrentChannelId: ({ to, threadId }) =>
+          threadId == null ? to : `${to}:topic:${threadId}`,
+      },
+    };
+    mocks.getChannelPlugin.mockReturnValue(telegramTopicPlugin);
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramTopicPlugin }]),
+      "send-test-topic-source-message-action-mirror",
+    );
+    mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
+      jsonResult({ ok: true, messageId: "tg-topic-1" }),
+    );
+
+    const { respond } = await runMessageActionRequest({
+      channel: "telegram",
+      action: "send",
+      params: {
+        to: "chat-123",
+        message: "visible topic source reply",
+      },
+      sessionKey: "agent:main:telegram:group:chat-123:topic:77",
+      agentId: "main",
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "chat-123:topic:77",
+        currentThreadTs: "77",
+      },
+      idempotencyKey: "idem-topic-source-message-action",
+    });
+
+    expect(firstRespondCall(respond)[0]).toBe(true);
+    expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionKey: "agent:main:telegram:group:chat-123:topic:77",
+      text: "visible topic source reply",
+      mediaUrls: undefined,
+      idempotencyKey: "idem-topic-source-message-action",
       config: {},
     });
   });

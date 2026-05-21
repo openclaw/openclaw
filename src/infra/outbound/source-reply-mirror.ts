@@ -1,4 +1,8 @@
-import type { ChannelThreadingToolContext } from "../../channels/plugins/types.public.js";
+import { getChannelPlugin } from "../../channels/plugins/index.js";
+import type {
+  ChannelId,
+  ChannelThreadingToolContext,
+} from "../../channels/plugins/types.public.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -50,6 +54,31 @@ function resolveSourceReplyTarget(params: Record<string, unknown>): string | und
   return readFirstString(params, ["target", "to", "channelId", "chatId"]);
 }
 
+function resolveSourceReplyThreadId(params: SourceReplyTranscriptMirrorParams): string | undefined {
+  return (
+    readFirstString(params.actionParams, ["threadId", "messageThreadId"]) ??
+    normalizeOptionalString(params.toolContext?.currentThreadTs)
+  );
+}
+
+function resolveThreadedSourceTarget(
+  params: SourceReplyTranscriptMirrorParams,
+  requestedTarget: string,
+): string {
+  const threadId = resolveSourceReplyThreadId(params);
+  if (!threadId) {
+    return requestedTarget;
+  }
+  return (
+    normalizeOptionalString(
+      getChannelPlugin(params.channel as ChannelId)?.threading?.resolveCurrentChannelId?.({
+        to: requestedTarget,
+        threadId,
+      }),
+    ) ?? requestedTarget
+  );
+}
+
 function hasExplicitDeliveryFailure(payload: unknown): boolean {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     return false;
@@ -86,7 +115,13 @@ function isCurrentSourceConversation(
     return false;
   }
   const requestedTarget = resolveSourceReplyTarget(params.actionParams);
-  return requestedTarget === currentTarget;
+  if (!requestedTarget) {
+    return false;
+  }
+  return (
+    requestedTarget === currentTarget ||
+    resolveThreadedSourceTarget(params, requestedTarget) === currentTarget
+  );
 }
 
 export async function mirrorDeliveredSourceReplyToTranscript(
