@@ -239,7 +239,7 @@ jobs:
   normal_ci:
     name: Run normal full CI
     needs: [resolve_target, docker_runtime_assets_preflight]
-    if: ${{ always() && contains(fromJSON('["all","ci"]'), inputs.rerun_group) && (inputs.rerun_group != 'all' || needs.docker_runtime_assets_preflight.result == 'success') }}
+    if: ${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('["all","ci"]'), inputs.rerun_group) && (inputs.rerun_group != 'all' || needs.docker_runtime_assets_preflight.result == 'success') }}
     runs-on: ubuntu-24.04
     timeout-minutes: ${{ inputs.release_profile != 'minimum' && 240 || 60 }}
     outputs:
@@ -339,7 +339,7 @@ jobs:
   plugin_prerelease:
     name: Run plugin prerelease validation
     needs: [resolve_target, docker_runtime_assets_preflight]
-    if: ${{ always() && contains(fromJSON('["all","plugin-prerelease"]'), inputs.rerun_group) && (inputs.rerun_group != 'all' || needs.docker_runtime_assets_preflight.result == 'success') }}
+    if: ${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('["all","plugin-prerelease"]'), inputs.rerun_group) && (inputs.rerun_group != 'all' || needs.docker_runtime_assets_preflight.result == 'success') }}
     runs-on: ubuntu-24.04
     timeout-minutes: ${{ inputs.release_profile == 'full' && 300 || inputs.release_profile == 'stable' && 240 || 60 }}
     outputs:
@@ -439,7 +439,7 @@ jobs:
   release_checks:
     name: Run release/live/Docker/QA validation
     needs: [resolve_target, docker_runtime_assets_preflight]
-    if: ${{ always() && contains(fromJSON('["all","release-checks","install-smoke","cross-os","live-e2e","package","qa","qa-parity","qa-live"]'), inputs.rerun_group) && (inputs.rerun_group != 'all' || needs.docker_runtime_assets_preflight.result == 'success') }}
+    if: ${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('["all","release-checks","install-smoke","cross-os","live-e2e","package","qa","qa-parity","qa-live"]'), inputs.rerun_group) && (inputs.rerun_group != 'all' || needs.docker_runtime_assets_preflight.result == 'success') }}
     runs-on: ubuntu-24.04
     timeout-minutes: ${{ inputs.release_profile != 'minimum' && 240 || 60 }}
     outputs:
@@ -592,7 +592,7 @@ jobs:
   prepare_release_package:
     name: Prepare release package artifact
     needs: [resolve_target, docker_runtime_assets_preflight]
-    if: ${{ always() && inputs.npm_telegram_package_spec == '' && inputs.release_package_spec == '' && inputs.rerun_group == 'all' && inputs.release_profile == 'full' && needs.docker_runtime_assets_preflight.result == 'success' }}
+    if: ${{ always() && needs.resolve_target.result == 'success' && inputs.npm_telegram_package_spec == '' && inputs.release_package_spec == '' && inputs.rerun_group == 'all' && inputs.release_profile == 'full' && needs.docker_runtime_assets_preflight.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:

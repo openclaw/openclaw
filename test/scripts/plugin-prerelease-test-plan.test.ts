@@ -498,6 +498,9 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       "resolve_target",
       "docker_runtime_assets_preflight",
     ]);
+    expect(fullReleaseWorkflow.jobs.normal_ci.if).toContain(
+      "needs.resolve_target.result == 'success'",
+    );
     expect(fullReleaseWorkflow.jobs.docker_runtime_assets_preflight.if).toBe(
       "inputs.rerun_group == 'all'",
     );
