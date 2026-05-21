@@ -83,6 +83,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.list[].contextInjection": "Agent Context Injection",
   "agents.list[].bootstrapMaxChars": "Agent Bootstrap Max Chars",
   "agents.list[].bootstrapTotalMaxChars": "Agent Bootstrap Total Max Chars",
+  "agents.list[].experimental": "Agent Experimental Flags",
+  "agents.list[].experimental.localModelLean": "Agent Lean Local Model Mode",
   agents: "Agents",
   "agents.defaults": "Agent Defaults",
   "agents.defaults.contextLimits": "Default Context Limits",
@@ -213,6 +215,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.alsoAllow": "Tool Allowlist Additions",
   "agents.list[].tools.profile": "Agent Tool Profile",
   "agents.list[].tools.alsoAllow": "Agent Tool Allowlist Additions",
+  "agents.list[].tools.codeMode": "Agent Code Mode",
   "tools.byProvider": "Tool Policy by Provider",
   "agents.list[].tools.byProvider": "Agent Tool Policy by Provider",
   "agents.list[].tools.message.crossContext.allowWithinProvider":

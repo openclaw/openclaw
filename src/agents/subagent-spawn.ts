@@ -12,7 +12,7 @@ import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 import { isValidAgentId, normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
-import { resolveAgentDir } from "./agent-scope-config.js";
+import { listAgentIds, resolveAgentDir } from "./agent-scope-config.js";
 import type { BootstrapContextMode } from "./bootstrap-files.js";
 import {
   inheritedToolAllowPatch,
@@ -92,6 +92,10 @@ export type {
 } from "./subagent-spawn.types.js";
 
 export { decodeStrictBase64 };
+
+function resolveConfiguredAgentIds(cfg: OpenClawConfig): string[] {
+  return listAgentIds(cfg);
+}
 
 type SubagentSpawnDeps = {
   callGateway: typeof callGateway;
@@ -839,6 +843,7 @@ export async function spawnSubagentDirect(
     allowAgents:
       resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ??
       cfg?.agents?.defaults?.subagents?.allowAgents,
+    configuredAgentIds: resolveConfiguredAgentIds(cfg),
   });
   if (!targetPolicy.ok) {
     return {
@@ -1023,7 +1028,9 @@ export async function spawnSubagentDirect(
       config: cfg,
       sandboxed: childRuntime.sandboxed,
     }),
-    nativeCommandGuidanceLines: listRegisteredPluginAgentPromptGuidance(),
+    nativeCommandGuidanceLines: listRegisteredPluginAgentPromptGuidance({
+      surface: "subagent",
+    }),
     childDepth,
     maxSpawnDepth,
   });
@@ -1349,7 +1356,7 @@ export async function spawnSubagentDirect(
   };
 }
 
-export const __testing = {
+export const testing = {
   setDepsForTest(overrides?: Partial<SubagentSpawnDeps>) {
     subagentSpawnDeps = overrides
       ? {
@@ -1359,3 +1366,4 @@ export const __testing = {
       : defaultSubagentSpawnDeps;
   },
 };
+export { testing as __testing };

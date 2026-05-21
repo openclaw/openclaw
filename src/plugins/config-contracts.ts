@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isRecord } from "../utils.js";
-import { discoverOpenClawPlugins } from "./discovery.js";
+import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginManifestConfigContracts } from "./manifest.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
@@ -33,6 +33,14 @@ function appendPathSegment(path: string, segment: string): string {
     return segment;
   }
   return /^\d+$/.test(segment) ? `${path}[${segment}]` : `${path}.${segment}`;
+}
+
+function parseCanonicalArrayIndex(segment: string, length: number): number | null {
+  if (!/^(0|[1-9]\d*)$/.test(segment)) {
+    return null;
+  }
+  const index = Number(segment);
+  return Number.isSafeInteger(index) && index >= 0 && index < length ? index : null;
 }
 
 export function collectPluginConfigContractMatches(params: {
@@ -69,8 +77,8 @@ export function collectPluginConfigContractMatches(params: {
         continue;
       }
       if (Array.isArray(state.value)) {
-        const index = Number.parseInt(segment, 10);
-        if (Number.isInteger(index) && index >= 0 && index < state.value.length) {
+        const index = parseCanonicalArrayIndex(segment, state.value.length);
+        if (index !== null) {
           nextStates.push({
             segments: [...state.segments, segment],
             value: state.value[index],
@@ -106,6 +114,7 @@ export function resolvePluginConfigContractsById(params: {
   fallbackToBundledMetadataForResolvedBundled?: boolean;
   fallbackBundledPluginIds?: readonly string[];
   pluginIds: readonly string[];
+  discovery?: PluginDiscoveryResult;
 }): ReadonlyMap<string, PluginConfigContractMetadata> {
   const matches = new Map<string, PluginConfigContractMetadata>();
   const pluginIds = [
@@ -124,10 +133,12 @@ export function resolvePluginConfigContractsById(params: {
     if (bundledContractFallbacks.has(pluginId)) {
       return bundledContractFallbacks.get(pluginId);
     }
-    const discovery = discoverOpenClawPlugins({
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-    });
+    const discovery =
+      params.discovery ??
+      discoverOpenClawPlugins({
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+      });
     const registry = loadPluginManifestRegistry({
       config: params.config,
       workspaceDir: params.workspaceDir,

@@ -2,9 +2,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolveOAuthDir } from "../../config/paths.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
 import { resolveAuthStorePath } from "./paths.js";
-import { promoteAuthProfileInOrder, upsertAuthProfileWithLock } from "./profiles.js";
+import {
+  clearLastGoodProfileWithLock,
+  promoteAuthProfileInOrder,
+  upsertAuthProfileWithLock,
+} from "./profiles.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   loadAuthProfileStoreForRuntime,
@@ -55,7 +60,9 @@ describe("promoteAuthProfileInOrder", () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-profile-upsert-"));
     const agentDir = path.join(stateDir, "agents", "main", "agent");
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const previousOAuthDir = process.env.OPENCLAW_OAUTH_DIR;
     process.env.OPENCLAW_STATE_DIR = stateDir;
+    delete process.env.OPENCLAW_OAUTH_DIR;
     try {
       fs.mkdirSync(agentDir, { recursive: true });
 
@@ -94,6 +101,11 @@ describe("promoteAuthProfileInOrder", () => {
         delete process.env.OPENCLAW_STATE_DIR;
       } else {
         process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      if (previousOAuthDir === undefined) {
+        delete process.env.OPENCLAW_OAUTH_DIR;
+      } else {
+        process.env.OPENCLAW_OAUTH_DIR = previousOAuthDir;
       }
       fs.rmSync(stateDir, { recursive: true, force: true });
     }
@@ -145,6 +157,7 @@ describe("promoteAuthProfileInOrder", () => {
         chatgptPlanType: "plus",
       });
       expect(credential).not.toHaveProperty("oauthRef");
+      expect(fs.existsSync(path.join(resolveOAuthDir(), "auth-profiles"))).toBe(false);
 
       clearRuntimeAuthProfileStoreSnapshots();
       expectOAuthCredentialFields(
@@ -344,6 +357,92 @@ describe("promoteAuthProfileInOrder", () => {
         newProfileId,
         staleProfileId,
       ]);
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("clears matching lastGood after a stale refresh_token_reused profile", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-clear-lastgood-"));
+    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    try {
+      fs.mkdirSync(agentDir, { recursive: true });
+      const staleProfileId = "openai-codex:default";
+      saveAuthProfileStore(
+        {
+          version: AUTH_STORE_VERSION,
+          profiles: {
+            [staleProfileId]: {
+              type: "oauth",
+              provider: "openai-codex",
+              access: "stale-access-token",
+              refresh: "stale-refresh-token",
+              expires: Date.now() - 60_000,
+            },
+          },
+          lastGood: { "openai-codex": staleProfileId },
+        },
+        agentDir,
+      );
+
+      await clearLastGoodProfileWithLock({
+        agentDir,
+        provider: "openai-codex",
+        profileId: staleProfileId,
+      });
+
+      expect(loadAuthProfileStoreForRuntime(agentDir).lastGood).toBeUndefined();
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not clear lastGood when the failed profile is not the stored profile", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-clear-lastgood-keep-"));
+    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    try {
+      fs.mkdirSync(agentDir, { recursive: true });
+      const goodProfileId = "openai-codex:user@example.test";
+      saveAuthProfileStore(
+        {
+          version: AUTH_STORE_VERSION,
+          profiles: {
+            [goodProfileId]: {
+              type: "oauth",
+              provider: "openai-codex",
+              access: "good-access-token",
+              refresh: "good-refresh-token",
+              expires: Date.now() + 60_000,
+            },
+          },
+          lastGood: { "openai-codex": goodProfileId },
+        },
+        agentDir,
+      );
+
+      await clearLastGoodProfileWithLock({
+        agentDir,
+        provider: "openai-codex",
+        profileId: "openai-codex:default",
+      });
+
+      expect(loadAuthProfileStoreForRuntime(agentDir).lastGood?.["openai-codex"]).toBe(
+        goodProfileId,
+      );
     } finally {
       if (previousStateDir === undefined) {
         delete process.env.OPENCLAW_STATE_DIR;

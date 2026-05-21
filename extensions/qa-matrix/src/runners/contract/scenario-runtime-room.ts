@@ -317,12 +317,7 @@ export async function runSubagentThreadSpawnScenario(context: MatrixQaScenarioCo
     "Do not omit thread=true; the child must bind to this Matrix thread.",
     `Do not write ${childToken} in the parent response.`,
   ].join(" ");
-  const driverEventId = await client.sendTextMessage({
-    body: triggerBody,
-    mentionUserIds: [context.sutUserId],
-    roomId: context.roomId,
-  });
-  const intro = await client.waitForRoomEvent({
+  const introPromise = client.waitForRoomEvent({
     observedEvents: context.observedEvents,
     predicate: (event) => {
       failIfMatrixSubagentThreadHookError(event);
@@ -339,6 +334,12 @@ export async function runSubagentThreadSpawnScenario(context: MatrixQaScenarioCo
     since: startSince,
     timeoutMs: context.timeoutMs,
   });
+  const driverEventId = await client.sendTextMessage({
+    body: triggerBody,
+    mentionUserIds: [context.sutUserId],
+    roomId: context.roomId,
+  });
+  const intro = await introPromise;
   const completion = await client.waitForRoomEvent({
     observedEvents: context.observedEvents,
     predicate: (event) => {

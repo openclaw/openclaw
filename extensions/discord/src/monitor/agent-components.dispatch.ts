@@ -312,7 +312,7 @@ export async function dispatchDiscordComponentEvent(params: {
           },
         },
         delivery: {
-          deliver: async (payload) => {
+          deliver: async (payload, info) => {
             const replyToId = replyReference.use();
             await deliverDiscordReply({
               cfg: ctx.cfg,
@@ -333,6 +333,7 @@ export async function dispatchDiscordComponentEvent(params: {
               tableMode,
               chunkMode: resolveChunkMode(ctx.cfg, "discord", accountId),
               mediaLocalRoots,
+              kind: info.kind,
             });
             replyReference.markSent();
           },

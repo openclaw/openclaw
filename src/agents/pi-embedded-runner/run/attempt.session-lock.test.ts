@@ -2,6 +2,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  runWithOwnedSessionTranscriptWriteLock,
+  withOwnedSessionTranscriptWrites,
+} from "../../../config/sessions/transcript-write-context.js";
 import { SessionWriteLockTimeoutError } from "../../session-write-lock-error.js";
 import {
   createEmbeddedAttemptSessionLockController,
@@ -179,6 +183,37 @@ describe("embedded attempt session lock lifecycle", () => {
     expect(release).toHaveBeenCalledTimes(2);
   });
 
+  it("refreshes the prompt fence after an owned transcript mirror append", async () => {
+    const sessionFile = await createTempSessionFile();
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLock = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+    await withOwnedSessionTranscriptWrites(
+      {
+        sessionFile,
+        sessionKey: "agent:main:discord:channel:123",
+        withSessionWriteLock: (operation) => controller.withSessionWriteLock(operation),
+      },
+      async () =>
+        await runWithOwnedSessionTranscriptWriteLock(
+          { sessionFile, sessionKey: "agent:main:discord:channel:123" },
+          async () => {
+            await fs.appendFile(sessionFile, '{"type":"message","id":"delivery-mirror"}\n', "utf8");
+          },
+        ),
+    );
+    await expect(controller.withSessionWriteLock(() => "finalize")).resolves.toBe("finalize");
+
+    expect(controller.hasSessionTakeover()).toBe(false);
+    expect(acquireSessionWriteLock).toHaveBeenCalledTimes(3);
+    expect(release).toHaveBeenCalledTimes(3);
+  });
+
   it("returns a no-op cleanup lock after prompt lock reacquisition times out", async () => {
     const releases: string[] = [];
     const acquireSessionWriteLock = vi
@@ -325,11 +360,11 @@ describe("embedded attempt session lock lifecycle", () => {
       },
     });
 
-    await session._processAgentEvent({ type: "message_update" });
-    await session._processAgentEvent({ type: "tool_execution_end" });
-    await session._processAgentEvent({ type: "message_end" });
-    await session._processAgentEvent({ type: "agent_end" });
-    await session._processAgentEvent({});
+    await session["_processAgentEvent"]({ type: "message_update" });
+    await session["_processAgentEvent"]({ type: "tool_execution_end" });
+    await session["_processAgentEvent"]({ type: "message_end" });
+    await session["_processAgentEvent"]({ type: "agent_end" });
+    await session["_processAgentEvent"]({});
 
     expect(processed).toEqual([
       "message_update",
@@ -418,7 +453,7 @@ describe("embedded attempt session lock lifecycle", () => {
     await session.agent.beforeToolCall();
 
     expect(events).toEqual(["lock", "tool_call"]);
-    expect(session._extensionRunner.hasHandlers).not.toHaveBeenCalledWith("tool_call");
+    expect(session["_extensionRunner"].hasHandlers).not.toHaveBeenCalledWith("tool_call");
   });
 
   it("drains queued session events before locking a tool-call extension hook", async () => {
@@ -436,7 +471,7 @@ describe("embedded attempt session lock lifecycle", () => {
       agent: {
         beforeToolCall: vi.fn(async () => {
           events.push("hook-start");
-          await session._agentEventQueue;
+          await session["_agentEventQueue"];
           events.push("hook-end");
         }),
       },

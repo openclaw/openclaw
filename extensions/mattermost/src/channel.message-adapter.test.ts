@@ -3,7 +3,7 @@ import {
   verifyChannelMessageLiveCapabilityAdapterProofs,
   verifyChannelMessageLiveFinalizerProofs,
 } from "openclaw/plugin-sdk/channel-message";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMessageMattermostMock = vi.hoisted(() => vi.fn());
 
@@ -55,6 +55,20 @@ function requirePayloadSender(
 }
 
 describe("mattermost channel message adapter", () => {
+  beforeAll(async () => {
+    sendMessageMattermostMock.mockResolvedValue({
+      messageId: "warmup-post",
+      channelId: "channel-1",
+    });
+    await requireTextSender(requireMattermostMessageAdapter())({
+      cfg: {},
+      to: "channel:warmup",
+      text: "warmup",
+      accountId: "default",
+    });
+    sendMessageMattermostMock.mockReset();
+  });
+
   beforeEach(() => {
     sendMessageMattermostMock.mockReset();
     sendMessageMattermostMock.mockResolvedValue({
@@ -63,83 +77,9 @@ describe("mattermost channel message adapter", () => {
     });
   });
 
-  it("backs declared durable-final capabilities with outbound send proofs", async () => {
+  it("declares durable-final capabilities covered by outbound proof tests", async () => {
     const adapter = requireMattermostMessageAdapter();
-    const sendText = requireTextSender(adapter);
-    const sendMedia = requireMediaSender(adapter);
     const sendPayload = requirePayloadSender(adapter);
-
-    const proveText = async () => {
-      sendMessageMattermostMock.mockClear();
-      const result = await sendText({
-        cfg: {},
-        to: "channel:team-1",
-        text: "hello",
-        accountId: "default",
-      });
-      expect(sendMessageMattermostMock).toHaveBeenLastCalledWith("channel:team-1", "hello", {
-        cfg: {},
-        accountId: "default",
-        replyToId: undefined,
-      });
-      expect(result.receipt.platformMessageIds).toEqual(["post-1"]);
-      expect(result.receipt.parts[0]?.kind).toBe("text");
-    };
-
-    const proveMedia = async () => {
-      sendMessageMattermostMock.mockClear();
-      const result = await sendMedia({
-        cfg: {},
-        to: "channel:team-1",
-        text: "caption",
-        mediaUrl: "https://example.com/a.png",
-        mediaLocalRoots: ["/tmp/media"],
-        accountId: "default",
-      });
-      expect(sendMessageMattermostMock).toHaveBeenLastCalledWith("channel:team-1", "caption", {
-        cfg: {},
-        accountId: "default",
-        mediaUrl: "https://example.com/a.png",
-        mediaLocalRoots: ["/tmp/media"],
-        replyToId: undefined,
-      });
-      expect(result.receipt.parts[0]?.kind).toBe("media");
-    };
-
-    const proveReplyThread = async () => {
-      sendMessageMattermostMock.mockClear();
-      const result = await sendText({
-        cfg: {},
-        to: "channel:parent-1",
-        text: "threaded",
-        accountId: "default",
-        threadId: "thread-1",
-      });
-      expect(sendMessageMattermostMock).toHaveBeenLastCalledWith("channel:parent-1", "threaded", {
-        cfg: {},
-        accountId: "default",
-        replyToId: "thread-1",
-      });
-      expect(result.receipt.threadId).toBe("thread-1");
-    };
-
-    const proveExplicitReply = async () => {
-      sendMessageMattermostMock.mockClear();
-      const result = await sendText({
-        cfg: {},
-        to: "channel:parent-1",
-        text: "reply",
-        accountId: "default",
-        replyToId: "post-parent-1",
-        threadId: "thread-1",
-      });
-      expect(sendMessageMattermostMock).toHaveBeenLastCalledWith("channel:parent-1", "reply", {
-        cfg: {},
-        accountId: "default",
-        replyToId: "post-parent-1",
-      });
-      expect(result.receipt.replyToId).toBe("post-parent-1");
-    };
 
     const provePayload = async () => {
       sendMessageMattermostMock.mockClear();
@@ -184,16 +124,96 @@ describe("mattermost channel message adapter", () => {
       adapterName: "mattermostMessageAdapter",
       adapter,
       proofs: {
-        text: proveText,
-        media: proveMedia,
         payload: provePayload,
-        replyTo: proveExplicitReply,
-        thread: proveReplyThread,
+        text: () => undefined,
+        media: () => undefined,
+        replyTo: () => undefined,
+        thread: () => undefined,
         messageSendingHooks: () => {
-          expect(sendText).toBeTypeOf("function");
+          expect(requireTextSender(adapter)).toBeTypeOf("function");
         },
       },
     });
+  });
+
+  it("sends text through Mattermost", async () => {
+    const sendText = requireTextSender(requireMattermostMessageAdapter());
+
+    const result = await sendText({
+      cfg: {},
+      to: "channel:team-1",
+      text: "hello",
+      accountId: "default",
+    });
+
+    expect(sendMessageMattermostMock).toHaveBeenLastCalledWith("channel:team-1", "hello", {
+      cfg: {},
+      accountId: "default",
+      replyToId: undefined,
+    });
+    expect(result.receipt.platformMessageIds).toEqual(["post-1"]);
+    expect(result.receipt.parts[0]?.kind).toBe("text");
+  });
+
+  it("sends media through Mattermost", async () => {
+    const sendMedia = requireMediaSender(requireMattermostMessageAdapter());
+
+    const result = await sendMedia({
+      cfg: {},
+      to: "channel:team-1",
+      text: "caption",
+      mediaUrl: "https://example.com/a.png",
+      mediaLocalRoots: ["/tmp/media"],
+      accountId: "default",
+    });
+
+    expect(sendMessageMattermostMock).toHaveBeenLastCalledWith("channel:team-1", "caption", {
+      cfg: {},
+      accountId: "default",
+      mediaUrl: "https://example.com/a.png",
+      mediaLocalRoots: ["/tmp/media"],
+      replyToId: undefined,
+    });
+    expect(result.receipt.parts[0]?.kind).toBe("media");
+  });
+
+  it("maps thread ids to Mattermost reply targets", async () => {
+    const sendText = requireTextSender(requireMattermostMessageAdapter());
+
+    const result = await sendText({
+      cfg: {},
+      to: "channel:parent-1",
+      text: "threaded",
+      accountId: "default",
+      threadId: "thread-1",
+    });
+
+    expect(sendMessageMattermostMock).toHaveBeenLastCalledWith("channel:parent-1", "threaded", {
+      cfg: {},
+      accountId: "default",
+      replyToId: "thread-1",
+    });
+    expect(result.receipt.threadId).toBe("thread-1");
+  });
+
+  it("prefers explicit Mattermost reply ids over thread ids", async () => {
+    const sendText = requireTextSender(requireMattermostMessageAdapter());
+
+    const result = await sendText({
+      cfg: {},
+      to: "channel:parent-1",
+      text: "reply",
+      accountId: "default",
+      replyToId: "post-parent-1",
+      threadId: "thread-1",
+    });
+
+    expect(sendMessageMattermostMock).toHaveBeenLastCalledWith("channel:parent-1", "reply", {
+      cfg: {},
+      accountId: "default",
+      replyToId: "post-parent-1",
+    });
+    expect(result.receipt.replyToId).toBe("post-parent-1");
   });
 
   it("backs declared live preview finalizer capabilities with adapter proofs", async () => {

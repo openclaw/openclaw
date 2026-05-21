@@ -36,9 +36,7 @@ struct PermissionsSettings: View {
                     }
                 }
             }
-            .frame(maxWidth: 760, alignment: .leading)
-            .padding(.trailing, SettingsLayout.scrollbarGutter)
-            .padding(.vertical, 4)
+            .settingsDetailContent()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
@@ -80,6 +78,8 @@ struct PermissionsSettings: View {
 }
 
 private struct LocationAccessSettings: View {
+    private static let controlWidth: CGFloat = 180
+
     @AppStorage(locationModeKey) private var locationModeRaw: String = OpenClawLocationMode.off.rawValue
     @AppStorage(locationPreciseKey) private var locationPreciseEnabled: Bool = true
     @State private var lastLocationModeRaw: String = OpenClawLocationMode.off.rawValue
@@ -97,7 +97,7 @@ private struct LocationAccessSettings: View {
                 }
                 .labelsHidden()
                 .pickerStyle(.menu)
-                .frame(width: 190)
+                .frame(width: Self.controlWidth, alignment: .trailing)
             }
 
             SettingsCardRow(
@@ -108,6 +108,7 @@ private struct LocationAccessSettings: View {
                 Toggle("Precise Location", isOn: self.$locationPreciseEnabled)
                     .labelsHidden()
                     .toggleStyle(.switch)
+                    .frame(width: Self.controlWidth, alignment: .trailing)
                     .disabled(self.locationMode == .off)
             }
         }

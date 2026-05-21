@@ -1,7 +1,20 @@
 import SwiftUI
 
 enum SettingsLayout {
-    static let scrollbarGutter: CGFloat = 36
+    static let sidebarWidth: CGFloat = 250
+    static let detailHorizontalPadding: CGFloat = 22
+    static let detailVerticalPadding: CGFloat = 18
+    static let nestedSidebarWidth: CGFloat = 260
+    static let detailBottomPadding: CGFloat = 16
+}
+
+extension View {
+    func settingsDetailContent() -> some View {
+        self
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 4)
+            .padding(.bottom, SettingsLayout.detailBottomPadding)
+    }
 }
 
 struct SettingsPageHeader: View {
@@ -63,9 +76,10 @@ struct SettingsCardGroup<Content: View>: View {
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.secondary)
 
-            VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 0) {
                 self.content
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .background(.quaternary.opacity(0.38), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -110,6 +124,7 @@ struct SettingsCardRow<Content: View>: View {
 
             self.content
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 14)
         .padding(.vertical, 11)
         .overlay(alignment: .bottom) {

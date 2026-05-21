@@ -192,7 +192,17 @@ function isJsonLikeThoughtSignature(value: string): boolean {
   );
 }
 
-function sanitizeGeminiToolCallThoughtSignature(
+const GEMINI_THOUGHT_SIGNATURE_ELLIPSIS_RE = /[\u2026]|\.\.\./;
+const GEMINI_THOUGHT_SIGNATURE_BASE64_RE = /^[A-Za-z0-9+/=]+$/;
+
+function hasGeminiThoughtSignatureTruncationFootprint(value: string): boolean {
+  return (
+    GEMINI_THOUGHT_SIGNATURE_ELLIPSIS_RE.test(value) ||
+    (GEMINI_THOUGHT_SIGNATURE_BASE64_RE.test(value) && value.length % 4 !== 0)
+  );
+}
+
+function sanitizeGeminiThoughtSignature(
   thoughtSignature: string | undefined,
 ): string | undefined {
   if (typeof thoughtSignature !== "string") {
@@ -210,6 +220,9 @@ function sanitizeGeminiToolCallThoughtSignature(
     lowered === "reasoning" ||
     lowered === normalizeLowercaseStringOrEmpty(GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP)
   ) {
+    return undefined;
+  }
+  if (hasGeminiThoughtSignatureTruncationFootprint(trimmed)) {
     return undefined;
   }
   return trimmed;
@@ -534,10 +547,13 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
           if (!block.text.trim()) {
             continue;
           }
+          const sanitizedTextSignature = isSameRoute
+            ? sanitizeGeminiThoughtSignature(block.textSignature)
+            : undefined;
           parts.push({
             text: sanitizeTransportPayloadText(block.text),
-            ...(isSameRoute && block.textSignature
-              ? { thoughtSignature: block.textSignature }
+            ...(sanitizedTextSignature
+              ? { thoughtSignature: sanitizedTextSignature }
               : {}),
           });
           continue;
@@ -547,10 +563,15 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
             continue;
           }
           if (isSameRoute) {
+            const sanitizedThinkingSignature = sanitizeGeminiThoughtSignature(
+              block.thinkingSignature,
+            );
             parts.push({
               thought: true,
               text: sanitizeTransportPayloadText(block.thinking),
-              ...(block.thinkingSignature ? { thoughtSignature: block.thinkingSignature } : {}),
+              ...(sanitizedThinkingSignature
+                ? { thoughtSignature: sanitizedThinkingSignature }
+                : {}),
             });
           } else {
             parts.push({ text: sanitizeTransportPayloadText(block.thinking) });
@@ -568,7 +589,7 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
           // Never replay signatures from foreign providers — Gemini requires
           // its own signatures returned exactly as issued.
           const ownSignature = isSameRoute
-            ? sanitizeGeminiToolCallThoughtSignature(block.thoughtSignature)
+            ? sanitizeGeminiThoughtSignature(block.thoughtSignature)
             : undefined;
           if (ownSignature) {
             nextReplayToolCallThoughtSignatures.set(replayKey, ownSignature);

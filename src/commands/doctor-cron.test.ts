@@ -3,7 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { maybeRepairLegacyCronStore, noteLegacyWhatsAppCrontabHealthCheck } from "./doctor-cron.js";
+import {
+  collectLegacyWhatsAppCrontabHealthWarning,
+  maybeRepairLegacyCronStore,
+  noteLegacyWhatsAppCrontabHealthCheck,
+} from "./doctor-cron.js";
 
 type TerminalNote = (message: string, title?: string) => void;
 
@@ -74,6 +78,11 @@ async function writeCronStore(storePath: string, jobs: Array<Record<string, unkn
     ),
     "utf-8",
   );
+}
+
+async function writeLegacyCronArrayStore(storePath: string, jobs: Array<Record<string, unknown>>) {
+  await fs.mkdir(path.dirname(storePath), { recursive: true });
+  await fs.writeFile(storePath, JSON.stringify(jobs, null, 2), "utf-8");
 }
 
 async function readPersistedJobs(storePath: string): Promise<Array<Record<string, unknown>>> {
@@ -292,6 +301,29 @@ describe("maybeRepairLegacyCronStore", () => {
     expect(payload.kind).toBe("systemEvent");
     expect(payload.text).toBe("Morning brief");
 
+    expectNoteContaining("Legacy cron job storage detected", "Cron");
+    expectNoteContaining("Cron store normalized", "Doctor changes");
+  });
+
+  it("repairs legacy top-level array cron stores instead of treating them as empty (#60799)", async () => {
+    const storePath = await makeTempStorePath();
+    await writeLegacyCronArrayStore(storePath, [createLegacyCronJob()]);
+
+    await maybeRepairLegacyCronStore({
+      cfg: createCronConfig(storePath),
+      options: {},
+      prompter: makePrompter(true),
+    });
+
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
+      version?: unknown;
+      jobs?: Array<Record<string, unknown>>;
+    };
+    const job = requirePersistedJob(persisted.jobs ?? [], 0);
+    expect(persisted.version).toBe(1);
+    expect(job.jobId).toBeUndefined();
+    expect(job.id).toBe("legacy-job");
+    expect(job.notify).toBeUndefined();
     expectNoteContaining("Legacy cron job storage detected", "Cron");
     expectNoteContaining("Cron store normalized", "Doctor changes");
   });
@@ -536,7 +568,25 @@ describe("maybeRepairLegacyCronStore", () => {
   });
 });
 
-describe("noteLegacyWhatsAppCrontabHealthCheck", () => {
+describe("legacy WhatsApp crontab health check", () => {
+  it("collects a warning about legacy ensure-whatsapp crontab entries on Linux", async () => {
+    const warning = await collectLegacyWhatsAppCrontabHealthWarning({
+      platform: "linux",
+      readCrontab: async () => ({
+        stdout: [
+          "# keep comments ignored",
+          "*/5 * * * * ~/.openclaw/bin/ensure-whatsapp.sh >> ~/.openclaw/logs/whatsapp-health.log 2>&1",
+          "0 9 * * * /usr/bin/true",
+          "",
+        ].join("\n"),
+      }),
+    });
+
+    expect(warning).toContain("Legacy WhatsApp crontab health check detected");
+    expect(warning).toContain("systemd user bus environment is missing");
+    expect(warning).toContain("Matched 1 entry");
+  });
+
   it("warns about legacy ensure-whatsapp crontab entries on Linux", async () => {
     await noteLegacyWhatsAppCrontabHealthCheck({
       platform: "linux",

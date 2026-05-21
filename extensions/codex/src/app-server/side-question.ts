@@ -21,6 +21,11 @@ import { refreshCodexAppServerAuthTokens } from "./auth-bridge.js";
 import { isCodexAppServerApprovalRequest, type CodexAppServerClient } from "./client.js";
 import { readCodexPluginConfig, resolveCodexAppServerRuntimeOptions } from "./config.js";
 import {
+  emitDynamicToolErrorDiagnostic,
+  emitDynamicToolStartedDiagnostic,
+  emitDynamicToolTerminalDiagnostic,
+} from "./dynamic-tool-diagnostics.js";
+import {
   filterCodexDynamicTools,
   resolveCodexDynamicToolsLoading,
 } from "./dynamic-tool-profile.js";
@@ -61,6 +66,7 @@ import { filterToolsForVisionInputs } from "./vision-tools.js";
 
 const CODEX_SIDE_DYNAMIC_TOOL_TIMEOUT_MS = 30_000;
 const CODEX_SIDE_DYNAMIC_TOOL_MAX_TIMEOUT_MS = 600_000;
+const CODEX_SIDE_DYNAMIC_IMAGE_GENERATION_TOOL_TIMEOUT_MS = 120_000;
 const CODEX_SIDE_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS = 60_000;
 const SIDE_QUESTION_COMPLETION_TIMEOUT_MS = 600_000;
 const CODEX_SIDE_NATIVE_HOOK_RELAY_MIN_TTL_MS = 30 * 60_000;
@@ -206,12 +212,37 @@ export async function runCodexAppServerSideQuestion(
         call,
         config: params.cfg,
       });
-      return (await handleSideDynamicToolCallWithTimeout({
+      const toolStartedAt = Date.now();
+      const diagnosticContext = {
         call,
-        toolBridge,
-        signal: runAbortController.signal,
-        timeoutMs,
-      })) as unknown as JsonValue;
+        runId: sideRunParams.runId,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+      };
+      emitDynamicToolStartedDiagnostic(diagnosticContext);
+      try {
+        const response = await handleSideDynamicToolCallWithTimeout({
+          call,
+          toolBridge,
+          signal: runAbortController.signal,
+          timeoutMs,
+        });
+        emitDynamicToolTerminalDiagnostic({
+          ...diagnosticContext,
+          response,
+          durationMs: Math.max(0, Date.now() - toolStartedAt),
+        });
+        return {
+          contentItems: response.contentItems,
+          success: response.success,
+        } as JsonValue;
+      } catch (error) {
+        emitDynamicToolErrorDiagnostic({
+          ...diagnosticContext,
+          durationMs: Math.max(0, Date.now() - toolStartedAt),
+        });
+        throw error;
+      }
     });
 
     const approvalPolicy = binding.approvalPolicy ?? appServer.approvalPolicy;
@@ -254,7 +285,9 @@ export async function runCodexAppServerSideQuestion(
       : options.nativeHookRelay?.enabled === false
         ? buildCodexNativeHookRelayDisabledConfig()
         : undefined;
-    const runtimeThreadConfig = buildCodexRuntimeThreadConfig(undefined);
+    const runtimeThreadConfig = buildCodexRuntimeThreadConfig(undefined, {
+      nativeCodeModeOnlyEnabled: appServer.codeModeOnly,
+    });
     const threadConfig =
       mergeCodexThreadConfigs(nativeHookRelayConfig, runtimeThreadConfig) ?? runtimeThreadConfig;
     const modelProvider = resolveCodexAppServerModelProvider({
@@ -520,6 +553,7 @@ async function createCodexSideToolBridge(input: {
         currentChannelId: input.params.currentChannelId,
       }).channelId,
       sandbox,
+      emitBeforeToolCallDiagnostics: false,
       modelHasVision: runtimeModel.input?.includes("image") ?? false,
       requireExplicitMessageTarget: true,
     });
@@ -607,10 +641,16 @@ async function handleSideDynamicToolCallWithTimeout(params: {
 }
 
 function failedSideDynamicToolResponse(message: string): CodexDynamicToolCallResponse {
-  return {
-    success: false,
+  const response: CodexDynamicToolCallResponse = {
     contentItems: [{ type: "inputText", text: message }],
+    success: false,
   };
+  Object.defineProperty(response, "diagnosticTerminalType", {
+    configurable: true,
+    enumerable: false,
+    value: "error",
+  });
+  return response;
 }
 
 function emptySideUserInputResponse(): JsonObject {
@@ -632,7 +672,8 @@ function resolveSideDynamicToolCallTimeoutMs(params: {
   const configured =
     readSideDynamicToolCallTimeoutMs(params.call.arguments) ??
     (params.call.tool === "image_generate"
-      ? readSideImageGenerationModelTimeoutMs(params.config)
+      ? (readSideImageGenerationModelTimeoutMs(params.config) ??
+        CODEX_SIDE_DYNAMIC_IMAGE_GENERATION_TOOL_TIMEOUT_MS)
       : undefined) ??
     (params.call.tool === "image"
       ? (readSideTimeoutSecondsAsMs(params.config?.tools?.media?.image?.timeoutSeconds) ??
@@ -673,7 +714,7 @@ function clampSideDynamicToolTimeoutMs(timeoutMs: number): number {
   return Math.max(1, Math.min(CODEX_SIDE_DYNAMIC_TOOL_MAX_TIMEOUT_MS, Math.floor(timeoutMs)));
 }
 
-export const __testing = {
+export const testing = {
   resolveSideDynamicToolCallTimeoutMs,
 } as const;
 
@@ -965,3 +1006,4 @@ function formatCodexErrorMessage(
     "Codex /btw side thread failed.";
   return new Error(formatErrorMessage(message));
 }
+export { testing as __testing };

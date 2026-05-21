@@ -137,6 +137,93 @@ describe("qa suite", () => {
     expect(qaSuiteProgressTesting.sanitizeQaSuiteProgressValue("\u0000\u0001")).toBe("<empty>");
   });
 
+  it("records gateway RSS peak and trace samples", () => {
+    expect(
+      qaSuiteProgressTesting.buildQaSuiteRuntimeMetrics({
+        startedAt: new Date("2026-04-22T12:00:00.000Z"),
+        finishedAt: new Date("2026-04-22T12:00:12.000Z"),
+        gatewayProcessCpuStartMs: 1_000,
+        gatewayProcessCpuEndMs: 4_000,
+        gatewayProcessRssStartBytes: 100_000_000,
+        gatewayProcessRssEndBytes: 125_000_000,
+        gatewayProcessRssSamples: [
+          {
+            label: "suite-start",
+            at: "2026-04-22T12:00:00.000Z",
+            gatewayProcessRssBytes: 100_000_000,
+          },
+          {
+            label: "scenario:canary:finish",
+            at: "2026-04-22T12:00:10.000Z",
+            gatewayProcessRssBytes: 140_000_000,
+          },
+        ],
+        gatewayHeapSnapshots: [
+          {
+            label: "suite-start",
+            at: "2026-04-22T12:00:01.000Z",
+            path: "artifacts/gateway-heap-snapshots/suite-start.heapsnapshot",
+            bytes: 12_345,
+          },
+        ],
+      }),
+    ).toEqual({
+      wallMs: 12_000,
+      gatewayProcessCpuMs: 3_000,
+      gatewayCpuCoreRatio: 0.25,
+      gatewayProcessRssStartBytes: 100_000_000,
+      gatewayProcessRssEndBytes: 125_000_000,
+      gatewayProcessRssDeltaBytes: 25_000_000,
+      gatewayProcessRssPeakBytes: 140_000_000,
+      gatewayProcessRssPeakDeltaBytes: 40_000_000,
+      gatewayProcessRssSamples: [
+        {
+          label: "suite-start",
+          at: "2026-04-22T12:00:00.000Z",
+          gatewayProcessRssBytes: 100_000_000,
+        },
+        {
+          label: "scenario:canary:finish",
+          at: "2026-04-22T12:00:10.000Z",
+          gatewayProcessRssBytes: 140_000_000,
+        },
+      ],
+      gatewayHeapSnapshots: [
+        {
+          label: "suite-start",
+          at: "2026-04-22T12:00:01.000Z",
+          path: "artifacts/gateway-heap-snapshots/suite-start.heapsnapshot",
+          bytes: 12_345,
+        },
+      ],
+    });
+  });
+
+  it("arms gateway heap checkpoint env only when requested", () => {
+    expect(
+      qaSuiteProgressTesting.buildQaGatewayHeapCheckpointRuntimeEnvPatch({
+        OPENCLAW_QA_GATEWAY_HEAP_CHECKPOINTS: "0",
+      }),
+    ).toBeUndefined();
+    expect(
+      qaSuiteProgressTesting.buildQaGatewayHeapCheckpointRuntimeEnvPatch({
+        OPENCLAW_QA_GATEWAY_HEAP_CHECKPOINTS: "1",
+        NODE_OPTIONS: "--max-old-space-size=4096",
+      }),
+    ).toEqual({
+      NODE_OPTIONS: "--max-old-space-size=4096 --heapsnapshot-signal=SIGUSR2",
+    });
+    expect(
+      qaSuiteProgressTesting.mergeQaRuntimeEnvPatches(
+        { OPENAI_API_KEY: "mock" },
+        { NODE_OPTIONS: "--heapsnapshot-signal=SIGUSR2" },
+      ),
+    ).toEqual({
+      OPENAI_API_KEY: "mock",
+      NODE_OPTIONS: "--heapsnapshot-signal=SIGUSR2",
+    });
+  });
+
   it("builds a codex mock runtime env patch that stays on the QA mock provider", () => {
     expect(
       qaSuiteProgressTesting.buildQaRuntimeEnvPatch({

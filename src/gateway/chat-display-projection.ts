@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../agents/internal-runtime-context.js";
 import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import {
@@ -112,6 +113,10 @@ function sanitizeChatHistoryContentBlock(
   }
   if ("thinkingSignature" in entry) {
     delete entry.thinkingSignature;
+    changed = true;
+  }
+  if ("openclawReasoningReplay" in entry) {
+    delete entry.openclawReasoningReplay;
     changed = true;
   }
   const type = typeof entry.type === "string" ? entry.type : "";
@@ -680,7 +685,17 @@ function isSubagentAnnounceInterSessionUserMessage(message: Record<string, unkno
   );
 }
 
+function isDisplayHiddenProjectedMessage(message: Record<string, unknown>): boolean {
+  if (message.display === false) {
+    return true;
+  }
+  return message.role === "custom" && message.customType === OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE;
+}
+
 function shouldHideProjectedHistoryMessage(message: Record<string, unknown>): boolean {
+  if (isDisplayHiddenProjectedMessage(message)) {
+    return true;
+  }
   const roleContent = asRoleContentMessage(message);
   if (!roleContent) {
     return false;

@@ -17,6 +17,7 @@ import {
   mockedSessionLikelyHasOversizedToolResults,
   mockedTruncateOversizedToolResultsInSession,
   overflowBaseRunParams as baseParams,
+  resetRunOverflowCompactionHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
@@ -61,17 +62,7 @@ describe("overflow compaction in run loop", () => {
   });
 
   beforeEach(() => {
-    mockedRunEmbeddedAttempt.mockReset();
-    mockedCompactDirect.mockReset();
-    mockedSessionLikelyHasOversizedToolResults.mockReset();
-    mockedTruncateOversizedToolResultsInSession.mockReset();
-    mockedContextEngine.info.ownsCompaction = false;
-    mockedLog.debug.mockReset();
-    mockedLog.info.mockReset();
-    mockedLog.warn.mockReset();
-    mockedLog.error.mockReset();
-    mockedLog.isEnabled.mockReset();
-    mockedLog.isEnabled.mockReturnValue(false);
+    resetRunOverflowCompactionHarnessMocks();
     mockedIsCompactionFailureError.mockImplementation((msg?: string) => {
       if (!msg) {
         return false;
@@ -90,17 +81,6 @@ describe("overflow compaction in run loop", () => {
         lower.includes("context window exceeded") ||
         lower.includes("prompt too large")
       );
-    });
-    mockedCompactDirect.mockResolvedValue({
-      ok: false,
-      compacted: false,
-      reason: "nothing to compact",
-    });
-    mockedSessionLikelyHasOversizedToolResults.mockReturnValue(false);
-    mockedTruncateOversizedToolResultsInSession.mockResolvedValue({
-      truncated: false,
-      truncatedCount: 0,
-      reason: "no oversized tool results",
     });
   });
 

@@ -291,3 +291,8 @@ export function resolveSlackRoutingContext(params: {
     historyKey,
   };
 }
+
+export const testing = {
+  normalizeSlackRouteBindingConfig,
+};
+export { testing as __testing };
