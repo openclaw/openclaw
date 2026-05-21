@@ -220,6 +220,19 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
 
       if (client.dms.isDm(roomId)) {
         if (strictDirectMembership) {
+          // Even if the room is mapped in m.direct account data, a local
+          // m.room.member event with is_direct=false is an explicit signal
+          // from the room creator (or an admin who later rewrote the
+          // membership) that this room is intentionally NOT a DM. Honor it
+          // over the stale account-data mapping so requireMention and
+          // per-group skill scoping take effect.
+          const directViaSelf = await resolveDirectMemberFlag(roomId, selfUserId);
+          if (directViaSelf === false) {
+            log(
+              `matrix: ignoring m.direct mapping because local member state is_direct=false room=${roomId}`,
+            );
+            return false;
+          }
           log(`matrix: dm detected via m.direct room=${roomId}`);
           return true;
         }

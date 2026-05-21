@@ -97,6 +97,29 @@ describe("createDirectRoomTracker", () => {
     expect(client.getJoinedRoomMembers).toHaveBeenCalledWith("!room:example.org");
   });
 
+  it("ignores m.direct mapping when local member state explicitly sets is_direct: false", async () => {
+    // Room is in m.direct account data AND has exactly 2 joined members, so
+    // the legacy m.direct branch would return true. But the bot's own
+    // m.room.member event carries is_direct: false — an explicit signal that
+    // this room is intentionally a group (e.g. /createRoom was called with
+    // is_direct: false, or an admin rewrote the membership). The veto must
+    // win over the stale account-data mapping so requireMention applies.
+    const client = createMockClient({
+      isDm: true,
+      stateEvents: {
+        "!room:example.org|m.room.member|@bot:example.org": { is_direct: false },
+      },
+    });
+    const tracker = createDirectRoomTracker(client);
+
+    await expect(
+      tracker.isDirectMessage({
+        roomId: "!room:example.org",
+        senderId: "@alice:example.org",
+      }),
+    ).resolves.toBe(false);
+  });
+
   it("does not trust stale m.direct classifications for shared rooms", async () => {
     const client = createMockClient({
       isDm: true,

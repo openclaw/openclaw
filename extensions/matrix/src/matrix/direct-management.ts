@@ -218,18 +218,24 @@ export async function promoteMatrixDirectRoomCandidate(params: {
     remoteUserId,
     selfUserId: params.selfUserId,
   });
-  if (!evidence.strict) {
-    return {
-      classifyAsDirect: false,
-      repaired: false,
-      reason: "not-strict",
-    };
-  }
+  // Check explicit-false BEFORE generic !strict — direct-room.ts now folds
+  // memberStateFlag === false into strict: false, but callers (and the
+  // direct-management regression test) still expect the more specific
+  // "local-explicit-false" reason to win over the generic "not-strict".
+  // Without this ordering every explicitly-not-DM room would collapse into
+  // the same bucket as e.g. 3-person rooms, losing diagnostic value.
   if (evidence.memberStateFlag === false) {
     return {
       classifyAsDirect: false,
       repaired: false,
       reason: "local-explicit-false",
+    };
+  }
+  if (!evidence.strict) {
+    return {
+      classifyAsDirect: false,
+      repaired: false,
+      reason: "not-strict",
     };
   }
 
