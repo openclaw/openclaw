@@ -929,7 +929,7 @@ describe("spawnAcpDirect", () => {
     expect(initInput.sessionKey).toMatch(/^agent:codex:acp:/);
   });
 
-  it("applies ACP spawn run timeout to runtime options and dispatch", async () => {
+  it("applies ACP spawn run timeout to dispatch without setting ACP runtime options", async () => {
     const result = await spawnAcpDirect(
       {
         task: "Investigate flaky tests",
@@ -944,9 +944,7 @@ describe("spawnAcpDirect", () => {
     expectAcceptedSpawn(result);
     const initInput = expectInitializeSessionFields({
       agent: "codex",
-      runtimeOptions: {
-        timeoutSeconds: 45,
-      },
+      runtimeOptions: undefined,
     });
     expect(initInput.sessionKey).toMatch(/^agent:codex:acp:/);
     const agentCall = findAgentGatewayCall();
