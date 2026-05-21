@@ -26,6 +26,7 @@ V1 should feel fast for simple market commands and still support slower reasonin
 - No shell/code/browser/computer tools exposed to Discord users.
 - No full-agent path for quote, earnings, news, option chain, or contract lookup when the request is command-shaped.
 - No public watchlist writes.
+- Public `watch SYMBOL` may return read-only ticker context in approved stock-room channels, but it must not save public or private watchlist state.
 - No scheduled briefings until manual briefing commands work.
 - No trading recommendations or buy/sell orders.
 

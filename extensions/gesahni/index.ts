@@ -664,6 +664,10 @@ function publicAlertMutationBlockedText(): string {
   ].join("\n");
 }
 
+function requireDiscordSenderId(senderId: string | undefined): string | undefined {
+  return senderId?.trim() || undefined;
+}
+
 async function handleStockAlertDispatch(
   event: {
     content: string;
@@ -786,13 +790,24 @@ async function handleStockAlertDispatch(
 
   const watchlistAddSymbol = parseWatchlistAddIntent(input);
   if (watchlistAddSymbol) {
-    await watchlistStore.add({ senderId, symbol: watchlistAddSymbol });
+    const ownerId = requireDiscordSenderId(senderId);
+    if (!ownerId) {
+      return { handled: true, text: "Private watchlist actions need a Discord sender id." };
+    }
+    await watchlistStore.add({ senderId: ownerId, symbol: watchlistAddSymbol });
     return { handled: true, text: `Added ${watchlistAddSymbol} to your private watchlist.` };
   }
 
   const watchlistRemoveSymbol = parseWatchlistRemoveIntent(input);
   if (watchlistRemoveSymbol) {
-    const removed = await watchlistStore.remove({ senderId, symbol: watchlistRemoveSymbol });
+    const ownerId = requireDiscordSenderId(senderId);
+    if (!ownerId) {
+      return { handled: true, text: "Private watchlist actions need a Discord sender id." };
+    }
+    const removed = await watchlistStore.remove({
+      senderId: ownerId,
+      symbol: watchlistRemoveSymbol,
+    });
     return {
       handled: true,
       text: removed
@@ -802,7 +817,11 @@ async function handleStockAlertDispatch(
   }
 
   if (isWatchlistListIntent(input)) {
-    const records = await watchlistStore.list({ senderId });
+    const ownerId = requireDiscordSenderId(senderId);
+    if (!ownerId) {
+      return { handled: true, text: "Private watchlist actions need a Discord sender id." };
+    }
+    const records = await watchlistStore.list({ senderId: ownerId });
     return { handled: true, text: formatWatchlist(records) };
   }
 

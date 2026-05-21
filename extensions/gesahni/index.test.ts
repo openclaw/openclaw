@@ -657,6 +657,31 @@ describe("gesahni plugin", () => {
     });
   });
 
+  it("requires sender identity for private watchlist actions", async () => {
+    await withTmpState(async (stateDir) => {
+      const options = {
+        pluginConfig: {},
+        stateDir,
+        marketDataClient: createMarketDataClient(),
+      };
+      const result = await __testing.handleStockAlertDispatch(
+        {
+          channel: "discord",
+          content: "watch AAPL",
+          sessionKey: "agent:gesahni-discord-dm:discord:direct:missing-sender",
+          isGroup: false,
+        },
+        {
+          conversationId: "user:missing-sender",
+          sessionKey: "agent:gesahni-discord-dm:discord:direct:missing-sender",
+        },
+        options,
+      );
+
+      expect(result?.text).toBe("Private watchlist actions need a Discord sender id.");
+    });
+  });
+
   it("keeps public watchlist mutations private but allows approved passive ticker reads", async () => {
     await withTmpState(async (stateDir) => {
       __testing.resetPassiveTickerReadCache();
@@ -698,13 +723,31 @@ describe("gesahni plugin", () => {
         ctx,
         options,
       );
+      const publicWatchRead = await __testing.handleStockAlertDispatch(
+        { ...event, content: "watch MSFT" },
+        ctx,
+        options,
+      );
+      const dmWatchlist = await __testing.handleStockAlertDispatch(
+        { ...event, channel: "discord", content: "list watchlist", isGroup: false },
+        {
+          conversationId: "user:1309247958029701190",
+          sessionKey: "agent:gesahni-discord-dm:discord:direct:1309247958029701190",
+          senderId: "1309247958029701190",
+        },
+        options,
+      );
 
       expect(passive?.text).toBe(
         "AAPL $210.00 | bid/ask $209.90/$210.10 | TestData | educational only.",
       );
       expect(throttled).toEqual({ handled: true });
       expect(blockedList?.text).toBe("Private watchlist actions are DM-only.");
-      expect(marketDataClient.quote).toHaveBeenCalledTimes(1);
+      expect(publicWatchRead?.text).toBe(
+        "MSFT $210.00 | bid/ask $209.90/$210.10 | TestData | educational only.",
+      );
+      expect(dmWatchlist?.text).toBe("No private watchlist symbols are saved.");
+      expect(marketDataClient.quote).toHaveBeenCalledTimes(2);
     });
   });
 

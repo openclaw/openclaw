@@ -6,7 +6,7 @@ export type WatchlistRecord = {
   symbol: string;
   owner: {
     channel: "discord";
-    senderId?: string;
+    senderId: string;
   };
   createdAt: string;
 };
@@ -16,9 +16,9 @@ export type WatchlistStoreState = {
 };
 
 export type WatchlistStore = {
-  add(params: { senderId?: string; symbol: string }): Promise<WatchlistRecord>;
-  remove(params: { senderId?: string; symbol: string }): Promise<WatchlistRecord | null>;
-  list(params: { senderId?: string }): Promise<WatchlistRecord[]>;
+  add(params: { senderId: string; symbol: string }): Promise<WatchlistRecord>;
+  remove(params: { senderId: string; symbol: string }): Promise<WatchlistRecord | null>;
+  list(params: { senderId: string }): Promise<WatchlistRecord[]>;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -30,7 +30,23 @@ function readWatchlistState(value: unknown): WatchlistStoreState {
     return { watchlists: [] };
   }
   return {
-    watchlists: value.watchlists.filter(isRecord) as WatchlistRecord[],
+    watchlists: value.watchlists.flatMap((entry) => {
+      if (!isRecord(entry) || !isRecord(entry.owner)) {
+        return [];
+      }
+      const symbol = typeof entry.symbol === "string" ? normalizeSymbol(entry.symbol) : "";
+      const senderId =
+        typeof entry.owner.senderId === "string" && entry.owner.senderId.trim()
+          ? entry.owner.senderId.trim()
+          : undefined;
+      const createdAt =
+        typeof entry.createdAt === "string" && entry.createdAt.trim()
+          ? entry.createdAt
+          : new Date(0).toISOString();
+      return symbol && senderId
+        ? [{ symbol, owner: { channel: "discord" as const, senderId }, createdAt }]
+        : [];
+    }),
   };
 }
 
