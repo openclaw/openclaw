@@ -23,7 +23,7 @@ Use when:
 - Prefer small fixes at the right ownership boundary; no refactor unless it clearly improves the bug class.
 - Keep going until the selected review path returns no accepted/actionable findings.
 - If a review-triggered fix changes code, rerun focused tests and rerun the review helper.
-- Default to Codex review. If Codex is unavailable or exits with an error, the helper falls back to the first configured CLI from `claude -p`, `pi -p`, `opencode run`, `droid exec`, or `copilot`. Prefer Codex for final closeout because it uses native review mode; non-Codex reviewers use a Codex-inspired generated diff prompt. The helper runs nested Codex review in yolo/full-access mode by default; use `--no-yolo` only when intentionally testing sandbox behavior.
+- Default to Codex review with no fallback. Prefer Codex for final closeout because it uses native review mode; non-Codex reviewers use a Codex-inspired generated diff prompt. Use `--fallback-reviewer auto|claude|pi|opencode|droid|copilot` only when a second-model fallback is explicitly wanted and authenticated. The helper runs nested Codex review in yolo/full-access mode by default; use `--no-yolo` only when intentionally testing sandbox behavior.
 - Stop as soon as the review command/helper exits 0 with no accepted/actionable findings. Do not run an extra direct `codex review` just to get a nicer "clean" line, a second opinion, or clearer closeout wording.
 - Treat the helper's successful exit plus absence of actionable findings as the clean review result, even if the underlying Codex CLI output is terse.
 - If rejecting a finding as intentional/not worth fixing, add a brief inline code comment only when it explains a real invariant or ownership decision that future reviewers should know.
@@ -52,11 +52,11 @@ git fetch origin
 codex review --base origin/main
 ```
 
-Do not pass any prompt with `--base`. Some Codex CLI versions reject both inline
-and stdin prompt forms, including the helper's `codex review --base <ref> -`,
-with `--base <BRANCH> cannot be used with [PROMPT]`. If the helper hits this
-error, run plain `codex review --base <ref>` and report that the helper prompt
-injection was skipped.
+Do not pass any prompt with `--base`, `--commit`, or `--uncommitted`. Codex CLI
+review targets and custom review prompts are mutually exclusive: target modes
+generate their own review prompt internally. Use plain target review for native
+Codex closeout, or use custom prompt review (`codex review -`) only when you
+intentionally want a generated diff prompt instead of native target review.
 
 If an open PR exists, use its actual base:
 
@@ -117,13 +117,13 @@ The helper:
 - use `--mode commit --commit <ref>` for already-committed work, especially clean `main` after landing
 - should be left in `--mode auto` or forced to `--mode branch` for PR/branch work; do not force `--mode local` after committing
 - supports `--reviewer codex|claude|pi|opencode|droid|copilot|auto`; `auto` means Codex first
-- supports `--fallback-reviewer auto|claude|pi|opencode|droid|copilot|none`; default is configured CLI fallback
+- supports `--fallback-reviewer auto|claude|pi|opencode|droid|copilot|none`; default is `none`
 - falls back only when Codex is unavailable or exits nonzero, not when Codex reports findings
 - writes only to stdout unless `--output` or `AUTOREVIEW_OUTPUT` is set
 - supports `--dry-run`, `--parallel-tests`, and commit refs
 - runs nested review with `--dangerously-bypass-approvals-and-sandbox --sandbox danger-full-access` by default
-- injects maintainer-only OpenClaw validation policy into native Codex review when `OPENCLAW_TESTBOX=1` or `AUTOREVIEW_OPENCLAW_MAINTAINER_VALIDATION=1`, so local memory-heavy Node/Vitest checks are avoided in favor of Crabbox/Testbox proof
-- branch mode may fail on Codex CLI versions that reject `--base` plus the helper's stdin prompt; on that exact parser error, rerun plain `codex review --base <ref>` instead of falling back to a non-Codex reviewer
+- with `OPENCLAW_TESTBOX=1` or `AUTOREVIEW_OPENCLAW_MAINTAINER_VALIDATION=1`, disables auto local `pnpm run check` and routes Codex through generated prompt review (`codex review -`) so the no-local-heavy-tests policy is included; native Codex target review cannot accept extra prompt text
+- non-Codex reviewers receive the generated diff prompt and maintainer validation policy text when maintainer validation is active
 - keeps accepting `--full-access`; use `--no-yolo` or `AUTOREVIEW_YOLO=0` to opt out
 - still accepts legacy `CODEX_REVIEW_*` env vars when the matching `AUTOREVIEW_*` var is unset
 - prints `autoreview clean: no accepted/actionable findings reported` when the selected review command exits 0

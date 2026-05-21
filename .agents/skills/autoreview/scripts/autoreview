@@ -11,9 +11,9 @@ Options:
   --base REF                 Base ref for branch review. Default: PR base or origin/main.
   --commit REF               Commit ref for commit review. Default: HEAD.
   --reviewer codex|claude|pi|opencode|droid|copilot|auto
-                              Review engine. Default: Codex with configured fallback on error.
+                              Review engine. Default: Codex.
   --fallback-reviewer auto|claude|pi|opencode|droid|copilot|none
-                              Fallback when Codex is unavailable or exits nonzero. Default: auto.
+                              Fallback when Codex is unavailable or exits nonzero. Default: none.
   --codex-bin PATH           Codex binary. Default: codex.
   --claude-bin PATH          Claude binary. Default: claude.
   --pi-bin PATH              Pi binary. Default: pi.
@@ -44,7 +44,7 @@ mode=auto
 base_ref=
 commit_ref=HEAD
 reviewer=${AUTOREVIEW_REVIEWER:-${CODEX_REVIEW_REVIEWER:-auto}}
-fallback_reviewer=${AUTOREVIEW_FALLBACK_REVIEWER:-${CODEX_REVIEW_FALLBACK_REVIEWER:-auto}}
+fallback_reviewer=${AUTOREVIEW_FALLBACK_REVIEWER:-${CODEX_REVIEW_FALLBACK_REVIEWER:-none}}
 codex_bin=${CODEX_BIN:-codex}
 claude_bin=${CLAUDE_BIN:-claude}
 pi_bin=${PI_BIN:-pi}
@@ -58,7 +58,6 @@ parallel_tests=
 parallel_tests_auto=false
 dry_run=false
 codex_review_prompt=
-codex_review_stdin_prompt=false
 codex_review_prompt_file=false
 openclaw_maintainer_validation=${AUTOREVIEW_OPENCLAW_MAINTAINER_VALIDATION:-${OPENCLAW_TESTBOX:-0}}
 
@@ -249,13 +248,8 @@ OpenClaw maintainer autoreview validation policy:
 - If remote validation is not necessary for the finding, state the targeted proof that should be run instead of starting local tests.
 EOF
 )
-  if [[ "$review_kind" == local ]]; then
-    review_cmd+=(-)
-    codex_review_stdin_prompt=true
-  else
-    review_cmd=("$codex_bin" "${codex_args[@]}" review -)
-    codex_review_prompt_file=true
-  fi
+  review_cmd=("$codex_bin" "${codex_args[@]}" review -)
+  codex_review_prompt_file=true
 fi
 
 printf 'autoreview target: %s\n' "$review_kind"
@@ -278,8 +272,8 @@ if [[ "$reviewer" == auto || "$reviewer" == codex ]]; then
   printf 'review:'
   printf ' %q' "${review_cmd[@]}"
   printf '\n'
-  if [[ "$codex_review_stdin_prompt" == true || "$codex_review_prompt_file" == true ]]; then
-    printf 'review policy: OpenClaw maintainer Crabbox/Testbox-aware validation prompt injected\n'
+  if [[ "$codex_review_prompt_file" == true ]]; then
+    printf 'review policy: OpenClaw maintainer validation active; using generated prompt review because Codex target review cannot accept extra prompt text\n'
   fi
 else
   printf 'review: %s prompt review\n' "$reviewer"
@@ -337,11 +331,8 @@ run_review() {
     rm -f "$prompt_file"
     prompt_file=
     return "$status"
-  elif [[ "$codex_review_stdin_prompt" == true ]]; then
-    printf '%s\n' "$codex_review_prompt" | "${review_cmd[@]}" 2>&1 | tee "$review_output"
-  else
-    "${review_cmd[@]}" 2>&1 | tee "$review_output"
   fi
+  "${review_cmd[@]}" 2>&1 | tee "$review_output"
 }
 
 diff_for_review() {
