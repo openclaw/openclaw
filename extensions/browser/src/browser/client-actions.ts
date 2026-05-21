@@ -10,4 +10,8 @@ export {
   browserNavigate,
   browserScreenshotAction,
 } from "./client-actions-core.js";
-export { browserConsoleMessages, browserPdfSave } from "./client-actions-observe.js";
+export {
+  browserConsoleMessages,
+  browserNetworkRequests,
+  browserPdfSave,
+} from "./client-actions-observe.js";

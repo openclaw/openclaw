@@ -7,12 +7,19 @@
 import crypto from "node:crypto";
 import path from "node:path";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  listChromeMcpConsoleMessages,
+  listChromeMcpNetworkRequests,
+} from "../chrome-mcp.js";
+import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { PwAiModule } from "../pw-ai-module.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import {
   readBody,
   resolveTargetIdFromBody,
   resolveTargetIdFromQuery,
+  requirePwAi,
+  withRouteTabContext,
   withPlaywrightRouteContext,
 } from "./agent.shared.js";
 import { resolveWritableOutputPathOrRespond } from "./output-paths.js";
@@ -50,6 +57,33 @@ async function sendPlaywrightDebugCollection(params: {
   });
 }
 
+function consolePriority(level: string | undefined) {
+  switch (level) {
+    case "error":
+      return 3;
+    case "warning":
+    case "warn":
+      return 2;
+    case "info":
+    case "log":
+      return 1;
+    case "debug":
+      return 0;
+    default:
+      return 1;
+  }
+}
+
+function filterConsoleMessagesByMinimumLevel<
+  T extends { type?: string },
+>(messages: T[], level: string | undefined): T[] {
+  if (!level) {
+    return messages;
+  }
+  const min = consolePriority(level);
+  return messages.filter((message) => consolePriority(message.type) >= min);
+}
+
 /** Register browser debug endpoints on the control server. */
 export function registerBrowserAgentDebugRoutes(
   app: BrowserRouteRegistrar,
@@ -61,14 +95,38 @@ export function registerBrowserAgentDebugRoutes(
       const targetId = resolveTargetIdFromQuery(req.query);
       const level = typeof req.query.level === "string" ? req.query.level : "";
 
-      await withPlaywrightRouteContext({
+      await withRouteTabContext({
         req,
         res,
         ctx,
         targetId,
-        feature: "console messages",
         enforceCurrentUrlAllowed: true,
-        run: async ({ cdpUrl, tab, pw, resolveTabUrl }) => {
+        run: async ({ cdpUrl, tab, profileCtx, resolveTabUrl }) => {
+          if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
+            const result = await listChromeMcpConsoleMessages({
+              profileName: profileCtx.profile.name,
+              profile: profileCtx.profile,
+              targetId: tab.targetId,
+              includePreservedMessages: true,
+            });
+            const messages = filterConsoleMessagesByMinimumLevel(
+              result.messages,
+              normalizeOptionalString(level),
+            );
+            const url = await resolveTabUrl(tab.url);
+            res.json({
+              ok: true,
+              messages,
+              ...(result.pagination ? { pagination: result.pagination } : {}),
+              targetId: tab.targetId,
+              ...(url ? { url } : {}),
+            });
+            return;
+          }
+          const pw = await requirePwAi(res, "console messages");
+          if (!pw) {
+            return;
+          }
           const messages = await pw.getConsoleMessagesViaPlaywright({
             cdpUrl,
             targetId: tab.targetId,
@@ -110,19 +168,48 @@ export function registerBrowserAgentDebugRoutes(
       const filter = typeof req.query.filter === "string" ? req.query.filter : "";
       const clear = toBoolean(req.query.clear) ?? false;
 
-      await sendPlaywrightDebugCollection({
+      await withRouteTabContext({
         req,
         res,
         ctx,
         targetId,
-        feature: "network requests",
-        collect: async ({ cdpUrl, targetId: targetIdLocal, pw }) =>
-          await pw.getNetworkRequestsViaPlaywright({
+        enforceCurrentUrlAllowed: true,
+        run: async ({ cdpUrl, tab, profileCtx, resolveTabUrl }) => {
+          if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
+            const result = await listChromeMcpNetworkRequests({
+              profileName: profileCtx.profile.name,
+              profile: profileCtx.profile,
+              targetId: tab.targetId,
+              includePreservedRequests: true,
+            });
+            const filterText = normalizeOptionalString(filter);
+            const requests = filterText
+              ? result.requests.filter((request) => request.url?.includes(filterText))
+              : result.requests;
+            const url = await resolveTabUrl(tab.url);
+            res.json({
+              ok: true,
+              targetId: tab.targetId,
+              ...(url ? { url } : {}),
+              requests,
+              ...(result.pagination ? { pagination: result.pagination } : {}),
+              ...(clear ? { clearUnsupported: true } : {}),
+            });
+            return;
+          }
+          const pw = await requirePwAi(res, "network requests");
+          if (!pw) {
+            return;
+          }
+          const result = await pw.getNetworkRequestsViaPlaywright({
             cdpUrl,
-            targetId: targetIdLocal,
+            targetId: tab.targetId,
             filter: normalizeOptionalString(filter),
             clear,
-          }),
+          });
+          const url = await resolveTabUrl(tab.url);
+          res.json({ ...browserDebugTargetPayload(tab.targetId, url), ...result });
+        },
       });
     }),
   );

@@ -42,6 +42,24 @@ export async function browserConsoleMessages(
   }>(withBaseUrl(baseUrl, `/console${suffix}`), { timeoutMs: 20000 });
 }
 
+export async function browserNetworkRequests(
+  baseUrl: string | undefined,
+  opts: { filter?: string; clear?: boolean; targetId?: string; profile?: string } = {},
+): Promise<{ ok: true; requests: unknown[]; targetId: string; url?: string }> {
+  const suffix = buildQuerySuffix([
+    ["filter", opts.filter],
+    ["clear", opts.clear],
+    ["targetId", opts.targetId],
+    ["profile", opts.profile],
+  ]);
+  return await fetchBrowserJson<{
+    ok: true;
+    requests: unknown[];
+    targetId: string;
+    url?: string;
+  }>(withBaseUrl(baseUrl, `/requests${suffix}`), { timeoutMs: 20000 });
+}
+
 /** Save the current page as PDF through browser control. */
 export async function browserPdfSave(
   baseUrl: string | undefined,

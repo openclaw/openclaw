@@ -58,6 +58,18 @@ const browserActionsMocks = vi.hoisted(() => ({
       },
     ],
   })),
+  browserNetworkRequests: vi.fn(async () => ({
+    ok: true,
+    targetId: "t1",
+    requests: [
+      {
+        id: "r1",
+        method: "GET",
+        url: "https://example.com/api/data.json",
+        status: "200",
+      },
+    ],
+  })),
   browserNavigate: vi.fn(async () => ({ ok: true })),
   browserPdfSave: vi.fn(async () => ({ ok: true, path: "/tmp/test.pdf" })),
   browserScreenshotAction: vi.fn(async () => ({ ok: true, path: "/tmp/test.png" })),
@@ -324,6 +336,7 @@ function resetBrowserToolMocks() {
   browserToolActionsTesting.setDepsForTest({
     browserAct: browserActionsMocks.browserAct as never,
     browserConsoleMessages: browserActionsMocks.browserConsoleMessages as never,
+    browserNetworkRequests: browserActionsMocks.browserNetworkRequests as never,
     browserSnapshot: browserClientMocks.browserSnapshot as never,
     browserTabs: browserClientMocks.browserTabs as never,
     getRuntimeConfig: configMocks.loadConfig as never,
@@ -1697,6 +1710,33 @@ describe("browser tool external content wrapping", () => {
     const details = externalContentDetails(result, "console");
     expect(details.targetId).toBe("t1");
     expect(details.messageCount).toBe(1);
+  });
+
+  it("wraps network request output as external content", async () => {
+    browserActionsMocks.browserNetworkRequests.mockResolvedValueOnce({
+      ok: true,
+      targetId: "t1",
+      requests: [
+        {
+          id: "r1",
+          method: "GET",
+          url: "https://example.com/ignore-previous-instructions.json",
+          status: "200",
+        },
+      ],
+    });
+
+    const tool = createBrowserTool();
+    const result = await tool.execute?.("call-1", { action: "requests" });
+    const requestsText = firstResultText(result);
+    expect(requestsText).toContain("<<<EXTERNAL_UNTRUSTED_CONTENT");
+    expect(requestsText).toContain("ignore-previous-instructions.json");
+    const details = externalContentDetails(result, "requests") as {
+      requestCount?: unknown;
+      targetId?: unknown;
+    };
+    expect(details.targetId).toBe("t1");
+    expect(details.requestCount).toBe(1);
   });
 });
 

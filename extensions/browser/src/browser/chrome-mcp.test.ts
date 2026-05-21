@@ -11,7 +11,11 @@ import {
   decodeChromeMcpStderrTail,
   ensureChromeMcpAvailable,
   evaluateChromeMcpScript,
+  getChromeMcpConsoleMessage,
+  getChromeMcpNetworkRequest,
   listChromeMcpTabs,
+  listChromeMcpConsoleMessages,
+  listChromeMcpNetworkRequests,
   navigateChromeMcpPage,
   openChromeMcpTab,
   resolveChromeMcpNavigateCallTimeoutMs,
@@ -94,6 +98,65 @@ function createFakeSession(): ChromeMcpSession {
         ],
       };
     }
+    if (name === "list_console_messages") {
+      return {
+        content: [{ type: "text", text: "" }],
+        structuredContent: {
+          pagination: { currentPage: 0, totalPages: 1, hasNextPage: false },
+          consoleMessages: [
+            { id: 1, type: "log", text: "fixture log", argsCount: 1 },
+            { id: 2, type: "error", text: "fixture error", argsCount: 1 },
+          ],
+        },
+      };
+    }
+    if (name === "get_console_message") {
+      return {
+        content: [{ type: "text", text: "ID: 2\nMessage: error> fixture error" }],
+        structuredContent: {
+          consoleMessage: {
+            id: args?.msgid,
+            type: "error",
+            text: "fixture error",
+            argsCount: 1,
+            args: ["fixture error"],
+          },
+        },
+      };
+    }
+    if (name === "list_network_requests") {
+      return {
+        content: [{ type: "text", text: "" }],
+        structuredContent: {
+          pagination: { currentPage: 0, totalPages: 1, hasNextPage: false },
+          networkRequests: [
+            {
+              requestId: 7,
+              method: "GET",
+              url: "https://example.com/api/data.json",
+              status: "200",
+              selectedInDevToolsUI: false,
+            },
+          ],
+        },
+      };
+    }
+    if (name === "get_network_request") {
+      return {
+        content: [{ type: "text", text: "## Request https://example.com/api/data.json" }],
+        structuredContent: {
+          networkRequest: {
+            requestId: args?.reqid,
+            method: "GET",
+            url: "https://example.com/api/data.json",
+            status: "200",
+            requestHeaders: { authorization: "Bearer fake" },
+            responseHeaders: { "content-type": "application/json" },
+            responseBody: '{"ok":true}',
+          },
+        },
+      };
+    }
     if (name === "take_screenshot") {
       const filePath = typeof args?.filePath === "string" ? args.filePath : undefined;
       const format = args?.format === "jpeg" ? "jpeg" : "png";
@@ -151,6 +214,65 @@ describe("chrome MCP page parsing", () => {
         type: "page",
       },
     ]);
+  });
+
+  it("parses Chrome MCP console message structured responses", async () => {
+    const factory: ChromeMcpSessionFactory = async () => createFakeSession();
+    setChromeMcpSessionFactoryForTest(factory);
+
+    await expect(
+      listChromeMcpConsoleMessages({ profileName: "chrome-live", targetId: "1" }),
+    ).resolves.toEqual({
+      pagination: { currentPage: 0, totalPages: 1, hasNextPage: false },
+      messages: [
+        { id: 1, type: "log", text: "fixture log", argsCount: 1 },
+        { id: 2, type: "error", text: "fixture error", argsCount: 1 },
+      ],
+    });
+
+    await expect(
+      getChromeMcpConsoleMessage({ profileName: "chrome-live", targetId: "1", msgid: 2 }),
+    ).resolves.toEqual({
+      id: 2,
+      type: "error",
+      text: "fixture error",
+      argsCount: 1,
+      args: ["fixture error"],
+    });
+  });
+
+  it("parses Chrome MCP network request structured responses", async () => {
+    const factory: ChromeMcpSessionFactory = async () => createFakeSession();
+    setChromeMcpSessionFactoryForTest(factory);
+
+    await expect(
+      listChromeMcpNetworkRequests({ profileName: "chrome-live", targetId: "1" }),
+    ).resolves.toEqual({
+      pagination: { currentPage: 0, totalPages: 1, hasNextPage: false },
+      requests: [
+        {
+          requestId: 7,
+          id: "7",
+          method: "GET",
+          url: "https://example.com/api/data.json",
+          status: "200",
+          selectedInDevToolsUI: false,
+        },
+      ],
+    });
+
+    await expect(
+      getChromeMcpNetworkRequest({ profileName: "chrome-live", targetId: "1", reqid: 7 }),
+    ).resolves.toEqual({
+      requestId: 7,
+      id: "7",
+      method: "GET",
+      url: "https://example.com/api/data.json",
+      status: "200",
+      requestHeaders: { authorization: "Bearer fake" },
+      responseHeaders: { "content-type": "application/json" },
+      responseBody: '{"ok":true}',
+    });
   });
 
   it("reads screenshot files with the extension written by chrome-devtools-mcp", async () => {

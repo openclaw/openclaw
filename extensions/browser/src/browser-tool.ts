@@ -8,6 +8,7 @@ import crypto from "node:crypto";
 import {
   executeActAction,
   executeConsoleAction,
+  executeRequestsAction,
   executeSnapshotAction,
   executeTabsAction,
 } from "./browser-tool.actions.js";
@@ -896,6 +897,13 @@ export function createBrowserTool(opts?: {
         }
         case "console":
           return await executeConsoleAction({
+            input: params,
+            baseUrl,
+            profile,
+            proxyRequest,
+          });
+        case "requests":
+          return await executeRequestsAction({
             input: params,
             baseUrl,
             profile,
