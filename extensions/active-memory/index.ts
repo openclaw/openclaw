@@ -108,6 +108,15 @@ const TIMEOUT_BOILERPLATE_PATTERNS = [
   /^(?:error:\s*)?active-memory timeout after \d+ms\b/i,
 ];
 
+const ASSISTANT_CHATTER_SUMMARY_PATTERNS = [
+  /^(?:hello|hi|hey)[!,.]?\s+(?:how can i help|what can i help|please let me know|if you have|it looks like|it seems like)\b/i,
+  /^(?:it\s+(?:looks|seems)\s+like|looks like)\b.{0,140}\b(?:message|request|input)\b.{0,140}\b(?:cut off|come through|empty|incomplete|missing)/i,
+  /^(?:could you please|please)\b.{0,100}\b(?:provide|share|send|tell me)\b.{0,100}\b(?:details|question|request|message|what you need)/i,
+  /^(?:the\s+)?current\s+(?:model|date|time)\b.{0,180}\b(?:if you|let me know|tell me|help|question|request)\b/i,
+  /^(?:您好|你好)[！!，,\s]*(?:请问|如果|有什么|看起来).{0,180}(?:帮助|问题|请求|告诉我|需要|具体)/,
+  /^当前(?:模型|日期|时间)(?:是|为)?.{0,180}(?:帮助|问题|请求|告诉我|需要)/,
+];
+
 const RECALLED_CONTEXT_LINE_PATTERNS = [
   /^🧩\s*active memory:/i,
   /^🔎\s*active memory debug:/i,
@@ -2096,6 +2105,10 @@ function isTimeoutBoilerplateSummary(value: string): boolean {
   return TIMEOUT_BOILERPLATE_PATTERNS.some((pattern) => pattern.test(value));
 }
 
+function isAssistantChatterSummary(value: string): boolean {
+  return ASSISTANT_CHATTER_SUMMARY_PATTERNS.some((pattern) => pattern.test(value));
+}
+
 function normalizeActiveSummary(rawReply: string): string | null {
   const trimmed = rawReply.trim();
   if (normalizeNoRecallValue(trimmed)) {
@@ -2105,7 +2118,8 @@ function normalizeActiveSummary(rawReply: string): string | null {
   if (
     !singleLine ||
     normalizeNoRecallValue(singleLine) ||
-    isTimeoutBoilerplateSummary(singleLine)
+    isTimeoutBoilerplateSummary(singleLine) ||
+    isAssistantChatterSummary(singleLine)
   ) {
     return null;
   }
@@ -3166,6 +3180,7 @@ const testing = {
   getCachedResult,
   isCircuitBreakerOpen,
   isMissingRegisteredMemoryToolsError,
+  normalizeActiveSummary,
   normalizePluginConfig,
   readActiveMemorySearchDebug,
   readPartialAssistantText,
