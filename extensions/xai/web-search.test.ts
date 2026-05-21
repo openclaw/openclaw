@@ -3,11 +3,11 @@ import { NON_ENV_SECRETREF_MARKER } from "openclaw/plugin-sdk/provider-auth-runt
 import { createNonExitingRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { withEnv, withEnvAsync, withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveXaiCatalogEntry } from "./model-definitions.js";
+import { buildXaiCatalogModels, resolveXaiCatalogEntry } from "./model-definitions.js";
 import { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
 import { resolveFallbackXaiAuth } from "./src/tool-auth-shared.js";
 import { wrapXaiWebSearchError } from "./src/web-search-shared.js";
-import { __testing } from "./test-api.js";
+import { testing } from "./test-api.js";
 import { createXaiWebSearchProvider } from "./web-search.js";
 
 vi.mock("openclaw/plugin-sdk/provider-web-search", async (importOriginal) => {
@@ -45,7 +45,7 @@ const {
   resolveXaiWebSearchCredential,
   resolveXaiWebSearchModel,
   resolveXaiWebSearchTimeoutSeconds,
-} = __testing;
+} = testing;
 
 function installXaiWebSearchFetch() {
   const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
@@ -476,7 +476,7 @@ describe("xai web search config resolution", () => {
   });
 
   it("builds wrapped payloads with optional inline citations", () => {
-    const payload = __testing.buildXaiWebSearchPayload({
+    const payload = testing.buildXaiWebSearchPayload({
       query: "q",
       provider: "grok",
       model: "grok-4-fast",
@@ -574,6 +574,14 @@ describe("xai web search response parsing", () => {
 });
 
 describe("xai provider models", () => {
+  it("publishes only current selectable chat models newest first", () => {
+    expect(buildXaiCatalogModels().map((model) => model.id)).toEqual([
+      "grok-4.3",
+      "grok-4.20-beta-latest-reasoning",
+      "grok-4.20-beta-latest-non-reasoning",
+    ]);
+  });
+
   it("publishes Grok 4.3 as the default chat model", () => {
     expectCatalogEntry("grok-4.3", {
       id: "grok-4.3",
@@ -585,7 +593,7 @@ describe("xai provider models", () => {
     });
   });
 
-  it("publishes the newer Grok fast and code models in the bundled catalog", () => {
+  it("keeps retired Grok fast and code slugs resolving for compatibility", () => {
     expectCatalogEntry("grok-4-1-fast", {
       id: "grok-4-1-fast",
       reasoning: true,
@@ -648,8 +656,8 @@ describe("xai provider models", () => {
   it("marks current Grok families as modern while excluding multi-agent ids", () => {
     expect(isModernXaiModel("grok-4.3")).toBe(true);
     expect(isModernXaiModel("grok-4.20-beta-latest-reasoning")).toBe(true);
-    expect(isModernXaiModel("grok-code-fast-1")).toBe(true);
-    expect(isModernXaiModel("grok-3-mini-fast")).toBe(true);
+    expect(isModernXaiModel("grok-code-fast-1")).toBe(false);
+    expect(isModernXaiModel("grok-3-mini-fast")).toBe(false);
     expect(isModernXaiModel("grok-4.20-multi-agent-experimental-beta-0304")).toBe(false);
   });
 

@@ -64,8 +64,11 @@ jobs:
   authorize_actor:
     name: Authorize workflow actor
     runs-on: ubuntu-24.04
+    outputs:
+      authorized: ${{ steps.permission.outputs.authorized }}
     steps:
       - name: Require maintainer-level repository access
+        id: permission
         uses: actions/github-script@v8
         with:
           script: |
@@ -79,14 +82,18 @@ jobs:
             const permission = data.permission;
             core.info(`Actor ${context.actor} permission: ${permission}`);
             if (!allowed.has(permission)) {
-              core.setFailed(
+              core.notice(
                 `Workflow requires write/maintain/admin access. Actor "${context.actor}" has "${permission}".`,
               );
+              core.setOutput("authorized", "false");
+              return;
             }
+            core.setOutput("authorized", "true");
 
   validate_ref:
     name: Validate candidate ref
     needs: authorize_actor
+    if: needs.authorize_actor.outputs.authorized == 'true'
     runs-on: ubuntu-24.04
     outputs:
       candidate_revision: ${{ steps.validate.outputs.candidate_revision }}
@@ -274,8 +281,8 @@ jobs:
             --credential-role ci \
             --provider-mode live-frontier \
             --hydrate-mode "$HYDRATE_MODE" \
-            --model openai/gpt-5.4 \
-            --alt-model openai/gpt-5.4 \
+            --model openai/gpt-5.5 \
+            --alt-model openai/gpt-5.5 \
             --fast \
             --scenario "$SCENARIO_ID" \
             "${keep_args[@]}" \
@@ -352,7 +359,7 @@ jobs:
       - name: Upload Mantis Slack desktop artifacts
         id: upload_artifact
         if: ${{ always() && steps.run_mantis.outputs.output_dir != '' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mantis-slack-desktop-smoke-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.run_mantis.outputs.output_dir }}

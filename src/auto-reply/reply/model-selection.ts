@@ -104,6 +104,7 @@ export async function createModelSelectionState(params: {
   model: string;
   hasModelDirective: boolean;
   hasOneTurnModelOverride?: boolean;
+  skipStoredModelOverride?: boolean;
   /** True when heartbeat.model was explicitly resolved for this run.
    *  In that case, skip session-stored overrides so the heartbeat selection wins. */
   hasResolvedHeartbeatModelOverride?: boolean;
@@ -280,6 +281,7 @@ export async function createModelSelectionState(params: {
   // overrides unless a direct auto fallback override is stale for the current
   // configured default.
   const skipStoredOverride =
+    params.skipStoredModelOverride === true ||
     hasOneTurnModelOverride ||
     params.hasResolvedHeartbeatModelOverride === true ||
     (staleHeartbeatAutoFallbackOverride && storedOverride?.source === "session");
@@ -310,7 +312,13 @@ export async function createModelSelectionState(params: {
     model = allowedInitialSelection.model;
   }
 
-  if (sessionEntry && sessionStore && sessionKey && sessionEntry.authProfileOverride) {
+  if (
+    !params.skipStoredModelOverride &&
+    sessionEntry &&
+    sessionStore &&
+    sessionKey &&
+    sessionEntry.authProfileOverride
+  ) {
     const { ensureAuthProfileStore } = await import("../../agents/auth-profiles.runtime.js");
     const store = ensureAuthProfileStore(undefined, {
       allowKeychainPrompt: false,

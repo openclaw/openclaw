@@ -17,7 +17,7 @@ import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
 import { createHostSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
 import { createUnsafeMountedSandbox } from "../test-helpers/unsafe-mounted-sandbox.js";
 import { makeZeroUsageSnapshot } from "../usage.js";
-import { __testing, createImageTool, resolveImageModelConfigForTool } from "./image-tool.js";
+import { testing, createImageTool, resolveImageModelConfigForTool } from "./image-tool.js";
 
 type CreateOpenClawCodingToolsArgs = Parameters<typeof createOpenClawCodingTools>[0];
 type MockOpenClawToolsOptions = {
@@ -181,13 +181,15 @@ async function createOpenClawCodingToolsWithFreshModules(options?: CreateOpenCla
   const defaultImageModels = new Map<string, string>([
     ["anthropic", "claude-opus-4-6"],
     ["minimax", "MiniMax-VL-01"],
+    ["minimax-cn", "MiniMax-VL-01"],
     ["minimax-portal", "MiniMax-VL-01"],
+    ["minimax-portal-cn", "MiniMax-VL-01"],
     ["openai", "gpt-5.4-mini"],
     ["opencode", "gpt-5-nano"],
     ["opencode-go", "kimi-k2.6"],
     ["zai", "glm-4.6v"],
   ]);
-  __testing.setProviderDepsForTest({
+  testing.setProviderDepsForTest({
     buildProviderRegistry: (overrides?: Record<string, MediaUnderstandingProvider>) =>
       imageProviderHarness.buildProviderRegistry(overrides),
     getMediaUnderstandingProvider: (
@@ -482,13 +484,15 @@ function installImageUnderstandingProviderStubs(...providers: MediaUnderstanding
   const defaultImageModels = new Map<string, string>([
     ["anthropic", "claude-opus-4-6"],
     ["minimax", "MiniMax-VL-01"],
+    ["minimax-cn", "MiniMax-VL-01"],
     ["minimax-portal", "MiniMax-VL-01"],
+    ["minimax-portal-cn", "MiniMax-VL-01"],
     ["openai", "gpt-5.4-mini"],
     ["opencode", "gpt-5-nano"],
     ["opencode-go", "kimi-k2.6"],
     ["zai", "glm-4.6v"],
   ]);
-  __testing.setProviderDepsForTest({
+  testing.setProviderDepsForTest({
     buildProviderRegistry: (overrides?: Record<string, MediaUnderstandingProvider>) =>
       imageProviderHarness.buildProviderRegistry(overrides),
     getMediaUnderstandingProvider: (
@@ -642,7 +646,7 @@ describe("image tool implicit imageModel config", () => {
 
   afterEach(() => {
     imageProviderHarness.reset();
-    __testing.setProviderDepsForTest();
+    testing.setProviderDepsForTest();
   });
 
   it("stays disabled without auth when no pairing is possible", async () => {
@@ -659,7 +663,7 @@ describe("image tool implicit imageModel config", () => {
     await withTempAgentDir(async (agentDir) => {
       const resolveDefaultMediaModelSpy = vi.fn(() => "gpt-5.4-mini");
       const resolveAutoMediaKeyProvidersSpy = vi.fn(() => ["openai"]);
-      __testing.setProviderDepsForTest({
+      testing.setProviderDepsForTest({
         buildProviderRegistry: (overrides?: Record<string, MediaUnderstandingProvider>) =>
           imageProviderHarness.buildProviderRegistry(overrides),
         getMediaUnderstandingProvider: (
@@ -761,6 +765,127 @@ describe("image tool implicit imageModel config", () => {
         fallbacks: ["openai/gpt-5.4-mini", "anthropic/claude-opus-4-6"],
       });
       expect(typeof createImageTool({ config: cfg, agentDir })?.execute).toBe("function");
+    });
+  });
+
+  it("keeps MiniMax CN chat metadata off automatic image routing", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "minimax-cn/MiniMax-M2.5" } } },
+        models: {
+          mode: "merge",
+          providers: {
+            "minimax-cn": {
+              baseUrl: "https://api.minimaxi.com/anthropic",
+              apiKey: "${MINIMAX_API_KEY}",
+              api: "anthropic-messages",
+              models: [makeModelDefinition("MiniMax-M2.5", ["text", "image"])],
+            },
+          },
+        },
+      };
+      const authStore = {
+        version: 1,
+        profiles: {
+          mini: { type: "api_key", provider: "minimax-cn", key: "minimax-test" },
+          miniGlobal: { type: "api_key", provider: "minimax", key: "minimax-test" },
+        },
+      } as const;
+
+      expect(resolveImageModelConfigForTool({ cfg, agentDir, authStore })).toEqual({
+        primary: "minimax-cn/MiniMax-VL-01",
+      });
+    });
+  });
+
+  it("prefers configured MiniMax CN image alias over canonical auto fallback", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const defaultImageModels = new Map<string, string>([
+        ["anthropic", "claude-opus-4-6"],
+        ["minimax", "MiniMax-VL-01"],
+        ["minimax-cn", "MiniMax-VL-01"],
+        ["openai", "gpt-5.4-mini"],
+      ]);
+      testing.setProviderDepsForTest({
+        buildProviderRegistry: (overrides?: Record<string, MediaUnderstandingProvider>) =>
+          imageProviderHarness.buildProviderRegistry(overrides),
+        getMediaUnderstandingProvider: (
+          id: string,
+          registry: Map<string, MediaUnderstandingProvider>,
+        ) => imageProviderHarness.getMediaUnderstandingProvider(id, registry),
+        describeImageWithModel: describeGenericImageWithModel,
+        describeImagesWithModel: describeGenericImagesWithModel,
+        resolveAutoMediaKeyProviders: ({ capability }) =>
+          capability === "image" ? ["openai", "anthropic", "minimax-cn", "minimax"] : [],
+        resolveDefaultMediaModel: ({ providerId, capability }) =>
+          capability === "image" ? defaultImageModels.get(providerId.toLowerCase()) : undefined,
+      });
+      const cfg: OpenClawConfig = {
+        models: {
+          mode: "merge",
+          providers: {
+            "minimax-cn": {
+              baseUrl: "https://api.minimaxi.com/anthropic",
+              apiKey: "${MINIMAX_API_KEY}",
+              api: "anthropic-messages",
+              models: [makeModelDefinition("MiniMax-M2.5", ["text", "image"])],
+            },
+          },
+        },
+      };
+      const authStore = {
+        version: 1,
+        profiles: {
+          mini: { type: "api_key", provider: "minimax-cn", key: "minimax-test" },
+          miniGlobal: { type: "api_key", provider: "minimax", key: "minimax-test" },
+        },
+      } as const;
+
+      expect(resolveImageModelConfigForTool({ cfg, agentDir, authStore })).toEqual({
+        primary: "minimax-cn/MiniMax-VL-01",
+      });
+    });
+  });
+
+  it("keeps canonical MiniMax fallback when configured CN alias has no image candidate", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      testing.setProviderDepsForTest({
+        buildProviderRegistry: (overrides?: Record<string, MediaUnderstandingProvider>) =>
+          imageProviderHarness.buildProviderRegistry(overrides),
+        getMediaUnderstandingProvider: (
+          id: string,
+          registry: Map<string, MediaUnderstandingProvider>,
+        ) => imageProviderHarness.getMediaUnderstandingProvider(id, registry),
+        describeImageWithModel: describeGenericImageWithModel,
+        describeImagesWithModel: describeGenericImagesWithModel,
+        resolveAutoMediaKeyProviders: ({ capability }) =>
+          capability === "image" ? ["minimax"] : [],
+        resolveDefaultMediaModel: ({ providerId, capability }) =>
+          capability === "image" && providerId === "minimax" ? "MiniMax-VL-01" : undefined,
+      });
+      const cfg: OpenClawConfig = {
+        models: {
+          mode: "merge",
+          providers: {
+            "minimax-cn": {
+              baseUrl: "https://api.minimaxi.com/anthropic",
+              apiKey: "${MINIMAX_API_KEY}",
+              api: "anthropic-messages",
+              models: [],
+            },
+          },
+        },
+      };
+      const authStore = {
+        version: 1,
+        profiles: {
+          miniGlobal: { type: "api_key", provider: "minimax", key: "minimax-test" },
+        },
+      } as const;
+
+      expect(resolveImageModelConfigForTool({ cfg, agentDir, authStore })).toEqual({
+        primary: "minimax/MiniMax-VL-01",
+      });
     });
   });
 
@@ -1349,9 +1474,9 @@ describe("image tool implicit imageModel config", () => {
         type: "object",
         properties: {
           prompt: { type: "string" },
-          image: { description: "Single image path or URL.", type: "string" },
+          image: { description: "One image path/URL.", type: "string" },
           images: {
-            description: "Multiple image paths or URLs (up to maxImages, default 20).",
+            description: "Image paths/URLs; maxImages default 20.",
             type: "array",
             items: { type: "string" },
           },
@@ -1605,14 +1730,14 @@ describe("image tool data URL support", () => {
   it("decodes base64 image data URLs", () => {
     const pngB64 =
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
-    const out = __testing.decodeDataUrl(`data:image/png;base64,${pngB64}`);
+    const out = testing.decodeDataUrl(`data:image/png;base64,${pngB64}`);
     expect(out.kind).toBe("image");
     expect(out.mimeType).toBe("image/png");
     expect(out.buffer).toEqual(Buffer.from(pngB64, "base64"));
   });
 
   it("rejects non-image data URLs", () => {
-    expect(() => __testing.decodeDataUrl("data:text/plain;base64,SGVsbG8=")).toThrow(
+    expect(() => testing.decodeDataUrl("data:text/plain;base64,SGVsbG8=")).toThrow(
       /Unsupported data URL type/i,
     );
   });
@@ -1623,7 +1748,7 @@ describe("image tool data URL support", () => {
     const bufferFromSpy = vi.spyOn(Buffer, "from");
 
     try {
-      expect(() => __testing.decodeDataUrl(dataUrl, { maxBytes: 4 })).toThrow(/size limit/i);
+      expect(() => testing.decodeDataUrl(dataUrl, { maxBytes: 4 })).toThrow(/size limit/i);
       expect(bufferFromSpy).not.toHaveBeenCalledWith(oversizedBase64, "base64");
     } finally {
       bufferFromSpy.mockRestore();
@@ -1648,7 +1773,7 @@ describe("image tool MiniMax VLM routing", () => {
 
   afterEach(() => {
     imageProviderHarness.reset();
-    __testing.setProviderDepsForTest();
+    testing.setProviderDepsForTest();
   });
 
   async function createMinimaxVlmFixture(baseResp: { status_code: number; status_msg: string }) {
@@ -1761,7 +1886,7 @@ describe("image tool managed inbound media", () => {
     vi.unstubAllEnvs();
     global.fetch = priorFetch;
     imageProviderHarness.reset();
-    __testing.setProviderDepsForTest();
+    testing.setProviderDepsForTest();
   });
 
   async function withManagedInboundPng(
@@ -1857,7 +1982,7 @@ describe("image tool response validation", () => {
       expected: 4096,
     },
   ])("$name", ({ maxOutputTokens, expected }) => {
-    expect(__testing.resolveImageToolMaxTokens(maxOutputTokens)).toBe(expected);
+    expect(testing.resolveImageToolMaxTokens(maxOutputTokens)).toBe(expected);
   });
 
   it.each([
@@ -1878,7 +2003,7 @@ describe("image tool response validation", () => {
     },
   ])("$name", ({ message, expectedError }) => {
     expect(() =>
-      __testing.coerceImageAssistantText({
+      testing.coerceImageAssistantText({
         provider: "openai",
         model: "gpt-5.4-mini",
         message,
@@ -1887,7 +2012,7 @@ describe("image tool response validation", () => {
   });
 
   it("returns trimmed text from image-model responses", () => {
-    const text = __testing.coerceImageAssistantText({
+    const text = testing.coerceImageAssistantText({
       provider: "anthropic",
       model: "claude-opus-4-6",
       message: {
@@ -1914,9 +2039,9 @@ describe("image tool response validation", () => {
           },
         ],
       });
-      expect(__testing.hasImageReasoningOnlyResponse(message as never)).toBe(true);
+      expect(testing.hasImageReasoningOnlyResponse(message as never)).toBe(true);
       expect(() =>
-        __testing.coerceImageAssistantText({
+        testing.coerceImageAssistantText({
           provider: "openai",
           model: "gpt-5.4-mini",
           message: message as never,
@@ -1940,9 +2065,9 @@ describe("image tool response validation", () => {
           },
         ],
       });
-      expect(__testing.hasImageReasoningOnlyResponse(message as never)).toBe(true);
+      expect(testing.hasImageReasoningOnlyResponse(message as never)).toBe(true);
       expect(() =>
-        __testing.coerceImageAssistantText({
+        testing.coerceImageAssistantText({
           provider: "openai",
           model: "gpt-5.4-mini",
           message: message as never,
@@ -1966,7 +2091,7 @@ describe("image tool response validation", () => {
       ],
     });
 
-    expect(__testing.hasImageReasoningOnlyResponse(message as never)).toBe(true);
+    expect(testing.hasImageReasoningOnlyResponse(message as never)).toBe(true);
   });
 
   it("ignores oversized JSON signatures without Responses reasoning markers", () => {
@@ -1980,7 +2105,7 @@ describe("image tool response validation", () => {
       ],
     });
 
-    expect(__testing.hasImageReasoningOnlyResponse(message as never)).toBe(false);
+    expect(testing.hasImageReasoningOnlyResponse(message as never)).toBe(false);
   });
 
   it("detects signed reasoning-only responses with empty summary text", () => {
@@ -1994,7 +2119,7 @@ describe("image tool response validation", () => {
       ],
     });
 
-    expect(__testing.hasImageReasoningOnlyResponse(message as never)).toBe(true);
+    expect(testing.hasImageReasoningOnlyResponse(message as never)).toBe(true);
   });
 
   it("bounds reasoning-only detection before scanning every block", () => {
@@ -2009,6 +2134,6 @@ describe("image tool response validation", () => {
       ],
     });
 
-    expect(__testing.hasImageReasoningOnlyResponse(message as never)).toBe(false);
+    expect(testing.hasImageReasoningOnlyResponse(message as never)).toBe(false);
   });
 });

@@ -11,8 +11,10 @@ import {
 } from "../../context-engine/registry.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { __testing as cliBackendsTesting } from "../cli-backends.js";
+import { clearMemoryPluginState, registerMemoryPromptSection } from "../../plugins/memory-state.js";
+import { testing as cliBackendsTesting } from "../cli-backends.js";
 import { hashCliSessionText } from "../cli-session.js";
+import { buildActiveImageGenerationTaskPromptContextForSession } from "../image-generation-task-status.js";
 import { buildActiveMusicGenerationTaskPromptContextForSession } from "../music-generation-task-status.js";
 import { buildActiveVideoGenerationTaskPromptContextForSession } from "../video-generation-task-status.js";
 import {
@@ -50,6 +52,16 @@ vi.mock("../video-generation-task-status.js", () => ({
   isActiveVideoGenerationTask: vi.fn(() => false),
 }));
 
+vi.mock("../image-generation-task-status.js", () => ({
+  IMAGE_GENERATION_TASK_KIND: "image_generation",
+  buildActiveImageGenerationTaskPromptContextForSession: vi.fn(() => undefined),
+  buildImageGenerationTaskStatusDetails: vi.fn(() => ({})),
+  buildImageGenerationTaskStatusText: vi.fn(() => ""),
+  findActiveImageGenerationTaskForSession: vi.fn(() => undefined),
+  getImageGenerationTaskProviderId: vi.fn(() => undefined),
+  isActiveImageGenerationTask: vi.fn(() => false),
+}));
+
 vi.mock("../music-generation-task-status.js", () => ({
   MUSIC_GENERATION_TASK_KIND: "music_generation",
   buildActiveMusicGenerationTaskPromptContextForSession: vi.fn(() => undefined),
@@ -61,6 +73,9 @@ vi.mock("../music-generation-task-status.js", () => ({
 const mockGetGlobalHookRunner = vi.mocked(getGlobalHookRunner);
 const mockBuildActiveVideoGenerationTaskPromptContextForSession = vi.mocked(
   buildActiveVideoGenerationTaskPromptContextForSession,
+);
+const mockBuildActiveImageGenerationTaskPromptContextForSession = vi.mocked(
+  buildActiveImageGenerationTaskPromptContextForSession,
 );
 const mockBuildActiveMusicGenerationTaskPromptContextForSession = vi.mocked(
   buildActiveMusicGenerationTaskPromptContextForSession,
@@ -78,7 +93,7 @@ function createTestMcpLoopbackServerConfig(port: number) {
           "x-openclaw-agent-id": "${OPENCLAW_MCP_AGENT_ID}",
           "x-openclaw-account-id": "${OPENCLAW_MCP_ACCOUNT_ID}",
           "x-openclaw-message-channel": "${OPENCLAW_MCP_MESSAGE_CHANNEL}",
-          "x-openclaw-inbound-turn-kind": "${OPENCLAW_MCP_INBOUND_TURN_KIND}",
+          "x-openclaw-inbound-event-kind": "${OPENCLAW_MCP_INBOUND_EVENT_KIND}",
         },
       },
     },
@@ -183,10 +198,12 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       getActiveMcpLoopbackRuntime: vi.fn(() => undefined),
       ensureMcpLoopbackServer: vi.fn(createTestMcpLoopbackServer),
       createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
+      resolveMcpLoopbackScopedTools: vi.fn(() => ({ agentId: "main", tools: [] })),
       resolveOpenClawReferencePaths: vi.fn(async () => ({ docsPath: null, sourcePath: null })),
     });
     mockGetGlobalHookRunner.mockReturnValue(null);
     getRuntimeConfigMock.mockReturnValue({});
+    mockBuildActiveImageGenerationTaskPromptContextForSession.mockReturnValue(undefined);
     mockBuildActiveVideoGenerationTaskPromptContextForSession.mockReturnValue(undefined);
     mockBuildActiveMusicGenerationTaskPromptContextForSession.mockReturnValue(undefined);
   });
@@ -195,8 +212,10 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     cliBackendsTesting.resetDepsForTest();
     getRuntimeConfigMock.mockReset();
     mockGetGlobalHookRunner.mockReset();
+    mockBuildActiveImageGenerationTaskPromptContextForSession.mockReset();
     mockBuildActiveVideoGenerationTaskPromptContextForSession.mockReset();
     mockBuildActiveMusicGenerationTaskPromptContextForSession.mockReset();
+    clearMemoryPluginState();
     vi.unstubAllEnvs();
   });
 
@@ -377,7 +396,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         workspaceDir: dir,
         prompt: "latest ask",
         transcriptPrompt: "latest ask",
-        currentTurnContext: {
+        currentInboundContext: {
           text: "Sender (untrusted metadata):\nsender_id=U123",
           promptJoiner: " ",
         },
@@ -887,6 +906,9 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
   it("applies direct-run prepend system context helpers on the CLI path", async () => {
     const { dir, sessionFile } = createSessionFile();
     try {
+      mockBuildActiveImageGenerationTaskPromptContextForSession.mockReturnValue(
+        "active image task",
+      );
       mockBuildActiveVideoGenerationTaskPromptContextForSession.mockReturnValue(
         "active video task",
       );
@@ -915,7 +937,10 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       });
 
       expect(context.systemPrompt).toBe(
-        "active video task\n\nhook prepend system\n\nhook system\n\nCurrent model identity: test-cli/test-model. If asked what model you are, answer with this value for the current run.",
+        "active image task\n\nactive video task\n\nhook prepend system\n\nhook system\n\nCurrent model identity: test-cli/test-model. If asked what model you are, answer with this value for the current run.",
+      );
+      expect(mockBuildActiveImageGenerationTaskPromptContextForSession).toHaveBeenCalledWith(
+        "agent:main:test",
       );
       expect(mockBuildActiveVideoGenerationTaskPromptContextForSession).toHaveBeenCalledWith(
         "agent:main:test",
@@ -960,6 +985,178 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       expect(context.preparedBackend.mcpConfigHash).toBeUndefined();
       expect(context.preparedBackend.env).toBeUndefined();
       expect(context.preparedBackend.backend.args).toEqual(["--print"]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses loopback-scoped tools when building bundled MCP CLI prompts", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      registerMemoryPromptSection(({ availableTools }) =>
+        availableTools.has("memory_search")
+          ? ["## Memory Recall", `tools=${[...availableTools].toSorted().join(",")}`, ""]
+          : [],
+      );
+      const getActiveMcpLoopbackRuntime = vi.fn(() => ({
+        port: 31783,
+        ownerToken: "owner-token",
+        nonOwnerToken: "non-owner-token",
+      }));
+      const ensureMcpLoopbackServer = vi.fn(createTestMcpLoopbackServer);
+      const createMcpLoopbackServerConfig = vi.fn(createTestMcpLoopbackServerConfig);
+      const resolveMcpLoopbackScopedTools = vi.fn(() => ({
+        agentId: "main",
+        tools: [
+          {
+            name: "memory_search",
+            label: "Memory Search",
+            description: "Search memory",
+            parameters: { type: "object", properties: {} },
+            execute: vi.fn(),
+          },
+        ],
+      }));
+      setCliRunnerPrepareTestDeps({
+        getActiveMcpLoopbackRuntime,
+        ensureMcpLoopbackServer,
+        createMcpLoopbackServerConfig,
+        resolveMcpLoopbackScopedTools,
+      });
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [
+          {
+            id: "native-cli",
+            pluginId: "native-plugin",
+            bundleMcp: true,
+            bundleMcpMode: "claude-config-file",
+            config: {
+              command: "native-cli",
+              args: ["--print"],
+              systemPromptArg: "--system-prompt",
+              systemPromptWhen: "first",
+              output: "text",
+              input: "arg",
+              sessionMode: "existing",
+            },
+          },
+        ],
+      });
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "native-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-loopback-prompt-tools",
+        config: createCliBackendConfig({ bundleMcp: true, systemPromptOverride: null }),
+        cliSessionBinding: {
+          sessionId: "cli-session",
+          promptToolNamesHash: "old-tool-surface",
+        },
+      });
+
+      expect(resolveMcpLoopbackScopedTools).toHaveBeenCalledWith({
+        cfg: expect.any(Object),
+        sessionKey: "agent:main:test",
+        messageProvider: undefined,
+        accountId: undefined,
+        inboundEventKind: undefined,
+        senderIsOwner: undefined,
+      });
+      expect(context.systemPrompt).toContain("## Memory Recall");
+      expect(context.systemPrompt).toContain("tools=memory_search");
+      expect(context.systemPromptReport.tools.entries.map((entry) => entry.name)).toEqual([
+        "memory_search",
+      ]);
+      expect(context.promptToolNamesHash).toBe(
+        hashCliSessionText(JSON.stringify(["memory_search"])),
+      );
+      expect(context.reusableCliSession).toEqual({ invalidatedReason: "system-prompt" });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not advertise loopback prompt tools when the runtime is unavailable", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      registerMemoryPromptSection(({ availableTools }) =>
+        availableTools.has("memory_search")
+          ? ["## Memory Recall", `tools=${[...availableTools].toSorted().join(",")}`, ""]
+          : [],
+      );
+      const getActiveMcpLoopbackRuntime = vi.fn(() => undefined);
+      const ensureMcpLoopbackServer = vi.fn(async () => {
+        throw new Error("loopback unavailable");
+      });
+      const createMcpLoopbackServerConfig = vi.fn(createTestMcpLoopbackServerConfig);
+      const resolveMcpLoopbackScopedTools = vi.fn(() => ({
+        agentId: "main",
+        tools: [
+          {
+            name: "memory_search",
+            label: "Memory Search",
+            description: "Search memory",
+            parameters: { type: "object", properties: {} },
+            execute: vi.fn(),
+          },
+        ],
+      }));
+      setCliRunnerPrepareTestDeps({
+        getActiveMcpLoopbackRuntime,
+        ensureMcpLoopbackServer,
+        createMcpLoopbackServerConfig,
+        resolveMcpLoopbackScopedTools,
+      });
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [
+          {
+            id: "native-cli",
+            pluginId: "native-plugin",
+            bundleMcp: true,
+            bundleMcpMode: "claude-config-file",
+            config: {
+              command: "native-cli",
+              args: ["--print"],
+              systemPromptArg: "--system-prompt",
+              systemPromptWhen: "first",
+              output: "text",
+              input: "arg",
+              sessionMode: "existing",
+            },
+          },
+        ],
+      });
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "native-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-loopback-prompt-tools-fallback",
+        config: createCliBackendConfig({ bundleMcp: true, systemPromptOverride: null }),
+      });
+
+      expect(ensureMcpLoopbackServer).toHaveBeenCalledTimes(1);
+      expect(getActiveMcpLoopbackRuntime).toHaveBeenCalledTimes(2);
+      expect(createMcpLoopbackServerConfig).not.toHaveBeenCalled();
+      expect(resolveMcpLoopbackScopedTools).not.toHaveBeenCalled();
+      expect(context.systemPrompt).not.toContain("## Memory Recall");
+      expect(context.systemPrompt).not.toContain("memory_search");
+      expect(context.systemPromptReport.tools.entries).toEqual([]);
+      expect(context.promptToolNamesHash).toBeUndefined();
+      expect(context.preparedBackend.env).toBeUndefined();
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -1010,13 +1207,13 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         timeoutMs: 1_000,
         runId: "run-test-room-event-tools",
         config: createCliBackendConfig(),
-        currentTurnKind: "room_event",
+        currentInboundEventKind: "room_event",
         messageChannel: "telegram",
       });
 
       expect(context.preparedBackend.env).toMatchObject({
         OPENCLAW_MCP_MESSAGE_CHANNEL: "telegram",
-        OPENCLAW_MCP_INBOUND_TURN_KIND: "room_event",
+        OPENCLAW_MCP_INBOUND_EVENT_KIND: "room_event",
       });
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });

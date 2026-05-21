@@ -35,6 +35,11 @@ const hoisted = vi.hoisted(() => ({
     label?: string;
     title?: string;
   }>,
+  activeEmbeddedRunCount: { value: 0 },
+  activeEmbeddedRunSessionIds: [] as string[],
+  activeEmbeddedRunSessionKeys: [] as string[],
+  markRestartAbortedMainSessions: vi.fn(async (_params: unknown) => ({ marked: 1, skipped: 0 })),
+  runtimeConfig: { value: { session: { store: "/tmp/active-sessions.json" } } as OpenClawConfig },
 }));
 
 vi.mock("../hooks/gmail-watcher.js", () => ({
@@ -76,6 +81,20 @@ vi.mock("../tasks/task-registry.maintenance.js", async () => {
   };
 });
 
+vi.mock("../agents/pi-embedded-runner/run-state.js", () => ({
+  getActiveEmbeddedRunCount: () => hoisted.activeEmbeddedRunCount.value,
+  listActiveEmbeddedRunSessionIds: () => hoisted.activeEmbeddedRunSessionIds,
+  listActiveEmbeddedRunSessionKeys: () => hoisted.activeEmbeddedRunSessionKeys,
+}));
+
+vi.mock("../agents/main-session-restart-recovery.js", () => ({
+  markRestartAbortedMainSessions: hoisted.markRestartAbortedMainSessions,
+}));
+
+vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: () => hoisted.runtimeConfig.value,
+}));
+
 function createReloadHandlersForTest(logReload = { info: vi.fn(), warn: vi.fn() }) {
   const cron = { start: vi.fn(async () => {}), stop: vi.fn() };
   const heartbeatRunner = {
@@ -115,15 +134,111 @@ afterEach(() => {
   hoisted.stopGmailWatcher.mockClear();
   hoisted.activeTaskCount.value = 0;
   hoisted.activeTaskBlockers.length = 0;
+  hoisted.activeEmbeddedRunCount.value = 0;
+  hoisted.activeEmbeddedRunSessionIds.length = 0;
+  hoisted.activeEmbeddedRunSessionKeys.length = 0;
+  hoisted.markRestartAbortedMainSessions.mockClear();
+  hoisted.runtimeConfig.value = { session: { store: "/tmp/active-sessions.json" } };
 });
 
 describe("gateway restart deferral preflight", () => {
+  it("defers channel hot reload until active embedded work drains", async () => {
+    const previousSkipChannels = process.env.OPENCLAW_SKIP_CHANNELS;
+    const previousSkipProviders = process.env.OPENCLAW_SKIP_PROVIDERS;
+    delete process.env.OPENCLAW_SKIP_CHANNELS;
+    delete process.env.OPENCLAW_SKIP_PROVIDERS;
+    const startChannel = vi.fn(async () => {});
+    const stopChannel = vi.fn(async () => {});
+    const { applyHotReload } = createGatewayReloadHandlers({
+      deps: {} as never,
+      broadcast: vi.fn(),
+      getState: () => ({
+        hooksConfig: {} as never,
+        hookClientIpConfig: {} as never,
+        heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() } as never,
+        cronState: {
+          cron: { start: vi.fn(async () => {}), stop: vi.fn() },
+          storePath: "/tmp/cron.json",
+          cronEnabled: false,
+        } as never,
+        channelHealthMonitor: null,
+      }),
+      setState: vi.fn(),
+      startChannel,
+      stopChannel,
+      reloadPlugins: vi.fn(
+        async (): Promise<GatewayPluginReloadResult> => ({
+          restartChannels: new Set(),
+          activeChannels: new Set(),
+        }),
+      ),
+      logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      logChannels: { info: vi.fn(), error: vi.fn() },
+      logCron: { error: vi.fn() },
+      logReload: { info: vi.fn(), warn: vi.fn() },
+      createHealthMonitor: () => null,
+    });
+    hoisted.activeEmbeddedRunCount.value = 1;
+    vi.useFakeTimers();
+    const reloadPromise = applyHotReload(
+      {
+        changedPaths: ["channels.discord.token"],
+        restartGateway: false,
+        restartReasons: [],
+        hotReasons: ["channels.discord.token"],
+        reloadHooks: false,
+        restartGmailWatcher: false,
+        restartCron: false,
+        restartHeartbeat: false,
+        restartHealthMonitor: false,
+        reloadPlugins: false,
+        restartChannels: new Set(["discord"]),
+        disposeMcpRuntimes: false,
+        noopPaths: [],
+      },
+      {
+        gateway: { reload: { deferralTimeoutMs: 60_000 } },
+        channels: { discord: { token: "token" } },
+      },
+    );
+    try {
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(500);
+      expect(stopChannel).not.toHaveBeenCalled();
+      expect(startChannel).not.toHaveBeenCalled();
+
+      hoisted.activeEmbeddedRunCount.value = 0;
+      await vi.advanceTimersByTimeAsync(500);
+      await reloadPromise;
+    } finally {
+      hoisted.activeEmbeddedRunCount.value = 0;
+      await vi.advanceTimersByTimeAsync(500).catch(() => {});
+      vi.useRealTimers();
+      await reloadPromise.catch(() => {});
+      if (previousSkipChannels === undefined) {
+        delete process.env.OPENCLAW_SKIP_CHANNELS;
+      } else {
+        process.env.OPENCLAW_SKIP_CHANNELS = previousSkipChannels;
+      }
+      if (previousSkipProviders === undefined) {
+        delete process.env.OPENCLAW_SKIP_PROVIDERS;
+      } else {
+        process.env.OPENCLAW_SKIP_PROVIDERS = previousSkipProviders;
+      }
+    }
+
+    expect(stopChannel).toHaveBeenCalledWith("discord", undefined, { manual: false });
+    expect(startChannel).toHaveBeenCalledWith("discord");
+  });
+
   it("logs active task run ids before waiting and when forcing after timeout", async () => {
-    const restartTesting = (await import("../infra/restart.js")).__testing;
+    const restartTesting = (await import("../infra/restart.js")).testing;
     restartTesting.resetSigusr1State();
     const logReload = { info: vi.fn(), warn: vi.fn() };
     const { requestGatewayRestart } = createReloadHandlersForTest(logReload);
     hoisted.activeTaskCount.value = 1;
+    hoisted.activeEmbeddedRunSessionIds.push("session-issue-82433");
+    hoisted.activeEmbeddedRunSessionKeys.push("agent:main:issue-82433");
     hoisted.activeTaskBlockers.push({
       taskId: "task-nightly",
       runId: "run-nightly",
@@ -171,6 +286,15 @@ describe("gateway restart deferral preflight", () => {
       await Promise.resolve();
 
       expect(signalSpy).toHaveBeenCalledTimes(1);
+      expect(hoisted.markRestartAbortedMainSessions).toHaveBeenCalledWith({
+        cfg: {
+          gateway: { reload: { deferralTimeoutMs: 1_000 } },
+        },
+        additionalCfgs: [{ session: { store: "/tmp/active-sessions.json" } }],
+        sessionIds: new Set(["session-issue-82433"]),
+        sessionKeys: new Set(["agent:main:issue-82433"]),
+        reason: "config reload forced restart",
+      });
       expect(logReload.warn.mock.calls).toEqual([
         [
           "config change requires gateway restart (gateway.port) — deferring until 1 background task run(s) complete",
@@ -188,6 +312,159 @@ describe("gateway restart deferral preflight", () => {
       process.removeListener("SIGUSR1", signalSpy);
       restartTesting.resetSigusr1State();
     }
+  });
+});
+
+describe("gateway channel hot reload handlers", () => {
+  function createChannelReloadPlan(channels: ChannelKind[]): GatewayReloadPlan {
+    return {
+      changedPaths: channels.map((channel) => `channels.${channel}.enabled`),
+      restartGateway: false,
+      restartReasons: [],
+      hotReasons: ["channels"],
+      reloadHooks: false,
+      restartGmailWatcher: false,
+      restartCron: false,
+      restartHeartbeat: false,
+      restartHealthMonitor: false,
+      reloadPlugins: false,
+      restartChannels: new Set(channels),
+      disposeMcpRuntimes: false,
+      noopPaths: [],
+    };
+  }
+
+  async function withChannelReloadsEnabled(run: () => Promise<void>) {
+    const previousSkipChannels = process.env.OPENCLAW_SKIP_CHANNELS;
+    const previousSkipProviders = process.env.OPENCLAW_SKIP_PROVIDERS;
+    delete process.env.OPENCLAW_SKIP_CHANNELS;
+    delete process.env.OPENCLAW_SKIP_PROVIDERS;
+    try {
+      await run();
+    } finally {
+      if (previousSkipChannels === undefined) {
+        delete process.env.OPENCLAW_SKIP_CHANNELS;
+      } else {
+        process.env.OPENCLAW_SKIP_CHANNELS = previousSkipChannels;
+      }
+      if (previousSkipProviders === undefined) {
+        delete process.env.OPENCLAW_SKIP_PROVIDERS;
+      } else {
+        process.env.OPENCLAW_SKIP_PROVIDERS = previousSkipProviders;
+      }
+    }
+  }
+
+  it("continues restarting later channels after a hot-reload stop failure", async () => {
+    const events: string[] = [];
+    const setState = vi.fn();
+    const logChannels = { info: vi.fn(), error: vi.fn() };
+    const stopChannel = vi.fn(async (channel: ChannelKind) => {
+      events.push(`stop:${channel}`);
+      if (channel === "telegram") {
+        throw new Error("stop failed");
+      }
+    });
+    const startChannel = vi.fn(async (channel: ChannelKind) => {
+      events.push(`start:${channel}`);
+    });
+    const { applyHotReload } = createGatewayReloadHandlers({
+      deps: {} as never,
+      broadcast: vi.fn(),
+      getState: () => ({
+        hooksConfig: {} as never,
+        hookClientIpConfig: {} as never,
+        heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() } as never,
+        cronState: {
+          cron: { start: vi.fn(async () => {}), stop: vi.fn() },
+          storePath: "/tmp/cron.json",
+          cronEnabled: false,
+        } as never,
+        channelHealthMonitor: null,
+      }),
+      setState,
+      startChannel,
+      stopChannel,
+      reloadPlugins: vi.fn(
+        async (): Promise<GatewayPluginReloadResult> => ({
+          restartChannels: new Set(),
+          activeChannels: new Set(),
+        }),
+      ),
+      logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      logChannels,
+      logCron: { error: vi.fn() },
+      logReload: { info: vi.fn(), warn: vi.fn() },
+      createHealthMonitor: () => null,
+    });
+
+    await withChannelReloadsEnabled(async () => {
+      await expect(
+        applyHotReload(createChannelReloadPlan(["telegram", "discord"]), {}),
+      ).rejects.toThrow("failed to restart channels during hot reload: telegram");
+    });
+
+    expect(events).toEqual(["stop:telegram", "stop:discord", "start:discord"]);
+    expect(logChannels.error).toHaveBeenCalledWith(
+      "failed to restart telegram channel during hot reload: stop failed",
+    );
+    expect(setState).not.toHaveBeenCalled();
+  });
+
+  it("continues restarting later channels after a hot-reload start failure", async () => {
+    const events: string[] = [];
+    const setState = vi.fn();
+    const logChannels = { info: vi.fn(), error: vi.fn() };
+    const stopChannel = vi.fn(async (channel: ChannelKind) => {
+      events.push(`stop:${channel}`);
+    });
+    const startChannel = vi.fn(async (channel: ChannelKind) => {
+      events.push(`start:${channel}`);
+      if (channel === "telegram") {
+        throw new Error("start failed");
+      }
+    });
+    const { applyHotReload } = createGatewayReloadHandlers({
+      deps: {} as never,
+      broadcast: vi.fn(),
+      getState: () => ({
+        hooksConfig: {} as never,
+        hookClientIpConfig: {} as never,
+        heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() } as never,
+        cronState: {
+          cron: { start: vi.fn(async () => {}), stop: vi.fn() },
+          storePath: "/tmp/cron.json",
+          cronEnabled: false,
+        } as never,
+        channelHealthMonitor: null,
+      }),
+      setState,
+      startChannel,
+      stopChannel,
+      reloadPlugins: vi.fn(
+        async (): Promise<GatewayPluginReloadResult> => ({
+          restartChannels: new Set(),
+          activeChannels: new Set(),
+        }),
+      ),
+      logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      logChannels,
+      logCron: { error: vi.fn() },
+      logReload: { info: vi.fn(), warn: vi.fn() },
+      createHealthMonitor: () => null,
+    });
+
+    await withChannelReloadsEnabled(async () => {
+      await expect(
+        applyHotReload(createChannelReloadPlan(["telegram", "discord"]), {}),
+      ).rejects.toThrow("failed to restart channels during hot reload: telegram");
+    });
+
+    expect(events).toEqual(["stop:telegram", "start:telegram", "stop:discord", "start:discord"]);
+    expect(logChannels.error).toHaveBeenCalledWith(
+      "failed to restart telegram channel during hot reload: start failed",
+    );
+    expect(setState).not.toHaveBeenCalled();
   });
 });
 
@@ -551,6 +828,115 @@ describe("gateway Gmail hot reload handlers", () => {
 });
 
 describe("gateway plugin hot reload handlers", () => {
+  it("rolls back stopped channels when plugin pre-replace stop fails", async () => {
+    const previousSkipChannels = process.env.OPENCLAW_SKIP_CHANNELS;
+    const previousSkipProviders = process.env.OPENCLAW_SKIP_PROVIDERS;
+    delete process.env.OPENCLAW_SKIP_CHANNELS;
+    delete process.env.OPENCLAW_SKIP_PROVIDERS;
+    const cron = { start: vi.fn(async () => {}), stop: vi.fn() };
+    const heartbeatRunner = {
+      stop: vi.fn(),
+      updateConfig: vi.fn(),
+    };
+    const setState = vi.fn();
+    const logChannels = { info: vi.fn(), error: vi.fn() };
+    const events: string[] = [];
+    const startChannel = vi.fn(async (channel: ChannelKind) => {
+      events.push(`start:${channel}`);
+    });
+    const stopChannel = vi.fn(async (channel: ChannelKind) => {
+      events.push(`stop:${channel}`);
+      if (channel === "discord") {
+        throw new Error("stop failed");
+      }
+    });
+    const reloadPlugins = vi.fn(
+      async (params: {
+        beforeReplace: (channels: ReadonlySet<ChannelKind>) => Promise<void>;
+      }): Promise<GatewayPluginReloadResult> => {
+        events.push("reload:start");
+        await params.beforeReplace(new Set(["telegram", "discord"]));
+        events.push("registry:replace");
+        return {
+          restartChannels: new Set(),
+          activeChannels: new Set(),
+        };
+      },
+    );
+    const { applyHotReload } = createGatewayReloadHandlers({
+      deps: {} as never,
+      broadcast: vi.fn(),
+      getState: () => ({
+        hooksConfig: {} as never,
+        hookClientIpConfig: {} as never,
+        heartbeatRunner: heartbeatRunner as never,
+        cronState: { cron, storePath: "/tmp/cron.json", cronEnabled: false } as never,
+        channelHealthMonitor: null,
+      }),
+      setState,
+      startChannel,
+      stopChannel,
+      reloadPlugins,
+      logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      logChannels,
+      logCron: { error: vi.fn() },
+      logReload: { info: vi.fn(), warn: vi.fn() },
+      createHealthMonitor: () => null,
+    });
+
+    try {
+      await expect(
+        applyHotReload(
+          {
+            changedPaths: ["plugins.enabled"],
+            restartGateway: false,
+            restartReasons: [],
+            hotReasons: ["plugins.enabled"],
+            reloadHooks: false,
+            restartGmailWatcher: false,
+            restartCron: false,
+            restartHeartbeat: false,
+            restartHealthMonitor: false,
+            reloadPlugins: true,
+            restartChannels: new Set(),
+            disposeMcpRuntimes: false,
+            noopPaths: [],
+          },
+          {
+            plugins: {
+              enabled: false,
+            },
+          },
+        ),
+      ).rejects.toThrow("failed to stop channels before plugin reload: discord");
+    } finally {
+      if (previousSkipChannels === undefined) {
+        delete process.env.OPENCLAW_SKIP_CHANNELS;
+      } else {
+        process.env.OPENCLAW_SKIP_CHANNELS = previousSkipChannels;
+      }
+      if (previousSkipProviders === undefined) {
+        delete process.env.OPENCLAW_SKIP_PROVIDERS;
+      } else {
+        process.env.OPENCLAW_SKIP_PROVIDERS = previousSkipProviders;
+      }
+    }
+
+    expect(events).toEqual([
+      "reload:start",
+      "stop:telegram",
+      "stop:discord",
+      "start:telegram",
+      "start:discord",
+    ]);
+    expect(logChannels.error).toHaveBeenCalledWith(
+      "failed to stop discord channel before plugin reload: stop failed",
+    );
+    expect(startChannel).toHaveBeenCalledWith("telegram");
+    expect(startChannel).toHaveBeenCalledWith("discord");
+    expect(setState).not.toHaveBeenCalled();
+  });
+
   it("stops removed channel plugins from broad activation before swapping plugin runtime", async () => {
     const previousSkipChannels = process.env.OPENCLAW_SKIP_CHANNELS;
     const previousSkipProviders = process.env.OPENCLAW_SKIP_PROVIDERS;
@@ -647,7 +1033,7 @@ describe("gateway plugin hot reload handlers", () => {
       },
     });
     expect(reloadParamsRecord?.changedPaths).toEqual(["plugins.enabled"]);
-    expect(stopChannel).toHaveBeenCalledWith("discord");
+    expect(stopChannel).toHaveBeenCalledWith("discord", undefined, { manual: false });
     expect(startChannel).not.toHaveBeenCalled();
     expect(events).toEqual(["reload:start", "stop", "registry:replace"]);
     expect(setState).toHaveBeenCalledTimes(1);

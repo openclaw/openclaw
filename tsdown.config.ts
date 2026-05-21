@@ -81,12 +81,21 @@ function buildInputOptions(options: InputOptionsArg): InputOptionsReturn {
     message?: string;
     id?: string;
     importer?: string;
+    plugin?: string;
   }) {
     if (log.code === "PLUGIN_TIMINGS") {
       return true;
     }
     if (log.code === "UNRESOLVED_IMPORT") {
       return normalizedLogHaystack(log).includes("extensions/");
+    }
+    if (
+      log.code === "PLUGIN_WARNING" &&
+      log.plugin === "rolldown-plugin-dts:fake-js" &&
+      typeof log.message === "string" &&
+      log.message.includes("uses CommonJS dts syntax")
+    ) {
+      return true;
     }
     if (log.code !== "EVAL") {
       return false;
@@ -183,7 +192,12 @@ function shouldNeverBundleDependency(id: string): boolean {
 }
 
 function shouldAlwaysBundleDependency(id: string): boolean {
-  return id === "@openclaw/fs-safe" || id.startsWith("@openclaw/fs-safe/");
+  return (
+    id === "@openclaw/fs-safe" ||
+    id.startsWith("@openclaw/fs-safe/") ||
+    id === "zod" ||
+    id.startsWith("zod/")
+  );
 }
 
 function listBundledPluginEntrySources(

@@ -6,7 +6,7 @@ import {
   isSessionIdentityPending,
   resolveSessionIdentityFromMeta,
 } from "../../acp/runtime/session-identity.js";
-import { resolveAgentDir } from "../../agents/agent-scope.js";
+import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
@@ -26,6 +26,7 @@ import {
 import { resolveStatusTtsSnapshot } from "../../tts/status-config.js";
 import { resolveConfiguredTtsMode } from "../../tts/tts-config.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
+import { markReplyPayloadAsTtsSupplement } from "../reply-payload.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import { createAcpReplyProjector } from "./acp-projector.js";
 import {
@@ -250,11 +251,19 @@ async function finalizeAcpTurnOutput(params: {
         accountId: params.ttsAccountId,
       });
       if (ttsSyntheticReply.mediaUrl) {
-        const delivered = await params.delivery.deliver("final", {
-          mediaUrl: ttsSyntheticReply.mediaUrl,
-          audioAsVoice: ttsSyntheticReply.audioAsVoice,
-          spokenText: accumulatedBlockTtsText,
-        });
+        const delivered = await params.delivery.deliver(
+          "final",
+          markReplyPayloadAsTtsSupplement(
+            {
+              mediaUrl: ttsSyntheticReply.mediaUrl,
+              audioAsVoice: ttsSyntheticReply.audioAsVoice,
+              spokenText: accumulatedBlockTtsText,
+              trustedLocalMedia: true,
+            },
+            accumulatedBlockTtsText,
+            { visibleTextAlreadyDelivered: true },
+          ),
+        );
         queuedFinal = queuedFinal || delivered;
         finalMediaDelivered = delivered;
       }
@@ -462,6 +471,7 @@ export async function tryDispatchAcpReply(params: {
           ctx: params.ctx,
           cfg: params.cfg,
           agentDir: resolveAgentDir(params.cfg, acpAgentId),
+          workspaceDir: resolveAgentWorkspaceDir(params.cfg, acpAgentId),
         });
       } catch (err) {
         logVerbose(

@@ -81,6 +81,10 @@ export const discordChannelConfigUiHints = {
     label: "Discord Progress Max Lines",
     help: "Maximum number of compact progress lines to keep below the draft label (default: 8).",
   },
+  "streaming.progress.maxLineChars": {
+    label: "Discord Progress Max Line Chars",
+    help: "Maximum characters per compact progress line before truncation (default: 120). Prose cuts at word boundaries; commands and paths keep useful suffixes.",
+  },
   "streaming.progress.toolProgress": {
     label: "Discord Progress Tool Lines",
     help: "Show compact tool/progress lines in progress draft mode (default: true). Set false to keep only the label until final delivery.",
@@ -197,6 +201,14 @@ export const discordChannelConfigUiHints = {
     label: "Discord Voice Agent Session Target",
     help: 'Discord target used when voice.agentSession.mode="target", for example channel:123.',
   },
+  "voice.followUsersEnabled": {
+    label: "Discord Voice Follow Users Enabled",
+    help: "Toggle Discord voice follow-users behavior without removing the saved voice.followUsers list. Defaults to true when followUsers is configured.",
+  },
+  "voice.followUsers": {
+    label: "Discord Voice Follow Users",
+    help: "Discord user IDs to follow into voice channels. The bot joins when a followed user joins or moves, and leaves when that user disconnects.",
+  },
   "voice.realtime.provider": {
     label: "Discord Realtime Provider",
     help: "Realtime voice provider for agent-proxy or bidi Discord voice modes, such as openai.",
@@ -216,6 +228,10 @@ export const discordChannelConfigUiHints = {
   "voice.realtime.consultPolicy": {
     label: "Discord Realtime Consult Policy",
     help: "Use always to strongly prefer the OpenClaw agent brain for substantive realtime turns. agent-proxy defaults to always.",
+  },
+  "voice.realtime.bootstrapContextFiles": {
+    label: "Discord Realtime Bootstrap Context Files",
+    help: "Agent profile bootstrap files included in realtime provider instructions for direct voice identity/persona grounding. Defaults to IDENTITY.md, USER.md, and SOUL.md; set [] to disable.",
   },
   "voice.realtime.bargeIn": {
     label: "Discord Realtime Barge-In",

@@ -39,6 +39,7 @@ const mockState = vi.hoisted(() => ({
       mediaUrl?: string;
       mediaUrls?: string[];
       spokenText?: string;
+      ttsSupplement?: { spokenText: string };
       audioAsVoice?: boolean;
       trustedLocalMedia?: boolean;
       replyToId?: string;
@@ -659,6 +660,30 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.dispatchBlockedByBeforeAgentRun = false;
   });
 
+  it("persists non-agent delivery mirrors with the chat send idempotency key", async () => {
+    createTranscriptFixture("openclaw-chat-send-final-idem-");
+    mockState.finalText = "mirror text";
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-final-mirror",
+      expectBroadcast: false,
+    });
+
+    const persistedAssistant = readTranscriptJsonLines(mockState.transcriptPath)
+      .map((entry) => entry.message)
+      .find(
+        (message): message is Record<string, unknown> =>
+          Boolean(message) &&
+          typeof message === "object" &&
+          (message as { role?: unknown }).role === "assistant",
+      );
+    expect(persistedAssistant?.idempotencyKey).toBe("idem-final-mirror");
+  });
+
   it("registers tool-event recipients for clients advertising tool-events capability", async () => {
     createTranscriptFixture("openclaw-chat-send-tool-events-");
     mockState.finalText = "ok";
@@ -798,6 +823,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           mediaUrls: [audioPath],
           trustedLocalMedia: true,
           audioAsVoice: true,
+          ttsSupplement: { spokenText: "This text is already in the model transcript." },
         },
       },
     ];

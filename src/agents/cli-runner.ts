@@ -31,7 +31,7 @@ import type { EmbeddedPiRunResult } from "./pi-embedded-runner.js";
 const log = createSubsystemLogger("agents/cli-runner");
 
 function flushSessionManagerFile(sessionManager: SessionManager): void {
-  (sessionManager as unknown as { _rewriteFile?: () => void })._rewriteFile?.();
+  (sessionManager as unknown as { _rewriteFile?: () => void })["_rewriteFile"]?.();
 }
 
 function buildHandledReplyPayloads(reply?: ReplyPayload) {
@@ -182,6 +182,11 @@ export async function runCliAgent(params: RunCliAgentParams): Promise<EmbeddedPi
         trigger: params.trigger,
         ...buildAgentHookContextChannelFields(params),
       } as const;
+      params.onExecutionPhase?.({
+        phase: "before_agent_reply",
+        provider: params.provider,
+        model: params.model ?? "",
+      });
       const hookResult = await hookRunner.runBeforeAgentReply(
         { cleanedBody: params.prompt },
         hookContext,
@@ -201,6 +206,11 @@ export async function runCliAgent(params: RunCliAgentParams): Promise<EmbeddedPi
           },
         };
       }
+      params.onExecutionPhase?.({
+        phase: "runtime_plugins",
+        provider: params.provider,
+        model: params.model ?? "",
+      });
     }
   }
   const { prepareCliRunContext } = await import("./cli-runner/prepare.runtime.js");
@@ -392,6 +402,15 @@ export async function runPreparedCliAgent(
   const executeCliAttempt = async (cliSessionIdToUse?: string) => {
     const output = await executePreparedCliRun(context, cliSessionIdToUse);
     const assistantText = output.text.trim();
+    if (!assistantText) {
+      throw new FailoverError("CLI backend returned an empty response.", {
+        reason: "empty_response",
+        provider: params.provider,
+        model: context.modelId,
+        sessionId: params.sessionId,
+        lane: params.lane,
+      });
+    }
     const assistantTexts = assistantText ? [assistantText] : [];
     const lastAssistant =
       assistantText.length > 0
@@ -491,6 +510,9 @@ export async function runPreparedCliAgent(
                   authEpochVersion: context.authEpochVersion,
                   ...(context.extraSystemPromptHash
                     ? { extraSystemPromptHash: context.extraSystemPromptHash }
+                    : {}),
+                  ...(context.promptToolNamesHash
+                    ? { promptToolNamesHash: context.promptToolNamesHash }
                     : {}),
                   ...(context.preparedBackend.mcpConfigHash
                     ? { mcpConfigHash: context.preparedBackend.mcpConfigHash }

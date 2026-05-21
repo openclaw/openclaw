@@ -6,6 +6,7 @@ import {
   createMcpLoopbackServerConfig,
   getActiveMcpLoopbackRuntime,
 } from "../../gateway/mcp-http.loopback-runtime.js";
+import { resolveMcpLoopbackScopedTools } from "../../gateway/mcp-http.runtime.js";
 import { isClaudeCliProvider } from "../../plugin-sdk/anthropic-cli.js";
 import type {
   CliBackendAuthEpochMode,
@@ -43,7 +44,7 @@ import {
 import { resolvePromptBuildHookResult } from "../pi-embedded-runner/run/attempt.prompt-helpers.js";
 import { resolveAttemptPrependSystemContext } from "../pi-embedded-runner/run/attempt.prompt-helpers.js";
 import { composeSystemPromptWithHookContext } from "../pi-embedded-runner/run/attempt.thread-helpers.js";
-import { buildCurrentTurnPrompt } from "../pi-embedded-runner/run/runtime-context-prompt.js";
+import { buildCurrentInboundPrompt } from "../pi-embedded-runner/run/runtime-context-prompt.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { resolveSkillsPromptForRun } from "../skills.js";
 import { resolveSystemPromptOverride } from "../system-prompt-override.js";
@@ -67,6 +68,7 @@ const prepareDeps = {
   getActiveMcpLoopbackRuntime,
   ensureMcpLoopbackServer,
   createMcpLoopbackServerConfig,
+  resolveMcpLoopbackScopedTools,
   resolveOpenClawReferencePaths: async (
     params: Parameters<typeof import("../docs-path.js").resolveOpenClawReferencePaths>[0],
   ) => (await import("../docs-path.js")).resolveOpenClawReferencePaths(params),
@@ -229,7 +231,7 @@ export async function prepareCliRunContext(
           OPENCLAW_MCP_ACCOUNT_ID: params.agentAccountId ?? "",
           OPENCLAW_MCP_SESSION_KEY: params.sessionKey ?? "",
           OPENCLAW_MCP_MESSAGE_CHANNEL: params.messageChannel ?? params.messageProvider ?? "",
-          OPENCLAW_MCP_INBOUND_TURN_KIND: params.currentTurnKind ?? "",
+          OPENCLAW_MCP_INBOUND_EVENT_KIND: params.currentInboundEventKind ?? "",
         }
       : undefined,
     warn: (message) => cliBackendLog.warn(message),
@@ -282,6 +284,21 @@ export async function prepareCliRunContext(
     ...(preparedBackendEnv ? { env: preparedBackendEnv } : {}),
     ...(preparedBackendCleanup ? { cleanup: preparedBackendCleanup } : {}),
   };
+  const promptTools =
+    bundleMcpEnabled && mcpLoopbackRuntime
+      ? prepareDeps.resolveMcpLoopbackScopedTools({
+          cfg: params.config ?? getRuntimeConfig(),
+          sessionKey: params.sessionKey ?? "",
+          messageProvider: params.messageChannel ?? params.messageProvider,
+          accountId: params.agentAccountId,
+          inboundEventKind: params.currentInboundEventKind,
+          senderIsOwner: params.senderIsOwner,
+        }).tools
+      : [];
+  const promptToolNamesHash =
+    bundleMcpEnabled && mcpLoopbackRuntime
+      ? hashCliSessionText(JSON.stringify(promptTools.map((tool) => tool.name).toSorted()))
+      : undefined;
   // Pre-flight: if a saved Claude CLI sessionId points at a transcript that no
   // longer exists on disk (e.g. update.run aborted mid-swap, Claude CLI was
   // reinstalled, or the projects tree was manually pruned), `claude --resume`
@@ -306,6 +323,7 @@ export async function prepareCliRunContext(
           authEpoch,
           authEpochVersion: CLI_AUTH_EPOCH_VERSION,
           extraSystemPromptHash,
+          promptToolNamesHash,
           mcpConfigHash: preparedBackendFinal.mcpConfigHash,
           mcpResumeHash: preparedBackendFinal.mcpResumeHash,
         })
@@ -362,7 +380,7 @@ export async function prepareCliRunContext(
       docsPath: openClawReferences.docsPath ?? undefined,
       sourcePath: openClawReferences.sourcePath ?? undefined,
       skillsPrompt,
-      tools: [],
+      tools: promptTools,
       contextFiles,
       modelDisplay,
       agentId: sessionAgentId,
@@ -421,8 +439,8 @@ export async function prepareCliRunContext(
   } catch (error) {
     cliBackendLog.warn(`cli prompt-build hook preparation failed: ${String(error)}`);
   }
-  preparedPrompt = buildCurrentTurnPrompt({
-    context: params.currentTurnContext,
+  preparedPrompt = buildCurrentInboundPrompt({
+    context: params.currentInboundContext,
     prompt: preparedPrompt,
   });
   preparedPrompt = annotateInterSessionPromptText(preparedPrompt, params.inputProvenance);
@@ -471,9 +489,9 @@ export async function prepareCliRunContext(
     bootstrapFiles,
     injectedFiles: contextFiles,
     skillsPrompt,
-    tools: [],
+    tools: promptTools,
     currentTurn: {
-      ...(params.currentTurnKind ? { kind: params.currentTurnKind } : {}),
+      ...(params.currentInboundEventKind ? { kind: params.currentInboundEventKind } : {}),
       promptChars: preparedPrompt.length,
       runtimeContextChars: 0,
     },
@@ -530,6 +548,7 @@ export async function prepareCliRunContext(
       authEpoch,
       authEpochVersion: CLI_AUTH_EPOCH_VERSION,
       extraSystemPromptHash,
+      promptToolNamesHash,
     };
   } catch (err) {
     try {

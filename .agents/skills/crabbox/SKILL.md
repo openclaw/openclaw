@@ -78,6 +78,22 @@ Use these only when the task needs an existing non-Linux host. OpenClaw broad
 Linux validation uses the repo Crabbox config unless a provider is explicitly
 requested.
 
+When the user explicitly asks for brokered macOS runners, use Crabbox AWS
+macOS only after confirming the deployed coordinator supports EC2 Mac host
+lifecycle/image routes and the operator has AWS EC2 Mac Dedicated Host quota
+and IAM. Prefer `CRABBOX_HOST_ID` for a known Crabbox-managed Dedicated Host,
+or run the no-spend preflight first:
+
+```sh
+crabbox admin hosts quota --provider aws --target macos --region eu-west-1 --type mac2.metal --json
+crabbox admin hosts allocate --provider aws --target macos --region eu-west-1 --type mac2.metal --dry-run --json
+CRABBOX_MACOS_TYPES=all scripts/macos-host-region-preflight.sh
+```
+
+Do not silently substitute AWS macOS for normal OpenClaw Linux proof. Report
+paid-host blockers as quota, IAM, coordinator deployment, or host availability
+instead of falling back to local macOS.
+
 Crabbox supports static SSH targets:
 
 ```sh
@@ -271,6 +287,13 @@ Use the smallest Crabbox lane that proves the reported user path, not just the
 touched code. Aim for one after-fix E2E proof before commenting, closing, or
 opening a PR for a user-visible bug.
 
+When the user says "test in Crabbox", do not simply copy tests to the remote
+box and run them there. Crabbox is for remote real-scenario proof: copy or
+install OpenClaw as the user would, run the same setup/update/CLI/Gateway/API
+call that failed, and capture behavior from that entrypoint. For regressions or
+bug reports, prove the broken state first when feasible, then run the same
+scenario after the fix.
+
 Pick the lane by symptom:
 
 - Docker/setup/install bug: build a package tarball and run the matching
@@ -292,8 +315,9 @@ Pick the lane by symptom:
 
 Efficient flow:
 
-1. Reproduce or prove the pre-fix symptom when feasible. If the issue cannot be
-   reproduced, capture the exact command and observed behavior instead.
+1. Reproduce or prove the pre-fix symptom from the real user-facing entrypoint
+   when feasible. If the issue cannot be reproduced, capture the exact command
+   and observed behavior instead.
 2. Patch locally and run narrow local tests for edit speed.
 3. Run one Crabbox E2E command that starts from the user-facing entrypoint:
    package install, Docker setup, onboarding, channel add, gateway start, or

@@ -1,4 +1,7 @@
 import {
+  CODEX_NATIVE_SUBAGENT_RUN_ID_PREFIX,
+  CODEX_NATIVE_SUBAGENT_RUNTIME,
+  CODEX_NATIVE_SUBAGENT_TASK_KIND,
   createRunningTaskRun,
   finalizeTaskRunByRunId,
   recordTaskRunProgressByRunId,
@@ -15,9 +18,6 @@ import type {
   JsonValue,
 } from "./protocol.js";
 import { isJsonObject } from "./protocol.js";
-
-const CODEX_NATIVE_SUBAGENT_RUNTIME = "subagent";
-const CODEX_NATIVE_SUBAGENT_TASK_KIND = "codex-native";
 
 export type TaskLifecycleRuntime = {
   createRunningTaskRun: typeof createRunningTaskRun;
@@ -192,14 +192,45 @@ export class CodexNativeSubagentTaskMirror {
       return;
     }
     const receiverThreadIds = readStringArray(item.receiverThreadIds);
-    if (normalizeToolName(readString(item, "tool")) === "spawnagent") {
+    const isSpawnAgentTool = normalizeToolName(readString(item, "tool")) === "spawnagent";
+    if (isSpawnAgentTool) {
       for (const receiverThreadId of receiverThreadIds) {
         this.createTaskFromCollabSpawnItem(receiverThreadId, item);
       }
     }
     const agentsStates = readAgentsStates(item.agentsStates);
+    const toolCallStatus = normalizeCollabToolCallStatus(readString(item, "status"));
+    const terminalToolCallThreadIds = new Set<string>();
+    if (isSpawnAgentTool && isBlockedOrFailedCollabToolCallStatus(toolCallStatus)) {
+      for (const threadId of receiverThreadIds) {
+        terminalToolCallThreadIds.add(threadId);
+      }
+      for (const threadId of agentsStates.keys()) {
+        terminalToolCallThreadIds.add(threadId);
+      }
+    }
+    const terminalAgentStateThreadIds = new Set<string>();
     for (const [threadId, state] of agentsStates) {
-      this.applyCollabAgentStatus(threadId, state.status, state.message);
+      const normalizedStatus = normalizeAgentStateStatus(state.status);
+      if (
+        terminalToolCallThreadIds.has(threadId) &&
+        isNonTerminalAgentStateStatus(normalizedStatus)
+      ) {
+        continue;
+      }
+      this.applyCollabAgentStatus(threadId, normalizedStatus, state.message);
+      if (isTerminalAgentStateStatus(normalizedStatus)) {
+        terminalAgentStateThreadIds.add(threadId);
+      }
+    }
+    if (isBlockedOrFailedCollabToolCallStatus(toolCallStatus)) {
+      for (const threadId of terminalToolCallThreadIds) {
+        if (terminalAgentStateThreadIds.has(threadId)) {
+          continue;
+        }
+        const state = agentsStates.get(threadId);
+        this.applyCollabAgentStatus(threadId, toolCallStatus, state?.message);
+      }
     }
   }
 
@@ -246,6 +277,9 @@ export class CodexNativeSubagentTaskMirror {
       return;
     }
     const runId = codexNativeSubagentRunId(threadId);
+    if (this.terminalRunIds.has(runId) && isNonTerminalAgentStateStatus(normalizedStatus)) {
+      return;
+    }
     const eventAt = this.now();
     if (normalizedStatus === "pendingInit" || normalizedStatus === "running") {
       this.runtime.recordTaskRunProgressByRunId({
@@ -273,6 +307,20 @@ export class CodexNativeSubagentTaskMirror {
       });
       return;
     }
+    if (normalizedStatus === "blocked") {
+      this.terminalRunIds.add(runId);
+      this.runtime.finalizeTaskRunByRunId({
+        runId,
+        runtime: CODEX_NATIVE_SUBAGENT_RUNTIME,
+        status: "succeeded",
+        endedAt: eventAt,
+        lastEventAt: eventAt,
+        progressSummary: trimOptional(message) ?? "Codex native subagent blocked.",
+        terminalSummary: trimOptional(message) ?? "Codex native subagent blocked.",
+        terminalOutcome: "blocked",
+      });
+      return;
+    }
     this.terminalRunIds.add(runId);
     this.runtime.finalizeTaskRunByRunId({
       runId,
@@ -291,7 +339,7 @@ export class CodexNativeSubagentTaskMirror {
 }
 
 export function codexNativeSubagentRunId(threadId: string): string {
-  return `codex-thread:${threadId.trim()}`;
+  return `${CODEX_NATIVE_SUBAGENT_RUN_ID_PREFIX}${threadId.trim()}`;
 }
 
 export function readSubagentThreadSpawnSource(
@@ -381,6 +429,35 @@ function normalizeToolName(value: string | undefined): string | undefined {
   return value?.replace(/[^a-z0-9]/giu, "").toLowerCase();
 }
 
+function normalizeCollabToolCallStatus(value: string | undefined): string | undefined {
+  const key = value?.replace(/[^a-z0-9]/giu, "").toLowerCase();
+  if (key === "completed" || key === "succeeded" || key === "success") {
+    return "completed";
+  }
+  if (key === "failed" || key === "error" || key === "errored") {
+    return "failed";
+  }
+  if (key === "blocked" || key === "declined") {
+    return "blocked";
+  }
+  if (key === "inprogress" || key === "running") {
+    return "running";
+  }
+  return value?.trim();
+}
+
+function isBlockedOrFailedCollabToolCallStatus(value: string | undefined): boolean {
+  return value === "failed" || value === "blocked";
+}
+
+function isNonTerminalAgentStateStatus(value: string | undefined): boolean {
+  return value === "pendingInit" || value === "running";
+}
+
+function isTerminalAgentStateStatus(value: string | undefined): boolean {
+  return value !== undefined && !isNonTerminalAgentStateStatus(value);
+}
+
 function normalizeAgentStateStatus(value: string | undefined): string | undefined {
   const key = value?.replace(/[^a-z0-9]/giu, "").toLowerCase();
   if (!key) {
@@ -400,6 +477,9 @@ function normalizeAgentStateStatus(value: string | undefined): string | undefine
   }
   if (key === "failed" || key === "error" || key === "systemerror") {
     return "failed";
+  }
+  if (key === "blocked" || key === "declined") {
+    return "blocked";
   }
   return value?.trim();
 }
