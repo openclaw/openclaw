@@ -828,6 +828,34 @@ describe("handleSlackAction", () => {
     });
   });
 
+  it("reads from allowlisted Slack target channels", async () => {
+    readSlackMessages.mockResolvedValueOnce({ messages: [], hasMore: false });
+
+    const cfg = slackConfig({
+      groupPolicy: "allowlist",
+      channels: {
+        C_ALLOWED: { enabled: true },
+      },
+    });
+    await handleSlackAction({ action: "readMessages", channelId: "C_ALLOWED" }, cfg);
+
+    expect(requireMockArg(readSlackMessages, "readSlackMessages", 0, 0)).toBe("C_ALLOWED");
+  });
+
+  it("rejects Slack reads for non-allowlisted target channels", async () => {
+    const cfg = slackConfig({
+      groupPolicy: "allowlist",
+      channels: {
+        C_ALLOWED: { enabled: true },
+      },
+    });
+
+    await expect(
+      handleSlackAction({ action: "readMessages", channelId: "C_OTHER" }, cfg),
+    ).rejects.toThrow("Slack read target channel is not allowed.");
+    expect(readSlackMessages).not.toHaveBeenCalled();
+  });
+
   it("passes messageId through to readSlackMessages", async () => {
     readSlackMessages.mockResolvedValueOnce({ messages: [], hasMore: false });
 

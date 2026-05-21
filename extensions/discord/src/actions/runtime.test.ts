@@ -413,6 +413,55 @@ describe("handleDiscordMessagingAction", () => {
     );
   });
 
+  it("reads from allowlisted Discord target channels", async () => {
+    const cfg = {
+      channels: {
+        discord: {
+          token: "token",
+          groupPolicy: "allowlist",
+          guilds: {
+            "111": {
+              channels: {
+                "222": { enabled: true },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await handleMessagingAction("readMessages", { channelId: "222" }, enableAllActions, cfg);
+
+    expect(readMessagesDiscord).toHaveBeenCalledWith(
+      "222",
+      { limit: undefined, before: undefined, after: undefined, around: undefined },
+      { cfg },
+    );
+  });
+
+  it("rejects Discord reads for non-allowlisted target channels", async () => {
+    const cfg = {
+      channels: {
+        discord: {
+          token: "token",
+          groupPolicy: "allowlist",
+          guilds: {
+            "111": {
+              channels: {
+                "222": { enabled: true },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      handleMessagingAction("readMessages", { channelId: "333" }, enableAllActions, cfg),
+    ).rejects.toThrow("Discord read target channel is not allowed.");
+    expect(readMessagesDiscord).not.toHaveBeenCalled();
+  });
+
   it("adds normalized timestamps to fetchMessage payloads", async () => {
     fetchMessageDiscord.mockResolvedValueOnce({
       id: "1",
@@ -446,6 +495,34 @@ describe("handleDiscordMessagingAction", () => {
       cfg,
     );
     expect(fetchMessageDiscord).toHaveBeenCalledWith("C1", "M1", { cfg });
+  });
+
+  it("rejects Discord message links for non-allowlisted target channels", async () => {
+    const cfg = {
+      channels: {
+        discord: {
+          token: "token",
+          groupPolicy: "allowlist",
+          guilds: {
+            "111": {
+              channels: {
+                "222": { enabled: true },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      handleMessagingAction(
+        "fetchMessage",
+        { messageLink: "https://discord.com/channels/111/333/444" },
+        enableAllActions,
+        cfg,
+      ),
+    ).rejects.toThrow("Discord read target channel is not allowed.");
+    expect(fetchMessageDiscord).not.toHaveBeenCalled();
   });
 
   it("adds normalized timestamps to listPins payloads", async () => {

@@ -2,7 +2,10 @@ import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { ResolvedSlackAccount } from "./accounts.js";
 import { parseSlackBlocksInput } from "./blocks-input.js";
+import { resolveSlackChannelConfig } from "./monitor/channel-config.js";
+import { isSlackChannelAllowedByPolicy } from "./monitor/policy.js";
 import {
   createActionGate,
   imageResultFromFile,
@@ -157,6 +160,40 @@ function readSlackBlocksParam(params: Record<string, unknown>) {
 
 function isImageContentType(value: string | undefined): boolean {
   return value?.trim().toLowerCase().startsWith("image/") === true;
+}
+
+function assertSlackReadTargetAllowed(params: {
+  account: ResolvedSlackAccount;
+  cfg: OpenClawConfig;
+  channelId: string;
+}) {
+  const channels = params.account.config.channels;
+  const channelKeys = Object.keys(channels ?? {});
+  const channelConfig = resolveSlackChannelConfig({
+    channelId: params.channelId,
+    channels,
+    channelKeys,
+    allowNameMatching: params.account.config.dangerouslyAllowNameMatching,
+    defaultRequireMention: params.account.config.requireMention,
+  });
+  const channelAllowed = channelConfig?.allowed !== false;
+  const groupPolicy =
+    params.account.config.groupPolicy ?? params.cfg.channels?.defaults?.groupPolicy;
+  if (
+    groupPolicy === "disabled" ||
+    (groupPolicy === "allowlist" &&
+      !isSlackChannelAllowedByPolicy({
+        groupPolicy,
+        channelAllowlistConfigured: channelKeys.length > 0,
+        channelAllowed,
+      })) ||
+    (channelKeys.length > 0 && !channelConfig?.matchSource)
+  ) {
+    throw new Error("Slack read target channel is not allowed.");
+  }
+  if (!channelAllowed && channelConfig?.matchSource) {
+    throw new Error("Slack read target channel is not allowed.");
+  }
 }
 
 export async function handleSlackAction(
@@ -387,6 +424,7 @@ export async function handleSlackAction(
       }
       case "readMessages": {
         const channelId = resolveChannelId();
+        assertSlackReadTargetAllowed({ account, cfg, channelId });
         const limitRaw = params.limit;
         const limit =
           typeof limitRaw === "number" && Number.isFinite(limitRaw) ? limitRaw : undefined;
