@@ -177,9 +177,9 @@ describe("diagnostics-prometheus service", () => {
   });
 
   it("records inbound dispatch and session turn telemetry", () => {
-    const store = __test__.createPrometheusMetricStore();
+    const store = testApi.createPrometheusMetricStore();
 
-    __test__.recordDiagnosticEvent(
+    testApi.recordDiagnosticEvent(
       store,
       {
         ...baseEvent(),
@@ -189,7 +189,7 @@ describe("diagnostics-prometheus service", () => {
       },
       trusted,
     );
-    __test__.recordDiagnosticEvent(
+    testApi.recordDiagnosticEvent(
       store,
       {
         ...baseEvent(),
@@ -199,7 +199,7 @@ describe("diagnostics-prometheus service", () => {
       },
       trusted,
     );
-    __test__.recordDiagnosticEvent(
+    testApi.recordDiagnosticEvent(
       store,
       {
         ...baseEvent(),
@@ -211,7 +211,7 @@ describe("diagnostics-prometheus service", () => {
       },
       trusted,
     );
-    __test__.recordDiagnosticEvent(
+    testApi.recordDiagnosticEvent(
       store,
       {
         ...baseEvent(),
@@ -224,7 +224,7 @@ describe("diagnostics-prometheus service", () => {
       },
       trusted,
     );
-    __test__.recordDiagnosticEvent(
+    testApi.recordDiagnosticEvent(
       store,
       {
         ...baseEvent(),
@@ -237,7 +237,7 @@ describe("diagnostics-prometheus service", () => {
       trusted,
     );
 
-    const rendered = __test__.renderPrometheusMetrics(store);
+    const rendered = testApi.renderPrometheusMetrics(store);
 
     expect(rendered).toContain(
       'openclaw_message_received_total{channel="telegram",source="webhook"} 1',
