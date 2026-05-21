@@ -26,11 +26,9 @@ export function resolveHeartbeatReplyPayload(
 export function hasHeartbeatMessageToolDeliveryEvidence(
   replyResult: ReplyPayload | ReplyPayload[] | undefined,
 ): boolean {
-  if (!replyResult) {
+  const replyPayload = resolveHeartbeatReplyPayload(replyResult);
+  if (!replyPayload) {
     return false;
   }
-  const payloads = Array.isArray(replyResult) ? replyResult : [replyResult];
-  return payloads.some(
-    (payload) => getReplyPayloadMetadata(payload)?.messageToolDeliveredForReplyRoute === true,
-  );
+  return getReplyPayloadMetadata(replyPayload)?.messageToolDeliveredForReplyRoute === true;
 }

@@ -1831,7 +1831,8 @@ export async function runHeartbeatOnce(opts: {
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
-    if (!heartbeatToolResponse && messageToolDelivered) {
+    const shouldSuppressMessageToolDeliveredMain = !heartbeatToolResponse && messageToolDelivered;
+    if (shouldSuppressMessageToolDeliveredMain && reasoningPayloads.length === 0) {
       emitHeartbeatEvent({
         status: "sent",
         reason: opts.reason,
@@ -1881,7 +1882,8 @@ export async function runHeartbeatOnce(opts: {
       normalized.shouldSkip = false;
     }
     const shouldSkipMain =
-      normalized.shouldSkip && !normalized.hasMedia && !hasRelayableExecCompletion;
+      shouldSuppressMessageToolDeliveredMain ||
+      (normalized.shouldSkip && !normalized.hasMedia && !hasRelayableExecCompletion);
     if (shouldSkipMain && reasoningPayloads.length === 0) {
       await restoreHeartbeatUpdatedAt({
         storePath,
@@ -2051,7 +2053,7 @@ export async function runHeartbeatOnce(opts: {
     await markCommitmentsStatus({
       cfg,
       ids: dueCommitmentIds,
-      status: shouldSkipMain ? "dismissed" : "sent",
+      status: shouldSkipMain && !shouldSuppressMessageToolDeliveredMain ? "dismissed" : "sent",
       nowMs: startedAt,
     });
 

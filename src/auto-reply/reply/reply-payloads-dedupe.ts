@@ -127,7 +127,7 @@ function normalizeProviderForComparison(value?: string): string | undefined {
   return lowered;
 }
 
-function normalizeThreadIdForComparison(value?: string): string | undefined {
+function normalizeThreadIdForComparison(value?: unknown): string | undefined {
   return stringifyRouteThreadId(value);
 }
 
@@ -141,6 +141,17 @@ function normalizeTargetForDedupe(provider: string, rawTarget?: string): string 
     ? getLoadedChannelPluginForRead(providerId)?.messaging?.normalizeTarget
     : undefined;
   return normalizeOptionalString(normalizer?.(rawTarget ?? "") ?? fallback);
+}
+
+function parseExplicitRouteTargetForDedupe(provider: string, rawTarget?: string) {
+  const raw = normalizeOptionalString(rawTarget);
+  if (!raw) {
+    return null;
+  }
+  const plugin =
+    getLoadedChannelPluginForRead(provider)?.messaging?.parseExplicitTarget ??
+    getChannelPlugin(provider)?.messaging?.parseExplicitTarget;
+  return plugin?.({ raw }) ?? null;
 }
 
 function resolveTargetProviderForComparison(params: {
@@ -163,17 +174,19 @@ function normalizeRouteTargetForDedupe(params: {
   provider: string;
   rawTarget?: string;
   accountId?: string;
-  threadId?: string;
+  threadId?: unknown;
 }): MessagingToolDedupeRouteTarget | null {
-  const to = normalizeTargetForDedupe(params.provider, params.rawTarget);
+  const parsed = parseExplicitRouteTargetForDedupe(params.provider, params.rawTarget);
+  const to = normalizeTargetForDedupe(params.provider, parsed?.to ?? params.rawTarget);
   if (!to) {
     return null;
   }
+  const threadId = params.threadId ?? parsed?.threadId;
   return {
     channel: params.provider,
     to,
     ...(params.accountId ? { accountId: params.accountId } : {}),
-    ...(params.threadId != null ? { threadId: params.threadId } : {}),
+    ...(threadId != null ? { threadId } : {}),
   };
 }
 
@@ -181,15 +194,26 @@ function targetsMatchForDedupe(params: {
   provider: string;
   originTarget: string;
   targetKey: string;
-  targetThreadId?: string;
+  targetThreadId?: unknown;
+  requireThreadSpecificMatch?: boolean;
 }): boolean {
   const pluginMatch = getChannelPlugin(params.provider)?.outbound?.targetsMatchForReplySuppression;
   if (pluginMatch) {
-    return pluginMatch({
+    const matchWithThread = pluginMatch({
       originTarget: params.originTarget,
       targetKey: params.targetKey,
       targetThreadId: normalizeThreadIdForComparison(params.targetThreadId),
     });
+    if (!params.requireThreadSpecificMatch || !matchWithThread || params.targetThreadId == null) {
+      return matchWithThread;
+    }
+    return !pluginMatch({
+      originTarget: params.originTarget,
+      targetKey: params.targetKey,
+    });
+  }
+  if (params.targetThreadId != null) {
+    return false;
   }
   return params.targetKey === params.originTarget;
 }
@@ -198,6 +222,7 @@ export function shouldDedupeMessagingToolRepliesForRoute(params: {
   messageProvider?: string;
   messagingToolSentTargets?: MessagingToolSend[];
   originatingTo?: string;
+  originatingThreadId?: string | number;
   accountId?: string;
 }): boolean {
   return getMatchingMessagingToolReplyTargets(params).length > 0;
@@ -207,6 +232,7 @@ export function getMatchingMessagingToolReplyTargets(params: {
   messageProvider?: string;
   messagingToolSentTargets?: MessagingToolSend[];
   originatingTo?: string;
+  originatingThreadId?: string | number;
   accountId?: string;
 }): MessagingToolSend[] {
   const provider = normalizeProviderForComparison(params.messageProvider);
@@ -237,6 +263,7 @@ export function getMatchingMessagingToolReplyTargets(params: {
       provider,
       rawTarget: originRawTarget,
       accountId: routeAccount,
+      threadId: params.originatingThreadId,
     });
     if (!originRoute) {
       return false;
@@ -250,6 +277,22 @@ export function getMatchingMessagingToolReplyTargets(params: {
     if (!targetRoute) {
       return false;
     }
+    const originThreadId = normalizeThreadIdForComparison(originRoute.threadId);
+    const targetThreadId = normalizeThreadIdForComparison(targetRoute.threadId);
+    if (originThreadId == null && targetThreadId != null) {
+      return targetsMatchForDedupe({
+        provider,
+        originTarget: originRoute.to,
+        targetKey: targetRoute.to,
+        targetThreadId: targetRoute.threadId,
+        requireThreadSpecificMatch: true,
+      });
+    }
+    if (originThreadId != null && originThreadId !== targetThreadId) {
+      if (targetThreadId != null || target.threadImplicit !== true || target.threadSuppressed) {
+        return false;
+      }
+    }
     if (channelRouteTargetsMatchExact({ left: originRoute, right: targetRoute })) {
       return true;
     }
@@ -257,7 +300,7 @@ export function getMatchingMessagingToolReplyTargets(params: {
       provider,
       originTarget: originRoute.to,
       targetKey: targetRoute.to,
-      targetThreadId: target.threadId,
+      targetThreadId: targetRoute.threadId,
     });
   });
 }
@@ -275,6 +318,7 @@ export function resolveMessagingToolPayloadDedupe(params: {
   messageProvider?: string;
   messagingToolSentTargets?: MessagingToolSend[];
   originatingTo?: string;
+  originatingThreadId?: string | number;
   accountId?: string;
 }): MessagingToolPayloadDedupeDecision {
   const sentTargets = params.messagingToolSentTargets ?? [];
@@ -282,6 +326,7 @@ export function resolveMessagingToolPayloadDedupe(params: {
     messageProvider: params.messageProvider,
     messagingToolSentTargets: sentTargets,
     originatingTo: params.originatingTo,
+    originatingThreadId: params.originatingThreadId,
     accountId: params.accountId,
   });
   const matchingRoute = matchingTargets.length > 0;

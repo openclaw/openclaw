@@ -1,8 +1,17 @@
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import {
+  hasOutboundReplyContent,
+  resolveSendableOutboundReplyParts,
+} from "openclaw/plugin-sdk/reply-payload";
+import { isMessagingToolDuplicate } from "../../agents/pi-embedded-helpers.js";
 import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers/sanitize-user-facing-text.js";
 import type { MessagingToolSend } from "../../agents/pi-embedded-messaging.types.js";
 import type { ReplyToMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
+import {
+  hasInteractiveReplyBlocks,
+  hasMessagePresentationBlocks,
+  hasReplyChannelData,
+} from "../../interactive/payload.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { stripLegacyBracketToolCallBlocks } from "../../shared/text/assistant-visible-text.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
@@ -10,6 +19,8 @@ import {
   appendReplyMediaFailureWarning,
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
+  markReplyPayloadForMessageToolDeliveryForReplyRoute,
+  REPLY_MEDIA_FAILURE_WARNING,
   setReplyPayloadMetadata,
 } from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
@@ -31,6 +42,91 @@ const replyPayloadsDedupeRuntimeLoader = createLazyImportLoader(
 
 function loadReplyPayloadsDedupeRuntime() {
   return replyPayloadsDedupeRuntimeLoader.load();
+}
+
+function hasNonEmptyStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.some((entry) => typeof entry === "string" && entry.trim());
+}
+
+function shouldMarkHeartbeatMessageToolDelivered(
+  payload: ReplyPayload,
+  sentTexts: string[],
+): boolean {
+  if (payload.isError || payload.isFallbackNotice) {
+    return false;
+  }
+  if (
+    hasInteractiveReplyBlocks(payload.interactive) ||
+    hasMessagePresentationBlocks(payload.presentation) ||
+    hasReplyChannelData(payload.channelData)
+  ) {
+    return false;
+  }
+  const sendable = resolveSendableOutboundReplyParts(payload);
+  if (sendable.text.includes(REPLY_MEDIA_FAILURE_WARNING)) {
+    return false;
+  }
+  return (
+    sendable.hasText && !sendable.hasMedia && isMessagingToolDuplicate(sendable.text, sentTexts)
+  );
+}
+
+function requiresHeartbeatDelivery(payload: ReplyPayload): boolean {
+  return payload.isReasoning !== true && hasOutboundReplyContent(payload);
+}
+
+function markHeartbeatMessageToolDeliveredPayloads(params: {
+  payloads: ReplyPayload[];
+  sentTexts: readonly string[];
+}): ReplyPayload[] {
+  if (params.sentTexts.length === 0) {
+    return params.payloads;
+  }
+  const sentTexts = [...params.sentTexts];
+  let nextPayloads: ReplyPayload[] | undefined;
+  for (let index = 0; index < params.payloads.length; index++) {
+    const payload = params.payloads[index];
+    if (!shouldMarkHeartbeatMessageToolDelivered(payload, sentTexts)) {
+      if (nextPayloads) {
+        nextPayloads.push(payload);
+      }
+      continue;
+    }
+    if (!nextPayloads) {
+      nextPayloads = params.payloads.slice(0, index);
+    }
+    nextPayloads.push(markReplyPayloadForMessageToolDeliveryForReplyRoute(payload));
+  }
+  return nextPayloads ?? params.payloads;
+}
+
+function isHeartbeatMessageToolDeliveredPayload(payload: ReplyPayload): boolean {
+  return getReplyPayloadMetadata(payload)?.messageToolDeliveredForReplyRoute === true;
+}
+
+function finalizeHeartbeatMessageToolDeliveredPayloads(params: {
+  payloads: ReplyPayload[];
+  fallbackPayloads: ReplyPayload[];
+}): ReplyPayload[] {
+  let hasMessageToolDeliveredPayload = false;
+  let hasUndeliveredPayload = false;
+  for (const payload of params.payloads) {
+    const messageToolDelivered = isHeartbeatMessageToolDeliveredPayload(payload);
+    hasMessageToolDeliveredPayload ||= messageToolDelivered;
+    if (!messageToolDelivered && requiresHeartbeatDelivery(payload)) {
+      hasUndeliveredPayload = true;
+    }
+  }
+  if (!hasUndeliveredPayload && !hasMessageToolDeliveredPayload) {
+    const fallbackPayload = params.fallbackPayloads.find(isHeartbeatMessageToolDeliveredPayload);
+    if (fallbackPayload) {
+      return [...params.payloads, fallbackPayload];
+    }
+  }
+  if (!hasMessageToolDeliveredPayload || !hasUndeliveredPayload) {
+    return params.payloads;
+  }
+  return params.payloads.filter((payload) => !isHeartbeatMessageToolDeliveredPayload(payload));
 }
 
 async function normalizeReplyPayloadMedia(params: {
@@ -174,7 +270,9 @@ export async function buildReplyPayloads(params: {
   messagingToolSentTargets?: MessagingToolSend[];
   originatingChannel?: OriginatingChannelType;
   originatingTo?: string;
+  originatingThreadId?: string | number;
   accountId?: string;
+  allowImplicitCurrentRouteMessageToolEvidence?: boolean;
   extractMarkdownImages?: boolean;
   normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>;
 }): Promise<{ replyPayloads: ReplyPayload[]; didLogHeartbeatStrip: boolean }> {
@@ -276,6 +374,7 @@ export async function buildReplyPayloads(params: {
     originatingTo: resolveOriginMessageTo({
       originatingTo: params.originatingTo,
     }),
+    originatingThreadId: params.originatingThreadId,
     accountId: resolveOriginAccountId({
       originatingAccountId: params.accountId,
     }),
@@ -307,6 +406,25 @@ export async function buildReplyPayloads(params: {
       ? messagingToolSentTexts
       : messagingToolPayloadDedupe.routeSentTexts
     : messagingToolSentTexts;
+  const currentRouteHasImplicitMessageToolTextEvidence =
+    params.allowImplicitCurrentRouteMessageToolEvidence === true &&
+    messagingToolSentTargets.length === 0 &&
+    hasNonEmptyStringArray(messagingToolSentTexts) &&
+    Boolean(
+      resolveOriginMessageProvider({
+        originatingChannel: params.originatingChannel,
+        provider: params.messageProvider,
+      }) &&
+      resolveOriginMessageTo({
+        originatingTo: params.originatingTo,
+      }),
+    );
+  const heartbeatMessageToolDeliveredSentTexts =
+    params.isHeartbeat && messagingToolPayloadDedupe.matchingRoute && sentTextsForDedupe.length > 0
+      ? sentTextsForDedupe
+      : params.isHeartbeat && currentRouteHasImplicitMessageToolTextEvidence
+        ? messagingToolSentTexts
+        : [];
   const messagingToolSentMediaUrls = dedupeMessagingToolPayloads
     ? await normalizeSentMediaUrlsForDedupe({
         sentMediaUrls: sentMediaUrlsForDedupe,
@@ -321,12 +439,22 @@ export async function buildReplyPayloads(params: {
         sentMediaUrls: messagingToolSentMediaUrls,
       })
     : silentFilteredPayloads;
-  const dedupedPayloads = dedupeMessagingToolPayloads
-    ? (dedupeRuntime ?? (await loadReplyPayloadsDedupeRuntime())).filterMessagingToolDuplicates({
-        payloads: mediaFilteredPayloads,
-        sentTexts: sentTextsForDedupe,
-      })
-    : mediaFilteredPayloads;
+  const dedupedPayloads =
+    params.isHeartbeat && heartbeatMessageToolDeliveredSentTexts.length > 0
+      ? markHeartbeatMessageToolDeliveredPayloads({
+          payloads: mediaFilteredPayloads,
+          sentTexts: heartbeatMessageToolDeliveredSentTexts,
+        })
+      : params.isHeartbeat
+        ? mediaFilteredPayloads
+        : dedupeMessagingToolPayloads
+          ? (
+              dedupeRuntime ?? (await loadReplyPayloadsDedupeRuntime())
+            ).filterMessagingToolDuplicates({
+              payloads: mediaFilteredPayloads,
+              sentTexts: sentTextsForDedupe,
+            })
+          : mediaFilteredPayloads;
   const isDirectlySentBlockPayload = (payload: ReplyPayload) =>
     Boolean(params.directlySentBlockKeys?.has(createBlockReplyContentKey(payload)));
   const preserveUnsentMediaAfterBlockStream = (payload: ReplyPayload): ReplyPayload | null => {
@@ -405,8 +533,22 @@ export async function buildReplyPayloads(params: {
           sentMediaUrls: blockSentMediaUrls,
         })
       : contentSuppressedPayloads;
+  const postMediaMarkedPayloads =
+    params.isHeartbeat && heartbeatMessageToolDeliveredSentTexts.length > 0
+      ? markHeartbeatMessageToolDeliveredPayloads({
+          payloads: filteredPayloads,
+          sentTexts: heartbeatMessageToolDeliveredSentTexts,
+        })
+      : filteredPayloads;
+  const deliveryFinalizedPayloads =
+    params.isHeartbeat && heartbeatMessageToolDeliveredSentTexts.length > 0
+      ? finalizeHeartbeatMessageToolDeliveredPayloads({
+          payloads: postMediaMarkedPayloads,
+          fallbackPayloads: dedupedPayloads,
+        })
+      : postMediaMarkedPayloads;
   const replyPayloads: ReplyPayload[] = [];
-  for (const payload of filteredPayloads) {
+  for (const payload of deliveryFinalizedPayloads) {
     if (isRenderablePayload(payload)) {
       replyPayloads.push(payload);
     }
