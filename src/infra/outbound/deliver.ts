@@ -1180,6 +1180,20 @@ function suppressedPayloadOutcome(params: {
 export async function deliverOutboundPayloads(
   params: DeliverOutboundPayloadsParams,
 ): Promise<OutboundDeliveryResult[]> {
+  // TEMP DIAGNOSTIC (2026-05-21): trace which channel deliveries reach
+  // deliverOutboundPayloads, which is what fires applyMessageSendingHook
+  // (provenance footer attach). If a channel bypasses this entry point,
+  // its outbound messages won't carry the footer. Remove after the
+  // slack-vs-discord footer asymmetry is resolved.
+  try {
+    log.info(
+      `[deliverOutboundPayloads] entry channel=${params.channel} to=${params.to} ` +
+        `payloads=${params.payloads.length} skipQueue=${params.skipQueue === true} ` +
+        `bestEffort=${params.bestEffort === true} sessionKey=${params.sessionKey ?? ""}`,
+    );
+  } catch {
+    // never throw from a diagnostic
+  }
   return await deliverOutboundPayloadsInternal(params);
 }
 
