@@ -979,7 +979,7 @@ describe("registerPolicyDoctorChecks", () => {
       expect.objectContaining({
         checkId: "policy/models-unapproved-provider",
         severity: "error",
-        ocPath: "oc://openclaw.config/agents/defaults/models/openrouter~1*",
+        ocPath: 'oc://openclaw.config/agents/defaults/models/"openrouter/*"',
         requirement: "oc://policy.jsonc/models/providers/allow",
       }),
     ]);
@@ -1266,6 +1266,25 @@ describe("registerPolicyDoctorChecks", () => {
       expect.objectContaining({
         id: "remote",
         url: "https://example.com",
+      }),
+    );
+  });
+
+  it("quotes MCP server ids with whitespace in policy evidence paths", () => {
+    const [server] = scanPolicyMcpServers({
+      mcp: {
+        servers: {
+          "Outlook Graph": {
+            command: "npx",
+          },
+        },
+      },
+    });
+
+    expect(server).toEqual(
+      expect.objectContaining({
+        id: "Outlook Graph",
+        source: 'oc://openclaw.config/mcp/servers/"Outlook Graph"',
       }),
     );
   });

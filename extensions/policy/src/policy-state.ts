@@ -188,7 +188,7 @@ export function scanPolicyMcpServers(
       } = {
         id,
         transport: mcpServerTransport(value),
-        source: `oc://openclaw.config/mcp/servers/${id}`,
+        source: `oc://openclaw.config/mcp/servers/${ocPathSegment(id)}`,
       };
       if (isRecord(value)) {
         if (typeof value.command === "string") {
@@ -525,7 +525,7 @@ function collectModelRefsFromAgentAllowlist(
     return;
   }
   for (const ref of Object.keys(defaults.models)) {
-    pushModelRef(refs, ref, `oc://openclaw.config/agents/defaults/models/${escapeRefSegment(ref)}`);
+    pushModelRef(refs, ref, `oc://openclaw.config/agents/defaults/models/${ocPathSegment(ref)}`);
   }
 }
 
@@ -533,8 +533,14 @@ function isModelSettingKey(key: string): boolean {
   return key === "model" || key.endsWith("Model");
 }
 
-function escapeRefSegment(value: string): string {
-  return value.replaceAll("/", "~1");
+function ocPathSegment(value: string): string {
+  if (/^[A-Za-z0-9_-]+$/.test(value)) {
+    return value;
+  }
+  if (value.includes('"') || value.includes("\\")) {
+    return value;
+  }
+  return `"${value}"`;
 }
 
 function pushModelRef(refs: PolicyModelRefEvidence[], ref: string, source: string): void {
