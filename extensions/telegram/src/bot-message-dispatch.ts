@@ -550,12 +550,14 @@ export const dispatchTelegramMessage = async ({
     }
   }
   const hasTelegramQuoteReply = replyToMode !== "off" && replyQuoteText != null;
+  const canUseDraftLanes = streamMode !== "progress";
   const canStreamAnswerDraft =
+    canUseDraftLanes &&
     streamDeliveryEnabled &&
     !hasTelegramQuoteReply &&
     !accountBlockStreamingEnabled &&
     !forceBlockStreamingForReasoning;
-  const canStreamReasoningDraft = !isRoomEvent && streamReasoningDraft;
+  const canStreamReasoningDraft = canUseDraftLanes && !isRoomEvent && streamReasoningDraft;
   const draftReplyToMessageId =
     replyToMode !== "off" && typeof msg.message_id === "number"
       ? (replyQuoteMessageId ?? msg.message_id)
@@ -600,8 +602,8 @@ export const dispatchTelegramMessage = async ({
   };
   const answerLane = lanes.answer;
   const reasoningLane = lanes.reasoning;
-  const streamToolProgressEnabled =
-    Boolean(answerLane.stream) && resolveChannelStreamingPreviewToolProgress(telegramCfg);
+  const streamToolProgressVisible = resolveChannelStreamingPreviewToolProgress(telegramCfg);
+  const streamToolProgressEnabled = Boolean(answerLane.stream) && streamToolProgressVisible;
   const nativeToolProgressDraft =
     streamToolProgressEnabled &&
     !isRoomEvent &&
@@ -662,19 +664,34 @@ export const dispatchTelegramMessage = async ({
       await renderProgressDraft({ flush: true });
     },
   });
+  let sendStandaloneToolProgress: ((text: string) => Promise<boolean>) | undefined;
   const pushStreamToolProgress = async (
     line?: string | ChannelProgressDraftLine,
     options?: { toolName?: string; startImmediately?: boolean },
-  ) => {
-    if (!answerLane.stream) {
-      return false;
-    }
+  ): Promise<boolean> => {
     if (options?.toolName !== undefined && !isChannelProgressDraftWorkToolName(options.toolName)) {
       return false;
     }
     const rawText = typeof line === "string" ? line : line?.text;
     const normalized = sanitizeProgressMarkdownText(rawText?.replace(/\s+/g, " ").trim() ?? "");
-    if (streamToolProgressSuppressed) {
+    if (!normalized || streamToolProgressSuppressed) {
+      return false;
+    }
+    if (streamMode === "progress" && !answerLane.stream) {
+      if (!streamToolProgressVisible || isRoomEvent) {
+        return false;
+      }
+      const delivered = (await sendStandaloneToolProgress?.(normalized)) ?? false;
+      if (delivered) {
+        void Promise.resolve(sendTyping()).catch((err) => {
+          logVerbose(
+            `telegram typing cue after tool progress failed for chat ${chatId}: ${String(err)}`,
+          );
+        });
+      }
+      return delivered;
+    }
+    if (!answerLane.stream) {
       return false;
     }
     if (streamMode !== "progress" && !streamToolProgressEnabled) {
@@ -1176,6 +1193,16 @@ export const dispatchTelegramMessage = async ({
       }
       return result.delivered;
     };
+    sendStandaloneToolProgress = async (text: string) => {
+      const result = await (telegramDeps.deliverReplies ?? deliverReplies)({
+        ...deliveryBaseOptions,
+        replies: [{ text }],
+        onVoiceRecording: sendRecordVoice,
+        silent: false,
+        mediaLoader: telegramDeps.loadWebMedia,
+      });
+      return result.delivered;
+    };
     const emitPreviewFinalizedHook = (result: LaneDeliveryResult) => {
       if (isDispatchSuperseded() || result.kind !== "preview-finalized") {
         return;
@@ -1243,6 +1270,7 @@ export const dispatchTelegramMessage = async ({
         resetDraftLaneState(answerLane);
       }
       const delivered = await sendPayload(applyTextToPayload(payload, text), { durable: true });
+      streamToolProgressSuppressed = true;
       answerLane.finalized = true;
       return delivered ? { kind: "sent" } : { kind: "skipped" };
     };

@@ -5,7 +5,6 @@ import {
   resolveAgentConfig,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
-import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
@@ -13,6 +12,7 @@ import {
   formatEmbeddedPiQueueFailureSummary,
   queueEmbeddedPiMessageWithOutcomeAsync,
 } from "../../agents/pi-embedded-runner/runs.js";
+import { resolvePreservedSessionContextTokens } from "../../agents/session-context-tokens.js";
 import { deriveContextPromptTokens, hasNonzeroUsage, normalizeUsage } from "../../agents/usage.js";
 import { enqueueCommitmentExtraction } from "../../commitments/runtime.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -1596,17 +1596,19 @@ export async function runReplyAgent(params: {
       runResult.meta.agentMeta.contextTokens > 0
         ? Math.floor(runResult.meta.agentMeta.contextTokens)
         : undefined;
-    const contextTokensUsed =
-      runtimeContextTokens ??
-      resolveContextTokensForModel({
-        cfg,
-        provider: providerUsed,
-        model: modelUsed,
-        contextTokensOverride: agentCfgContextTokens,
-        fallbackContextTokens: activeSessionEntry?.contextTokens ?? DEFAULT_CONTEXT_TOKENS,
-        allowAsyncLoad: false,
-      }) ??
-      DEFAULT_CONTEXT_TOKENS;
+    const contextTokensUsed = resolvePreservedSessionContextTokens({
+      cfg,
+      provider: providerUsed,
+      model: modelUsed,
+      runtimeContextTokens,
+      contextTokensOverride: agentCfgContextTokens,
+      existingEntry: activeSessionEntry,
+      fallbackContextTokens: activeSessionEntry?.contextTokens ?? DEFAULT_CONTEXT_TOKENS,
+      allowAsyncLoad: false,
+    });
+    if (runResult.meta?.agentMeta) {
+      runResult.meta.agentMeta.contextTokens = contextTokensUsed;
+    }
 
     await persistRunSessionUsage({
       storePath,

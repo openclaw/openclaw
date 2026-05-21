@@ -1,4 +1,5 @@
 import { setCliSessionBinding, setCliSessionId } from "../../agents/cli-session.js";
+import { resolvePreservedSessionContextTokens } from "../../agents/session-context-tokens.js";
 import {
   deriveSessionTotalTokens,
   hasNonzeroUsage,
@@ -113,7 +114,15 @@ export async function persistSessionUsageUpdate(params: {
         storePath,
         sessionKey,
         update: async (entry) => {
-          const resolvedContextTokens = params.contextTokensUsed ?? entry.contextTokens;
+          const resolvedContextTokens = resolvePreservedSessionContextTokens({
+            cfg,
+            provider: params.providerUsed ?? entry.modelProvider,
+            model: params.modelUsed ?? entry.model,
+            runtimeContextTokens: params.contextTokensUsed,
+            existingEntry: entry,
+            fallbackContextTokens: entry.contextTokens,
+            allowAsyncLoad: false,
+          });
           // Use last-call usage for totalTokens when available. The accumulated
           // `usage.input` sums input tokens from every API call in the run
           // (tool-use loops, compaction retries), overstating actual context.
@@ -189,7 +198,15 @@ export async function persistSessionUsageUpdate(params: {
                 ? entry.modelProvider
                 : (params.providerUsed ?? entry.modelProvider),
             model: params.isHeartbeat === true ? entry.model : (params.modelUsed ?? entry.model),
-            contextTokens: params.contextTokensUsed ?? entry.contextTokens,
+            contextTokens: resolvePreservedSessionContextTokens({
+              cfg,
+              provider: params.providerUsed ?? entry.modelProvider,
+              model: params.modelUsed ?? entry.model,
+              runtimeContextTokens: params.contextTokensUsed,
+              existingEntry: entry,
+              fallbackContextTokens: entry.contextTokens,
+              allowAsyncLoad: false,
+            }),
             systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
             updatedAt: Date.now(),
           };

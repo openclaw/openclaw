@@ -10,19 +10,15 @@ import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { clearCliSession, setCliSessionBinding, setCliSessionId } from "../cli-session.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { isCliProvider } from "../model-selection.js";
+import { resolvePreservedSessionContextTokens } from "../session-context-tokens.js";
 import { deriveSessionTotalTokens, hasNonzeroUsage } from "../usage.js";
 
 type RunResult = Awaited<ReturnType<(typeof import("../pi-embedded.js"))["runEmbeddedPiAgent"]>>;
 
 const usageFormatModuleLoader = createLazyImportLoader(() => import("../../utils/usage-format.js"));
-const contextModuleLoader = createLazyImportLoader(() => import("../context.js"));
 
 async function getUsageFormatModule() {
   return await usageFormatModuleLoader.load();
-}
-
-async function getContextModule() {
-  return await contextModuleLoader.load();
 }
 
 function resolveNonNegativeNumber(value: number | undefined): number | undefined {
@@ -95,18 +91,6 @@ export async function updateSessionStoreAfterAgentRun(params: {
   const providerUsed = result.meta.agentMeta?.provider ?? fallbackProvider ?? defaultProvider;
   const agentHarnessId = normalizeOptionalString(result.meta.agentMeta?.agentHarnessId);
   const runtimeContextTokens = resolvePositiveInteger(result.meta.agentMeta?.contextTokens);
-  const contextTokens =
-    runtimeContextTokens !== undefined
-      ? runtimeContextTokens
-      : typeof params.contextTokensOverride === "number" && params.contextTokensOverride > 0
-        ? params.contextTokensOverride
-        : ((await getContextModule()).resolveContextTokensForModel({
-            cfg,
-            provider: providerUsed,
-            model: modelUsed,
-            fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
-            allowAsyncLoad: false,
-          }) ?? DEFAULT_CONTEXT_TOKENS);
 
   const preserveRuntimeModel = params.preserveRuntimeModel === true;
   const entry = sessionStore[sessionKey] ?? {
@@ -114,6 +98,16 @@ export async function updateSessionStoreAfterAgentRun(params: {
     updatedAt: now,
     sessionStartedAt: now,
   };
+  const contextTokens = resolvePreservedSessionContextTokens({
+    cfg,
+    provider: providerUsed,
+    model: modelUsed,
+    runtimeContextTokens,
+    contextTokensOverride: params.contextTokensOverride,
+    existingEntry: entry,
+    fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
+    allowAsyncLoad: false,
+  });
   const next: SessionEntry = {
     ...entry,
     sessionId,
