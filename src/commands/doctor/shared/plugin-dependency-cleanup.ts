@@ -296,6 +296,32 @@ async function resolveSafeRemovalTarget(
   return { target: targetPath };
 }
 
+async function prepareCleanupTargets(
+  targets: readonly CleanupTarget[],
+  cleanupRoots: readonly CleanupRoot[],
+): Promise<{ removalTargets: string[]; staleRoots: string[]; warnings: string[] }> {
+  const removalTargets: string[] = [];
+  const staleRoots: string[] = [];
+  const warnings: string[] = [];
+  for (const target of targets) {
+    if (!(await pathExists(target.path))) {
+      continue;
+    }
+    const safeTarget = await resolveSafeRemovalTarget(target, cleanupRoots);
+    if ("warning" in safeTarget) {
+      warnings.push(safeTarget.warning);
+      continue;
+    }
+    removalTargets.push(safeTarget.target);
+    staleRoots.push(safeTarget.target);
+  }
+  return {
+    removalTargets: uniqueSorted(removalTargets),
+    staleRoots: uniqueSorted(staleRoots),
+    warnings,
+  };
+}
+
 async function collectLegacyPluginDependencyTargetEntries(
   env: NodeJS.ProcessEnv = process.env,
   options: { packageRoot?: string | null } = {},
@@ -379,27 +405,19 @@ export async function cleanupLegacyPluginDependencyState(params: {
   const cleanupRoots = await collectExistingCleanupRoots(cleanupRootPaths);
   const staleRootCandidates = filterLegacyStaleRootCandidates(targets, cleanupRootPaths);
   warnings.push(...staleRootCandidates.warnings);
+  const preparedTargets = await prepareCleanupTargets(staleRootCandidates.targets, cleanupRoots);
+  warnings.push(...preparedTargets.warnings);
   const staleSymlinks = await removeStalePluginRuntimeSymlinks(packageRoot, {
-    staleRoots: staleRootCandidates.targets.map((target) => target.path),
+    staleRoots: preparedTargets.staleRoots,
   });
   changes.push(...staleSymlinks.changes);
   warnings.push(...staleSymlinks.warnings);
-  for (const target of staleRootCandidates.targets) {
-    if (!(await pathExists(target.path))) {
-      continue;
-    }
-    const safeTarget = await resolveSafeRemovalTarget(target, cleanupRoots);
-    if ("warning" in safeTarget) {
-      warnings.push(safeTarget.warning);
-      continue;
-    }
+  for (const target of preparedTargets.removalTargets) {
     try {
-      await fs.rm(safeTarget.target, { recursive: true, force: true });
-      changes.push(`Removed legacy plugin dependency state: ${safeTarget.target}`);
+      await fs.rm(target, { recursive: true, force: true });
+      changes.push(`Removed legacy plugin dependency state: ${target}`);
     } catch (error) {
-      warnings.push(
-        `Failed to remove legacy plugin dependency state ${safeTarget.target}: ${String(error)}`,
-      );
+      warnings.push(`Failed to remove legacy plugin dependency state ${target}: ${String(error)}`);
     }
   }
   return { changes, warnings };

@@ -230,6 +230,46 @@ describe("cleanupLegacyPluginDependencyState", () => {
     await expectDirectoryPresent(externalRuntimeRoot);
   });
 
+  it("does not unlink global runtime symlinks through unsafe cleanup roots", async () => {
+    const stateDir = path.join(tempDir, "state");
+    const packageRoot = path.join(tempDir, "prefix", "lib", "node_modules", "openclaw");
+    const nodeModulesRoot = path.dirname(packageRoot);
+    const legacyRuntimeRoot = path.join(stateDir, "plugin-runtime-deps");
+    const externalRuntimeRoot = path.join(tempDir, "external-runtime");
+    const activeRuntimeTarget = path.join(
+      externalRuntimeRoot,
+      "openclaw-external",
+      "node_modules",
+      "left-pad",
+    );
+    const unsafeRuntimeTarget = path.join(
+      legacyRuntimeRoot,
+      "openclaw-external",
+      "node_modules",
+      "left-pad",
+    );
+    const leftPadLink = path.join(nodeModulesRoot, "left-pad");
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(packageRoot, { recursive: true });
+    await fs.mkdir(activeRuntimeTarget, { recursive: true });
+    await fs.symlink(externalRuntimeRoot, legacyRuntimeRoot, "dir");
+    await fs.symlink(unsafeRuntimeTarget, leftPadLink, "dir");
+
+    const result = await cleanupLegacyPluginDependencyState({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+      packageRoot,
+    });
+
+    expect(result.changes).toStrictEqual([]);
+    expect(result.warnings).toContain(
+      `Skipped legacy plugin dependency state ${legacyRuntimeRoot}: resolved outside OpenClaw cleanup roots`,
+    );
+    expect((await fs.lstat(leftPadLink)).isSymbolicLink()).toBe(true);
+    expect((await fs.lstat(legacyRuntimeRoot)).isSymbolicLink()).toBe(true);
+    await expectDirectoryPresent(activeRuntimeTarget);
+  });
+
   it("removes dangling global plugin-runtime symlinks that point at legacy runtime deps", async () => {
     const stateDir = path.join(tempDir, "state");
     const packageRoot = path.join(tempDir, "prefix", "lib", "node_modules", "openclaw");
