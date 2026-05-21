@@ -59,11 +59,52 @@ log() {
   printf '[entrypoint] %s\n' "$*" >&2
 }
 
+# Render /home/runtime/.claude/settings.json.j2 → settings.json with the
+# tenant/lab/target-dir placeholders substituted. Missing env vars are
+# best-effort: log a WARN, substitute empty, do NOT exit (byok/dev may
+# not have LAB_ID until fly_provisioning_service is updated; see
+# specs/runtime-platform-lab-id-env-2026-05-21.md).
+render_settings_json() {
+  local template="/home/runtime/.claude/settings.json.j2"
+  local output="/home/runtime/.claude/settings.json"
+  if [ ! -f "$template" ]; then
+    log "WARN: settings.json.j2 render: template ${template} not present; skipping"
+    return 0
+  fi
+  local lab_id="${PLATFORM_LAB_ID:-${LAB_ID:-}}"
+  local tenant_id="${ROCKIELAB_TENANT_ID:-}"
+  local target_dir="${PLATFORM_TARGET_DIR:-${TARGET_DIR:-/home/runtime}}"
+  for var in lab_id tenant_id target_dir; do
+    if [ -z "${!var}" ]; then
+      log "WARN: settings.json.j2 render: ${var} unset, substituting empty"
+    fi
+  done
+  # Escape sed metachars (\, &, |) so a future provisioner passing a
+  # path like /srv/work&prod can't corrupt the rendered JSON. `|` is
+  # our delimiter — escape it too.
+  local esc='s/[\&|]/\\&/g'
+  mkdir -p "$(dirname "$output")"
+  sed \
+    -e "s|{{ LAB_ID }}|$(printf '%s' "$lab_id" | sed -e "$esc")|g" \
+    -e "s|{{ TENANT_ID }}|$(printf '%s' "$tenant_id" | sed -e "$esc")|g" \
+    -e "s|{{ TARGET_DIR }}|$(printf '%s' "$target_dir" | sed -e "$esc")|g" \
+    "$template" > "$output"
+  if command -v python3 >/dev/null 2>&1 && \
+     ! python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$output" 2>/dev/null; then
+    log "WARN: settings.json.j2 render: ${output} failed JSON validation; continuing"
+    return 0
+  fi
+  log "settings.json rendered → ${output} (lab=${lab_id:-<empty>}, tenant=${tenant_id:-<empty>}, target=${target_dir:-<empty>})"
+}
+
 # If the caller passed a command (e.g. `docker run image claude --version`),
 # just run it. The mode router only kicks in when no command is given.
 if [ "$#" -gt 0 ]; then
   exec "$@"
 fi
+
+# --- settings.json render (must precede broker + any subscription CLI) -----
+render_settings_json
 
 # --- broker (always-on) -----------------------------------------------------
 if [ -x /usr/local/bin/broker ]; then

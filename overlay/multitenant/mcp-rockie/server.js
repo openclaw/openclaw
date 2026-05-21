@@ -37,11 +37,17 @@ const STATIC_TOOLS = [
   {
     name: "notebook_read",
     description:
-      "Read a lab's metadata + a summary of its sources and notes. Use when the user names a specific lab or you need to ground the next action in a lab's contents.",
+      "Read a lab's metadata + a summary of its sources and notes. notebook_id defaults to the runtime's PLATFORM_LAB_ID env var when omitted, so the in-runtime agent can call notebook_read({}) to ground itself in its own lab.",
     inputSchema: {
+      // notebook_id intentionally NOT in `required` so an empty `{}`
+      // argument is accepted; the CallToolRequestSchema handler fills
+      // it from PLATFORM_LAB_ID. The platform-context parity test
+      // (platform-context/tests/test_agent_tools.py) only asserts the
+      // tool NAME sets match — not required-field sets — so this does
+      // not break parity. Keep `notebook_id` in `properties` so the
+      // schema still advertises the field.
       type: "object",
       properties: { notebook_id: { type: "string" } },
-      required: ["notebook_id"],
       additionalProperties: false,
     },
   },
@@ -637,6 +643,35 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       ],
       isError: true,
     };
+  }
+  // notebook_read defaults notebook_id to PLATFORM_LAB_ID so the
+  // in-runtime agent can call notebook_read({}) and have it resolve to
+  // its own lab. PLATFORM_LAB_ID is injected by
+  // overlay/multitenant/entrypoint.sh:render_settings_json (see
+  // rockie-workspace#485). If still empty after the fallback, short-
+  // circuit with a structured error rather than round-tripping to the
+  // API with a blank id.
+  if (name === "notebook_read" && !args.notebook_id) {
+    const fallback = process.env.PLATFORM_LAB_ID || "";
+    if (fallback) {
+      args.notebook_id = fallback;
+    } else {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              error: {
+                code: "lab_id_unset",
+                message:
+                  "notebook_read: no notebook_id supplied and PLATFORM_LAB_ID env var is not set",
+              },
+            }),
+          },
+        ],
+        isError: true,
+      };
+    }
   }
   try {
     const result = await callTool(name, args);
