@@ -402,7 +402,9 @@ describe("google web search provider", () => {
 
   it("passes freshness to Gemini Google Search grounding as a time range", async () => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-04-15T12:00:00Z"));
+    // Use a wall-clock-realistic moment with non-zero milliseconds; the helper
+    // must strip them to avoid Gemini's "Granularity of nano is not supported".
+    vi.setSystemTime(new Date("2026-04-15T12:00:00.123Z"));
     const mockFetch = installGeminiFetch();
     const provider = createGeminiWebSearchProvider();
     const tool = provider.createTool({
