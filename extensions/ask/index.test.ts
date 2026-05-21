@@ -12,7 +12,9 @@ function createMemoryStore<T>() {
       map.set(key, value);
     }),
     registerIfAbsent: vi.fn(async (key: string, value: T) => {
-      if (map.has(key)) return false;
+      if (map.has(key)) {
+        return false;
+      }
       map.set(key, value);
       return true;
     }),

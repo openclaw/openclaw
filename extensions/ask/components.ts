@@ -1,4 +1,4 @@
-import type { DiscordComponentMessageSpec } from "openclaw/plugin-sdk/discord";
+import type { DiscordComponentMessageSpec } from "openclaw/plugin-sdk/discord-interactions";
 import type { AskSession } from "./types.js";
 
 export function buildAskDiscordComponents(session: AskSession): DiscordComponentMessageSpec {

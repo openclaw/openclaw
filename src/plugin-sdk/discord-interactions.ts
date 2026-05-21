@@ -6,6 +6,17 @@ import type {
   PluginInteractiveRegistration,
 } from "./plugin-runtime.js";
 
+export type DiscordComponentMessageSpec = {
+  text?: string;
+  reusable?: boolean;
+  container?: {
+    accentColor?: string | number;
+    spoiler?: boolean;
+  };
+  blocks?: unknown[];
+  modal?: unknown;
+};
+
 export type DiscordInteractiveHandlerContext = {
   channel: "discord";
   accountId: string;
