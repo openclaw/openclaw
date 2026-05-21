@@ -392,7 +392,10 @@ describe("memory plugin e2e", () => {
         const artifacts = await provider.listArtifacts({
           cfg: {
             agents: {
-              list: [{ id: "main", default: true, workspace: workspaceDir }],
+              list: [
+                { id: "main", default: true, workspace: workspaceDir },
+                { id: "research", workspace: workspaceDir },
+              ],
             },
           },
         });
@@ -405,7 +408,7 @@ describe("memory plugin e2e", () => {
             workspaceDir: bridgeDir,
             relativePath: "lancedb-memories.md",
             absolutePath: bridgeFile,
-            agentIds: ["main"],
+            agentIds: ["main", "research"],
             contentType: "markdown",
           },
           {
@@ -413,7 +416,7 @@ describe("memory plugin e2e", () => {
             workspaceDir,
             relativePath: "MEMORY.md",
             absolutePath: path.join(workspaceDir, "MEMORY.md"),
-            agentIds: ["main"],
+            agentIds: ["main", "research"],
             contentType: "markdown",
           },
           {
@@ -421,7 +424,7 @@ describe("memory plugin e2e", () => {
             workspaceDir,
             relativePath: "memory/2026-05-21.md",
             absolutePath: path.join(workspaceDir, "memory", "2026-05-21.md"),
-            agentIds: ["main"],
+            agentIds: ["main", "research"],
             contentType: "markdown",
           },
         ]);

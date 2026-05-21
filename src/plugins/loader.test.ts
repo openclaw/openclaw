@@ -3215,7 +3215,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
     );
   });
 
-  it("preserves memory capability discovered by fresh activate:false snapshot loads", async () => {
+  it("preserves only public artifacts discovered by fresh activate:false snapshot loads", async () => {
     useNoBundledPlugins();
     const workspaceDir = makeTempDir();
     const absolutePath = path.join(workspaceDir, "MEMORY.md");
@@ -3228,6 +3228,23 @@ module.exports = { id: "throws-after-import", register() {} };`,
         kind: "memory",
         register(api) {
           api.registerMemoryCapability({
+            promptBuilder: () => ["discovery prompt should not leak"],
+            flushPlanResolver: () => ({
+              softThresholdTokens: 10,
+              forceFlushTranscriptBytes: 20,
+              reserveTokensFloor: 30,
+              prompt: "discovery",
+              systemPrompt: "discovery",
+              relativePath: "memory/discovery.md",
+            }),
+            runtime: {
+              async getMemorySearchManager() {
+                return { manager: null, error: "discovery" };
+              },
+              resolveMemoryBackendConfig() {
+                return { backend: "builtin" };
+              },
+            },
             publicArtifacts: {
               async listArtifacts() {
                 return [{
@@ -3257,6 +3274,13 @@ module.exports = { id: "throws-after-import", register() {} };`,
         },
       },
     });
+
+    expect(buildMemoryPromptSection({ availableTools: new Set() })).toStrictEqual([]);
+    expect(resolveMemoryFlushPlan({})).toBeNull();
+    expect(getMemoryRuntime()).toBeUndefined();
+    const registration = getMemoryCapabilityRegistration();
+    expect(registration?.pluginId).toBe("capability-discovered-memory");
+    expect(Object.keys(registration?.capability ?? {})).toEqual(["publicArtifacts"]);
 
     await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual([
       {

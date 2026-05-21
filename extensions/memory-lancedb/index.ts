@@ -14,6 +14,7 @@ import type * as LanceDB from "@lancedb/lancedb";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { MemoryEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
+  listMemoryWorkspaceAgentIds,
   listMemoryWorkspacePublicArtifacts,
   type MemoryPluginPublicArtifact,
 } from "openclaw/plugin-sdk/memory-host-core";
@@ -570,6 +571,7 @@ function isFilesystemDbPath(value: string): boolean {
 async function collectLanceDbPublicArtifact(params: {
   resolvedDbPath: string;
   db: MemoryDB;
+  agentIds: string[];
 }): Promise<MemoryPluginPublicArtifact> {
   const bridgeDir = path.join(params.resolvedDbPath, "wiki-bridge");
   const bridgeFile = path.join(bridgeDir, "lancedb-memories.md");
@@ -581,7 +583,7 @@ async function collectLanceDbPublicArtifact(params: {
     workspaceDir: bridgeDir,
     relativePath: "lancedb-memories.md",
     absolutePath: bridgeFile,
-    agentIds: ["main"],
+    agentIds: [...params.agentIds],
     contentType: "markdown",
   };
 }
@@ -787,8 +789,9 @@ export default definePluginEntry({
         publicArtifacts: {
           async listArtifacts(params) {
             const artifacts: MemoryPluginPublicArtifact[] = [];
+            const agentIds = listMemoryWorkspaceAgentIds(params);
             if (isFilesystemDbPath(resolvedDbPath)) {
-              artifacts.push(await collectLanceDbPublicArtifact({ resolvedDbPath, db }));
+              artifacts.push(await collectLanceDbPublicArtifact({ resolvedDbPath, db, agentIds }));
             } else if (!loggedUriArtifactSkip) {
               loggedUriArtifactSkip = true;
               api.logger.warn(
