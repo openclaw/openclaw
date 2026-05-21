@@ -83,6 +83,7 @@ vi.mock("../gateway/probe-auth.js", () => ({
 
 vi.mock("../daemon/program-args.js", () => ({
   OPENCLAW_WRAPPER_ENV_KEY: "OPENCLAW_WRAPPER",
+  looksLikeExternalGatewayWrapperArg: (_value: string | undefined) => false,
   resolveGatewayProgramArguments: (opts: unknown) => resolveGatewayProgramArguments(opts),
   resolveOpenClawWrapperPath: async (value: string | undefined) => value?.trim() || undefined,
 }));
