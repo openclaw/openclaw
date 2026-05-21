@@ -45,6 +45,7 @@ const VERSION_MANAGER_PATH_MARKERS: readonly string[] = [
   "/.local/share/fnm/",
   "/.volta/",
   "/.asdf/",
+  "/.local/share/mise/",
   "/.n/",
   "/.nodenv/",
   "/.nodebrew/",

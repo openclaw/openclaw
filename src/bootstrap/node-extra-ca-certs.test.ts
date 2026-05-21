@@ -80,6 +80,12 @@ describe("isNodeVersionManagerRuntime", () => {
     ).toBe(true);
   });
 
+  it("detects mise via execPath", () => {
+    expect(
+      isNodeVersionManagerRuntime({}, "/home/test/.local/share/mise/installs/node/22.14.0/bin/node"),
+    ).toBe(true);
+  });
+
   it("detects n via execPath", () => {
     expect(isNodeVersionManagerRuntime({}, "/home/test/.n/bin/node")).toBe(true);
   });
