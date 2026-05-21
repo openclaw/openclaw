@@ -172,6 +172,7 @@ Useful env vars for the manual launcher:
 - `OPENCLAW_PODMAN_PUBLISH_HOST` -- host interface for published ports; default is `127.0.0.1`
 - `OPENCLAW_GATEWAY_BIND` -- gateway bind mode inside the container; default is `lan`
 - `OPENCLAW_PODMAN_USERNS` -- `keep-id` (default), `auto`, or `host`
+- `OPENCLAW_HOST_CLAUDE_DIR` -- override the host Claude CLI credential directory mounted read-only into the setup container; defaults to `$HOME/.claude`. Only consulted during `launch setup`; the regular `launch` does not mount this path. The launcher still requires a private regular-file `.credentials.json` owned by the current user and skips the mount with a warning if the source fails those guards.
 
 The manual launcher reads `~/.openclaw/.env` before finalizing container/image defaults, so you can persist these there.
 
