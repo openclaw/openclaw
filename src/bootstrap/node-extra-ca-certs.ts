@@ -33,19 +33,23 @@ export function resolveLinuxSystemCaBundle(
 }
 
 /**
- * Version manager path markers, aligned with src/daemon/service-audit.ts.
+ * Version manager path markers (Linux subset), mirroring VERSION_MANAGER_MARKERS
+ * in src/daemon/runtime-paths.ts. Not imported directly because bootstrap code
+ * must avoid daemon-layer dependencies at startup.
  * Version-manager-installed Node does not inherit system CA certificates,
- * so we need to detect this to auto-inject NODE_EXTRA_CA_CERTS.
+ * so we detect this to auto-inject NODE_EXTRA_CA_CERTS.
  */
 const VERSION_MANAGER_PATH_MARKERS: readonly string[] = [
   "/.nvm/",
   "/.fnm/",
+  "/.local/share/fnm/",
   "/.volta/",
   "/.asdf/",
   "/.n/",
   "/.nodenv/",
   "/.nodebrew/",
   "/nvs/",
+  "/.nvs/",
 ];
 
 export function isNodeVersionManagerRuntime(

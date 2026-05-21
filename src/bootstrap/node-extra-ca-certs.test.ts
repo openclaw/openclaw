@@ -55,6 +55,19 @@ describe("isNodeVersionManagerRuntime", () => {
     ).toBe(true);
   });
 
+  it("detects fnm via XDG data path", () => {
+    expect(
+      isNodeVersionManagerRuntime(
+        {},
+        "/home/test/.local/share/fnm/node-versions/v22/installation/bin/node",
+      ),
+    ).toBe(true);
+  });
+
+  it("detects nvs via dotted home path", () => {
+    expect(isNodeVersionManagerRuntime({}, "/home/test/.nvs/node/22.14.0/x64/bin/node")).toBe(true);
+  });
+
   it("detects volta via execPath", () => {
     expect(
       isNodeVersionManagerRuntime({}, "/home/test/.volta/tools/image/node/22.14.0/bin/node"),
