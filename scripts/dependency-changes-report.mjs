@@ -12,6 +12,7 @@ import {
 const DEPENDENCY_FILE_PATTERNS = [
   /^package\.json$/u,
   /^package-lock\.json$/u,
+  /\/package-lock\.json$/u,
   /^npm-shrinkwrap\.json$/u,
   /\/npm-shrinkwrap\.json$/u,
   /^pnpm-lock\.yaml$/u,
@@ -23,6 +24,7 @@ const DEPENDENCY_FILE_PATTERNS = [
 const DEPENDENCY_DIFF_PATHS = [
   "package.json",
   "package-lock.json",
+  "extensions/*/package-lock.json",
   "npm-shrinkwrap.json",
   "pnpm-lock.yaml",
   "pnpm-workspace.yaml",
