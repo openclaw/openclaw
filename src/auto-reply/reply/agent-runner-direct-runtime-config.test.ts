@@ -212,6 +212,13 @@ describe("runReplyAgent runtime config", () => {
       requesterSenderE164: undefined,
     });
     expect(runPreflightCompactionIfNeededMock).toHaveBeenCalledTimes(1);
+    expect(runMemoryFlushIfNeededMock).toHaveBeenCalledTimes(1);
+    expect(runMemoryFlushIfNeededMock.mock.invocationCallOrder[0]).toBeLessThan(
+      runPreflightCompactionIfNeededMock.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+    const memoryCall = requireMaintenanceCall(runMemoryFlushIfNeededMock, "runMemoryFlushIfNeeded");
+    expect(memoryCall.cfg).toBe(freshCfg);
+    expect(memoryCall.followupRun).toBe(followupRun);
     const preflightCall = requireMaintenanceCall(
       runPreflightCompactionIfNeededMock,
       "runPreflightCompactionIfNeeded",
@@ -230,8 +237,6 @@ describe("runReplyAgent runtime config", () => {
     followupRun.run.runtimePolicySessionKey = runtimePolicySessionKey;
     replyParams.sessionKey = "agent:main:main";
     replyParams.runtimePolicySessionKey = runtimePolicySessionKey;
-    runPreflightCompactionIfNeededMock.mockResolvedValue(undefined);
-    runMemoryFlushIfNeededMock.mockRejectedValue(sentinelError);
 
     await expect(runReplyAgent(replyParams)).rejects.toBe(sentinelError);
 
