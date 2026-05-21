@@ -1,3 +1,4 @@
+import { resolveProviderCapabilities } from "openclaw/plugin-sdk/image-generation";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildXaiImageGenerationProvider } from "./image-generation-provider.js";
 
@@ -102,13 +103,14 @@ describe("xai image generation provider", () => {
 
   it("builds provider with correct models, default, and capabilities", () => {
     const provider = buildXaiImageGenerationProvider();
+    const caps = resolveProviderCapabilities(provider.capabilities);
     expect(provider.id).toBe("xai");
     expect(provider.label).toBe("xAI");
     expect(provider.defaultModel).toBe("grok-imagine-image");
     expect(provider.models).toEqual(["grok-imagine-image", "grok-imagine-image-quality"]);
-    expect(provider.capabilities.generate.maxCount).toBe(4);
-    expect(provider.capabilities.generate.supportsAspectRatio).toBe(true);
-    expect(provider.capabilities.geometry?.aspectRatios).toEqual([
+    expect(caps.generate.maxCount).toBe(4);
+    expect(caps.generate.supportsAspectRatio).toBe(true);
+    expect(caps.geometry?.aspectRatios).toEqual([
       "1:1",
       "16:9",
       "9:16",
@@ -117,8 +119,8 @@ describe("xai image generation provider", () => {
       "2:3",
       "3:2",
     ]);
-    expect(provider.capabilities.edit.enabled).toBe(true);
-    expect(provider.capabilities.edit.maxInputImages).toBe(5);
+    expect(caps.edit.enabled).toBe(true);
+    expect(caps.edit.maxInputImages).toBe(5);
     const isConfigured = provider.isConfigured;
     if (!isConfigured) {
       throw new Error("expected XAI image provider config predicate");

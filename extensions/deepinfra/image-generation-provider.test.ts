@@ -1,3 +1,4 @@
+import { resolveProviderCapabilities } from "openclaw/plugin-sdk/image-generation";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { buildDeepInfraImageGenerationProvider } from "./image-generation-provider.js";
 
@@ -73,12 +74,13 @@ describe("deepinfra image generation provider", () => {
 
   it("declares generation and single-reference edit support", () => {
     const provider = buildDeepInfraImageGenerationProvider();
+    const caps = resolveProviderCapabilities(provider.capabilities);
 
     expect(provider.id).toBe("deepinfra");
     expect(provider.defaultModel).toBe("black-forest-labs/FLUX-1-schnell");
-    expect(provider.capabilities.generate.maxCount).toBe(4);
-    expect(provider.capabilities.edit.enabled).toBe(true);
-    expect(provider.capabilities.edit.maxInputImages).toBe(1);
+    expect(caps.generate.maxCount).toBe(4);
+    expect(caps.edit.enabled).toBe(true);
+    expect(caps.edit.maxInputImages).toBe(1);
   });
 
   it("sends OpenAI-compatible image generation requests and sniffs JPEG output", async () => {

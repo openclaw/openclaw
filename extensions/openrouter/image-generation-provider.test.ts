@@ -1,3 +1,4 @@
+import { resolveProviderCapabilities } from "openclaw/plugin-sdk/image-generation";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildOpenRouterImageGenerationProvider,
@@ -94,14 +95,15 @@ describe("openrouter image generation provider", () => {
 
   it("builds provider metadata and capabilities", () => {
     const provider = buildOpenRouterImageGenerationProvider();
+    const caps = resolveProviderCapabilities(provider.capabilities);
     expect(provider.id).toBe("openrouter");
     expect(provider.label).toBe("OpenRouter");
     expect(provider.defaultModel).toBe("google/gemini-3.1-flash-image-preview");
     expect(provider.models).toContain("google/gemini-3-pro-image-preview");
-    expect(provider.capabilities.generate.maxCount).toBe(4);
-    expect(provider.capabilities.generate.supportsAspectRatio).toBe(true);
-    expect(provider.capabilities.edit.enabled).toBe(true);
-    expect(provider.capabilities.edit.maxInputImages).toBe(5);
+    expect(caps.generate.maxCount).toBe(4);
+    expect(caps.generate.supportsAspectRatio).toBe(true);
+    expect(caps.edit.enabled).toBe(true);
+    expect(caps.edit.maxInputImages).toBe(5);
   });
 
   it("sends chat completion image requests with Gemini image config and count", async () => {

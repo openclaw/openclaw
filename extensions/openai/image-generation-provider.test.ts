@@ -1,3 +1,4 @@
+import { resolveProviderCapabilities } from "openclaw/plugin-sdk/image-generation";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIImageGenerationProvider } from "./image-generation-provider.js";
 
@@ -266,6 +267,7 @@ describe("openai image generation provider", () => {
 
   it("advertises the current OpenAI image model and 2K/4K size hints", () => {
     const provider = buildOpenAIImageGenerationProvider();
+    const caps = resolveProviderCapabilities(provider.capabilities);
 
     expect(provider.defaultModel).toBe("gpt-image-2");
     expect(provider.aliases).toContain("openai-codex");
@@ -275,10 +277,10 @@ describe("openai image generation provider", () => {
       "gpt-image-1",
       "gpt-image-1-mini",
     ]);
-    expect(provider.capabilities.geometry?.sizes).toContain("2048x2048");
-    expect(provider.capabilities.geometry?.sizes).toContain("3840x2160");
-    expect(provider.capabilities.geometry?.sizes).toContain("2160x3840");
-    expect(provider.capabilities.output).toEqual({
+    expect(caps.geometry?.sizes).toContain("2048x2048");
+    expect(caps.geometry?.sizes).toContain("3840x2160");
+    expect(caps.geometry?.sizes).toContain("2160x3840");
+    expect(caps.output).toEqual({
       formats: ["png", "jpeg", "webp"],
       qualities: ["low", "medium", "high", "auto"],
       backgrounds: ["transparent", "opaque", "auto"],
