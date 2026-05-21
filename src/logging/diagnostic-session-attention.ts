@@ -14,7 +14,7 @@ export type SessionAttentionClassification =
       reason: string;
       classification: "blocked_tool_call" | "stalled_agent_run";
       activeWorkKind?: DiagnosticSessionActiveWorkKind;
-      recoveryEligible: false;
+      recoveryEligible: boolean;
     }
   | {
       eventType: "session.stuck";
@@ -48,12 +48,17 @@ export function classifySessionAttention(params: {
       params.activity.activeWorkKind === "embedded_run" &&
       isTerminalDiagnosticProgressReason(params.activity.lastProgressReason)
     ) {
+      // The active embedded_run has emitted a terminal progress signal
+      // (e.g., `rawResponseItem/completed`, `embedded_run:ended`) yet the
+      // lane is still holding queued items. The work signal indicates the
+      // active turn is effectively done, so allow the recovery coordinator
+      // to release the lane and let the queue drain.
       return {
         eventType: "session.stalled",
         reason: "queued_behind_terminal_active_work",
         classification: "stalled_agent_run",
         activeWorkKind: params.activity.activeWorkKind,
-        recoveryEligible: false,
+        recoveryEligible: true,
       };
     }
     if ((params.activity.lastProgressAgeMs ?? 0) > params.staleMs) {

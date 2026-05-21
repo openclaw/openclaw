@@ -68,7 +68,10 @@ describe("classifySessionAttention", () => {
         reason: "queued_behind_terminal_active_work",
         classification: "stalled_agent_run",
         activeWorkKind: "embedded_run",
-        recoveryEligible: false,
+        // Terminal progress signal + queued items = lane is effectively
+        // done with the active turn; recovery coordinator should release
+        // the lane so the queue can drain.
+        recoveryEligible: true,
       },
     },
     {

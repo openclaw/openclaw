@@ -590,7 +590,12 @@ export function loadAuthProfileStoreForSecretsRuntime(agentDir?: string): AuthPr
   return loadAuthProfileStoreForRuntime(agentDir, {
     readOnly: true,
     allowKeychainPrompt: false,
-    resolveLegacyOAuthSidecars: false,
+    // Include legacy OAuth sidecar material when the runtime is resolving
+    // secrets for an agent turn. Without this, embedded agent runs cannot reach
+    // the access token for openai-codex profiles whose `oauthRef.source` is
+    // "openclaw-credentials", and resolveApiKeyForProfile() falls through to
+    // "No API key found".
+    resolveLegacyOAuthSidecars: true,
   });
 }
 
@@ -604,7 +609,10 @@ export function loadAuthProfileStoreWithoutExternalProfiles(
   const options: LoadAuthProfileStoreOptions = {
     readOnly: true,
     allowKeychainPrompt: loadOptions?.allowKeychainPrompt ?? false,
-    resolveLegacyOAuthSidecars: loadOptions?.resolveLegacyOAuthSidecars ?? false,
+    // Default sidecar resolution to true so callers that do not explicitly
+    // override still pick up legacy OAuth credential material for isolated and
+    // sub-agent auth resolution paths.
+    resolveLegacyOAuthSidecars: loadOptions?.resolveLegacyOAuthSidecars ?? true,
   };
   const store = loadAuthProfileStoreForAgent(agentDir, options);
   const authPath = resolveAuthStorePath(agentDir);
@@ -639,20 +647,31 @@ export function ensureAuthProfileStore(
 
 export function ensureAuthProfileStoreWithoutExternalProfiles(
   agentDir?: string,
-  options?: { allowKeychainPrompt?: boolean },
+  options?: { allowKeychainPrompt?: boolean; resolveLegacyOAuthSidecars?: boolean },
 ): AuthProfileStore {
-  const runtimeStore = resolveRuntimeAuthProfileStore(agentDir, options);
+  // Forward `resolveLegacyOAuthSidecars` through this entry point so embedded
+  // runner sub-agents and isolated session lanes can read legacy sidecar
+  // credential material. Default true to match
+  // `loadAuthProfileStoreWithoutExternalProfiles`.
+  const resolveLegacyOAuthSidecars = options?.resolveLegacyOAuthSidecars ?? true;
+  const effectiveOptions: LoadAuthProfileStoreOptions = {
+    ...(options ?? {}),
+    resolveLegacyOAuthSidecars,
+  };
+  const runtimeStore = resolveRuntimeAuthProfileStore(agentDir, effectiveOptions);
   if (runtimeStore) {
     return runtimeStore;
   }
-  const store = loadAuthProfileStoreForAgent(agentDir, options);
+  const store = loadAuthProfileStoreForAgent(agentDir, effectiveOptions);
   const authPath = resolveAuthStorePath(agentDir);
   const mainAuthPath = resolveAuthStorePath();
   if (!agentDir || authPath === mainAuthPath) {
     return store;
   }
 
-  const mainStore = loadAuthProfileStoreForAgent(undefined, options);
+  // Use the same options for the main fallback load; sub-agents that merge in
+  // the main store need the same legacy sidecar material.
+  const mainStore = loadAuthProfileStoreForAgent(undefined, effectiveOptions);
   return mergeAuthProfileStores(mainStore, store);
 }
 
