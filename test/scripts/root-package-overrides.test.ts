@@ -34,12 +34,14 @@ describe("root package override guardrails", () => {
     const bedrockManifest = readPackageManifest(
       path.resolve(process.cwd(), "extensions", "amazon-bedrock", "package.json"),
     );
+    const bedrockRuntimeDependency = bedrockManifest.dependencies?.[packageName];
     const npmOverride = manifest.overrides?.[packageName];
-    const pnpmOverride = pnpmWorkspace.overrides?.["@aws-sdk/client-bedrock-runtime"];
+    const pnpmOverride = pnpmWorkspace.overrides?.[packageName];
 
+    expect(bedrockRuntimeDependency).toBeDefined();
     expect(manifest.dependencies).not.toHaveProperty(packageName);
     expect(npmOverride).toBeUndefined();
-    expect(pnpmOverride).toBe(bedrockManifest.dependencies?.[packageName]);
+    expect(pnpmOverride).toBe(bedrockRuntimeDependency);
   });
 
   it("pins the node-domexception alias exactly in npm and pnpm overrides", () => {
