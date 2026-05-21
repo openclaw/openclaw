@@ -24,9 +24,9 @@ execution:
   summary: Exercise the lifecycle fixture for pinned-old Codex plugin mismatch.
   config:
     pluginVersion: 2026.5.19
-    hostVersion: 2026.5.20
+    hostVersion: 2026.5.21
     pluginRelation: older
-    remediation: Codex plugin version 2026.5.19 is older than OpenClaw 2026.5.20. Run "openclaw plugins update codex" or unpin codex, then rerun "openclaw doctor --fix".
+    remediation: Codex plugin version 2026.5.19 is older than OpenClaw 2026.5.21. Run "openclaw plugins update codex" or unpin codex, then rerun "openclaw doctor --fix".
 ```
 
 ```yaml qa-flow

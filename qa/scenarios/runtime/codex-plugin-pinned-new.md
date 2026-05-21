@@ -23,10 +23,10 @@ execution:
   kind: flow
   summary: Exercise the lifecycle fixture for pinned-new Codex plugin mismatch.
   config:
-    pluginVersion: 2026.5.21
-    hostVersion: 2026.5.20
+    pluginVersion: 2026.5.22
+    hostVersion: 2026.5.21
     pluginRelation: newer
-    remediation: Codex plugin version 2026.5.21 requires a newer OpenClaw host than 2026.5.20. Upgrade OpenClaw or install a codex plugin version pinned to 2026.5.20.
+    remediation: Codex plugin version 2026.5.22 requires a newer OpenClaw host than 2026.5.21. Upgrade OpenClaw or install a codex plugin version pinned to 2026.5.21.
 ```
 
 ```yaml qa-flow

@@ -88,12 +88,12 @@ describe("codex plugin lifecycle: pinned-old codex plugin with new OpenClaw", ()
     const result = evaluateCodexPluginLifecycle({
       plugin: await snapshotCodexPluginState(agentDir),
       auth: await snapshotAuthProfiles(agentDir),
-      hostVersion: "2026.5.20",
+      hostVersion: "2026.5.21",
     });
 
     expect(result.status).toBe("blocked");
     expect(result.remediation).toBe(
-      'Codex plugin version 2026.5.19 is older than OpenClaw 2026.5.20. Run "openclaw plugins update codex" or unpin codex, then rerun "openclaw doctor --fix".',
+      'Codex plugin version 2026.5.19 is older than OpenClaw 2026.5.21. Run "openclaw plugins update codex" or unpin codex, then rerun "openclaw doctor --fix".',
     );
   });
 });
@@ -101,18 +101,18 @@ describe("codex plugin lifecycle: pinned-old codex plugin with new OpenClaw", ()
 describe("codex plugin lifecycle: pinned-new codex plugin with old OpenClaw", () => {
   it("blocks with a precise host-upgrade remediation when the plugin is newer than the host", async () => {
     const agentDir = await createAgentDir("qa-codex-plugin-new-");
-    await seedCodexPluginAt("2026.5.21", agentDir);
+    await seedCodexPluginAt("2026.5.22", agentDir);
     await seedAuthProfiles("oauth-only", agentDir);
 
     const result = evaluateCodexPluginLifecycle({
       plugin: await snapshotCodexPluginState(agentDir),
       auth: await snapshotAuthProfiles(agentDir),
-      hostVersion: "2026.5.20",
+      hostVersion: "2026.5.21",
     });
 
     expect(result.status).toBe("blocked");
     expect(result.remediation).toBe(
-      "Codex plugin version 2026.5.21 requires a newer OpenClaw host than 2026.5.20. Upgrade OpenClaw or install a codex plugin version pinned to 2026.5.20.",
+      "Codex plugin version 2026.5.22 requires a newer OpenClaw host than 2026.5.21. Upgrade OpenClaw or install a codex plugin version pinned to 2026.5.21.",
     );
   });
 });

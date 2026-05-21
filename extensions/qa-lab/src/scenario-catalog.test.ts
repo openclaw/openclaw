@@ -231,7 +231,7 @@ describe("qa scenario catalog", () => {
     }
     expect(readQaScenarioExecutionConfig("codex-plugin-pinned-old")).toMatchObject({
       pluginVersion: "2026.5.19",
-      hostVersion: "2026.5.20",
+      hostVersion: "2026.5.21",
       pluginRelation: "older",
     });
     expect(readQaScenarioExecutionConfig("auth-profile-doctor-migration-safety")).toMatchObject({
