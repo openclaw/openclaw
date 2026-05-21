@@ -201,14 +201,13 @@ describe("json file helpers", () => {
       let callCount = 0;
 
       vi.spyOn(fsPromises, "lstat").mockImplementation(async (p, ...args) => {
-        const stat = await origLstat(p as fs.PathLike, ...(args as any));
+        const stat = await origLstat(p, ...args);
         const pathStr = typeof p === "string" ? p : String(p);
         if (pathStr === targetPath) {
           callCount++;
           if (callCount <= targetCallCount) {
             // Modify ino: for BigInt ino add 100n, for number ino add 100
-            const modifiedIno =
-              typeof stat.ino === "bigint" ? stat.ino + 100n : (stat.ino as number) + 100;
+            const modifiedIno = typeof stat.ino === "bigint" ? stat.ino + 100n : stat.ino + 100;
 
             // Clone stat preserving prototype, override ino
             return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, {

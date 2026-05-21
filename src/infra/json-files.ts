@@ -1,10 +1,10 @@
 import "./fs-safe-defaults.js";
-import { replaceFileAtomic } from "./replace-file.js";
 import {
   JsonFileReadError,
   readJson as readJsonImpl,
   readJsonIfExists as readJsonIfExistsImpl,
 } from "@openclaw/fs-safe/json";
+import { replaceFileAtomic } from "./replace-file.js";
 
 export {
   JsonFileReadError,
@@ -51,7 +51,7 @@ async function withRetryOnFileChanged<T>(fn: () => Promise<T>): Promise<T> {
       return await fn();
     } catch (err) {
       if (isFileChangedDuringRead(err) && attempt < RETRY_MAX_ATTEMPTS - 1) {
-        await new Promise((r) => setTimeout(r, RETRY_BASE_DELAY_MS * Math.pow(2, attempt)));
+        await new Promise((r) => setTimeout(r, RETRY_BASE_DELAY_MS * 2 ** attempt));
         continue;
       }
       throw err;
@@ -75,7 +75,9 @@ export async function readJsonIfExists<T>(filePath: string): Promise<T | null> {
   try {
     return await withRetryOnFileChanged(() => readJsonIfExistsImpl<T>(filePath));
   } catch (err) {
-    if (err instanceof JsonFileReadError) throw err;
+    if (err instanceof JsonFileReadError) {
+      throw err;
+    }
     throw new JsonFileReadError(filePath, "read", err);
   }
 }
