@@ -1274,6 +1274,65 @@ describe("exec approvals", () => {
     }
   });
 
+  it("requires approval for the legacy skill display prelude even when the wrapper is allowlisted", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-prelude-"));
+    try {
+      const skillDir = path.join(tempDir, ".openclaw", "skills", "gog");
+      const skillPath = path.join(skillDir, "SKILL.md");
+      const binDir = path.join(tempDir, "bin");
+      const wrapperPath = path.join(binDir, "gog-wrapper");
+      await fs.mkdir(skillDir, { recursive: true });
+      await fs.mkdir(binDir, { recursive: true });
+      await fs.writeFile(skillPath, "# gog skill\n");
+      await fs.writeFile(wrapperPath, "#!/bin/sh\necho '{\"events\":[]}'\n");
+      await fs.chmod(wrapperPath, 0o755);
+      const trustedWrapperPath = await fs.realpath(wrapperPath);
+
+      await writeExecApprovalsConfig({
+        version: 1,
+        defaults: { security: "allowlist", ask: "on-miss", askFallback: "deny" },
+        agents: {
+          main: {
+            allowlist: [{ pattern: trustedWrapperPath }],
+          },
+        },
+      });
+
+      const calls: string[] = [];
+      vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+        calls.push(method);
+        if (method === "exec.approval.request") {
+          return acceptedApprovalResponse(params);
+        }
+        if (method === "exec.approval.waitDecision") {
+          return { decision: "deny" };
+        }
+        return { ok: true };
+      });
+
+      const tool = createExecTool({
+        host: "gateway",
+        ask: "on-miss",
+        security: "allowlist",
+        approvalRunningNoticeMs: 0,
+      });
+
+      const command = `cat ${JSON.stringify(skillPath)} && printf '\\n---CMD---\\n' && ${JSON.stringify(wrapperPath)} calendar events primary --today --json`;
+      const result = await tool.execute("call-skill-prelude", {
+        command,
+        workdir: tempDir,
+      });
+
+      expectPendingCommandText(result, command);
+      expect(calls).toContain("exec.approval.request");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("shows full chained node commands in approval-pending message", async () => {
     const calls: string[] = [];
     vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {

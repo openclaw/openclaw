@@ -624,6 +624,28 @@ describe("exec approvals shell analysis", () => {
       expect(result.segmentSatisfiedBy).toEqual(["allowlist"]);
     });
 
+    it("rejects the legacy skill display prelude when only the wrapper is allowlisted", () => {
+      if (process.platform === "win32") {
+        return;
+      }
+      const { skillRoot, wrapperPath } = createSkillWrapperFixture();
+      const skillDir = path.join(skillRoot, "skills", "gog");
+      const skillPath = path.join(skillDir, "SKILL.md");
+      fs.mkdirSync(skillDir, { recursive: true });
+      fs.writeFileSync(skillPath, "# gog\n");
+
+      const result = evaluateShellAllowlist({
+        command: `cat ${skillPath} && printf '\\n---CMD---\\n' && ${wrapperPath} calendar events primary --today --json`,
+        allowlist: [{ pattern: wrapperPath }],
+        safeBins: new Set(),
+        cwd: skillRoot,
+      });
+
+      expect(result.analysisOk).toBe(true);
+      expect(result.allowlistSatisfied).toBe(false);
+      expect(result.segmentSatisfiedBy).toEqual([null]);
+    });
+
     it.each(['/usr/bin/echo "foo && bar"', '/usr/bin/echo "foo\\" && bar"'])(
       "respects quoted chain separator for %s",
       (command) => {
