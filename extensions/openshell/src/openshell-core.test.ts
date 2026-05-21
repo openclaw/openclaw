@@ -10,7 +10,6 @@ import {
   buildOpenShellBaseArgv,
   resolveOpenShellCommand,
   runOpenShellCli,
-  setBundledOpenShellCommandResolverForTest,
   shellEscape,
 } from "./cli.js";
 import { resolveOpenShellPluginConfig } from "./config.js";
@@ -25,7 +24,6 @@ describe("openshell cli helpers", () => {
   const originalEnv = { ...process.env };
 
   afterEach(() => {
-    setBundledOpenShellCommandResolverForTest();
     for (const key of Object.keys(process.env)) {
       if (!(key in originalEnv)) {
         delete process.env[key];
@@ -49,18 +47,17 @@ describe("openshell cli helpers", () => {
     ]);
   });
 
-  it("prefers the bundled openshell command when available", () => {
-    setBundledOpenShellCommandResolverForTest(() => "/tmp/node_modules/.bin/openshell");
+  it("uses the configured NVIDIA OpenShell CLI command directly", () => {
     const config = resolveOpenShellPluginConfig(undefined);
 
-    expect(resolveOpenShellCommand("openshell")).toBe("/tmp/node_modules/.bin/openshell");
-    expect(buildOpenShellBaseArgv(config)).toEqual(["/tmp/node_modules/.bin/openshell"]);
+    expect(resolveOpenShellCommand("openshell")).toBe("openshell");
+    expect(buildOpenShellBaseArgv(config)).toEqual(["openshell"]);
   });
 
-  it("falls back to the PATH command when no bundled openshell is present", () => {
-    setBundledOpenShellCommandResolverForTest(() => null);
-
-    expect(resolveOpenShellCommand("openshell")).toBe("openshell");
+  it("preserves an explicit NVIDIA OpenShell CLI path", () => {
+    expect(resolveOpenShellCommand("/opt/openshell/bin/openshell")).toBe(
+      "/opt/openshell/bin/openshell",
+    );
   });
 
   it("shell escapes single quotes", () => {

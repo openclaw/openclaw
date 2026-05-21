@@ -1,7 +1,7 @@
 {
   "name": "@openclaw/openshell-sandbox",
   "version": "2026.5.20",
-  "description": "OpenClaw OpenShell sandbox backend",
+  "description": "OpenClaw sandbox backend for the NVIDIA OpenShell CLI",
   "repository": {
     "type": "git",
     "url": "https://github.com/openclaw/openclaw"
