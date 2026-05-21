@@ -1519,6 +1519,45 @@ describe("agent event handler", () => {
     resetAgentRunContextForTest();
   });
 
+  it("does not mirror tool events back to run-scoped recipients", () => {
+    const { broadcastToConnIds, sessionEventSubscribers, toolEventRecipients, handler } =
+      createHarness({
+        resolveSessionKeyForRun: () => "session-1",
+      });
+
+    registerAgentRunContext("run-session-tool-dedupe", {
+      sessionKey: "session-1",
+      verboseLevel: "off",
+    });
+    toolEventRecipients.add("run-session-tool-dedupe", "conn-run");
+    sessionEventSubscribers.subscribe("conn-run");
+    sessionEventSubscribers.subscribe("conn-late");
+
+    handler({
+      runId: "run-session-tool-dedupe",
+      seq: 1,
+      stream: "tool",
+      ts: 1_234,
+      data: {
+        phase: "start",
+        name: "exec",
+        toolCallId: "tool-session-dedupe",
+        args: { command: "echo hi" },
+      },
+    });
+
+    expect(broadcastToConnIds).toHaveBeenCalledTimes(2);
+    expect(requireMockArg(broadcastToConnIds, 0, 0, "run tool event")).toBe("agent");
+    expect(requireMockArg(broadcastToConnIds, 0, 2, "run tool recipients")).toEqual(
+      new Set(["conn-run"]),
+    );
+    expect(requireMockArg(broadcastToConnIds, 1, 0, "session tool event")).toBe("session.tool");
+    expect(requireMockArg(broadcastToConnIds, 1, 2, "session tool recipients")).toEqual(
+      new Set(["conn-late"]),
+    );
+    resetAgentRunContextForTest();
+  });
+
   it("suppresses heartbeat tool events for Control UI and verbose node subscribers", () => {
     const {
       broadcastToConnIds,
