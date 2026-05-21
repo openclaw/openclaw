@@ -89,6 +89,28 @@ describe("modelsAliasesRemoveCommand", () => {
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
   });
 
+  it("falls back to 'Alias not found' when the user explicitly disables a built-in via alias: \"\"", async () => {
+    // Source config sets an explicit empty alias on the target. applyModelDefaults
+    // honors the opt-out (see src/config/defaults.ts:337 and src/config/model-alias-defaults.test.ts:106),
+    // so `list` does not show `gemini` and `remove gemini` should return the plain
+    // not-found error rather than the "built-in alias" error.
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          models: {
+            "google/gemini-3.1-pro-preview": { alias: "" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    mocks.readConfigFileSnapshot.mockResolvedValue(snapshot(cfg));
+
+    await expect(modelsAliasesRemoveCommand("gemini", makeRuntime())).rejects.toThrow(
+      /Alias not found: gemini/,
+    );
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+  });
+
   it("falls back to 'Alias not found' when the alias is neither user-added nor a materialized built-in", async () => {
     const cfg: OpenClawConfig = {
       agents: { defaults: { models: {} } },
