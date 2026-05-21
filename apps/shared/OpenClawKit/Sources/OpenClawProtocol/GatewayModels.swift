@@ -5727,7 +5727,6 @@ public struct PluginApprovalRequestParams: Codable, Sendable {
     public let title: String
     public let description: String
     public let severity: String?
-    public let metadata: AnyCodable?
     public let toolname: String?
     public let toolcallid: String?
     public let alloweddecisions: [String]?
@@ -5745,7 +5744,6 @@ public struct PluginApprovalRequestParams: Codable, Sendable {
         title: String,
         description: String,
         severity: String?,
-        metadata: AnyCodable?,
         toolname: String?,
         toolcallid: String?,
         alloweddecisions: [String]?,
@@ -5762,7 +5760,6 @@ public struct PluginApprovalRequestParams: Codable, Sendable {
         self.title = title
         self.description = description
         self.severity = severity
-        self.metadata = metadata
         self.toolname = toolname
         self.toolcallid = toolcallid
         self.alloweddecisions = alloweddecisions
@@ -5781,7 +5778,6 @@ public struct PluginApprovalRequestParams: Codable, Sendable {
         case title
         case description
         case severity
-        case metadata
         case toolname = "toolName"
         case toolcallid = "toolCallId"
         case alloweddecisions = "allowedDecisions"

@@ -343,6 +343,8 @@ describe("collectForbiddenPackPaths", () => {
     expect(
       collectForbiddenPackPaths([
         "dist/index.js",
+        "dist/extensions/node_modules/@openclaw/oc-path/api.js",
+        "dist/extensions/node_modules/@openclaw/oc-path/package.json",
         bundledDistPluginFile("discord", "node_modules/@discordjs/voice/index.js"),
         bundledPluginFile("tlon", "node_modules/.bin/tlon"),
         "node_modules/.bin/openclaw",
@@ -352,6 +354,11 @@ describe("collectForbiddenPackPaths", () => {
       bundledPluginFile("tlon", "node_modules/.bin/tlon"),
       "node_modules/.bin/openclaw",
     ]);
+  });
+
+  it("keeps the packaged oc-path alias explicitly included", () => {
+    const pkg = JSON.parse(readFileSync("package.json", "utf8")) as { files?: string[] };
+    expect(pkg.files).toContain("dist/extensions/node_modules/@openclaw/oc-path/**");
   });
 
   it("blocks generated docs artifacts from npm pack output", () => {

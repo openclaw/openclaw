@@ -114,7 +114,6 @@ Policy config lives under `plugins.entries.policy.config`.
         "config": {
           "enabled": true,
           "path": "policy.jsonc",
-          "runtimeToolPolicy": false,
           "workspaceRepairs": false,
           "expectedHash": "sha256:...",
           "expectedAttestationHash": "sha256:...",
@@ -125,14 +124,13 @@ Policy config lives under `plugins.entries.policy.config`.
 }
 ```
 
-| Setting                   | Purpose                                                                  |
-| ------------------------- | ------------------------------------------------------------------------ |
-| `enabled`                 | Enable policy checks even before `policy.jsonc` exists.                  |
-| `runtimeToolPolicy`       | Apply authored tool metadata requirements through the trusted tool hook. |
-| `workspaceRepairs`        | Allow `doctor --fix` to edit policy-managed workspace settings.          |
-| `expectedHash`            | Optional hash-lock for the approved policy artifact.                     |
-| `expectedAttestationHash` | Optional hash-lock for the last accepted clean policy check.             |
-| `path`                    | Workspace-relative location of the policy artifact.                      |
+| Setting                   | Purpose                                                         |
+| ------------------------- | --------------------------------------------------------------- |
+| `enabled`                 | Enable policy checks even before `policy.jsonc` exists.         |
+| `workspaceRepairs`        | Allow `doctor --fix` to edit policy-managed workspace settings. |
+| `expectedHash`            | Optional hash-lock for the approved policy artifact.            |
+| `expectedAttestationHash` | Optional hash-lock for the last accepted clean policy check.    |
+| `path`                    | Workspace-relative location of the policy artifact.             |
 
 Set `plugins.entries.policy.config.enabled` to `false` to disable policy checks
 for a workspace while leaving the plugin installed.
@@ -208,11 +206,6 @@ Use this lifecycle when accepting policy state:
 3. If the result is clean, record `attestation.policy.hash` as `expectedHash`.
 4. Record `attestation.attestationHash` as `expectedAttestationHash`.
 5. Re-run `openclaw doctor --lint` in CI or release gates.
-
-The tool runtime gate also includes structured approval metadata on approval
-requests: policy path/hash, configured expected hash when present, the policy
-evidence hash, and the target tool reference. That keeps audit values separate
-from the human-readable approval message.
 
 If policy rules change intentionally, update both accepted hashes from a clean
 check. If workspace settings change intentionally but policy stays the same,
@@ -310,47 +303,6 @@ configured channel:
   },
 }
 ```
-
-## Runtime Tool Policy
-
-OpenClaw config can also opt into a small runtime tool gate:
-
-```jsonc
-{
-  "plugins": {
-    "entries": {
-      "policy": {
-        "enabled": true,
-        "config": {
-          "enabled": true,
-          "runtimeToolPolicy": true,
-        },
-      },
-    },
-  },
-}
-```
-
-When `runtimeToolPolicy` is enabled, the bundled Policy plugin registers an
-OpenClaw trusted tool policy. It uses the same `policy.jsonc` requirements and
-`TOOLS.md` evidence as `policy check`.
-
-The runtime gate is enabled from OpenClaw config, not from `policy.jsonc`, so a
-missing policy artifact still fails closed instead of disabling the gate.
-
-The runtime gate:
-
-- blocks tool calls if the enabled policy artifact is missing or does not match
-  `expectedHash`;
-- blocks governed tool calls whose required metadata is missing or invalid;
-- asks for approval for governed tools marked `risk:critical` or
-  `IRREVERSIBLE_EXTERNAL`;
-- otherwise lets the normal tool call path continue.
-
-This is not a separate plugin loader path for doctor. The plugin registers
-the trusted tool policy when the Policy plugin is enabled, and the existing
-tool runtime invokes the registered policy before regular `before_tool_call`
-hooks.
 
 ## Exit codes
 

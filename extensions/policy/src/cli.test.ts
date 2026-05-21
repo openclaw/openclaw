@@ -298,6 +298,39 @@ describe("policy commands", () => {
     });
   });
 
+  it("reports findings before stale when accepted attestation exists", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({
+        plugins: {
+          entries: {
+            policy: {
+              enabled: true,
+              config: { enabled: true, expectedAttestationHash: "sha256:not-current" },
+            },
+          },
+        },
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(join(workspaceDir, "policy.jsonc"), "{ channels: ", "utf-8");
+
+    const { exitCode, parsed } = await runPolicyWatchJson();
+
+    expect(exitCode).toBe(1);
+    expect(parsed).toMatchObject({
+      status: "findings",
+      expectedAttestationHash: "sha256:not-current",
+      findings: [
+        {
+          checkId: "policy/policy-jsonc-invalid",
+        },
+      ],
+    });
+  });
+
   it("rejects invalid severity thresholds", async () => {
     const errors: string[] = [];
 

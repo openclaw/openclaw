@@ -20,10 +20,6 @@
         "type": "boolean",
         "description": "Enable policy doctor checks even before policy.jsonc exists."
       },
-      "runtimeToolPolicy": {
-        "type": "boolean",
-        "description": "Apply enabled policy tool requirements at runtime through the trusted tool policy hook."
-      },
       "workspaceRepairs": {
         "type": "boolean",
         "description": "Allow doctor --fix to repair policy-managed workspace settings."

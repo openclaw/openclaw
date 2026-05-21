@@ -222,7 +222,7 @@ const policyToolsMissingOwnerCheck: HealthCheck = {
 async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEvaluation> {
   const settings = policySettings(ctx);
   const policyPath = policyDisplayName(ctx);
-  let evidence = collectPolicyEvidence(ctx.cfg as Record<string, unknown>);
+  let evidence: PolicyEvidence = collectPolicyEvidence(ctx.cfg as Record<string, unknown>);
   const findings: HealthFinding[] = [];
 
   if (!policyChecksEnabled(ctx, settings)) {
@@ -303,7 +303,7 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
     metadataRequirementFindings.length === 0 ? requiredToolMetadata(policy) : new Set<string>();
   if (requiredMetadata.size > 0) {
     const toolsFile = await readWorkspaceFile(ctx, "TOOLS.md");
-    evidence = collectPolicyEvidence(ctx.cfg as Record<string, unknown>, {
+    evidence = await collectPolicyEvidence(ctx.cfg as Record<string, unknown>, {
       toolsRaw: toolsFile?.raw ?? "",
     });
   }
@@ -490,10 +490,9 @@ function toolMetadataRequirementFindings(
   const invalidIndex = policy.tools.requireMetadata.findIndex(
     (entry) =>
       typeof entry !== "string" ||
-      (entry.trim() !== "" &&
-        !SUPPORTED_TOOL_METADATA.includes(
-          entry.trim().toLowerCase() as (typeof SUPPORTED_TOOL_METADATA)[number],
-        )),
+      !SUPPORTED_TOOL_METADATA.includes(
+        entry.trim().toLowerCase() as (typeof SUPPORTED_TOOL_METADATA)[number],
+      ),
   );
   if (invalidIndex < 0) {
     return [];

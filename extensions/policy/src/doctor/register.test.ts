@@ -603,6 +603,29 @@ describe("registerPolicyDoctorChecks", () => {
     ]);
   });
 
+  it("reports blank requireMetadata policy entries", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({ tools: { requireMetadata: ["risk", " "] } }),
+      "utf-8",
+    );
+
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()), {
+      checks: registerChecks(),
+    });
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/policy-jsonc-invalid",
+        severity: "error",
+        path: "policy.jsonc",
+        target: "oc://policy.jsonc/tools/requireMetadata/#1",
+      }),
+    ]);
+  });
+
   it("reports invalid requireMetadata entries against a configured policy path", async () => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     await fs.writeFile(configPath, "{}", "utf-8");
@@ -667,6 +690,42 @@ describe("registerPolicyDoctorChecks", () => {
     );
   });
 
+  it("reports governed bullet tools missing required metadata", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({ tools: { requireMetadata: ["risk", "sensitivity", "owner"] } }),
+      "utf-8",
+    );
+    await fs.writeFile(join(workspaceDir, "TOOLS.md"), "## Tools\n\n- deploy: deploys\n", "utf-8");
+
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()), {
+      checks: registerChecks(),
+    });
+
+    expect(result.findings).toHaveLength(3);
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/tools-missing-risk-level",
+          path: "TOOLS.md",
+          ocPath: "oc://TOOLS.md/tools/deploy",
+        }),
+        expect.objectContaining({
+          checkId: "policy/tools-missing-sensitivity-token",
+          path: "TOOLS.md",
+          ocPath: "oc://TOOLS.md/tools/deploy",
+        }),
+        expect.objectContaining({
+          checkId: "policy/tools-missing-owner",
+          path: "TOOLS.md",
+          ocPath: "oc://TOOLS.md/tools/deploy",
+        }),
+      ]),
+    );
+  });
+
   it("accepts governed tool metadata declared on following lines", async () => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     await fs.writeFile(configPath, "{}", "utf-8");
@@ -698,7 +757,7 @@ describe("registerPolicyDoctorChecks", () => {
     const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()), {
       checks: registerChecks(),
     });
-    const evidence = collectPolicyEvidence(
+    const evidence = await collectPolicyEvidence(
       {},
       {
         toolsRaw: await fs.readFile(join(workspaceDir, "TOOLS.md"), "utf-8"),

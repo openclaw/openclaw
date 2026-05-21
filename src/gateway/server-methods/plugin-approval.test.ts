@@ -215,51 +215,6 @@ describe("createPluginApprovalHandlers", () => {
       expect(responseCall(respond as unknown as MockCallSource, 1).error).toBeUndefined();
     });
 
-    it("persists structured plugin approval metadata", async () => {
-      const handlers = createPluginApprovalHandlers(manager);
-      const respond = vi.fn();
-      const opts = createMockOptions(
-        "plugin.approval.request",
-        {
-          title: "Policy-governed tool",
-          description: "deploy requires policy approval",
-          severity: "critical",
-          metadata: {
-            policyHash: "sha256:policy",
-            evidenceHash: "sha256:evidence",
-            target: "oc://TOOLS.md/tools/deploy",
-          },
-          twoPhase: true,
-        },
-        { respond },
-      );
-
-      const handlerPromise = handlers["plugin.approval.request"](opts);
-
-      await vi.waitFor(() => {
-        expect(acceptedResult(respond as unknown as MockCallSource).status).toBe("accepted");
-      });
-
-      const approvalId = acceptedApprovalId(respond as unknown as MockCallSource);
-      expect(manager.getSnapshot(approvalId)?.request.metadata).toEqual({
-        policyHash: "sha256:policy",
-        evidenceHash: "sha256:evidence",
-        target: "oc://TOOLS.md/tools/deploy",
-      });
-      const broadcastRequest = requireRecord(
-        broadcastCall(opts).payload.request,
-        "broadcast request",
-      );
-      expect(broadcastRequest.metadata).toEqual({
-        policyHash: "sha256:policy",
-        evidenceHash: "sha256:evidence",
-        target: "oc://TOOLS.md/tools/deploy",
-      });
-
-      manager.resolve(approvalId, "allow-once");
-      await handlerPromise;
-    });
-
     it("expires immediately when no approval route", async () => {
       const handlers = createPluginApprovalHandlers(manager);
       const opts = createMockOptions(

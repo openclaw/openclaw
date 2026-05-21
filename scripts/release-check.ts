@@ -101,6 +101,7 @@ const forbiddenPrefixes = [
   "docs/channels/qa-channel.md",
   "qa/",
 ];
+const allowedNodeModulesPackPrefixes = ["dist/extensions/node_modules/@openclaw/oc-path/"];
 const forbiddenPrivateQaContentMarkers = [
   "//#region extensions/qa-lab/",
   "qa-channel/runtime-api.js",
@@ -638,7 +639,8 @@ export function collectForbiddenPackPaths(paths: Iterable<string>): string[] {
         forbiddenPrefixes.some((prefix) => path.startsWith(prefix)) ||
         /(^|\/)\.openclaw-runtime-deps-[^/]+(\/|$)/u.test(path) ||
         path.endsWith("/.openclaw-runtime-deps-stamp.json") ||
-        path.includes("node_modules/"),
+        (path.includes("node_modules/") &&
+          !allowedNodeModulesPackPrefixes.some((prefix) => path.startsWith(prefix))),
     )
     .toSorted((left, right) => left.localeCompare(right));
 }

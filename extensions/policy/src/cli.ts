@@ -291,6 +291,12 @@ function writePolicyWatchReport(
 }
 
 function policyWatchStatus(report: PolicyCheckReport): "clean" | "findings" | "stale" {
+  if (
+    !report.ok &&
+    report.findings.some((finding) => finding.checkId !== "policy/attestation-hash-mismatch")
+  ) {
+    return "findings";
+  }
   const expected = report.expectedAttestationHash?.trim();
   if (
     expected &&

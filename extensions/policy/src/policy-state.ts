@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { parseMd } from "@openclaw/oc-path/api.js";
 
 export type PolicyAttestation = {
   readonly checkedAt: string;
@@ -38,6 +37,9 @@ export type PolicyToolEvidence = {
 };
 
 const RESERVED_CHANNEL_CONFIG_KEYS = new Set(["defaults", "modelByChannel"]);
+const NON_SLUG_CHARS = /[^a-z0-9-]+/g;
+const COLLAPSE_HYPHENS = /-+/g;
+const TRIM_HYPHENS = /^-+|-+$/g;
 
 export function policyDocumentHash(policy: unknown): string {
   return sha256(stableJson(policy));
@@ -96,13 +98,21 @@ export function createPolicyAttestation(input: {
 
 export function collectPolicyEvidence(
   cfg: Record<string, unknown>,
+  options?: { readonly toolsRaw?: undefined },
+): PolicyEvidence;
+export function collectPolicyEvidence(
+  cfg: Record<string, unknown>,
+  options: { readonly toolsRaw: string },
+): Promise<PolicyEvidence>;
+export function collectPolicyEvidence(
+  cfg: Record<string, unknown>,
   options: { readonly toolsRaw?: string } = {},
-): PolicyEvidence {
+): PolicyEvidence | Promise<PolicyEvidence> {
   const channels = scanPolicyChannels(cfg);
   if (options.toolsRaw === undefined) {
     return { channels };
   }
-  return { channels, tools: scanPolicyTools(options.toolsRaw) };
+  return scanPolicyTools(options.toolsRaw).then((tools) => ({ channels, tools }));
 }
 
 export function scanPolicyChannels(cfg: Record<string, unknown>): readonly PolicyChannelEvidence[] {
@@ -127,11 +137,12 @@ export function scanPolicyChannels(cfg: Record<string, unknown>): readonly Polic
     });
 }
 
-export function scanPolicyTools(raw: string): readonly PolicyToolEvidence[] {
+export async function scanPolicyTools(raw: string): Promise<readonly PolicyToolEvidence[]> {
   return scanPolicyToolHeaders(raw);
 }
 
-function scanPolicyToolHeaders(raw: string): readonly PolicyToolEvidence[] {
+async function scanPolicyToolHeaders(raw: string): Promise<readonly PolicyToolEvidence[]> {
+  const { parseMd } = await import("@openclaw/oc-path/api.js");
   const toolsBlock = parseMd(raw).ast.blocks.find((block) => block.slug === "tools");
   if (toolsBlock === undefined) {
     return [];
@@ -140,11 +151,13 @@ function scanPolicyToolHeaders(raw: string): readonly PolicyToolEvidence[] {
   const tools: PolicyToolEvidence[] = [];
   for (let index = 0; index < body.length; index += 1) {
     const line = body[index];
-    const match = /^###\s+([^\s#]+)(.*)$/.exec(line);
-    if (match === null) {
+    const heading = /^###\s+([^\s#]+)(.*)$/.exec(line);
+    const bullet = /^[-*+]\s+([^:\s][^:]*?)\s*:(.*)$/.exec(line);
+    const match = heading ?? bullet;
+    if (match === null || slugify(match[1]).length === 0) {
       continue;
     }
-    const id = match[1].trim();
+    const id = slugify(match[1]);
     const entry: {
       id: string;
       source: string;
@@ -161,7 +174,7 @@ function scanPolicyToolHeaders(raw: string): readonly PolicyToolEvidence[] {
     const metaLines = [match[2] ?? ""];
     for (let metaIndex = index + 1; metaIndex < body.length; metaIndex += 1) {
       const metaLine = body[metaIndex];
-      if (/^###\s+\S+/.test(metaLine.trim())) {
+      if (/^###\s+\S+/.test(metaLine.trim()) || /^[-*+]\s+[^:\s][^:]*?\s*:/.test(metaLine)) {
         break;
       }
       metaLines.push(metaLine);
@@ -186,6 +199,15 @@ function scanPolicyToolHeaders(raw: string): readonly PolicyToolEvidence[] {
     tools.push(entry);
   }
   return tools;
+}
+
+function slugify(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/_/g, "-")
+    .replace(NON_SLUG_CHARS, "-")
+    .replace(COLLAPSE_HYPHENS, "-")
+    .replace(TRIM_HYPHENS, "");
 }
 
 function riskFromMeta(meta: string): string | undefined {
