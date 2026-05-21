@@ -614,7 +614,13 @@ export function loadAuthProfileStoreWithoutExternalProfiles(
   const options: LoadAuthProfileStoreOptions = {
     readOnly: true,
     allowKeychainPrompt: loadOptions?.allowKeychainPrompt ?? false,
-    resolveLegacyOAuthSidecars: loadOptions?.resolveLegacyOAuthSidecars ?? false,
+    // L4.1 PATCH: default sidecar resolution to true so that any caller
+    // not explicitly overriding (model-auth-label, model-provider-auth,
+    // pi-auth-discovery, list.list-command, etc.) still picks up legacy
+    // OAuth credential material. Was inadvertently left at `false` in the
+    // upstream #82777/#83312 refactor and breaks isolated/sub-agent auth
+    // resolution paths (e.g., cron-nested lanes).
+    resolveLegacyOAuthSidecars: loadOptions?.resolveLegacyOAuthSidecars ?? true,
   };
   const store = loadAuthProfileStoreForAgent(agentDir, options);
   const authPath = resolveAuthStorePath(agentDir);
@@ -649,20 +655,32 @@ export function ensureAuthProfileStore(
 
 export function ensureAuthProfileStoreWithoutExternalProfiles(
   agentDir?: string,
-  options?: { allowKeychainPrompt?: boolean },
+  options?: { allowKeychainPrompt?: boolean; resolveLegacyOAuthSidecars?: boolean },
 ): AuthProfileStore {
-  const runtimeStore = resolveRuntimeAuthProfileStore(agentDir, options);
+  // L4.1 PATCH: forward `resolveLegacyOAuthSidecars` through this entry
+  // point so embedded-runner sub-agents (cron-nested, isolated session
+  // lanes for AgentOS sweeps) can read the legacy sidecar credential
+  // material. Default true to match `loadAuthProfileStoreWithoutExternalProfiles`.
+  const resolveLegacyOAuthSidecars = options?.resolveLegacyOAuthSidecars ?? true;
+  const effectiveOptions: LoadAuthProfileStoreOptions = {
+    ...(options ?? {}),
+    resolveLegacyOAuthSidecars,
+  };
+  const runtimeStore = resolveRuntimeAuthProfileStore(agentDir, effectiveOptions);
   if (runtimeStore) {
     return runtimeStore;
   }
-  const store = loadAuthProfileStoreForAgent(agentDir, options);
+  const store = loadAuthProfileStoreForAgent(agentDir, effectiveOptions);
   const authPath = resolveAuthStorePath(agentDir);
   const mainAuthPath = resolveAuthStorePath();
   if (!agentDir || authPath === mainAuthPath) {
     return store;
   }
 
-  const mainStore = loadAuthProfileStoreForAgent(undefined, options);
+  // L4.1 PATCH: use effectiveOptions (with sidecar resolution) for the main
+  // fallback load too, otherwise sub-agents that need to merge in the main
+  // store would still miss the legacy credential material.
+  const mainStore = loadAuthProfileStoreForAgent(undefined, effectiveOptions);
   return mergeAuthProfileStores(mainStore, store);
 }
 
