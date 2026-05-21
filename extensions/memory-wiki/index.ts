@@ -20,6 +20,7 @@ import {
   createWikiApplyTool,
   createWikiGetTool,
   createWikiLintTool,
+  createWikiRecordReceiptTool,
   createWikiSearchTool,
   createWikiStatusTool,
 } from "./src/tool.js";
@@ -40,6 +41,7 @@ export default definePluginEntry({
     api.registerTool(createWikiStatusTool(config, api.config), { name: "wiki_status" });
     api.registerTool(createWikiLintTool(config, api.config), { name: "wiki_lint" });
     api.registerTool(createWikiApplyTool(config, api.config), { name: "wiki_apply" });
+    api.registerTool(createWikiRecordReceiptTool(config), { name: "wiki_record_receipt" });
     api.registerTool(
       (ctx) =>
         createWikiSearchTool(config, api.config, {

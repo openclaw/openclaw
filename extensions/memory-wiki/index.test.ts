@@ -42,11 +42,12 @@ describe("memory-wiki plugin", () => {
       "wiki.obsidian.command",
       "wiki.obsidian.daily",
     ]);
-    expect(registerTool).toHaveBeenCalledTimes(5);
+    expect(registerTool).toHaveBeenCalledTimes(6);
     expect(registerTool.mock.calls.map((call) => call[1]?.name)).toEqual([
       "wiki_status",
       "wiki_lint",
       "wiki_apply",
+      "wiki_record_receipt",
       "wiki_search",
       "wiki_get",
     ]);

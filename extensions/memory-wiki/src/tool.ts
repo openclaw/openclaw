@@ -9,6 +9,7 @@ import {
 } from "./config.js";
 import { lintMemoryWikiVault } from "./lint.js";
 import { getMemoryWikiPage, searchMemoryWiki, WIKI_SEARCH_MODES } from "./query.js";
+import { recordMemoryUtilizationReceipt } from "./receipts.js";
 import { syncMemoryWikiImportedSources } from "./source-sync.js";
 import { renderMemoryWikiStatus, resolveMemoryWikiStatus } from "./status.js";
 
@@ -28,6 +29,37 @@ function formatWikiToolReportPath(config: ResolvedMemoryWikiConfig, reportPath: 
 
 const WikiStatusSchema = Type.Object({}, { additionalProperties: false });
 const WikiLintSchema = Type.Object({}, { additionalProperties: false });
+const WikiReceiptSchema = Type.Object(
+  {
+    run_id: Type.String({ minLength: 1, maxLength: 200 }),
+    task: Type.String({ minLength: 1, maxLength: 4000 }),
+    memory_preflight: Type.Object(
+      {
+        performed: Type.Boolean(),
+        wiki_injectable: Type.Boolean(),
+        reason_if_not: Type.Union([Type.String({ minLength: 1, maxLength: 1000 }), Type.Null()]),
+        files_read: Type.Array(Type.String({ minLength: 1, maxLength: 2000 }), {
+          maxItems: 500,
+        }),
+        claims_used: Type.Array(Type.String({ minLength: 1, maxLength: 500 }), {
+          maxItems: 1000,
+        }),
+      },
+      { additionalProperties: false },
+    ),
+    decisions_influenced_by_memory: Type.Array(Type.String({ minLength: 1, maxLength: 4000 }), {
+      maxItems: 500,
+    }),
+    writeback: Type.Object(
+      {
+        performed: Type.Boolean(),
+        paths: Type.Array(Type.String({ minLength: 1, maxLength: 2000 }), { maxItems: 500 }),
+      },
+      { additionalProperties: false },
+    ),
+  },
+  { additionalProperties: false },
+);
 const WikiSearchBackendSchema = Type.Union(
   WIKI_SEARCH_BACKENDS.map((value) => Type.Literal(value)),
 );
@@ -124,6 +156,24 @@ export function createWikiStatusTool(
       return {
         content: [{ type: "text", text: renderMemoryWikiStatus(status) }],
         details: status,
+      };
+    },
+  };
+}
+
+export function createWikiRecordReceiptTool(config: ResolvedMemoryWikiConfig): AnyAgentTool {
+  return {
+    name: "wiki_record_receipt",
+    label: "Wiki Record Receipt",
+    description:
+      "Record an audited memory utilization receipt after using durable memory or the compiled wiki.",
+    parameters: WikiReceiptSchema,
+    execute: async (_toolCallId, rawParams) => {
+      const result = await recordMemoryUtilizationReceipt({ config, receipt: rawParams });
+      const logPath = formatWikiToolReportPath(config, result.logPath);
+      return {
+        content: [{ type: "text", text: `Recorded memory receipt ${result.runId}.` }],
+        details: { ...result, logPath },
       };
     },
   };

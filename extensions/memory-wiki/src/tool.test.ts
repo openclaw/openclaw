@@ -4,7 +4,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { lintMemoryWikiVault } from "./lint.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
-import { createWikiApplyTool, createWikiLintTool, createWikiStatusTool } from "./tool.js";
+import {
+  createWikiApplyTool,
+  createWikiLintTool,
+  createWikiRecordReceiptTool,
+  createWikiStatusTool,
+} from "./tool.js";
 
 const syncMemoryWikiImportedSourcesMock = vi.hoisted(() => vi.fn());
 
@@ -48,6 +53,41 @@ describe("memory-wiki tools", () => {
     expect(asSchemaObject(result.details)).toMatchObject({
       vaultExists: true,
     });
+  });
+
+  it("records memory receipts through a model-facing tool", async () => {
+    const { rootDir, config } = await harness.createVault({ initialize: true });
+    const tool = createWikiRecordReceiptTool(config);
+
+    const result = await tool.execute("receipt-call", {
+      run_id: "run-123",
+      task: "Verify memory wiki receipt tool",
+      memory_preflight: {
+        performed: true,
+        wiki_injectable: true,
+        reason_if_not: null,
+        files_read: [".openclaw-wiki/cache/agent-digest.json"],
+        claims_used: ["claim.alpha"],
+      },
+      decisions_influenced_by_memory: ["Used claim.alpha to avoid guessing."],
+      writeback: {
+        performed: false,
+        paths: [],
+      },
+    });
+
+    const details = asSchemaObject(result.details);
+    expect(details).toMatchObject({
+      recorded: true,
+      runId: "run-123",
+      logPath: ".openclaw-wiki/telemetry/memory-receipts.jsonl",
+    });
+    await expect(
+      fs.readFile(
+        path.join(rootDir, ".openclaw-wiki", "telemetry", "memory-receipts.jsonl"),
+        "utf8",
+      ),
+    ).resolves.toContain('"run_id":"run-123"');
   });
 
   it("allows provenance metadata in wiki_apply claim evidence", () => {

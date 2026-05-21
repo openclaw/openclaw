@@ -4,10 +4,10 @@ The memory wiki is a compiled, freshness-gated cache over canonical durable memo
 
 Agents must follow this contract on every task that can depend on durable project or operator memory:
 
-1. Check wiki injection status with `wiki.status` or the model-facing `wiki_status` tool before doing task work. Status checks are pure read and must not sync, refresh, compile, or mutate cache artifacts.
+1. Check wiki injection status with `wiki.status` or the model-facing `wiki_status` tool before doing task work. Status checks are pure read and must not sync, refresh, compile, or mutate cache artifacts. Treat `injection.injectable` as the cache-use decision.
 2. If the wiki is injectable, load `.openclaw-wiki/cache/agent-digest.json` and the relevant claim rows from `.openclaw-wiki/cache/claims.jsonl` before making memory-dependent decisions.
 3. If the wiki is not injectable because the cache is stale, missing, or otherwise rejected, fall back to reading canonical memory files directly.
-4. Record a memory utilization receipt with `wiki.record_receipt` at the end of the run. The receipt must cite the claim IDs or memory paths used.
+4. Record a memory utilization receipt with `wiki.record_receipt` or the model-facing `wiki_record_receipt` tool at the end of the run. The receipt must cite the claim IDs or memory paths used.
 5. If changing durable truth, write back to the canonical memory files. Do not write durable truth only to wiki cache files or generated source pages.
 6. Never treat wiki source pages as canonical when durable memory files conflict. Canonical durable memory wins over compiled wiki pages, digests, and claim rows.
 

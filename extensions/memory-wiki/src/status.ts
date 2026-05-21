@@ -4,6 +4,13 @@ import { listActiveMemoryPublicArtifacts } from "openclaw/plugin-sdk/memory-host
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import type { OpenClawConfig } from "../api.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
+import {
+  DEFAULT_WIKI_INJECTABLE_MAX_AGE_MS,
+  DEFAULT_WIKI_INJECTABLE_REQUIRED_OUTPUTS,
+  isWikiInjectable,
+  resolveWikiCachePaths,
+  type WikiInjectableResult,
+} from "./freshness.js";
 import { inferWikiPageKind, toWikiPageSummary, type WikiPageKind } from "./markdown.js";
 import { probeObsidianCli } from "./obsidian.js";
 
@@ -44,6 +51,7 @@ export type MemoryWikiStatus = {
     unsafeLocal: number;
     other: number;
   };
+  injection: WikiInjectableResult;
   warnings: MemoryWikiStatusWarning[];
 };
 
@@ -218,6 +226,12 @@ export async function resolveMemoryWikiStatus(
         ).length
       : null;
   const obsidianProbe = await probeObsidianCli({ resolveCommand: deps?.resolveCommand });
+  const cachePaths = resolveWikiCachePaths(config.vault.path);
+  const injection = await isWikiInjectable({
+    ...cachePaths,
+    maxAgeMs: DEFAULT_WIKI_INJECTABLE_MAX_AGE_MS,
+    requiredOutputs: DEFAULT_WIKI_INJECTABLE_REQUIRED_OUTPUTS,
+  });
   const counts = vaultExists
     ? await collectVaultCounts(config.vault.path)
     : {
@@ -256,6 +270,7 @@ export async function resolveMemoryWikiStatus(
     },
     pageCounts: counts.pageCounts,
     sourceCounts: counts.sourceCounts,
+    injection,
     warnings: buildWarnings({
       config,
       bridgePublicArtifactCount,
@@ -292,6 +307,10 @@ export function buildMemoryWikiDoctorReport(status: MemoryWikiStatus): MemoryWik
 }
 
 export function renderMemoryWikiStatus(status: MemoryWikiStatus): string {
+  const injection = status.injection ?? {
+    injectable: false,
+    reason: "not_reported",
+  };
   const lines = [
     `Wiki vault mode: ${status.vaultMode}`,
     `Vault: ${status.vaultExists ? "ready" : "missing"} (${status.vaultPath})`,
@@ -301,6 +320,7 @@ export function renderMemoryWikiStatus(status: MemoryWikiStatus): string {
     `Unsafe local: ${status.unsafeLocal.allowPrivateMemoryCoreAccess ? `enabled (${status.unsafeLocal.pathCount} paths)` : "disabled"}`,
     `Pages: ${status.pageCounts.source} sources, ${status.pageCounts.entity} entities, ${status.pageCounts.concept} concepts, ${status.pageCounts.synthesis} syntheses, ${status.pageCounts.report} reports`,
     `Source provenance: ${status.sourceCounts.native} native, ${status.sourceCounts.bridge} bridge, ${status.sourceCounts.bridgeEvents} bridge-events, ${status.sourceCounts.unsafeLocal} unsafe-local, ${status.sourceCounts.other} other`,
+    `Compiled cache: ${injection.injectable ? "injectable" : `not injectable (${injection.reason ?? "unknown"})`}`,
   ];
 
   if (status.warnings.length > 0) {

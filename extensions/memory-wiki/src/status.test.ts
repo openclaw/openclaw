@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../api.js";
+import { compileMemoryWikiVault } from "./compile.js";
 import { resolveMemoryWikiConfig } from "./config.js";
 import { renderWikiMarkdown } from "./markdown.js";
 import {
@@ -159,6 +160,47 @@ describe("resolveMemoryWikiStatus", () => {
       other: 0,
     });
   });
+
+  it("reports whether the compiled cache is injectable", async () => {
+    const { rootDir, config } = await createVault({
+      prefix: "memory-wiki-status-cache-",
+      initialize: true,
+    });
+    await fs.writeFile(
+      path.join(rootDir, "sources", "alpha.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          id: "source.alpha",
+          title: "Alpha",
+          claims: [{ id: "claim.alpha", text: "Alpha status cache is fresh." }],
+        },
+        body: "# Alpha\n",
+      }),
+      "utf8",
+    );
+    await compileMemoryWikiVault(config);
+
+    const freshStatus = await resolveMemoryWikiStatus(config, {
+      pathExists: async () => true,
+      resolveCommand: async () => null,
+    });
+
+    expect(freshStatus.injection.injectable).toBe(true);
+    expect(freshStatus.injection.requiredOutputs).toEqual(["digest", "claims", "manifest"]);
+
+    const claimsPath = path.join(rootDir, ".openclaw-wiki", "cache", "claims.jsonl");
+    const stale = new Date(Date.now() - 30 * 60 * 60 * 1000);
+    await fs.utimes(claimsPath, stale, stale);
+
+    const staleStatus = await resolveMemoryWikiStatus(config, {
+      pathExists: async () => true,
+      resolveCommand: async () => null,
+    });
+
+    expect(staleStatus.injection.injectable).toBe(false);
+    expect(staleStatus.injection.reason).toBe("claims_stale");
+  });
 });
 
 describe("renderMemoryWikiStatus", () => {
@@ -201,6 +243,14 @@ describe("renderMemoryWikiStatus", () => {
         unsafeLocal: 0,
         other: 0,
       },
+      injection: {
+        injectable: false,
+        reason: "digest_missing",
+        now: "2026-05-21T00:00:00.000Z",
+        maxAgeMs: 24 * 60 * 60 * 1000,
+        requiredOutputs: ["digest", "claims", "manifest"],
+        outputs: {},
+      },
       warnings: [{ code: "vault-missing", message: "Wiki vault has not been initialized yet." }],
     });
 
@@ -209,6 +259,7 @@ describe("renderMemoryWikiStatus", () => {
     expect(rendered).toContain(
       "Source provenance: 0 native, 0 bridge, 0 bridge-events, 0 unsafe-local, 0 other",
     );
+    expect(rendered).toContain("Compiled cache: not injectable (digest_missing)");
     expect(rendered).toContain("Warnings:");
     expect(rendered).toContain("Wiki vault has not been initialized yet.");
   });

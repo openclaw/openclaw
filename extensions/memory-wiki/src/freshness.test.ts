@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { isWikiInjectable } from "./freshness.js";
+import { isWikiInjectable, isWikiInjectableSync } from "./freshness.js";
 
 async function createCacheFixture() {
   const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-freshness-"));
@@ -57,5 +57,27 @@ describe("isWikiInjectable", () => {
 
     expect(result.injectable).toBe(false);
     expect(result.reason).toBe("manifest_missing");
+  });
+
+  it("uses the same injectable contract from synchronous prompt paths", async () => {
+    const fixture = await createCacheFixture();
+    const now = new Date("2026-05-21T06:00:00.000Z");
+    await fs.writeFile(fixture.digestPath, '{"claimCount":1,"pages":[]}\n', "utf8");
+    await fs.writeFile(fixture.claimsPath, '{"id":"claim-1"}\n', "utf8");
+    await fs.writeFile(fixture.manifestPath, '{"schema_version":"test"}\n', "utf8");
+    await fs.utimes(fixture.digestPath, now, now);
+    await fs.utimes(fixture.claimsPath, now, now);
+    await fs.utimes(fixture.manifestPath, now, now);
+
+    const result = isWikiInjectableSync({
+      now,
+      digestPath: fixture.digestPath,
+      claimsPath: fixture.claimsPath,
+      manifestPath: fixture.manifestPath,
+      maxAgeMs: 24 * 60 * 60 * 1000,
+    });
+
+    expect(result.injectable).toBe(true);
+    expect(result.requiredOutputs).toEqual(["digest", "claims", "manifest"]);
   });
 });
