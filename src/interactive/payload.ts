@@ -369,6 +369,9 @@ export function presentationToInteractiveReply(
           if (button.disabled === true) {
             interactiveButton.disabled = true;
           }
+          if (button.reusable === true) {
+            interactiveButton.reusable = true;
+          }
           return interactiveButton;
         });
       if (buttons.length > 0) {

@@ -15,6 +15,7 @@ Docs: https://docs.openclaw.ai
 - CLI/message: include a stable top-level `messageId` in `openclaw message --json` output when channel sends return one. (#84191) Thanks @100menotu001.
 - Gateway/agents: use an agent's `identity.name` in Gateway agent summaries when `agents.list[].name` is unset, so configured agent labels remain visible in clients. (#84355; refs #57835) Thanks @luoyanglang.
 - Plugins/hooks: apply a default 30-second timeout to `before_compaction` and `after_compaction` hooks so a hung plugin handler no longer blocks compaction completion. (#84153)
+- Discord: preserve reusable presentation buttons through portable conversion and Discord component registration. (#84187) Thanks @100menotu001.
 - Discord: preserve disabled presentation buttons when adapting and rendering Discord message controls. (#84188) Thanks @100menotu001.
 - Twitch: add a test-only client-manager registry reset helper so non-isolated Twitch tests can clear cached managers between cases. Fixes #83887. (#84244) Thanks @hclsys.
 - Cron: use structured embedded-run denial metadata for isolated scheduled tasks so blocked exec requests fail the job without treating ordinary assistant prose as a denial. (#84067) Thanks @abnershang.
