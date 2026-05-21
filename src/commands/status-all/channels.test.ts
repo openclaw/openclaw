@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createScopedChannelConfigAdapter } from "../../plugin-sdk/channel-config-helpers.js";
 import { buildChannelsTable } from "./channels.js";
 
@@ -35,12 +36,12 @@ type SecretChatAccessorAccount = {
 
 function inspectSecretChatAccount({
   cfg,
-  accountId,
 }: {
-  cfg: { channels?: { secretchat?: { allowFrom?: string[] } } };
-  accountId?: string;
+  cfg: OpenClawConfig;
+  accountId?: string | null;
 }): SecretChatAccessorAccount {
-  const section = cfg.channels?.secretchat ?? {};
+  const channels = cfg.channels as Record<string, { allowFrom?: string[] } | undefined> | undefined;
+  const section = channels?.secretchat ?? {};
   return {
     enabled: true,
     configured: true,
