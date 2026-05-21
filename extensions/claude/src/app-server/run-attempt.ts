@@ -20,6 +20,7 @@ import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
 import {
   buildEmbeddedAttemptToolRunContext,
   embeddedAgentLog,
+  emitAgentEvent,
   resolveAgentDir,
   type EmbeddedRunAttemptParams,
   type EmbeddedRunAttemptResult,
@@ -397,7 +398,22 @@ async function runTurn(
           break;
         }
         case "item/agentMessage/delta": {
-          if (typeof p.delta === "string") textParts.push(p.delta);
+          if (typeof p.delta === "string") {
+            textParts.push(p.delta);
+            // Forward token-level deltas to OpenClaw's agent-event bus so
+            // downstream consumers (Discord/Slack/etc.) can stream-update
+            // their messages instead of waiting for turn/completed. Mirrors
+            // the CLI runner's onAssistantDelta wiring.
+            try {
+              emitAgentEvent({
+                runId: params.runId,
+                stream: "assistant",
+                data: { text: textParts.join(""), delta: p.delta },
+              });
+            } catch (err) {
+              embeddedAgentLog.debug("claude-app-server: emitAgentEvent threw", { error: err });
+            }
+          }
           break;
         }
         case "item/reasoning/delta": {
