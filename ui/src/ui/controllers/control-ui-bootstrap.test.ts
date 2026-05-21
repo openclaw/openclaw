@@ -249,6 +249,9 @@ describe("loadControlUiBootstrapConfig", () => {
       assistantAvatar: null,
       assistantAgentId: null,
       serverVersion: null,
+      localMediaPreviewRoots: [],
+      embedSandboxMode: "scripts" as const,
+      allowExternalEmbedUrls: false,
     };
 
     await loadControlUiBootstrapConfig(state);
@@ -277,6 +280,9 @@ describe("loadControlUiBootstrapConfig", () => {
       assistantAvatar: null,
       assistantAgentId: null,
       serverVersion: null,
+      localMediaPreviewRoots: [],
+      embedSandboxMode: "scripts" as const,
+      allowExternalEmbedUrls: false,
     };
 
     await loadControlUiBootstrapConfig(state);
