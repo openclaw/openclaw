@@ -139,6 +139,18 @@ describe("memory-wiki cli", () => {
         unsafeLocal: 0,
         other: 0,
       },
+      injection: {
+        injectable: false,
+        reason: "digest_missing",
+        now: "2026-01-01T00:00:00.000Z",
+        outputs: {
+          digest: { name: "digest", path: null, exists: false, reason: "digest_missing" },
+          claims: { name: "claims", path: null, exists: false, reason: "claims_missing" },
+          manifest: { name: "manifest", path: null, exists: false, reason: "manifest_missing" },
+        },
+        maxAgeMs: 24 * 60 * 60 * 1000,
+        requiredOutputs: ["digest", "claims", "manifest"],
+      },
       warnings: [],
     };
   }
