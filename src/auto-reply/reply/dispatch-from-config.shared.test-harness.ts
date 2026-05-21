@@ -153,6 +153,7 @@ export {
   sessionBindingMocks,
   sessionStoreMocks,
   runtimePluginMocks,
+  ttsMocks,
 };
 
 function parseGenericThreadSessionInfo(sessionKey: string | undefined) {
