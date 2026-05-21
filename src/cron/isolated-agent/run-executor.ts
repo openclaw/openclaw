@@ -461,7 +461,6 @@ export async function executeCronRun(params: {
     abortReason: params.abortReason,
     onExecutionStarted: params.onExecutionStarted,
     onExecutionPhase: params.onExecutionPhase,
-    senderIsOwner: params.senderIsOwner,
     deadlineAtMs: params.deadlineAtMs,
     getDeadlineAtMs: params.getDeadlineAtMs,
     fallbackMinRemainingMs: params.fallbackMinRemainingMs,
