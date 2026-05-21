@@ -10,7 +10,6 @@ permissions:
   contents: read
   packages: write
   pull-requests: read
-  actions: read  
 
 concurrency:
   group: openclaw-scheduled-live-checks-${{ github.ref }}
