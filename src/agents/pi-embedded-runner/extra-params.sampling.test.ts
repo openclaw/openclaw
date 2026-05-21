@@ -15,6 +15,67 @@ vi.mock("./logger.js", () => ({
   },
 }));
 
+vi.mock("../../plugin-sdk/provider-stream-shared.js", () => ({
+  createDeepSeekV4OpenAICompatibleThinkingWrapper: ({
+    baseStreamFn,
+  }: {
+    baseStreamFn?: StreamFn;
+  }) => baseStreamFn,
+  createThinkingOnlyFinalTextWrapper: ({ baseStreamFn }: { baseStreamFn?: StreamFn }) =>
+    baseStreamFn,
+}));
+
+vi.mock("../../plugins/provider-hook-runtime.js", () => ({
+  prepareProviderExtraParams: () => undefined,
+  resolveProviderExtraParamsForTransport: () => undefined,
+  wrapProviderStreamFn: () => undefined,
+}));
+
+vi.mock("../model-selection-normalize.js", () => ({
+  legacyModelKey: (provider: string, model: string) => {
+    const rawKey = `${provider.trim()}/${model.trim()}`;
+    const canonicalKey = rawKey.toLowerCase();
+    return rawKey === canonicalKey ? null : rawKey;
+  },
+  modelKey: (provider: string, model: string) => `${provider.trim()}/${model.trim()}`.toLowerCase(),
+}));
+
+vi.mock("../provider-request-config.js", () => ({
+  resolveProviderRequestPolicyConfig: () => ({
+    capabilities: {
+      usesKnownNativeOpenAIRoute: true,
+    },
+  }),
+}));
+
+vi.mock("./google-stream-wrappers.js", () => ({
+  createGoogleThinkingPayloadWrapper: (streamFn: StreamFn | undefined) => streamFn,
+}));
+
+vi.mock("./minimax-stream-wrappers.js", () => ({
+  createMinimaxThinkingDisabledWrapper: (streamFn: StreamFn | undefined) => streamFn,
+}));
+
+vi.mock("./moonshot-stream-wrappers.js", () => ({
+  createSiliconFlowThinkingWrapper: (streamFn: StreamFn | undefined) => streamFn,
+  shouldApplySiliconFlowThinkingOffCompat: () => false,
+}));
+
+vi.mock("./openai-stream-wrappers.js", () => ({
+  createOpenAICompletionsStrictMessageKeysWrapper: (streamFn: StreamFn | undefined) => streamFn,
+  createOpenAICompletionsToolsCompatWrapper: (streamFn: StreamFn | undefined) => streamFn,
+  createOpenAIResponsesContextManagementWrapper: (streamFn: StreamFn | undefined) => streamFn,
+  createOpenAIStringContentWrapper: (streamFn: StreamFn | undefined) => streamFn,
+}));
+
+vi.mock("./prompt-cache-retention.js", () => ({
+  resolveCacheRetention: () => undefined,
+}));
+
+vi.mock("./proxy-stream-wrappers.js", () => ({
+  createOpenRouterSystemCacheWrapper: (streamFn: StreamFn | undefined) => streamFn,
+}));
+
 vi.mock("@earendil-works/pi-ai", () => createPiAiStreamSimpleMock());
 
 beforeEach(() => {
@@ -91,6 +152,127 @@ describe("createStreamFnWithExtraParams sampling overrides", () => {
     const callOptions = (underlying as unknown as { mock: { calls: unknown[][] } }).mock
       .calls[0]?.[2] as { maxTokens?: number } | undefined;
     expect(callOptions?.maxTokens).toBe(64_000);
+  });
+
+  it("clamps configured maxTokens to the remaining model context window", () => {
+    const underlying = vi.fn(() => ({
+      push: vi.fn(),
+      result: vi.fn(async () => undefined),
+      [Symbol.asyncIterator]: vi.fn(async function* () {
+        // empty stream
+      }),
+    })) as unknown as StreamFn;
+    const agent: { streamFn?: StreamFn } = { streamFn: underlying };
+
+    applyExtraParamsToAgent(agent, undefined, "openai", "gpt-5.4", {
+      maxTokens: 90,
+    });
+
+    if (!agent.streamFn) {
+      throw new Error("expected extra params to wrap streamFn");
+    }
+
+    void agent.streamFn(
+      {
+        id: "gpt-5.4",
+        api: "openai-completions",
+        provider: "openai",
+        contextWindow: 100,
+      } as never,
+      {
+        messages: [{ role: "user", content: "x".repeat(200), timestamp: 0 }],
+        tools: [],
+      } as never,
+      undefined,
+    );
+
+    const callOptions = (underlying as unknown as { mock: { calls: unknown[][] } }).mock
+      .calls[0]?.[2] as { maxTokens?: number } | undefined;
+    expect(callOptions?.maxTokens).toBe(40);
+  });
+
+  it("keeps a smaller runtime maxTokens override when it fits the remaining context", () => {
+    const underlying = vi.fn(() => ({
+      push: vi.fn(),
+      result: vi.fn(async () => undefined),
+      [Symbol.asyncIterator]: vi.fn(async function* () {
+        // empty stream
+      }),
+    })) as unknown as StreamFn;
+    const agent: { streamFn?: StreamFn } = { streamFn: underlying };
+
+    applyExtraParamsToAgent(agent, undefined, "openai", "gpt-5.4", {
+      maxTokens: 90,
+    });
+
+    if (!agent.streamFn) {
+      throw new Error("expected extra params to wrap streamFn");
+    }
+
+    void agent.streamFn(
+      {
+        id: "gpt-5.4",
+        api: "openai-completions",
+        provider: "openai",
+        contextWindow: 100,
+      } as never,
+      {
+        messages: [{ role: "user", content: "x".repeat(200), timestamp: 0 }],
+        tools: [],
+      } as never,
+      { maxTokens: 30 } as never,
+    );
+
+    const callOptions = (underlying as unknown as { mock: { calls: unknown[][] } }).mock
+      .calls[0]?.[2] as { maxTokens?: number } | undefined;
+    expect(callOptions?.maxTokens).toBe(30);
+  });
+
+  it("clamps model maxTokens to the remaining context window", () => {
+    const underlying = vi.fn(() => ({
+      push: vi.fn(),
+      result: vi.fn(async () => undefined),
+      [Symbol.asyncIterator]: vi.fn(async function* () {
+        // empty stream
+      }),
+    })) as unknown as StreamFn;
+    const agent: { streamFn?: StreamFn } = { streamFn: underlying };
+    const model = {
+      id: "mimo-v2-omni",
+      api: "anthropic-messages",
+      provider: "xiaomi-token-plan-cn",
+      contextWindow: 100,
+      maxTokens: 90,
+    };
+
+    applyExtraParamsToAgent(
+      agent,
+      undefined,
+      "xiaomi-token-plan-cn",
+      "mimo-v2-omni",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      model as never,
+    );
+
+    if (!agent.streamFn) {
+      throw new Error("expected extra params to wrap streamFn");
+    }
+
+    void agent.streamFn(
+      model as never,
+      {
+        messages: [{ role: "user", content: "x".repeat(200), timestamp: 0 }],
+        tools: [],
+      } as never,
+      undefined,
+    );
+
+    const callModel = (underlying as unknown as { mock: { calls: unknown[][] } }).mock
+      .calls[0]?.[0] as { maxTokens?: number } | undefined;
+    expect(callModel?.maxTokens).toBe(40);
   });
 
   it("keeps runtime maxTokens ahead of OpenAI completions token alias defaults", () => {
