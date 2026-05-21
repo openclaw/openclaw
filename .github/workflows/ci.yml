@@ -1664,14 +1664,14 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-swift-build-v2-${{ steps.swift-toolchain.outputs.key }}-
 
-      - name: Repair Swift binary artifact cache
+      - name: Reset Sparkle binary artifact cache
         run: |
           set -euo pipefail
-          sparkle_artifact="apps/macos/.build/artifacts/sparkle/Sparkle/Sparkle.xcframework"
-          if [ -d "$sparkle_artifact" ] && [ ! -f "$sparkle_artifact/Info.plist" ]; then
-            echo "Removing incomplete Sparkle artifact cache; SwiftPM will resolve it again."
-            rm -rf apps/macos/.build/artifacts/sparkle
-          fi
+          # SwiftPM can restore a stale binary-artifact cache where the
+          # Sparkle.xcframework directory exists without its Info.plist.
+          # Clear Sparkle from both cache layers so the release build resolves
+          # the binary artifact from Package.resolved instead of reusing it.
+          rm -rf apps/macos/.build/artifacts/sparkle "$HOME/Library/Caches/org.swift.swiftpm/artifacts/sparkle"
 
       - name: Preserve Swift build cache hit
         if: steps.swift-build-cache.outputs.cache-hit == 'true'
