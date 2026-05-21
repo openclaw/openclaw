@@ -18,7 +18,7 @@ export async function writeWebCredsRawAtomically(params: {
   content: string;
   tempPrefix: string;
 }): Promise<void> {
-  assertWebCredsPathRegularFileOrMissing(params.filePath);
+  await assertWebCredsPathRegularFileOrMissing(params.filePath);
   await replaceFileAtomic({
     filePath: params.filePath,
     content: params.content,
@@ -28,7 +28,7 @@ export async function writeWebCredsRawAtomically(params: {
     syncTempFile: true,
     syncParentDir: true,
     beforeRename: async ({ filePath }) => {
-      assertWebCredsPathRegularFileOrMissing(filePath);
+      await assertWebCredsPathRegularFileOrMissing(filePath);
     },
   });
 }

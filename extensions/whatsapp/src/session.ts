@@ -72,8 +72,8 @@ const WHATSAPP_WEBSOCKET_PROXY_TARGET = "https://mmg.whatsapp.net/";
 const CREDS_FLUSH_TIMEOUT_MESSAGE =
   "Queued WhatsApp creds save did not finish before auth bootstrap; skipping repair and continuing with primary creds.";
 
-function rejectUnsafeWebCredsPath(authDir: string): void {
-  assertWebCredsPathRegularFileOrMissing(resolveWebCredsPath(authDir));
+async function rejectUnsafeWebCredsPath(authDir: string): Promise<void> {
+  await assertWebCredsPathRegularFileOrMissing(resolveWebCredsPath(authDir));
 }
 
 function enqueueSaveCreds(
@@ -148,17 +148,17 @@ export async function createWaSocket(
   );
   const logger = toPinoLikeLogger(baseLogger, verbose ? "info" : "silent");
   const authDir = resolveUserPath(opts.authDir ?? resolveDefaultWebAuthDir());
-  rejectUnsafeWebCredsPath(authDir);
+  await rejectUnsafeWebCredsPath(authDir);
   await ensureDir(authDir);
   const sessionLogger = getChildLogger({ module: "web-session" });
   const queueResult = await waitForCredsSaveQueueWithTimeout(authDir);
   if (queueResult === "timed_out") {
     sessionLogger.warn({ authDir }, CREDS_FLUSH_TIMEOUT_MESSAGE);
   } else {
-    rejectUnsafeWebCredsPath(authDir);
+    await rejectUnsafeWebCredsPath(authDir);
     await restoreCredsFromBackupIfNeeded(authDir);
   }
-  rejectUnsafeWebCredsPath(authDir);
+  await rejectUnsafeWebCredsPath(authDir);
   const { state } = await useMultiFileAuthState(authDir);
   const saveCreds = async () => {
     await writeCredsJsonAtomically(authDir, state.creds);
