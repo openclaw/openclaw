@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { logRejectedLargePayload } from "../logging/diagnostic-payload.js";
 import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
@@ -710,6 +711,12 @@ export class NodeRegistry {
     if (!(node.client.socket.bufferedAmount > MAX_BUFFERED_BYTES)) {
       return false;
     }
+    logRejectedLargePayload({
+      surface: "gateway.ws.outbound_buffer",
+      bytes: node.client.socket.bufferedAmount,
+      limitBytes: MAX_BUFFERED_BYTES,
+      reason: "ws_send_buffer_close",
+    });
     try {
       node.client.socket.close(SLOW_CONSUMER_CLOSE_CODE, "slow consumer");
     } catch {

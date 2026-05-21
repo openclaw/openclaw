@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
+import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import { NodeRegistry, serializeEventPayload } from "./node-registry.js";
 import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
@@ -508,6 +509,9 @@ describe("gateway/node-registry", () => {
   });
 
   it("rejects raw event sends when the node socket buffer is saturated", () => {
+    resetDiagnosticEventsForTest();
+    const diagnosticEvents: unknown[] = [];
+    const stopDiagnostics = onDiagnosticEvent((event) => diagnosticEvents.push(event));
     const registry = new NodeRegistry();
     const socket = {
       bufferedAmount: MAX_BUFFERED_BYTES + 1,
@@ -522,9 +526,26 @@ describe("gateway/node-registry", () => {
     );
     const payload = serializeEventPayload({ foo: "bar" });
 
-    expect(registry.sendEventRaw("node-1", "chat", payload)).toBe(false);
-    expect(socket.send).not.toHaveBeenCalled();
-    expect(socket.close).toHaveBeenCalledWith(1008, "slow consumer");
+    try {
+      expect(registry.sendEventRaw("node-1", "chat", payload)).toBe(false);
+      expect(socket.send).not.toHaveBeenCalled();
+      expect(socket.close).toHaveBeenCalledWith(1008, "slow consumer");
+      expect(diagnosticEvents).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "payload.large",
+            action: "rejected",
+            surface: "gateway.ws.outbound_buffer",
+            bytes: MAX_BUFFERED_BYTES + 1,
+            limitBytes: MAX_BUFFERED_BYTES,
+            reason: "ws_send_buffer_close",
+          }),
+        ]),
+      );
+    } finally {
+      stopDiagnostics();
+      resetDiagnosticEventsForTest();
+    }
   });
 
   it("refreshes effective live surface within the declared surface", () => {
