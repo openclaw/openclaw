@@ -12,12 +12,14 @@ configurable `maxTurnMs` per channel that aborts the turn and emits a single
 `briefing.timeout`.
 
 **Parent plans:**
+
 - [`2026-05-18-openclaw-multitasking.md`](./2026-05-18-openclaw-multitasking.md)
   — Phase 1 items 4 (surface quarantined messages) + 5 (turn timeouts).
 - [`2026-05-20-agentos-operator-dispatcher-loop.md`](./2026-05-20-agentos-operator-dispatcher-loop.md)
   — consumes `briefing.*` events as operator-loop escalation inputs.
 
 **Roadmap ref (100% Roadmap Gap Audit, 2026-05-20):**
+
 > **D-GAP-2 — Phase 1 items 4 + 5 (quarantine + turn timeouts).** Surface
 > quarantined messages once per batch with a `briefing.quarantine` event;
 > bound hung turns with a configurable `maxTurnMs` per channel and emit
@@ -25,6 +27,7 @@ configurable `maxTurnMs` per channel that aborts the turn and emits a single
 > `idempotencyKey = multitask-100-roadmap:D-GAP-2:quarantine-and-timeouts`.
 
 **Owned paths for this slice:**
+
 - `src/infra/briefing-events.ts` (+ `.test.ts`)
 - `src/infra/turn-timeout.ts` (+ `.test.ts`)
 - this plan doc
@@ -101,7 +104,7 @@ The first landing shipped the watchdog without its dependency:
 - Parent slice `2158ceda9d7` created `briefing-events.ts` (+ test).
 - Reviewed fix `eb14a4f55d0` landed **only** `turn-timeout.ts` + `.test.ts`
   (the auto-dispose-on-re-arm revision), both of which `import
-  ./briefing-events.js`. That file was never in the landed tree → the slice
+./briefing-events.js`. That file was never in the landed tree → the slice
   could not compile (`TS2307` at `turn-timeout.ts:22`). The verifier
   (`20260521t011647z`) confirmed: logic sound (8/8 once the dep is present),
   but D-GAP-2 cannot close on that commit alone.
@@ -119,7 +122,7 @@ re-runs the gates on the current base.
 
 1. **`quarantine-briefing.ts` emitter.** The original parent slice carried a
    `quarantine-briefing.ts` batcher; the reviewed compile-ready slice dropped
-   it to keep the landing minimal. The `briefing.quarantine` *event type* is
+   it to keep the landing minimal. The `briefing.quarantine` _event type_ is
    defined in `briefing-events.ts`; the batcher that dedupes per
    `(sessionKey, channel)` and emits one event per pass lands separately.
 2. **Runtime wiring.** Neither module has a production caller yet. Integrating
