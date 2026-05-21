@@ -108,12 +108,37 @@ describe("qa scenario catalog", () => {
     const soak = readQaScenarioById("runtime-soak-100-turn");
 
     expect(firstHour.runtimeParityTier).toBe("standard");
+    expect(firstHour.evidence?.github).toContain(
+      "https://github.com/openclaw/openclaw/issues/80364",
+    );
     expect(readQaScenarioExecutionConfig(firstHour.id)).toMatchObject({
       runtimeParityComparison: "outcome-only",
       turnCount: 20,
     });
     expect(soak.runtimeParityTier).toBe("soak");
+    expect(soak.evidence?.github).toContain(
+      "https://github.com/openclaw/openclaw/issues/80395",
+    );
     expect(readQaScenarioExecutionConfig(soak.id)).toMatchObject({ turnCount: 100 });
+  });
+
+  it("loads audited GitHub evidence metadata from scenario markdown", () => {
+    const pack = readQaScenarioPack();
+    const scenariosWithEvidence = pack.scenarios.filter(
+      (scenario) => (scenario.evidence?.github?.length ?? 0) > 0,
+    );
+    const evidenceUrls = scenariosWithEvidence.flatMap(
+      (scenario) => scenario.evidence?.github ?? [],
+    );
+
+    expect(scenariosWithEvidence.map((scenario) => scenario.id)).toContain(
+      "codex-pi-shaped-read-vocabulary",
+    );
+    expect(evidenceUrls).toContain("https://github.com/openclaw/openclaw/pull/80323");
+    expect(evidenceUrls).toContain("https://github.com/openclaw/openclaw/issues/80312");
+    for (const url of evidenceUrls) {
+      expect(url).toMatch(/^https:\/\/github\.com\/openclaw\/openclaw\/(?:issues|pull)\/\d+$/);
+    }
   });
 
   it("loads runtime tool fixture metadata for standard and optional lanes", () => {
@@ -188,6 +213,29 @@ describe("qa scenario catalog", () => {
     expect(readQaScenarioById("webchat-direct-reply-routing").sourcePath).toBe(
       "qa/scenarios/channels/webchat-direct-reply-routing.md",
     );
+  });
+
+  it("loads the opt-in update.run package self-upgrade sentinel", () => {
+    const scenario = readQaScenarioById("update-run-package-self-upgrade");
+    const config = readQaScenarioExecutionConfig(scenario.id) as
+      | {
+          requiredProviderMode?: string;
+          allowEnv?: string;
+          sourceVersion?: string;
+          targetTag?: string;
+        }
+      | undefined;
+
+    expect(scenario.sourcePath).toBe("qa/scenarios/runtime/update-run-package-self-upgrade.md");
+    expect(scenario.coverage?.primary).toContain("runtime.update-run");
+    expect(scenario.coverage?.secondary).toContain("runtime.package-update");
+    expect(config?.requiredProviderMode).toBe("live-frontier");
+    expect(config?.allowEnv).toBe("OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF");
+    expect(config?.sourceVersion).toBe("2026.4.26");
+    expect(config?.targetTag).toBe("latest");
+    expect(scenario.execution.flow?.steps.map((step) => step.name)).toEqual([
+      "asks the agent to self-update through update.run",
+    ]);
   });
 
   it("keeps the character eval scenario natural and task-shaped", () => {

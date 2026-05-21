@@ -10,6 +10,11 @@ coverage:
     - runtime.soak-100
   secondary:
     - runtime.long-context
+evidence:
+  github:
+    - https://github.com/openclaw/openclaw/issues/80171
+    - https://github.com/openclaw/openclaw/issues/80338
+    - https://github.com/openclaw/openclaw/issues/80395
 objective: Provide an optional long-run soak that can be scheduled or run in Testbox without entering the maintainer default gate.
 successCriteria:
   - The same QA session accepts 100 sequential user turns.

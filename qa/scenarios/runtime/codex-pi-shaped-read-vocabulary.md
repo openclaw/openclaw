@@ -11,6 +11,10 @@ coverage:
   secondary:
     - runtime.prompt-compatibility
     - tools.fs.read
+evidence:
+  github:
+    - https://github.com/openclaw/openclaw/pull/80323
+    - https://github.com/openclaw/openclaw/issues/81734
 objective: Verify Codex-mode agents can satisfy legacy Pi-shaped "Read tool" wording through the native Codex workspace-read capability instead of stopping because duplicate OpenClaw dynamic read is intentionally filtered.
 successCriteria:
   - Agent reads the seeded workspace file and replies with the exact marker line.

@@ -8,6 +8,9 @@ runtimeParityTier: standard
 coverage:
   primary:
     - tools.apply-patch
+evidence:
+  github:
+    - https://github.com/openclaw/openclaw/issues/80320
 objective: Verify apply_patch behavior is tracked across Pi and Codex while Codex owns patching natively.
 successCriteria:
   - Pi may expose OpenClaw apply_patch while Codex app-server mode may omit duplicate OpenClaw dynamic apply_patch.
