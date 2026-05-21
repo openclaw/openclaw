@@ -205,6 +205,48 @@ describe("models-config", () => {
     });
   });
 
+  it("migrates existing plaintext models.json apiKey values before redacting output", async () => {
+    await withTempHome(async (home) => {
+      const agentDir = path.join(home, "agent-with-existing-key");
+      await fs.mkdir(agentDir, { recursive: true });
+      await fs.writeFile(
+        path.join(agentDir, "models.json"),
+        `${JSON.stringify(
+          {
+            providers: {
+              "custom-proxy": {
+                baseUrl: "http://localhost:4000/v1",
+                api: "openai-completions",
+                apiKey: "sk-existing-models-json-key", // pragma: allowlist secret
+                models: [{ id: "llama-3.1-8b", name: "Llama", input: ["text"] }],
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+
+      await ensureOpenClawModelsJson(CUSTOM_PROXY_MODELS_CONFIG, agentDir);
+
+      const rawModels = await fs.readFile(path.join(agentDir, "models.json"), "utf8");
+      const models = JSON.parse(rawModels) as { providers: Record<string, ParsedProviderConfig> };
+      expect(models.providers["custom-proxy"]?.apiKey).toBeUndefined();
+      expect(rawModels).not.toContain("sk-existing-models-json-key");
+
+      const rawAuthProfiles = await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf8");
+      const authProfiles = JSON.parse(rawAuthProfiles) as {
+        profiles: Record<string, { type?: string; provider?: string; key?: string }>;
+      };
+      expect(authProfiles.profiles["custom-proxy:models-json"]).toMatchObject({
+        type: "api_key",
+        provider: "custom-proxy",
+        key: "sk-existing-models-json-key",
+      });
+    });
+  });
+
   it("adds minimax provider when MINIMAX_API_KEY is set", async () => {
     await withTempHome(async () => {
       await runEnvProviderCase({
