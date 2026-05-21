@@ -105,11 +105,15 @@ describe("cleanupLegacyPluginDependencyState", () => {
   it("removes configured plugin stage roots outside OpenClaw roots", async () => {
     const stateDir = path.join(tempDir, "state");
     const packageRoot = path.join(tempDir, "package");
-    const stageRoot = path.join(tempDir, ".openclaw-install-stage-corrupt");
+    const stageRoot = path.join(tempDir, "stage");
 
     await fs.mkdir(stateDir, { recursive: true });
     await fs.mkdir(packageRoot, { recursive: true });
     await fs.mkdir(path.join(stageRoot, "node_modules", "ansi-escapes"), { recursive: true });
+    await fs.writeFile(
+      path.join(stageRoot, "node_modules", "ansi-escapes", ".openclaw-rename-tmp"),
+      "corrupt rename residue\n",
+    );
 
     const result = await cleanupLegacyPluginDependencyState({
       env: {
@@ -127,7 +131,7 @@ describe("cleanupLegacyPluginDependencyState", () => {
   it("refuses arbitrary explicit plugin stage roots outside OpenClaw roots", async () => {
     const stateDir = path.join(tempDir, "state");
     const packageRoot = path.join(tempDir, "package");
-    const stageRoot = path.join(tempDir, "stage");
+    const stageRoot = path.join(tempDir, "stage-without-marker");
 
     await fs.mkdir(stateDir, { recursive: true });
     await fs.mkdir(packageRoot, { recursive: true });

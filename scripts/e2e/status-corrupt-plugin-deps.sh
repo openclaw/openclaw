@@ -14,7 +14,7 @@ HOME_DIR="$TMP_DIR/home"
 STATE_DIR="$TMP_DIR/state"
 CONFIG_PATH="$TMP_DIR/openclaw.json"
 PLUGIN_DIR="$TMP_DIR/plugin"
-STAGE_DIR="$TMP_DIR/.openclaw-install-stage-corrupt-plugin-deps"
+STAGE_DIR="$TMP_DIR/stage"
 mkdir -p "$HOME_DIR" "$STATE_DIR" "$PLUGIN_DIR" "$STAGE_DIR/node_modules/ansi-escapes"
 printf "corrupt rename residue\n" > "$STAGE_DIR/node_modules/ansi-escapes/.openclaw-rename-tmp"
 

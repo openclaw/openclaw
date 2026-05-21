@@ -78,6 +78,11 @@ function isExpectedLegacyCleanupTargetName(name: string): boolean {
   );
 }
 
+async function isFile(targetPath: string): Promise<boolean> {
+  const stat = await fs.lstat(targetPath).catch(() => null);
+  return stat?.isFile() === true;
+}
+
 function isPathInsideRoot(candidate: string, root: string): boolean {
   const relativePath = path.relative(root, candidate);
   return relativePath === "" || (!relativePath.startsWith("..") && !path.isAbsolute(relativePath));
@@ -176,6 +181,44 @@ function collectExplicitStageTargets(env: NodeJS.ProcessEnv): CleanupTarget[] {
   }));
 }
 
+async function hasOpenClawRenameResidue(root: string): Promise<boolean> {
+  const nodeModulesRoot = path.join(root, "node_modules");
+  if (await isFile(path.join(nodeModulesRoot, ".openclaw-rename-tmp"))) {
+    return true;
+  }
+  const entries = await fs.readdir(nodeModulesRoot, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.isSymbolicLink()) {
+      continue;
+    }
+    const entryPath = path.join(nodeModulesRoot, entry.name);
+    if (await isFile(path.join(entryPath, ".openclaw-rename-tmp"))) {
+      return true;
+    }
+    if (!entry.name.startsWith("@")) {
+      continue;
+    }
+    const scopedEntries = await fs.readdir(entryPath, { withFileTypes: true }).catch(() => []);
+    for (const scopedEntry of scopedEntries) {
+      if (!scopedEntry.isDirectory() || scopedEntry.isSymbolicLink()) {
+        continue;
+      }
+      if (await isFile(path.join(entryPath, scopedEntry.name, ".openclaw-rename-tmp"))) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+async function hasExplicitStageDebrisProof(root: string): Promise<boolean> {
+  const children = await collectDirectChildren(root);
+  if (children.some((childPath) => isRuntimeDependencyMarkerName(path.basename(childPath)))) {
+    return true;
+  }
+  return await hasOpenClawRenameResidue(root);
+}
+
 function filterLegacyStaleRootCandidates(
   targets: readonly CleanupTarget[],
   cleanupRootPaths: readonly string[],
@@ -190,10 +233,6 @@ function filterLegacyStaleRootCandidates(
     }
     seen.add(targetPath);
     if (target.kind === "explicit-stage") {
-      if (!isInstallStageDebrisName(path.basename(targetPath))) {
-        warnings.push(`Skipped legacy plugin dependency state ${targetPath}: unexpected path name`);
-        continue;
-      }
       if (target.rawPath && hasParentPathSegment(target.rawPath)) {
         warnings.push(
           `Skipped legacy plugin dependency state ${targetPath}: parent path segments are not allowed`,
@@ -239,6 +278,14 @@ async function resolveSafeRemovalTarget(
     };
   }
   if (target.kind === "explicit-stage") {
+    if (
+      !isInstallStageDebrisName(path.basename(targetPath)) &&
+      !(await hasExplicitStageDebrisProof(targetPath))
+    ) {
+      return {
+        warning: `Skipped legacy plugin dependency state ${targetPath}: unexpected path name`,
+      };
+    }
     return { target: targetPath };
   }
   if (!cleanupRoots.some((root) => isPathInsideRoot(realPath, root.realPath))) {
