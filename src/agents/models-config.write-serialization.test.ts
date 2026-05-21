@@ -14,12 +14,11 @@ import { readGeneratedModelsJson } from "./models-config.test-utils.js";
 const planOpenClawModelsJsonMock = vi.fn();
 const writePrivateStoreTextWriteMock = vi.fn();
 const upsertAuthProfileWithLockMock = vi.fn();
+type UpsertAuthProfileWithLock = typeof import("./auth-profiles.js").upsertAuthProfileWithLock;
 let actualPrivateFileStore:
   | typeof import("../infra/private-file-store.js").privateFileStore
   | undefined;
-let actualUpsertAuthProfileWithLock:
-  | typeof import("./auth-profiles.js").upsertAuthProfileWithLock
-  | undefined;
+let actualUpsertAuthProfileWithLock: UpsertAuthProfileWithLock | undefined;
 
 installModelsConfigTestHooks();
 
@@ -158,12 +157,14 @@ beforeEach(() => {
       action: "write",
       contents: `${JSON.stringify({ providers: params.cfg?.models?.providers ?? {} }, null, 2)}\n`,
     }));
-  upsertAuthProfileWithLockMock.mockReset().mockImplementation(async (...args) => {
-    if (!actualUpsertAuthProfileWithLock) {
-      throw new Error("auth profile upsert mock not initialized");
-    }
-    return await actualUpsertAuthProfileWithLock(...args);
-  });
+  upsertAuthProfileWithLockMock
+    .mockReset()
+    .mockImplementation(async (...args: Parameters<UpsertAuthProfileWithLock>) => {
+      if (!actualUpsertAuthProfileWithLock) {
+        throw new Error("auth profile upsert mock not initialized");
+      }
+      return await actualUpsertAuthProfileWithLock(...args);
+    });
 });
 
 describe("models-config write serialization", () => {

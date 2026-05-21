@@ -1,7 +1,8 @@
+import { getProviders } from "@earendil-works/pi-ai";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { isRecord } from "../utils.js";
-import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
+import { NON_ENV_SECRETREF_MARKER, isNonSecretApiKeyMarker } from "./model-auth-markers.js";
 import {
   mergeProviders,
   mergeWithExistingProviderSecrets,
@@ -17,6 +18,8 @@ import {
 } from "./models-config.providers.js";
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
+const PI_BUILT_IN_PROVIDER_IDS = new Set<string>(getProviders());
+
 export type ResolveImplicitProvidersForModelsJson = (params: {
   agentDir: string;
   config: OpenClawConfig;
@@ -121,6 +124,17 @@ function stripPlaintextProviderApiKeys(
       continue;
     }
     mutated = true;
+    if (
+      !PI_BUILT_IN_PROVIDER_IDS.has(providerKey) &&
+      Array.isArray(provider.models) &&
+      provider.models.length > 0
+    ) {
+      nextProviders[providerKey] = {
+        ...provider,
+        apiKey: NON_ENV_SECRETREF_MARKER,
+      } as ProviderConfig;
+      continue;
+    }
     const { apiKey: _apiKey, ...providerWithoutApiKey } = provider as Record<string, unknown>;
     nextProviders[providerKey] = providerWithoutApiKey as ProviderConfig;
   }
