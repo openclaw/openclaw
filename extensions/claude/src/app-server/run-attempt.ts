@@ -268,6 +268,7 @@ async function ensureThread(
     approvalsReviewer: "user",
     sandbox: cfg.appServer.sandbox,
     dynamicTools: bridge.specs,
+    developerInstructions: buildClaudeDeveloperInstructions(params),
   };
   const response = await client.request<ThreadStartResponse>("thread/start", startParams);
   const threadId = response.thread?.id;
@@ -460,6 +461,28 @@ async function runTurn(
   if (textParts.length > 0) acc.assistantTexts = [textParts.join("")];
   if (reasoningParts.length > 0) acc.reasoning = reasoningParts.join("");
   return acc;
+}
+
+// ─── Developer instructions ─────────────────────────────────────────────────
+
+/**
+ * Per-thread system-prompt-shaped guidance the server forwards to the SDK.
+ * Mirrors what codex's `buildDeveloperInstructions` does for Codex turns:
+ * tells the model what runtime it's in and which tool surface to prefer for
+ * common operations (especially subagent spawning, where Claude Code's
+ * native `Agent`/`Task` tools don't integrate with OpenClaw's session
+ * lifecycle — the server also disables/aliases those at the SDK layer as
+ * defense-in-depth).
+ */
+function buildClaudeDeveloperInstructions(params: EmbeddedRunAttemptParams): string {
+  const sections = [
+    "Running inside OpenClaw. Use OpenClaw dynamic tools for OpenClaw-owned messaging, sessions, memory, cron, media, gateway, and node capabilities when available.",
+    "Subagent spawning: use OpenClaw's `sessions_spawn` (exposed under the `openclaw` MCP namespace as `mcp__openclaw__sessions_spawn`). Do not attempt to use Claude Code's native `Agent` or `Task` tools — they're disabled in this environment because they spawn Claude-Code-internal subagents that do not integrate with OpenClaw's session, messaging, or persistence layers. Tool-call emissions targeting `Agent` or `Task` are automatically aliased to `sessions_spawn`.",
+    "Visible channel replies: use the `message` tool (under the openclaw namespace). Do not narrate the reply you would send — actually send it.",
+    "Preserve channel/session context. Avoid heavy investigation when a direct reply suffices; for anything requiring substantial work, delegate via `sessions_spawn`.",
+    typeof params.extraSystemPrompt === "string" ? params.extraSystemPrompt : "",
+  ];
+  return sections.filter((s) => s.trim().length > 0).join("\n\n");
 }
 
 function buildInput(params: EmbeddedRunAttemptParams): UserInput[] {
