@@ -753,6 +753,7 @@ Docs: https://docs.openclaw.ai
 - Replies: reuse per-turn manifest model-normalization metadata across reply default-model and model-selection paths to avoid repeated request-time plugin metadata scans.
 - Plugins: reuse the Gateway's current metadata snapshot for agent workspaces without local plugins, avoiding repeated request-time manifest scans while preserving workspace plugin overrides.
 - QA-Lab: disable background agent heartbeats in WhatsApp live probes so RTT artifacts measure the canary reply lane without heartbeat contention.
+- QA-Lab: add an explicit `whatsapp-canary-rtt` live scenario id so repeated WhatsApp RTT proof runs can target the canary lane directly.
 - Replies: skip provider thinking-catalog hydration when thinking is off so messaging replies avoid unnecessary model-runtime setup before dispatch.
 - Providers: reuse already-loaded provider runtime hooks for synthetic auth before falling back to provider discovery loads.
 - QA-Lab: include the gateway diagnostic timeline in WhatsApp live trace artifacts so RTT probes expose reply setup, compaction, and model-run phase costs.
