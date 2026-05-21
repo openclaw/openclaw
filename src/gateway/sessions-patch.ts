@@ -461,8 +461,11 @@ export async function applySessionsPatchToStore(params: {
           model: resolvedDefault.model,
           isDefault: true,
         },
-        markLiveSwitchPending: true,
       });
+      if (next.liveModelSwitchPending !== undefined) {
+        delete next.liveModelSwitchPending;
+        next.updatedAt = Date.now();
+      }
     } else if (raw !== undefined) {
       const trimmed = normalizeOptionalString(raw) ?? "";
       if (!trimmed) {
