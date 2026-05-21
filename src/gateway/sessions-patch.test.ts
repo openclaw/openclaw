@@ -329,6 +329,95 @@ describe("gateway sessions patch", () => {
     expect(entry.authProfileOverrideCompactionCount).toBe(2);
   });
 
+  test("preserves unprefixed auth overrides when existing provider matches model patch", async () => {
+    const store: Record<string, SessionEntry> = {
+      "agent:main:main": {
+        sessionId: "sess-unprefixed-same-provider",
+        updatedAt: 1,
+        providerOverride: "anthropic",
+        modelOverride: "claude-opus-4-6",
+        authProfileOverride: "work",
+        authProfileOverrideSource: "user",
+        authProfileOverrideCompactionCount: 4,
+      } as SessionEntry,
+    };
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, model: "anthropic/claude-sonnet-4-6" },
+        loadGatewayModelCatalog: async () => [
+          { provider: "anthropic", id: "claude-sonnet-4-6", name: "sonnet" },
+        ],
+      }),
+    );
+    expect(entry.providerOverride).toBe("anthropic");
+    expect(entry.modelOverride).toBe("claude-sonnet-4-6");
+    expect(entry.authProfileOverride).toBe("work");
+    expect(entry.authProfileOverrideSource).toBe("user");
+    expect(entry.authProfileOverrideCompactionCount).toBe(4);
+  });
+
+  test("preserves unprefixed auth overrides when existing provider is the default", async () => {
+    const store: Record<string, SessionEntry> = {
+      "agent:main:main": {
+        sessionId: "sess-unprefixed-default-provider",
+        updatedAt: 1,
+        authProfileOverride: "work",
+        authProfileOverrideSource: "user",
+        authProfileOverrideCompactionCount: 4,
+      } as SessionEntry,
+    };
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: {
+          agents: {
+            defaults: {
+              model: { primary: "anthropic/claude-opus-4-6" },
+            },
+          },
+        } as OpenClawConfig,
+        store,
+        patch: { key: MAIN_SESSION_KEY, model: "anthropic/claude-sonnet-4-6" },
+        loadGatewayModelCatalog: async () => [
+          { provider: "anthropic", id: "claude-sonnet-4-6", name: "sonnet" },
+        ],
+      }),
+    );
+    expect(entry.providerOverride).toBe("anthropic");
+    expect(entry.modelOverride).toBe("claude-sonnet-4-6");
+    expect(entry.authProfileOverride).toBe("work");
+    expect(entry.authProfileOverrideSource).toBe("user");
+    expect(entry.authProfileOverrideCompactionCount).toBe(4);
+  });
+
+  test("clears unprefixed auth overrides when model patch changes provider", async () => {
+    const store: Record<string, SessionEntry> = {
+      "agent:main:main": {
+        sessionId: "sess-unprefixed-provider-change",
+        updatedAt: 1,
+        providerOverride: "anthropic",
+        modelOverride: "claude-opus-4-6",
+        authProfileOverride: "work",
+        authProfileOverrideSource: "user",
+        authProfileOverrideCompactionCount: 4,
+      } as SessionEntry,
+    };
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, model: "openai/gpt-5.4" },
+        loadGatewayModelCatalog: async () => [
+          { provider: "openai", id: "gpt-5.4", name: "gpt-5.4" },
+        ],
+      }),
+    );
+    expect(entry.providerOverride).toBe("openai");
+    expect(entry.modelOverride).toBe("gpt-5.4");
+    expect(entry.authProfileOverride).toBeUndefined();
+    expect(entry.authProfileOverrideSource).toBeUndefined();
+    expect(entry.authProfileOverrideCompactionCount).toBeUndefined();
+  });
+
   test("clears provider-prefixed auth overrides when model patch changes provider", async () => {
     const store: Record<string, SessionEntry> = {
       "agent:main:main": {
