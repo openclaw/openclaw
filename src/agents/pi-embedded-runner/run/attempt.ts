@@ -3182,8 +3182,10 @@ export async function runEmbeddedAttempt(
       const ownedTranscriptWriteContext = {
         sessionFile: params.sessionFile,
         sessionKey: params.sessionKey,
-        withSessionWriteLock: <T>(operation: () => Promise<T> | T) =>
-          sessionLockController.withSessionWriteLock(operation),
+        withSessionWriteLock: <T>(
+          operation: () => Promise<T> | T,
+          options?: { publishOwnedWrite?: boolean },
+        ) => sessionLockController.withSessionWriteLock(operation, options),
       };
       const promptActiveSession = (
         prompt: string,
@@ -3844,6 +3846,7 @@ export async function runEmbeddedAttempt(
               waitForSessionEvents: (sessionToDrain) =>
                 sessionLockController.waitForSessionEvents(sessionToDrain),
               releaseForPrompt: () => sessionLockController.releaseForPrompt(),
+              reacquireAfterPrompt: () => sessionLockController.reacquireAfterPrompt(),
             });
           }
 
