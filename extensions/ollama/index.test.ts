@@ -783,8 +783,8 @@ describe("ollama plugin", () => {
       modelApi: "ollama",
       modelId: "qwen3.5:9b",
     } as never);
-    expect(nativePolicy?.sanitizeToolCallIds).toBe(true);
-    expect(nativePolicy?.toolCallIdMode).toBe("strict");
+    expect(nativePolicy?.sanitizeToolCallIds).toBe(false);
+    expect(nativePolicy?.toolCallIdMode).toBeUndefined();
     expect(nativePolicy?.applyAssistantFirstOrderingFix).toBe(true);
     expect(nativePolicy?.validateGeminiTurns).toBe(true);
     expect(nativePolicy?.validateAnthropicTurns).toBe(true);
