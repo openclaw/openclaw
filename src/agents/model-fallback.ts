@@ -411,6 +411,7 @@ async function assertModelFallbackCandidateHarnessAvailable(
     agentHarnessRuntimeOverride,
   });
   if (
+    agentRuntime &&
     agentRuntime !== "auto" &&
     agentRuntime !== "pi" &&
     !(agentRuntime === "codex" && agentRuntimeSource === "implicit") &&

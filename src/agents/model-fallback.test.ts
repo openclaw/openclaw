@@ -778,7 +778,13 @@ describe("runWithModelFallback", () => {
     setAuthRuntimeStore(tempDir, {
       version: AUTH_STORE_VERSION,
       profiles: {
-        "anthropic:claude-cli": { type: "oauth", provider: "anthropic", token: "stale" },
+        "anthropic:claude-cli": {
+          type: "oauth",
+          provider: "anthropic",
+          access: "stale-access",
+          refresh: "stale-refresh",
+          expires: Date.now() - 60_000,
+        },
       },
       usageStats: {
         "anthropic:claude-cli": {
