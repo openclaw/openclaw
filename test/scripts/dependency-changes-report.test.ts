@@ -48,11 +48,13 @@ describe("dependency-changes-report", () => {
     expect(isDependencyFile("npm-shrinkwrap.json")).toBe(true);
     expect(isDependencyFile("extensions/discord/npm-shrinkwrap.json")).toBe(true);
     expect(isDependencyFile("package-lock.json")).toBe(true);
+    expect(isDependencyFile("extensions/discord/package-lock.json")).toBe(true);
     expect(isDependencyFile("pnpm-lock.yaml")).toBe(true);
     expect(isDependencyFile("docs/gateway/security/index.md")).toBe(false);
   });
 
   it("includes plugin shrinkwrap files in git diff pathspecs", () => {
+    expect(dependencyDiffPathspecs()).toContain("extensions/*/package-lock.json");
     expect(dependencyDiffPathspecs()).toContain("extensions/*/npm-shrinkwrap.json");
   });
 });
