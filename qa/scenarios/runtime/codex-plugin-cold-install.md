@@ -20,8 +20,8 @@ docsRefs:
   - docs/cli/plugins.md
   - docs/plugins/install-overrides.md
 codeRefs:
-  - extensions/qa-lab/src/codex-plugin-fixture.ts
-  - extensions/qa-lab/src/auth-profile-fixture.ts
+  - extensions/qa-lab/src/codex-plugin.fixture.ts
+  - extensions/qa-lab/src/auth-profile.fixture.ts
   - extensions/qa-lab/src/codex-plugin-lifecycle.test.ts
 execution:
   kind: flow
@@ -36,10 +36,10 @@ steps:
     actions:
       - set: auth
         value:
-          expr: await qaImport("./auth-profile-fixture.js")
+          expr: await qaImport("./auth-profile.fixture.js")
       - set: plugin
         value:
-          expr: await qaImport("./codex-plugin-fixture.js")
+          expr: await qaImport("./codex-plugin.fixture.js")
       - set: tmpRoot
         value:
           expr: await fs.mkdtemp(path.join(env.gateway?.workspaceDir ?? "/tmp", "qa-codex-cold-"))
