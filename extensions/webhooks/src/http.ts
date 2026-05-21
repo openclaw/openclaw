@@ -19,14 +19,112 @@ import {
 } from "../runtime-api.js";
 import type {
   ConfiguredWebhookAuth,
+  ConfiguredWebhookAgentDispatchConfig,
+  ConfiguredWebhookDeliveryConfig,
   ConfiguredWebhookEventConfig,
   ConfiguredWebhookIdempotencyConfig,
+  ConfiguredWebhookTaskFlowTemplateConfig,
   WebhookSecretInput,
 } from "./config.js";
 
 type BoundTaskFlowRuntime = ReturnType<PluginRuntime["tasks"]["managedFlows"]["bindSession"]>;
+type LoadChannelOutboundAdapter = PluginRuntime["channel"]["outbound"]["loadAdapter"];
+
+type ScheduleSessionTurn = (params: {
+  sessionKey: string;
+  message: string;
+  agentId?: string;
+  deliveryMode?: "none" | "announce";
+  name?: string;
+  tag?: string;
+  delayMs: number;
+  deleteAfterRun?: boolean;
+}) => Promise<{ id: string; pluginId: string; sessionKey: string; kind: string } | undefined>;
+
+type WebhookIdempotencyStore = {
+  registerIfAbsent: (
+    key: string,
+    value: {
+      routeId: string;
+      idempotencyKey: string;
+      firstSeenAt: number;
+    },
+    opts?: { ttlMs?: number },
+  ) => Promise<boolean>;
+};
+
+type WebhookLogger = {
+  info?: (...args: unknown[]) => void;
+  warn?: (...args: unknown[]) => void;
+};
 
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
+
+function normalizeJsonForState(value: unknown): JsonValue {
+  const seen = new WeakSet<object>();
+  const normalize = (entry: unknown): JsonValue => {
+    if (entry === null) {
+      return null;
+    }
+    if (typeof entry === "string" || typeof entry === "boolean") {
+      return entry;
+    }
+    if (typeof entry === "number") {
+      return Number.isFinite(entry) ? entry : String(entry);
+    }
+    if (typeof entry === "bigint") {
+      return entry.toString();
+    }
+    if (Array.isArray(entry)) {
+      return entry.map(normalize);
+    }
+    if (typeof entry === "object") {
+      if (seen.has(entry)) {
+        return "[Circular]";
+      }
+      seen.add(entry);
+      try {
+        const record: Record<string, JsonValue> = {};
+        for (const key of Object.keys(entry as Record<string, unknown>).sort()) {
+          record[key] = normalize((entry as Record<string, unknown>)[key]);
+        }
+        return record;
+      } finally {
+        seen.delete(entry);
+      }
+    }
+    return null;
+  };
+  return normalize(value);
+}
+
+function jsonStringifyStable(value: unknown, maxChars?: number): string {
+  const rendered = JSON.stringify(normalizeJsonForState(value), null, 2) ?? "null";
+  return maxChars ? truncateTemplateString(rendered, maxChars) : rendered;
+}
+
+function truncateTemplateString(value: string, maxChars: number): string {
+  if (value.length <= maxChars) {
+    return value;
+  }
+  return `${value.slice(0, maxChars)}...`;
+}
+
+function toTemplateString(value: unknown, maxChars?: number): string {
+  if (value === null) {
+    return "";
+  }
+  if (typeof value === "string") {
+    return maxChars ? truncateTemplateString(value, maxChars) : value;
+  }
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    return String(value);
+  }
+  if (value === undefined) {
+    return "";
+  }
+  return jsonStringifyStable(value, maxChars);
+}
 
 const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
   z.union([
@@ -190,6 +288,9 @@ export type TaskFlowWebhookTarget = {
   event?: ConfiguredWebhookEventConfig;
   events?: string[];
   idempotency?: ConfiguredWebhookIdempotencyConfig;
+  prompt?: string;
+  skills?: string[];
+  taskflow?: ConfiguredWebhookTaskFlowTemplateConfig;
   taskFlow: BoundTaskFlowRuntime;
 };
 
@@ -202,9 +303,44 @@ export type AckWebhookTarget = {
   event?: ConfiguredWebhookEventConfig;
   events?: string[];
   idempotency?: ConfiguredWebhookIdempotencyConfig;
+  prompt?: string;
+  skills?: string[];
 };
 
-export type WebhookTarget = TaskFlowWebhookTarget | AckWebhookTarget;
+export type AgentWebhookTarget = {
+  routeId: string;
+  path: string;
+  dispatchMode: "agent";
+  auth: ConfiguredWebhookAuth;
+  secretConfigPath?: string;
+  event?: ConfiguredWebhookEventConfig;
+  events?: string[];
+  idempotency?: ConfiguredWebhookIdempotencyConfig;
+  prompt?: string;
+  skills?: string[];
+  sessionKey: string;
+  agent: ConfiguredWebhookAgentDispatchConfig;
+};
+
+export type DeliverWebhookTarget = {
+  routeId: string;
+  path: string;
+  dispatchMode: "deliver";
+  auth: ConfiguredWebhookAuth;
+  secretConfigPath?: string;
+  event?: ConfiguredWebhookEventConfig;
+  events?: string[];
+  idempotency?: ConfiguredWebhookIdempotencyConfig;
+  prompt?: string;
+  skills?: string[];
+  delivery: ConfiguredWebhookDeliveryConfig;
+};
+
+export type WebhookTarget =
+  | TaskFlowWebhookTarget
+  | AckWebhookTarget
+  | AgentWebhookTarget
+  | DeliverWebhookTarget;
 
 type FlowView = {
   flowId: string;
@@ -250,6 +386,38 @@ type TaskView = {
   terminalSummary?: string;
   terminalOutcome?: string;
 };
+
+type WebhookDispatchContext = {
+  routeId: string;
+  eventType?: string;
+  idempotencyKey?: string;
+  body: unknown;
+  rawBody: string;
+  headers: Record<string, string>;
+};
+
+const DEFAULT_EVENT_HEADERS = [
+  "x-github-event",
+  "x-gitlab-event",
+  "x-event-type",
+  "x-webhook-event",
+] as const;
+
+const DEFAULT_EVENT_PAYLOAD_PATHS = ["event_type", "event.type", "event.action", "type"] as const;
+
+const DEFAULT_IDEMPOTENCY_HEADERS = [
+  "x-github-delivery",
+  "x-request-id",
+  "x-webhook-id",
+  "x-delivery-id",
+] as const;
+
+const DEFAULT_IDEMPOTENCY_PAYLOAD_PATHS = [
+  "delivery.id",
+  "event.id",
+  "webhook.id",
+  "request.id",
+] as const;
 
 function pickOptionalFields<T extends object, TKey extends keyof T & string>(
   source: T,
@@ -337,6 +505,14 @@ function firstHeaderValue(value: string | string[] | undefined): string {
   return Array.isArray(value) ? (value[0] ?? "") : (value ?? "");
 }
 
+function collectRequestHeaders(req: IncomingMessage): Record<string, string> {
+  const headers: Record<string, string> = {};
+  for (const [name, value] of Object.entries(req.headers)) {
+    headers[normalizeLowercaseStringOrEmpty(name)] = firstHeaderValue(value).trim();
+  }
+  return headers;
+}
+
 function getHeader(req: IncomingMessage, name: string): string {
   return firstHeaderValue(req.headers[normalizeLowercaseStringOrEmpty(name)]).trim();
 }
@@ -389,7 +565,15 @@ function timingSafeAsciiEquals(left: string, right: string): boolean {
 }
 
 function isTaskFlowTarget(target: WebhookTarget): target is TaskFlowWebhookTarget {
-  return target.dispatchMode !== "ack";
+  return target.dispatchMode === undefined || target.dispatchMode === "taskflow";
+}
+
+function isAgentTarget(target: WebhookTarget): target is AgentWebhookTarget {
+  return target.dispatchMode === "agent";
+}
+
+function isDeliverTarget(target: WebhookTarget): target is DeliverWebhookTarget {
+  return target.dispatchMode === "deliver";
 }
 
 function targetAuth(target: WebhookTarget): ConfiguredWebhookAuth {
@@ -444,6 +628,32 @@ function readPayloadPath(value: unknown, path: string | undefined): unknown {
   return current;
 }
 
+function readTemplatePath(value: unknown, path: string): unknown {
+  if (!path) {
+    return undefined;
+  }
+  let current = value;
+  for (const rawSegment of path.split(".")) {
+    const segment = rawSegment.trim();
+    if (!segment || BLOCKED_PATH_SEGMENTS.has(segment)) {
+      return undefined;
+    }
+    if (current === null || typeof current !== "object") {
+      return undefined;
+    }
+    if (Array.isArray(current)) {
+      const index = Number(segment);
+      if (!Number.isInteger(index) || index < 0) {
+        return undefined;
+      }
+      current = current[index];
+      continue;
+    }
+    current = (current as Record<string, unknown>)[segment];
+  }
+  return current;
+}
+
 function normalizePathString(value: unknown): string | undefined {
   if (typeof value === "string") {
     const trimmed = value.trim();
@@ -464,7 +674,23 @@ function extractEventType(params: {
   if (fromHeader) {
     return fromHeader;
   }
-  return normalizePathString(readPayloadPath(params.body, params.config?.payloadPath));
+  const fromPayload = normalizePathString(readPayloadPath(params.body, params.config?.payloadPath));
+  if (fromPayload) {
+    return fromPayload;
+  }
+  for (const header of DEFAULT_EVENT_HEADERS) {
+    const value = getHeader(params.req, header);
+    if (value) {
+      return value;
+    }
+  }
+  for (const path of DEFAULT_EVENT_PAYLOAD_PATHS) {
+    const value = normalizePathString(readPayloadPath(params.body, path));
+    if (value) {
+      return value;
+    }
+  }
+  return undefined;
 }
 
 function extractIdempotencyKey(params: {
@@ -476,7 +702,162 @@ function extractIdempotencyKey(params: {
   if (fromHeader) {
     return fromHeader;
   }
-  return normalizePathString(readPayloadPath(params.body, params.config?.payloadPath));
+  const fromPayload = normalizePathString(readPayloadPath(params.body, params.config?.payloadPath));
+  if (fromPayload) {
+    return fromPayload;
+  }
+  if (!params.config) {
+    return undefined;
+  }
+  for (const header of DEFAULT_IDEMPOTENCY_HEADERS) {
+    const value = getHeader(params.req, header);
+    if (value) {
+      return value;
+    }
+  }
+  for (const path of DEFAULT_IDEMPOTENCY_PAYLOAD_PATHS) {
+    const value = normalizePathString(readPayloadPath(params.body, path));
+    if (value) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function normalizeTemplateOutput(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized || undefined;
+}
+
+function sanitizeSchedulerToken(value: string | undefined): string | undefined {
+  const normalized = normalizeTemplateOutput(value);
+  if (!normalized) {
+    return undefined;
+  }
+  const safe = normalized.replace(/:/g, "-").replace(/\s+/g, "-").slice(0, 96);
+  return safe || undefined;
+}
+
+function renderDeliveryField(
+  value: string | number | undefined,
+  context: WebhookDispatchContext,
+): string | number | undefined {
+  if (typeof value === "string") {
+    return renderTemplate(value, context).trim();
+  }
+  return value;
+}
+
+function renderTemplateExpression(params: {
+  match: string;
+  rawExpression: string;
+  context: WebhookDispatchContext;
+  keepMissingLiteral: boolean;
+}): string {
+  const expression = params.rawExpression.trim();
+  if (!expression) {
+    return params.keepMissingLiteral ? params.match : "";
+  }
+  if (expression === "__raw__") {
+    return jsonStringifyStable(params.context.body, 4000);
+  }
+  if (expression.startsWith("json ")) {
+    const path = expression.slice(5).trim();
+    const value = resolveTemplateValue(path, params.context);
+    if (value === undefined && params.keepMissingLiteral) {
+      return params.match;
+    }
+    if (value === undefined) {
+      return "";
+    }
+    return jsonStringifyStable(value);
+  }
+  const value = resolveTemplateValue(expression, params.context);
+  if (value === undefined && params.keepMissingLiteral) {
+    return params.match;
+  }
+  return toTemplateString(value, params.keepMissingLiteral ? 2000 : undefined);
+}
+
+function renderTemplate(template: string, context: WebhookDispatchContext): string {
+  return template.replace(
+    /\{\{\s*([^}]+?)\s*\}\}|\{([^{}\n]+)\}/g,
+    (
+      match: string,
+      doubleBraceExpression: string | undefined,
+      singleBraceExpression: string | undefined,
+    ) =>
+      renderTemplateExpression({
+        match,
+        rawExpression: doubleBraceExpression ?? singleBraceExpression ?? "",
+        context,
+        keepMissingLiteral: singleBraceExpression !== undefined,
+      }),
+  );
+}
+
+function renderOptionalTemplate(
+  template: string | undefined,
+  context: WebhookDispatchContext,
+): string | undefined {
+  return template ? normalizeTemplateOutput(renderTemplate(template, context)) : undefined;
+}
+
+function resolveTemplateValue(path: string, context: WebhookDispatchContext): unknown {
+  switch (path) {
+    case "body":
+    case "payload":
+      return context.body;
+    case "rawBody":
+      return context.rawBody;
+    case "event":
+    case "eventType":
+      return context.eventType;
+    case "route":
+    case "routeId":
+      return context.routeId;
+    case "idempotency":
+    case "idempotencyKey":
+      return context.idempotencyKey;
+    default:
+      break;
+  }
+  if (path.startsWith("body.")) {
+    return readTemplatePath(context.body, path.slice("body.".length));
+  }
+  if (path.startsWith("payload.")) {
+    return readTemplatePath(context.body, path.slice("payload.".length));
+  }
+  if (path.startsWith("headers.")) {
+    return context.headers[path.slice("headers.".length).toLowerCase()];
+  }
+  if (path.startsWith("header.")) {
+    return context.headers[path.slice("header.".length).toLowerCase()];
+  }
+  if (path.startsWith("event.")) {
+    const eventMetadata = readTemplatePath({ type: context.eventType }, path.slice("event.".length));
+    return eventMetadata !== undefined ? eventMetadata : readTemplatePath(context.body, path);
+  }
+  return readTemplatePath(context.body, path);
+}
+
+function buildDefaultWebhookPrompt(context: WebhookDispatchContext): string {
+  const lines = [
+    `Webhook route: ${context.routeId}`,
+    context.eventType ? `Event: ${context.eventType}` : undefined,
+    context.idempotencyKey ? `Delivery id: ${context.idempotencyKey}` : undefined,
+    "",
+    "Payload:",
+    jsonStringifyStable(context.body),
+  ].filter((line): line is string => line !== undefined);
+  return lines.join("\n");
+}
+
+function applySkillHint(text: string, skills: string[] | undefined): string {
+  if (!skills?.length) {
+    return text;
+  }
+  return `${text}\n\nUse these OpenClaw skills when useful: ${skills.join(", ")}`;
 }
 
 type IdempotencyRecord = {
@@ -510,6 +891,48 @@ function checkAndStoreIdempotencyKey(params: {
   const existing = params.records.get(storageKey);
   if (existing && existing.expiresAt > params.nowMs) {
     return { duplicate: true };
+  }
+  params.records.set(storageKey, {
+    expiresAt: params.nowMs + params.ttlMs,
+  });
+  return { duplicate: false };
+}
+
+async function checkAndStoreDurableIdempotencyKey(params: {
+  store: WebhookIdempotencyStore | undefined;
+  records: Map<string, IdempotencyRecord>;
+  routeId: string;
+  key: string | undefined;
+  ttlMs: number;
+  nowMs: number;
+}): Promise<{ duplicate: boolean }> {
+  const key = params.key?.trim();
+  if (!key) {
+    return { duplicate: false };
+  }
+  const storageKey = `${params.routeId}:${key}`;
+  pruneExpiredIdempotencyRecords(params.records, params.nowMs);
+  const existing = params.records.get(storageKey);
+  if (existing && existing.expiresAt > params.nowMs) {
+    return { duplicate: true };
+  }
+  if (params.store) {
+    try {
+      const inserted = await params.store.registerIfAbsent(
+        storageKey,
+        {
+          routeId: params.routeId,
+          idempotencyKey: key,
+          firstSeenAt: params.nowMs,
+        },
+        { ttlMs: params.ttlMs },
+      );
+      if (!inserted) {
+        return { duplicate: true };
+      }
+    } catch {
+      return checkAndStoreIdempotencyKey(params);
+    }
   }
   params.records.set(storageKey, {
     expiresAt: params.nowMs + params.ttlMs,
@@ -866,10 +1289,293 @@ async function executeWebhookAction(params: {
   throw new Error("Unsupported webhook action");
 }
 
+async function executeTaskFlowTemplateDispatch(params: {
+  target: TaskFlowWebhookTarget;
+  context: WebhookDispatchContext;
+}): Promise<unknown> {
+  const { target, context } = params;
+  const taskflow = target.taskflow ?? {};
+  const goal =
+    renderOptionalTemplate(taskflow.goalTemplate, context) ??
+    renderOptionalTemplate(target.prompt, context) ??
+    buildDefaultWebhookPrompt(context);
+  const flow = target.taskFlow.createManaged({
+    controllerId: target.defaultControllerId,
+    goal: applySkillHint(goal, target.skills),
+    status: taskflow.status,
+    notifyPolicy: taskflow.notifyPolicy,
+    currentStep: taskflow.currentStep,
+    stateJson: {
+      source: "webhooks",
+      routeId: target.routeId,
+      ...(context.eventType ? { eventType: context.eventType } : {}),
+      ...(context.idempotencyKey ? { idempotencyKey: context.idempotencyKey } : {}),
+      payload: normalizeJsonForState(context.body),
+    },
+  });
+
+  const runTask = taskflow.runTask;
+  if (!runTask || runTask.enabled === false) {
+    return {
+      action: "taskflow_dispatch",
+      flow: toFlowView(flow),
+    };
+  }
+
+  const renderedTask =
+    renderOptionalTemplate(runTask.taskTemplate, context) ??
+    renderOptionalTemplate(target.prompt, context) ??
+    buildDefaultWebhookPrompt(context);
+  const runId =
+    renderOptionalTemplate(runTask.runIdTemplate, context) ??
+    context.idempotencyKey ??
+    `${target.routeId}:${flow.flowId}`;
+  const result = target.taskFlow.runTask({
+    flowId: flow.flowId,
+    runtime: runTask.runtime,
+    sourceId: runTask.sourceId,
+    childSessionKey: runTask.childSessionKey,
+    parentTaskId: runTask.parentTaskId,
+    agentId: runTask.agentId,
+    runId,
+    label: renderOptionalTemplate(runTask.labelTemplate, context),
+    task: applySkillHint(renderedTask, target.skills),
+    preferMetadata: runTask.preferMetadata,
+    notifyPolicy: runTask.notifyPolicy,
+    status: runTask.status,
+  });
+
+  return result.created
+    ? {
+        action: "taskflow_dispatch",
+        flow: toFlowView(result.flow),
+        task: toTaskView(result.task),
+      }
+    : {
+        action: "taskflow_dispatch",
+        flow: toFlowView(flow),
+        taskCreated: false,
+        reason: result.reason,
+      };
+}
+
+async function executeAgentDispatch(params: {
+  target: AgentWebhookTarget;
+  context: WebhookDispatchContext;
+  scheduleSessionTurn?: ScheduleSessionTurn;
+}): Promise<{ statusCode: number; body: unknown }> {
+  const { target, context } = params;
+  const message =
+    renderOptionalTemplate(target.agent.messageTemplate, context) ??
+    renderOptionalTemplate(target.prompt, context) ??
+    buildDefaultWebhookPrompt(context);
+  const scheduler = params.scheduleSessionTurn;
+  const name = renderOptionalTemplate(target.agent.nameTemplate, context);
+  const tag = sanitizeSchedulerToken(renderOptionalTemplate(target.agent.tagTemplate, context));
+  if (!scheduler) {
+    return {
+      statusCode: 503,
+      body: {
+        ok: false,
+        routeId: target.routeId,
+        code: "agent_dispatch_unavailable",
+        error: "Agent dispatch is unavailable in this Gateway runtime.",
+      },
+    };
+  }
+  const handle = await scheduler({
+    sessionKey: target.sessionKey,
+    message: applySkillHint(message, target.skills),
+    deliveryMode: target.agent.deliveryMode,
+    delayMs: target.agent.delayMs,
+    deleteAfterRun: true,
+    ...(target.agent.agentId ? { agentId: target.agent.agentId } : {}),
+    ...(name ? { name } : {}),
+    ...(tag ? { tag } : {}),
+  });
+  if (!handle) {
+    return {
+      statusCode: 503,
+      body: {
+        ok: false,
+        routeId: target.routeId,
+        code: "agent_dispatch_rejected",
+        error: "Agent dispatch was not scheduled.",
+      },
+    };
+  }
+  return {
+    statusCode: 202,
+    body: {
+      ok: true,
+      routeId: target.routeId,
+      result: {
+        action: "agent_dispatch",
+        sessionKey: handle.sessionKey,
+        jobId: handle.id,
+      },
+    },
+  };
+}
+
+async function executeDeliveryDispatch(params: {
+  target: DeliverWebhookTarget;
+  context: WebhookDispatchContext;
+  loadChannelOutboundAdapter?: LoadChannelOutboundAdapter;
+  logger?: WebhookLogger;
+  cfg: OpenClawConfig;
+}): Promise<{ statusCode: number; body: unknown }> {
+  const { target, context } = params;
+  const defaultText =
+    renderOptionalTemplate(target.prompt, context) ?? buildDefaultWebhookPrompt(context);
+  if (target.delivery.mode === "log") {
+    params.logger?.info?.("[webhooks] delivery event", {
+      routeId: target.routeId,
+      eventType: context.eventType,
+      idempotencyKey: context.idempotencyKey,
+      text: defaultText,
+    });
+    return {
+      statusCode: 200,
+      body: {
+        ok: true,
+        routeId: target.routeId,
+        result: {
+          action: "deliver",
+          mode: "log",
+          ...(context.eventType ? { eventType: context.eventType } : {}),
+          ...(context.idempotencyKey ? { idempotencyKey: context.idempotencyKey } : {}),
+        },
+      },
+    };
+  }
+
+  const loadAdapter = params.loadChannelOutboundAdapter;
+  if (!loadAdapter) {
+    return {
+      statusCode: 503,
+      body: {
+        ok: false,
+        routeId: target.routeId,
+        code: "delivery_unavailable",
+        error: "Channel delivery is unavailable in this Gateway runtime.",
+      },
+    };
+  }
+  const adapter = await loadAdapter(target.delivery.channel);
+  if (!adapter?.sendText) {
+    return {
+      statusCode: 503,
+      body: {
+        ok: false,
+        routeId: target.routeId,
+        code: "channel_unavailable",
+        error: `Channel ${target.delivery.channel} is not available for text delivery.`,
+      },
+    };
+  }
+  const deliveryTo = renderDeliveryField(target.delivery.to, context);
+  const deliveryAccountId = renderDeliveryField(target.delivery.accountId, context);
+  const deliveryThreadId = renderDeliveryField(target.delivery.threadId, context);
+  const normalizedDeliveryTo =
+    typeof deliveryTo === "string" && deliveryTo.trim() ? deliveryTo.trim() : undefined;
+  if (!normalizedDeliveryTo && !adapter.resolveTarget) {
+    return {
+      statusCode: 400,
+      body: {
+        ok: false,
+        routeId: target.routeId,
+        code: "invalid_delivery_target",
+        error:
+          "Delivery target is required because the channel does not provide default target resolution.",
+      },
+    };
+  }
+  const resolvedTarget = adapter.resolveTarget?.({
+    cfg: params.cfg,
+    ...(normalizedDeliveryTo ? { to: normalizedDeliveryTo } : {}),
+    ...(typeof deliveryAccountId === "string" && deliveryAccountId.trim()
+      ? { accountId: deliveryAccountId }
+      : {}),
+    mode: "explicit",
+  });
+  if (resolvedTarget?.ok === false) {
+    return {
+      statusCode: 400,
+      body: {
+        ok: false,
+        routeId: target.routeId,
+        code: "invalid_delivery_target",
+        error: resolvedTarget.error.message,
+      },
+    };
+  }
+  const text =
+    renderOptionalTemplate(target.delivery.textTemplate, context) ??
+    renderOptionalTemplate(target.prompt, context) ??
+    buildDefaultWebhookPrompt(context);
+  let result;
+  try {
+    const outboundTo = resolvedTarget?.ok === true ? resolvedTarget.to : normalizedDeliveryTo;
+    if (!outboundTo) {
+      return {
+        statusCode: 400,
+        body: {
+          ok: false,
+          routeId: target.routeId,
+          code: "invalid_delivery_target",
+          error: "Delivery target resolved to an empty value.",
+        },
+      };
+    }
+    result = await adapter.sendText({
+      cfg: params.cfg,
+      to: outboundTo,
+      text,
+      ...(typeof deliveryAccountId === "string" && deliveryAccountId.trim()
+        ? { accountId: deliveryAccountId }
+        : {}),
+      ...(deliveryThreadId !== undefined && deliveryThreadId !== ""
+        ? { threadId: deliveryThreadId }
+        : {}),
+      ...(target.delivery.silent !== undefined ? { silent: target.delivery.silent } : {}),
+    });
+  } catch (error) {
+    return {
+      statusCode: 502,
+      body: {
+        ok: false,
+        routeId: target.routeId,
+        code: "delivery_failed",
+        error: error instanceof Error ? error.message : "Channel delivery failed.",
+      },
+    };
+  }
+  return {
+    statusCode: 200,
+    body: {
+      ok: true,
+      routeId: target.routeId,
+      result: {
+        action: "deliver",
+        mode: "channel",
+        channel: result.channel ?? target.delivery.channel,
+        messageId: result.messageId,
+        ...(context.eventType ? { eventType: context.eventType } : {}),
+        ...(context.idempotencyKey ? { idempotencyKey: context.idempotencyKey } : {}),
+      },
+    },
+  };
+}
+
 export function createTaskFlowWebhookRequestHandler(params: {
   cfg: OpenClawConfig;
   targetsByPath: Map<string, WebhookTarget[]>;
   inFlightLimiter?: WebhookInFlightLimiter;
+  idempotencyStore?: WebhookIdempotencyStore;
+  scheduleSessionTurn?: ScheduleSessionTurn;
+  loadChannelOutboundAdapter?: LoadChannelOutboundAdapter;
+  logger?: WebhookLogger;
 }): (req: IncomingMessage, res: ServerResponse) => Promise<boolean> {
   const rateLimiter = createFixedWindowRateLimiter({
     windowMs: WEBHOOK_RATE_LIMIT_DEFAULTS.windowMs,
@@ -917,7 +1623,7 @@ export function createTaskFlowWebhookRequestHandler(params: {
         return `${new URL(req.url ?? "/", "http://localhost").pathname}:${clientIp}`;
       })(),
       inFlightLimiter,
-      handle: async ({ targets }) => {
+      handle: async ({ targets }: { path: string; targets: WebhookTarget[] }) => {
         const body = await readWebhookBodyOrReject({
           req,
           res,
@@ -932,7 +1638,7 @@ export function createTaskFlowWebhookRequestHandler(params: {
         const target = await resolveWebhookTargetWithAuthOrReject({
           targets,
           res,
-          isMatch: async (candidate) => {
+          isMatch: async (candidate: WebhookTarget) => {
             const auth = targetAuth(candidate);
             const presentedSecret = extractPresentedSecret({ req, auth });
             if (presentedSecret.length === 0) {
@@ -984,7 +1690,8 @@ export function createTaskFlowWebhookRequestHandler(params: {
           config: target.idempotency,
         });
         if (target.idempotency) {
-          const dedupe = checkAndStoreIdempotencyKey({
+          const dedupe = await checkAndStoreDurableIdempotencyKey({
+            store: params.idempotencyStore,
             records: idempotencyRecords,
             routeId: target.routeId,
             key: idempotencyKey,
@@ -1002,7 +1709,36 @@ export function createTaskFlowWebhookRequestHandler(params: {
           }
         }
 
+        const dispatchContext: WebhookDispatchContext = {
+          routeId: target.routeId,
+          ...(eventType ? { eventType } : {}),
+          ...(idempotencyKey ? { idempotencyKey } : {}),
+          body: parsedBody.value,
+          rawBody: body.value,
+          headers: collectRequestHeaders(req),
+        };
+
         if (!isTaskFlowTarget(target)) {
+          if (isAgentTarget(target)) {
+            const outcome = await executeAgentDispatch({
+              target,
+              context: dispatchContext,
+              scheduleSessionTurn: params.scheduleSessionTurn,
+            });
+            writeJson(res, outcome.statusCode, outcome.body);
+            return true;
+          }
+          if (isDeliverTarget(target)) {
+            const outcome = await executeDeliveryDispatch({
+              target,
+              context: dispatchContext,
+              loadChannelOutboundAdapter: params.loadChannelOutboundAdapter,
+              logger: params.logger,
+              cfg: params.cfg,
+            });
+            writeJson(res, outcome.statusCode, outcome.body);
+            return true;
+          }
           writeJson(res, 200, {
             ok: true,
             routeId: target.routeId,
@@ -1011,6 +1747,19 @@ export function createTaskFlowWebhookRequestHandler(params: {
               ...(eventType ? { eventType } : {}),
               ...(idempotencyKey ? { idempotencyKey } : {}),
             },
+          });
+          return true;
+        }
+
+        if (target.taskflow || target.prompt) {
+          const result = await executeTaskFlowTemplateDispatch({
+            target,
+            context: dispatchContext,
+          });
+          writeJson(res, 202, {
+            ok: true,
+            routeId: target.routeId,
+            result,
           });
           return true;
         }

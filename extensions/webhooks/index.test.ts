@@ -8,6 +8,9 @@ function createApi(params?: {
   registerHttpRoute?: OpenClawPluginApi["registerHttpRoute"];
   logger?: OpenClawPluginApi["logger"];
   bindSession?: ReturnType<typeof vi.fn>;
+  scheduleSessionTurn?: ReturnType<typeof vi.fn>;
+  loadAdapter?: ReturnType<typeof vi.fn>;
+  openKeyedStore?: ReturnType<typeof vi.fn>;
 }): OpenClawPluginApi {
   return createTestPluginApi({
     id: "webhooks",
@@ -22,7 +25,20 @@ function createApi(params?: {
             vi.fn(({ sessionKey }: { sessionKey: string }) => ({ sessionKey })),
         },
       },
+      channel: {
+        outbound: {
+          loadAdapter: params?.loadAdapter ?? vi.fn(),
+        },
+      },
+      state: {
+        openKeyedStore: params?.openKeyedStore ?? vi.fn(),
+      },
     } as unknown as OpenClawPluginApi["runtime"],
+    session: {
+      workflow: {
+        scheduleSessionTurn: params?.scheduleSessionTurn ?? vi.fn(async () => undefined),
+      },
+    } as unknown as OpenClawPluginApi["session"],
     registerHttpRoute: params?.registerHttpRoute ?? vi.fn(),
     logger:
       params?.logger ??
@@ -104,5 +120,110 @@ describe("webhooks plugin registration", () => {
     const route = requireFirstRouteRegistration(registerHttpRoute);
     expect(route.path).toBe("/plugins/webhooks/alerts");
     expect(route.handler).toBeTypeOf("function");
+  });
+
+  it("registers agent routes without binding TaskFlow sessions", () => {
+    const registerHttpRoute = vi.fn();
+    const bindSession = vi.fn(({ sessionKey }: { sessionKey: string }) => ({ sessionKey }));
+    const scheduleSessionTurn = vi.fn(async () => undefined);
+
+    const result = plugin.register(
+      createApi({
+        pluginConfig: {
+          routes: {
+            incidents: {
+              sessionKey: "agent:main:main",
+              dispatch: { mode: "agent" },
+              auth: {
+                mode: "bearer",
+                secret: "shared-secret",
+              },
+              prompt: "Investigate {incident.id}",
+            },
+          },
+        },
+        registerHttpRoute,
+        bindSession,
+        scheduleSessionTurn,
+      }),
+    );
+
+    expect(result).toBeUndefined();
+    expect(registerHttpRoute).toHaveBeenCalledTimes(1);
+    expect(bindSession).not.toHaveBeenCalled();
+    const route = requireFirstRouteRegistration(registerHttpRoute);
+    expect(route.path).toBe("/plugins/webhooks/incidents");
+    expect(route.handler).toBeTypeOf("function");
+  });
+
+  it("registers deliver routes without binding TaskFlow sessions", () => {
+    const registerHttpRoute = vi.fn();
+    const bindSession = vi.fn(({ sessionKey }: { sessionKey: string }) => ({ sessionKey }));
+    const loadAdapter = vi.fn();
+
+    const result = plugin.register(
+      createApi({
+        pluginConfig: {
+          routes: {
+            alerts: {
+              dispatch: { mode: "deliver" },
+              auth: {
+                mode: "bearer",
+                secret: "shared-secret",
+              },
+              deliver: {
+                channel: "telegram",
+                to: "{alert.chat_id}",
+              },
+            },
+          },
+        },
+        registerHttpRoute,
+        bindSession,
+        loadAdapter,
+      }),
+    );
+
+    expect(result).toBeUndefined();
+    expect(registerHttpRoute).toHaveBeenCalledTimes(1);
+    expect(bindSession).not.toHaveBeenCalled();
+    const route = requireFirstRouteRegistration(registerHttpRoute);
+    expect(route.path).toBe("/plugins/webhooks/alerts");
+    expect(route.handler).toBeTypeOf("function");
+  });
+
+  it("opens the persistent idempotency store when any route enables dedupe", () => {
+    const registerHttpRoute = vi.fn();
+    const openKeyedStore = vi.fn(() => ({
+      registerIfAbsent: vi.fn(async () => true),
+    }));
+
+    const result = plugin.register(
+      createApi({
+        pluginConfig: {
+          routes: {
+            incidents: {
+              dispatch: { mode: "ack" },
+              auth: {
+                mode: "bearer",
+                secret: "shared-secret",
+              },
+              idempotency: {
+                payloadPath: "delivery.id",
+              },
+            },
+          },
+        },
+        registerHttpRoute,
+        openKeyedStore,
+      }),
+    );
+
+    expect(result).toBeUndefined();
+    expect(openKeyedStore).toHaveBeenCalledWith({
+      namespace: "webhook-idempotency",
+      maxEntries: 25_000,
+      defaultTtlMs: 24 * 60 * 60 * 1000,
+    });
   });
 });

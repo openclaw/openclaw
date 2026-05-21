@@ -1,9 +1,38 @@
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
-import { type ConfiguredWebhookAuth, resolveWebhooksPluginConfig } from "./src/config.js";
+import {
+  type ConfiguredWebhookAuth,
+  type ConfiguredWebhookIdempotencyConfig,
+  resolveWebhooksPluginConfig,
+} from "./src/config.js";
 import { createTaskFlowWebhookRequestHandler, type WebhookTarget } from "./src/http.js";
 
 function usesLegacySharedSecretHeader(auth: ConfiguredWebhookAuth): boolean {
   return auth.mode === "bearer" && auth.legacySharedHeader === true;
+}
+
+function hasIdempotency(routes: { idempotency?: ConfiguredWebhookIdempotencyConfig }[]): boolean {
+  return routes.some((route) => route.idempotency);
+}
+
+function openIdempotencyStore(api: OpenClawPluginApi) {
+  try {
+    return api.runtime.state?.openKeyedStore<{
+      routeId: string;
+      idempotencyKey: string;
+      firstSeenAt: number;
+    }>({
+      namespace: "webhook-idempotency",
+      maxEntries: 25_000,
+      defaultTtlMs: 24 * 60 * 60 * 1000,
+    });
+  } catch (error) {
+    api.logger.warn?.(
+      `[webhooks] persistent idempotency store unavailable; falling back to in-process dedupe: ${String(
+        error instanceof Error ? error.message : error,
+      )}`,
+    );
+    return undefined;
+  }
 }
 
 function registerWebhookRoutes(api: OpenClawPluginApi): void {
@@ -18,38 +47,60 @@ function registerWebhookRoutes(api: OpenClawPluginApi): void {
   const handler = createTaskFlowWebhookRequestHandler({
     cfg: api.config,
     targetsByPath,
+    ...(hasIdempotency(routes) ? { idempotencyStore: openIdempotencyStore(api) } : {}),
+    scheduleSessionTurn: api.session?.workflow?.scheduleSessionTurn ?? api.scheduleSessionTurn,
+    loadChannelOutboundAdapter: api.runtime.channel?.outbound?.loadAdapter?.bind(
+      api.runtime.channel.outbound,
+    ),
+    logger: api.logger,
   });
 
   for (const route of routes) {
-    const target: WebhookTarget =
-      route.dispatchMode === "ack"
-        ? {
-            routeId: route.routeId,
-            path: route.path,
-            dispatchMode: "ack",
-            auth: route.auth,
-            secretConfigPath: `plugins.entries.webhooks.routes.${route.routeId}.auth.secret`,
-            event: route.event,
-            ...(route.events ? { events: route.events } : {}),
-            ...(route.idempotency ? { idempotency: route.idempotency } : {}),
-          }
-        : {
-            routeId: route.routeId,
-            path: route.path,
-            dispatchMode: "taskflow",
-            auth: route.auth,
-            secretInput: route.secret,
-            secretConfigPath: usesLegacySharedSecretHeader(route.auth)
-              ? `plugins.entries.webhooks.routes.${route.routeId}.secret`
-              : `plugins.entries.webhooks.routes.${route.routeId}.auth.secret`,
-            defaultControllerId: route.controllerId,
-            event: route.event,
-            ...(route.events ? { events: route.events } : {}),
-            ...(route.idempotency ? { idempotency: route.idempotency } : {}),
-            taskFlow: api.runtime.tasks.managedFlows.bindSession({
-              sessionKey: route.sessionKey,
-            }),
-          };
+    let target: WebhookTarget;
+    const secretConfigPath = usesLegacySharedSecretHeader(route.auth)
+      ? `plugins.entries.webhooks.routes.${route.routeId}.secret`
+      : `plugins.entries.webhooks.routes.${route.routeId}.auth.secret`;
+    const commonTarget = {
+      routeId: route.routeId,
+      path: route.path,
+      auth: route.auth,
+      secretConfigPath,
+      event: route.event,
+      ...(route.events ? { events: route.events } : {}),
+      ...(route.idempotency ? { idempotency: route.idempotency } : {}),
+      ...(route.prompt ? { prompt: route.prompt } : {}),
+      ...(route.skills ? { skills: route.skills } : {}),
+    };
+    if (route.dispatchMode === "ack") {
+      target = {
+        ...commonTarget,
+        dispatchMode: "ack",
+      };
+    } else if (route.dispatchMode === "agent") {
+      target = {
+        ...commonTarget,
+        dispatchMode: "agent",
+        sessionKey: route.sessionKey,
+        agent: route.agent,
+      };
+    } else if (route.dispatchMode === "deliver") {
+      target = {
+        ...commonTarget,
+        dispatchMode: "deliver",
+        delivery: route.delivery,
+      };
+    } else {
+      target = {
+        ...commonTarget,
+        dispatchMode: "taskflow",
+        secretInput: route.secret,
+        defaultControllerId: route.controllerId,
+        ...(route.taskflow ? { taskflow: route.taskflow } : {}),
+        taskFlow: api.runtime.tasks.managedFlows.bindSession({
+          sessionKey: route.sessionKey,
+        }),
+      };
+    }
     targetsByPath.set(target.path, [...(targetsByPath.get(target.path) ?? []), target]);
     api.registerHttpRoute({
       path: target.path,
@@ -70,7 +121,7 @@ export default definePluginEntry({
   id: "webhooks",
   name: "Webhooks",
   description:
-    "Authenticated inbound webhooks that bind external automation to OpenClaw TaskFlows.",
+    "Authenticated inbound webhooks that trigger OpenClaw agents, TaskFlows, or channel delivery.",
   register(api: OpenClawPluginApi) {
     registerWebhookRoutes(api);
   },

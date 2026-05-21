@@ -183,6 +183,274 @@ describe("resolveWebhooksPluginConfig", () => {
     });
   });
 
+  it("normalizes agent dispatch routes with prompt templates and skills", () => {
+    const routes = resolveWebhooksPluginConfig({
+      pluginConfig: {
+        routes: {
+          pagerduty: {
+            sessionKey: "agent:main:main",
+            auth: {
+              mode: "bearer",
+              secret: "agent-secret",
+            },
+            dispatch: {
+              mode: "agent",
+              agent: {
+                messageTemplate: "Triage incident {incident.id}: {incident.title}",
+                deliveryMode: "none",
+                delayMs: 50,
+                nameTemplate: "incident-{incident.id}",
+                tagTemplate: "incident:{incident.id}",
+                agentId: "sre-agent",
+              },
+            },
+            skills: ["incident-response"],
+          },
+        },
+      },
+    });
+
+    expect(routes).toEqual([
+      {
+        routeId: "pagerduty",
+        path: "/plugins/webhooks/pagerduty",
+        dispatchMode: "agent",
+        sessionKey: "agent:main:main",
+        auth: {
+          mode: "bearer",
+          secret: "agent-secret",
+          prefix: "Bearer",
+        },
+        event: {},
+        skills: ["incident-response"],
+        agent: {
+          messageTemplate: "Triage incident {incident.id}: {incident.title}",
+          deliveryMode: "none",
+          delayMs: 50,
+          nameTemplate: "incident-{incident.id}",
+          tagTemplate: "incident:{incident.id}",
+          agentId: "sre-agent",
+        },
+      },
+    ]);
+  });
+
+  it("normalizes Hermes-style string delivery routes", () => {
+    const routes = resolveWebhooksPluginConfig({
+      pluginConfig: {
+        routes: {
+          alerts: {
+            dispatch: { mode: "deliver" },
+            auth: {
+              mode: "header",
+              header: "x-alert-token",
+              secret: "deliver-secret",
+            },
+            prompt: "Alert {alert.id}: {alert.summary}",
+            deliver: "telegram",
+            deliver_extra: {
+              chat_id: "{alert.chat_id}",
+              message_thread_id: "{alert.topic_id}",
+              silent: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(routes).toEqual([
+      {
+        routeId: "alerts",
+        path: "/plugins/webhooks/alerts",
+        dispatchMode: "deliver",
+        auth: {
+          mode: "header",
+          header: "x-alert-token",
+          secret: "deliver-secret",
+        },
+        event: {},
+        prompt: "Alert {alert.id}: {alert.summary}",
+        delivery: {
+          mode: "channel",
+          channel: "telegram",
+          to: "{alert.chat_id}",
+          threadId: "{alert.topic_id}",
+          silent: true,
+        },
+      },
+    ]);
+  });
+
+  it("allows Hermes-style string delivery routes to use the channel default target", () => {
+    const routes = resolveWebhooksPluginConfig({
+      pluginConfig: {
+        routes: {
+          alerts: {
+            dispatch: { mode: "deliver" },
+            auth: {
+              mode: "bearer",
+              secret: "deliver-secret",
+            },
+            prompt: "Alert {alert.id}: {alert.summary}",
+            deliver: "telegram",
+          },
+        },
+      },
+    });
+
+    expect(routes[0]).toMatchObject({
+      routeId: "alerts",
+      dispatchMode: "deliver",
+      delivery: {
+        mode: "channel",
+        channel: "telegram",
+      },
+    });
+  });
+
+  it("normalizes object delivery routes", () => {
+    const routes = resolveWebhooksPluginConfig({
+      pluginConfig: {
+        routes: {
+          chatops: {
+            deliver_only: true,
+            auth: {
+              mode: "bearer",
+              secret: "deliver-secret",
+            },
+            deliver: {
+              channel: "slack",
+              to: "C123",
+              accountId: "workspace-a",
+              threadId: "{thread.ts}",
+              textTemplate: "Build {build.id} finished",
+            },
+          },
+        },
+      },
+    });
+
+    expect(routes[0]).toMatchObject({
+      routeId: "chatops",
+      dispatchMode: "deliver",
+      delivery: {
+        mode: "channel",
+        channel: "slack",
+        to: "C123",
+        accountId: "workspace-a",
+        threadId: "{thread.ts}",
+        textTemplate: "Build {build.id} finished",
+      },
+    });
+  });
+
+  it("normalizes object delivery routes with Hermes-style extra fields", () => {
+    const routes = resolveWebhooksPluginConfig({
+      pluginConfig: {
+        routes: {
+          chatops: {
+            dispatch: { mode: "deliver" },
+            auth: {
+              mode: "bearer",
+              secret: "deliver-secret",
+            },
+            deliver: {
+              channel: "telegram",
+            },
+            deliverExtra: {
+              chatId: "{chat.id}",
+              thread_id: "{message.thread}",
+              account_id: "workspace-a",
+              silent: false,
+            },
+          },
+        },
+      },
+    });
+
+    expect(routes[0]).toMatchObject({
+      routeId: "chatops",
+      dispatchMode: "deliver",
+      delivery: {
+        mode: "channel",
+        channel: "telegram",
+        to: "{chat.id}",
+        threadId: "{message.thread}",
+        accountId: "workspace-a",
+        silent: false,
+      },
+    });
+  });
+
+  it("normalizes templated TaskFlow dispatch routes", () => {
+    const routes = resolveWebhooksPluginConfig({
+      pluginConfig: {
+        routes: {
+          jira: {
+            sessionKey: "agent:main:main",
+            secret: "taskflow-secret",
+            prompt: "Investigate ticket {issue.key}: {issue.summary}",
+            dispatch: {
+              mode: "taskflow",
+              taskflow: {
+                goalTemplate: "Ticket {issue.key}",
+                currentStep: "queued from Jira",
+                status: "queued",
+                notifyPolicy: "state_changes",
+                runTask: {
+                  taskTemplate: "Start on {issue.key}",
+                  runIdTemplate: "{webhookEvent.id}",
+                  labelTemplate: "{issue.key}",
+                  status: "queued",
+                  preferMetadata: true,
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(routes[0]).toMatchObject({
+      routeId: "jira",
+      dispatchMode: "taskflow",
+      prompt: "Investigate ticket {issue.key}: {issue.summary}",
+      taskflow: {
+        goalTemplate: "Ticket {issue.key}",
+        currentStep: "queued from Jira",
+        status: "queued",
+        notifyPolicy: "state_changes",
+        runTask: {
+          enabled: true,
+          runtime: "acp",
+          taskTemplate: "Start on {issue.key}",
+          runIdTemplate: "{webhookEvent.id}",
+          labelTemplate: "{issue.key}",
+          status: "queued",
+          preferMetadata: true,
+        },
+      },
+    });
+  });
+
+  it("rejects delivery routes without a delivery target", () => {
+    expect(() =>
+      resolveWebhooksPluginConfig({
+        pluginConfig: {
+          routes: {
+            broken: {
+              dispatch: { mode: "deliver" },
+              auth: {
+                mode: "bearer",
+                secret: "deliver-secret",
+              },
+            },
+          },
+        },
+      }),
+    ).toThrow(/deliver is required/i);
+  });
+
   it("rejects duplicate normalized paths", () => {
     expect(() =>
       resolveWebhooksPluginConfig({
