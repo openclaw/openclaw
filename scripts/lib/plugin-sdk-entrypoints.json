@@ -159,6 +159,7 @@
   "direct-dm-access",
   "direct-dm-guard-policy",
   "discord",
+  "discord-interactions",
   "mattermost",
   "matrix",
   "device-bootstrap",
