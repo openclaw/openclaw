@@ -30,6 +30,7 @@ export const DEFAULT_HEARTBEAT_ACK_MAX_CHARS = 300;
  * - Markdown ATX headers (`#`, `##`, ...)
  * - Markdown fence markers such as ``` or ```markdown
  * - Empty list item stubs (`- `, `- [ ]`, `* `, `+ `)
+ * - List-item markdown links inside a "Related" section (default template footer)
  *
  * Note: A missing file returns false (not effectively empty) so the LLM can still
  * decide what to do. This function is only for when the file exists but has no content.
@@ -43,33 +44,41 @@ export function isHeartbeatContentEffectivelyEmpty(content: string | undefined |
   }
 
   const lines = content.split("\n");
+  let previousLineWasRelatedHeader = false;
   for (const line of lines) {
     const trimmed = line.trim();
     // Skip empty lines
     if (!trimmed) {
+      previousLineWasRelatedHeader = false;
       continue;
     }
     // Skip markdown header lines (# followed by space or EOL, ## etc)
     // This intentionally does NOT skip lines like "#TODO" or "#hashtag" which might be content
     // (Those aren't valid markdown headers - ATX headers require space after #)
     if (/^#+(\s|$)/.test(trimmed)) {
+      // Track "## Related" headers (the default template footer section)
+      previousLineWasRelatedHeader = /^##\s+Related\s*$/.test(trimmed);
       continue;
     }
     // Skip empty markdown list items like "- [ ]" or "* [ ]" or just "- "
     if (/^[-*+]\s*(\[[\sXx]?\]\s*)?$/.test(trimmed)) {
+      previousLineWasRelatedHeader = false;
       continue;
     }
     // Ignore markdown fence markers that were added for doc rendering but do
     // not carry task semantics in the workspace template body.
     if (/^```[A-Za-z0-9_-]*$/.test(trimmed)) {
+      previousLineWasRelatedHeader = false;
       continue;
     }
-    // Skip standalone markdown link lines (doc links like "- [Heartbeat config](/gateway/config-agents)")
-    if (
-      /^[-*+]\s+\[[^\]]+\]\([^)]+\)\s*$/.test(trimmed) ||
-      /^\[[^\]]+\]\([^)]+\)\s*$/.test(trimmed)
-    ) {
-      continue;
+    // Skip list-item markdown links only when they appear inside a "Related"
+    // section footer (e.g. the default template's "## Related\n- [Heartbeat config](/...)").
+    // This preserves user-authored link-only tasks that are not in a Related section.
+    if (previousLineWasRelatedHeader) {
+      if (/^[-*+]\s+\[[^\]]+\]\([^)]+\)\s*$/.test(trimmed)) {
+        previousLineWasRelatedHeader = false;
+        continue;
+      }
     }
     // Found a non-empty, non-comment line - there's actionable content
     return false;
