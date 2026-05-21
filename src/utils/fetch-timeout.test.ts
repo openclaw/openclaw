@@ -1,5 +1,10 @@
 import { Stream } from "openai/streaming";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  onDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  type DiagnosticEventPayload,
+} from "../infra/diagnostic-events.js";
 
 const warn = vi.hoisted(() => vi.fn());
 
@@ -36,11 +41,13 @@ function requireWarnRecord(callIndex: number): Record<string, unknown> {
 describe("buildTimeoutAbortSignal", () => {
   beforeEach(() => {
     warn.mockClear();
+    resetDiagnosticEventsForTest();
     vi.useFakeTimers();
   });
 
   afterEach(() => {
     vi.useRealTimers();
+    resetDiagnosticEventsForTest();
   });
 
   it("logs when its own timeout aborts the signal", async () => {
@@ -106,6 +113,8 @@ describe("buildTimeoutAbortSignal", () => {
   });
 
   it("annotates timeout logs when the timer fires late", async () => {
+    const diagnosticEvents: DiagnosticEventPayload[] = [];
+    const unsubscribe = onDiagnosticEvent((event) => diagnosticEvents.push(event));
     vi.setSystemTime(0);
     const { cleanup } = buildTimeoutAbortSignal({
       timeoutMs: 25,
@@ -123,7 +132,19 @@ describe("buildTimeoutAbortSignal", () => {
     expect(String(record.consoleMessage)).toContain(
       "timer delayed 2000ms, likely event-loop starvation",
     );
+    expect(diagnosticEvents).toContainEqual(
+      expect.objectContaining({
+        type: "fetch.timeout.delayed",
+        timeoutMs: 25,
+        elapsedMs: 2025,
+        timerDelayMs: 2000,
+        eventLoopDelayHint: "timer delayed 2000ms, likely event-loop starvation",
+        operation: "unit-test",
+        url: "https://example.com/v1/responses",
+      }),
+    );
 
+    unsubscribe();
     cleanup();
   });
 

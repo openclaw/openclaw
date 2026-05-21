@@ -1,3 +1,4 @@
+import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const log = createSubsystemLogger("fetch-timeout");
@@ -87,6 +88,17 @@ function abortDueToTimeout(
     ...(operation ? { operation } : {}),
     ...(sanitizedUrl ? { url: sanitizedUrl } : {}),
   });
+  if (eventLoopDelayHint) {
+    emitDiagnosticEvent({
+      type: "fetch.timeout.delayed",
+      timeoutMs,
+      elapsedMs,
+      timerDelayMs: delayMs,
+      eventLoopDelayHint,
+      ...(operation ? { operation } : {}),
+      ...(sanitizedUrl ? { url: sanitizedUrl } : {}),
+    });
+  }
   const error = new Error("request timed out");
   error.name = "TimeoutError";
   controller.abort(error);
