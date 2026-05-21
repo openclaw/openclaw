@@ -267,6 +267,7 @@ function isLocalBaseUrl(baseUrl: string): boolean {
       host === "::1" ||
       host === "::ffff:7f00:1" ||
       host === "::ffff:127.0.0.1" ||
+      host === "host.orb.internal" ||
       host.endsWith(".local") ||
       isPrivateIpv4Host(host)
     );
