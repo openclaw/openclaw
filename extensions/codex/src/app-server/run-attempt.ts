@@ -114,6 +114,10 @@ import {
   buildCodexNativeHookRelayConfig,
   CODEX_NATIVE_HOOK_RELAY_EVENTS,
 } from "./native-hook-relay.js";
+import {
+  describeCodexNotificationCorrelation,
+  isCodexNotificationForTurn,
+} from "./notification-correlation.js";
 import { buildCodexPluginAppCacheKey } from "./plugin-app-cache-key.js";
 import {
   buildCodexPluginThreadConfig,
@@ -266,6 +270,10 @@ function emitCodexAppServerEvent(
 
 function collectTerminalAssistantText(result: EmbeddedRunAttemptResult): string {
   return result.assistantTexts.join("\n\n").trim();
+}
+
+function hasCodexAppServerPotentialSideEffectEvidence(result: EmbeddedRunAttemptResult): boolean {
+  return result.replayMetadata.hadPotentialSideEffects;
 }
 
 type CodexSteeringQueueOptions = {
@@ -1996,6 +2004,17 @@ export async function runCodexAppServerAttempt(
     }
   };
   const enqueueNotification = (notification: CodexServerNotification): Promise<void> => {
+    const correlation = describeCodexNotificationCorrelation(notification, {
+      threadId: thread.threadId,
+      ...(turnId ? { turnId } : {}),
+    });
+    embeddedAgentLog.debug("codex app-server raw notification received", correlation);
+    if (notification.method === "turn/completed" && correlation.matchesActiveTurn === false) {
+      embeddedAgentLog.warn(
+        "codex app-server turn/completed did not match active turn",
+        correlation,
+      );
+    }
     if (!projector || !turnId) {
       userInputBridge?.handleNotification(notification);
       pendingNotifications.push(notification);
@@ -2177,6 +2196,9 @@ export async function runCodexAppServerAttempt(
           callId: call.callId,
           tool: call.tool,
           success: protocolResponse.success,
+          terminalType:
+            response.diagnosticTerminalType ?? (protocolResponse.success ? "completed" : "error"),
+          sideEffectEvidence: response.sideEffectEvidence === true,
           contentItems: protocolResponse.contentItems,
         });
         if (shouldEmitDynamicToolProgress) {
@@ -2662,6 +2684,23 @@ export async function runCodexAppServerAttempt(
     }
     const finalPromptErrorSource =
       timedOut || clientClosedPromptError ? "prompt" : result.promptErrorSource;
+    const completionIdleTimeoutHadPotentialSideEffects =
+      hasCodexAppServerPotentialSideEffectEvidence(result);
+    const promptTimeoutOutcome =
+      turnCompletionIdleTimedOut &&
+      (result.itemLifecycle.completedCount > 0 || completionIdleTimeoutHadPotentialSideEffects)
+        ? {
+            message: completionIdleTimeoutHadPotentialSideEffects
+              ? CODEX_APP_SERVER_MISSING_TERMINAL_EVENT_SIDE_EFFECT_USER_MESSAGE
+              : CODEX_APP_SERVER_MISSING_TERMINAL_EVENT_USER_MESSAGE,
+            ...(completionIdleTimeoutHadPotentialSideEffects
+              ? {
+                  replayInvalid: true,
+                  livenessState: "abandoned" as const,
+                }
+              : {}),
+          }
+        : undefined;
     recordCodexTrajectoryCompletion(trajectoryRecorder, {
       attempt: params,
       result,
@@ -2769,6 +2808,7 @@ export async function runCodexAppServerAttempt(
       aborted: finalAborted,
       promptError: finalPromptError,
       promptErrorSource: finalPromptErrorSource,
+      ...(promptTimeoutOutcome ? { promptTimeoutOutcome } : {}),
       systemPromptReport,
     };
   } finally {
@@ -2904,7 +2944,7 @@ async function handleDynamicToolCallWithTimeout(params: {
   const abortFromRun = () => {
     const message = "OpenClaw dynamic tool call aborted.";
     controller.abort(params.signal.reason ?? new Error(message));
-    resolveAbort?.(failedDynamicToolResponse(message));
+    resolveAbort?.(failedDynamicToolResponse(message, { sideEffectEvidence: true }));
   };
   const abortPromise = new Promise<CodexDynamicToolCallResponse>((resolve) => {
     resolveAbort = resolve;
@@ -2920,7 +2960,9 @@ async function handleDynamicToolCallWithTimeout(params: {
         ...timeoutDetails.meta,
         consoleMessage: timeoutDetails.consoleMessage,
       });
-      resolve(failedDynamicToolResponse(timeoutDetails.responseMessage));
+      resolve(
+        failedDynamicToolResponse(timeoutDetails.responseMessage, { sideEffectEvidence: true }),
+      );
     }, timeoutMs);
     timeout.unref?.();
   });
@@ -2936,7 +2978,9 @@ async function handleDynamicToolCallWithTimeout(params: {
       timeoutPromise,
     ]);
   } catch (error) {
-    return failedDynamicToolResponse(error instanceof Error ? error.message : String(error));
+    return failedDynamicToolResponse(error instanceof Error ? error.message : String(error), {
+      sideEffectEvidence: true,
+    });
   } finally {
     if (timeout) {
       clearTimeout(timeout);
@@ -2949,7 +2993,10 @@ async function handleDynamicToolCallWithTimeout(params: {
   }
 }
 
-function failedDynamicToolResponse(message: string): CodexDynamicToolCallResponse {
+function failedDynamicToolResponse(
+  message: string,
+  options?: { sideEffectEvidence?: boolean },
+): CodexDynamicToolCallResponse {
   const response: CodexDynamicToolCallResponse = {
     contentItems: [{ type: "inputText", text: message }],
     success: false,
@@ -2959,6 +3006,13 @@ function failedDynamicToolResponse(message: string): CodexDynamicToolCallRespons
     enumerable: false,
     value: "error",
   });
+  if (options?.sideEffectEvidence === true) {
+    Object.defineProperty(response, "sideEffectEvidence", {
+      configurable: true,
+      enumerable: false,
+      value: true,
+    });
+  }
   return response;
 }
 
@@ -4135,10 +4189,7 @@ function isTurnNotification(
   threadId: string,
   turnId: string,
 ): boolean {
-  if (!isJsonObject(value)) {
-    return false;
-  }
-  return readString(value, "threadId") === threadId && readNotificationTurnId(value) === turnId;
+  return isCodexNotificationForTurn(value, threadId, turnId);
 }
 
 function isCurrentThreadTurnRequestParams(
@@ -4187,21 +4238,16 @@ function isTerminalTurnStatus(status: string | undefined): boolean {
   return status === "completed" || status === "interrupted" || status === "failed";
 }
 
-function readNotificationTurnId(record: JsonObject): string | undefined {
-  return readString(record, "turnId") ?? readNestedTurnId(record);
-}
-
-function readNestedTurnId(record: JsonObject): string | undefined {
-  const turn = record.turn;
-  return isJsonObject(turn) ? readString(turn, "id") : undefined;
-}
-
 const CODEX_TURN_ABORT_MARKER_START = "<turn_aborted>";
 const CODEX_TURN_ABORT_MARKER_END = "</turn_aborted>";
 const CODEX_INTERRUPTED_USER_GUIDANCE =
   "The user interrupted the previous turn on purpose. Any running unified exec processes may still be running in the background. If any tools/commands were aborted, they may have partially executed.";
 const CODEX_INTERRUPTED_DEVELOPER_GUIDANCE =
   "The previous turn was interrupted on purpose. Any running unified exec processes may still be running in the background. If any tools/commands were aborted, they may have partially executed.";
+const CODEX_APP_SERVER_MISSING_TERMINAL_EVENT_USER_MESSAGE =
+  "Codex stopped before confirming the turn was complete. The response may be incomplete; retry if needed.";
+const CODEX_APP_SERVER_MISSING_TERMINAL_EVENT_SIDE_EFFECT_USER_MESSAGE =
+  "Codex stopped before confirming the turn was complete. Some work may already have been performed; verify the current state before retrying.";
 
 function isCodexTurnAbortMarkerNotification(
   notification: CodexServerNotification,
