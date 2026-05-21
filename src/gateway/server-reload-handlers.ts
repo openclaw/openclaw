@@ -306,20 +306,28 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     const state = params.getState();
     const nextState = { ...state };
 
-    if (
-      plan.changedPaths.some(
-        (path) =>
-          path === "models" ||
-          path.startsWith("models.") ||
-          path === "agents.defaults.model" ||
-          path.startsWith("agents.defaults.model.") ||
-          path === "agents.defaults.models" ||
-          path.startsWith("agents.defaults.models."),
-      )
-    ) {
+    const modelConfigChanged = plan.changedPaths.some(
+      (path) =>
+        path === "models" ||
+        path.startsWith("models.") ||
+        path === "agents.defaults.model" ||
+        path.startsWith("agents.defaults.model.") ||
+        path === "agents.defaults.models" ||
+        path.startsWith("agents.defaults.models."),
+    );
+    if (modelConfigChanged) {
       resetModelCatalogCache();
-      clearCurrentProviderAuthState();
       markGatewayModelCatalogStaleForReload();
+    }
+    // Provider-auth answers come from env/synthetic/plugin sources as well
+    // as the model catalog, so plugin config changes (e.g. plugins.entries.*
+    // env vars or synthetic-auth wiring) can also flip the answer. Clear
+    // and rewarm whenever a model OR plugin path mutates.
+    if (
+      modelConfigChanged ||
+      plan.changedPaths.some((path) => path === "plugins" || path.startsWith("plugins."))
+    ) {
+      clearCurrentProviderAuthState();
       void warmCurrentProviderAuthState(nextConfig).catch((err) => {
         params.logReload.warn(`provider auth state rewarm failed: ${String(err)}`);
       });
