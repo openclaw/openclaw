@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { collectConfiguredAgentHarnessRuntimes } from "../../../agents/harness-runtimes.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { resolvePluginMigrationProvider } from "../../../plugins/migration-provider-runtime.js";
 
 export type CodexNativeAssetHit = {
   kind: "skill" | "plugin" | "config" | "hooks";
@@ -181,6 +182,10 @@ function plural(count: number, singular: string): string {
   return `${count} ${singular}${count === 1 ? "" : "s"}`;
 }
 
+function canResolveCodexMigrationProvider(cfg: OpenClawConfig): boolean {
+  return resolvePluginMigrationProvider({ providerId: "codex", cfg }) !== undefined;
+}
+
 export async function collectCodexNativeAssetWarnings(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -196,12 +201,15 @@ export async function collectCodexNativeAssetWarnings(params: {
     plural(countKind(hits, "config"), "config file"),
     plural(countKind(hits, "hooks"), "hook file"),
   ];
+  const migrationGuidance = canResolveCodexMigrationProvider(params.cfg)
+    ? "- Run `openclaw migrate codex --dry-run` to inventory them. Applying that migration copies skills into the current OpenClaw agent workspace; Codex plugins, hooks, and config stay manual-review only."
+    : "- Run `openclaw doctor --fix` first so OpenClaw can repair the configured Codex plugin install, then rerun `openclaw migrate codex --dry-run` to inventory them. Applying that migration copies skills into the current OpenClaw agent workspace; Codex plugins, hooks, and config stay manual-review only.";
   return [
     [
       "- Personal Codex CLI assets were found, but native Codex-mode OpenClaw agents use isolated per-agent Codex homes.",
       `- Sources: ${resolveCodexHome(env)} and ${resolvePersonalAgentSkillsDir(env)} (${counts.join(", ")}).`,
       "- These assets will not be loaded by the Codex app-server child unless you intentionally promote them.",
-      "- Run `openclaw migrate codex --dry-run` to inventory them. Applying that migration copies skills into the current OpenClaw agent workspace; Codex plugins, hooks, and config stay manual-review only.",
+      migrationGuidance,
     ].join("\n"),
   ];
 }
