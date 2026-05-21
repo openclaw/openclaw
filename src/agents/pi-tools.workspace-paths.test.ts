@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { configureFsSafePython, getFsSafePythonConfig } from "@openclaw/fs-safe/config";
 import { describe, expect, it, vi } from "vitest";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
@@ -22,6 +23,16 @@ async function withTempDir<T>(prefix: string, fn: (dir: string) => Promise<T>) {
     return await fn(dir);
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
+  }
+}
+
+async function withFsSafePythonAuto<T>(fn: () => Promise<T>): Promise<T> {
+  const previous = getFsSafePythonConfig();
+  configureFsSafePython({ mode: "auto", pythonPath: previous.pythonPath });
+  try {
+    return await fn();
+  } finally {
+    configureFsSafePython(previous);
   }
 }
 
@@ -223,6 +234,66 @@ describe("workspace path resolution", () => {
       }
     });
   });
+
+  it.runIf(process.platform !== "win32")(
+    "allows workspaceOnly write and edit through symlinked directory parents inside the workspace",
+    async () => {
+      await withFsSafePythonAuto(async () => {
+        await withTempDir("openclaw-ws-symlink-write-", async (workspaceDir) => {
+          const realDir = path.join(workspaceDir, "oc_system", "memory");
+          const linkDir = path.join(workspaceDir, "memory");
+          await fs.mkdir(realDir, { recursive: true });
+          await fs.symlink(path.relative(workspaceDir, realDir), linkDir, "dir");
+
+          const cfg: OpenClawConfig = { tools: { fs: { workspaceOnly: true } } };
+          const tools = createOpenClawCodingTools({ workspaceDir, config: cfg });
+          const { writeTool, editTool } = expectReadWriteEditTools(tools);
+
+          await writeTool.execute("ws-write-symlink-parent", {
+            path: path.join("memory", "note.md"),
+            content: "through symlink",
+          });
+          expect(await fs.readFile(path.join(realDir, "note.md"), "utf8")).toBe("through symlink");
+
+          await editTool.execute("ws-edit-symlink-parent", {
+            path: path.join("memory", "note.md"),
+            edits: [{ oldText: "symlink", newText: "canonical parent" }],
+          });
+          expect(await fs.readFile(path.join(realDir, "note.md"), "utf8")).toBe(
+            "through canonical parent",
+          );
+        });
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rejects workspaceOnly writes through symlinked directory parents outside the workspace",
+    async () => {
+      await withTempDir("openclaw-ws-symlink-escape-", async (rootDir) => {
+        const workspaceDir = path.join(rootDir, "workspace");
+        const outsideDir = path.join(rootDir, "outside");
+        const linkDir = path.join(workspaceDir, "escape");
+        await fs.mkdir(workspaceDir, { recursive: true });
+        await fs.mkdir(outsideDir, { recursive: true });
+        await fs.symlink(outsideDir, linkDir, "dir");
+
+        const cfg: OpenClawConfig = { tools: { fs: { workspaceOnly: true } } };
+        const tools = createOpenClawCodingTools({ workspaceDir, config: cfg });
+        const { writeTool } = expectReadWriteEditTools(tools);
+
+        await expect(
+          writeTool.execute("ws-write-symlink-escape", {
+            path: path.join("escape", "outside.md"),
+            content: "outside",
+          }),
+        ).rejects.toThrow(/outside|escape|workspace root|sandbox root/i);
+        await expect(fs.readFile(path.join(outsideDir, "outside.md"), "utf8")).rejects.toThrow(
+          /ENOENT/,
+        );
+      });
+    },
+  );
 
   it("allows workspaceOnly reads for resolved skill roots without allowing other filesystem access", async () => {
     await withTempDir("openclaw-skill-read-", async (rootDir) => {

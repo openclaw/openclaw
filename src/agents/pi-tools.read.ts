@@ -4,7 +4,11 @@ import { URL } from "node:url";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { createEditTool, createReadTool, createWriteTool } from "@earendil-works/pi-coding-agent";
 import { isWindowsDrivePath } from "../infra/archive-path.js";
-import { root as fsRoot, FsSafeError } from "../infra/fs-safe.js";
+import {
+  canonicalPathFromExistingAncestor,
+  root as fsRoot,
+  FsSafeError,
+} from "../infra/fs-safe.js";
 import { expandHomePrefix, resolveOsHomeDir } from "../infra/home-dir.js";
 import { hasEncodedFileUrlSeparator, trySafeFileURLToPath } from "../infra/local-file-access.js";
 import { detectMime } from "../media/mime.js";
@@ -860,6 +864,45 @@ async function writeHostFile(absolutePath: string, content: string) {
   await fs.writeFile(resolved, content, "utf-8");
 }
 
+function assertCanonicalWorkspaceRelativePath(params: {
+  root: string;
+  candidate: string;
+  relative: string;
+}): string {
+  if (
+    params.relative === "" ||
+    params.relative === "." ||
+    params.relative === ".." ||
+    params.relative.startsWith("../") ||
+    params.relative.startsWith("..\\") ||
+    path.isAbsolute(params.relative)
+  ) {
+    throw new Error(`Path escapes workspace root (${params.root}): ${params.candidate}`);
+  }
+  return params.relative;
+}
+
+async function toCanonicalParentWorkspaceRelativePath(
+  root: string,
+  absolutePath: string,
+): Promise<string> {
+  const relative = toRelativeWorkspacePath(root, absolutePath);
+  const resolvedRoot = path.resolve(root);
+  const lexicalTarget = path.resolve(resolvedRoot, relative);
+  await assertSandboxPath({ filePath: lexicalTarget, cwd: resolvedRoot, root: resolvedRoot });
+
+  const [canonicalRoot, canonicalParent] = await Promise.all([
+    fs.realpath(resolvedRoot),
+    canonicalPathFromExistingAncestor(path.dirname(lexicalTarget)),
+  ]);
+  const canonicalTarget = path.join(canonicalParent, path.basename(lexicalTarget));
+  return assertCanonicalWorkspaceRelativePath({
+    root: canonicalRoot,
+    candidate: absolutePath,
+    relative: path.relative(canonicalRoot, canonicalTarget),
+  });
+}
+
 function createHostWriteOperations(root: string, options?: { workspaceOnly?: boolean }) {
   const workspaceOnly = options?.workspaceOnly ?? false;
 
@@ -884,7 +927,7 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
       await fs.mkdir(resolved, { recursive: true });
     },
     writeFile: async (absolutePath: string, content: string) => {
-      const relative = toRelativeWorkspacePath(root, absolutePath);
+      const relative = await toCanonicalParentWorkspaceRelativePath(root, absolutePath);
       await (await rootPromise).write(relative, content, { mkdir: true });
     },
   } as const;
@@ -917,7 +960,7 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
       return safeRead.buffer;
     },
     writeFile: async (absolutePath: string, content: string) => {
-      const relative = toRelativeWorkspacePath(root, absolutePath);
+      const relative = await toCanonicalParentWorkspaceRelativePath(root, absolutePath);
       await (await rootPromise).write(relative, content, { mkdir: true });
     },
     access: async (absolutePath: string) => {
