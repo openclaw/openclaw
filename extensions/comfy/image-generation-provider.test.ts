@@ -1,3 +1,4 @@
+import { resolveProviderCapabilities } from "openclaw/plugin-sdk/image-generation";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   setComfyFetchGuardForTesting,
@@ -670,5 +671,119 @@ describe("comfy image-generation provider", () => {
     };
     expect(node10.inputs.width).toBe(512);
     expect(node10.inputs.height).toBe(512);
+  });
+
+  describe("dynamic capabilities", () => {
+    it("capabilities property is a function", () => {
+      const provider = buildComfyImageGenerationProvider();
+      expect(typeof provider.capabilities).toBe("function");
+    });
+
+    it("reports supportsSize and supportsAspectRatio true when top-level dimensions config is present", () => {
+      const provider = buildComfyImageGenerationProvider();
+      const caps = resolveProviderCapabilities(provider.capabilities, {
+        cfg: buildComfyConfig({
+          workflow: { "6": { inputs: { text: "" } } },
+          promptNodeId: "6",
+          dimensions: { widthNodeId: "10", heightNodeId: "10" },
+        }),
+      });
+      expect(caps.generate.supportsSize).toBe(true);
+      expect(caps.generate.supportsAspectRatio).toBe(true);
+    });
+
+    it("reports supportsSize and supportsAspectRatio true when dimensions config is nested under image", () => {
+      const provider = buildComfyImageGenerationProvider();
+      const caps = resolveProviderCapabilities(provider.capabilities, {
+        cfg: buildComfyConfig({
+          image: {
+            workflow: { "6": { inputs: { text: "" } } },
+            promptNodeId: "6",
+            dimensions: { widthNodeId: "10", heightNodeId: "10" },
+          },
+        }),
+      });
+      expect(caps.generate.supportsSize).toBe(true);
+      expect(caps.generate.supportsAspectRatio).toBe(true);
+    });
+
+    it("reports supportsSize and supportsAspectRatio false when no dimensions config", () => {
+      const provider = buildComfyImageGenerationProvider();
+      const caps = resolveProviderCapabilities(provider.capabilities, {
+        cfg: buildComfyConfig({
+          workflow: { "6": { inputs: { text: "" } } },
+          promptNodeId: "6",
+        }),
+      });
+      expect(caps.generate.supportsSize).toBe(false);
+      expect(caps.generate.supportsAspectRatio).toBe(false);
+    });
+
+    it("reports supportsSize and supportsAspectRatio false when dimensions config lacks required node ids", () => {
+      const provider = buildComfyImageGenerationProvider();
+      const caps = resolveProviderCapabilities(provider.capabilities, {
+        cfg: buildComfyConfig({
+          workflow: { "6": { inputs: { text: "" } } },
+          promptNodeId: "6",
+          dimensions: { baseSize: 512 }, // missing widthNodeId / heightNodeId
+        }),
+      });
+      expect(caps.generate.supportsSize).toBe(false);
+      expect(caps.generate.supportsAspectRatio).toBe(false);
+    });
+
+    it("reports supportsSize and supportsAspectRatio false when no ctx is provided", () => {
+      const provider = buildComfyImageGenerationProvider();
+      const caps = resolveProviderCapabilities(provider.capabilities);
+      expect(caps.generate.supportsSize).toBe(false);
+      expect(caps.generate.supportsAspectRatio).toBe(false);
+    });
+
+    it("edit capabilities are always present and static regardless of config", () => {
+      const provider = buildComfyImageGenerationProvider();
+      const caps = resolveProviderCapabilities(provider.capabilities);
+      expect(caps.edit.enabled).toBe(true);
+      expect(caps.edit.maxCount).toBe(1);
+      expect(caps.edit.maxInputImages).toBe(1);
+      expect(caps.edit.supportsSize).toBe(false);
+      expect(caps.edit.supportsAspectRatio).toBe(false);
+    });
+  });
+
+  describe("unsupported-override reporting", () => {
+    it("size and aspectRatio are silently skipped (not injected) when dimensions nodes are absent", async () => {
+      setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
+      mockLocalWorkflowResponses("ignored-dims-1");
+
+      const provider = buildComfyImageGenerationProvider();
+      // No dimensions config → capabilities will report supportsSize=false.
+      // The normalization layer would strip these before calling generateImage,
+      // but even if called directly, they must not modify the workflow.
+      await provider.generateImage({
+        provider: "comfy",
+        model: "workflow",
+        prompt: "test",
+        size: "512x768",
+        aspectRatio: "3:2",
+        cfg: buildComfyConfig({
+          workflow: {
+            "6": { inputs: { text: "" } },
+            "10": { inputs: { width: 1024, height: 1024 } },
+            "9": { inputs: {} },
+          },
+          promptNodeId: "6",
+          outputNodeId: "9",
+          // no dimensions config
+        }),
+      });
+
+      const body = parseJsonBody(1);
+      const node10 = (body.prompt as Record<string, unknown>)["10"] as {
+        inputs: { width: number; height: number };
+      };
+      // workflow node must remain at its original values
+      expect(node10.inputs.width).toBe(1024);
+      expect(node10.inputs.height).toBe(1024);
+    });
   });
 });

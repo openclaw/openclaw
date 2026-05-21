@@ -25,11 +25,11 @@ export function buildComfyImageGenerationProvider(): ImageGenerationProvider {
         agentDir,
         capability: "image",
       }),
-    capabilities: {
+    capabilities: (ctx) => ({
       generate: {
         maxCount: 1,
-        supportsSize: isComfyDimensionsConfigured(cfg),
-        supportsAspectRatio: isComfyDimensionsConfigured(cfg),
+        supportsSize: isComfyDimensionsConfigured({ cfg: ctx?.cfg, capability: "image" }),
+        supportsAspectRatio: isComfyDimensionsConfigured({ cfg: ctx?.cfg, capability: "image" }),
         supportsResolution: false,
       },
       edit: {
@@ -40,7 +40,7 @@ export function buildComfyImageGenerationProvider(): ImageGenerationProvider {
         supportsAspectRatio: false,
         supportsResolution: false,
       },
-    },
+    }),
     async generateImage(req: ImageGenerationRequest) {
       if ((req.inputImages?.length ?? 0) > 1) {
         throw new Error("Comfy image generation currently supports at most one reference image");

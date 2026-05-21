@@ -709,12 +709,34 @@ export function isComfyCapabilityConfigured(params: {
   });
 }
 
-export function isComfyDimensionsConfigured(params: { cfg?: OpenClawConfig }): boolean {
-  const config = getComfyConfig(params.cfg);
-  if (config.widthNodeId && config.heightNodeId) {
-    return true;
+function resolveComfyDimensionConfig(
+  capabilityConfig: ComfyProviderConfig,
+): ComfyDimensionConfig | undefined {
+  const dims = capabilityConfig.dimensions;
+  if (!isRecord(dims)) {
+    return undefined;
   }
-  return false;
+  const widthNodeId = normalizeOptionalString(dims.widthNodeId);
+  const heightNodeId = normalizeOptionalString(dims.heightNodeId);
+  if (!widthNodeId || !heightNodeId) {
+    return undefined;
+  }
+  return {
+    widthNodeId,
+    widthInputName: normalizeOptionalString(dims.widthInputName),
+    heightNodeId,
+    heightInputName: normalizeOptionalString(dims.heightInputName),
+    baseSize: readConfigInteger(dims as ComfyProviderConfig, "baseSize"),
+  };
+}
+
+export function isComfyDimensionsConfigured(params: {
+  cfg?: OpenClawConfig;
+  capability: ComfyCapability;
+}): boolean {
+  const config = getComfyConfig(params.cfg);
+  const capabilityConfig = getComfyCapabilityConfig(config, params.capability);
+  return resolveComfyDimensionConfig(capabilityConfig) !== undefined;
 }
 
 export async function runComfyWorkflow(params: {
@@ -743,14 +765,15 @@ export async function runComfyWorkflow(params: {
   const outputNodeId = normalizeOptionalString(capabilityConfig.outputNodeId);
 
   // Calculate and inject dimensions from aspectRatio/size if configured
-  if (params.aspectRatio || params.size) {
+  const dimensionConfig = resolveComfyDimensionConfig(capabilityConfig);
+  if ((params.aspectRatio || params.size) && dimensionConfig) {
     const dims = calculateDimensions({
       aspectRatio: params.aspectRatio,
       size: params.size,
-      baseConfig: capabilityConfig.dimensions,
+      baseConfig: dimensionConfig,
     });
     if (dims) {
-      setWorkflowDimensionInput(workflow, capabilityConfig.dimensions, dims.width, dims.height);
+      setWorkflowDimensionInput(workflow, dimensionConfig, dims.width, dims.height);
     }
   }
   const pollIntervalMs =
