@@ -1023,6 +1023,7 @@ export async function runEmbeddedPiAgent(
       let lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
       let autoCompactionCount = 0;
       let lastCompactionTokensAfter: number | undefined;
+      let lastContextBudgetStatus: EmbeddedPiAgentMeta["contextBudgetStatus"];
       let runLoopIterations = 0;
       let overloadProfileRotations = 0;
       let planningOnlyRetryAttempts = 0;
@@ -1622,6 +1623,9 @@ export async function runEmbeddedPiAgent(
             attempt.compactionTokensAfter > 0
           ) {
             lastCompactionTokensAfter = Math.floor(attempt.compactionTokensAfter);
+          }
+          if (attempt.contextBudgetStatus) {
+            lastContextBudgetStatus = attempt.contextBudgetStatus;
           }
           const activeErrorContext = resolveActiveErrorContext({
             provider,
@@ -2627,6 +2631,7 @@ export async function runEmbeddedPiAgent(
             usage: usageMeta.usage,
             lastCallUsage: usageMeta.lastCallUsage,
             promptTokens: usageMeta.promptTokens,
+            ...(lastContextBudgetStatus ? { contextBudgetStatus: lastContextBudgetStatus } : {}),
             compactionCount: autoCompactionCount > 0 ? autoCompactionCount : undefined,
             compactionTokensAfter: lastCompactionTokensAfter,
           };

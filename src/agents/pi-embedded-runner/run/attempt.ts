@@ -389,6 +389,7 @@ import {
 } from "./midturn-precheck.js";
 import {
   PREEMPTIVE_OVERFLOW_ERROR_TEXT,
+  buildPrePromptContextBudgetStatus,
   formatPrePromptPrecheckLog,
   shouldPreemptivelyCompactBeforePrompt,
 } from "./preemptive-compaction.js";
@@ -3320,6 +3321,7 @@ export async function runEmbeddedAttempt(
       let cacheBreak: PromptCacheBreak | null = null;
       let promptCache: EmbeddedRunAttemptResult["promptCache"];
       let lastCallUsage: NormalizedUsage | undefined;
+      let contextBudgetStatus: EmbeddedRunAttemptResult["contextBudgetStatus"];
       let compactionOccurredThisAttempt = false;
       let finalPromptText: string | undefined;
       if (params.replyOperation) {
@@ -4012,6 +4014,20 @@ export async function runEmbeddedAttempt(
                 }),
               });
           if (preemptiveCompaction) {
+            contextBudgetStatus = buildPrePromptContextBudgetStatus({
+              result: preemptiveCompaction,
+              provider: params.provider,
+              modelId: params.modelId,
+              messageCount: activeSession.messages.length,
+              contextTokenBudget,
+              reserveTokens,
+              ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+              ...(contextEnginePromptAuthority === "preassembly_may_overflow" &&
+              unwindowedContextEngineMessagesForPrecheck
+                ? { unwindowedMessageCount: unwindowedContextEngineMessagesForPrecheck.length }
+                : {}),
+              ...(params.sessionFile ? { sessionFile: params.sessionFile } : {}),
+            });
             log.debug(
               formatPrePromptPrecheckLog({
                 result: preemptiveCompaction,
@@ -4818,6 +4834,7 @@ export async function runEmbeddedAttempt(
         ),
         attemptUsage,
         promptCache,
+        contextBudgetStatus,
         compactionCount: getCompactionCount(),
         compactionTokensAfter: getLastCompactionTokensAfter(),
         // Client tool calls detected (OpenResponses hosted tools).

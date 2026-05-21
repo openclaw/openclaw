@@ -1,5 +1,9 @@
 import type { HeartbeatToolResponse } from "../../auto-reply/heartbeat-tool-response.js";
-import type { CliSessionBinding, SessionSystemPromptReport } from "../../config/sessions/types.js";
+import type {
+  CliSessionBinding,
+  SessionContextBudgetStatus,
+  SessionSystemPromptReport,
+} from "../../config/sessions/types.js";
 import type { DiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import type { FallbackAttempt } from "../model-fallback.types.js";
 import type {
@@ -50,6 +54,7 @@ export type EmbeddedPiAgentMeta = {
     cacheWrite?: number;
     total?: number;
   };
+  contextBudgetStatus?: SessionContextBudgetStatus;
 };
 
 export type TraceAttempt = {

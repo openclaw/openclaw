@@ -623,6 +623,75 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
+  it("persists estimated context budget status without marking stale usage fresh", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-context-budget-status";
+      const sessionId = "test-context-budget-status-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          totalTokens: 21225,
+          totalTokensFresh: true,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      const result: EmbeddedPiRunResult = {
+        meta: {
+          durationMs: 500,
+          agentMeta: {
+            sessionId,
+            provider: "minimax",
+            model: "MiniMax-M2.7",
+            contextBudgetStatus: {
+              schemaVersion: 1,
+              source: "pre-prompt-estimate",
+              updatedAt: 123,
+              provider: "minimax",
+              model: "MiniMax-M2.7",
+              route: "fits",
+              shouldCompact: false,
+              estimatedPromptTokens: 18_000,
+              contextTokenBudget: 32_000,
+              promptBudgetBeforeReserve: 28_000,
+              reserveTokens: 4_000,
+              effectiveReserveTokens: 4_000,
+              remainingPromptBudgetTokens: 10_000,
+              overflowTokens: 0,
+              toolResultReducibleChars: 0,
+              messageCount: 4,
+              unwindowedMessageCount: 4,
+            },
+          },
+        },
+      };
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "minimax",
+        defaultModel: "MiniMax-M2.7",
+        result,
+      });
+
+      expect(sessionStore[sessionKey]?.totalTokens).toBe(21225);
+      expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(false);
+      expect(sessionStore[sessionKey]?.contextBudgetStatus).toMatchObject({
+        source: "pre-prompt-estimate",
+        estimatedPromptTokens: 18_000,
+        contextTokenBudget: 32_000,
+      });
+
+      const persisted = loadSessionStore(storePath);
+      expect(persisted[sessionKey]?.contextBudgetStatus?.estimatedPromptTokens).toBe(18_000);
+    });
+  });
+
   it("does not treat CLI cumulative usage as a fresh context snapshot", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {
