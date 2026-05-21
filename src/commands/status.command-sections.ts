@@ -133,7 +133,11 @@ export function buildStatusLastHeartbeatValue(params: {
   const accountLabel = params.lastHeartbeat.accountId
     ? `account ${params.lastHeartbeat.accountId}`
     : null;
-  return [params.lastHeartbeat.status, `${age} ago`, channel, accountLabel]
+  const hint =
+    params.lastHeartbeat.status === "skipped" && params.lastHeartbeat.hint
+      ? params.lastHeartbeat.hint
+      : null;
+  return [params.lastHeartbeat.status, `${age} ago`, channel, accountLabel, hint]
     .filter(Boolean)
     .join(" · ");
 }

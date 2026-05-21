@@ -1919,6 +1919,7 @@ export async function runHeartbeatOnce(opts: {
       emitHeartbeatEvent({
         status: "skipped",
         reason: delivery.reason ?? "no-target",
+        hint: delivery.hint,
         preview: previewText?.slice(0, 200),
         durationMs: Date.now() - startedAt,
         hasMedia: mediaUrls.length > 0,

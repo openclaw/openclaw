@@ -12,6 +12,10 @@ export type HeartbeatEventPayload = {
   durationMs?: number;
   hasMedia?: boolean;
   reason?: string;
+  /** Human-readable companion to `reason` (e.g. `delivery disabled by configuration`
+   * for the intentional `target-none` skip path). Optional; clients should
+   * fall back to `reason` when absent. */
+  hint?: string;
   /** The channel this heartbeat was sent to. */
   channel?: string;
   /** Whether the message was silently suppressed (showOk: false). */
