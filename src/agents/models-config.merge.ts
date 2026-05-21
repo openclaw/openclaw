@@ -36,6 +36,57 @@ function getProviderModelId(model: unknown): string {
 }
 
 /**
+ * Provider IDs that are shipped as first-party / built-in catalog entries by
+ * OpenClaw's bundled extension plugins.  The input-capability default logic is
+ * restricted to these providers so that user-defined custom provider proxies
+ * (which may reuse a well-known model name such as "claude-3-5-sonnet" but
+ * route to an endpoint that never declared image support) are never silently
+ * upgraded to image-capable.  Custom providers MUST opt in explicitly by
+ * setting `input: ["text", "image"]` on the model entry.
+ *
+ * Derived from the `PROVIDER_ID` constants in each extension's index.ts and the
+ * `hookAliases` registered in the built-in provider plugins.
+ */
+export const BUILT_IN_PROVIDER_IDS: ReadonlySet<string> = new Set([
+  "anthropic",
+  "openai",
+  "azure-openai",
+  "azure-openai-responses",
+  "google",
+  "google-vertex",
+  "google-antigravity",
+  "google-gemini-cli",
+  "anthropic-vertex",
+  "amazon-bedrock",
+  "groq",
+  "openrouter",
+  "together",
+  "fireworks",
+  "deepseek",
+  "mistral",
+  "qwen",
+  "xai",
+  "deepinfra",
+  "cerebras",
+  "moonshot",
+  "kimi",
+  "volcengine",
+  "nvidia",
+  "minimax",
+  "zai",
+  "codex",
+  "kilocode",
+  "opencode",
+  "opencode-go",
+  "arcee",
+  "venice",
+  "chutes",
+  "byteplus",
+  "stepfun",
+  "perplexity",
+]);
+
+/**
  * Default `input` modalities for explicit model entries that don't specify
  * one and have no matching implicit (discovery) entry to inherit from.
  *
@@ -74,10 +125,19 @@ function explicitEntryLooksVisionCapable(id: string): boolean {
 
 function applyInputDefaultForExplicitOnlyEntry(
   entry: ModelDefinitionConfig,
+  opts?: { builtInProvider?: boolean },
 ): ModelDefinitionConfig {
   const id = getProviderModelId(entry);
   const existing = (entry as { input?: unknown }).input;
   if (Array.isArray(existing)) {
+    return entry;
+  }
+  // Only infer image capability for known built-in provider catalogs.  A
+  // custom provider endpoint that happens to use a well-known model ID (e.g.
+  // "claude-3-5-sonnet" behind a company proxy) must declare
+  // `input: ["text", "image"]` explicitly; we must not silently forward
+  // attachments to endpoints that never advertised image support.
+  if (!opts?.builtInProvider) {
     return entry;
   }
   if (!explicitEntryLooksVisionCapable(id)) {
@@ -89,6 +149,7 @@ function applyInputDefaultForExplicitOnlyEntry(
 export function mergeProviderModels(
   implicit: ProviderConfig,
   explicit: ProviderConfig,
+  opts?: { providerKey?: string },
 ): ProviderConfig {
   const implicitModels = Array.isArray(implicit.models) ? implicit.models : [];
   const explicitModels = Array.isArray(explicit.models) ? explicit.models : [];
@@ -100,9 +161,13 @@ export function mergeProviderModels(
     explicit.headers && typeof explicit.headers === "object" && !Array.isArray(explicit.headers)
       ? explicit.headers
       : undefined;
+  const builtInProvider =
+    opts?.providerKey !== undefined
+      ? BUILT_IN_PROVIDER_IDS.has(normalizeOptionalString(opts.providerKey) ?? "")
+      : false;
   if (implicitModels.length === 0) {
     const explicitWithDefaults = explicitModels.map((m) =>
-      applyInputDefaultForExplicitOnlyEntry(m),
+      applyInputDefaultForExplicitOnlyEntry(m, { builtInProvider }),
     );
     return {
       ...implicit,
@@ -134,7 +199,7 @@ export function mergeProviderModels(
     seen.add(id);
     const implicitModel = implicitById.get(id);
     if (!implicitModel) {
-      return applyInputDefaultForExplicitOnlyEntry(explicitModel);
+      return applyInputDefaultForExplicitOnlyEntry(explicitModel, { builtInProvider });
     }
 
     const contextWindow = resolvePreferredTokenLimit({
@@ -204,6 +269,7 @@ export function mergeProviders(params: {
     out[providerKey] = mergeProviderModels(
       implicit ?? ({ models: [] } as unknown as ProviderConfig),
       explicit,
+      { providerKey },
     );
   }
   return out;
