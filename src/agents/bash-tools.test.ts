@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
@@ -106,7 +104,12 @@ vi.mock("../process/supervisor/index.js", () => {
   };
 
   const immediate = () => new Promise<void>((resolve) => setImmediate(resolve));
-  const readEnvPath = (env?: NodeJS.ProcessEnv) => env?.PATH ?? env?.Path ?? "";
+  const readPathKey = (env?: NodeJS.ProcessEnv) =>
+    env && "Path" in env && !("PATH" in env) ? "Path" : "PATH";
+  const readEnvPath = (env?: NodeJS.ProcessEnv) => env?.[readPathKey(env)] ?? "";
+  const writeEnvPath = (env: NodeJS.ProcessEnv, value: string) => {
+    env[readPathKey(env)] = value;
+  };
   const extractCommand = (input: SpawnInput) => input.ptyCommand ?? input.argv?.at(-1) ?? "";
   const splitCommands = (command: string) => {
     const commands: string[] = [];
@@ -118,7 +121,18 @@ vi.mock("../process/supervisor/index.js", () => {
     }
     return commands;
   };
-  const stdoutForSegment = (segment: string, env?: NodeJS.ProcessEnv) => {
+  const applySegmentShellEffects = (segment: string, env: NodeJS.ProcessEnv) => {
+    if (segment === 'export PATH="${OPENCLAW_PREPEND_PATH}${PATH:+:$PATH}"') {
+      const prepend = env.OPENCLAW_PREPEND_PATH ?? "";
+      const current = readEnvPath(env);
+      writeEnvPath(env, `${prepend}${current ? `:${current}` : ""}`);
+      return;
+    }
+    if (segment === "unset OPENCLAW_PREPEND_PATH") {
+      delete env.OPENCLAW_PREPEND_PATH;
+    }
+  };
+  const stdoutForSegment = (segment: string, env: NodeJS.ProcessEnv) => {
     if (segment === "echo $PATH" || segment === "Write-Output $env:PATH") {
       return `${readEnvPath(env)}\n`;
     }
@@ -131,10 +145,15 @@ vi.mock("../process/supervisor/index.js", () => {
     return "";
   };
 
-  const commandOutput = (command: string, env?: NodeJS.ProcessEnv) =>
-    splitCommands(command)
-      .map((segment) => stdoutForSegment(segment, env))
+  const commandOutput = (command: string, env?: NodeJS.ProcessEnv) => {
+    const shellEnv = { ...(env ?? {}) };
+    return splitCommands(command)
+      .map((segment) => {
+        applySegmentShellEffects(segment, shellEnv);
+        return stdoutForSegment(segment, shellEnv);
+      })
       .join("");
+  };
 
   return {
     getProcessSupervisor: () => ({
@@ -848,37 +867,21 @@ describe("exec PATH handling", () => {
     }
   });
 
-  it("protects POSIX prepended paths from RC file overrides", async () => {
+  it("protects POSIX prepended paths from shell startup overrides", async () => {
     if (isWin) {
       return;
     }
-    const basePath = "/usr/bin";
+    process.env.PATH = "/evil/bin:/usr/bin";
     const tool = createTestExecTool({ pathPrepend: ["/custom/bin"] });
 
-    // Set up a mock "login shell" RC file that attempts to prepend its own path (/evil/bin)
-    // to verify that our prepend logic still forces our paths to be absolute first.
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-"));
-    const rcFile = path.join(tempDir, "evil-rc.sh");
-    fs.writeFileSync(rcFile, "export PATH=/evil/bin:$PATH\n", "utf8");
+    const result = await executeExecCommand(tool, COMMAND_PRINT_PATH);
 
-    try {
-      process.env.PATH = basePath;
-      // Force bash to load our mock RC file before running the command
-      process.env.BASH_ENV = rcFile;
+    const text = readNormalizedTextContent(result.content);
+    const entries = text.split(path.delimiter);
 
-      const result = await executeExecCommand(tool, COMMAND_PRINT_PATH);
-      
-      const text = readNormalizedTextContent(result.content);
-      const entries = text.split(path.delimiter);
-      
-      // The Shell executes the RC file first during initialization (putting /evil/bin first).
-      // Then our wrapper executes inside the shell, which securely re-prepends /custom/bin.
-      // Final order must be: /custom/bin -> /evil/bin -> /usr/bin
-      expect(entries).toEqual(["/custom/bin", "/evil/bin", "/usr/bin"]);
-    } finally {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-      delete process.env.BASH_ENV;
-    }
+    // Simulate a shell startup file prepending /evil/bin before the command runs.
+    // The exec wrapper must still restore configured pathPrepend entries to the front.
+    expect(entries).toEqual(["/custom/bin", "/evil/bin", "/usr/bin"]);
   });
 });
 

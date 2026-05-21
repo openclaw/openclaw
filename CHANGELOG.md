@@ -53,6 +53,7 @@ Docs: https://docs.openclaw.ai
 - Auth/OAuth: skip the refresh adapter when a stored OAuth credential has no refresh token so agent turns fail fast on missing-key instead of waiting on the 120s refresh timeout. Thanks @romneyda.
 - Auth/Codex: load legacy OAuth sidecar credentials in the embedded runner's secrets-runtime auth loaders so Telegram replies, cron-triggered turns, and other isolated sub-agent lanes can reach the existing #83312 refresh-and-rewrite migration instead of failing with `No API key found for provider "openai-codex"` until the user runs `openclaw doctor`. Thanks @Totalsolutionsync and @romneyda.
 - Codex/failover: classify `deactivated_workspace` as a permanent auth failure so configured fallback models can advance when a Codex workspace is deactivated. (#55893) Thanks @litang9.
+- Exec: keep configured `tools.exec.pathPrepend` entries ahead of user shell startup PATH changes on POSIX gateway runs. (#81403) Thanks @medns.
 
 ## 2026.5.20
 
