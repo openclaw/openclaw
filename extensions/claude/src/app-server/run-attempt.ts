@@ -22,8 +22,15 @@ import {
   buildEmbeddedAttemptToolRunContext,
   embeddedAgentLog,
   emitAgentEvent,
+  hasBeforeToolCallPolicy,
+  isSubagentSessionKey,
+  normalizeAgentRuntimeTools,
   resolveAgentDir,
+  resolveAttemptSpawnWorkspaceDir,
   resolveBootstrapContextForRun,
+  resolveSandboxContext,
+  supportsModelTools,
+  type AgentMessage,
   type EmbeddedRunAttemptParams,
   type EmbeddedRunAttemptResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -97,10 +104,37 @@ export async function runClaudeAppServerAttempt(
   let unregisterServerRequest: (() => void) | undefined;
 
   try {
-    // 1. Materialize OpenClaw's tool registry for this turn.
-    const tools = await buildTools(params);
+    // 1. Resolve sandbox + effective workspace once so dynamic-tool
+    //    materialization, thread/start cwd, and runTurn cwd all agree on
+    //    where filesystem access is allowed. Mirrors codex/run-attempt.ts:791.
+    const resolvedWorkspace = params.workspaceDir ?? process.cwd();
+    const sandboxSessionKey =
+      params.sandboxSessionKey?.trim() || params.sessionKey?.trim() || params.sessionId;
+    const sandbox = await resolveSandboxContext({
+      config: params.config,
+      sessionKey: sandboxSessionKey,
+      workspaceDir: resolvedWorkspace,
+    });
+    const effectiveWorkspace =
+      sandbox?.enabled && sandbox.workspaceAccess !== "rw"
+        ? sandbox.workspaceDir
+        : resolvedWorkspace;
+    // Apply codex-equivalent approval-policy promotion: when BeforeToolCall
+    // hooks are registered AND user hasn't explicitly opted into a permissive
+    // policy, promote "never" → "untrusted" so hook policy gets a chance to
+    // gate destructive actions. User's explicit allow-all opt-in via env
+    // (OPENCLAW_CLAUDE_APP_SERVER_ALLOW_ALL) or config is preserved as-is.
+    cfg.appServer.approvalPolicy = resolveClaudeAppServerApprovalPolicy({
+      approvalPolicy: cfg.appServer.approvalPolicy,
+      pluginConfig: options.pluginConfig,
+      env: process.env,
+      shouldPromote: hasBeforeToolCallPolicy(),
+    });
 
-    // 2. Project to DynamicToolSpec[] + register the server→client tool-call bridge.
+    // 2. Materialize OpenClaw's tool registry for this turn.
+    const tools = await buildTools(params, { sandbox, resolvedWorkspace, effectiveWorkspace });
+
+    // 3. Project to DynamicToolSpec[] + register the server→client tool-call bridge.
     const bridge = createClaudeDynamicToolBridge({
       tools,
       signal: ac.signal,
@@ -116,7 +150,7 @@ export async function runClaudeAppServerAttempt(
     });
     unregisterServerRequest = registerToolCallHandler(client, bridge);
 
-    // 3. Build developerInstructions ONCE per turn (cheap; reads bootstrap
+    // 4. Build developerInstructions ONCE per turn (cheap; reads bootstrap
     //    files). Hash to detect SOUL.md / workspace changes; if the hash
     //    differs from the existing binding, ensureThread rotates to a fresh
     //    thread so the new persona reaches the model. The SDK pins
@@ -124,8 +158,12 @@ export async function runClaudeAppServerAttempt(
     //    Claude-Code-preset systemPrompt for the thread's lifetime.
     const developerInstructions = await buildClaudeDeveloperInstructions(params);
     const developerInstructionsFingerprint = fingerprintString(developerInstructions);
+    // Tool-catalog fingerprint so we can rotate when the projected tool set
+    // changes (plugin enabled/disabled/upgraded, allowlist edited, sandbox
+    // toggled). Codex does the same at thread-lifecycle.ts:102/219.
+    const dynamicToolsFingerprint = fingerprintDynamicTools(bridge.specs);
 
-    // 4. Ensure thread binding for this session.
+    // 5. Ensure thread binding for this session.
     const threadId = await ensureThread(
       client,
       params,
@@ -133,9 +171,10 @@ export async function runClaudeAppServerAttempt(
       bridge,
       developerInstructions,
       developerInstructionsFingerprint,
+      dynamicToolsFingerprint,
     );
 
-    // 5. Run the turn. Per-turn user prompt is just the user's actual message;
+    // 6. Run the turn. Per-turn user prompt is just the user's actual message;
     //    we don't duplicate workspace context into the transcript.
     const accumulated = await runTurn(client, params, threadId, cfg, ac);
 
@@ -163,9 +202,24 @@ export async function runClaudeAppServerAttempt(
       }
     }
 
-    // 6. Populate result.
+    // 7. Populate result.
     result.assistantTexts = accumulated.assistantTexts;
     result.toolMetas = accumulated.toolMetas;
+    // Populate messagesSnapshot + lastAssistant so the auto-reply dispatcher
+    // and provenance message_sending hook chain (which key on these fields,
+    // not on emitted events) have a transcript to operate on. Without this,
+    // claude-driven replies bypass the footer-injection path entirely. See
+    // codex/run-attempt.ts:2629 (mirrorTranscriptBestEffort) for the codex
+    // analog.
+    result.messagesSnapshot = buildMessagesSnapshot(accumulated);
+    // lastAssistant must be the actual AssistantMessage object, not just
+    // text — the auto-reply dispatcher reads stopReason/usage off it.
+    const lastAssistantMessage = [...result.messagesSnapshot]
+      .reverse()
+      .find((m) => (m as { role?: string }).role === "assistant");
+    if (lastAssistantMessage) {
+      result.lastAssistant = lastAssistantMessage as typeof result.lastAssistant;
+    }
     // accumulated.reasoning is collected for diagnostics but not surfaced
     // via replayMetadata (codex's EmbeddedRunReplayMetadata is strictly typed).
     result.itemLifecycle = {
@@ -224,13 +278,41 @@ export async function runClaudeAppServerAttempt(
 
 // ─── Tool materialization ───────────────────────────────────────────────────
 
-async function buildTools(params: EmbeddedRunAttemptParams) {
+async function buildTools(
+  params: EmbeddedRunAttemptParams,
+  context: {
+    sandbox: Awaited<ReturnType<typeof resolveSandboxContext>>;
+    resolvedWorkspace: string;
+    effectiveWorkspace: string;
+  },
+) {
+  // Gate the entire tool surface up front, mirroring codex/run-attempt.ts:3246.
+  // Without this, a turn with `disableTools` set or running on a model that
+  // doesn't support tools would still receive the full openclaw catalog —
+  // policy bypass.
+  if (params.disableTools || !supportsModelTools(params.model)) {
+    return [];
+  }
+  const modelHasVision = params.model.input?.includes("image") ?? false;
   const agentDir =
     params.agentDir ?? resolveAgentDir(params.config ?? {}, params.agentId ?? "default");
-  const tools = createOpenClawCodingTools({
+  const allTools = createOpenClawCodingTools({
+    agentId: params.agentId,
     ...buildEmbeddedAttemptToolRunContext(params),
+    exec: {
+      ...(params.execOverrides ?? {}),
+      elevated: params.bashElevated,
+    },
+    sandbox: context.sandbox,
+    agentAccountId: params.agentAccountId,
+    spawnedBy: params.spawnedBy,
+    allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
     agentDir,
-    workspaceDir: params.workspaceDir,
+    workspaceDir: context.effectiveWorkspace,
+    spawnWorkspaceDir: resolveAttemptSpawnWorkspaceDir({
+      sandbox: context.sandbox,
+      resolvedWorkspace: context.resolvedWorkspace,
+    }),
     sessionId: params.sessionId,
     runId: params.runId,
     config: params.config,
@@ -240,8 +322,12 @@ async function buildTools(params: EmbeddedRunAttemptParams) {
     modelId: params.modelId,
     modelApi: params.model.api,
     modelContextWindowTokens: params.model.contextWindow,
-    modelHasVision: params.model.input?.includes("image") ?? false,
+    modelHasVision,
     currentChannelId: params.currentChannelId,
+    currentThreadTs: params.currentThreadTs,
+    currentMessageId: params.currentMessageId,
+    replyToMode: params.replyToMode,
+    hasRepliedRef: params.hasRepliedRef,
     senderId: params.senderId ?? undefined,
     senderName: params.senderName ?? undefined,
     senderUsername: params.senderUsername ?? undefined,
@@ -254,8 +340,80 @@ async function buildTools(params: EmbeddedRunAttemptParams) {
     groupChannel: params.groupChannel,
     groupSpace: params.groupSpace,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+    requireExplicitMessageTarget:
+      params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
+    disableMessageTool: params.disableMessageTool,
+    forceMessageTool: shouldForceMessageTool(params),
+    enableHeartbeatTool: params.trigger === "heartbeat",
+    forceHeartbeatTool: params.trigger === "heartbeat",
   });
-  return tools;
+  // Vision filter — when the model can see images and the turn carries
+  // inbound images, the agent doesn't need a separate `image` tool to inspect
+  // them. Mirrors extensions/codex/src/app-server/vision-tools.ts.
+  const visionFiltered = filterToolsForVisionInputs(allTools, {
+    modelHasVision,
+    hasInboundImages: (params.images?.length ?? 0) > 0,
+  });
+  // Allowlist filter — honor params.toolsAllow. Adds `message` to the allow
+  // set when `sourceReplyDeliveryMode === "message_tool_only"` forces it.
+  // Mirrors codex/run-attempt.ts:3335.
+  const toolsAllow = includeForcedMessageToolAllow(params.toolsAllow, params);
+  const allowFiltered = filterToolsForAllowlist(visionFiltered, toolsAllow);
+  // Runtime-plan normalization — applies the agent's runtime plan (model-
+  // family overrides, schema rewrites, etc.) to the final tool set. This is
+  // the same plugin-sdk helper codex uses at run-attempt.ts:3337.
+  return normalizeAgentRuntimeTools({
+    runtimePlan: params.runtimePlan,
+    tools: allowFiltered,
+    provider: params.provider,
+    config: params.config,
+    workspaceDir: context.effectiveWorkspace,
+    env: process.env,
+    modelId: params.modelId,
+    modelApi: params.model.api,
+    model: params.model,
+  });
+}
+
+// ─── Local helpers replicated from codex's run-attempt (cannot cross-import
+// from another extension per the plugins boundary; logic is small) ─────────
+
+function filterToolsForVisionInputs<T extends { name?: string }>(
+  tools: T[],
+  params: { modelHasVision: boolean; hasInboundImages: boolean },
+): T[] {
+  if (!params.modelHasVision || !params.hasInboundImages) return tools;
+  return tools.filter((tool) => tool.name !== "image");
+}
+
+function filterToolsForAllowlist<T extends { name: string }>(
+  tools: T[],
+  toolsAllow?: string[],
+): T[] {
+  if (!toolsAllow) return tools;
+  if (toolsAllow.length === 0) return [];
+  if (toolsAllow.some((n) => n.trim() === "*")) return tools;
+  const allow = new Set(toolsAllow.map((n) => n.trim()).filter(Boolean));
+  return tools.filter((tool) => allow.has(tool.name));
+}
+
+function includeForcedMessageToolAllow(
+  toolsAllow: string[] | undefined,
+  params: EmbeddedRunAttemptParams,
+): string[] | undefined {
+  if (
+    !shouldForceMessageTool(params) ||
+    toolsAllow === undefined ||
+    toolsAllow.some((n) => n.trim() === "*")
+  ) {
+    return toolsAllow;
+  }
+  if (toolsAllow.length === 0) return ["message"];
+  return toolsAllow.includes("message") ? toolsAllow : [...toolsAllow, "message"];
+}
+
+function shouldForceMessageTool(params: EmbeddedRunAttemptParams): boolean {
+  return params.sourceReplyDeliveryMode === "message_tool_only";
 }
 
 // ─── Server-request handler registration ────────────────────────────────────
@@ -282,6 +440,7 @@ async function ensureThread(
   bridge: ClaudeDynamicToolBridge,
   developerInstructions: string,
   developerInstructionsFingerprint: string,
+  dynamicToolsFingerprint: string,
 ): Promise<string> {
   const sessionFile = params.sessionFile;
   const existing = sessionFile ? await readClaudeAppServerBinding(sessionFile) : null;
@@ -290,6 +449,10 @@ async function ensureThread(
   //  - approvalPolicy changed (server pins it at thread/start)
   //  - developerInstructions hash changed (SOUL.md edited, workspace files
   //    changed, plugin guidance updated, etc.)
+  //  - dynamicToolsFingerprint changed (tool catalog changed: plugin
+  //    enabled/disabled/upgraded, allowlist edited, sandbox toggled).
+  //    Pre-rebuild bindings without the field are grandfathered (no
+  //    rotation) to avoid disrupting existing threads.
   let rotationReason: string | undefined;
   if (existing) {
     if (existing.approvalPolicy !== cfg.appServer.approvalPolicy) {
@@ -299,6 +462,11 @@ async function ensureThread(
       existing.developerInstructionsFingerprint !== developerInstructionsFingerprint
     ) {
       rotationReason = "developerInstructions changed (SOUL.md or workspace files edited)";
+    } else if (
+      existing.dynamicToolsFingerprint &&
+      existing.dynamicToolsFingerprint !== dynamicToolsFingerprint
+    ) {
+      rotationReason = "dynamic tool catalog changed (plugin set, allowlist, or sandbox shifted)";
     }
   }
 
@@ -346,6 +514,7 @@ async function ensureThread(
       approvalsReviewer: "user",
       sandbox: cfg.appServer.sandbox,
       developerInstructionsFingerprint,
+      dynamicToolsFingerprint,
     };
     await writeClaudeAppServerBinding(sessionFile, binding);
   }
@@ -381,6 +550,9 @@ type Accumulator = {
   toolMetas: Array<{ toolName: string; meta?: string }>;
   reasoning: string;
   itemCount: number;
+  // Captured tool calls + results for messagesSnapshot construction.
+  // Keyed by item id so item/completed can pair with its earlier item/started.
+  toolCalls: Map<string, { name: string; args?: unknown; result?: unknown; isError?: boolean }>;
 };
 
 async function runTurn(
@@ -390,15 +562,23 @@ async function runTurn(
   cfg: ResolvedConfig,
   ac: AbortController,
 ): Promise<Accumulator> {
+  const effort = resolveReasoningEffort(params.thinkLevel, params.modelId);
   const turnParams: TurnStartParams = {
     threadId,
     input: buildInput(params),
     cwd: params.workspaceDir,
     model: params.modelId,
+    ...(effort ? { effort } : {}),
   };
   const startResp = await client.request<{ turn: Turn }>("turn/start", turnParams, ac.signal);
   const turnId = startResp.turn.id;
-  const acc: Accumulator = { assistantTexts: [], toolMetas: [], reasoning: "", itemCount: 0 };
+  const acc: Accumulator = {
+    assistantTexts: [],
+    toolMetas: [],
+    reasoning: "",
+    itemCount: 0,
+    toolCalls: new Map(),
+  };
   const textParts: string[] = [];
   const reasoningParts: string[] = [];
 
@@ -459,6 +639,11 @@ async function runTurn(
             if (isTool) {
               const toolName = extractItemName(item) ?? "unknown";
               acc.toolMetas.push({ toolName });
+              // Stash for messagesSnapshot construction; item/completed will
+              // fill in result/status.
+              const itemId = typeof item.id === "string" ? item.id : undefined;
+              if (itemId)
+                acc.toolCalls.set(itemId, { name: toolName, args: item.arguments ?? item.input });
               // Mirror codex's stream:"tool" phase:"start" emission so Discord/
               // Slack/etc. can render "🛠️ <tool> <preview>" stubs in real time
               // instead of waiting for the whole turn to finish.
@@ -470,6 +655,15 @@ async function runTurn(
             }
           } else {
             if (isTool) {
+              const itemId = typeof item.id === "string" ? item.id : undefined;
+              if (itemId) {
+                const prev = acc.toolCalls.get(itemId);
+                acc.toolCalls.set(itemId, {
+                  ...(prev ?? { name: extractItemName(item) ?? "unknown" }),
+                  result: item.result,
+                  isError: item.status === "failed" || item.error != null,
+                });
+              }
               emitToolEvent(params, "result", item);
             } else {
               emitItemEvent(params, "end", item);
@@ -626,6 +820,162 @@ function emitReasoningDeltaEvent(
     });
   } catch (err) {
     embeddedAgentLog.debug("claude-app-server: emit reasoning event threw", { error: err });
+  }
+}
+
+// ─── Reasoning effort + dynamic-tools fingerprint + approval-promotion ─────
+
+/**
+ * Map openclaw thinkLevel onto the SDK's effort enum. Claude Code's
+ * `claude_code` preset accepts none/minimal/low/medium/high/xhigh; the model
+ * itself ignores unsupported values so a `null` return drops the field.
+ * Mirrors codex/thread-lifecycle.ts:923.
+ */
+function resolveReasoningEffort(
+  thinkLevel: EmbeddedRunAttemptParams["thinkLevel"],
+  _modelId: string,
+): "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | null {
+  // openclaw ThinkLevel includes "off" / "adaptive" / "max" which don't
+  // map to the SDK's effort enum — drop them (server treats null as "use
+  // model default").
+  if (thinkLevel === "off") return "none";
+  if (
+    thinkLevel === "minimal" ||
+    thinkLevel === "low" ||
+    thinkLevel === "medium" ||
+    thinkLevel === "high" ||
+    thinkLevel === "xhigh"
+  ) {
+    return thinkLevel;
+  }
+  return null;
+}
+
+/**
+ * Hash the dynamic tool catalog so we can rotate the thread when the set
+ * shifts (plugin enable/disable/upgrade, allowlist edit, sandbox toggle).
+ * Spec descriptions are excluded — they're not part of the contract that
+ * the model has cached. Mirrors codex/thread-lifecycle.ts:764.
+ */
+function fingerprintDynamicTools(
+  specs: ReadonlyArray<{ name: string; inputSchema: unknown }>,
+): string {
+  const stable = specs
+    .map((s) => ({ name: s.name, schema: stabilizeJson(s.inputSchema) }))
+    .toSorted((a, b) => a.name.localeCompare(b.name));
+  return createHash("sha256").update(JSON.stringify(stable), "utf8").digest("hex");
+}
+
+function stabilizeJson(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stabilizeJson);
+  if (value && typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(obj).toSorted()) out[key] = stabilizeJson(obj[key]);
+    return out;
+  }
+  return value;
+}
+
+/**
+ * Promote a default "never" approval policy to "untrusted" when openclaw has
+ * BeforeToolCall hooks registered and the user hasn't explicitly opted into
+ * a permissive mode via config or env. Mirrors codex/run-attempt.ts:482
+ * (resolveCodexAppServerForOpenClawToolPolicy).
+ *
+ * Without this, registering a tool-policy plugin in openclaw has no effect
+ * on Claude turns because the SDK runs at bypassPermissions regardless.
+ */
+function resolveClaudeAppServerApprovalPolicy(args: {
+  approvalPolicy: ApprovalPolicy;
+  pluginConfig: unknown;
+  env: NodeJS.ProcessEnv;
+  shouldPromote: boolean;
+}): ApprovalPolicy {
+  if (!args.shouldPromote || args.approvalPolicy !== "never") return args.approvalPolicy;
+  // Respect user opt-in to permissive mode.
+  if (args.env.OPENCLAW_CLAUDE_APP_SERVER_ALLOW_ALL === "1") return args.approvalPolicy;
+  const cfg = (args.pluginConfig ?? {}) as { appServer?: Record<string, unknown> };
+  const explicitMode = cfg.appServer?.approvalPolicy !== undefined;
+  const explicitEnv = typeof args.env.OPENCLAW_CLAUDE_APP_SERVER_APPROVAL_POLICY === "string";
+  if (explicitMode || explicitEnv) return args.approvalPolicy;
+  return "untrusted";
+}
+
+// ─── messagesSnapshot construction ─────────────────────────────────────────
+// Builds a best-effort transcript from accumulated turn data so the auto-
+// reply dispatcher and message_sending hook chain have a snapshot to consume.
+// Codex builds this via its event-projector (extensions/codex/src/app-server/
+// event-projector.ts) with full provider/usage metadata; we provide the
+// minimum that downstream consumers actually key on (role + content +
+// timestamp + tool linkage).
+
+function buildMessagesSnapshot(acc: Accumulator): AgentMessage[] {
+  const now = Date.now();
+  const messages: AgentMessage[] = [];
+  // Tool calls in encounter order (Map preserves insertion). Each becomes
+  // an AssistantMessage with a toolCall content block + a paired
+  // ToolResultMessage.
+  let toolSeq = 0;
+  for (const [toolCallId, call] of acc.toolCalls) {
+    toolSeq += 1;
+    const toolUseAssistant = {
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          toolCallId,
+          toolName: call.name,
+          args: call.args ?? {},
+        },
+      ],
+      api: "messages",
+      provider: "anthropic",
+      model: "",
+      usage: { input: 0, output: 0, total: 0 },
+      stopReason: "toolUse",
+      timestamp: now + toolSeq,
+    } as unknown as AgentMessage;
+    messages.push(toolUseAssistant);
+    const resultText =
+      typeof call.result === "string"
+        ? call.result
+        : call.result !== undefined
+          ? safeStringify(call.result)
+          : "";
+    const toolResult = {
+      role: "toolResult",
+      toolCallId,
+      toolName: call.name,
+      content: [{ type: "text", text: resultText }],
+      isError: call.isError === true,
+      timestamp: now + toolSeq,
+    } as unknown as AgentMessage;
+    messages.push(toolResult);
+  }
+  // Final assistant text(s).
+  for (const text of acc.assistantTexts) {
+    if (typeof text !== "string" || text.length === 0) continue;
+    const assistant = {
+      role: "assistant",
+      content: [{ type: "text", text }],
+      api: "messages",
+      provider: "anthropic",
+      model: "",
+      usage: { input: 0, output: 0, total: 0 },
+      stopReason: "stop",
+      timestamp: now,
+    } as unknown as AgentMessage;
+    messages.push(assistant);
+  }
+  return messages;
+}
+
+function safeStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
   }
 }
 
