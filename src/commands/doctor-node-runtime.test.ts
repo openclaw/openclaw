@@ -138,6 +138,12 @@ describe("collectNodeRuntimeDiagnostics", () => {
 // ─── buildNodeRuntimeWarnings ───────────────────────────────────
 
 describe("buildNodeRuntimeWarnings", () => {
+  it("warns with the current minimum version (>=22.19.0) when below minimum", () => {
+    const diag = makeDiag({ version: "20.18.0", major: 20, satisfiesMinimum: false });
+    const warnings = buildNodeRuntimeWarnings(diag);
+    expect(warnings[0]).toContain(">=22.19.0");
+  });
+
   it("returns empty array for recommended version", () => {
     const diag = makeDiag({ version: "24.14.0", major: 24 });
     expect(buildNodeRuntimeWarnings(diag)).toEqual([]);
@@ -227,6 +233,24 @@ describe("buildNodeRuntimeSummary", () => {
     expect(summary).toContain("Node 24.14.0");
     expect(summary).toContain("/usr/local/bin/node");
     expect(summary).toContain("system install");
+  });
+
+  it("redacts the home directory from the exec path (no leaked username)", () => {
+    // Regression: the inline "/"-only home check leaked full
+    // C:\\Users\\<name>\\... paths on Windows. shortenHomePath handles
+    // both separators; verify the POSIX home path is collapsed to "~".
+    const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
+    if (!home) {
+      return; // no home in env; nothing to assert
+    }
+    const diag = makeDiag({
+      execPath: `${home}/.volta/bin/node`,
+      versionManaged: true,
+      versionManagerHint: "volta",
+    });
+    const summary = buildNodeRuntimeSummary(diag);
+    expect(summary).toContain("~/.volta/bin/node");
+    expect(summary).not.toContain(home);
   });
 
   it("formats version manager summary with name", () => {

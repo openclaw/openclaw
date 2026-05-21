@@ -29,6 +29,7 @@ import {
   type RuntimeDetails,
 } from "../infra/runtime-guard.js";
 import { note } from "../terminal/note.js";
+import { shortenHomePath } from "../utils.js";
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -164,7 +165,7 @@ export function buildNodeRuntimeWarnings(
   // different code path.
   if (!diag.satisfiesMinimum) {
     warnings.push(
-      `Node ${diag.version ?? "unknown"} does not meet the minimum requirement (>=22.14.0).`,
+      `Node ${diag.version ?? "unknown"} does not meet the minimum requirement (>=22.19.0).`,
     );
     warnings.push("Upgrade Node: https://nodejs.org/en/download");
     return warnings;
@@ -232,17 +233,12 @@ export function buildNodeRuntimeSummary(diag: NodeRuntimeDiagnostics): string {
   // Version
   parts.push(`Node ${diag.version ?? "unknown"}`);
 
-  // Executable path (shortened for readability)
+  // Executable path (home-redacted for readability and to avoid leaking
+  // usernames). Reuse the shared shortenHomePath helper, which handles
+  // both POSIX ("/") and Windows ("\\") home boundaries — the previous
+  // inline "/"-only check leaked full C:\\Users\\<name>\\... paths on Windows.
   if (diag.execPath) {
-    const homeDir = process.env.HOME ?? process.env.USERPROFILE ?? "";
-    let displayPath = diag.execPath;
-    // Ensure directory-boundary match: homeDir must be an exact prefix
-    // followed by "/" (or be an exact match). Without this guard,
-    // HOME=/home/alice would incorrectly match /home/alice2/...
-    if (homeDir && (displayPath === homeDir || displayPath.startsWith(homeDir + "/"))) {
-      displayPath = "~" + displayPath.slice(homeDir.length);
-    }
-    parts.push(displayPath);
+    parts.push(shortenHomePath(diag.execPath));
   }
 
   // Version manager
