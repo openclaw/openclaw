@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const EXACT_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/u;
 
 function usage() {
   return [
@@ -74,6 +75,155 @@ function runNpm(args, cwd) {
   });
 }
 
+function exactVersionFromOverrideSpec(spec) {
+  if (!spec || typeof spec !== "string") {
+    return null;
+  }
+  if (EXACT_VERSION_PATTERN.test(spec)) {
+    return spec;
+  }
+  if (!spec.startsWith("npm:")) {
+    return null;
+  }
+  const versionIndex = spec.lastIndexOf("@");
+  if (versionIndex <= "npm:".length) {
+    return null;
+  }
+  const version = spec.slice(versionIndex + 1);
+  return EXACT_VERSION_PATTERN.test(version) ? version : null;
+}
+
+function exactOverrideRulesFromOverrides(overrides) {
+  return Object.fromEntries(
+    Object.entries(normalizeOverrides(overrides))
+      .map(([name, spec]) => [name, exactVersionFromOverrideSpec(spec)])
+      .filter((entry) => entry[1] !== null),
+  );
+}
+
+function parseLockPackagePath(lockPath) {
+  if (!lockPath.startsWith("node_modules/")) {
+    return [];
+  }
+  const packages = [];
+  let remaining = lockPath;
+  let current = "";
+  while (remaining.startsWith("node_modules/")) {
+    const withoutPrefix = remaining.slice("node_modules/".length);
+    const segments = withoutPrefix.split("/");
+    const name = segments[0]?.startsWith("@") ? segments.slice(0, 2).join("/") : segments[0];
+    if (!name) {
+      return packages;
+    }
+    current = current ? `${current}/node_modules/${name}` : `node_modules/${name}`;
+    packages.push({ name, path: current });
+    remaining = withoutPrefix.slice(name.length);
+    if (remaining.startsWith("/")) {
+      remaining = remaining.slice(1);
+    }
+  }
+  return packages;
+}
+
+function collectOverrideViolations(lockfile, overrideRules) {
+  const packages = lockfile?.packages;
+  if (!packages || typeof packages !== "object") {
+    return [];
+  }
+  const violations = [];
+  for (const [lockPath, metadata] of Object.entries(packages)) {
+    const packagePath = parseLockPackagePath(lockPath);
+    const packageName = packagePath.at(-1)?.name;
+    const expectedVersion = packageName ? overrideRules[packageName] : undefined;
+    if (!expectedVersion || metadata?.version === expectedVersion) {
+      continue;
+    }
+    violations.push({
+      path: lockPath,
+      packageName,
+      actualVersion: metadata?.version ?? "<missing>",
+      expectedVersion,
+      packagePath,
+    });
+  }
+  return violations;
+}
+
+function disableShrinkwrappedOverrideConflictSources(lockfile, overrideRules) {
+  const packages = lockfile?.packages;
+  if (!packages || typeof packages !== "object") {
+    return [];
+  }
+  const disabled = new Set();
+  for (const violation of collectOverrideViolations(lockfile, overrideRules)) {
+    const ancestors = violation.packagePath.slice(0, -1).toReversed();
+    const shrinkwrappedAncestor = ancestors.find(
+      (ancestor) => packages[ancestor.path]?.hasShrinkwrap === true,
+    );
+    if (!shrinkwrappedAncestor) {
+      continue;
+    }
+    delete packages[shrinkwrappedAncestor.path].hasShrinkwrap;
+    disabled.add(shrinkwrappedAncestor.path);
+  }
+  for (const ancestorPath of disabled) {
+    const subtreePrefix = `${ancestorPath}/node_modules/`;
+    for (const lockPath of Object.keys(packages)) {
+      if (lockPath.startsWith(subtreePrefix)) {
+        delete packages[lockPath];
+      }
+    }
+  }
+  return [...disabled].toSorted((left, right) => left.localeCompare(right));
+}
+
+function describeOverrideViolations(violations) {
+  return violations
+    .slice(0, 5)
+    .map(
+      (violation) =>
+        `${violation.path} locked ${violation.actualVersion}, expected ${violation.expectedVersion}`,
+    )
+    .join("; ");
+}
+
+function normalizeShrinkwrapOverrides(tempDir) {
+  const shrinkwrapPath = path.join(tempDir, "npm-shrinkwrap.json");
+  const overrideRules = exactOverrideRulesFromOverrides(readWorkspaceOverrides());
+  if (Object.keys(overrideRules).length === 0) {
+    return;
+  }
+
+  const shrinkwrap = JSON.parse(readFileSync(shrinkwrapPath, "utf8"));
+  const disabled = disableShrinkwrappedOverrideConflictSources(shrinkwrap, overrideRules);
+  if (disabled.length === 0) {
+    const violations = collectOverrideViolations(shrinkwrap, overrideRules);
+    if (violations.length > 0) {
+      throw new Error(
+        `generated npm-shrinkwrap.json violates workspace overrides: ${describeOverrideViolations(violations)}`,
+      );
+    }
+    return;
+  }
+
+  // npm ignores root overrides inside dependency-owned shrinkwraps. Mark those embedded
+  // shrinkwraps as inactive, drop their cached subtree, then ask npm to recalculate this
+  // package's authoritative lock with registry integrity hashes.
+  writeFileSync(shrinkwrapPath, `${JSON.stringify(shrinkwrap, null, 2)}\n`);
+  runNpm(
+    ["install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund"],
+    tempDir,
+  );
+
+  const normalized = JSON.parse(readFileSync(shrinkwrapPath, "utf8"));
+  const remaining = collectOverrideViolations(normalized, overrideRules);
+  if (remaining.length > 0) {
+    throw new Error(
+      `generated npm-shrinkwrap.json violates workspace overrides after disabling ${disabled.join(", ")}: ${describeOverrideViolations(remaining)}`,
+    );
+  }
+}
+
 function generateShrinkwrap(packageDir) {
   const tempDir = mkdtempSync(path.join(tmpdir(), "openclaw-shrinkwrap-"));
   try {
@@ -87,6 +237,7 @@ function generateShrinkwrap(packageDir) {
       tempDir,
     );
     runNpm(["shrinkwrap", "--ignore-scripts", "--no-audit", "--no-fund"], tempDir);
+    normalizeShrinkwrapOverrides(tempDir);
     return readFileSync(path.join(tempDir, "npm-shrinkwrap.json"), "utf8");
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
@@ -198,9 +349,19 @@ function main() {
   }
 }
 
-try {
-  main();
-} catch (error) {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exitCode = 1;
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  try {
+    main();
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  }
 }
+
+export {
+  collectOverrideViolations,
+  disableShrinkwrappedOverrideConflictSources,
+  exactOverrideRulesFromOverrides,
+  exactVersionFromOverrideSpec,
+  parseLockPackagePath,
+};
