@@ -4,8 +4,18 @@ import { killProcessTree } from "../../kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../../linux-oom-score.js";
 import { spawnWithFallback } from "../../spawn-utils.js";
 import { resolveWindowsCommandShim } from "../../windows-command.js";
+import {
+  type SupervisorStopCommand,
+  resolveSupervisorBoundary,
+  runBoundaryStopCommand,
+} from "../boundary.js";
 import type { ManagedRunStdin, SpawnProcessAdapter } from "../types.js";
 import { toStringEnv } from "./env.js";
+
+// User-bus variables `systemd-run --user` needs to reach the per-user manager.
+// They are inherited automatically when no env override is set, but an explicit
+// worker env (e.g. agent CLI runs) can omit them, so the launcher re-adds them.
+const SYSTEMD_USER_BUS_ENV_KEYS = ["XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"] as const;
 
 const FORCE_KILL_WAIT_FALLBACK_MS = 4000;
 const WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS = 250;
@@ -23,6 +33,28 @@ function isServiceManagedRuntime(): boolean {
   return Boolean(process.env.OPENCLAW_SERVICE_MARKER?.trim());
 }
 
+/**
+ * Ensure the user-bus env reaches a `systemd-run --user` launcher. Only matters
+ * when the worker carries an explicit env override (an inherited env already
+ * includes these). Returns the input untouched for non-systemd boundaries or
+ * when no override env is set (so default inherit semantics are preserved).
+ */
+function withSystemdLauncherEnv(
+  env: NodeJS.ProcessEnv | undefined,
+  sourceEnv: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv | undefined {
+  if (!env) {
+    return env;
+  }
+  const merged = { ...env };
+  for (const key of SYSTEMD_USER_BUS_ENV_KEYS) {
+    if (merged[key] === undefined && sourceEnv[key] !== undefined) {
+      merged[key] = sourceEnv[key];
+    }
+  }
+  return merged;
+}
+
 export async function createChildAdapter(params: {
   argv: string[];
   cwd?: string;
@@ -30,6 +62,8 @@ export async function createChildAdapter(params: {
   windowsVerbatimArguments?: boolean;
   input?: string;
   stdinMode?: "inherit" | "pipe-open" | "pipe-closed";
+  surviveSupervisorRestart?: boolean;
+  boundaryId?: string;
 }): Promise<ChildAdapter> {
   const resolvedArgv = [...params.argv];
   resolvedArgv[0] = resolveCommand(resolvedArgv[0] ?? "");
@@ -43,11 +77,36 @@ export async function createChildAdapter(params: {
   // In service-managed mode keep children attached so systemd/launchd can
   // stop the full process tree reliably. Outside service mode preserve the
   // existing POSIX detached behavior.
-  const useDetached = process.platform !== "win32" && !isServiceManagedRuntime();
+  let useDetached = process.platform !== "win32" && !isServiceManagedRuntime();
+
+  // Survival boundary (gate G-D1): when requested and available, wrap the worker
+  // argv so it runs in a transient systemd scope / launchd job that outlives the
+  // gateway. The launcher must run detached so our own group-kill never reaches
+  // the survivor, and cancellation goes through the unit's stop command.
+  let launchCommand = preparedSpawn.command;
+  let launchArgs = preparedSpawn.args;
+  let launchEnv = preparedSpawn.env;
+  let boundaryStopCommand: SupervisorStopCommand | null = null;
+  if (params.surviveSupervisorRestart) {
+    const boundary = resolveSupervisorBoundary();
+    if (boundary.kind !== "inline") {
+      const plan = boundary.plan({
+        argv: [preparedSpawn.command, ...preparedSpawn.args],
+        runId: params.boundaryId ?? "",
+      });
+      launchCommand = plan.command;
+      launchArgs = plan.args;
+      boundaryStopCommand = plan.stopCommand;
+      useDetached = process.platform !== "win32";
+      if (plan.kind === "systemd-scope") {
+        launchEnv = withSystemdLauncherEnv(launchEnv, params.env ?? process.env);
+      }
+    }
+  }
 
   const options: SpawnOptions = {
     cwd: params.cwd,
-    env: preparedSpawn.env,
+    env: launchEnv,
     stdio: ["pipe", "pipe", "pipe"],
     detached: useDetached,
     windowsHide: true,
@@ -60,7 +119,7 @@ export async function createChildAdapter(params: {
   }
 
   const spawned = await spawnWithFallback({
-    argv: [preparedSpawn.command, ...preparedSpawn.args],
+    argv: [launchCommand, ...launchArgs],
     options,
     fallbacks: useDetached
       ? [
@@ -357,9 +416,20 @@ export async function createChildAdapter(params: {
   // gateway's process group regardless of intent, so the kill must avoid
   // group-kill. (#71662 follow-up — caught by Greptile review)
   const childIsDetached = useDetached && !spawned.usedFallback;
+  let boundaryStopRequested = false;
+  const stopSurvivableWorker = () => {
+    // A survivable worker lives in its own cgroup/launchd domain, so killing the
+    // local launcher's process group cannot reach it — stop the unit explicitly.
+    if (boundaryStopRequested || !boundaryStopCommand) {
+      return;
+    }
+    boundaryStopRequested = true;
+    runBoundaryStopCommand(boundaryStopCommand);
+  };
   const kill = (signal?: NodeJS.Signals) => {
     const pid = child.pid ?? undefined;
     if (signal === undefined || signal === "SIGKILL") {
+      stopSurvivableWorker();
       if (pid) {
         // Pass through whether the child is actually detached. Without this,
         // `killProcessTree` group-kills via `-pid` and takes out the gateway's
@@ -374,6 +444,7 @@ export async function createChildAdapter(params: {
       scheduleForceKillWaitFallback("SIGKILL");
       return;
     }
+    stopSurvivableWorker();
     try {
       child.kill(signal);
     } catch {

@@ -150,6 +150,8 @@ export function createProcessSupervisor(): ProcessSupervisor {
               windowsVerbatimArguments: input.windowsVerbatimArguments,
               input: input.input,
               stdinMode: input.stdinMode,
+              surviveSupervisorRestart: input.surviveSupervisorRestart,
+              boundaryId: runId,
             });
 
       registry.updateState(runId, "running", { pid: adapter.pid });
