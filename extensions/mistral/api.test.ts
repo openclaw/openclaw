@@ -170,7 +170,7 @@ describe("applyMistralModelCompat", () => {
     ).toEqual({ levels: [{ id: "off" }, { id: "high" }], defaultLevel: "off" });
   });
 
-  it("contributes Mistral transport compat for native, provider-family, and hinted custom routes", () => {
+  it("enables prompt cache key compat only for direct Mistral routes", () => {
     expect(
       contributeMistralResolvedModelCompat({
         modelId: "mistral-large-latest",
@@ -202,6 +202,9 @@ describe("applyMistralModelCompat", () => {
           baseUrl: "https://openrouter.ai/api/v1",
         },
       }),
-    ).toEqual(MISTRAL_MODEL_TRANSPORT_PATCH);
+    ).toEqual({
+      ...MISTRAL_MODEL_TRANSPORT_PATCH,
+      supportsPromptCacheKey: false,
+    });
   });
 });

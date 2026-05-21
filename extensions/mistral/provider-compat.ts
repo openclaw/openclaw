@@ -26,12 +26,12 @@ function isMistralModelHint(modelId: string): boolean {
   );
 }
 
-function shouldContributeMistralCompat(params: {
+function resolveMistralCompatRoute(params: {
   modelId: string;
   model: { api?: unknown; baseUrl?: unknown; provider?: unknown; compat?: unknown };
-}): boolean {
+}): "direct" | "hinted" | undefined {
   if (params.model.api !== "openai-completions") {
-    return false;
+    return undefined;
   }
 
   const capabilities = resolveProviderRequestCapabilities({
@@ -47,16 +47,31 @@ function shouldContributeMistralCompat(params: {
         : undefined,
   });
 
-  return (
+  if (
     capabilities.knownProviderFamily === "mistral" ||
-    capabilities.endpointClass === "mistral-public" ||
-    isMistralModelHint(params.modelId)
-  );
+    capabilities.endpointClass === "mistral-public"
+  ) {
+    return "direct";
+  }
+  if (isMistralModelHint(params.modelId)) {
+    return "hinted";
+  }
+  return undefined;
 }
 
 export function contributeMistralResolvedModelCompat(params: {
   modelId: string;
   model: { api?: unknown; baseUrl?: unknown; provider?: unknown; compat?: unknown };
 }) {
-  return shouldContributeMistralCompat(params) ? MISTRAL_MODEL_TRANSPORT_PATCH : undefined;
+  const route = resolveMistralCompatRoute(params);
+  if (!route) {
+    return undefined;
+  }
+  if (route === "direct") {
+    return MISTRAL_MODEL_TRANSPORT_PATCH;
+  }
+  return {
+    ...MISTRAL_MODEL_TRANSPORT_PATCH,
+    supportsPromptCacheKey: false,
+  };
 }
