@@ -19,6 +19,8 @@ const startTaskRegistryMaintenanceMock = vi.hoisted(() => vi.fn());
 const outputRootHelpMock = vi.hoisted(() => vi.fn());
 const outputPrecomputedRootHelpTextMock = vi.hoisted(() => vi.fn(() => false));
 const outputPrecomputedBrowserHelpTextMock = vi.hoisted(() => vi.fn(() => false));
+const outputPrecomputedSecretsHelpTextMock = vi.hoisted(() => vi.fn(() => false));
+const outputPrecomputedNodesHelpTextMock = vi.hoisted(() => vi.fn(() => false));
 const loadRootHelpRenderOptionsForConfigSensitivePluginsMock = vi.hoisted(() =>
   vi.fn<() => Promise<RootHelpRenderOptions | null>>(async () => null),
 );
@@ -170,7 +172,9 @@ vi.mock("./program/root-help.js", () => ({
 
 vi.mock("./root-help-metadata.js", () => ({
   outputPrecomputedBrowserHelpText: outputPrecomputedBrowserHelpTextMock,
+  outputPrecomputedNodesHelpText: outputPrecomputedNodesHelpTextMock,
   outputPrecomputedRootHelpText: outputPrecomputedRootHelpTextMock,
+  outputPrecomputedSecretsHelpText: outputPrecomputedSecretsHelpTextMock,
 }));
 
 vi.mock("./root-help-live-config.js", () => ({
@@ -255,7 +259,9 @@ describe("runCli exit behavior", () => {
     hasMemoryRuntimeMock.mockReturnValue(false);
     listAgentHarnessIdsMock.mockReturnValue([]);
     outputPrecomputedBrowserHelpTextMock.mockReturnValue(false);
+    outputPrecomputedNodesHelpTextMock.mockReturnValue(false);
     outputPrecomputedRootHelpTextMock.mockReturnValue(false);
+    outputPrecomputedSecretsHelpTextMock.mockReturnValue(false);
     loadRootHelpRenderOptionsForConfigSensitivePluginsMock.mockResolvedValue(null);
     tryOutputSetupOnboardConfigureHelpMock.mockResolvedValue(true);
     hasEnvHttpProxyAgentConfiguredMock.mockReturnValue(false);
@@ -410,6 +416,47 @@ describe("runCli exit behavior", () => {
     expect(closeActiveMemorySearchManagersMock).not.toHaveBeenCalled();
     expect(exitSpy).not.toHaveBeenCalled();
     exitSpy.mockRestore();
+  });
+
+  it("renders secrets help from startup metadata without building the full program", async () => {
+    outputPrecomputedSecretsHelpTextMock.mockReturnValueOnce(true);
+
+    await runCli(["node", "openclaw", "secrets", "--help"]);
+
+    expect(tryRouteCliMock).not.toHaveBeenCalled();
+    expect(outputPrecomputedSecretsHelpTextMock).toHaveBeenCalledTimes(1);
+    expect(buildProgramMock).not.toHaveBeenCalled();
+    expect(registerSubCliByNameMock).not.toHaveBeenCalled();
+  });
+
+  it("renders nodes help from startup metadata without building the full program", async () => {
+    outputPrecomputedNodesHelpTextMock.mockReturnValueOnce(true);
+
+    await runCli(["node", "openclaw", "nodes", "--help"]);
+
+    expect(tryRouteCliMock).not.toHaveBeenCalled();
+    expect(outputPrecomputedNodesHelpTextMock).toHaveBeenCalledTimes(1);
+    expect(buildProgramMock).not.toHaveBeenCalled();
+    expect(registerSubCliByNameMock).not.toHaveBeenCalled();
+  });
+
+  it("defers nodes help startup metadata when plugin config can change command metadata", async () => {
+    const argv = ["node", "openclaw", "nodes", "--help"];
+    const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
+    const program = {
+      commands: [{ name: () => "nodes", aliases: () => [] }],
+      parseAsync,
+    };
+    loadRootHelpRenderOptionsForConfigSensitivePluginsMock.mockResolvedValueOnce({ env: {} });
+    outputPrecomputedNodesHelpTextMock.mockReturnValueOnce(true);
+    buildProgramMock.mockReturnValueOnce(program);
+
+    await runCli(argv);
+
+    expect(loadRootHelpRenderOptionsForConfigSensitivePluginsMock).toHaveBeenCalledTimes(1);
+    expect(outputPrecomputedNodesHelpTextMock).not.toHaveBeenCalled();
+    expect(registerSubCliByNameMock.mock.calls).toEqual([[program, "nodes", argv]]);
+    expect(parseAsync).toHaveBeenCalledWith(argv);
   });
 
   it("keeps root help on the precomputed path without proxy bootstrap", async () => {

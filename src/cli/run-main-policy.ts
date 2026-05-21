@@ -11,6 +11,7 @@ import {
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
+import { hasFlag } from "./argv.js";
 import {
   resolveCliCommandPathPolicy,
   resolveCliNetworkProxyPolicy,
@@ -85,7 +86,37 @@ export function shouldUseBrowserHelpFastPath(
   return (
     invocation.commandPath.length === 1 &&
     invocation.commandPath[0] === "browser" &&
-    invocation.hasHelpOrVersion
+    (hasFlag(argv, "--help") || hasFlag(argv, "-h"))
+  );
+}
+
+export function shouldUseSecretsHelpFastPath(
+  argv: string[],
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH === "1") {
+    return false;
+  }
+  const invocation = resolveCliArgvInvocation(argv);
+  return (
+    invocation.commandPath.length === 1 &&
+    invocation.commandPath[0] === "secrets" &&
+    (hasFlag(argv, "--help") || hasFlag(argv, "-h"))
+  );
+}
+
+export function shouldUseNodesHelpFastPath(
+  argv: string[],
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH === "1") {
+    return false;
+  }
+  const invocation = resolveCliArgvInvocation(argv);
+  return (
+    invocation.commandPath.length === 1 &&
+    invocation.commandPath[0] === "nodes" &&
+    (hasFlag(argv, "--help") || hasFlag(argv, "-h"))
   );
 }
 
