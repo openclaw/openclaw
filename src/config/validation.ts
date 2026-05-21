@@ -609,7 +609,7 @@ function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
   // Numeric ceiling/floor hints (too_big / too_small with numeric origin).
   // Append a parenthesized bound alongside Zod's native message,
   // matching the clarity that enum/union rejections get via (allowed: …).
-  const enrichedMessage = appendNumericBoundHint(message, record);
+  const enrichedMessage = record ? appendNumericBoundHint(message, record) : message;
 
   const allowedValuesSummary = summarizeAllowedValues(collectAllowedValuesFromUnknownIssue(issue));
 
