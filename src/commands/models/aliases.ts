@@ -105,7 +105,11 @@ export async function modelsAliasesRemoveCommand(aliasRaw: string, runtime: Runt
       // case the user sees the alias in `models aliases list` but it cannot be removed
       // because it isn't actually stored in the config file.
       const builtinTarget = DEFAULT_MODEL_ALIASES[alias];
-      if (builtinTarget && nextModels[builtinTarget] && !nextModels[builtinTarget]?.alias) {
+      if (
+        builtinTarget &&
+        nextModels[builtinTarget] &&
+        nextModels[builtinTarget]?.alias === undefined
+      ) {
         throw new Error(
           `Cannot remove "${alias}": it is a built-in alias for "${builtinTarget}" provided automatically by OpenClaw and is not stored in your config file. To shadow it with a different target, run ${formatCliCommand(`openclaw models aliases add ${alias} <model>`)}.`,
         );
