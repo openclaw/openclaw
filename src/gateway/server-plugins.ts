@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
-import { normalizeModelRef, parseModelRef } from "../agents/model-selection.js";
+import { modelKey, normalizeModelRef, parseModelRef } from "../agents/model-selection.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
@@ -127,7 +127,7 @@ function normalizeAllowedModelRef(raw: string): string | null {
     return null;
   }
   const normalized = normalizeModelRef(providerRaw, modelRaw);
-  return `${normalized.provider}/${normalized.model}`;
+  return modelKey(normalized.provider, normalized.model);
 }
 
 export function setPluginSubagentOverridePolicies(cfg: OpenClawConfig): void {
@@ -227,7 +227,7 @@ function resolveRequestedFallbackModelRef(params: {
 }): string | null {
   if (params.provider && params.model) {
     const normalizedRequest = normalizeModelRef(params.provider, params.model);
-    return `${normalizedRequest.provider}/${normalizedRequest.model}`;
+    return modelKey(normalizedRequest.provider, normalizedRequest.model);
   }
   const rawModel = params.model?.trim();
   if (!rawModel || !rawModel.includes("/")) {
@@ -237,7 +237,7 @@ function resolveRequestedFallbackModelRef(params: {
   if (!parsed?.provider || !parsed.model) {
     return null;
   }
-  return `${parsed.provider}/${parsed.model}`;
+  return modelKey(parsed.provider, parsed.model);
 }
 
 // ── Internal gateway dispatch for plugin runtime ────────────────────

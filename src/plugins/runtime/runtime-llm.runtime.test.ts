@@ -306,6 +306,43 @@ describe("runtime.llm.complete", () => {
     expect(hoisted.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
   });
 
+  it("uses the deduped resolved ref in the allowlist deny diagnostic (#84887)", async () => {
+    hoisted.resolveSimpleCompletionSelectionForAgent.mockReturnValue({
+      provider: "openrouter",
+      modelId: "openrouter/gpt-5.5",
+      agentDir: "/tmp/openclaw-agent",
+    });
+
+    const runtimeContext = resolveContextEngineCapabilities({
+      config: {
+        ...cfg,
+        plugins: {
+          entries: {
+            "lossless-claw": {
+              llm: {
+                allowModelOverride: true,
+                allowedModels: ["openrouter/gpt-5.4-mini"],
+              },
+            },
+          },
+        },
+      },
+      sessionKey: "agent:main:session:abc",
+      contextEnginePluginId: "lossless-claw",
+      purpose: "context-engine.compaction",
+    });
+
+    await expect(
+      runtimeContext.llm!.complete({
+        model: "openrouter/gpt-5.5",
+        messages: [{ role: "user", content: "summarize" }],
+      }),
+    ).rejects.toThrow(
+      'model override "openrouter/gpt-5.5" is not allowlisted for plugin "lossless-claw"',
+    );
+    expect(hoisted.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+  });
+
   it("keeps context-engine attribution and host-derived policy inside plugin runtime scope", async () => {
     const runtimeContext = resolveContextEngineCapabilities({
       config: {

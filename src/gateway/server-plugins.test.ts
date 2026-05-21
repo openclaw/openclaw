@@ -1031,6 +1031,36 @@ describe("loadGatewayPlugins", () => {
     );
   });
 
+  test("uses deduped resolved ref in fallback override deny diagnostic (#84887)", async () => {
+    const serverPlugins = serverPluginsModule;
+    const runtime = await createSubagentRuntime(serverPlugins, {
+      plugins: {
+        entries: {
+          "voice-call": {
+            subagent: {
+              allowModelOverride: true,
+              allowedModels: ["openrouter/gpt-5.4-mini"],
+            },
+          },
+        },
+      },
+    });
+    serverPlugins.setFallbackGatewayContext(createTestContext("fallback-prefixed-model-deny"));
+    await expect(
+      gatewayRequestScopeModule.withPluginRuntimePluginIdScope("voice-call", () =>
+        runtime.run({
+          sessionKey: "s-prefixed-model-deny",
+          message: "use trusted override",
+          provider: "openrouter",
+          model: "openrouter/gpt-5.5",
+          deliver: false,
+        }),
+      ),
+    ).rejects.toThrow(
+      'model override "openrouter/gpt-5.5" is not allowlisted for plugin "voice-call".',
+    );
+  });
+
   test("uses least-privilege synthetic fallback scopes without admin", async () => {
     const serverPlugins = serverPluginsModule;
     const runtime = await createSubagentRuntime(serverPlugins);
