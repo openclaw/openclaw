@@ -51,6 +51,7 @@ type SubagentListItem = {
   totalTokens?: number;
   startedAt?: number;
   endedAt?: number;
+  executionPlacement?: SubagentRunRecord["executionPlacement"];
 };
 
 type BuiltSubagentList = {
@@ -268,7 +269,10 @@ export function buildSubagentList(params: {
     const task = truncateLine(entry.task.trim(), params.taskMaxChars ?? 72);
     const taskName = entry.taskName?.trim();
     const taskNamePrefix = taskName ? `${taskName}: ` : "";
-    const line = `${index}. ${taskNamePrefix}${label} (${resolveModelDisplay(sessionEntry, entry.model)}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${normalizeLowercaseStringOrEmpty(task) !== normalizeLowercaseStringOrEmpty(label) ? ` - ${task}` : ""}`;
+    const executionText = entry.executionPlacement
+      ? `, exec ${entry.executionPlacement.backend}${entry.executionPlacement.profile ? `/${entry.executionPlacement.profile}` : ""}`
+      : "";
+    const line = `${index}. ${taskNamePrefix}${label} (${resolveModelDisplay(sessionEntry, entry.model)}, ${runtime}${usageText ? `, ${usageText}` : ""}${executionText}) ${status}${normalizeLowercaseStringOrEmpty(task) !== normalizeLowercaseStringOrEmpty(label) ? ` - ${task}` : ""}`;
     const view: SubagentListItem = {
       index,
       line,
@@ -286,6 +290,7 @@ export function buildSubagentList(params: {
       totalTokens,
       startedAt: getSubagentSessionStartedAt(entry),
       ...(entry.endedAt ? { endedAt: entry.endedAt } : {}),
+      ...(entry.executionPlacement ? { executionPlacement: entry.executionPlacement } : {}),
     };
     index += 1;
     return view;
