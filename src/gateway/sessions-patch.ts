@@ -74,6 +74,7 @@ function normalizeExecAsk(raw: string): "off" | "on-miss" | "always" | undefined
 function shouldPreserveSessionAuthProfileOverride(params: {
   cfg: OpenClawConfig;
   entry: SessionEntry;
+  currentProvider: string;
   provider: string;
 }): boolean {
   const profileOverride = normalizeOptionalString(params.entry.authProfileOverride);
@@ -84,9 +85,19 @@ function shouldPreserveSessionAuthProfileOverride(params: {
   if (!provider) {
     return false;
   }
+  const resolvesToTargetProvider = (rawProvider: string | undefined): boolean => {
+    const candidate = normalizeOptionalLowercaseString(rawProvider);
+    if (!candidate) {
+      return false;
+    }
+    return (
+      resolveProviderIdForAuth(candidate, { config: params.cfg }) ===
+      resolveProviderIdForAuth(provider, { config: params.cfg })
+    );
+  };
   const delimiterIndex = profileOverride.indexOf(":");
   if (delimiterIndex < 0) {
-    return true;
+    return resolvesToTargetProvider(params.currentProvider);
   }
   const profileProvider = normalizeOptionalLowercaseString(
     profileOverride.slice(0, delimiterIndex),
@@ -94,10 +105,7 @@ function shouldPreserveSessionAuthProfileOverride(params: {
   if (!profileProvider) {
     return false;
   }
-  return (
-    resolveProviderIdForAuth(profileProvider, { config: params.cfg }) ===
-    resolveProviderIdForAuth(provider, { config: params.cfg })
-  );
+  return resolvesToTargetProvider(profileProvider);
 }
 
 function supportsSpawnLineage(storeKey: string): boolean {
@@ -493,6 +501,7 @@ export async function applySessionsPatchToStore(params: {
         },
         preserveAuthProfileOverride: shouldPreserveSessionAuthProfileOverride({
           cfg,
+          currentProvider: next.providerOverride ?? next.modelProvider ?? resolvedDefault.provider,
           entry: next,
           provider: resolvedDefault.provider,
         }),
@@ -538,6 +547,7 @@ export async function applySessionsPatchToStore(params: {
         },
         preserveAuthProfileOverride: shouldPreserveSessionAuthProfileOverride({
           cfg,
+          currentProvider: next.providerOverride ?? next.modelProvider ?? resolvedDefault.provider,
           entry: next,
           provider: resolved.ref.provider,
         }),
