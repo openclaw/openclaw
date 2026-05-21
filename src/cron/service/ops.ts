@@ -643,25 +643,19 @@ async function prepareManualRun(
     } as const;
   }
   return await locked(state, async () => {
-    // Reserve this run under lock, then execute outside lock so read ops
-    // (`list`, `status`) stay responsive while the run is in progress.
     const job = findJobOrThrow(state, id);
     if (typeof job.state.runningAtMs === "number") {
       return { ok: true, ran: false, reason: "already-running" as const };
     }
     job.state.runningAtMs = preflight.now;
     job.state.lastError = undefined;
-    // Persist the running marker before releasing lock so timer ticks that
-    // force-reload from disk cannot start the same job concurrently.
-    await persist(state);
-    emit(state, { jobId: job.id, action: "started", job, runAtMs: preflight.now });
     const taskRunId = tryCreateManualTaskRun({
       state,
       job,
       startedAt: preflight.now,
     });
     const executionJob = structuredClone(job);
-    return {
+    const prepared = {
       ok: true,
       ran: true,
       jobId: job.id,
@@ -669,6 +663,14 @@ async function prepareManualRun(
       startedAt: preflight.now,
       executionJob,
     } as const;
+    // Persist the running marker OUTSIDE the lock. The CommandLane.Cron
+    // serialization ensures no concurrent manual runs of the same job can
+    // be enqueued. Timer ticks are serialized by the Cron lane too, so
+    // they cannot interleave with a manual run that has already reserved
+    // the job in memory.
+    await persist(state);
+    emit(state, { jobId: job.id, action: "started", job, runAtMs: preflight.now });
+    return prepared;
   });
 }
 
