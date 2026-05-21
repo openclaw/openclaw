@@ -898,6 +898,9 @@ export const registerTelegramHandlers = ({
   const loadStoreAllowFrom = async () =>
     telegramDeps.readChannelAllowFromStore("telegram", process.env, accountId).catch(() => []);
 
+  const isSelfAuthoredTelegramMessage = (ctx: TelegramContext, msg: Message): boolean =>
+    msg.from?.id != null && msg.from.id === ctx.me?.id;
+
   const recordMessageForReplyChain = (msg: Message, threadId?: number) =>
     messageCache.record({
       accountId,
@@ -995,7 +998,14 @@ export const registerTelegramHandlers = ({
     for (const node of chain) {
       let mediaRef: TelegramMediaRef | undefined;
       const replyFileId = resolveInboundMediaFileId(node.sourceMessage);
-      if (replyFileId && hasInboundMedia(node.sourceMessage)) {
+      // Skip media from the bot's own messages in the reply chain to avoid
+      // re-ingesting self-authored content (and re-paying media-download cost
+      // every time a user replies to one of the bot's prior turns).
+      if (
+        replyFileId &&
+        hasInboundMedia(node.sourceMessage) &&
+        !isSelfAuthoredTelegramMessage(ctx, node.sourceMessage)
+      ) {
         try {
           const media = await resolveMedia({
             ctx: {
