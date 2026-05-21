@@ -449,8 +449,17 @@ export async function handleSlackAction(
       }
       case "downloadFile": {
         const fileId = readStringParam(params, "fileId", { required: true });
-        const channelTarget = readStringParam(params, "channelId") ?? readStringParam(params, "to");
-        const channelId = channelTarget ? resolveSlackChannelId(channelTarget) : undefined;
+        const channelTarget =
+          readStringParam(params, "channelId") ??
+          readStringParam(params, "to") ??
+          context?.currentChannelId;
+        if (!channelTarget) {
+          throw new Error(
+            "Slack file download requires channelId or to so the read target can be authorized.",
+          );
+        }
+        const channelId = resolveSlackChannelId(channelTarget);
+        assertSlackReadTargetAllowed({ account, cfg, channelId });
         const threadId = readStringParam(params, "threadId") ?? readStringParam(params, "replyTo");
         const maxBytes = account.config?.mediaMaxMb
           ? account.config.mediaMaxMb * 1024 * 1024
@@ -525,6 +534,7 @@ export async function handleSlackAction(
       }
       return jsonResult({ ok: true });
     }
+    assertSlackReadTargetAllowed({ account, cfg, channelId });
     const pins = writeOpts
       ? await slackActionRuntime.listSlackPins(channelId, readOpts)
       : await slackActionRuntime.listSlackPins(channelId);

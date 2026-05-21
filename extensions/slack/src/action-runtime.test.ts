@@ -344,6 +344,7 @@ describe("handleSlackAction", () => {
       {
         action: "downloadFile",
         fileId: "F123",
+        channelId: "C1",
       },
       slackConfig(),
     );
@@ -352,6 +353,15 @@ describe("handleSlackAction", () => {
       20 * 1024 * 1024,
     );
     expect(requireDetails(result).ok).toBe(false);
+  });
+
+  it("fails closed for downloadFile when no channel target can be authorized", async () => {
+    await expect(
+      handleSlackAction({ action: "downloadFile", fileId: "F123" }, slackConfig()),
+    ).rejects.toThrow(
+      "Slack file download requires channelId or to so the read target can be authorized.",
+    );
+    expect(downloadSlackFile).not.toHaveBeenCalled();
   });
 
   it("passes download scope (channel/thread) to downloadSlackFile", async () => {
@@ -386,6 +396,7 @@ describe("handleSlackAction", () => {
       {
         action: "downloadFile",
         fileId: "F123",
+        channelId: "C1",
       },
       slackConfig(),
     );
@@ -410,14 +421,17 @@ describe("handleSlackAction", () => {
 
   it("forwards resolved botToken to action functions instead of relying on config re-read", async () => {
     downloadSlackFile.mockResolvedValueOnce(null);
-    await handleSlackAction({ action: "downloadFile", fileId: "F123" }, slackConfig());
+    await handleSlackAction(
+      { action: "downloadFile", fileId: "F123", channelId: "C1" },
+      slackConfig(),
+    );
     expect(requireRecordArg(downloadSlackFile, "downloadSlackFile", 0, 1).token).toBe("tok");
   });
 
   it("keeps resolved userToken for downloadFile reads when configured", async () => {
     downloadSlackFile.mockResolvedValueOnce(null);
     await handleSlackAction(
-      { action: "downloadFile", fileId: "F123" },
+      { action: "downloadFile", fileId: "F123", channelId: "C1" },
       slackConfig({
         accounts: {
           default: {
@@ -882,6 +896,34 @@ describe("handleSlackAction", () => {
       handleSlackAction({ action: "readMessages", channelId: "C_DISABLED" }, cfg),
     ).rejects.toThrow("Slack read target channel is not allowed.");
     expect(readSlackMessages).not.toHaveBeenCalled();
+  });
+
+  it("rejects Slack file downloads for non-allowlisted target channels", async () => {
+    const cfg = slackConfig({
+      groupPolicy: "allowlist",
+      channels: {
+        C_ALLOWED: { enabled: true },
+      },
+    });
+
+    await expect(
+      handleSlackAction({ action: "downloadFile", fileId: "F123", channelId: "C_OTHER" }, cfg),
+    ).rejects.toThrow("Slack read target channel is not allowed.");
+    expect(downloadSlackFile).not.toHaveBeenCalled();
+  });
+
+  it("rejects Slack pin reads for non-allowlisted target channels", async () => {
+    const cfg = slackConfig({
+      groupPolicy: "allowlist",
+      channels: {
+        C_ALLOWED: { enabled: true },
+      },
+    });
+
+    await expect(
+      handleSlackAction({ action: "listPins", channelId: "C_OTHER" }, cfg),
+    ).rejects.toThrow("Slack read target channel is not allowed.");
+    expect(listSlackPins).not.toHaveBeenCalled();
   });
 
   it("passes messageId through to readSlackMessages", async () => {

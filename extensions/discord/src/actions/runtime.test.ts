@@ -574,6 +574,29 @@ describe("handleDiscordMessagingAction", () => {
     expect(payload.pins[0].timestampUtc).toBe(new Date(expectedMs).toISOString());
   });
 
+  it("rejects Discord pin reads for non-allowlisted target channels", async () => {
+    const cfg = {
+      channels: {
+        discord: {
+          token: "token",
+          groupPolicy: "allowlist",
+          guilds: {
+            "111": {
+              channels: {
+                "222": { enabled: true },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      handleMessagingAction("listPins", { channelId: "444" }, enableAllActions, cfg),
+    ).rejects.toThrow("Discord read target channel is not allowed.");
+    expect(listPinsDiscord).not.toHaveBeenCalled();
+  });
+
   it("adds normalized timestamps to searchMessages payloads", async () => {
     searchMessagesDiscord.mockResolvedValueOnce({
       total_results: 1,
@@ -594,6 +617,64 @@ describe("handleDiscordMessagingAction", () => {
     expect(payload.results?.messages?.[0]?.[0]?.timestampUtc).toBe(
       new Date(expectedMs).toISOString(),
     );
+  });
+
+  it("rejects Discord searches for non-allowlisted target channels", async () => {
+    const cfg = {
+      channels: {
+        discord: {
+          token: "token",
+          groupPolicy: "allowlist",
+          guilds: {
+            "111": {
+              channels: {
+                "222": { enabled: true },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      handleMessagingAction(
+        "searchMessages",
+        { guildId: "111", channelId: "444", content: "canary" },
+        enableAllActions,
+        cfg,
+      ),
+    ).rejects.toThrow("Discord read target channel is not allowed.");
+    expect(searchMessagesDiscord).not.toHaveBeenCalled();
+  });
+
+  it("requires explicit Discord search targets when channels are allowlisted", async () => {
+    const cfg = {
+      channels: {
+        discord: {
+          token: "token",
+          groupPolicy: "allowlist",
+          guilds: {
+            "111": {
+              channels: {
+                "222": { enabled: true },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      handleMessagingAction(
+        "searchMessages",
+        { guildId: "111", content: "canary" },
+        enableAllActions,
+        cfg,
+      ),
+    ).rejects.toThrow(
+      "Discord message search requires channelId or channelIds so each read target can be authorized.",
+    );
+    expect(searchMessagesDiscord).not.toHaveBeenCalled();
   });
 
   it("sends voice messages from a local file path", async () => {
