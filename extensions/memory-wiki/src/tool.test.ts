@@ -8,6 +8,7 @@ import {
   createWikiApplyTool,
   createWikiLintTool,
   createWikiRecordReceiptTool,
+  createWikiRefreshTool,
   createWikiStatusTool,
 } from "./tool.js";
 
@@ -53,6 +54,36 @@ describe("memory-wiki tools", () => {
     expect(asSchemaObject(result.details)).toMatchObject({
       vaultExists: true,
     });
+  });
+
+  it("offers wiki_refresh as the explicit status-heartbeat migration path", async () => {
+    const { rootDir, config } = await harness.createVault({ initialize: true });
+    const tool = createWikiRefreshTool(config);
+
+    const result = await tool.execute("refresh-call", {});
+    const text = result.content.find((part) => part.type === "text")?.text ?? "";
+    const details = asSchemaObject(result.details);
+
+    expect(syncMemoryWikiImportedSourcesMock).toHaveBeenCalledWith({
+      config,
+      appConfig: undefined,
+    });
+    expect(text).toContain("Refreshed memory wiki cache");
+    expect(text).toContain("Manifest: .openclaw-wiki/cache/wiki-cache-manifest.json");
+    expect(details).toMatchObject({
+      refreshed: true,
+      manifestPath: ".openclaw-wiki/cache/wiki-cache-manifest.json",
+      sourceImport: {
+        operation: "refresh",
+        importedCount: 0,
+      },
+    });
+    await expect(
+      fs.readFile(
+        path.join(rootDir, ".openclaw-wiki", "cache", "wiki-cache-manifest.json"),
+        "utf8",
+      ),
+    ).resolves.toContain('"source_import"');
   });
 
   it("records memory receipts through a model-facing tool", async () => {

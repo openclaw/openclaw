@@ -11,6 +11,7 @@
       "wiki_get",
       "wiki_lint",
       "wiki_record_receipt",
+      "wiki_refresh",
       "wiki_search",
       "wiki_status"
     ]

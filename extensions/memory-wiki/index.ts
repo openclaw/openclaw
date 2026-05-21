@@ -21,6 +21,7 @@ import {
   createWikiGetTool,
   createWikiLintTool,
   createWikiRecordReceiptTool,
+  createWikiRefreshTool,
   createWikiSearchTool,
   createWikiStatusTool,
 } from "./src/tool.js";
@@ -39,6 +40,7 @@ export default definePluginEntry({
     );
     registerMemoryWikiGatewayMethods({ api, config, appConfig: api.config });
     api.registerTool(createWikiStatusTool(config, api.config), { name: "wiki_status" });
+    api.registerTool(createWikiRefreshTool(config, api.config), { name: "wiki_refresh" });
     api.registerTool(createWikiLintTool(config, api.config), { name: "wiki_lint" });
     api.registerTool(createWikiApplyTool(config, api.config), { name: "wiki_apply" });
     api.registerTool(createWikiRecordReceiptTool(config), { name: "wiki_record_receipt" });

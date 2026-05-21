@@ -2,6 +2,7 @@ import path from "node:path";
 import { Type } from "typebox";
 import type { AnyAgentTool, OpenClawConfig } from "../api.js";
 import { applyMemoryWikiMutation, normalizeMemoryWikiMutationInput } from "./apply.js";
+import { compileMemoryWikiVault } from "./compile.js";
 import {
   WIKI_SEARCH_BACKENDS,
   WIKI_SEARCH_CORPORA,
@@ -28,6 +29,7 @@ function formatWikiToolReportPath(config: ResolvedMemoryWikiConfig, reportPath: 
 }
 
 const WikiStatusSchema = Type.Object({}, { additionalProperties: false });
+const WikiRefreshSchema = Type.Object({}, { additionalProperties: false });
 const WikiLintSchema = Type.Object({}, { additionalProperties: false });
 const WikiReceiptSchema = Type.Object(
   {
@@ -130,7 +132,7 @@ async function syncImportedSourcesIfNeeded(
   config: ResolvedMemoryWikiConfig,
   appConfig?: OpenClawConfig,
 ) {
-  await syncMemoryWikiImportedSources({ config, appConfig });
+  return await syncMemoryWikiImportedSources({ config, appConfig });
 }
 
 type WikiToolMemoryContext = {
@@ -147,7 +149,7 @@ export function createWikiStatusTool(
     name: "wiki_status",
     label: "Wiki Status",
     description:
-      "Inspect the current memory wiki vault mode, health, and Obsidian CLI availability.",
+      "Pure-read inspection of the current memory wiki vault mode, cache freshness, health, and Obsidian CLI availability. Call wiki_refresh first when imported sources must be synced.",
     parameters: WikiStatusSchema,
     execute: async () => {
       const status = await resolveMemoryWikiStatus(config, {
@@ -156,6 +158,48 @@ export function createWikiStatusTool(
       return {
         content: [{ type: "text", text: renderMemoryWikiStatus(status) }],
         details: status,
+      };
+    },
+  };
+}
+
+export function createWikiRefreshTool(
+  config: ResolvedMemoryWikiConfig,
+  appConfig?: OpenClawConfig,
+): AnyAgentTool {
+  return {
+    name: "wiki_refresh",
+    label: "Wiki Refresh",
+    description:
+      "Write-scoped migration path for callers that previously used wiki_status as a refresh heartbeat. Imports bridge or unsafe-local sources and rebuilds compiled cache artifacts.",
+    parameters: WikiRefreshSchema,
+    execute: async () => {
+      const sync = await syncImportedSourcesIfNeeded(config, appConfig);
+      const compile = await compileMemoryWikiVault(config, {
+        touchCacheArtifacts: true,
+        sourceImport: { operation: "refresh", ...sync },
+      });
+      const manifestPath = compile.manifestPath
+        ? formatWikiToolReportPath(config, compile.manifestPath)
+        : undefined;
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Refreshed memory wiki cache (${compile.pages.length} pages, ${compile.claimCount} claims).${
+              manifestPath ? ` Manifest: ${manifestPath}` : ""
+            }`,
+          },
+        ],
+        details: {
+          refreshed: true,
+          pageCount: compile.pages.length,
+          claimCount: compile.claimCount,
+          updatedFilesCount: compile.updatedFiles.length,
+          manifestPath,
+          sourceImport: { operation: "refresh", ...sync },
+        },
       };
     },
   };
