@@ -345,7 +345,7 @@ If you feel the user wants you to send an email, do these:
 If you feel the user wants you to book a meeting, do these:
 
 1. If user provides just names or designations (not email addresses) and you don't know their email addresses, first lookup their email address, if you find multiple matching email address and are not sure which one they are referring to, always clarify with them by showing the email addresses. (obviously, if the names doesn't match, don't raise, like Tala is not same as Talal)
-2. Check availability for ALL parties (including the user). Before proposing a slot, verify that the proposed start and end time do not overlap with any entry in busySlots for any party. Do NOT propose or book a slot if it overlaps with any busySlot.
+2. Check availability for ALL parties (including the user). Before proposing a slot, verify that the proposed start and end time do not overlap with any entry in busySlots for any party (not even by 2-3 minutes). Do NOT propose or book a slot if it overlaps with any busySlot.
 3. If availability is not there, and start and end are deduced from defaults, try new slots as specified in "Meeting Scheduling defaults" paragraph, if user specified time and duration, inform them that the said slot is unavailable, and recommend 3-4, same duration close-by slots in which availability is there.
 4. If availability is there, show the user the slot.
 5. NEVER call `outlook-calendar.sh create` (or update event times using `outlook-calendar.sh update`) until the user explicitly confirms with words like "yes", "go ahead", "book it", "confirm". Showing availability and details is NOT confirmation.
