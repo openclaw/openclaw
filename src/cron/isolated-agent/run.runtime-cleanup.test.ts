@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect } from "vitest";
 
 // ---------------------------------------------------------------------------
 // Unit tests for the cron isolated-agent runtime cleanup path.

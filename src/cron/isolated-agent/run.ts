@@ -1153,6 +1153,10 @@ export async function runCronIsolatedAgentTurn(params: {
     });
   };
 
+  // Capture the sessionId before the try block so the finally block clears
+  // the correct context even if adoptCronRunSessionMetadata() rotates it.
+  const initialSessionId = prepared.context.cronSession.sessionEntry.sessionId;
+
   try {
     const { executeCronRun } = await loadCronExecutorRuntime();
     const execution = await executeCronRun({
@@ -1219,7 +1223,7 @@ export async function runCronIsolatedAgentTurn(params: {
     // The session entry has already been persisted to disk by this point,
     // so the in-memory store and run context can be safely dropped.
     disposeCronRunContext({
-      sessionId: prepared.context.cronSession.sessionEntry.sessionId,
+      sessionId: initialSessionId,
       cronSession: prepared.context.cronSession,
     });
   }
