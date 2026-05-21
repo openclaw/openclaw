@@ -635,7 +635,137 @@ function policyContainerShapeFindings(
       ),
     ];
   }
+  if (policy.mcp !== undefined && !isRecord(policy.mcp)) {
+    return [
+      policyShapeFinding(
+        policyPath,
+        `oc://${policyDocName}/mcp`,
+        `${policyPath} mcp must be an object.`,
+        `Fix ${policyPath} so mcp is an object.`,
+      ),
+    ];
+  }
+  if (isRecord(policy.mcp)) {
+    const finding = policyStringArrayShapeFinding(policy.mcp.servers, {
+      property: "mcp.servers",
+      policyDocName,
+      policyPath,
+      target: "mcp/servers",
+      valueName: "MCP server id",
+    });
+    if (finding !== undefined) {
+      return [finding];
+    }
+  }
+  if (policy.models !== undefined && !isRecord(policy.models)) {
+    return [
+      policyShapeFinding(
+        policyPath,
+        `oc://${policyDocName}/models`,
+        `${policyPath} models must be an object.`,
+        `Fix ${policyPath} so models is an object.`,
+      ),
+    ];
+  }
+  if (isRecord(policy.models)) {
+    const finding = policyStringArrayShapeFinding(policy.models.providers, {
+      property: "models.providers",
+      policyDocName,
+      policyPath,
+      target: "models/providers",
+      valueName: "model provider id",
+    });
+    if (finding !== undefined) {
+      return [finding];
+    }
+  }
+  if (policy.network !== undefined && !isRecord(policy.network)) {
+    return [
+      policyShapeFinding(
+        policyPath,
+        `oc://${policyDocName}/network`,
+        `${policyPath} network must be an object.`,
+        `Fix ${policyPath} so network is an object.`,
+      ),
+    ];
+  }
+  if (isRecord(policy.network)) {
+    if (policy.network.privateNetwork !== undefined && !isRecord(policy.network.privateNetwork)) {
+      return [
+        policyShapeFinding(
+          policyPath,
+          `oc://${policyDocName}/network/privateNetwork`,
+          `${policyPath} network.privateNetwork must be an object.`,
+          `Fix ${policyPath} so network.privateNetwork is an object.`,
+        ),
+      ];
+    }
+    if (
+      isRecord(policy.network.privateNetwork) &&
+      policy.network.privateNetwork.allow !== undefined &&
+      typeof policy.network.privateNetwork.allow !== "boolean"
+    ) {
+      return [
+        policyShapeFinding(
+          policyPath,
+          `oc://${policyDocName}/network/privateNetwork/allow`,
+          `${policyPath} network.privateNetwork.allow must be a boolean.`,
+          `Fix ${policyPath} so network.privateNetwork.allow is true or false.`,
+        ),
+      ];
+    }
+  }
   return [];
+}
+
+function policyStringArrayShapeFinding(
+  value: unknown,
+  params: {
+    readonly property: string;
+    readonly policyDocName: string;
+    readonly policyPath: string;
+    readonly target: string;
+    readonly valueName: string;
+  },
+): HealthFinding | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!isRecord(value)) {
+    return policyShapeFinding(
+      params.policyPath,
+      `oc://${params.policyDocName}/${params.target}`,
+      `${params.policyPath} ${params.property} must be an object.`,
+      `Fix ${params.policyPath} so ${params.property} is an object.`,
+    );
+  }
+  for (const key of ["allow", "deny"] as const) {
+    const entries = value[key];
+    if (entries === undefined) {
+      continue;
+    }
+    const target = `oc://${params.policyDocName}/${params.target}/${key}`;
+    if (!Array.isArray(entries)) {
+      return policyShapeFinding(
+        params.policyPath,
+        target,
+        `${params.policyPath} ${params.property}.${key} must be an array.`,
+        `Fix ${params.policyPath} so ${params.property}.${key} is an array of ${params.valueName}s.`,
+      );
+    }
+    const invalidIndex = entries.findIndex(
+      (entry) => typeof entry !== "string" || entry.trim() === "",
+    );
+    if (invalidIndex >= 0) {
+      return policyShapeFinding(
+        params.policyPath,
+        `${target}/#${invalidIndex}`,
+        `${params.policyPath} ${params.property}.${key}[${invalidIndex}] must be a non-empty string.`,
+        `Fix ${params.policyPath} so each ${params.property}.${key} entry is a ${params.valueName}.`,
+      );
+    }
+  }
+  return undefined;
 }
 
 function policyShapeFinding(

@@ -220,6 +220,45 @@ describe("registerPolicyDoctorChecks", () => {
     ["tools settings array", { tools: { settings: [] } }, "oc://policy.jsonc/tools/settings"],
     ["tools entries object", { tools: { entries: {} } }, "oc://policy.jsonc/tools/entries"],
     ["channels array", { channels: [] }, "oc://policy.jsonc/channels"],
+    ["mcp array", { mcp: [] }, "oc://policy.jsonc/mcp"],
+    ["mcp servers array", { mcp: { servers: [] } }, "oc://policy.jsonc/mcp/servers"],
+    [
+      "mcp servers allow string",
+      { mcp: { servers: { allow: "docs" } } },
+      "oc://policy.jsonc/mcp/servers/allow",
+    ],
+    [
+      "mcp servers deny non-string entry",
+      { mcp: { servers: { deny: ["docs", 1] } } },
+      "oc://policy.jsonc/mcp/servers/deny/#1",
+    ],
+    ["models array", { models: [] }, "oc://policy.jsonc/models"],
+    [
+      "models providers array",
+      { models: { providers: [] } },
+      "oc://policy.jsonc/models/providers",
+    ],
+    [
+      "models providers allow string",
+      { models: { providers: { allow: "openai" } } },
+      "oc://policy.jsonc/models/providers/allow",
+    ],
+    [
+      "models providers deny blank entry",
+      { models: { providers: { deny: ["openrouter", " "] } } },
+      "oc://policy.jsonc/models/providers/deny/#1",
+    ],
+    ["network array", { network: [] }, "oc://policy.jsonc/network"],
+    [
+      "network privateNetwork boolean",
+      { network: { privateNetwork: false } },
+      "oc://policy.jsonc/network/privateNetwork",
+    ],
+    [
+      "network privateNetwork allow string",
+      { network: { privateNetwork: { allow: "false" } } },
+      "oc://policy.jsonc/network/privateNetwork/allow",
+    ],
   ])("reports malformed policy shape for %s", async (_label, policy, target) => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     await fs.writeFile(configPath, "{}", "utf-8");

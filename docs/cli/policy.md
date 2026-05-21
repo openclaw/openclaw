@@ -229,7 +229,7 @@ Example JSON output:
       }
     ]
   },
-  "checksRun": 14,
+  "checksRun": 15,
   "checksSkipped": 0,
   "findings": []
 }
