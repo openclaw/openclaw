@@ -654,4 +654,30 @@ describe("run-oxlint", () => {
     expect(result.stderr).not.toContain("Refusing to start sharded type-aware oxlint");
     expect(fs.existsSync(tmpDir)).toBe(false);
   });
+
+  it("delegates explicit file-target sharded oxlint requests before heavy setup", () => {
+    const fixtureDir = createTempDir("openclaw-run-oxlint-file-target-");
+    const fixtureFile = path.join(fixtureDir, "target.ts");
+    const tmpDir = path.join(fixtureDir, "heavy-tmp");
+    fs.writeFileSync(fixtureFile, "export const ok = 1;\n");
+
+    const result = spawnSync(process.execPath, ["scripts/run-oxlint-shards.mjs", fixtureFile], {
+      cwd: path.resolve("."),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        CI: "",
+        GITHUB_ACTIONS: "",
+        OPENCLAW_LOCAL_CHECK_MODE: "",
+        OPENCLAW_LOCAL_HEAVY_CHECK_TMPDIR: tmpDir,
+      },
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).not.toContain("prepare-extension-package-boundary-artifacts");
+    expect(result.stderr).not.toContain("[oxlint:core] starting");
+    expect(result.stderr).toContain("Refusing to start type-aware oxlint");
+    expect(result.stderr).not.toContain("Refusing to start sharded type-aware oxlint");
+    expect(fs.existsSync(tmpDir)).toBe(false);
+  });
 });
