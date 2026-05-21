@@ -21,7 +21,7 @@ import {
   authorizeScopedGatewayHttpRequestOrReply,
   checkGatewayHttpRequestAuth,
   getHeader,
-  resolveOpenAiCompatibleHttpOperatorScopes,
+  resolveSharedSecretHttpOperatorScopes,
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS } from "./server-methods/chat.js";
@@ -118,9 +118,9 @@ export async function handleSessionHistoryHttpRequest(
     return true;
   }
 
-  // Session history intentionally uses the same shared-secret HTTP trust model as
-  // the OpenAI-compatible APIs: token/password bearer auth grants default operator scopes
-  // so simple API key callers can read their own history without a scope header.
+  // Session history intentionally uses the shared-secret HTTP trust model:
+  // token/password bearer auth grants default operator scopes so simple API key
+  // callers can read their own history without a scope header.
   const authResult = await authorizeScopedGatewayHttpRequestOrReply({
     req,
     res,
@@ -129,7 +129,7 @@ export async function handleSessionHistoryHttpRequest(
     allowRealIpFallback: opts.allowRealIpFallback,
     rateLimiter: opts.rateLimiter,
     operatorMethod: "chat.history",
-    resolveOperatorScopes: resolveOpenAiCompatibleHttpOperatorScopes,
+    resolveOperatorScopes: resolveSharedSecretHttpOperatorScopes,
   });
   if (!authResult) {
     return true;
@@ -286,7 +286,10 @@ export async function handleSessionHistoryHttpRequest(
     if (!currentRequestAuth.ok) {
       return false;
     }
-    const requestedScopes = resolveOpenAiCompatibleHttpOperatorScopes(req, currentRequestAuth.requestAuth);
+    const requestedScopes = resolveSharedSecretHttpOperatorScopes(
+      req,
+      currentRequestAuth.requestAuth,
+    );
     return authorizeOperatorScopesForMethod("chat.history", requestedScopes).allowed;
   };
 
