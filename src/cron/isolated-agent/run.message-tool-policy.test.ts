@@ -7,6 +7,7 @@ import {
   clearFastTestEnv,
   dispatchCronDeliveryMock,
   getChannelPluginMock,
+  isCliProviderMock,
   isHeartbeatOnlyResponseMock,
   loadRunCronIsolatedAgentTurn,
   makeCronSession,
@@ -16,6 +17,7 @@ import {
   resolveCronDeliveryPlanMock,
   resolveDeliveryTargetMock,
   restoreFastTestEnv,
+  runCliAgentMock,
   runEmbeddedPiAgentMock,
 } from "./run.test-harness.js";
 
@@ -359,6 +361,54 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       resolvedDelivery,
     });
   }
+
+  it("rejects CLI-backed cron runs that declare required toolsAllow before dispatch", async () => {
+    mockRunCronFallbackPassthrough();
+    isCliProviderMock.mockReturnValue(true);
+
+    const executor = createMessageToolExecutor({
+      agentPayload: {
+        kind: "agentTurn",
+        message: "run health checks",
+        toolsAllow: ["exec", "read"],
+      } as never,
+      liveSelection: {
+        provider: "openai-codex",
+        model: "gpt-5.5",
+      },
+    });
+
+    await expect(executor.runPrompt("run health checks")).rejects.toThrow(
+      /TOOL_SURFACE_UNAVAILABLE: CLI backend openai-codex cannot expose required cron toolsAllow: exec, read/,
+    );
+    expect(runCliAgentMock).not.toHaveBeenCalled();
+    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("returns tool-surface diagnostics with provider/model for required-tool setup failures", async () => {
+    mockRunCronFallbackPassthrough();
+    isCliProviderMock.mockReturnValue(true);
+
+    const result = await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: makeMessageToolPolicyJob(
+        { mode: "none" },
+        {
+          kind: "agentTurn",
+          message: "run health checks",
+          toolsAllow: ["exec", "read"],
+        },
+      ),
+    });
+
+    expect(result.status).toBe("error");
+    expect(result.provider).toBe("openai");
+    expect(result.model).toBe("gpt-5.4");
+    expect(result.diagnostics?.summary).toContain("TOOL_SURFACE_UNAVAILABLE");
+    expect(result.diagnostics?.entries[0]?.source).toBe("tool-surface");
+    expect(runCliAgentMock).not.toHaveBeenCalled();
+    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+  });
 
   afterEach(() => {
     restoreFastTestEnv(previousFastTestEnv);

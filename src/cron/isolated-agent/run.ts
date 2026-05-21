@@ -152,6 +152,18 @@ function isCronNestedLaneTaskTimeoutError(err: unknown): boolean {
   return isCommandLaneTaskTimeoutError(err, CommandLane.CronNested);
 }
 
+function isToolSurfaceUnavailableError(err: unknown): boolean {
+  if (
+    err &&
+    typeof err === "object" &&
+    (err as { code?: unknown }).code === "TOOL_SURFACE_UNAVAILABLE"
+  ) {
+    return true;
+  }
+  const message = err instanceof Error ? err.message : String(err);
+  return message.includes("TOOL_SURFACE_UNAVAILABLE");
+}
+
 async function retireRolledCronSessionMcpRuntime(params: {
   job: CronJob;
   cronSession: MutableCronSession;
@@ -1186,14 +1198,17 @@ export async function runCronIsolatedAgentTurn(params: {
     });
   } catch (err) {
     const isCronLaneTimeout = isAborted() || isCronNestedLaneTaskTimeoutError(err);
+    const isToolSurfaceUnavailable = isToolSurfaceUnavailableError(err);
     const error = isCronLaneTimeout ? abortReason() : String(err);
     return prepared.context.withRunSession({
       status: "error",
       error,
       diagnostics: createCronRunDiagnosticsFromError(
-        isCronLaneTimeout ? "cron-setup" : "agent-run",
+        isCronLaneTimeout ? "cron-setup" : isToolSurfaceUnavailable ? "tool-surface" : "agent-run",
         isCronLaneTimeout ? error : err,
       ),
+      provider: prepared.context.liveSelection.provider,
+      model: prepared.context.liveSelection.model,
     });
   }
 }

@@ -1,6 +1,36 @@
 import { describe, expect, it } from "vitest";
 import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
-import { resolveCronPayloadOutcome } from "./isolated-agent/helpers.js";
+import {
+  detectCronMissingToolSummaryToken,
+  resolveCronPayloadOutcome,
+} from "./isolated-agent/helpers.js";
+
+describe("detectCronMissingToolSummaryToken", () => {
+  it("matches success-shaped missing-tool summaries case-insensitively", () => {
+    expect(detectCronMissingToolSummaryToken("EXEC_TOOL_UNAVAILABLE")).toBe(
+      "exec_tool_unavailable",
+    );
+    expect(detectCronMissingToolSummaryToken("OPENCLAW_DYNAMIC_EXEC_UNAVAILABLE")).toBe(
+      "openclaw_dynamic_exec_unavailable",
+    );
+    expect(detectCronMissingToolSummaryToken("No exec/shell tool is available in this run.")).toBe(
+      "no exec/shell tool",
+    );
+    expect(detectCronMissingToolSummaryToken("Unable to run required health commands.")).toBe(
+      "unable to run required",
+    );
+  });
+
+  it("ignores broad narrated denial text", () => {
+    expect(detectCronMissingToolSummaryToken(undefined)).toBeUndefined();
+    expect(
+      detectCronMissingToolSummaryToken("I could not run the requested script."),
+    ).toBeUndefined();
+    expect(
+      detectCronMissingToolSummaryToken("The denied claim was reviewed, then the job succeeded."),
+    ).toBeUndefined();
+  });
+});
 
 describe("resolveCronPayloadOutcome", () => {
   it("uses the last non-empty non-error payload as summary and output", () => {
@@ -376,6 +406,20 @@ describe("resolveCronPayloadOutcome", () => {
     expect(result.hasFatalErrorPayload).toBe(false);
     expect(result.outputText).toBe("I could not run the requested script.");
     expect(result.embeddedRunError).toBeUndefined();
+  });
+
+  it("promotes success-shaped missing-tool summaries as a fatal backstop", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text: "Working on it..." }],
+      finalAssistantVisibleText: "No exec/shell tool is available in this run.",
+      preferFinalAssistantVisibleText: true,
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(true);
+    expect(result.outputText).toBe("No exec/shell tool is available in this run.");
+    expect(result.embeddedRunError).toBe(
+      'cron classifier: missing tool token "no exec/shell tool" detected in summary',
+    );
   });
 
   it("prefers typed failure signals over denial-token fallback", () => {

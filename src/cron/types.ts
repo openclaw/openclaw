@@ -103,6 +103,7 @@ export type CronRunDiagnosticSource =
   | "cron-setup"
   | "model-preflight"
   | "agent-run"
+  | "tool-surface"
   | "tool"
   | "exec"
   | "delivery";
