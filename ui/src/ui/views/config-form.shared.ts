@@ -1974,7 +1974,7 @@ const CONFIG_TAG_TRANSLATIONS: Record<string, string> = {
 };
 
 export function translateConfigLabel(value: string | undefined): string | undefined {
-  if (!value || i18n.getLocale() === "en") {
+  if (!value || i18n.getLocale() !== "vi") {
     return value;
   }
   const exact = CONFIG_EXACT_TRANSLATIONS[value];
@@ -1989,7 +1989,7 @@ export function translateConfigLabel(value: string | undefined): string | undefi
 }
 
 export function translateConfigHelp(value: string | undefined): string | undefined {
-  if (!value || i18n.getLocale() === "en") {
+  if (!value || i18n.getLocale() !== "vi") {
     return value;
   }
   const exact = CONFIG_EXACT_TRANSLATIONS[value];

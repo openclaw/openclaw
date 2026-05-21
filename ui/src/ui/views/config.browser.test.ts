@@ -441,6 +441,23 @@ describe("config view", () => {
     }
   });
 
+  it("keeps config helper copy unchanged for non-Vietnamese locales", async () => {
+    await i18n.setLocale("de");
+    try {
+      expect(translateConfigLabel("Native Commands")).toBe("Native Commands");
+      expect(translateConfigLabel("Approval Agent Filter")).toBe("Approval Agent Filter");
+      expect(
+        translateConfigHelp(
+          "Enable image understanding so attached or referenced images can be interpreted into textual context.",
+        ),
+      ).toBe(
+        "Enable image understanding so attached or referenced images can be interpreted into textual context.",
+      );
+    } finally {
+      await i18n.setLocale("en");
+    }
+  });
+
   it("localizes Vietnamese settings labels across config sections", async () => {
     await i18n.setLocale("vi");
     try {

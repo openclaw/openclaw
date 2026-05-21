@@ -171,7 +171,7 @@ export function resolveNavigatorLocale(navLang: string): Locale {
   if (navLang.startsWith("en")) {
     return "en";
   }
-  return DEFAULT_APP_LOCALE;
+  return DEFAULT_LOCALE;
 }
 
 export async function loadLazyLocaleTranslation(locale: Locale): Promise<TranslationMap | null> {

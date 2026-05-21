@@ -91,7 +91,8 @@ describeWhenUiI18nPresent("ui i18n locale registry", () => {
     expect(localeRegistry.resolveNavigatorLocale("vi-VN")).toBe("vi");
     expect(localeRegistry.resolveNavigatorLocale("nl-NL")).toBe("nl");
     expect(localeRegistry.resolveNavigatorLocale("fa-IR")).toBe("fa");
-    expect(localeRegistry.resolveNavigatorLocale("")).toBe("vi");
+    expect(localeRegistry.resolveNavigatorLocale("xx-XX")).toBe("en");
+    expect(localeRegistry.resolveNavigatorLocale("")).toBe("en");
   });
 
   it("loads lazy locale translations from the registry", async () => {
