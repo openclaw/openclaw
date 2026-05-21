@@ -136,7 +136,6 @@
       "resolved": "https://registry.npmjs.org/@types/body-parser/-/body-parser-1.19.6.tgz",
       "integrity": "sha512-HLFeCYgz89uk22N5Qg3dvGvsv46B8GLvKKo1zKG4NybA8U2DiEO3w9lqGg29t/tfLRJpJ6iQxnVw4OnB7MoM9g==",
       "license": "MIT",
-      "peer": true,
       "dependencies": {
         "@types/connect": "*",
         "@types/node": "*"
@@ -147,7 +146,6 @@
       "resolved": "https://registry.npmjs.org/@types/connect/-/connect-3.4.38.tgz",
       "integrity": "sha512-K6uROf1LD88uDQqJCktA4yzL1YYAK6NgfsI0v/mTgyPKWsX1CnJ0XPSDhViejru1GcRkLWb8RlzFYJRqGUbaug==",
       "license": "MIT",
-      "peer": true,
       "dependencies": {
         "@types/node": "*"
       }
@@ -169,7 +167,6 @@
       "resolved": "https://registry.npmjs.org/@types/express-serve-static-core/-/express-serve-static-core-5.1.1.tgz",
       "integrity": "sha512-v4zIMr/cX7/d2BpAEX3KNKL/JrT1s43s96lLvvdTmza1oEvDudCqK9aF/djc/SWgy8Yh0h30TZx5VpzqFCxk5A==",
       "license": "MIT",
-      "peer": true,
       "dependencies": {
         "@types/node": "*",
         "@types/qs": "*",
@@ -181,8 +178,7 @@
       "version": "2.0.5",
       "resolved": "https://registry.npmjs.org/@types/http-errors/-/http-errors-2.0.5.tgz",
       "integrity": "sha512-r8Tayk8HJnX0FztbZN7oVqGccWgw98T/0neJphO91KkmOzug1KkofZURD4UaD5uH8AqcFLfdPErnBod0u71/qg==",
-      "license": "MIT",
-      "peer": true
+      "license": "MIT"
     },
     "node_modules/@types/jsonwebtoken": {
       "version": "9.0.10",
@@ -213,15 +209,13 @@
       "version": "6.15.1",
       "resolved": "https://registry.npmjs.org/@types/qs/-/qs-6.15.1.tgz",
       "integrity": "sha512-GZHUBZR9hckSUhrxmp1nG6NwdpM9fCunJwyThLW1X3AyHgd9IlHb6VANpQQqDr2o/qQp6McZ3y/IA2rVzKzSbw==",
-      "license": "MIT",
-      "peer": true
+      "license": "MIT"
     },
     "node_modules/@types/range-parser": {
       "version": "1.2.7",
       "resolved": "https://registry.npmjs.org/@types/range-parser/-/range-parser-1.2.7.tgz",
       "integrity": "sha512-hKormJbkJqzQGhziax5PItDUTMAM9uE2XXQmM37dyd4hVM+5aVl7oVxMVUiVQn2oCQFN/LKCZdvSM0pFRqbSmQ==",
-      "license": "MIT",
-      "peer": true
+      "license": "MIT"
     },
     "node_modules/@types/retry": {
       "version": "0.12.0",
@@ -234,7 +228,6 @@
       "resolved": "https://registry.npmjs.org/@types/send/-/send-1.2.1.tgz",
       "integrity": "sha512-arsCikDvlU99zl1g69TcAB3mzZPpxgw0UQnaHeC1Nwb015xp8bknZv5rIfri9xTOcMuaVgvabfIRA7PSZVuZIQ==",
       "license": "MIT",
-      "peer": true,
       "dependencies": {
         "@types/node": "*"
       }
@@ -244,7 +237,6 @@
       "resolved": "https://registry.npmjs.org/@types/serve-static/-/serve-static-2.2.0.tgz",
       "integrity": "sha512-8mam4H1NHLtu7nmtalF7eyBH14QyOASmcxHhSfEoRyr0nP/YdoesEtU+uSRvMe96TW/HPTtkoKqQLl53N7UXMQ==",
       "license": "MIT",
-      "peer": true,
       "dependencies": {
         "@types/http-errors": "*",
         "@types/node": "*"

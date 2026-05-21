@@ -8,20 +8,20 @@
       "name": "@openclaw/diffs",
       "version": "2026.5.20",
       "dependencies": {
-        "@pierre/diffs": "1.1.22",
-        "@pierre/theme": "0.0.29",
+        "@pierre/diffs": "1.2.1",
+        "@pierre/theme": "1.0.3",
         "playwright-core": "1.60.0",
         "typebox": "1.1.38",
         "zod": "4.4.3"
       }
     },
     "node_modules/@pierre/diffs": {
-      "version": "1.1.22",
-      "resolved": "https://registry.npmjs.org/@pierre/diffs/-/diffs-1.1.22.tgz",
-      "integrity": "sha512-1Iv7kdl6OABFCd1n2HQbGUiRHouXPaHoIjcb7Lwg8zeJKY5ph+cESFcGEyIiwW0NCbKGtYS2bTnXmI+Eze5dwg==",
+      "version": "1.2.1",
+      "resolved": "https://registry.npmjs.org/@pierre/diffs/-/diffs-1.2.1.tgz",
+      "integrity": "sha512-T9pYhh1KeaYLTwL1HMiAkeETj9CPjiKq6pqiUWRVJXvIkIvYutMrYyr3kN07cFWX2XPM8eqe6l2dknezs6K2AA==",
       "license": "apache-2.0",
       "dependencies": {
-        "@pierre/theme": "0.0.28",
+        "@pierre/theme": "1.0.3",
         "@shikijs/transformers": "^3.0.0",
         "diff": "8.0.3",
         "hast-util-to-html": "9.0.5",
@@ -33,19 +33,10 @@
         "react-dom": "^18.3.1 || ^19.0.0"
       }
     },
-    "node_modules/@pierre/diffs/node_modules/@pierre/theme": {
-      "version": "0.0.28",
-      "resolved": "https://registry.npmjs.org/@pierre/theme/-/theme-0.0.28.tgz",
-      "integrity": "sha512-1j/H/fECBuc9dEvntdWI+l435HZapw+RCJTlqCA6BboQ5TjlnE005j/ROWutXIs8aq5OAc82JI2Kwk4A1WWBgw==",
-      "license": "MIT",
-      "engines": {
-        "vscode": "^1.0.0"
-      }
-    },
     "node_modules/@pierre/theme": {
-      "version": "0.0.29",
-      "resolved": "https://registry.npmjs.org/@pierre/theme/-/theme-0.0.29.tgz",
-      "integrity": "sha512-ZXce2GikoXHNThHdkaxA2X4ISnzSTL/LmKDYaTwqP1bQqENs+l7B+PheF9RsUWgx4GbphW5GU1i1vO4ttAzCUA==",
+      "version": "1.0.3",
+      "resolved": "https://registry.npmjs.org/@pierre/theme/-/theme-1.0.3.tgz",
+      "integrity": "sha512-sWHv11TMoqKxKDgTIk5VbhQjdPhs8DCcBxbjh3mRlS3YOM/OcrWoGX6MM8eBGn9cUu3M46Py0JnxsG2nJaFTuA==",
       "license": "MIT",
       "engines": {
         "vscode": "^1.0.0"
@@ -481,8 +472,7 @@
       "version": "0.27.0",
       "resolved": "https://registry.npmjs.org/scheduler/-/scheduler-0.27.0.tgz",
       "integrity": "sha512-eNv+WrVbKu1f3vbYJT/xtiF5syA5HPIMtf9IgY/nKg0sWqzAUEvqY/xm7OcZc/qafLx/iO9FgOmeSAp4v5ti/Q==",
-      "license": "MIT",
-      "peer": true
+      "license": "MIT"
     },
     "node_modules/shiki": {
       "version": "3.23.0",

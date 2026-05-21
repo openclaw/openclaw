@@ -8,8 +8,8 @@
       "name": "@openclaw/tlon",
       "version": "2026.5.20",
       "dependencies": {
-        "@aws-sdk/client-s3": "3.1048.0",
-        "@aws-sdk/s3-request-presigner": "3.1048.0",
+        "@aws-sdk/client-s3": "3.1051.0",
+        "@aws-sdk/s3-request-presigner": "3.1051.0",
         "@tloncorp/tlon-skill": "0.4.0",
         "@urbit/aura": "3.0.0",
         "zod": "4.4.3"
@@ -112,21 +112,21 @@
       }
     },
     "node_modules/@aws-sdk/client-s3": {
-      "version": "3.1048.0",
-      "resolved": "https://registry.npmjs.org/@aws-sdk/client-s3/-/client-s3-3.1048.0.tgz",
-      "integrity": "sha512-SrJn5FteqqtcDBgQIvqLKk3Qn/2vSsi5XR03I53EDDR4CbCdLysVSNgUnjVncEECMua9Pz+nxO0/lEx3TP+6mA==",
+      "version": "3.1051.0",
+      "resolved": "https://registry.npmjs.org/@aws-sdk/client-s3/-/client-s3-3.1051.0.tgz",
+      "integrity": "sha512-0Yhq7AMw2te5YtxDHkm2KKpXF8IccOO4nmCsp12EzYB/e3IKQ73NHH4jA2ki8mQwvAQzFGB+1GoycT00U8sZCg==",
       "license": "Apache-2.0",
       "dependencies": {
         "@aws-crypto/sha1-browser": "5.2.0",
         "@aws-crypto/sha256-browser": "5.2.0",
         "@aws-crypto/sha256-js": "5.2.0",
-        "@aws-sdk/core": "^3.974.11",
-        "@aws-sdk/credential-provider-node": "^3.972.42",
-        "@aws-sdk/middleware-bucket-endpoint": "^3.972.13",
+        "@aws-sdk/core": "^3.974.12",
+        "@aws-sdk/credential-provider-node": "^3.972.43",
+        "@aws-sdk/middleware-bucket-endpoint": "^3.972.14",
         "@aws-sdk/middleware-expect-continue": "^3.972.12",
-        "@aws-sdk/middleware-flexible-checksums": "^3.974.19",
+        "@aws-sdk/middleware-flexible-checksums": "^3.974.20",
         "@aws-sdk/middleware-location-constraint": "^3.972.10",
-        "@aws-sdk/middleware-sdk-s3": "^3.972.40",
+        "@aws-sdk/middleware-sdk-s3": "^3.972.41",
         "@aws-sdk/middleware-ssec": "^3.972.10",
         "@aws-sdk/signature-v4-multi-region": "^3.996.27",
         "@aws-sdk/types": "^3.973.8",
@@ -439,12 +439,12 @@
       }
     },
     "node_modules/@aws-sdk/s3-request-presigner": {
-      "version": "3.1048.0",
-      "resolved": "https://registry.npmjs.org/@aws-sdk/s3-request-presigner/-/s3-request-presigner-3.1048.0.tgz",
-      "integrity": "sha512-7/yZh562OhKvwBFS/nVL+7qMecUGO91XfaPfqisWiswtlgoQ4gt4zHn9MuUwoPcIYgdkOO0RucOzcD13u7uJEg==",
+      "version": "3.1051.0",
+      "resolved": "https://registry.npmjs.org/@aws-sdk/s3-request-presigner/-/s3-request-presigner-3.1051.0.tgz",
+      "integrity": "sha512-9ZULJHf5IAObmqtg2XhiufMmgEl+aM9jlRog2V9qbICeSOgDCHekmlRxF9FuqZKMqrpLzGtJPDbd8gGAHJZv/A==",
       "license": "Apache-2.0",
       "dependencies": {
-        "@aws-sdk/core": "^3.974.11",
+        "@aws-sdk/core": "^3.974.12",
         "@aws-sdk/signature-v4-multi-region": "^3.996.27",
         "@aws-sdk/types": "^3.973.8",
         "@smithy/core": "^3.24.2",
