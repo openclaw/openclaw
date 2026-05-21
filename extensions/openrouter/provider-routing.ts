@@ -56,9 +56,9 @@ function mergeOpenRouterProviderRouting(params: {
   const modelRouting = readRecord(params.modelParams?.provider);
   const extraRouting = readRecord(params.extraParams.provider);
   const merged = {
-    ...(providerRouting ?? {}),
-    ...(modelRouting ?? {}),
-    ...(extraRouting ?? {}),
+    ...providerRouting,
+    ...modelRouting,
+    ...extraRouting,
   };
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
@@ -78,8 +78,8 @@ export function resolveOpenRouterExtraParamsForTransport(
   }
   return {
     patch: {
-      ...(providerConfigParams ?? {}),
-      ...(modelParams ?? {}),
+      ...providerConfigParams,
+      ...modelParams,
       ...ctx.extraParams,
       ...(providerRouting ? { provider: providerRouting } : {}),
     },
