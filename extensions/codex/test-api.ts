@@ -42,6 +42,7 @@ export function buildCodexHarnessPromptSnapshot(params: {
   appServer: CodexAppServerRuntimeOptions;
   config?: JsonObject;
   promptText?: string;
+  currentTurnReferenceContext?: string;
   developerInstructionAdditions?: string;
   heartbeatCollaborationInstructions?: string;
 }): CodexHarnessPromptSnapshot {
@@ -71,6 +72,7 @@ export function buildCodexHarnessPromptSnapshot(params: {
       cwd: params.cwd,
       appServer: params.appServer,
       promptText: params.promptText,
+      currentTurnReferenceContext: params.currentTurnReferenceContext,
       heartbeatCollaborationInstructions: params.heartbeatCollaborationInstructions,
     }),
   };

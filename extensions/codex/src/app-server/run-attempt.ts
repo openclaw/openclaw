@@ -1140,11 +1140,9 @@ export async function runCodexAppServerAttempt(
       ctx: hookContext,
     });
   let promptBuild = await buildPromptFromCurrentInputs();
-  const decorateCodexTurnPromptText = (prompt: string) =>
-    prependCodexOpenClawPromptContext(prompt, openClawPromptContext);
-  let codexTurnPromptText = decorateCodexTurnPromptText(promptBuild.prompt);
+  let codexTurnPromptText = promptBuild.prompt;
   const refreshCodexTurnPromptText = () => {
-    codexTurnPromptText = decorateCodexTurnPromptText(promptBuild.prompt);
+    codexTurnPromptText = promptBuild.prompt;
   };
   const systemPromptReport = buildCodexSystemPromptReport({
     attempt: params,
@@ -2366,6 +2364,7 @@ export async function runCodexAppServerAttempt(
           cwd: effectiveWorkspace,
           appServer: pluginAppServer,
           promptText: codexTurnPromptText,
+          currentTurnReferenceContext: openClawPromptContext,
           sandboxPolicy: codexSandboxPolicy,
           heartbeatCollaborationInstructions:
             workspaceBootstrapContext.heartbeatCollaborationInstructions,
@@ -4554,16 +4553,6 @@ function shouldInjectCodexOpenClawPromptContext(params: EmbeddedRunAttemptParams
   return !(
     params.bootstrapContextMode === "lightweight" && params.bootstrapContextRunKind === "cron"
   );
-}
-
-function prependCodexOpenClawPromptContext(prompt: string, context: string | undefined): string {
-  if (!context?.trim()) {
-    return prompt;
-  }
-  const promptSection = prompt.startsWith("OpenClaw assembled context for this turn:")
-    ? prompt
-    : ["Current user request:", prompt].join("\n");
-  return [context.trim(), "", promptSection].join("\n");
 }
 
 function renderCodexWorkspaceBootstrapPromptContext(

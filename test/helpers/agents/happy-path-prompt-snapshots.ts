@@ -75,6 +75,7 @@ type CodexPromptSnapshotApi = {
     appServer: unknown;
     config?: Record<string, unknown>;
     promptText?: string;
+    currentTurnReferenceContext?: string;
     developerInstructionAdditions?: string;
     heartbeatCollaborationInstructions?: string;
   }) => {
@@ -628,7 +629,7 @@ function renderModelBoundPromptLayers(params: {
   return [
     "## Reconstructed Model-Bound Prompt Layers",
     "",
-    "This is the deterministic model-bound layer stack OpenClaw can snapshot for the Codex happy path. It uses a pinned Codex `gpt-5.5` prompt fixture generated from Codex's model catalog/cache shape, then adds the Codex permission developer text, Codex thread config instructions when present, OpenClaw developer instructions, turn-scoped collaboration-mode instructions when OpenClaw provides them, turn input with OpenClaw runtime context, and the OpenClaw dynamic tool catalog. Codex can still add runtime-owned context such as native workspace `AGENTS.md`, environment context, memories, app/plugin instructions, and built-in collaboration-mode instructions inside the Codex runtime.",
+    "This is the deterministic model-bound layer stack OpenClaw can snapshot for the Codex happy path. It uses a pinned Codex `gpt-5.5` prompt fixture generated from Codex's model catalog/cache shape, then adds the Codex permission developer text, Codex thread config instructions when present, OpenClaw developer instructions, turn-scoped collaboration-mode instructions when OpenClaw provides them, turn input, and the OpenClaw dynamic tool catalog. Codex can still add runtime-owned context such as native workspace `AGENTS.md`, environment context, memories, app/plugin instructions, and built-in collaboration-mode instructions inside the Codex runtime.",
     "",
     "### Layer Metadata",
     "",
@@ -647,7 +648,7 @@ function renderModelBoundPromptLayers(params: {
         openClawRuntime: {
           configInstructionsFrom: "extensions/codex app-server thread/start config.instructions",
           workspaceBootstrapContextFrom:
-            "extensions/codex app-server turn/start input OpenClaw runtime context",
+            "extensions/codex app-server turn/start collaborationMode.settings.developer_instructions current-turn reference context",
           developerInstructionsFrom:
             "extensions/codex app-server thread/start developerInstructions",
           collaborationModeDeveloperInstructionsFrom:
@@ -737,17 +738,13 @@ function buildCodexOpenClawRuntimeContext(): string {
   ].join("\n");
 }
 
-function prependCodexOpenClawRuntimeContext(prompt: string): string {
-  return [buildCodexOpenClawRuntimeContext(), "", "Current user request:", prompt].join("\n");
-}
-
 function renderScenarioSnapshot(scenario: PromptScenario): string {
   const attempt = createAttempt({
     scenario,
     sessionKey: scenario.ctx.SessionKey ?? `agent:main:${scenario.id}`,
   });
   const appServer = codexApi.resolveCodexPromptSnapshotAppServerOptions();
-  const codexTurnPromptText = prependCodexOpenClawRuntimeContext(scenario.prompt);
+  const codexTurnReferenceContext = buildCodexOpenClawRuntimeContext();
   const codexSnapshot = codexApi.buildCodexHarnessPromptSnapshot({
     attempt,
     cwd: WORKSPACE_DIR,
@@ -755,7 +752,8 @@ function renderScenarioSnapshot(scenario: PromptScenario): string {
     dynamicTools: scenario.dynamicTools,
     appServer,
     config: CODEX_PROMPT_SNAPSHOT_THREAD_CONFIG,
-    promptText: codexTurnPromptText,
+    promptText: scenario.prompt,
+    currentTurnReferenceContext: codexTurnReferenceContext,
     developerInstructionAdditions: CODEX_WORKSPACE_DEVELOPER_INSTRUCTIONS,
     heartbeatCollaborationInstructions:
       scenario.trigger === "heartbeat" ? CODEX_HEARTBEAT_COLLABORATION_INSTRUCTIONS : undefined,
@@ -773,7 +771,7 @@ function renderScenarioSnapshot(scenario: PromptScenario): string {
     "",
     ...scenario.notes.map((note) => `- ${note}`),
     "- This captures the OpenClaw-owned Codex app-server inputs and reconstructs the stable Codex model/permission layers from committed Codex prompt fixtures.",
-    "- This also simulates Codex workspace bootstrap routing: `SOUL.md`, `IDENTITY.md`, `TOOLS.md`, and `USER.md` as developer instructions, `MEMORY.md` in turn input, and `HEARTBEAT.md` as a heartbeat-only file pointer.",
+    "- This also simulates Codex workspace bootstrap routing: `SOUL.md`, `IDENTITY.md`, `TOOLS.md`, and `USER.md` as developer instructions, `MEMORY.md` in turn-scoped reference context, and `HEARTBEAT.md` as a heartbeat-only file pointer.",
     "",
     "## Scenario Metadata",
     "",

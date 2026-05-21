@@ -322,6 +322,23 @@ describe("Codex app-server turn input image sanitizing", () => {
       },
     ]);
   });
+
+  it("passes current-turn OpenClaw context through collaboration instructions instead of user input", () => {
+    const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
+      threadId: "thread-1",
+      cwd: "/repo",
+      appServer: createAppServerOptions() as never,
+      promptText: "user request only",
+      currentTurnReferenceContext:
+        "OpenClaw runtime context for this turn:\n## OpenClaw Workspace Context\nmemory note",
+    });
+
+    expect(request.input).toEqual([{ type: "text", text: "user request only", text_elements: [] }]);
+    const developerInstructions = request.collaborationMode?.settings.developer_instructions ?? "";
+    expect(developerInstructions).toContain("OpenClaw current-turn reference context follows");
+    expect(developerInstructions).toContain("OpenClaw runtime context for this turn:");
+    expect(developerInstructions).toContain("memory note");
+  });
 });
 
 describe("Codex app-server model provider selection", () => {
