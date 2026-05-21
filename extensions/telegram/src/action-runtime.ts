@@ -16,6 +16,7 @@ import {
   renderMessagePresentationFallbackText,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import type { MessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
+import { sendPayloadMediaSequenceOrFallback } from "openclaw/plugin-sdk/reply-payload";
 import { createTelegramActionGate, resolveTelegramPollActionGateState } from "./accounts.js";
 import { resolveTelegramInlineButtons } from "./button-types.js";
 import { notifyTelegramInboundEventOutboundSuccess } from "./inbound-event-delivery.js";
@@ -130,6 +131,48 @@ function readTelegramReplyToMessageId(params: Record<string, unknown>) {
     readNumberParam(params, "replyToMessageId", { integer: true }) ??
     readNumberParam(params, "replyTo", { integer: true })
   );
+}
+
+function pushTelegramMediaUrl(mediaUrls: string[], seen: Set<string>, value: unknown): void {
+  if (typeof value !== "string") {
+    return;
+  }
+  const normalized = value.trim();
+  if (!normalized || seen.has(normalized)) {
+    return;
+  }
+  seen.add(normalized);
+  mediaUrls.push(normalized);
+}
+
+function readTelegramSendMediaUrls(params: Record<string, unknown>) {
+  const mediaUrls: string[] = [];
+  const seen = new Set<string>();
+  pushTelegramMediaUrl(mediaUrls, seen, params.mediaUrl);
+  pushTelegramMediaUrl(mediaUrls, seen, params.media);
+  pushTelegramMediaUrl(mediaUrls, seen, params.path);
+  pushTelegramMediaUrl(mediaUrls, seen, params.filePath);
+  pushTelegramMediaUrl(mediaUrls, seen, params.fileUrl);
+  if (Array.isArray(params.mediaUrls)) {
+    for (const mediaUrl of params.mediaUrls) {
+      pushTelegramMediaUrl(mediaUrls, seen, mediaUrl);
+    }
+  }
+  if (Array.isArray(params.attachments)) {
+    for (const attachment of params.attachments) {
+      if (!attachment || typeof attachment !== "object" || Array.isArray(attachment)) {
+        continue;
+      }
+      const record = attachment as Record<string, unknown>;
+      pushTelegramMediaUrl(mediaUrls, seen, record.media);
+      pushTelegramMediaUrl(mediaUrls, seen, record.mediaUrl);
+      pushTelegramMediaUrl(mediaUrls, seen, record.path);
+      pushTelegramMediaUrl(mediaUrls, seen, record.filePath);
+      pushTelegramMediaUrl(mediaUrls, seen, record.fileUrl);
+      pushTelegramMediaUrl(mediaUrls, seen, record.url);
+    }
+  }
+  return mediaUrls;
 }
 
 function resolveTelegramButtonsFromParams(
@@ -350,16 +393,13 @@ export async function handleTelegramAction(
       throw new Error("Telegram sendMessage is disabled.");
     }
     const to = readStringParam(params, "to", { required: true });
-    const mediaUrl =
-      readStringParam(params, "mediaUrl") ??
-      readStringParam(params, "media", {
-        trim: false,
-      });
+    const mediaUrls = readTelegramSendMediaUrls(params);
+    const firstMediaUrl = mediaUrls[0];
     const presentation = normalizeMessagePresentation(params.presentation);
     const buttons = resolveTelegramButtonsFromParams(params, presentation);
     const content = readTelegramSendContent({
       args: params,
-      mediaUrl: mediaUrl ?? undefined,
+      mediaUrl: firstMediaUrl,
       hasButtons: Array.isArray(buttons) && buttons.length > 0,
       interactive: params.interactive,
       presentation,
@@ -401,15 +441,13 @@ export async function handleTelegramAction(
         "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
       );
     }
-    const result = await telegramActionRuntime.sendMessageTelegram(to, content, {
+    const sendOptions = {
       cfg,
       token,
       accountId: accountId ?? undefined,
-      mediaUrl: mediaUrl || undefined,
       mediaLocalRoots: options?.mediaLocalRoots,
       mediaReadFile: options?.mediaReadFile,
       gatewayClientScopes: options?.gatewayClientScopes,
-      buttons,
       replyToMessageId: replyToMessageId ?? undefined,
       messageThreadId: messageThreadId ?? undefined,
       quoteText: quoteText ?? undefined,
@@ -419,6 +457,22 @@ export async function handleTelegramAction(
         readBooleanParam(params, "forceDocument") ??
         readBooleanParam(params, "asDocument") ??
         false,
+    };
+    const result = await sendPayloadMediaSequenceOrFallback({
+      text: content,
+      mediaUrls,
+      fallbackResult: { messageId: "unknown", chatId: to },
+      sendNoMedia: async () =>
+        await telegramActionRuntime.sendMessageTelegram(to, content, {
+          ...sendOptions,
+          buttons,
+        }),
+      send: async ({ text, mediaUrl, isFirst }) =>
+        await telegramActionRuntime.sendMessageTelegram(to, text, {
+          ...sendOptions,
+          mediaUrl,
+          ...(isFirst ? { buttons } : {}),
+        }),
     });
     notifyVisibleOutboundSuccess(to, messageThreadId);
     await maybePinTelegramActionSend({
