@@ -146,7 +146,7 @@ vi.mock("../process/supervisor/index.js", () => {
   };
 
   const commandOutput = (command: string, env?: NodeJS.ProcessEnv) => {
-    const shellEnv = { ...(env ?? {}) };
+    const shellEnv = { ...env };
     return splitCommands(command)
       .map((segment) => {
         applySegmentShellEffects(segment, shellEnv);
