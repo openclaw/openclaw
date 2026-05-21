@@ -21,7 +21,7 @@ import {
 import { buildAgentHookContext } from "./harness/hook-context.js";
 import { buildAgentHookConversationMessages } from "./harness/hook-history.js";
 import {
-  runAgentHarnessAgentEndHook,
+  awaitAgentHarnessAgentEndHook,
   runAgentHarnessLlmInputHook,
   runAgentHarnessLlmOutputHook,
 } from "./harness/lifecycle-hook-helpers.js";
@@ -576,7 +576,7 @@ export async function runPreparedCliAgent(
           message: blockMessage,
           pluginId: "before_agent_run",
         });
-        await runAgentHarnessAgentEndHook({
+        await awaitAgentHarnessAgentEndHook({
           event: buildBlockedAgentEndEvent(blockMessage),
           ctx: hookContext,
           hookRunner,
@@ -593,7 +593,7 @@ export async function runPreparedCliAgent(
           message: blockMessage,
           pluginId: beforeRunResult?.pluginId ?? "unknown",
         });
-        await runAgentHarnessAgentEndHook({
+        await awaitAgentHarnessAgentEndHook({
           event: buildBlockedAgentEndEvent(blockMessage),
           ctx: hookContext,
           hookRunner,
@@ -619,7 +619,7 @@ export async function runPreparedCliAgent(
         assistantText,
         output,
       });
-      await runAgentHarnessAgentEndHook({
+      await awaitAgentHarnessAgentEndHook({
         event: {
           messages: buildAgentEndMessages(lastAssistant),
           success: true,
@@ -651,7 +651,7 @@ export async function runPreparedCliAgent(
               assistantText,
               output,
             });
-            await runAgentHarnessAgentEndHook({
+            await awaitAgentHarnessAgentEndHook({
               event: {
                 messages: buildAgentEndMessages(lastAssistant),
                 success: true,
@@ -663,7 +663,7 @@ export async function runPreparedCliAgent(
             return buildCliRunResult({ output, effectiveCliSessionId });
           } catch (retryErr) {
             const retryMessage = formatErrorMessage(retryErr);
-            await runAgentHarnessAgentEndHook({
+            await awaitAgentHarnessAgentEndHook({
               event: buildFailedAgentEndEvent(retryMessage),
               ctx: hookContext,
               hookRunner,
@@ -671,7 +671,7 @@ export async function runPreparedCliAgent(
             return toCliRunFailure(retryErr);
           }
         }
-        await runAgentHarnessAgentEndHook({
+        await awaitAgentHarnessAgentEndHook({
           event: buildFailedAgentEndEvent(formatErrorMessage(err)),
           ctx: hookContext,
           hookRunner,
@@ -679,7 +679,7 @@ export async function runPreparedCliAgent(
         throw err;
       }
       const message = formatErrorMessage(err);
-      await runAgentHarnessAgentEndHook({
+      await awaitAgentHarnessAgentEndHook({
         event: buildFailedAgentEndEvent(message),
         ctx: hookContext,
         hookRunner,

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  awaitAgentHarnessAgentEndHook,
   clearAgentHarnessFinalizeRetryBudget,
   runAgentHarnessAgentEndHook,
   runAgentHarnessBeforeAgentFinalizeHook,
@@ -69,16 +70,47 @@ describe("agent harness lifecycle hook helpers", () => {
       runAgentEnd: vi.fn(() => agentEndSettled),
     };
 
-    const run = runAgentHarnessAgentEndHook({
+    const run = awaitAgentHarnessAgentEndHook({
       ctx: { runId: "run-1", sessionKey: "agent:main:session-1" },
       event: EVENT,
       hookRunner: hookRunner as never,
     });
+    let resolved = false;
+    void run.then(() => {
+      resolved = true;
+    });
 
     await Promise.resolve();
     expect(hookRunner.runAgentEnd).toHaveBeenCalledTimes(1);
+    expect(hookRunner.runAgentEnd).toHaveBeenCalledWith(
+      EVENT,
+      expect.objectContaining({ runId: "run-1", sessionKey: "agent:main:session-1" }),
+      { unrefTimeout: false },
+    );
+    expect(resolved).toBe(false);
     releaseHook();
     await expect(run).resolves.toBeUndefined();
+    expect(resolved).toBe(true);
+  });
+
+  it("can leave agent_end timeouts unref'd for fire-and-forget callers", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "agent_end"),
+      runAgentEnd: vi.fn(async () => undefined),
+    };
+
+    runAgentHarnessAgentEndHook({
+      ctx: { runId: "run-1", sessionKey: "agent:main:session-1" },
+      event: EVENT,
+      hookRunner: hookRunner as never,
+    });
+    await Promise.resolve();
+
+    expect(hookRunner.runAgentEnd).toHaveBeenCalledWith(
+      EVENT,
+      expect.objectContaining({ runId: "run-1", sessionKey: "agent:main:session-1" }),
+      { unrefTimeout: true },
+    );
   });
 
   it("continues when legacy hook runners advertise before_agent_finalize without a runner method", async () => {

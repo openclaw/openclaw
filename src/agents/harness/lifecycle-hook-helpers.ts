@@ -8,6 +8,7 @@ import type {
   PluginHookLlmInputEvent,
   PluginHookLlmOutputEvent,
 } from "../../plugins/hook-types.js";
+import type { VoidHookRunOptions } from "../../plugins/hooks.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { buildAgentHookContext, type AgentHarnessHookContext } from "./hook-context.js";
 
@@ -88,20 +89,38 @@ export function runAgentHarnessLlmOutputHook(params: {
   });
 }
 
-export async function runAgentHarnessAgentEndHook(params: {
+async function executeAgentHarnessAgentEndHook(params: {
   event: PluginHookAgentEndEvent;
   ctx: AgentHarnessHookContext;
   hookRunner?: AgentHarnessHookRunner;
+  unrefTimeout?: boolean;
 }): Promise<void> {
   const hookRunner = params.hookRunner ?? getGlobalHookRunner();
   if (!hookRunner?.hasHooks("agent_end") || typeof hookRunner.runAgentEnd !== "function") {
     return;
   }
   try {
-    await hookRunner.runAgentEnd(params.event, buildAgentHookContext(params.ctx));
+    const options: VoidHookRunOptions = { unrefTimeout: params.unrefTimeout ?? false };
+    await hookRunner.runAgentEnd(params.event, buildAgentHookContext(params.ctx), options);
   } catch (error) {
     log.warn(`agent_end hook failed: ${String(error)}`);
   }
+}
+
+export function runAgentHarnessAgentEndHook(params: {
+  event: PluginHookAgentEndEvent;
+  ctx: AgentHarnessHookContext;
+  hookRunner?: AgentHarnessHookRunner;
+}): void {
+  void executeAgentHarnessAgentEndHook({ ...params, unrefTimeout: true });
+}
+
+export async function awaitAgentHarnessAgentEndHook(params: {
+  event: PluginHookAgentEndEvent;
+  ctx: AgentHarnessHookContext;
+  hookRunner?: AgentHarnessHookRunner;
+}): Promise<void> {
+  await executeAgentHarnessAgentEndHook({ ...params, unrefTimeout: false });
 }
 
 export type AgentHarnessBeforeAgentFinalizeOutcome =
