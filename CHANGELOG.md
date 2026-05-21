@@ -22,6 +22,7 @@ Docs: https://docs.openclaw.ai
 
 - Infra/json: retry transient `File changed during read` races while loading JSON state so config and state reads recover instead of failing the turn. (#84285)
 - Providers/Ollama: resolve configured Ollama Cloud `OLLAMA_API_KEY` markers to the real discovery key so cloud provider entries keep authenticated model catalog access. (#85037)
+- Discord: keep persistent component registry fallback warnings actionable by forwarding structured error and cause metadata through the runtime logger. Fixes #84185. (#84190) Thanks @100menotu001.
 - Gateway/sessions: preserve compatible session auth profile overrides when switching models within the same provider, including provider-auth aliases. Fixes #81837. (#81886) Thanks @TurboTheTurtle.
 - Gateway/status: surface inbound delivery telemetry counters and transport-liveness warnings in `openclaw status --all`. Fixes #49577. (#72724)
 - Docker: prune package-excluded plugin source workspaces and dependency closures so runtime images do not keep packages for plugins that were not opted in.
