@@ -353,7 +353,7 @@ async function collectLegacyPluginDependencyTargetEntries(
       {
         kind: "legacy",
         path: path.join(root, ".local", "bundled-plugin-runtime-deps"),
-      },
+      } satisfies CleanupTarget,
     ]),
   ];
   for (const root of roots) {
