@@ -5,7 +5,7 @@
   "description": "OpenClaw LM Studio provider plugin",
   "type": "module",
   "dependencies": {
-    "@earendil-works/pi-ai": "0.75.3"
+    "@earendil-works/pi-ai": "0.75.4"
   },
   "openclaw": {
     "extensions": [
