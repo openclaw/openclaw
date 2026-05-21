@@ -108,12 +108,37 @@ describe("qa scenario catalog", () => {
     const soak = readQaScenarioById("runtime-soak-100-turn");
 
     expect(firstHour.runtimeParityTier).toBe("standard");
+    expect(firstHour.evidence?.github).toContain(
+      "https://github.com/openclaw/openclaw/issues/80364",
+    );
     expect(readQaScenarioExecutionConfig(firstHour.id)).toMatchObject({
       runtimeParityComparison: "outcome-only",
       turnCount: 20,
     });
     expect(soak.runtimeParityTier).toBe("soak");
+    expect(soak.evidence?.github).toContain(
+      "https://github.com/openclaw/openclaw/issues/80395",
+    );
     expect(readQaScenarioExecutionConfig(soak.id)).toMatchObject({ turnCount: 100 });
+  });
+
+  it("loads audited GitHub evidence metadata from scenario markdown", () => {
+    const pack = readQaScenarioPack();
+    const scenariosWithEvidence = pack.scenarios.filter(
+      (scenario) => (scenario.evidence?.github?.length ?? 0) > 0,
+    );
+    const evidenceUrls = scenariosWithEvidence.flatMap(
+      (scenario) => scenario.evidence?.github ?? [],
+    );
+
+    expect(scenariosWithEvidence.map((scenario) => scenario.id)).toContain(
+      "codex-pi-shaped-read-vocabulary",
+    );
+    expect(evidenceUrls).toContain("https://github.com/openclaw/openclaw/pull/80323");
+    expect(evidenceUrls).toContain("https://github.com/openclaw/openclaw/issues/80312");
+    for (const url of evidenceUrls) {
+      expect(url).toMatch(/^https:\/\/github\.com\/openclaw\/openclaw\/(?:issues|pull)\/\d+$/);
+    }
   });
 
   it("loads runtime tool fixture metadata for standard and optional lanes", () => {

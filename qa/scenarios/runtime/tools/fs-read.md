@@ -8,6 +8,9 @@ runtimeParityTier: standard
 coverage:
   primary:
     - tools.fs.read
+evidence:
+  github:
+    - https://github.com/openclaw/openclaw/issues/80312
 objective: Verify file read behavior is tracked across Pi and Codex while Codex owns read natively.
 successCriteria:
   - Pi may expose OpenClaw read while Codex app-server mode may omit duplicate OpenClaw dynamic read.
