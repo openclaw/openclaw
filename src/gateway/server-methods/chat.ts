@@ -380,6 +380,18 @@ type SideResultPayload = {
   ts: number;
 };
 
+function buildDeliveredReplyErrorMessage(
+  deliveredReplies: Array<{ payload: ReplyPayload }>,
+): string | undefined {
+  const message = deliveredReplies
+    .filter((entry) => entry.payload.isError === true)
+    .map((entry) => entry.payload.text?.trim())
+    .filter((text): text is string => Boolean(text))
+    .join(" | ")
+    .trim();
+  return message || undefined;
+}
+
 function buildTranscriptReplyText(payloads: ReplyPayload[]): string {
   const chunks = payloads
     .map((payload) => {
@@ -2689,6 +2701,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               // duplicate normal Pi assistant turns. The non-agent branch below has no Pi
               // assistant turn, so it appends a gateway-injected assistant entry before
               // broadcasting the final UI event.
+              let deliveredReplyErrorMessage: string | undefined;
               if (!agentRunStarted) {
                 await emitUserTranscriptUpdate();
                 const btwReplies = deliveredReplies
@@ -2879,12 +2892,23 @@ export const chatHandlers: GatewayRequestHandlers = {
                     message,
                   });
                 }
-              } else if (!hasBeforeAgentRunGate) {
-                await emitUserTranscriptUpdate().catch((transcriptErr) => {
-                  context.logGateway.warn(
-                    `webchat user transcript update failed after agent run: ${formatForLog(transcriptErr)}`,
-                  );
-                });
+              } else {
+                const errorMessage = buildDeliveredReplyErrorMessage(deliveredReplies);
+                if (errorMessage) {
+                  deliveredReplyErrorMessage = errorMessage;
+                  broadcastChatError({
+                    context,
+                    runId: clientRunId,
+                    sessionKey,
+                    errorMessage,
+                  });
+                } else if (!hasBeforeAgentRunGate) {
+                  await emitUserTranscriptUpdate().catch((transcriptErr) => {
+                    context.logGateway.warn(
+                      `webchat user transcript update failed after agent run: ${formatForLog(transcriptErr)}`,
+                    );
+                  });
+                }
               }
               if (!context.chatAbortedRuns.has(clientRunId)) {
                 setGatewayDedupeEntry({
@@ -2892,8 +2916,14 @@ export const chatHandlers: GatewayRequestHandlers = {
                   key: `chat:${clientRunId}`,
                   entry: {
                     ts: Date.now(),
-                    ok: true,
-                    payload: { runId: clientRunId, status: "ok" as const },
+                    ok: deliveredReplyErrorMessage === undefined,
+                    payload: deliveredReplyErrorMessage
+                      ? {
+                          runId: clientRunId,
+                          status: "error" as const,
+                          summary: deliveredReplyErrorMessage,
+                        }
+                      : { runId: clientRunId, status: "ok" as const },
                   },
                 });
               }

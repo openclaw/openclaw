@@ -31,6 +31,7 @@ const mockState = vi.hoisted(() => ({
     replyToId?: string;
     replyToCurrent?: boolean;
     isReasoning?: boolean;
+    isError?: boolean;
   } | null,
   dispatchedReplies: [] as Array<{
     kind: "tool" | "block" | "final";
@@ -45,6 +46,7 @@ const mockState = vi.hoisted(() => ({
       replyToId?: string;
       replyToCurrent?: boolean;
       isReasoning?: boolean;
+      isError?: boolean;
     };
   }>,
   dispatchError: null as Error | null,
@@ -744,6 +746,78 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     const register = context.registerToolEventRecipient as unknown as ReturnType<typeof vi.fn>;
     expect(register).not.toHaveBeenCalled();
+  });
+
+  it("broadcasts agent-run error payloads when the dispatch promise resolves", async () => {
+    createTranscriptFixture("openclaw-chat-send-agent-error-payload-");
+    mockState.triggerAgentRunStart = true;
+    mockState.dispatchedReplies = [
+      {
+        kind: "final",
+        payload: {
+          text: "LLM idle timeout (120s): no response from model",
+          isError: true,
+        },
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-agent-error-payload",
+    });
+
+    expect(payload).toMatchObject({
+      runId: "idem-agent-error-payload",
+      sessionKey: "main",
+      state: "error",
+      errorMessage: "LLM idle timeout (120s): no response from model",
+    });
+    const nodePayload = mockCallAt(
+      context.nodeSendToSession as unknown as ReturnType<typeof vi.fn>,
+      0,
+    )?.[2];
+    expect(nodePayload).toMatchObject({
+      runId: "idem-agent-error-payload",
+      state: "error",
+      errorMessage: "LLM idle timeout (120s): no response from model",
+    });
+  });
+
+  it("joins multiple agent-run error payloads before broadcasting", async () => {
+    createTranscriptFixture("openclaw-chat-send-agent-error-payloads-");
+    mockState.triggerAgentRunStart = true;
+    mockState.dispatchedReplies = [
+      {
+        kind: "block",
+        payload: {
+          text: "first timeout",
+          isError: true,
+        },
+      },
+      {
+        kind: "final",
+        payload: {
+          text: "second timeout",
+          isError: true,
+        },
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-agent-error-payloads",
+    });
+
+    expect(payload).toMatchObject({
+      state: "error",
+      errorMessage: "first timeout | second timeout",
+    });
   });
 
   it("persists agent-run audio replies emitted as media-bearing block payloads", async () => {
