@@ -876,6 +876,42 @@ describe("handleDiscordMessagingAction", () => {
     expect(searchMessagesDiscord).not.toHaveBeenCalled();
   });
 
+  it("allows guild-wide Discord searches when the guild has a wildcard channel allowlist", async () => {
+    const cfg = {
+      channels: {
+        discord: {
+          token: "token",
+          groupPolicy: "allowlist",
+          guilds: {
+            "111": {
+              channels: {
+                "*": { enabled: true },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await handleMessagingAction(
+      "searchMessages",
+      { guildId: "111", content: "canary" },
+      enableAllActions,
+      cfg,
+    );
+
+    expect(searchMessagesDiscord).toHaveBeenCalledWith(
+      {
+        guildId: "111",
+        content: "canary",
+        channelIds: undefined,
+        authorIds: undefined,
+        limit: undefined,
+      },
+      { cfg },
+    );
+  });
+
   it("sends voice messages from a local file path", async () => {
     sendVoiceMessageDiscord.mockClear();
     sendMessageDiscord.mockClear();

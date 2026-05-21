@@ -378,6 +378,25 @@ describe("handleSlackAction", () => {
     expect(downloadSlackFile).not.toHaveBeenCalled();
   });
 
+  it("uses current channel context to authorize downloadFile", async () => {
+    downloadSlackFile.mockResolvedValueOnce(null);
+    const cfg = slackConfig({
+      groupPolicy: "allowlist",
+      channels: {
+        C1: { enabled: true },
+      },
+    });
+
+    const result = await handleSlackAction({ action: "downloadFile", fileId: "F123" }, cfg, {
+      currentChannelId: "C1",
+    });
+
+    expectRecordFields(requireRecordArg(downloadSlackFile, "downloadSlackFile", 0, 1), {
+      channelId: "C1",
+    });
+    expect(requireDetails(result).ok).toBe(false);
+  });
+
   it("passes download scope (channel/thread) to downloadSlackFile", async () => {
     downloadSlackFile.mockResolvedValueOnce(null);
 

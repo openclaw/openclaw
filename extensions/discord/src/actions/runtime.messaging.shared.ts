@@ -51,6 +51,16 @@ function hasDiscordGuildEntries(
   return Boolean(guilds && Object.keys(guilds).length > 0);
 }
 
+function allowsAllDiscordGuildChannels(
+  channels: DiscordGuildEntryResolved["channels"] | undefined,
+): boolean {
+  const wildcard = channels?.["*"];
+  if (!wildcard || wildcard.enabled === false) {
+    return false;
+  }
+  return Object.values(channels ?? {}).every((entry) => entry?.enabled !== false);
+}
+
 function resolveDiscordActionGuildEntry(params: {
   guilds?: Record<string, DiscordGuildEntryResolved | undefined>;
   guildId?: string;
@@ -362,7 +372,10 @@ export function createDiscordMessagingActionContext(params: {
       ) {
         throw new Error("Discord read target channel is not allowed.");
       }
-      if (hasDiscordGuildEntries(guildInfo?.channels)) {
+      if (
+        hasDiscordGuildEntries(guildInfo?.channels) &&
+        !allowsAllDiscordGuildChannels(guildInfo.channels)
+      ) {
         throw new Error(
           "Discord message search requires channelId or channelIds so each read target can be authorized.",
         );
