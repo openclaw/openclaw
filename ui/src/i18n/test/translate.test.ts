@@ -125,6 +125,7 @@ describe("i18n", () => {
     vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
     localStorage.setItem("openclaw.i18n.locale", "zh-CN");
     const fresh = await importFreshTranslate();
+    expect(fresh.i18n.getLocale()).toBe("en");
     await vi.waitFor(() => {
       expect(fresh.i18n.getLocale()).toBe("zh-CN");
     });

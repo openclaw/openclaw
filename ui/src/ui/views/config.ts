@@ -25,20 +25,20 @@ import {
 } from "./config-form.shared.ts";
 import { analyzeConfigSchema, renderConfigForm, SECTION_META } from "./config-form.ts";
 
-const BORDER_RADIUS_LABELS: Record<BorderRadiusStop, string> = {
-  0: uiText("None", "Không bo"),
-  25: uiText("Slight", "Nhẹ"),
-  50: uiText("Default", "Mặc định"),
-  75: uiText("Round", "Bo tròn"),
-  100: uiText("Full", "Tròn hẳn"),
+const BORDER_RADIUS_LABELS: Record<BorderRadiusStop, [string, string]> = {
+  0: ["None", "Không bo"],
+  25: ["Slight", "Nhẹ"],
+  50: ["Default", "Mặc định"],
+  75: ["Round", "Bo tròn"],
+  100: ["Full", "Tròn hẳn"],
 };
 
-const TEXT_SCALE_LABELS: Record<TextScaleStop, string> = {
-  90: uiText("Small", "Nhỏ"),
-  100: uiText("Default", "Mặc định"),
-  110: uiText("Large", "Lớn"),
-  125: "XL",
-  140: "XXL",
+const TEXT_SCALE_LABELS: Record<TextScaleStop, [string, string]> = {
+  90: ["Small", "Nhỏ"],
+  100: ["Default", "Mặc định"],
+  110: ["Large", "Lớn"],
+  125: ["XL", "XL"],
+  140: ["XXL", "XXL"],
 };
 
 export type WebPushUiState = {
@@ -1121,7 +1121,9 @@ function renderAppearanceSection(props: ConfigProps) {
                     class="settings-roundness__swatch"
                     style="border-radius: ${Math.round(10 * (stop / 50))}px"
                   ></span>
-                  <span class="settings-roundness__label">${BORDER_RADIUS_LABELS[stop]}</span>
+                  <span class="settings-roundness__label"
+                    >${uiText(...BORDER_RADIUS_LABELS[stop])}</span
+                  >
                 </button>
               `,
             )}
@@ -1140,7 +1142,9 @@ function renderAppearanceSection(props: ConfigProps) {
                   class="settings-text-scale__btn ${stop === props.textScale ? "active" : ""}"
                   @click=${() => props.setTextScale(stop)}
                 >
-                  <span class="settings-text-scale__sample">${TEXT_SCALE_LABELS[stop]}</span>
+                  <span class="settings-text-scale__sample"
+                    >${uiText(...TEXT_SCALE_LABELS[stop])}</span
+                  >
                   <span class="settings-text-scale__label">${stop}%</span>
                 </button>
               `,

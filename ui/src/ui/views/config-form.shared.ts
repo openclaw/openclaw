@@ -2007,7 +2007,7 @@ export function translateConfigHelp(value: string | undefined): string | undefin
 }
 
 export function translateConfigTag(value: string): string {
-  if (i18n.getLocale() === "en") {
+  if (i18n.getLocale() !== "vi") {
     return value;
   }
   return CONFIG_TAG_TRANSLATIONS[value] ?? CONFIG_TAG_TRANSLATIONS[value.toLowerCase()] ?? value;

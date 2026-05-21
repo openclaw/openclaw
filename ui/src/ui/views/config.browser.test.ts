@@ -453,6 +453,9 @@ describe("config view", () => {
       ).toBe(
         "Enable image understanding so attached or referenced images can be interpreted into textual context.",
       );
+      expect((await import("./config-form.shared.ts")).translateConfigTag("advanced")).toBe(
+        "advanced",
+      );
     } finally {
       await i18n.setLocale("en");
     }
