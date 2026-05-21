@@ -24,7 +24,7 @@
     "@vitest/browser-playwright": "4.1.7",
     "jsdom": "29.1.1",
     "playwright": "1.60.0",
-    "vite": "8.0.13",
+    "vite": "8.0.14",
     "vitest": "4.1.7"
   }
 }
