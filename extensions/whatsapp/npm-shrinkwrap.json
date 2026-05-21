@@ -75,7 +75,6 @@
       "integrity": "sha512-ewvYlk86xUoGI0zQRNq/mC+16R1QeDlKQy21Ki3oSYXNgLb45GV1P6A0M+/s6nyCuNDqe5VpaY84BzXGwVbwFA==",
       "license": "MIT",
       "optional": true,
-      "peer": true,
       "dependencies": {
         "tslib": "^2.4.0"
       }
@@ -106,7 +105,6 @@
       "resolved": "https://registry.npmjs.org/@img/colour/-/colour-1.1.0.tgz",
       "integrity": "sha512-Td76q7j57o/tLVdgS746cYARfSyxk8iEfRxewL9h4OMzYhbW4TAcppl0mT4eyqXddh6L/jwoM75mo7ixa/pCeQ==",
       "license": "MIT",
-      "peer": true,
       "engines": {
         "node": ">=18"
       }
@@ -123,7 +121,6 @@
       "os": [
         "darwin"
       ],
-      "peer": true,
       "engines": {
         "node": "^18.17.0 || ^20.3.0 || >=21.0.0"
       },
@@ -146,7 +143,6 @@
       "os": [
         "darwin"
       ],
-      "peer": true,
       "engines": {
         "node": "^18.17.0 || ^20.3.0 || >=21.0.0"
       },
@@ -169,7 +165,6 @@
       "os": [
         "darwin"
       ],
-      "peer": true,
       "funding": {
         "url": "https://opencollective.com/libvips"
       }
@@ -186,7 +181,6 @@
       "os": [
         "darwin"
       ],
-      "peer": true,
       "funding": {
         "url": "https://opencollective.com/libvips"
       }
@@ -198,15 +192,11 @@
       "cpu": [
         "arm"
       ],
-      "libc": [
-        "glibc"
-      ],
       "license": "LGPL-3.0-or-later",
       "optional": true,
       "os": [
         "linux"
       ],
-      "peer": true,
       "funding": {
         "url": "https://opencollective.com/libvips"
       }
@@ -218,15 +208,11 @@
       "cpu": [
         "arm64"
       ],
-      "libc": [
-        "glibc"
-      ],
       "license": "LGPL-3.0-or-later",
       "optional": true,
       "os": [
         "linux"
       ],
-      "peer": true,
       "funding": {
         "url": "https://opencollective.com/libvips"
       }
@@ -238,15 +224,11 @@
       "cpu": [
         "ppc64"
       ],
-      "libc": [
-        "glibc"
-      ],
       "license": "LGPL-3.0-or-later",
       "optional": true,
       "os": [
         "linux"
       ],
-      "peer": true,
       "funding": {
         "url": "https://opencollective.com/libvips"
       }
@@ -258,15 +240,11 @@
       "cpu": [
         "riscv64"
       ],
-      "libc": [
-        "glibc"
-      ],
       "license": "LGPL-3.0-or-later",
       "optional": true,
       "os": [
         "linux"
       ],
-      "peer": true,
       "funding": {
         "url": "https://opencollective.com/libvips"
       }
@@ -278,15 +256,11 @@
       "cpu": [
         "s390x"
       ],
-      "libc": [
-        "glibc"
-      ],
       "license": "LGPL-3.0-or-later",
       "optional": true,
       "os": [
         "linux"
       ],
-      "peer": true,
       "funding": {
         "url": "https://opencollective.com/libvips"
       }
@@ -298,15 +272,11 @@
       "cpu": [
         "x64"
       ],
-      "libc": [
-        "glibc"
-      ],
       "license": "LGPL-3.0-or-later",
       "optional": true,
       "os": [
         "linux"
       ],
-      "peer": true,
       "funding": {
         "url": "https://opencollective.com/libvips"
       }
@@ -318,15 +288,11 @@
       "cpu": [
         "arm64"
       ],
-      "libc": [
-        "musl"
-      ],
       "license": "LGPL-3.0-or-later",
       "optional": true,
       "os": [
         "linux"
       ],
-      "peer": true,
       "funding": {
         "url": "https://opencollective.com/libvips"
       }
@@ -338,15 +304,11 @@
       "cpu": [
         "x64"
       ],
-      "libc": [
-        "musl"
-      ],
       "license": "LGPL-3.0-or-later",
       "optional": true,
       "os": [
         "linux"
       ],
-      "peer": true,
       "funding": {
         "url": "https://opencollective.com/libvips"
       }
@@ -358,15 +320,11 @@
       "cpu": [
         "arm"
       ],
-      "libc": [
-        "glibc"
-      ],
       "license": "Apache-2.0",
       "optional": true,
       "os": [
         "linux"
       ],
-      "peer": true,
       "engines": {
         "node": "^18.17.0 || ^20.3.0 || >=21.0.0"
       },
@@ -384,15 +342,11 @@
       "cpu": [
         "arm64"
       ],
-      "libc": [
-        "glibc"
-      ],
       "license": "Apache-2.0",
       "optional": true,
       "os": [
         "linux"
       ],
-      "peer": true,
       "engines": {
         "node": "^18.17.0 || ^20.3.0 || >=21.0.0"
       },
@@ -410,15 +364,11 @@
       "cpu": [
         "ppc64"
       ],
-      "libc": [
-        "glibc"
-      ],
       "license": "Apache-2.0",
       "optional": true,
       "os": [
         "linux"
       ],
-      "peer": true,
       "engines": {
         "node": "^18.17.0 || ^20.3.0 || >=21.0.0"
       },
@@ -436,15 +386,11 @@
       "cpu": [
         "riscv64"
       ],
-      "libc": [
-        "glibc"
-      ],
       "license": "Apache-2.0",
       "optional": true,
       "os": [
         "linux"
       ],
-      "peer": true,
       "engines": {
         "node": "^18.17.0 || ^20.3.0 || >=21.0.0"
       },
@@ -462,15 +408,11 @@
       "cpu": [
         "s390x"
       ],
-      "libc": [
-        "glibc"
-      ],
       "license": "Apache-2.0",
       "optional": true,
       "os": [
         "linux"
       ],
-      "peer": true,
       "engines": {
         "node": "^18.17.0 || ^20.3.0 || >=21.0.0"
       },
@@ -488,15 +430,11 @@
       "cpu": [
         "x64"
       ],
-      "libc": [
-        "glibc"
-      ],
       "license": "Apache-2.0",
       "optional": true,
       "os": [
         "linux"
       ],
-      "peer": true,
       "engines": {
         "node": "^18.17.0 || ^20.3.0 || >=21.0.0"
       },
@@ -514,15 +452,11 @@
       "cpu": [
         "arm64"
       ],
-      "libc": [
-        "musl"
-      ],
       "license": "Apache-2.0",
       "optional": true,
       "os": [
         "linux"
       ],
-      "peer": true,
       "engines": {
         "node": "^18.17.0 || ^20.3.0 || >=21.0.0"
       },
@@ -540,15 +474,11 @@
       "cpu": [
         "x64"
       ],
-      "libc": [
-        "musl"
-      ],
       "license": "Apache-2.0",
       "optional": true,
       "os": [
         "linux"
       ],
-      "peer": true,
       "engines": {
         "node": "^18.17.0 || ^20.3.0 || >=21.0.0"
       },
@@ -568,7 +498,6 @@
       ],
       "license": "Apache-2.0 AND LGPL-3.0-or-later AND MIT",
       "optional": true,
-      "peer": true,
       "dependencies": {
         "@emnapi/runtime": "^1.7.0"
       },
@@ -591,7 +520,6 @@
       "os": [
         "win32"
       ],
-      "peer": true,
       "engines": {
         "node": "^18.17.0 || ^20.3.0 || >=21.0.0"
       },
@@ -611,7 +539,6 @@
       "os": [
         "win32"
       ],
-      "peer": true,
       "engines": {
         "node": "^18.17.0 || ^20.3.0 || >=21.0.0"
       },
@@ -631,7 +558,6 @@
       "os": [
         "win32"
       ],
-      "peer": true,
       "engines": {
         "node": "^18.17.0 || ^20.3.0 || >=21.0.0"
       },
@@ -1079,69 +1005,6 @@
       "integrity": "sha512-k2ENnmBugE/rzQfEcdWHcCY+/FM3VLzH9cYEsbdsoqrvzAKRhUZeRNhAZvB8OitQJ1TBed3yqWtdjzS6wJKBwg==",
       "license": "MIT"
     },
-    "node_modules/@protobufjs/aspromise": {
-      "version": "1.1.2",
-      "resolved": "https://registry.npmjs.org/@protobufjs/aspromise/-/aspromise-1.1.2.tgz",
-      "integrity": "sha512-j+gKExEuLmKwvz3OgROXtrJ2UG2x8Ch2YZUxahh+s1F2HZ+wAceUNLkvy6zKCPVRkU++ZWQrdxsUeQXmcg4uoQ==",
-      "license": "BSD-3-Clause"
-    },
-    "node_modules/@protobufjs/base64": {
-      "version": "1.1.2",
-      "resolved": "https://registry.npmjs.org/@protobufjs/base64/-/base64-1.1.2.tgz",
-      "integrity": "sha512-AZkcAA5vnN/v4PDqKyMR5lx7hZttPDgClv83E//FMNhR2TMcLUhfRUBHCmSl0oi9zMgDDqRUJkSxO3wm85+XLg==",
-      "license": "BSD-3-Clause"
-    },
-    "node_modules/@protobufjs/codegen": {
-      "version": "2.0.5",
-      "resolved": "https://registry.npmjs.org/@protobufjs/codegen/-/codegen-2.0.5.tgz",
-      "integrity": "sha512-zgXFLzW3Ap33e6d0Wlj4MGIm6Ce8O89n/apUaGNB/jx+hw+ruWEp7EwGUshdLKVRCxZW12fp9r40E1mQrf/34g==",
-      "license": "BSD-3-Clause"
-    },
-    "node_modules/@protobufjs/eventemitter": {
-      "version": "1.1.0",
-      "resolved": "https://registry.npmjs.org/@protobufjs/eventemitter/-/eventemitter-1.1.0.tgz",
-      "integrity": "sha512-j9ednRT81vYJ9OfVuXG6ERSTdEL1xVsNgqpkxMsbIabzSo3goCjDIveeGv5d03om39ML71RdmrGNjG5SReBP/Q==",
-      "license": "BSD-3-Clause"
-    },
-    "node_modules/@protobufjs/fetch": {
-      "version": "1.1.1",
-      "resolved": "https://registry.npmjs.org/@protobufjs/fetch/-/fetch-1.1.1.tgz",
-      "integrity": "sha512-GpptLrs57adMSuHi3VNj0mAF8dwh36LMaYF6XyJ6JMWlVsc+t42tm1HSEDmOs3A8fC9yyeisgLhsTVQokOZ0zw==",
-      "license": "BSD-3-Clause",
-      "dependencies": {
-        "@protobufjs/aspromise": "^1.1.1"
-      }
-    },
-    "node_modules/@protobufjs/float": {
-      "version": "1.0.2",
-      "resolved": "https://registry.npmjs.org/@protobufjs/float/-/float-1.0.2.tgz",
-      "integrity": "sha512-Ddb+kVXlXst9d+R9PfTIxh1EdNkgoRe5tOX6t01f1lYWOvJnSPDBlG241QLzcyPdoNTsblLUdujGSE4RzrTZGQ==",
-      "license": "BSD-3-Clause"
-    },
-    "node_modules/@protobufjs/inquire": {
-      "version": "1.1.2",
-      "resolved": "https://registry.npmjs.org/@protobufjs/inquire/-/inquire-1.1.2.tgz",
-      "integrity": "sha512-pa0vFRuws4wkvaXKK1uXZMAwAX4/t8ANaJo45iw/oQHNQ9q5xUzwgFmVJGXiga2BeN+zpX7Vf9vmsiIa2J+MUw==",
-      "license": "BSD-3-Clause"
-    },
-    "node_modules/@protobufjs/path": {
-      "version": "1.1.2",
-      "resolved": "https://registry.npmjs.org/@protobufjs/path/-/path-1.1.2.tgz",
-      "integrity": "sha512-6JOcJ5Tm08dOHAbdR3GrvP+yUUfkjG5ePsHYczMFLq3ZmMkAD98cDgcT2iA1lJ9NVwFd4tH/iSSoe44YWkltEA==",
-      "license": "BSD-3-Clause"
-    },
-    "node_modules/@protobufjs/pool": {
-      "version": "1.1.0",
-      "resolved": "https://registry.npmjs.org/@protobufjs/pool/-/pool-1.1.0.tgz",
-      "integrity": "sha512-0kELaGSIDBKvcgS4zkjz1PeddatrjYcmMWOlAuAPwAeccUrPHdUqo/J6LiymHHEiJT5NrF1UVwxY14f+fy4WQw==",
-      "license": "BSD-3-Clause"
-    },
-    "node_modules/@protobufjs/utf8": {
-      "version": "1.1.1",
-      "resolved": "https://registry.npmjs.org/@protobufjs/utf8/-/utf8-1.1.1.tgz",
-      "integrity": "sha512-oOAWABowe8EAbMyWKM0tYDKi8Yaox52D+HWZhAIJqQXbqe0xI/GV7FhLWqlEKreMkfDjshR5FKgi3mnle0h6Eg==",
-      "license": "BSD-3-Clause"
-    },
     "node_modules/@thi.ng/bitstream": {
       "version": "2.4.51",
       "resolved": "https://registry.npmjs.org/@thi.ng/bitstream/-/bitstream-2.4.51.tgz",
@@ -1315,6 +1178,7 @@
       "resolved": "https://registry.npmjs.org/audio-decode/-/audio-decode-2.2.3.tgz",
       "integrity": "sha512-Z0lHvMayR/Pad9+O9ddzaBJE0DrhZkQlStrC1RwcAHF3AhQAsdwKHeLGK8fYKyp2DDU6xHxzGb4CLMui12yVrg==",
       "license": "MIT",
+      "peer": true,
       "dependencies": {
         "@wasm-audio-decoders/flac": "^0.2.4",
         "@wasm-audio-decoders/ogg-vorbis": "^0.1.15",
@@ -1446,7 +1310,6 @@
       "resolved": "https://registry.npmjs.org/detect-libc/-/detect-libc-2.1.2.tgz",
       "integrity": "sha512-Btj2BOOO83o3WyH59e8MgXsxEQVcarkUOpEYrubB0urwnN10yQ364rsiByU11nZlqWYZm05i/of7io4mzihBtQ==",
       "license": "Apache-2.0",
-      "peer": true,
       "engines": {
         "node": ">=8"
       }
@@ -1555,6 +1418,7 @@
       "resolved": "https://registry.npmjs.org/jimp/-/jimp-1.6.1.tgz",
       "integrity": "sha512-hNQh6rZtWfSVWSNVmvq87N5BPJsNH7k7I7qyrXf9DOma9xATQk3fsyHazCQe51nCjdkoWdTmh0vD7bjVSLoxxw==",
       "license": "MIT",
+      "peer": true,
       "dependencies": {
         "@jimp/core": "1.6.1",
         "@jimp/diff": "1.6.1",
@@ -1599,6 +1463,7 @@
       "resolved": "https://registry.npmjs.org/keyv/-/keyv-5.6.0.tgz",
       "integrity": "sha512-CYDD3SOtsHtyXeEORYRx2qBtpDJFjRTGXUtmNEMGyzYOKj1TE3tycdlho7kA1Ufx9OYWZzg52QFBGALTirzDSw==",
       "license": "MIT",
+      "peer": true,
       "dependencies": {
         "@keyv/serialize": "^1.1.1"
       }
@@ -1892,24 +1757,13 @@
       "license": "MIT"
     },
     "node_modules/protobufjs": {
-      "version": "7.5.6",
-      "resolved": "https://registry.npmjs.org/protobufjs/-/protobufjs-7.5.6.tgz",
-      "integrity": "sha512-M71sTMB146U3u0di3yup8iM+zv8yPRNQVr1KK4tyBitl3qFvEGucq/rGDRShD2rsJhtN02RJaJ7j5X5hmy8SJg==",
+      "version": "8.4.0",
+      "resolved": "https://registry.npmjs.org/protobufjs/-/protobufjs-8.4.0.tgz",
+      "integrity": "sha512-iriNhQ57SYA5Jbdi+41AyPdx6jPPkFO7DODzkOBmqFhgYn/JzX2HxgxYPY18eQAs3CP/AWqtPvkWn8rclRAxdQ==",
       "hasInstallScript": true,
       "license": "BSD-3-Clause",
       "dependencies": {
-        "@protobufjs/aspromise": "^1.1.2",
-        "@protobufjs/base64": "^1.1.2",
-        "@protobufjs/codegen": "^2.0.5",
-        "@protobufjs/eventemitter": "^1.1.0",
-        "@protobufjs/fetch": "^1.1.0",
-        "@protobufjs/float": "^1.0.2",
-        "@protobufjs/inquire": "^1.1.1",
-        "@protobufjs/path": "^1.1.2",
-        "@protobufjs/pool": "^1.1.0",
-        "@protobufjs/utf8": "^1.1.1",
-        "@types/node": ">=13.7.0",
-        "long": "^5.0.0"
+        "long": "^5.3.2"
       },
       "engines": {
         "node": ">=12.0.0"
@@ -1980,7 +1834,6 @@
       "resolved": "https://registry.npmjs.org/semver/-/semver-7.8.0.tgz",
       "integrity": "sha512-AcM7dV/5ul4EekoQ29Agm5vri8JNqRyj39o0qpX6vDF2GZrtutZl5RwgD1XnZjiTAfncsJhMI48QQH3sN87YNA==",
       "license": "ISC",
-      "peer": true,
       "bin": {
         "semver": "bin/semver.js"
       },

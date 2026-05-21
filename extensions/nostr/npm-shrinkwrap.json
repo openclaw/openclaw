@@ -8,7 +8,7 @@
       "name": "@openclaw/nostr",
       "version": "2026.5.20",
       "dependencies": {
-        "nostr-tools": "2.23.3",
+        "nostr-tools": "2.23.5",
         "zod": "4.4.3"
       },
       "peerDependencies": {
@@ -96,9 +96,9 @@
       }
     },
     "node_modules/nostr-tools": {
-      "version": "2.23.3",
-      "resolved": "https://registry.npmjs.org/nostr-tools/-/nostr-tools-2.23.3.tgz",
-      "integrity": "sha512-AALyt9k8xPdF4UV2mlLJ2mgCn4kpTB0DZ8t2r6wjdUh6anfx2cTVBsHUlo9U0EY/cKC5wcNyiMAmRJV5OVEalA==",
+      "version": "2.23.5",
+      "resolved": "https://registry.npmjs.org/nostr-tools/-/nostr-tools-2.23.5.tgz",
+      "integrity": "sha512-Fa7ZlUdjfUW1P4E7H3yBexhOHYi18XNyvd2n7eNHkYR085xADX6Y8V8Vm7nT/XQajaFOBrptXmVIGkJ2E4vfVw==",
       "license": "Unlicense",
       "dependencies": {
         "@noble/ciphers": "2.1.1",

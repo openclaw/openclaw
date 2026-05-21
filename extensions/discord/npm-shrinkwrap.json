@@ -49,8 +49,9 @@
       "version": "0.0.8",
       "resolved": "https://registry.npmjs.org/opusscript/-/opusscript-0.0.8.tgz",
       "integrity": "sha512-VSTi1aWFuCkRCVq+tx/BQ5q9fMnQ9pVZ3JU4UHKqTkf0ED3fKEPdr+gKAAl3IA2hj9rrP6iyq3hlcJq3HELtNQ==",
-      "extraneous": true,
-      "license": "MIT"
+      "license": "MIT",
+      "optional": true,
+      "peer": true
     },
     "node_modules/@discordjs/voice/node_modules/prism-media": {
       "version": "1.3.5",
@@ -107,7 +108,6 @@
       "integrity": "sha512-uTII7OYF+/Mes/MrcIOYp5yOtSMLBWSIoLPpcgwipoiKbli6k322tcoFsxoIIxPDqW01SQGAgko4EzZi2BNv2w==",
       "license": "MIT",
       "optional": true,
-      "peer": true,
       "dependencies": {
         "tslib": "^2.4.0"
       }
@@ -261,9 +261,6 @@
       "cpu": [
         "arm64"
       ],
-      "libc": [
-        "glibc"
-      ],
       "license": "MIT",
       "optional": true,
       "os": [
@@ -279,9 +276,6 @@
       "integrity": "sha512-e6pX6Hiabtz99q+H/YHNkm9JVlpqN8HGh0qPib8G2+UY4/SSH8WvqWipk3v581dMy2oyCHt7MOoY1aU1P1N/xA==",
       "cpu": [
         "arm64"
-      ],
-      "libc": [
-        "musl"
       ],
       "license": "MIT",
       "optional": true,
@@ -299,9 +293,6 @@
       "cpu": [
         "x64"
       ],
-      "libc": [
-        "glibc"
-      ],
       "license": "MIT",
       "optional": true,
       "os": [
@@ -317,9 +308,6 @@
       "integrity": "sha512-5j6Pmc+Wzv5lSxVP6quA7teYRJXibkZqQyYGfTDnTsUOO5dPpcojpqlXlkhyvsA1OAQTj4uxbOCciN3cVWwzug==",
       "cpu": [
         "x64"
-      ],
-      "libc": [
-        "musl"
       ],
       "license": "MIT",
       "optional": true,

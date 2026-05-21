@@ -8,16 +8,16 @@
       "name": "@openclaw/memory-lancedb",
       "version": "2026.5.20",
       "dependencies": {
-        "@lancedb/lancedb": "0.27.2",
+        "@lancedb/lancedb": "0.29.0",
         "apache-arrow": "18.1.0",
         "openai": "6.38.0",
         "typebox": "1.1.38"
       }
     },
     "node_modules/@lancedb/lancedb": {
-      "version": "0.27.2",
-      "resolved": "https://registry.npmjs.org/@lancedb/lancedb/-/lancedb-0.27.2.tgz",
-      "integrity": "sha512-JQpZHV5KzUzDI3flYCjtZcfHlEbL8lM54E0NT+jrRYe29aKYegfavvPsAsuZp0VdcMwFMZcpMkaBhjQMo/fwvg==",
+      "version": "0.29.0",
+      "resolved": "https://registry.npmjs.org/@lancedb/lancedb/-/lancedb-0.29.0.tgz",
+      "integrity": "sha512-lqg2QVs+yriRZ30I1fqnR8qHTR8olSx+9gY7PKvbk19kjP9Ei3uvYhtNsoqdfaF8sdCXML9RczGP9HPYepF2yw==",
       "cpu": [
         "x64",
         "arm64"
@@ -35,22 +35,22 @@
         "node": ">= 18"
       },
       "optionalDependencies": {
-        "@lancedb/lancedb-darwin-arm64": "0.27.2",
-        "@lancedb/lancedb-linux-arm64-gnu": "0.27.2",
-        "@lancedb/lancedb-linux-arm64-musl": "0.27.2",
-        "@lancedb/lancedb-linux-x64-gnu": "0.27.2",
-        "@lancedb/lancedb-linux-x64-musl": "0.27.2",
-        "@lancedb/lancedb-win32-arm64-msvc": "0.27.2",
-        "@lancedb/lancedb-win32-x64-msvc": "0.27.2"
+        "@lancedb/lancedb-darwin-arm64": "0.29.0",
+        "@lancedb/lancedb-linux-arm64-gnu": "0.29.0",
+        "@lancedb/lancedb-linux-arm64-musl": "0.29.0",
+        "@lancedb/lancedb-linux-x64-gnu": "0.29.0",
+        "@lancedb/lancedb-linux-x64-musl": "0.29.0",
+        "@lancedb/lancedb-win32-arm64-msvc": "0.29.0",
+        "@lancedb/lancedb-win32-x64-msvc": "0.29.0"
       },
       "peerDependencies": {
         "apache-arrow": ">=15.0.0 <=18.1.0"
       }
     },
     "node_modules/@lancedb/lancedb-darwin-arm64": {
-      "version": "0.27.2",
-      "resolved": "https://registry.npmjs.org/@lancedb/lancedb-darwin-arm64/-/lancedb-darwin-arm64-0.27.2.tgz",
-      "integrity": "sha512-+XM68V/Rou8kKWDnUeKvg9ChKS0zGeQC2sKAop+06Ty4LwIjEGkeYBYrK0vMhZkBN5EFaOjTOp8E8hGQxdFwXA==",
+      "version": "0.29.0",
+      "resolved": "https://registry.npmjs.org/@lancedb/lancedb-darwin-arm64/-/lancedb-darwin-arm64-0.29.0.tgz",
+      "integrity": "sha512-LzI8+2WKRBGmLbOBe/ojya1ihIGWD7lz9cKGOnCKZ4Wvnqm4RRhyL0r4ukAgmhgJGrVIbZj+juwgSs+NDErLcw==",
       "cpu": [
         "arm64"
       ],
@@ -64,14 +64,11 @@
       }
     },
     "node_modules/@lancedb/lancedb-linux-arm64-gnu": {
-      "version": "0.27.2",
-      "resolved": "https://registry.npmjs.org/@lancedb/lancedb-linux-arm64-gnu/-/lancedb-linux-arm64-gnu-0.27.2.tgz",
-      "integrity": "sha512-laiTTDeMUTzm7t+t6ME5nNQMDoERjmkeuWAFWekbXiFdmp62Dqu34Lvf2BvpWnKwxLMZ5JcBJFIw32WS8/8Jnw==",
+      "version": "0.29.0",
+      "resolved": "https://registry.npmjs.org/@lancedb/lancedb-linux-arm64-gnu/-/lancedb-linux-arm64-gnu-0.29.0.tgz",
+      "integrity": "sha512-y9hFXWVDJNxxpvR1XRrxSslFwIwBiXXDTwYQl/aKoIQ5irG1PdqKsnvCPGcIR01WhLlog12AGytby01lYuE7FA==",
       "cpu": [
         "arm64"
-      ],
-      "libc": [
-        "glibc"
       ],
       "license": "Apache-2.0",
       "optional": true,
@@ -83,14 +80,11 @@
       }
     },
     "node_modules/@lancedb/lancedb-linux-arm64-musl": {
-      "version": "0.27.2",
-      "resolved": "https://registry.npmjs.org/@lancedb/lancedb-linux-arm64-musl/-/lancedb-linux-arm64-musl-0.27.2.tgz",
-      "integrity": "sha512-bK5Mc50EvwGZaaiym5CoPu8Y4GNSyEEvTQ0dTC2AUIm83qdQu1rGw6kkYtc/rTH/hbvAvPQot4agHDZfMVxfYw==",
+      "version": "0.29.0",
+      "resolved": "https://registry.npmjs.org/@lancedb/lancedb-linux-arm64-musl/-/lancedb-linux-arm64-musl-0.29.0.tgz",
+      "integrity": "sha512-fZ8Y4pzm/xfkSKhgZ289puaShckAOwd8s1mt5mHNDC8IuAaBmA6YxpDEQCItiDX1CNgsN+L7BFZWu11x+gsDPQ==",
       "cpu": [
         "arm64"
-      ],
-      "libc": [
-        "musl"
       ],
       "license": "Apache-2.0",
       "optional": true,
@@ -102,14 +96,11 @@
       }
     },
     "node_modules/@lancedb/lancedb-linux-x64-gnu": {
-      "version": "0.27.2",
-      "resolved": "https://registry.npmjs.org/@lancedb/lancedb-linux-x64-gnu/-/lancedb-linux-x64-gnu-0.27.2.tgz",
-      "integrity": "sha512-qe+ML0YmPru0o84f33RBHqoNk6zsHBjiXTLKsEBDiiFYKks/XMsrkKy9NQYcTxShBrg/nx/MLzCzd7dihqgNYw==",
+      "version": "0.29.0",
+      "resolved": "https://registry.npmjs.org/@lancedb/lancedb-linux-x64-gnu/-/lancedb-linux-x64-gnu-0.29.0.tgz",
+      "integrity": "sha512-1JLQohd/MKyAVVaO2unM66e80jm9F7CE1xCRlml+BNKUXReDI4m3Jg7DZLzor+jPs2+Si3dIwXa2Rzs/9plr5g==",
       "cpu": [
         "x64"
-      ],
-      "libc": [
-        "glibc"
       ],
       "license": "Apache-2.0",
       "optional": true,
@@ -121,14 +112,11 @@
       }
     },
     "node_modules/@lancedb/lancedb-linux-x64-musl": {
-      "version": "0.27.2",
-      "resolved": "https://registry.npmjs.org/@lancedb/lancedb-linux-x64-musl/-/lancedb-linux-x64-musl-0.27.2.tgz",
-      "integrity": "sha512-ZpX6Oxn06qvzAdm+D/gNb3SRp/A9lgRAPvPg6nnMmSQk5XamC/hbGO07uK1wwop7nlqXUH/thk4is2y2ieWdTw==",
+      "version": "0.29.0",
+      "resolved": "https://registry.npmjs.org/@lancedb/lancedb-linux-x64-musl/-/lancedb-linux-x64-musl-0.29.0.tgz",
+      "integrity": "sha512-OZ3X0Cksi0e5e0ILvH/mGvuP3rQ2Rj/csNScExM3lroxlnl359TGQod+o4Z1hjSjLbPAe7gRax5Xwmu0/fh7AQ==",
       "cpu": [
         "x64"
-      ],
-      "libc": [
-        "musl"
       ],
       "license": "Apache-2.0",
       "optional": true,
@@ -140,9 +128,9 @@
       }
     },
     "node_modules/@lancedb/lancedb-win32-arm64-msvc": {
-      "version": "0.27.2",
-      "resolved": "https://registry.npmjs.org/@lancedb/lancedb-win32-arm64-msvc/-/lancedb-win32-arm64-msvc-0.27.2.tgz",
-      "integrity": "sha512-4ffpFvh49MiUtkdFJOmBytXEbgUPXORphTOuExnJAgT1VAKwQcu4ZzdsgNoK6mumKBaU+pYQU/MedNkgTzx/Lw==",
+      "version": "0.29.0",
+      "resolved": "https://registry.npmjs.org/@lancedb/lancedb-win32-arm64-msvc/-/lancedb-win32-arm64-msvc-0.29.0.tgz",
+      "integrity": "sha512-5BS/8sNmmqtuj4J5btaoG+mqhcrQZKMJQa4koc+VfzK6VW0KV465kkcXwPtyzgjF4SyionpO9SbUHZj6LHplYA==",
       "cpu": [
         "arm64"
       ],
@@ -156,9 +144,9 @@
       }
     },
     "node_modules/@lancedb/lancedb-win32-x64-msvc": {
-      "version": "0.27.2",
-      "resolved": "https://registry.npmjs.org/@lancedb/lancedb-win32-x64-msvc/-/lancedb-win32-x64-msvc-0.27.2.tgz",
-      "integrity": "sha512-XlwiI6CK2Gkqq+FFVAStHojao/XjIJpDPTm7Tb9SpLL64IlwGw3yaT2hnWKTm90W4KlSrpfSldPly+s+y4U7JQ==",
+      "version": "0.29.0",
+      "resolved": "https://registry.npmjs.org/@lancedb/lancedb-win32-x64-msvc/-/lancedb-win32-x64-msvc-0.29.0.tgz",
+      "integrity": "sha512-cszoiRM0C1wYi7zbMTkQKhVLPWpsW4D3ZTVnukJrCW3faJ+GVyjkXCqpZebWgbq9/9XDNcS0/iJUbB/FbSUNSw==",
       "cpu": [
         "x64"
       ],
@@ -221,6 +209,7 @@
       "resolved": "https://registry.npmjs.org/apache-arrow/-/apache-arrow-18.1.0.tgz",
       "integrity": "sha512-v/ShMp57iBnBp4lDgV8Jx3d3Q5/Hac25FWmQ98eMahUiHPXcvwIMKJD0hBIgclm/FCG+LwPkAKtkRO1O/W0YGg==",
       "license": "Apache-2.0",
+      "peer": true,
       "dependencies": {
         "@swc/helpers": "^0.5.11",
         "@types/command-line-args": "^5.2.3",

@@ -8,11 +8,11 @@
       "name": "@openclaw/matrix",
       "version": "2026.5.20",
       "dependencies": {
-        "@matrix-org/matrix-sdk-crypto-nodejs": "0.5.1",
+        "@matrix-org/matrix-sdk-crypto-nodejs": "0.4.0",
         "@matrix-org/matrix-sdk-crypto-wasm": "18.3.0",
         "fake-indexeddb": "6.2.5",
         "markdown-it": "14.1.1",
-        "matrix-js-sdk": "41.5.0",
+        "matrix-js-sdk": "41.6.0-rc.0",
         "music-metadata": "11.12.3",
         "typebox": "1.1.38",
         "zod": "4.4.3"
@@ -46,9 +46,9 @@
       }
     },
     "node_modules/@matrix-org/matrix-sdk-crypto-nodejs": {
-      "version": "0.5.1",
-      "resolved": "https://registry.npmjs.org/@matrix-org/matrix-sdk-crypto-nodejs/-/matrix-sdk-crypto-nodejs-0.5.1.tgz",
-      "integrity": "sha512-m1nTFhUJv8AZCvuVmZ0wgYsFaseVNMhl3Jqu18KoHs7TQa+mmAW4q3xY6MuVApd75Zu9E0ooQeA5obUZdQ24OA==",
+      "version": "0.4.0",
+      "resolved": "https://registry.npmjs.org/@matrix-org/matrix-sdk-crypto-nodejs/-/matrix-sdk-crypto-nodejs-0.4.0.tgz",
+      "integrity": "sha512-+qqgpn39XFSbsD0dFjssGO9vHEP7sTyfs8yTpt8vuqWpUpF20QMwpCZi0jpYw7GxjErNTsMshopuo8677DfGEA==",
       "hasInstallScript": true,
       "license": "Apache-2.0",
       "dependencies": {
@@ -56,7 +56,7 @@
         "node-downloader-helper": "^2.1.9"
       },
       "engines": {
-        "node": ">= 24"
+        "node": ">= 22"
       }
     },
     "node_modules/@matrix-org/matrix-sdk-crypto-wasm": {
@@ -307,9 +307,9 @@
       "license": "Apache-2.0"
     },
     "node_modules/matrix-js-sdk": {
-      "version": "41.5.0",
-      "resolved": "https://registry.npmjs.org/matrix-js-sdk/-/matrix-js-sdk-41.5.0.tgz",
-      "integrity": "sha512-CK3h+qQJ4wkVEUgEWc5MdLjccXyiFqncCC53P+auqOhnX2U6tAFsRfnbML1QQiKIsFMzqTrAnF/4a5LUUOIeXg==",
+      "version": "41.6.0-rc.0",
+      "resolved": "https://registry.npmjs.org/matrix-js-sdk/-/matrix-js-sdk-41.6.0-rc.0.tgz",
+      "integrity": "sha512-FcTQyR+Nfh0ASEogYcX393hxGr1936Esg53Z+0f9O4SBsAxl1ZSkLXY3JfLZRLX9dNe38VVwQDQE6QuwnwV7Zw==",
       "license": "Apache-2.0",
       "dependencies": {
         "@babel/runtime": "^7.12.5",
