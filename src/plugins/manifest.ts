@@ -230,6 +230,43 @@ export type PluginManifestSetup = {
   requiresRuntime?: boolean;
 };
 
+export type PluginManifestAuthRequirementKind =
+  | "host-capability"
+  | "provider"
+  | "oauth"
+  | "api-key"
+  | "secret"
+  | "channel-account"
+  | "external-service";
+
+export type PluginManifestAuthRequirement = {
+  /** Stable requirement id used by setup, install, and test planners. */
+  id: string;
+  /** Broad requirement family. */
+  kind: PluginManifestAuthRequirementKind;
+  /** User-facing label and explanatory text for setup surfaces. */
+  label?: string;
+  description?: string;
+  /** Host runtime capability that can satisfy this requirement. */
+  capability?: string;
+  /** Provider, channel, or external service that owns the required credential. */
+  provider?: string;
+  channel?: string;
+  service?: string;
+  /** Setup/auth method ids, OAuth scopes, or local credential signals. */
+  authMethods?: string[];
+  scopes?: string[];
+  envVars?: string[];
+  configPaths?: string[];
+  secretRefs?: string[];
+  /** Links to setup providers, auth choices, or channel descriptors in this manifest. */
+  setupRefs?: string[];
+  /** Hints for automated benches and install planners. */
+  optional?: boolean;
+  mockable?: boolean;
+  manual?: boolean;
+};
+
 export type PluginManifestQaRunner = {
   /** Subcommand mounted beneath `openclaw qa`, for example `matrix`. */
   commandName: string;
@@ -363,6 +400,11 @@ export type PluginManifest = {
   activation?: PluginManifestActivation;
   /** Cheap setup/onboarding metadata exposed before plugin runtime loads. */
   setup?: PluginManifestSetup;
+  /**
+   * Declarative auth requirements used by install, setup, and test planners
+   * without importing plugin runtime.
+   */
+  authRequirements?: PluginManifestAuthRequirement[];
   /** Cheap QA runner metadata exposed before plugin runtime loads. */
   qaRunners?: PluginManifestQaRunner[];
   skills?: string[];
@@ -1311,6 +1353,76 @@ function normalizeManifestSetup(value: unknown): PluginManifestSetup | undefined
   return Object.keys(setup).length > 0 ? setup : undefined;
 }
 
+const MANIFEST_AUTH_REQUIREMENT_KINDS = new Set<PluginManifestAuthRequirementKind>([
+  "host-capability",
+  "provider",
+  "oauth",
+  "api-key",
+  "secret",
+  "channel-account",
+  "external-service",
+]);
+
+function normalizeManifestAuthRequirementKind(
+  value: unknown,
+): PluginManifestAuthRequirementKind | undefined {
+  const kind = normalizeOptionalString(value);
+  return kind && MANIFEST_AUTH_REQUIREMENT_KINDS.has(kind as PluginManifestAuthRequirementKind)
+    ? (kind as PluginManifestAuthRequirementKind)
+    : undefined;
+}
+
+function normalizeManifestAuthRequirements(
+  value: unknown,
+): PluginManifestAuthRequirement[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const normalized: PluginManifestAuthRequirement[] = [];
+  for (const entry of value) {
+    if (!isRecord(entry)) {
+      continue;
+    }
+    const id = normalizeOptionalString(entry.id) ?? "";
+    const kind = normalizeManifestAuthRequirementKind(entry.kind);
+    if (!id || !kind) {
+      continue;
+    }
+    const label = normalizeOptionalString(entry.label) ?? "";
+    const description = normalizeOptionalString(entry.description) ?? "";
+    const capability = normalizeOptionalString(entry.capability) ?? "";
+    const provider = normalizeOptionalString(entry.provider) ?? "";
+    const channel = normalizeOptionalString(entry.channel) ?? "";
+    const service = normalizeOptionalString(entry.service) ?? "";
+    const authMethods = normalizeTrimmedStringList(entry.authMethods);
+    const scopes = normalizeTrimmedStringList(entry.scopes);
+    const envVars = normalizeTrimmedStringList(entry.envVars);
+    const configPaths = normalizeTrimmedStringList(entry.configPaths);
+    const secretRefs = normalizeTrimmedStringList(entry.secretRefs);
+    const setupRefs = normalizeTrimmedStringList(entry.setupRefs);
+    normalized.push({
+      id,
+      kind,
+      ...(label ? { label } : {}),
+      ...(description ? { description } : {}),
+      ...(capability ? { capability } : {}),
+      ...(provider ? { provider } : {}),
+      ...(channel ? { channel } : {}),
+      ...(service ? { service } : {}),
+      ...(authMethods.length > 0 ? { authMethods } : {}),
+      ...(scopes.length > 0 ? { scopes } : {}),
+      ...(envVars.length > 0 ? { envVars } : {}),
+      ...(configPaths.length > 0 ? { configPaths } : {}),
+      ...(secretRefs.length > 0 ? { secretRefs } : {}),
+      ...(setupRefs.length > 0 ? { setupRefs } : {}),
+      ...(entry.optional === true ? { optional: true } : {}),
+      ...(entry.mockable === true ? { mockable: true } : {}),
+      ...(entry.manual === true ? { manual: true } : {}),
+    });
+  }
+  return normalized.length > 0 ? normalized : undefined;
+}
+
 function normalizeManifestQaRunners(value: unknown): PluginManifestQaRunner[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;
@@ -1633,6 +1745,7 @@ export function loadPluginManifest(
   const providerAuthChoices = normalizeProviderAuthChoices(raw.providerAuthChoices);
   const activation = normalizeManifestActivation(raw.activation);
   const setup = normalizeManifestSetup(raw.setup);
+  const authRequirements = normalizeManifestAuthRequirements(raw.authRequirements);
   const qaRunners = normalizeManifestQaRunners(raw.qaRunners);
   const skills = normalizeTrimmedStringList(raw.skills);
   const contracts = normalizeManifestContracts(raw.contracts);
@@ -1689,6 +1802,7 @@ export function loadPluginManifest(
       providerAuthChoices,
       activation,
       setup,
+      authRequirements,
       qaRunners,
       skills,
       name,

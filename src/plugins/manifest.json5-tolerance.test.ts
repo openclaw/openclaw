@@ -40,6 +40,64 @@ describe("loadPluginManifest JSON5 tolerance", () => {
     }
   });
 
+  it("normalizes manifest auth requirements", () => {
+    const dir = makeTempDir();
+    fs.writeFileSync(
+      path.join(dir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "auth-demo",
+        configSchema: { type: "object" },
+        authRequirements: [
+          {
+            id: " host-llm ",
+            kind: "host-capability",
+            label: "Host LLM",
+            description: "Use the user's configured model auth.",
+            capability: " runtime.llm.completeStructured ",
+            provider: "",
+            authMethods: [" ", "model-auth"],
+            scopes: ["text-inference"],
+            envVars: ["OPENCLAW_HOST_MODEL"],
+            configPaths: ["agents.defaultModel"],
+            secretRefs: ["modelAuthProfile"],
+            setupRefs: ["setup.providers:host"],
+            optional: false,
+            mockable: true,
+            manual: true,
+          },
+          {
+            id: "ignored",
+            kind: "unknown",
+          },
+        ],
+      }),
+      "utf-8",
+    );
+
+    const result = loadPluginManifest(dir, false);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.manifest.authRequirements).toEqual([
+        {
+          id: "host-llm",
+          kind: "host-capability",
+          label: "Host LLM",
+          description: "Use the user's configured model auth.",
+          capability: "runtime.llm.completeStructured",
+          authMethods: ["model-auth"],
+          scopes: ["text-inference"],
+          envVars: ["OPENCLAW_HOST_MODEL"],
+          configPaths: ["agents.defaultModel"],
+          secretRefs: ["modelAuthProfile"],
+          setupRefs: ["setup.providers:host"],
+          mockable: true,
+          manual: true,
+        },
+      ]);
+    }
+  });
+
   it("uses native JSON parsing for standard JSON manifests", () => {
     const json5Parse = vi.spyOn(JSON5, "parse");
     const dir = makeTempDir();

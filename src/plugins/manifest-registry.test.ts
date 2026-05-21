@@ -740,6 +740,14 @@ describe("loadPluginManifestRegistry", () => {
           assistantVisibility: "visible",
         },
       ],
+      authRequirements: [
+        {
+          id: "host-structured-llm",
+          kind: "host-capability",
+          capability: "runtime.llm.completeStructured",
+          mockable: true,
+        },
+      ],
       configSchema: { type: "object" },
     });
 
@@ -805,6 +813,14 @@ describe("loadPluginManifestRegistry", () => {
         choiceLabel: "OpenAI API key",
         assistantPriority: 10,
         assistantVisibility: "visible",
+      },
+    ]);
+    expect(registry.plugins[0]?.authRequirements).toEqual([
+      {
+        id: "host-structured-llm",
+        kind: "host-capability",
+        capability: "runtime.llm.completeStructured",
+        mockable: true,
       },
     ]);
   });

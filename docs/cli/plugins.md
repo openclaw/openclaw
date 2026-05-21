@@ -222,6 +222,7 @@ openclaw plugins install npm:@scope/plugin-name@1.0.1
 
 OpenClaw checks the advertised plugin API / minimum gateway compatibility before install. When the selected ClawHub version publishes a ClawPack artifact, OpenClaw downloads the versioned npm-pack `.tgz`, verifies the ClawHub digest header and the artifact digest, then installs it through the normal archive path. Older ClawHub versions without ClawPack metadata still install through the legacy package archive verification path. Recorded installs keep their ClawHub source metadata, artifact kind, npm integrity, npm shasum, tarball name, and ClawPack digest facts for later updates.
 Unversioned ClawHub installs keep an unversioned recorded spec so `openclaw plugins update` can follow newer ClawHub releases; explicit version or tag selectors such as `clawhub:pkg@1.2.3` and `clawhub:pkg@beta` remain pinned to that selector.
+Native OpenClaw plugin manifests can also advertise `authRequirements`, which gives setup, install, and test planners a metadata-only view of provider credentials, channel accounts, external services, or host runtime capabilities that may be needed after install.
 
 #### Marketplace shorthand
 

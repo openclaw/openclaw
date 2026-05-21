@@ -221,6 +221,7 @@ export type PluginManifestRecord = {
   providerAuthChoices?: PluginManifest["providerAuthChoices"];
   activation?: PluginManifestActivation;
   setup?: PluginManifestSetup;
+  authRequirements?: PluginManifest["authRequirements"];
   packageManifest?: OpenClawPackageManifest;
   packageDependencies?: PluginDependencySpecMap;
   packageOptionalDependencies?: PluginDependencySpecMap;
@@ -538,6 +539,7 @@ function buildRecord(params: {
     providerAuthChoices: params.manifest.providerAuthChoices,
     activation: params.manifest.activation,
     setup: params.manifest.setup,
+    authRequirements: params.manifest.authRequirements,
     packageManifest: params.candidate.packageManifest,
     packageDependencies: params.candidate.packageDependencies,
     packageOptionalDependencies: params.candidate.packageOptionalDependencies,
@@ -753,6 +755,8 @@ function matchesInstalledPluginRecord(params: {
   if (!record) {
     return false;
   }
+  const resolvedCandidateRoot = resolveUserPath(params.candidate.rootDir, params.env);
+  const candidateRoot = safeRealpathSync(resolvedCandidateRoot) ?? resolvedCandidateRoot;
   const resolvedCandidateSource = resolveUserPath(params.candidate.source, params.env);
   const candidateSource = safeRealpathSync(resolvedCandidateSource) ?? resolvedCandidateSource;
   const trackedPaths = [record.installPath, record.sourcePath]
@@ -765,7 +769,12 @@ function matchesInstalledPluginRecord(params: {
     return false;
   }
   return trackedPaths.some((trackedPath) => {
-    return candidateSource === trackedPath || isPathInside(trackedPath, candidateSource);
+    return (
+      candidateRoot === trackedPath ||
+      candidateSource === trackedPath ||
+      isPathInside(trackedPath, candidateRoot) ||
+      isPathInside(trackedPath, candidateSource)
+    );
   });
 }
 
