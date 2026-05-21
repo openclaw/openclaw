@@ -1189,7 +1189,8 @@ export async function deliverOutboundPayloads(
     log.info(
       `[deliverOutboundPayloads] entry channel=${params.channel} to=${params.to} ` +
         `payloads=${params.payloads.length} skipQueue=${params.skipQueue === true} ` +
-        `bestEffort=${params.bestEffort === true} sessionKey=${params.sessionKey ?? ""}`,
+        `bestEffort=${params.bestEffort === true} ` +
+        `session=${params.session?.key ?? params.session?.policyKey ?? ""}`,
     );
   } catch {
     // never throw from a diagnostic
