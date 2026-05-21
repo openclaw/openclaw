@@ -808,6 +808,7 @@ export async function runCodexAppServerAttempt(
   await fs.mkdir(resolvedWorkspace, { recursive: true });
   const sandboxSessionKey =
     params.sandboxSessionKey?.trim() || params.sessionKey?.trim() || params.sessionId;
+  const contextSessionKey = params.sessionKey?.trim() || sandboxSessionKey;
   const sandbox = await resolveSandboxContext({
     config: params.config,
     sessionKey: sandboxSessionKey,
@@ -882,7 +883,7 @@ export async function runCodexAppServerAttempt(
       });
   const runtimeParams = {
     ...params,
-    sessionKey: sandboxSessionKey,
+    sessionKey: contextSessionKey,
     ...(startupAuthProfileId ? { authProfileId: startupAuthProfileId } : {}),
   };
   let activeSessionId = params.sessionId;
@@ -1000,7 +1001,7 @@ export async function runCodexAppServerAttempt(
       hadSessionFile,
       contextEngine: activeContextEngine,
       sessionId: activeSessionId,
-      sessionKey: sandboxSessionKey,
+      sessionKey: contextSessionKey,
       sessionFile: activeSessionFile,
       runtimeContext: buildActiveContextEngineRuntimeContext(),
       runMaintenance: runHarnessContextEngineMaintenance,
@@ -1014,7 +1015,7 @@ export async function runCodexAppServerAttempt(
     params,
     resolvedWorkspace,
     effectiveWorkspace,
-    sessionKey: sandboxSessionKey,
+    sessionKey: contextSessionKey,
     sessionAgentId,
   });
   const baseDeveloperInstructions = joinPresentSections(
@@ -1047,7 +1048,7 @@ export async function runCodexAppServerAttempt(
     const assembled = await assembleHarnessContextEngine({
       contextEngine: activeContextEngine,
       sessionId: activeSessionId,
-      sessionKey: sandboxSessionKey,
+      sessionKey: contextSessionKey,
       messages: historyMessages,
       tokenBudget: params.contextTokenBudget,
       availableTools: new Set(toolBridge.specs.map((tool) => tool.name).filter(isNonEmptyString)),
@@ -1087,7 +1088,7 @@ export async function runCodexAppServerAttempt(
       : { project: true, reason: "per-turn-projection" };
     embeddedAgentLog.info("codex app-server context-engine projection decision", {
       sessionId: params.sessionId,
-      sessionKey: sandboxSessionKey,
+      sessionKey: contextSessionKey,
       engineId: activeContextEngine.info.id,
       mode: contextEngineProjection?.mode ?? assembled.contextProjection?.mode ?? "per_turn",
       epoch: contextEngineProjection?.epoch,
@@ -1148,7 +1149,7 @@ export async function runCodexAppServerAttempt(
   };
   const systemPromptReport = buildCodexSystemPromptReport({
     attempt: params,
-    sessionKey: sandboxSessionKey,
+    sessionKey: contextSessionKey,
     workspaceDir: effectiveWorkspace,
     developerInstructions: promptBuild.developerInstructions,
     workspaceBootstrapContext,
@@ -2254,7 +2255,7 @@ export async function runCodexAppServerAttempt(
       "codex app-server context-engine turn overflowed; forcing context-engine compaction",
       {
         sessionId: activeSessionId,
-        sessionKey: sandboxSessionKey,
+        sessionKey: contextSessionKey,
         threadId: thread.threadId,
         engineId: activeContextEngine.info.id,
         tokenBudget: params.contextTokenBudget,
@@ -2273,7 +2274,7 @@ export async function runCodexAppServerAttempt(
         activeContextEngine,
         {
           sessionId: activeSessionId,
-          sessionKey: sandboxSessionKey,
+          sessionKey: contextSessionKey,
           sessionFile: activeSessionFile,
           tokenBudget: params.contextTokenBudget,
           force: true,
@@ -2291,7 +2292,7 @@ export async function runCodexAppServerAttempt(
       );
       embeddedAgentLog.info("codex app-server context-engine forced compaction result", {
         sessionId: activeSessionId,
-        sessionKey: sandboxSessionKey,
+        sessionKey: contextSessionKey,
         engineId: activeContextEngine.info.id,
         ok: compactResult.ok,
         compacted: compactResult.compacted,
@@ -2307,7 +2308,7 @@ export async function runCodexAppServerAttempt(
       await runHarnessContextEngineMaintenance({
         contextEngine: activeContextEngine,
         sessionId: activeSessionId,
-        sessionKey: sandboxSessionKey,
+        sessionKey: contextSessionKey,
         sessionFile: activeSessionFile,
         reason: "compaction",
         runtimeContext: maintenanceRuntimeContext,
@@ -2317,7 +2318,7 @@ export async function runCodexAppServerAttempt(
     } catch (compactErr) {
       embeddedAgentLog.warn("codex app-server context-engine forced compaction failed", {
         sessionId: params.sessionId,
-        sessionKey: sandboxSessionKey,
+        sessionKey: contextSessionKey,
         engineId: activeContextEngine.info.id,
         error: formatErrorMessage(compactErr),
       });
@@ -2682,7 +2683,7 @@ export async function runCodexAppServerAttempt(
       params,
       agentId: sessionAgentId,
       result,
-      sessionKey: sandboxSessionKey,
+      sessionKey: contextSessionKey,
       threadId: thread.threadId,
       turnId: activeTurnId,
     });
@@ -2715,7 +2716,7 @@ export async function runCodexAppServerAttempt(
         aborted: finalAborted,
         yieldAborted: Boolean(result.yieldDetected),
         sessionIdUsed: activeSessionId,
-        sessionKey: sandboxSessionKey,
+        sessionKey: contextSessionKey,
         sessionFile: activeSessionFile,
         messagesSnapshot: finalMessages,
         prePromptMessageCount,

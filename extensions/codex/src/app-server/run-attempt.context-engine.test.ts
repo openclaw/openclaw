@@ -348,6 +348,39 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(openSpy).not.toHaveBeenCalled();
   });
 
+  it("keeps context-engine history bound to the run session when sandbox key differs", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    SessionManager.open(sessionFile).appendMessage(
+      assistantMessage("canonical main context", Date.now()) as never,
+    );
+    const contextEngine = createContextEngine();
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.sessionKey = "agent:main:main";
+    params.sandboxSessionKey = "agent:main:telegram:default:direct:12345";
+    params.contextEngine = contextEngine;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+
+    if (!contextEngine.bootstrap) {
+      throw new Error("expected bootstrap hook");
+    }
+    const bootstrapParams = requireFirstCallArg(contextEngine.bootstrap, "bootstrap") as Parameters<
+      NonNullable<ContextEngine["bootstrap"]>
+    >[0];
+    expect(bootstrapParams.sessionKey).toBe("agent:main:main");
+
+    const assembleParams = requireFirstCallArg(contextEngine.assemble, "assemble") as Parameters<
+      ContextEngine["assemble"]
+    >[0];
+    expect(assembleParams.sessionKey).toBe("agent:main:main");
+
+    await harness.completeTurn();
+    await run;
+  });
+
   it("uses the runtime token budget for large Codex context-engine projections", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
