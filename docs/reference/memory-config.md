@@ -138,6 +138,9 @@ Codex OAuth covers chat/completions only and does not satisfy embedding requests
 
 For custom OpenAI-compatible endpoints or overriding provider defaults:
 
+Use `provider: "openai-compatible"` for a generic OpenAI-compatible
+`/v1/embeddings` server that should not inherit global OpenAI chat credentials.
+
 <ParamField path="remote.baseUrl" type="string">
   Custom API base URL.
 </ParamField>
@@ -153,7 +156,7 @@ For custom OpenAI-compatible endpoints or overriding provider defaults:
   agents: {
     defaults: {
       memorySearch: {
-        provider: "openai",
+        provider: "openai-compatible",
         model: "text-embedding-3-small",
         remote: {
           baseUrl: "https://api.example.com/v1/",
