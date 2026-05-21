@@ -1704,16 +1704,13 @@ export async function runEmbeddedAttempt(
             params.config?.messages?.visibleReplies === "message_tool"),
       },
     );
-    const constructionEffectiveToolPolicy =
-      toolsAllowWithForcedRuntimeTools === undefined
-        ? resolveEffectiveToolPolicy({
-            config: params.config,
-            sessionKey: sandboxSessionKey,
-            agentId: sessionAgentId,
-            modelProvider: params.provider,
-            modelId: params.modelId,
-          })
-        : undefined;
+    const constructionEffectiveToolPolicy = resolveEffectiveToolPolicy({
+      config: params.config,
+      sessionKey: sandboxSessionKey,
+      agentId: sessionAgentId,
+      modelProvider: params.provider,
+      modelId: params.modelId,
+    });
     const constructionToolsAllow = resolveAttemptConstructionToolsAllow({
       config: params.config,
       sessionKey: sandboxSessionKey,
@@ -2077,6 +2074,7 @@ export async function runEmbeddedAttempt(
       agentId: sessionAgentId,
       modelProvider: params.provider,
       modelId: params.modelId,
+      effectiveToolPolicy: constructionEffectiveToolPolicy,
       messageProvider: resolveAttemptToolPolicyMessageProvider(params),
       agentAccountId: params.agentAccountId,
       groupId: params.groupId,
@@ -2212,9 +2210,7 @@ export async function runEmbeddedAttempt(
       senderE164: params.senderE164,
       sandboxToolPolicy: sandbox?.tools,
       toolsAllow: params.toolsAllow,
-      ...(constructionEffectiveToolPolicy
-        ? { effectiveToolPolicy: constructionEffectiveToolPolicy }
-        : {}),
+      effectiveToolPolicy: constructionEffectiveToolPolicy,
     });
     const toolSearchRunPlan = buildToolSearchRunPlan({
       visibleTools: effectiveTools,
