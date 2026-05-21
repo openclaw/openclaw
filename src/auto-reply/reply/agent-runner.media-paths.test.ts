@@ -64,11 +64,15 @@ vi.mock("../../agents/pi-embedded-runner/runs.js", () => ({
   queueEmbeddedPiMessageWithOutcomeAsync: queueEmbeddedPiMessageWithOutcomeAsyncMock,
 }));
 
-vi.mock("./queue.js", () => ({
-  enqueueFollowupRun: enqueueFollowupRunMock,
-  refreshQueuedFollowupSession: refreshQueuedFollowupSessionMock,
-  scheduleFollowupDrain: scheduleFollowupDrainMock,
-}));
+vi.mock("./queue.js", async () => {
+  const actual = await vi.importActual<typeof import("./queue.js")>("./queue.js");
+  return {
+    ...actual,
+    enqueueFollowupRun: enqueueFollowupRunMock,
+    refreshQueuedFollowupSession: refreshQueuedFollowupSessionMock,
+    scheduleFollowupDrain: scheduleFollowupDrainMock,
+  };
+});
 
 vi.mock("../../media/outbound-attachment.js", () => ({
   resolveOutboundAttachmentFromUrl: (...args: unknown[]) =>

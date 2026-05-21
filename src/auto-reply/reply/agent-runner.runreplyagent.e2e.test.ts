@@ -102,11 +102,15 @@ vi.mock("../../agents/pi-embedded-runner/runs.js", () => ({
     state.queueEmbeddedPiMessageMock(sessionId, prompt, options),
 }));
 
-vi.mock("./queue.js", () => ({
-  enqueueFollowupRun: vi.fn(),
-  refreshQueuedFollowupSession: vi.fn(),
-  scheduleFollowupDrain: vi.fn(),
-}));
+vi.mock("./queue.js", async () => {
+  const actual = await vi.importActual<typeof import("./queue.js")>("./queue.js");
+  return {
+    ...actual,
+    enqueueFollowupRun: vi.fn(),
+    refreshQueuedFollowupSession: vi.fn(),
+    scheduleFollowupDrain: vi.fn(),
+  };
+});
 
 beforeAll(async () => {
   // Avoid attributing the initial agent-runner import cost to the first test case.

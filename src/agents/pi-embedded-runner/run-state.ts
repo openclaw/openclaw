@@ -9,6 +9,7 @@ import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 export type EmbeddedPiQueueHandle = {
   kind?: "embedded";
   queueMessage: (text: string, options?: EmbeddedPiQueueMessageOptions) => Promise<void>;
+  getQueueDepth?: () => number | undefined;
   isStreaming: () => boolean;
   isCompacting: () => boolean;
   supportsTranscriptCommitWait?: boolean;

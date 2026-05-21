@@ -46,6 +46,10 @@ import type {
   PluginHookBeforeResetEvent,
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
+  PluginHookQueueAfterEnqueueEvent,
+  PluginHookQueueBeforeEnqueueEvent,
+  PluginHookQueueBeforeEnqueueResult,
+  PluginHookQueueContext,
   PluginAgentTurnPrepareEvent,
   PluginAgentTurnPrepareResult,
   PluginHeartbeatPromptContributionEvent,
@@ -126,6 +130,10 @@ export type {
   PluginHookBeforeToolCallResult,
   PluginHookBeforeAgentRunEvent,
   PluginHookAfterToolCallEvent,
+  PluginHookQueueAfterEnqueueEvent,
+  PluginHookQueueBeforeEnqueueEvent,
+  PluginHookQueueBeforeEnqueueResult,
+  PluginHookQueueContext,
   PluginHookToolResultPersistContext,
   PluginHookToolResultPersistEvent,
   PluginHookToolResultPersistResult,
@@ -212,6 +220,7 @@ const DEFAULT_MODIFYING_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, 
   // logged and the run proceeds without its modifications.
   before_agent_start: 15_000,
   before_prompt_build: 15_000,
+  queue_before_enqueue: 15_000,
 };
 
 type ModifyingHookPolicy<K extends PluginHookName, TResult> = {
@@ -458,6 +467,21 @@ export function createHookRunner(
       return acc;
     }
     return next;
+  };
+
+  const mergeQueueBeforeEnqueueResult = (
+    acc: PluginHookQueueBeforeEnqueueResult | undefined,
+    next: PluginHookQueueBeforeEnqueueResult,
+  ): PluginHookQueueBeforeEnqueueResult => {
+    if (acc?.block === true) {
+      return acc;
+    }
+    return {
+      prompt: lastDefined(acc?.prompt, next.prompt),
+      summaryLine: lastDefined(acc?.summaryLine, next.summaryLine),
+      block: stickyTrue(acc?.block, next.block),
+      blockReason: lastDefined(acc?.blockReason, next.blockReason),
+    };
   };
 
   const handleHookError = (params: {
@@ -1191,6 +1215,37 @@ export function createHookRunner(
   }
 
   /**
+   * Run queue_before_enqueue hook.
+   * Allows plugins to block or rewrite a follow-up before it enters the queue.
+   */
+  async function runQueueBeforeEnqueue(
+    event: PluginHookQueueBeforeEnqueueEvent,
+    ctx: PluginHookQueueContext,
+  ): Promise<PluginHookQueueBeforeEnqueueResult | undefined> {
+    return runModifyingHook<"queue_before_enqueue", PluginHookQueueBeforeEnqueueResult>(
+      "queue_before_enqueue",
+      event,
+      ctx,
+      {
+        mergeResults: mergeQueueBeforeEnqueueResult,
+        shouldStop: (result) => result.block === true,
+        terminalLabel: "block=true",
+      },
+    );
+  }
+
+  /**
+   * Run queue_after_enqueue hook.
+   * Runs in parallel after the queue decision has been applied.
+   */
+  async function runQueueAfterEnqueue(
+    event: PluginHookQueueAfterEnqueueEvent,
+    ctx: PluginHookQueueContext,
+  ): Promise<void> {
+    return runVoidHook("queue_after_enqueue", event, ctx);
+  }
+
+  /**
    * Run tool_result_persist hook.
    *
    * This hook is intentionally synchronous: it runs in hot paths where session
@@ -1522,6 +1577,8 @@ export function createHookRunner(
     // Tool hooks
     runBeforeToolCall,
     runAfterToolCall,
+    runQueueBeforeEnqueue,
+    runQueueAfterEnqueue,
     runToolResultPersist,
     // Message write hooks
     runBeforeMessageWrite,

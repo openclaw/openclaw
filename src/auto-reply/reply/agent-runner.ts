@@ -34,6 +34,7 @@ import {
 } from "../../infra/diagnostic-trace-context.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -87,6 +88,7 @@ import { readPostCompactionContext } from "./post-compaction-context.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import {
   enqueueFollowupRun,
+  getFollowupQueueDepth,
   refreshQueuedFollowupSession,
   scheduleFollowupDrain,
   type FollowupRun,
@@ -1024,6 +1026,124 @@ function refreshSessionEntryFromStore(params: {
   }
 }
 
+async function runQueueBeforeEnqueueHooks(params: {
+  queueKey: string;
+  queueMode: QueueSettings["mode"];
+  dropPolicy?: QueueSettings["dropPolicy"];
+  followupRun: FollowupRun;
+}): Promise<
+  | {
+      status: "ok";
+      followupRun: FollowupRun;
+      depthBefore: number;
+    }
+  | {
+      status: "blocked";
+      depthBefore: number;
+      reason?: string;
+    }
+> {
+  const { queueKey, queueMode, dropPolicy, followupRun } = params;
+  const depthBefore = getFollowupQueueDepth(queueKey);
+  const hookRunner = getGlobalHookRunner();
+  if (!hookRunner?.hasHooks("queue_before_enqueue")) {
+    return { status: "ok", followupRun, depthBefore };
+  }
+
+  const event = {
+    queueKey,
+    queueMode,
+    ...(dropPolicy ? { dropPolicy } : {}),
+    depthBefore,
+    prompt: followupRun.prompt,
+    ...(followupRun.summaryLine ? { summaryLine: followupRun.summaryLine } : {}),
+    ...(followupRun.messageId ? { messageId: followupRun.messageId } : {}),
+    ...(followupRun.originatingChannel
+      ? { originatingChannel: followupRun.originatingChannel }
+      : {}),
+    ...(followupRun.originatingTo ? { originatingTo: followupRun.originatingTo } : {}),
+    ...(followupRun.originatingAccountId
+      ? { originatingAccountId: followupRun.originatingAccountId }
+      : {}),
+    ...(followupRun.originatingThreadId !== undefined
+      ? { originatingThreadId: followupRun.originatingThreadId }
+      : {}),
+    sessionId: followupRun.run.sessionId,
+    ...(followupRun.run.sessionKey ? { sessionKey: followupRun.run.sessionKey } : {}),
+  };
+  const ctx = {
+    agentId: followupRun.run.agentId,
+    sessionKey: followupRun.run.sessionKey,
+    sessionId: followupRun.run.sessionId,
+    channelId: followupRun.originatingChannel,
+  };
+  const result = await hookRunner.runQueueBeforeEnqueue(event, ctx);
+  if (result?.block === true) {
+    return { status: "blocked", depthBefore, reason: result.blockReason };
+  }
+
+  const nextPrompt = normalizeOptionalString(result?.prompt);
+  const nextSummaryLine = normalizeOptionalString(result?.summaryLine);
+  if (!nextPrompt && !nextSummaryLine) {
+    return { status: "ok", followupRun, depthBefore };
+  }
+  return {
+    status: "ok",
+    depthBefore,
+    followupRun: {
+      ...followupRun,
+      ...(nextPrompt ? { prompt: nextPrompt } : {}),
+      ...(nextSummaryLine ? { summaryLine: nextSummaryLine } : {}),
+    },
+  };
+}
+
+function runQueueAfterEnqueueHooks(params: {
+  queueKey: string;
+  queueMode: QueueSettings["mode"];
+  dropPolicy?: QueueSettings["dropPolicy"];
+  followupRun: FollowupRun;
+  depthBefore: number;
+  enqueued: boolean;
+}): void {
+  const hookRunner = getGlobalHookRunner();
+  if (!hookRunner?.hasHooks("queue_after_enqueue")) {
+    return;
+  }
+  const { queueKey, queueMode, dropPolicy, followupRun, depthBefore, enqueued } = params;
+  void hookRunner.runQueueAfterEnqueue(
+    {
+      queueKey,
+      queueMode,
+      ...(dropPolicy ? { dropPolicy } : {}),
+      depthBefore,
+      depthAfter: getFollowupQueueDepth(queueKey),
+      enqueued,
+      prompt: followupRun.prompt,
+      ...(followupRun.summaryLine ? { summaryLine: followupRun.summaryLine } : {}),
+      ...(followupRun.messageId ? { messageId: followupRun.messageId } : {}),
+      ...(followupRun.originatingChannel
+        ? { originatingChannel: followupRun.originatingChannel }
+        : {}),
+      ...(followupRun.originatingTo ? { originatingTo: followupRun.originatingTo } : {}),
+      ...(followupRun.originatingAccountId
+        ? { originatingAccountId: followupRun.originatingAccountId }
+        : {}),
+      ...(followupRun.originatingThreadId !== undefined
+        ? { originatingThreadId: followupRun.originatingThreadId }
+        : {}),
+      sessionId: followupRun.run.sessionId,
+      ...(followupRun.run.sessionKey ? { sessionKey: followupRun.run.sessionKey } : {}),
+    },
+    {
+      agentId: followupRun.run.agentId,
+      sessionKey: followupRun.run.sessionKey,
+      sessionId: followupRun.run.sessionId,
+      channelId: followupRun.originatingChannel,
+    },
+  );
+}
+
 export async function runReplyAgent(params: {
   commandBody: string;
   transcriptCommandBody?: string;
@@ -1202,14 +1322,37 @@ export async function runReplyAgent(params: {
   }
 
   if (activeRunQueueAction === "enqueue-followup") {
-    enqueueFollowupRun(
+    const queueHookResult = await runQueueBeforeEnqueueHooks({
       queueKey,
+      queueMode: activeRunQueueMode,
+      dropPolicy: resolvedQueue.dropPolicy,
       followupRun,
+    });
+    if (queueHookResult.status === "blocked") {
+      if (queueHookResult.reason) {
+        logVerbose(`queue: follow-up enqueue blocked by plugin hook: ${queueHookResult.reason}`);
+      }
+      typing.cleanup();
+      return undefined;
+    }
+
+    const queuedFollowupRun = queueHookResult.followupRun;
+    const enqueued = enqueueFollowupRun(
+      queueKey,
+      queuedFollowupRun,
       resolvedQueue,
       "message-id",
       queuedRunFollowupTurn,
       false,
     );
+    runQueueAfterEnqueueHooks({
+      queueKey,
+      queueMode: activeRunQueueMode,
+      dropPolicy: resolvedQueue.dropPolicy,
+      followupRun: queuedFollowupRun,
+      depthBefore: queueHookResult.depthBefore,
+      enqueued,
+    });
     // Re-check liveness after enqueue so a stale active snapshot cannot leave
     // the followup queue idle if the original run already finished.
     const queuedBehindActiveRun = isRunActive?.() === true;

@@ -123,6 +123,11 @@ observation-only.
 - **`tool_result_persist`** - rewrite the assistant message produced from a tool result
 - **`before_message_write`** - inspect or block an in-progress message write (rare)
 
+**Queue**
+
+- **`queue_before_enqueue`** - block or rewrite an active-run follow-up before it enters the queue
+- `queue_after_enqueue` - observe the applied follow-up queue decision and queue depth change
+
 **Messages and delivery**
 
 - **`inbound_claim`** - claim an inbound message before agent routing (synthetic replies)
@@ -215,6 +220,44 @@ with `api.registerTrustedToolPolicy(...)`. These run before ordinary
 for host-trusted gates such as workspace policy, budget enforcement, or
 reserved workflow safety. External plugins should use normal `before_tool_call`
 hooks.
+
+## Queue policy
+
+`queue_before_enqueue` runs when a user message is about to be queued behind an
+already-active run. It receives:
+
+- `event.queueKey`
+- `event.queueMode`
+- optional `event.dropPolicy`
+- `event.depthBefore`
+- `event.prompt`
+- optional `event.summaryLine`
+- optional `event.messageId`
+- optional origin fields: `originatingChannel`, `originatingTo`,
+  `originatingAccountId`, `originatingThreadId`
+- optional session fields: `sessionId`, `sessionKey`
+
+It can return:
+
+```typescript
+type QueueBeforeEnqueueResult = {
+  block?: boolean;
+  blockReason?: string;
+  prompt?: string;
+  summaryLine?: string;
+};
+```
+
+Returning `{ block: true }` stops lower-priority queue handlers and skips the
+enqueue. Returning `prompt` or `summaryLine` rewrites the queued follow-up before
+the queue applies dedupe and drop policy.
+
+`queue_after_enqueue` receives the same event plus:
+
+- `event.depthAfter`
+- `event.enqueued`
+
+It is observation-only and runs after the queue decision has been applied.
 
 ### Tool result persistence
 
