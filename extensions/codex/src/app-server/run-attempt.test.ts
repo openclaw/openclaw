@@ -14,13 +14,17 @@ import {
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
+  emitDiagnosticEvent,
   emitTrustedDiagnosticEvent,
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
+  waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import {
+  clearInternalHooks,
   initializeGlobalHookRunner,
+  registerInternalHook,
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/hook-runtime";
 import { clearPluginCommands, registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
@@ -80,7 +84,19 @@ type RunCodexAppServerAttemptOptions = NonNullable<
 >;
 
 function flushDiagnosticEvents() {
-  return new Promise<void>((resolve) => setImmediate(resolve));
+  return waitForDiagnosticEventsDrained();
+}
+
+function emitAsyncDiagnosticBacklog(count: number): void {
+  for (let index = 0; index < count; index += 1) {
+    emitDiagnosticEvent({
+      type: "model.call.started",
+      runId: `backlog-run-${index}`,
+      callId: `backlog-call-${index}`,
+      provider: "openai",
+      model: "gpt-5.4",
+    });
+  }
 }
 
 function activeDiagnosticToolKeys(events: DiagnosticEventPayload[]): Set<string> {
@@ -632,6 +648,7 @@ function extractRelayIdFromThreadRequest(params: unknown): string {
 
 describe("runCodexAppServerAttempt", () => {
   beforeEach(async () => {
+    clearInternalHooks();
     resetAgentEventsForTest();
     resetDiagnosticEventsForTest();
     vi.stubEnv("OPENCLAW_TRAJECTORY", "0");
@@ -649,6 +666,7 @@ describe("runCodexAppServerAttempt", () => {
     resetAgentEventsForTest();
     resetDiagnosticEventsForTest();
     resetGlobalHookRunner();
+    clearInternalHooks();
     defaultCodexAppInventoryCache.clear();
     vi.useRealTimers();
     vi.restoreAllMocks();
@@ -722,6 +740,7 @@ describe("runCodexAppServerAttempt", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(sessionFile, workspaceDir);
     params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
     const sandboxSessionKey = params.sessionKey;
     if (!sandboxSessionKey) {
       throw new Error("createParams must provide a sessionKey for Codex dynamic tool tests.");
@@ -758,6 +777,7 @@ describe("runCodexAppServerAttempt", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(sessionFile, workspaceDir);
     params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
     const sandboxSessionKey = params.sessionKey;
     if (!sandboxSessionKey) {
       throw new Error("createParams must provide a sessionKey for Codex dynamic tool tests.");
@@ -789,6 +809,7 @@ describe("runCodexAppServerAttempt", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(sessionFile, workspaceDir);
     params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
     const sandboxSessionKey = params.sessionKey;
     if (!sandboxSessionKey) {
       throw new Error("createParams must provide a sessionKey for Codex dynamic tool tests.");
@@ -827,6 +848,7 @@ describe("runCodexAppServerAttempt", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(sessionFile, workspaceDir);
     params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
     const sandboxSessionKey = params.sessionKey;
     if (!sandboxSessionKey) {
       throw new Error("createParams must provide a sessionKey for Codex dynamic tool tests.");
@@ -856,6 +878,7 @@ describe("runCodexAppServerAttempt", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(sessionFile, workspaceDir);
     params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
     const sandboxSessionKey = params.sessionKey;
     if (!sandboxSessionKey) {
       throw new Error("createParams must provide a sessionKey for Codex dynamic tool tests.");
@@ -886,6 +909,7 @@ describe("runCodexAppServerAttempt", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(sessionFile, workspaceDir);
     params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
     const sandboxSessionKey = params.sessionKey;
     if (!sandboxSessionKey) {
       throw new Error("createParams must provide a sessionKey for Codex dynamic tool tests.");
@@ -1365,6 +1389,10 @@ describe("runCodexAppServerAttempt", () => {
 
     expect(testing.shouldForceMessageTool(params)).toBe(true);
 
+    params.disableMessageTool = true;
+    expect(testing.shouldForceMessageTool(params)).toBe(false);
+
+    params.disableMessageTool = false;
     params.sourceReplyDeliveryMode = "automatic";
     expect(testing.shouldForceMessageTool(params)).toBe(false);
   });
@@ -1374,14 +1402,22 @@ describe("runCodexAppServerAttempt", () => {
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     params.sourceReplyDeliveryMode = "message_tool_only";
 
-    expect(testing.buildDeveloperInstructions(params)).toContain(
-      "Visible channel replies: use `message`",
-    );
+    expect(
+      testing.buildDeveloperInstructions(params, {
+        dynamicTools: [createMessageDynamicTool("Message test tool")],
+      }),
+    ).toContain("To send a visible message, use the `message` tool.");
+
+    const withoutMessageToolInstructions = testing.buildDeveloperInstructions(params, {
+      dynamicTools: [],
+    });
+    expect(withoutMessageToolInstructions).toContain("active Codex delivery path");
+    expect(withoutMessageToolInstructions).not.toContain("use the `message` tool");
 
     params.sourceReplyDeliveryMode = "automatic";
     const automaticInstructions = testing.buildDeveloperInstructions(params);
     expect(automaticInstructions).toContain("active Codex delivery path");
-    expect(automaticInstructions).not.toContain("Visible channel replies: use `message`");
+    expect(automaticInstructions).not.toContain("use the `message` tool");
   });
 
   it("includes Codex app-server scoped plugin command guidance in developer instructions", () => {
@@ -1883,6 +1919,22 @@ describe("runCodexAppServerAttempt", () => {
         },
       }),
     ).toBe(180_000);
+  });
+
+  it("uses a 120 second default for Codex image generation dynamic tool calls", () => {
+    expect(
+      testing.resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-image-generate-default",
+          namespace: null,
+          tool: "image_generate",
+          arguments: { prompt: "cat" },
+        },
+        config: undefined,
+      }),
+    ).toBe(120_000);
   });
 
   it("uses the media image timeout for Codex image dynamic tool calls", () => {
@@ -2487,6 +2539,7 @@ describe("runCodexAppServerAttempt", () => {
 
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("thread/start");
+    emitAsyncDiagnosticBacklog(150);
 
     const toolResult = (await harness.handleServerRequest({
       id: "request-echo-error-tool",
@@ -4671,19 +4724,31 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).toContain("make the default webpage openclaw");
   });
 
-  it("passes OpenClaw bootstrap files through Codex turn context", async () => {
+  it("passes stable workspace files as Codex developer instructions and keeps MEMORY.md as turn context", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
+    const agentsGuidance = "Follow AGENTS guidance.";
+    const soulGuidance = "Soul voice goes here.";
+    const identityGuidance = "Identity guidance goes here.";
+    const toolGuidance = "Tool guidance goes here.";
+    const userProfile = "User profile goes here.";
+    const heartbeatChecklist = "Heartbeat checklist goes here.";
+    const memorySummary = "Memory summary goes here.";
     await fs.mkdir(workspaceDir, { recursive: true });
-    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "Follow AGENTS guidance.");
-    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "Soul voice goes here.");
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), agentsGuidance);
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), soulGuidance);
+    await fs.writeFile(path.join(workspaceDir, "IDENTITY.md"), identityGuidance);
+    await fs.writeFile(path.join(workspaceDir, "TOOLS.md"), toolGuidance);
+    await fs.writeFile(path.join(workspaceDir, "USER.md"), userProfile);
+    await fs.writeFile(path.join(workspaceDir, "HEARTBEAT.md"), heartbeatChecklist);
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), memorySummary);
     const harness = createStartedThreadHarness();
 
     const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
     await harness.waitForMethod("turn/start");
     await new Promise<void>((resolve) => setImmediate(resolve));
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await run;
+    const result = await run;
 
     const threadStart = harness.requests.find((request) => request.method === "thread/start");
     const threadStartParams = threadStart?.params as {
@@ -4692,9 +4757,18 @@ describe("runCodexAppServerAttempt", () => {
     };
     const config = threadStartParams.config;
 
-    expect(threadStartParams.developerInstructions).not.toContain("Soul voice goes here.");
+    expect(threadStartParams.developerInstructions).toContain("OpenClaw Agent Soul");
+    expect(threadStartParams.developerInstructions).toContain(
+      "They define who you are, how you work",
+    );
+    expect(threadStartParams.developerInstructions).toContain(soulGuidance);
+    expect(threadStartParams.developerInstructions).toContain(identityGuidance);
+    expect(threadStartParams.developerInstructions).toContain(toolGuidance);
+    expect(threadStartParams.developerInstructions).toContain(userProfile);
+    expect(threadStartParams.developerInstructions).not.toContain(heartbeatChecklist);
+    expect(threadStartParams.developerInstructions).not.toContain(memorySummary);
     expect(threadStartParams.developerInstructions).not.toContain("Codex loads AGENTS.md natively");
-    expect(threadStartParams.developerInstructions).not.toContain("Follow AGENTS guidance.");
+    expect(threadStartParams.developerInstructions).not.toContain(agentsGuidance);
     expect(config?.instructions).toBeUndefined();
 
     const turnStart = harness.requests.find((request) => request.method === "turn/start");
@@ -4703,11 +4777,169 @@ describe("runCodexAppServerAttempt", () => {
     };
     const inputText = turnStartParams.input?.[0]?.text ?? "";
     expect(inputText).toContain("OpenClaw runtime context for this turn:");
-    expect(inputText).toContain("not developer policy");
-    expect(inputText).toContain("Soul voice goes here.");
+    expect(inputText).not.toContain("does not override Codex system/developer instructions");
+    expect(inputText).not.toContain("not developer policy");
+    expect(inputText).not.toContain(soulGuidance);
+    expect(inputText).not.toContain(identityGuidance);
+    expect(inputText).not.toContain(toolGuidance);
+    expect(inputText).not.toContain(userProfile);
+    expect(inputText).not.toContain(heartbeatChecklist);
+    expect(inputText).toContain(memorySummary);
     expect(inputText).toContain("Codex loads AGENTS.md natively");
-    expect(inputText).not.toContain("Follow AGENTS guidance.");
+    expect(inputText).not.toContain(agentsGuidance);
     expect(inputText).toContain("Current user request:\nhello");
+
+    const fileStats = new Map(
+      result.systemPromptReport?.injectedWorkspaceFiles.map((file) => [file.name, file]) ?? [],
+    );
+    expect(fileStats.get("SOUL.md")).toMatchObject({
+      rawChars: soulGuidance.length,
+      injectedChars: soulGuidance.length,
+      truncated: false,
+    });
+    expect(fileStats.get("IDENTITY.md")).toMatchObject({
+      rawChars: identityGuidance.length,
+      injectedChars: identityGuidance.length,
+      truncated: false,
+    });
+    expect(fileStats.get("TOOLS.md")).toMatchObject({
+      rawChars: toolGuidance.length,
+      injectedChars: toolGuidance.length,
+      truncated: false,
+    });
+    expect(fileStats.get("USER.md")).toMatchObject({
+      rawChars: userProfile.length,
+      injectedChars: userProfile.length,
+      truncated: false,
+    });
+    expect(fileStats.get("MEMORY.md")).toMatchObject({
+      rawChars: memorySummary.length,
+      injectedChars: memorySummary.length,
+      truncated: false,
+    });
+    expect(fileStats.get("HEARTBEAT.md")).toMatchObject({
+      rawChars: heartbeatChecklist.length,
+      injectedChars: 0,
+      truncated: false,
+    });
+    expect(fileStats.get("AGENTS.md")).toMatchObject({
+      rawChars: agentsGuidance.length,
+      injectedChars: agentsGuidance.length,
+      truncated: false,
+    });
+  });
+
+  it("reports hook-supplied bootstrap files that only expose path and content", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const soulPath = path.join(workspaceDir, "SOUL.md");
+    const soulGuidance = "Hook supplied soul guidance.";
+    await fs.mkdir(workspaceDir, { recursive: true });
+    registerInternalHook("agent:bootstrap", (event) => {
+      const context = event.context as {
+        bootstrapFiles: Array<{ content: string; missing: boolean; path: string }>;
+      };
+      context.bootstrapFiles = [
+        {
+          path: soulPath,
+          content: soulGuidance,
+          missing: false,
+        },
+      ];
+    });
+    const harness = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    await harness.waitForMethod("turn/start");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    const result = await run;
+
+    expect(result.systemPromptReport?.injectedWorkspaceFiles).toEqual([
+      expect.objectContaining({
+        name: "SOUL.md",
+        path: soulPath,
+        rawChars: soulGuidance.length,
+        injectedChars: soulGuidance.length,
+        truncated: false,
+      }),
+    ]);
+  });
+
+  it("points heartbeat Codex turns at HEARTBEAT.md without injecting its contents", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const heartbeatPath = path.join(workspaceDir, "HEARTBEAT.md");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(heartbeatPath, "Heartbeat checklist goes here.");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.trigger = "heartbeat";
+    params.bootstrapContextMode = "lightweight";
+    params.bootstrapContextRunKind = "heartbeat";
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const threadStart = harness.requests.find((request) => request.method === "thread/start");
+    const threadStartParams = threadStart?.params as {
+      developerInstructions?: string;
+    };
+    expect(threadStartParams.developerInstructions).not.toContain("Heartbeat checklist goes here.");
+
+    const turnStart = harness.requests.find((request) => request.method === "turn/start");
+    const turnStartParams = turnStart?.params as {
+      input?: Array<{ text?: string }>;
+      collaborationMode?: {
+        settings?: {
+          developer_instructions?: string | null;
+        };
+      };
+    };
+    const inputText = turnStartParams.input?.[0]?.text ?? "";
+    const collaborationInstructions =
+      turnStartParams.collaborationMode?.settings?.developer_instructions ?? "";
+
+    expect(inputText).not.toContain("Heartbeat checklist goes here.");
+    expect(collaborationInstructions).toContain("HEARTBEAT.md exists");
+    expect(collaborationInstructions).toContain("Read it before proceeding with this heartbeat");
+    expect(collaborationInstructions).toContain(heartbeatPath);
+    expect(collaborationInstructions).not.toContain("Heartbeat checklist goes here.");
+  });
+
+  it("omits heartbeat Codex workspace pointers for empty HEARTBEAT.md files", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "HEARTBEAT.md"), "\n\n");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.trigger = "heartbeat";
+    params.bootstrapContextMode = "lightweight";
+    params.bootstrapContextRunKind = "heartbeat";
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const turnStart = harness.requests.find((request) => request.method === "turn/start");
+    const turnStartParams = turnStart?.params as {
+      collaborationMode?: {
+        settings?: {
+          developer_instructions?: string | null;
+        };
+      };
+    };
+    const collaborationInstructions =
+      turnStartParams.collaborationMode?.settings?.developer_instructions ?? "";
+
+    expect(collaborationInstructions).toContain("This is an OpenClaw heartbeat turn");
+    expect(collaborationInstructions).not.toContain("HEARTBEAT.md exists");
   });
 
   it("remaps Codex bootstrap files under dot-prefixed workspace directories", () => {
@@ -4830,7 +5062,9 @@ describe("runCodexAppServerAttempt", () => {
     expect(llmInputPayload.prompt).toBe("hello");
     expect(llmInputPayload.imagesCount).toBe(0);
     expect(llmInputPayload.historyMessages?.[0]?.role).toBe("assistant");
-    expect(llmInputPayload.systemPrompt).toContain("Running inside OpenClaw");
+    expect(llmInputPayload.systemPrompt).toContain(
+      "You are a personal agent running inside OpenClaw.",
+    );
     expect(llmInputPayload.systemPrompt).not.toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
     expect(llmInputContext.runId).toBe("run-1");
     expect(llmInputContext.sessionId).toBe("session-1");
@@ -6668,7 +6902,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(result.timedOut).toBe(false);
   });
 
-  it("routes MCP approval elicitations through the native bridge", async () => {
+  it("routes Computer Use MCP elicitations through the native bridge", async () => {
     let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
     let handleRequest:
       | ((request: { id: string; method: string; params?: unknown }) => Promise<unknown>)
@@ -6681,6 +6915,65 @@ describe("runCodexAppServerAttempt", () => {
         _meta: null,
       });
     const request = vi.fn(async (method: string) => {
+      if (method === "plugin/list") {
+        return {
+          marketplaces: [
+            {
+              name: "openai-bundled",
+              path: "/marketplaces/openai-bundled",
+              plugins: [
+                {
+                  id: "computer-use@openai-bundled",
+                  name: "computer-use",
+                  source: {
+                    type: "local",
+                    path: "/marketplaces/openai-bundled/plugins/computer-use",
+                  },
+                  installed: true,
+                  enabled: true,
+                },
+              ],
+            },
+          ],
+          marketplaceLoadErrors: [],
+          featuredPluginIds: [],
+        };
+      }
+      if (method === "plugin/read") {
+        return {
+          plugin: {
+            marketplaceName: "openai-bundled",
+            marketplacePath: "/marketplaces/openai-bundled",
+            summary: {
+              id: "computer-use@openai-bundled",
+              name: "computer-use",
+              source: {
+                type: "local",
+                path: "/marketplaces/openai-bundled/plugins/computer-use",
+              },
+              installed: true,
+              enabled: true,
+            },
+            description: null,
+            skills: [],
+            apps: [],
+            mcpServers: ["computer-use"],
+          },
+        };
+      }
+      if (method === "mcpServerStatus/list") {
+        return {
+          data: [
+            {
+              name: "desktop-control",
+              tools: {
+                "computer-use.get_app_state": {},
+              },
+            },
+          ],
+          nextCursor: null,
+        };
+      }
       if (method === "thread/start") {
         return threadStartResult("thread-1");
       }
@@ -6712,6 +7005,15 @@ describe("runCodexAppServerAttempt", () => {
 
     const run = runCodexAppServerAttempt(
       createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
+      {
+        pluginConfig: {
+          computerUse: {
+            enabled: true,
+            marketplaceName: "openai-bundled",
+            mcpServerName: "desktop-control",
+          },
+        },
+      },
     );
     await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"));
 
@@ -6721,7 +7023,7 @@ describe("runCodexAppServerAttempt", () => {
       params: {
         threadId: "thread-1",
         turnId: "turn-1",
-        serverName: "codex_apps__github",
+        serverName: "desktop-control",
         mode: "form",
       },
     });
@@ -6732,10 +7034,23 @@ describe("runCodexAppServerAttempt", () => {
       _meta: null,
     });
     const [bridgeCall] = mockCall(bridgeSpy, "elicitation bridge") as [
-      { threadId?: string; turnId?: string },
+      {
+        requestParams?: { serverName?: string };
+        computerUseMcpServerName?: string;
+        threadId?: string;
+        turnId?: string;
+      },
     ];
     expect(bridgeCall.threadId).toBe("thread-1");
     expect(bridgeCall.turnId).toBe("turn-1");
+    expect(bridgeCall.requestParams?.serverName).toBe("desktop-control");
+    expect(bridgeCall.computerUseMcpServerName).toBe("desktop-control");
+    const requestCalls = request.mock.calls as unknown as Array<[string, unknown, unknown?]>;
+    const threadStart = requestCalls.find(([method]) => method === "thread/start");
+    const threadStartParams = threadStart?.[1] as
+      | { approvalPolicy?: { granular?: { mcp_elicitations?: boolean } } }
+      | undefined;
+    expect(threadStartParams?.approvalPolicy?.granular?.mcp_elicitations).toBe(true);
 
     await notify({
       method: "turn/completed",
@@ -9362,7 +9677,10 @@ describe("runCodexAppServerAttempt", () => {
     const params = createParams("/tmp/session.jsonl", "/tmp/workspace");
     params.trigger = "heartbeat";
 
-    const heartbeatCollaborationMode = buildTurnCollaborationMode(params);
+    const heartbeatCollaborationMode = buildTurnCollaborationMode(params, {
+      heartbeatCollaborationInstructions:
+        "HEARTBEAT.md exists at /tmp/workspace/HEARTBEAT.md. Read it before proceeding.",
+    });
     expect(heartbeatCollaborationMode.mode).toBe("default");
     expect(heartbeatCollaborationMode.settings.model).toBe("gpt-5.4-codex");
     expect(heartbeatCollaborationMode.settings.reasoning_effort).toBe("medium");
@@ -9375,9 +9693,17 @@ describe("runCodexAppServerAttempt", () => {
     expect(heartbeatCollaborationMode.settings.developer_instructions).toContain(
       "If `heartbeat_respond` is not already available and `tool_search` is available",
     );
+    expect(heartbeatCollaborationMode.settings.developer_instructions).toContain(
+      "HEARTBEAT.md exists at /tmp/workspace/HEARTBEAT.md.",
+    );
 
     params.trigger = "user";
-    expect(buildTurnCollaborationMode(params).settings.developer_instructions).toBeNull();
+    expect(
+      buildTurnCollaborationMode(params, {
+        heartbeatCollaborationInstructions:
+          "HEARTBEAT.md exists at /tmp/workspace/HEARTBEAT.md. Read it before proceeding.",
+      }).settings.developer_instructions,
+    ).toBeNull();
   });
 
   it("uses turn-scoped collaboration instructions for cron Codex turns", () => {

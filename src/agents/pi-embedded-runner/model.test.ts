@@ -644,6 +644,25 @@ describe("resolveModel", () => {
     expect(model.api).toBe("openai-completions");
   });
 
+  it("does not synthesize unknown models from timeout-only provider overlays", () => {
+    const cfg = {
+      models: {
+        providers: {
+          openai: {
+            timeoutSeconds: 300,
+            baseUrl: "",
+            models: [],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("openai", "typo-model", "/tmp/agent", cfg);
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe("Unknown model: openai/typo-model");
+  });
+
   it("defaults baseUrl-only local custom fallback models to chat completions", () => {
     const cfg = {
       agents: {
@@ -1135,6 +1154,33 @@ describe("resolveModel", () => {
     expect(result.error).toBeUndefined();
     expect((result.model as { requestTimeoutMs?: number } | undefined)?.requestTimeoutMs).toBe(
       300_000,
+    );
+  });
+
+  it("resolves provider request timeout metadata from built-in provider overlays", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "openai",
+      modelId: "gpt-5.5",
+      templateModel: {
+        ...makeModel("gpt-5.5"),
+        provider: "openai",
+      },
+    });
+    const cfg = {
+      models: {
+        providers: {
+          openai: {
+            timeoutSeconds: 600,
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("openai", "gpt-5.5", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect((result.model as { requestTimeoutMs?: number } | undefined)?.requestTimeoutMs).toBe(
+      600_000,
     );
   });
 
