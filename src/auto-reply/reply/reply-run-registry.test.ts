@@ -5,6 +5,7 @@ import {
 } from "../../logging/diagnostic-run-activity.js";
 import {
   testing,
+  abortReplyRunBySessionId,
   abortActiveReplyRuns,
   createReplyOperation,
   forceClearReplyRunBySessionId,
@@ -147,6 +148,29 @@ describe("reply run registry", () => {
       expect(forceClearReplyRunBySessionId("session-running", new Error("stuck"))).toBe(true);
 
       expect(isReplyRunActiveForSessionId("session-running")).toBe(false);
+      await expect(waitPromise).resolves.toBe(true);
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears a running operation immediately when aborting without an attached backend", async () => {
+    vi.useFakeTimers();
+    try {
+      const operation = createReplyOperation({
+        sessionKey: "agent:main:main",
+        sessionId: "session-orphaned-running",
+        resetTriggered: false,
+      });
+      operation.setPhase("running");
+
+      const waitPromise = waitForReplyRunEndBySessionId("session-orphaned-running", 1_000);
+
+      expect(abortReplyRunBySessionId("session-orphaned-running")).toBe(true);
+
+      expect(operation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
+      expect(isReplyRunActiveForSessionId("session-orphaned-running")).toBe(false);
       await expect(waitPromise).resolves.toBe(true);
     } finally {
       await vi.runOnlyPendingTimersAsync();
