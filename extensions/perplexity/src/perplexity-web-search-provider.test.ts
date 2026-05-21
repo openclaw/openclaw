@@ -162,7 +162,11 @@ describe("perplexity web search provider", () => {
     const tool = provider.createTool({
       config: {},
       searchConfig: { perplexity: { model: "perplexity/sonar-pro" } },
-      runtimeMetadata: { perplexityTransport: "chat_completions" },
+      runtimeMetadata: {
+        providerSource: "configured",
+        perplexityTransport: "chat_completions",
+        diagnostics: [],
+      },
     });
     if (!tool) {
       throw new Error("Expected tool definition");

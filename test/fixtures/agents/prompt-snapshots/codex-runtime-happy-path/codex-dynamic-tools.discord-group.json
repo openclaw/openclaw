@@ -1165,6 +1165,11 @@
           "description": "Search query.",
           "type": "string"
         },
+        "search_context_size": {
+          "description": "Perplexity Sonar search context budget.",
+          "enum": ["low", "medium", "high"],
+          "type": "string"
+        },
         "search_lang": {
           "description": "Brave result language.",
           "type": "string"
