@@ -74,4 +74,34 @@ describe("prepared provider auth state", () => {
     expect(hasAuthForModelProvider({ provider: "anthropic", cfg })).toBe(true);
     expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(3);
   });
+
+  it("hasAuthForModelProvider falls through to compute when the caller narrows the auth-discovery scope", async () => {
+    const cfg = {} as OpenClawConfig;
+    modelCatalogMocks.loadModelCatalog.mockResolvedValue([
+      { id: "gpt", name: "gpt", provider: "openai" },
+    ]);
+    // Warm with the broad answer: provider has CLI/synthetic auth.
+    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(true);
+    await warmCurrentProviderAuthState(cfg);
+    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(1);
+
+    // Flip the underlying compute to false. A narrow-scope caller must NOT
+    // pick up the warmed broad answer — gateway models.list with
+    // runtimeAuthDiscovery: false maps to both flags false, and the answer
+    // must reflect that narrower scope, not the prepared broad answer.
+    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(false);
+    expect(
+      hasAuthForModelProvider({
+        provider: "openai",
+        cfg,
+        discoverExternalCliAuth: false,
+        allowPluginSyntheticAuth: false,
+      }),
+    ).toBe(false);
+    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(2);
+
+    // Broad-scope caller (default flags) still hits the prepared map.
+    expect(hasAuthForModelProvider({ provider: "openai", cfg })).toBe(true);
+    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(2);
+  });
 });

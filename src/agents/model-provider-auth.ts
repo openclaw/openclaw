@@ -35,9 +35,23 @@ export function hasAuthForModelProvider(params: {
   discoverExternalCliAuth?: boolean;
 }): boolean {
   const provider = normalizeProviderId(params.provider);
-  const preparedAnswer = currentProviderAuthState?.get(provider);
-  if (preparedAnswer !== undefined) {
-    return preparedAnswer;
+  // The prepared map is built by warmCurrentProviderAuthState with broad
+  // auth discovery (external CLI + plugin synthetic auth enabled, no
+  // caller-supplied agentDir/env/store). Only consult it when the caller's
+  // scope matches; otherwise fall through to compute so callers that
+  // explicitly narrow the auth scope — e.g. gateway `models.list` with
+  // `runtimeAuthDiscovery: false` — get the answer they asked for.
+  const matchesWarmedScope =
+    params.discoverExternalCliAuth !== false &&
+    params.allowPluginSyntheticAuth !== false &&
+    params.agentDir === undefined &&
+    params.env === undefined &&
+    params.store === undefined;
+  if (matchesWarmedScope) {
+    const preparedAnswer = currentProviderAuthState?.get(provider);
+    if (preparedAnswer !== undefined) {
+      return preparedAnswer;
+    }
   }
   if (
     hasRuntimeAvailableProviderAuth({
