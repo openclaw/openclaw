@@ -364,7 +364,6 @@ export function buildPrePromptContextBudgetStatus(params: {
   contextTokenBudget: number;
   reserveTokens: number;
   sessionId?: string;
-  sessionFile?: string;
   now?: number;
 }): SessionContextBudgetStatus {
   const { result } = params;
@@ -394,6 +393,5 @@ export function buildPrePromptContextBudgetStatus(params: {
       Math.floor(params.unwindowedMessageCount ?? params.messageCount),
     ),
     ...(params.sessionId ? { sessionId: params.sessionId } : {}),
-    ...(params.sessionFile ? { sessionFile: params.sessionFile } : {}),
   };
 }

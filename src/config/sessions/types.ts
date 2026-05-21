@@ -136,7 +136,6 @@ export type SessionContextBudgetStatus = {
   messageCount: number;
   unwindowedMessageCount: number;
   sessionId?: string;
-  sessionFile?: string;
 };
 
 export type SessionPluginDebugEntry = {

@@ -181,7 +181,6 @@ describe("preemptive-compaction", () => {
       contextTokenBudget: 10_000,
       reserveTokens: 1_000,
       sessionId: "session-1",
-      sessionFile: "sessions/session-1.json",
       now: 123,
     });
 
@@ -201,7 +200,6 @@ describe("preemptive-compaction", () => {
       messageCount: 1,
       unwindowedMessageCount: 3,
       sessionId: "session-1",
-      sessionFile: "sessions/session-1.json",
     });
     expect(status.remainingPromptBudgetTokens).toBe(
       result.promptBudgetBeforeReserve - result.estimatedPromptTokens,
