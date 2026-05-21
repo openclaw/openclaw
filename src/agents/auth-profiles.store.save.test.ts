@@ -11,6 +11,7 @@ import {
   ensureAuthProfileStore,
   replaceRuntimeAuthProfileStoreSnapshots,
   saveAuthProfileStore,
+  updateAuthProfileStoreWithLock,
 } from "./auth-profiles/store.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 
@@ -35,6 +36,104 @@ function expectProfileFields(profile: unknown, expected: Record<string, unknown>
 }
 
 describe("saveAuthProfileStore", () => {
+  it("updates only the scoped agent auth profile store under lock", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-logout-scope-"));
+    const mainAgentDir = path.join(root, "agents", "main", "agent");
+    const scopedAgentDir = path.join(root, "agents", "gap5", "agent");
+    try {
+      await fs.mkdir(mainAgentDir, { recursive: true });
+      await fs.mkdir(scopedAgentDir, { recursive: true });
+      await fs.writeFile(
+        resolveAuthStorePath(mainAgentDir),
+        `${JSON.stringify(
+          {
+            version: 1,
+            profiles: {
+              "xai:main": {
+                type: "oauth",
+                provider: "xai",
+                access: "main-access",
+                refresh: "main-refresh",
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      await fs.writeFile(
+        resolveAuthStorePath(scopedAgentDir),
+        `${JSON.stringify(
+          {
+            version: 1,
+            profiles: {
+              "xai:scoped": {
+                type: "oauth",
+                provider: "xai",
+                access: "scoped-access",
+                refresh: "scoped-refresh",
+              },
+              "anthropic:default": {
+                type: "api_key",
+                provider: "anthropic",
+                key: "sk-anthropic",
+              },
+            },
+            order: { xai: ["xai:scoped"] },
+            lastGood: { xai: "xai:scoped" },
+            usageStats: {
+              "xai:scoped": { errorCount: 1 },
+              "anthropic:default": { errorCount: 2 },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+      );
+
+      const removedProfiles: string[] = [];
+      const updated = await updateAuthProfileStoreWithLock({
+        agentDir: scopedAgentDir,
+        updater: (store) => {
+          const profileIds = Object.entries(store.profiles)
+            .filter(([, credential]) => credential.provider === "xai")
+            .map(([profileId]) => profileId);
+          removedProfiles.push(...profileIds);
+          for (const profileId of profileIds) {
+            delete store.profiles[profileId];
+            delete store.usageStats?.[profileId];
+          }
+          delete store.order?.xai;
+          delete store.lastGood?.xai;
+          return profileIds.length > 0;
+        },
+      });
+
+      expect(updated).not.toBeNull();
+      expect(removedProfiles).toEqual(["xai:scoped"]);
+      const mainRaw = JSON.parse(await fs.readFile(resolveAuthStorePath(mainAgentDir), "utf8")) as {
+        profiles: Record<string, unknown>;
+      };
+      const scopedRaw = JSON.parse(
+        await fs.readFile(resolveAuthStorePath(scopedAgentDir), "utf8"),
+      ) as {
+        profiles: Record<string, unknown>;
+        order?: Record<string, string[]>;
+        lastGood?: Record<string, string>;
+        usageStats?: Record<string, unknown>;
+      };
+      expect(mainRaw.profiles).toHaveProperty("xai:main");
+      expect(scopedRaw.profiles).not.toHaveProperty("xai:scoped");
+      expect(scopedRaw.profiles).toHaveProperty("anthropic:default");
+      expect(scopedRaw.order).toBeUndefined();
+      expect(scopedRaw.lastGood).toBeUndefined();
+      expect(scopedRaw.usageStats).toBeUndefined();
+    } finally {
+      clearRuntimeAuthProfileStoreSnapshots();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("strips plaintext when keyRef/tokenRef are present", async () => {
     const structuredCloneSpy = vi.spyOn(globalThis, "structuredClone");
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-save-"));

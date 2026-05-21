@@ -80,6 +80,7 @@ import {
   setTtsProvider,
   textToSpeech,
 } from "../tts/tts.js";
+import { resolveUserPath } from "../utils.js";
 import { generateVideo, listRuntimeVideoGenerationProviders } from "../video-generation/runtime.js";
 import type { VideoGenerationResolution } from "../video-generation/types.js";
 import {
@@ -109,6 +110,11 @@ const IMAGE_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
 const IMAGE_BACKGROUNDS = ["transparent", "opaque", "auto"] as const;
 const LOCAL_MODEL_RUN_SYSTEM_PROMPT = "You are a personal assistant running inside OpenClaw.";
 const HEIC_MODEL_RUN_MIMES = new Set(["image/heic", "image/heif"]);
+
+function resolveEnvAgentDirOverride(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const override = env.OPENCLAW_AGENT_DIR?.trim() || env.PI_CODING_AGENT_DIR?.trim();
+  return override ? resolveUserPath(override, env) : undefined;
+}
 
 type CapabilityMetadata = {
   id: string;
@@ -922,12 +928,13 @@ async function runModelAuthStatus() {
 
 async function runModelAuthLogout(provider: string) {
   const cfg = getRuntimeConfig();
-  const agentDir = resolveAgentDir(cfg, resolveDefaultAgentId(cfg));
-  const store = loadAuthProfileStoreForRuntime(agentDir);
-  const profileIds = listProfilesForProvider(store, provider);
+  const agentDir = resolveEnvAgentDirOverride() ?? resolveAgentDir(cfg, resolveDefaultAgentId(cfg));
+  let removedProfiles: string[] = [];
   const updated = await updateAuthProfileStoreWithLock({
     agentDir,
     updater: (nextStore) => {
+      const profileIds = listProfilesForProvider(nextStore, provider);
+      removedProfiles = profileIds;
       let changed = false;
       for (const profileId of profileIds) {
         if (nextStore.profiles[profileId]) {
@@ -955,7 +962,7 @@ async function runModelAuthLogout(provider: string) {
   }
   return {
     provider,
-    removedProfiles: profileIds,
+    removedProfiles,
   };
 }
 

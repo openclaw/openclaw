@@ -2178,6 +2178,60 @@ describe("capability cli", () => {
     });
   });
 
+  it("logs out provider auth profiles from the OPENCLAW_AGENT_DIR store", async () => {
+    vi.stubEnv("OPENCLAW_AGENT_DIR", "/tmp/scoped-agent");
+    mocks.listProfilesForProvider.mockImplementation(((store: any, provider: string) =>
+      Object.entries(store.profiles)
+        .filter(([, credential]: [string, any]) => credential.provider === provider)
+        .map(([profileId]) => profileId)) as never);
+
+    let updatedStore: Record<string, any> | null = null;
+    mocks.updateAuthProfileStoreWithLock.mockImplementationOnce(
+      async ({ agentDir, updater }: { agentDir?: string; updater: (store: any) => boolean }) => {
+        expect(agentDir).toBe("/tmp/scoped-agent");
+        const store = {
+          version: 1,
+          profiles: {
+            "xai:scoped": { id: "xai:scoped", provider: "xai" },
+            "anthropic:default": { id: "anthropic:default", provider: "anthropic" },
+          },
+          order: { xai: ["xai:scoped"] },
+          lastGood: { xai: "xai:scoped" },
+          usageStats: {
+            "xai:scoped": { errorCount: 1 },
+            "anthropic:default": { errorCount: 2 },
+          },
+        };
+        expect(updater(store)).toBe(true);
+        updatedStore = store;
+        return store;
+      },
+    );
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "model", "auth", "logout", "--provider", "xai", "--json"],
+    });
+
+    if (updatedStore === null) {
+      throw new Error("expected updated auth store");
+    }
+    const storeSnapshot = updatedStore as unknown as Record<string, any>;
+    expect(storeSnapshot.profiles).toEqual({
+      "anthropic:default": { id: "anthropic:default", provider: "anthropic" },
+    });
+    expect(storeSnapshot.order).toEqual({});
+    expect(storeSnapshot.lastGood).toEqual({});
+    expect(storeSnapshot.usageStats).toEqual({
+      "anthropic:default": { errorCount: 2 },
+    });
+    expect(mocks.loadAuthProfileStoreForRuntime).not.toHaveBeenCalled();
+    expect(mocks.runtime.writeJson).toHaveBeenCalledWith({
+      provider: "xai",
+      removedProfiles: ["xai:scoped"],
+    });
+  });
+
   it("fails logout if the auth store update does not complete", async () => {
     mocks.listProfilesForProvider.mockReturnValue(["openai:default"] as never);
     mocks.updateAuthProfileStoreWithLock.mockResolvedValueOnce(null as never);
