@@ -86,6 +86,7 @@ import {
 } from "../../tts/tts-config.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import {
+  isExplicitCommandTurn,
   isNativeCommandTurn,
   resolveCommandTurnContext,
   resolveCommandTurnTargetSessionKey,
@@ -715,6 +716,7 @@ export async function dispatchReplyFromConfig(
     ctx,
     sessionKey: acpDispatchSessionKey,
   });
+  const commandTurnContext = resolveCommandTurnContext(ctx);
   const inboundAudio = isInboundAudioContext(ctx);
   const sessionTtsAuto = normalizeTtsAutoMode(sessionStoreEntry.entry?.ttsAuto);
   const workspaceDir = resolveAgentWorkspaceDir(cfg, sessionAgentId);
@@ -1276,16 +1278,18 @@ export async function dispatchReplyFromConfig(
         markInboundDedupeReplayUnsafe();
         finalReplyDeliveryStarted = true;
       }
-      const ttsPayload = await maybeApplyTtsToReplyPayload({
-        payload,
-        cfg,
-        channel: deliveryChannel,
-        kind: "final",
-        inboundAudio,
-        ttsAuto: sessionTtsAuto,
-        agentId: sessionAgentId,
-        accountId: replyRoute.accountId,
-      });
+      const ttsPayload = isExplicitCommandTurn(commandTurnContext)
+        ? payload
+        : await maybeApplyTtsToReplyPayload({
+            payload,
+            cfg,
+            channel: deliveryChannel,
+            kind: "final",
+            inboundAudio,
+            ttsAuto: sessionTtsAuto,
+            agentId: sessionAgentId,
+            accountId: replyRoute.accountId,
+          });
       const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
       const result = await routeReplyToOriginating(normalizedPayload);
       if (result) {
