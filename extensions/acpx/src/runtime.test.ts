@@ -661,7 +661,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     const commandWithOverrides =
       'npx @zed-industries/codex-acp@^0.12.0 -c model=gpt-5.5 -c model_reasoning_effort=medium';
     expect(
-      __testing.appendCodexAcpConfigOverrides(commandWithOverrides, {
+      testing.appendCodexAcpConfigOverrides(commandWithOverrides, {
         model: "gpt-5.5",
         reasoningEffort: "medium",
       }),
@@ -671,7 +671,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   it("skips already-configured -c model and only appends missing keys", () => {
     const commandWithModel = 'npx @zed-industries/codex-acp@^0.12.0 -c model=gpt-5.4';
     expect(
-      __testing.appendCodexAcpConfigOverrides(commandWithModel, {
+      testing.appendCodexAcpConfigOverrides(commandWithModel, {
         model: "gpt-5.5",
         reasoningEffort: "medium",
       }),
@@ -683,9 +683,9 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   it("appends -c overrides to wrapper command without duplicating configured args", () => {
     const wrapperWithArgs =
       `${CODEX_ACP_WRAPPER_COMMAND} -c model=gpt-5.5 -c model_reasoning_effort=medium`;
-    expect(__testing.isCodexAcpCommand(wrapperWithArgs)).toBe(true);
+    expect(testing.isCodexAcpCommand(wrapperWithArgs)).toBe(true);
     expect(
-      __testing.appendCodexAcpConfigOverrides(wrapperWithArgs, {
+      testing.appendCodexAcpConfigOverrides(wrapperWithArgs, {
         model: "gpt-5.5",
         reasoningEffort: "medium",
       }),
@@ -694,19 +694,19 @@ describe("AcpxRuntime fresh reset wrapper", () => {
 
   it("detects existing -c config keys in command", () => {
     expect(
-      __testing.commandHasConfigKey(
+      testing.commandHasConfigKey(
         'npx @zed-industries/codex-acp@^0.12.0 -c model=gpt-5.5',
         "model",
       ),
     ).toBe(true);
     expect(
-      __testing.commandHasConfigKey(
+      testing.commandHasConfigKey(
         'npx @zed-industries/codex-acp@^0.12.0 -c model=gpt-5.5',
         "model_reasoning_effort",
       ),
     ).toBe(false);
     expect(
-      __testing.commandHasConfigKey(
+      testing.commandHasConfigKey(
         'npx @zed-industries/codex-acp@^0.12.0',
         "model",
       ),
