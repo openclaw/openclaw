@@ -59,6 +59,7 @@ export function createFailoverDecisionLogger(
     const observedError = buildApiErrorObservationFields(normalizedBase.rawError);
     const safeRawErrorPreview = sanitizeForConsole(observedError.rawErrorPreview);
     const shouldSuppressRawErrorConsoleSuffix =
+      observedError.providerRuntimeFailureKind === "auth_html_401" ||
       observedError.providerRuntimeFailureKind === "auth_html_403" ||
       observedError.providerRuntimeFailureKind === "auth_scope" ||
       observedError.providerRuntimeFailureKind === "auth_refresh";

@@ -229,6 +229,31 @@ describe("handleAgentEnd", () => {
     expect(consoleMsg).not.toContain("<html>");
   });
 
+  it("omits raw HTML auth bodies from consoleMessage for HTML 401 auth failures", async () => {
+    const ctx = createContext({
+      role: "assistant",
+      stopReason: "error",
+      provider: "openai-codex",
+      model: "gpt-5.4",
+      errorMessage: "401 <!DOCTYPE html><html><body>Unauthorized</body></html>",
+      content: [{ type: "text", text: "" }],
+    });
+
+    await handleAgentEnd(ctx);
+
+    const meta = firstWarnMeta(ctx);
+    expect(meta.providerRuntimeFailureKind).toBe("auth_html_401");
+    expect(meta.rawErrorPreview).toBe(
+      "401 <!DOCTYPE html><html><body>Unauthorized</body></html>",
+    );
+    expect(meta.error).toBe(
+      "Authentication failed with an HTML 401 response from the provider. Re-authenticate and verify your provider credentials.",
+    );
+    const consoleMsg = typeof meta.consoleMessage === "string" ? meta.consoleMessage : "";
+    expect(consoleMsg).not.toContain("rawError=");
+    expect(consoleMsg).not.toContain("<html>");
+  });
+
   it("keeps non-error run-end logging on debug only", async () => {
     const ctx = createContext(undefined);
 
