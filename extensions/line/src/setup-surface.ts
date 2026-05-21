@@ -15,7 +15,7 @@ import {
 import {
   DEFAULT_ACCOUNT_ID,
   formatDocsLink,
-  resolveLineAccount,
+  inspectLineAccount,
   setSetupChannelEnabled,
   splitSetupEntries,
   type ChannelSetupDmPolicy,
@@ -60,7 +60,7 @@ const lineDmPolicy: ChannelSetupDmPolicy = {
           allowFromKey: "channels.line.allowFrom",
         },
   getCurrent: (cfg, accountId) =>
-    resolveLineAccount({ cfg, accountId: accountId ?? resolveDefaultLineAccountId(cfg) }).config
+    inspectLineAccount({ cfg, accountId: accountId ?? resolveDefaultLineAccountId(cfg) }).config
       .dmPolicy ?? "pairing",
   setPolicy: (cfg, policy, accountId) =>
     patchLineAccountConfig({
@@ -72,7 +72,7 @@ const lineDmPolicy: ChannelSetupDmPolicy = {
           ? {
               dmPolicy: "open",
               allowFrom: mergeAllowFromEntries(
-                resolveLineAccount({
+                inspectLineAccount({
                   cfg,
                   accountId: accountId ?? resolveDefaultLineAccountId(cfg),
                 }).config.allowFrom,
@@ -118,16 +118,10 @@ export const lineSetupWizard: ChannelSetupWizard = {
       inputPrompt: t("wizard.line.tokenInputPrompt"),
       allowEnv: ({ accountId }) => accountId === DEFAULT_ACCOUNT_ID,
       inspect: ({ cfg, accountId }) => {
-        const resolved = resolveLineAccount({ cfg, accountId });
+        const resolved = inspectLineAccount({ cfg, accountId });
         return {
-          accountConfigured: Boolean(
-            normalizeOptionalString(resolved.channelAccessToken) &&
-            normalizeOptionalString(resolved.channelSecret),
-          ),
-          hasConfiguredValue: Boolean(
-            normalizeOptionalString(resolved.config.channelAccessToken) ??
-            normalizeOptionalString(resolved.config.tokenFile),
-          ),
+          accountConfigured: resolved.configured,
+          hasConfiguredValue: resolved.tokenStatus !== "missing",
           resolvedValue: normalizeOptionalString(resolved.channelAccessToken),
           envValue:
             accountId === DEFAULT_ACCOUNT_ID
@@ -164,16 +158,10 @@ export const lineSetupWizard: ChannelSetupWizard = {
       inputPrompt: t("wizard.line.secretInputPrompt"),
       allowEnv: ({ accountId }) => accountId === DEFAULT_ACCOUNT_ID,
       inspect: ({ cfg, accountId }) => {
-        const resolved = resolveLineAccount({ cfg, accountId });
+        const resolved = inspectLineAccount({ cfg, accountId });
         return {
-          accountConfigured: Boolean(
-            normalizeOptionalString(resolved.channelAccessToken) &&
-            normalizeOptionalString(resolved.channelSecret),
-          ),
-          hasConfiguredValue: Boolean(
-            normalizeOptionalString(resolved.config.channelSecret) ??
-            normalizeOptionalString(resolved.config.secretFile),
-          ),
+          accountConfigured: resolved.configured,
+          hasConfiguredValue: resolved.signingSecretStatus !== "missing",
           resolvedValue: normalizeOptionalString(resolved.channelSecret),
           envValue:
             accountId === DEFAULT_ACCOUNT_ID

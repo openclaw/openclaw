@@ -4,11 +4,16 @@ import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  inspectLineAccount,
   resolveLineAccount,
   resolveDefaultLineAccountId,
   normalizeAccountId,
   DEFAULT_ACCOUNT_ID,
 } from "./accounts.js";
+
+function envRef(id: string) {
+  return { source: "env" as const, provider: "default" as const, id };
+}
 
 describe("LINE accounts", () => {
   const tempDirs: string[] = [];
@@ -199,6 +204,65 @@ describe("LINE accounts", () => {
       expect(() => resolveLineAccount({ cfg })).toThrow(
         /LINE credential file.*must not be a symlink/,
       );
+    });
+
+    it("fails closed when runtime resolution sees unresolved SecretRefs", () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          line: {
+            channelAccessToken: envRef("LINE_REF_TOKEN"),
+            channelSecret: envRef("LINE_REF_SECRET"),
+          },
+        },
+      };
+
+      expect(() => resolveLineAccount({ cfg })).toThrow(
+        /channels\.line\.channelAccessToken: unresolved SecretRef/,
+      );
+    });
+  });
+
+  describe("inspectLineAccount", () => {
+    it("treats unresolved top-level SecretRefs as configured but unavailable", () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          line: {
+            channelAccessToken: envRef("LINE_REF_TOKEN"),
+            channelSecret: envRef("LINE_REF_SECRET"),
+          },
+        },
+      };
+
+      const account = inspectLineAccount({ cfg });
+
+      expect(account.configured).toBe(true);
+      expect(account.channelAccessToken).toBe("");
+      expect(account.channelSecret).toBe("");
+      expect(account.tokenStatus).toBe("configured_unavailable");
+      expect(account.signingSecretStatus).toBe("configured_unavailable");
+    });
+
+    it("treats unresolved named-account SecretRefs as configured but unavailable", () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          line: {
+            defaultAccount: "work",
+            accounts: {
+              work: {
+                channelAccessToken: envRef("LINE_WORK_REF_TOKEN"),
+                channelSecret: envRef("LINE_WORK_REF_SECRET"),
+              },
+            },
+          },
+        },
+      };
+
+      const account = inspectLineAccount({ cfg });
+
+      expect(account.accountId).toBe("work");
+      expect(account.configured).toBe(true);
+      expect(account.tokenStatus).toBe("configured_unavailable");
+      expect(account.signingSecretStatus).toBe("configured_unavailable");
     });
   });
 

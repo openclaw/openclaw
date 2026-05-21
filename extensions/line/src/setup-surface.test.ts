@@ -30,6 +30,10 @@ vi.mock("@line/bot-sdk", () => ({
   messagingApi: { MessagingApiClient: MessagingApiClientMock },
 }));
 
+function envRef(id: string) {
+  return { source: "env" as const, provider: "default" as const, id };
+}
+
 afterAll(() => {
   vi.doUnmock("@line/bot-sdk");
   vi.resetModules();
@@ -301,6 +305,68 @@ describe("line setup wizard", () => {
     });
 
     expect(configured).toBe(false);
+  });
+
+  it("reports top-level SecretRef credentials as configured during read-only setup inspection", async () => {
+    const cfg = {
+      channels: {
+        line: {
+          channelAccessToken: envRef("LINE_REF_TOKEN"),
+          channelSecret: envRef("LINE_REF_SECRET"),
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(lineSetupWizard.status.resolveConfigured({ cfg })).toBe(true);
+    await expect(
+      lineSetupWizard.status.resolveStatusLines?.({
+        cfg,
+        accountId: "default",
+        configured: true,
+      }),
+    ).resolves.toContain("LINE: configured");
+
+    expect(lineSetupWizard.credentials[0]?.inspect({ cfg, accountId: "default" })).toMatchObject({
+      accountConfigured: true,
+      hasConfiguredValue: true,
+      resolvedValue: undefined,
+    });
+    expect(lineSetupWizard.credentials[1]?.inspect({ cfg, accountId: "default" })).toMatchObject({
+      accountConfigured: true,
+      hasConfiguredValue: true,
+      resolvedValue: undefined,
+    });
+  });
+
+  it("reports account-scoped SecretRef credentials as configured during read-only setup inspection", async () => {
+    const cfg = {
+      channels: {
+        line: {
+          defaultAccount: "work",
+          accounts: {
+            work: {
+              channelAccessToken: envRef("LINE_WORK_REF_TOKEN"),
+              channelSecret: envRef("LINE_WORK_REF_SECRET"),
+              dmPolicy: "allowlist",
+              allowFrom: ["U1234567890abcdef1234567890abcdef"],
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(lineSetupWizard.status.resolveConfigured({ cfg })).toBe(true);
+    expect(lineSetupWizard.dmPolicy?.getCurrent(cfg)).toBe("allowlist");
+    expect(lineSetupWizard.credentials[0]?.inspect({ cfg, accountId: "work" })).toMatchObject({
+      accountConfigured: true,
+      hasConfiguredValue: true,
+      resolvedValue: undefined,
+    });
+    expect(lineSetupWizard.credentials[1]?.inspect({ cfg, accountId: "work" })).toMatchObject({
+      accountConfigured: true,
+      hasConfiguredValue: true,
+      resolvedValue: undefined,
+    });
   });
 });
 

@@ -1,5 +1,6 @@
 import { createScopedChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
 import {
+  inspectLineAccount,
   listLineAccountIds,
   resolveDefaultLineAccountId,
   resolveLineAccount,
@@ -18,6 +19,7 @@ export const lineConfigAdapter = createScopedChannelConfigAdapter<
   listAccountIds: listLineAccountIds,
   resolveAccount: (cfg, accountId) =>
     resolveLineAccount({ cfg, accountId: accountId ?? undefined }),
+  inspectAccount: (cfg, accountId) => inspectLineAccount({ cfg, accountId }),
   defaultAccountId: resolveDefaultLineAccountId,
   clearBaseFields: ["channelSecret", "tokenFile", "secretFile"],
   resolveAllowFrom: (account) => account.config.allowFrom,
