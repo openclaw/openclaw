@@ -1,3 +1,4 @@
+import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   externalCliDiscoveryForProviderAuth,
@@ -18,16 +19,36 @@ import { resolveDefaultAgentWorkspaceDir } from "./workspace.js";
 // (pickers, /models, status commands, CLI) skips the per-provider plugin
 // discovery and external-CLI probing on the hot path.
 
-let currentProviderAuthState: ReadonlyMap<string, boolean> | null = null;
-let currentProviderAuthStateWorkspaceDir: string | undefined;
+type PreparedProviderAuthState = {
+  configFingerprint: string;
+  workspaceDir: string;
+  preparedAtMs: number;
+  providers: ReadonlyMap<string, boolean>;
+};
+
+const PREPARED_PROVIDER_AUTH_STATE_TTL_MS = 10_000;
+let currentProviderAuthState: PreparedProviderAuthState | null = null;
+const configFingerprintCache = new WeakMap<OpenClawConfig, string>();
 // Generation counter guards against an in-flight warm publishing stale
-// state after a subsequent clear/reload has invalidated it.
+// state after a subsequent warm or clear has invalidated it.
 let currentProviderAuthStateGeneration = 0;
 
 export function clearCurrentProviderAuthState(): void {
   currentProviderAuthState = null;
-  currentProviderAuthStateWorkspaceDir = undefined;
   currentProviderAuthStateGeneration += 1;
+}
+
+function resolveProviderAuthConfigFingerprint(cfg: OpenClawConfig | undefined): string | null {
+  if (!cfg) {
+    return null;
+  }
+  const cached = configFingerprintCache.get(cfg);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const fingerprint = hashRuntimeConfigValue(cfg);
+  configFingerprintCache.set(cfg, fingerprint);
+  return fingerprint;
 }
 
 export function hasAuthForModelProvider(params: {
@@ -48,16 +69,23 @@ export function hasAuthForModelProvider(params: {
   // that narrow the scope — e.g. gateway `models.list` with
   // `runtimeAuthDiscovery: false`, or per-agent picker calls that pass a
   // non-default workspaceDir — get the answer they asked for.
+  const preparedState = currentProviderAuthState;
+  const workspaceDir = params.workspaceDir ?? resolveDefaultAgentWorkspaceDir();
+  const configFingerprint = resolveProviderAuthConfigFingerprint(params.cfg);
+  const preparedStateFresh =
+    preparedState !== null &&
+    Date.now() - preparedState.preparedAtMs <= PREPARED_PROVIDER_AUTH_STATE_TTL_MS;
   const matchesWarmedScope =
+    preparedStateFresh &&
+    configFingerprint === preparedState.configFingerprint &&
+    workspaceDir === preparedState.workspaceDir &&
     params.discoverExternalCliAuth !== false &&
     params.allowPluginSyntheticAuth !== false &&
     params.agentDir === undefined &&
     params.env === undefined &&
-    params.store === undefined &&
-    (params.workspaceDir === undefined ||
-      params.workspaceDir === currentProviderAuthStateWorkspaceDir);
+    params.store === undefined;
   if (matchesWarmedScope) {
-    const preparedAnswer = currentProviderAuthState?.get(provider);
+    const preparedAnswer = preparedState.providers.get(provider);
     if (preparedAnswer !== undefined) {
       return preparedAnswer;
     }
@@ -152,6 +180,10 @@ export async function warmCurrentProviderAuthState(cfg: OpenClawConfig): Promise
     // the newer answer wins.
     return;
   }
-  currentProviderAuthState = state;
-  currentProviderAuthStateWorkspaceDir = workspaceDir;
+  currentProviderAuthState = {
+    configFingerprint: resolveProviderAuthConfigFingerprint(cfg) ?? "",
+    workspaceDir,
+    preparedAtMs: Date.now(),
+    providers: state,
+  };
 }

@@ -390,6 +390,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       }
       await refreshActiveSecretsRuntimeSnapshot();
       invalidateModelAuthStatusCache();
+      clearCurrentProviderAuthState();
       void warmCurrentProviderAuthState(context.getRuntimeConfig()).catch((err) => {
         log.warn(`provider auth state rewarm after logout failed: ${formatForLog(err)}`);
       });
