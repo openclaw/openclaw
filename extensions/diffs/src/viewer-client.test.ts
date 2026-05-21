@@ -2,7 +2,8 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-(globalThis as typeof globalThis & { __OPENCLAW_DIFFS_DISABLE_AUTO_START__?: boolean }).__OPENCLAW_DIFFS_DISABLE_AUTO_START__ = true;
+const disableAutoStartKey = Symbol.for("openclaw.diffs.disableAutoStart");
+(globalThis as typeof globalThis & Record<symbol, unknown>)[disableAutoStartKey] = true;
 
 const { fileDiffHydrateMock, fileDiffRerenderMock, fileDiffSetOptionsMock, preloadHighlighterMock } =
   vi.hoisted(() => ({
@@ -71,7 +72,7 @@ describe("hydrateViewer", () => {
       throw new Error("broken card");
     });
     const { controllers, hydrateViewer } = await import("./viewer-client.js");
-    controllers.splice(0, controllers.length);
+    controllers.splice(0);
 
     await hydrateViewer();
 

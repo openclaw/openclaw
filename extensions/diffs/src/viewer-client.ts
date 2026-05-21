@@ -346,9 +346,9 @@ async function main(): Promise<void> {
   }
 }
 
-const autoStartDisabled = (
-  globalThis as typeof globalThis & { __OPENCLAW_DIFFS_DISABLE_AUTO_START__?: boolean }
-).__OPENCLAW_DIFFS_DISABLE_AUTO_START__;
+export const disableAutoStartKey = Symbol.for("openclaw.diffs.disableAutoStart");
+
+const autoStartDisabled = Boolean((globalThis as typeof globalThis & Record<symbol, unknown>)[disableAutoStartKey]);
 
 if (typeof document !== "undefined" && !autoStartDisabled) {
   if (document.readyState === "loading") {
