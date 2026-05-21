@@ -1,5 +1,6 @@
 import { basename, isAbsolute, resolve } from "node:path";
 import JSON5 from "json5";
+import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   registerHealthCheck as registerPluginHealthCheck,
   type HealthCheck,
@@ -871,8 +872,8 @@ function modelProviderFindings(
   policyDocName: string,
   evidence: PolicyEvidence,
 ): readonly HealthFinding[] {
-  const denied = new Set(readStringList(policy, ["models", "providers", "deny"]));
-  const allowed = readStringList(policy, ["models", "providers", "allow"]);
+  const denied = new Set(readModelProviderPolicyList(policy, ["models", "providers", "deny"]));
+  const allowed = readModelProviderPolicyList(policy, ["models", "providers", "allow"]);
   const allowedSet = new Set(allowed);
   const findings: HealthFinding[] = [];
 
@@ -884,6 +885,10 @@ function modelProviderFindings(
   }
 
   return findings;
+}
+
+function readModelProviderPolicyList(policy: unknown, path: readonly string[]): readonly string[] {
+  return readStringList(policy, path).map((provider) => normalizeProviderId(provider));
 }
 
 function modelProviderConformanceFindings(

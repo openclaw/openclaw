@@ -914,6 +914,81 @@ describe("registerPolicyDoctorChecks", () => {
     ]);
   });
 
+  it("normalizes model provider refs before deny policy comparison", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      models: {
+        providers: {
+          "aws-bedrock": {},
+        },
+      },
+      agents: {
+        defaults: {
+          model: "OpenRouter/openai/gpt-5.5",
+        },
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        models: {
+          providers: { deny: ["openrouter", "amazon-bedrock"] },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyDoctorLint(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/models-denied-provider",
+        severity: "error",
+        ocPath: "oc://openclaw.config/models/providers/aws-bedrock",
+        requirement: "oc://policy.jsonc/models/providers/deny",
+      }),
+      expect.objectContaining({
+        checkId: "policy/models-denied-provider",
+        severity: "error",
+        ocPath: "oc://openclaw.config/agents/defaults/model",
+        requirement: "oc://policy.jsonc/models/providers/deny",
+      }),
+    ]);
+  });
+
+  it("normalizes model provider refs before allow policy comparison", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      models: {
+        providers: {
+          "aws-bedrock": {},
+        },
+      },
+      agents: {
+        defaults: {
+          model: "OpenRouter/openai/gpt-5.5",
+        },
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        models: {
+          providers: { allow: ["openrouter", "amazon-bedrock"] },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyDoctorLint(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual([]);
+  });
+
   it("reports model refs outside the policy allowlist", async () => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {

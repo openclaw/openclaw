@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 
 export type PolicyAttestation = {
   readonly checkedAt: string;
@@ -208,7 +209,7 @@ export function scanPolicyModelProviders(
   return Object.keys(configuredModelProviders(cfg))
     .toSorted((a, b) => a.localeCompare(b))
     .map((id) => ({
-      id,
+      id: normalizeProviderId(id),
       source: `oc://openclaw.config/models/providers/${id}`,
     }));
 }
@@ -586,7 +587,7 @@ function parseModelRef(
     return undefined;
   }
   return {
-    provider: trimmed.slice(0, slash),
+    provider: normalizeProviderId(trimmed.slice(0, slash)),
     model: trimmed.slice(slash + 1),
   };
 }
