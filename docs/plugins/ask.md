@@ -26,3 +26,28 @@ Example:
 ```
 
 The resulting Discord component uses `callbackData = "ask:<ask_id>"` and is handled by the bundled `ask` plugin interactive handler.
+
+## Grill Mode
+
+`/ask grill <request>` starts a one-question-at-a-time clarification protocol for ambiguous work.
+It is a prefix mode on the current `/ask` command, not a native Discord subcommand yet.
+
+Grill Mode asks six fixed prompts:
+
+1. Goal
+2. Context
+3. Scope
+4. Risk / HITL
+5. Acceptance
+6. Output format
+
+Each step uses a short modal prompt and stores the answer in `ask.sessions`.
+The visible message only shows the current question and progress; it does not replay the whole answer history on every turn.
+The final summary is still `log_only` and keeps `requires_second_go=true`.
+It must not trigger implementation, external sends, deploys, config writes, deletes, billing, or gateway restarts.
+
+Example:
+
+```text
+/ask grill 曖昧な依頼をSPECと実装タスクまで詰めたい
+```

@@ -11,6 +11,7 @@ const YES_NO_OPTIONS: AskOption[] = [
 ];
 
 export type AskClassification = {
+  mode: "single" | "grill";
   uiType: AskUiType;
   questionText: string;
   options: AskOption[];
@@ -20,8 +21,19 @@ export function classifyAskInput(rawArgs: string | undefined): AskClassification
   const args = (rawArgs ?? "").trim();
   if (!args) {
     return {
+      mode: "single",
       uiType: "modal",
       questionText: "What should I ask?",
+      options: [],
+    };
+  }
+
+  const grill = parseGrillArgs(args);
+  if (grill.isGrill) {
+    return {
+      mode: "grill",
+      uiType: "modal",
+      questionText: grill.initialRequest,
       options: [],
     };
   }
@@ -32,12 +44,31 @@ export function classifyAskInput(rawArgs: string | undefined): AskClassification
   const options = explicit.options.length > 0 ? explicit.options : inferOptions(questionText);
 
   if (shouldUseModal(lower, options)) {
-    return { uiType: "modal", questionText, options: [] };
+    return { mode: "single", uiType: "modal", questionText, options: [] };
   }
   if (shouldUseSelect(lower, options)) {
-    return { uiType: "select", questionText, options: normalizeOptions(options).slice(0, 25) };
+    return {
+      mode: "single",
+      uiType: "select",
+      questionText,
+      options: normalizeOptions(options).slice(0, 25),
+    };
   }
-  return { uiType: "button", questionText, options: normalizeOptions(options).slice(0, 5) };
+  return {
+    mode: "single",
+    uiType: "button",
+    questionText,
+    options: normalizeOptions(options).slice(0, 5),
+  };
+}
+
+function parseGrillArgs(args: string): { isGrill: boolean; initialRequest: string } {
+  const match = /^grill(?:\s+|$)([\s\S]*)$/iu.exec(args);
+  if (!match) {
+    return { isGrill: false, initialRequest: args };
+  }
+  const initialRequest = (match[1] ?? "").trim() || "未指定の依頼";
+  return { isGrill: true, initialRequest };
 }
 
 function parseExplicitOptions(args: string): { questionText: string; options: AskOption[] } {

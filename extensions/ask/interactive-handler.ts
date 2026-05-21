@@ -1,6 +1,12 @@
 import type { DiscordInteractiveHandlerContext } from "openclaw/plugin-sdk/discord-interactions";
-import type { AskStores } from "./session-store.js";
-import { recordAskFeedback } from "./session-store.js";
+import { buildAskDiscordComponents } from "./components.js";
+import {
+  advanceAskGrillSession,
+  formatAskGrillSummary,
+  isAskGrillSession,
+  sanitizeDiscordDisplayText,
+} from "./grill.js";
+import { ASK_SESSION_TTL_MS, recordAskFeedback, type AskStores } from "./session-store.js";
 import type { AskAnswer, AskFeedbackEvent, AskSession } from "./types.js";
 
 export function createAskInteractiveHandler(stores: AskStores) {
@@ -95,13 +101,17 @@ export function createAskInteractiveHandler(stores: AskStores) {
       fields: ctx.interaction.fields,
       answeredAt: now,
     };
+    const advanced = isAskGrillSession(session)
+      ? advanceAskGrillSession(session, answer, now)
+      : { session: { ...session, status: "answered" as const, result: answer }, completed: true };
     const answered: AskSession = {
-      ...session,
-      status: "answered",
+      ...advanced.session,
       interactionMessageId: answer.interactionMessageId,
-      result: answer,
+      expiresAt: isAskGrillSession(advanced.session)
+        ? now + ASK_SESSION_TTL_MS
+        : advanced.session.expiresAt,
     };
-    await stores.sessions.register(askId, answered);
+    await stores.sessions.register(askId, answered, { ttlMs: ASK_SESSION_TTL_MS });
     await logFeedback(stores, {
       askId,
       type: "answered",
@@ -109,14 +119,34 @@ export function createAskInteractiveHandler(stores: AskStores) {
       interactionId: ctx.interactionId,
       interactionMessageId: answer.interactionMessageId,
       createdAt: now,
-      detail: summarizeAnswer(answer),
+      detail: isAskGrillSession(session)
+        ? `grill_step_recorded:${(answered.grill?.answers.length ?? 0).toString()}`
+        : summarizeAnswer(answer),
     });
 
+    if (isAskGrillSession(answered) && !advanced.completed) {
+      await ctx.respond.editMessage({
+        text: formatGrillProgress(answered),
+        components: buildAskDiscordComponents(answered),
+      });
+      return { handled: true };
+    }
+
     await ctx.respond.clearComponents({
-      text: `✅ /ask answered: ${summarizeAnswer(answer)}\n-# 記録のみ完了。次の実行には別GOが必要です。`,
+      text: isAskGrillSession(answered)
+        ? formatAskGrillSummary(answered)
+        : `✅ /ask answered: ${summarizeAnswer(answer)}\n-# 記録のみ完了。次の実行には別GOが必要です。`,
     });
     return { handled: true };
   };
+}
+
+function formatGrillProgress(session: AskSession): string {
+  const answeredCount = session.grill?.answers.length ?? 0;
+  return [
+    `✅ /ask grill answer recorded (${answeredCount.toString()})`,
+    "-# 次の質問へ進みます。ここまでの回答はstateに保存済みです。",
+  ].join("\n");
 }
 
 function parseAskPayload(payload: string): { askId: string; buttonValue?: string } {
@@ -146,10 +176,10 @@ function summarizeAnswer(answer: AskAnswer): string {
     const fieldSummary = answer.fields
       ?.map((field) => `${field.name}: ${field.values.join(", ")}`)
       .join("; ");
-    return fieldSummary || "modal submitted";
+    return fieldSummary ? sanitizeDiscordDisplayText(fieldSummary, 300) : "modal submitted";
   }
   if (answer.values?.length) {
-    return answer.values.join(", ");
+    return sanitizeDiscordDisplayText(answer.values.join(", "), 300);
   }
   return answer.kind;
 }

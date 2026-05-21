@@ -4,6 +4,7 @@ import type { AskFeedbackEvent, AskSession } from "./types.js";
 type AskKeyedStore<T> = {
   register: (key: string, value: T, opts?: { ttlMs?: number }) => Promise<void>;
   lookup: (key: string) => Promise<T | undefined>;
+  entries: () => Promise<Array<{ key: string; value: T; createdAt: number }>>;
 };
 
 export const ASK_SESSION_TTL_MS = 30 * 60 * 1000;

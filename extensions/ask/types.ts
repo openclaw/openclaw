@@ -1,3 +1,5 @@
+export type AskMode = "single" | "grill";
+
 export type AskUiType = "button" | "select" | "modal";
 
 export type AskOption = {
@@ -19,6 +21,7 @@ export type AskAnswer = {
 
 export type AskSession = {
   askId: string;
+  mode: AskMode;
   createdAt: number;
   expiresAt: number;
   requesterUserId?: string;
@@ -39,6 +42,20 @@ export type AskSession = {
   nextActionPolicy: "log_only";
   requiresSecondGo: true;
   actionScope: "answer_capture_only";
+  grill?: AskGrillState;
+};
+
+export type AskGrillAnswer = {
+  stepId: string;
+  question: string;
+  answer: string;
+  answeredAt: number;
+};
+
+export type AskGrillState = {
+  initialRequest: string;
+  currentStepIndex: number;
+  answers: AskGrillAnswer[];
 };
 
 export type AskFeedbackEvent = {
