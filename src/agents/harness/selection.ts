@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { isCliRuntimeAlias } from "../model-runtime-aliases.js";
 import type { CompactEmbeddedPiSessionParams } from "../pi-embedded-runner/compact.types.js";
 import type {
   EmbeddedRunAttemptParams,
@@ -442,6 +443,15 @@ function logAgentHarnessSelection(
 export async function maybeCompactAgentHarnessSession(
   params: CompactEmbeddedPiSessionParams,
 ): Promise<EmbeddedPiCompactResult | undefined> {
+  const runtime = resolveConfiguredAgentHarnessPolicy({
+    provider: params.provider,
+    modelId: params.model,
+    config: params.config,
+    sessionKey: params.sessionKey,
+  }).runtime;
+  if (isCliRuntimeAlias(runtime)) {
+    return undefined;
+  }
   const harness = selectAgentHarness({
     provider: params.provider ?? "",
     modelId: params.model,

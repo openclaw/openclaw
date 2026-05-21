@@ -597,6 +597,20 @@ describe("selectAgentHarness", () => {
     ).toBe("codex");
   });
 
+  it("skips harness compaction preflight for claude-cli runtime sessions", async () => {
+    await expect(
+      maybeCompactAgentHarnessSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+        config: agentModelRuntimeConfig("anthropic/claude-opus-4-7", "claude-cli"),
+      }),
+    ).resolves.toBeUndefined();
+  });
+
   it("does not compact a plugin-pinned session through PI when the plugin has no compactor", async () => {
     registerFailingCodexHarness();
 
