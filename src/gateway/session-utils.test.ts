@@ -13,6 +13,7 @@ import {
   buildGatewaySessionRow,
   capArrayByJsonBytes,
   classifySessionKey,
+  deleteGatewaySessionStoreEntry,
   deriveSessionTitle,
   getSessionDefaults,
   listAgentsForGateway,
@@ -29,6 +30,7 @@ import {
   resolveSessionModelIdentityRef,
   resolveSessionModelRef,
   resolveSessionStoreKey,
+  writeGatewaySessionStoreEntry,
 } from "./session-utils.js";
 
 function resolveSyncRealpath(filePath: string): string {
@@ -163,6 +165,130 @@ describe("gateway session utils", () => {
     expect(listed.totalCount).toBe(5);
     expect(listed.limitApplied).toBe(3);
     expect(listed.hasMore).toBe(true);
+  });
+
+  test("session lists collapse preserved raw external aliases", () => {
+    const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
+    const rawKey = "conversation:pair:user_a::user_b:space:space_123";
+    const canonicalKey = `agent:main:${rawKey}`;
+    const store = {
+      [rawKey]: {
+        sessionId: "sess-raw",
+        subject: "Alias Needle",
+        updatedAt: 20,
+      },
+      [canonicalKey]: {
+        sessionId: "sess-raw",
+        subject: "Alias Needle",
+        updatedAt: 30,
+      },
+    } satisfies Record<string, SessionEntry>;
+
+    const listed = listSessionsFromStore({
+      cfg,
+      storePath: "",
+      store,
+      opts: {},
+    });
+    expect(listed.sessions.map((session) => session.key)).toEqual([canonicalKey]);
+    expect(listed.count).toBe(1);
+    expect(listed.totalCount).toBe(1);
+    expect(listed.hasMore).toBe(false);
+
+    const searched = listSessionsFromStore({
+      cfg,
+      storePath: "",
+      store,
+      opts: { search: "alias needle" },
+    });
+    expect(searched.sessions.map((session) => session.key)).toEqual([canonicalKey]);
+    expect(searched.count).toBe(1);
+    expect(searched.totalCount).toBe(1);
+
+    const rawOnly = listSessionsFromStore({
+      cfg,
+      storePath: "",
+      store: { [rawKey]: store[rawKey] },
+      opts: {},
+    });
+    expect(rawOnly.sessions.map((session) => session.key)).toEqual([rawKey]);
+    expect(rawOnly.totalCount).toBe(1);
+  });
+
+  test("preserved Signal group raw aliases keep opaque peer id casing", () => {
+    const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
+    const groupId = "GroupOpaqueID-AbC123";
+    const rawKey = `Signal:Group:${groupId}`;
+    const preservedRawKey = `signal:group:${groupId}`;
+    const foldedRawKey = `signal:group:${groupId.toLowerCase()}`;
+    const canonicalKey = `agent:main:${preservedRawKey}`;
+    const store = {
+      [rawKey]: {
+        sessionId: "sess-signal",
+        subject: "Signal Alias",
+        updatedAt: 20,
+      },
+      [canonicalKey]: {
+        sessionId: "sess-older",
+        subject: "Old Signal Alias",
+        updatedAt: 10,
+      },
+      [foldedRawKey]: {
+        sessionId: "sess-folded",
+        subject: "Folded Signal Alias",
+        updatedAt: 5,
+      },
+    } satisfies Record<string, SessionEntry>;
+
+    const { preservedAliasKeys, primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+      cfg,
+      key: rawKey,
+      store,
+    });
+
+    expect(primaryKey).toBe(canonicalKey);
+    expect(preservedAliasKeys.toSorted()).toEqual([preservedRawKey, rawKey].toSorted());
+    expect(store[canonicalKey]?.sessionId).toBe("sess-signal");
+    expect(store[preservedRawKey]?.sessionId).toBe("sess-signal");
+    expect(store[rawKey]?.sessionId).toBe("sess-signal");
+    expect(store[foldedRawKey]).toBeUndefined();
+
+    writeGatewaySessionStoreEntry({
+      store,
+      primaryKey,
+      aliasKeys: preservedAliasKeys,
+      entry: {
+        sessionId: "sess-write",
+        subject: "Signal Alias",
+        updatedAt: 30,
+        sendPolicy: "deny",
+      },
+    });
+
+    expect(store[preservedRawKey]).toBe(store[canonicalKey]);
+    expect(store[rawKey]).toBe(store[canonicalKey]);
+    expect(store[preservedRawKey]?.sessionId).toBe("sess-write");
+
+    const listed = listSessionsFromStore({
+      cfg,
+      storePath: "",
+      store,
+      opts: {},
+    });
+    expect(listed.sessions.map((session) => session.key)).toEqual([canonicalKey]);
+    expect(listed.count).toBe(1);
+    expect(listed.totalCount).toBe(1);
+
+    expect(
+      deleteGatewaySessionStoreEntry({
+        store,
+        primaryKey,
+        aliasKeys: preservedAliasKeys,
+      }),
+    ).toBe(true);
+    expect(store[canonicalKey]).toBeUndefined();
+    expect(store[preservedRawKey]).toBeUndefined();
+    expect(store[rawKey]).toBeUndefined();
   });
 
   test("parseGroupKey handles group keys", () => {
@@ -1083,6 +1209,165 @@ describe("gateway session utils", () => {
     expect(result.entry?.sessionId).toBe("sess-fresh");
     expect(store["agent:main:main"]?.sessionId).toBe("sess-fresh");
     expect(store["agent:main:MAIN"]).toBeUndefined();
+  });
+
+  test("migrateAndPruneGatewaySessionStoreKey preserves raw structured external aliases", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: { list: [{ id: "main", default: true }] },
+    } as OpenClawConfig;
+    const rawKey = "conversation:pair:user_a::user_b:space:space_123";
+    const canonicalKey = `agent:main:${rawKey}`;
+    const store: Record<string, SessionEntry> = {
+      [rawKey]: {
+        sessionId: "sess-raw",
+        updatedAt: 2,
+      } as SessionEntry,
+    };
+
+    const result = migrateAndPruneGatewaySessionStoreKey({
+      cfg,
+      key: rawKey,
+      store,
+    });
+
+    expect(result.primaryKey).toBe(canonicalKey);
+    expect(result.entry?.sessionId).toBe("sess-raw");
+    expect(result.preservedAliasKeys).toEqual([rawKey]);
+    expect(store[canonicalKey]?.sessionId).toBe("sess-raw");
+    expect(store[rawKey]?.sessionId).toBe("sess-raw");
+  });
+
+  test("preserved raw external aliases follow replacement and delete operations", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: { list: [{ id: "main", default: true }] },
+    } as OpenClawConfig;
+    const rawKey = "conversation:pair:user_a::user_b:space:space_123";
+    const canonicalKey = `agent:main:${rawKey}`;
+    const store: Record<string, SessionEntry> = {
+      [rawKey]: {
+        sessionId: "sess-raw",
+        updatedAt: 2,
+      } as SessionEntry,
+    };
+
+    const migrated = migrateAndPruneGatewaySessionStoreKey({
+      cfg,
+      key: rawKey,
+      store,
+    });
+    const nextEntry = {
+      sessionId: "sess-next",
+      updatedAt: 3,
+    } as SessionEntry;
+
+    writeGatewaySessionStoreEntry({
+      store,
+      primaryKey: migrated.primaryKey,
+      aliasKeys: migrated.preservedAliasKeys,
+      entry: nextEntry,
+    });
+
+    expect(store[canonicalKey]).toBe(nextEntry);
+    expect(store[rawKey]).toBe(nextEntry);
+    expect(
+      deleteGatewaySessionStoreEntry({
+        store,
+        primaryKey: migrated.primaryKey,
+        aliasKeys: migrated.preservedAliasKeys,
+      }),
+    ).toBe(true);
+    expect(store[canonicalKey]).toBeUndefined();
+    expect(store[rawKey]).toBeUndefined();
+  });
+
+  test("preserved raw external aliases are rediscovered from canonical keys", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: { list: [{ id: "main", default: true }] },
+    } as OpenClawConfig;
+    const rawKey = "conversation:pair:user_a::user_b:space:space_123";
+    const canonicalKey = `agent:main:${rawKey}`;
+    const store: Record<string, SessionEntry> = {
+      [canonicalKey]: {
+        sessionId: "sess-canonical",
+        updatedAt: 3,
+      } as SessionEntry,
+      [rawKey]: {
+        sessionId: "sess-raw",
+        updatedAt: 2,
+      } as SessionEntry,
+    };
+
+    const migrated = migrateAndPruneGatewaySessionStoreKey({
+      cfg,
+      key: canonicalKey,
+      store,
+    });
+
+    expect(migrated.primaryKey).toBe(canonicalKey);
+    expect(migrated.preservedAliasKeys).toEqual([rawKey]);
+    const nextEntry = {
+      sessionId: "sess-next",
+      updatedAt: 4,
+    } as SessionEntry;
+
+    writeGatewaySessionStoreEntry({
+      store,
+      primaryKey: migrated.primaryKey,
+      aliasKeys: migrated.preservedAliasKeys,
+      entry: nextEntry,
+    });
+
+    expect(store[canonicalKey]).toBe(nextEntry);
+    expect(store[rawKey]).toBe(nextEntry);
+    expect(
+      deleteGatewaySessionStoreEntry({
+        store,
+        primaryKey: migrated.primaryKey,
+        aliasKeys: migrated.preservedAliasKeys,
+      }),
+    ).toBe(true);
+    expect(store[canonicalKey]).toBeUndefined();
+    expect(store[rawKey]).toBeUndefined();
+  });
+
+  test("canonical-only external session keys do not create raw aliases", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: { list: [{ id: "main", default: true }] },
+    } as OpenClawConfig;
+    const rawKey = "conversation:pair:user_a::user_b:space:space_123";
+    const canonicalKey = `agent:main:${rawKey}`;
+    const store: Record<string, SessionEntry> = {
+      [canonicalKey]: {
+        sessionId: "sess-canonical",
+        updatedAt: 3,
+      } as SessionEntry,
+    };
+
+    const migrated = migrateAndPruneGatewaySessionStoreKey({
+      cfg,
+      key: canonicalKey,
+      store,
+    });
+
+    expect(migrated.primaryKey).toBe(canonicalKey);
+    expect(migrated.preservedAliasKeys).toEqual([]);
+    const nextEntry = {
+      sessionId: "sess-next",
+      updatedAt: 4,
+    } as SessionEntry;
+    writeGatewaySessionStoreEntry({
+      store,
+      primaryKey: migrated.primaryKey,
+      aliasKeys: migrated.preservedAliasKeys,
+      entry: nextEntry,
+    });
+
+    expect(store[canonicalKey]).toBe(nextEntry);
+    expect(store[rawKey]).toBeUndefined();
   });
 
   test("listAgentsForGateway rejects avatar symlink escapes outside workspace", () => {

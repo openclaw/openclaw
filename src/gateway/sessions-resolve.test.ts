@@ -65,7 +65,10 @@ describe("resolveSessionKeyFromResolveParams", () => {
       storeKeys: [canonicalKey, legacyKey],
       storePath,
     });
-    hoisted.migrateAndPruneGatewaySessionStoreKeyMock.mockReturnValue({ primaryKey: canonicalKey });
+    hoisted.migrateAndPruneGatewaySessionStoreKeyMock.mockReturnValue({
+      primaryKey: canonicalKey,
+      preservedAliasKeys: [],
+    });
     hoisted.updateSessionStoreMock.mockImplementation(
       async (_path: string, updater: (store: Record<string, SessionEntry>) => void) => {
         const store = hoisted.loadSessionStoreMock.mock.results[0]?.value as

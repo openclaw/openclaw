@@ -16,6 +16,7 @@ import {
   migrateAndPruneGatewaySessionStoreKey,
   resolveDeletedAgentIdFromSessionKey,
   resolveGatewaySessionStoreTarget,
+  syncGatewaySessionStoreAliases,
 } from "./session-utils.js";
 
 export type SessionsResolveResult = { ok: true; key: string } | { ok: false; error: ErrorShape };
@@ -65,6 +66,7 @@ function isResolvedSessionKeyVisible(params: {
     return true;
   }
   return filterAndSortSessionEntries({
+    cfg: params.cfg,
     store: params.store,
     now: Date.now(),
     opts: resolveSessionVisibilityFilterOptions(params.p),
@@ -72,12 +74,14 @@ function isResolvedSessionKeyVisible(params: {
 }
 
 function findVisibleSessionIdMatches(params: {
+  cfg: OpenClawConfig;
   store: Record<string, SessionEntry>;
   p: SessionsResolveParams;
   sessionId: string;
 }): Array<[string, SessionEntry]> {
   const now = Date.now();
   const entries = filterAndSortSessionEntries({
+    cfg: params.cfg,
     store: params.store,
     now,
     opts: resolveSessionVisibilityFilterOptions(params.p),
@@ -141,10 +145,19 @@ export async function resolveSessionKeyFromResolveParams(params: {
       return noSessionFoundResult(key);
     }
     await updateSessionStore(target.storePath, (s) => {
-      const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({ cfg, key, store: s });
+      const { preservedAliasKeys, primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+        cfg,
+        key,
+        store: s,
+      });
       if (!s[primaryKey] && s[legacyKey]) {
         s[primaryKey] = s[legacyKey];
       }
+      syncGatewaySessionStoreAliases({
+        store: s,
+        primaryKey,
+        aliasKeys: preservedAliasKeys,
+      });
     });
     if (
       !isResolvedSessionKeyVisible({
@@ -166,7 +179,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
 
   if (hasSessionId) {
     const { store } = loadCombinedSessionStoreForGateway(cfg, { agentId: p.agentId });
-    const matches = findVisibleSessionIdMatches({ store, p, sessionId });
+    const matches = findVisibleSessionIdMatches({ cfg, store, p, sessionId });
     const selection = resolveSessionIdMatchSelection(matches, sessionId);
     if (selection.kind === "none") {
       return {

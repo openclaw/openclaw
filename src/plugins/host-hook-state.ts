@@ -8,6 +8,11 @@ import {
 } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  normalizeSessionStoreKeys,
+  resolveGatewaySessionStorePreservedAliasKeys,
+  syncGatewaySessionStoreAliases,
+} from "../gateway/session-store-aliases.js";
+import {
   resolveSessionStoreAgentId,
   resolveSessionStoreKey,
 } from "../gateway/session-store-key.js";
@@ -170,6 +175,7 @@ function loadPluginHostHookSessionEntry(params: { cfg: OpenClawConfig; sessionKe
   entry?: SessionEntry;
   canonicalKey: string;
   storeKey: string;
+  aliasKeys: string[];
 } {
   const key = normalizeOptionalString(params.sessionKey) ?? "";
   const cfg = params.cfg;
@@ -181,20 +187,35 @@ function loadPluginHostHookSessionEntry(params: { cfg: OpenClawConfig; sessionKe
     agentId,
     storePath: resolveStorePath(cfg.session?.store, { agentId }),
   };
+  const fallbackStore = loadSessionStore(fallback.storePath);
+  let selectedAliasKeys = resolvePluginHostHookSessionAliasKeys({
+    cfg,
+    key,
+    canonicalKey,
+    store: fallbackStore,
+  });
   let selectedStorePath = fallback.storePath;
-  let selectedMatch = findFreshestStoreMatch(loadSessionStore(fallback.storePath), ...scanTargets);
+  let selectedMatch = findFreshestStoreMatch(fallbackStore, ...scanTargets, ...selectedAliasKeys);
   for (let index = 1; index < candidates.length; index += 1) {
     const candidate = candidates[index];
     if (!candidate) {
       continue;
     }
-    const match = findFreshestStoreMatch(loadSessionStore(candidate.storePath), ...scanTargets);
+    const store = loadSessionStore(candidate.storePath);
+    const aliasKeys = resolvePluginHostHookSessionAliasKeys({
+      cfg,
+      key,
+      canonicalKey,
+      store,
+    });
+    const match = findFreshestStoreMatch(store, ...scanTargets, ...aliasKeys);
     if (
       match &&
       (!selectedMatch || (match.entry.updatedAt ?? 0) >= (selectedMatch.entry.updatedAt ?? 0))
     ) {
       selectedStorePath = candidate.storePath;
       selectedMatch = match;
+      selectedAliasKeys = aliasKeys;
     }
   }
   return {
@@ -202,7 +223,42 @@ function loadPluginHostHookSessionEntry(params: { cfg: OpenClawConfig; sessionKe
     entry: selectedMatch?.entry,
     canonicalKey,
     storeKey: selectedMatch?.key ?? canonicalKey,
+    aliasKeys: selectedAliasKeys,
   };
+}
+
+function resolvePluginHostHookSessionAliasKeys(params: {
+  cfg: OpenClawConfig;
+  key: string;
+  canonicalKey: string;
+  store: Record<string, SessionEntry>;
+}): string[] {
+  const preservedAliasKeys = resolveGatewaySessionStorePreservedAliasKeys({
+    cfg: params.cfg,
+    key: params.key,
+    canonicalKey: params.canonicalKey,
+    storeKeys: [params.key, params.canonicalKey, ...Object.keys(params.store)],
+  });
+  return normalizeSessionStoreKeys([params.canonicalKey, ...preservedAliasKeys]);
+}
+
+function findPluginHostHookWritableSessionEntry(
+  store: Record<string, SessionEntry>,
+  loaded: ReturnType<typeof loadPluginHostHookSessionEntry>,
+): { entry: SessionEntry; key: string } | undefined {
+  return findFreshestStoreMatch(store, loaded.storeKey, loaded.canonicalKey, ...loaded.aliasKeys);
+}
+
+function syncPluginHostHookSessionAliases(
+  store: Record<string, SessionEntry>,
+  primaryKey: string,
+  loaded: ReturnType<typeof loadPluginHostHookSessionEntry>,
+) {
+  syncGatewaySessionStoreAliases({
+    store,
+    primaryKey,
+    aliasKeys: loaded.aliasKeys,
+  });
 }
 
 function isPluginPromptInjectionEnabled(cfg: OpenClawConfig, pluginId: string): boolean {
@@ -292,10 +348,11 @@ export async function enqueuePluginNextTurnInjection(params: {
   let enqueued = false;
   let resultId = record.id;
   await updateSessionStore(loaded.storePath, (store) => {
-    const entry = store[loaded.storeKey];
-    if (!entry) {
+    const match = findPluginHostHookWritableSessionEntry(store, loaded);
+    if (!match) {
       return;
     }
+    const entry = match.entry;
     const injections = { ...entry.pluginNextTurnInjections };
     // Guard against malformed/hand-edited persisted state — a non-array value
     // here would crash the spread/filter and break the whole session's enqueue.
@@ -310,17 +367,16 @@ export async function enqueuePluginNextTurnInjection(params: {
       resultId = duplicate.id;
       injections[params.pluginId] = existing;
       entry.pluginNextTurnInjections = injections;
-      return;
-    }
-    if (existing.length >= MAX_PLUGIN_NEXT_TURN_INJECTIONS_PER_SESSION) {
+    } else if (existing.length >= MAX_PLUGIN_NEXT_TURN_INJECTIONS_PER_SESSION) {
       injections[params.pluginId] = existing;
       entry.pluginNextTurnInjections = injections;
-      return;
+    } else {
+      injections[params.pluginId] = [...existing, record];
+      entry.pluginNextTurnInjections = injections;
+      entry.updatedAt = now;
+      enqueued = true;
     }
-    injections[params.pluginId] = [...existing, record];
-    entry.pluginNextTurnInjections = injections;
-    entry.updatedAt = now;
-    enqueued = true;
+    syncPluginHostHookSessionAliases(store, match.key, loaded);
   });
   return { enqueued, id: resultId, sessionKey: canonicalKey };
 }
@@ -350,10 +406,11 @@ export async function drainPluginNextTurnInjections(params: {
   }
   const now = params.now ?? Date.now();
   return await updateSessionStore(loaded.storePath, (store) => {
-    const entry = store[loaded.storeKey];
-    if (!entry?.pluginNextTurnInjections) {
+    const match = findPluginHostHookWritableSessionEntry(store, loaded);
+    if (!match?.entry.pluginNextTurnInjections) {
       return [];
     }
+    const entry = match.entry;
     const activePluginIds = new Set(
       (getActivePluginRegistry()?.plugins ?? [])
         .filter((plugin) => plugin.status === "loaded")
@@ -381,6 +438,7 @@ export async function drainPluginNextTurnInjections(params: {
     if (drained.length > 0) {
       entry.updatedAt = now;
     }
+    syncPluginHostHookSessionAliases(store, match.key, loaded);
     return drained;
   });
 }
@@ -482,10 +540,11 @@ export async function patchPluginSessionExtension(params: {
   }
   const slotKey = normalizedSlotKey?.ok === true ? normalizedSlotKey.key : undefined;
   const nextValue = await updateSessionStore(loaded.storePath, (store) => {
-    const entry = store[loaded.storeKey];
-    if (!entry) {
+    const match = findPluginHostHookWritableSessionEntry(store, loaded);
+    if (!match) {
       return undefined;
     }
+    const entry = match.entry;
     const entryRecord = entry as Record<string, unknown>;
     const pluginExtensions = { ...entry.pluginExtensions };
     const pluginState = { ...pluginExtensions[pluginId] };
@@ -539,6 +598,7 @@ export async function patchPluginSessionExtension(params: {
       }
     }
     entry.updatedAt = Date.now();
+    syncPluginHostHookSessionAliases(store, match.key, loaded);
     return pluginState[namespace] as PluginJsonValue | undefined;
   });
   return { ok: true, key: canonicalKey, value: nextValue };

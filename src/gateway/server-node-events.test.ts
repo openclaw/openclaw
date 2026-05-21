@@ -87,6 +87,7 @@ const runtimeMocks = vi.hoisted(() => ({
       target: { canonicalKey: key, storeKeys: [key] },
       primaryKey: key,
       entry: store[key],
+      preservedAliasKeys: [],
     }),
   ),
   normalizeChannelId: normalizeChannelIdMock,
@@ -134,6 +135,26 @@ const runtimeMocks = vi.hoisted(() => ({
       : wakeOptions;
   }),
   updateSessionStore: vi.fn(),
+  writeGatewaySessionStoreEntry: vi.fn(
+    ({
+      aliasKeys,
+      entry,
+      primaryKey,
+      store,
+    }: {
+      aliasKeys: Iterable<string>;
+      entry: unknown;
+      primaryKey: string;
+      store: Record<string, unknown>;
+    }) => {
+      store[primaryKey] = entry;
+      for (const aliasKey of aliasKeys) {
+        if (aliasKey !== primaryKey) {
+          store[aliasKey] = entry;
+        }
+      }
+    },
+  ),
 }));
 
 vi.mock("./server-node-events.runtime.js", () => runtimeMocks);

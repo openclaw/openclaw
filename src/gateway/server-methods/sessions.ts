@@ -91,6 +91,7 @@ import { reactivateCompletedSubagentSession } from "../session-subagent-reactiva
 import {
   archiveFileOnDisk,
   buildGatewaySessionRow,
+  deleteGatewaySessionStoreEntry,
   listSessionsFromStoreAsync,
   loadCombinedSessionStoreForGateway,
   loadGatewaySessionRow,
@@ -106,6 +107,8 @@ import {
   resolveSessionDisplayModelIdentityRef,
   resolveSessionModelRef,
   resolveSessionTranscriptCandidates,
+  syncGatewaySessionStoreAliases,
+  writeGatewaySessionStoreEntry,
   type SessionsPatchResult,
   type SessionsPreviewEntry,
   type SessionsPreviewResult,
@@ -1644,7 +1647,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const loaded = loadSessionEntry(key);
-    const { entry, canonicalKey, storePath } = loaded;
+    const { cfg, entry, canonicalKey, storePath } = loaded;
     if (!entry?.sessionId) {
       respond(
         false,
@@ -1697,7 +1700,17 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     });
 
     await updateSessionStore(storePath, (store) => {
-      store[canonicalKey] = nextEntry;
+      const { preservedAliasKeys, primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+        cfg,
+        key,
+        store,
+      });
+      writeGatewaySessionStoreEntry({
+        store,
+        primaryKey,
+        aliasKeys: preservedAliasKeys,
+        entry: nextEntry,
+      });
     });
 
     respond(
@@ -1908,14 +1921,26 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       context.getRuntimeConfig(),
     );
     const applied = await updateSessionStore(storePath, async (store) => {
-      const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({ cfg, key, store });
-      return await applySessionsPatchToStore({
+      const { preservedAliasKeys, primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+        cfg,
+        key,
+        store,
+      });
+      const applied = await applySessionsPatchToStore({
         cfg,
         store,
         storeKey: primaryKey,
         patch: p,
         loadGatewayModelCatalog: context.loadGatewayModelCatalog,
       });
+      if (applied.ok) {
+        syncGatewaySessionStoreAliases({
+          store,
+          primaryKey,
+          aliasKeys: preservedAliasKeys,
+        });
+      }
+      return applied;
     });
     if (!applied.ok) {
       respond(false, undefined, applied.error);
@@ -2120,12 +2145,16 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
     const sessionId = entry?.sessionId;
     const deleted = await updateSessionStore(storePath, (store) => {
-      const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({ cfg, key, store });
-      const hadEntry = Boolean(store[primaryKey]);
-      if (hadEntry) {
-        delete store[primaryKey];
-      }
-      return hadEntry;
+      const { preservedAliasKeys, primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+        cfg,
+        key,
+        store,
+      });
+      return deleteGatewaySessionStoreEntry({
+        store,
+        primaryKey,
+        aliasKeys: preservedAliasKeys,
+      });
     });
 
     const archivedTranscripts =
@@ -2222,8 +2251,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     );
     // Lock + read in a short critical section; transcript work happens outside.
     const compactTarget = await updateSessionStore(storePath, (store) => {
-      const { entry, primaryKey } = migrateAndPruneGatewaySessionStoreKey({ cfg, key, store });
-      return { entry, primaryKey };
+      const { entry, preservedAliasKeys, primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+        cfg,
+        key,
+        store,
+      });
+      return { entry, preservedAliasKeys, primaryKey };
     });
     const entry = compactTarget.entry;
     const sessionId = entry?.sessionId;
@@ -2355,6 +2388,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
             delete entryToUpdate.totalTokens;
             delete entryToUpdate.totalTokensFresh;
           }
+          writeGatewaySessionStoreEntry({
+            store,
+            primaryKey: entryKey,
+            aliasKeys: compactTarget.preservedAliasKeys,
+            entry: entryToUpdate,
+          });
         });
       }
 
@@ -2416,6 +2455,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       delete entryToUpdate.totalTokens;
       delete entryToUpdate.totalTokensFresh;
       entryToUpdate.updatedAt = Date.now();
+      writeGatewaySessionStoreEntry({
+        store,
+        primaryKey: entryKey,
+        aliasKeys: compactTarget.preservedAliasKeys,
+        entry: entryToUpdate,
+      });
     });
 
     respond(

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
+import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
 import { piSdkMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq as directSessionHandlerReq,
@@ -30,6 +31,14 @@ function expectSinglePrefixedFilename(files: string[], prefix: string): string {
   }
   expect(match.length).toBeGreaterThan(prefix.length);
   return match;
+}
+
+async function writeRawSessionStore(
+  storePath: string,
+  entries: Record<string, Record<string, unknown>>,
+) {
+  await fs.writeFile(storePath, JSON.stringify(entries, null, 2), "utf-8");
+  clearSessionStoreCacheForTest();
 }
 
 test("lists and patches session store via sessions.* RPC", async () => {
@@ -453,6 +462,81 @@ test("lists and patches session store via sessions.* RPC", async () => {
   expect((badThinking.error as { message?: unknown } | undefined)?.message ?? "").toMatch(
     /invalid thinkinglevel/i,
   );
+});
+
+test("sessions.patch and sessions.delete keep raw external aliases in sync", async () => {
+  const { storePath } = await createSessionStoreDir();
+  await writeSessionStore({ entries: {}, storePath });
+  const rawKey = "conversation:pair:user_a::user_b:space:space_123";
+  const canonicalKey = `agent:main:${rawKey}`;
+  await writeRawSessionStore(storePath, {
+    [rawKey]: {
+      sessionId: "sess-raw",
+      updatedAt: 1,
+    },
+  });
+
+  const patched = await directSessionHandlerReq<{
+    ok: true;
+    key: string;
+    entry: { sessionId?: string; sendPolicy?: string };
+  }>("sessions.patch", {
+    key: rawKey,
+    sendPolicy: "deny",
+  });
+  expect(patched.ok).toBe(true);
+  expect(patched.payload?.key).toBe(canonicalKey);
+  expect(patched.payload?.entry.sessionId).toBe("sess-raw");
+  expect(patched.payload?.entry.sendPolicy).toBe("deny");
+  const storeAfterPatch = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    { label?: string; sessionId?: string; sendPolicy?: string }
+  >;
+  expect(storeAfterPatch[canonicalKey]?.sessionId).toBe("sess-raw");
+  expect(storeAfterPatch[canonicalKey]?.sendPolicy).toBe("deny");
+  expect(storeAfterPatch[rawKey]?.sessionId).toBe("sess-raw");
+  expect(storeAfterPatch[rawKey]?.sendPolicy).toBe("deny");
+
+  const listed = await directSessionHandlerReq<{ sessions: Array<{ key: string }> }>(
+    "sessions.list",
+    {},
+  );
+  expect(listed.ok).toBe(true);
+  expect(listed.payload?.sessions.map((session) => session.key)).toEqual([canonicalKey]);
+  const visibleKey = listed.payload?.sessions[0]?.key;
+  expect(visibleKey).toBe(canonicalKey);
+
+  const patchedVisible = await directSessionHandlerReq<{
+    ok: true;
+    key: string;
+    entry: { label?: string; sessionId?: string; sendPolicy?: string };
+  }>("sessions.patch", {
+    key: visibleKey,
+    label: "Canonical visible row",
+  });
+  expect(patchedVisible.ok).toBe(true);
+  expect(patchedVisible.payload?.key).toBe(canonicalKey);
+  expect(patchedVisible.payload?.entry.label).toBe("Canonical visible row");
+  const storeAfterVisiblePatch = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    { label?: string; sessionId?: string; sendPolicy?: string }
+  >;
+  expect(storeAfterVisiblePatch[canonicalKey]?.label).toBe("Canonical visible row");
+  expect(storeAfterVisiblePatch[rawKey]?.label).toBe("Canonical visible row");
+  expect(storeAfterVisiblePatch[rawKey]?.sendPolicy).toBe("deny");
+
+  const deleted = await directSessionHandlerReq<{ ok: true; deleted: boolean }>("sessions.delete", {
+    key: visibleKey,
+    deleteTranscript: false,
+  });
+  expect(deleted.ok).toBe(true);
+  expect(deleted.payload?.deleted).toBe(true);
+  const storeAfterDelete = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    unknown
+  >;
+  expect(storeAfterDelete[canonicalKey]).toBeUndefined();
+  expect(storeAfterDelete[rawKey]).toBeUndefined();
 });
 
 test("sessions.list configuredAgentsOnly keeps configured-agent children and hides unrelated stores", async () => {

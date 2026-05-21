@@ -210,6 +210,9 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
     restoreSessionManagerOpenSpy.mockRestore();
     restoreSessionManagerForkFromSpy.mockRestore();
   }
+  if (!restored.ok) {
+    throw new Error(`restore failed: ${JSON.stringify(restored.error)}`);
+  }
   expect(restored.ok).toBe(true);
   expect(restored.payload?.key).toBe("agent:main:main");
   expect(restored.payload?.sessionId).not.toBe(fixture.sessionId);
@@ -229,6 +232,80 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
   >;
   expect(storeAfterRestore["agent:main:main"]?.sessionId).toBe(restored.payload?.sessionId);
   expect(storeAfterRestore["agent:main:main"]?.compactionCheckpoints).toHaveLength(1);
+
+  ws.close();
+});
+
+test("sessions.compaction.restore synchronizes raw external session aliases", async () => {
+  const { dir, storePath } = await createSessionStoreDir();
+  const fixture = await createCheckpointFixture(dir);
+  const rawKey = "conversation:pair:user_a::user_b:space:space_123";
+  const canonicalKey = `agent:main:${rawKey}`;
+  const checkpointCreatedAt = Date.now();
+  const checkpoint = {
+    checkpointId: "checkpoint-raw",
+    sessionKey: canonicalKey,
+    sessionId: fixture.sessionId,
+    createdAt: checkpointCreatedAt,
+    reason: "manual" as const,
+    tokensBefore: 123,
+    preCompaction: {
+      sessionId: fixture.preCompactionSession.getSessionId(),
+      sessionFile: fixture.preCompactionSessionFile,
+      leafId: fixture.preCompactionLeafId,
+    },
+    postCompaction: {
+      sessionId: fixture.sessionId,
+      sessionFile: fixture.sessionFile,
+      leafId: fixture.postCompactionLeafId,
+    },
+  };
+  const entry = sessionStoreEntry(fixture.sessionId, {
+    sessionFile: fixture.sessionFile,
+    compactionCheckpoints: [checkpoint],
+  });
+  await writeSessionStore({
+    entries: {
+      [canonicalKey]: entry,
+      [rawKey]: { ...entry },
+    },
+  });
+
+  const { ws } = await openClient();
+  const restored = await rpcReq<{
+    ok: true;
+    key: string;
+    sessionId: string;
+    entry: { sessionId: string; compactionCheckpoints?: unknown[] };
+  }>(ws, "sessions.compaction.restore", {
+    key: rawKey,
+    checkpointId: "checkpoint-raw",
+  });
+
+  if (!restored.ok) {
+    throw new Error(`restore failed: ${JSON.stringify(restored.error)}`);
+  }
+  expect(restored.ok).toBe(true);
+  expect(restored.payload?.key).toBe(canonicalKey);
+  expect(restored.payload?.sessionId).not.toBe(fixture.sessionId);
+
+  const storeAfterRestore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    { compactionCheckpoints?: unknown[]; sessionId?: string }
+  >;
+  expect(storeAfterRestore[canonicalKey]?.sessionId).toBe(restored.payload?.sessionId);
+  expect(storeAfterRestore[rawKey]?.sessionId).toBe(restored.payload?.sessionId);
+  expect(storeAfterRestore[rawKey]?.compactionCheckpoints).toEqual(
+    storeAfterRestore[canonicalKey]?.compactionCheckpoints,
+  );
+
+  const listedSessions = await rpcReq<{ sessions: Array<{ key: string }> }>(ws, "sessions.list");
+  expect(listedSessions.ok).toBe(true);
+  expect(
+    listedSessions.payload?.sessions
+      .map((session) => session.key)
+      .filter((key) => key === canonicalKey || key === rawKey),
+  ).toEqual([canonicalKey]);
 
   ws.close();
 });
@@ -362,6 +439,151 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
   expect(store["agent:main:main"]?.compactionCount).toBe(1);
   expect(store["agent:main:main"]?.totalTokens).toBe(80);
   expect(store["agent:main:main"]?.totalTokensFresh).toBe(true);
+
+  ws.close();
+});
+
+test("sessions.compact synchronizes raw external aliases after manual compaction", async () => {
+  const { dir, storePath } = await createSessionStoreDir();
+  const rawKey = "conversation:pair:user_a::user_b:space:space_123";
+  const canonicalKey = `agent:main:${rawKey}`;
+  const sessionFile = path.join(dir, "sess-raw-manual.jsonl");
+  await fs.writeFile(
+    sessionFile,
+    `${JSON.stringify({ role: "user", content: "hello" })}\n`,
+    "utf-8",
+  );
+  const entry = sessionStoreEntry("sess-raw-manual", {
+    sessionFile,
+    inputTokens: 7,
+    outputTokens: 11,
+    totalTokens: 120,
+    totalTokensFresh: false,
+  });
+  await writeSessionStore({
+    entries: {
+      [canonicalKey]: entry,
+      [rawKey]: { ...entry },
+    },
+  });
+
+  const { ws } = await openClient();
+  const compacted = await rpcReq<{
+    ok: true;
+    key: string;
+    compacted: boolean;
+    result?: { tokensAfter?: number };
+  }>(ws, "sessions.compact", {
+    key: rawKey,
+  });
+
+  expect(compacted.ok).toBe(true);
+  expect(compacted.payload?.key).toBe(canonicalKey);
+  expect(compacted.payload?.compacted).toBe(true);
+  expect(embeddedRunMock.compactEmbeddedPiSession).toHaveBeenCalledTimes(1);
+
+  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    {
+      compactionCount?: number;
+      inputTokens?: number;
+      outputTokens?: number;
+      sessionId?: string;
+      totalTokens?: number;
+      totalTokensFresh?: boolean;
+    }
+  >;
+  expect(store[canonicalKey]?.sessionId).toBe("sess-raw-manual");
+  expect(store[rawKey]).toEqual(store[canonicalKey]);
+  expect(store[canonicalKey]?.compactionCount).toBe(1);
+  expect(store[rawKey]?.compactionCount).toBe(1);
+  expect(store[canonicalKey]?.totalTokens).toBe(80);
+  expect(store[rawKey]?.totalTokens).toBe(80);
+  expect(store[canonicalKey]?.totalTokensFresh).toBe(true);
+  expect(store[rawKey]?.totalTokensFresh).toBe(true);
+  expect("inputTokens" in store[canonicalKey]).toBe(false);
+  expect("outputTokens" in store[rawKey]).toBe(false);
+
+  const listedSessions = await rpcReq<{ sessions: Array<{ key: string }> }>(ws, "sessions.list");
+  expect(listedSessions.ok).toBe(true);
+  expect(
+    listedSessions.payload?.sessions
+      .map((session) => session.key)
+      .filter((key) => key === canonicalKey || key === rawKey),
+  ).toEqual([canonicalKey]);
+
+  ws.close();
+});
+
+test("sessions.compact maxLines synchronizes raw external aliases", async () => {
+  const { dir, storePath } = await createSessionStoreDir();
+  const rawKey = "conversation:pair:user_a::user_b:space:space_123";
+  const canonicalKey = `agent:main:${rawKey}`;
+  const sessionFile = path.join(dir, "sess-raw-lines.jsonl");
+  await fs.writeFile(
+    sessionFile,
+    [
+      JSON.stringify({ role: "user", content: "one" }),
+      JSON.stringify({ role: "assistant", content: "two" }),
+      JSON.stringify({ role: "user", content: "three" }),
+    ].join("\n") + "\n",
+    "utf-8",
+  );
+  const entry = sessionStoreEntry("sess-raw-lines", {
+    sessionFile,
+    inputTokens: 7,
+    outputTokens: 11,
+    totalTokens: 120,
+    totalTokensFresh: true,
+  });
+  await writeSessionStore({
+    entries: {
+      [canonicalKey]: entry,
+      [rawKey]: { ...entry },
+    },
+  });
+
+  const { ws } = await openClient();
+  const compacted = await rpcReq<{
+    ok: true;
+    key: string;
+    compacted: boolean;
+    kept?: number;
+  }>(ws, "sessions.compact", {
+    key: rawKey,
+    maxLines: 2,
+  });
+
+  expect(compacted.ok).toBe(true);
+  expect(compacted.payload?.key).toBe(canonicalKey);
+  expect(compacted.payload?.compacted).toBe(true);
+  expect(compacted.payload?.kept).toBe(2);
+  expect(embeddedRunMock.compactEmbeddedPiSession).not.toHaveBeenCalled();
+
+  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    {
+      inputTokens?: number;
+      outputTokens?: number;
+      sessionId?: string;
+      totalTokens?: number;
+      totalTokensFresh?: boolean;
+    }
+  >;
+  expect(store[canonicalKey]?.sessionId).toBe("sess-raw-lines");
+  expect(store[rawKey]).toEqual(store[canonicalKey]);
+  expect("inputTokens" in store[canonicalKey]).toBe(false);
+  expect("outputTokens" in store[rawKey]).toBe(false);
+  expect("totalTokens" in store[canonicalKey]).toBe(false);
+  expect("totalTokensFresh" in store[rawKey]).toBe(false);
+
+  const listedSessions = await rpcReq<{ sessions: Array<{ key: string }> }>(ws, "sessions.list");
+  expect(listedSessions.ok).toBe(true);
+  expect(
+    listedSessions.payload?.sessions
+      .map((session) => session.key)
+      .filter((key) => key === canonicalKey || key === rawKey),
+  ).toEqual([canonicalKey]);
 
   ws.close();
 });

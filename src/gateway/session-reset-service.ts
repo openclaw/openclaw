@@ -59,6 +59,7 @@ import {
   readSessionMessagesAsync,
   resolveGatewaySessionStoreTarget,
   resolveSessionModelRef,
+  writeGatewaySessionStoreEntry,
 } from "./session-utils.js";
 
 const ACP_RUNTIME_CLEANUP_TIMEOUT_MS = 15_000;
@@ -690,7 +691,7 @@ export async function performGatewaySessionReset(params: {
   let oldSessionFile: string | undefined;
   let resetSourceEntry: SessionEntry | undefined;
   const next = await updateSessionStore(storePath, (store) => {
-    const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+    const { preservedAliasKeys, primaryKey } = migrateAndPruneGatewaySessionStoreKey({
       cfg,
       key: params.key,
       store,
@@ -799,7 +800,12 @@ export async function performGatewaySessionReset(params: {
     if (!isSubagentSessionKey(primaryKey)) {
       clearAllCliSessions(nextEntry);
     }
-    store[primaryKey] = nextEntry;
+    writeGatewaySessionStoreEntry({
+      store,
+      primaryKey,
+      aliasKeys: preservedAliasKeys,
+      entry: nextEntry,
+    });
     return nextEntry;
   });
   await emitGatewayBeforeResetPluginHook({
