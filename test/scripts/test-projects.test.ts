@@ -8,6 +8,7 @@ import {
   applyDefaultVitestNoOutputTimeout,
   applyParallelVitestCachePaths,
   buildFullSuiteVitestRunPlans,
+  buildVitestArgs,
   buildVitestRunPlans,
   listFullExtensionVitestProjectConfigs,
   orderFullSuiteSpecsForParallelRun,
@@ -581,6 +582,37 @@ describe("scripts/test-projects changed-target routing", () => {
         watchMode: false,
       },
     ]);
+  });
+
+  it("routes control ui e2e tests to the ui e2e lane", () => {
+    expect(buildVitestRunPlans(["ui/src/ui/e2e/chat-flow.e2e.test.ts"])).toEqual([
+      {
+        config: "test/vitest/vitest.ui-e2e.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["ui/src/ui/e2e/chat-flow.e2e.test.ts"],
+        watchMode: false,
+      },
+    ]);
+
+    expect(buildVitestRunPlans(["ui/src/test-helpers/control-ui-e2e.ts"])).toEqual([
+      {
+        config: "test/vitest/vitest.ui-e2e.config.ts",
+        forwardedArgs: [],
+        includePatterns: null,
+        watchMode: false,
+      },
+    ]);
+
+    expect(buildVitestRunPlans(["ui/src/ui/e2e"])).toEqual([
+      {
+        config: "test/vitest/vitest.ui-e2e.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["ui/src/ui/e2e/**/*.test.ts"],
+        watchMode: false,
+      },
+    ]);
+
+    expect(buildVitestArgs(["ui/src/ui/e2e"])).toContain("--configLoader");
   });
 
   it("routes changed unit ui tests to the unit ui lane", () => {

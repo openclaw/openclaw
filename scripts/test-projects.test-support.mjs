@@ -221,6 +221,7 @@ const TASKS_VITEST_CONFIG = "test/vitest/vitest.tasks.config.ts";
 const TOOLING_VITEST_CONFIG = "test/vitest/vitest.tooling.config.ts";
 const TUI_VITEST_CONFIG = "test/vitest/vitest.tui.config.ts";
 const UI_VITEST_CONFIG = "test/vitest/vitest.ui.config.ts";
+const UI_E2E_VITEST_CONFIG = "test/vitest/vitest.ui-e2e.config.ts";
 const UTILS_VITEST_CONFIG = "test/vitest/vitest.utils.config.ts";
 const WIZARD_VITEST_CONFIG = "test/vitest/vitest.wizard.config.ts";
 const INCLUDE_FILE_ENV_KEY = "OPENCLAW_VITEST_INCLUDE_FILE";
@@ -300,6 +301,7 @@ const VITEST_CONFIG_BY_KIND = {
   tooling: TOOLING_VITEST_CONFIG,
   tui: TUI_VITEST_CONFIG,
   ui: UI_VITEST_CONFIG,
+  uiE2e: UI_E2E_VITEST_CONFIG,
   utils: UTILS_VITEST_CONFIG,
   wizard: WIZARD_VITEST_CONFIG,
 };
@@ -1032,6 +1034,15 @@ function isUnitUiTestTarget(relative) {
   );
 }
 
+function isControlUiE2eTarget(relative) {
+  return (
+    relative === "ui/src/test-helpers/control-ui-e2e.ts" ||
+    relative === "ui/src/ui/e2e" ||
+    relative.startsWith("ui/src/ui/e2e/") ||
+    (relative.startsWith("ui/src/") && relative.endsWith(".e2e.test.ts"))
+  );
+}
+
 function resolveChannelContractTargetKind(relative) {
   if (!relative.startsWith("src/channels/plugins/contracts/")) {
     return null;
@@ -1262,6 +1273,9 @@ function classifyTarget(arg, cwd) {
   if (resolveUnitFastTestIncludePattern(relative)) {
     return "unitFast";
   }
+  if (isControlUiE2eTarget(relative)) {
+    return "uiE2e";
+  }
   if (relative.endsWith(".e2e.test.ts")) {
     return "e2e";
   }
@@ -1432,6 +1446,9 @@ function classifyTarget(arg, cwd) {
     return "plugin";
   }
   if (relative.startsWith("ui/src/")) {
+    if (isControlUiE2eTarget(relative)) {
+      return "uiE2e";
+    }
     if (isUnitUiTestTarget(relative)) {
       return "unitUi";
     }
@@ -1467,6 +1484,10 @@ function shouldUseWholeConfigTarget(kind, targetArg, cwd) {
   if (isVitestConfigTargetForKind(kind, targetArg, cwd)) {
     return true;
   }
+  if (kind === "uiE2e") {
+    const relative = toRepoRelativeTarget(targetArg, cwd);
+    return relative === "ui/src/test-helpers/control-ui-e2e.ts";
+  }
   if (kind !== "ui") {
     return false;
   }
@@ -1483,6 +1504,7 @@ function createVitestArgs(params) {
     ...(params.watchMode ? [] : ["run"]),
     "--config",
     params.config,
+    ...(params.config === UI_E2E_VITEST_CONFIG ? ["--configLoader", "runner"] : []),
     ...params.forwardedArgs,
   ];
 }
@@ -1592,6 +1614,7 @@ export function buildVitestRunPlans(
     "agent",
     "plugin",
     "ui",
+    "uiE2e",
     "unitSrc",
     "unitSecurity",
     "unitSupport",
