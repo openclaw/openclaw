@@ -191,9 +191,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
       },
       lifecycle: {
         detectLegacyStateMigrations: async ({ oauthDir }) =>
-          await (
-            await import("./state-migrations.js")
-          ).detectWhatsAppLegacyStateMigrations({ oauthDir }),
+          (await import("./state-migrations.js")).detectWhatsAppLegacyStateMigrations({ oauthDir }),
       },
       heartbeat: {
         checkReady: async ({ cfg, accountId, deps }) =>
