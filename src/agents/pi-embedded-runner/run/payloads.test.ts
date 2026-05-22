@@ -452,10 +452,22 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
-  it("shows exec tool errors when verbose mode is on", () => {
+  it("keeps exec tool errors compact when verbose mode is on", () => {
     const payloads = buildPayloads({
       lastToolError: { toolName: "exec", error: "command failed" },
       verboseLevel: "on",
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Exec",
+      absentDetail: "command failed",
+    });
+  });
+
+  it("shows exec tool error details when verbose mode is full", () => {
+    const payloads = buildPayloads({
+      lastToolError: { toolName: "exec", error: "command failed" },
+      verboseLevel: "full",
     });
 
     expectSingleToolErrorPayload(payloads, {
@@ -478,10 +490,10 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
 
   it.each([
     {
-      name: "includes details for mutating tool failures when verbose is on",
+      name: "keeps mutating tool failures compact when verbose is on",
       verboseLevel: "on" as const,
-      detail: "permission denied",
-      absentDetail: undefined,
+      detail: undefined,
+      absentDetail: "permission denied",
     },
     {
       name: "includes details for mutating tool failures when verbose is full",

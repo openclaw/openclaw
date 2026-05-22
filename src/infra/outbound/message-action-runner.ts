@@ -37,6 +37,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
+import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -798,7 +799,7 @@ async function buildSendPayloadParts(params: {
   mergedMediaUrls.length = 0;
   mergedMediaUrls.push(...normalizedMediaUrls);
 
-  message = parsed.text;
+  message = stripUnsupportedCitationControlMarkers(parsed.text);
   actionParams.message = message;
   if (!actionParams.replyTo && parsed.replyToId) {
     actionParams.replyTo = parsed.replyToId;
@@ -981,9 +982,9 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       requesterSenderName: input.requesterSenderName ?? undefined,
       requesterSenderUsername: input.requesterSenderUsername ?? undefined,
       requesterSenderE164: input.requesterSenderE164 ?? undefined,
+      senderIsOwner: input.senderIsOwner,
       mediaAccess: ctx.mediaAccess,
       accountId: accountId ?? undefined,
-      senderIsOwner: input.senderIsOwner,
       sessionId: input.sessionId,
       inboundEventKind: input.inboundEventKind,
       gateway,
@@ -997,6 +998,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
               agentId,
               text: sendPayload.message,
               mediaUrls: sendPayload.mediaUrls,
+              idempotencyKey: normalizeOptionalString(params.idempotencyKey) ?? undefined,
             }
           : undefined,
       abortSignal,
@@ -1089,7 +1091,6 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
       accountId: accountId ?? undefined,
       agentId,
       requesterSenderId: input.requesterSenderId ?? undefined,
-      senderIsOwner: input.senderIsOwner,
       sessionKey: input.sessionKey,
       sessionId: input.sessionId,
       inboundEventKind: input.inboundEventKind,

@@ -538,6 +538,45 @@ function recordDiagnosticEvent(
         },
       );
       return;
+    case "message.received":
+      store.counter("openclaw_message_received_total", "Inbound messages received by channel.", {
+        channel: lowCardinalityLabel(evt.channel),
+        source: lowCardinalityLabel(evt.source),
+      });
+      return;
+    case "message.dispatch.started":
+      store.counter(
+        "openclaw_message_dispatch_started_total",
+        "Inbound message dispatch attempts started by channel.",
+        {
+          channel: lowCardinalityLabel(evt.channel),
+          source: lowCardinalityLabel(evt.source),
+        },
+      );
+      return;
+    case "message.dispatch.completed":
+      store.counter(
+        "openclaw_message_dispatch_completed_total",
+        "Inbound message dispatch attempts completed by outcome.",
+        {
+          channel: lowCardinalityLabel(evt.channel),
+          outcome: evt.outcome,
+          reason: lowCardinalityLabel(evt.reason, "none"),
+          source: lowCardinalityLabel(evt.source),
+        },
+      );
+      store.histogram(
+        "openclaw_message_dispatch_duration_seconds",
+        "Inbound message dispatch duration in seconds.",
+        {
+          channel: lowCardinalityLabel(evt.channel),
+          outcome: evt.outcome,
+          reason: lowCardinalityLabel(evt.reason, "none"),
+          source: lowCardinalityLabel(evt.source),
+        },
+        seconds(evt.durationMs),
+      );
+      return;
     case "message.delivery.completed":
     case "message.delivery.error":
       store.counter(
@@ -633,6 +672,13 @@ function recordDiagnosticEvent(
         );
       }
       return;
+    case "session.turn.created":
+      store.counter("openclaw_session_turn_created_total", "Agent session turns created.", {
+        agent: lowCardinalityLabel(evt.agentId),
+        channel: lowCardinalityLabel(evt.channel),
+        trigger: evt.trigger,
+      });
+      return;
     case "diagnostic.memory.sample":
       store.gauge(
         "openclaw_memory_bytes",
@@ -668,6 +714,44 @@ function recordDiagnosticEvent(
           level: evt.level,
           reason: evt.reason,
         },
+      );
+      return;
+    case "diagnostic.async_queue.dropped":
+      store.counter(
+        "openclaw_diagnostic_async_queue_dropped_total",
+        "Async diagnostic queue drops by dropped event class.",
+        { drop_class: "total" },
+        numericValue(evt.droppedEvents),
+      );
+      if (evt.droppedTrustedEvents !== undefined) {
+        store.counter(
+          "openclaw_diagnostic_async_queue_dropped_total",
+          "Async diagnostic queue drops by dropped event class.",
+          { drop_class: "trusted" },
+          numericValue(evt.droppedTrustedEvents),
+        );
+      }
+      if (evt.droppedUntrustedEvents !== undefined) {
+        store.counter(
+          "openclaw_diagnostic_async_queue_dropped_total",
+          "Async diagnostic queue drops by dropped event class.",
+          { drop_class: "untrusted" },
+          numericValue(evt.droppedUntrustedEvents),
+        );
+      }
+      if (evt.droppedPriorityEvents !== undefined) {
+        store.counter(
+          "openclaw_diagnostic_async_queue_dropped_total",
+          "Async diagnostic queue drops by dropped event class.",
+          { drop_class: "priority" },
+          numericValue(evt.droppedPriorityEvents),
+        );
+      }
+      store.gauge(
+        "openclaw_diagnostic_async_queue_length",
+        "Latest async diagnostic queue length after a drop summary.",
+        {},
+        numericValue(evt.queueLength),
       );
       return;
     case "diagnostic.heartbeat":

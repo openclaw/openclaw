@@ -112,6 +112,55 @@ function serviceLane(name, command, options = {}) {
   });
 }
 
+function createPackageUpdateMaintenanceLanes() {
+  return [
+    npmLane("doctor-switch", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:doctor-switch", {
+      stateScenario: "empty",
+      weight: 3,
+    }),
+    npmLane(
+      "update-channel-switch",
+      "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-channel-switch",
+      {
+        stateScenario: "update-stable",
+        timeoutMs: 30 * 60 * 1000,
+        weight: 3,
+      },
+    ),
+    npmLane("skill-install", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:skill-install", {
+      retryPatterns: LIVE_RETRY_PATTERNS,
+      retries: 1,
+      stateScenario: "empty",
+      timeoutMs: 10 * 60 * 1000,
+      weight: 2,
+    }),
+    npmLane("upgrade-survivor", upgradeSurvivorCommand, {
+      stateScenario: "upgrade-survivor",
+      timeoutMs: 20 * 60 * 1000,
+      weight: 3,
+    }),
+    npmLane(
+      "published-upgrade-survivor",
+      "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:published-upgrade-survivor",
+      {
+        stateScenario: "upgrade-survivor",
+        timeoutMs: 25 * 60 * 1000,
+        weight: 3,
+      },
+    ),
+    npmLane("root-managed-vps-upgrade", rootManagedVpsUpgradeCommand, {
+      stateScenario: "upgrade-survivor",
+      timeoutMs: 25 * 60 * 1000,
+      weight: 3,
+    }),
+    npmLane("update-restart-auth", updateRestartAuthCommand, {
+      stateScenario: "upgrade-survivor",
+      timeoutMs: 25 * 60 * 1000,
+      weight: 3,
+    }),
+  ];
+}
+
 const bundledPluginInstallUninstallLanes = Array.from(
   { length: BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS },
   (_, index) =>
@@ -155,6 +204,35 @@ function liveOpenAiChatToolsLane() {
       stateScenario: "empty",
       timeoutMs: 10 * 60 * 1000,
       weight: 2,
+    },
+  );
+}
+
+function liveCodexNpmPluginLane() {
+  return liveLane(
+    "live-codex-npm-plugin",
+    liveDockerScriptCommand("e2e/codex-npm-plugin-live-docker.sh"),
+    {
+      cacheKey: "codex-npm-plugin",
+      e2eImageKind: "bare",
+      provider: "openai",
+      resources: ["npm"],
+      stateScenario: "empty",
+      timeoutMs: 30 * 60 * 1000,
+      weight: 3,
+    },
+  );
+}
+
+function kitchenSinkRpcLane() {
+  return serviceLane(
+    "kitchen-sink-rpc",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:kitchen-sink-rpc",
+    {
+      resources: ["npm"],
+      stateScenario: "empty",
+      timeoutMs: 15 * 60 * 1000,
+      weight: 3,
     },
   );
 }
@@ -322,50 +400,7 @@ export const mainLanes = [
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:cron-mcp-cleanup",
     { resources: ["npm"], stateScenario: "empty", weight: 3 },
   ),
-  npmLane("doctor-switch", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:doctor-switch", {
-    stateScenario: "empty",
-    weight: 3,
-  }),
-  npmLane(
-    "update-channel-switch",
-    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-channel-switch",
-    {
-      stateScenario: "update-stable",
-      timeoutMs: 30 * 60 * 1000,
-      weight: 3,
-    },
-  ),
-  npmLane("skill-install", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:skill-install", {
-    retryPatterns: LIVE_RETRY_PATTERNS,
-    retries: 1,
-    stateScenario: "empty",
-    timeoutMs: 10 * 60 * 1000,
-    weight: 2,
-  }),
-  npmLane("upgrade-survivor", upgradeSurvivorCommand, {
-    stateScenario: "upgrade-survivor",
-    timeoutMs: 20 * 60 * 1000,
-    weight: 3,
-  }),
-  npmLane(
-    "published-upgrade-survivor",
-    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:published-upgrade-survivor",
-    {
-      stateScenario: "upgrade-survivor",
-      timeoutMs: 25 * 60 * 1000,
-      weight: 3,
-    },
-  ),
-  npmLane("root-managed-vps-upgrade", rootManagedVpsUpgradeCommand, {
-    stateScenario: "upgrade-survivor",
-    timeoutMs: 25 * 60 * 1000,
-    weight: 3,
-  }),
-  npmLane("update-restart-auth", updateRestartAuthCommand, {
-    stateScenario: "upgrade-survivor",
-    timeoutMs: 25 * 60 * 1000,
-    weight: 3,
-  }),
+  ...createPackageUpdateMaintenanceLanes(),
   npmLane("update-migration", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-migration", {
     stateScenario: "upgrade-survivor",
     timeoutMs: 30 * 60 * 1000,
@@ -381,6 +416,7 @@ export const mainLanes = [
     stateScenario: "empty",
     weight: 3,
   }),
+  kitchenSinkRpcLane(),
   ...bundledPluginInstallUninstallLanes,
   lane(
     "plugins-offline",
@@ -484,19 +520,7 @@ export const tailLanes = [
       weight: 3,
     },
   ),
-  liveLane(
-    "live-codex-npm-plugin",
-    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-codex-npm-plugin",
-    {
-      cacheKey: "codex-npm-plugin",
-      e2eImageKind: "bare",
-      provider: "openai",
-      resources: ["npm"],
-      stateScenario: "empty",
-      timeoutMs: 30 * 60 * 1000,
-      weight: 3,
-    },
-  ),
+  liveCodexNpmPluginLane(),
   livePluginToolLane(),
   liveLane(
     "live-acp-bind-claude",
@@ -577,6 +601,7 @@ const releasePathPluginRuntimeLanes = [
       weight: 3,
     },
   ),
+  kitchenSinkRpcLane(),
   serviceLane(
     "openai-web-search-minimal",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openai-web-search-minimal",
@@ -603,6 +628,7 @@ const releasePathPluginRuntimeServiceLanes = [
       weight: 3,
     },
   ),
+  kitchenSinkRpcLane(),
   serviceLane(
     "openai-web-search-minimal",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openai-web-search-minimal",
@@ -633,6 +659,7 @@ const releasePathPackageInstallOpenAiLanes = [
     },
   ),
   liveOpenAiChatToolsLane(),
+  liveCodexNpmPluginLane(),
   npmLane("codex-on-demand", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:codex-on-demand", {
     resources: ["service"],
     stateScenario: "empty",
@@ -668,50 +695,7 @@ const releasePathPackageUpdateCoreLanes = [
     "OPENCLAW_NPM_ONBOARD_CHANNEL=slack OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:npm-onboard-channel-agent",
     { resources: ["service"], stateScenario: "empty", weight: 3 },
   ),
-  npmLane("doctor-switch", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:doctor-switch", {
-    stateScenario: "empty",
-    weight: 3,
-  }),
-  npmLane(
-    "update-channel-switch",
-    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-channel-switch",
-    {
-      stateScenario: "update-stable",
-      timeoutMs: 30 * 60 * 1000,
-      weight: 3,
-    },
-  ),
-  npmLane("skill-install", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:skill-install", {
-    retryPatterns: LIVE_RETRY_PATTERNS,
-    retries: 1,
-    stateScenario: "empty",
-    timeoutMs: 10 * 60 * 1000,
-    weight: 2,
-  }),
-  npmLane("upgrade-survivor", upgradeSurvivorCommand, {
-    stateScenario: "upgrade-survivor",
-    timeoutMs: 20 * 60 * 1000,
-    weight: 3,
-  }),
-  npmLane(
-    "published-upgrade-survivor",
-    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:published-upgrade-survivor",
-    {
-      stateScenario: "upgrade-survivor",
-      timeoutMs: 25 * 60 * 1000,
-      weight: 3,
-    },
-  ),
-  npmLane("root-managed-vps-upgrade", rootManagedVpsUpgradeCommand, {
-    stateScenario: "upgrade-survivor",
-    timeoutMs: 25 * 60 * 1000,
-    weight: 3,
-  }),
-  npmLane("update-restart-auth", updateRestartAuthCommand, {
-    stateScenario: "upgrade-survivor",
-    timeoutMs: 25 * 60 * 1000,
-    weight: 3,
-  }),
+  ...createPackageUpdateMaintenanceLanes(),
 ];
 
 const primaryReleasePathChunks = {

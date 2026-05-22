@@ -1,7 +1,12 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { t } from "../i18n/index.ts";
-import { renderChatControls, renderChatMobileToggle, renderTab } from "./app-render.helpers.ts";
+import {
+  renderChatControls,
+  renderChatMobileToggle,
+  renderTab,
+  renderTopbarThemeModeToggle,
+} from "./app-render.helpers.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import type { SessionsListResult } from "./types.ts";
 
@@ -49,11 +54,19 @@ function createState(overrides: Partial<AppViewState> = {}) {
       chatAutoScroll: "near-bottom",
     },
     applySettings: () => undefined,
+    setThemeMode: () => undefined,
     chatMobileControlsOpen: false,
     setChatMobileControlsOpen: () => undefined,
     chatModelCatalog: [],
     chatModelOverrides: {},
     chatModelsLoading: false,
+    chatSessionPickerOpen: false,
+    chatSessionPickerSurface: null,
+    chatSessionPickerQuery: "",
+    chatSessionPickerAppliedQuery: "",
+    chatSessionPickerLoading: false,
+    chatSessionPickerError: null,
+    chatSessionPickerResult: null,
     client: { request: vi.fn() },
     ...overrides,
   } as unknown as AppViewState;
@@ -134,6 +147,31 @@ describe("chat header controls (browser)", () => {
       expect(button.getAttribute("title")).toBe(button.getAttribute("data-tooltip"));
       expect(button.getAttribute("aria-label")).toBe(button.getAttribute("data-tooltip"));
     }
+  });
+
+  it("renders explicit hover tooltip metadata for the color mode buttons", async () => {
+    const container = document.createElement("div");
+    render(renderTopbarThemeModeToggle(createState({ themeMode: "system" })), container);
+    await Promise.resolve();
+
+    const buttons = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(".topbar-theme-mode__btn[data-tooltip]"),
+    );
+
+    expect(buttons).toHaveLength(3);
+
+    const labels = buttons.map((button) => button.getAttribute("data-tooltip"));
+    expect(labels).toEqual([
+      t("common.colorModeOption", { mode: t("common.system") }),
+      t("common.colorModeOption", { mode: t("common.light") }),
+      t("common.colorModeOption", { mode: t("common.dark") }),
+    ]);
+
+    for (const button of buttons) {
+      expect(button.getAttribute("title")).toBe(button.getAttribute("data-tooltip"));
+      expect(button.getAttribute("aria-label")).toBe(button.getAttribute("data-tooltip"));
+    }
+    expect(buttons[0]?.classList.contains("topbar-theme-mode__btn--active")).toBe(true);
   });
 
   it.each([
@@ -250,14 +288,19 @@ describe("chat header controls (browser)", () => {
 
     const sessionRows = container.querySelectorAll(".chat-controls__session-row");
     expect(sessionRows).toHaveLength(1);
+    const sessionTrigger = requireButton(
+      container.querySelector<HTMLButtonElement>('button[data-chat-session-select="true"]'),
+      "session trigger",
+    );
+    expect(sessionTrigger.dataset.chatSessionSelect).toBe("true");
+
     const selectDatasets = Array.from(container.querySelectorAll("select")).map(
       (select) => select.dataset,
     );
-    expect(selectDatasets).toHaveLength(4);
+    expect(selectDatasets).toHaveLength(3);
     expect(selectDatasets[0]?.chatAgentFilter).toBe("true");
-    expect(selectDatasets[1]?.chatSessionSelect).toBe("true");
-    expect(selectDatasets[2]?.chatModelSelect).toBe("true");
-    expect(selectDatasets[3]?.chatThinkingSelect).toBe("true");
+    expect(selectDatasets[1]?.chatModelSelect).toBe("true");
+    expect(selectDatasets[2]?.chatThinkingSelect).toBe("true");
     const autoScrollToggle = requireButton(
       container.querySelector<HTMLButtonElement>('[data-chat-auto-scroll-toggle="true"]'),
       "auto-scroll toggle",
