@@ -5,8 +5,12 @@ on:
     paths:
       - "src/tui/**"
       - "scripts/dev/tui-pty-test-watch.ts"
+      - "scripts/test-projects.test-support.mjs"
       - "package.json"
       - "pnpm-lock.yaml"
+      - "test/scripts/test-projects.test.ts"
+      - "test/vitest/vitest.test-shards.mjs"
+      - "test/vitest/vitest.tui-pty.config.ts"
       - ".github/workflows/tui-pty.yml"
   workflow_dispatch:
 
