@@ -486,6 +486,274 @@ async function buildReminderContextLines(params: {
   }
 }
 
+type CronExecContext = {
+  opts: CronToolOptions | undefined;
+  callGateway: GatewayToolCaller;
+  gatewayOpts: GatewayCallOptions;
+};
+
+async function cronActionStatus(ctx: CronExecContext) {
+  const result = await ctx.callGateway("cron.status", ctx.gatewayOpts, {});
+  return jsonResult(
+    readCronSelfRemoveOnlyJobId(ctx.opts) ? filterCronStatusResultForSelfScope(result) : result,
+  );
+}
+
+async function cronActionList(ctx: CronExecContext, params: Record<string, unknown>) {
+  const cfg = getRuntimeConfig();
+  const selfRemoveOnlyJobId = readCronSelfRemoveOnlyJobId(ctx.opts);
+  const listAgentId = selfRemoveOnlyJobId
+    ? ctx.opts?.agentSessionKey?.trim()
+      ? resolveSessionAgentId({ sessionKey: ctx.opts.agentSessionKey, config: cfg })
+      : undefined
+    : typeof params.agentId === "string" && params.agentId.trim()
+      ? params.agentId.trim()
+      : ctx.opts?.agentSessionKey
+        ? resolveSessionAgentId({ sessionKey: ctx.opts.agentSessionKey, config: cfg })
+        : undefined;
+  const includeDisabled = Boolean(params.includeDisabled);
+  let offset = 0;
+  let result: unknown;
+  let shouldContinue = true;
+  while (shouldContinue) {
+    result = await ctx.callGateway("cron.list", ctx.gatewayOpts, {
+      includeDisabled,
+      agentId: listAgentId,
+      ...(selfRemoveOnlyJobId ? { limit: 200, offset } : {}),
+    });
+    if (!selfRemoveOnlyJobId || cronListResultHasJob(result, selfRemoveOnlyJobId)) {
+      shouldContinue = false;
+    } else {
+      const nextOffset = readCronListNextOffset(result, offset);
+      if (nextOffset === undefined) {
+        shouldContinue = false;
+      } else {
+        offset = nextOffset;
+      }
+    }
+  }
+  return jsonResult(
+    selfRemoveOnlyJobId ? filterCronListResultToJobId(result, selfRemoveOnlyJobId) : result,
+  );
+}
+
+async function cronActionGet(ctx: CronExecContext, params: Record<string, unknown>) {
+  const id = readCronJobIdParam(params);
+  if (!id) {
+    throw new Error("jobId required (id accepted for backward compatibility)");
+  }
+  return jsonResult(await ctx.callGateway("cron.get", ctx.gatewayOpts, { id }));
+}
+
+async function cronActionAdd(ctx: CronExecContext, params: Record<string, unknown>) {
+  // Flat-params recovery: non-frontier models (e.g. Grok) sometimes flatten
+  // job properties to the top level alongside `action` instead of nesting
+  // them inside `job`. When `params.job` is missing or empty, reconstruct
+  // a synthetic job object from any recognised top-level job fields.
+  // See: https://github.com/openclaw/openclaw/issues/11310
+  if (isMissingOrEmptyObject(params.job)) {
+    const synthetic = recoverCronObjectFromFlatParams(params);
+    // Only use the synthetic job if at least one meaningful field is present
+    // (schedule, payload, message, or text are the minimum signals that the
+    // LLM intended to create a job).
+    if (synthetic.found && hasCronCreateSignal(synthetic.value)) {
+      params.job = synthetic.value;
+    }
+  }
+
+  if (!params.job || typeof params.job !== "object") {
+    throw new Error("job required");
+  }
+  const job =
+    normalizeCronJobCreate(params.job, {
+      sessionContext: { sessionKey: ctx.opts?.agentSessionKey },
+    }) ?? params.job;
+  const cfg = getRuntimeConfig();
+  if (job && typeof job === "object") {
+    const { mainKey, alias } = resolveMainSessionAlias(cfg);
+    const resolvedSessionKey = ctx.opts?.agentSessionKey
+      ? resolveInternalSessionKey({ key: ctx.opts.agentSessionKey, alias, mainKey })
+      : undefined;
+    if (!("agentId" in job) || (job as { agentId?: unknown }).agentId === undefined) {
+      const agentId = ctx.opts?.agentSessionKey
+        ? resolveSessionAgentId({ sessionKey: ctx.opts.agentSessionKey, config: cfg })
+        : undefined;
+      if (agentId) {
+        (job as { agentId?: string }).agentId = agentId;
+      }
+    }
+    if (!("sessionKey" in job) && resolvedSessionKey) {
+      (job as { sessionKey?: string }).sessionKey = resolvedSessionKey;
+    }
+  }
+
+  if (
+    (ctx.opts?.agentSessionKey || ctx.opts?.currentDeliveryContext) &&
+    job &&
+    typeof job === "object" &&
+    "payload" in job &&
+    (job as { payload?: { kind?: string } }).payload?.kind === "agentTurn"
+  ) {
+    const deliveryValue = (job as { delivery?: unknown }).delivery;
+    const delivery = isRecord(deliveryValue) ? deliveryValue : undefined;
+    const modeRaw = typeof delivery?.mode === "string" ? delivery.mode : "";
+    const mode = normalizeLowercaseStringOrEmpty(modeRaw);
+    if (mode === "webhook") {
+      const webhookUrl = normalizeHttpWebhookUrl(delivery?.to);
+      if (!webhookUrl) {
+        throw new Error('delivery.mode="webhook" requires delivery.to to be a valid http(s) URL');
+      }
+      if (delivery) {
+        delivery.to = webhookUrl;
+      }
+    }
+
+    const hasTarget =
+      (typeof delivery?.channel === "string" && delivery.channel.trim()) ||
+      (typeof delivery?.to === "string" && delivery.to.trim());
+    const shouldInfer =
+      (deliveryValue == null || delivery) && (mode === "" || mode === "announce") && !hasTarget;
+    if (shouldInfer) {
+      const inferred = resolveCronCreationDelivery({
+        cfg,
+        currentDeliveryContext: ctx.opts.currentDeliveryContext,
+        agentSessionKey: ctx.opts.agentSessionKey,
+      });
+      if (inferred) {
+        (job as { delivery?: unknown }).delivery = {
+          ...inferred,
+          ...delivery,
+        } satisfies CronDelivery;
+      }
+    }
+  }
+
+  const contextMessages =
+    typeof params.contextMessages === "number" && Number.isFinite(params.contextMessages)
+      ? params.contextMessages
+      : 0;
+  if (
+    job &&
+    typeof job === "object" &&
+    "payload" in job &&
+    (job as { payload?: { kind?: string; text?: string } }).payload?.kind === "systemEvent"
+  ) {
+    const payload = (job as { payload: { kind: string; text: string } }).payload;
+    if (typeof payload.text === "string" && payload.text.trim()) {
+      const contextLines = await buildReminderContextLines({
+        agentSessionKey: ctx.opts?.agentSessionKey,
+        gatewayOpts: ctx.gatewayOpts,
+        contextMessages,
+        callGatewayTool: ctx.callGateway,
+      });
+      if (contextLines.length > 0) {
+        const baseText = stripExistingContext(payload.text);
+        payload.text = `${baseText}${REMINDER_CONTEXT_MARKER}${contextLines.join("\n")}`;
+      }
+    }
+  }
+  return jsonResult(await ctx.callGateway("cron.add", ctx.gatewayOpts, job));
+}
+
+async function cronActionUpdate(ctx: CronExecContext, params: Record<string, unknown>) {
+  const id = readCronJobIdParam(params);
+  if (!id) {
+    throw new Error("jobId required (id accepted for backward compatibility)");
+  }
+
+  // Flat-params recovery for patch
+  let recoveredFlatPatch = false;
+  if (isMissingOrEmptyObject(params.patch)) {
+    const synthetic = recoverCronObjectFromFlatParams(params);
+    if (synthetic.found) {
+      params.patch = synthetic.value;
+      recoveredFlatPatch = true;
+    }
+  }
+
+  if (!params.patch || typeof params.patch !== "object") {
+    throw new Error("patch required");
+  }
+  const patch = normalizeCronJobPatch(params.patch) ?? params.patch;
+  if (
+    recoveredFlatPatch &&
+    typeof patch === "object" &&
+    patch !== null &&
+    Object.keys(patch as Record<string, unknown>).length === 0
+  ) {
+    throw new Error("patch required");
+  }
+  return jsonResult(
+    await ctx.callGateway("cron.update", ctx.gatewayOpts, {
+      id,
+      patch,
+    }),
+  );
+}
+
+async function cronActionRemove(ctx: CronExecContext, params: Record<string, unknown>) {
+  const id = readCronJobIdParam(params);
+  if (!id) {
+    throw new Error("jobId required (id accepted for backward compatibility)");
+  }
+  return jsonResult(await ctx.callGateway("cron.remove", ctx.gatewayOpts, { id }));
+}
+
+async function cronActionRun(ctx: CronExecContext, params: Record<string, unknown>) {
+  const id = readCronJobIdParam(params);
+  if (!id) {
+    throw new Error("jobId required (id accepted for backward compatibility)");
+  }
+  const runMode = params.runMode === "due" || params.runMode === "force" ? params.runMode : "force";
+  return jsonResult(await ctx.callGateway("cron.run", ctx.gatewayOpts, { id, mode: runMode }));
+}
+
+async function cronActionRuns(ctx: CronExecContext, params: Record<string, unknown>) {
+  const id = readCronJobIdParam(params);
+  if (!id) {
+    throw new Error("jobId required (id accepted for backward compatibility)");
+  }
+  return jsonResult(await ctx.callGateway("cron.runs", ctx.gatewayOpts, { id }));
+}
+
+async function cronActionWake(ctx: CronExecContext, params: Record<string, unknown>) {
+  const text = readStringParam(params, "text", { required: true });
+  const mode =
+    params.mode === "now" || params.mode === "next-heartbeat" ? params.mode : "next-heartbeat";
+  return jsonResult(
+    await ctx.callGateway("wake", ctx.gatewayOpts, { mode, text }, { expectFinal: false }),
+  );
+}
+
+async function executeCronAction(
+  action: string,
+  ctx: CronExecContext,
+  params: Record<string, unknown>,
+) {
+  switch (action) {
+    case "status":
+      return cronActionStatus(ctx);
+    case "list":
+      return cronActionList(ctx, params);
+    case "get":
+      return cronActionGet(ctx, params);
+    case "add":
+      return cronActionAdd(ctx, params);
+    case "update":
+      return cronActionUpdate(ctx, params);
+    case "remove":
+      return cronActionRemove(ctx, params);
+    case "run":
+      return cronActionRun(ctx, params);
+    case "runs":
+      return cronActionRuns(ctx, params);
+    case "wake":
+      return cronActionWake(ctx, params);
+    default:
+      throw new Error(`Unknown action: ${action}`);
+  }
+}
+
 export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): AnyAgentTool {
   const callGateway = deps?.callGatewayTool ?? callGatewayTool;
   return {
@@ -581,242 +849,7 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
             ? params.timeoutMs
             : 60_000,
       };
-
-      switch (action) {
-        case "status": {
-          const result = await callGateway("cron.status", gatewayOpts, {});
-          return jsonResult(
-            readCronSelfRemoveOnlyJobId(opts) ? filterCronStatusResultForSelfScope(result) : result,
-          );
-        }
-        case "list": {
-          const cfg = getRuntimeConfig();
-          const selfRemoveOnlyJobId = readCronSelfRemoveOnlyJobId(opts);
-          const listAgentId = selfRemoveOnlyJobId
-            ? opts?.agentSessionKey?.trim()
-              ? resolveSessionAgentId({ sessionKey: opts.agentSessionKey, config: cfg })
-              : undefined
-            : typeof params.agentId === "string" && params.agentId.trim()
-              ? params.agentId.trim()
-              : opts?.agentSessionKey
-                ? resolveSessionAgentId({ sessionKey: opts.agentSessionKey, config: cfg })
-                : undefined;
-          const includeDisabled = Boolean(params.includeDisabled);
-          let offset = 0;
-          let result: unknown;
-          let shouldContinue = true;
-          while (shouldContinue) {
-            result = await callGateway("cron.list", gatewayOpts, {
-              includeDisabled,
-              agentId: listAgentId,
-              ...(selfRemoveOnlyJobId ? { limit: 200, offset } : {}),
-            });
-            if (!selfRemoveOnlyJobId || cronListResultHasJob(result, selfRemoveOnlyJobId)) {
-              shouldContinue = false;
-            } else {
-              const nextOffset = readCronListNextOffset(result, offset);
-              if (nextOffset === undefined) {
-                shouldContinue = false;
-              } else {
-                offset = nextOffset;
-              }
-            }
-          }
-          return jsonResult(
-            selfRemoveOnlyJobId ? filterCronListResultToJobId(result, selfRemoveOnlyJobId) : result,
-          );
-        }
-        case "get": {
-          const id = readCronJobIdParam(params);
-          if (!id) {
-            throw new Error("jobId required (id accepted for backward compatibility)");
-          }
-          return jsonResult(await callGateway("cron.get", gatewayOpts, { id }));
-        }
-        case "add": {
-          // Flat-params recovery: non-frontier models (e.g. Grok) sometimes flatten
-          // job properties to the top level alongside `action` instead of nesting
-          // them inside `job`. When `params.job` is missing or empty, reconstruct
-          // a synthetic job object from any recognised top-level job fields.
-          // See: https://github.com/openclaw/openclaw/issues/11310
-          if (isMissingOrEmptyObject(params.job)) {
-            const synthetic = recoverCronObjectFromFlatParams(params);
-            // Only use the synthetic job if at least one meaningful field is present
-            // (schedule, payload, message, or text are the minimum signals that the
-            // LLM intended to create a job).
-            if (synthetic.found && hasCronCreateSignal(synthetic.value)) {
-              params.job = synthetic.value;
-            }
-          }
-
-          if (!params.job || typeof params.job !== "object") {
-            throw new Error("job required");
-          }
-          const job =
-            normalizeCronJobCreate(params.job, {
-              sessionContext: { sessionKey: opts?.agentSessionKey },
-            }) ?? params.job;
-          const cfg = getRuntimeConfig();
-          if (job && typeof job === "object") {
-            const { mainKey, alias } = resolveMainSessionAlias(cfg);
-            const resolvedSessionKey = opts?.agentSessionKey
-              ? resolveInternalSessionKey({ key: opts.agentSessionKey, alias, mainKey })
-              : undefined;
-            if (!("agentId" in job) || (job as { agentId?: unknown }).agentId === undefined) {
-              const agentId = opts?.agentSessionKey
-                ? resolveSessionAgentId({ sessionKey: opts.agentSessionKey, config: cfg })
-                : undefined;
-              if (agentId) {
-                (job as { agentId?: string }).agentId = agentId;
-              }
-            }
-            if (!("sessionKey" in job) && resolvedSessionKey) {
-              (job as { sessionKey?: string }).sessionKey = resolvedSessionKey;
-            }
-          }
-
-          if (
-            (opts?.agentSessionKey || opts?.currentDeliveryContext) &&
-            job &&
-            typeof job === "object" &&
-            "payload" in job &&
-            (job as { payload?: { kind?: string } }).payload?.kind === "agentTurn"
-          ) {
-            const deliveryValue = (job as { delivery?: unknown }).delivery;
-            const delivery = isRecord(deliveryValue) ? deliveryValue : undefined;
-            const modeRaw = typeof delivery?.mode === "string" ? delivery.mode : "";
-            const mode = normalizeLowercaseStringOrEmpty(modeRaw);
-            if (mode === "webhook") {
-              const webhookUrl = normalizeHttpWebhookUrl(delivery?.to);
-              if (!webhookUrl) {
-                throw new Error(
-                  'delivery.mode="webhook" requires delivery.to to be a valid http(s) URL',
-                );
-              }
-              if (delivery) {
-                delivery.to = webhookUrl;
-              }
-            }
-
-            const hasTarget =
-              (typeof delivery?.channel === "string" && delivery.channel.trim()) ||
-              (typeof delivery?.to === "string" && delivery.to.trim());
-            const shouldInfer =
-              (deliveryValue == null || delivery) &&
-              (mode === "" || mode === "announce") &&
-              !hasTarget;
-            if (shouldInfer) {
-              const inferred = resolveCronCreationDelivery({
-                cfg,
-                currentDeliveryContext: opts.currentDeliveryContext,
-                agentSessionKey: opts.agentSessionKey,
-              });
-              if (inferred) {
-                (job as { delivery?: unknown }).delivery = {
-                  ...inferred,
-                  ...delivery,
-                } satisfies CronDelivery;
-              }
-            }
-          }
-
-          const contextMessages =
-            typeof params.contextMessages === "number" && Number.isFinite(params.contextMessages)
-              ? params.contextMessages
-              : 0;
-          if (
-            job &&
-            typeof job === "object" &&
-            "payload" in job &&
-            (job as { payload?: { kind?: string; text?: string } }).payload?.kind === "systemEvent"
-          ) {
-            const payload = (job as { payload: { kind: string; text: string } }).payload;
-            if (typeof payload.text === "string" && payload.text.trim()) {
-              const contextLines = await buildReminderContextLines({
-                agentSessionKey: opts?.agentSessionKey,
-                gatewayOpts,
-                contextMessages,
-                callGatewayTool: callGateway,
-              });
-              if (contextLines.length > 0) {
-                const baseText = stripExistingContext(payload.text);
-                payload.text = `${baseText}${REMINDER_CONTEXT_MARKER}${contextLines.join("\n")}`;
-              }
-            }
-          }
-          return jsonResult(await callGateway("cron.add", gatewayOpts, job));
-        }
-        case "update": {
-          const id = readCronJobIdParam(params);
-          if (!id) {
-            throw new Error("jobId required (id accepted for backward compatibility)");
-          }
-
-          // Flat-params recovery for patch
-          let recoveredFlatPatch = false;
-          if (isMissingOrEmptyObject(params.patch)) {
-            const synthetic = recoverCronObjectFromFlatParams(params);
-            if (synthetic.found) {
-              params.patch = synthetic.value;
-              recoveredFlatPatch = true;
-            }
-          }
-
-          if (!params.patch || typeof params.patch !== "object") {
-            throw new Error("patch required");
-          }
-          const patch = normalizeCronJobPatch(params.patch) ?? params.patch;
-          if (
-            recoveredFlatPatch &&
-            typeof patch === "object" &&
-            patch !== null &&
-            Object.keys(patch as Record<string, unknown>).length === 0
-          ) {
-            throw new Error("patch required");
-          }
-          return jsonResult(
-            await callGateway("cron.update", gatewayOpts, {
-              id,
-              patch,
-            }),
-          );
-        }
-        case "remove": {
-          const id = readCronJobIdParam(params);
-          if (!id) {
-            throw new Error("jobId required (id accepted for backward compatibility)");
-          }
-          return jsonResult(await callGateway("cron.remove", gatewayOpts, { id }));
-        }
-        case "run": {
-          const id = readCronJobIdParam(params);
-          if (!id) {
-            throw new Error("jobId required (id accepted for backward compatibility)");
-          }
-          const runMode =
-            params.runMode === "due" || params.runMode === "force" ? params.runMode : "force";
-          return jsonResult(await callGateway("cron.run", gatewayOpts, { id, mode: runMode }));
-        }
-        case "runs": {
-          const id = readCronJobIdParam(params);
-          if (!id) {
-            throw new Error("jobId required (id accepted for backward compatibility)");
-          }
-          return jsonResult(await callGateway("cron.runs", gatewayOpts, { id }));
-        }
-        case "wake": {
-          const text = readStringParam(params, "text", { required: true });
-          const mode =
-            params.mode === "now" || params.mode === "next-heartbeat"
-              ? params.mode
-              : "next-heartbeat";
-          return jsonResult(
-            await callGateway("wake", gatewayOpts, { mode, text }, { expectFinal: false }),
-          );
-        }
-        default:
-          throw new Error(`Unknown action: ${action}`);
-      }
+      return executeCronAction(action, { opts, callGateway, gatewayOpts }, params);
     },
   };
 }
