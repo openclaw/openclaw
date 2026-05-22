@@ -13,6 +13,7 @@ type RecentMediaGenerationTaskStart = {
 };
 
 const recentMediaGenerationTaskStarts = new Map<string, RecentMediaGenerationTaskStart[]>();
+const RECENT_MEDIA_GENERATION_TASK_START_CACHE_MS = 2 * 60_000;
 
 export function buildMediaGenerationRequestKey(value: Record<string, unknown>): string {
   return stableStringify(value);
@@ -161,7 +162,11 @@ export function recordRecentMediaGenerationTaskStartForSession(params: {
     return;
   }
   const nowMs = params.nowMs ?? Date.now();
-  pruneRecentMediaGenerationTaskStarts({ maxAgeMs: 2 * 60_000, nowMs, preserveKey: key });
+  pruneRecentMediaGenerationTaskStarts({
+    maxAgeMs: RECENT_MEDIA_GENERATION_TASK_START_CACHE_MS,
+    nowMs,
+    preserveKey: key,
+  });
   const entry: RecentMediaGenerationTaskStart = {
     requestKey: normalizeOptionalString(params.requestKey),
     task: {
@@ -185,7 +190,13 @@ export function recordRecentMediaGenerationTaskStartForSession(params: {
       progressSummary: params.progressSummary,
     },
   };
-  const previousEntries = recentMediaGenerationTaskStarts.get(key) ?? [];
+  const previousEntries = (recentMediaGenerationTaskStarts.get(key) ?? []).filter((entry) =>
+    isRecentMediaGenerationTaskRecord({
+      task: entry.task,
+      maxAgeMs: RECENT_MEDIA_GENERATION_TASK_START_CACHE_MS,
+      nowMs,
+    }),
+  );
   recentMediaGenerationTaskStarts.set(key, [
     ...previousEntries.filter(
       (previousEntry) => !recentMediaGenerationTaskStartMatches(previousEntry, entry),

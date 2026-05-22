@@ -10,6 +10,7 @@ import {
   IMAGE_GENERATION_TASK_KIND,
 } from "./image-generation-task-status.js";
 import {
+  findRecentStartedMediaGenerationTaskForSession,
   recordRecentMediaGenerationTaskStartForSession,
   resetRecentMediaGenerationDuplicateGuardsForTests,
 } from "./media-generation-task-status-shared.js";
@@ -331,6 +332,46 @@ describe("image generation task status", () => {
         requestKey: "image-request:first",
       })?.taskId,
     ).toBe("task-first");
+  });
+
+  it("prunes stale same-session recent starts when another image request starts", () => {
+    const now = Date.now();
+    recordRecentMediaGenerationTaskStartForSession({
+      sessionKey: "agent:main",
+      taskKind: IMAGE_GENERATION_TASK_KIND,
+      sourcePrefix: "image_generate",
+      taskId: "task-stale",
+      runId: "run-stale",
+      taskLabel: "stale prompt",
+      requestKey: "image-request:stale",
+      providerId: "xai",
+      progressSummary: "Generating stale image",
+      nowMs: now - 3 * 60_000,
+    });
+    recordRecentMediaGenerationTaskStartForSession({
+      sessionKey: "agent:main",
+      taskKind: IMAGE_GENERATION_TASK_KIND,
+      sourcePrefix: "image_generate",
+      taskId: "task-fresh",
+      runId: "run-fresh",
+      taskLabel: "fresh prompt",
+      requestKey: "image-request:fresh",
+      providerId: "xai",
+      progressSummary: "Generating fresh image",
+      nowMs: now,
+    });
+
+    expect(
+      findRecentStartedMediaGenerationTaskForSession({
+        sessionKey: "agent:main",
+        taskKind: IMAGE_GENERATION_TASK_KIND,
+        sourcePrefix: "image_generate",
+        taskLabel: "stale prompt",
+        requestKey: "image-request:stale",
+        maxAgeMs: 10 * 60_000,
+        nowMs: now,
+      }),
+    ).toBeUndefined();
   });
 
   it("does not block a distinct prompt from a cached active recent start", () => {
