@@ -402,4 +402,16 @@ describe("WhatsApp QA live runtime", () => {
     ).toBe(true);
     expect(testing.isTransientWhatsAppQaDriverError(new Error("timed out waiting"))).toBe(false);
   });
+
+  it("classifies logged-out WhatsApp driver credentials", () => {
+    expect(testing.isLoggedOutWhatsAppQaDriverError(new Error("WhatsApp session logged out"))).toBe(
+      true,
+    );
+    expect(
+      testing.isLoggedOutWhatsAppQaDriverError(
+        new Error('{"output":{"statusCode":401,"payload":{"error":"Unauthorized"}}}'),
+      ),
+    ).toBe(true);
+    expect(testing.isLoggedOutWhatsAppQaDriverError(new Error("Connection Closed"))).toBe(false);
+  });
 });

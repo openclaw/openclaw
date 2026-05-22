@@ -205,6 +205,7 @@ const WHATSAPP_QA_READY_TIMEOUT_MS = 150_000;
 const WHATSAPP_QA_READY_STABILITY_MS = 20_000;
 const WHATSAPP_QA_HEAP_CHECKPOINT_SETTLE_MS = 10_000;
 const WHATSAPP_QA_DRIVER_RECONNECT_DELAY_MS = 10_000;
+const WHATSAPP_QA_CREDENTIAL_ATTEMPTS = 3;
 const WHATSAPP_QA_ENV_KEYS = [
   "OPENCLAW_QA_WHATSAPP_DRIVER_PHONE_E164",
   "OPENCLAW_QA_WHATSAPP_SUT_PHONE_E164",
@@ -808,6 +809,16 @@ function isTransientWhatsAppQaDriverError(error: unknown) {
   );
 }
 
+function isLoggedOutWhatsAppQaDriverError(error: unknown) {
+  const message = formatErrorMessage(error);
+  return (
+    /\bWhatsApp session logged out\b/iu.test(message) ||
+    /\bUnauthorized\b/iu.test(message) ||
+    /\bstatusCode["']?\s*:\s*401\b/iu.test(message) ||
+    /\breason["']?\s*:\s*["']?401\b/iu.test(message)
+  );
+}
+
 async function restartWhatsAppQaDriverSession(params: {
   authDir: string;
   current: WhatsAppQaDriverSession;
@@ -1200,10 +1211,11 @@ export async function runWhatsAppQaLive(params: {
   const gatewayDebugDirPath = path.join(outputDir, "gateway-debug");
   let preservedGatewayDebugArtifacts = false;
   const preserveSuccessfulGatewayDebugArtifacts = shouldPreserveWhatsAppGatewayDebugArtifacts();
+  const credentialLeases: WhatsAppCredentialLease[] = [];
+  const leaseHeartbeats: WhatsAppCredentialHeartbeat[] = [];
+  const tempAuthRoots: string[] = [];
   let credentialLease: WhatsAppCredentialLease | undefined;
-  let leaseHeartbeat: WhatsAppCredentialHeartbeat | undefined;
   let runtimeEnv: WhatsAppQaRuntimeEnv | undefined;
-  let tempAuthRoot: string | undefined;
   let driver: WhatsAppQaDriverSession | undefined;
   const sampleGatewayProcessRss = (gateway: WhatsAppQaGatewayHandle, label: string) => {
     const gatewayProcessRssBytes = gateway.getProcessRssBytes?.() ?? null;
@@ -1233,35 +1245,71 @@ export async function runWhatsAppQaLive(params: {
   }
 
   try {
-    credentialLease = await acquireQaCredentialLease({
-      kind: "whatsapp",
-      source: params.credentialSource,
-      role: params.credentialRole,
-      resolveEnvPayload: () => resolveWhatsAppQaRuntimeEnv(),
-      parsePayload: parseWhatsAppQaCredentialPayload,
-    });
-    leaseHeartbeat = startQaCredentialLeaseHeartbeat(credentialLease);
+    const credentialAttempts =
+      requestedCredentialSource === "convex" ? WHATSAPP_QA_CREDENTIAL_ATTEMPTS : 1;
+    let activeDriver: WhatsAppQaDriverSession | undefined;
+
+    for (let credentialAttempt = 1; credentialAttempt <= credentialAttempts; credentialAttempt += 1) {
+      credentialLease = await acquireQaCredentialLease({
+        kind: "whatsapp",
+        source: params.credentialSource,
+        role: params.credentialRole,
+        ownerId:
+          credentialAttempt === 1
+            ? undefined
+            : `${process.env.OPENCLAW_QA_CREDENTIAL_OWNER_ID || "qa-live-whatsapp"}-retry-${credentialAttempt}`,
+        resolveEnvPayload: () => resolveWhatsAppQaRuntimeEnv(),
+        parsePayload: parseWhatsAppQaCredentialPayload,
+      });
+      credentialLeases.push(credentialLease);
+      const heartbeat = startQaCredentialLeaseHeartbeat(credentialLease);
+      leaseHeartbeats.push(heartbeat);
+      runtimeEnv = credentialLease.payload;
+      const tempAuthRoot = await fs.mkdtemp(
+        path.join(resolvePreferredOpenClawTmpDir(), "openclaw-whatsapp-qa-"),
+      );
+      tempAuthRoots.push(tempAuthRoot);
+      const [driverAuthDir, sutAuthDir] = await Promise.all([
+        unpackWhatsAppAuthArchive({
+          archiveBase64: runtimeEnv.driverAuthArchiveBase64,
+          label: "driver-auth",
+          parentDir: tempAuthRoot,
+        }),
+        unpackWhatsAppAuthArchive({
+          archiveBase64: runtimeEnv.sutAuthArchiveBase64,
+          label: "sut-auth",
+          parentDir: tempAuthRoot,
+        }),
+      ]);
+
+      try {
+        activeDriver = await startWhatsAppQaDriverSessionWithRetry({ authDir: driverAuthDir });
+        driver = activeDriver;
+        break;
+      } catch (error) {
+        if (
+          credentialAttempt >= credentialAttempts ||
+          requestedCredentialSource !== "convex" ||
+          !isLoggedOutWhatsAppQaDriverError(error)
+        ) {
+          throw error;
+        }
+        cleanupIssues.push(
+          `WhatsApp credential ${toCredentialFingerprint(credentialLease.credentialId) ?? "<unknown>"} was logged out; trying another Convex lease.`,
+        );
+      }
+    }
+
+    if (!activeDriver || !runtimeEnv) {
+      throw new Error("WhatsApp QA could not start a driver session.");
+    }
+
     const assertLeaseHealthy = () => {
-      leaseHeartbeat?.throwIfFailed();
+      for (const heartbeat of leaseHeartbeats) {
+        heartbeat.throwIfFailed();
+      }
     };
-    runtimeEnv = credentialLease.payload;
-    tempAuthRoot = await fs.mkdtemp(
-      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-whatsapp-qa-"),
-    );
-    const [driverAuthDir, sutAuthDir] = await Promise.all([
-      unpackWhatsAppAuthArchive({
-        archiveBase64: runtimeEnv.driverAuthArchiveBase64,
-        label: "driver-auth",
-        parentDir: tempAuthRoot,
-      }),
-      unpackWhatsAppAuthArchive({
-        archiveBase64: runtimeEnv.sutAuthArchiveBase64,
-        label: "sut-auth",
-        parentDir: tempAuthRoot,
-      }),
-    ]);
-    let activeDriver = await startWhatsAppQaDriverSessionWithRetry({ authDir: driverAuthDir });
-    driver = activeDriver;
+    const sutAuthDir = path.join(tempAuthRoots.at(-1)!, "sut-auth");
 
     for (const scenario of scenarios) {
       assertLeaseHealthy();
@@ -1374,22 +1422,22 @@ export async function runWhatsAppQaLive(params: {
         appendLiveLaneIssue(cleanupIssues, "driver session stop failed", error);
       }
     }
-    if (leaseHeartbeat) {
+    for (const heartbeat of leaseHeartbeats.toReversed()) {
       try {
-        await leaseHeartbeat.stop();
+        await heartbeat.stop();
       } catch (error) {
         appendLiveLaneIssue(cleanupIssues, "credential heartbeat stop failed", error);
       }
     }
-    if (credentialLease) {
+    for (const lease of credentialLeases.toReversed()) {
       try {
-        await credentialLease.release();
+        await lease.release();
       } catch (error) {
         appendLiveLaneIssue(cleanupIssues, "credential release failed", error);
       }
     }
-    if (tempAuthRoot) {
-      await fs.rm(tempAuthRoot, { recursive: true, force: true }).catch((error) => {
+    for (const authRoot of tempAuthRoots.toReversed()) {
+      await fs.rm(authRoot, { recursive: true, force: true }).catch((error) => {
         appendLiveLaneIssue(cleanupIssues, "temporary auth cleanup failed", error);
       });
     }
@@ -1510,6 +1558,7 @@ export const testing = {
   findScenarios,
   formatWhatsAppScenarioTimings,
   heapSnapshotLooksComplete,
+  isLoggedOutWhatsAppQaDriverError,
   isTransientWhatsAppQaDriverError,
   parseWhatsAppQaCredentialPayload,
   resolveWhatsAppHeapCheckpointSettleMs,
