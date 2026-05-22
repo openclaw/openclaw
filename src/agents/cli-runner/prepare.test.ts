@@ -102,8 +102,11 @@ function createTestMcpLoopbackServerConfig(port: number) {
 
 async function createTestMcpLoopbackServer(port = 0) {
   return {
-    port,
-    close: vi.fn(async () => undefined),
+    server: {
+      port,
+      close: vi.fn(async () => undefined),
+    },
+    created: true,
   };
 }
 
