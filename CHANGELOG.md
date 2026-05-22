@@ -137,7 +137,7 @@ Docs: https://docs.openclaw.ai
 - Agents/Pi: treat accepted embedded `sessions_spawn` child-session handoffs as terminal progress so parent turns no longer report false non-deliverable failures. (#85054) Thanks @samzong.
 - CLI/models: resolve `openclaw models set` aliases from the runtime config while keeping authored aliases ahead of runtime-only defaults. (#83262) Thanks @IWhatsskill.
 - WhatsApp: update Baileys to `7.0.0-rc13` and drop the obsolete logger type patch.
-- Install/update: reject OpenClaw GitHub source package targets early and point moving-main users at the dev/git install path instead of the broken npm source-install flow.
+- CLI/update: pre-pack GitHub/git package update targets before the staged npm install, restoring `openclaw update --tag main` for one-off package updates. (#81296) Thanks @fuller-stack-dev.
 - Gateway: mirror successful same-source message-tool sends into session transcripts so delivered replies stay in later history/context. (#84837) Thanks @iFiras-Max1.
 - Media generation: keep image, music, and video completion delivery from duplicating or losing task ownership when generated media finishes through active session replies. (#84006) Thanks @fuller-stack-dev.
 - Infra/json: retry transient `File changed during read` races while loading JSON state so config and state reads recover instead of failing the turn. (#84285)
