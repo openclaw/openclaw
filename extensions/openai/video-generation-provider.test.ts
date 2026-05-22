@@ -12,6 +12,7 @@ const {
   fetchWithTimeoutGuardedMock,
   pollProviderOperationJsonMock,
   assertOkOrThrowHttpErrorMock,
+  executeProviderOperationWithRetryMock,
   resolveProviderHttpRequestConfigMock,
   sanitizeConfiguredModelProviderRequestMock,
 } = getProviderHttpMocks();
@@ -304,11 +305,84 @@ describe("openai video generation provider", () => {
     });
   });
 
-  it("releases guarded local video download requests when HTTP errors throw", async () => {
-    const release = vi.fn(async () => {});
+  it("retries guarded local video downloads after transient HTTP errors", async () => {
+    const firstRelease = vi.fn(async () => {});
+    const secondRelease = vi.fn(async () => {});
     assertOkOrThrowHttpErrorMock
       .mockImplementationOnce(async () => {})
       .mockImplementationOnce(async () => {})
+      .mockImplementationOnce(async (_response, label) => {
+        throw new Error(label);
+      })
+      .mockImplementationOnce(async () => {});
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({
+          id: "vid_local",
+          model: "sora-2",
+          status: "queued",
+        }),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutMock.mockResolvedValueOnce({
+      json: async () => ({
+        id: "vid_local",
+        model: "sora-2",
+        status: "completed",
+      }),
+    });
+    fetchWithTimeoutGuardedMock
+      .mockResolvedValueOnce({
+        response: new Response("busy", { status: 503, statusText: "Service Unavailable" }),
+        finalUrl: "http://127.0.0.1:44080/v1/videos/vid_local/content?variant=video",
+        release: firstRelease,
+      })
+      .mockResolvedValueOnce({
+        response: {
+          headers: new Headers({ "content-type": "video/mp4" }),
+          arrayBuffer: async () => Buffer.from("mp4-bytes"),
+        },
+        finalUrl: "http://127.0.0.1:44080/v1/videos/vid_local/content?variant=video",
+        release: secondRelease,
+      });
+
+    const provider = buildOpenAIVideoGenerationProvider();
+    const result = await provider.generateVideo({
+      provider: "openai",
+      model: "sora-2",
+      prompt: "Render via local relay",
+      cfg: {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "http://127.0.0.1:44080/v1",
+              request: { allowPrivateNetwork: true },
+              models: [],
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.videos[0]?.buffer.toString()).toBe("mp4-bytes");
+    expect(executeProviderOperationWithRetryMock).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "openai", stage: "download" }),
+    );
+    expect(fetchWithTimeoutGuardedMock).toHaveBeenCalledTimes(2);
+    expect(firstRelease).toHaveBeenCalledTimes(1);
+    expect(secondRelease).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases guarded local video download requests when HTTP errors throw", async () => {
+    const firstRelease = vi.fn(async () => {});
+    const secondRelease = vi.fn(async () => {});
+    assertOkOrThrowHttpErrorMock
+      .mockImplementationOnce(async () => {})
+      .mockImplementationOnce(async () => {})
+      .mockImplementationOnce(async (_response, label) => {
+        throw new Error(label);
+      })
       .mockImplementationOnce(async (_response, label) => {
         throw new Error(label);
       });
@@ -329,11 +403,17 @@ describe("openai video generation provider", () => {
         status: "completed",
       }),
     });
-    fetchWithTimeoutGuardedMock.mockResolvedValueOnce({
-      response: new Response("busy", { status: 503, statusText: "Service Unavailable" }),
-      finalUrl: "http://127.0.0.1:44080/v1/videos/vid_local/content?variant=video",
-      release,
-    });
+    fetchWithTimeoutGuardedMock
+      .mockResolvedValueOnce({
+        response: new Response("busy", { status: 503, statusText: "Service Unavailable" }),
+        finalUrl: "http://127.0.0.1:44080/v1/videos/vid_local/content?variant=video",
+        release: firstRelease,
+      })
+      .mockResolvedValueOnce({
+        response: new Response("busy", { status: 503, statusText: "Service Unavailable" }),
+        finalUrl: "http://127.0.0.1:44080/v1/videos/vid_local/content?variant=video",
+        release: secondRelease,
+      });
 
     const provider = buildOpenAIVideoGenerationProvider();
     await expect(
@@ -355,7 +435,9 @@ describe("openai video generation provider", () => {
       }),
     ).rejects.toThrow("OpenAI video download failed");
 
-    expect(release).toHaveBeenCalledTimes(1);
+    expect(fetchWithTimeoutGuardedMock).toHaveBeenCalledTimes(2);
+    expect(firstRelease).toHaveBeenCalledTimes(1);
+    expect(secondRelease).toHaveBeenCalledTimes(1);
   });
 
   it("uses multipart input_reference for video-to-video uploads", async () => {

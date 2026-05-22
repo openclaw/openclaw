@@ -5,6 +5,7 @@ import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
   createProviderOperationTimeoutResolver,
+  executeProviderOperationWithRetry,
   fetchProviderDownloadResponse,
   fetchWithTimeoutGuarded,
   pollProviderOperationJson,
@@ -187,24 +188,30 @@ async function fetchOpenAIVideoDownload(
     };
   }
 
-  const result = await fetchWithTimeoutGuarded(
-    params.url,
-    params.init,
-    resolveOpenAIVideoDownloadTimeoutMs(params.timeoutMs),
-    params.fetchFn,
-    {
-      ...(params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
-      ...(params.dispatcherPolicy ? { dispatcherPolicy: params.dispatcherPolicy } : {}),
-      auditContext: "openai-video-download",
+  return await executeProviderOperationWithRetry({
+    provider: "openai",
+    stage: "download",
+    operation: async () => {
+      const result = await fetchWithTimeoutGuarded(
+        params.url,
+        params.init,
+        resolveOpenAIVideoDownloadTimeoutMs(params.timeoutMs),
+        params.fetchFn,
+        {
+          ...(params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
+          ...(params.dispatcherPolicy ? { dispatcherPolicy: params.dispatcherPolicy } : {}),
+          auditContext: "openai-video-download",
+        },
+      );
+      try {
+        await assertOkOrThrowHttpError(result.response, "OpenAI video download failed");
+        return result;
+      } catch (error) {
+        await result.release();
+        throw error;
+      }
     },
-  );
-  try {
-    await assertOkOrThrowHttpError(result.response, "OpenAI video download failed");
-    return result;
-  } catch (error) {
-    await result.release();
-    throw error;
-  }
+  });
 }
 
 async function downloadOpenAIVideo(
