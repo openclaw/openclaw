@@ -48,7 +48,7 @@ describe("redactSensitiveText", () => {
   it("masks JSON-escaped quoted env assignments while keeping the key", () => {
     const xai = "issue85049-xai-cleartext-token-ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890";
     const brave = "issue85049-brave-cleartext-token-ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890";
-    const input = `raw_params={"command":"export XAI_API_KEY=\\\"${xai}\\\" && export BRAVE_API_KEY=\\\\\\\"${brave}\\\\\\\" && echo blocked"}`;
+    const input = String.raw`raw_params={"command":"export XAI_API_KEY=\"${xai}\" && export BRAVE_API_KEY=\\\"${brave}\\\" && echo blocked"}`;
     const output = redactSensitiveText(input, {
       mode: "tools",
       patterns: defaults,
