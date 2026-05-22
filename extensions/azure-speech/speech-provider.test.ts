@@ -202,6 +202,9 @@ describe("buildAzureSpeechProvider", () => {
       providerOverrides: {
         voice: "en-US-AriaNeural",
         lang: "es-US",
+        rate: "+8%",
+        pitch: "+4%",
+        volume: "+0%",
       },
       timeoutMs: 30_000,
     });
@@ -214,6 +217,9 @@ describe("buildAzureSpeechProvider", () => {
       region: "eastus",
       voice: "en-US-AriaNeural",
       lang: "es-US",
+      rate: "+8%",
+      pitch: "+4%",
+      volume: "+0%",
       outputFormat: "raw-8khz-8bit-mono-mulaw",
       timeoutMs: 30_000,
     });
@@ -238,5 +244,33 @@ describe("buildAzureSpeechProvider", () => {
       region: "eastus",
       timeoutMs: undefined,
     });
+  });
+
+  it("passes prosody provider overrides to Azure Speech synthesis", async () => {
+    const provider = buildAzureSpeechProvider();
+    await provider.synthesize({
+      text: "hello",
+      cfg: {} as never,
+      providerConfig: {
+        apiKey: "key",
+        region: "eastus",
+        voice: "en-US-JennyNeural",
+      },
+      providerOverrides: {
+        rate: "+8%",
+        pitch: "+4%",
+        volume: "+0%",
+      },
+      target: "audio-file",
+      timeoutMs: 30_000,
+    });
+
+    expect(azureSpeechTTSMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rate: "+8%",
+        pitch: "+4%",
+        volume: "+0%",
+      }),
+    );
   });
 });

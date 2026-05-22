@@ -60,16 +60,38 @@ function escapeXmlAttr(value: string): string {
   return escapeXmlText(value).replace(/"/g, "&quot;").replace(/'/g, "&apos;");
 }
 
+function buildProsodyAttrs(params: { rate?: string; pitch?: string; volume?: string }): string {
+  return (
+    [
+      ["rate", params.rate],
+      ["pitch", params.pitch],
+      ["volume", params.volume],
+    ] as const
+  )
+    .map(([name, value]) => {
+      const trimmed = trimToUndefined(value);
+      return trimmed ? `${name}="${escapeXmlAttr(trimmed)}"` : undefined;
+    })
+    .filter((value): value is string => value !== undefined)
+    .join(" ");
+}
+
 export function buildAzureSpeechSsml(params: {
   text: string;
   voice: string;
   lang?: string;
+  rate?: string;
+  pitch?: string;
+  volume?: string;
 }): string {
   const lang = trimToUndefined(params.lang) ?? DEFAULT_AZURE_SPEECH_LANG;
+  const text = escapeXmlText(params.text);
+  const prosodyAttrs = buildProsodyAttrs(params);
+  const content = prosodyAttrs ? `<prosody ${prosodyAttrs}>${text}</prosody>` : text;
   return (
     `<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" ` +
     `xml:lang="${escapeXmlAttr(lang)}">` +
-    `<voice name="${escapeXmlAttr(params.voice)}">${escapeXmlText(params.text)}</voice>` +
+    `<voice name="${escapeXmlAttr(params.voice)}">${content}</voice>` +
     `</speak>`
   );
 }
@@ -173,6 +195,9 @@ export async function azureSpeechTTS(params: {
   region?: string;
   voice?: string;
   lang?: string;
+  rate?: string;
+  pitch?: string;
+  volume?: string;
   outputFormat?: string;
   timeoutMs?: number;
 }): Promise<Buffer> {
@@ -193,6 +218,9 @@ export async function azureSpeechTTS(params: {
         text: params.text,
         voice,
         lang: params.lang,
+        rate: params.rate,
+        pitch: params.pitch,
+        volume: params.volume,
       }),
     },
     timeoutMs: params.timeoutMs,

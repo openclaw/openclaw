@@ -23,6 +23,15 @@ export type TtsModelOverrideConfig = {
   allowSeed?: boolean;
 };
 
+export type TtsAutoEmotionConfig = {
+  /** Enable conservative automatic emotion selection from synthesized text. */
+  enabled?: boolean;
+  /** Emotion to use when no heuristic matches or the selected emotion is not allowed. */
+  fallback?: string;
+  /** Optional allowlist of abstract emotion ids that automatic selection may emit. */
+  allowed?: string[];
+};
+
 export type TtsProviderConfigMap = Record<string, Record<string, unknown>>;
 
 export type TtsPersonaFallbackPolicy = "preserve-persona" | "provider-defaults" | "fail";
@@ -69,6 +78,8 @@ export type TtsConfig = {
   summaryModel?: string;
   /** Allow the model to override TTS parameters. */
   modelOverrides?: TtsModelOverrideConfig;
+  /** Conservatively infer provider emotion from synthesized text when no emotion is explicit. */
+  autoEmotion?: TtsAutoEmotionConfig;
   /** Provider-specific TTS settings keyed by speech provider id. */
   providers?: TtsProviderConfigMap;
   /** Optional path for local TTS user preferences JSON. */

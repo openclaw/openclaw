@@ -20,6 +20,7 @@ function isSpeechRequestBody(value: unknown): value is {
   model?: string;
   voice?: string;
   speed?: number;
+  instructions?: string;
   response_format?: string;
 } {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -30,6 +31,7 @@ function parseRequestBody(init: RequestInit | undefined): {
   model?: string;
   voice?: string;
   speed?: number;
+  instructions?: string;
   response_format?: string;
 } {
   if (typeof init?.body !== "string") {
@@ -237,9 +239,10 @@ describe("buildOpenAISpeechProvider", () => {
     const provider = buildOpenAISpeechProvider();
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
       const body = parseRequestBody(init);
-      expect(body.model).toBe("tts-1");
+      expect(body.model).toBe("gpt-4o-mini-tts");
       expect(body.voice).toBe("nova");
       expect(body.speed).toBe(1.25);
+      expect(body.instructions).toBe("Persona: Alfred\n\nSpeak in a warm, upbeat, cheerful tone.");
       expect(body.response_format).toBe("pcm");
       return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
     });
@@ -250,14 +253,16 @@ describe("buildOpenAISpeechProvider", () => {
       cfg: {} as never,
       providerConfig: {
         apiKey: "sk-test",
-        model: "gpt-4o-mini-tts",
+        model: "tts-1",
         voice: "alloy",
         speed: 1,
+        instructions: "Persona: Alfred",
       },
       providerOverrides: {
-        model: "tts-1",
+        model: "gpt-4o-mini-tts",
         voice: "nova",
         speed: 1.25,
+        instructions: "Speak in a warm, upbeat, cheerful tone.",
       },
       timeoutMs: 1_000,
     });
@@ -320,5 +325,56 @@ describe("buildOpenAISpeechProvider", () => {
 
     expect(result.outputFormat).toBe("mp3");
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("applies provider override instructions to speech requests", async () => {
+    const provider = buildOpenAISpeechProvider();
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = parseRequestBody(init);
+      expect(body.instructions).toBe("Speak in a warm, upbeat, cheerful tone.");
+      return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await provider.synthesize({
+      text: "hello",
+      cfg: {} as never,
+      providerConfig: {
+        apiKey: "sk-test",
+      },
+      providerOverrides: {
+        instructions: "Speak in a warm, upbeat, cheerful tone.",
+      },
+      target: "audio-file",
+      timeoutMs: 1_000,
+    });
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("preserves configured instructions when applying provider override instructions", async () => {
+    const provider = buildOpenAISpeechProvider();
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = parseRequestBody(init);
+      expect(body.instructions).toBe("Persona: Alfred\n\nSpeak in a warm, upbeat, cheerful tone.");
+      return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await provider.synthesize({
+      text: "hello",
+      cfg: {} as never,
+      providerConfig: {
+        apiKey: "sk-test",
+        instructions: "Persona: Alfred",
+      },
+      providerOverrides: {
+        instructions: "Speak in a warm, upbeat, cheerful tone.",
+      },
+      target: "audio-file",
+      timeoutMs: 1_000,
+    });
+
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 });
