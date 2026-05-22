@@ -104,6 +104,15 @@ describe("sanitizeExecApprovalDisplayText", () => {
     expect(result).toContain("https://api.example.com");
   });
 
+  it("does not let contextual secret matches hide split-token bypass detection", () => {
+    const discordToken = `${"A".repeat(24)}.${"B".repeat(6)}.${"C".repeat(27)}`;
+    const cmd = `discord sk-abc123\u200B456789012345678 ${discordToken}`;
+    const result = sanitizeExecApprovalDisplayText(cmd);
+    expect(result).not.toContain("sk-abc123");
+    expect(result).not.toContain("456789012345678");
+    expect(result).not.toContain(discordToken);
+  });
+
   it("keeps PEM private-key context visible when raw redaction already covers the key (not a bypass)", () => {
     const cmd =
       "echo -----BEGIN RSA PRIVATE KEY-----\nABCDEF0123456789abcdef\n-----END RSA PRIVATE KEY----- > key.pem";

@@ -142,6 +142,7 @@ const DEFAULT_REDACT_PATTERNS: string[] = [
   // Authorization headers.
   String.raw`Authorization\s*[:=]\s*Bearer\s+([A-Za-z0-9._\-+=]+)`,
   String.raw`Authorization\s*[:=]\s*Basic\s+([A-Za-z0-9+/=]+)`,
+  String.raw`Authorization\s*[:=]\s*Bot\s+([A-Za-z0-9._\-+=]{18,})`,
   String.raw`(?:X-OpenClaw-Token|x-pomerium-jwt-assertion|X-Api-Key|X-Auth-Token)\s*[:=]\s*([^\s"',;]+)`,
   String.raw`\bBearer\s+([A-Za-z0-9._\-+=]{18,})\b`,
   // URL userinfo and common connection-string password slots.
@@ -163,8 +164,13 @@ const DEFAULT_REDACT_PATTERNS: string[] = [
   String.raw`(ghu_[A-Za-z0-9]{10,})`,
   String.raw`(ghs_[A-Za-z0-9]{10,})`,
   String.raw`(ghr_[A-Za-z0-9]{10,})`,
+  String.raw`(glpat-[A-Za-z0-9._=\-]{20,})`,
+  String.raw`(gloas-[A-Fa-f0-9]{32,})`,
   String.raw`(xox[baprs]-[A-Za-z0-9-]{10,})`,
   String.raw`(xapp-[A-Za-z0-9-]{10,})`,
+  String.raw`(https:\/\/hooks\.slack\.com\/(?:services\/T[A-Z0-9]+\/B[A-Z0-9]+|workflows\/T[A-Z0-9]+\/A[A-Z0-9]+\/[0-9]{17,19})\/[A-Za-z0-9]{20,})`,
+  String.raw`(https:\/\/discord(?:app)?\.com\/api\/webhooks\/[0-9]{17,20}\/[A-Za-z0-9_-]{60,})`,
+  String.raw`discord(?:.|\n|\r){0,40}?\b([A-Za-z0-9_-]{24}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27})\b`,
   String.raw`(gsk_[A-Za-z0-9_-]{10,})`,
   String.raw`(AIza[0-9A-Za-z\-_]{20,})`,
   String.raw`(ya29\.[0-9A-Za-z_\-./+=]{10,})`,
@@ -183,6 +189,29 @@ const DEFAULT_REDACT_PATTERNS: string[] = [
   String.raw`(pypi-[A-Za-z0-9_-]{10,})`,
   String.raw`(dop_v1_[A-Za-z0-9]{10,})`,
   String.raw`(doo_v1_[A-Za-z0-9]{10,})`,
+  String.raw`(dor_v1_[A-Za-z0-9]{10,})`,
+  String.raw`(dp\.(?:ct|pt|sa|scim|audit)\.[A-Za-z0-9]{40,44})`,
+  String.raw`(dp\.st\.[A-Za-z0-9]{40,44})`,
+  String.raw`(dp\.st\.[a-z0-9_-]{2,35}\.[A-Za-z0-9]{40,44})`,
+  String.raw`(dckr_(?:pat|oat)_[A-Za-z0-9_-]{27,32})`,
+  String.raw`(bkua_[a-z0-9]{40})`,
+  String.raw`(CCIPAT_[A-Za-z0-9]{22}_[A-Fa-f0-9]{40})`,
+  String.raw`(sbp_[a-z0-9]{40})`,
+  String.raw`(dapi[0-9a-f]{32}(?:-\d)?)`,
+  String.raw`(dd[pw]_[A-Za-z0-9]{36})`,
+  String.raw`(glsa_[A-Za-z0-9_]{41})`,
+  String.raw`(glc_eyJ[A-Za-z0-9+/=]{60,160})`,
+  String.raw`(nfp_[A-Za-z0-9_]{36})`,
+  String.raw`(CFPAT-[A-Za-z0-9_\-]{40,})`,
+  String.raw`(ATCTT3xFfG[A-Za-z0-9+/=_-]+=[A-Za-z0-9]{8})`,
+  String.raw`(ATATT[A-Za-z0-9+/=_-]+=[A-Za-z0-9]{8})`,
+  String.raw`(ATBB[A-Za-z0-9_=.-]{16,})`,
+  String.raw`(BBDC-[A-Za-z0-9+/@_-]{40,50})`,
+  String.raw`(HRKU-AA[A-Za-z0-9_-]{20,})`,
+  String.raw`(pat-(?:eu|na)1-[A-Za-z0-9]{8}\-[A-Za-z0-9]{4}\-[A-Za-z0-9]{4}\-[A-Za-z0-9]{4}\-[A-Za-z0-9]{12})`,
+  String.raw`(apify_api_[A-Za-z0-9\-]{20,})`,
+  String.raw`(FlyV1 fm\d+_[A-Za-z0-9+/=,_-]{100,})`,
+  String.raw`(fio-u-[A-Za-z0-9_-]{40,})`,
   String.raw`(^|[^A-Za-z0-9_])(am_[A-Za-z0-9_-]{10,})`,
   String.raw`(^|[^A-Za-z0-9_])(sk_[A-Za-z0-9_]{10,})`,
   String.raw`(tvly-[A-Za-z0-9]{10,})`,
@@ -199,6 +228,7 @@ const DEFAULT_REDACT_PATTERNS: string[] = [
   String.raw`(AKID[A-Za-z0-9]{10,})`,
   String.raw`(LTAI[A-Za-z0-9]{10,})`,
   String.raw`(hf_[A-Za-z0-9]{10,})`,
+  String.raw`(api_org_[A-Za-z0-9]{20,})`,
   String.raw`(r8_[A-Za-z0-9]{10,})`,
   // Telegram Bot API URLs embed the token as `/bot<token>/...` (no word-boundary before digits).
   String.raw`\bbot(\d{6,}:[A-Za-z0-9_-]{20,})\b`,
@@ -645,6 +675,26 @@ function hasBackreferenceToGroup(pattern: RegExp, groupNumber: number): boolean 
   return new RegExp(String.raw`\\${groupNumber}(?!\d)`).test(pattern.source);
 }
 
+type SecretCaptureSelection = {
+  captureCount: number;
+  index: number;
+  value: string;
+};
+
+function selectSecretCapture(match: string, groups: string[]): SecretCaptureSelection {
+  const tokens = groups
+    .map((value, index) => ({ index, value }))
+    .filter(({ value }) => typeof value === "string" && value.length > 0);
+  const selected = (tokens.length > 1 ? tokens[tokens.length - 1] : tokens[0]) ?? {
+    index: -1,
+    value: match,
+  };
+  return {
+    ...selected,
+    captureCount: tokens.length,
+  };
+}
+
 function getIndexedCaptureStart(
   pattern: RegExp,
   input: string,
@@ -675,6 +725,30 @@ function getIndexedCaptureStart(
   }
 }
 
+function getSecretCaptureStart(
+  pattern: RegExp,
+  input: string,
+  match: string,
+  matchOffset: number,
+  selected: SecretCaptureSelection,
+): number {
+  const indexedTokenStart = getIndexedCaptureStart(
+    pattern,
+    input,
+    match,
+    matchOffset,
+    selected.index,
+  );
+  const preferFirstCapture =
+    selected.captureCount === 1 &&
+    selected.index >= 0 &&
+    hasBackreferenceToGroup(pattern, selected.index + 1);
+  return (
+    indexedTokenStart ??
+    (preferFirstCapture ? match.indexOf(selected.value) : match.lastIndexOf(selected.value))
+  );
+}
+
 function redactMatch(
   match: string,
   groups: string[],
@@ -684,40 +758,34 @@ function redactMatch(
   if (match.includes("PRIVATE KEY-----")) {
     return redactPemBlock(match);
   }
-  const tokens = groups
-    .map((value, index) => ({ index, value }))
-    .filter(({ value }) => typeof value === "string" && value.length > 0);
-  const selected = (tokens.length > 1 ? tokens[tokens.length - 1] : tokens[0]) ?? {
-    index: -1,
-    value: match,
-  };
+  const selected = selectSecretCapture(match, groups);
   const token = selected.value;
+  const isShellReferencePattern = shellReferencePreservingPatterns.has(pattern);
   // Preserve shell variable references (e.g. `MY_TOKEN=$MY_TOKEN`) for assignment patterns
   // registered as shell-reference-preserving, so non-secret expansions that merely echo the
   // assignment key are not masked.
   if (
-    shellReferencePreservingPatterns.has(pattern) &&
+    isShellReferencePattern &&
     (shouldPreserveShellReferenceMatch(match, token) || isEmptyShellParameterExpansionTail(token))
   ) {
     return match;
   }
-  const masked = maskSecretValue(token, { hinted: true });
+  // Assignment values can legitimately include trailing shell/structural characters
+  // (e.g. `${VAR:-default}`); mask the captured token whole so those characters count toward the
+  // retained hint instead of being exposed by delimiter-aware masking.
+  const masked = isShellReferencePattern
+    ? maskToken(token)
+    : maskSecretValue(token, { hinted: true });
   if (token === match) {
     return masked;
   }
-  const indexedTokenStart = getIndexedCaptureStart(
+  const tokenIndex = getSecretCaptureStart(
     pattern,
     context?.input ?? "",
     match,
     context?.offset ?? -1,
-    selected.index,
+    selected,
   );
-  const preferFirstCapture =
-    tokens.length === 1 &&
-    selected.index >= 0 &&
-    hasBackreferenceToGroup(pattern, selected.index + 1);
-  const tokenIndex =
-    indexedTokenStart ?? (preferFirstCapture ? match.indexOf(token) : match.lastIndexOf(token));
   if (tokenIndex < 0) {
     return match;
   }
@@ -764,6 +832,39 @@ function cloneGlobalPattern(pattern: RegExp): RegExp {
     : new RegExp(pattern.source, `${pattern.flags}g`);
 }
 
+function markPatternMatchRedaction(
+  bitmap: boolean[],
+  input: string,
+  pattern: RegExp,
+  match: RegExpMatchArray,
+): void {
+  if (match.index === undefined) {
+    return;
+  }
+  const fullMatch = match[0] ?? "";
+  if (fullMatch.includes("PRIVATE KEY-----")) {
+    markBitmapRange(bitmap, match.index, match.index + fullMatch.length);
+    return;
+  }
+  const selected = selectSecretCapture(
+    fullMatch,
+    match.slice(1).map((value) => (typeof value === "string" ? value : "")),
+  );
+  const tokenStart =
+    selected.value === fullMatch
+      ? 0
+      : getSecretCaptureStart(pattern, input, fullMatch, match.index, selected);
+  if (tokenStart < 0) {
+    return;
+  }
+  const secretValue = splitSecretValueForMask(selected.value);
+  markBitmapRange(
+    bitmap,
+    match.index + tokenStart + secretValue.maskStart,
+    match.index + tokenStart + secretValue.maskEnd,
+  );
+}
+
 export function computeSensitiveRedactionBitmap(
   text: string,
   resolved: ResolvedRedactOptions,
@@ -778,10 +879,7 @@ export function computeSensitiveRedactionBitmap(
   }
   for (const pattern of resolved.patterns) {
     for (const match of text.matchAll(cloneGlobalPattern(pattern))) {
-      if (match.index === undefined) {
-        continue;
-      }
-      markBitmapRange(bitmap, match.index, match.index + match[0].length);
+      markPatternMatchRedaction(bitmap, text, pattern, match);
     }
   }
   return bitmap;

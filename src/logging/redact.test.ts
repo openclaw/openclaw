@@ -301,6 +301,17 @@ describe("redactSensitiveText", () => {
     expect(output).not.toContain(secret);
   });
 
+  it("masks Bot authorization header tokens", () => {
+    const secret = `${"A".repeat(24)}.${"B".repeat(6)}.${"C".repeat(27)}`;
+    const output = redactSensitiveText(`Authorization: Bot ${secret}`, {
+      mode: "tools",
+      patterns: defaults,
+    });
+
+    expect(output).toBe("Authorization: Bot AAAAAA…CCCC");
+    expect(output).not.toContain(secret);
+  });
+
   it("masks named Gateway security headers", () => {
     const openClawToken = "supersecretgatewaytoken1234567890";
     const pomeriumJwt = "eyJheaderabcd.eyJpayloadabcd.signatureabcd123456";
@@ -935,7 +946,12 @@ describe("redactSensitiveText", () => {
       "ghu_abcdefghijklmnopqrstuvwxyz",
       "ghs_abcdefghijklmnopqrstuvwxyz",
       "ghr_abcdefghijklmnopqrstuvwxyz",
+      "glpat-abcdefghijklmnopqrstuvwxyz12.ab.abcdefghi",
+      `gloas-${"a".repeat(64)}`,
       ["xoxb", "1234567890", "abcdefghijklmnopqrstuvwxyz"].join("-"),
+      "https://hooks.slack.com/services/T1234567890/B1234567890/abcdefghijklmnopqrstuvwxy",
+      "https://discord.com/api/webhooks/123456789012345678/abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdef",
+      `discord bot token ${"A".repeat(24)}.${"B".repeat(6)}.${"C".repeat(27)}`,
       "AIzaabcdefghijklmnopqrstuvwxyzABCDE",
       "pplx-abcdefghijklmnopqrstuvwxyz",
       "fal_abcdefghijklmnopqrstuvwxyz",
@@ -944,6 +960,7 @@ describe("redactSensitiveText", () => {
       "gAAAAabcdefghijklmnopqrstuvwxyz123456",
       "AKIAABCDEFGHIJKLMNOP",
       "ASIAABCDEFGHIJKLMNOP",
+      "api_org_abcdefghijklmnopqrstuvwxyz12345678",
       ["sk", "live", "abcdefghijklmnopqrstuvwxyz"].join("_"),
       ["sk", "test", "abcdefghijklmnopqrstuvwxyz"].join("_"),
       ["rk", "live", "abcdefghijklmnopqrstuvwxyz"].join("_"),
@@ -952,6 +969,28 @@ describe("redactSensitiveText", () => {
       "pypi-abcdefghijklmnopqrstuvwxyz",
       "dop_v1_abcdefghijklmnopqrstuvwxyz",
       "doo_v1_abcdefghijklmnopqrstuvwxyz",
+      "dor_v1_abcdefghijklmnopqrstuvwxyz",
+      `dp.pt.${"A".repeat(43)}`,
+      `dckr_pat_${"A".repeat(27)}`,
+      `dckr_oat_${"B".repeat(32)}`,
+      `bkua_${"a".repeat(40)}`,
+      `CCIPAT_${"A".repeat(22)}_${"a".repeat(40)}`,
+      `sbp_${"a".repeat(40)}`,
+      `dapi${"a".repeat(32)}-1`,
+      `ddp_${"A".repeat(36)}`,
+      `glsa_${"A".repeat(41)}`,
+      `glc_eyJ${"A".repeat(80)}`,
+      `nfp_${"A".repeat(36)}`,
+      `CFPAT-${"A".repeat(43)}`,
+      `ATCTT3xFfG${"A".repeat(48)}=ABCDEF12`,
+      `ATATT${"A".repeat(48)}=ABCDEF12`,
+      `ATBB${"A".repeat(24)}`,
+      `BBDC-${"A".repeat(42)}`,
+      `HRKU-AA${"A".repeat(58)}`,
+      ["pat", "na1", "12345678", "1234", "1234", "1234", "123456789abc"].join("-"),
+      `apify_api_${"A".repeat(36)}`,
+      `FlyV1 fm123_${"A".repeat(120)}`,
+      `fio-u-${"A".repeat(64)}`,
       "am_abcdefghijklmnopqrstuvwxyz",
       "sk_abcdefghijklmnopqrstuvwxyz",
       "tvly-abcdefghijklmnopqrstuvwxyz",
@@ -980,7 +1019,7 @@ describe("redactSensitiveText", () => {
 
   it("does not redact ordinary identifiers containing short token-prefix substrings", () => {
     const input =
-      "npm_telegram_package_spec ask_openclaw_query_patterns team_management risk_assessment";
+      "npm_telegram_package_spec ask_openclaw_query_patterns team_management risk_assessment glpat-docs dapi-example sbp_short nfp_site CCIPAT_docs ATATT-example";
     const output = redactSensitiveText(input, {
       mode: "tools",
       patterns: defaults,
