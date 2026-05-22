@@ -2088,6 +2088,34 @@ export function listTasksForOwnerKey(ownerKey: string): TaskRecord[] {
   return listTasksFromIndex(taskIdsByOwnerKey, key);
 }
 
+export function listFreshTasksForOwnerKey(ownerKey: string): TaskRecord[] {
+  ensureTaskRegistryReady();
+  const key = normalizeOptionalString(ownerKey);
+  if (!key) {
+    return [];
+  }
+  const store = getTaskRegistryStore();
+  if (store.listTasksForOwnerKey) {
+    try {
+      const merged = new Map<string, TaskRecord>();
+      for (const task of store.listTasksForOwnerKey(key)) {
+        merged.set(task.taskId, cloneTaskRecord(normalizeTaskTimestamps(task)));
+      }
+      return [...merged.values()]
+        .map((task, insertionIndex) => Object.assign({}, task, { insertionIndex }))
+        .toSorted(compareTasksNewestFirst)
+        .map(({ insertionIndex: _, ...task }) => task);
+    } catch (error) {
+      log.warn("Failed to read fresh owner task registry records", {
+        ownerKey: key,
+        error,
+      });
+    }
+  }
+
+  return listTasksFromIndex(taskIdsByOwnerKey, key);
+}
+
 export function listTasksForFlowId(flowId: string): TaskRecord[] {
   ensureTaskRegistryReady();
   const key = flowId.trim();

@@ -1,6 +1,7 @@
 import type { HeartbeatToolResponse } from "../../auto-reply/heartbeat-tool-response.js";
 import type { CliSessionBinding, SessionSystemPromptReport } from "../../config/sessions/types.js";
 import type { DiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
+import type { AcceptedSessionSpawn } from "../accepted-session-spawn.js";
 import type { FallbackAttempt } from "../model-fallback.types.js";
 import type {
   MessagingToolSend,
@@ -34,6 +35,7 @@ export type EmbeddedPiAgentMeta = {
     output?: number;
     cacheRead?: number;
     cacheWrite?: number;
+    reasoningTokens?: number;
     total?: number;
   };
   /**
@@ -48,6 +50,7 @@ export type EmbeddedPiAgentMeta = {
     output?: number;
     cacheRead?: number;
     cacheWrite?: number;
+    reasoningTokens?: number;
     total?: number;
   };
 };
@@ -191,6 +194,8 @@ export type EmbeddedPiRunResult = {
   messagingToolSentTargets?: MessagingToolSend[];
   // Message-tool replies delivered to the active internal UI source.
   messagingToolSourceReplyPayloads?: MessagingToolSourceReplyPayload[];
+  // Child sessions successfully accepted by sessions_spawn during the run.
+  acceptedSessionSpawns?: AcceptedSessionSpawn[];
   // Structured heartbeat outcome recorded by the heartbeat response tool.
   heartbeatToolResponse?: HeartbeatToolResponse;
   // Count of successful cron.add tool calls in this run.
