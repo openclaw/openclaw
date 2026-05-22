@@ -1606,6 +1606,56 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
+  it("falls back to root Telegram group tool summaries for multi-account configs without account groups", async () => {
+    setNoAbort();
+    const cfg = {
+      ...automaticGroupReplyConfig,
+      channels: {
+        telegram: {
+          groups: {
+            "-1003234567890": {
+              verboseToolSummaries: true,
+            },
+          },
+          accounts: {
+            qa: {},
+            prod: {
+              groups: {
+                "-1004234567890": {
+                  requireMention: false,
+                },
+              },
+            },
+          },
+        },
+      },
+    } as const satisfies OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      AccountId: "qa",
+      ChatType: "group",
+      From: "telegram:group:-1003234567890",
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      const onToolResult = requireToolResultHandler(opts?.onToolResult);
+      await onToolResult({ text: "🔧 exec: date" });
+      return { text: "hi" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(1);
+    expect(firstToolResultPayload(dispatcher)?.text).toBe("🔧 exec: date");
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+  });
+
   it("does not inherit root Telegram group verbose summaries into scoped account groups", async () => {
     setNoAbort();
     const cfg = {

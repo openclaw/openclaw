@@ -235,12 +235,10 @@ function resolveTelegramGroupsForVerboseSummaries(
   accountId?: string | null,
 ): Record<string, TelegramVerboseGroupConfig | undefined> | undefined {
   const accountIds = Object.keys(telegram.accounts ?? {});
-  const account = resolveAccountEntry(telegram.accounts, normalizeAccountId(accountId)) as
-    | TelegramVerboseAccountConfig
-    | undefined;
+  const account = resolveAccountEntry(telegram.accounts, normalizeAccountId(accountId));
 
   if (accountIds.length > 1) {
-    return account?.groups;
+    return account?.groups ?? telegram.groups;
   }
   return hasConfiguredTelegramGroups(account?.groups) ? account?.groups : telegram.groups;
 }
