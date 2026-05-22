@@ -2,15 +2,27 @@
 // Normalizes package-acceptance inputs into the tarball shape consumed by Docker E2E.
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
+import { lookup as dnsLookupCb } from "node:dns";
+import { lookup as dnsLookup } from "node:dns/promises";
 import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
+import { isIP } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
+import { Agent } from "undici";
 
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_OUTPUT_NAME = "openclaw-current.tgz";
+const PACKAGE_URL_DOWNLOAD_TIMEOUT_MS = 60_000;
+const PACKAGE_URL_MAX_BYTES = 250 * 1024 * 1024;
+const PACKAGE_URL_MAX_REDIRECTS = 5;
+const BLOCKED_PACKAGE_HOSTNAMES = new Set([
+  "localhost",
+  "localhost.localdomain",
+  "metadata.google.internal",
+]);
 export const OPENCLAW_PACKAGE_SPEC_RE =
   /^openclaw@(alpha|beta|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-(alpha|beta)\.[1-9][0-9]*)?)$/u;
 
@@ -340,16 +352,266 @@ async function moveNewestPackedTarball(outputDir, packOutput, outputName) {
   return target;
 }
 
-async function downloadUrl(url, target) {
-  const parsed = new URL(url);
+function normalizeUrlHostname(hostname) {
+  return hostname.replace(/^\[/u, "").replace(/\]$/u, "").replace(/\.+$/u, "").toLowerCase();
+}
+
+function parseIpv4(address) {
+  const parts = address.split(".");
+  if (parts.length !== 4) {
+    return null;
+  }
+  const octets = parts.map((part) => Number(part));
+  if (octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)) {
+    return null;
+  }
+  return octets;
+}
+
+function ipv4ToInt(octets) {
+  return ((octets[0] << 24) >>> 0) + (octets[1] << 16) + (octets[2] << 8) + octets[3];
+}
+
+function ipv4InCidr(octets, base, bits) {
+  const mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0;
+  return (ipv4ToInt(octets) & mask) === (ipv4ToInt(base) & mask);
+}
+
+function isUnsafeIpv4(address) {
+  const octets = parseIpv4(address);
+  if (!octets) {
+    return true;
+  }
+  return [
+    [[0, 0, 0, 0], 8],
+    [[10, 0, 0, 0], 8],
+    [[100, 64, 0, 0], 10],
+    [[127, 0, 0, 0], 8],
+    [[169, 254, 0, 0], 16],
+    [[172, 16, 0, 0], 12],
+    [[192, 0, 0, 0], 24],
+    [[192, 0, 2, 0], 24],
+    [[192, 168, 0, 0], 16],
+    [[198, 18, 0, 0], 15],
+    [[198, 51, 100, 0], 24],
+    [[203, 0, 113, 0], 24],
+    [[224, 0, 0, 0], 4],
+    [[240, 0, 0, 0], 4],
+  ].some(([base, bits]) => ipv4InCidr(octets, base, bits));
+}
+
+function isUnsafeIpv6(address) {
+  const normalized = address.toLowerCase();
+  const embeddedIpv4 = normalized.match(/(?:::ffff:)?(\d{1,3}(?:\.\d{1,3}){3})$/u)?.[1];
+  if (embeddedIpv4 && isUnsafeIpv4(embeddedIpv4)) {
+    return true;
+  }
+  return (
+    normalized === "::" ||
+    normalized === "::1" ||
+    normalized.startsWith("fc") ||
+    normalized.startsWith("fd") ||
+    /^fe[89ab]/u.test(normalized) ||
+    normalized.startsWith("ff") ||
+    normalized.startsWith("64:ff9b:1:") ||
+    normalized.startsWith("100:") ||
+    normalized.startsWith("2001:2:") ||
+    normalized.startsWith("2001:db8:")
+  );
+}
+
+function isUnsafeIpAddress(address) {
+  const normalized = normalizeUrlHostname(address);
+  const family = isIP(normalized);
+  if (family === 4) {
+    return isUnsafeIpv4(normalized);
+  }
+  if (family === 6) {
+    return isUnsafeIpv6(normalized);
+  }
+  return true;
+}
+
+function isBlockedPackageHostname(hostname) {
+  const normalized = normalizeUrlHostname(hostname);
+  return (
+    BLOCKED_PACKAGE_HOSTNAMES.has(normalized) ||
+    normalized.endsWith(".localhost") ||
+    normalized.endsWith(".local") ||
+    normalized.endsWith(".internal") ||
+    (isIP(normalized) !== 0 && isUnsafeIpAddress(normalized))
+  );
+}
+
+function validatePackageDownloadUrl(parsed) {
   if (parsed.protocol !== "https:") {
-    throw new Error(`package_url must use https: ${url}`);
+    throw new Error(`package_url must use https: ${parsed.toString()}`);
   }
-  const response = await fetch(parsed);
-  if (!response.ok || !response.body) {
-    throw new Error(`failed to download package_url: HTTP ${response.status}`);
+  if (parsed.username || parsed.password) {
+    throw new Error(`package_url must not include credentials: ${parsed.origin}`);
   }
-  await pipeline(response.body, createWriteStream(target));
+  if (parsed.port && parsed.port !== "443") {
+    throw new Error(`package_url must use the default HTTPS port: ${parsed.origin}`);
+  }
+  if (isBlockedPackageHostname(parsed.hostname)) {
+    throw new Error(
+      `Blocked hostname or private/internal/special-use IP address: ${parsed.hostname}`,
+    );
+  }
+}
+
+async function defaultLookupHost(hostname) {
+  return await dnsLookup(hostname, { all: true, verbatim: true });
+}
+
+function normalizeLookupResults(results) {
+  const entries = Array.isArray(results) ? results : [results];
+  return entries
+    .map((entry) => ({ address: String(entry.address ?? ""), family: Number(entry.family ?? 0) }))
+    .filter((entry) => entry.address && (entry.family === 4 || entry.family === 6));
+}
+
+function createPinnedLookup(hostname, addresses) {
+  const normalizedHost = normalizeUrlHostname(hostname);
+  const records = addresses.map((address) => ({
+    address,
+    family: isIP(normalizeUrlHostname(address)),
+  }));
+  return (host, options, callback) => {
+    const cb = typeof options === "function" ? options : callback;
+    if (!cb) {
+      return;
+    }
+    if (normalizeUrlHostname(host) !== normalizedHost) {
+      if (typeof options === "function") {
+        dnsLookupCb(host, cb);
+        return;
+      }
+      dnsLookupCb(host, options, cb);
+      return;
+    }
+    const opts = typeof options === "object" && options !== null ? options : {};
+    const filtered = opts.family
+      ? records.filter((record) => record.family === opts.family)
+      : records;
+    const usable = filtered.length > 0 ? filtered : records;
+    if (opts.all) {
+      cb(null, usable);
+      return;
+    }
+    const chosen = usable[0];
+    cb(null, chosen.address, chosen.family);
+  };
+}
+
+async function resolvePackageDownloadAddresses(parsed, lookupHost) {
+  const hostname = normalizeUrlHostname(parsed.hostname);
+  if (isIP(hostname)) {
+    return [hostname];
+  }
+  const results = normalizeLookupResults(await lookupHost(hostname));
+  if (results.length === 0) {
+    throw new Error(`Unable to resolve package_url hostname: ${parsed.hostname}`);
+  }
+  const blocked = results.find((entry) => isUnsafeIpAddress(entry.address));
+  if (blocked) {
+    throw new Error(
+      `Blocked: package_url resolves to private/internal/special-use IP address: ${blocked.address}`,
+    );
+  }
+  return [...new Set(results.map((entry) => entry.address))];
+}
+
+async function openPackageDownloadResponse(url, options) {
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const lookupHost = options.lookupHost ?? defaultLookupHost;
+  const timeoutMs = options.timeoutMs ?? PACKAGE_URL_DOWNLOAD_TIMEOUT_MS;
+  const maxRedirects = options.maxRedirects ?? PACKAGE_URL_MAX_REDIRECTS;
+  let parsed = new URL(url);
+  for (let redirectCount = 0; redirectCount <= maxRedirects; redirectCount += 1) {
+    validatePackageDownloadUrl(parsed);
+    const addresses = await resolvePackageDownloadAddresses(parsed, lookupHost);
+    const dispatcher = new Agent({
+      connect: { lookup: createPinnedLookup(parsed.hostname, addresses) },
+    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    timeout.unref?.();
+    const response = await fetchImpl(parsed, {
+      dispatcher,
+      redirect: "manual",
+      signal: controller.signal,
+    }).catch(async (error) => {
+      clearTimeout(timeout);
+      await dispatcher.close();
+      if (error?.name === "AbortError") {
+        throw new Error(
+          `package_url download timed out after ${timeoutMs}ms: ${parsed.toString()}`,
+          {
+            cause: error,
+          },
+        );
+      }
+      throw error;
+    });
+
+    if ([301, 302, 303, 307, 308].includes(response.status)) {
+      clearTimeout(timeout);
+      await dispatcher.close();
+      const location = response.headers.get("location");
+      if (!location) {
+        throw new Error(`package_url redirect missing Location header: HTTP ${response.status}`);
+      }
+      parsed = new URL(location, parsed);
+      continue;
+    }
+    return { dispatcher, response, timeout, timeoutMs };
+  }
+  throw new Error(`package_url exceeded ${maxRedirects} redirects: ${url}`);
+}
+
+async function* limitResponseBody(body, maxBytes) {
+  let downloaded = 0;
+  for await (const chunk of body) {
+    const size = typeof chunk === "string" ? Buffer.byteLength(chunk) : chunk.byteLength;
+    downloaded += size;
+    if (downloaded > maxBytes) {
+      throw new Error(`package_url exceeds maximum download size of ${maxBytes} bytes`);
+    }
+    yield chunk;
+  }
+}
+
+export async function downloadUrl(url, target, options = {}) {
+  const maxBytes = options.maxBytes ?? PACKAGE_URL_MAX_BYTES;
+  const { dispatcher, response, timeout, timeoutMs } = await openPackageDownloadResponse(
+    url,
+    options,
+  );
+  const tempTarget = `${target}.tmp`;
+  try {
+    if (!response.ok || !response.body) {
+      throw new Error(`failed to download package_url: HTTP ${response.status}`);
+    }
+    const contentLength = Number(response.headers.get("content-length") ?? "");
+    if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+      throw new Error(`package_url exceeds maximum download size of ${maxBytes} bytes`);
+    }
+    await fs.rm(tempTarget, { force: true });
+    await pipeline(limitResponseBody(response.body, maxBytes), createWriteStream(tempTarget));
+    await fs.rename(tempTarget, target);
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error(`package_url download timed out after ${timeoutMs}ms: ${url}`, {
+        cause: error,
+      });
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+    await dispatcher.close();
+    await fs.rm(tempTarget, { force: true });
+  }
 }
 
 async function readPackageJson(tarball) {
