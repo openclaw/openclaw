@@ -248,6 +248,46 @@ describe("Windows startup fallback", () => {
     });
   });
 
+  it("falls back to a Startup-folder launcher when schtasks create returns Chinese access denied (zh-CN)", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      addStartupFallbackMissingResponses([
+        { code: 1, stdout: "", stderr: "错误: 拒绝访问。" },
+      ]);
+
+      await installGatewayScheduledTask(env);
+
+      await expect(fs.access(resolveStartupEntryPath(env))).resolves.toBeUndefined();
+      expectStartupFallbackSpawn();
+    });
+  });
+
+  it("falls back to a Startup-folder launcher when schtasks create returns Japanese access denied (ja-JP)", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      addStartupFallbackMissingResponses([
+        { code: 1, stdout: "", stderr: "エラー: アクセスが拒否されました。" },
+      ]);
+
+      await installGatewayScheduledTask(env);
+
+      await expect(fs.access(resolveStartupEntryPath(env))).resolves.toBeUndefined();
+      expectStartupFallbackSpawn();
+    });
+  });
+
+  it("falls back to a Startup-folder launcher when schtasks create returns exit code 1 with unknown locale", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      // exit code 1 is locale-independent — should always trigger fallback
+      addStartupFallbackMissingResponses([
+        { code: 1, stdout: "", stderr: "\u041e\u0448\u0438\u0431\u043a\u0430: \u043e\u0442\u043a\u0430\u0437\u0430\u043d\u043e \u0432 \u0434\u043e\u0441\u0442\u0443\u043f\u0435." },
+      ]);
+
+      await installGatewayScheduledTask(env);
+
+      await expect(fs.access(resolveStartupEntryPath(env))).resolves.toBeUndefined();
+      expectStartupFallbackSpawn();
+    });
+  });
+
   it("falls back to a Startup-folder launcher when schtasks create hangs", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       addStartupFallbackMissingResponses([

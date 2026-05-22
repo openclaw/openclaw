@@ -37,7 +37,16 @@ function resolveTaskName(env: GatewayServiceEnv): string {
 
 function shouldFallbackToStartupEntry(params: { code: number; detail: string }): boolean {
   return (
-    /(?:access is denied|acceso denegado)/i.test(params.detail) ||
+    // Exit code 1 is schtasks' locale-independent access-denied signal — match it
+    // regardless of the error message language so non-English Windows locales
+    // (Chinese, Japanese, Korean, French, German, Russian, …) also fall back to
+    // the Startup folder shortcut instead of throwing.
+    params.code === 1 ||
+    // Retain the original English/Spanish text matches for context-rich logging
+    // and the additional locale variants reported in issue #85255.
+    /(?:access is denied|acceso denegado|拒绝访问|拒絕存取|アクセスが拒否|zugriff verweigert|accès refusé|отказано в доступе|액세스가 거부)/i.test(
+      params.detail,
+    ) ||
     params.code === 124 ||
     /schtasks timed out/i.test(params.detail) ||
     /schtasks produced no output/i.test(params.detail)
