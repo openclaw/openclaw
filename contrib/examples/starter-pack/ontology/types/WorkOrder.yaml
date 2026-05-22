@@ -1,0 +1,28 @@
+id: WorkOrder
+name: WorkOrder
+displayName: 工单
+description: |
+  维修/处置工单。由 Playbook 自动创建，工程师认领后关闭。
+primaryKey: work_order_id
+fields:
+  - name: work_order_id
+    type: string
+    required: true
+    description: 工单编号（自动生成）
+  - name: equipment_id
+    type: string
+    required: true
+    foreign_key: Equipment
+    description: 关联设备
+  - name: description
+    type: string
+    description: 问题描述
+  - name: diagnosis
+    type: string
+    description: LLM 诊断结论
+  - name: status
+    type: string
+    description: 工单状态（open / in_progress / closed）
+  - name: created_at
+    type: date
+    description: 创建时间

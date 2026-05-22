@@ -1,0 +1,47 @@
+id: welcome_new_user
+name: 新用户欢迎
+pack: starter-pack
+priority: 90
+description: |
+  用户首次交互时触发欢迎流程：
+  1. 获取机器人身份信息
+  2. 发送欢迎消息（含能力介绍）
+  3. 将用户记录到 UserProfile
+
+trigger:
+  kind: event
+  pattern: user.first_interaction
+
+steps:
+  - id: get_identity
+    kind: action
+    actionApiName: system.describe
+    params: {}
+    output: identity
+
+  - id: welcome_msg
+    kind: notification
+    message: |
+      👋 你好，{{ payload.user_name or payload.user_id }}！我是 {{ robot.name }}。
+
+      我可以帮助你：
+      • 🔔 查询和处置设备报警
+      • 📋 创建和跟踪工单
+      • 📚 查询知识库
+      • 📊 生成运营报告
+      • ⚙️ 系统状态监控
+
+      有什么我可以帮你的吗？
+    channels:
+      - "{{ payload.channel or 'default' }}"
+
+  - id: record_user
+    kind: action
+    actionApiName: observe.audit_log
+    params:
+      event_type: user.welcomed
+      actor: claworks-robot
+      target: "{{ payload.user_id }}"
+      payload:
+        channel: "{{ payload.channel }}"
+        welcomed_at: "{{ now }}"

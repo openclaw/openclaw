@@ -1,0 +1,35 @@
+id: starter.kb_lookup
+name: 知识库查询
+pack: starter-imperative
+description: 演示如何直接使用动作原语编写 Playbook（命令式风格）。
+trigger:
+  kind: event
+  pattern: starter.lookup_requested
+steps:
+  - kind: action
+    id: search
+    action: kb.search
+    params:
+      query: "{{ event.payload.query }}"
+      limit: 3
+    store_result_as: results
+
+  - kind: condition
+    id: has_result
+    if: "{{ results.results | length > 0 }}"
+    then:
+      - kind: action
+        id: reply
+        action: comms.send
+        params:
+          channel: "{{ event.source }}"
+          message: "📚 {{ results.results[0].content | truncate(300) }}"
+        on_failure: continue
+    else:
+      - kind: action
+        id: no_result
+        action: comms.send
+        params:
+          channel: "{{ event.source }}"
+          message: "暂无相关内容。"
+        on_failure: continue

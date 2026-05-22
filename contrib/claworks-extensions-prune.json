@@ -1,0 +1,41 @@
+{
+  "description": "Extension physical prune for ClaWorks (Feishu-first). Run: pnpm claworks:prune-extensions:apply",
+  "prune": [
+    "comfy",
+    "imessage",
+    "inworld",
+    "line",
+    "migrate-claude",
+    "migrate-hermes",
+    "nostr",
+    "phone-control",
+    "qqbot",
+    "tlon",
+    "twitch",
+    "zalo",
+    "zalouser",
+    "video-generation-core",
+    "discord",
+    "telegram",
+    "slack",
+    "msteams",
+    "matrix",
+    "nextcloud-talk",
+    "mattermost",
+    "signal",
+    "whatsapp",
+    "bluebubbles",
+    "irc",
+    "google-chat",
+    "voice-call"
+  ],
+  "deferred": [
+    { "id": "wechat", "reason": "may enable later for WeChat channel" },
+    { "id": "google-meet", "reason": "Tencent Meeting user may wire Google Meet later" }
+  ],
+  "notes": {
+    "batch1": "Consumer / unused migration / video gen",
+    "batch2": "Unused IM channels for personal_work (keep feishu)",
+    "deferred": "Enable later if you wire WeChat or Google Meet plugins"
+  }
+}

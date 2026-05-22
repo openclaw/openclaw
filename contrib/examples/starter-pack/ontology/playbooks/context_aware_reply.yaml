@@ -1,0 +1,73 @@
+id: context_aware_reply
+name: 上下文感知追问回复
+pack: starter-pack
+priority: 1100
+description: |
+  当用户消息是对上一条机器人回复的追问（上下文存在 + 意图置信度较低）时，
+  携带历史上下文调用 LLM 直接回复，避免跳转到 Playbook 路由造成割裂感。
+  优先级 1100，高于普通 IM 消息处理（100），仅在上下文明确时介入。
+
+trigger:
+  kind: event
+  pattern: im.message_received
+
+steps:
+  # ── 1. 检索该用户的最近一条机器人回复 ──────────────────────────────
+  - id: load_last_reply
+    kind: action
+    actionApiName: memory.search
+    params:
+      query: "last_bot_reply"
+      namespace: "bot_replies_{{ payload.user_id }}"
+      limit: 1
+    output: last_reply
+    on_failure: continue
+
+  # ── 2. 分类当前消息意图（获取置信度）──────────────────────────────
+  - id: classify_intent
+    kind: action
+    actionApiName: perceive.intent
+    params:
+      text: "{{ payload.text }}"
+      user_id: "{{ payload.user_id }}"
+    output: intent_result
+    on_failure: continue
+
+  # ── 3. 仅当：有上文 AND 意图置信度 < 0.55（疑似追问）时，生成上下文回复 ──
+  - id: context_reply
+    kind: action
+    condition: "steps.load_last_reply.result.results and steps.load_last_reply.result.results | length > 0 and steps.classify_intent.result.confidence < 0.55"
+    actionApiName: llm.complete
+    params:
+      prompt: |
+        你是工业助手。以下是最近一次对话上下文。
+        ——上文——
+        {{ steps.load_last_reply.result.results[0].content | truncate(300) }}
+        ——用户追问——
+        {{ payload.text }}
+        ——要求——
+        请结合上文，简洁准确地回答用户的追问（不超过 150 字）。
+      max_tokens: 300
+    output: reply
+    on_failure: continue
+
+  # ── 4. 发送上下文感知回复 ────────────────────────────────────────
+  - id: send_context_reply
+    kind: notification
+    condition: "steps.context_reply.result.text"
+    message: "{{ steps.context_reply.result.text }}"
+    channels:
+      - "{{ payload.channel }}"
+
+  # ── 5. 将本次机器人回复存入记忆，供下一轮追问使用 ──────────────
+  - id: store_reply
+    kind: action
+    condition: "steps.context_reply.result.text"
+    actionApiName: kb.ingest
+    params:
+      content: "{{ steps.context_reply.result.text }}"
+      metadata:
+        source: "context_aware_reply"
+        namespace: "bot_replies_{{ payload.user_id }}"
+        user_id: "{{ payload.user_id }}"
+    on_failure: continue

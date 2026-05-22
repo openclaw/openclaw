@@ -1,0 +1,13 @@
+{
+  "id": "starter-declarative",
+  "name": "声明式入门示例 Pack",
+  "version": "0.1.0",
+  "description": "零代码示例：用通用框架实现每日数据摘要报告。只有 YAML + JSON，无 TypeScript 代码。",
+  "license": "MIT",
+  "requires": [{ "id": "core" }],
+  "provides": {
+    "objectTypes": [],
+    "playbooks": ["starter-declarative.on_daily_summary"],
+    "actionTypes": []
+  }
+}

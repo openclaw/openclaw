@@ -1,0 +1,26 @@
+id: starter.echo_message
+name: 消息回显（命令式示例）
+pack: starter-imperative
+description: |
+  接收 IM 消息并原路回显，演示命令式 Playbook 编写方式。
+  直接使用 comms.send 动作原语，不依赖通用框架。
+  适合快速接入：改一改 message 内容就能集成自己的业务。
+trigger:
+  kind: event
+  pattern: "starter.echo_requested"
+steps:
+  - kind: action
+    id: send_echo
+    action: comms.send
+    params:
+      channel: "{{ event.payload.channel | default(event.source) }}"
+      message: "🔁 您说：{{ event.payload.text }}"
+    on_failure: continue
+
+  - kind: action
+    id: audit
+    action: observe.audit_log
+    params:
+      event_type: "starter.echo_sent"
+      target: "{{ event.source }}"
+    on_failure: continue

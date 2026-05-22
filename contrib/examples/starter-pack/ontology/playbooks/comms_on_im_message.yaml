@@ -1,0 +1,129 @@
+id: comms_on_im_message
+name: IM 消息完整处理流程
+pack: starter-pack
+priority: 100
+description: |
+  完整的 IM 消息 5 层处理架构：
+  L0  情感感知（紧急时立即 ACK）
+  L1  规则引擎（无 LLM，最快响应）
+  L2  结构化意图分类（弱 LLM）
+  L3  KB 快速问答（命中知识库直接回复）
+  L4  Playbook 路由（按 intent 触发业务流）
+  L5  学习 + 优雅兜底
+
+trigger:
+  kind: event
+  pattern: im.message_received
+
+steps:
+  # ── L0: 情感感知（快速，不阻塞后续步骤） ──────────────────────────
+  - id: sentiment_check
+    kind: action
+    actionApiName: perceive.sentiment
+    params:
+      text: "{{ payload.text }}"
+    output: sentiment
+
+  - id: urgent_ack
+    kind: notification
+    condition: "steps.sentiment_check.result.sentiment == 'urgent' or steps.sentiment_check.result.sentiment == 'angry'"
+    message: "⚡ 收到，马上处理！"
+    channels:
+      - "{{ payload.channel }}"
+
+  # ── L1: 规则引擎（无 LLM，最快响应） ──────────────────────────────
+  - id: rule_eval
+    kind: action
+    actionApiName: rule.evaluate
+    params:
+      table: im.quick_rules
+      context:
+        text: "{{ payload.text }}"
+        user_id: "{{ payload.user_id }}"
+        channel: "{{ payload.channel }}"
+    output: rule_result
+
+  - id: rule_reply
+    kind: notification
+    condition: "steps.rule_eval.result.matched == true"
+    message: "{{ steps.rule_eval.result.reply }}"
+    channels:
+      - "{{ payload.channel }}"
+
+  # ── L2: 结构化意图分类（弱 LLM 友好） ─────────────────────────────
+  - id: classify_intent
+    kind: action
+    condition: "steps.rule_eval.result.matched != true"
+    actionApiName: perceive.intent
+    params:
+      text: "{{ payload.text }}"
+      user_id: "{{ payload.user_id }}"
+      session_id: "{{ payload.session_id or payload.user_id }}"
+      channel: "{{ payload.channel }}"
+    output: intent_result
+
+  - id: clarify_if_needed
+    kind: action
+    condition: "steps.classify_intent.result.confidence < 0.55"
+    actionApiName: perceive.needs_clarification
+    params:
+      text: "{{ payload.text }}"
+      intent_confidence: "{{ steps.classify_intent.result.confidence }}"
+    output: clarification
+
+  - id: send_clarification
+    kind: notification
+    condition: "steps.clarify_if_needed.result.needs_clarification == true"
+    message: "{{ steps.clarify_if_needed.result.question }}"
+    channels:
+      - "{{ payload.channel }}"
+
+  # ── L3: KB 快速问答 ────────────────────────────────────────────────
+  - id: kb_search
+    kind: action
+    condition: "steps.classify_intent.result.intent == 'kb_query' and steps.clarify_if_needed.result.needs_clarification != true"
+    actionApiName: memory.search
+    params:
+      query: "{{ payload.text }}"
+      limit: 3
+    output: kb_results
+
+  - id: kb_reply
+    kind: notification
+    condition: "steps.kb_search.result.results and steps.kb_search.result.results | length > 0"
+    message: "{{ steps.kb_search.result.results[0].content }}"
+    channels:
+      - "{{ payload.channel }}"
+
+  # ── L4: Playbook 路由（按 intent 触发业务流） ─────────────────────
+  - id: route_intent
+    kind: function
+    condition: "steps.classify_intent.result.confidence >= 0.55 and steps.clarify_if_needed.result.needs_clarification != true and steps.rule_eval.result.matched != true"
+    functionApiName: publish_event_from_intent
+    params:
+      intent: "{{ steps.classify_intent.result.intent }}"
+      extracted: "{{ steps.classify_intent.result.extracted }}"
+      source: "im-bridge:comms_on_im_message"
+      correlation_id: "{{ payload.message_id }}"
+    output: route_result
+
+  # ── L5: 学习 + 优雅兜底 ───────────────────────────────────────────
+  - id: learn_interaction
+    kind: action
+    condition: "steps.classify_intent.result.intent and steps.classify_intent.result.intent != 'unknown'"
+    actionApiName: learn.from_interaction
+    params:
+      input: "{{ payload.text }}"
+      intent: "{{ steps.classify_intent.result.intent }}"
+      response: "{{ steps.kb_reply.result.message or steps.rule_reply.result.message or '已路由到业务流程' }}"
+      feedback_score: 0.8
+
+  - id: fallback_reply
+    kind: notification
+    condition: "steps.route_result.result.status == 'skipped' or steps.classify_intent.result.intent == 'unknown'"
+    message: |
+      我理解你的意思，但还不确定该如何处理。可以试试：
+      • 直接说"创建工单"、"查询报警"等指令
+      • 或者 @我 + 具体问题
+    channels:
+      - "{{ payload.channel }}"

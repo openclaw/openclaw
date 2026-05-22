@@ -1,0 +1,12 @@
+{
+  "id": "starter-pack",
+  "name": "Starter Pack",
+  "version": "0.1.0",
+  "description": "ClaWorks 入门示范 Pack — 演示 ObjectType + Playbook + HITL 全链路",
+  "license": "MIT",
+  "provides": {
+    "objectTypes": ["Equipment", "WorkOrder"],
+    "playbooks": ["on_alarm_received", "daily_health_check"],
+    "actionTypes": []
+  }
+}

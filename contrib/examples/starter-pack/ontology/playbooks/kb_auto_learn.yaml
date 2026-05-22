@@ -1,0 +1,33 @@
+id: kb_auto_learn
+name: 知识库自动学习
+pack: starter-pack
+priority: 50
+description: |
+  当新文档被添加到知识库时自动触发学习流程：
+  1. 记录文档摄入审计日志
+  2. 发布学习完成事件（供其他 Playbook 监听）
+
+trigger:
+  kind: event
+  pattern: kb.document_added
+
+steps:
+  - id: record_ingest
+    kind: action
+    actionApiName: observe.audit_log
+    params:
+      event_type: kb.document_ingested
+      actor: kb-auto-learn
+      target: "{{ payload.document_id or payload.id }}"
+      payload:
+        title: "{{ payload.title }}"
+        source: "{{ payload.source }}"
+        namespace: "{{ payload.namespace }}"
+        layer: "{{ payload.layer }}"
+
+  - id: notify_learned
+    kind: notification
+    message: |
+      📚 知识库已学习新文档：{{ payload.title or payload.document_id or '(无标题)' }}
+      来源：{{ payload.source or '手动录入' }}
+      命名空间：{{ payload.namespace or 'default' }}

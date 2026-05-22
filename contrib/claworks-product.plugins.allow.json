@@ -1,24 +1,28 @@
 {
-  "description": "ClaWorks product profile — plugins.allow for industrial robot deployments (see docs/design/FORK-MODIFICATION-PLAN.md)",
+  "description": "ClaWorks product profile — plugins.allow (see docs/design/PERSONAL-ENTERPRISE.md)",
   "core": [
     "claworks-robot",
     "feishu",
-    "telegram",
-    "discord",
     "webhooks",
     "memory-core",
     "memory-lancedb",
     "skill-workshop",
     "openai",
-    "anthropic",
-    "ollama",
     "file-transfer",
-    "document-extract",
-    "diagnostics-prometheus",
-    "diagnostics-otel",
-    "qa-lab",
-    "qa-channel"
+    "document-extract"
+  ],
+  "personal_work": [
+    "claworks-robot",
+    "feishu",
+    "webhooks",
+    "memory-core",
+    "memory-lancedb",
+    "skill-workshop",
+    "openai",
+    "file-transfer",
+    "document-extract"
   ],
   "optional_domestic_llm": ["qwen", "deepseek", "moonshot", "litellm", "openrouter"],
-  "optional_enterprise": ["msteams", "slack", "google", "microsoft", "browser", "web-fetch", "tavily", "brave"]
+  "optional_enterprise": ["msteams", "slack", "google", "microsoft", "browser", "tavily", "brave"],
+  "optional_dev_only": ["qa-lab", "qa-channel", "qa-matrix", "diagnostics-prometheus", "diagnostics-otel"]
 }

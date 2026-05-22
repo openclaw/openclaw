@@ -24,13 +24,14 @@ Configure in `claworks.json` under `plugins.entries.claworks-robot.config.connec
 }
 ```
 
-| Preset      | Bridge                           | Live mode                                             |
-| ----------- | -------------------------------- | ----------------------------------------------------- |
-| `echo`      | `echo/echo-bridge.mjs`           | test only                                             |
-| `rest-poll` | `rest-poll/rest-poll-bridge.mjs` | HTTP polling                                          |
-| `mqtt`      | `mqtt/mqtt-bridge.mjs`           | `npm install mqtt` + unset `CLAWORKS_MQTT_SIMULATE`   |
-| `opcua`     | `opcua/opcua-bridge.py`          | `pip install asyncua` + `CLAWORKS_OPCUA_SIMULATE=0`   |
-| `modbus`    | `modbus/modbus-bridge.py`        | `pip install pymodbus` + `CLAWORKS_MODBUS_SIMULATE=0` |
+| Preset          | Bridge                                   | Live mode                                                    |
+| --------------- | ---------------------------------------- | ------------------------------------------------------------ |
+| `echo`          | `echo/echo-bridge.mjs`                   | test only                                                    |
+| `rest-poll`     | `rest-poll/rest-poll-bridge.mjs`         | HTTP polling                                                 |
+| `mqtt`          | `mqtt/mqtt-bridge.mjs`                   | `npm install mqtt` + unset `CLAWORKS_MQTT_SIMULATE`          |
+| `opcua`         | `opcua/opcua-bridge.py`                  | `pip install asyncua` + `CLAWORKS_OPCUA_SIMULATE=0`          |
+| `modbus`        | `modbus/modbus-bridge.py`                | `pip install pymodbus` + `CLAWORKS_MODBUS_SIMULATE=0`        |
+| `filesystem-kb` | `filesystem-kb/filesystem-kb-bridge.mjs` | `CLAWORKS_KB_WATCH_DIRS`; auto_start; emits `kb.folder_sync` |
 
 ## Invoke from REST
 

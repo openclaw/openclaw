@@ -1,0 +1,129 @@
+id: daily_briefing
+name: 每日工作简报（主动推送）
+pack: starter-pack
+priority: 40
+description: |
+  工作日早 8 点主动生成并推送飞书互动日报卡片。
+
+  三步分工策略（弱模型安全）：
+    Step 1 — Skill（纯脚本）：查询数据 + 统计聚合，不依赖 LLM
+    Step 2 — LLM scaffold：只生成 ≤100 字摘要文字，few-shot 约束输出格式
+    Step 3 — Skill（纯脚本）：调用 card.build_daily_report 组装飞书卡片
+    Step 4 — notify.dispatch：发送给运营角色
+
+trigger:
+  kind: schedule
+  cron: "0 8 * * 1-5"
+  timezone: Asia/Shanghai
+
+steps:
+  # ── Step 1: 并发查询数据 ──────────────────────────────────────────────
+  - id: query_active_alarms
+    kind: action
+    actionApiName: objectstore.query
+    params:
+      type_name: Alarm
+      filters:
+        status: active
+      limit: 50
+    output: active_alarms
+
+  - id: query_open_orders
+    kind: action
+    actionApiName: objectstore.query
+    params:
+      type_name: WorkOrder
+      filters:
+        status: open
+      limit: 50
+    output: open_orders
+
+  - id: query_completed_today
+    kind: action
+    actionApiName: objectstore.query
+    params:
+      type_name: WorkOrder
+      filters:
+        status: closed
+        closed_date: "{{ _today }}"
+      limit: 100
+    output: completed_today
+
+  # ── Step 1 Skill: 聚合统计（全部纯脚本，不调 LLM） ────────────────────
+  - id: count_alarms
+    kind: skill
+    skill_id: array.aggregate
+    input:
+      items: "{{ active_alarms }}"
+      op: count
+    output: alarm_stats
+
+  - id: count_orders
+    kind: skill
+    skill_id: array.aggregate
+    input:
+      items: "{{ open_orders }}"
+      op: count
+    output: order_stats
+
+  - id: count_completed
+    kind: skill
+    skill_id: array.aggregate
+    input:
+      items: "{{ completed_today }}"
+      op: count
+    output: completed_stats
+
+  - id: format_date
+    kind: skill
+    skill_id: time.format
+    input:
+      format: "YYYY-MM-DD"
+    output: date_info
+
+  # ── Step 2: LLM scaffold — 仅生成摘要文字（≤100字） ──────────────────
+  - id: generate_summary
+    kind: llm
+    prompt: |
+      你是工业生产助手，请用中文写一段简短摘要（≤100字，纯文本，不含任何 JSON/Markdown）。
+
+      示例（输入→输出）：
+      报警3条，工单12条，完成8条 → 今日生产运行平稳，共有3条活跃报警和12个待处理工单，已完成8项任务。
+      报警8条，工单20条，完成5条 → 今日生产存在一定压力，8条报警和20个工单待处理，完成5项，请重点关注。
+
+      当前数据：报警{{ alarm_stats.result }}条，工单{{ order_stats.result }}条，完成{{ completed_stats.result }}条
+
+      仅输出摘要文字：
+    output: summary_text
+
+  # ── Step 3: Skill — 组装飞书卡片（纯代码） ────────────────────────────
+  - id: build_daily_card
+    kind: skill
+    skill_id: card.build_daily_report
+    input:
+      date: "{{ date_info.formatted }}"
+      summary: "{{ summary_text }}"
+      alarm_count: "{{ alarm_stats.result }}"
+      work_order_count: "{{ order_stats.result }}"
+      completed_task_count: "{{ completed_stats.result }}"
+    output: daily_card
+
+  # ── Step 4: 发送 ──────────────────────────────────────────────────────
+  - id: send_daily_report
+    kind: notification
+    message: "{{ summary_text }}"
+    card: "{{ daily_card.feishu_card }}"
+
+  # ── Step 5: 审计日志 ───────────────────────────────────────────────────
+  - id: record_audit
+    kind: action
+    actionApiName: observe.audit_log
+    params:
+      event_type: briefing.sent
+      actor: scheduler
+      payload:
+        date: "{{ date_info.formatted }}"
+        alarms: "{{ alarm_stats.result }}"
+        orders: "{{ order_stats.result }}"
+        completed: "{{ completed_stats.result }}"
+    on_failure: continue

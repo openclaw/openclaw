@@ -1,0 +1,13 @@
+{
+  "id": "starter-imperative",
+  "name": "Starter Pack（命令式）",
+  "version": "0.1.0",
+  "description": "命令式示例 Pack — 直接使用动作原语，演示事件触发 + 消息回显。适合快速集成自有业务。",
+  "author": "ClaWorks Team",
+  "license": "MIT",
+  "provides": {
+    "objectTypes": [],
+    "playbooks": ["echo_message"],
+    "actionTypes": []
+  }
+}

@@ -1,0 +1,65 @@
+id: auto_kb_query
+name: 自动知识库查询
+pack: starter-pack
+priority: 800
+description: |
+  当消息被意图分类为 kb_query / knowledge_query 时，自动搜索知识库：
+  - 命中（score > 0.7）：直接回复最相关内容
+  - 未命中：温和告知 + 记录知识缺口（用于后续 evolution 改进）
+
+trigger:
+  kind: event
+  pattern: intent.knowledge_query
+
+steps:
+  # ── 1. 知识库语义搜索 ─────────────────────────────────────────────
+  - id: kb_search
+    kind: action
+    actionApiName: kb.search
+    params:
+      query: "{{ payload.text }}"
+      limit: 3
+    output: results
+
+  # ── 2a. 命中高质量结果 → 直接回复 ─────────────────────────────────
+  - id: reply_with_result
+    kind: notification
+    condition: "steps.kb_search.result.results and steps.kb_search.result.results | length > 0 and steps.kb_search.result.results[0].score > 0.7"
+    message: |
+      📚 {{ steps.kb_search.result.results[0].content | truncate(400) }}
+      {% if steps.kb_search.result.results | length > 1 %}
+      _另有 {{ (steps.kb_search.result.results | length) - 1 }} 条相关内容，可进一步询问。_
+      {% endif %}
+    channels:
+      - "{{ payload.source or payload.channel }}"
+
+  # ── 2b. 未命中 → 告知用户 + 记录知识缺口 ─────────────────────────
+  - id: no_result_reply
+    kind: notification
+    condition: "not (steps.kb_search.result.results and steps.kb_search.result.results | length > 0 and steps.kb_search.result.results[0].score > 0.7)"
+    message: "我的知识库中暂无关于「{{ payload.text | truncate(30) }}」的内容，已记录您的问题，后续会补充。"
+    channels:
+      - "{{ payload.source or payload.channel }}"
+
+  - id: record_knowledge_gap
+    kind: action
+    condition: "not (steps.kb_search.result.results and steps.kb_search.result.results | length > 0 and steps.kb_search.result.results[0].score > 0.7)"
+    actionApiName: learn.from_interaction
+    params:
+      input: "{{ payload.text }}"
+      intent: knowledge_query
+      response: "no_answer"
+      feedback_score: 0.1
+    on_failure: continue
+
+  # ── 3. 记录 CBR 案例（无论命中与否，积累问答对） ─────────────────
+  - id: record_cbr
+    kind: action
+    actionApiName: cbr.record
+    params:
+      context:
+        query: "{{ payload.text | truncate(100) }}"
+        user_id: "{{ payload.user_id }}"
+      action: kb_query
+      outcome: "{{ 'answered' if steps.kb_search.result.results and steps.kb_search.result.results | length > 0 else 'no_answer' }}"
+    on_failure: continue

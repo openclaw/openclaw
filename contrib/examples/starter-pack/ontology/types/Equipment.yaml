@@ -1,0 +1,24 @@
+id: Equipment
+name: Equipment
+displayName: 设备
+description: |
+  工业设备记录。每台设备对应一条 Equipment 对象。
+primaryKey: equipment_id
+fields:
+  - name: equipment_id
+    type: string
+    required: true
+    description: 设备唯一编号（如 PUMP-001）
+  - name: name
+    type: string
+    required: true
+    description: 设备名称
+  - name: status
+    type: string
+    description: 运行状态（running / stopped / fault）
+  - name: location
+    type: string
+    description: 所在位置（车间/区域）
+  - name: last_alarm_at
+    type: date
+    description: 最近一次告警时间

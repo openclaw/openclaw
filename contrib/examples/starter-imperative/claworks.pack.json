@@ -1,0 +1,13 @@
+{
+  "id": "starter-imperative",
+  "name": "命令式入门示例 Pack",
+  "version": "0.1.0",
+  "description": "命令式示例：直接编写步骤序列处理自定义事件。无需通用框架，适合独特业务逻辑。",
+  "license": "MIT",
+  "requires": [{ "id": "core" }],
+  "provides": {
+    "objectTypes": [],
+    "playbooks": ["starter-imperative.on_threshold_exceeded"],
+    "actionTypes": []
+  }
+}

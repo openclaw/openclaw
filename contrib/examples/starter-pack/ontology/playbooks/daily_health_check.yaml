@@ -1,0 +1,52 @@
+id: daily_health_check
+name: 每日设备健康巡检
+pack: starter-pack
+priority: 30
+description: |
+  每天早上 8 点自动扫描所有 Equipment 对象，
+  用 LLM 汇总近期告警趋势，推送日报给运营人员。
+
+trigger:
+  kind: schedule
+  cron: "0 8 * * *"
+  timezone: Asia/Shanghai
+
+steps:
+  - id: list_equipment
+    kind: action
+    actionApiName: objectstore.query
+    params:
+      type_name: Equipment
+    output: all_equipment
+
+  - id: list_open_work_orders
+    kind: action
+    actionApiName: objectstore.query
+    params:
+      type_name: WorkOrder
+      filters:
+        status: open
+    output: open_orders
+
+  - id: llm_summary
+    kind: llm
+    prompt: |
+      今日设备健康报告请求（{{ robot.name }}）
+
+      在线设备（{{ steps.all_equipment.result | length }} 台）：
+      {{ steps.all_equipment.result }}
+
+      待处置工单（{{ steps.open_orders.result | length }} 条）：
+      {{ steps.open_orders.result }}
+
+      请生成一份简洁的中文日报：
+      - 设备总体状况
+      - 需关注的重点问题（如有）
+      - 建议行动
+    output: report
+
+  - id: send_report
+    kind: notification
+    message: |
+      📊 每日设备健康报告
+      {{ steps.llm_summary.result }}

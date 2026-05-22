@@ -1,0 +1,13 @@
+{
+  "id": "starter-declarative",
+  "name": "Starter Pack（声明式）",
+  "version": "0.1.0",
+  "description": "最简声明式示例 Pack — 只有 YAML，无任何 TypeScript 代码。演示定时触发 + 通知广播。",
+  "author": "ClaWorks Team",
+  "license": "MIT",
+  "provides": {
+    "objectTypes": [],
+    "playbooks": ["morning_greeting"],
+    "actionTypes": []
+  }
+}

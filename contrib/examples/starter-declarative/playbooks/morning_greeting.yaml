@@ -1,0 +1,14 @@
+id: starter.morning_greeting
+name: 早安问候
+pack: starter-declarative
+description: 最简单的定时播报示例，零代码，使用通用广播框架。
+trigger:
+  kind: schedule
+  cron: "0 9 * * 1-5"
+steps:
+  - kind: call_playbook
+    playbook_id: "process.scheduled_broadcast"
+    params:
+      recipients: all_users
+      message_template: "🌅 早安！今天是工作日，祝工作顺利。"
+      priority: low

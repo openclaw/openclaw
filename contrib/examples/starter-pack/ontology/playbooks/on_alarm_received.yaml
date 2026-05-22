@@ -1,0 +1,95 @@
+id: on_alarm_received
+name: 设备告警处置
+pack: starter-pack
+priority: 80
+description: |
+  收到设备告警事件后：
+  1. 查询设备信息
+  2. LLM 诊断
+  3. 创建工单
+  4. HITL 通知工程师确认
+  5. 按决策推送结果
+
+trigger:
+  kind: event
+  pattern: alarm.created
+
+steps:
+  - id: query_equipment
+    kind: action
+    actionApiName: objectstore.query
+    params:
+      type_name: Equipment
+      filters:
+        equipment_id: "{{ event.payload.equipment_id }}"
+    output: equipment
+
+  - id: llm_diagnosis
+    kind: llm
+    prompt: |
+      设备信息：{{ steps.query_equipment.result }}
+      告警描述：{{ event.payload.description }}
+      告警级别：{{ event.payload.severity }}
+
+      请根据以上信息：
+      1. 分析可能的故障原因（1-2句）
+      2. 给出建议的处置措施
+      格式：原因：…\n措施：…
+    output: diagnosis
+
+  - id: create_work_order
+    kind: action
+    actionApiName: objectstore.create
+    params:
+      type_name: WorkOrder
+      object:
+        equipment_id: "{{ event.payload.equipment_id }}"
+        description: "{{ event.payload.description }}"
+        diagnosis: "{{ steps.llm_diagnosis.result }}"
+        status: open
+    output: work_order
+
+  - id: notify_engineer
+    kind: hitl
+    message: |
+      ⚠️ 设备告警 — {{ event.payload.equipment_id }}
+      {{ event.payload.description }}
+
+      诊断：{{ steps.llm_diagnosis.result }}
+      工单：{{ steps.create_work_order.result.work_order_id }}
+
+      请选择处置方式：
+    options:
+      - 立即派人处理
+      - 标记观察中
+      - 误报忽略
+    output: engineer_decision
+    timeout_seconds: 3600
+
+  - id: update_status
+    kind: condition
+    if: "steps.engineer_decision == '立即派人处理'"
+    then:
+      - id: update_wo_inprogress
+        kind: action
+        actionApiName: objectstore.update
+        params:
+          type_name: WorkOrder
+          id: "{{ steps.create_work_order.result.work_order_id }}"
+          patch:
+            status: in_progress
+      - id: confirm_dispatch
+        kind: notification
+        message: "✅ 工单 {{ steps.create_work_order.result.work_order_id }} 已派工"
+    else:
+      - id: update_wo_watching
+        kind: action
+        actionApiName: objectstore.update
+        params:
+          type_name: WorkOrder
+          id: "{{ steps.create_work_order.result.work_order_id }}"
+          patch:
+            status: "{{ steps.engineer_decision == '误报忽略' && 'closed' || 'open' }}"
+      - id: confirm_decision
+        kind: notification
+        message: "📋 工单 {{ steps.create_work_order.result.work_order_id }} 已标记：{{ steps.engineer_decision }}"

@@ -1,0 +1,18 @@
+{
+  "id": "starter_daily_summary",
+  "description": "每日摘要报告模板（示例）",
+  "prompt_template": "今天是 {date}。请生成一条简洁的每日摘要通知（不超过50字）。\n\n输出 JSON：{\"text\": \"摘要内容\"}",
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "text": { "type": "string" }
+    },
+    "required": ["text"]
+  },
+  "examples": [
+    {
+      "input": { "date": "2026-05-22" },
+      "output": { "text": "今日工作日报：系统运行正常，无异常事件。请各团队按计划推进工作，如有问题及时上报。" }
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "plugins": {
+    "allow": ["claworks-robot", "feishu"],
+    "entries": {
+      "claworks-robot": {
+        "enabled": true,
+        "config": {
+          "robot": {
+            "name": "alarm-robot",
+            "role": "alarm",
+            "host": "127.0.0.1",
+            "port": 18800
+          },
+          "a2a": {
+            "peers": [
+              {
+                "name": "maintenance-robot",
+                "url": "http://127.0.0.1:18801",
+                "description": "维修域机器人 — 独立 Gateway 实例"
+              }
+            ]
+          },
+          "packs": {
+            "installed": ["base", "process-industry"]
+          }
+        }
+      }
+    }
+  },
+  "gateway": {
+    "port": 18800
+  }
+}

@@ -1,0 +1,27 @@
+id: starter-declarative.on_daily_summary
+name: 每日摘要报告（声明式示例）
+pack: starter-declarative
+version: "1.0"
+description: |
+  示例：声明式开发方式。
+  只需配置参数，委派给通用 process.collect_and_report 框架执行。
+  无需编写任何 TypeScript 代码。
+
+trigger:
+  kind: schedule
+  cron: "0 9 * * 1-5"
+  timezone: Asia/Shanghai
+
+steps:
+  - id: daily_report
+    kind: call_playbook
+    playbook_id: "process.collect_and_report"
+    params:
+      # 使用 KB 内容作为数据源（无 collector_script，框架直接生成报告）
+      report_scaffold: "starter_daily_summary"
+      recipient_type: role
+      recipient_id: manager
+      report_type: daily_summary
+      context:
+        date: "{{ today() }}"
+        pack: "starter-declarative"

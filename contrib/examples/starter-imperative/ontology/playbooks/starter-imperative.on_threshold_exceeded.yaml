@@ -1,0 +1,86 @@
+id: starter-imperative.on_threshold_exceeded
+name: 阈值超限处理（命令式示例）
+pack: starter-imperative
+version: "1.0"
+description: |
+  示例：命令式开发方式。
+  直接编写步骤序列，处理"某指标超出阈值"的事件。
+  无需通用框架，逻辑完全自主控制。
+
+  事件载荷（trigger payload）：
+    metric_name  - 指标名称
+    current_value - 当前值
+    threshold    - 阈值
+    source       - 来源系统
+
+trigger:
+  kind: event
+  pattern: "starter-imperative.metric_threshold_exceeded"
+
+steps:
+  # Step 1：查询相关历史记录
+  - id: check_history
+    kind: action
+    action: kb.search
+    params:
+      query: "{{ event.metric_name }} 超限 历史记录"
+      top_k: 2
+    store_result_as: history
+    on_failure: continue
+
+  # Step 2：根据超限幅度分级处理
+  - id: severity_branch
+    kind: condition
+    if: "{{ (event.current_value | float) > (event.threshold | float) * 1.5 }}"
+    then:
+      # 严重超限（>150%）：立即告警
+      - id: critical_alert
+        kind: action
+        action: notify.dispatch
+        params:
+          subject_type: role
+          subject_id: manager
+          priority: urgent
+          message: |
+            🚨 严重超限告警
+            指标：{{ event.metric_name }}
+            当前值：{{ event.current_value }}（阈值：{{ event.threshold }}）
+            来源：{{ event.source | default('未知') }}
+        on_failure: continue
+
+      - id: hitl_confirm
+        kind: hitl
+        prompt: "{{ event.metric_name }} 严重超限，当前值 {{ event.current_value }} 超过阈值 {{ event.threshold }} 的 150%。是否立即处理？"
+        timeout_seconds: 3600
+        options:
+          - label: "立即处理"
+            value: handle_now
+          - label: "稍后处理"
+            value: defer
+        store_result_as: decision
+        on_failure: continue
+    else:
+      # 轻度超限：普通通知
+      - id: normal_notify
+        kind: action
+        action: comms.send
+        params:
+          channel: operator
+          message: |
+            ⚠️ 指标超限提醒
+            指标：{{ event.metric_name }}
+            当前值：{{ event.current_value }}（阈值：{{ event.threshold }}）
+        on_failure: continue
+
+  # Step 3：记录事件（无论如何都执行）
+  - id: record_event
+    kind: action
+    action: observe.audit_log
+    params:
+      event_type: "starter-imperative.threshold_handled"
+      target: "{{ event.metric_name }}"
+      detail:
+        current_value: "{{ event.current_value }}"
+        threshold: "{{ event.threshold }}"
+        had_history: "{{ history.results | default([]) | length > 0 }}"
+    on_failure: continue
