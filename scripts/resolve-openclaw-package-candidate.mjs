@@ -557,6 +557,7 @@ async function openPackageDownloadResponse(url, options) {
 
     if ([301, 302, 303, 307, 308].includes(response.status)) {
       clearTimeout(timeout);
+      response.body?.cancel();
       await dispatcher.close();
       const location = response.headers.get("location");
       if (!location) {

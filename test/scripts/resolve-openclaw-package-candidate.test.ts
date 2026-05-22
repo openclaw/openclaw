@@ -149,6 +149,41 @@ describe("resolve-openclaw-package-candidate", () => {
     expect(requestedUrls).toEqual(["https://packages.example/openclaw.tgz"]);
   });
 
+  it("cancels redirect response bodies before following the next hop", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-download-"));
+    tempDirs.push(dir);
+    const target = path.join(dir, "openclaw.tgz");
+    const bodyCancelled: string[] = [];
+
+    await expect(
+      downloadUrl("https://packages.example/openclaw.tgz", target, {
+        fetchImpl: async (url: URL) => {
+          const body = new ReadableStream({
+            start(controller) {
+              // Simulate a slow/never-ending body that would hang if not cancelled
+              const timer = setInterval(() => {
+                controller.enqueue(new Uint8Array([0]));
+              }, 100);
+              // Keep the stream open indefinitely
+              return () => clearInterval(timer);
+            },
+            cancel(reason) {
+              bodyCancelled.push(url.toString());
+            },
+          });
+          return new Response(body, {
+            headers: { location: "https://packages.example/redirected.tgz" },
+            status: 302,
+          });
+        },
+        lookupHost: lookupAddresses([{ address: "93.184.216.34", family: 4 }]),
+        timeoutMs: 5000,
+      }),
+    ).rejects.toThrow();
+    // The redirect body must have been cancelled, not left open
+    expect(bodyCancelled.length).toBeGreaterThan(0);
+  });
+
   it("bounds package_url downloads and writes completed files atomically", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-download-"));
     tempDirs.push(dir);
