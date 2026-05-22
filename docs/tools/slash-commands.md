@@ -176,6 +176,7 @@ Current source-of-truth:
     - `/agents` lists thread-bound agents for the current session.
     - `/kill <id|#|all>` aborts one or all running sub-agents.
     - `/subagents steer <id|#> <message>` sends steering to a running sub-agent. See [Steer](/tools/steer).
+    - `/long [background|desktop] <task>` forks a long-running task into a detached background sub-agent that runs independently of the conversation turn and reports back when done. `background` is the default; `desktop` is host-specific and passes through to the agent.
 
   </Accordion>
   <Accordion title="Owner-only writes and admin">

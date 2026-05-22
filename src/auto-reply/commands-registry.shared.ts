@@ -426,6 +426,24 @@ export function buildBuiltinChatCommands(
       argsMenu: "auto",
     }),
     defineChatCommand({
+      key: "long",
+      nativeName: "long",
+      description:
+        "Fork a long-running task into a detached background agent that reports back here when done.",
+      textAlias: "/long",
+      category: "management",
+      tier: "standard",
+      args: [
+        {
+          name: "task",
+          description: "Optional 'background' or 'desktop' mode prefix, then the task to run",
+          type: "string",
+          captureRemaining: true,
+        },
+      ],
+      argsMenu: "auto",
+    }),
+    defineChatCommand({
       key: "acp",
       nativeName: "acp",
       description: "Manage ACP sessions and runtime options.",
