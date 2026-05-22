@@ -434,12 +434,11 @@ messages for easy correlation.
 
 ## Denied approval behavior
 
-When an async exec approval is denied, OpenClaw prevents the agent from
-reusing output from any earlier run of the same command in the session.
-The denial reason is passed with explicit guidance that no command output
-is available, which stops the agent from claiming there is new output or
-repeating the denied command with stale results from a prior successful
-run.
+When an async exec approval is denied, OpenClaw treats the request as terminal.
+It can show a concise denial to the operator or direct chat route, but it does
+not send denial guidance back through the agent session. That keeps a denied
+command from becoming another model turn and prevents the agent from reusing
+output from an earlier run of the same command.
 
 ## Implications
 
