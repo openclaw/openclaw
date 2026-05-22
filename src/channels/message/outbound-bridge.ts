@@ -5,6 +5,7 @@ import type {
   ChannelMessageReceiveAdapterShape,
   ChannelMessageSendMediaContext,
   ChannelMessageSendPayloadContext,
+  ChannelMessageSendPollContext,
   ChannelMessageSendResult,
   ChannelMessageSendTextContext,
   DurableFinalDeliveryRequirementMap,
@@ -35,6 +36,9 @@ export type ChannelMessageOutboundBridgeAdapter<TConfig = unknown> = {
   ) => Promise<ChannelMessageOutboundBridgeResult>;
   sendPayload?: (
     ctx: ChannelMessageSendPayloadContext<TConfig>,
+  ) => Promise<ChannelMessageOutboundBridgeResult>;
+  sendPoll?: (
+    ctx: ChannelMessageSendPollContext<TConfig>,
   ) => Promise<ChannelMessageOutboundBridgeResult>;
 };
 
@@ -131,6 +135,14 @@ export function createChannelMessageAdapterFromOutbound<TConfig = unknown>(
     send.payload = async (ctx) =>
       toMessageSendResult(await params.outbound.sendPayload!(ctx), {
         kind: resolvePayloadReceiptKind(ctx as ChannelMessageSendPayloadContext<unknown>),
+        threadId: ctx.threadId,
+        replyToId: ctx.replyToId,
+      });
+  }
+  if (params.outbound.sendPoll) {
+    send.poll = async (ctx) =>
+      toMessageSendResult(await params.outbound.sendPoll!(ctx), {
+        kind: "poll",
         threadId: ctx.threadId,
         replyToId: ctx.replyToId,
       });
