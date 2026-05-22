@@ -47,16 +47,21 @@ describe("sanitizeEnvVars", () => {
       "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYQ==";
     const result = sanitizeExplicitSandboxEnvVars({
       CONFIG_TOKEN: base64Like,
+      AWS_SECRET_ACCESS_KEY: base64Like,
       BUILD_ID: "0123456789abcdef".repeat(8),
     });
 
     expect(result.allowed).toEqual({
       CONFIG_TOKEN: base64Like,
+      AWS_SECRET_ACCESS_KEY: base64Like,
       BUILD_ID: "0123456789abcdef".repeat(8),
     });
     expect(result.blocked).toStrictEqual([]);
     expect(result.warnings).toContain(
       "CONFIG_TOKEN: Value looks like base64-encoded credential data",
+    );
+    expect(result.warnings).toContain(
+      "AWS_SECRET_ACCESS_KEY: Value looks like base64-encoded credential data",
     );
   });
 

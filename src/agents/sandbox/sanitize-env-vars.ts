@@ -42,8 +42,6 @@ export type EnvSanitizationOptions = {
   customAllowedPatterns?: ReadonlyArray<RegExp>;
 };
 
-const SENSITIVE_ENV_VAR_NAME_PATTERN = /_?(API_KEY|TOKEN|PASSWORD|PRIVATE_KEY|SECRET)$/i;
-
 function looksLikeStructuredBase64(value: string): boolean {
   if (value.length < 128 || value.length % 4 !== 0) {
     return false;
@@ -54,6 +52,10 @@ function looksLikeStructuredBase64(value: string): boolean {
   return !value.slice(0, -2).includes("=");
 }
 
+function isSensitiveEnvVarName(key: string): boolean {
+  return matchesAnyPattern(key, BLOCKED_ENV_VAR_PATTERNS);
+}
+
 export function validateEnvVarValue(value: string, key?: string): string | undefined {
   if (value.includes("\0")) {
     return "Contains null bytes";
@@ -61,7 +63,7 @@ export function validateEnvVarValue(value: string, key?: string): string | undef
   if (value.length > 32768) {
     return "Value exceeds maximum length";
   }
-  if (key && SENSITIVE_ENV_VAR_NAME_PATTERN.test(key) && looksLikeStructuredBase64(value)) {
+  if (key && isSensitiveEnvVarName(key) && looksLikeStructuredBase64(value)) {
     return "Value looks like base64-encoded credential data";
   }
   return undefined;
