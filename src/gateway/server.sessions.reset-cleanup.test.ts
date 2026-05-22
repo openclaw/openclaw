@@ -283,6 +283,21 @@ test("sessions.reset closes child ACP runtime handles spawned from the parent", 
           lastActivityAt: Date.now(),
         },
       }),
+      "not-acp-child": sessionStoreEntry("sess-not-acp-child", {
+        spawnedBy: "agent:main:main",
+      }),
+      "unrelated-acp-child": sessionStoreEntry("sess-unrelated-acp-child", {
+        spawnedBy: "agent:main:other",
+        acp: {
+          backend: "acpx",
+          agent: "codex",
+          runtimeSessionName: "runtime:unrelated",
+          mode: "oneshot",
+          cwd: "/tmp/acp-session",
+          state: "idle",
+          lastActivityAt: Date.now(),
+        },
+      }),
     },
   });
 
@@ -298,6 +313,8 @@ test("sessions.reset closes child ACP runtime handles spawned from the parent", 
   ).map((call) => call[0]?.sessionKey);
   expect(closedKeys).toContain("agent:main:main");
   expect(closedKeys).toContain("agent:main:acp-child-1");
+  expect(closedKeys).not.toContain("agent:main:not-acp-child");
+  expect(closedKeys).not.toContain("agent:main:unrelated-acp-child");
 });
 
 test("sessions.reset closes a spawned ACP child that lives in a different agent store", async () => {

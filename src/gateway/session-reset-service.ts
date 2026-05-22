@@ -18,7 +18,6 @@ import {
 import { clearSessionResetRuntimeState } from "../auto-reply/reply/session-reset-cleanup.js";
 import { getRuntimeConfig } from "../config/io.js";
 import {
-  loadCombinedSessionStoreForGateway,
   snapshotSessionOrigin,
   type SessionEntry,
   updateSessionStore,
@@ -49,6 +48,7 @@ import {
   noteActiveSessionForShutdown,
 } from "./active-sessions-shutdown-tracker.js";
 import { ErrorCodes, errorShape } from "./protocol/index.js";
+import { findDirectChildSessionsForParent } from "./session-child-sessions.js";
 import {
   archiveSessionTranscriptsDetailed,
   resolveStableSessionEndTranscript,
@@ -567,9 +567,12 @@ async function closeChildAcpRuntimesForParent(params: {
   // parent's under the default per-agent layout. The combined gateway store
   // aggregates all agent stores under canonical keys (same source the dashboard
   // session list uses).
-  let store: Record<string, SessionEntry>;
+  let children: Array<{ sessionKey: string; entry: SessionEntry }>;
   try {
-    store = loadCombinedSessionStoreForGateway(params.cfg).store;
+    children = findDirectChildSessionsForParent({
+      cfg: params.cfg,
+      parentKey: params.parentKey,
+    }).filter(({ entry }) => entry.acp);
   } catch (error) {
     logVerbose(
       `sessions.${params.reason}: failed to enumerate sessions for child ACP cleanup: ${String(error)}`,
@@ -579,17 +582,6 @@ async function closeChildAcpRuntimesForParent(params: {
   // Close only direct ACP-backed children of the session being mutated; the
   // parent itself is closed separately by the caller. Without this, child ACP
   // sessions spawned via sessions_spawn are orphaned on parent reset/delete.
-  // Lineage matches the spawn path: ACP spawns record the requester via
-  // `spawnedBy` (canonical key), subagent spawns via `parentSessionKey`; match
-  // either so real ACP children are not missed. Grandchildren are out of scope.
-  const children = Object.entries(store)
-    .filter(
-      ([sessionKey, entry]) =>
-        sessionKey !== params.parentKey &&
-        (entry.spawnedBy === params.parentKey || entry.parentSessionKey === params.parentKey) &&
-        entry.acp,
-    )
-    .map(([sessionKey, entry]) => ({ sessionKey, entry }));
   // Close children concurrently so total latency is bounded by a single ACP
   // cleanup timeout window rather than scaling with the number of stuck
   // children; per-child failures are logged best-effort and never propagated,
