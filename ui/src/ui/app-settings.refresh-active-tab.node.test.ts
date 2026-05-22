@@ -50,6 +50,7 @@ const mocks = vi.hoisted(() => ({
   loadSessionsMock: vi.fn(async () => {}),
   loadSkillsMock: vi.fn(async () => {}),
   loadUsageMock: vi.fn(async () => {}),
+  loadWorkboardMock: vi.fn(async () => {}),
   startDebugPollingMock: vi.fn(),
   startLogsPollingMock: vi.fn(),
   startNodesPollingMock: vi.fn(),
@@ -128,6 +129,9 @@ vi.mock("./controllers/skills.ts", () => ({
 }));
 vi.mock("./controllers/usage.ts", () => ({
   loadUsage: mocks.loadUsageMock,
+}));
+vi.mock("./controllers/workboard.ts", () => ({
+  loadWorkboard: mocks.loadWorkboardMock,
 }));
 
 import { loadChannelsTab, refreshActiveTab, setTab } from "./app-settings.ts";
@@ -304,6 +308,23 @@ describe("refreshActiveTab", () => {
 
     expect(mocks.loadConfigMock).toHaveBeenCalledOnce();
     expect(mocks.loadSessionsMock).toHaveBeenCalledOnce();
+  });
+
+  it("refreshes workboard cards with config, sessions, and agents", async () => {
+    const host = createHost();
+    host.tab = "workboard";
+
+    await refreshActiveTab(host as never);
+
+    expect(mocks.loadConfigMock).toHaveBeenCalledWith(host);
+    expect(mocks.loadSessionsMock).toHaveBeenCalledWith(host);
+    expect(mocks.loadAgentsMock).toHaveBeenCalledWith(host);
+    expect(mocks.loadWorkboardMock).toHaveBeenCalledWith({
+      host,
+      client: host.client,
+      force: true,
+      requestUpdate: host.requestUpdate,
+    });
   });
 
   it("starts node polling on Nodes tab entry and clears pending session reloads on tab changes", () => {

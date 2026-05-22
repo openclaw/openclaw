@@ -54,6 +54,7 @@ import { loadPresence, type PresenceState } from "./controllers/presence.ts";
 import { loadSessions, type SessionsState } from "./controllers/sessions.ts";
 import { loadSkills, type SkillsState } from "./controllers/skills.ts";
 import { loadUsage, type UsageState } from "./controllers/usage.ts";
+import { loadWorkboard } from "./controllers/workboard.ts";
 import { resolveCronJobLastRunStatus } from "./cron-status.ts";
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
 import { isMonitoredAuthProvider } from "./model-auth-helpers.ts";
@@ -427,7 +428,17 @@ export async function refreshActiveTab(host: SettingsHost) {
       case "activity":
         break;
       case "workboard":
-        await Promise.all([loadConfig(app), loadSessions(app), loadAgents(app)]);
+        await Promise.all([
+          loadConfig(app),
+          loadSessions(app),
+          loadAgents(app),
+          loadWorkboard({
+            host,
+            client: app.client,
+            force: true,
+            requestUpdate: host.requestUpdate,
+          }),
+        ]);
         break;
       case "channels":
         await loadChannelsTab(host);
