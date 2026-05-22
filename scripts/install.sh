@@ -83,21 +83,19 @@ download_file() {
     wget -q --https-only --secure-protocol=TLSv1_2 --tries=3 --timeout=20 -O "$output" "$url"
 }
 
-run_remote_bash() {
-    local url="$1"
-    local tmp
-    tmp="$(mktempfile)"
-    download_file "$url" "$tmp"
-    # Validate the downloaded file is a non-empty shell script before executing.
-    # A full checksum pin is impractical for third-party scripts that update
-    # frequently (e.g., Homebrew installer), but structural validation catches
-    # truncated downloads, HTML error pages, and empty responses.
-    if [[ ! -s "$tmp" ]]; then
+# Validate a downloaded file is a non-empty shell script before execution.
+# Used by run_remote_bash and the NodeSource setup-script paths.
+# A full checksum pin is impractical for third-party scripts that update
+# frequently (e.g., Homebrew installer), but structural validation catches
+# truncated downloads, HTML error pages, and empty responses.
+validate_downloaded_script() {
+    local file="$1" url="$2"
+    if [[ ! -s "$file" ]]; then
         ui_error "Downloaded script is empty: ${url}"
         return 1
     fi
     local first_line
-    first_line="$(head -c 256 "$tmp" | head -1)"
+    first_line="$(head -c 256 "$file" | head -1)"
     if [[ "$first_line" != "#!"* ]]; then
         # Sanitize before logging: strip control chars and escape backslashes
         # so untrusted content cannot inject terminal escapes through
@@ -109,6 +107,14 @@ run_remote_bash() {
         ui_error "First line: ${safe_line}"
         return 1
     fi
+}
+
+run_remote_bash() {
+    local url="$1"
+    local tmp
+    tmp="$(mktempfile)"
+    download_file "$url" "$tmp"
+    validate_downloaded_script "$tmp" "$url" || return 1
     /bin/bash "$tmp"
 }
 
@@ -1849,6 +1855,7 @@ install_node() {
             local tmp
             tmp="$(mktempfile)"
             run_quiet_step "Downloading NodeSource setup script" download_file "https://deb.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
+            validate_downloaded_script "$tmp" "https://deb.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" || return 1
             if is_root; then
                 run_quiet_step "Configuring NodeSource repository" bash "$tmp"
                 run_quiet_step "Installing Node.js" apt_get_install nodejs
@@ -1860,6 +1867,7 @@ install_node() {
             local tmp
             tmp="$(mktempfile)"
             run_quiet_step "Downloading NodeSource setup script" download_file "https://rpm.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
+            validate_downloaded_script "$tmp" "https://rpm.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" || return 1
             if is_root; then
                 run_quiet_step "Configuring NodeSource repository" bash "$tmp"
                 run_quiet_step "Installing Node.js" dnf install -y -q nodejs
@@ -1871,6 +1879,7 @@ install_node() {
             local tmp
             tmp="$(mktempfile)"
             run_quiet_step "Downloading NodeSource setup script" download_file "https://rpm.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
+            validate_downloaded_script "$tmp" "https://rpm.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" || return 1
             if is_root; then
                 run_quiet_step "Configuring NodeSource repository" bash "$tmp"
                 run_quiet_step "Installing Node.js" yum install -y -q nodejs
