@@ -298,6 +298,15 @@ COPY --chown=root:root overlay/multitenant/runtime/git-credential-rockie.sh \
 RUN chmod 755 /usr/local/bin/git-credential-rockie.sh && \
     git config --system credential.helper /usr/local/bin/git-credential-rockie.sh
 
+# Drop in the env-backed git credential helper for huggingface.co
+# (rockie-workspace#575). Unlike the rockie helper above this is NOT
+# registered here — entrypoint.sh wires it per-runtime, only when the
+# tenant connected Hugging Face (HF_TOKEN present). Baking the script in
+# at build time keeps the per-runtime cost to one cheap `git config`.
+COPY --chown=root:root overlay/multitenant/runtime/git-credential-hf-env.sh \
+  /usr/local/bin/git-credential-hf-env.sh
+RUN chmod 755 /usr/local/bin/git-credential-hf-env.sh
+
 # Drop in the PTY-WebSocket broker binary built in stage 4b.
 COPY --from=broker-build /out/broker /usr/local/bin/broker
 RUN chmod 755 /usr/local/bin/broker

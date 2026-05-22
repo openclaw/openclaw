@@ -97,6 +97,87 @@ render_settings_json() {
   log "settings.json rendered → ${output} (lab=${lab_id:-<empty>}, tenant=${tenant_id:-<empty>}, target=${target_dir:-<empty>})"
 }
 
+# Pre-wire git so the agent never has to improvise a GIT_ASKPASS bridge or
+# set git identity by hand on a fresh runtime (rockie-workspace#575).
+#
+# fleet-task #573 lands GH_TOKEN / HF_TOKEN in the agent env, and the
+# `gh` / `hf` CLIs consume them automatically — but plain `git clone` /
+# `git push` against github.com / huggingface.co does NOT, so every agent
+# re-solves the same two papercuts. This wires them once at boot:
+#
+#   - GitHub:      `gh auth setup-git` registers a credential helper for
+#                  github.com keyed off the authenticated `gh` session
+#                  (which itself reads GH_TOKEN from env).
+#   - HuggingFace: `git-credential-hf-env.sh` emits HF_TOKEN for
+#                  huggingface.co (no `gh`-equivalent exists for HF).
+#   - Identity:    a default `user.name` / `user.email` so the first
+#                  commit in a fresh clone does not fail with
+#                  "Author identity unknown".
+#
+# Every step is conditional / no-op when the tokens are absent (BYOK /
+# open-weights tenants, or pre-connection state) and never hard-fails the
+# entrypoint — a credential-helper hiccup must not stop the runtime.
+prewire_git_credentials() {
+  if ! command -v git >/dev/null 2>&1; then
+    log "WARN: git not on PATH; skipping git credential pre-wire"
+    return 0
+  fi
+
+  # Default identity — set unconditionally (it is harmless without tokens
+  # and lets ad-hoc local commits work). --global writes ~/.gitconfig for
+  # the runtime user; do not clobber an identity the tenant already set.
+  if [ -z "$(git config --global user.name 2>/dev/null || true)" ]; then
+    if git config --global user.name "Rockie Agent"; then
+      log "git: default user.name set (Rockie Agent)"
+    else
+      log "WARN: git config user.name failed; continuing"
+    fi
+  fi
+  if [ -z "$(git config --global user.email 2>/dev/null || true)" ]; then
+    if git config --global user.email "agent@rockielab.com"; then
+      log "git: default user.email set (agent@rockielab.com)"
+    else
+      log "WARN: git config user.email failed; continuing"
+    fi
+  fi
+
+  # GitHub — `gh auth setup-git` wires credential.https://github.com.helper
+  # to `gh auth git-credential`. `gh` is authenticated by GH_TOKEN in env,
+  # so this only does useful work when the tenant connected GitHub.
+  if [ -n "${GH_TOKEN:-}" ]; then
+    if command -v gh >/dev/null 2>&1; then
+      if gh auth setup-git >/dev/null 2>&1; then
+        log "git: github.com credential helper wired via gh auth setup-git"
+      else
+        log "WARN: gh auth setup-git failed; plain git push to github.com may prompt"
+      fi
+    else
+      log "WARN: GH_TOKEN set but gh CLI missing; skipping github.com credential wire"
+    fi
+  else
+    log "git: GH_TOKEN unset; github.com credential helper not wired (expected for BYOK/pre-connection)"
+  fi
+
+  # HuggingFace — register the static env-backed helper for huggingface.co.
+  # Only wire it when HF_TOKEN is present; the helper itself also fails
+  # silent without the token, but skipping the `git config` write keeps
+  # `.gitconfig` clean for unconnected tenants.
+  if [ -n "${HF_TOKEN:-}" ]; then
+    local hf_helper="/usr/local/bin/git-credential-hf-env.sh"
+    if [ -x "$hf_helper" ]; then
+      if git config --global "credential.https://huggingface.co.helper" "$hf_helper"; then
+        log "git: huggingface.co credential helper wired (${hf_helper})"
+      else
+        log "WARN: git config of huggingface.co helper failed; plain git push to huggingface.co may prompt"
+      fi
+    else
+      log "WARN: HF_TOKEN set but ${hf_helper} not present; skipping huggingface.co credential wire"
+    fi
+  else
+    log "git: HF_TOKEN unset; huggingface.co credential helper not wired (expected for BYOK/pre-connection)"
+  fi
+}
+
 # If the caller passed a command (e.g. `docker run image claude --version`),
 # just run it. The mode router only kicks in when no command is given.
 if [ "$#" -gt 0 ]; then
@@ -105,6 +186,9 @@ fi
 
 # --- settings.json render (must precede broker + any subscription CLI) -----
 render_settings_json
+
+# --- git credential + identity pre-wire (rockie-workspace#575) --------------
+prewire_git_credentials
 
 # --- broker (always-on) -----------------------------------------------------
 if [ -x /usr/local/bin/broker ]; then
