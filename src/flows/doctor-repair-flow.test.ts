@@ -105,6 +105,61 @@ describe("runDoctorHealthRepairs", () => {
     expect(scopes).toMatchObject([{ paths: ["gateway.mode"] }]);
   });
 
+  it("validates effect-only repairs after non-dry-run mutation", async () => {
+    const scopes: unknown[] = [];
+    let cleaned = false;
+    const checks: HealthCheck[] = [
+      {
+        id: "test/effect-only",
+        kind: "core",
+        description: "effect only",
+        async detect(_ctx, scope) {
+          if (scope !== undefined) {
+            scopes.push(scope);
+          }
+          return cleaned
+            ? []
+            : [
+                {
+                  checkId: "test/effect-only",
+                  severity: "warning",
+                  message: "stale service remains",
+                  path: "openclaw-gateway-old.service",
+                },
+              ];
+        },
+        async repair() {
+          cleaned = true;
+          return {
+            changes: [],
+            effects: [
+              {
+                kind: "service",
+                action: "remove-legacy-gateway-service",
+                target: "openclaw-gateway-old.service",
+                dryRunSafe: false,
+              },
+            ],
+          };
+        },
+      },
+    ];
+
+    const result = await runDoctorHealthRepairs(ctx({}), { checks, validate: true });
+
+    expect(result.effects).toMatchObject([
+      {
+        kind: "service",
+        action: "remove-legacy-gateway-service",
+        target: "openclaw-gateway-old.service",
+      },
+    ]);
+    expect(result.checksRepaired).toBe(1);
+    expect(result.checksValidated).toBe(1);
+    expect(result.remainingFindings).toEqual([]);
+    expect(scopes).toMatchObject([{ paths: ["openclaw-gateway-old.service"] }]);
+  });
+
   it("leaves non-repairable checks for legacy doctor behavior", async () => {
     const checks: HealthCheck[] = [
       defineSplitHealthCheck({

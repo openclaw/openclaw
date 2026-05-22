@@ -263,6 +263,503 @@ const legacyStateCheck: RegisteredHealthCheck = defineSplitHealthCheck({
   },
 });
 
+const legacyPluginManifestsCheck: RegisteredHealthCheck = defineSplitHealthCheck({
+  id: "core/doctor/legacy-plugin-manifests",
+  kind: "core",
+  description: "Legacy top-level plugin manifest capability keys are moved under contracts.",
+  source: "doctor",
+  async detect(ctx, scope) {
+    const { collectLegacyPluginManifestContractMigrations } =
+      await import("../commands/doctor-plugin-manifests.js");
+    const migrations = collectLegacyPluginManifestContractMigrations({
+      config: ctx.cfg,
+      ...(ctx.env ? { env: ctx.env } : {}),
+      ...(ctx.cfg.plugins?.load?.paths ? { manifestRoots: ctx.cfg.plugins.load.paths } : {}),
+      ...(ctx.cwd ? { workspaceDir: ctx.cwd } : {}),
+    });
+    const scopedPaths = new Set(scope?.paths ?? []);
+    return migrations
+      .filter((migration) => scopedPaths.size === 0 || scopedPaths.has(migration.manifestPath))
+      .map(
+        (migration): HealthFinding => ({
+          checkId: "core/doctor/legacy-plugin-manifests",
+          severity: "warning",
+          message: `Plugin manifest ${migration.pluginId} uses legacy top-level capability keys.`,
+          path: migration.manifestPath,
+          fixHint: "Run `openclaw doctor --fix` to move legacy manifest keys under contracts.",
+        }),
+      );
+  },
+  async repair(ctx, findings) {
+    const { collectLegacyPluginManifestContractMigrations, repairLegacyPluginManifestContracts } =
+      await import("../commands/doctor-plugin-manifests.js");
+    const findingPaths = new Set(
+      findings.map((finding) => finding.path).filter((path): path is string => Boolean(path)),
+    );
+    const migrations = collectLegacyPluginManifestContractMigrations({
+      config: ctx.cfg,
+      ...(ctx.env ? { env: ctx.env } : {}),
+      ...(ctx.cfg.plugins?.load?.paths ? { manifestRoots: ctx.cfg.plugins.load.paths } : {}),
+      ...(ctx.cwd ? { workspaceDir: ctx.cwd } : {}),
+    }).filter((migration) => findingPaths.size === 0 || findingPaths.has(migration.manifestPath));
+    const repaired = await repairLegacyPluginManifestContracts({
+      config: ctx.cfg,
+      runtime: ctx.runtime,
+      migrations,
+      ...(ctx.env ? { env: ctx.env } : {}),
+      ...(ctx.cwd ? { workspaceDir: ctx.cwd } : {}),
+      ...(ctx.dryRun !== undefined ? { dryRun: ctx.dryRun } : {}),
+      ...(ctx.diff !== undefined ? { diff: ctx.diff } : {}),
+    });
+    return repaired;
+  },
+});
+
+function configuredPluginInstallEffects(params: {
+  pluginIds: readonly string[];
+  channelIds: readonly string[];
+  dryRun: boolean;
+}) {
+  const actionPrefix = params.dryRun ? "would-" : "";
+  return [
+    ...params.pluginIds.map((pluginId) => ({
+      kind: "package" as const,
+      action: `${actionPrefix}install-configured-plugin`,
+      target: pluginId,
+      dryRunSafe: false,
+    })),
+    ...params.channelIds.map((channelId) => ({
+      kind: "package" as const,
+      action: `${actionPrefix}install-configured-channel-plugin`,
+      target: channelId,
+      dryRunSafe: false,
+    })),
+  ];
+}
+
+function configuredPluginInstallDryRunChanges(params: {
+  pluginIds: readonly string[];
+  channelIds: readonly string[];
+  shouldTouchConfig: boolean;
+}): string[] {
+  const changes: string[] = [];
+  if (params.pluginIds.length > 0) {
+    changes.push(`Would repair configured plugin install(s): ${params.pluginIds.join(", ")}.`);
+  }
+  if (params.channelIds.length > 0) {
+    changes.push(
+      `Would repair configured channel plugin install(s): ${params.channelIds.join(", ")}.`,
+    );
+  }
+  if (params.shouldTouchConfig) {
+    changes.push("Would mark configured plugin install release repair complete.");
+  }
+  return changes;
+}
+
+const configuredPluginInstallsCheck: RegisteredHealthCheck = {
+  id: "core/doctor/configured-plugin-installs",
+  kind: "core",
+  description: "Configured official plugins and channels have install records after migration.",
+  source: "doctor",
+  async run(ctx, scope) {
+    if (ctx.mode === "fix" && scope?.findings === undefined) {
+      const findings: HealthFinding[] = [
+        {
+          checkId: "core/doctor/configured-plugin-installs",
+          severity: "info",
+          message: "Configured plugin install repair should run at this doctor position.",
+          path: "plugins",
+        },
+      ];
+      if (!ctx.repair) {
+        return { findings, ...(await configuredPluginInstallPreview(ctx, true)) };
+      }
+      return { findings, ...(await repairConfiguredPluginInstalls(ctx)) };
+    }
+    const { collectReleaseConfiguredPluginIds, shouldRunConfiguredPluginInstallReleaseStep } =
+      await import("../commands/doctor/shared/release-configured-plugin-installs.js");
+    const configured = collectReleaseConfiguredPluginIds({
+      cfg: ctx.cfg,
+      env: ctx.env ?? process.env,
+    });
+    const touchedVersion =
+      scope?.findings === undefined
+        ? (ctx.doctor?.sourceLastTouchedVersion ?? ctx.cfg.meta?.lastTouchedVersion ?? null)
+        : (ctx.cfg.meta?.lastTouchedVersion ?? null);
+    const shouldRunReleaseStep = shouldRunConfiguredPluginInstallReleaseStep({
+      touchedVersion,
+    });
+    if (!shouldRunReleaseStep) {
+      return { findings: [] };
+    }
+    const paths = [
+      configured.pluginIds.length > 0 ? `plugins:${configured.pluginIds.join(",")}` : undefined,
+      configured.channelIds.length > 0 ? `channels:${configured.channelIds.join(",")}` : undefined,
+      shouldRunReleaseStep ? "meta.lastTouchedVersion" : undefined,
+    ].filter((entry): entry is string => entry !== undefined);
+    const findings: HealthFinding[] = [
+      {
+        checkId: "core/doctor/configured-plugin-installs",
+        severity: "warning",
+        message: "Configured plugin install repair should run for this config.",
+        path: paths.join(" "),
+        fixHint: "Run `openclaw doctor --fix` to install missing configured plugins.",
+      },
+    ];
+    if (!ctx.repair) {
+      return { findings, ...(await configuredPluginInstallPreview(ctx, shouldRunReleaseStep)) };
+    }
+    return { findings, ...(await repairConfiguredPluginInstalls(ctx)) };
+  },
+};
+
+async function configuredPluginInstallPreview(
+  ctx: Parameters<RegisteredHealthCheck["run"]>[0],
+  shouldRunReleaseStep: boolean,
+) {
+  const { collectReleaseConfiguredPluginIds } =
+    await import("../commands/doctor/shared/release-configured-plugin-installs.js");
+  const { shouldDeferConfiguredPluginInstallRepair } =
+    await import("../commands/doctor/shared/update-phase.js");
+  const { VERSION } = await import("../version.js");
+  const env = ctx.env ?? process.env;
+  const configured = collectReleaseConfiguredPluginIds({ cfg: ctx.cfg, env });
+  const shouldTouchConfig =
+    shouldRunReleaseStep && !shouldDeferConfiguredPluginInstallRepair(env);
+  return {
+    status: "repairable" as const,
+    changes: configuredPluginInstallDryRunChanges({
+      pluginIds: configured.pluginIds,
+      channelIds: configured.channelIds,
+      shouldTouchConfig,
+    }),
+    effects: [
+      ...configuredPluginInstallEffects({
+        pluginIds: configured.pluginIds,
+        channelIds: configured.channelIds,
+        dryRun: true,
+      }),
+      ...(shouldTouchConfig
+        ? [
+            {
+              kind: "config" as const,
+              action: "would-stamp-configured-plugin-install-release",
+              target: "meta.lastTouchedVersion",
+              dryRunSafe: true,
+            },
+          ]
+        : []),
+    ],
+    diffs:
+      shouldTouchConfig && ctx.diff === true
+        ? [
+            {
+              kind: "config" as const,
+              path: "meta",
+              before: JSON.stringify(ctx.cfg.meta ?? null, null, 2),
+              after: JSON.stringify(
+                {
+                  ...ctx.cfg.meta,
+                  lastTouchedVersion: VERSION,
+                  lastTouchedAt: "<doctor-run timestamp>",
+                },
+                null,
+                2,
+              ),
+            },
+          ]
+        : [],
+  };
+}
+
+async function repairConfiguredPluginInstalls(ctx: Parameters<RegisteredHealthCheck["run"]>[0]) {
+  const {
+    collectReleaseConfiguredPluginIds,
+    maybeRunConfiguredPluginInstallReleaseStep,
+  } = await import("../commands/doctor/shared/release-configured-plugin-installs.js");
+  const { isLegacyParentWritableUpdateDoctorPass } =
+    await import("../commands/doctor/shared/update-phase.js");
+  const { VERSION } = await import("../version.js");
+  const env = ctx.env ?? process.env;
+  const touchedVersion =
+    ctx.doctor?.sourceLastTouchedVersion ?? ctx.cfg.meta?.lastTouchedVersion ?? null;
+  const configured = collectReleaseConfiguredPluginIds({ cfg: ctx.cfg, env });
+  const effects = configuredPluginInstallEffects({
+    pluginIds: configured.pluginIds,
+    channelIds: configured.channelIds,
+    dryRun: false,
+  });
+  const result = await maybeRunConfiguredPluginInstallReleaseStep({
+    cfg: ctx.cfg,
+    env,
+    touchedVersion,
+  });
+  if (!result.touchedConfig) {
+    return {
+      changes: result.changes,
+      warnings: result.warnings,
+      effects: result.changes.length > 0 ? effects : [],
+    };
+  }
+  const lastTouchedVersion = isLegacyParentWritableUpdateDoctorPass(env)
+    ? ctx.doctor?.sourceLastTouchedVersion?.trim() || ctx.cfg.meta?.lastTouchedVersion || VERSION
+    : VERSION;
+  const nextConfig = {
+    ...ctx.cfg,
+    meta: {
+      ...ctx.cfg.meta,
+      lastTouchedVersion,
+      lastTouchedAt: new Date().toISOString(),
+    },
+  };
+  return {
+    config: nextConfig,
+    changes: result.changes,
+    warnings: result.warnings,
+    effects: [
+      ...effects,
+      {
+        kind: "config" as const,
+        action: "stamp-configured-plugin-install-release",
+        target: "meta.lastTouchedVersion",
+        dryRunSafe: true,
+      },
+    ],
+    diffs:
+      ctx.diff === true
+        ? [
+            {
+              kind: "config" as const,
+              path: "meta",
+              before: JSON.stringify(ctx.cfg.meta ?? null, null, 2),
+              after: JSON.stringify(nextConfig.meta, null, 2),
+            },
+          ]
+        : [],
+  };
+}
+
+function pluginRegistryIssueFindingMessage(kind: string): string {
+  switch (kind) {
+    case "migration":
+      return "Persisted plugin registry is missing or stale.";
+    case "disabled":
+      return "Plugin registry repair is disabled by environment.";
+    case "stale-managed-npm-bundled-plugin":
+      return "Managed npm plugin package shadows a bundled plugin.";
+    case "stale-local-bundled-plugin-install-record":
+      return "Local bundled plugin install record shadows a bundled plugin.";
+    case "managed-npm-peer-link":
+      return "Managed npm plugin package has a broken OpenClaw host peer link.";
+    default:
+      return "Plugin registry repair should run.";
+  }
+}
+
+function pluginRegistryIssuePath(issue: {
+  kind: string;
+  filePath?: string;
+  packageDir?: string;
+  packageName?: string;
+  stalePath?: string;
+}): string {
+  return (
+    issue.filePath ?? issue.packageDir ?? issue.packageName ?? issue.stalePath ?? "plugin-registry"
+  );
+}
+
+function pluginRegistryRepairEffects(
+  issues: readonly {
+    kind: string;
+    filePath?: string;
+    packageDir?: string;
+    packageName?: string;
+    pluginId?: string;
+    stalePath?: string;
+  }[],
+  dryRun: boolean,
+) {
+  const actionPrefix = dryRun ? "would-" : "";
+  return issues
+    .filter((issue) => issue.kind !== "disabled")
+    .map((issue) => {
+      if (issue.kind === "stale-managed-npm-bundled-plugin") {
+        return {
+          kind: "package" as const,
+          action: `${actionPrefix}remove-stale-managed-npm-plugin`,
+          target: issue.packageName ?? issue.pluginId ?? "managed npm plugin",
+          dryRunSafe: false,
+        };
+      }
+      if (issue.kind === "stale-local-bundled-plugin-install-record") {
+        return {
+          kind: "state" as const,
+          action: `${actionPrefix}remove-stale-local-plugin-install-record`,
+          target: issue.pluginId ?? issue.stalePath ?? "local install record",
+          dryRunSafe: false,
+        };
+      }
+      if (issue.kind === "managed-npm-peer-link") {
+        return {
+          kind: "package" as const,
+          action: `${actionPrefix}repair-openclaw-peer-link`,
+          target: issue.packageName ?? "managed npm plugin",
+          dryRunSafe: false,
+        };
+      }
+      return {
+        kind: "state" as const,
+        action: `${actionPrefix}refresh-plugin-registry`,
+        target: issue.filePath ?? "installed plugin registry",
+        dryRunSafe: true,
+      };
+    });
+}
+
+function pluginRegistryDryRunChanges(
+  issues: readonly {
+    kind: string;
+    filePath?: string;
+    packageName?: string;
+    pluginId?: string;
+    stalePath?: string;
+  }[],
+): string[] {
+  return issues.map((issue) => {
+    if (issue.kind === "stale-managed-npm-bundled-plugin") {
+      return `Would remove stale managed npm plugin package ${issue.packageName ?? issue.pluginId}.`;
+    }
+    if (issue.kind === "managed-npm-peer-link") {
+      return `Would repair OpenClaw host peer link for managed npm plugin ${issue.packageName}.`;
+    }
+    if (issue.kind === "stale-local-bundled-plugin-install-record") {
+      return `Would remove stale local bundled plugin install record for ${issue.pluginId}.`;
+    }
+    if (issue.kind === "disabled") {
+      return "Would skip plugin registry repair because it is disabled by environment.";
+    }
+    return `Would rebuild plugin registry${issue.filePath ? ` at ${issue.filePath}` : ""}.`;
+  });
+}
+
+function filterPluginRegistryIssuesForFindings<
+  T extends {
+    kind: string;
+    filePath?: string;
+    packageDir?: string;
+    packageName?: string;
+  },
+>(issues: readonly T[], findings: readonly HealthFinding[]): T[] {
+  const findingPaths = new Set(
+    findings.map((finding) => finding.path).filter((path): path is string => Boolean(path)),
+  );
+  if (findingPaths.size === 0 || findingPaths.has("plugin-registry")) {
+    return [...issues];
+  }
+  return issues.filter((issue) => findingPaths.has(pluginRegistryIssuePath(issue)));
+}
+
+const pluginRegistryCheck: RegisteredHealthCheck = {
+  id: "core/doctor/plugin-registry",
+  kind: "core",
+  description:
+    "Persisted plugin registry state is current and managed plugin packages are healthy.",
+  source: "doctor",
+  async run(ctx, scope) {
+    if (ctx.mode === "fix" && scope?.findings === undefined) {
+      const findings: HealthFinding[] = [
+        {
+          checkId: "core/doctor/plugin-registry",
+          severity: "info",
+          message: "Plugin registry repair should run at this doctor position.",
+          path: "plugin-registry",
+        },
+      ];
+      if (!ctx.repair) {
+        const previewIssues = [{ kind: "migration" }];
+        return {
+          findings,
+          status: "repairable",
+          changes: pluginRegistryDryRunChanges(previewIssues),
+          effects: pluginRegistryRepairEffects(previewIssues, true),
+        };
+      }
+      return { findings, ...(await repairPluginRegistry(ctx, findings)) };
+    }
+    const { detectPluginRegistryStateIssues } =
+      await import("../commands/doctor-plugin-registry.js");
+    const issues = await detectPluginRegistryStateIssues({
+      config: ctx.cfg,
+      env: ctx.env ?? process.env,
+      prompter: { shouldRepair: false },
+    });
+    const scopedIssues =
+      scope?.findings === undefined
+        ? issues
+        : filterPluginRegistryIssuesForFindings(issues, scope.findings);
+    const findings = scopedIssues.map(
+      (issue): HealthFinding => ({
+        checkId: "core/doctor/plugin-registry",
+        severity: issue.kind === "disabled" ? "info" : "warning",
+        message: pluginRegistryIssueFindingMessage(issue.kind),
+        path: pluginRegistryIssuePath(issue),
+        fixHint:
+          issue.kind === "disabled"
+            ? "Unset the plugin registry migration disable environment variable to allow repair."
+            : "Run `openclaw doctor --fix` to repair plugin registry state.",
+      }),
+    );
+    if (findings.length === 0) {
+      return { findings };
+    }
+    if (!ctx.repair) {
+      return {
+        findings,
+        status: "repairable",
+        changes: pluginRegistryDryRunChanges(scopedIssues),
+        effects: pluginRegistryRepairEffects(scopedIssues, true),
+      };
+    }
+    return { findings, ...(await repairPluginRegistry(ctx, findings)) };
+  },
+};
+
+async function repairPluginRegistry(
+  ctx: Parameters<RegisteredHealthCheck["run"]>[0],
+  findings: readonly HealthFinding[],
+) {
+  const { detectPluginRegistryStateIssues, repairPluginRegistryState } =
+    await import("../commands/doctor-plugin-registry.js");
+  const params = {
+    config: ctx.cfg,
+    env: ctx.env ?? process.env,
+    prompter: { shouldRepair: true },
+  };
+  const issues = filterPluginRegistryIssuesForFindings(
+    await detectPluginRegistryStateIssues(params),
+    findings,
+  );
+  const shouldRunPositionalRepair = findings.some((finding) => finding.path === "plugin-registry");
+  if (issues.length === 0 && !shouldRunPositionalRepair) {
+    return {
+      status: "skipped" as const,
+      reason: "plugin registry finding no longer exists",
+      changes: [],
+    };
+  }
+  const repairIssues = issues.length === 0 && shouldRunPositionalRepair ? undefined : issues;
+  const result = await repairPluginRegistryState(params, repairIssues);
+  return {
+    config: result.config,
+    status: result.status,
+    reason: result.reason,
+    changes: result.changes,
+    warnings: result.warnings,
+    effects: pluginRegistryRepairEffects(repairIssues ?? issues, false),
+  };
+}
+
 const bootstrapSizeCheck: RegisteredHealthCheck = defineSplitHealthCheck({
   id: "core/doctor/bootstrap-size",
   kind: "core",
@@ -904,6 +1401,9 @@ function createConvertedWorkflowChecks(deps: CoreHealthCheckDeps): readonly Regi
     claudeCliCheck,
     gatewayAuthCheck,
     legacyStateCheck,
+    legacyPluginManifestsCheck,
+    configuredPluginInstallsCheck,
+    pluginRegistryCheck,
     legacyWhatsAppCrontabCheck,
     gatewayPlatformNotesCheck,
     startupChannelMaintenanceCheck,

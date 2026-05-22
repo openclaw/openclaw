@@ -34,9 +34,19 @@ const mocks = vi.hoisted(() => ({
   maybeArchiveLegacyClawdBrowserProfileResidue: vi.fn(),
 }));
 
-vi.mock("../commands/doctor/shared/release-configured-plugin-installs.js", () => ({
-  maybeRunConfiguredPluginInstallReleaseStep: mocks.maybeRunConfiguredPluginInstallReleaseStep,
-}));
+vi.mock(
+  "../commands/doctor/shared/release-configured-plugin-installs.js",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("../commands/doctor/shared/release-configured-plugin-installs.js")
+      >();
+    return {
+      ...actual,
+      maybeRunConfiguredPluginInstallReleaseStep: mocks.maybeRunConfiguredPluginInstallReleaseStep,
+    };
+  },
+);
 
 vi.mock("../terminal/note.js", () => ({
   note: mocks.note,

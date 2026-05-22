@@ -266,14 +266,15 @@ async function runStructuredHealthRepairChecks(
       env: ctx.env ?? process.env,
       doctor: {
         options: ctx.options,
+        sourceLastTouchedVersion: ctx.configResult.sourceLastTouchedVersion,
         confirm: (params) => ctx.prompter.confirm(params),
         note,
       },
     },
     {
       checks,
-      dryRun: ctx.options.dryRun === true,
-      diff: ctx.options.diff === true,
+      dryRun: ctx.options?.dryRun === true,
+      diff: ctx.options?.diff === true,
     },
   );
   ctx.cfg = result.config;
@@ -374,6 +375,10 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
 }
 
 async function runLegacyPluginManifestHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  if (ctx.prompter.shouldRepair) {
+    await runPositionalStructuredHealthRepair(ctx, "core/doctor/legacy-plugin-manifests");
+    return;
+  }
   const { maybeRepairLegacyPluginManifestContracts } =
     await import("../commands/doctor-plugin-manifests.js");
   await maybeRepairLegacyPluginManifestContracts({
@@ -385,6 +390,10 @@ async function runLegacyPluginManifestHealth(ctx: DoctorHealthFlowContext): Prom
 }
 
 async function runPluginRegistryHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  if (ctx.prompter.shouldRepair) {
+    await runPositionalStructuredHealthRepair(ctx, "core/doctor/plugin-registry");
+    return;
+  }
   const { maybeRepairPluginRegistryState } = await import("../commands/doctor-plugin-registry.js");
   ctx.cfg = await maybeRepairPluginRegistryState({
     config: ctx.cfg,
@@ -402,37 +411,7 @@ async function runReleaseConfiguredPluginInstallsHealth(
   if (!ctx.prompter.shouldRepair) {
     return;
   }
-  const { maybeRunConfiguredPluginInstallReleaseStep } =
-    await import("../commands/doctor/shared/release-configured-plugin-installs.js");
-  const { note } = await import("../terminal/note.js");
-  const { VERSION } = await import("../version.js");
-  const result = await maybeRunConfiguredPluginInstallReleaseStep({
-    cfg: ctx.cfg,
-    env: ctx.env ?? process.env,
-    touchedVersion: ctx.configResult.sourceLastTouchedVersion ?? ctx.cfg.meta?.lastTouchedVersion,
-  });
-  if (result.changes.length > 0) {
-    note(result.changes.join("\n"), "Doctor changes");
-  }
-  if (result.warnings.length > 0) {
-    note(result.warnings.join("\n"), "Doctor warnings");
-  }
-  if (!result.touchedConfig) {
-    return;
-  }
-  const lastTouchedVersion = isLegacyParentWritableUpdateDoctorPass(ctx.env ?? process.env)
-    ? ctx.configResult.sourceLastTouchedVersion?.trim() ||
-      ctx.cfg.meta?.lastTouchedVersion ||
-      VERSION
-    : VERSION;
-  ctx.cfg = {
-    ...ctx.cfg,
-    meta: {
-      ...ctx.cfg.meta,
-      lastTouchedVersion,
-      lastTouchedAt: new Date().toISOString(),
-    },
-  };
+  await runPositionalStructuredHealthRepair(ctx, "core/doctor/configured-plugin-installs");
 }
 
 async function runStateIntegrityHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -866,16 +845,19 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:legacy-plugin-manifests",
       label: "Legacy plugin manifests",
+      healthCheckIds: ["core/doctor/legacy-plugin-manifests"],
       run: runLegacyPluginManifestHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:release-configured-plugin-installs",
       label: "Configured plugin repair",
+      healthCheckIds: ["core/doctor/configured-plugin-installs"],
       run: runReleaseConfiguredPluginInstallsHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:plugin-registry",
       label: "Plugin registry",
+      healthCheckIds: ["core/doctor/plugin-registry"],
       run: runPluginRegistryHealth,
     }),
     createDoctorHealthContribution({

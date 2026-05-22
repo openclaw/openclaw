@@ -18,11 +18,29 @@ const LEGACY_MANIFEST_CONTRACT_KEYS = [
   "tools",
 ] as const;
 
-type LegacyManifestContractMigration = {
+export type LegacyManifestContractMigration = {
   manifestPath: string;
   pluginId: string;
   nextRaw: Record<string, unknown>;
   changeLines: string[];
+};
+
+export type LegacyPluginManifestContractRepairResult = {
+  status?: "repaired" | "skipped" | "failed";
+  changes: string[];
+  warnings: string[];
+  diffs: {
+    kind: "file";
+    path: string;
+    before?: string;
+    after?: string;
+  }[];
+  effects: {
+    kind: "file";
+    action: string;
+    target: string;
+    dryRunSafe: boolean;
+  }[];
 };
 
 const JsonRecordSchema = z.record(z.string(), z.unknown());
@@ -35,11 +53,38 @@ function readManifestJson(manifestPath: string): Record<string, unknown> | null 
   }
 }
 
+function renderManifestJson(raw: Record<string, unknown>): string {
+  return `${JSON.stringify(raw, null, 2)}\n`;
+}
+
 function manifestSeenKey(manifestPath: string): string {
   try {
     return fs.realpathSync.native(manifestPath);
   } catch {
     return path.resolve(manifestPath);
+  }
+}
+
+function collectManifestMigration(params: {
+  manifestPath: string;
+  seen: Set<string>;
+  migrations: LegacyManifestContractMigration[];
+}): void {
+  const seenKey = manifestSeenKey(params.manifestPath);
+  if (params.seen.has(seenKey)) {
+    return;
+  }
+  params.seen.add(seenKey);
+  const raw = readManifestJson(params.manifestPath);
+  if (!raw) {
+    return;
+  }
+  const migration = buildLegacyManifestContractMigration({
+    manifestPath: params.manifestPath,
+    raw,
+  });
+  if (migration) {
+    params.migrations.push(migration);
   }
 }
 
@@ -100,27 +145,30 @@ export function collectLegacyPluginManifestContractMigrations(params?: {
   const migrations: LegacyManifestContractMigration[] = [];
 
   for (const root of params?.manifestRoots ?? []) {
-    if (!fs.existsSync(root)) {
+    let rootStat: fs.Stats;
+    try {
+      rootStat = fs.statSync(root);
+    } catch {
       continue;
     }
+    if (rootStat.isFile()) {
+      collectManifestMigration({ manifestPath: root, seen, migrations });
+      continue;
+    }
+    if (!rootStat.isDirectory()) {
+      continue;
+    }
+    collectManifestMigration({
+      manifestPath: path.join(root, "openclaw.plugin.json"),
+      seen,
+      migrations,
+    });
     for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
       if (!entry.isDirectory()) {
         continue;
       }
       const manifestPath = path.join(root, entry.name, "openclaw.plugin.json");
-      const seenKey = manifestSeenKey(manifestPath);
-      if (seen.has(seenKey)) {
-        continue;
-      }
-      seen.add(seenKey);
-      const raw = readManifestJson(manifestPath);
-      if (!raw) {
-        continue;
-      }
-      const migration = buildLegacyManifestContractMigration({ manifestPath, raw });
-      if (migration) {
-        migrations.push(migration);
-      }
+      collectManifestMigration({ manifestPath, seen, migrations });
     }
   }
 
@@ -129,25 +177,91 @@ export function collectLegacyPluginManifestContractMigrations(params?: {
     ...(params?.env ? { env: params.env } : {}),
     ...(params?.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   }).plugins) {
-    const seenKey = manifestSeenKey(plugin.manifestPath);
-    if (seen.has(seenKey)) {
-      continue;
-    }
-    seen.add(seenKey);
-    const raw = readManifestJson(plugin.manifestPath);
-    if (!raw) {
-      continue;
-    }
-    const migration = buildLegacyManifestContractMigration({
+    collectManifestMigration({
       manifestPath: plugin.manifestPath,
-      raw,
+      seen,
+      migrations,
     });
-    if (migration) {
-      migrations.push(migration);
-    }
   }
 
   return migrations.toSorted((left, right) => left.manifestPath.localeCompare(right.manifestPath));
+}
+
+export async function repairLegacyPluginManifestContracts(params: {
+  config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  manifestRoots?: string[];
+  workspaceDir?: string;
+  runtime: RuntimeEnv;
+  migrations?: readonly LegacyManifestContractMigration[];
+  dryRun?: boolean;
+  diff?: boolean;
+}): Promise<LegacyPluginManifestContractRepairResult> {
+  const migrations =
+    params.migrations ??
+    collectLegacyPluginManifestContractMigrations({
+      ...(params.config ? { config: params.config } : {}),
+      ...(params.env ? { env: params.env } : {}),
+      ...(params.manifestRoots ? { manifestRoots: params.manifestRoots } : {}),
+      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    });
+  if (migrations.length === 0) {
+    return { status: "skipped", changes: [], warnings: [], diffs: [], effects: [] };
+  }
+
+  const changes: string[] = [];
+  const warnings: string[] = [];
+  const diffs: LegacyPluginManifestContractRepairResult["diffs"] = [];
+  const effects: LegacyPluginManifestContractRepairResult["effects"] = [];
+
+  for (const migration of migrations) {
+    const after = renderManifestJson(migration.nextRaw);
+    if (params.diff === true) {
+      let before: string | undefined;
+      try {
+        before = fs.readFileSync(migration.manifestPath, "utf-8");
+      } catch {
+        before = undefined;
+      }
+      diffs.push({
+        kind: "file",
+        path: migration.manifestPath,
+        ...(before !== undefined ? { before } : {}),
+        after,
+      });
+    }
+    const effect: LegacyPluginManifestContractRepairResult["effects"][number] = {
+      kind: "file",
+      action:
+        params.dryRun === true
+          ? "would-rewrite-legacy-plugin-manifest-contracts"
+          : "rewrite-legacy-plugin-manifest-contracts",
+      target: migration.manifestPath,
+      dryRunSafe: params.dryRun === true,
+    };
+    if (params.dryRun === true) {
+      effects.push(effect);
+      changes.push(...migration.changeLines);
+      continue;
+    }
+    try {
+      fs.writeFileSync(migration.manifestPath, after, "utf-8");
+      effects.push(effect);
+      changes.push(...migration.changeLines);
+    } catch (error) {
+      const warning = `Failed to rewrite legacy plugin manifest at ${migration.manifestPath}: ${String(error)}`;
+      warnings.push(warning);
+      params.runtime.error(warning);
+    }
+  }
+
+  return {
+    status: warnings.length === migrations.length ? "failed" : "repaired",
+    changes,
+    warnings,
+    diffs,
+    effects,
+  };
 }
 
 export async function maybeRepairLegacyPluginManifestContracts(params: {
@@ -188,23 +302,16 @@ export async function maybeRepairLegacyPluginManifestContracts(params: {
     return;
   }
 
-  const applied: string[] = [];
-  for (const migration of migrations) {
-    try {
-      fs.writeFileSync(
-        migration.manifestPath,
-        `${JSON.stringify(migration.nextRaw, null, 2)}\n`,
-        "utf-8",
-      );
-      applied.push(...migration.changeLines);
-    } catch (error) {
-      params.runtime.error(
-        `Failed to rewrite legacy plugin manifest at ${migration.manifestPath}: ${String(error)}`,
-      );
-    }
-  }
+  const repaired = await repairLegacyPluginManifestContracts({
+    runtime: params.runtime,
+    migrations,
+    ...(params.config ? { config: params.config } : {}),
+    ...(params.env ? { env: params.env } : {}),
+    ...(params.manifestRoots ? { manifestRoots: params.manifestRoots } : {}),
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+  });
 
-  if (applied.length > 0) {
-    emitNote(applied.join("\n"), "Doctor changes");
+  if (repaired.changes.length > 0) {
+    emitNote(repaired.changes.join("\n"), "Doctor changes");
   }
 }

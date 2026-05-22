@@ -7,6 +7,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import {
   collectLegacyPluginManifestContractMigrations,
   maybeRepairLegacyPluginManifestContracts,
+  repairLegacyPluginManifestContracts,
 } from "./doctor-plugin-manifests.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
@@ -164,6 +165,42 @@ describe("doctor plugin manifest legacy contract repair", () => {
     ]);
   });
 
+  it("collects direct manifest load paths without treating them as directories", () => {
+    const pluginsRoot = makeTrustedBundledPluginsDir();
+    const root = path.join(pluginsRoot, "openai");
+    fs.mkdirSync(root, { recursive: true });
+    writePackageJson(root);
+    writeManifest(root, {
+      id: "openai",
+      speechProviders: ["openai"],
+      configSchema: { type: "object" },
+    });
+
+    const manifestPath = path.join(root, "openclaw.plugin.json");
+    const migrations = collectLegacyPluginManifestContractMigrations({
+      config: configWithPluginLoadPath(manifestPath),
+      env: {
+        ...process.env,
+      },
+      manifestRoots: [manifestPath],
+    });
+
+    expect(migrations).toStrictEqual([
+      {
+        changeLines: [`- ${manifestPath}: moved speechProviders to contracts.speechProviders`],
+        manifestPath,
+        nextRaw: {
+          id: "openai",
+          contracts: {
+            speechProviders: ["openai"],
+          },
+          configSchema: { type: "object" },
+        },
+        pluginId: "openai",
+      },
+    ]);
+  });
+
   it("rewrites legacy top-level capability keys into contracts", async () => {
     const pluginsRoot = makeTrustedBundledPluginsDir();
     const root = path.join(pluginsRoot, "openai");
@@ -203,6 +240,83 @@ describe("doctor plugin manifest legacy contract repair", () => {
       mediaUnderstandingProviders: ["openai"],
       webSearchProviders: ["gemini"],
     });
+  });
+
+  it("previews legacy manifest contract rewrites without changing files", async () => {
+    const pluginsRoot = makeTrustedBundledPluginsDir();
+    const root = path.join(pluginsRoot, "openai");
+    fs.mkdirSync(root, { recursive: true });
+    writePackageJson(root);
+    writeManifest(root, {
+      id: "openai",
+      providers: ["openai"],
+      speechProviders: ["openai"],
+      configSchema: { type: "object" },
+    });
+    const manifestPath = path.join(root, "openclaw.plugin.json");
+    const before = fs.readFileSync(manifestPath, "utf-8");
+
+    const result = await repairLegacyPluginManifestContracts({
+      config: configWithPluginLoadPath(pluginsRoot),
+      env: { ...process.env },
+      manifestRoots: [pluginsRoot],
+      runtime: createRuntime(),
+      dryRun: true,
+      diff: true,
+    });
+
+    expect(fs.readFileSync(manifestPath, "utf-8")).toBe(before);
+    expect(result.status).toBe("repaired");
+    expect(result.changes).toEqual([
+      `- ${manifestPath}: moved speechProviders to contracts.speechProviders`,
+    ]);
+    expect(result.diffs).toMatchObject([
+      {
+        kind: "file",
+        path: manifestPath,
+        before,
+        after: expect.stringContaining('"contracts"'),
+      },
+    ]);
+    expect(result.effects).toEqual([
+      {
+        kind: "file",
+        action: "would-rewrite-legacy-plugin-manifest-contracts",
+        target: manifestPath,
+        dryRunSafe: true,
+      },
+    ]);
+  });
+
+  it("does not report failed manifest rewrites as applied changes", async () => {
+    const runtime = createRuntime();
+    const manifestPath = path.join(
+      makeTrustedBundledPluginsDir(),
+      "missing",
+      "openclaw.plugin.json",
+    );
+
+    const result = await repairLegacyPluginManifestContracts({
+      runtime,
+      migrations: [
+        {
+          manifestPath,
+          pluginId: "missing",
+          nextRaw: { id: "missing" },
+          changeLines: [`- ${manifestPath}: moved tools to contracts.tools`],
+        },
+      ],
+    });
+
+    expect(result.status).toBe("failed");
+    expect(result.changes).toEqual([]);
+    expect(result.effects).toEqual([]);
+    expect(result.warnings).toEqual([
+      expect.stringContaining("Failed to rewrite legacy plugin manifest"),
+    ]);
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Failed to rewrite legacy plugin manifest"),
+    );
   });
 
   it("removes duplicate legacy top-level plugin tools while keeping contracts.tools", async () => {
