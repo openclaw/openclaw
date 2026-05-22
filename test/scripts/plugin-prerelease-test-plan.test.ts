@@ -182,7 +182,8 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     });
     expect(script).toContain("OPENCLAW_ENTRY=/app/openclaw.mjs");
     expect(script).toContain("docker stats --no-stream");
-    expect(script).toContain("scripts/e2e/kitchen-sink-rpc-walk.mjs");
+    expect(script).toContain("node scripts/e2e/kitchen-sink-rpc-walk.mjs");
+    expect(script).not.toContain("--import tsx");
     expect(walkScript).toContain("commands.list");
     expect(walkScript).toContain("tools.invoke");
     expect(walkScript).toContain("tts.providers");
