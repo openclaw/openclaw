@@ -58,6 +58,47 @@ describe("buildGradiumRealtimeTranscriptionProvider", () => {
     ).toThrow("Invalid Gradium realtime transcription input format: mp3");
   });
 
+  it("accepts documented Gradium realtime input formats and aliases", () => {
+    const provider = buildGradiumRealtimeTranscriptionProvider();
+    const formats = [
+      "pcm",
+      "pcm_8000",
+      "pcm_16000",
+      "pcm_22050",
+      "pcm_24000",
+      "pcm_44100",
+      "pcm_48000",
+      "wav",
+      "opus",
+      "ulaw_8000",
+      "mulaw_8000",
+      "alaw_8000",
+    ];
+
+    const resolvedFormats = formats.map((inputFormat) => {
+      const resolved = provider.resolveConfig?.({
+        cfg: {} as OpenClawConfig,
+        rawConfig: { providers: { gradium: { input_format: inputFormat } } },
+      });
+      return resolved?.inputFormat;
+    });
+
+    expect(resolvedFormats).toEqual([
+      "pcm",
+      "pcm_8000",
+      "pcm_16000",
+      "pcm_22050",
+      "pcm_24000",
+      "pcm_44100",
+      "pcm_48000",
+      "wav",
+      "opus",
+      "ulaw_8000",
+      "ulaw_8000",
+      "alaw_8000",
+    ]);
+  });
+
   it("rejects delay values Gradium does not accept", () => {
     const provider = buildGradiumRealtimeTranscriptionProvider();
     expect(() =>
@@ -152,10 +193,15 @@ describe("buildGradiumRealtimeTranscriptionProvider", () => {
     expect(onPartial).toHaveBeenCalledWith("hello");
     expect(onPartial).toHaveBeenCalledWith("hello openclaw");
     expect(sendJson).toHaveBeenCalledWith({ type: "flush", flush_id: 1 });
-    expect(onTranscript).toHaveBeenCalledWith("hello openclaw");
+    expect(onTranscript).not.toHaveBeenCalled();
+
+    handleEvent({ type: "text", text: "!" }, transport);
+
+    expect(onPartial).toHaveBeenCalledWith("hello openclaw!");
 
     handleEvent({ type: "flushed" }, transport);
 
+    expect(onTranscript).toHaveBeenCalledWith("hello openclaw!");
     expect(onTranscript).toHaveBeenCalledTimes(1);
   });
 

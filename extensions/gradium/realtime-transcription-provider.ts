@@ -10,7 +10,18 @@ import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-i
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { DEFAULT_GRADIUM_BASE_URL, normalizeGradiumBaseUrl } from "./shared.js";
 
-type GradiumRealtimeInputFormat = "pcm" | "wav" | "opus" | "ulaw_8000" | "alaw_8000";
+type GradiumRealtimeInputFormat =
+  | "pcm"
+  | "pcm_8000"
+  | "pcm_16000"
+  | "pcm_22050"
+  | "pcm_24000"
+  | "pcm_44100"
+  | "pcm_48000"
+  | "wav"
+  | "opus"
+  | "ulaw_8000"
+  | "alaw_8000";
 
 type GradiumRealtimeProviderConfig = {
   apiKey?: string;
@@ -75,6 +86,12 @@ const GRADIUM_REALTIME_MAX_QUEUED_BYTES = 2 * 1024 * 1024;
 
 const VALID_INPUT_FORMATS: ReadonlySet<GradiumRealtimeInputFormat> = new Set([
   "pcm",
+  "pcm_8000",
+  "pcm_16000",
+  "pcm_22050",
+  "pcm_24000",
+  "pcm_44100",
+  "pcm_48000",
   "wav",
   "opus",
   "ulaw_8000",
@@ -150,6 +167,9 @@ function normalizeInputFormat(value: unknown): GradiumRealtimeInputFormat | unde
   const normalized = normalizeOptionalString(value)?.toLowerCase();
   if (!normalized) {
     return undefined;
+  }
+  if (normalized === "mulaw_8000") {
+    return "ulaw_8000";
   }
   if (VALID_INPUT_FORMATS.has(normalized as GradiumRealtimeInputFormat)) {
     return normalized as GradiumRealtimeInputFormat;
@@ -342,7 +362,6 @@ function createGradiumRealtimeEventHandler(config: GradiumRealtimeSessionConfig)
         return;
       case "end_text":
         if (flushRequested) {
-          commitTranscript();
           return;
         }
         if (config.semanticVad) {
