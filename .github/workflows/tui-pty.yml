@@ -23,7 +23,7 @@ env:
 jobs:
   tui-pty:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 5
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -33,8 +33,5 @@ jobs:
         with:
           install-bun: "false"
 
-      - name: Build OpenClaw
-        run: pnpm build
-
       - name: Run TUI PTY tests
-        run: node scripts/run-vitest.mjs run --config test/vitest/vitest.tui-pty.config.ts
+        run: timeout 120s node scripts/run-vitest.mjs run --config test/vitest/vitest.tui-pty.config.ts

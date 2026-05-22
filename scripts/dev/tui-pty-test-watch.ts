@@ -109,6 +109,7 @@ async function main(): Promise<void> {
       env: {
         ...process.env,
         OPENCLAW_TUI_PTY_MIRROR_PATH: options.mirrorPath,
+        OPENCLAW_TUI_PTY_INCLUDE_LOCAL: options.mode === "fake" ? "0" : "1",
         OPENCLAW_TUI_PTY_COLS: currentTerminalDimension(process.stdout.columns, DEFAULT_PTY_COLS),
         OPENCLAW_TUI_PTY_ROWS: currentTerminalDimension(process.stdout.rows, DEFAULT_PTY_ROWS),
         OPENCLAW_TUI_PTY_TYPE_CHUNK_SIZE: process.env.OPENCLAW_TUI_PTY_TYPE_CHUNK_SIZE ?? "4",
