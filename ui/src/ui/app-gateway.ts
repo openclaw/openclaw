@@ -690,7 +690,6 @@ function handleTerminalChatEvent(
     if (state === "final") {
       void loadSessions(host as unknown as SessionsState, {
         activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
-        agentId: resolveChatEventSessionListAgentId(host, payload),
         limit: CHAT_SESSIONS_REFRESH_LIMIT,
       });
     }
@@ -718,27 +717,6 @@ function isEventForDifferentActiveRun(
   activeRunId: string | null,
 ): boolean {
   return Boolean(activeRunId && payload && payload.runId !== activeRunId);
-}
-
-function resolveChatEventSessionListAgentId(
-  host: GatewayHost,
-  payload: ChatEventPayload | undefined,
-): string {
-  return resolveSessionListAgentIdForSessionKey(
-    host,
-    payload?.sessionKey?.trim() || host.sessionKey,
-  );
-}
-
-function resolveSessionListAgentIdForSessionKey(host: GatewayHost, sessionKey: string): string {
-  const parsed = parseAgentSessionKey(sessionKey);
-  if (parsed?.agentId) {
-    return parsed.agentId;
-  }
-  const snapshot = host.hello?.snapshot as
-    | { sessionDefaults?: SessionDefaultsSnapshot }
-    | undefined;
-  return normalizeAgentId(snapshot?.sessionDefaults?.defaultAgentId);
 }
 
 function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | undefined) {
@@ -861,7 +839,6 @@ function handleSessionMessageGatewayEvent(
     const runIdBeforeRefresh = host.chatRunId;
     void loadSessions(host as unknown as SessionsState, {
       activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
-      agentId: resolveSessionListAgentIdForSessionKey(host, sessionKey),
       limit: CHAT_SESSIONS_REFRESH_LIMIT,
     }).finally(() =>
       replayDeferredSessionMessageReloadAfterSessionsRefresh(

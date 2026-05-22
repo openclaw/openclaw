@@ -202,14 +202,7 @@ async function refreshSessionOptions(state: AppViewState) {
     includeGlobal: true,
     includeUnknown: true,
     showArchived: state.sessionsShowArchived,
-    agentId: resolveSessionOptionsAgentId(state),
   });
-}
-
-function resolveSessionOptionsAgentId(state: AppViewState): string {
-  return (
-    parseAgentSessionKey(state.sessionKey)?.agentId ?? normalizeAgentId(state.agentsList?.defaultId)
-  );
 }
 
 async function refreshVisibleToolsEffectiveForCurrentSessionLazy(state: AppViewState) {
