@@ -122,12 +122,37 @@ function stripPackageAlias(spec: string, packageName: string): string {
     : trimmed;
 }
 
+function isHttpGitUrlSpec(spec: string): boolean {
+  try {
+    const url = new URL(spec);
+    if (url.protocol !== "https:" && url.protocol !== "http:") {
+      return false;
+    }
+    return url.pathname.replace(/\/+$/u, "").endsWith(".git");
+  } catch {
+    return false;
+  }
+}
+
+function isGitHubShorthandSpec(spec: string): boolean {
+  const [repo] = spec.split("#", 1);
+  if (!repo || repo.startsWith(".") || repo.startsWith("/") || repo.startsWith("@")) {
+    return false;
+  }
+  const parts = repo.split("/");
+  return parts.length === 2 && parts.every((part) => /^[^\s/:@]+$/u.test(part));
+}
+
 function isNpmGitSourceInstallSpec(spec: string, packageName: string): boolean {
   const target = stripPackageAlias(spec, packageName);
   return (
     /^github:/i.test(target) ||
     /^git\+(?:ssh|https|http|file):/i.test(target) ||
-    /^git:/i.test(target)
+    /^git:/i.test(target) ||
+    /^ssh:\/\//i.test(target) ||
+    /^[^@\s]+@[^:\s]+:[^#\s]+(?:#.*)?$/u.test(target) ||
+    isHttpGitUrlSpec(target) ||
+    isGitHubShorthandSpec(target)
   );
 }
 

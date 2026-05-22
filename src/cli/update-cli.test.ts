@@ -421,7 +421,31 @@ describe("update-cli", () => {
 
   const isNpmGitPackageSpec = (spec: string) => {
     const target = stripOpenClawPackageAlias(spec);
-    return /^github:/i.test(target) || /^git(?:\+|:)/i.test(target);
+    const [repo] = target.split("#", 1);
+    const isGitHubShorthand =
+      !!repo &&
+      !repo.startsWith(".") &&
+      !repo.startsWith("/") &&
+      !repo.startsWith("@") &&
+      repo.split("/").length === 2 &&
+      repo.split("/").every((part) => /^[^\s/:@]+$/u.test(part));
+    let isHttpGitUrl = false;
+    try {
+      const url = new URL(target);
+      isHttpGitUrl =
+        (url.protocol === "https:" || url.protocol === "http:") &&
+        url.pathname.replace(/\/+$/u, "").endsWith(".git");
+    } catch {
+      isHttpGitUrl = false;
+    }
+    return (
+      /^github:/i.test(target) ||
+      /^git(?:\+|:)/i.test(target) ||
+      /^ssh:\/\//i.test(target) ||
+      /^[^@\s]+@[^:\s]+:[^#\s]+(?:#.*)?$/u.test(target) ||
+      isHttpGitUrl ||
+      isGitHubShorthand
+    );
   };
 
   const doctorCommandCall = () =>
@@ -2174,6 +2198,30 @@ describe("update-cli", () => {
         await updateCommand({ yes: true, tag: "OpenClaw@github:openclaw/openclaw#main" });
       },
       expectedSpec: "OpenClaw@github:openclaw/openclaw#main",
+    },
+    {
+      name: "full git URL package spec",
+      run: async () => {
+        mockPackageInstallStatus(createCaseDir("openclaw-update"));
+        await updateCommand({ yes: true, tag: "https://github.com/openclaw/openclaw.git#main" });
+      },
+      expectedSpec: "https://github.com/openclaw/openclaw.git#main",
+    },
+    {
+      name: "GitHub shorthand package spec",
+      run: async () => {
+        mockPackageInstallStatus(createCaseDir("openclaw-update"));
+        await updateCommand({ yes: true, tag: "openclaw/openclaw#main" });
+      },
+      expectedSpec: "openclaw/openclaw#main",
+    },
+    {
+      name: "SCP-style SSH package spec",
+      run: async () => {
+        mockPackageInstallStatus(createCaseDir("openclaw-update"));
+        await updateCommand({ yes: true, tag: "git@github.com:openclaw/openclaw.git#main" });
+      },
+      expectedSpec: "git@github.com:openclaw/openclaw.git#main",
     },
     {
       name: "OPENCLAW_UPDATE_PACKAGE_SPEC override",
