@@ -779,7 +779,7 @@ describe("createImageGenerateTool", () => {
     expect(resultDetails(duplicateResult).duplicateGuard).toBe(true);
   });
 
-  it("returns active status for a distinct image request while another image task is active", async () => {
+  it("starts a distinct image request while another image task is active", async () => {
     stubImageGenerationProviders();
     vi.stubEnv("OPENAI_API_KEY", "openai-test");
     vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
@@ -794,6 +794,9 @@ describe("createImageGenerateTool", () => {
           fileName: "second.png",
         },
       ],
+    });
+    taskRuntimeMocks.createRunningTaskRun.mockReturnValue({
+      taskId: "task-second-image",
     });
     taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([
       {
@@ -841,12 +844,10 @@ describe("createImageGenerateTool", () => {
       model: "openai/gpt-image-1",
     });
 
-    expect(scheduled).toHaveLength(0);
-    expect(taskRuntimeMocks.createRunningTaskRun).not.toHaveBeenCalled();
-    expect(resultText(result)).toContain(
-      "Image generation task task-first-image is already running",
-    );
-    expect(resultDetails(result).duplicateGuard).toBe(true);
+    expect(scheduled).toHaveLength(1);
+    expect(taskRuntimeMocks.createRunningTaskRun).toHaveBeenCalledTimes(1);
+    expect(resultText(result)).toContain("Background task started for image generation");
+    expect(resultDetails(result).duplicateGuard).toBeUndefined();
   });
 
   it("returns active status for a duplicate image request with the same prompt", async () => {

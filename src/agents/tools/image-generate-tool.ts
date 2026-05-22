@@ -830,6 +830,7 @@ export function createImageGenerateTool(options?: {
 
       const activeDuplicateGuardResult = createImageGenerateDuplicateGuardResult(
         options?.agentSessionKey,
+        { prompt },
       );
       if (activeDuplicateGuardResult) {
         return activeDuplicateGuardResult;
@@ -877,7 +878,7 @@ export function createImageGenerateTool(options?: {
       });
       const duplicateGuardResult = createImageGenerateDuplicateGuardResult(
         options?.agentSessionKey,
-        { requestKey },
+        { prompt, requestKey },
       );
       if (duplicateGuardResult) {
         return duplicateGuardResult;

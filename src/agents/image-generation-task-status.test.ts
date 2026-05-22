@@ -263,6 +263,96 @@ describe("image generation task status", () => {
     ).toBeUndefined();
   });
 
+  it("preserves earlier recent request keys when another image request starts", () => {
+    const now = Date.now();
+    recordRecentMediaGenerationTaskStartForSession({
+      sessionKey: "agent:main",
+      taskKind: IMAGE_GENERATION_TASK_KIND,
+      sourcePrefix: "image_generate",
+      taskId: "task-first",
+      runId: "run-first",
+      taskLabel: "first prompt",
+      requestKey: "image-request:first",
+      providerId: "xai",
+      progressSummary: "Generating first image",
+      nowMs: now - 30_000,
+    });
+    recordRecentMediaGenerationTaskStartForSession({
+      sessionKey: "agent:main",
+      taskKind: IMAGE_GENERATION_TASK_KIND,
+      sourcePrefix: "image_generate",
+      taskId: "task-second",
+      runId: "run-second",
+      taskLabel: "second prompt",
+      requestKey: "image-request:second",
+      providerId: "xai",
+      progressSummary: "Generating second image",
+      nowMs: now - 20_000,
+    });
+    taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([
+      {
+        taskId: "task-first",
+        runId: "run-first",
+        runtime: "cli",
+        taskKind: IMAGE_GENERATION_TASK_KIND,
+        sourceId: "image_generate:xai",
+        requesterSessionKey: "agent:main",
+        ownerKey: "agent:main",
+        scopeKind: "session",
+        task: "first prompt",
+        status: "succeeded",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+        createdAt: now - 30_000,
+        endedAt: now - 15_000,
+        progressSummary: "Generated first image",
+      },
+      {
+        taskId: "task-second",
+        runId: "run-second",
+        runtime: "cli",
+        taskKind: IMAGE_GENERATION_TASK_KIND,
+        sourceId: "image_generate:xai",
+        requesterSessionKey: "agent:main",
+        ownerKey: "agent:main",
+        scopeKind: "session",
+        task: "second prompt",
+        status: "succeeded",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+        createdAt: now - 20_000,
+        endedAt: now - 10_000,
+        progressSummary: "Generated second image",
+      },
+    ]);
+
+    expect(
+      findDuplicateGuardImageGenerationTaskForSession("agent:main", {
+        requestKey: "image-request:first",
+      })?.taskId,
+    ).toBe("task-first");
+  });
+
+  it("does not block a distinct prompt from a cached active recent start", () => {
+    recordRecentMediaGenerationTaskStartForSession({
+      sessionKey: "agent:main",
+      taskKind: IMAGE_GENERATION_TASK_KIND,
+      sourcePrefix: "image_generate",
+      taskId: "task-first",
+      runId: "run-first",
+      taskLabel: "first prompt",
+      requestKey: "image-request:first",
+      providerId: "xai",
+      progressSummary: "Generating first image",
+    });
+
+    expect(
+      findDuplicateGuardImageGenerationTaskForSession("agent:main", {
+        prompt: "second prompt",
+      }),
+    ).toBeUndefined();
+  });
+
   it("uses a recent persisted completion instead of pruning a stale recent-start cache", () => {
     const now = Date.now();
     recordRecentMediaGenerationTaskStartForSession({

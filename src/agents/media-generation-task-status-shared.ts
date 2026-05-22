@@ -12,7 +12,7 @@ type RecentMediaGenerationTaskStart = {
   requestKey?: string;
 };
 
-const recentMediaGenerationTaskStarts = new Map<string, RecentMediaGenerationTaskStart>();
+const recentMediaGenerationTaskStarts = new Map<string, RecentMediaGenerationTaskStart[]>();
 
 export function buildMediaGenerationRequestKey(value: Record<string, unknown>): string {
   return stableStringify(value);
@@ -50,11 +50,16 @@ function pruneRecentMediaGenerationTaskStarts(params: {
   nowMs: number;
   preserveKey?: string;
 }) {
-  for (const [key, entry] of recentMediaGenerationTaskStarts.entries()) {
+  for (const [key, entries] of recentMediaGenerationTaskStarts.entries()) {
     if (params.preserveKey === key) {
       continue;
     }
-    if (!isRecentMediaGenerationTaskRecord({ task: entry.task, ...params })) {
+    const freshEntries = entries.filter((entry) =>
+      isRecentMediaGenerationTaskRecord({ task: entry.task, ...params }),
+    );
+    if (freshEntries.length > 0) {
+      recentMediaGenerationTaskStarts.set(key, freshEntries);
+    } else {
       recentMediaGenerationTaskStarts.delete(key);
     }
   }
@@ -89,6 +94,19 @@ function isTaskRecentSuccessfulDuplicate(params: {
       nowMs: params.nowMs,
     })
   );
+}
+
+function recentMediaGenerationTaskStartMatches(
+  left: RecentMediaGenerationTaskStart,
+  right: RecentMediaGenerationTaskStart,
+): boolean {
+  if (left.requestKey && right.requestKey) {
+    return left.requestKey === right.requestKey;
+  }
+  if (left.task.runId && right.task.runId) {
+    return left.task.runId === right.task.runId;
+  }
+  return left.task.taskId === right.task.taskId;
 }
 
 function findPersistedTaskForRecentMediaGenerationStart(params: {
@@ -143,7 +161,8 @@ export function recordRecentMediaGenerationTaskStartForSession(params: {
     return;
   }
   const nowMs = params.nowMs ?? Date.now();
-  recentMediaGenerationTaskStarts.set(key, {
+  pruneRecentMediaGenerationTaskStarts({ maxAgeMs: 2 * 60_000, nowMs, preserveKey: key });
+  const entry = {
     requestKey: normalizeOptionalString(params.requestKey),
     task: {
       taskId: params.taskId,
@@ -165,13 +184,21 @@ export function recordRecentMediaGenerationTaskStartForSession(params: {
       lastEventAt: nowMs,
       progressSummary: params.progressSummary,
     },
-  });
+  };
+  const previousEntries = recentMediaGenerationTaskStarts.get(key) ?? [];
+  recentMediaGenerationTaskStarts.set(key, [
+    ...previousEntries.filter(
+      (previousEntry) => !recentMediaGenerationTaskStartMatches(previousEntry, entry),
+    ),
+    entry,
+  ]);
 }
 
 export function findRecentStartedMediaGenerationTaskForSession(params: {
   sessionKey?: string;
   taskKind: string;
   sourcePrefix: string;
+  taskLabel?: string;
   maxAgeMs: number;
   requestKey?: string;
   nowMs?: number;
@@ -183,44 +210,57 @@ export function findRecentStartedMediaGenerationTaskForSession(params: {
   }
   const nowMs = params.nowMs ?? Date.now();
   const maxAgeMs = Math.max(0, Math.floor(params.maxAgeMs));
+  const taskLabel = normalizeOptionalString(params.taskLabel);
   pruneRecentMediaGenerationTaskStarts({ maxAgeMs, nowMs, preserveKey: key });
-  const entry = recentMediaGenerationTaskStarts.get(key);
-  const task = entry?.task;
-  if (!entry || !task) {
+  const entries = recentMediaGenerationTaskStarts.get(key);
+  if (!entries?.length) {
     return undefined;
   }
-  const persistedTask = findPersistedTaskForRecentMediaGenerationStart({
-    sessionKey,
-    cachedTask: task,
-    taskKind: params.taskKind,
-    sourcePrefix: params.sourcePrefix,
-  });
-  if (persistedTask) {
-    if (isTaskStillBlockingDuplicateGuard(persistedTask)) {
-      return persistedTask;
+  const retainedEntries: RecentMediaGenerationTaskStart[] = [];
+  for (const entry of entries.toReversed()) {
+    const task = entry.task;
+    const persistedTask = findPersistedTaskForRecentMediaGenerationStart({
+      sessionKey,
+      cachedTask: task,
+      taskKind: params.taskKind,
+      sourcePrefix: params.sourcePrefix,
+    });
+    if (persistedTask) {
+      const persistedTaskLabelMatches =
+        !taskLabel || mediaGenerationTaskLabelMatches(persistedTask, taskLabel);
+      if (isTaskStillBlockingDuplicateGuard(persistedTask) && persistedTaskLabelMatches) {
+        return persistedTask;
+      }
+      if (
+        isTaskRecentSuccessfulDuplicate({
+          task: persistedTask,
+          requestKey: params.requestKey,
+          cachedRequestKey: entry.requestKey,
+          maxAgeMs,
+          nowMs,
+        })
+      ) {
+        return persistedTask;
+      }
+      if (isRecentMediaGenerationTaskRecord({ task: persistedTask, maxAgeMs, nowMs })) {
+        retainedEntries.push(entry);
+      }
+      continue;
     }
-    if (persistedTask.status === "succeeded" && entry.requestKey && !params.requestKey) {
-      return undefined;
+    if (isRecentMediaGenerationTaskRecord({ task, maxAgeMs, nowMs })) {
+      const cachedTaskLabelMatches = !taskLabel || mediaGenerationTaskLabelMatches(task, taskLabel);
+      if (isTaskStillBlockingDuplicateGuard(task) && cachedTaskLabelMatches) {
+        return { ...task };
+      }
+      retainedEntries.push(entry);
     }
-    if (
-      isTaskRecentSuccessfulDuplicate({
-        task: persistedTask,
-        requestKey: params.requestKey,
-        cachedRequestKey: entry.requestKey,
-        maxAgeMs,
-        nowMs,
-      })
-    ) {
-      return persistedTask;
-    }
+  }
+  if (retainedEntries.length > 0) {
+    recentMediaGenerationTaskStarts.set(key, retainedEntries.toReversed());
+  } else {
     recentMediaGenerationTaskStarts.delete(key);
-    return undefined;
   }
-  if (!isRecentMediaGenerationTaskRecord({ task, maxAgeMs, nowMs })) {
-    recentMediaGenerationTaskStarts.delete(key);
-    return undefined;
-  }
-  return { ...task };
+  return undefined;
 }
 
 export function resetRecentMediaGenerationDuplicateGuardsForTests() {
@@ -285,6 +325,7 @@ export function findDuplicateGuardMediaGenerationTaskForSession(params: {
       sessionKey: params.sessionKey,
       taskKind: params.taskKind,
       sourcePrefix: params.sourcePrefix,
+      taskLabel: params.taskLabel,
     }) ??
     undefined
   );

@@ -364,7 +364,11 @@ describe("embedded attempt session lock lifecycle", () => {
 
     await controller.releaseForPrompt();
     await controller.reacquireAfterPrompt();
-    await fs.appendFile(sessionFile, '{"type":"message","id":"external-after-reacquire"}\n', "utf8");
+    await fs.appendFile(
+      sessionFile,
+      '{"type":"message","id":"external-after-reacquire"}\n',
+      "utf8",
+    );
 
     const cleanupLock = await controller.acquireForCleanup();
     await cleanupLock.release();
