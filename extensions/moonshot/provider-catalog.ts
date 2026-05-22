@@ -3,7 +3,14 @@ import {
   applyProviderNativeStreamingUsageCompat,
   supportsNativeStreamingUsageCompat,
 } from "openclaw/plugin-sdk/provider-catalog-shared";
-import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import type {
+  ProviderResolveDynamicModelContext,
+  ProviderRuntimeModel,
+} from "openclaw/plugin-sdk/plugin-entry";
+import {
+  normalizeModelCompat,
+  type ModelProviderConfig,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 export const MOONSHOT_BASE_URL = "https://api.moonshot.ai/v1";
@@ -31,4 +38,20 @@ export function buildMoonshotProvider(): ModelProviderConfig {
     providerId: "moonshot",
     catalog: manifest.modelCatalog.providers.moonshot,
   });
+}
+
+export function resolveMoonshotDynamicModel(ctx: ProviderResolveDynamicModelContext) {
+  const providerConfig = ctx.providerConfig;
+  const provider = buildMoonshotProvider();
+  const model = provider.models.find((candidate) => candidate.id === ctx.modelId);
+  if (!model) {
+    return undefined;
+  }
+
+  return normalizeModelCompat({
+    ...model,
+    provider: ctx.provider,
+    api: providerConfig?.api ?? provider.api,
+    baseUrl: providerConfig?.baseUrl ?? provider.baseUrl,
+  } as ProviderRuntimeModel);
 }

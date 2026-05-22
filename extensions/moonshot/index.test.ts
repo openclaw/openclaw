@@ -70,4 +70,24 @@ describe("moonshot provider plugin", () => {
       thinking: { type: "disabled" },
     });
   });
+
+  it("resolves bundled Moonshot models without registry discovery", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    const resolved = provider.resolveDynamicModel?.({
+      provider: "moonshot",
+      modelId: "kimi-k2.6",
+      modelRegistry: { find: () => undefined } as never,
+      providerConfig: { baseUrl: "https://api.moonshot.cn/v1" },
+    });
+
+    expect(resolved).toMatchObject({
+      id: "kimi-k2.6",
+      provider: "moonshot",
+      api: "openai-completions",
+      baseUrl: "https://api.moonshot.cn/v1",
+      contextWindow: 262144,
+      maxTokens: 262144,
+    });
+  });
 });

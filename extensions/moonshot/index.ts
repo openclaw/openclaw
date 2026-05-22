@@ -8,7 +8,10 @@ import {
   applyMoonshotConfigCn,
   MOONSHOT_DEFAULT_MODEL_REF,
 } from "./onboard.js";
-import { buildMoonshotProvider } from "./provider-catalog.js";
+import {
+  buildMoonshotProvider,
+  resolveMoonshotDynamicModel,
+} from "./provider-catalog.js";
 import { createKimiWebSearchProvider } from "./src/kimi-web-search-provider.js";
 
 const PROVIDER_ID = "moonshot";
@@ -73,6 +76,7 @@ export default defineSingleProviderPluginEntry({
       ],
       defaultLevel: "off",
     }),
+    resolveDynamicModel: resolveMoonshotDynamicModel,
   },
   register(api) {
     api.registerMediaUnderstandingProvider(moonshotMediaUnderstandingProvider);
