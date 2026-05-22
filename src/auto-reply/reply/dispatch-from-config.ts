@@ -63,6 +63,7 @@ import {
   logSessionStateChange,
   markDiagnosticSessionProgress,
 } from "../../logging/diagnostic.js";
+import { matchPluginCommand } from "../../plugins/commands.js";
 import {
   buildPluginBindingDeclinedText,
   buildPluginBindingErrorText,
@@ -94,6 +95,11 @@ import {
   resolveCommandTurnContext,
   resolveCommandTurnTargetSessionKey,
 } from "../command-turn-context.js";
+import {
+  findCommandByNativeName,
+  normalizeCommandBody,
+  resolveTextCommand,
+} from "../commands-registry.js";
 import type { BlockReplyContext } from "../get-reply-options.types.js";
 import {
   getReplyPayloadMetadata,
@@ -571,6 +577,42 @@ const resolveHarnessSourceVisibleRepliesDefault = (params: {
     return undefined;
   }
 };
+
+function shouldBypassPluginOwnedBindingForCommand(ctx: FinalizedMsgContext): boolean {
+  const commandTurn = resolveCommandTurnContext(ctx);
+  if (!commandTurn.authorized) {
+    return false;
+  }
+  if (isNativeCommandTurn(commandTurn)) {
+    return true;
+  }
+  if (commandTurn.kind !== "text-slash") {
+    return false;
+  }
+  const commandBody = normalizeCommandBody(commandTurn.body ?? "", {
+    botUsername: ctx.BotUsername,
+  });
+  if (!commandBody.startsWith("/")) {
+    return false;
+  }
+  if (resolveTextCommand(commandBody)) {
+    return true;
+  }
+  const provider = normalizeOptionalString(ctx.Provider ?? ctx.Surface);
+  if (
+    commandTurn.commandName &&
+    findCommandByNativeName(commandTurn.commandName, provider, {
+      includeBundledChannelFallback: true,
+    })
+  ) {
+    return true;
+  }
+  return Boolean(
+    matchPluginCommand(commandBody, {
+      channel: normalizeOptionalString(ctx.Surface ?? ctx.Provider),
+    }),
+  );
+}
 
 async function clearPendingFinalDeliveryAfterSuccess(params: {
   storePath?: string;
@@ -1268,7 +1310,11 @@ export async function dispatchReplyFromConfig(
 
   if (pluginOwnedBinding) {
     touchConversationBindingRecord(pluginOwnedBinding.bindingId);
-    if (suppressDelivery) {
+    if (shouldBypassPluginOwnedBindingForCommand(ctx)) {
+      logVerbose(
+        `plugin-bound inbound command escaped plugin binding (plugin=${pluginOwnedBinding.pluginId} session=${sessionKey ?? "unknown"}); falling through to command processing`,
+      );
+    } else if (suppressDelivery) {
       // Plugin-bound inbound handlers typically emit outbound replies we
       // cannot rewind. When automatic delivery is suppressed, skip the plugin
       // claim and fall through to normal suppressed agent processing.
