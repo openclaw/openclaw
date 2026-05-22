@@ -133,6 +133,8 @@ describe("registerPolicyDoctorChecks", () => {
       "policy/gateway-remote-enabled",
       "policy/gateway-http-endpoint-enabled",
       "policy/gateway-http-url-fetch-unrestricted",
+      "policy/agents-workspace-access-denied",
+      "policy/agents-tool-not-denied",
       "policy/secrets-unmanaged-provider",
       "policy/secrets-denied-provider-source",
       "policy/secrets-insecure-provider",
@@ -303,6 +305,28 @@ describe("registerPolicyDoctorChecks", () => {
       { gateway: { http: { requireUrlAllowlists: "true" } } },
       "oc://policy.jsonc/gateway/http/requireUrlAllowlists",
     ],
+    ["agents array", { agents: [] }, "oc://policy.jsonc/agents"],
+    ["agents workspace array", { agents: { workspace: [] } }, "oc://policy.jsonc/agents/workspace"],
+    [
+      "agents workspace allowedAccess string",
+      { agents: { workspace: { allowedAccess: "ro" } } },
+      "oc://policy.jsonc/agents/workspace/allowedAccess",
+    ],
+    [
+      "agents workspace allowedAccess invalid",
+      { agents: { workspace: { allowedAccess: ["none", "host"] } } },
+      "oc://policy.jsonc/agents/workspace/allowedAccess/#1",
+    ],
+    [
+      "agents workspace denyTools string",
+      { agents: { workspace: { denyTools: "exec" } } },
+      "oc://policy.jsonc/agents/workspace/denyTools",
+    ],
+    [
+      "agents workspace denyTools unsupported",
+      { agents: { workspace: { denyTools: ["exec", "browser"] } } },
+      "oc://policy.jsonc/agents/workspace/denyTools/#1",
+    ],
     ["secrets array", { secrets: [] }, "oc://policy.jsonc/secrets"],
     ["auth array", { auth: [] }, "oc://policy.jsonc/auth"],
     ["auth profiles array", { auth: { profiles: [] } }, "oc://policy.jsonc/auth/profiles"],
@@ -460,7 +484,12 @@ describe("registerPolicyDoctorChecks", () => {
       policyHash,
       evidence: collectPolicyEvidence(
         {},
-        { includeGatewayExposure: false, includeSecrets: false, includeAuthProfiles: false },
+        {
+          includeGatewayExposure: false,
+          includeAgentWorkspace: false,
+          includeSecrets: false,
+          includeAuthProfiles: false,
+        },
       ),
       findings: [],
     }).attestationHash;
@@ -485,7 +514,12 @@ describe("registerPolicyDoctorChecks", () => {
       policyHash,
       evidence: collectPolicyEvidence(
         {},
-        { includeGatewayExposure: false, includeSecrets: false, includeAuthProfiles: false },
+        {
+          includeGatewayExposure: false,
+          includeAgentWorkspace: false,
+          includeSecrets: false,
+          includeAuthProfiles: false,
+        },
       ),
       findings: [],
     }).attestationHash;
@@ -522,7 +556,12 @@ describe("registerPolicyDoctorChecks", () => {
             },
           },
         },
-        { includeGatewayExposure: false, includeSecrets: false, includeAuthProfiles: false },
+        {
+          includeGatewayExposure: false,
+          includeAgentWorkspace: false,
+          includeSecrets: false,
+          includeAuthProfiles: false,
+        },
       ),
       findings: [],
     }).attestationHash;
@@ -547,10 +586,12 @@ describe("registerPolicyDoctorChecks", () => {
     expect(result.findings).toEqual([]);
     const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>, {
       includeGatewayExposure: false,
+      includeAgentWorkspace: false,
       includeSecrets: false,
       includeAuthProfiles: false,
     });
     expect(evidence).not.toHaveProperty("gatewayExposure");
+    expect(evidence).not.toHaveProperty("agentWorkspace");
     expect(evidence).not.toHaveProperty("secrets");
     expect(evidence).not.toHaveProperty("authProfiles");
   });
@@ -2010,6 +2051,125 @@ describe("registerPolicyDoctorChecks", () => {
         }),
       ]),
     );
+  });
+
+  it("reports agent workspace posture denied by policy", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      tools: {
+        deny: ["write", "edit"],
+      },
+      agents: {
+        defaults: {
+          sandbox: { workspaceAccess: "rw" },
+        },
+        list: [
+          {
+            id: "reviewer",
+            sandbox: { workspaceAccess: "ro" },
+            tools: { deny: ["group:fs", "group:runtime"] },
+          },
+        ],
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        agents: {
+          workspace: {
+            allowedAccess: ["none", "ro"],
+            denyTools: ["exec", "process", "write", "edit", "apply_patch"],
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+    const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>);
+
+    expect(evidence.agentWorkspace).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "agents-defaults-workspace-access",
+          kind: "workspaceAccess",
+          value: "rw",
+          source: "oc://openclaw.config/agents/defaults/sandbox/workspaceAccess",
+        }),
+        expect.objectContaining({
+          id: "reviewer-tool-apply_patch",
+          kind: "toolDeny",
+          tool: "apply_patch",
+          denied: true,
+        }),
+      ]),
+    );
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/agents-workspace-access-denied",
+          severity: "error",
+          ocPath: "oc://openclaw.config/agents/defaults/sandbox/workspaceAccess",
+          requirement: "oc://policy.jsonc/agents/workspace/allowedAccess",
+        }),
+        expect.objectContaining({
+          checkId: "policy/agents-tool-not-denied",
+          severity: "error",
+          ocPath: "oc://openclaw.config/tools/deny",
+          requirement: "oc://policy.jsonc/agents/workspace/denyTools",
+        }),
+      ]),
+    );
+    expect(result.findings).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/agents-tool-not-denied",
+          ocPath: "oc://openclaw.config/agents/list/#0/tools/deny",
+        }),
+      ]),
+    );
+  });
+
+  it("accepts read-only agent workspace policy with group denies", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      tools: {
+        deny: ["group:runtime", "group:fs"],
+      },
+      agents: {
+        defaults: {
+          sandbox: { workspaceAccess: "ro" },
+        },
+        list: [
+          {
+            id: "locked",
+            sandbox: { workspaceAccess: "none" },
+          },
+        ],
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        agents: {
+          workspace: {
+            allowedAccess: ["none", "ro"],
+            denyTools: ["exec", "process", "write", "edit", "apply_patch"],
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual([]);
   });
 
   it("reports gateway exposure settings denied by policy", async () => {
