@@ -29,8 +29,7 @@ import {
 } from "./failover-policy.js";
 import { MissingAgentHarnessError, isMissingAgentHarnessError } from "./harness/errors.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
-import { getRegisteredAgentHarness } from "./harness/registry.js";
-import { selectAgentHarness } from "./harness/selection.js";
+import { getRegisteredAgentHarness, listRegisteredAgentHarnesses } from "./harness/registry.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import {
   isModelFallbackDecisionLogEnabled,
@@ -366,6 +365,35 @@ function isRegisteredNonCodexPluginHarness(runtime: string | undefined): boolean
   );
 }
 
+function resolveAutoSelectedRegisteredHarnessId(
+  params: ModelFallbackRuntimeContext & ModelCandidate & { agentHarnessRuntimeOverride?: string },
+): string | undefined {
+  const runtimeOverride = params.agentHarnessRuntimeOverride?.trim();
+  if (runtimeOverride && runtimeOverride !== "auto" && runtimeOverride !== "default") {
+    return runtimeOverride;
+  }
+
+  return listRegisteredAgentHarnesses()
+    .map((entry) => {
+      const support = entry.harness.supports({
+        provider: params.provider,
+        modelId: params.model,
+        requestedRuntime: "auto",
+      });
+      return support.supported
+        ? {
+            id: entry.harness.id,
+            priority: support.priority ?? 0,
+          }
+        : undefined;
+    })
+    .filter((entry): entry is { id: string; priority: number } => Boolean(entry))
+    .toSorted((left, right) => {
+      const priorityDelta = right.priority - left.priority;
+      return priorityDelta !== 0 ? priorityDelta : left.id.localeCompare(right.id);
+    })[0]?.id;
+}
+
 function resolvesToRegisteredNonCodexPluginHarness(
   params: ModelFallbackRuntimeContext &
     ModelCandidate & {
@@ -379,15 +407,7 @@ function resolvesToRegisteredNonCodexPluginHarness(
   if (params.agentRuntime !== "auto" || !params.cfg) {
     return false;
   }
-  const selectedHarness = selectAgentHarness({
-    provider: params.provider,
-    modelId: params.model,
-    config: params.cfg,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-    agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
-  });
-  return isRegisteredNonCodexPluginHarness(selectedHarness.id);
+  return isRegisteredNonCodexPluginHarness(resolveAutoSelectedRegisteredHarnessId(params));
 }
 
 function resolveModelFallbackCandidateHarnessInfo(
