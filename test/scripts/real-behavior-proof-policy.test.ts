@@ -255,6 +255,27 @@ describe("real-behavior-proof-policy", () => {
     expect(evaluateClawSweeperExactHeadProof({ pullRequest, comments }).passed).toBe(true);
   });
 
+  it("accepts exact OpenClaw ClawSweeper bot pass verdict markers when GitHub omits the app source", () => {
+    const pullRequest = {
+      number: 83581,
+      head: {
+        sha: "06ee95df6608d29a395c52ba8ab53fdd93a9dc4f",
+      },
+    };
+    const comments = [
+      {
+        user: {
+          login: "openclaw-clawsweeper[bot]",
+          type: "Bot",
+        },
+        body: "<!-- clawsweeper-verdict:pass item=83581 sha=06ee95df6608d29a395c52ba8ab53fdd93a9dc4f confidence=high -->",
+      },
+    ];
+
+    expect(hasClawSweeperExactHeadProof({ pullRequest, comments })).toBe(true);
+    expect(evaluateClawSweeperExactHeadProof({ pullRequest, comments }).passed).toBe(true);
+  });
+
   it("rejects bot-shaped pass verdict markers from other bot users", () => {
     const pullRequest = {
       number: 83581,
