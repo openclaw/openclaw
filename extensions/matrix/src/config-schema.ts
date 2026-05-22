@@ -33,14 +33,6 @@ const matrixThreadBindingsSchema = z
     defaultSpawnContext: z.enum(["isolated", "fork"]).optional(),
     spawnSubagentSessions: z.boolean().optional(),
     spawnAcpSessions: z.boolean().optional(),
-    /**
-     * When true, in-thread replies skip the room-level `requireMention` gate
-     * if the bot already has a runtime session binding for the thread. Lets
-     * the common "mention to open thread, free conversation continues inside"
-     * UX work in requireMention rooms. Off by default to preserve the
-     * existing contract that mention enforcement applies regardless of
-     * thread binding state.
-     */
     bypassMentionInBoundThreads: z.boolean().optional(),
   })
   .optional();

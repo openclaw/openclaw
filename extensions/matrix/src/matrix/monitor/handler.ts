@@ -222,13 +222,6 @@ export type MatrixMonitorHandlerParams = {
   threadReplies: "off" | "inbound" | "always";
   /** DM-specific threadReplies override. Falls back to threadReplies when absent. */
   dmThreadReplies?: "off" | "inbound" | "always";
-  /**
-   * When true, in-thread replies skip the room-level `requireMention` gate if
-   * the bot already has a runtime session binding for the thread. Mirrors
-   * `channels.matrix.threadBindings.bypassMentionInBoundThreads` in user
-   * config; off by default to preserve the legacy contract that mention
-   * enforcement applies regardless of thread binding state.
-   */
   bypassMentionInBoundThreads?: boolean;
   /** DM session grouping behavior. */
   dmSessionScope?: "per-user" | "per-room";
@@ -1045,31 +1038,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 ? roomConfig?.requireMention
                 : true
           : false;
-        // Thread-continuation bypass: when the user replies INSIDE a thread
-        // the bot has prior activity in, skip the room-level mention gate.
-        //
-        // Without this, the common bot UX of "mention to open a thread, then
-        // free conversation continues inside that thread" is broken on
-        // requireMention rooms — every in-thread reply gets dropped as
-        // "skipping room message: no-mention" even though the user is
-        // clearly addressing the bot via thread relation.
-        //
-        // Discriminators:
-        //   1. `threadRootId` is set AND `threadRootId !== messageId` — this
-        //      is an in-thread reply (the message has an m.thread relation
-        //      to a root that is not itself), not a top-level message that
-        //      becomes a thread root under threadReplies: "always".
-        //   2. EITHER an existing session record for `_route.sessionKey`
-        //      exists (the bot has previously processed a message in this
-        //      thread → recordInboundSession persisted the thread-suffixed
-        //      session key) OR `_runtimeBindingId` is non-null (an explicit
-        //      ACP/user binding via /focus or /acp bind exists for the
-        //      thread). Both signals mean the bot has been engaged here.
-        //
-        // The session-store check (signal #2a) is the natural-continuation
-        // path — bots that have just replied in a thread land here without
-        // needing any explicit /focus. The runtime-binding check (signal #2b)
-        // covers the explicit-binding case for parity with /focus flows.
         const inThreadReply =
           bypassMentionInBoundThreads && threadRootId !== undefined && threadRootId !== messageId;
         let threadSessionExists = false;
