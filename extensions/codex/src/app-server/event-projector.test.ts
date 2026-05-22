@@ -1991,6 +1991,95 @@ describe("CodexAppServerEventProjector", () => {
     expect(payload.text).toContain("```txt\nopened\n```");
   });
 
+  it("keeps side-effect evidence for dynamic tools that error after execution", async () => {
+    const projector = await createProjector();
+
+    projector.recordDynamicToolCall({
+      callId: "call-process-kill",
+      tool: "process",
+      arguments: { action: "kill", sessionId: "session-1" },
+    });
+    projector.recordDynamicToolResult({
+      callId: "call-process-kill",
+      tool: "process",
+      success: false,
+      terminalType: "error",
+      sideEffectEvidence: true,
+      contentItems: [{ type: "inputText", text: "process exited" }],
+    });
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.replayMetadata).toEqual({ hadPotentialSideEffects: true, replaySafe: false });
+  });
+
+  it("does not keep side-effect evidence for pre-execution dynamic tool errors", async () => {
+    const projector = await createProjector();
+
+    projector.recordDynamicToolCall({
+      callId: "call-unknown-message",
+      tool: "message",
+      arguments: { action: "send", text: "hello" },
+    });
+    projector.recordDynamicToolResult({
+      callId: "call-unknown-message",
+      tool: "message",
+      success: false,
+      terminalType: "error",
+      contentItems: [{ type: "inputText", text: "Unknown OpenClaw tool: message" }],
+    });
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.replayMetadata).toEqual({ hadPotentialSideEffects: false, replaySafe: true });
+  });
+
+  it("does not mark blocked dynamic tools as side-effecting", async () => {
+    const projector = await createProjector();
+
+    projector.recordDynamicToolCall({
+      callId: "call-bash-blocked",
+      tool: "bash",
+      arguments: { command: "touch blocked.txt" },
+    });
+    projector.recordDynamicToolResult({
+      callId: "call-bash-blocked",
+      tool: "bash",
+      success: false,
+      terminalType: "blocked",
+      sideEffectEvidence: true,
+      contentItems: [{ type: "inputText", text: "blocked" }],
+    });
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.replayMetadata).toEqual({ hadPotentialSideEffects: false, replaySafe: true });
+  });
+
+  it("treats completed native MCP tool calls as side-effect evidence", async () => {
+    const projector = await createProjector();
+
+    await projector.handleNotification({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "mcp-1",
+          type: "mcpToolCall",
+          server: "github",
+          tool: "create_issue",
+          status: "completed",
+          arguments: { title: "check replay safety" },
+        },
+      },
+    });
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.replayMetadata).toEqual({ hadPotentialSideEffects: true, replaySafe: false });
+  });
+
   it("suppresses transcript progress for message-like tools", async () => {
     const onAgentEvent = vi.fn();
     const onToolResult = vi.fn();
@@ -2021,7 +2110,7 @@ describe("CodexAppServerEventProjector", () => {
     expect(onToolResult).not.toHaveBeenCalled();
   });
 
-  it("suppresses transcript progress for activity-log bash commands", async () => {
+  it("does not parse shell command text to suppress transcript progress", async () => {
     const onAgentEvent = vi.fn();
     const onToolResult = vi.fn();
     const projector = await createProjector({
@@ -2047,12 +2136,11 @@ describe("CodexAppServerEventProjector", () => {
       contentItems: [{ type: "inputText", text: "Logged: [web_search] Grilled salmon research" }],
     });
 
-    const toolEvents = onAgentEvent.mock.calls.filter(([event]) => {
-      const record = requireRecord(event, "agent event");
-      return record.stream === "tool";
-    });
-    expect(toolEvents).toHaveLength(0);
-    expect(onToolResult).not.toHaveBeenCalled();
+    expect(onAgentEvent).not.toHaveBeenCalled();
+    const toolProgressText = onToolResult.mock.calls
+      .map(([payload]) => (payload as { text?: string }).text ?? "")
+      .join("\n");
+    expect(toolProgressText).toContain("log_activity.sh");
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
     expect(result.messagesSnapshot.some((message) => message.role === "toolResult")).toBe(true);
@@ -2425,6 +2513,36 @@ describe("CodexAppServerEventProjector", () => {
     });
     expect(onToolResult).toHaveBeenNthCalledWith(2, {
       text: "📖 Read: `from README.md`\n```txt\nfile contents\n```",
+    });
+  });
+
+  it("marks failed completed tool output as error progress", async () => {
+    const onToolResult = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      verboseLevel: "full",
+      onToolResult,
+    });
+
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "dynamicToolCall",
+          id: "tool-1",
+          namespace: null,
+          tool: "bash",
+          arguments: { command: "ls /tmp/missing" },
+          status: "failed",
+          contentItems: [{ type: "inputText", text: "No such file or directory" }],
+          success: false,
+          durationMs: 12,
+        },
+      ]),
+    );
+
+    expect(onToolResult).toHaveBeenNthCalledWith(2, {
+      text: "🛠️ `list files in /tmp/missing`\n```txt\nNo such file or directory\n```",
+      isError: true,
     });
   });
 

@@ -56,6 +56,7 @@ import {
 import { isStoredCredentialCompatibleWithAuthProvider } from "./auth-profiles/order.js";
 import { clearSessionAuthProfileOverride } from "./auth-profiles/session-override.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
+import { createAgentAttemptLifecycleCallbacks } from "./command/attempt-callbacks.js";
 import {
   persistSessionEntry as persistSessionEntryBase,
   prependInternalEventContext,
@@ -300,10 +301,7 @@ function normalizeExplicitOverrideInput(raw: string, kind: "provider" | "model")
   return trimmed;
 }
 
-async function prepareAgentCommandExecution(
-  opts: AgentCommandOpts & { senderIsOwner: boolean },
-  runtime: RuntimeEnv,
-) {
+async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: RuntimeEnv) {
   const isRawModelRun = opts.modelRun === true || opts.promptMode === "none";
   const message = opts.message ?? "";
   if (!message.trim()) {
@@ -483,7 +481,7 @@ async function prepareAgentCommandExecution(
 }
 
 async function agentCommandInternal(
-  opts: AgentCommandOpts & { senderIsOwner: boolean },
+  opts: AgentCommandOpts,
   runtime: RuntimeEnv = defaultRuntime,
   deps?: CliDeps,
 ) {
@@ -1086,7 +1084,11 @@ async function agentCommandInternal(
     }
 
     const startedAt = Date.now();
-    let lifecycleEnded = false;
+    const attemptLifecycleState = {
+      currentTurnUserMessagePersisted: false,
+      lifecycleEnded: false,
+    };
+    const attemptLifecycleCallbacks = createAgentAttemptLifecycleCallbacks(attemptLifecycleState);
     const attemptExecutionRuntime = await loadAttemptExecutionRuntime();
     const runContext = resolveAgentRunContext(opts);
     const messageChannel = resolveMessageChannel(
@@ -1126,7 +1128,7 @@ async function agentCommandInternal(
         });
 
         let fallbackAttemptIndex = 0;
-        let currentTurnUserMessagePersisted = false;
+        attemptLifecycleState.currentTurnUserMessagePersisted = false;
         const fallbackResult = await runWithModelFallback<AgentAttemptResult>({
           cfg,
           provider,
@@ -1219,19 +1221,9 @@ async function agentCommandInternal(
                 !isNewSession || (await attemptExecutionRuntime.sessionFileHasContent(sessionFile)),
               suppressPromptPersistenceOnRetry:
                 opts.suppressPromptPersistence === true ||
-                (isFallbackRetry && currentTurnUserMessagePersisted),
-              onUserMessagePersisted: () => {
-                currentTurnUserMessagePersisted = true;
-              },
-              onAgentEvent: (evt) => {
-                if (
-                  evt.stream === "lifecycle" &&
-                  typeof evt.data?.phase === "string" &&
-                  (evt.data.phase === "end" || evt.data.phase === "error")
-                ) {
-                  lifecycleEnded = true;
-                }
-              },
+                (isFallbackRetry && attemptLifecycleState.currentTurnUserMessagePersisted),
+              onUserMessagePersisted: attemptLifecycleCallbacks.onUserMessagePersisted,
+              onAgentEvent: attemptLifecycleCallbacks.onAgentEvent,
             });
           },
         });
@@ -1293,7 +1285,7 @@ async function agentCommandInternal(
             },
           };
         }
-        if (!lifecycleEnded) {
+        if (!attemptLifecycleState.lifecycleEnded) {
           const stopReason = result.meta.stopReason;
           if (stopReason && stopReason !== "end_turn") {
             console.error(`[agent] run ${runId} ended with stopReason=${stopReason}`);
@@ -1318,7 +1310,7 @@ async function agentCommandInternal(
             log.error(
               `Live session model switch in subagent run ${runId}: exceeded maximum retries (${MAX_LIVE_SWITCH_RETRIES})`,
             );
-            if (!lifecycleEnded) {
+            if (!attemptLifecycleState.lifecycleEnded) {
               emitAgentEvent({
                 runId,
                 stream: "lifecycle",
@@ -1343,7 +1335,7 @@ async function agentCommandInternal(
               `Live session model switch in subagent run ${runId}: ` +
                 `rejected ${sanitizeForLog(err.provider)}/${sanitizeForLog(err.model)} (not in allowlist)`,
             );
-            if (!lifecycleEnded) {
+            if (!attemptLifecycleState.lifecycleEnded) {
               emitAgentEvent({
                 runId,
                 stream: "lifecycle",
@@ -1387,13 +1379,13 @@ async function agentCommandInternal(
             storedModelOverride = err.model;
             storedModelOverrideSource = "user";
           }
-          lifecycleEnded = false;
+          attemptLifecycleState.lifecycleEnded = false;
           log.info(
             `Live session model switch in subagent run ${runId}: switching to ${sanitizeForLog(err.provider)}/${sanitizeForLog(err.model)}`,
           );
           continue;
         }
-        if (!lifecycleEnded) {
+        if (!attemptLifecycleState.lifecycleEnded) {
           emitAgentEvent({
             runId,
             stream: "lifecycle",
@@ -1474,7 +1466,6 @@ async function agentCommandInternal(
           skillsSnapshot,
           messageChannel,
           agentAccountId: runContext.accountId,
-          senderIsOwner: opts.senderIsOwner,
           thinkLevel: resolvedThinkLevel,
           extraSystemPrompt: opts.extraSystemPrompt,
         });
@@ -1606,7 +1597,7 @@ export async function agentCommand(
         {
           ...opts,
           // agentCommand is the trusted-operator entrypoint used by CLI/local flows.
-          // Ingress callers must opt into owner semantics explicitly via
+          // Ingress callers must opt into owner identity explicitly via
           // agentCommandFromIngress so network-facing paths cannot inherit this default by accident.
           senderIsOwner: opts.senderIsOwner ?? true,
           // Local/CLI callers are trusted by default for per-run model overrides.
@@ -1623,20 +1614,11 @@ export async function agentCommandFromIngress(
   runtime: RuntimeEnv = defaultRuntime,
   deps?: CliDeps,
 ) {
-  if (typeof opts.senderIsOwner !== "boolean") {
-    // HTTP/WS ingress must declare the trust level explicitly at the boundary.
-    // This keeps network-facing callers from silently picking up the local trusted default.
-    throw new Error("senderIsOwner must be explicitly set for ingress agent runs.");
-  }
   if (typeof opts.allowModelOverride !== "boolean") {
     throw new Error("allowModelOverride must be explicitly set for ingress agent runs.");
   }
   return await agentCommandInternal(
-    {
-      ...opts,
-      senderIsOwner: opts.senderIsOwner,
-      allowModelOverride: opts.allowModelOverride,
-    },
+    { ...opts, senderIsOwner: opts.senderIsOwner === true },
     runtime,
     deps,
   );

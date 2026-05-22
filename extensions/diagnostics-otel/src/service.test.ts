@@ -53,6 +53,21 @@ const logShutdown = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const traceExporterCtor = vi.hoisted(() => vi.fn());
 const metricExporterCtor = vi.hoisted(() => vi.fn());
 const logExporterCtor = vi.hoisted(() => vi.fn());
+const unhandledRejectionHandlerState = vi.hoisted(() => {
+  let handlers: Array<(reason: unknown) => boolean> = [];
+  return {
+    getHandlers: () => handlers,
+    register: vi.fn((handler: (reason: unknown) => boolean) => {
+      handlers.push(handler);
+      return () => {
+        handlers = handlers.filter((candidate) => candidate !== handler);
+      };
+    }),
+    reset: () => {
+      handlers = [];
+    },
+  };
+});
 
 vi.mock("@opentelemetry/api", () => ({
   context: {
@@ -97,6 +112,10 @@ vi.mock("@opentelemetry/exporter-logs-otlp-proto", () => ({
   OTLPLogExporter: function OTLPLogExporter(options?: unknown) {
     logExporterCtor(options);
   },
+}));
+
+vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
+  registerUnhandledRejectionHandler: unhandledRejectionHandlerState.register,
 }));
 
 vi.mock("@opentelemetry/sdk-logs", () => ({
@@ -336,6 +355,8 @@ describe("diagnostics-otel service", () => {
     traceExporterCtor.mockClear();
     metricExporterCtor.mockClear();
     logExporterCtor.mockClear();
+    unhandledRejectionHandlerState.reset();
+    unhandledRejectionHandlerState.register.mockClear();
     delete process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT;
     delete process.env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT;
     delete process.env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT;
@@ -395,6 +416,41 @@ describe("diagnostics-otel service", () => {
       queueDepth: 2,
     });
     emitDiagnosticEvent({
+      type: "message.received",
+      channel: "telegram",
+      source: "webhook",
+    });
+    emitDiagnosticEvent({
+      type: "message.dispatch.started",
+      channel: "telegram",
+      source: "webhook",
+    });
+    emitDiagnosticEvent({
+      type: "message.dispatch.completed",
+      channel: "telegram",
+      source: "webhook",
+      durationMs: 25,
+      outcome: "completed",
+    });
+    emitDiagnosticEvent({
+      type: "message.received",
+      channel: "telegram/custom",
+      source: "webhook with secret sk-test",
+    });
+    emitDiagnosticEvent({
+      type: "message.dispatch.started",
+      channel: "telegram/custom",
+      source: "webhook with secret sk-test",
+    });
+    emitDiagnosticEvent({
+      type: "message.dispatch.completed",
+      channel: "telegram/custom",
+      source: "webhook with secret sk-test",
+      durationMs: 30,
+      outcome: "completed",
+      reason: "progress draft / message tool 123",
+    });
+    emitDiagnosticEvent({
       type: "message.processed",
       channel: "telegram",
       chatId: "chat-should-not-export",
@@ -447,6 +503,66 @@ describe("diagnostics-otel service", () => {
       "openclaw.channel": "telegram",
       "openclaw.outcome": "completed",
     });
+    expect(telemetryState.counters.get("openclaw.message.received")?.add).toHaveBeenCalledWith(1, {
+      "openclaw.channel": "telegram",
+      "openclaw.source": "webhook",
+    });
+    expect(telemetryState.counters.get("openclaw.message.received")?.add).toHaveBeenCalledWith(1, {
+      "openclaw.channel": "unknown",
+      "openclaw.source": "unknown",
+    });
+    expect(
+      telemetryState.counters.get("openclaw.message.dispatch.started")?.add,
+    ).toHaveBeenCalledWith(1, {
+      "openclaw.channel": "telegram",
+      "openclaw.source": "webhook",
+    });
+    expect(
+      telemetryState.counters.get("openclaw.message.dispatch.started")?.add,
+    ).toHaveBeenCalledWith(1, {
+      "openclaw.channel": "unknown",
+      "openclaw.source": "unknown",
+    });
+    expect(
+      telemetryState.counters.get("openclaw.message.dispatch.completed")?.add,
+    ).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({
+        "openclaw.channel": "telegram",
+        "openclaw.outcome": "completed",
+        "openclaw.source": "webhook",
+      }),
+    );
+    expect(
+      telemetryState.counters.get("openclaw.message.dispatch.completed")?.add,
+    ).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({
+        "openclaw.channel": "unknown",
+        "openclaw.reason": "none",
+        "openclaw.source": "unknown",
+      }),
+    );
+    expect(
+      telemetryState.histograms.get("openclaw.message.dispatch.duration_ms")?.record,
+    ).toHaveBeenCalledWith(
+      25,
+      expect.objectContaining({
+        "openclaw.channel": "telegram",
+        "openclaw.outcome": "completed",
+        "openclaw.source": "webhook",
+      }),
+    );
+    expect(
+      telemetryState.histograms.get("openclaw.message.dispatch.duration_ms")?.record,
+    ).toHaveBeenCalledWith(
+      30,
+      expect.objectContaining({
+        "openclaw.channel": "unknown",
+        "openclaw.reason": "none",
+        "openclaw.source": "unknown",
+      }),
+    );
     expect(
       telemetryState.histograms.get("openclaw.message.duration_ms")?.record,
     ).toHaveBeenCalledWith(55, {
@@ -471,6 +587,22 @@ describe("diagnostics-otel service", () => {
     expect(telemetryState.counters.get("openclaw.run.attempt")?.add).toHaveBeenCalledWith(1, {
       "openclaw.attempt": 2,
     });
+
+    emitDiagnosticEvent({
+      type: "session.turn.created",
+      runId: "run-1",
+      agentId: "agent.default",
+      channel: "telegram",
+      trigger: "user",
+    });
+    expect(telemetryState.counters.get("openclaw.session.turn.created")?.add).toHaveBeenCalledWith(
+      1,
+      {
+        "openclaw.agent": "agent.default",
+        "openclaw.channel": "telegram",
+        "openclaw.trigger": "user",
+      },
+    );
 
     const spanNames = telemetryState.tracer.startSpan.mock.calls.map((call) => call[0]);
     expect(spanNames).toContain("openclaw.webhook.processed");
@@ -529,6 +661,54 @@ describe("diagnostics-otel service", () => {
       durationMs: 10,
     });
     expect(telemetryState.tracer.startSpan).not.toHaveBeenCalled();
+  });
+
+  test("registers and removes an OTLP exporter unhandled rejection handler", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true, logs: true });
+
+    await service.start(ctx);
+
+    expect(unhandledRejectionHandlerState.register).toHaveBeenCalledTimes(1);
+    const handler = unhandledRejectionHandlerState.getHandlers()[0];
+    expect(handler).toBeTypeOf("function");
+
+    const errorInstance = Object.assign(new Error("collector gone"), {
+      name: "OTLPExporterError",
+      code: 410,
+    });
+    expect(handler?.(errorInstance)).toBe(true);
+    expect(handler?.({ name: "OTLPExporterError", code: 410, data: "user_stop" })).toBe(true);
+    expect(handler?.([{ name: "OTLPExporterError", code: 410, data: "user_stop" }])).toBe(true);
+    expect(
+      handler?.(
+        new AggregateError(
+          [{ name: "OTLPExporterError", code: 410, data: "user_stop" }],
+          "export failed",
+        ),
+      ),
+    ).toBe(true);
+    expect(handler?.(new Error("other exporter error"))).toBe(false);
+    expect(ctx.logger.warn).toHaveBeenCalledWith(
+      "diagnostics-otel: suppressed OTLP exporter unhandled rejection (code=410)",
+    );
+
+    await service.stop?.(ctx);
+    expect(unhandledRejectionHandlerState.getHandlers()).toHaveLength(0);
+  });
+
+  test("does not retain an OTLP exporter handler when startup setup fails", async () => {
+    const startupError = new Error("trace exporter setup failed");
+    traceExporterCtor.mockImplementationOnce(() => {
+      throw startupError;
+    });
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true });
+
+    await expect(service.start(ctx)).rejects.toBe(startupError);
+
+    expect(unhandledRejectionHandlerState.register).not.toHaveBeenCalled();
+    expect(unhandledRejectionHandlerState.getHandlers()).toHaveLength(0);
   });
 
   test("uses a preloaded OpenTelemetry SDK without dropping diagnostic listeners", async () => {

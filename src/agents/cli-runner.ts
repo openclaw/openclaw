@@ -564,7 +564,6 @@ export async function runPreparedCliAgent(
             }),
             channelId: hookContext.channelId,
             accountId: params.agentAccountId,
-            senderIsOwner: params.senderIsOwner,
           },
           buildAgentHookContext(hookContext),
         );
@@ -725,7 +724,6 @@ export function buildRunClaudeCliAgentParams(params: RunClaudeCliAgentParams): R
     images: params.images,
     messageChannel: params.messageChannel,
     messageProvider: params.messageProvider,
-    senderIsOwner: params.senderIsOwner,
   };
 }
 

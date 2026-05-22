@@ -11,6 +11,7 @@ type AcpClientOptions = {
 type AcpGatewayOptions = {
   gatewayPassword?: string;
   gatewayToken?: string;
+  prefixCwd?: boolean;
 };
 
 const mocks = vi.hoisted(() => ({
@@ -87,6 +88,26 @@ describe("acp cli option collisions", () => {
     expect(runAcpClientInteractive).toHaveBeenCalledTimes(1);
     const clientOptions = requireFirstMockArg(runAcpClientInteractive) as { verbose?: boolean };
     expect(clientOptions?.verbose).toBe(true);
+  });
+
+  it("forwards --no-prefix-cwd to the ACP bridge", async () => {
+    await parseAcp(["--no-prefix-cwd"]);
+
+    expect(serveAcpGateway).toHaveBeenCalledTimes(1);
+    const gatewayOptions = requireFirstMockArg(serveAcpGateway) as {
+      prefixCwd?: boolean;
+    };
+    expect(gatewayOptions?.prefixCwd).toBe(false);
+  });
+
+  it("defaults to prefixing the working directory", async () => {
+    await parseAcp([]);
+
+    expect(serveAcpGateway).toHaveBeenCalledTimes(1);
+    const gatewayOptions = requireFirstMockArg(serveAcpGateway) as {
+      prefixCwd?: boolean;
+    };
+    expect(gatewayOptions?.prefixCwd).toBe(true);
   });
 
   it("loads gateway token/password from files", async () => {

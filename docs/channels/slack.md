@@ -743,6 +743,11 @@ The default manifest enables the Slack App Home **Home** tab and subscribes to `
       "usage_hint": "host=<auto|sandbox|gateway|node> security=<deny|allowlist|full> ask=<off|on-miss|always> node=<id>"
     },
     {
+      "command": "/approve",
+      "description": "Approve or deny pending approval requests",
+      "usage_hint": "<id> <decision>"
+    },
+    {
       "command": "/model",
       "description": "Show or set the model",
       "usage_hint": "[name|#|status]"

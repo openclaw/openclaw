@@ -11,6 +11,7 @@ import { isCodexFastServiceTier, type CodexComputerUseConfig } from "./app-serve
 import { listAllCodexAppServerModels } from "./app-server/models.js";
 import { isJsonObject, type JsonValue } from "./app-server/protocol.js";
 import { rememberCodexRateLimits } from "./app-server/rate-limit-cache.js";
+import { resolveCodexNativeSandboxBlock } from "./app-server/sandbox-guard.js";
 import {
   clearCodexAppServerBinding,
   readCodexAppServerBinding,
@@ -28,6 +29,10 @@ import {
   formatThreads,
   readString,
 } from "./command-formatters.js";
+import {
+  handleCodexPluginsSubcommand,
+  type CodexPluginsManagementIO,
+} from "./command-plugins-management.js";
 import {
   codexControlRequest,
   readCodexStatusProbes,
@@ -80,6 +85,7 @@ export type CodexCommandDeps = {
   stopCodexConversationTurn: typeof stopCodexConversationTurn;
   listCodexCliSessionsOnNode: ListCodexCliSessionsOnNodeFn;
   resolveCodexCliSessionForBindingOnNode: ResolveCodexCliSessionForBindingOnNodeFn;
+  codexPluginsManagementIo?: CodexPluginsManagementIO;
 };
 
 type CodexControlRequestFn = (
@@ -205,6 +211,16 @@ const CODEX_DIAGNOSTICS_CONFIRMATION_MAX_REQUESTS_PER_SCOPE = 100;
 const CODEX_DIAGNOSTICS_CONFIRMATION_MAX_SCOPES = 100;
 const CODEX_DIAGNOSTICS_SCOPE_FIELD_MAX_CHARS = 128;
 const CODEX_RESUME_SAFE_THREAD_ID_PATTERN = /^[A-Za-z0-9._:-]+$/;
+const CODEX_NATIVE_EXECUTION_SUBCOMMANDS = new Set([
+  "bind",
+  "resume",
+  "steer",
+  "model",
+  "fast",
+  "permissions",
+  "compact",
+  "review",
+]);
 
 const lastCodexDiagnosticsUploadByThread = new Map<string, number>();
 const lastCodexDiagnosticsUploadByScope = new Map<string, number>();
@@ -227,6 +243,20 @@ export async function handleCodexSubcommand(
   const normalized = subcommand.toLowerCase();
   if (normalized === "help") {
     return { text: buildHelp() };
+  }
+  const sandboxBlock = resolveCodexNativeCommandSandboxBlock(ctx, normalized, rest);
+  if (sandboxBlock) {
+    return { text: sandboxBlock };
+  }
+  if (normalized === "plugins") {
+    if (!deps.codexPluginsManagementIo) {
+      return {
+        text:
+          "Codex sub-plugin management is not wired up (codexPluginsManagementIo dep is undefined). " +
+          "Edit ~/.openclaw/openclaw.json or use `openclaw config patch` until the runtime exposes the IO.",
+      };
+    }
+    return await handleCodexPluginsSubcommand(ctx, rest, deps.codexPluginsManagementIo);
   }
   if (normalized === "status") {
     if (rest.length > 0) {
@@ -384,6 +414,62 @@ export async function handleCodexSubcommand(
     };
   }
   return { text: `Unknown Codex command: ${formatCodexDisplayText(subcommand)}\n\n${buildHelp()}` };
+}
+
+function resolveCodexNativeCommandSandboxBlock(
+  ctx: PluginCommandContext,
+  subcommand: string,
+  args: readonly string[],
+): string | undefined {
+  if (!CODEX_NATIVE_EXECUTION_SUBCOMMANDS.has(subcommand)) {
+    return undefined;
+  }
+  if (returnsBeforeNativeCodexExecution(subcommand, args)) {
+    return undefined;
+  }
+  return resolveCodexNativeSandboxBlock({
+    config: ctx.config,
+    sessionKey: ctx.sessionKey,
+    sessionId: ctx.sessionId,
+    surface: `/${["codex", subcommand].join(" ")}`,
+  });
+}
+
+function returnsBeforeNativeCodexExecution(subcommand: string, args: readonly string[]): boolean {
+  switch (subcommand) {
+    case "bind":
+      return parseBindArgs([...args]).help === true;
+    case "resume":
+      return returnsBeforeNativeCodexResume(args);
+    case "steer":
+      return args.join(" ").trim() === "";
+    case "model":
+      return args.length === 0 || args.length > 1;
+    case "fast":
+      return args.length === 0 || args.length > 1 || parseCodexFastModeArg(args[0]) === undefined;
+    case "permissions":
+      return (
+        args.length === 0 || args.length > 1 || parseCodexPermissionsModeArg(args[0]) === undefined
+      );
+    case "compact":
+    case "review":
+    case "stop":
+      return args.length > 0;
+    default:
+      return false;
+  }
+}
+
+function returnsBeforeNativeCodexResume(args: readonly string[]): boolean {
+  const parsed = parseResumeArgs([...args]);
+  const normalizedThreadId = parsed.threadId?.trim();
+  if (parsed.help) {
+    return true;
+  }
+  if (parsed.host) {
+    return !normalizedThreadId || parsed.bindHere !== true;
+  }
+  return !normalizedThreadId || args.length !== 1;
 }
 
 async function handleComputerUseCommand(
