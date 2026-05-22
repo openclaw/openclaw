@@ -188,6 +188,9 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(walkScript).toContain("tools.invoke");
     expect(walkScript).toContain("tts.providers");
     expect(walkScript).toContain("plugins.uiDescriptors");
+    expect(walkScript).toContain("loadCallGatewayModule(options.runner)");
+    expect(walkScript).toContain("usesPackagedOpenClawEntry(runner)");
+    expect(walkScript).toContain("src/gateway/call.ts");
     expect(walkScript).toContain("^call(?:\\.runtime)?");
   });
 

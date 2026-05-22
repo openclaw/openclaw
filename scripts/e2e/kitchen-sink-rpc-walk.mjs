@@ -227,7 +227,7 @@ function unwrapRpcPayload(raw) {
 }
 
 async function rpcCall(method, params, options) {
-  const { callGateway } = await loadCallGatewayModule();
+  const { callGateway } = await loadCallGatewayModule(options.runner);
   const payload = await callGateway({
     config: readJson(options.env.OPENCLAW_CONFIG_PATH),
     configPath: options.env.OPENCLAW_CONFIG_PATH,
@@ -241,27 +241,35 @@ async function rpcCall(method, params, options) {
   return unwrapRpcPayload(payload);
 }
 
-async function loadCallGatewayModule() {
-  callGatewayModulePromise ??= importCallGatewayModule();
+async function loadCallGatewayModule(runner) {
+  callGatewayModulePromise ??= importCallGatewayModule(runner);
   return callGatewayModulePromise;
 }
 
-async function importCallGatewayModule() {
-  const distDir = path.join(process.cwd(), "dist");
-  if (fs.existsSync(distDir)) {
-    const candidates = fs
-      .readdirSync(distDir)
-      .filter((name) => /^call(?:\.runtime)?-[A-Za-z0-9_-]+\.js$/u.test(name))
-      .toSorted((left, right) => left.localeCompare(right));
-    for (const name of candidates) {
-      const module = await import(pathToFileURL(path.join(distDir, name)).href);
-      if (typeof module.callGateway === "function") {
-        return module;
-      }
-    }
-    throw new Error(`unable to find callGateway export in dist (${candidates.join(", ")})`);
+async function importCallGatewayModule(runner) {
+  if (!usesPackagedOpenClawEntry(runner)) {
+    return import(pathToFileURL(path.join(process.cwd(), "src/gateway/call.ts")).href);
   }
-  return import(pathToFileURL(path.join(process.cwd(), "src/gateway/call.ts")).href);
+  const distDir = path.join(process.cwd(), "dist");
+  const candidates = fs.existsSync(distDir)
+    ? fs
+        .readdirSync(distDir)
+        .filter((name) => /^call(?:\.runtime)?-[A-Za-z0-9_-]+\.js$/u.test(name))
+        .toSorted((left, right) => left.localeCompare(right))
+    : [];
+  for (const name of candidates) {
+    const module = await import(pathToFileURL(path.join(distDir, name)).href);
+    if (typeof module.callGateway === "function") {
+      return module;
+    }
+  }
+  throw new Error(`unable to find callGateway export in dist (${candidates.join(", ")})`);
+}
+
+function usesPackagedOpenClawEntry(runner) {
+  return Boolean(
+    process.env.OPENCLAW_ENTRY && runner?.baseArgs?.[0] === process.env.OPENCLAW_ENTRY,
+  );
 }
 
 async function retryRpcCall(method, params, options) {
