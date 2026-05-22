@@ -1,16 +1,17 @@
 import { basename, isAbsolute, resolve } from "node:path";
 import JSON5 from "json5";
-import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   registerHealthCheck as registerPluginHealthCheck,
   type HealthCheck,
   type HealthCheckContext,
   type HealthFinding,
 } from "openclaw/plugin-sdk/health";
+import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   collectPolicyEvidence,
   createPolicyAttestation,
   policyDocumentHash,
+  type PolicyAuthProfileEvidence,
   type PolicyEvidence,
 } from "../policy-state.js";
 
@@ -25,6 +26,11 @@ const CHECK_IDS = {
   policyDeniedModelProvider: "policy/models-denied-provider",
   policyUnapprovedModelProvider: "policy/models-unapproved-provider",
   policyPrivateNetworkAccess: "policy/network-private-access-enabled",
+  policySecretsUnmanagedProvider: "policy/secrets-unmanaged-provider",
+  policySecretsDeniedProviderSource: "policy/secrets-denied-provider-source",
+  policySecretsInsecureProvider: "policy/secrets-insecure-provider",
+  policyAuthProfileInvalidMetadata: "policy/auth-profile-invalid-metadata",
+  policyAuthProfileUnapprovedMode: "policy/auth-profile-unapproved-mode",
   policyMissingToolOwner: "policy/tools-missing-owner",
   policyMissingToolRisk: "policy/tools-missing-risk-level",
   policyMissingToolSensitivity: "policy/tools-missing-sensitivity-token",
@@ -43,6 +49,11 @@ export const POLICY_CHECK_IDS = [
   CHECK_IDS.policyDeniedModelProvider,
   CHECK_IDS.policyUnapprovedModelProvider,
   CHECK_IDS.policyPrivateNetworkAccess,
+  CHECK_IDS.policySecretsUnmanagedProvider,
+  CHECK_IDS.policySecretsDeniedProviderSource,
+  CHECK_IDS.policySecretsInsecureProvider,
+  CHECK_IDS.policyAuthProfileInvalidMetadata,
+  CHECK_IDS.policyAuthProfileUnapprovedMode,
   CHECK_IDS.policyMissingToolRisk,
   CHECK_IDS.policyUnknownToolRisk,
   CHECK_IDS.policyMissingToolSensitivity,
@@ -53,6 +64,8 @@ export const POLICY_CHECK_IDS = [
 const KNOWN_RISK_LEVELS = ["low", "medium", "high", "critical"] as const;
 const KNOWN_SENSITIVITY_LEVELS = ["public", "internal", "confidential", "restricted"] as const;
 const SUPPORTED_TOOL_METADATA = ["risk", "sensitivity", "owner"] as const;
+const SUPPORTED_AUTH_PROFILE_METADATA = ["provider", "mode"] as const;
+const SUPPORTED_AUTH_PROFILE_MODES = ["api_key", "aws-sdk", "oauth", "token"] as const;
 
 let registered = false;
 const policyEvaluationCache = new WeakMap<HealthCheckContext, Promise<PolicyEvaluation>>();
@@ -88,6 +101,11 @@ export function registerPolicyDoctorChecks(host?: PolicyDoctorRegistrationHost):
   registerHealthCheck(policyModelsDeniedProviderCheck);
   registerHealthCheck(policyModelsUnapprovedProviderCheck);
   registerHealthCheck(policyNetworkPrivateAccessCheck);
+  registerHealthCheck(policySecretsUnmanagedProviderCheck);
+  registerHealthCheck(policySecretsDeniedProviderSourceCheck);
+  registerHealthCheck(policySecretsInsecureProviderCheck);
+  registerHealthCheck(policyAuthProfileInvalidMetadataCheck);
+  registerHealthCheck(policyAuthProfileUnapprovedModeCheck);
   registerHealthCheck(policyToolsMissingRiskCheck);
   registerHealthCheck(policyToolsUnknownRiskCheck);
   registerHealthCheck(policyToolsMissingSensitivityCheck);
@@ -235,6 +253,59 @@ const policyNetworkPrivateAccessCheck: HealthCheck = {
   },
 };
 
+const policySecretsUnmanagedProviderCheck: HealthCheck = {
+  id: CHECK_IDS.policySecretsUnmanagedProvider,
+  kind: "plugin",
+  description:
+    "OpenClaw config SecretRefs use configured secret providers when policy requires managed providers.",
+  source: "policy",
+  async detect(ctx) {
+    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policySecretsUnmanagedProvider);
+  },
+};
+
+const policySecretsDeniedProviderSourceCheck: HealthCheck = {
+  id: CHECK_IDS.policySecretsDeniedProviderSource,
+  kind: "plugin",
+  description:
+    "OpenClaw config secret providers and SecretRefs do not use sources denied by policy.",
+  source: "policy",
+  async detect(ctx) {
+    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policySecretsDeniedProviderSource);
+  },
+};
+
+const policySecretsInsecureProviderCheck: HealthCheck = {
+  id: CHECK_IDS.policySecretsInsecureProvider,
+  kind: "plugin",
+  description:
+    "Configured secret providers do not opt into insecure posture unless policy allows it.",
+  source: "policy",
+  async detect(ctx) {
+    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policySecretsInsecureProvider);
+  },
+};
+
+const policyAuthProfileInvalidMetadataCheck: HealthCheck = {
+  id: CHECK_IDS.policyAuthProfileInvalidMetadata,
+  kind: "plugin",
+  description: "OpenClaw config auth profiles declare required provider and mode metadata.",
+  source: "policy",
+  async detect(ctx) {
+    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyAuthProfileInvalidMetadata);
+  },
+};
+
+const policyAuthProfileUnapprovedModeCheck: HealthCheck = {
+  id: CHECK_IDS.policyAuthProfileUnapprovedMode,
+  kind: "plugin",
+  description: "OpenClaw config auth profile modes stay within the policy allowlist.",
+  source: "policy",
+  async detect(ctx) {
+    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyAuthProfileUnapprovedMode);
+  },
+};
+
 const policyToolsMissingRiskCheck: HealthCheck = {
   id: CHECK_IDS.policyMissingToolRisk,
   kind: "plugin",
@@ -288,7 +359,10 @@ const policyToolsMissingOwnerCheck: HealthCheck = {
 async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEvaluation> {
   const settings = policySettings(ctx);
   const policyPath = policyDisplayName(ctx);
-  let evidence: PolicyEvidence = collectPolicyEvidence(ctx.cfg as Record<string, unknown>);
+  let evidence: PolicyEvidence = collectPolicyEvidence(ctx.cfg as Record<string, unknown>, {
+    includeSecrets: false,
+    includeAuthProfiles: false,
+  });
   const findings: HealthFinding[] = [];
 
   if (!policyChecksEnabled(ctx, settings)) {
@@ -365,12 +439,26 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
     policyFile.displayName,
     policyFile.ocDocName,
   );
+  const authMetadataRequirementFindings = authProfileMetadataRequirementFindings(
+    policy,
+    policyFile.displayName,
+    policyFile.ocDocName,
+  );
   const requiredMetadata =
     metadataRequirementFindings.length === 0 ? requiredToolMetadata(policy) : new Set<string>();
+  const includeSecrets = policyHasSecretRules(policy);
+  const includeAuthProfiles = policyHasAuthProfileRules(policy);
   if (requiredMetadata.size > 0) {
     const toolsFile = await readWorkspaceFile(ctx, "TOOLS.md");
     evidence = await collectPolicyEvidence(ctx.cfg as Record<string, unknown>, {
       toolsRaw: toolsFile?.raw ?? "",
+      includeSecrets,
+      includeAuthProfiles,
+    });
+  } else {
+    evidence = collectPolicyEvidence(ctx.cfg as Record<string, unknown>, {
+      includeSecrets,
+      includeAuthProfiles,
     });
   }
   const policyFindings: HealthFinding[] = [
@@ -379,6 +467,8 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
     ...mcpServerFindings(policy, policyFile.ocDocName, evidence),
     ...modelProviderFindings(policy, policyFile.ocDocName, evidence),
     ...networkFindings(policy, policyFile.ocDocName, evidence),
+    ...secretAuthProvenanceFindings(policy, policyFile.displayName, policyFile.ocDocName, evidence),
+    ...authMetadataRequirementFindings,
     ...metadataRequirementFindings,
   ];
   if (requiredMetadata.has("risk")) {
@@ -716,6 +806,40 @@ function policyContainerShapeFindings(
       ];
     }
   }
+  if (policy.secrets !== undefined && !isRecord(policy.secrets)) {
+    return [
+      policyShapeFinding(
+        policyPath,
+        `oc://${policyDocName}/secrets`,
+        `${policyPath} secrets must be an object.`,
+        `Fix ${policyPath} so secrets is an object.`,
+      ),
+    ];
+  }
+  if (policy.auth !== undefined && !isRecord(policy.auth)) {
+    return [
+      policyShapeFinding(
+        policyPath,
+        `oc://${policyDocName}/auth`,
+        `${policyPath} auth must be an object.`,
+        `Fix ${policyPath} so auth is an object.`,
+      ),
+    ];
+  }
+  if (
+    isRecord(policy.auth) &&
+    policy.auth.profiles !== undefined &&
+    !isRecord(policy.auth.profiles)
+  ) {
+    return [
+      policyShapeFinding(
+        policyPath,
+        `oc://${policyDocName}/auth/profiles`,
+        `${policyPath} auth.profiles must be an object.`,
+        `Fix ${policyPath} so auth.profiles is an object.`,
+      ),
+    ];
+  }
   return [];
 }
 
@@ -784,6 +908,55 @@ function policyShapeFinding(
     target,
     fixHint,
   };
+}
+
+function authProfileMetadataRequirementFindings(
+  policy: unknown,
+  policyPath: string,
+  policyDocName: string,
+): readonly HealthFinding[] {
+  if (
+    !isRecord(policy) ||
+    !isRecord(policy.auth) ||
+    !isRecord(policy.auth.profiles) ||
+    policy.auth.profiles.requireMetadata === undefined
+  ) {
+    return [];
+  }
+  if (!Array.isArray(policy.auth.profiles.requireMetadata)) {
+    return [
+      {
+        checkId: CHECK_IDS.policyInvalidFile,
+        severity: "error",
+        message: `${policyPath} auth.profiles.requireMetadata must be an array of metadata keys.`,
+        source: "policy",
+        path: policyPath,
+        target: `oc://${policyDocName}/auth/profiles/requireMetadata`,
+        fixHint: `Use supported metadata keys: ${SUPPORTED_AUTH_PROFILE_METADATA.join(", ")}.`,
+      },
+    ];
+  }
+  const invalidIndex = policy.auth.profiles.requireMetadata.findIndex(
+    (entry) =>
+      typeof entry !== "string" ||
+      !SUPPORTED_AUTH_PROFILE_METADATA.includes(
+        entry.trim().toLowerCase() as (typeof SUPPORTED_AUTH_PROFILE_METADATA)[number],
+      ),
+  );
+  if (invalidIndex < 0) {
+    return [];
+  }
+  return [
+    {
+      checkId: CHECK_IDS.policyInvalidFile,
+      severity: "error",
+      message: `${policyPath} auth.profiles.requireMetadata[${invalidIndex}] must be a supported metadata key.`,
+      source: "policy",
+      path: policyPath,
+      target: `oc://${policyDocName}/auth/profiles/requireMetadata/#${invalidIndex}`,
+      fixHint: `Use supported metadata keys: ${SUPPORTED_AUTH_PROFILE_METADATA.join(", ")}.`,
+    },
+  ];
 }
 
 function invalidChannelDenyRuleFindings(
@@ -985,6 +1158,295 @@ function networkFindings(
         target: setting.source,
         requirement: `oc://${policyDocName}/network/privateNetwork/allow`,
         fixHint: "Disable this private-network access setting or update policy after review.",
+      };
+    });
+}
+
+function secretAuthProvenanceFindings(
+  policy: unknown,
+  policyPath: string,
+  policyDocName: string,
+  evidence: PolicyEvidence,
+): readonly HealthFinding[] {
+  const secretShapeFindings = secretPolicyShapeFindings(policy, policyPath, policyDocName);
+  const authShapeFindings = authProfileAllowModesShapeFindings(policy, policyPath, policyDocName);
+  return [
+    ...(secretShapeFindings.length > 0
+      ? secretShapeFindings
+      : [
+          ...secretManagedProviderFindings(policy, policyDocName, evidence),
+          ...secretDeniedSourceFindings(policy, policyDocName, evidence),
+          ...secretInsecureProviderFindings(policy, policyDocName, evidence),
+        ]),
+    ...(authShapeFindings.length > 0
+      ? authShapeFindings
+      : [
+          ...authProfileMetadataFindings(policy, policyDocName, evidence),
+          ...authProfileModeFindings(policy, policyDocName, evidence),
+        ]),
+  ];
+}
+
+function policyHasSecretRules(policy: unknown): boolean {
+  if (!isRecord(policy) || !isRecord(policy.secrets)) {
+    return false;
+  }
+  return (
+    policy.secrets.requireManagedProviders !== undefined ||
+    policy.secrets.denySources !== undefined ||
+    policy.secrets.allowInsecureProviders !== undefined
+  );
+}
+
+function policyHasAuthProfileRules(policy: unknown): boolean {
+  return (
+    isRecord(policy) &&
+    isRecord(policy.auth) &&
+    isRecord(policy.auth.profiles) &&
+    (policy.auth.profiles.requireMetadata !== undefined ||
+      policy.auth.profiles.allowModes !== undefined)
+  );
+}
+
+function secretPolicyShapeFindings(
+  policy: unknown,
+  policyPath: string,
+  policyDocName: string,
+): readonly HealthFinding[] {
+  if (!isRecord(policy) || !isRecord(policy.secrets)) {
+    return [];
+  }
+  const findings: HealthFinding[] = [];
+  for (const key of ["requireManagedProviders", "allowInsecureProviders"] as const) {
+    if (policy.secrets[key] !== undefined && typeof policy.secrets[key] !== "boolean") {
+      findings.push(
+        policyShapeFinding(
+          policyPath,
+          `oc://${policyDocName}/secrets/${key}`,
+          `${policyPath} secrets.${key} must be a boolean.`,
+          `Set secrets.${key} to true or false.`,
+        ),
+      );
+    }
+  }
+  if (policy.secrets.denySources !== undefined && !Array.isArray(policy.secrets.denySources)) {
+    findings.push(
+      policyShapeFinding(
+        policyPath,
+        `oc://${policyDocName}/secrets/denySources`,
+        `${policyPath} secrets.denySources must be an array of source names.`,
+        'Use an array such as ["exec"] or remove secrets.denySources.',
+      ),
+    );
+  } else if (Array.isArray(policy.secrets.denySources)) {
+    const invalidIndex = policy.secrets.denySources.findIndex(
+      (entry) => typeof entry !== "string" || entry.trim() === "",
+    );
+    if (invalidIndex >= 0) {
+      findings.push(
+        policyShapeFinding(
+          policyPath,
+          `oc://${policyDocName}/secrets/denySources/#${invalidIndex}`,
+          `${policyPath} secrets.denySources[${invalidIndex}] must be a non-empty source name.`,
+          "Use non-empty source names such as env, file, exec, or openclaw.",
+        ),
+      );
+    }
+  }
+  return findings;
+}
+
+function authProfileAllowModesShapeFindings(
+  policy: unknown,
+  policyPath: string,
+  policyDocName: string,
+): readonly HealthFinding[] {
+  if (
+    !isRecord(policy) ||
+    !isRecord(policy.auth) ||
+    !isRecord(policy.auth.profiles) ||
+    policy.auth.profiles.allowModes === undefined
+  ) {
+    return [];
+  }
+  if (!Array.isArray(policy.auth.profiles.allowModes)) {
+    return [
+      policyShapeFinding(
+        policyPath,
+        `oc://${policyDocName}/auth/profiles/allowModes`,
+        `${policyPath} auth.profiles.allowModes must be an array of auth modes.`,
+        `Use supported auth modes: ${SUPPORTED_AUTH_PROFILE_MODES.join(", ")}.`,
+      ),
+    ];
+  }
+  const invalidIndex = policy.auth.profiles.allowModes.findIndex(
+    (entry) =>
+      typeof entry !== "string" ||
+      !SUPPORTED_AUTH_PROFILE_MODES.includes(
+        entry.trim().toLowerCase() as (typeof SUPPORTED_AUTH_PROFILE_MODES)[number],
+      ),
+  );
+  if (invalidIndex < 0) {
+    return [];
+  }
+  return [
+    policyShapeFinding(
+      policyPath,
+      `oc://${policyDocName}/auth/profiles/allowModes/#${invalidIndex}`,
+      `${policyPath} auth.profiles.allowModes[${invalidIndex}] must be a supported auth mode.`,
+      `Use supported auth modes: ${SUPPORTED_AUTH_PROFILE_MODES.join(", ")}.`,
+    ),
+  ];
+}
+
+function secretManagedProviderFindings(
+  policy: unknown,
+  policyDocName: string,
+  evidence: PolicyEvidence,
+): readonly HealthFinding[] {
+  if (readPolicyBoolean(policy, ["secrets", "requireManagedProviders"]) !== true) {
+    return [];
+  }
+  const secrets = evidence.secrets ?? [];
+  const providerKeys = new Set(
+    secrets
+      .filter((secret) => secret.kind === "provider" && secret.providerSource !== undefined)
+      .map((secret) => `${secret.providerSource}:${secret.id}`),
+  );
+  return secrets
+    .filter(
+      (secret) =>
+        secret.kind === "input" &&
+        secret.provenance === "secretRef" &&
+        (secret.refProvider === undefined ||
+          secret.refSource === undefined ||
+          !providerKeys.has(`${secret.refSource}:${secret.refProvider}`)),
+    )
+    .map((secret): HealthFinding => {
+      return {
+        checkId: CHECK_IDS.policySecretsUnmanagedProvider,
+        severity: "error",
+        message: `SecretRef uses unmanaged provider '${secret.refProvider ?? "default"}'.`,
+        source: "policy",
+        path: "openclaw config",
+        ocPath: secret.source,
+        target: secret.source,
+        requirement: `oc://${policyDocName}/secrets/requireManagedProviders`,
+        fixHint:
+          "Declare the referenced provider under secrets.providers or update policy after review.",
+      };
+    });
+}
+
+function secretDeniedSourceFindings(
+  policy: unknown,
+  policyDocName: string,
+  evidence: PolicyEvidence,
+): readonly HealthFinding[] {
+  const deniedSources = new Set(readStringList(policy, ["secrets", "denySources"]));
+  if (deniedSources.size === 0) {
+    return [];
+  }
+  return (evidence.secrets ?? [])
+    .filter((secret) => {
+      const source = secret.kind === "provider" ? secret.providerSource : secret.refSource;
+      return source !== undefined && deniedSources.has(source);
+    })
+    .map((secret): HealthFinding => {
+      const source = secret.kind === "provider" ? secret.providerSource : secret.refSource;
+      return {
+        checkId: CHECK_IDS.policySecretsDeniedProviderSource,
+        severity: "error",
+        message: `Secret ${secret.kind} '${secret.id}' uses denied source '${source}'.`,
+        source: "policy",
+        path: "openclaw config",
+        ocPath: secret.source,
+        target: secret.source,
+        requirement: `oc://${policyDocName}/secrets/denySources`,
+        fixHint: "Move this secret to an approved source or update policy after review.",
+      };
+    });
+}
+
+function secretInsecureProviderFindings(
+  policy: unknown,
+  policyDocName: string,
+  evidence: PolicyEvidence,
+): readonly HealthFinding[] {
+  if (readPolicyBoolean(policy, ["secrets", "allowInsecureProviders"]) !== false) {
+    return [];
+  }
+  return (evidence.secrets ?? [])
+    .filter((secret) => secret.kind === "provider" && (secret.insecure?.length ?? 0) > 0)
+    .map((secret): HealthFinding => {
+      return {
+        checkId: CHECK_IDS.policySecretsInsecureProvider,
+        severity: "error",
+        message: `Secret provider '${secret.id}' enables insecure posture: ${(secret.insecure ?? []).join(", ")}.`,
+        source: "policy",
+        path: "openclaw config",
+        ocPath: secret.source,
+        target: secret.source,
+        requirement: `oc://${policyDocName}/secrets/allowInsecureProviders`,
+        fixHint: "Remove insecure provider overrides or update policy after review.",
+      };
+    });
+}
+
+function authProfileMetadataFindings(
+  policy: unknown,
+  policyDocName: string,
+  evidence: PolicyEvidence,
+): readonly HealthFinding[] {
+  const requiredMetadata = requiredAuthProfileMetadata(policy);
+  if (requiredMetadata.size === 0) {
+    return [];
+  }
+  return (evidence.authProfiles ?? []).flatMap((profile): HealthFinding[] => {
+    const missing = [...requiredMetadata].filter(
+      (metadata) => !authProfileHasMetadata(profile, metadata),
+    );
+    if (missing.length === 0) {
+      return [];
+    }
+    return [
+      {
+        checkId: CHECK_IDS.policyAuthProfileInvalidMetadata,
+        severity: "error",
+        message: `Auth profile '${profile.id}' is missing required metadata: ${missing.join(", ")}.`,
+        source: "policy",
+        path: "openclaw config",
+        ocPath: profile.source,
+        target: profile.source,
+        requirement: `oc://${policyDocName}/auth/profiles/requireMetadata`,
+        fixHint: "Set auth.profiles.<id>.provider and a supported auth profile mode.",
+      },
+    ];
+  });
+}
+
+function authProfileModeFindings(
+  policy: unknown,
+  policyDocName: string,
+  evidence: PolicyEvidence,
+): readonly HealthFinding[] {
+  const allowedModes = new Set(readStringList(policy, ["auth", "profiles", "allowModes"]));
+  if (allowedModes.size === 0) {
+    return [];
+  }
+  return (evidence.authProfiles ?? [])
+    .filter((profile) => profile.mode !== undefined && !allowedModes.has(profile.mode))
+    .map((profile): HealthFinding => {
+      return {
+        checkId: CHECK_IDS.policyAuthProfileUnapprovedMode,
+        severity: "error",
+        message: `Auth profile '${profile.id}' uses mode '${profile.mode}' outside the policy allowlist.`,
+        source: "policy",
+        path: "openclaw config",
+        ocPath: profile.source,
+        target: profile.source,
+        requirement: `oc://${policyDocName}/auth/profiles/allowModes`,
+        fixHint: "Change the auth profile mode or update policy after review.",
       };
     });
 }
@@ -1313,6 +1775,31 @@ function policyChecksEnabled(ctx: HealthCheckContext, settings: PolicySettings):
 
 function requiredToolMetadata(policy: unknown): ReadonlySet<string> {
   return new Set(readPolicyStringArray(policy, ["tools", "requireMetadata"]) ?? []);
+}
+
+function requiredAuthProfileMetadata(
+  policy: unknown,
+): ReadonlySet<(typeof SUPPORTED_AUTH_PROFILE_METADATA)[number]> {
+  const entries = readPolicyStringArray(policy, ["auth", "profiles", "requireMetadata"]) ?? [];
+  return new Set(
+    entries.filter((entry): entry is (typeof SUPPORTED_AUTH_PROFILE_METADATA)[number] =>
+      SUPPORTED_AUTH_PROFILE_METADATA.includes(
+        entry as (typeof SUPPORTED_AUTH_PROFILE_METADATA)[number],
+      ),
+    ),
+  );
+}
+
+function authProfileHasMetadata(
+  profile: PolicyAuthProfileEvidence,
+  metadata: (typeof SUPPORTED_AUTH_PROFILE_METADATA)[number],
+): boolean {
+  if (metadata === "provider") {
+    return profile.provider !== undefined && profile.provider.trim() !== "";
+  }
+  return SUPPORTED_AUTH_PROFILE_MODES.includes(
+    profile.mode as (typeof SUPPORTED_AUTH_PROFILE_MODES)[number],
+  );
 }
 
 function readPolicyStringArray(

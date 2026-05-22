@@ -18,12 +18,14 @@ report drift through `doctor --lint`. The final conformance signal is a clean
 instead of creating a separate health gate.
 
 Policy currently manages configured channels, MCP servers, model providers,
-network SSRF posture, and governed tool declarations. For example, IT or a
-workspace operator can record that Telegram is not an approved channel
-provider, restrict MCP servers and model refs to approved entries, require
-private-network fetch/browser access to remain disabled, require governed tools
-to carry risk and sensitivity metadata, then use `doctor --lint` as the shared
-conformance gate.
+network SSRF posture, OpenClaw config secret provider/auth profile posture,
+and governed tool declarations. For example, IT or a workspace operator can
+record that Telegram is not an approved channel provider, restrict MCP servers
+and model refs to approved entries, require private-network fetch/browser
+access to remain disabled, require OpenClaw config SecretRefs to use managed
+providers, require config auth profiles to carry provider/mode metadata,
+require governed tools to carry risk and sensitivity metadata, then use
+`doctor --lint` as the shared conformance gate.
 
 Use policy when a workspace needs a durable statement such as "these channels
 must not be enabled" or "governed tools must declare approval metadata" and a
@@ -44,8 +46,9 @@ arbitrary plugins. The plugin remains enabled if `policy.jsonc` is missing, so
 doctor can report the missing artifact.
 
 Policy is authored, not generated from the user's current settings. A minimal
-policy for channels, MCP servers, model providers, network posture, and tool
-metadata looks like this:
+policy for channels, MCP servers, model providers, network posture,
+OpenClaw config secret provider/auth profile posture, and tool metadata looks
+like this:
 
 ```jsonc
 {
@@ -75,6 +78,17 @@ metadata looks like this:
       "allow": false,
     },
   },
+  "secrets": {
+    "requireManagedProviders": true,
+    "denySources": ["exec"],
+    "allowInsecureProviders": false,
+  },
+  "auth": {
+    "profiles": {
+      "requireMetadata": ["provider", "mode"],
+      "allowModes": ["api_key", "token"],
+    },
+  },
   "tools": {
     "requireMetadata": ["risk", "sensitivity", "owner"],
   },
@@ -84,8 +98,12 @@ metadata looks like this:
 The rules are the authority. A category block is only a namespace; checks run
 when a concrete rule is present. OpenClaw reads current `channels.*` settings
 `mcp.servers.*`, `models.providers.*`, selected agent model refs, network SSRF
-settings, and `TOOLS.md` declarations as evidence, then reports observed state
-that does not conform.
+settings, OpenClaw config secret provider and SecretRef provenance, config auth
+profile metadata, and `TOOLS.md` declarations as evidence, then reports
+observed state that does not conform. Secret evidence records provider/source
+posture and SecretRef metadata, never raw secret values. Policy does not read
+or attest per-agent credential stores such as `auth-profiles.json`; those
+stores remain owned by the existing auth and credential flows.
 
 Run policy-only checks during authoring:
 
@@ -218,6 +236,31 @@ Example JSON output:
         "value": false
       }
     ],
+    "secrets": [
+      {
+        "id": "vault",
+        "kind": "provider",
+        "source": "oc://openclaw.config/secrets/providers/vault",
+        "providerSource": "env"
+      },
+      {
+        "id": "oc://openclaw.config/models/providers/openai/apiKey",
+        "kind": "input",
+        "source": "oc://openclaw.config/models/providers/openai/apiKey",
+        "provenance": "secretRef",
+        "refSource": "env",
+        "refProvider": "vault"
+      }
+    ],
+    "authProfiles": [
+      {
+        "id": "github",
+        "source": "oc://openclaw.config/auth/profiles/github",
+        "validMetadata": true,
+        "provider": "github",
+        "mode": "token"
+      }
+    ],
     "tools": [
       {
         "id": "deploy",
@@ -229,7 +272,7 @@ Example JSON output:
       }
     ]
   },
-  "checksRun": 15,
+  "checksRun": 20,
   "checksSkipped": 0,
   "findings": []
 }
@@ -277,23 +320,28 @@ choose a different interval.
 
 Policy currently verifies:
 
-| Check id                                 | Finding                                                               |
-| ---------------------------------------- | --------------------------------------------------------------------- |
-| `policy/policy-jsonc-missing`            | Policy is enabled but `policy.jsonc` is missing.                      |
-| `policy/policy-jsonc-invalid`            | Policy cannot be parsed or contains malformed rule entries.           |
-| `policy/policy-hash-mismatch`            | Policy does not match configured `expectedHash`.                      |
-| `policy/attestation-hash-mismatch`       | Current policy evidence no longer matches the accepted attestation.   |
-| `policy/channels-denied-provider`        | An enabled channel matches a channel deny rule.                       |
-| `policy/mcp-denied-server`               | A configured MCP server is denied by policy.                          |
-| `policy/mcp-unapproved-server`           | A configured MCP server is outside the allowlist.                     |
-| `policy/models-denied-provider`          | A configured model provider or model ref uses a denied provider.      |
-| `policy/models-unapproved-provider`      | A configured model provider or model ref is outside the allowlist.    |
-| `policy/network-private-access-enabled`  | A private-network SSRF escape hatch is enabled when policy denies it. |
-| `policy/tools-missing-risk-level`        | A governed tool declaration is missing risk metadata.                 |
-| `policy/tools-unknown-risk-level`        | A governed tool declaration uses an unknown risk value.               |
-| `policy/tools-missing-sensitivity-token` | A governed tool declaration is missing sensitivity metadata.          |
-| `policy/tools-missing-owner`             | A governed tool declaration is missing owner metadata.                |
-| `policy/tools-unknown-sensitivity-token` | A governed tool declaration uses an unknown sensitivity value.        |
+| Check id                                 | Finding                                                                          |
+| ---------------------------------------- | -------------------------------------------------------------------------------- |
+| `policy/policy-jsonc-missing`            | Policy is enabled but `policy.jsonc` is missing.                                 |
+| `policy/policy-jsonc-invalid`            | Policy cannot be parsed or contains malformed rule entries.                      |
+| `policy/policy-hash-mismatch`            | Policy does not match configured `expectedHash`.                                 |
+| `policy/attestation-hash-mismatch`       | Current policy evidence no longer matches the accepted attestation.              |
+| `policy/channels-denied-provider`        | An enabled channel matches a channel deny rule.                                  |
+| `policy/mcp-denied-server`               | A configured MCP server is denied by policy.                                     |
+| `policy/mcp-unapproved-server`           | A configured MCP server is outside the allowlist.                                |
+| `policy/models-denied-provider`          | A configured model provider or model ref uses a denied provider.                 |
+| `policy/models-unapproved-provider`      | A configured model provider or model ref is outside the allowlist.               |
+| `policy/network-private-access-enabled`  | A private-network SSRF escape hatch is enabled when policy denies it.            |
+| `policy/secrets-unmanaged-provider`      | A config SecretRef references a provider not declared under `secrets.providers`. |
+| `policy/secrets-denied-provider-source`  | A config secret provider or SecretRef uses a source denied by policy.            |
+| `policy/secrets-insecure-provider`       | A secret provider opts into insecure posture when policy denies it.              |
+| `policy/auth-profile-invalid-metadata`   | A config auth profile is missing valid provider or mode metadata.                |
+| `policy/auth-profile-unapproved-mode`    | A config auth profile mode is outside the policy allowlist.                      |
+| `policy/tools-missing-risk-level`        | A governed tool declaration is missing risk metadata.                            |
+| `policy/tools-unknown-risk-level`        | A governed tool declaration uses an unknown risk value.                          |
+| `policy/tools-missing-sensitivity-token` | A governed tool declaration is missing sensitivity metadata.                     |
+| `policy/tools-missing-owner`             | A governed tool declaration is missing owner metadata.                           |
+| `policy/tools-unknown-sensitivity-token` | A governed tool declaration uses an unknown sensitivity value.                   |
 
 Policy findings can include both `target` and `requirement`. `target` is the
 observed workspace thing that does not conform. `requirement` is the authored

@@ -9,6 +9,7 @@ import {
   type HealthRepairContext,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/health";
+import { clearHealthChecksForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   collectPolicyEvidence,
@@ -93,12 +94,14 @@ async function runDeniedChannelRepair(repairCheckCtx: HealthRepairContext) {
 
 describe("registerPolicyDoctorChecks", () => {
   beforeEach(async () => {
+    clearHealthChecksForTest();
     resetPolicyDoctorChecksForTest();
     workspaceDir = await fs.mkdtemp(join(tmpdir(), "policy-doctor-"));
   });
 
   afterEach(async () => {
     await fs.rm(workspaceDir, { recursive: true, force: true });
+    clearHealthChecksForTest();
     resetPolicyDoctorChecksForTest();
   });
 
@@ -122,6 +125,11 @@ describe("registerPolicyDoctorChecks", () => {
       "policy/models-denied-provider",
       "policy/models-unapproved-provider",
       "policy/network-private-access-enabled",
+      "policy/secrets-unmanaged-provider",
+      "policy/secrets-denied-provider-source",
+      "policy/secrets-insecure-provider",
+      "policy/auth-profile-invalid-metadata",
+      "policy/auth-profile-unapproved-mode",
       "policy/tools-missing-risk-level",
       "policy/tools-unknown-risk-level",
       "policy/tools-missing-sensitivity-token",
@@ -233,11 +241,7 @@ describe("registerPolicyDoctorChecks", () => {
       "oc://policy.jsonc/mcp/servers/deny/#1",
     ],
     ["models array", { models: [] }, "oc://policy.jsonc/models"],
-    [
-      "models providers array",
-      { models: { providers: [] } },
-      "oc://policy.jsonc/models/providers",
-    ],
+    ["models providers array", { models: { providers: [] } }, "oc://policy.jsonc/models/providers"],
     [
       "models providers allow string",
       { models: { providers: { allow: "openai" } } },
@@ -259,6 +263,9 @@ describe("registerPolicyDoctorChecks", () => {
       { network: { privateNetwork: { allow: "false" } } },
       "oc://policy.jsonc/network/privateNetwork/allow",
     ],
+    ["secrets array", { secrets: [] }, "oc://policy.jsonc/secrets"],
+    ["auth array", { auth: [] }, "oc://policy.jsonc/auth"],
+    ["auth profiles array", { auth: { profiles: [] } }, "oc://policy.jsonc/auth/profiles"],
   ])("reports malformed policy shape for %s", async (_label, policy, target) => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     await fs.writeFile(configPath, "{}", "utf-8");
@@ -411,7 +418,7 @@ describe("registerPolicyDoctorChecks", () => {
       checkedAt: "2026-05-10T20:00:00.000Z",
       policyPath: "policy.jsonc",
       policyHash,
-      evidence: collectPolicyEvidence({}),
+      evidence: collectPolicyEvidence({}, { includeSecrets: false, includeAuthProfiles: false }),
       findings: [],
     }).attestationHash;
     await fs.writeFile(configPath, "{}", "utf-8");
@@ -433,7 +440,7 @@ describe("registerPolicyDoctorChecks", () => {
       checkedAt: "2026-05-10T20:00:00.000Z",
       policyPath: "policy.jsonc",
       policyHash,
-      evidence: collectPolicyEvidence({}),
+      evidence: collectPolicyEvidence({}, { includeSecrets: false, includeAuthProfiles: false }),
       findings: [],
     }).attestationHash;
     await fs.writeFile(configPath, "{}", "utf-8");
@@ -445,6 +452,59 @@ describe("registerPolicyDoctorChecks", () => {
     );
 
     expect(result.findings).toEqual([]);
+  });
+
+  it("does not include unrelated secret or auth evidence in channel-only attestations", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const policy = { channels: { denyRules: [] } };
+    const policyHash = policyDocumentHash(policy);
+    const acceptedAttestationHash = createPolicyAttestation({
+      ok: true,
+      checkedAt: "2026-05-10T20:00:00.000Z",
+      policyPath: "policy.jsonc",
+      policyHash,
+      evidence: collectPolicyEvidence(
+        {
+          secrets: {
+            providers: {
+              vault: { source: "env" },
+            },
+          },
+          auth: {
+            profiles: {
+              github: { provider: "github", mode: "token" },
+            },
+          },
+        },
+        { includeSecrets: false, includeAuthProfiles: false },
+      ),
+      findings: [],
+    }).attestationHash;
+    const cfg = {
+      ...cfgWithPolicy({ expectedAttestationHash: acceptedAttestationHash }),
+      secrets: {
+        providers: {
+          changed: { source: "exec", command: "vault" },
+        },
+      },
+      auth: {
+        profiles: {
+          changed: { provider: "github", mode: "oauth" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(join(workspaceDir, "policy.jsonc"), JSON.stringify(policy), "utf-8");
+
+    const result = await runPolicyChecks(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual([]);
+    const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>, {
+      includeSecrets: false,
+      includeAuthProfiles: false,
+    });
+    expect(evidence).not.toHaveProperty("secrets");
+    expect(evidence).not.toHaveProperty("authProfiles");
   });
 
   it("reports configured channels denied by policy", async () => {
@@ -1217,7 +1277,9 @@ describe("registerPolicyDoctorChecks", () => {
     );
     await fs.writeFile(join(workspaceDir, "TOOLS.md"), "## Tools\n\n### deploy\n", "utf-8");
 
-    const result = await runPolicyDoctorLint(ctx(configPath, cfgWithPolicy({ enabled: undefined })));
+    const result = await runPolicyDoctorLint(
+      ctx(configPath, cfgWithPolicy({ enabled: undefined })),
+    );
 
     expect(result.findings).toEqual([]);
   });
@@ -1472,6 +1534,627 @@ describe("registerPolicyDoctorChecks", () => {
         severity: "error",
         ocPath: "oc://openclaw.config/tools/web/fetch/ssrfPolicy/allowIpv6UniqueLocalRange",
         requirement: "oc://policy.jsonc/network/privateNetwork/allow",
+      }),
+    ]);
+  });
+
+  it("reports secret provider conformance findings without leaking secret values", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      secrets: {
+        providers: {
+          vault: { source: "file", path: ".secrets.json", allowInsecurePath: true },
+          command: { source: "exec", command: "vault", args: ["read", "openai/api-key"] },
+        },
+      },
+      models: {
+        providers: {
+          anthropic: { apiKey: { source: "env", provider: "missing", id: "ANTHROPIC_API_KEY" } },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        secrets: {
+          requireManagedProviders: true,
+          denySources: ["exec"],
+          allowInsecureProviders: false,
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+    const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>);
+
+    expect(JSON.stringify(evidence)).not.toContain("ANTHROPIC_API_KEY");
+    expect(JSON.stringify(result.findings)).not.toContain("ANTHROPIC_API_KEY");
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/secrets-unmanaged-provider",
+          severity: "error",
+          ocPath: "oc://openclaw.config/models/providers/anthropic/apiKey",
+          requirement: "oc://policy.jsonc/secrets/requireManagedProviders",
+        }),
+        expect.objectContaining({
+          checkId: "policy/secrets-denied-provider-source",
+          severity: "error",
+          ocPath: "oc://openclaw.config/secrets/providers/command",
+          requirement: "oc://policy.jsonc/secrets/denySources",
+        }),
+        expect.objectContaining({
+          checkId: "policy/secrets-insecure-provider",
+          severity: "error",
+          ocPath: "oc://openclaw.config/secrets/providers/vault",
+          requirement: "oc://policy.jsonc/secrets/allowInsecureProviders",
+        }),
+      ]),
+    );
+    expect(result.findings).toHaveLength(3);
+  });
+
+  it("checks managed providers for structured provider request SecretRefs", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const baseCfg = cfgWithPolicy();
+    const cfg = {
+      ...baseCfg,
+      models: {
+        providers: {
+          openai: {
+            request: {
+              auth: {
+                mode: "authorization-bearer",
+                token: { source: "exec", provider: "rogue", id: "openai/bearer-token" },
+              },
+              tls: {
+                passphrase: { source: "exec", provider: "rogue", id: "tls/passphrase" },
+              },
+            },
+          },
+          "z.ai": {
+            headers: {
+              Authorization: { source: "exec", provider: "rogue", id: "zai/authorization" },
+            },
+          },
+        },
+      },
+      tools: {
+        media: {
+          models: [
+            {
+              request: {
+                auth: {
+                  mode: "authorization-bearer",
+                  token: { source: "exec", provider: "rogue", id: "media/shared-token" },
+                },
+                tls: {
+                  key: { source: "exec", provider: "rogue", id: "media/tls/key" },
+                },
+              },
+            },
+          ],
+          audio: {
+            request: {
+              auth: {
+                mode: "authorization-bearer",
+                token: { source: "exec", provider: "rogue", id: "media/audio-token" },
+              },
+            },
+          },
+          image: {
+            models: [
+              {
+                request: {
+                  auth: {
+                    mode: "authorization-bearer",
+                    token: { source: "exec", provider: "rogue", id: "media/image-token" },
+                  },
+                },
+              },
+            ],
+          },
+        },
+      },
+      plugins: {
+        ...baseCfg.plugins,
+        entries: {
+          ...baseCfg.plugins?.entries,
+          acpx: {
+            config: {
+              mcpServers: {
+                github: {
+                  env: {
+                    GITHUB_TOKEN: { source: "exec", provider: "rogue", id: "github/token" },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        secrets: {
+          requireManagedProviders: true,
+          denySources: ["exec"],
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+    const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>);
+
+    expect(evidence.secrets).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "input",
+          provenance: "secretRef",
+          refSource: "exec",
+          refProvider: "rogue",
+          source: "oc://openclaw.config/models/providers/openai/request/auth/token",
+        }),
+        expect.objectContaining({
+          kind: "input",
+          provenance: "secretRef",
+          refSource: "exec",
+          refProvider: "rogue",
+          source: "oc://openclaw.config/models/providers/openai/request/tls/passphrase",
+        }),
+        expect.objectContaining({
+          kind: "input",
+          provenance: "secretRef",
+          refSource: "exec",
+          refProvider: "rogue",
+          source: 'oc://openclaw.config/models/providers/"z.ai"/headers/Authorization',
+        }),
+        expect.objectContaining({
+          kind: "input",
+          provenance: "secretRef",
+          refSource: "exec",
+          refProvider: "rogue",
+          source:
+            "oc://openclaw.config/plugins/entries/acpx/config/mcpServers/github/env/GITHUB_TOKEN",
+        }),
+        expect.objectContaining({
+          kind: "input",
+          provenance: "secretRef",
+          refSource: "exec",
+          refProvider: "rogue",
+          source: "oc://openclaw.config/tools/media/models/#0/request/auth/token",
+        }),
+        expect.objectContaining({
+          kind: "input",
+          provenance: "secretRef",
+          refSource: "exec",
+          refProvider: "rogue",
+          source: "oc://openclaw.config/tools/media/models/#0/request/tls/key",
+        }),
+        expect.objectContaining({
+          kind: "input",
+          provenance: "secretRef",
+          refSource: "exec",
+          refProvider: "rogue",
+          source: "oc://openclaw.config/tools/media/audio/request/auth/token",
+        }),
+        expect.objectContaining({
+          kind: "input",
+          provenance: "secretRef",
+          refSource: "exec",
+          refProvider: "rogue",
+          source: "oc://openclaw.config/tools/media/image/models/#0/request/auth/token",
+        }),
+      ]),
+    );
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/secrets-unmanaged-provider",
+          ocPath: "oc://openclaw.config/models/providers/openai/request/auth/token",
+        }),
+        expect.objectContaining({
+          checkId: "policy/secrets-denied-provider-source",
+          ocPath: "oc://openclaw.config/models/providers/openai/request/auth/token",
+        }),
+        expect.objectContaining({
+          checkId: "policy/secrets-unmanaged-provider",
+          ocPath: "oc://openclaw.config/models/providers/openai/request/tls/passphrase",
+        }),
+        expect.objectContaining({
+          checkId: "policy/secrets-denied-provider-source",
+          ocPath: "oc://openclaw.config/models/providers/openai/request/tls/passphrase",
+        }),
+        expect.objectContaining({
+          checkId: "policy/secrets-unmanaged-provider",
+          ocPath: 'oc://openclaw.config/models/providers/"z.ai"/headers/Authorization',
+        }),
+        expect.objectContaining({
+          checkId: "policy/secrets-denied-provider-source",
+          ocPath:
+            "oc://openclaw.config/plugins/entries/acpx/config/mcpServers/github/env/GITHUB_TOKEN",
+        }),
+        expect.objectContaining({
+          checkId: "policy/secrets-unmanaged-provider",
+          ocPath: "oc://openclaw.config/tools/media/models/#0/request/auth/token",
+        }),
+        expect.objectContaining({
+          checkId: "policy/secrets-denied-provider-source",
+          ocPath: "oc://openclaw.config/tools/media/audio/request/auth/token",
+        }),
+        expect.objectContaining({
+          checkId: "policy/secrets-unmanaged-provider",
+          ocPath: "oc://openclaw.config/tools/media/image/models/#0/request/auth/token",
+        }),
+        expect.objectContaining({
+          checkId: "policy/secrets-unmanaged-provider",
+          ocPath: "oc://openclaw.config/tools/media/models/#0/request/tls/key",
+        }),
+      ]),
+    );
+  });
+
+  it("honors configured secret default providers when checking managed providers", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      secrets: {
+        defaults: {
+          env: "vault",
+        },
+        providers: {
+          vault: { source: "env" },
+        },
+      },
+      models: {
+        providers: {
+          openai: { apiKey: "$OPENAI_API_KEY" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        secrets: {
+          requireManagedProviders: true,
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+    const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>);
+
+    expect(evidence.secrets).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "input",
+          provenance: "secretRef",
+          refSource: "env",
+          refProvider: "vault",
+          source: "oc://openclaw.config/models/providers/openai/apiKey",
+        }),
+      ]),
+    );
+    expect(result.findings).toEqual([]);
+  });
+
+  it("reports SecretRefs that use a managed provider alias with the wrong source", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      secrets: {
+        providers: {
+          vault: { source: "file", path: ".secrets.json" },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            apiKey: { source: "env", provider: "vault", id: "OPENAI_API_KEY" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        secrets: {
+          requireManagedProviders: true,
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/secrets-unmanaged-provider",
+        severity: "error",
+        ocPath: "oc://openclaw.config/models/providers/openai/apiKey",
+        requirement: "oc://policy.jsonc/secrets/requireManagedProviders",
+      }),
+    ]);
+  });
+
+  it("does not treat raw MCP env values as SecretRefs", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      mcp: {
+        servers: {
+          "corp.github": {
+            env: {
+              APP_ID: "$GITHUB_APP_ID",
+              GITHUB_TOKEN: "$GITHUB_TOKEN",
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        secrets: {
+          requireManagedProviders: true,
+          denySources: ["env"],
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+    const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>);
+
+    expect(evidence.secrets).toEqual([]);
+    expect(result.findings).toEqual([]);
+  });
+
+  it("checks configured channel encryptKey SecretRefs", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      channels: {
+        feishu: {
+          encryptKey: { source: "exec", provider: "rogue", id: "feishu/encrypt-key" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        secrets: {
+          requireManagedProviders: true,
+          denySources: ["exec"],
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/secrets-unmanaged-provider",
+          ocPath: "oc://openclaw.config/channels/feishu/encryptKey",
+        }),
+        expect.objectContaining({
+          checkId: "policy/secrets-denied-provider-source",
+          ocPath: "oc://openclaw.config/channels/feishu/encryptKey",
+        }),
+      ]),
+    );
+  });
+
+  it("reports auth profiles missing required metadata or using unapproved modes", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      auth: {
+        profiles: {
+          missingMode: { provider: "github" },
+          oauth: { provider: "github", mode: "oauth" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        auth: {
+          profiles: { requireMetadata: ["provider", "mode"], allowModes: ["api_key", "token"] },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/auth-profile-invalid-metadata",
+        severity: "error",
+        ocPath: "oc://openclaw.config/auth/profiles/missingMode",
+        requirement: "oc://policy.jsonc/auth/profiles/requireMetadata",
+      }),
+      expect.objectContaining({
+        checkId: "policy/auth-profile-unapproved-mode",
+        severity: "error",
+        ocPath: "oc://openclaw.config/auth/profiles/oauth",
+        requirement: "oc://policy.jsonc/auth/profiles/allowModes",
+      }),
+    ]);
+  });
+
+  it("reports malformed secrets policy values before applying secrets checks", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        secrets: {
+          requireManagedProviders: "yes",
+          denySources: "exec",
+          allowInsecureProviders: "false",
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/policy-jsonc-invalid",
+          target: "oc://policy.jsonc/secrets/requireManagedProviders",
+        }),
+        expect.objectContaining({
+          checkId: "policy/policy-jsonc-invalid",
+          target: "oc://policy.jsonc/secrets/denySources",
+        }),
+        expect.objectContaining({
+          checkId: "policy/policy-jsonc-invalid",
+          target: "oc://policy.jsonc/secrets/allowInsecureProviders",
+        }),
+      ]),
+    );
+  });
+
+  it("keeps secret conformance checks active when auth policy shape is invalid", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      models: {
+        providers: {
+          openai: {
+            apiKey: { source: "exec", provider: "rogue", id: "openai/api-key" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        secrets: {
+          requireManagedProviders: true,
+        },
+        auth: {
+          profiles: {
+            allowModes: "token",
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/secrets-unmanaged-provider",
+          ocPath: "oc://openclaw.config/models/providers/openai/apiKey",
+        }),
+        expect.objectContaining({
+          checkId: "policy/policy-jsonc-invalid",
+          target: "oc://policy.jsonc/auth/profiles/allowModes",
+        }),
+      ]),
+    );
+  });
+
+  it("reports blank secrets deny source policy entries", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({ secrets: { denySources: ["exec", " "] } }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/policy-jsonc-invalid",
+        target: "oc://policy.jsonc/secrets/denySources/#1",
+      }),
+    ]);
+  });
+
+  it("reports malformed auth profile policy values", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        auth: {
+          profiles: {
+            requireMetadata: ["provider", ""],
+            allowModes: ["api_key", "unsupported"],
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/policy-jsonc-invalid",
+          target: "oc://policy.jsonc/auth/profiles/requireMetadata/#1",
+        }),
+        expect.objectContaining({
+          checkId: "policy/policy-jsonc-invalid",
+          target: "oc://policy.jsonc/auth/profiles/allowModes/#1",
+        }),
+      ]),
+    );
+  });
+
+  it("reports non-array auth mode allowlists", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({ auth: { profiles: { allowModes: "token" } } }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/policy-jsonc-invalid",
+        target: "oc://policy.jsonc/auth/profiles/allowModes",
       }),
     ]);
   });
