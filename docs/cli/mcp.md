@@ -431,12 +431,14 @@ Example config shape:
 
 Launches a local child process and communicates over stdin/stdout.
 
-| Field                      | Description                       |
-| -------------------------- | --------------------------------- |
-| `command`                  | Executable to spawn (required)    |
-| `args`                     | Array of command-line arguments   |
-| `env`                      | Extra environment variables       |
-| `cwd` / `workingDirectory` | Working directory for the process |
+| Field                      | Description                                                                                      |
+| -------------------------- | ------------------------------------------------------------------------------------------------ |
+| `command`                  | Executable to spawn (required)                                                                   |
+| `args`                     | Array of command-line arguments                                                                  |
+| `env`                      | Extra environment variables                                                                      |
+| `cwd` / `workingDirectory` | Working directory for the process                                                                |
+| `connectionTimeoutMs`      | Per-server connection timeout in ms (optional)                                                   |
+| `toolsListTimeoutMs`       | Optional timeout for post-connect `tools/list` catalog requests; defaults to SDK request timeout |
 
 <Warning>
 **Stdio env safety filter**
@@ -450,11 +452,12 @@ If your MCP server genuinely needs one of the blocked variables, set it on the g
 
 Connects to a remote MCP server over HTTP Server-Sent Events.
 
-| Field                 | Description                                                      |
-| --------------------- | ---------------------------------------------------------------- |
-| `url`                 | HTTP or HTTPS URL of the remote server (required)                |
-| `headers`             | Optional key-value map of HTTP headers (for example auth tokens) |
-| `connectionTimeoutMs` | Per-server connection timeout in ms (optional)                   |
+| Field                 | Description                                                                                      |
+| --------------------- | ------------------------------------------------------------------------------------------------ |
+| `url`                 | HTTP or HTTPS URL of the remote server (required)                                                |
+| `headers`             | Optional key-value map of HTTP headers (for example auth tokens)                                 |
+| `connectionTimeoutMs` | Per-server connection timeout in ms (optional)                                                   |
+| `toolsListTimeoutMs`  | Optional timeout for post-connect `tools/list` catalog requests; defaults to SDK request timeout |
 
 Example:
 
@@ -479,12 +482,13 @@ Sensitive values in `url` (userinfo) and `headers` are redacted in logs and stat
 
 `streamable-http` is an additional transport option alongside `sse` and `stdio`. It uses HTTP streaming for bidirectional communication with remote MCP servers.
 
-| Field                 | Description                                                                            |
-| --------------------- | -------------------------------------------------------------------------------------- |
-| `url`                 | HTTP or HTTPS URL of the remote server (required)                                      |
-| `transport`           | Set to `"streamable-http"` to select this transport; when omitted, OpenClaw uses `sse` |
-| `headers`             | Optional key-value map of HTTP headers (for example auth tokens)                       |
-| `connectionTimeoutMs` | Per-server connection timeout in ms (optional)                                         |
+| Field                 | Description                                                                                      |
+| --------------------- | ------------------------------------------------------------------------------------------------ |
+| `url`                 | HTTP or HTTPS URL of the remote server (required)                                                |
+| `transport`           | Set to `"streamable-http"` to select this transport; when omitted, OpenClaw uses `sse`           |
+| `headers`             | Optional key-value map of HTTP headers (for example auth tokens)                                 |
+| `connectionTimeoutMs` | Per-server connection timeout in ms (optional)                                                   |
+| `toolsListTimeoutMs`  | Optional timeout for post-connect `tools/list` catalog requests; defaults to SDK request timeout |
 
 OpenClaw config uses `transport: "streamable-http"` as the canonical spelling. CLI-native MCP `type: "http"` values are accepted when saved through `openclaw mcp set` and repaired by `openclaw doctor --fix` in existing config, but `transport` is what embedded Pi consumes directly.
 

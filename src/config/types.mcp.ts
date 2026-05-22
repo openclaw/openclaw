@@ -28,6 +28,8 @@ export type McpServerConfig = {
   headers?: Record<string, string | number | boolean>;
   /** Optional connection timeout in milliseconds. */
   connectionTimeoutMs?: number;
+  /** Optional post-connect tools/list request timeout in milliseconds. */
+  toolsListTimeoutMs?: number;
   /** Codex-specific projection controls for Codex app-server/runtime config. */
   codex?: McpServerCodexConfig;
   [key: string]: unknown;

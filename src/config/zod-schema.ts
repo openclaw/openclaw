@@ -354,6 +354,7 @@ const McpServerSchema = z
         z.union([z.string().register(sensitive), z.number(), z.boolean()]).register(sensitive),
       )
       .optional(),
+    toolsListTimeoutMs: z.number().int().positive().optional(),
     codex: z
       .object({
         agents: z

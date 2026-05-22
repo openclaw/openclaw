@@ -119,11 +119,15 @@ function redactErrorUrls(error: unknown): string {
   return redactSensitiveUrlLikeString(String(error));
 }
 
-async function listAllTools(client: Client) {
+async function listAllTools(client: Client, timeoutMs?: number) {
   const tools: ListedTool[] = [];
   let cursor: string | undefined;
   do {
-    const page = await client.listTools(cursor ? { cursor } : undefined);
+    const params = cursor ? { cursor } : undefined;
+    const page =
+      timeoutMs === undefined
+        ? await client.listTools(params)
+        : await client.listTools(params, { timeout: timeoutMs });
     tools.push(...page.tools);
     cursor = page.nextCursor;
   } while (cursor);
@@ -260,7 +264,7 @@ export function createSessionMcpRuntime(params: {
             failIfDisposed();
             await connectWithTimeout(client, resolved.transport, resolved.connectionTimeoutMs);
             failIfDisposed();
-            const listedTools = await listAllTools(client);
+            const listedTools = await listAllTools(client, resolved.toolsListTimeoutMs);
             failIfDisposed();
             servers[serverName] = {
               serverName,
