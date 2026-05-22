@@ -121,6 +121,14 @@ function readApprovalScopeValue(value: unknown): "turn" | "session" | undefined 
   return value === "turn" || value === "session" ? value : undefined;
 }
 
+function readCommandOutputClassification(
+  value: unknown,
+): "success" | "benign_no_result" | "failure" | undefined {
+  return value === "success" || value === "benign_no_result" || value === "failure"
+    ? value
+    : undefined;
+}
+
 export type RuntimeFallbackAttempt = {
   provider: string;
   model: string;
@@ -2073,6 +2081,10 @@ export async function runAgentTurnWithFallback(params: {
                       name: readStringValue(evt.data.name),
                       output: readStringValue(evt.data.output),
                       status: readStringValue(evt.data.status),
+                      outcomeClassification: readCommandOutputClassification(
+                        evt.data.outcomeClassification,
+                      ),
+                      statusLabel: readStringValue(evt.data.statusLabel),
                       exitCode:
                         typeof evt.data.exitCode === "number" || evt.data.exitCode === null
                           ? evt.data.exitCode
