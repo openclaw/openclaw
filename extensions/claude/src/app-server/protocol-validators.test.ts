@@ -104,6 +104,21 @@ describe("assertTurnStartResponse", () => {
     });
     expect(result.turn.error).toBeNull();
   });
+
+  // Tank P1 regression: malformed turn/start responses must fail closed.
+  // Without the assert helper, the runner reads response.turn.id off a
+  // cast and propagates undefined as the turnId — which then poisons the
+  // turnIdentity filter so the tool-call handler claims unrelated requests
+  // from concurrent turns.
+  it("fails closed when turn.id is empty", () => {
+    expect(() => assertTurnStartResponse({ turn: { id: "", status: "inProgress" } })).toThrow(
+      ClaudeAppServerProtocolError,
+    );
+  });
+
+  it("fails closed when turn is missing entirely", () => {
+    expect(() => assertTurnStartResponse({})).toThrow(ClaudeAppServerProtocolError);
+  });
 });
 
 describe("assertTurnStartParams", () => {
@@ -151,6 +166,21 @@ describe("readDynamicToolCallParams", () => {
     expect(
       readDynamicToolCallParams({ callId: "c", threadId: "", turnId: "t", tool: "x" }),
     ).toBeUndefined();
+  });
+
+  // Tank P1 regression: malformed item/tool/call params must NOT claim
+  // unrelated requests. readDynamicToolCallParams returning undefined is
+  // what makes the registerToolCallHandler `if (!call) return undefined`
+  // guard work — it lets the handler chain try the next consumer instead
+  // of dead-ending the request.
+  it("fails closed on missing tool name (handler will skip)", () => {
+    expect(
+      readDynamicToolCallParams({ callId: "c", threadId: "thr", turnId: "t" }),
+    ).toBeUndefined();
+  });
+
+  it("fails closed on missing turnId (cross-turn claim prevention)", () => {
+    expect(readDynamicToolCallParams({ callId: "c", threadId: "thr", tool: "x" })).toBeUndefined();
   });
 
   it("returns undefined for non-objects", () => {

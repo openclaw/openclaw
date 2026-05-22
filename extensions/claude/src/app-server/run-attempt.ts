@@ -65,7 +65,14 @@ import {
 import { getSharedClaudeAppServerClient, type ClaudeAppServerClient } from "./client.js";
 import { resolveClaudeAppServerConfig, type ResolvedClaudeAppServerConfig } from "./config.js";
 import { createClaudeDynamicToolBridge, type ClaudeDynamicToolBridge } from "./dynamic-tools.js";
-import { assertThreadStartResponse } from "./protocol-validators.js";
+import {
+  assertThreadStartResponse,
+  assertTurnStartParams,
+  assertTurnStartResponse,
+  readDynamicToolCallParams,
+  readTurn,
+  readTurnCompletedNotification,
+} from "./protocol-validators.js";
 import { startOrResumeClaudeThread } from "./thread-lifecycle.js";
 import {
   readClaudeAppServerBinding,
@@ -666,8 +673,12 @@ function registerToolCallHandler(
     if (req.method !== "item/tool/call") {
       return undefined;
     }
-    const call = req.params as DynamicToolCallParams | undefined;
-    if (!call || typeof call.tool !== "string") {
+    // Validate the params shape before claiming this request. Malformed
+    // params (missing callId/threadId/turnId/tool) fall through to the
+    // next handler; without this, a permissive cast would let the bridge
+    // claim a request it can't actually fulfill, dead-ending the call.
+    const call = readDynamicToolCallParams(req.params);
+    if (!call) {
       return undefined;
     }
     // Tank P1/P2: strict turn-identity filter. Require BOTH the turn
@@ -675,19 +686,14 @@ function registerToolCallHandler(
     // step 6/7) AND the incoming params to carry matching ids. Permissive
     // matching (accept-when-unbound or accept-when-missing) lets the
     // first registered handler claim a request that wasn't meant for it
-    // under concurrency. Return undefined so the next handler in the
-    // chain tries; ultimate fallback is the server's
-    // defaultServerRequestResponse which rejects with "no dynamic-tool
-    // handler registered".
+    // under concurrency.
     if (!turnIdentity.threadId || !turnIdentity.turnId) {
       return undefined;
     }
-    const callThreadId = typeof call.threadId === "string" ? call.threadId : undefined;
-    const callTurnId = typeof call.turnId === "string" ? call.turnId : undefined;
-    if (callThreadId !== turnIdentity.threadId) {
+    if (call.threadId !== turnIdentity.threadId) {
       return undefined;
     }
-    if (callTurnId !== turnIdentity.turnId) {
+    if (call.turnId !== turnIdentity.turnId) {
       return undefined;
     }
     const response = await bridge.handleToolCall(call);
@@ -752,7 +758,7 @@ async function runTurn(
   promptPrefix = "",
 ): Promise<Accumulator> {
   const effort = resolveReasoningEffort(params.thinkLevel, params.modelId);
-  const turnParams: TurnStartParams = {
+  const turnParamsCandidate: TurnStartParams = {
     threadId,
     input: buildInput(params, promptPrefix),
     // effectiveWorkspace — see thread-lifecycle.ts cwd comment. Per-turn cwd lets
@@ -762,7 +768,17 @@ async function runTurn(
     model: params.modelId,
     ...(effort ? { effort } : {}),
   };
-  const startResp = await client.request<{ turn: Turn }>("turn/start", turnParams, ac.signal);
+  // Outbound validation: catch a malformed turn/start params object
+  // (empty threadId, unknown effort enum, etc.) before paying the round
+  // trip. Server would 400 anyway; failing fast on the client side gives
+  // a cleaner ClaudeAppServerProtocolError instead.
+  const turnParams = assertTurnStartParams(turnParamsCandidate);
+  const rawStartResp = await client.request<unknown>("turn/start", turnParams, ac.signal);
+  // Inbound validation: schema-check the server's reply before reading
+  // turn.id. Malformed responses now throw ClaudeAppServerProtocolError
+  // with structured zod issues instead of producing an undefined turnId
+  // that propagates as a nonsense identity filter downstream.
+  const startResp = assertTurnStartResponse(rawStartResp);
   const turnId = startResp.turn.id;
   // Bind turnId on the shared turnIdentity ref so the tool-call / approval
   // request handlers can filter incoming server requests by exact turn,
@@ -966,7 +982,14 @@ async function runTurn(
           }
           settled = true;
           cleanup();
-          const turn = p.turn as Turn | undefined;
+          // readTurnCompletedNotification returns undefined for a
+          // malformed payload (missing turn.id, unknown status enum).
+          // Falling through to undefined preserves the prior cast-tolerant
+          // behavior (the body checks `turn?.status` etc.) without
+          // committing to a value we can't trust.
+          const parsedNotification = readTurnCompletedNotification(p);
+          const turn: Turn | undefined =
+            parsedNotification?.turn ?? readTurn((p as { turn?: unknown }).turn);
           if (turn?.status === "failed") {
             reject(new Error(`Claude turn failed: ${turn.error?.message ?? "unknown"}`));
           } else {
