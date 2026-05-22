@@ -281,12 +281,17 @@ describe("buildNodeRuntimeWarnings", () => {
     expect(warnings[0]).not.toContain("1 months");
   });
 
-  it("does not label unknown non-LTS majors as supported (e.g. Node 23)", () => {
+  it("warns that Node 23 (odd, past end-of-life) is unsupported", () => {
     const diag = makeDiag({ version: "23.0.0", major: 23 });
     const warnings = buildNodeRuntimeWarnings(diag, new Date("2025-06-01"));
-    // Node 23 is not in NODE_RELEASE_SCHEDULE and is not an LTS line,
-    // so Doctor should not emit "Node 23 is supported" nudge.
-    expect(warnings).toEqual([]);
+    // Node 23 is an odd (non-LTS) line that reached EOL on 2025-06-01.
+    // It still satisfies the >=22.19.0 engine, so Doctor must surface an
+    // end-of-life security advisory rather than staying silent.
+    expect(warnings).toHaveLength(2);
+    expect(warnings[0]).toContain("Node 23 reached end-of-life on 2025-06-01");
+    expect(warnings[0]).toContain("no longer receives security updates");
+    // Recommends upgrading to the recommended LTS (Node 24), not a downgrade.
+    expect(warnings[1]).toContain("Upgrade to Node 24");
   });
 });
 

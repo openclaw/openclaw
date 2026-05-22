@@ -145,6 +145,13 @@ const NODE_RELEASE_SCHEDULE: ReadonlyArray<{
     label: "Node 22 LTS",
   },
   {
+    // Odd-numbered line: no Active LTS phase. Already past end-of-life.
+    major: 23,
+    maintenanceStart: "2025-04-01",
+    eol: "2025-06-01",
+    label: "Node 23",
+  },
+  {
     major: 24,
     maintenanceStart: "2026-10-20",
     eol: "2028-04-30",
