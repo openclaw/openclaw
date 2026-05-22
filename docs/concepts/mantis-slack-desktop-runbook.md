@@ -116,6 +116,27 @@ Use `--hydrate-mode prehydrated` only when the reused remote workspace already
 has `node_modules` and a built `dist/`. Mantis fails closed if those are
 missing.
 
+Prove native Slack approval UI:
+
+```bash
+pnpm openclaw qa mantis slack-desktop-smoke \
+  --provider aws \
+  --class standard \
+  --approval-checkpoints \
+  --credential-source convex \
+  --credential-role maintainer \
+  --hydrate-mode source
+```
+
+Approval checkpoint mode is mutually exclusive with `--gateway-setup`. It runs
+the opt-in `slack-approval-exec-native` and `slack-approval-plugin-native`
+scenarios unless you pass explicit approval checkpoint `--scenario` flags; other
+Slack scenarios are rejected before the VM starts. The remote watcher captures
+`approval-checkpoints/<scenario>-pending.png` and
+`approval-checkpoints/<scenario>-resolved.png` after the Slack QA runner writes
+each checkpoint JSON file. The run fails if any checkpoint JSON, ack JSON, or
+screenshot is missing or empty.
+
 ## Hydrate modes
 
 | Mode          | Use when                                  | Remote behavior                                                                       | Tradeoff                                                 |
