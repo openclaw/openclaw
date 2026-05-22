@@ -86,6 +86,8 @@ describe("phase hooks merger", () => {
         appendContext: undefined,
         prependSystemContext: undefined,
         appendSystemContext: undefined,
+        prependDynamicSystemContext: undefined,
+        appendDynamicSystemContext: undefined,
         systemPrompt: "system A",
       },
     },
@@ -116,6 +118,39 @@ describe("phase hooks merger", () => {
         appendContext: undefined,
         prependSystemContext: "prepend A\n\nprepend B",
         appendSystemContext: "append A\n\nappend B",
+        prependDynamicSystemContext: undefined,
+        appendDynamicSystemContext: undefined,
+      },
+    },
+    {
+      name: "before_prompt_build concatenates dynamic system context fields",
+      hookName: "before_prompt_build" as const,
+      hooks: [
+        {
+          pluginId: "first",
+          result: {
+            prependDynamicSystemContext: "dynamic prepend A",
+            appendDynamicSystemContext: "dynamic append A",
+          },
+          priority: 10,
+        },
+        {
+          pluginId: "second",
+          result: {
+            prependDynamicSystemContext: "dynamic prepend B",
+            appendDynamicSystemContext: "dynamic append B",
+          },
+          priority: 1,
+        },
+      ],
+      expected: {
+        systemPrompt: undefined,
+        prependContext: undefined,
+        appendContext: undefined,
+        prependSystemContext: undefined,
+        appendSystemContext: undefined,
+        prependDynamicSystemContext: "dynamic prepend A\n\ndynamic prepend B",
+        appendDynamicSystemContext: "dynamic append A\n\ndynamic append B",
       },
     },
   ] as const)("$name", async ({ hookName, hooks, expected }) => {
