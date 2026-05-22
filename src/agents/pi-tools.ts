@@ -500,11 +500,7 @@ export function createOpenClawCodingTools(options?: {
   }
   const memoryFlushWritePath = isMemoryFlushRun ? options.memoryFlushWritePath : undefined;
   const cronSelfRemoveOnlyJobId =
-    options?.trigger === "cron" &&
-    options.jobId?.trim() &&
-    options.ownerOnlyToolAllowlist?.some((toolName) => normalizeToolName(toolName) === "cron")
-      ? options.jobId.trim()
-      : undefined;
+    options?.trigger === "cron" && options.jobId?.trim() ? options.jobId.trim() : undefined;
   const effectiveToolPolicy =
     options?.effectiveToolPolicy ??
     resolveEffectiveToolPolicy({
