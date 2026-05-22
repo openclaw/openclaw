@@ -285,6 +285,48 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(deliverySettled).toBe(true);
   });
 
+  it("stops waiting for direct block delivery when the ACP dispatch aborts", async () => {
+    const delivered: unknown[] = [];
+    const controller = new AbortController();
+    let releaseDelivery: (() => void) | undefined;
+    let markDeliveryStarted: (() => void) | undefined;
+    const deliveryStarted = new Promise<void>((resolve) => {
+      markDeliveryStarted = resolve;
+    });
+    const deliveryGate = new Promise<void>((resolve) => {
+      releaseDelivery = resolve;
+    });
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload) => {
+        delivered.push(payload);
+        markDeliveryStarted?.();
+        await deliveryGate;
+      },
+    });
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig(),
+      ctx: buildTestCtx({
+        Provider: "visiblechat",
+        Surface: "visiblechat",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher,
+      inboundAudio: false,
+      shouldRouteToOriginating: false,
+      abortSignal: controller.signal,
+    });
+
+    const deliveryPromise = coordinator.deliver("block", { text: "hello" }, { skipTts: true });
+    await deliveryStarted;
+    controller.abort();
+
+    await expect(deliveryPromise).resolves.toBe(true);
+    expect(delivered).toEqual([{ text: "hello" }]);
+
+    releaseDelivery?.();
+    await dispatcher.waitForIdle();
+  });
+
   it("strips split TTS directives from visible ACP block delivery", async () => {
     const dispatcher = createDispatcher();
     const coordinator = createAcpDispatchDeliveryCoordinator({

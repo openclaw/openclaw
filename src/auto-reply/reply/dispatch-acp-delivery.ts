@@ -192,6 +192,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
   originatingChannel?: string;
   originatingTo?: string;
   onReplyStart?: () => Promise<void> | void;
+  abortSignal?: AbortSignal;
 }): AcpDispatchDeliveryCoordinator {
   const directChannel = normalizeOptionalLowercaseString(params.ctx.Provider ?? params.ctx.Surface);
   const routedChannel = normalizeOptionalLowercaseString(params.originatingChannel);
@@ -460,7 +461,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       state.failedVisibleTextDelivery = true;
     }
     if (kind === "block" && delivered) {
-      await waitForReplyDispatcherIdle(params.dispatcher);
+      await waitForReplyDispatcherIdle(params.dispatcher, params.abortSignal);
     }
     return delivered;
   };
