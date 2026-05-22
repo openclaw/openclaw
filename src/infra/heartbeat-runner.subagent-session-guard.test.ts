@@ -138,8 +138,6 @@ describe("runHeartbeatOnce", () => {
       );
       enqueueSystemEvent("Exec completed (run-dm, code 0)", {
         sessionKey: mainSessionKey,
-        forceSenderIsOwnerFalse: true,
-        trusted: false,
       });
       replySpy.mockResolvedValue({ text: "NO_REPLY" });
 
