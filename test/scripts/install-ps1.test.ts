@@ -84,7 +84,7 @@ describe("install.ps1 failure handling", () => {
 
   it("runs npm install through the resolved command with quiet CI defaults", () => {
     const npmInstallBody = extractFunctionBody(source, "Install-OpenClaw");
-    expect(npmInstallBody).toContain("$npmOutput = & (Get-NpmCommandPath) install -g");
+    expect(npmInstallBody).toContain("$npmOutput = Invoke-NpmCommand -Arguments");
     expect(npmInstallBody).toContain('$env:NPM_CONFIG_LOGLEVEL = "error"');
     expect(npmInstallBody).toContain('$env:NPM_CONFIG_UPDATE_NOTIFIER = "false"');
     expect(npmInstallBody).toContain('$env:NPM_CONFIG_FUND = "false"');
@@ -95,12 +95,44 @@ describe("install.ps1 failure handling", () => {
     expect(npmInstallBody).toContain("Remove-Item Env:NPM_CONFIG_MIN_RELEASE_AGE");
     expect(npmInstallBody).toContain('$env:NODE_LLAMA_CPP_SKIP_DOWNLOAD = "1"');
     expect(npmInstallBody).toContain(
-      '$npmOutput = & (Get-NpmCommandPath) install -g @freshnessArgs "$installSpec"',
+      [
+        "$npmOutput = Invoke-NpmCommand -Arguments",
+        '(@("install", "-g") + $freshnessArgs + @("$installSpec"))',
+      ].join(" "),
     );
     expect(npmInstallBody).toContain("$env:NPM_CONFIG_LOGLEVEL = $prevLogLevel");
     expect(npmInstallBody).toContain("$env:NPM_CONFIG_BEFORE = $prevBefore");
     expect(npmInstallBody).toContain(
       "$env:NODE_LLAMA_CPP_SKIP_DOWNLOAD = $prevNodeLlamaSkipDownload",
+    );
+  });
+
+  it("runs Windows command shims from a Windows-local cwd", () => {
+    const commandSafeBody = extractFunctionBody(source, "Invoke-CommandFromWindowsSafeDirectory");
+    const npmCommandBody = extractFunctionBody(source, "Invoke-NpmCommand");
+    const corepackCommandBody = extractFunctionBody(source, "Invoke-CorepackCommand");
+    const openClawPathBody = extractFunctionBody(source, "Ensure-OpenClawOnPath");
+    const ensurePnpmBody = extractFunctionBody(source, "Ensure-Pnpm");
+    const mainBody = extractFunctionBody(source, "Main");
+
+    expect(commandSafeBody).toContain("Get-WindowsCommandSafeDirectory");
+    expect(commandSafeBody).toContain("Push-Location -LiteralPath $safeDir");
+    expect(commandSafeBody).toContain("& $CommandPath @Arguments");
+    expect(commandSafeBody).toContain("Pop-Location");
+    expect(npmCommandBody).toContain("Invoke-CommandFromWindowsSafeDirectory");
+    expect(corepackCommandBody).toContain("Invoke-CommandFromWindowsSafeDirectory");
+    expect(openClawPathBody).toContain(
+      'Invoke-NpmCommand -Arguments @("config", "get", "prefix")',
+    );
+    expect(ensurePnpmBody).toContain(
+      'Invoke-CorepackCommand -Arguments @("prepare", $pnpmSpec, "--activate")',
+    );
+    expect(ensurePnpmBody).toContain('Invoke-NpmCommand -Arguments @("install", "-g", $pnpmSpec)');
+    expect(mainBody).toContain(
+      'Invoke-NpmCommand -Arguments @("uninstall", "-g", "openclaw")',
+    );
+    expect(mainBody).toContain(
+      'Invoke-NpmCommand -Arguments @("list", "-g", "--depth", "0", "--json")',
     );
   });
 
@@ -112,6 +144,23 @@ describe("install.ps1 failure handling", () => {
     expect(npmInstallBody).toContain("Test-OpenClawSourcePackageInstallSpec -RequestedTag $Tag");
     expect(npmInstallBody).toContain("npm installs do not support OpenClaw GitHub source targets");
     expect(npmInstallBody).toContain("-InstallMethod git -Tag main");
+  });
+
+  it("preserves caller-relative local tarball install specs before safe-cwd npm calls", () => {
+    const resolveSpecBody = extractFunctionBody(source, "Resolve-NpmOpenClawInstallSpec");
+    const localSpecBody = extractFunctionBody(source, "Resolve-LocalNpmPackageInstallSpec");
+    const localPathBody = extractFunctionBody(source, "Resolve-LocalNpmPackagePath");
+
+    expect(resolveSpecBody).toContain(
+      "Resolve-LocalNpmPackageInstallSpec -InstallSpec $trimmedTag",
+    );
+    expect(localSpecBody).toContain("$InstallSpec -match '^file:(?<path>.+)$'");
+    expect(localSpecBody).toContain("Resolve-LocalNpmPackagePath -PackagePath $filePath");
+    expect(localSpecBody).toContain(").AbsoluteUri");
+    expect(localSpecBody).toContain("$InstallSpec -notmatch '^\\.\\.?[\\\\/]'");
+    expect(localSpecBody).toContain("$InstallSpec -notmatch '\\.tgz$'");
+    expect(localPathBody).toContain("Resolve-Path -LiteralPath $PackagePath");
+    expect(localPathBody).toContain("[System.IO.Path]::GetFullPath($PackagePath)");
   });
 
   it("falls back to a user-local portable Node.js bootstrap when package managers are absent", () => {
@@ -188,8 +237,10 @@ describe("install.ps1 failure handling", () => {
     expect(ensurePnpmBody).toContain(
       "Test-PnpmCommandMatchesVersion -PnpmVersion $pnpmVersion -RepoDir $RepoDir",
     );
-    expect(ensurePnpmBody).toContain("& $corepackCommand prepare $pnpmSpec --activate");
-    expect(ensurePnpmBody).toContain("& (Get-NpmCommandPath) install -g $pnpmSpec");
+    expect(ensurePnpmBody).toContain(
+      'Invoke-CorepackCommand -Arguments @("prepare", $pnpmSpec, "--activate")',
+    );
+    expect(ensurePnpmBody).toContain('Invoke-NpmCommand -Arguments @("install", "-g", $pnpmSpec)');
     expect(gitInstallBody.indexOf("git clone $repoUrl $RepoDir")).toBeLessThan(
       gitInstallBody.indexOf("Ensure-Pnpm -RepoDir $RepoDir"),
     );
