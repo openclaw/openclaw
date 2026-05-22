@@ -226,21 +226,21 @@ struct ConfigSchemaForm: View {
         "webhookUrl",
     ]
 
-    private func renderStringField(
-        _ schema: ConfigSchemaNode,
-        path: ConfigPath,
-        label: String?,
-        help: String?) -> some View
-    {
-        let hint = hintForPath(path, hints: store.configUiHints)
-        let placeholder = hint?.placeholder ?? ""
-        let sensitive = hint?.sensitive ?? isSensitivePath(path)
-        let defaultValue = schema.explicitDefault as? String
-        VStack(alignment: .leading, spacing: 6) {
-            if let label { Text(label).font(.callout.weight(.semibold)) }
-            if let help {
-                Text(help)
-                    .font(.caption)
+	    private func renderStringField(
+	        _ schema: ConfigSchemaNode,
+	        path: ConfigPath,
+	        label: String?,
+	        help: String?
+	    ) -> some View {
+	        let hint = hintForPath(path, hints: store.configUiHints)
+	        let placeholder = hint?.placeholder ?? ""
+	        let sensitive = hint?.sensitive ?? isSensitivePath(path)
+	        let defaultValue = schema.explicitDefault as? String
+	        return VStack(alignment: .leading, spacing: 6) {
+	            if let label { Text(label).font(.callout.weight(.semibold)) }
+	            if let help {
+	                Text(help)
+	                    .font(.caption)
                     .foregroundStyle(.secondary)
             }
             if let options = schema.enumValues {
@@ -261,19 +261,19 @@ struct ConfigSchemaForm: View {
         }
     }
 
-    private func renderNumberField(
-        _ schema: ConfigSchemaNode,
-        path: ConfigPath,
-        label: String?,
-        help: String?) -> some View
-    {
-        let defaultValue = (schema.explicitDefault as? Double)
-            ?? (schema.explicitDefault as? Int).map(Double.init)
-        VStack(alignment: .leading, spacing: 6) {
-            if let label { Text(label).font(.callout.weight(.semibold)) }
-            if let help {
-                Text(help)
-                    .font(.caption)
+	    private func renderNumberField(
+	        _ schema: ConfigSchemaNode,
+	        path: ConfigPath,
+	        label: String?,
+	        help: String?
+	    ) -> some View {
+	        let defaultValue = (schema.explicitDefault as? Double)
+	            ?? (schema.explicitDefault as? Int).map(Double.init)
+	        return VStack(alignment: .leading, spacing: 6) {
+	            if let label { Text(label).font(.callout.weight(.semibold)) }
+	            if let help {
+	                Text(help)
+	                    .font(.caption)
                     .foregroundStyle(.secondary)
             }
             TextField(
@@ -286,20 +286,20 @@ struct ConfigSchemaForm: View {
         }
     }
 
-    private func renderArray(
-        _ schema: ConfigSchemaNode,
-        path: ConfigPath,
-        value: Any?,
-        label: String?,
-        help: String?) -> some View
-    {
-        let items = value as? [Any] ?? []
-        let itemSchema = schema.items
-        VStack(alignment: .leading, spacing: 10) {
-            if let label { Text(label).font(.callout.weight(.semibold)) }
-            if let help {
-                Text(help)
-                    .font(.caption)
+	    private func renderArray(
+	        _ schema: ConfigSchemaNode,
+	        path: ConfigPath,
+	        value: Any?,
+	        label: String?,
+	        help: String?
+	    ) -> some View {
+	        let items = value as? [Any] ?? []
+	        let itemSchema = schema.items
+	        return VStack(alignment: .leading, spacing: 10) {
+	            if let label { Text(label).font(.callout.weight(.semibold)) }
+	            if let help {
+	                Text(help)
+	                    .font(.caption)
                     .foregroundStyle(.secondary)
             }
             ForEach(items.indices, id: \.self) { index in
@@ -332,6 +332,7 @@ struct ConfigSchemaForm: View {
         }
     }
 
+<<<<<<< HEAD
     private func renderAdditionalProperties(
         _ schema: ConfigSchemaNode,
         path: ConfigPath,
@@ -342,6 +343,18 @@ struct ConfigSchemaForm: View {
                 let dict = value as? [String: Any] ?? [:]
                 let reserved = Set(schema.properties.keys)
                 let extras = dict.keys.filter { !reserved.contains($0) }.sorted()
+=======
+	    private func renderAdditionalProperties(
+	        _ schema: ConfigSchemaNode,
+	        path: ConfigPath,
+	        value: Any?,
+	    ) -> some View {
+	        Group {
+	            if let additionalSchema = schema.additionalProperties {
+	                let dict = value as? [String: Any] ?? [:]
+	                let reserved = Set(schema.properties.keys)
+	                let extras = dict.keys.filter { !reserved.contains($0) }.sorted()
+>>>>>>> 066b0f733f (fix: unblock PR 79068 CI)
 
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Extra entries")
