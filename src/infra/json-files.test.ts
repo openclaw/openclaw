@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   JsonFileReadError,
@@ -16,7 +16,12 @@ import {
 
 const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 
+beforeEach(() => {
+  vi.useRealTimers();
+});
+
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   if (originalPlatformDescriptor) {
     Object.defineProperty(process, "platform", originalPlatformDescriptor);
