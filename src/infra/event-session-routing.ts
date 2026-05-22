@@ -138,10 +138,13 @@ function shouldPreserveDirectSessionKeyFromRoute(params: {
       accountId: params.target.accountId,
       peer: { kind: "direct", id: params.target.peerId },
     });
+    const { baseSessionKey } = parseThreadSessionSuffix(params.sessionKey);
+    const normalizedRouteSessionKey = normalizeLowercaseStringOrEmpty(route.sessionKey);
     return (
       route.lastRoutePolicy === "session" &&
-      normalizeLowercaseStringOrEmpty(route.sessionKey) ===
-        normalizeLowercaseStringOrEmpty(params.sessionKey)
+      (normalizedRouteSessionKey === normalizeLowercaseStringOrEmpty(params.sessionKey) ||
+        (baseSessionKey !== undefined &&
+          normalizedRouteSessionKey === normalizeLowercaseStringOrEmpty(baseSessionKey)))
     );
   } catch {
     return false;

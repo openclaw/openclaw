@@ -119,9 +119,13 @@ describe("event session routing", () => {
     } as unknown as OpenClawConfig;
     const sessionKey = "agent:main:telegram:work:direct:123";
     const policy = resolveEventSessionRoutingPolicy({ cfg, sessionKey });
+    const threadSessionKey = `${sessionKey}:thread:1712345678.123`;
+    const threadPolicy = resolveEventSessionRoutingPolicy({ cfg, sessionKey: threadSessionKey });
 
     expect(policy.preserveSessionKey).toBe(true);
     expect(resolveEventSessionKeyForPolicy(sessionKey, policy)).toBe(sessionKey);
+    expect(threadPolicy.preserveSessionKey).toBe(true);
+    expect(resolveEventSessionKeyForPolicy(threadSessionKey, threadPolicy)).toBe(threadSessionKey);
   });
 
   it("keeps cron-run remapping behavior unchanged", () => {
