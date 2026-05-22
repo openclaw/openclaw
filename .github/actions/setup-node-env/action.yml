@@ -7,14 +7,6 @@ inputs:
     description: Node.js version to install.
     required: false
     default: "24.x"
-  cache-key-suffix:
-    description: Suffix appended to the pnpm store cache key.
-    required: false
-    default: "node24-pnpm11"
-  pnpm-version:
-    description: pnpm version for corepack.
-    required: false
-    default: "11.0.8"
   install-bun:
     description: Whether to install Bun alongside Node.
     required: false
@@ -40,13 +32,9 @@ runs:
         node-version: ${{ inputs.node-version }}
         check-latest: false
 
-    - name: Setup pnpm + cache store
-      id: pnpm-cache
+    - name: Setup pnpm
       uses: ./.github/actions/setup-pnpm-store-cache
       with:
-        node-version: ${{ inputs.node-version }}
-        pnpm-version: ${{ inputs.pnpm-version }}
-        cache-key-suffix: ${{ inputs.cache-key-suffix }}
         use-actions-cache: ${{ inputs.use-actions-cache }}
 
     - name: Setup Bun
@@ -128,11 +116,3 @@ runs:
           ln -sfn "$PNPM_CONFIG_MODULES_DIR" node_modules
           ln -sfn . "$PNPM_CONFIG_MODULES_DIR/node_modules"
         fi
-
-    - name: Save pnpm store cache
-      if: inputs.install-deps == 'true' && steps.pnpm-cache.outputs.cache-enabled == 'true' && steps.pnpm-cache.outputs.cache-hit != 'true'
-      uses: actions/cache/save@v5
-      continue-on-error: true
-      with:
-        path: ${{ steps.pnpm-cache.outputs.store-path }}
-        key: ${{ steps.pnpm-cache.outputs.primary-key }}
