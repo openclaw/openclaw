@@ -19,6 +19,7 @@ export async function buildStatusCommandReportLines(params: {
   taskMaintenanceHint: string;
   pluginCompatibilityLines: string[];
   pairingRecoveryLines: string[];
+  modelSelectionLines: string[];
   securityAuditLines: string[];
   channelsColumns: readonly TableColumn[];
   channelsRows: Array<Record<string, string>>;
@@ -63,25 +64,43 @@ export async function buildStatusCommandReportLines(params: {
       },
       {
         kind: "lines",
+        title: "Model selection",
+        body: params.modelSelectionLines,
+        skipIfEmpty: true,
+      },
+      {
+        kind: "lines",
         title: "Security audit",
         body: params.securityAuditLines,
       },
-      {
-        ...buildStatusChannelsTableSection({
-          width: params.width,
-          renderTable: params.renderTable,
-          columns: params.channelsColumns,
-          rows: params.channelsRows,
-        }),
-      },
-      {
-        ...buildStatusSessionsSection({
-          width: params.width,
-          renderTable: params.renderTable,
-          columns: params.sessionsColumns,
-          rows: params.sessionsRows,
-        }),
-      },
+      params.channelsRows.length === 0
+        ? {
+            kind: "lines",
+            title: "Channels",
+            body: [params.muted("No channels configured")],
+          }
+        : {
+            ...buildStatusChannelsTableSection({
+              width: params.width,
+              renderTable: params.renderTable,
+              columns: params.channelsColumns,
+              rows: params.channelsRows,
+            }),
+          },
+      params.sessionsRows.length === 0
+        ? {
+            kind: "lines",
+            title: "Sessions",
+            body: [params.muted("No sessions")],
+          }
+        : {
+            ...buildStatusSessionsSection({
+              width: params.width,
+              renderTable: params.renderTable,
+              columns: params.sessionsColumns,
+              rows: params.sessionsRows,
+            }),
+          },
       {
         ...buildStatusSystemEventsSection({
           width: params.width,

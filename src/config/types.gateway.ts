@@ -62,6 +62,8 @@ export type TalkRealtimeConfig = {
   transport?: "webrtc" | "provider-websocket" | "gateway-relay" | "managed-room";
   /** Tool/agent strategy for realtime sessions. */
   brain?: "agent-consult" | "direct-tools" | "none";
+  /** How Gateway relay handles final user transcripts when the provider skips a consult. */
+  consultRouting?: "provider-direct" | "force-agent-consult";
 };
 
 export type ResolvedTalkConfig = {
@@ -226,6 +228,8 @@ export type GatewayRemoteConfig = {
   url?: string;
   /** Transport for macOS remote connections (ssh tunnel or direct WS). */
   transport?: "ssh" | "direct";
+  /** Gateway port on the remote SSH host. Defaults to 18789. */
+  remotePort?: number;
   /** Token for remote auth (when the gateway requires token auth). */
   token?: SecretInput;
   /** Password for remote auth (when the gateway requires password auth). */

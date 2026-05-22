@@ -45,6 +45,21 @@ describe("redactSensitiveText", () => {
     expect(output).toBe("OPENAI_API_KEY=sk-123…cdef");
   });
 
+  it("masks JSON-escaped quoted env assignments while keeping the key", () => {
+    const xai = "issue85049-xai-cleartext-token-ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890";
+    const brave = "issue85049-brave-cleartext-token-ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890";
+    const input = String.raw`raw_params={"command":"export XAI_API_KEY=\"${xai}\" && export BRAVE_API_KEY=\\\"${brave}\\\" && echo blocked"}`;
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).toContain("XAI_API_KEY=");
+    expect(output).toContain("BRAVE_API_KEY=");
+    expect(output).not.toContain(xai);
+    expect(output).not.toContain(brave);
+    expect(output).toContain("issue8…7890");
+  });
+
   it("masks CLI flags", () => {
     const input = "curl --token abcdef1234567890ghij https://api.test";
     const output = redactSensitiveText(input, {
@@ -206,6 +221,39 @@ describe("redactSensitiveText", () => {
       patterns: defaults,
     });
     expect(output).toBe("Authorization: Bearer abcdef…ghij");
+  });
+
+  it("masks Basic authorization header tokens", () => {
+    const secret = "c2VjcmV0OnBhc3M=";
+    const output = redactSensitiveText(`Authorization: Basic ${secret}`, {
+      mode: "tools",
+      patterns: defaults,
+    });
+
+    expect(output).toBe("Authorization: Basic ***");
+    expect(output).not.toContain(secret);
+  });
+
+  it("masks named Gateway security headers", () => {
+    const openClawToken = "supersecretgatewaytoken1234567890";
+    const pomeriumJwt = "eyJheaderabcd.eyJpayloadabcd.signatureabcd123456";
+    const apiKey = "shortsecret";
+    const input = [
+      `X-OpenClaw-Token: ${openClawToken}`,
+      `x-pomerium-jwt-assertion: ${pomeriumJwt}`,
+      `X-Api-Key=${apiKey}`,
+    ].join("\n");
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+
+    expect(output).toContain("X-OpenClaw-Token: supers…7890");
+    expect(output).toContain("x-pomerium-jwt-assertion: eyJhea…3456");
+    expect(output).toContain("X-Api-Key=***");
+    expect(output).not.toContain(openClawToken);
+    expect(output).not.toContain(pomeriumJwt);
+    expect(output).not.toContain(apiKey);
   });
 
   it("masks token prefixes embedded after adjacent text", () => {

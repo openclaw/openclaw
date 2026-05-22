@@ -605,6 +605,16 @@ function isAnthropicEmptyCacheProbe(error: unknown): boolean {
   return error instanceof CacheProbeTextMismatchError && error.text.trim().length === 0;
 }
 
+function isAnthropicToolProbeDrift(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return (
+    error.message.startsWith("expected tool call for ") ||
+    error.message.startsWith("expected tool-only response for ")
+  );
+}
+
 function shouldSkipAnthropicCacheProviderDrift(error: unknown): boolean {
   return Boolean(
     shouldSkipLiveProviderDrift({
@@ -646,8 +656,16 @@ async function runAnthropicCacheLane(params: {
     }
   }
 
-  if (shouldSkipAnthropicCacheProviderDrift(lastError) || isAnthropicEmptyCacheProbe(lastError)) {
-    const reason = isAnthropicEmptyCacheProbe(lastError) ? "empty response" : "account drift";
+  if (
+    shouldSkipAnthropicCacheProviderDrift(lastError) ||
+    isAnthropicEmptyCacheProbe(lastError) ||
+    isAnthropicToolProbeDrift(lastError)
+  ) {
+    const reason = isAnthropicEmptyCacheProbe(lastError)
+      ? "empty response"
+      : isAnthropicToolProbeDrift(lastError)
+        ? "tool probe drift"
+        : "account drift";
     const warning = `anthropic ${params.lane} skipped: ${reason}`;
     params.warnings.push(warning);
     logLiveCache(warning);
@@ -678,10 +696,11 @@ async function runAnthropicDisabledCacheLane(params: {
   }
 }
 
-export const __testing = {
+export const testing = {
   assertAgainstBaseline,
   evaluateAgainstBaseline,
   resolveCacheProbeMaxTokens,
+  isAnthropicToolProbeDrift,
   shouldAcceptEmptyCacheProbe,
   shouldRetryCacheProbeText,
   shouldRetryBaselineFindings,
@@ -788,3 +807,4 @@ export async function runLiveCacheRegression(): Promise<LiveCacheRegressionResul
   }
   return { regressions, summary, warnings };
 }
+export { testing as __testing };

@@ -86,6 +86,32 @@ openclaw config get meta.lastTouchedVersion
 For intentional downgrade or emergency recovery only, set `OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1` for the single command. Leave it unset for normal operation.
 </Warning>
 
+## Protocol mismatch after rollback
+
+Use this when logs keep printing `protocol mismatch` after you downgrade or roll back OpenClaw. This means an older Gateway is running, but a newer local client process is still trying to reconnect with a protocol range that the older Gateway cannot speak.
+
+```bash
+openclaw --version
+which -a openclaw
+openclaw gateway status --deep
+openclaw doctor --deep
+openclaw logs --follow
+```
+
+Look for:
+
+- `protocol mismatch ... client=... v<version> min=<n> max=<n> expected=<n>` in Gateway logs.
+- `Established clients:` in `openclaw gateway status --deep` or `Gateway clients` in `openclaw doctor --deep`. This lists active TCP clients connected to the Gateway port, including PIDs and command lines when the OS allows it.
+- A client process whose command line points at the newer OpenClaw install or wrapper you rolled back from.
+
+Fix:
+
+1. Stop or restart the stale OpenClaw client process shown by `gateway status --deep`.
+2. Restart apps or wrappers that embed OpenClaw, such as local dashboards, editors, app-server helpers, or long-running `openclaw logs --follow` shells.
+3. Re-run `openclaw gateway status --deep` or `openclaw doctor --deep` and confirm the stale client PID is gone.
+
+Do not make an older Gateway accept a newer incompatible protocol. Protocol bumps protect the wire contract; rollback recovery is a process/version cleanup problem.
+
 ## Skill symlink skipped as path escape
 
 Use this when logs include:
@@ -374,6 +400,42 @@ Related:
 - [Background exec and process tool](/gateway/background-process)
 - [Configuration](/gateway/configuration)
 - [Doctor](/gateway/doctor)
+
+## Gateway exits during high memory use
+
+Use this when the Gateway disappears under load, the supervisor reports an OOM-style restart, or logs mention `critical memory pressure bundle written`.
+
+```bash
+openclaw gateway status --deep
+openclaw logs --follow
+openclaw gateway stability --bundle latest
+openclaw gateway diagnostics export
+```
+
+Look for:
+
+- `Reason: diagnostic.memory.pressure.critical` in the latest stability bundle.
+- `Memory pressure:` with `critical/rss_threshold`, `critical/heap_threshold`, or `critical/rss_growth`.
+- `V8 heap:` values near the heap limit.
+- `Largest session files:` entries such as `agents/<agent>/sessions/<session>.jsonl` or `sessions/<session>.jsonl`.
+- Linux cgroup memory counters when the gateway runs inside a container or memory-limited service.
+
+Common signatures:
+
+- `critical memory pressure bundle written` appears shortly before restart → OpenClaw captured a pre-OOM stability bundle. Inspect it with `openclaw gateway stability --bundle latest`.
+- `memory pressure: level=critical ... memoryPressureSnapshot=disabled` appears in gateway logs → OpenClaw detected critical memory pressure, but the pre-OOM stability snapshot is off.
+- `Largest session files:` points at a very large redacted transcript path → reduce retained session history, inspect session growth, or move old transcripts out of the active store before restarting.
+- `V8 heap:` used bytes are close to the heap limit → lower prompt/session pressure, reduce concurrent work, or raise the Node heap limit only after confirming the workload is expected.
+- `Memory pressure: critical/rss_growth` → memory grew quickly inside one sampling window. Check the latest logs for a large import, runaway tool output, repeated retries, or a batch of queued agent work.
+- Critical memory pressure appears in logs but no bundle exists → this is the default. Set `diagnostics.memoryPressureSnapshot: true` to capture the pre-OOM stability bundle on future critical memory pressure events.
+
+The stability bundle is payload-free. It includes operational memory evidence and redacted relative file paths, not message text, webhook bodies, credentials, tokens, cookies, or raw session ids. Attach the diagnostics export to bug reports instead of copying raw logs.
+
+Related:
+
+- [Gateway health](/gateway/health)
+- [Diagnostics export](/gateway/diagnostics)
+- [Sessions](/cli/sessions)
 
 ## Gateway rejected invalid config
 

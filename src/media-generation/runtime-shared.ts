@@ -60,6 +60,21 @@ export function hasMediaNormalizationEntry<TValue extends MediaNormalizationValu
 
 const IMAGE_RESOLUTION_ORDER = ["1K", "2K", "4K"] as const;
 
+export function resolveMediaProviderDefaultTimeoutMs(
+  timeoutMs: number | undefined,
+): number | undefined {
+  return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
+    ? Math.floor(timeoutMs)
+    : undefined;
+}
+
+export function resolveMediaProviderRequestTimeoutMs(params: {
+  timeoutMs?: number;
+  providerDefaultTimeoutMs?: number;
+}): number | undefined {
+  return params.timeoutMs ?? resolveMediaProviderDefaultTimeoutMs(params.providerDefaultTimeoutMs);
+}
+
 type CapabilityProviderCandidate = {
   id: string;
   aliases?: readonly string[];
@@ -178,6 +193,21 @@ function resolveProviderModelOnlyRef(params: {
   return provider ? { provider: provider.id, model } : null;
 }
 
+function hasCapabilityProviderId(params: {
+  providerId: string | undefined;
+  providers: CapabilityProviderCandidate[];
+}): boolean {
+  const providerId = normalizeOptionalString(params.providerId);
+  if (!providerId) {
+    return false;
+  }
+  return params.providers.some(
+    (provider) =>
+      provider.id === providerId ||
+      (provider.aliases ?? []).some((alias) => normalizeOptionalString(alias) === providerId),
+  );
+}
+
 export function resolveCapabilityModelCandidates(params: {
   cfg: OpenClawConfig;
   modelConfig: AgentModelConfig | undefined;
@@ -201,6 +231,15 @@ export function resolveCapabilityModelCandidates(params: {
     }
     const parsed = params.parseModelRef(raw);
     if (!options.useProviderMetadata) {
+      return parsed;
+    }
+    if (
+      parsed &&
+      hasCapabilityProviderId({
+        providerId: parsed.provider,
+        providers: getProviders(),
+      })
+    ) {
       return parsed;
     }
     return resolveProviderModelOnlyRef({ raw: trimmed, providers: getProviders() }) ?? parsed;

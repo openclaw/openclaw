@@ -93,8 +93,18 @@ on:
         required: false
         default: ""
         type: string
+      advisory:
+        description: Treat acceptance failures as advisory for the caller
+        required: false
+        default: false
+        type: boolean
   workflow_call:
     inputs:
+      advisory:
+        description: Treat acceptance failures as advisory for the caller
+        required: false
+        default: false
+        type: boolean
       workflow_ref:
         description: Trusted repo ref for workflow scripts and Docker E2E harness
         required: false
@@ -278,7 +288,6 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.15.0"
-  PNPM_VERSION: "11.0.8"
   PACKAGE_ARTIFACT_NAME: package-under-test
 
 jobs:
@@ -310,7 +319,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: ${{ inputs.source == 'ref' && 'true' || 'false' }}
           install-deps: "false"
 
@@ -504,11 +512,38 @@ jobs:
             echo "- Published upgrade survivor scenarios: \`${PUBLISHED_UPGRADE_SURVIVOR_SCENARIOS}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
+  package_integrity:
+    name: Package integrity
+    needs: resolve_package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout package workflow ref
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.workflow_ref }}
+          fetch-depth: 1
+
+      - name: Download package-under-test artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.resolve_package.outputs.package_artifact_name }}
+          path: .artifacts/docker-e2e-package
+
+      - name: Enforce public package integrity
+        env:
+          OPENCLAW_PACKAGE_TARBALL_CHECK_TIMINGS: "0"
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/check-openclaw-package-tarball.mjs .artifacts/docker-e2e-package/openclaw-current.tgz
+
   docker_acceptance:
     name: Docker product acceptance
-    needs: resolve_package
+    needs: [resolve_package, package_integrity]
     uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
     with:
+      advisory: ${{ inputs.advisory }}
       ref: ${{ needs.resolve_package.outputs.package_source_sha || inputs.workflow_ref }}
       include_repo_e2e: false
       include_release_path_suites: ${{ needs.resolve_package.outputs.include_release_path_suites == 'true' }}
@@ -569,10 +604,11 @@ jobs:
 
   package_telegram:
     name: Telegram package acceptance
-    needs: resolve_package
+    needs: [resolve_package, package_integrity]
     if: needs.resolve_package.outputs.telegram_enabled == 'true'
     uses: ./.github/workflows/npm-telegram-beta-e2e.yml
     with:
+      advisory: ${{ inputs.advisory }}
       package_spec: ${{ inputs.package_spec }}
       package_artifact_name: ${{ needs.resolve_package.outputs.package_artifact_name }}
       package_label: openclaw@${{ needs.resolve_package.outputs.package_version }}
@@ -586,7 +622,7 @@ jobs:
 
   summary:
     name: Verify package acceptance
-    needs: [resolve_package, docker_acceptance, package_telegram]
+    needs: [resolve_package, package_integrity, docker_acceptance, package_telegram]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -594,20 +630,27 @@ jobs:
       - name: Verify package acceptance results
         env:
           DOCKER_RESULT: ${{ needs.docker_acceptance.result }}
+          PACKAGE_INTEGRITY_RESULT: ${{ needs.package_integrity.result }}
           PACKAGE_TELEGRAM_RESULT: ${{ needs.package_telegram.result }}
           RESOLVE_RESULT: ${{ needs.resolve_package.result }}
         shell: bash
         run: |
           set -euo pipefail
+          advisory="${{ inputs.advisory }}"
           failed=0
           for item in \
             "resolve_package=${RESOLVE_RESULT}" \
+            "package_integrity=${PACKAGE_INTEGRITY_RESULT}" \
             "docker_acceptance=${DOCKER_RESULT}" \
             "package_telegram=${PACKAGE_TELEGRAM_RESULT}"
           do
             name="${item%%=*}"
             result="${item#*=}"
             if [[ "$result" != "success" && "$result" != "skipped" ]]; then
+              if [[ "$advisory" == "true" && "$name" != "resolve_package" ]]; then
+                echo "::warning::${name} ended with ${result}; package acceptance is advisory for this caller."
+                continue
+              fi
               echo "::error::${name} ended with ${result}"
               failed=1
             fi

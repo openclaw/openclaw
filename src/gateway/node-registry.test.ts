@@ -1,5 +1,8 @@
+import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
+import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import { NodeRegistry, serializeEventPayload } from "./node-registry.js";
+import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
 function makeClient(
@@ -16,18 +19,21 @@ function makeClient(
     declaredCaps?: string[];
     declaredCommands?: string[];
     declaredPermissions?: Record<string, boolean>;
+    socket?: GatewayWsClient["socket"];
   } = {},
 ): GatewayWsClient {
   return {
     connId,
     usesSharedGatewayAuth: false,
-    socket: {
-      send(frame: unknown) {
-        if (typeof frame === "string") {
-          sent.push(frame);
-        }
-      },
-    } as unknown as GatewayWsClient["socket"],
+    socket:
+      opts.socket ??
+      ({
+        send(frame: unknown) {
+          if (typeof frame === "string") {
+            sent.push(frame);
+          }
+        },
+      } as unknown as GatewayWsClient["socket"]),
     connect: {
       minProtocol: 1,
       maxProtocol: 1,
@@ -55,6 +61,56 @@ function makeClient(
 }
 
 describe("gateway/node-registry", () => {
+  it("checks node websocket connectivity with ping/pong", async () => {
+    const registry = new NodeRegistry();
+    const socket = new EventEmitter() as EventEmitter & {
+      readyState: number;
+      send: (frame: unknown) => void;
+      ping: (data?: Buffer, mask?: boolean, cb?: (err?: Error) => void) => void;
+    };
+    socket.readyState = 1;
+    socket.send = () => {};
+    socket.ping = (dataValue, _mask, cb) => {
+      cb?.();
+      queueMicrotask(() => socket.emit("pong"));
+    };
+    registry.register(
+      makeClient("conn-1", "node-1", [], {
+        socket: socket as unknown as GatewayWsClient["socket"],
+      }),
+      {},
+    );
+
+    await expect(registry.checkConnectivity("node-1", 50)).resolves.toEqual({ ok: true });
+  });
+
+  it("reports stale node websocket connectivity before invoke timeout", async () => {
+    const registry = new NodeRegistry();
+    const socket = new EventEmitter() as EventEmitter & {
+      readyState: number;
+      send: (frame: unknown) => void;
+      ping: (data?: Buffer, mask?: boolean, cb?: (err?: Error) => void) => void;
+    };
+    socket.readyState = 1;
+    socket.send = () => {};
+    socket.ping = (dataValue, _mask, cb) => {
+      cb?.();
+    };
+    registry.register(
+      makeClient("conn-1", "node-1", [], {
+        socket: socket as unknown as GatewayWsClient["socket"],
+      }),
+      {},
+    );
+
+    const result = await registry.checkConnectivity("node-1", 1);
+
+    expect(result).toEqual({
+      ok: false,
+      error: { code: "TIMEOUT", message: "node connectivity probe timed out" },
+    });
+  });
+
   it("keeps a reconnected node when the old connection unregisters", async () => {
     const registry = new NodeRegistry();
     const oldFrames: string[] = [];
@@ -450,6 +506,46 @@ describe("gateway/node-registry", () => {
       '{"type":"event","event":"chat","payload":{"foo":"bar"}}',
       '{"type":"event","event":"heartbeat"}',
     ]);
+  });
+
+  it("rejects raw event sends when the node socket buffer is saturated", () => {
+    resetDiagnosticEventsForTest();
+    const diagnosticEvents: unknown[] = [];
+    const stopDiagnostics = onDiagnosticEvent((event) => diagnosticEvents.push(event));
+    const registry = new NodeRegistry();
+    const socket = {
+      bufferedAmount: MAX_BUFFERED_BYTES + 1,
+      send: vi.fn(),
+      close: vi.fn(),
+    };
+    registry.register(
+      makeClient("conn-1", "node-1", [], {
+        socket: socket as unknown as GatewayWsClient["socket"],
+      }),
+      {},
+    );
+    const payload = serializeEventPayload({ foo: "bar" });
+
+    try {
+      expect(registry.sendEventRaw("node-1", "chat", payload)).toBe(false);
+      expect(socket.send).not.toHaveBeenCalled();
+      expect(socket.close).toHaveBeenCalledWith(1008, "slow consumer");
+      expect(diagnosticEvents).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "payload.large",
+            action: "rejected",
+            surface: "gateway.ws.outbound_buffer",
+            bytes: MAX_BUFFERED_BYTES + 1,
+            limitBytes: MAX_BUFFERED_BYTES,
+            reason: "ws_send_buffer_close",
+          }),
+        ]),
+      );
+    } finally {
+      stopDiagnostics();
+      resetDiagnosticEventsForTest();
+    }
   });
 
   it("refreshes effective live surface within the declared surface", () => {

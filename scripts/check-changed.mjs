@@ -1,3 +1,5 @@
+import { accessSync, constants } from "node:fs";
+import path from "node:path";
 import { performance } from "node:perf_hooks";
 import {
   detectChangedLanesForPaths,
@@ -23,6 +25,8 @@ const LIVE_DOCKER_AUTH_SHELL_TARGETS = [
   "scripts/test-live-models-docker.sh",
   "scripts/test-live-subagent-announce-docker.sh",
 ];
+const SHRINKWRAP_POLICY_PATH_RE =
+  /^(?:npm-shrinkwrap\.json|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|scripts\/generate-npm-shrinkwrap\.mjs|extensions\/[^/]+\/(?:package\.json|npm-shrinkwrap\.json))$/u;
 
 export function createChangedCheckChildEnv(baseEnv = process.env) {
   const resolvedBaseEnv = resolveLocalHeavyCheckEnv(baseEnv);
@@ -39,6 +43,33 @@ function isTruthyEnvFlag(value) {
     .trim()
     .toLowerCase();
   return normalized !== "" && normalized !== "0" && normalized !== "false" && normalized !== "no";
+}
+
+function executableExistsOnPath(command, env = process.env) {
+  const pathValue = env.PATH ?? env.Path ?? "";
+  const pathExts =
+    process.platform === "win32" ? (env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";") : [""];
+  for (const searchPath of pathValue.split(path.delimiter)) {
+    if (!searchPath) {
+      continue;
+    }
+    for (const ext of pathExts) {
+      try {
+        accessSync(path.join(searchPath, `${command}${ext}`), constants.X_OK);
+        return true;
+      } catch {
+        continue;
+      }
+    }
+  }
+  return false;
+}
+
+export function shouldSkipAppLintForMissingSwiftlint(options = {}) {
+  const env = options.env ?? process.env;
+  const platform = options.platform ?? process.platform;
+  const swiftlintAvailable = options.swiftlintAvailable ?? executableExistsOnPath("swiftlint", env);
+  return platform !== "darwin" && !swiftlintAvailable;
 }
 
 export function shouldDelegateChangedCheckToCrabbox(argv = [], env = process.env) {
@@ -90,6 +121,10 @@ export function buildChangedCheckCrabboxArgs(argv = []) {
   ];
 }
 
+export function shouldRunShrinkwrapGuard(paths) {
+  return paths.some((changedPath) => SHRINKWRAP_POLICY_PATH_RE.test(changedPath));
+}
+
 export async function runChangedCheckViaCrabbox(argv = [], env = process.env) {
   console.error(
     "[check:changed] OPENCLAW_TESTBOX=1 set; delegating to Blacksmith Testbox via `pnpm crabbox:run`.",
@@ -127,6 +162,9 @@ export function createChangedCheckPlan(result, options = {}) {
   add("plugin-sdk wildcard re-exports", ["lint:extensions:no-plugin-sdk-wildcard-reexports"]);
   add("duplicate scan target coverage", ["dup:check:coverage"]);
   add("dependency pin guard", ["deps:pins:check"]);
+  if (shouldRunShrinkwrapGuard(result.paths)) {
+    add("npm shrinkwrap guard", ["deps:shrinkwrap:check"]);
+  }
   add("package patch guard", ["deps:patches:check"]);
 
   if (result.docsOnly) {
@@ -198,7 +236,17 @@ export function createChangedCheckPlan(result, options = {}) {
   if (lanes.tooling || lanes.liveDockerTooling) {
     addLint("lint scripts", ["lint:scripts"]);
   }
-  if (lanes.apps) {
+  if (lanes.apps && shouldSkipAppLintForMissingSwiftlint({ ...options, env: baseEnv })) {
+    addCommand(
+      "lint apps (swiftlint unavailable on this host)",
+      "node",
+      [
+        "-e",
+        "console.error('[check:changed] Swift app lint skipped: swiftlint is unavailable on this non-macOS host; macOS CI owns SwiftLint coverage.')",
+      ],
+      baseEnv,
+    );
+  } else if (lanes.apps) {
     addLint("lint apps", ["lint:apps"]);
   }
 

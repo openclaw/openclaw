@@ -176,7 +176,11 @@ const pwMocks = vi.hoisted(() => ({
   fillFormViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
   getConsoleMessagesViaPlaywright: vi.fn(async () => []),
   getNetworkRequestsViaPlaywright: vi.fn(async () => ({ requests: [] })),
+  getObservedBrowserStateViaPlaywright: vi.fn(async () => ({
+    dialogs: { pending: [], recent: [] },
+  })),
   getPageErrorsViaPlaywright: vi.fn(async () => ({ errors: [] })),
+  highlightViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
   hoverViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
   scrollIntoViewViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
   navigateViaPlaywright: vi.fn(async () => ({ url: "https://example.com" })),

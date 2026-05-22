@@ -717,6 +717,39 @@ describe("subscribeEmbeddedPiSession", () => {
     });
   });
 
+  it("counts orphaned tool media emitted through block replies", async () => {
+    const onBlockReply = vi.fn();
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run",
+      builtinToolNames: new Set(["tts"]),
+      onBlockReply,
+    });
+
+    emit({
+      type: "tool_execution_end",
+      toolName: "tts",
+      toolCallId: "tc-1",
+      isError: false,
+      result: {
+        details: {
+          media: {
+            mediaUrl: "/tmp/reply.opus",
+            audioAsVoice: true,
+          },
+        },
+      },
+    });
+    emit({ type: "agent_end" });
+    await flushBlockReplyCallbacks();
+
+    expect(onBlockReply).toHaveBeenCalledWith({
+      mediaUrls: ["/tmp/reply.opus"],
+      audioAsVoice: true,
+    });
+    expect(subscription.getPendingToolMediaReply()).toBeNull();
+    expect(subscription.getVisibleBlockReplyCount()).toBe(1);
+  });
+
   it.each(THINKING_TAG_CASES)(
     "suppresses <%s> blocks across chunk boundaries",
     async ({ open, close }) => {
@@ -1133,6 +1166,49 @@ describe("subscribeEmbeddedPiSession", () => {
       result: { details: { status: "ok" } },
     });
     emit({ type: "compaction_end", willRetry: true, result: { summary: "compacted" } });
+    emit({ type: "agent_end" });
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expectLifecyclePayload(payloads, {
+      phase: "end",
+      livenessState: "working",
+      replayInvalid: true,
+    });
+  });
+
+  it("preserves accepted session spawn terminal evidence across compaction retries", () => {
+    const { session, emit } = createStubSessionHarness();
+    const onAgentEvent = vi.fn();
+    const subscription = subscribeEmbeddedPiSession({
+      session,
+      runId: "run-spawn-side-effect-compaction",
+      onAgentEvent,
+      sessionKey: "test-session",
+    });
+
+    emitToolRun({
+      emit,
+      toolName: "sessions_spawn",
+      toolCallId: "spawn-1",
+      args: { prompt: "continue in a child session" },
+      isError: false,
+      result: {
+        details: {
+          status: "accepted",
+          runId: "run-child",
+          childSessionKey: "agent:claude:subagent:child",
+        },
+      },
+    });
+    emit({ type: "compaction_end", willRetry: true, result: { summary: "compacted" } });
+
+    expect(subscription.getAcceptedSessionSpawns()).toEqual([
+      {
+        runId: "run-child",
+        childSessionKey: "agent:claude:subagent:child",
+      },
+    ]);
+
     emit({ type: "agent_end" });
 
     const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);

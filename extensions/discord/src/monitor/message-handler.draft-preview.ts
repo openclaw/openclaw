@@ -48,8 +48,10 @@ export function createDiscordDraftPreviewController(params: {
   const accountBlockStreamingEnabled =
     resolveChannelStreamingBlockEnabled(params.discordConfig) ??
     params.cfg.agents?.defaults?.blockStreamingDefault === "on";
+  const canStreamProgressDraftForToolOnlySource =
+    params.sourceRepliesAreToolOnly && discordStreamMode === "progress";
   const canStreamDraft =
-    !params.sourceRepliesAreToolOnly &&
+    (!params.sourceRepliesAreToolOnly || canStreamProgressDraftForToolOnlySource) &&
     discordStreamMode !== "off" &&
     !accountBlockStreamingEnabled;
   const draftStream = canStreamDraft
@@ -75,6 +77,7 @@ export function createDiscordDraftPreviewController(params: {
   let draftText = "";
   let hasStreamedMessage = false;
   let finalizedViaPreviewMessage = false;
+  let finalReplyStarted = false;
   let finalReplyDelivered = false;
   const previewToolProgressEnabled =
     Boolean(draftStream) && resolveChannelStreamingPreviewToolProgress(params.discordConfig);
@@ -147,6 +150,9 @@ export function createDiscordDraftPreviewController(params: {
     get finalizedViaPreviewMessage() {
       return finalizedViaPreviewMessage;
     },
+    markFinalReplyStarted() {
+      finalReplyStarted = true;
+    },
     markFinalReplyDelivered() {
       finalReplyDelivered = true;
     },
@@ -165,6 +171,9 @@ export function createDiscordDraftPreviewController(params: {
       options?: { toolName?: string },
     ) {
       if (!draftStream) {
+        return;
+      }
+      if (finalReplyStarted || finalReplyDelivered) {
         return;
       }
       if (
@@ -226,6 +235,9 @@ export function createDiscordDraftPreviewController(params: {
     },
     async pushReasoningProgress(text?: string) {
       if (!draftStream || discordStreamMode !== "progress" || !text) {
+        return;
+      }
+      if (finalReplyDelivered) {
         return;
       }
       reasoningProgressRawText = mergeReasoningProgressText(reasoningProgressRawText, text);
@@ -386,7 +398,7 @@ export function createDiscordDraftPreviewController(params: {
 
 function normalizeReasoningProgressLine(text: string): string {
   return text
-    .replace(/^\s*(?:>\s*)?Reasoning:\s*/i, "")
+    .replace(/^\s*(?:>\s*)?(?:Reasoning:|Thinking\.{0,3})\s*/i, "")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -407,7 +419,7 @@ function mergeReasoningProgressText(current: string, incoming: string): string {
 }
 
 function isReasoningSnapshotText(text: string): boolean {
-  return /^\s*(?:>\s*)?Reasoning:\s*/i.test(text);
+  return /^\s*(?:>\s*)?(?:Reasoning:|Thinking\.{0,3})\s*/i.test(text);
 }
 
 function isEmptyDiscordProgressLine(line: string | ChannelProgressDraftLine | undefined): boolean {

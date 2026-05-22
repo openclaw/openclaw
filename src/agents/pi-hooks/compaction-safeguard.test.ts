@@ -19,7 +19,7 @@ import {
   setCompactionSafeguardCancelReason,
   setCompactionSafeguardRuntime,
 } from "./compaction-safeguard-runtime.js";
-import compactionSafeguardExtension, { __testing } from "./compaction-safeguard.js";
+import compactionSafeguardExtension, { testing } from "./compaction-safeguard.js";
 
 vi.mock("../../plugins/provider-runtime.js", () => ({
   applyProviderResolvedModelCompatWithPlugins: () => undefined,
@@ -69,14 +69,14 @@ const {
   MAX_COMPACTION_SUMMARY_CHARS,
   MAX_FILE_OPS_SECTION_CHARS,
   SUMMARY_TRUNCATED_MARKER,
-} = __testing;
+} = testing;
 
 beforeEach(() => {
-  __testing.setSummarizeInStagesForTest(mockSummarizeInStages);
+  testing.setSummarizeInStagesForTest(mockSummarizeInStages);
 });
 
 afterEach(() => {
-  __testing.setSummarizeInStagesForTest();
+  testing.setSummarizeInStagesForTest();
   clearCompactionProviders();
 });
 
@@ -2374,7 +2374,7 @@ describe("compaction-safeguard double-compaction guard", () => {
 
   it("treats tool results as real conversation only when linked to a meaningful user ask", () => {
     expect(
-      __testing.isRealConversationMessage(
+      testing.isRealConversationMessage(
         {
           role: "toolResult",
           toolCallId: "t1",
@@ -2395,7 +2395,7 @@ describe("compaction-safeguard double-compaction guard", () => {
     ).toBe(false);
 
     expect(
-      __testing.isRealConversationMessage(
+      testing.isRealConversationMessage(
         {
           role: "toolResult",
           toolCallId: "t2",
@@ -2418,7 +2418,7 @@ describe("compaction-safeguard double-compaction guard", () => {
 
   it("does not treat assistant-only tool calls as meaningful conversation", () => {
     expect(
-      __testing.hasMeaningfulConversationContent({
+      testing.hasMeaningfulConversationContent({
         role: "assistant",
         content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
       } as AgentMessage),
@@ -2427,14 +2427,14 @@ describe("compaction-safeguard double-compaction guard", () => {
 
   it("does not treat reasoning-only assistant blocks as meaningful conversation", () => {
     expect(
-      __testing.hasMeaningfulConversationContent({
+      testing.hasMeaningfulConversationContent({
         role: "assistant",
         content: [{ type: "thinking", thinking: "checking" }],
       } as AgentMessage),
     ).toBe(false);
 
     expect(
-      __testing.hasMeaningfulConversationContent({
+      testing.hasMeaningfulConversationContent({
         role: "assistant",
         content: [{ type: "reasoning", summary: [] }],
       } as unknown as AgentMessage),
@@ -2443,7 +2443,7 @@ describe("compaction-safeguard double-compaction guard", () => {
 
   it("treats markup-wrapped heartbeat tokens as boilerplate", () => {
     expect(
-      __testing.hasMeaningfulConversationContent(
+      testing.hasMeaningfulConversationContent(
         castAgentMessage({
           role: "assistant",
           content: "<b>HEARTBEAT_OK</b>",

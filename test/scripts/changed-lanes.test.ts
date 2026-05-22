@@ -13,6 +13,7 @@ import {
   createChangedCheckChildEnv,
   createChangedCheckPlan,
   shouldDelegateChangedCheckToCrabbox,
+  shouldRunShrinkwrapGuard,
 } from "../../scripts/check-changed.mjs";
 import { cleanupTempDirs, makeTempRepoRoot } from "../helpers/temp-repo.js";
 
@@ -102,6 +103,43 @@ describe("scripts/changed-lanes", () => {
 
     expect(result.paths).toEqual(["scripts/new-check.mjs"]);
     expectLanes(result.lanes, { tooling: true });
+  });
+
+  it("ignores local Crabbox metadata in the default local diff", () => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-changed-lanes-crabbox-");
+    git(dir, ["init", "-q", "--initial-branch=main"]);
+    writeFileSync(path.join(dir, ".gitignore"), ".crabbox/\n", "utf8");
+    writeFileSync(path.join(dir, "README.md"), "initial\n", "utf8");
+    git(dir, ["add", ".gitignore", "README.md"]);
+    git(dir, [
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "user.name=Test User",
+      "commit",
+      "-q",
+      "-m",
+      "initial",
+    ]);
+
+    mkdirSync(path.join(dir, ".crabbox"), { recursive: true });
+    writeFileSync(path.join(dir, ".crabbox", "capture-files.txt"), "stdout.log\n", "utf8");
+    writeFileSync(path.join(dir, ".crabbox", "capture-manifest.txt"), "stdout.log\t12\n", "utf8");
+
+    const output = execFileSync(
+      process.execPath,
+      [path.join(repoRoot, "scripts", "changed-lanes.mjs"), "--json", "--base", "HEAD"],
+      {
+        cwd: dir,
+        encoding: "utf8",
+        env: createNestedGitEnv(),
+      },
+    );
+
+    const result = parseChangedLaneOutput(output);
+
+    expect(result.paths).toEqual([]);
+    expectLanes(result.lanes, {});
   });
 
   it("includes deleted worktree files in the default local diff", () => {
@@ -756,6 +794,7 @@ describe("scripts/changed-lanes", () => {
       "lint:extensions:no-plugin-sdk-wildcard-reexports",
       "dup:check:coverage",
       "deps:pins:check",
+      "deps:shrinkwrap:check",
       "deps:patches:check",
       "release-metadata:check",
       "ios:version:check",
@@ -774,6 +813,22 @@ describe("scripts/changed-lanes", () => {
       docs: true,
     });
     expect(plan.commands.map((command) => command.args[0])).not.toContain("release-metadata:check");
+  });
+
+  it("runs the npm shrinkwrap guard for dependency package surfaces", () => {
+    expect(
+      shouldRunShrinkwrapGuard([
+        "npm-shrinkwrap.json",
+        "extensions/slack/npm-shrinkwrap.json",
+        "extensions/slack/package.json",
+        "scripts/generate-npm-shrinkwrap.mjs",
+      ]),
+    ).toBe(true);
+
+    const result = detectChangedLanes(["extensions/slack/package.json"]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(plan.commands.map((command) => command.args[0])).toContain("deps:shrinkwrap:check");
   });
 
   it("guards release metadata package changes to the top-level version field", () => {
@@ -863,6 +918,41 @@ describe("scripts/changed-lanes", () => {
       apps: true,
     });
     expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:all");
+  });
+
+  it("keeps app lint explicit when non-macOS hosts lack SwiftLint", () => {
+    const result = detectChangedLanes([
+      "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
+    ]);
+    const plan = createChangedCheckPlan(result, {
+      env: { PATH: "/usr/bin" },
+      platform: "linux",
+      swiftlintAvailable: false,
+    });
+
+    expectLanes(result.lanes, {
+      apps: true,
+    });
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("lint:apps");
+    expect(plan.commands).toContainEqual(
+      expect.objectContaining({
+        name: "lint apps (swiftlint unavailable on this host)",
+        bin: "node",
+      }),
+    );
+  });
+
+  it("runs app lint when SwiftLint is available in Testbox", () => {
+    const result = detectChangedLanes([
+      "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
+    ]);
+    const plan = createChangedCheckPlan(result, {
+      env: { OPENCLAW_TESTBOX_REMOTE_RUN: "1", PATH: "/usr/bin" },
+      platform: "linux",
+      swiftlintAvailable: true,
+    });
+
+    expect(plan.commands.map((command) => command.args[0])).toContain("lint:apps");
   });
 
   it("routes legacy root asset deletions as tooling during root cleanup", () => {

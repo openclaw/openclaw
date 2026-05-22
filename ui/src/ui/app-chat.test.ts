@@ -44,6 +44,7 @@ let handleSendChat: typeof import("./app-chat.ts").handleSendChat;
 let steerQueuedChatMessage: typeof import("./app-chat.ts").steerQueuedChatMessage;
 let navigateChatInputHistory: typeof import("./app-chat.ts").navigateChatInputHistory;
 let handleAbortChat: typeof import("./app-chat.ts").handleAbortChat;
+let hasAbortableSessionRun: typeof import("./app-chat.ts").hasAbortableSessionRun;
 let refreshChat: typeof import("./app-chat.ts").refreshChat;
 let refreshChatAvatar: typeof import("./app-chat.ts").refreshChatAvatar;
 let clearPendingQueueItemsForRun: typeof import("./app-chat.ts").clearPendingQueueItemsForRun;
@@ -55,6 +56,7 @@ async function loadChatHelpers(): Promise<void> {
     steerQueuedChatMessage,
     navigateChatInputHistory,
     handleAbortChat,
+    hasAbortableSessionRun,
     refreshChat,
     refreshChatAvatar,
     clearPendingQueueItemsForRun,
@@ -227,9 +229,11 @@ describe("refreshChat", () => {
       "sessions.list",
       "sessions list payload",
     );
-    expect(sessionsListPayload.agentId).toBe("main");
+    expect(sessionsListPayload).not.toHaveProperty("activeMinutes");
+    expect(sessionsListPayload).not.toHaveProperty("agentId");
     expect(sessionsListPayload.includeGlobal).toBe(true);
     expect(sessionsListPayload.includeUnknown).toBe(true);
+    expect(sessionsListPayload.limit).toBe(50);
     expect(request).toHaveBeenCalledWith("commands.list", {
       agentId: "main",
       includeArgs: true,
@@ -576,11 +580,11 @@ describe("refreshChat", () => {
         "sessions.list",
         "sessions list payload",
       );
-      expect(sessionsListPayload.activeMinutes).toBe(120);
-      expect(sessionsListPayload.agentId).toBe("main");
+      expect(sessionsListPayload).not.toHaveProperty("activeMinutes");
+      expect(sessionsListPayload).not.toHaveProperty("agentId");
       expect(sessionsListPayload.includeGlobal).toBe(true);
       expect(sessionsListPayload.includeUnknown).toBe(true);
-      expect(sessionsListPayload.limit).toBe(100);
+      expect(sessionsListPayload.limit).toBe(50);
       expect(request).toHaveBeenCalledWith("models.list", { view: "configured" });
       const commandsListPayload = findRequestPayload(
         request as unknown as MockCallSource,
@@ -1571,6 +1575,19 @@ describe("handleAbortChat", () => {
 
     expect(host.pendingAbort).toEqual({ runId: null, sessionKey: "agent:main" });
     expect(host.chatMessage).toBe("");
+  });
+
+  it("ignores stale active-run flags once the current session is terminal", () => {
+    const host = makeHost({
+      chatRunId: null,
+      sessionKey: "agent:main",
+      sessionsResult: createSessionsResult([
+        row("agent:main", { hasActiveRun: true, status: "done" }),
+        row("agent:other", { hasActiveRun: true, status: "running" }),
+      ]),
+    });
+
+    expect(hasAbortableSessionRun(host)).toBe(false);
   });
 
   it("keeps the draft when disconnected without an active run", async () => {

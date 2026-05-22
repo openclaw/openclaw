@@ -9,11 +9,16 @@ import { createHookRunner } from "../../plugins/hooks.js";
 import { addTestHook } from "../../plugins/hooks.test-helpers.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import {
+  pinActivePluginChannelRegistry,
   releasePinnedPluginChannelRegistry,
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
 import type { PluginHookRegistration } from "../../plugins/types.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import {
+  createChannelTestPluginBase,
+  createOutboundTestPlugin,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
 import {
   onInternalDiagnosticEvent,
@@ -316,6 +321,43 @@ describe("deliverOutboundPayloads", () => {
     resetDiagnosticEventsForTest();
     releasePinnedPluginChannelRegistry();
     setActivePluginRegistry(emptyRegistry);
+  });
+
+  it("delivers through full active plugin when pinned setup channel has no sender", async () => {
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
+    const setupRegistry = createTestRegistry([
+      {
+        pluginId: "matrix",
+        source: "setup",
+        plugin: createChannelTestPluginBase({ id: "matrix" }),
+      },
+    ]);
+    const runtimeRegistry = createTestRegistry([
+      {
+        pluginId: "matrix",
+        source: "runtime",
+        plugin: createOutboundTestPlugin({ id: "matrix", outbound: matrixOutboundForTest }),
+      },
+    ]);
+
+    setActivePluginRegistry(setupRegistry);
+    pinActivePluginChannelRegistry(setupRegistry);
+    setActivePluginRegistry(runtimeRegistry);
+
+    const results = await deliverOutboundPayloads({
+      cfg: matrixChunkConfig,
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "hello from queue" }],
+      deps: { matrix: sendMatrix },
+    });
+
+    expect(sendMatrix).toHaveBeenCalledWith("!room:example", "hello from queue", {
+      cfg: matrixChunkConfig,
+      accountId: undefined,
+      gifPlayback: undefined,
+    });
+    expect(results).toEqual([{ channel: "matrix", messageId: "m1", roomId: "!room:example" }]);
   });
 
   it("reports unsupported durable final delivery when required capabilities are missing", async () => {
@@ -1678,6 +1720,87 @@ describe("deliverOutboundPayloads", () => {
     });
     expect(deliveredPayload?.interactive).toStrictEqual({
       blocks: [{ type: "text", text: "visible" }],
+    });
+  });
+
+  it("adapts presentation buttons to channel limits before rendering", async () => {
+    const renderPresentation = vi.fn(({ payload }) => ({
+      ...payload,
+      channelData: { rendered: true },
+    }));
+    const sendPayload = vi.fn().mockResolvedValue({
+      channel: "matrix" as const,
+      messageId: "adapted",
+      roomId: "!room",
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              presentationCapabilities: {
+                supported: true,
+                buttons: true,
+                limits: {
+                  actions: {
+                    maxActions: 1,
+                    maxLabelLength: 4,
+                    maxValueBytes: 8,
+                    supportsStyles: false,
+                  },
+                },
+              },
+              renderPresentation,
+              sendText: vi.fn(),
+              sendMedia: vi.fn(),
+              sendPayload,
+            },
+          }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room",
+      payloads: [
+        {
+          presentation: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [
+                  { label: "Reject", value: "reject", priority: 1, style: "danger" },
+                  { label: "Approve", value: "approve", priority: 10, style: "success" },
+                  { label: "Too long", value: "x".repeat(12), priority: 20 },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    const renderArg = requireMockCallArg(renderPresentation, "renderPresentation") as {
+      presentation?: unknown;
+    };
+    expect(renderArg.presentation).toEqual({
+      tone: undefined,
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [{ label: "Appr", value: "approve", priority: 10, style: undefined }],
+        },
+        {
+          type: "context",
+          text: "Actions:\n- Reje\n- Too",
+        },
+      ],
     });
   });
 

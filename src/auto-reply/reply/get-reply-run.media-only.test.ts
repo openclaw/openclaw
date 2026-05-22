@@ -1,5 +1,8 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearActiveEmbeddedRun,
   setActiveEmbeddedRun,
@@ -118,7 +121,6 @@ vi.mock("./session-updates.runtime.js", () => ({
 
 vi.mock("./session-system-events.js", () => ({
   drainFormattedSystemEvents: vi.fn().mockResolvedValue(undefined),
-  drainFormattedSystemEventBlock: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("./typing-mode.js", () => ({
@@ -128,14 +130,14 @@ vi.mock("./typing-mode.js", () => ({
 let runPreparedReply: typeof import("./get-reply-run.js").runPreparedReply;
 let runReplyAgent: typeof import("./agent-runner.runtime.js").runReplyAgent;
 let routeReply: typeof import("./route-reply.runtime.js").routeReply;
-let drainFormattedSystemEventBlock: typeof import("./session-system-events.js").drainFormattedSystemEventBlock;
+let drainFormattedSystemEvents: typeof import("./session-system-events.js").drainFormattedSystemEvents;
 let resolveTypingMode: typeof import("./typing-mode.js").resolveTypingMode;
 let buildDirectChatContext: typeof import("./groups.js").buildDirectChatContext;
 let buildGroupChatContext: typeof import("./groups.js").buildGroupChatContext;
 let buildInboundUserContextPrefix: typeof import("./inbound-meta.js").buildInboundUserContextPrefix;
 let resolveInboundUserContextPromptJoiner: typeof import("./inbound-meta.js").resolveInboundUserContextPromptJoiner;
 let getActiveReplyRunCount: typeof import("./reply-run-registry.js").getActiveReplyRunCount;
-let replyRunTesting: typeof import("./reply-run-registry.js").__testing;
+let replyRunTesting: typeof import("./reply-run-registry.js").testing;
 let loadScopeCounter = 0;
 
 function createGatewayDrainingError(): Error {
@@ -269,16 +271,18 @@ function requireLastRunReplyAgentCall() {
 }
 
 describe("runPreparedReply media-only handling", () => {
+  const cleanupPaths: string[] = [];
+
   beforeAll(async () => {
     ({ runPreparedReply } = await import("./get-reply-run.js"));
     ({ runReplyAgent } = await import("./agent-runner.runtime.js"));
     ({ routeReply } = await import("./route-reply.runtime.js"));
-    ({ drainFormattedSystemEventBlock } = await import("./session-system-events.js"));
+    ({ drainFormattedSystemEvents } = await import("./session-system-events.js"));
     ({ resolveTypingMode } = await import("./typing-mode.js"));
     ({ buildDirectChatContext, buildGroupChatContext } = await import("./groups.js"));
     ({ buildInboundUserContextPrefix, resolveInboundUserContextPromptJoiner } =
       await import("./inbound-meta.js"));
-    ({ __testing: replyRunTesting, getActiveReplyRunCount } =
+    ({ testing: replyRunTesting, getActiveReplyRunCount } =
       await import("./reply-run-registry.js"));
   });
 
@@ -287,6 +291,11 @@ describe("runPreparedReply media-only handling", () => {
     updateSessionStore.mockReset();
     vi.clearAllMocks();
     replyRunTesting.resetReplyRunRegistry();
+  });
+
+  afterEach(() => {
+    const paths = cleanupPaths.splice(0);
+    return Promise.all(paths.map((entry) => rm(entry, { recursive: true, force: true })));
   });
 
   it("does not load session store runtime on module import", async () => {
@@ -678,7 +687,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(result).toEqual({ text: "ok" });
 
     const call = requireRunReplyAgentCall();
-    expect(call.followupRun.currentTurnContext?.text).toContain(
+    expect(call.followupRun.currentInboundContext?.text).toContain(
       "Thread starter (untrusted, for context):",
     );
     expect(call.followupRun.prompt).not.toContain("[Thread starter - for context]");
@@ -782,8 +791,10 @@ describe("runPreparedReply media-only handling", () => {
     expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
     const call = requireRunReplyAgentCall();
     expect(call?.followupRun.prompt).toBe("");
-    expect(call?.followupRun.currentTurnContext?.text).toContain("Chat history since last reply");
-    expect(call?.followupRun.currentTurnContext?.text).toContain("what changed?");
+    expect(call?.followupRun.currentInboundContext?.text).toContain(
+      "Chat history since last reply",
+    );
+    expect(call?.followupRun.currentInboundContext?.text).toContain("what changed?");
     expect(call?.followupRun.prompt).not.toContain("[User sent media without caption]");
   });
 
@@ -864,8 +875,61 @@ describe("runPreparedReply media-only handling", () => {
     expect(result).toEqual({ text: "ok" });
     expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
     const call = requireRunReplyAgentCall();
-    expect(call?.followupRun.currentTurnContext?.text).toContain("webchat:local");
+    expect(call?.followupRun.currentInboundContext?.text).toContain("webchat:local");
     expect(call?.followupRun.prompt).toContain("[User sent media without caption]");
+  });
+
+  it("hydrates current MediaPaths into queued followup images", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-followup-image-"));
+    cleanupPaths.push(tmpDir);
+    const imagePath = path.join(tmpDir, "inbound.png");
+    await writeFile(
+      imagePath,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+        "base64",
+      ),
+    );
+
+    const result = await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "describe this",
+          RawBody: "describe this",
+          CommandBody: "describe this",
+          MediaPaths: [imagePath],
+          MediaTypes: ["image/png"],
+          MediaWorkspaceDir: tmpDir,
+          OriginatingChannel: "discord",
+          OriginatingTo: "C123",
+          ChatType: "group",
+        },
+        sessionCtx: {
+          Body: "describe this",
+          BodyStripped: "describe this",
+          Provider: "discord",
+          OriginatingChannel: "discord",
+          OriginatingTo: "C123",
+          ChatType: "group",
+          MediaPaths: [imagePath],
+          MediaTypes: ["image/png"],
+          MediaWorkspaceDir: tmpDir,
+        },
+      }),
+    );
+
+    expect(result).toEqual({ text: "ok" });
+    expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
+    const call = requireRunReplyAgentCall();
+    expect(call.followupRun.images).toEqual([
+      {
+        type: "image",
+        data: expect.any(String),
+        mimeType: "image/png",
+      },
+    ]);
+    expect(call.followupRun.images?.[0]?.data).toHaveLength(92);
+    expect(call.followupRun.imageOrder).toEqual(["inline"]);
   });
 
   it("does not send a standalone reset notice for reply-producing /new turns", async () => {
@@ -1093,6 +1157,75 @@ describe("runPreparedReply media-only handling", () => {
     await expect(runPromise).resolves.toEqual({ text: "ok" });
     expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
   });
+
+  it("does not queue a run behind its provided pre-dispatch reply operation", async () => {
+    const piRuntime = await import("../../agents/pi-embedded.runtime.js");
+    const operation = createReplyOperation({
+      sessionId: "session-pre-dispatch-owner",
+      sessionKey: "session-key",
+      resetTriggered: false,
+    });
+    vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId).mockReturnValue(
+      "session-pre-dispatch-owner",
+    );
+    vi.mocked(piRuntime.isEmbeddedPiRunActive).mockReturnValue(true);
+
+    try {
+      await expect(
+        runPreparedReply(
+          baseParams({
+            isNewSession: false,
+            sessionId: "session-pre-dispatch-owner",
+            opts: { replyOperation: operation } as never,
+          }),
+        ),
+      ).resolves.toEqual({ text: "ok" });
+
+      const call = requireLastRunReplyAgentCall();
+      expect(call.replyOperation).toBe(operation);
+      expect(vi.mocked(piRuntime.isEmbeddedPiRunActive)).not.toHaveBeenCalled();
+    } finally {
+      operation.complete();
+      vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId).mockReset().mockReturnValue(undefined);
+      vi.mocked(piRuntime.isEmbeddedPiRunActive).mockReset().mockReturnValue(false);
+    }
+  });
+
+  it("does not interrupt its provided pre-dispatch reply operation for reset turns", async () => {
+    const queueSettings = await import("./queue/settings-runtime.js");
+    const piRuntime = await import("../../agents/pi-embedded.runtime.js");
+    const commandQueue = await import("../../process/command-queue.js");
+    const operation = createReplyOperation({
+      sessionId: "session-reset-owner",
+      sessionKey: "session-key",
+      resetTriggered: false,
+    });
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "followup" });
+    vi.mocked(commandQueue.getQueueSize).mockReturnValueOnce(0);
+    vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId).mockReturnValue("session-reset-owner");
+
+    try {
+      await expect(
+        runPreparedReply(
+          baseParams({
+            resetTriggered: true,
+            isNewSession: true,
+            sessionId: "session-reset-owner",
+            opts: { replyOperation: operation } as never,
+          }),
+        ),
+      ).resolves.toEqual({ text: "ok" });
+
+      const call = requireLastRunReplyAgentCall();
+      expect(call.replyOperation).toBe(operation);
+      expect(commandQueue.clearCommandLane).not.toHaveBeenCalled();
+      expect(piRuntime.abortEmbeddedPiRun).not.toHaveBeenCalled();
+    } finally {
+      operation.complete();
+      vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId).mockReset().mockReturnValue(undefined);
+    }
+  });
+
   it("re-resolves auth profile after waiting for a prior run", async () => {
     const { resolveSessionAuthProfileOverride } =
       await import("../../agents/auth-profiles/session-override.js");
@@ -1140,6 +1273,154 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.run.authProfileId).toBe("profile-after-wait");
     expect(vi.mocked(resolveSessionAuthProfileOverride)).toHaveBeenCalledTimes(1);
   });
+
+  it("resolves image override auth profile without mutating stored session profile", async () => {
+    const { resolveSessionAuthProfileOverride } =
+      await import("../../agents/auth-profiles/session-override.js");
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-image-auth",
+      sessionFile: "/tmp/session-image-auth.jsonl",
+      authProfileOverride: "anthropic:work",
+      authProfileOverrideSource: "user",
+      updatedAt: 1,
+    };
+    const sessionStore: Record<string, SessionEntry> = {
+      "session-key": sessionEntry,
+    };
+    vi.mocked(resolveSessionAuthProfileOverride).mockImplementationOnce(async (params) => {
+      expect(params.provider).toBe("openai");
+      expect(params.storePath).toBeUndefined();
+      expect(params.sessionEntry).not.toBe(sessionEntry);
+      expect(params.sessionStore).not.toBe(sessionStore);
+      if (params.sessionEntry) {
+        params.sessionEntry.authProfileOverride = "openai:vision";
+        params.sessionEntry.authProfileOverrideSource = "auto";
+      }
+      return "openai:vision";
+    });
+
+    await runPreparedReply(
+      baseParams({
+        provider: "openai",
+        model: "gpt-4o",
+        defaultProvider: "anthropic",
+        defaultModel: "claude-opus-4-1",
+        hasAppliedImageModelOverride: true,
+        isNewSession: false,
+        sessionId: "session-image-auth",
+        sessionEntry,
+        sessionStore,
+        storePath: "/tmp/sessions.json",
+      }),
+    );
+
+    const call = requireLastRunReplyAgentCall();
+    expect(call?.followupRun.run.authProfileId).toBe("openai:vision");
+    expect(call?.followupRun.run.authProfileIdSource).toBe("auto");
+    expect(sessionEntry.authProfileOverride).toBe("anthropic:work");
+    expect(sessionEntry.authProfileOverrideSource).toBe("user");
+    expect(sessionStore["session-key"]?.authProfileOverride).toBe("anthropic:work");
+  });
+
+  it("isolates image override auth profile when the override provider matches the default provider", async () => {
+    const { resolveSessionAuthProfileOverride } =
+      await import("../../agents/auth-profiles/session-override.js");
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-image-default-provider-auth",
+      sessionFile: "/tmp/session-image-default-provider-auth.jsonl",
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-1",
+      authProfileOverride: "anthropic:work",
+      authProfileOverrideSource: "user",
+      updatedAt: 1,
+    };
+    const sessionStore: Record<string, SessionEntry> = {
+      "session-key": sessionEntry,
+    };
+    vi.mocked(resolveSessionAuthProfileOverride).mockImplementationOnce(async (params) => {
+      expect(params.provider).toBe("openai");
+      expect(params.storePath).toBeUndefined();
+      expect(params.sessionEntry).not.toBe(sessionEntry);
+      expect(params.sessionStore).not.toBe(sessionStore);
+      if (params.sessionEntry) {
+        params.sessionEntry.authProfileOverride = "openai:vision";
+        params.sessionEntry.authProfileOverrideSource = "auto";
+      }
+      return "openai:vision";
+    });
+
+    await runPreparedReply(
+      baseParams({
+        provider: "openai",
+        model: "gpt-4o",
+        defaultProvider: "openai",
+        defaultModel: "gpt-4o-mini",
+        hasAppliedImageModelOverride: true,
+        isNewSession: false,
+        sessionId: "session-image-default-provider-auth",
+        sessionEntry,
+        sessionStore,
+        storePath: "/tmp/sessions.json",
+      }),
+    );
+
+    const call = requireLastRunReplyAgentCall();
+    expect(call?.followupRun.run.authProfileId).toBe("openai:vision");
+    expect(call?.followupRun.run.authProfileIdSource).toBe("auto");
+    expect(sessionEntry.authProfileOverride).toBe("anthropic:work");
+    expect(sessionStore["session-key"]?.authProfileOverride).toBe("anthropic:work");
+  });
+
+  it("isolates image override auth profile from the pre-override runtime provider", async () => {
+    const { resolveSessionAuthProfileOverride } =
+      await import("../../agents/auth-profiles/session-override.js");
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-image-runtime-provider-auth",
+      sessionFile: "/tmp/session-image-runtime-provider-auth.jsonl",
+      modelProvider: "anthropic",
+      model: "claude-opus-4-1",
+      authProfileOverride: "anthropic:work",
+      authProfileOverrideSource: "user",
+      updatedAt: 1,
+    };
+    const sessionStore: Record<string, SessionEntry> = {
+      "session-key": sessionEntry,
+    };
+    vi.mocked(resolveSessionAuthProfileOverride).mockImplementationOnce(async (params) => {
+      expect(params.provider).toBe("openai");
+      expect(params.storePath).toBeUndefined();
+      expect(params.sessionEntry).not.toBe(sessionEntry);
+      expect(params.sessionStore).not.toBe(sessionStore);
+      if (params.sessionEntry) {
+        params.sessionEntry.authProfileOverride = "openai:vision";
+        params.sessionEntry.authProfileOverrideSource = "auto";
+      }
+      return "openai:vision";
+    });
+
+    await runPreparedReply(
+      baseParams({
+        provider: "openai",
+        model: "gpt-4o",
+        defaultProvider: "openai",
+        defaultModel: "gpt-4o-mini",
+        hasAppliedImageModelOverride: true,
+        imageModelOverrideBaseProvider: "anthropic",
+        isNewSession: false,
+        sessionId: "session-image-runtime-provider-auth",
+        sessionEntry,
+        sessionStore,
+        storePath: "/tmp/sessions.json",
+      }),
+    );
+
+    const call = requireLastRunReplyAgentCall();
+    expect(call?.followupRun.run.authProfileId).toBe("openai:vision");
+    expect(call?.followupRun.run.authProfileIdSource).toBe("auto");
+    expect(sessionEntry.authProfileOverride).toBe("anthropic:work");
+    expect(sessionStore["session-key"]?.authProfileOverride).toBe("anthropic:work");
+  });
+
   it("re-resolves same-session ownership after session-id rotation during async prep", async () => {
     const { resolveSessionAuthProfileOverride } =
       await import("../../agents/auth-profiles/session-override.js");
@@ -1236,15 +1517,9 @@ describe("runPreparedReply media-only handling", () => {
   it("re-drains system events after waiting behind an active run", async () => {
     const queueSettings = await import("./queue/settings-runtime.js");
     vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
-    vi.mocked(drainFormattedSystemEventBlock)
-      .mockResolvedValueOnce({
-        text: "System: [t] Initial event.",
-        forceSenderIsOwnerFalse: false,
-      })
-      .mockResolvedValueOnce({
-        text: "System: [t] Post-compaction context.",
-        forceSenderIsOwnerFalse: false,
-      });
+    vi.mocked(drainFormattedSystemEvents)
+      .mockResolvedValueOnce("System: [t] Initial event.")
+      .mockResolvedValueOnce("System: [t] Post-compaction context.");
 
     const previousRun = createReplyOperation({
       sessionId: "session-events-after-wait",
@@ -1308,14 +1583,66 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.transcriptCommandBody).toBe("what does this mean?");
     expect(call?.followupRun.prompt).toContain("what does this mean?");
     expect(call?.followupRun.transcriptPrompt).toBe("what does this mean?");
-    expect(call?.followupRun.currentTurnContext?.promptJoiner).toBe(" ");
-    expect(call?.followupRun.currentTurnContext?.text).toContain("Current message:");
-    expect(call?.followupRun.currentTurnContext?.text).toContain(
+    expect(call?.followupRun.currentInboundContext?.promptJoiner).toBe(" ");
+    expect(call?.followupRun.currentInboundContext?.text).toContain("Current message:");
+    expect(call?.followupRun.currentInboundContext?.text).toContain(
       '[Replying to: "quoted status body"]',
     );
-    expect(call?.followupRun.currentTurnContext?.text).not.toContain(
+    expect(call?.followupRun.currentInboundContext?.text).not.toContain(
       "Reply target of current user message",
     );
+  });
+
+  it("runs bare mention replies when the reply target is the current-turn context", async () => {
+    vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce(
+      [
+        "Reply target of current user message (untrusted, for context):",
+        "```json",
+        JSON.stringify({ sender_label: "Bot", body: "quoted status body" }, null, 2),
+        "```",
+      ].join("\n"),
+    );
+
+    const result = await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "",
+          RawBody: "@bot",
+          CommandBody: "@bot",
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "group",
+          ReplyToBody: "quoted status body",
+          ReplyToSender: "Bot",
+        },
+        sessionCtx: {
+          Body: "",
+          BodyStripped: "",
+          RawBody: "@bot",
+          CommandBody: "@bot",
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "group",
+          ReplyToBody: "quoted status body",
+          ReplyToSender: "Bot",
+        },
+        command: {
+          ...baseParams().command,
+          rawBodyNormalized: "@bot",
+          commandBodyNormalized: "",
+        } as never,
+      }),
+    );
+
+    expect(result).toEqual({ text: "ok" });
+    const call = requireLastRunReplyAgentCall();
+    expect(call?.transcriptCommandBody).toBe("");
+    expect(call?.followupRun.prompt).toBe("");
+    expect(call?.followupRun.transcriptPrompt).toBe("");
+    expect(call?.followupRun.currentInboundContext?.text).toContain(
+      "Reply target of current user message",
+    );
+    expect(call?.followupRun.currentInboundContext?.text).toContain("quoted status body");
   });
 
   it("runs room events as contextual events instead of direct user prompts", async () => {
@@ -1323,7 +1650,7 @@ describe("runPreparedReply media-only handling", () => {
       [
         "Conversation info (untrusted metadata):",
         "```json",
-        JSON.stringify({ message_id: "35676", turn_kind: "room_event" }, null, 2),
+        JSON.stringify({ message_id: "35676", inbound_event_kind: "room_event" }, null, 2),
         "```",
         "",
         "Conversation context (untrusted, chronological, selected for current message):",
@@ -1350,7 +1677,7 @@ describe("runPreparedReply media-only handling", () => {
           Provider: "telegram",
           Surface: "telegram",
           ChatType: "group",
-          InboundTurnKind: "room_event",
+          InboundEventKind: "room_event",
           MessageSid: "35676",
           SenderName: "Keśava",
         },
@@ -1362,17 +1689,17 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.transcriptCommandBody).toBe("");
     expect(call?.followupRun.prompt).toBe("[OpenClaw room event]");
     expect(call?.followupRun.transcriptPrompt).toBe("");
-    expect(call?.followupRun.currentTurnKind).toBe("room_event");
+    expect(call?.followupRun.currentInboundEventKind).toBe("room_event");
     expect(call?.followupRun.run.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(call?.followupRun.run.suppressNextUserMessagePersistence).toBe(true);
-    expect(call?.followupRun.currentTurnContext?.text).toContain(
+    expect(call?.followupRun.currentInboundContext?.text).toContain(
       "#35675 obviyus ->#35674: Are you fr fr",
     );
-    expect(call?.followupRun.currentTurnContext?.text).toContain("[OpenClaw turn]");
-    expect(call?.followupRun.currentTurnContext?.text).toContain(
+    expect(call?.followupRun.currentInboundContext?.text).toContain("[OpenClaw room event]");
+    expect(call?.followupRun.currentInboundContext?.text).toContain(
       "visible_reply_contract: message_tool_only",
     );
-    expect(call?.followupRun.currentTurnContext?.text).toContain(
+    expect(call?.followupRun.currentInboundContext?.text).toContain(
       "Current event:\n#35676 Keśava: No wtf",
     );
   });
@@ -1380,6 +1707,7 @@ describe("runPreparedReply media-only handling", () => {
   it("queues active room events as followups instead of steering fake prompts", async () => {
     const queueSettings = await import("./queue/settings-runtime.js");
     const piRuntime = await import("../../agents/pi-embedded.runtime.js");
+    const abortController = new AbortController();
     vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({
       mode: "steer",
       debounceMs: 500,
@@ -1397,6 +1725,7 @@ describe("runPreparedReply media-only handling", () => {
 
     await runPreparedReply(
       baseParams({
+        opts: { abortSignal: abortController.signal },
         ctx: {
           Body: "ambient",
           RawBody: "ambient",
@@ -1411,7 +1740,7 @@ describe("runPreparedReply media-only handling", () => {
           Provider: "telegram",
           Surface: "telegram",
           ChatType: "group",
-          InboundTurnKind: "room_event",
+          InboundEventKind: "room_event",
           MessageSid: "992",
           SenderName: "Alice",
         },
@@ -1424,8 +1753,57 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.isActive).toBe(true);
     expect(call.resolvedQueue.mode).toBe("steer");
     expect(call.followupRun.prompt).toBe("[OpenClaw room event]");
-    expect(call.followupRun.currentTurnKind).toBe("room_event");
-    expect(call.followupRun.currentTurnContext?.text).toContain("Current event:");
+    expect(call.followupRun.currentInboundEventKind).toBe("room_event");
+    expect(call.followupRun.abortSignal).toBe(abortController.signal);
+    expect(call.followupRun.currentInboundContext?.text).toContain("Current event:");
+  });
+
+  it("detaches queued user requests from superseded source abort signals", async () => {
+    const queueSettings = await import("./queue/settings-runtime.js");
+    const piRuntime = await import("../../agents/pi-embedded.runtime.js");
+    const abortController = new AbortController();
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({
+      mode: "collect",
+      debounceMs: 500,
+      cap: 20,
+      dropPolicy: "summarize",
+    });
+    vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId)
+      .mockReturnValueOnce("active-session")
+      .mockReturnValueOnce("active-session");
+    vi.mocked(piRuntime.isEmbeddedPiRunActive).mockReturnValueOnce(true);
+    vi.mocked(piRuntime.isEmbeddedPiRunStreaming).mockReturnValueOnce(true);
+    vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce("user request context");
+
+    await runPreparedReply(
+      baseParams({
+        opts: { abortSignal: abortController.signal },
+        ctx: {
+          Body: "@bot keep this",
+          RawBody: "@bot keep this",
+          CommandBody: "@bot keep this",
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "group",
+        },
+        sessionCtx: {
+          Body: "@bot keep this",
+          BodyStripped: "@bot keep this",
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "group",
+          InboundEventKind: "user_request",
+          MessageSid: "994",
+          SenderName: "Alice",
+        },
+      }),
+    );
+
+    const call = requireLastRunReplyAgentCall();
+    expect(call.shouldFollowup).toBe(true);
+    expect(call.isActive).toBe(true);
+    expect(call.followupRun.currentInboundEventKind).toBe("user_request");
+    expect(call.followupRun.abortSignal).toBeUndefined();
   });
 
   it("queues active room events instead of interrupting active user requests", async () => {
@@ -1460,7 +1838,7 @@ describe("runPreparedReply media-only handling", () => {
           Provider: "telegram",
           Surface: "telegram",
           ChatType: "group",
-          InboundTurnKind: "room_event",
+          InboundEventKind: "room_event",
           MessageSid: "993",
           SenderName: "Alice",
         },
@@ -1496,7 +1874,7 @@ describe("runPreparedReply media-only handling", () => {
           Provider: "telegram",
           Surface: "telegram",
           ChatType: "group",
-          InboundTurnKind: "room_event",
+          InboundEventKind: "room_event",
           MessageSid: "991",
           SenderName: "Alice",
         },
@@ -1505,7 +1883,7 @@ describe("runPreparedReply media-only handling", () => {
 
     const call = requireLastRunReplyAgentCall();
     expect(call?.followupRun.run.sourceReplyDeliveryMode).toBe("message_tool_only");
-    expect(call?.followupRun.currentTurnContext?.text).toContain(
+    expect(call?.followupRun.currentInboundContext?.text).toContain(
       "visible_reply_contract: message_tool_only",
     );
   });
@@ -1607,7 +1985,7 @@ describe("runPreparedReply media-only handling", () => {
     ["/new", "new"],
     ["/reset", "reset"],
   ] as const)(
-    "keeps inbound sender context in the bare %s model prompt while hiding startup instructions from transcript prompt",
+    "keeps inbound sender context in reply-targeted bare %s model prompt while hiding startup instructions from transcript prompt",
     async (commandText, startupAction) => {
       vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce(
         [
@@ -1627,6 +2005,8 @@ describe("runPreparedReply media-only handling", () => {
             Provider: "webchat",
             Surface: "webchat",
             ChatType: "direct",
+            ReplyToBody: "quoted reset target",
+            ReplyToSender: "Ada Lovelace",
           },
           sessionCtx: {
             Body: "",
@@ -1636,6 +2016,8 @@ describe("runPreparedReply media-only handling", () => {
             ChatType: "direct",
             SenderId: "telegram-user-1",
             SenderName: "Ada Lovelace",
+            ReplyToBody: "quoted reset target",
+            ReplyToSender: "Ada Lovelace",
           },
           command: {
             surface: "webchat",
@@ -1794,6 +2176,38 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.originatingAccountId).toBe("work");
   });
 
+  it("uses transport thread metadata for followup originatingThreadId", async () => {
+    await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "",
+          RawBody: "",
+          CommandBody: "",
+          ThreadHistoryBody: "Earlier message in this thread",
+          OriginatingChannel: "slack",
+          OriginatingTo: "user:U1",
+          ChatType: "direct",
+          MessageThreadId: undefined,
+          TransportThreadId: "650.000",
+        },
+        sessionCtx: {
+          Body: "",
+          BodyStripped: "",
+          ThreadHistoryBody: "Earlier message in this thread",
+          MediaPath: "/tmp/input.png",
+          Provider: "slack",
+          ChatType: "direct",
+          OriginatingChannel: "slack",
+          OriginatingTo: "user:U1",
+          TransportThreadId: "650.000",
+        },
+      }),
+    );
+
+    const call = requireRunReplyAgentCall();
+    expect(call?.followupRun.originatingThreadId).toBe("650.000");
+  });
+
   it("passes suppressTyping through typing mode resolution", async () => {
     await runPreparedReply(
       baseParams({
@@ -1810,10 +2224,7 @@ describe("runPreparedReply media-only handling", () => {
   });
 
   it("routes queued system events into user prompt text, not system prompt context", async () => {
-    vi.mocked(drainFormattedSystemEventBlock).mockResolvedValueOnce({
-      text: "System: [t] Model switched.",
-      forceSenderIsOwnerFalse: false,
-    });
+    vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce("System: [t] Model switched.");
 
     await runPreparedReply(baseParams());
 
@@ -1822,24 +2233,10 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.run.extraSystemPrompt ?? "").not.toContain("Runtime System Events");
   });
 
-  it("downgrades sender ownership when drained system events request owner downgrade", async () => {
-    vi.mocked(drainFormattedSystemEventBlock).mockResolvedValueOnce({
-      text: "System: [t] External webhook payload.",
-      forceSenderIsOwnerFalse: true,
-    });
-    const params = ownerParams();
-
-    await runPreparedReply(params);
-
-    const call = requireRunReplyAgentCall();
-    expect(call?.followupRun.run.senderIsOwner).toBe(false);
-  });
-
-  it("keeps sender ownership when drained system events do not request owner downgrade", async () => {
-    vi.mocked(drainFormattedSystemEventBlock).mockResolvedValueOnce({
-      text: "System: [t] Trusted event.",
-      forceSenderIsOwnerFalse: false,
-    });
+  it("keeps sender ownership when queued system events are prepended", async () => {
+    vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce(
+      "System: [t] External webhook payload.",
+    );
     const params = ownerParams();
 
     await runPreparedReply(params);
@@ -1848,11 +2245,20 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.run.senderIsOwner).toBe(true);
   });
 
-  it("does not downgrade sender ownership when trusted event text contains the untrusted marker", async () => {
-    vi.mocked(drainFormattedSystemEventBlock).mockResolvedValueOnce({
-      text: "System: [t] Relay text mentions System (untrusted): but event is trusted.",
-      forceSenderIsOwnerFalse: false,
-    });
+  it("keeps sender ownership when drained system events are present", async () => {
+    vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce("System: [t] Trusted event.");
+    const params = ownerParams();
+
+    await runPreparedReply(params);
+
+    const call = requireRunReplyAgentCall();
+    expect(call?.followupRun.run.senderIsOwner).toBe(true);
+  });
+
+  it("does not downgrade sender ownership when event text contains the untrusted marker", async () => {
+    vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce(
+      "System: [t] Relay text mentions System (untrusted): but event is trusted.",
+    );
     const params = ownerParams();
 
     await runPreparedReply(params);
@@ -1862,13 +2268,10 @@ describe("runPreparedReply media-only handling", () => {
   });
 
   it("preserves first-token think hint when system events are prepended", async () => {
-    // drainFormattedSystemEventBlock returns the events block; the caller prepends it.
+    // drainFormattedSystemEvents returns the events block; the caller prepends it.
     // The hint must be extracted from the user body BEFORE prepending, so "System:"
     // does not shadow the low|medium|high shorthand.
-    vi.mocked(drainFormattedSystemEventBlock).mockResolvedValueOnce({
-      text: "System: [t] Node connected.",
-      forceSenderIsOwnerFalse: false,
-    });
+    vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce("System: [t] Node connected.");
 
     await runPreparedReply(
       baseParams({
@@ -1889,12 +2292,9 @@ describe("runPreparedReply media-only handling", () => {
   });
 
   it("carries system events into followupRun.prompt for deferred turns", async () => {
-    // drainFormattedSystemEventBlock returns the events block; the caller prepends it to
+    // drainFormattedSystemEvents returns the events block; the caller prepends it to
     // effectiveBaseBody for the queue path so deferred turns see events.
-    vi.mocked(drainFormattedSystemEventBlock).mockResolvedValueOnce({
-      text: "System: [t] Node connected.",
-      forceSenderIsOwnerFalse: false,
-    });
+    vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce("System: [t] Node connected.");
 
     await runPreparedReply(baseParams());
 
@@ -1905,7 +2305,7 @@ describe("runPreparedReply media-only handling", () => {
   it("does not strip think-hint token from deferred queue body", async () => {
     // In steer mode the inferred thinkLevel is never consumed, so the first token
     // must not be stripped from the queue/steer body (followupRun.prompt).
-    vi.mocked(drainFormattedSystemEventBlock).mockResolvedValueOnce(undefined);
+    vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce(undefined);
 
     await runPreparedReply(
       baseParams({

@@ -145,8 +145,6 @@ describe("startAcpSpawnParentStreamRelay", () => {
           contextKey?: string;
           sessionKey?: string;
           deliveryContext?: unknown;
-          forceSenderIsOwnerFalse?: boolean;
-          trusted?: boolean;
         },
       ]
     >;
@@ -155,30 +153,22 @@ describe("startAcpSpawnParentStreamRelay", () => {
         contextKey: options.contextKey,
         sessionKey: options.sessionKey,
         deliveryContext: options.deliveryContext,
-        forceSenderIsOwnerFalse: options.forceSenderIsOwnerFalse,
-        trusted: options.trusted,
       })),
     ).toEqual([
       {
         contextKey: "acp-spawn:run-1:start",
         sessionKey: "agent:main:main",
         deliveryContext,
-        forceSenderIsOwnerFalse: true,
-        trusted: false,
       },
       {
         contextKey: "acp-spawn:run-1:progress",
         sessionKey: "agent:main:main",
         deliveryContext,
-        forceSenderIsOwnerFalse: true,
-        trusted: false,
       },
       {
         contextKey: "acp-spawn:run-1:done",
         sessionKey: "agent:main:main",
         deliveryContext,
-        forceSenderIsOwnerFalse: true,
-        trusted: false,
       },
     ]);
     const heartbeatCalls = requestHeartbeatMock.mock.calls as Array<
@@ -233,11 +223,10 @@ describe("startAcpSpawnParentStreamRelay", () => {
     );
     expect(progressEvent?.[0]).toContain("codex: hello from child");
     const progressOptions = progressEvent?.[1] as
-      | { contextKey?: unknown; sessionKey?: unknown; forceSenderIsOwnerFalse?: unknown }
+      | { contextKey?: unknown; sessionKey?: unknown }
       | undefined;
     expect(progressOptions?.contextKey).toBe("acp-spawn:run-cron:progress");
     expect(progressOptions?.sessionKey).toBe("global");
-    expect(progressOptions?.forceSenderIsOwnerFalse).toBe(true);
     const heartbeatOptions = firstMockCall(requestHeartbeatMock, "heartbeat request")[0] as
       | { agentId?: string; reason?: string }
       | undefined;
@@ -247,7 +236,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
     relay.dispose();
   });
 
-  it("emits a no-output notice and a resumed notice when output returns", () => {
+  it("emits a pre-prompt stall notice and a resumed notice when output returns", () => {
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-2",
       parentSessionKey: "agent:main:main",
@@ -259,7 +248,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
     });
 
     vi.advanceTimersByTime(1_500);
-    expectTextWithFragment(collectedTexts(), "has produced no output for 1s");
+    expectTextWithFragment(collectedTexts(), "no prompt submission was observed for 1s");
 
     emitAgentEvent({
       runId: "run-2",
@@ -283,6 +272,80 @@ describe("startAcpSpawnParentStreamRelay", () => {
       },
     });
     expectTextWithFragment(collectedTexts(), "run failed: boom");
+    relay.dispose();
+  });
+
+  it("classifies stalls after prompt submission but before the first runtime event", () => {
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-prompt-stall",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:child-prompt-stall",
+      agentId: "codex",
+      streamFlushMs: 1,
+      noOutputNoticeMs: 1_000,
+      noOutputPollMs: 250,
+    });
+
+    emitAgentEvent({
+      runId: "run-prompt-stall",
+      stream: "acp",
+      data: {
+        phase: "prompt_submitted",
+        at: Date.now(),
+        proxyEnvKeys: ["HTTPS_PROXY"],
+      },
+    });
+    vi.advanceTimersByTime(1_500);
+
+    const texts = collectedTexts();
+    expectTextWithFragment(texts, "prompt was submitted but no ACP runtime event arrived for 1s");
+    expectTextWithFragment(texts, "proxy env: HTTPS_PROXY");
+    expectNoTextWithFragment(texts, "waiting for interactive input");
+    relay.dispose();
+  });
+
+  it("classifies runtime activity without visible assistant output separately from input waits", () => {
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-runtime-stall",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:child-runtime-stall",
+      agentId: "codex",
+      streamFlushMs: 1,
+      noOutputNoticeMs: 1_000,
+      noOutputPollMs: 250,
+    });
+
+    emitAgentEvent({
+      runId: "run-runtime-stall",
+      stream: "acp",
+      data: {
+        phase: "prompt_submitted",
+        at: Date.now(),
+        proxyEnvKeys: [],
+      },
+    });
+    vi.advanceTimersByTime(750);
+    emitAgentEvent({
+      runId: "run-runtime-stall",
+      stream: "acp",
+      data: {
+        phase: "runtime_event",
+        eventType: "status",
+        text: "connecting to upstream",
+      },
+    });
+    vi.advanceTimersByTime(750);
+    expectNoTextWithFragment(collectedTexts(), "has ACP runtime activity");
+
+    vi.advanceTimersByTime(500);
+
+    const texts = collectedTexts();
+    expectTextWithFragment(
+      texts,
+      "has ACP runtime activity but no visible assistant output for 1s",
+    );
+    expectTextWithFragment(texts, "Last ACP event: status");
+    expectNoTextWithFragment(texts, "waiting for interactive input");
     relay.dispose();
   });
 

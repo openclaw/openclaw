@@ -33,7 +33,9 @@ import {
   stripHeartbeatToken,
   type HeartbeatTask,
 } from "../auto-reply/heartbeat.js";
+import { replaceGenericExternalRunFailureText } from "../auto-reply/reply/agent-runner-failure-copy.js";
 import { resolveDefaultModel } from "../auto-reply/reply/directive-handling.defaults.js";
+import { replyRunRegistry } from "../auto-reply/reply/reply-run-registry.js";
 import { resolveResponsePrefixTemplate } from "../auto-reply/reply/response-prefix-template.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
@@ -89,6 +91,7 @@ import { escapeRegExp } from "../utils.js";
 import { MAX_SAFE_TIMEOUT_DELAY_MS, resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { loadOrCreateDeviceIdentity } from "./device-identity.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
+import { resolveMainScopedEventSessionKey } from "./event-session-routing.js";
 import { isWithinActiveHours, resolveActiveHoursTimezone } from "./heartbeat-active-hours.js";
 import { recordRunStart, shouldDeferWake, type DeferDecision } from "./heartbeat-cooldown.js";
 import {
@@ -142,6 +145,7 @@ export type HeartbeatDeps = OutboundSendDeps &
     runtime?: RuntimeEnv;
     getQueueSize?: (lane?: string) => number;
     getCommandLaneSnapshots?: () => readonly CommandLaneSnapshot[];
+    isReplyRunActive?: (sessionKey: string) => boolean;
     nowMs?: () => number;
   };
 
@@ -553,11 +557,17 @@ function resolveHeartbeatSession(
       if (forcedCanonical !== "global" && !isSubagentSessionKey(forcedCanonical)) {
         const sessionAgentId = resolveAgentIdFromSessionKey(forcedCanonical);
         if (sessionAgentId === normalizeAgentId(resolvedAgentId)) {
+          const routedSessionKey =
+            resolveMainScopedEventSessionKey({
+              cfg,
+              sessionKey: forcedCanonical,
+              agentId: resolvedAgentId,
+            }) ?? forcedCanonical;
           return {
-            sessionKey: forcedCanonical,
+            sessionKey: routedSessionKey,
             storePath,
             store,
-            entry: store[forcedCanonical],
+            entry: store[routedSessionKey],
             suppressOriginatingContext: false,
           };
         }
@@ -697,12 +707,14 @@ function resolveHeartbeatReasoningPayloads(
   const reasoningPayloads: ReplyPayload[] = [];
   for (const payload of payloads) {
     const text = typeof payload.text === "string" ? payload.text : "";
-    const hasLegacyReasoningPrefix = text.trimStart().startsWith("Reasoning:");
-    if (payload.isReasoning !== true && !hasLegacyReasoningPrefix) {
+    const hasFormattedReasoningPrefix = /^(?:Reasoning:|Thinking\.{0,3}(?=\s*_))/u.test(
+      text.trimStart(),
+    );
+    if (payload.isReasoning !== true && !hasFormattedReasoningPrefix) {
       continue;
     }
 
-    const formattedText = hasLegacyReasoningPrefix ? text : formatReasoningMessage(text);
+    const formattedText = hasFormattedReasoningPrefix ? text : formatReasoningMessage(text);
     if (!formattedText.trim()) {
       continue;
     }
@@ -1350,6 +1362,16 @@ export async function runHeartbeatOnce(opts: {
     return { status: "skipped", reason: preflight.skipReason };
   }
   const { entry, sessionKey, storePath, suppressOriginatingContext } = preflight.session;
+  const isReplyRunActive =
+    opts.deps?.isReplyRunActive ?? ((key: string) => replyRunRegistry.isActive(key));
+  if (isReplyRunActive(sessionKey)) {
+    emitHeartbeatEvent({
+      status: "skipped",
+      reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
+      durationMs: Date.now() - startedAt,
+    });
+    return { status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT };
+  }
 
   // Check the resolved session lane — if it is busy, skip to avoid interrupting
   // an active streaming turn.  The wake-layer retry (heartbeat-wake.ts) will
@@ -1543,19 +1565,6 @@ export async function runHeartbeatOnce(opts: {
     }
     runSessionKey = isolatedSessionKey;
   }
-  const activeSessionPendingEventEntries =
-    runSessionKey === sessionKey
-      ? preflight.pendingEventEntries
-      : peekSystemEventEntries(runSessionKey);
-  const hasInspectedOwnerDowngradeEvents =
-    preflight.shouldInspectPendingEvents &&
-    preflight.pendingEventEntries.some((event) => event.forceSenderIsOwnerFalse === true);
-  const hasActiveSessionOwnerDowngradeEvents = activeSessionPendingEventEntries.some(
-    (event) => event.forceSenderIsOwnerFalse === true,
-  );
-  const hasOwnerDowngradeSystemEvents =
-    hasInspectedOwnerDowngradeEvents || hasActiveSessionOwnerDowngradeEvents;
-
   // Update task last run times AFTER successful heartbeat completion
   const updateTaskTimestamps = async () => {
     if (!preflight.tasks || preflight.tasks.length === 0) {
@@ -1605,7 +1614,6 @@ export async function runHeartbeatOnce(opts: {
     MessageThreadId: delivery.threadId,
     Provider: hasExecCompletion ? "exec-event" : hasCronEvents ? "cron-event" : "heartbeat",
     SessionKey: runSessionKey,
-    ForceSenderIsOwnerFalse: hasExecCompletion || hasOwnerDowngradeSystemEvents,
   };
   if (!visibility.showAlerts && !visibility.showOk && !visibility.useIndicator) {
     emitHeartbeatEvent({
@@ -1810,6 +1818,14 @@ export async function runHeartbeatOnce(opts: {
       normalized.text = execFallbackText;
       normalized.shouldSkip = false;
     }
+    const replacement = !heartbeatToolResponse
+      ? replaceGenericExternalRunFailureText(normalized.text)
+      : { text: normalized.text, replaced: false };
+    const deliveredAgentRunFailure = replacement.replaced;
+    if (deliveredAgentRunFailure) {
+      normalized.text = replacement.text;
+      normalized.shouldSkip = false;
+    }
     const shouldSkipMain =
       normalized.shouldSkip && !normalized.hasMedia && !hasRelayableExecCompletion;
     if (shouldSkipMain && reasoningPayloads.length === 0) {
@@ -2000,15 +2016,17 @@ export async function runHeartbeatOnce(opts: {
       });
     }
 
+    const sentStatus = deliveredAgentRunFailure ? "failed" : "sent";
     emitHeartbeatEvent({
-      status: "sent",
+      status: sentStatus,
       to: delivery.to,
+      ...(deliveredAgentRunFailure ? { reason: "agent-runner-failure" } : {}),
       preview: previewText?.slice(0, 200),
       durationMs: Date.now() - startedAt,
       hasMedia: mediaUrls.length > 0,
       channel: delivery.channel,
       accountId: delivery.accountId,
-      indicatorType: visibility.useIndicator ? resolveIndicatorType("sent") : undefined,
+      indicatorType: visibility.useIndicator ? resolveIndicatorType(sentStatus) : undefined,
     });
     await updateTaskTimestamps();
     consumeInspectedSystemEvents();

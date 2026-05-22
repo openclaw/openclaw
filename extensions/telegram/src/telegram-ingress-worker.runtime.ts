@@ -4,13 +4,15 @@ import { normalizeTelegramApiRoot } from "./api-root.js";
 import { resolveTelegramTransport } from "./fetch.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 import { makeProxyFetch } from "./proxy.js";
-import { TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS } from "./request-timeouts.js";
+import {
+  TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS,
+  resolveTelegramLongPollTimeoutSeconds,
+} from "./request-timeouts.js";
 import { writeTelegramSpooledUpdate } from "./telegram-ingress-spool.js";
 import type {
   TelegramIngressWorkerMessage,
   TelegramIngressWorkerOptions,
 } from "./telegram-ingress-worker.js";
-import { writeTelegramUpdateOffset } from "./update-offset-store.js";
 
 const options = workerData as TelegramIngressWorkerOptions;
 const pollLimit = 100;
@@ -92,10 +94,7 @@ async function main(): Promise<void> {
   const fetchImpl = transport.fetch ?? globalThis.fetch;
   const apiRoot = normalizeTelegramApiRoot(options.apiRoot ?? "https://api.telegram.org");
   const getUpdatesUrl = `${apiRoot}/bot${options.token}/getUpdates`;
-  const pollTimeoutSeconds =
-    typeof options.timeoutSeconds === "number" && Number.isFinite(options.timeoutSeconds)
-      ? Math.max(1, Math.floor(options.timeoutSeconds))
-      : 30;
+  const pollTimeoutSeconds = resolveTelegramLongPollTimeoutSeconds(options.timeoutSeconds);
   let lastUpdateId = options.initialUpdateId;
   let failures = 0;
 
@@ -131,11 +130,6 @@ async function main(): Promise<void> {
           });
           if (lastUpdateId === null || updateId > lastUpdateId) {
             lastUpdateId = updateId;
-            await writeTelegramUpdateOffset({
-              accountId: options.accountId,
-              botToken: options.token,
-              updateId,
-            });
           }
           post({ type: "spooled", updateId, queued: result.length });
         }
@@ -168,8 +162,11 @@ async function main(): Promise<void> {
 }
 
 main()
-  .then(() => undefined)
+  .then(() => {
+    parentPort?.close();
+  })
   .catch((err) => {
     post({ type: "poll-error", message: formatErrorMessage(err), finishedAt: Date.now() });
-    process.exitCode = 1;
+    parentPort?.close();
+    process.exitCode = stopped ? 0 : 1;
   });

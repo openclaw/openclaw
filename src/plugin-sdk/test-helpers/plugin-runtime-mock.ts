@@ -260,7 +260,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       return result;
     },
   ) as unknown as PluginRuntime["channel"]["turn"]["run"];
-  const buildChannelTurnContextMock = vi.fn(
+  const buildChannelInboundEventContextMock = vi.fn(
     (params: Parameters<PluginRuntime["channel"]["turn"]["buildContext"]>[0]) =>
       ({
         Body: params.message.body ?? params.message.rawBody,
@@ -379,6 +379,22 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         loadSessionStore: vi.fn(
           () => ({}),
         ) as unknown as PluginRuntime["agent"]["session"]["loadSessionStore"],
+        getSessionEntry: vi.fn(
+          () => undefined,
+        ) as unknown as PluginRuntime["agent"]["session"]["getSessionEntry"],
+        listSessionEntries: vi.fn(
+          () => [],
+        ) as unknown as PluginRuntime["agent"]["session"]["listSessionEntries"],
+        patchSessionEntry: vi
+          .fn()
+          .mockResolvedValue(
+            null,
+          ) as unknown as PluginRuntime["agent"]["session"]["patchSessionEntry"],
+        upsertSessionEntry: vi
+          .fn()
+          .mockResolvedValue(
+            undefined,
+          ) as unknown as PluginRuntime["agent"]["session"]["upsertSessionEntry"],
         saveSessionStore: vi
           .fn()
           .mockResolvedValue(
@@ -605,6 +621,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
               await params.onFlush([item]);
             },
             flushKey: vi.fn(),
+            cancelKey: vi.fn(() => false),
           }),
         ) as unknown as PluginRuntime["channel"]["debounce"]["createInboundDebouncer"],
         resolveInboundDebounceMs: vi.fn((params: unknown) => {
@@ -678,7 +695,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
               },
             }),
         ) as unknown as PluginRuntime["channel"]["turn"]["runResolved"],
-        buildContext: buildChannelTurnContextMock,
+        buildContext: buildChannelInboundEventContextMock,
         runPrepared: runPreparedChannelTurnMock,
         dispatchAssembled:
           dispatchAssembledChannelTurnMock as unknown as PluginRuntime["channel"]["turn"]["dispatchAssembled"],

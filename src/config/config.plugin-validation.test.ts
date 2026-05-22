@@ -258,7 +258,26 @@ describe("config plugin validation", () => {
     expect(res.ok).toBe(false);
     if (!res.ok) {
       expectPathMessage(res.issues, "plugins.slots.memory", "plugin not found: missing-slot");
-      expect(res.warnings).toEqual([
+      expect(res.warnings).toEqual(
+        expect.arrayContaining([
+          {
+            path: "plugins.entries.missing-plugin",
+            message:
+              "plugin not found: missing-plugin (stale config entry ignored; remove it from plugins config)",
+          },
+          {
+            path: "plugins.allow",
+            message:
+              "plugin not found: missing-allow (stale config entry ignored; remove it from plugins config)",
+          },
+          {
+            path: "plugins.deny",
+            message:
+              "plugin not found: missing-deny (stale config entry ignored; remove it from plugins config)",
+          },
+        ]),
+      );
+      expect(res.warnings.filter((warning) => warning.path.startsWith("plugins."))).toEqual([
         {
           path: "plugins.entries.missing-plugin",
           message:
@@ -296,7 +315,7 @@ describe("config plugin validation", () => {
     }
   });
 
-  it("reports catalog install hints for missing configured official external plugins", () => {
+  it("deduplicates catalog install hints for missing configured official external plugins", () => {
     const res = validateConfigObjectWithPlugins(
       {
         agents: { list: [{ id: "pi" }] },
@@ -320,12 +339,180 @@ describe("config plugin validation", () => {
     const message =
       "plugin not installed: brave — install the official external plugin with: openclaw plugins install @openclaw/brave-plugin";
     expectPathMessage(res.warnings, "plugins.entries.brave", message);
-    expectPathMessage(res.warnings, "plugins.allow", message);
+    expect((res.warnings ?? []).filter((warning) => warning.message === message)).toHaveLength(1);
     expect(
       (res.warnings ?? []).some(
         (warning) =>
           (warning.path === "plugins.entries.brave" || warning.path === "plugins.allow") &&
           warning.message.includes("remove it from plugins config"),
+      ),
+    ).toBe(false);
+  });
+
+  it("warns instead of failing when an official external memory slot plugin is not installed", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "pi" }] },
+        plugins: {
+          slots: { memory: "memory-lancedb" },
+          entries: { "memory-lancedb": { enabled: true } },
+        },
+      },
+      {
+        env: suiteEnv(),
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            plugins: [],
+            diagnostics: [],
+          },
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+    const slotMessage =
+      "plugin not installed: memory-lancedb — gateway will run without persistent memory until installed; install the official external plugin with: openclaw plugins install @openclaw/memory-lancedb";
+    const entryMessage =
+      "plugin not installed: memory-lancedb — install the official external plugin with: openclaw plugins install @openclaw/memory-lancedb";
+    expectPathMessage(res.warnings, "plugins.slots.memory", slotMessage);
+    expectPathMessage(res.warnings, "plugins.entries.memory-lancedb", entryMessage);
+  });
+
+  it("keeps no-persistent-memory wording scoped to the selected missing memory slot", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "pi" }] },
+        plugins: {
+          slots: { memory: "none" },
+          entries: { "memory-lancedb": { enabled: true } },
+          allow: ["memory-lancedb"],
+        },
+      },
+      {
+        env: suiteEnv(),
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            plugins: [],
+            diagnostics: [],
+          },
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+    const message =
+      "plugin not installed: memory-lancedb — install the official external plugin with: openclaw plugins install @openclaw/memory-lancedb";
+    expectPathMessage(res.warnings, "plugins.entries.memory-lancedb", message);
+    expect((res.warnings ?? []).filter((warning) => warning.message === message)).toHaveLength(1);
+    expect(
+      (res.warnings ?? []).some((warning) =>
+        warning.message.includes("gateway will run without persistent memory"),
+      ),
+    ).toBe(false);
+  });
+
+  it("deduplicates yuanbao missing-plugin warnings across entries and allow", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "pi" }] },
+        plugins: {
+          entries: { yuanbao: { enabled: true } },
+          allow: ["yuanbao"],
+        },
+      },
+      {
+        env: suiteEnv(),
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            plugins: [],
+            diagnostics: [],
+          },
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+    const message =
+      "plugin not installed: yuanbao — install the official external plugin with: openclaw plugins install openclaw-plugin-yuanbao@2.13.1";
+    expectPathMessage(res.warnings, "plugins.entries.yuanbao", message);
+    expect((res.warnings ?? []).filter((warning) => warning.message === message)).toHaveLength(1);
+  });
+
+  it("keeps official external non-memory plugins fatal in the memory slot", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "pi" }] },
+        plugins: {
+          slots: { memory: "brave" },
+          entries: { brave: { enabled: true } },
+        },
+      },
+      {
+        env: suiteEnv(),
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            plugins: [],
+            diagnostics: [],
+          },
+        },
+      },
+    );
+
+    expect(res.ok).toBe(false);
+    if (res.ok) {
+      return;
+    }
+    expectPathMessage(res.issues, "plugins.slots.memory", "plugin not found: brave");
+    expectPathMessage(
+      res.warnings,
+      "plugins.entries.brave",
+      "plugin not installed: brave — install the official external plugin with: openclaw plugins install @openclaw/brave-plugin",
+    );
+  });
+
+  it("keeps blocked official external memory slot plugins fatal", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "pi" }] },
+        plugins: {
+          slots: { memory: "memory-lancedb" },
+          entries: { "memory-lancedb": { enabled: true } },
+        },
+      },
+      {
+        env: suiteEnv(),
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            plugins: [],
+            diagnostics: [
+              {
+                level: "warn",
+                pluginId: "memory-lancedb",
+                message: "blocked plugin candidate: fixture safety block",
+              },
+            ],
+          },
+        },
+      },
+    );
+
+    expect(res.ok).toBe(false);
+    if (res.ok) {
+      return;
+    }
+    expectPathMessageIncludes(
+      res.issues,
+      "plugins.slots.memory",
+      "plugin present but blocked: memory-lancedb",
+    );
+    expectPathMessageIncludes(
+      res.warnings,
+      "plugins.entries.memory-lancedb",
+      "plugin present but blocked: memory-lancedb",
+    );
+    expect(
+      res.warnings?.some((warning) =>
+        warning.message.includes("plugin not installed: memory-lancedb"),
       ),
     ).toBe(false);
   });
@@ -417,6 +604,83 @@ describe("config plugin validation", () => {
     expect(
       res.warnings.some((warning) => warning.message.includes("plugin not found: blocked-plugin")),
     ).toBe(false);
+  });
+
+  it("warns for broken discovered plugins that are not referenced by config", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "pi" }] },
+        plugins: {
+          allow: ["telegram"],
+        },
+      },
+      {
+        env: suiteEnv(),
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            plugins: [],
+            diagnostics: [
+              {
+                level: "error",
+                pluginId: "broken-local",
+                source: path.join(suiteHome, "extensions", "broken-local", "openclaw.plugin.json"),
+                message: "plugin manifest entry does not exist: dist/index.js",
+              },
+            ],
+          },
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expectPathMessage(
+      res.warnings,
+      "plugins",
+      "plugin broken-local: plugin manifest entry does not exist: dist/index.js",
+    );
+    expectNoPath(res.warnings, "plugins.entries.broken-local");
+  });
+
+  it("keeps broken discovered plugins fatal when config references them", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "pi" }] },
+        plugins: {
+          entries: {
+            "broken-local": { enabled: true },
+          },
+        },
+      },
+      {
+        env: suiteEnv(),
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            plugins: [],
+            diagnostics: [
+              {
+                level: "error",
+                pluginId: "broken-local",
+                source: path.join(suiteHome, "extensions", "broken-local", "openclaw.plugin.json"),
+                message: "plugin manifest entry does not exist: dist/index.js",
+              },
+            ],
+          },
+        },
+      },
+    );
+
+    expect(res.ok).toBe(false);
+    if (res.ok) {
+      return;
+    }
+    expectPathMessage(
+      res.issues,
+      "plugins.entries.broken-local",
+      "plugin broken-local: plugin manifest entry does not exist: dist/index.js",
+    );
   });
 
   it("does not source-match blocked diagnostics that already name a different plugin id", () => {

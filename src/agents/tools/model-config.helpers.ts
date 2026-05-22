@@ -3,15 +3,16 @@ import {
   resolveAgentModelPrimaryValue,
   resolveAgentModelTimeoutMsValue,
 } from "../../config/model-input.js";
-import type { AgentModelConfig } from "../../config/types.agents-shared.js";
+import type { AgentToolModelConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   externalCliDiscoveryForProviderAuth,
   ensureAuthProfileStore,
+  ensureAuthProfileStoreWithoutExternalProfiles,
   hasAnyAuthProfileStoreSource,
   listProfilesForProvider,
 } from "../auth-profiles.js";
-import type { AuthProfileStore } from "../auth-profiles/types.js";
+import type { AuthProfileCredential, AuthProfileStore } from "../auth-profiles/types.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { resolveEnvApiKey } from "../model-auth.js";
 import { resolveConfiguredModelRef } from "../model-selection.js";
@@ -44,23 +45,41 @@ export function hasAuthForProvider(params: {
   if (resolveEnvApiKey(params.provider)?.apiKey) {
     return true;
   }
-  if (params.authStore) {
-    return listProfilesForProvider(params.authStore, params.provider).length > 0;
-  }
-  const agentDir = params.agentDir?.trim();
-  if (!agentDir) {
-    return false;
-  }
-  if (!hasAnyAuthProfileStoreSource(agentDir)) {
-    return false;
-  }
-  const store = ensureAuthProfileStore(agentDir, {
-    externalCli: externalCliDiscoveryForProviderAuth({ provider: params.provider }),
-  });
-  return listProfilesForProvider(store, params.provider).length > 0;
+  return hasAuthProfileForProvider({ ...params, includeExternalCli: true });
 }
 
-export function coerceToolModelConfig(model?: AgentModelConfig): ToolModelConfig {
+export function hasAuthProfileForProvider(params: {
+  provider: string;
+  agentDir?: string;
+  authStore?: AuthProfileStore;
+  includeExternalCli?: boolean;
+  type?: AuthProfileCredential["type"];
+}): boolean {
+  let store = params.authStore;
+  if (!store) {
+    const agentDir = params.agentDir?.trim();
+    if (!agentDir) {
+      return false;
+    }
+    if (!hasAnyAuthProfileStoreSource(agentDir)) {
+      return false;
+    }
+    store = params.includeExternalCli
+      ? ensureAuthProfileStore(agentDir, {
+          externalCli: externalCliDiscoveryForProviderAuth({ provider: params.provider }),
+        })
+      : ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+          allowKeychainPrompt: false,
+        });
+  }
+  const profileIds = listProfilesForProvider(store, params.provider);
+  if (!params.type) {
+    return profileIds.length > 0;
+  }
+  return profileIds.some((profileId) => store.profiles[profileId]?.type === params.type);
+}
+
+export function coerceToolModelConfig(model?: AgentToolModelConfig): ToolModelConfig {
   const primary = resolveAgentModelPrimaryValue(model);
   const fallbacks = resolveAgentModelFallbackValues(model);
   const timeoutMs = resolveAgentModelTimeoutMsValue(model);

@@ -47,7 +47,7 @@ function shouldRegisterGatewayRunOnly(name: string, argv: string[]): boolean {
 }
 
 async function registerGatewayRunOnly(program: Command): Promise<void> {
-  const { addGatewayRunCommand } = await import("../gateway-cli/run.js");
+  const { addGatewayRunCommand } = await import("../gateway-cli/run-command.js");
   removeCommandByName(program, "gateway");
   const gateway = addGatewayRunCommand(
     program.command("gateway").description("Run, inspect, and query the WebSocket Gateway"),
@@ -127,11 +127,15 @@ const entrySpecs: readonly CommandGroupDescriptorSpec<SubCliRegistrar>[] = [
       loadModule: () => import("../exec-policy-cli.js"),
       exportName: "registerExecPolicyCli",
     },
-    {
-      commandNames: ["nodes"],
-      loadModule: () => import("../nodes-cli.js"),
-      exportName: "registerNodesCli",
+  ]),
+  {
+    commandNames: ["nodes"],
+    register: async (program, argv) => {
+      const mod = await import("../nodes-cli.js");
+      await mod.registerNodesCli(program, argv);
     },
+  },
+  ...defineImportedProgramCommandGroupSpecs([
     {
       commandNames: ["devices"],
       loadModule: () => import("../devices-cli.js"),

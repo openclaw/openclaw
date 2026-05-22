@@ -89,7 +89,11 @@ function buildPaginatedSessionHistory(params: {
 }
 
 function resolveMessageSeq(message: SessionHistoryMessage | undefined): number | undefined {
-  return asPositiveSafeInteger(message?.__openclaw?.seq);
+  return asPositiveSafeInteger(message?.["__openclaw"]?.seq);
+}
+
+function isMessageToolMirrorMessage(message: SessionHistoryMessage): boolean {
+  return message.openclawMessageToolMirror !== undefined;
 }
 
 function paginateSessionMessages(
@@ -248,20 +252,69 @@ export class SessionHistorySseState {
       ...(typeof update.messageId === "string" ? { id: update.messageId } : {}),
       seq: this.rawTranscriptSeq,
     });
+    const projectedMessages = toSessionHistoryMessages(
+      projectChatDisplayMessages([...this.sentHistory.messages, nextMessage], {
+        maxChars: this.maxChars,
+      }),
+    );
+    if (projectedMessages.length > this.sentHistory.messages.length) {
+      const addedMessages = projectedMessages.slice(this.sentHistory.messages.length);
+      if (addedMessages.length > 1) {
+        this.sentHistory = buildPaginatedSessionHistory({
+          messages: projectedMessages,
+          hasMore: false,
+        });
+        return { shouldRefresh: true };
+      }
+      const projectedMessage = addedMessages[0];
+      if (projectedMessage !== undefined) {
+        const emittedMessage: SessionHistoryMessage =
+          isMessageToolMirrorMessage(projectedMessage) ||
+          resolveMessageSeq(projectedMessage) === undefined
+            ? (attachOpenClawTranscriptMeta(projectedMessage, {
+                seq: this.rawTranscriptSeq,
+              }) as SessionHistoryMessage)
+            : projectedMessage;
+        const nextMessages = [...this.sentHistory.messages, emittedMessage];
+        this.sentHistory = buildPaginatedSessionHistory({
+          messages: nextMessages,
+          hasMore: false,
+        });
+        return {
+          message: emittedMessage,
+          messageSeq: resolveMessageSeq(emittedMessage),
+        };
+      }
+    }
     const [sanitizedMessage] = toSessionHistoryMessages(
       projectChatDisplayMessages([nextMessage], { maxChars: this.maxChars }),
     );
     if (!sanitizedMessage) {
+      if (projectedMessages.length < this.sentHistory.messages.length) {
+        this.sentHistory = buildPaginatedSessionHistory({
+          messages: projectedMessages,
+          hasMore: false,
+        });
+        return { shouldRefresh: true };
+      }
       return null;
     }
-    const nextMessages = [...this.sentHistory.messages, sanitizedMessage];
+    if (projectedMessages.length <= this.sentHistory.messages.length) {
+      this.sentHistory = buildPaginatedSessionHistory({
+        messages: projectedMessages,
+        hasMore: false,
+      });
+      return { shouldRefresh: true };
+    }
+    const projectedMessage = projectedMessages.at(-1) ?? sanitizedMessage;
+    const nextMessages = [...this.sentHistory.messages, projectedMessage];
     this.sentHistory = buildPaginatedSessionHistory({
       messages: nextMessages,
       hasMore: false,
     });
     return {
-      message: sanitizedMessage,
-      messageSeq: resolveMessageSeq(sanitizedMessage),
+      message: projectedMessage,
+      messageSeq: resolveMessageSeq(projectedMessage),
     };
   }
 

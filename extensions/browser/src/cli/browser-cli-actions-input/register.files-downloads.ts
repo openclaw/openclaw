@@ -8,7 +8,9 @@ import {
   resolveExistingPathsWithinRoot,
   shortenHomePath,
 } from "../core-api.js";
-import { resolveBrowserActionContext } from "./shared.js";
+import { resolveBrowserActionContext, withBrowserActionTimeoutSlack } from "./shared.js";
+
+const DEFAULT_BROWSER_HOOK_TIMEOUT_MS = 120000;
 
 async function normalizeUploadPaths(paths: string[]): Promise<string[]> {
   const result = await resolveExistingPathsWithinRoot({
@@ -40,7 +42,7 @@ async function runBrowserPostAction<T>(params: {
         query: params.profile ? { profile: params.profile } : undefined,
         body: params.body,
       },
-      { timeoutMs: params.timeoutMs },
+      { timeoutMs: withBrowserActionTimeoutSlack(params.timeoutMs) },
     );
     if (params.parent?.json) {
       defaultRuntime.writeJson(result);
@@ -79,7 +81,7 @@ export function registerBrowserFilesAndDownloadsCommands(
         targetId,
         timeoutMs,
       },
-      timeoutMs: timeoutMs ?? 20000,
+      timeoutMs: timeoutMs ?? DEFAULT_BROWSER_HOOK_TIMEOUT_MS,
       describeSuccess: (result) => `downloaded: ${shortenHomePath(result.download.path)}`,
     });
   };
@@ -116,7 +118,7 @@ export function registerBrowserFilesAndDownloadsCommands(
           targetId,
           timeoutMs,
         },
-        timeoutMs: timeoutMs ?? 20000,
+        timeoutMs: timeoutMs ?? DEFAULT_BROWSER_HOOK_TIMEOUT_MS,
         describeSuccess: () => `upload armed for ${paths.length} file(s)`,
       });
     });
@@ -173,6 +175,7 @@ export function registerBrowserFilesAndDownloadsCommands(
     .option("--accept", "Accept the dialog", false)
     .option("--dismiss", "Dismiss the dialog", false)
     .option("--prompt <text>", "Prompt response text")
+    .option("--dialog-id <id>", "Pending dialog id from snapshot/browser state")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .option(
       "--timeout-ms <ms>",
@@ -181,6 +184,11 @@ export function registerBrowserFilesAndDownloadsCommands(
     )
     .action(async (opts, cmd) => {
       const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
+      if (opts.accept && opts.dismiss) {
+        defaultRuntime.error(danger("Specify only one of --accept or --dismiss"));
+        defaultRuntime.exit(1);
+        return;
+      }
       const accept = opts.accept ? true : opts.dismiss ? false : undefined;
       if (accept === undefined) {
         defaultRuntime.error(danger("Specify --accept or --dismiss"));
@@ -195,10 +203,11 @@ export function registerBrowserFilesAndDownloadsCommands(
         body: {
           accept,
           promptText: normalizeOptionalString(opts.prompt),
+          dialogId: normalizeOptionalString(opts.dialogId),
           targetId,
           timeoutMs,
         },
-        timeoutMs: timeoutMs ?? 20000,
+        timeoutMs: timeoutMs ?? DEFAULT_BROWSER_HOOK_TIMEOUT_MS,
         describeSuccess: () => "dialog armed",
       });
     });

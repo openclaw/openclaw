@@ -2,12 +2,12 @@ import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { __testing, runSlackQaLive } from "./slack-live.runtime.js";
+import { testing, runSlackQaLive } from "./slack-live.runtime.js";
 
 describe("Slack live QA runtime helpers", () => {
   it("resolves env credential payloads", () => {
     expect(
-      __testing.resolveSlackQaRuntimeEnv({
+      testing.resolveSlackQaRuntimeEnv({
         OPENCLAW_QA_SLACK_CHANNEL_ID: "C123456789",
         OPENCLAW_QA_SLACK_DRIVER_BOT_TOKEN: "xoxb-driver",
         OPENCLAW_QA_SLACK_SUT_BOT_TOKEN: "xoxb-sut",
@@ -23,7 +23,7 @@ describe("Slack live QA runtime helpers", () => {
 
   it("rejects malformed Slack channel ids", () => {
     expect(() =>
-      __testing.resolveSlackQaRuntimeEnv({
+      testing.resolveSlackQaRuntimeEnv({
         OPENCLAW_QA_SLACK_CHANNEL_ID: "qa-channel",
         OPENCLAW_QA_SLACK_DRIVER_BOT_TOKEN: "xoxb-driver",
         OPENCLAW_QA_SLACK_SUT_BOT_TOKEN: "xoxb-sut",
@@ -34,7 +34,7 @@ describe("Slack live QA runtime helpers", () => {
 
   it("parses Convex credential payloads", () => {
     expect(
-      __testing.parseSlackQaCredentialPayload({
+      testing.parseSlackQaCredentialPayload({
         channelId: "C123456789",
         driverBotToken: "xoxb-driver",
         sutBotToken: "xoxb-sut",
@@ -49,7 +49,7 @@ describe("Slack live QA runtime helpers", () => {
   });
 
   it("reports standard live transport scenario coverage", () => {
-    expect(__testing.SLACK_QA_STANDARD_SCENARIO_IDS).toEqual([
+    expect(testing.SLACK_QA_STANDARD_SCENARIO_IDS).toEqual([
       "canary",
       "mention-gating",
       "allowlist-block",
@@ -61,15 +61,15 @@ describe("Slack live QA runtime helpers", () => {
   });
 
   it("selects Slack scenarios by id", () => {
-    expect(__testing.findScenario(["slack-canary"]).map((scenario) => scenario.id)).toEqual([
+    expect(testing.findScenario(["slack-canary"]).map((scenario) => scenario.id)).toEqual([
       "slack-canary",
     ]);
   });
 
-  it("fails mention-gating when the SUT replies without the marker", async () => {
+  it("ignores delayed unrelated SUT replies during mention-gating", async () => {
     const observedMessages: Array<unknown> = [];
     await expect(
-      __testing.waitForSlackNoReply({
+      testing.waitForSlackNoReply({
         channelId: "C123456789",
         client: {
           conversations: {
@@ -90,9 +90,9 @@ describe("Slack live QA runtime helpers", () => {
         observationScenarioTitle: "Slack unmentioned bot message does not trigger",
         sentTs: "1.000000",
         sutIdentity: { userId: "U999999999" },
-        timeoutMs: 1_000,
+        timeoutMs: 10,
       }),
-    ).rejects.toThrow("unexpected Slack SUT reply observed");
+    ).resolves.toBeUndefined();
     const typedObservedMessages = observedMessages as Array<{
       matchedScenario?: boolean;
       text?: string;
@@ -104,6 +104,34 @@ describe("Slack live QA runtime helpers", () => {
     expect(typedObservedMessages[0]?.text).toBe("I should not have replied");
     expect(typedObservedMessages[0]?.ts).toBe("2.000000");
     expect(typedObservedMessages[0]?.userId).toBe("U999999999");
+  });
+
+  it("fails mention-gating when the SUT replies with the marker", async () => {
+    await expect(
+      testing.waitForSlackNoReply({
+        channelId: "C123456789",
+        client: {
+          conversations: {
+            history: async () => ({
+              messages: [
+                {
+                  text: "SLACK_QA_NOMENTION_MARKER",
+                  ts: "2.000000",
+                  user: "U999999999",
+                },
+              ],
+            }),
+          },
+        } as never,
+        matchText: "SLACK_QA_NOMENTION_MARKER",
+        observedMessages: [],
+        observationScenarioId: "slack-mention-gating",
+        observationScenarioTitle: "Slack unmentioned bot message does not trigger",
+        sentTs: "1.000000",
+        sutIdentity: { userId: "U999999999" },
+        timeoutMs: 1_000,
+      }),
+    ).rejects.toThrow("unexpected Slack SUT reply observed");
   });
 
   it("writes artifacts when Convex credential acquisition fails", async () => {

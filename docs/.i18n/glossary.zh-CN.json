@@ -108,6 +108,10 @@
     "target": "Gateway 网关"
   },
   {
+    "source": "Gateway health",
+    "target": "Gateway 健康"
+  },
+  {
     "source": "Gateway RPC reference",
     "target": "Gateway RPC 参考"
   },
@@ -646,6 +650,18 @@
   {
     "source": "Plugin SDK",
     "target": "插件 SDK"
+  },
+  {
+    "source": "Tool plugins",
+    "target": "工具插件"
+  },
+  {
+    "source": "Plugin SDK subpaths",
+    "target": "插件 SDK 子路径"
+  },
+  {
+    "source": "Plugins CLI",
+    "target": "插件 CLI"
   },
   {
     "source": "Plugins",
