@@ -870,6 +870,134 @@ describe("downgradeOpenAIReasoningBlocks", () => {
     );
   });
 
+  it("drops empty non-replayable reasoning before tool calls while preserving tool pairing", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "   ",
+            thinkingSignature: JSON.stringify({ id: "rs_empty", type: "reasoning" }),
+          },
+          { type: "toolCall", id: "call_read", name: "read", arguments: {} },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_read",
+        toolName: "read",
+        content: [{ type: "text", text: "ok" }],
+      },
+    ];
+
+    expect(downgradeOpenAIReasoningBlocks(input as any)).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_read", name: "read", arguments: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_read",
+        toolName: "read",
+        content: [{ type: "text", text: "ok" }],
+      },
+    ]);
+  });
+
+  it("drops non-string replayable reasoning even when followed by content", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: { text: "not replayable text" },
+            thinkingSignature: JSON.stringify({ id: "rs_non_string", type: "reasoning" }),
+          },
+          { type: "text", text: "answer" },
+        ],
+      },
+    ];
+
+    expect(downgradeOpenAIReasoningBlocks(input as any)).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "answer" }] },
+    ]);
+  });
+
+  it("keeps empty-text reasoning when the signature carries content replay state", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "",
+            thinkingSignature: JSON.stringify({
+              id: "rs_content",
+              type: "reasoning",
+              content: [{ type: "reasoning_text", text: "hidden" }],
+            }),
+          },
+          { type: "text", text: "answer" },
+        ],
+      },
+    ];
+
+    expect(downgradeOpenAIReasoningBlocks(input as any)).toEqual(input);
+  });
+
+  it("keeps empty-text reasoning when the signature carries encrypted replay state", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "   ",
+            thinkingSignature: JSON.stringify({
+              id: "rs_encrypted",
+              type: "reasoning",
+              encrypted_content: "enc_payload",
+            }),
+          },
+          { type: "toolCall", id: "call_read|fc_123", name: "read", arguments: {} },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_read|fc_123",
+        toolName: "read",
+        content: [{ type: "text", text: "ok" }],
+      },
+    ];
+
+    expect(downgradeOpenAIReasoningBlocks(input as any)).toEqual(input);
+    expect(downgradeOpenAIFunctionCallReasoningPairs(input as any)).toEqual(input);
+  });
+
+  it("keeps empty-text reasoning when the signature carries summary replay state", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "",
+            thinkingSignature: JSON.stringify({
+              id: "rs_summary",
+              type: "reasoning",
+              summary: [{ type: "summary_text", text: "summary" }],
+            }),
+          },
+          { type: "text", text: "answer" },
+        ],
+      },
+    ];
+
+    expect(downgradeOpenAIReasoningBlocks(input as any)).toEqual(input);
+  });
+
   it("drops orphaned reasoning blocks without following content", () => {
     const input = [
       {
