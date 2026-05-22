@@ -1592,6 +1592,36 @@ describe("registerCoreHealthChecks", () => {
     await expect(fs.access(otherLock)).resolves.toBeUndefined();
   });
 
+  it("scopes session lock detection during validation", async () => {
+    tmp = await fs.mkdtemp(join(tmpdir(), "openclaw-health-session-locks-detect-scope-"));
+    const sessionsDir = join(tmp, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const selectedLock = join(sessionsDir, "selected.jsonl.lock");
+    const otherLock = join(sessionsDir, "other.jsonl.lock");
+    const payload = JSON.stringify({
+      pid: -1,
+      createdAt: new Date(Date.now() - 120_000).toISOString(),
+    });
+    await fs.writeFile(selectedLock, payload);
+    await fs.writeFile(otherLock, payload);
+    const check = CORE_HEALTH_CHECKS.find((entry) => entry.id === "core/doctor/session-locks");
+
+    const findings = await check?.detect(
+      {
+        mode: "fix",
+        runtime: { log() {}, error() {}, exit() {} },
+        cfg: {},
+        env: {
+          ...process.env,
+          OPENCLAW_STATE_DIR: tmp,
+        },
+      },
+      { paths: [selectedLock] },
+    );
+
+    expect(findings?.map((finding) => finding.path)).toEqual([selectedLock]);
+  });
+
   it("validates session transcript repairs with detect-after", async () => {
     tmp = await fs.mkdtemp(join(tmpdir(), "openclaw-health-transcripts-"));
     const sessionsDir = join(tmp, "agents", "main", "sessions");
@@ -1764,6 +1794,54 @@ describe("registerCoreHealthChecks", () => {
     ]);
     expect((await fs.readFile(selectedFile, "utf-8")).trim().split(/\r?\n/)).toHaveLength(2);
     expect((await fs.readFile(otherFile, "utf-8")).trim().split(/\r?\n/)).toHaveLength(3);
+  });
+
+  it("scopes session transcript detection during validation", async () => {
+    tmp = await fs.mkdtemp(join(tmpdir(), "openclaw-health-transcripts-detect-scope-"));
+    const sessionsDir = join(tmp, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const selectedFile = join(sessionsDir, "selected.jsonl");
+    const otherFile = join(sessionsDir, "other.jsonl");
+    const entries = [
+      { type: "session", version: 3, id: "session-1", timestamp: "2026-04-25T00:00:00Z" },
+      {
+        type: "message",
+        id: "runtime-user",
+        parentId: null,
+        message: {
+          role: "user",
+          content:
+            "visible ask\n\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nsecret\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+        },
+      },
+      {
+        type: "message",
+        id: "plain-user",
+        parentId: null,
+        message: { role: "user", content: "visible ask" },
+      },
+    ];
+    const raw = `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`;
+    await fs.writeFile(selectedFile, raw);
+    await fs.writeFile(otherFile, raw);
+    const check = CORE_HEALTH_CHECKS.find(
+      (entry) => entry.id === "core/doctor/session-transcripts",
+    );
+
+    const findings = await check?.detect(
+      {
+        mode: "fix",
+        runtime: { log() {}, error() {}, exit() {} },
+        cfg: {},
+        env: {
+          ...process.env,
+          OPENCLAW_STATE_DIR: tmp,
+        },
+      },
+      { paths: [selectedFile] },
+    );
+
+    expect(findings?.map((finding) => finding.path)).toEqual([selectedFile]);
   });
 
   it("validates configured plugin install repairs against repaired config metadata", async () => {
