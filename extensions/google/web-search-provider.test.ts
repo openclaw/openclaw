@@ -325,8 +325,8 @@ describe("google web search provider", () => {
 
     const body = parseGeminiFetchBody(mockFetch);
     expect(body.tools?.[0]?.google_search?.timeRangeFilter).toEqual({
-      startTime: "2026-04-08T12:00:00.000Z",
-      endTime: "2026-04-15T12:00:00.000Z",
+      startTime: "2026-04-08T12:00:00Z",
+      endTime: "2026-04-15T12:00:00Z",
     });
   });
 
@@ -359,7 +359,7 @@ describe("google web search provider", () => {
     const body = parseGeminiFetchBody(mockFetch);
     expect(body.tools?.[0]?.google_search?.timeRangeFilter).toEqual({
       startTime: "2026-04-01T00:00:00Z",
-      endTime: "2026-05-01T00:00:00.000Z",
+      endTime: "2026-05-01T00:00:00Z",
     });
   });
 
