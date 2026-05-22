@@ -416,6 +416,7 @@ describe("doctor health contributions", () => {
     );
     expect(mocks.note).toHaveBeenCalledWith(expect.stringContaining("config:meta"), "Doctor diffs");
     expect(mocks.note.mock.calls.map(([, title]) => title)).toEqual([
+      "Doctor findings",
       "Doctor changes",
       "Doctor effects",
       "Doctor diffs",
@@ -778,6 +779,28 @@ describe("doctor health contributions", () => {
         }),
       ]),
     });
+  });
+
+  it("prints structured detect-only findings during human dry-run previews", async () => {
+    const contribution = requireDoctorContribution("doctor:gateway-config");
+    const ctx = {
+      cfg: {},
+      configResult: { cfg: {}, sourceLastTouchedVersion: "2026.5.2-test" },
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: { dryRun: true },
+      env: {},
+      cfgForPersistence: {},
+      configPath: "/tmp/fake-openclaw.json",
+    } as Parameters<typeof runDoctorHealthContribution>[0];
+
+    await runDoctorHealthContribution(ctx, contribution);
+
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("warning:core/doctor/gateway-config (gateway.mode)"),
+      "Doctor findings",
+    );
   });
 
   it("formats unconverted preview warnings with conversion targets", () => {
