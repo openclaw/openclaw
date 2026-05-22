@@ -113,10 +113,14 @@ runs:
         append_pnpm_option_arg PNPM_CONFIG_MODULES_DIR modules-dir
         append_pnpm_option_arg PNPM_CONFIG_NETWORK_CONCURRENCY network-concurrency
         append_pnpm_option_arg PNPM_CONFIG_VIRTUAL_STORE_DIR virtual-store-dir
+        if [ -n "${PNPM_CONFIG_MODULES_DIR:-}" ]; then
+          mkdir -p "$PNPM_CONFIG_MODULES_DIR"
+          ln -sfn . "$PNPM_CONFIG_MODULES_DIR/node_modules"
+        fi
         pnpm "${install_args[@]}" || pnpm "${install_args[@]}"
         if [ -n "${PNPM_CONFIG_MODULES_DIR:-}" ]; then
           rm -rf node_modules
-          ln -s "$PNPM_CONFIG_MODULES_DIR" node_modules
+          ln -sfn "$PNPM_CONFIG_MODULES_DIR" node_modules
           ln -sfn . "$PNPM_CONFIG_MODULES_DIR/node_modules"
         fi
 
