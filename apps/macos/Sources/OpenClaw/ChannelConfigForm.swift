@@ -335,8 +335,7 @@ struct ConfigSchemaForm: View {
     private func renderAdditionalProperties(
         _ schema: ConfigSchemaNode,
         path: ConfigPath,
-        value: Any?,
-    ) -> some View
+        value: Any?) -> some View
     {
         Group {
             if let additionalSchema = schema.additionalProperties {

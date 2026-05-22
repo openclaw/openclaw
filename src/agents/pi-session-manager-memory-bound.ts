@@ -1,7 +1,6 @@
 import {
   SessionManager,
   type CompactionEntry,
-  type CustomEntry,
   type FileEntry,
   type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
