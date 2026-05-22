@@ -3696,6 +3696,69 @@ describe("gateway agent handler chat.abort integration", () => {
     });
   });
 
+  it("preserves stop-command reason when /stop lands during the accepted ack yield", async () => {
+    prime();
+    mocks.agentCommand.mockReturnValueOnce(new Promise(() => {}));
+
+    const context = makeContext();
+    const respond = vi.fn();
+    const runId = "idem-stop-before-dispatch";
+    await invokeAgent(
+      {
+        message: "hi",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        idempotencyKey: runId,
+      },
+      { context, respond, reqId: runId, flushDispatch: false },
+    );
+
+    expectRecordFields(mockCallArg(respond, 0, 1), {
+      runId,
+      sessionKey: "agent:main:main",
+      status: "accepted",
+    });
+    expect(context.chatAbortControllers.has(runId)).toBe(true);
+
+    const stopRespond = vi.fn();
+    await chatHandlers["chat.send"]({
+      params: {
+        sessionKey: "agent:main:main",
+        message: "/stop",
+        idempotencyKey: "idem-stop-command-before-dispatch",
+      },
+      respond: stopRespond as never,
+      context,
+      req: { type: "req", id: "stop-req", method: "chat.send" },
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expectRecordFields(mockCallArg(stopRespond, 0, 1), {
+      aborted: true,
+      runIds: [runId],
+    });
+    expect(context.chatAbortControllers.has(runId)).toBe(false);
+
+    await flushScheduledDispatchStep();
+
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, {
+      runId,
+      status: "timeout",
+      summary: "aborted",
+      stopReason: "stop",
+    });
+    const finalResponse = respond.mock.calls.find(
+      (call: unknown[]) => (call[1] as { status?: unknown } | undefined)?.status === "timeout",
+    );
+    expectRecordFields(requireValue(finalResponse, "terminal response missing")[1], {
+      runId,
+      status: "timeout",
+      stopReason: "stop",
+    });
+  });
+
   it("does not dispatch when chat.abort lands during pre-accept setup", async () => {
     prime();
     const requestedSessionKey = "agent:main:legacy-main";

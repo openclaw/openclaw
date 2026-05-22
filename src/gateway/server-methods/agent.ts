@@ -100,6 +100,7 @@ import {
 } from "../../utils/message-channel.js";
 import { resolveAssistantIdentity } from "../assistant-identity.js";
 import {
+  type ChatAbortControllerEntry,
   registerChatAbortController,
   resolveAgentRunExpiresAtMs,
   updateChatRunProvider,
@@ -545,6 +546,10 @@ function setAbortedAgentDedupeEntries(params: {
       },
     },
   });
+}
+
+function resolveAbortedAgentStopReason(entry?: ChatAbortControllerEntry): string {
+  return entry?.abortStopReason?.trim() || "rpc";
 }
 
 function deleteGatewayDedupeEntries(params: {
@@ -1669,11 +1674,12 @@ export const agentHandlers: GatewayRequestHandlers = {
         let dispatched = false;
         try {
           if (activeRunAbort.controller.signal.aborted) {
+            const stopReason = resolveAbortedAgentStopReason(activeRunAbort.entry);
             setAbortedAgentDedupeEntries({
               dedupe: context.dedupe,
               keys: agentDedupeKeys,
               runId,
-              stopReason: "rpc",
+              stopReason,
             });
             respond(
               true,
@@ -1681,7 +1687,7 @@ export const agentHandlers: GatewayRequestHandlers = {
                 runId,
                 status: "timeout" as const,
                 summary: "aborted",
-                stopReason: "rpc",
+                stopReason,
               },
               undefined,
               { runId },
