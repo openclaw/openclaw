@@ -1086,6 +1086,17 @@ export function resolveUpdatedGatewayRestartPort(params: {
   return resolveGatewayPort(params.config, params.serviceEnv ?? params.processEnv ?? process.env);
 }
 
+export function resolvePostUpdateServiceStateReadEnv(params: {
+  updateMode: UpdateRunResult["mode"];
+  processEnv?: NodeJS.ProcessEnv;
+  prePackageServiceEnv?: NodeJS.ProcessEnv;
+}): NodeJS.ProcessEnv {
+  if (isPackageManagerUpdateMode(params.updateMode) && params.prePackageServiceEnv) {
+    return params.prePackageServiceEnv;
+  }
+  return params.processEnv ?? process.env;
+}
+
 type UpdateDryRunPreview = {
   dryRun: true;
   root: string;
@@ -3502,7 +3513,11 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   if (shouldRestart) {
     try {
       const serviceState = await readGatewayServiceState(resolveGatewayService(), {
-        env: process.env,
+        env: resolvePostUpdateServiceStateReadEnv({
+          updateMode: resultWithPostUpdate.mode,
+          processEnv: process.env,
+          prePackageServiceEnv: prePackageServiceStop?.serviceEnv,
+        }),
       });
       if (
         shouldPrepareUpdatedInstallRestart({

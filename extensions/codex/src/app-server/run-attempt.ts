@@ -4,11 +4,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import {
   assembleHarnessContextEngine,
+  assertContextEngineHostSupport,
   bootstrapHarnessContextEngine,
   buildAgentHookContextChannelFields,
   buildHarnessContextEngineRuntimeContext,
   buildHarnessContextEngineRuntimeContextFromUsage,
   buildEmbeddedAttemptToolRunContext,
+  CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
   clearActiveEmbeddedRun,
   compactContextEngineWithSafetyTimeout,
   embeddedAgentLog,
@@ -114,6 +116,7 @@ import {
   buildCodexNativeHookRelayConfig,
   CODEX_NATIVE_HOOK_RELAY_EVENTS,
 } from "./native-hook-relay.js";
+import { registerCodexNativeSubagentMonitor } from "./native-subagent-monitor.js";
 import {
   describeCodexNotificationCorrelation,
   isCodexNotificationForTurn,
@@ -961,6 +964,13 @@ export async function runCodexAppServerAttempt(
   const activeContextEngine = isActiveHarnessContextEngine(params.contextEngine)
     ? params.contextEngine
     : undefined;
+  if (activeContextEngine) {
+    assertContextEngineHostSupport({
+      contextEngine: activeContextEngine,
+      operation: "agent-run",
+      host: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
+    });
+  }
   const hookChannelId = resolveCodexAppServerHookChannelId(params, sandboxSessionKey);
   let yieldDetected = false;
   const tools = await buildDynamicTools({
@@ -2163,6 +2173,14 @@ export async function runCodexAppServerAttempt(
     return notificationQueue;
   };
 
+  registerCodexNativeSubagentMonitor({
+    client,
+    parentThreadId: thread.threadId,
+    requesterSessionKey: params.sessionKey,
+    taskRuntimeScope: params.agentHarnessTaskRuntimeScope,
+    agentId: params.agentId,
+    codexHome: appServer.start.env?.CODEX_HOME ?? resolveCodexAppServerHomeDir(agentDir),
+  });
   const notificationCleanup = client.addNotificationHandler(enqueueNotification);
   const requestCleanup = client.addRequestHandler(async (request) => {
     let armCompletionWatchOnResponse = false;

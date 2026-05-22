@@ -701,6 +701,62 @@
   color: var(--text);
 }
 
+.agent-chat__voice-turns {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 4px 8px;
+  background: transparent;
+}
+
+.agent-chat__voice-turn {
+  display: grid;
+  grid-template-columns: minmax(56px, max-content) minmax(0, 1fr) 12px;
+  gap: 8px;
+  align-items: baseline;
+  max-width: min(100%, 780px);
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg) 82%, transparent);
+}
+
+.agent-chat__voice-turn--user {
+  align-self: flex-end;
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg));
+}
+
+.agent-chat__voice-turn--assistant {
+  align-self: flex-start;
+}
+
+.agent-chat__voice-turn-speaker {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-chat__voice-turn-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.agent-chat__voice-turn-stream {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--accent);
+  opacity: 0.7;
+}
+
 .agent-chat__talk-options {
   display: flex;
   align-items: flex-start;

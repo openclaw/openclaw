@@ -92,6 +92,13 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain(
       "package_artifact_name: ${{ needs.resolve_package.outputs.package_artifact_name }}",
     );
+    expect(workflow).toContain("package_integrity:");
+    expect(workflow).toContain("name: Package integrity");
+    expect(workflow).toContain(
+      "node scripts/check-openclaw-package-tarball.mjs .artifacts/docker-e2e-package/openclaw-current.tgz",
+    );
+    expect(workflow).toContain("needs: [resolve_package, package_integrity]");
+    expect(workflow).toContain("package_integrity=${PACKAGE_INTEGRITY_RESULT}");
   });
 
   it("offers bounded product profiles and can run Telegram against the resolved artifact", () => {
@@ -699,7 +706,9 @@ describe("package artifact reuse", () => {
     const workflow = readFileSync(PACKAGE_ACCEPTANCE_WORKFLOW, "utf8");
 
     expect(workflow).toContain("package_telegram:");
-    expect(workflow).toContain("needs: [resolve_package, docker_acceptance, package_telegram]");
+    expect(workflow).toContain(
+      "needs: [resolve_package, package_integrity, docker_acceptance, package_telegram]",
+    );
     expect(workflow).toContain("PACKAGE_TELEGRAM_RESULT:");
     expect(workflow).toContain("package_telegram=${PACKAGE_TELEGRAM_RESULT}");
     expect(workflow).not.toContain("npm_telegram:");

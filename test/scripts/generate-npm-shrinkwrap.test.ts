@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   collectOverrideViolations,
+  collectPnpmLockViolations,
   disableShrinkwrappedOverrideConflictSources,
   exactOverrideRulesFromOverrides,
   exactVersionFromOverrideSpec,
+  parsePnpmPackageKey,
   parseLockPackagePath,
 } from "../../scripts/generate-npm-shrinkwrap.mjs";
 
@@ -29,6 +31,18 @@ describe("generate-npm-shrinkwrap", () => {
         path: "node_modules/@earendil-works/pi-coding-agent/node_modules/@anthropic-ai/sdk",
       },
     ]);
+  });
+
+  it("parses pnpm lock package keys", () => {
+    expect(parsePnpmPackageKey("@aws-sdk/core@3.974.12")).toEqual({
+      name: "@aws-sdk/core",
+      version: "3.974.12",
+    });
+    expect(parsePnpmPackageKey("react-dom@19.2.4(react@19.2.4)")).toEqual({
+      name: "react-dom",
+      version: "19.2.4",
+    });
+    expect(parsePnpmPackageKey("invalid")).toBeNull();
   });
 
   it("disables embedded shrinkwraps that hide workspace overrides", () => {
@@ -66,5 +80,27 @@ describe("generate-npm-shrinkwrap", () => {
     expect(
       lockfile.packages["node_modules/@earendil-works/pi-coding-agent/node_modules/protobufjs"],
     ).toBeUndefined();
+  });
+
+  it("detects shrinkwrap packages that bypass the pnpm lock", () => {
+    const lockfile = {
+      packages: {
+        "": {},
+        "node_modules/react": {
+          version: "19.2.6",
+        },
+        "node_modules/@nolyfill/domexception": {
+          version: "1.0.28",
+        },
+      },
+    };
+    const pnpmPackages = new Set(["react@19.2.4", "@nolyfill/domexception@1.0.28"]);
+
+    expect(collectPnpmLockViolations(lockfile, pnpmPackages)).toEqual([
+      {
+        packageKey: "react@19.2.6",
+        path: "node_modules/react",
+      },
+    ]);
   });
 });

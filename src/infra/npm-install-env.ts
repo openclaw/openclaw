@@ -110,8 +110,16 @@ function readNpmGlobalConfigPath(
 }
 
 function resolveScopedProjectNpmrc(scope: NpmFreshnessConfigScope): string | null {
-  const cwd = scope.npmConfigCwd?.trim() || process.cwd();
-  return cwd ? path.join(cwd, ".npmrc") : null;
+  const scopedCwd = scope.npmConfigCwd?.trim();
+  if (scopedCwd) {
+    return path.join(scopedCwd, ".npmrc");
+  }
+  try {
+    const cwd = process.cwd();
+    return cwd ? path.join(cwd, ".npmrc") : null;
+  } catch {
+    return null;
+  }
 }
 
 function resolveScopedGlobalNpmrc(scope: NpmFreshnessConfigScope): string | null {

@@ -181,7 +181,10 @@ export function createProviderAuthChecker(params: {
   };
 }
 
-export async function warmCurrentProviderAuthState(cfg: OpenClawConfig): Promise<void> {
+export async function warmCurrentProviderAuthState(
+  cfg: OpenClawConfig,
+  options: { isCancelled?: () => boolean } = {},
+): Promise<void> {
   // Claim a fresh generation; any concurrent warm or clear bumps this and
   // turns our published state stale.
   currentProviderAuthStateGeneration += 1;
@@ -226,7 +229,7 @@ export async function warmCurrentProviderAuthState(cfg: OpenClawConfig): Promise
       providers: state,
     });
   }
-  if (ownGeneration !== currentProviderAuthStateGeneration) {
+  if (options.isCancelled?.() || ownGeneration !== currentProviderAuthStateGeneration) {
     // A newer warm or clear ran while we were building; skip publication so
     // the newer answer wins.
     return;

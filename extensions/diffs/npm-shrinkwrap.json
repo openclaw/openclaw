@@ -422,9 +422,9 @@
       }
     },
     "node_modules/react": {
-      "version": "19.2.6",
-      "resolved": "https://registry.npmjs.org/react/-/react-19.2.6.tgz",
-      "integrity": "sha512-sfWGGfavi0xr8Pg0sVsyHMAOziVYKgPLNrS7ig+ivMNb3wbCBw3KxtflsGBAwD3gYQlE/AEZsTLgToRrSCjb0Q==",
+      "version": "19.2.4",
+      "resolved": "https://registry.npmjs.org/react/-/react-19.2.4.tgz",
+      "integrity": "sha512-9nfp2hYpCwOjAN+8TZFGhtWEwgvWHXqESH8qT89AT/lWklpLON22Lc8pEtnpsZz7VmawabSU0gCjnj8aC0euHQ==",
       "license": "MIT",
       "peer": true,
       "engines": {
@@ -432,16 +432,16 @@
       }
     },
     "node_modules/react-dom": {
-      "version": "19.2.6",
-      "resolved": "https://registry.npmjs.org/react-dom/-/react-dom-19.2.6.tgz",
-      "integrity": "sha512-0prMI+hvBbPjsWnxDLxlCGyM8PN6UuWjEUCYmZhO67xIV9Xasa/r/vDnq+Xyq4Lo27g8QSbO5YzARu0D1Sps3g==",
+      "version": "19.2.4",
+      "resolved": "https://registry.npmjs.org/react-dom/-/react-dom-19.2.4.tgz",
+      "integrity": "sha512-AXJdLo8kgMbimY95O2aKQqsz2iWi9jMgKJhRBAxECE4IFxfcazB2LmzloIoibJI3C12IlY20+KFaLv+71bUJeQ==",
       "license": "MIT",
       "peer": true,
       "dependencies": {
         "scheduler": "^0.27.0"
       },
       "peerDependencies": {
-        "react": "^19.2.6"
+        "react": "^19.2.4"
       }
     },
     "node_modules/regex": {

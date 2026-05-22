@@ -22,7 +22,6 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { resolveCodexLocalRuntimeAttribution } from "./local-runtime-attribution.js";
-import { CodexNativeSubagentTaskMirror } from "./native-subagent-task-mirror.js";
 import {
   readCodexNotificationThreadId,
   readCodexNotificationTurnId,
@@ -169,33 +168,18 @@ export class CodexAppServerEventProjector {
   private guardianReviewCount = 0;
   private completedCompactionCount = 0;
   private latestRateLimits: JsonValue | undefined;
-  private readonly nativeSubagentTaskMirror: CodexNativeSubagentTaskMirror;
 
   constructor(
     private readonly params: EmbeddedRunAttemptParams,
     private readonly threadId: string,
     private readonly turnId: string,
     private readonly options: CodexAppServerEventProjectorOptions = {},
-  ) {
-    this.nativeSubagentTaskMirror = new CodexNativeSubagentTaskMirror({
-      parentThreadId: threadId,
-      requesterSessionKey: params.sessionKey,
-      agentId: params.agentId,
-    });
-  }
+  ) {}
 
   async handleNotification(notification: CodexServerNotification): Promise<void> {
     const params = isJsonObject(notification.params) ? notification.params : undefined;
     if (!params) {
       return;
-    }
-    try {
-      this.nativeSubagentTaskMirror.handleNotification(notification);
-    } catch (error) {
-      embeddedAgentLog.warn("Failed to mirror Codex native subagent lifecycle event", {
-        method: notification.method,
-        error: formatErrorMessage(error),
-      });
     }
     if (notification.method === "account/rateLimits/updated") {
       this.latestRateLimits = params;
@@ -1234,7 +1218,7 @@ export class CodexAppServerEventProjector {
   }
 
   private recordNativeToolTranscriptCall(item: CodexThreadItem | undefined): void {
-    if (!item || !shouldSynthesizeToolProgressForItem(item)) {
+    if (!item || !shouldRecordNativeToolTranscript(item)) {
       return;
     }
     const name = itemName(item);
@@ -1249,7 +1233,7 @@ export class CodexAppServerEventProjector {
   }
 
   private recordNativeToolTranscriptResult(item: CodexThreadItem | undefined): void {
-    if (!item || !shouldSynthesizeToolProgressForItem(item)) {
+    if (!item || !shouldRecordNativeToolTranscript(item)) {
       return;
     }
     const name = itemName(item);
@@ -1774,6 +1758,10 @@ function shouldSynthesizeToolProgressForItem(item: CodexThreadItem): boolean {
     default:
       return false;
   }
+}
+
+function shouldRecordNativeToolTranscript(item: CodexThreadItem): boolean {
+  return shouldSynthesizeToolProgressForItem(item) && item.type !== "webSearch";
 }
 
 function isMutatingNativeToolItem(item: CodexThreadItem): boolean {

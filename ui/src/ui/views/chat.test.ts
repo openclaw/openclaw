@@ -546,6 +546,32 @@ afterEach(() => {
 });
 
 describe("chat loading skeleton", () => {
+  it("renders realtime Talk transcript as ordered voice turns", () => {
+    const container = renderChatView({
+      realtimeTalkActive: true,
+      realtimeTalkConversation: [
+        { id: "u1", role: "user", text: "Turn off the lights", isStreaming: false },
+        { id: "a1", role: "assistant", text: "Checking", isStreaming: true },
+        { id: "u2", role: "user", text: "Second request", isStreaming: false },
+      ],
+    });
+
+    const turns = [...container.querySelectorAll(".agent-chat__voice-turn")];
+    expect(turns.map((turn) => turn.getAttribute("data-role"))).toEqual([
+      "user",
+      "assistant",
+      "user",
+    ]);
+    expect(turns.map((turn) => turn.textContent?.replace(/\s+/g, " ").trim())).toEqual([
+      "You Turn off the lights",
+      "Val Checking",
+      "You Second request",
+    ]);
+    expect(container.querySelector(".chat-thread-inner .agent-chat__voice-turns")).not.toBeNull();
+    expect(container.querySelector(".agent-chat__input .agent-chat__voice-turns")).toBeNull();
+    expect(container.querySelector(".agent-chat__welcome")).toBeNull();
+  });
+
   it("shows the skeleton while the initial history load has no rendered content", () => {
     const container = renderChatView({ loading: true });
 
