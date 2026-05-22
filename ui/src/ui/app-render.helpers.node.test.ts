@@ -165,6 +165,10 @@ function createChatSessionState(overrides: Partial<AppViewState> = {}) {
   return state;
 }
 
+function assistantTextMessage(text: string) {
+  return { role: "assistant", content: [{ type: "text", text }] };
+}
+
 /* ================================================================
  *  parseSessionKey – low-level key → type / fallback mapping
  * ================================================================ */
@@ -1037,40 +1041,17 @@ describe("switchChatSession", () => {
   });
 
   it("restores visible messages when switching back before history reloads", () => {
-    const settings = createSettings();
-    const mainMessages = [{ role: "assistant", content: [{ type: "text", text: "main report" }] }];
-    const otherMessages = [{ role: "assistant", content: [{ type: "text", text: "other reply" }] }];
-    const state = {
+    const mainMessages = [assistantTextMessage("main report")];
+    const otherMessages = [assistantTextMessage("other reply")];
+    const state = createChatSessionState({
       sessionKey: "main",
       chatMessage: "",
       chatAttachments: [],
       chatMessages: mainMessages,
-      chatToolMessages: [],
-      chatStreamSegments: [],
-      chatThinkingLevel: null,
-      chatStream: null,
-      chatSideResult: null,
-      lastError: null,
-      compactionStatus: null,
-      fallbackStatus: null,
-      chatAvatarUrl: null,
       chatQueue: [],
       chatQueueBySession: {},
       chatMessagesBySession: {},
-      chatRunId: null,
-      sessionsShowArchived: false,
-      chatSideResultTerminalRuns: new Set<string>(),
-      chatStreamStartedAt: null,
-      settings,
-      announceSessionSwitch: vi.fn(),
-      applySettings(next: typeof settings) {
-        state.settings = next;
-      },
-      loadAssistantIdentity: vi.fn(),
-      resetToolStream: vi.fn(),
-      resetChatScroll: vi.fn(),
-      resetChatInputHistoryNavigation: vi.fn(),
-    } as unknown as AppViewState;
+    });
 
     refreshChatAvatarMock.mockResolvedValue(undefined);
     refreshSlashCommandsMock.mockResolvedValue(undefined);
@@ -1087,30 +1068,16 @@ describe("switchChatSession", () => {
   });
 
   it("restores visible messages across configured default-session aliases", () => {
-    const settings = createSettings();
-    const mainMessages = [{ role: "assistant", content: [{ type: "text", text: "ops report" }] }];
-    const otherMessages = [{ role: "assistant", content: [{ type: "text", text: "other reply" }] }];
-    const state = {
+    const mainMessages = [assistantTextMessage("ops report")];
+    const otherMessages = [assistantTextMessage("other reply")];
+    const state = createChatSessionState({
       sessionKey: "home",
       chatMessage: "",
       chatAttachments: [],
       chatMessages: mainMessages,
-      chatToolMessages: [],
-      chatStreamSegments: [],
-      chatThinkingLevel: null,
-      chatStream: null,
-      chatSideResult: null,
-      lastError: null,
-      compactionStatus: null,
-      fallbackStatus: null,
-      chatAvatarUrl: null,
       chatQueue: [],
       chatQueueBySession: {},
       chatMessagesBySession: {},
-      chatRunId: null,
-      sessionsShowArchived: false,
-      chatSideResultTerminalRuns: new Set<string>(),
-      chatStreamStartedAt: null,
       hello: {
         snapshot: {
           sessionDefaults: {
@@ -1118,17 +1085,8 @@ describe("switchChatSession", () => {
             mainKey: "home",
           },
         },
-      },
-      settings,
-      announceSessionSwitch: vi.fn(),
-      applySettings(next: typeof settings) {
-        state.settings = next;
-      },
-      loadAssistantIdentity: vi.fn(),
-      resetToolStream: vi.fn(),
-      resetChatScroll: vi.fn(),
-      resetChatInputHistoryNavigation: vi.fn(),
-    } as unknown as AppViewState;
+      } as AppViewState["hello"],
+    });
 
     refreshChatAvatarMock.mockResolvedValue(undefined);
     refreshSlashCommandsMock.mockResolvedValue(undefined);
@@ -1148,42 +1106,17 @@ describe("switchChatSession", () => {
   });
 
   it("restores visible messages across plain and canonical non-main keys", () => {
-    const settings = createSettings();
-    const projectMessages = [
-      { role: "assistant", content: [{ type: "text", text: "project report" }] },
-    ];
-    const mainMessages = [{ role: "assistant", content: [{ type: "text", text: "main reply" }] }];
-    const state = {
+    const projectMessages = [assistantTextMessage("project report")];
+    const mainMessages = [assistantTextMessage("main reply")];
+    const state = createChatSessionState({
       sessionKey: "project",
       chatMessage: "",
       chatAttachments: [],
       chatMessages: projectMessages,
-      chatToolMessages: [],
-      chatStreamSegments: [],
-      chatThinkingLevel: null,
-      chatStream: null,
-      chatSideResult: null,
-      lastError: null,
-      compactionStatus: null,
-      fallbackStatus: null,
-      chatAvatarUrl: null,
       chatQueue: [],
       chatQueueBySession: {},
       chatMessagesBySession: {},
-      chatRunId: null,
-      sessionsShowArchived: false,
-      chatSideResultTerminalRuns: new Set<string>(),
-      chatStreamStartedAt: null,
-      settings,
-      announceSessionSwitch: vi.fn(),
-      applySettings(next: typeof settings) {
-        state.settings = next;
-      },
-      loadAssistantIdentity: vi.fn(),
-      resetToolStream: vi.fn(),
-      resetChatScroll: vi.fn(),
-      resetChatInputHistoryNavigation: vi.fn(),
-    } as unknown as AppViewState;
+    });
 
     refreshChatAvatarMock.mockResolvedValue(undefined);
     refreshSlashCommandsMock.mockResolvedValue(undefined);

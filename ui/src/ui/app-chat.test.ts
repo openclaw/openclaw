@@ -1276,6 +1276,14 @@ describe("handleSendChat", () => {
   });
 
   it("clears BTW side results when /clear resets chat history", async () => {
+    const cachedSessionKeys = [
+      "home",
+      "agent:main:home",
+      "agent:ops:main",
+      "agent:ops:home",
+      "agent:main:main",
+    ];
+    const cachedMessage = [{ role: "user", content: "hello", timestamp: 1 }];
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.reset") {
         return { ok: true };
@@ -1289,14 +1297,10 @@ describe("handleSendChat", () => {
       client: { request } as unknown as ChatHost["client"],
       sessionKey: "home",
       chatMessage: "/clear",
-      chatMessages: [{ role: "user", content: "hello", timestamp: 1 }],
-      chatMessagesBySession: {
-        home: [{ role: "user", content: "hello", timestamp: 1 }],
-        "agent:main:home": [{ role: "user", content: "hello", timestamp: 1 }],
-        "agent:ops:main": [{ role: "user", content: "hello", timestamp: 1 }],
-        "agent:ops:home": [{ role: "user", content: "hello", timestamp: 1 }],
-        "agent:main:main": [{ role: "user", content: "hello", timestamp: 1 }],
-      },
+      chatMessages: cachedMessage,
+      chatMessagesBySession: Object.fromEntries(
+        cachedSessionKeys.map((key) => [key, cachedMessage]),
+      ),
       hello: {
         snapshot: {
           sessionDefaults: {
@@ -1321,11 +1325,9 @@ describe("handleSendChat", () => {
 
     expect(request).toHaveBeenCalledWith("sessions.reset", { key: "home" });
     expect(host.chatMessages).toStrictEqual([]);
-    expect(host.chatMessagesBySession?.home).toBeUndefined();
-    expect(host.chatMessagesBySession?.["agent:main:home"]).toBeUndefined();
-    expect(host.chatMessagesBySession?.["agent:ops:main"]).toBeUndefined();
-    expect(host.chatMessagesBySession?.["agent:ops:home"]).toBeUndefined();
-    expect(host.chatMessagesBySession?.["agent:main:main"]).toBeUndefined();
+    for (const key of cachedSessionKeys) {
+      expect(host.chatMessagesBySession?.[key]).toBeUndefined();
+    }
     expect(host.chatSideResult).toBeNull();
     expect(host.chatSideResultTerminalRuns?.size).toBe(0);
     expect(host.chatRunId).toBeNull();
