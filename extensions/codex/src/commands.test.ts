@@ -21,6 +21,11 @@ import {
   resetCodexDiagnosticsFeedbackStateForTests,
   type CodexCommandDeps,
 } from "./command-handlers.js";
+import type {
+  CodexPluginsConfigBlock,
+  CodexPluginConfigEntry,
+  CodexPluginsManagementIO,
+} from "./command-plugins-management.js";
 import { handleCodexCommand } from "./commands.js";
 
 let tempDir: string;
@@ -44,6 +49,18 @@ function createContext(
     getCurrentConversationBinding: async () => null,
     ...overrides,
   };
+}
+
+function createSandboxedContext(
+  args: string,
+  sessionFile?: string,
+  overrides: Partial<PluginCommandContext> = {},
+): PluginCommandContext {
+  return createContext(args, sessionFile, {
+    config: { agents: { defaults: { sandbox: { mode: "all" } } } },
+    sessionKey: "sandboxed-session",
+    ...overrides,
+  } as Partial<PluginCommandContext>);
 }
 
 function createDeps(overrides: Partial<CodexCommandDeps> = {}): Partial<CodexCommandDeps> {
@@ -70,6 +87,27 @@ function createDeps(overrides: Partial<CodexCommandDeps> = {}): Partial<CodexCom
     ),
     safeCodexControlRequest: vi.fn(),
     ...overrides,
+  };
+}
+
+function inMemoryCodexPluginsIO(
+  initial: Record<string, CodexPluginConfigEntry> = {},
+  options: { enabled?: boolean } = { enabled: true },
+): CodexPluginsManagementIO & {
+  current: () => Record<string, CodexPluginConfigEntry>;
+  currentConfig: () => CodexPluginsConfigBlock;
+} {
+  const store: CodexPluginsConfigBlock = {
+    enabled: options.enabled,
+    plugins: JSON.parse(JSON.stringify(initial)),
+  };
+  return {
+    current: () => JSON.parse(JSON.stringify(store.plugins ?? {})),
+    currentConfig: () => JSON.parse(JSON.stringify(store)),
+    readConfig: () => Promise.resolve(JSON.parse(JSON.stringify(store))),
+    mutate: async (update) => {
+      update(store);
+    },
   };
 }
 
@@ -216,6 +254,46 @@ describe("codex command", () => {
     expect(result.text).not.toContain("<@U123>");
   });
 
+  it("lists Codex sub-plugins through the /codex plugins command surface", async () => {
+    const codexPluginsManagementIo = inMemoryCodexPluginsIO({
+      "google-calendar": {
+        enabled: true,
+        marketplaceName: "openai-curated",
+        pluginName: "google-calendar",
+      },
+    });
+
+    const result = await handleCodexCommand(createContext("plugins list"), {
+      deps: createDeps({ codexPluginsManagementIo }),
+    });
+
+    expectResultTextContains(result, "ON   google-calendar");
+    expectResultTextContains(result, "openclaw.json");
+  });
+
+  it("enables and disables Codex sub-plugins through the /codex plugins command surface", async () => {
+    const codexPluginsManagementIo = inMemoryCodexPluginsIO({
+      "google-calendar": {
+        enabled: true,
+        marketplaceName: "openai-curated",
+        pluginName: "google-calendar",
+      },
+    });
+
+    const disabled = await handleCodexCommand(createContext("plugins disable google-calendar"), {
+      deps: createDeps({ codexPluginsManagementIo }),
+    });
+    expectResultTextContains(disabled, "google-calendar: disabled in openclaw.json");
+    expect(codexPluginsManagementIo.current()["google-calendar"]?.enabled).toBe(false);
+
+    const enabled = await handleCodexCommand(createContext("plugins enable google-calendar"), {
+      deps: createDeps({ codexPluginsManagementIo }),
+    });
+    expectResultTextContains(enabled, "google-calendar: enabled in openclaw.json");
+    expect(codexPluginsManagementIo.currentConfig().enabled).toBe(true);
+    expect(codexPluginsManagementIo.current()["google-calendar"]?.enabled).toBe(true);
+  });
+
   it("attaches the current session to an existing Codex thread", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const requests: Array<{ method: string; params: unknown }> = [];
@@ -263,6 +341,147 @@ describe("codex command", () => {
     });
     expect(codexControlRequest).not.toHaveBeenCalled();
     expect(writeCodexAppServerBinding).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "bind",
+    "resume thread-123",
+    "steer keep going",
+    "steer keep going --help",
+    "model --help",
+    "model gpt-5.5",
+    "fast on",
+    "permissions yolo",
+    "compact",
+    "review",
+  ])("blocks /codex %s in sandboxed sessions before native Codex execution", async (args) => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const codexControlRequest = vi.fn();
+    const startCodexConversationThread = vi.fn();
+    const steerCodexConversationTurn = vi.fn();
+    const setCodexConversationModel = vi.fn();
+    const setCodexConversationFastMode = vi.fn();
+    const setCodexConversationPermissions = vi.fn();
+    const stopCodexConversationTurn = vi.fn();
+
+    const result = await handleCodexCommand(createSandboxedContext(args, sessionFile), {
+      deps: createDeps({
+        codexControlRequest,
+        startCodexConversationThread,
+        steerCodexConversationTurn,
+        setCodexConversationModel,
+        setCodexConversationFastMode,
+        setCodexConversationPermissions,
+        stopCodexConversationTurn,
+      }),
+    });
+
+    expect(result.text).toContain(
+      "Codex-native /codex " +
+        args.split(/\s+/u)[0] +
+        " is unavailable because OpenClaw sandboxing is active for this session.",
+    );
+    expect(codexControlRequest).not.toHaveBeenCalled();
+    expect(startCodexConversationThread).not.toHaveBeenCalled();
+    expect(steerCodexConversationTurn).not.toHaveBeenCalled();
+    expect(setCodexConversationModel).not.toHaveBeenCalled();
+    expect(setCodexConversationFastMode).not.toHaveBeenCalled();
+    expect(setCodexConversationPermissions).not.toHaveBeenCalled();
+    expect(stopCodexConversationTurn).not.toHaveBeenCalled();
+  });
+
+  it("still returns pre-native usage for malformed sandboxed native Codex commands", async () => {
+    const startCodexConversationThread = vi.fn();
+    const setCodexConversationModel = vi.fn();
+
+    await expect(
+      handleCodexCommand(createSandboxedContext("bind --help"), {
+        deps: createDeps({ startCodexConversationThread }),
+      }),
+    ).resolves.toEqual({
+      text: "Usage: /codex bind [thread-id] [--cwd <path>] [--model <model>] [--provider <provider>]",
+    });
+    expect(startCodexConversationThread).not.toHaveBeenCalled();
+
+    await expect(
+      handleCodexCommand(createSandboxedContext("model gpt-5.5 --help"), {
+        deps: createDeps({ setCodexConversationModel }),
+      }),
+    ).resolves.toEqual({
+      text: "Usage: /codex model <model>",
+    });
+    expect(setCodexConversationModel).not.toHaveBeenCalled();
+
+    await expect(
+      handleCodexCommand(createSandboxedContext("resume"), { deps: createDeps() }),
+    ).resolves.toEqual({
+      text: "Usage: /codex resume <thread-id>",
+    });
+
+    const resolveCodexCliSessionForBindingOnNode = vi.fn();
+    await expect(
+      handleCodexCommand(createSandboxedContext("resume cli-1 --host node-1"), {
+        deps: createDeps({ resolveCodexCliSessionForBindingOnNode }),
+      }),
+    ).resolves.toEqual({
+      text: "Usage: /codex resume <session-id> --host <node> --bind here",
+    });
+    expect(resolveCodexCliSessionForBindingOnNode).not.toHaveBeenCalled();
+
+    await expect(
+      handleCodexCommand(createSandboxedContext("resume cli-1 --host node-1 --bind here extra"), {
+        deps: createDeps({ resolveCodexCliSessionForBindingOnNode }),
+      }),
+    ).resolves.toEqual({
+      text: "Usage: /codex resume <thread-id>\nUsage: /codex resume <session-id> --host <node> --bind here",
+    });
+    expect(resolveCodexCliSessionForBindingOnNode).not.toHaveBeenCalled();
+
+    await expect(
+      handleCodexCommand(createSandboxedContext("steer", path.join(tempDir, "session.jsonl")), {
+        deps: createDeps(),
+      }),
+    ).resolves.toEqual({
+      text: "Usage: /codex steer <message>",
+    });
+
+    await expect(
+      handleCodexCommand(createSandboxedContext("stop now"), {
+        deps: createDeps({ stopCodexConversationTurn: vi.fn() }),
+      }),
+    ).resolves.toEqual({
+      text: "Usage: /codex stop",
+    });
+  });
+
+  it("allows local Codex binding status forms in sandboxed sessions", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({
+        schemaVersion: 1,
+        threadId: "thread-status",
+        cwd: tempDir,
+        model: "gpt-5.5",
+        approvalPolicy: "never",
+        sandbox: "danger-full-access",
+        serviceTier: "priority",
+      }),
+    );
+
+    await expect(
+      handleCodexCommand(createSandboxedContext("model", sessionFile), { deps: createDeps() }),
+    ).resolves.toEqual({ text: "Codex model: gpt-5.5" });
+    await expect(
+      handleCodexCommand(createSandboxedContext("fast status", sessionFile), {
+        deps: createDeps(),
+      }),
+    ).resolves.toEqual({ text: "Codex fast mode: on." });
+    await expect(
+      handleCodexCommand(createSandboxedContext("permissions status", sessionFile), {
+        deps: createDeps(),
+      }),
+    ).resolves.toEqual({ text: "Codex permissions: full access." });
   });
 
   it("lists Codex CLI sessions from a requested node", async () => {
@@ -1259,6 +1478,192 @@ describe("codex command", () => {
     expect(result.text).not.toContain(
       "personal-email@gmail.com   ChatGPT subscription   — active now",
     );
+  });
+
+  it("respects explicit Codex auth order over stale lastGood after OAuth re-login", async () => {
+    const config = {};
+    const now = Date.now();
+    installAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          "openai-codex:default": {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "stale-access-token",
+            refresh: "stale-refresh-token",
+            expires: now + 2 * 24 * 60 * 60 * 1000,
+            email: "previous@example.com",
+          },
+          "openai-codex:fresh-email@example.com": {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "fresh-access-token",
+            refresh: "fresh-refresh-token",
+            expires: now + 9 * 24 * 60 * 60 * 1000,
+            email: "fresh-email@example.com",
+          },
+        },
+        order: {
+          "openai-codex": ["openai-codex:fresh-email@example.com", "openai-codex:default"],
+        },
+        lastGood: {
+          "openai-codex": "openai-codex:default",
+        },
+      },
+      config,
+    );
+
+    const safeCodexControlRequest = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        value: { account: { type: "unknown" }, requiresOpenaiAuth: true },
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        value: codexRateLimitPayload({
+          primaryUsedPercent: 5,
+          secondaryUsedPercent: 10,
+          primaryResetSeconds: Math.ceil(now / 1000) + 60 * 60,
+          secondaryResetSeconds: Math.ceil(now / 1000) + 6 * 60 * 60,
+        }),
+      });
+
+    const result = await handleCodexCommand(createContext("account", undefined, { config }), {
+      deps: createDeps({ safeCodexControlRequest }),
+    });
+
+    expect(result.text).toContain(
+      "\n  1. fresh-email@example.com   ChatGPT subscription   — active now",
+    );
+    expect(result.text).toContain(
+      "\n  2. previous@example.com   ChatGPT subscription   — available if needed",
+    );
+    expect(result.text).not.toContain("previous@example.com   ChatGPT subscription   — active now");
+    expect(result.text).not.toContain("openai-codex:");
+    expect(safeCodexControlRequest).toHaveBeenCalledTimes(2);
+  });
+
+  it("respects openai-alias explicit order over stale lastGood for API key profiles", async () => {
+    const config = {};
+    const now = Date.now();
+    installAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          "openai:fresh-key": {
+            type: "api_key",
+            provider: "openai",
+            key: "sk-fresh-111",
+          },
+          "openai:stale-key": {
+            type: "api_key",
+            provider: "openai",
+            key: "sk-stale-222",
+          },
+        },
+        order: {
+          openai: ["openai:fresh-key", "openai:stale-key"],
+        },
+        lastGood: {
+          openai: "openai:stale-key",
+        },
+      },
+      config,
+    );
+
+    const safeCodexControlRequest = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        value: { account: { type: "unknown" }, requiresOpenaiAuth: false },
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        error: "usage data unavailable",
+      });
+
+    const result = await handleCodexCommand(createContext("account", undefined, { config }), {
+      deps: createDeps({ safeCodexControlRequest }),
+    });
+
+    expect(result.text).toContain("\n  1. fresh-key   API key   — active now");
+    expect(result.text).not.toContain("stale-key   API key   — active now");
+    expect(safeCodexControlRequest).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not mark any profile active when all explicit-order token credentials are expired", async () => {
+    // Both profiles use type:"token" with expired expiry, so resolveAuthProfileEligibility
+    // returns eligible=false for both. resolveActiveProfileId must return undefined rather
+    // than marking an ineligible profile as active; the display shows "no working credential".
+    const config = {};
+    const now = Date.now();
+    installAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          "openai-codex:fresh@example.com": {
+            type: "token",
+            provider: "openai-codex",
+            token: "fresh-token",
+            expires: now - 1000,
+            email: "fresh@example.com",
+          },
+          "openai-codex:stale@example.com": {
+            type: "token",
+            provider: "openai-codex",
+            token: "stale-token",
+            expires: now - 2000,
+            email: "stale@example.com",
+          },
+        },
+        order: {
+          "openai-codex": ["openai-codex:fresh@example.com", "openai-codex:stale@example.com"],
+        },
+        lastGood: {
+          "openai-codex": "openai-codex:stale@example.com",
+        },
+      },
+      config,
+    );
+
+    const safeCodexControlRequest = vi
+      .fn()
+      // call 1: account info for the active/first profile
+      .mockResolvedValueOnce({
+        ok: true,
+        value: { account: { type: "unknown" }, requiresOpenaiAuth: true },
+      })
+      // call 2: rate limits for the active profile
+      .mockResolvedValueOnce({
+        ok: false,
+        error: "rate limits unavailable",
+      })
+      // call 3: readSubscriptionUsage — no activeProfileId means the subscription
+      // profile (fresh, type:"token") is fetched separately
+      .mockResolvedValueOnce({
+        ok: false,
+        error: "subscription limits unavailable",
+      });
+
+    const result = await handleCodexCommand(createContext("account", undefined, { config }), {
+      deps: createDeps({ safeCodexControlRequest }),
+    });
+
+    // With all credentials expired, no profile is active — the display shows
+    // "no working credential" and both profiles are labelled "sign-in expired".
+    // lastGood (stale) must not override the stated operator rank, and the
+    // first explicit-order entry must not be falsely marked active when ineligible.
+    expect(result.text).toContain("no working credential");
+    expect(result.text).toContain(
+      "\n  1. fresh@example.com   ChatGPT subscription   — sign-in expired",
+    );
+    expect(result.text).toContain(
+      "\n  2. stale@example.com   ChatGPT subscription   — sign-in expired",
+    );
+    expect(result.text).not.toContain("active now");
+    expect(safeCodexControlRequest).toHaveBeenCalledTimes(3);
   });
 
   it("escapes successful Codex account fallback summaries before chat display", async () => {
@@ -2993,6 +3398,26 @@ describe("codex command", () => {
       pluginConfig: undefined,
       agentDir: path.join(tempDir, "agents", "main", "agent"),
       config: {},
+    });
+  });
+
+  it("stops the active bound Codex turn in sandboxed sessions", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const stopCodexConversationTurn = vi.fn(async () => ({
+      stopped: true,
+      message: "Codex stop requested.",
+    }));
+
+    await expect(
+      handleCodexCommand(createSandboxedContext("stop", sessionFile), {
+        deps: createDeps({ stopCodexConversationTurn }),
+      }),
+    ).resolves.toEqual({ text: "Codex stop requested." });
+    expect(stopCodexConversationTurn).toHaveBeenCalledWith({
+      sessionFile,
+      pluginConfig: undefined,
+      agentDir: path.join(tempDir, "agents", "main", "agent"),
+      config: { agents: { defaults: { sandbox: { mode: "all" } } } },
     });
   });
 

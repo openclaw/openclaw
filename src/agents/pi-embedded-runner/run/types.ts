@@ -7,6 +7,8 @@ import type { SessionSystemPromptReport } from "../../../config/sessions/types.j
 import type { ContextEngine, ContextEnginePromptCacheInfo } from "../../../context-engine/types.js";
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import type { PluginHookBeforeAgentStartResult } from "../../../plugins/hook-before-agent-start.types.js";
+import type { AgentHarnessTaskRuntimeScope } from "../../../tasks/agent-harness-task-runtime-scope.js";
+import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import type { AuthProfileStore } from "../../auth-profiles/types.js";
 import type {
   MessagingToolSend,
@@ -52,6 +54,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   agentHarnessId?: string;
   /** OpenClaw-owned runtime policy prepared by the orchestrator for this attempt. */
   runtimePlan?: AgentRuntimePlan;
+  /** Host-issued scope for harnesses that mirror native child runs into task state. */
+  agentHarnessTaskRuntimeScope?: AgentHarnessTaskRuntimeScope;
   /** Live observer called after wrapped tool outcomes are recorded. */
   onToolOutcome?: ToolOutcomeObserver;
   model: Model<Api>;
@@ -108,6 +112,23 @@ export type EmbeddedRunAttemptResult = {
   diagnosticTrace?: DiagnosticTraceContext;
   agentHarnessId?: string;
   agentHarnessResultClassification?: "empty" | "reasoning-only" | "planning-only";
+  promptTimeoutOutcome?: {
+    message?: string;
+    replayInvalid?: boolean;
+    livenessState?: EmbeddedRunLivenessState;
+  };
+  codexAppServerFailure?: {
+    kind: "client_closed_before_turn_completed" | "turn_completion_idle_timeout";
+    transport: "stdio" | "websocket";
+    threadId?: string;
+    turnId?: string;
+    replaySafe: boolean;
+    replayBlockedReason?:
+      | "assistant_output"
+      | "tool_activity"
+      | "potential_side_effect"
+      | "active_item";
+  };
   bootstrapPromptWarningSignaturesSeen?: string[];
   bootstrapPromptWarningSignature?: string;
   systemPromptReport?: SessionSystemPromptReport;
@@ -115,6 +136,7 @@ export type EmbeddedRunAttemptResult = {
   messagesSnapshot: AgentMessage[];
   assistantTexts: string[];
   toolMetas: Array<{ toolName: string; meta?: string }>;
+  acceptedSessionSpawns?: AcceptedSessionSpawn[];
   lastAssistant: AssistantMessage | undefined;
   currentAttemptAssistant?: AssistantMessage | undefined;
   lastToolError?: ToolErrorSummary;

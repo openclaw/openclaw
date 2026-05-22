@@ -37,6 +37,7 @@ import {
   wrapStreamFnRepairMalformedToolCallArguments,
   wrapStreamFnSanitizeMalformedToolCalls,
   wrapStreamFnTrimToolCallNames,
+  testing as attemptTesting,
 } from "./attempt.js";
 import { buildEmbeddedAttemptToolRunContext } from "./attempt.tool-run-context.js";
 
@@ -990,6 +991,7 @@ describe("resolveEmbeddedAgentStreamFn", () => {
         provider: "demo-provider",
         id: "demo-model",
       } as never,
+      authProfileId: "demo-provider:oauth",
       authStorage: {
         getApiKey: vi.fn(async () => "demo-runtime-key"),
       },
@@ -1001,7 +1003,32 @@ describe("resolveEmbeddedAgentStreamFn", () => {
       {},
     );
     expect(requireRecord(streamOptions, "stream options").apiKey).toBe("demo-runtime-key");
+    expect(requireRecord(streamOptions, "stream options").authProfileId).toBe(
+      "demo-provider:oauth",
+    );
     expect(providerStreamFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses only the runtime-forwarded auth profile for stream provenance", () => {
+    expect(
+      attemptTesting.resolveAttemptStreamAuthProfileId({
+        authProfileId: "openai-codex:raw-session-profile",
+        runtimePlan: {
+          auth: {
+            forwardedAuthProfileId: "openai-codex:forwarded-profile",
+          },
+        } as never,
+      }),
+    ).toBe("openai-codex:forwarded-profile");
+
+    expect(
+      attemptTesting.resolveAttemptStreamAuthProfileId({
+        authProfileId: "openai:non-forwarded-profile",
+        runtimePlan: {
+          auth: {},
+        } as never,
+      }),
+    ).toBeUndefined();
   });
 
   it("strips the internal cache boundary before provider-owned stream calls", async () => {
@@ -3600,7 +3627,6 @@ describe("buildAfterTurnRuntimeContext", () => {
           sessionId: "session-123",
           config: {} as OpenClawConfig,
           skillsSnapshot: undefined,
-          senderIsOwner: true,
           provider: "openai-codex",
           modelId: "gpt-5.4",
           thinkLevel: "off",
@@ -3639,7 +3665,6 @@ describe("buildAfterTurnRuntimeContext", () => {
         authProfileId: "openai:p1",
         config: {} as OpenClawConfig,
         skillsSnapshot: undefined,
-        senderIsOwner: true,
         provider: "openai-codex",
         modelId: "gpt-5.4",
         thinkLevel: "off",
@@ -3673,7 +3698,6 @@ describe("buildAfterTurnRuntimeContext", () => {
           },
         } as OpenClawConfig,
         skillsSnapshot: undefined,
-        senderIsOwner: true,
         provider: "openai-codex",
         modelId: "gpt-5.4",
         thinkLevel: "off",
@@ -3712,7 +3736,6 @@ describe("buildAfterTurnRuntimeContext", () => {
         authProfileId: "openai:p1",
         config: { plugins: { slots: { contextEngine: "lossless-claw" } } } as OpenClawConfig,
         skillsSnapshot: undefined,
-        senderIsOwner: true,
         provider: "openai-codex",
         modelId: "gpt-5.4",
         thinkLevel: "off",
@@ -3755,7 +3778,6 @@ describe("buildAfterTurnRuntimeContext", () => {
         authProfileId: "openai:p1",
         config: { plugins: { slots: { contextEngine: "lossless-claw" } } } as OpenClawConfig,
         skillsSnapshot: undefined,
-        senderIsOwner: true,
         provider: "openai-codex",
         modelId: "gpt-5.4",
         thinkLevel: "off",
@@ -3787,7 +3809,6 @@ describe("buildAfterTurnRuntimeContext", () => {
         authProfileId: "openai:p1",
         config: {} as OpenClawConfig,
         skillsSnapshot: undefined,
-        senderIsOwner: true,
         senderId: "user-123",
         provider: "openai-codex",
         modelId: "gpt-5.4",

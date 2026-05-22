@@ -1,7 +1,9 @@
 import {
+  compactContextEngineWithSafetyTimeout,
   embeddedAgentLog,
   formatErrorMessage,
   isActiveHarnessContextEngine,
+  resolveCompactionTimeoutMs,
   resolveContextEngineOwnerPluginId,
   runHarnessContextEngineMaintenance,
   type CompactEmbeddedPiSessionParams,
@@ -14,11 +16,13 @@ import {
 import type { CodexAppServerClient, CodexServerNotificationHandler } from "./client.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { isJsonObject, type CodexServerNotification, type JsonObject } from "./protocol.js";
+import { resolveCodexNativeSandboxBlock } from "./sandbox-guard.js";
 import { clearCodexAppServerBinding, readCodexAppServerBinding } from "./session-binding.js";
 type CodexNativeCompactionCompletion = {
   signal: "thread/compacted" | "item/completed";
   turnId?: string;
   itemId?: string;
+  tokensAfter?: number;
 };
 type CodexNativeCompactionWaiter = {
   promise: Promise<CodexNativeCompactionCompletion>;
@@ -27,6 +31,7 @@ type CodexNativeCompactionWaiter = {
 };
 
 const DEFAULT_CODEX_COMPACTION_WAIT_TIMEOUT_MS = 5 * 60 * 1000;
+const CODEX_COMPACTION_TOKEN_USAGE_GRACE_MS = 250;
 const warnedIgnoredCompactionOverrides = new Set<string>();
 
 export async function maybeCompactCodexAppServerSession(
@@ -67,6 +72,8 @@ async function compactOwningContextEngine(
   params: CompactEmbeddedPiSessionParams,
   contextEngine: NonNullable<CompactEmbeddedPiSessionParams["contextEngine"]>,
 ): Promise<EmbeddedPiCompactResult> {
+  const compactionTarget = params.trigger === "manual" ? "threshold" : "budget";
+  const force = params.force === true || params.trigger === "manual";
   embeddedAgentLog.info("starting context-engine-owned Codex app-server compaction", {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
@@ -74,22 +81,32 @@ async function compactOwningContextEngine(
     tokenBudget: params.contextTokenBudget,
     currentTokenCount: params.currentTokenCount,
     trigger: params.trigger,
-    compactionTarget: params.trigger === "manual" ? "threshold" : "budget",
-    force: params.trigger === "manual",
+    compactionTarget,
+    force,
   });
   let result: Awaited<ReturnType<typeof contextEngine.compact>>;
   try {
-    result = await contextEngine.compact({
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      sessionFile: params.sessionFile,
-      tokenBudget: params.contextTokenBudget,
-      currentTokenCount: params.currentTokenCount,
-      compactionTarget: params.trigger === "manual" ? "threshold" : "budget",
-      customInstructions: params.customInstructions,
-      force: params.trigger === "manual",
-      runtimeContext: params.contextEngineRuntimeContext,
-    });
+    // Bound the plugin-owned compaction with the same finite safety timeout
+    // that protects native runtime compaction, and thread the caller's abort
+    // signal through, so a slow/hung plugin compact() cannot hang the Codex
+    // compaction lane indefinitely. A timeout/abort (or any thrown error) is
+    // converted to a clean { ok: false } result by the catch below.
+    result = await compactContextEngineWithSafetyTimeout(
+      contextEngine,
+      {
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        sessionFile: params.sessionFile,
+        tokenBudget: params.contextTokenBudget,
+        currentTokenCount: params.currentTokenCount,
+        compactionTarget,
+        customInstructions: params.customInstructions,
+        force,
+        runtimeContext: params.contextEngineRuntimeContext,
+      },
+      resolveCompactionTimeoutMs(params.config),
+      params.abortSignal,
+    );
   } catch (error) {
     embeddedAgentLog.warn("context-engine-owned Codex app-server compaction failed", {
       sessionId: params.sessionId,
@@ -124,9 +141,9 @@ async function compactOwningContextEngine(
         error: formatErrorMessage(error),
       });
     }
-    await clearCodexAppServerBinding(params.sessionFile);
+    await clearCodexAppServerBinding(params.sessionFile, { config: params.config });
     if (compactedSessionFile !== params.sessionFile) {
-      await clearCodexAppServerBinding(compactedSessionFile);
+      await clearCodexAppServerBinding(compactedSessionFile, { config: params.config });
     }
   }
 
@@ -310,10 +327,22 @@ async function compactCodexNativeThread(
   params: CompactEmbeddedPiSessionParams,
   options: { pluginConfig?: unknown; clientFactory?: CodexAppServerClientFactory } = {},
 ): Promise<EmbeddedPiCompactResult | undefined> {
+  const sandboxBlock = resolveCodexNativeSandboxBlock({
+    config: params.config,
+    sessionKey: params.sandboxSessionKey ?? params.sessionKey,
+    sessionId: params.sessionId,
+    surface: "native compaction",
+  });
+  if (sandboxBlock) {
+    return { ok: false, compacted: false, reason: sandboxBlock };
+  }
   const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig: options.pluginConfig });
   const binding = await readCodexAppServerBinding(params.sessionFile, { config: params.config });
   if (!binding?.threadId) {
-    return { ok: false, compacted: false, reason: "no codex app-server thread binding" };
+    return failedCodexThreadBindingCompactionResult(params, {
+      reason: "no codex app-server thread binding",
+      recovery: "missing_thread_binding",
+    });
   }
   const requestedAuthProfileId = params.authProfileId?.trim() || undefined;
   if (
@@ -345,6 +374,14 @@ async function compactCodexNativeThread(
     completion = await waiter.promise;
   } catch (error) {
     waiter.cancel();
+    if (isCodexThreadNotFoundError(error)) {
+      await clearCodexAppServerBinding(params.sessionFile, { config: params.config });
+      return failedCodexThreadBindingCompactionResult(params, {
+        threadId: binding.threadId,
+        reason: formatCompactionError(error),
+        recovery: "stale_thread_binding",
+      });
+    }
     return {
       ok: false,
       compacted: false,
@@ -357,7 +394,22 @@ async function compactCodexNativeThread(
     signal: completion.signal,
     turnId: completion.turnId,
     itemId: completion.itemId,
+    tokensAfter: completion.tokensAfter,
   });
+  const resultDetails: JsonObject = {
+    backend: "codex-app-server",
+    threadId: binding.threadId,
+    signal: completion.signal,
+  };
+  if (completion.turnId) {
+    resultDetails.turnId = completion.turnId;
+  }
+  if (completion.itemId) {
+    resultDetails.itemId = completion.itemId;
+  }
+  if (completion.tokensAfter !== undefined) {
+    resultDetails.tokenUsageSource = "thread/tokenUsage/updated";
+  }
   return {
     ok: true,
     compacted: true,
@@ -365,15 +417,40 @@ async function compactCodexNativeThread(
       summary: "",
       firstKeptEntryId: "",
       tokensBefore: params.currentTokenCount ?? 0,
-      details: {
-        backend: "codex-app-server",
-        threadId: binding.threadId,
-        signal: completion.signal,
-        turnId: completion.turnId,
-        itemId: completion.itemId,
-      },
+      ...(completion.tokensAfter !== undefined ? { tokensAfter: completion.tokensAfter } : {}),
+      details: resultDetails,
     },
   };
+}
+
+function failedCodexThreadBindingCompactionResult(
+  params: CompactEmbeddedPiSessionParams,
+  recovery: {
+    reason: string;
+    recovery: "missing_thread_binding" | "stale_thread_binding";
+    threadId?: string;
+  },
+): EmbeddedPiCompactResult {
+  embeddedAgentLog.warn("codex app-server compaction could not use thread binding", {
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    threadId: recovery.threadId,
+    reason: recovery.reason,
+    recovery: recovery.recovery,
+  });
+  return {
+    ok: false,
+    compacted: false,
+    reason: recovery.reason,
+    failure: {
+      reason: recovery.recovery,
+      rawError: recovery.reason,
+    },
+  };
+}
+
+function isCodexThreadNotFoundError(error: unknown): boolean {
+  return formatCompactionError(error).toLowerCase().includes("thread not found");
 }
 
 function createCodexNativeCompactionWaiter(
@@ -383,6 +460,7 @@ function createCodexNativeCompactionWaiter(
   let settled = false;
   let removeHandler: () => void = () => {};
   let timeout: ReturnType<typeof setTimeout> | undefined;
+  let tokenUsageGraceTimeout: ReturnType<typeof setTimeout> | undefined;
   let failWaiter: (error: Error) => void = () => {};
 
   const promise = new Promise<CodexNativeCompactionCompletion>((resolve, reject) => {
@@ -390,6 +468,9 @@ function createCodexNativeCompactionWaiter(
       removeHandler();
       if (timeout) {
         clearTimeout(timeout);
+      }
+      if (tokenUsageGraceTimeout) {
+        clearTimeout(tokenUsageGraceTimeout);
       }
     };
     const complete = (completion: CodexNativeCompactionCompletion): void => {
@@ -408,11 +489,49 @@ function createCodexNativeCompactionWaiter(
       cleanup();
       reject(error);
     };
+    let latestTokensAfter: number | undefined;
+    const completionWithLatestTokenUsage = (
+      completion: CodexNativeCompactionCompletion,
+    ): CodexNativeCompactionCompletion =>
+      latestTokensAfter === undefined
+        ? completion
+        : { ...completion, tokensAfter: latestTokensAfter };
+    const completeAfterTokenUsageGrace = (completion: CodexNativeCompactionCompletion): void => {
+      if (settled || tokenUsageGraceTimeout) {
+        return;
+      }
+      if (timeout) {
+        clearTimeout(timeout);
+        timeout = undefined;
+      }
+      tokenUsageGraceTimeout = setTimeout(
+        () => complete(completionWithLatestTokenUsage(observedCompletion ?? completion)),
+        CODEX_COMPACTION_TOKEN_USAGE_GRACE_MS,
+      );
+      tokenUsageGraceTimeout.unref?.();
+    };
     failWaiter = fail;
+    let observedCompletion: CodexNativeCompactionCompletion | undefined;
     const handler: CodexServerNotificationHandler = (notification) => {
+      const tokensAfter = readNativeCompactionTokenUsage(notification, threadId);
+      if (tokensAfter !== undefined) {
+        latestTokensAfter = tokensAfter;
+        if (observedCompletion) {
+          complete(completionWithLatestTokenUsage(observedCompletion));
+          return;
+        }
+      }
       const completion = readNativeCompactionCompletion(notification, threadId);
       if (completion) {
-        complete(completion);
+        observedCompletion = completionWithLatestTokenUsage({
+          ...observedCompletion,
+          ...completion,
+        });
+        if (latestTokensAfter !== undefined) {
+          complete(observedCompletion);
+          return;
+        }
+        completeAfterTokenUsageGrace(observedCompletion);
       }
     };
     removeHandler = client.addNotificationHandler(handler);
@@ -440,6 +559,49 @@ function createCodexNativeCompactionWaiter(
       }
     },
   };
+}
+
+function readNativeCompactionTokenUsage(
+  notification: CodexServerNotification,
+  threadId: string,
+): number | undefined {
+  const params = notification.params;
+  if (!isJsonObject(params) || readString(params, "threadId", "thread_id") !== threadId) {
+    return undefined;
+  }
+  if (notification.method !== "thread/tokenUsage/updated") {
+    return undefined;
+  }
+  const tokenUsage = isJsonObject(params.tokenUsage) ? params.tokenUsage : undefined;
+  const currentUsage = readCodexCurrentTokenUsage(tokenUsage) ?? readCodexCurrentTokenUsage(params);
+  return readCodexTotalTokens(currentUsage);
+}
+
+function readCodexCurrentTokenUsage(value: JsonObject | undefined): JsonObject | undefined {
+  if (!value) {
+    return undefined;
+  }
+  for (const key of [
+    "last",
+    "current",
+    "lastCall",
+    "lastCallUsage",
+    "lastTokenUsage",
+    "last_token_usage",
+  ]) {
+    const usage = value[key];
+    if (isJsonObject(usage)) {
+      return usage;
+    }
+  }
+  return undefined;
+}
+
+function readCodexTotalTokens(value: JsonObject | undefined): number | undefined {
+  const totalTokens = value?.total_tokens ?? value?.totalTokens ?? value?.total;
+  return typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0
+    ? Math.floor(totalTokens)
+    : undefined;
 }
 
 function readNativeCompactionCompletion(

@@ -94,6 +94,38 @@ describe("diagnostics-prometheus service", () => {
     expect(testApi.renderPrometheusMetrics(store)).toBe("");
   });
 
+  it("records trusted async diagnostic queue drop summaries", () => {
+    const store = testApi.createPrometheusMetricStore();
+
+    testApi.recordDiagnosticEvent(
+      store,
+      {
+        ...baseEvent(),
+        type: "diagnostic.async_queue.dropped",
+        droppedEvents: 3,
+        droppedTrustedEvents: 1,
+        droppedUntrustedEvents: 2,
+        queueLength: 0,
+        maxQueueLength: 10_000,
+        drainBatchSize: 100,
+      },
+      trusted,
+    );
+
+    const rendered = testApi.renderPrometheusMetrics(store);
+
+    expect(rendered).toContain(
+      'openclaw_diagnostic_async_queue_dropped_total{drop_class="total"} 3',
+    );
+    expect(rendered).toContain(
+      'openclaw_diagnostic_async_queue_dropped_total{drop_class="trusted"} 1',
+    );
+    expect(rendered).toContain(
+      'openclaw_diagnostic_async_queue_dropped_total{drop_class="untrusted"} 2',
+    );
+    expect(rendered).toContain("openclaw_diagnostic_async_queue_length 0");
+  });
+
   it("redacts and bounds label values", () => {
     const store = testApi.createPrometheusMetricStore();
 
@@ -174,6 +206,93 @@ describe("diagnostics-prometheus service", () => {
     expect(rendered).not.toContain("message-should-not-export");
     expect(rendered).not.toContain("session-should-not-export");
     expect(rendered).not.toContain("progress draft");
+  });
+
+  it("records inbound dispatch and session turn telemetry", () => {
+    const store = testApi.createPrometheusMetricStore();
+
+    testApi.recordDiagnosticEvent(
+      store,
+      {
+        ...baseEvent(),
+        type: "message.received",
+        channel: "telegram",
+        source: "webhook",
+      },
+      trusted,
+    );
+    testApi.recordDiagnosticEvent(
+      store,
+      {
+        ...baseEvent(),
+        type: "message.dispatch.started",
+        channel: "telegram",
+        source: "webhook",
+      },
+      trusted,
+    );
+    testApi.recordDiagnosticEvent(
+      store,
+      {
+        ...baseEvent(),
+        type: "message.dispatch.completed",
+        channel: "telegram",
+        source: "webhook",
+        durationMs: 250,
+        outcome: "completed",
+      },
+      trusted,
+    );
+    testApi.recordDiagnosticEvent(
+      store,
+      {
+        ...baseEvent(),
+        type: "message.dispatch.completed",
+        channel: "telegram/custom",
+        source: "webhook with secret sk-test",
+        durationMs: 300,
+        outcome: "completed",
+        reason: "progress draft / message tool 123",
+      },
+      trusted,
+    );
+    testApi.recordDiagnosticEvent(
+      store,
+      {
+        ...baseEvent(),
+        type: "session.turn.created",
+        runId: "run-should-not-export",
+        agentId: "agent.default",
+        channel: "telegram",
+        trigger: "user",
+      },
+      trusted,
+    );
+
+    const rendered = testApi.renderPrometheusMetrics(store);
+
+    expect(rendered).toContain(
+      'openclaw_message_received_total{channel="telegram",source="webhook"} 1',
+    );
+    expect(rendered).toContain(
+      'openclaw_message_dispatch_started_total{channel="telegram",source="webhook"} 1',
+    );
+    expect(rendered).toContain(
+      'openclaw_message_dispatch_completed_total{channel="telegram",outcome="completed",reason="none",source="webhook"} 1',
+    );
+    expect(rendered).toContain(
+      'openclaw_message_dispatch_duration_seconds_sum{channel="telegram",outcome="completed",reason="none",source="webhook"} 0.25',
+    );
+    expect(rendered).toContain(
+      'openclaw_message_dispatch_completed_total{channel="unknown",outcome="completed",reason="none",source="unknown"} 1',
+    );
+    expect(rendered).toContain(
+      'openclaw_message_dispatch_duration_seconds_sum{channel="unknown",outcome="completed",reason="none",source="unknown"} 0.3',
+    );
+    expect(rendered).toContain(
+      'openclaw_session_turn_created_total{agent="agent.default",channel="telegram",trigger="user"} 1',
+    );
+    expect(rendered).not.toContain("run-should-not-export");
   });
 
   it("records session recovery and talk metrics without exporting raw ids or content", () => {

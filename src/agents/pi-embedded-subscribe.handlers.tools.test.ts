@@ -47,6 +47,7 @@ function createTestContext(): {
     state: {
       toolMetaById: new Map<string, ToolCallSummary>(),
       toolMetas: [],
+      acceptedSessionSpawns: [],
       toolSummaryById: new Set<string>(),
       itemActiveIds: new Set<string>(),
       itemStartedCount: 0,
@@ -280,7 +281,121 @@ describe("handleToolExecutionEnd cron.add commitment tracking", () => {
   });
 });
 
+describe("handleToolExecutionEnd sessions_spawn terminal success tracking", () => {
+  it("records accepted sessions_spawn identifiers", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "sessions_spawn",
+        toolCallId: "tool-spawn-accepted",
+        isError: false,
+        result: {
+          details: {
+            status: "accepted",
+            runId: " run-child ",
+            childSessionKey: " agent:claude:subagent:child ",
+          },
+        },
+      } as never,
+    );
+
+    expect(ctx.state.acceptedSessionSpawns).toEqual([
+      {
+        runId: "run-child",
+        childSessionKey: "agent:claude:subagent:child",
+      },
+    ]);
+    expect(ctx.state.replayState).toEqual({
+      replayInvalid: true,
+      hadPotentialSideEffects: true,
+    });
+  });
+
+  it("does not record failed or malformed sessions_spawn results", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "sessions_spawn",
+        toolCallId: "tool-spawn-failed",
+        isError: false,
+        result: {
+          details: {
+            status: "error",
+            runId: "run-child",
+            childSessionKey: "agent:claude:subagent:child",
+          },
+        },
+      } as never,
+    );
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "sessions_spawn",
+        toolCallId: "tool-spawn-malformed",
+        isError: false,
+        result: {
+          details: {
+            status: "accepted",
+            runId: "run-child",
+            childSessionKey: " ",
+          },
+        },
+      } as never,
+    );
+
+    expect(ctx.state.acceptedSessionSpawns).toEqual([]);
+  });
+});
+
 describe("handleToolExecutionEnd mutating failure recovery", () => {
+  it("marks middleware failures on the last tool error", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "tool-exec-middleware-error",
+        args: { cmd: "echo ok" },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-middleware-error",
+        isError: false,
+        result: {
+          content: [
+            {
+              type: "text",
+              text: "Tool output unavailable due to post-processing error.",
+            },
+          ],
+          details: {
+            status: "error",
+            middlewareError: true,
+          },
+        },
+      } as never,
+    );
+
+    expect(ctx.state.lastToolError).toMatchObject({
+      toolName: "exec",
+      middlewareError: true,
+    });
+  });
+
   it("clears edit failure when the retry succeeds through common file path aliases", async () => {
     const { ctx } = createTestContext();
 
@@ -531,6 +646,67 @@ describe("handleToolExecutionEnd timeout metadata", () => {
     expectRecordFields(ctx.state.lastToolError, "last tool error", {
       toolName: "exec",
       timedOut: true,
+    });
+  });
+
+  it("records structured error codes for failed tool results", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-denied",
+        isError: true,
+        result: {
+          content: [{ type: "text", text: "SYSTEM_RUN_DENIED: approval required" }],
+          details: {
+            status: "failed",
+            error: {
+              code: "SYSTEM_RUN_DENIED",
+              message: "approval required",
+            },
+          },
+        },
+      } as never,
+    );
+
+    expectRecordFields(ctx.state.lastToolError, "last tool error", {
+      toolName: "exec",
+      errorCode: "SYSTEM_RUN_DENIED",
+      error: "approval required",
+    });
+  });
+
+  it("records node denial codes from thrown gateway error results", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-node-denied",
+        isError: true,
+        result: {
+          details: {
+            status: "error",
+            error: "UNAVAILABLE: SYSTEM_RUN_DENIED: approval required",
+            gatewayCode: "UNAVAILABLE",
+            nodeError: {
+              code: "UNAVAILABLE",
+              message: "SYSTEM_RUN_DENIED: approval required",
+            },
+          },
+        },
+      } as never,
+    );
+
+    expectRecordFields(ctx.state.lastToolError, "last tool error", {
+      toolName: "exec",
+      errorCode: "SYSTEM_RUN_DENIED",
+      error: "UNAVAILABLE: SYSTEM_RUN_DENIED: approval required",
     });
   });
 });

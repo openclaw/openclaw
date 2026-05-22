@@ -28,6 +28,7 @@ import {
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../chat/input-history.ts";
 import { PinnedMessages } from "../chat/pinned-messages.ts";
 import { getPinnedMessageSummary } from "../chat/pinned-summary.ts";
+import type { RealtimeTalkConversationEntry } from "../chat/realtime-talk-conversation.ts";
 import type { RealtimeTalkStatus } from "../chat/realtime-talk.ts";
 import { renderChatRunControls } from "../chat/run-controls.ts";
 import type { ChatRunUiStatus } from "../chat/run-lifecycle.ts";
@@ -100,6 +101,7 @@ export type ChatProps = {
   realtimeTalkStatus?: RealtimeTalkStatus;
   realtimeTalkDetail?: string | null;
   realtimeTalkTranscript?: string | null;
+  realtimeTalkConversation?: RealtimeTalkConversationEntry[];
   realtimeTalkOptionsOpen?: boolean;
   realtimeTalkOptions?: {
     provider: string;
@@ -325,6 +327,40 @@ function renderRealtimeTalkOptions(props: ChatProps) {
           </label>
         </div>
       </details>
+    </div>
+  `;
+}
+
+function renderRealtimeTalkConversation(props: ChatProps) {
+  const entries = props.realtimeTalkConversation ?? [];
+  if (entries.length === 0) {
+    return nothing;
+  }
+  return html`
+    <div class="agent-chat__voice-turns" role="log" aria-label="Talk transcript">
+      ${repeat(
+        entries,
+        (entry) => entry.id,
+        (entry) => {
+          const label =
+            entry.role === "user" ? props.userName?.trim() || "You" : props.assistantName;
+          return html`
+            <div
+              class="agent-chat__voice-turn agent-chat__voice-turn--${entry.role}"
+              data-role=${entry.role}
+            >
+              <span class="agent-chat__voice-turn-speaker">${label}</span>
+              <span class="agent-chat__voice-turn-text">${entry.text}</span>
+              ${entry.isStreaming
+                ? html`<span
+                    class="agent-chat__voice-turn-stream"
+                    aria-label="Still listening"
+                  ></span>`
+                : nothing}
+            </div>
+          `;
+        },
+      )}
     </div>
   `;
 }
@@ -1042,7 +1078,8 @@ export function renderChat(props: ChatProps) {
     expandedToolCards.set(toolCardId, !expandedToolCards.get(toolCardId));
     requestUpdate();
   };
-  const isEmpty = chatItems.length === 0 && !props.loading;
+  const hasRealtimeTalkConversation = (props.realtimeTalkConversation?.length ?? 0) > 0;
+  const isEmpty = chatItems.length === 0 && !props.loading && !hasRealtimeTalkConversation;
   const showLoadingSkeleton = props.loading && chatItems.length === 0;
 
   const thread = html`
@@ -1191,6 +1228,7 @@ export function renderChat(props: ChatProps) {
             return nothing;
           },
         )}
+        ${renderRealtimeTalkConversation(props)}
       </div>
     </div>
   `;
@@ -1447,7 +1485,9 @@ export function renderChat(props: ChatProps) {
           ? html`
               <div class="agent-chat__stt-interim agent-chat__talk-status">
                 ${props.realtimeTalkDetail ??
-                props.realtimeTalkTranscript ??
+                ((props.realtimeTalkConversation?.length ?? 0) === 0
+                  ? props.realtimeTalkTranscript
+                  : null) ??
                 (props.realtimeTalkStatus === "thinking"
                   ? "Asking OpenClaw..."
                   : props.realtimeTalkStatus === "connecting"

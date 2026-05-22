@@ -20,6 +20,10 @@ on:
         description: Successful Full Release Validation run id for this tag/SHA, required for real publish
         required: false
         type: string
+      release_publish_run_id:
+        description: Approved OpenClaw Release Publish workflow run id
+        required: false
+        type: string
       npm_dist_tag:
         description: npm dist-tag to publish to
         required: true
@@ -32,7 +36,7 @@ on:
 
 concurrency:
   group: openclaw-npm-release-${{ github.event_name == 'workflow_dispatch' && format('{0}-{1}', inputs.tag, inputs.npm_dist_tag) || github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' && inputs.preflight_only && inputs.npm_dist_tag == 'alpha' }}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -367,6 +371,7 @@ jobs:
     if: ${{ !inputs.preflight_only }}
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       contents: read
     steps:
       - name: Require trusted workflow ref for publish
@@ -389,6 +394,7 @@ jobs:
         env:
           PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
+          RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
         run: |
           set -euo pipefail
           if [[ -z "${PREFLIGHT_RUN_ID}" ]]; then
@@ -399,6 +405,32 @@ jobs:
             echo "Real publish requires full_release_validation_run_id from a successful Full Release Validation run." >&2
             exit 1
           fi
+          if [[ -z "${RELEASE_PUBLISH_RUN_ID// }" && "${GITHUB_ACTOR}" == "github-actions[bot]" ]]; then
+            echo "Workflow-dispatched real publish requires release_publish_run_id from the approved OpenClaw Release Publish workflow." >&2
+            exit 1
+          fi
+
+      - name: Validate release publish approval run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
+          EXPECTED_WORKFLOW_BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${RELEASE_PUBLISH_RUN_ID// }" ]]; then
+            if [[ "${GITHUB_ACTOR}" == "github-actions[bot]" ]]; then
+              echo "OpenClaw npm publish dispatched by another workflow must include release_publish_run_id." >&2
+              exit 1
+            fi
+            echo "Direct OpenClaw npm publish; relying on this workflow's npm-release environment approval."
+            exit 0
+          fi
+          if [[ "${GITHUB_ACTOR}" != "github-actions[bot]" ]]; then
+            echo "OpenClaw npm publish must be dispatched by the OpenClaw Release Publish workflow, not directly by ${GITHUB_ACTOR}." >&2
+            exit 1
+          fi
+          RUN_JSON="$(gh run view "$RELEASE_PUBLISH_RUN_ID" --repo "$GITHUB_REPOSITORY" --json workflowName,headBranch,event,status,conclusion,url)"
+          printf '%s' "$RUN_JSON" | node -e 'const fs = require("node:fs"); const run = JSON.parse(fs.readFileSync(0, "utf8")); const checks = [["workflowName", "OpenClaw Release Publish"], ["headBranch", process.env.EXPECTED_WORKFLOW_BRANCH], ["event", "workflow_dispatch"]]; for (const [key, expected] of checks) { if (run[key] !== expected) { console.error(`Referenced release publish run ${process.env.RELEASE_PUBLISH_RUN_ID} must have ${key}=${expected}, got ${run[key] ?? "<missing>"}.`); process.exit(1); } } if (run.status !== "in_progress") { console.error(`Referenced release publish run ${process.env.RELEASE_PUBLISH_RUN_ID} must still be in_progress, got ${run.status ?? "<missing>"}.`); process.exit(1); } if (run.conclusion) { console.error(`Referenced release publish run ${process.env.RELEASE_PUBLISH_RUN_ID} already concluded ${run.conclusion}.`); process.exit(1); } console.log(`Using release publish approval run ${process.env.RELEASE_PUBLISH_RUN_ID}: ${run.url}`);'
 
   publish_openclaw_npm:
     # KEEP THE REAL RELEASE/PUBLISH PATH ON A GITHUB-HOSTED RUNNER.
@@ -511,10 +543,25 @@ jobs:
             preferred_name="openclaw-npm-preflight-${RELEASE_TAG}"
             rm -rf preflight-tarball
             mkdir -p preflight-tarball
-            if gh run download "${PREFLIGHT_RUN_ID}" \
-              --repo "${GITHUB_REPOSITORY}" \
-              --name "${preferred_name}" \
-              --dir preflight-tarball; then
+
+            download_named_artifact() {
+              local artifact_name="$1"
+              for attempt in 1 2 3; do
+                if gh run download "${PREFLIGHT_RUN_ID}" \
+                  --repo "${GITHUB_REPOSITORY}" \
+                  --name "${artifact_name}" \
+                  --dir preflight-tarball; then
+                  return 0
+                fi
+                if [[ "$attempt" != "3" ]]; then
+                  echo "::warning::Artifact download for ${artifact_name} failed on attempt ${attempt}; retrying."
+                  sleep $((attempt * 10))
+                fi
+              done
+              return 1
+            }
+
+            if download_named_artifact "${preferred_name}"; then
               echo "Downloaded ${preferred_name}."
               return 0
             fi
@@ -530,10 +577,7 @@ jobs:
               exit 1
             fi
             fallback_name="${matches[0]}"
-            gh run download "${PREFLIGHT_RUN_ID}" \
-              --repo "${GITHUB_REPOSITORY}" \
-              --name "${fallback_name}" \
-              --dir preflight-tarball
+            download_named_artifact "${fallback_name}"
             echo "Downloaded fallback preflight artifact ${fallback_name}."
           }
 

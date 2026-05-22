@@ -1042,11 +1042,51 @@ resolve_candidate_version() {
   export OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT
 }
 
+candidate_update_spec() {
+  if [ "$CANDIDATE_KIND" != "tarball" ]; then
+    printf '%s\n' "$CANDIDATE_SPEC"
+    return 0
+  fi
+  case "$CANDIDATE_SPEC" in
+    file:*)
+      printf '%s\n' "$CANDIDATE_SPEC"
+      ;;
+    *)
+      printf 'file:%s\n' "$CANDIDATE_SPEC"
+      ;;
+  esac
+}
+
+assert_update_json_ok() {
+  local file="$1"
+  node -e '
+    const fs = require("node:fs");
+    const file = process.argv[1];
+    const raw = fs.readFileSync(file, "utf8");
+    let result;
+    try {
+      result = JSON.parse(raw);
+    } catch (err) {
+      // Published baselines may emit legacy service-control logs before the JSON payload.
+      const jsonStart = raw.indexOf("{");
+      if (jsonStart === -1) {
+        throw err;
+      }
+      result = JSON.parse(raw.slice(jsonStart));
+    }
+    if (!result || result.status !== "ok") {
+      throw new Error(`update JSON did not report ok status: ${JSON.stringify(result)}`);
+    }
+  ' "$file"
+}
+
 update_candidate() {
-  echo "Updating baseline $baseline_spec to candidate $CANDIDATE_KIND:$CANDIDATE_SPEC ($candidate_version)"
+  local update_spec
+  update_spec="$(candidate_update_spec)"
+  echo "Updating baseline $baseline_spec to candidate $CANDIDATE_KIND:$update_spec ($candidate_version)"
   local update_start=""
   local update_end=""
-  local update_args=(update --tag "$CANDIDATE_SPEC" --yes --json)
+  local update_args=(update --tag "$update_spec" --yes --json)
   local update_env=(
     env
     -u OPENCLAW_GATEWAY_TOKEN
@@ -1070,14 +1110,7 @@ update_candidate() {
   if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
     update_end="$(node -e "process.stdout.write(String(Date.now()))")"
     update_restart_seconds=$(((update_end - update_start + 999) / 1000))
-    node -e '
-      const fs = require("node:fs");
-      const file = process.argv[1];
-      const result = JSON.parse(fs.readFileSync(file, "utf8"));
-      if (!result || result.status !== "ok") {
-        throw new Error(`update JSON did not report ok status: ${JSON.stringify(result)}`);
-      }
-    ' "$UPDATE_JSON"
+    assert_update_json_ok "$UPDATE_JSON"
   fi
   installed_version="$(read_installed_version)"
 }

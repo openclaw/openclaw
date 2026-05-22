@@ -42,6 +42,8 @@ export type {
 } from "../agents/pi-embedded-runner/run/types.js";
 export type {
   ContextEngine as HarnessContextEngine,
+  ContextEngineHostCapability,
+  ContextEngineOperation,
   ContextEngineProjection,
 } from "../context-engine/types.js";
 export type { CompactEmbeddedPiSessionParams } from "../agents/pi-embedded-runner/compact.js";
@@ -187,6 +189,10 @@ export {
 export { createCodexAppServerToolResultExtensionRunner } from "../agents/harness/codex-app-server-extensions.js";
 export { createAgentToolResultMiddlewareRunner } from "../agents/harness/tool-result-middleware.js";
 export {
+  assertContextEngineHostSupport,
+  CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
+} from "../context-engine/host-compat.js";
+export {
   assembleHarnessContextEngine,
   bootstrapHarnessContextEngine,
   buildHarnessContextEngineRuntimeContext,
@@ -195,12 +201,22 @@ export {
   isActiveHarnessContextEngine,
   runHarnessContextEngineMaintenance,
 } from "../agents/harness/context-engine-lifecycle.js";
+// Plugin-owned (`ownsCompaction`) compaction safety timeout. Exposed on the
+// agent-harness-runtime surface so plugin harnesses such as Codex bound their
+// own `ContextEngine.compact()` calls with the exact same finite, host-resolved
+// timeout the built-in pi-embedded runner uses — one shared implementation, no
+// copy-pasted watchdog.
+export {
+  compactContextEngineWithSafetyTimeout,
+  resolveCompactionTimeoutMs,
+} from "../agents/pi-embedded-runner/compaction-safety-timeout.js";
 export { resolveContextEngineOwnerPluginId } from "../context-engine/registry.js";
 export {
   runAgentHarnessAfterToolCallHook,
   runAgentHarnessBeforeMessageWriteHook,
 } from "../agents/harness/hook-helpers.js";
 export {
+  awaitAgentHarnessAgentEndHook,
   runAgentHarnessBeforeAgentFinalizeHook,
   runAgentHarnessAgentEndHook,
   runAgentHarnessLlmInputHook,
