@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AgentHarnessTaskRecord } from "openclaw/plugin-sdk/agent-harness-task-runtime";
+import type {
+  AgentHarnessTaskRecord,
+  AgentHarnessTaskRuntimeScope,
+} from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { createAgentHarnessTaskRuntimeScope } from "../../../../src/tasks/agent-harness-task-runtime-scope.js";
 import {
   CodexNativeSubagentMonitor,
   registerCodexNativeSubagentMonitor,
@@ -70,7 +72,7 @@ function createRuntime() {
 }
 
 function createTaskScope(requesterSessionKey = "agent:main:discord:channel:C123") {
-  return createAgentHarnessTaskRuntimeScope({ requesterSessionKey });
+  return { requesterSessionKey } as AgentHarnessTaskRuntimeScope;
 }
 
 async function notifyChildStarted(
