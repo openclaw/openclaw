@@ -1673,6 +1673,7 @@
     "test:docker:openai-web-search-minimal": "bash scripts/e2e/openai-web-search-minimal-docker.sh",
     "test:docker:openwebui": "bash scripts/e2e/openwebui-docker.sh",
     "test:docker:pi-bundle-mcp-tools": "bash scripts/e2e/pi-bundle-mcp-tools-docker.sh",
+    "test:docker:plugin-binding-command-escape": "bash scripts/e2e/plugin-binding-command-escape-docker.sh",
     "test:docker:plugin-lifecycle-matrix": "bash scripts/e2e/plugin-lifecycle-matrix-docker.sh",
     "test:docker:plugin-update": "bash scripts/e2e/plugin-update-unchanged-docker.sh",
     "test:docker:plugins": "bash scripts/e2e/plugins-docker.sh",

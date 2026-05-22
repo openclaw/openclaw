@@ -705,6 +705,21 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(plan.needs.package).toBe(true);
   });
 
+  it("plans the plugin binding command escape lane as source Docker proof", () => {
+    const plan = planFor({ selectedLaneNames: ["plugin-binding-command-escape"] });
+
+    expect(plan.lanes).toHaveLength(1);
+    const lane = requireFirstLane(plan);
+    expect(lane.command).toBe("pnpm test:docker:plugin-binding-command-escape");
+    expect(lane.imageKind).toBeUndefined();
+    expect(lane.live).toBe(false);
+    expect(lane.name).toBe("plugin-binding-command-escape");
+    expect(lane.resources).toEqual(["docker", "npm"]);
+    expect(lane.stateScenario).toBe("empty");
+    expect(plan.needs.e2eImage).toBe(false);
+    expect(plan.needs.package).toBe(false);
+  });
+
   it("plans the live plugin tool lane as package-backed OpenAI proof", () => {
     const plan = planFor({ selectedLaneNames: ["live-plugin-tool"] });
 
