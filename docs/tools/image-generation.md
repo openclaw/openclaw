@@ -235,11 +235,12 @@ from each attempt.
   <Accordion title="Timeouts">
     Set `agents.defaults.imageGenerationModel.timeoutMs` for slow image
     backends. A per-call `timeoutMs` tool parameter overrides the configured
-    default. Google, OpenRouter, and xAI hosted image providers use 180 second
-    defaults; Azure OpenAI image generation uses 600 seconds. Codex dynamic-tool
-    calls use a 120 second `image_generate` bridge default and honor the same
-    timeout budget when configured, bounded by OpenClaw's 600000 ms dynamic-tool
-    bridge maximum.
+    default, and configured defaults override plugin-authored provider
+    defaults. Google and OpenRouter hosted image providers use 180 second
+    defaults; xAI and Azure OpenAI image generation use 600 seconds. Codex
+    dynamic-tool calls use a 120 second `image_generate` bridge default and
+    honor the same timeout budget when configured, bounded by OpenClaw's 600000
+    ms dynamic-tool bridge maximum.
   </Accordion>
   <Accordion title="Inspect at runtime">
     Use `action: "list"` to inspect the currently registered providers,

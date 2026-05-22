@@ -42,6 +42,7 @@ function mockConfig(storePath: string, overrides?: Partial<OpenClawConfig>) {
         timeoutSeconds: 600,
         ...overrides?.agents?.defaults,
       },
+      ...(overrides?.agents?.list ? { list: overrides.agents.list } : {}),
     },
     session: {
       store: storePath,
@@ -188,6 +189,178 @@ describe("agentCliCommand", () => {
     });
   });
 
+  it("uses an explicit session key as the gateway session selector", async () => {
+    await withTempStore(async () => {
+      mockGatewaySuccessReply();
+
+      await agentCliCommand({ message: "hi", sessionKey: "agent:main:incident-42" }, runtime);
+
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "gateway request");
+      const params = requireRecord(request.params, "gateway request params");
+      expect(params.sessionKey).toBe("agent:main:incident-42");
+      expect(params.sessionId).toBeUndefined();
+      expect(params.to).toBeUndefined();
+      expect(agentCommand).not.toHaveBeenCalled();
+    });
+  });
+
+  it("scopes legacy explicit session keys to the requested agent", async () => {
+    await withTempStore(
+      async () => {
+        mockGatewaySuccessReply();
+
+        await agentCliCommand({ message: "hi", agent: "ops", sessionKey: "incident-42" }, runtime);
+
+        expect(callGateway).toHaveBeenCalledTimes(1);
+        const request = requireRecord(
+          requireFirstCallArg(callGateway, "gateway"),
+          "gateway request",
+        );
+        const params = requireRecord(request.params, "gateway request params");
+        expect(params.agentId).toBe("ops");
+        expect(params.sessionKey).toBe("agent:ops:incident-42");
+      },
+      { agents: { list: [{ id: "main" }, { id: "ops" }] } },
+    );
+  });
+
+  it("accepts agent-prefixed session keys when only casing differs from --agent", async () => {
+    await withTempStore(
+      async () => {
+        mockGatewaySuccessReply();
+
+        await agentCliCommand(
+          { message: "hi", agent: "OPS", sessionKey: "agent:OPS:incident-42" },
+          runtime,
+        );
+
+        expect(callGateway).toHaveBeenCalledTimes(1);
+        const request = requireRecord(
+          requireFirstCallArg(callGateway, "gateway"),
+          "gateway request",
+        );
+        const params = requireRecord(request.params, "gateway request params");
+        expect(params.agentId).toBe("ops");
+        expect(params.sessionKey).toBe("agent:OPS:incident-42");
+      },
+      { agents: { list: [{ id: "main" }, { id: "ops" }] } },
+    );
+  });
+
+  it("scopes legacy explicit session keys to the default agent when no agent is requested", async () => {
+    await withTempStore(
+      async () => {
+        mockGatewaySuccessReply();
+
+        await agentCliCommand({ message: "hi", sessionKey: "incident-42" }, runtime);
+
+        expect(callGateway).toHaveBeenCalledTimes(1);
+        const request = requireRecord(
+          requireFirstCallArg(callGateway, "gateway"),
+          "gateway request",
+        );
+        const params = requireRecord(request.params, "gateway request params");
+        expect(params.agentId).toBeUndefined();
+        expect(params.sessionKey).toBe("agent:ops:incident-42");
+      },
+      { agents: { list: [{ id: "ops", default: true }, { id: "main" }] } },
+    );
+  });
+
+  it("prefers explicit session keys when a session id is also supplied", async () => {
+    await withTempStore(
+      async ({ store }) => {
+        fs.writeFileSync(
+          store,
+          JSON.stringify({
+            "agent:main:main": { sessionId: "existing-main-session", updatedAt: 1 },
+          }),
+        );
+        mockGatewaySuccessReply();
+
+        await agentCliCommand(
+          {
+            message: "hi",
+            sessionId: "existing-main-session",
+            sessionKey: "agent:ops:incident-42",
+          },
+          runtime,
+        );
+
+        expect(callGateway).toHaveBeenCalledTimes(1);
+        const request = requireRecord(
+          requireFirstCallArg(callGateway, "gateway"),
+          "gateway request",
+        );
+        const params = requireRecord(request.params, "gateway request params");
+        expect(params.sessionId).toBe("existing-main-session");
+        expect(params.sessionKey).toBe("agent:ops:incident-42");
+      },
+      { agents: { list: [{ id: "main" }, { id: "ops" }] } },
+    );
+  });
+
+  it("scopes legacy global session keys to the requested agent before gateway dispatch", async () => {
+    await withTempStore(
+      async () => {
+        mockGatewaySuccessReply();
+
+        await agentCliCommand({ message: "hi", agent: "ops", sessionKey: "global" }, runtime);
+
+        expect(callGateway).toHaveBeenCalledTimes(1);
+        const request = requireRecord(
+          requireFirstCallArg(callGateway, "gateway"),
+          "gateway request",
+        );
+        const params = requireRecord(request.params, "gateway request params");
+        expect(params.agentId).toBe("ops");
+        expect(params.sessionKey).toBe("agent:ops:global");
+      },
+      { agents: { list: [{ id: "main" }, { id: "ops" }] } },
+    );
+  });
+
+  it("preserves unscoped global session keys when no agent is requested", async () => {
+    await withTempStore(
+      async () => {
+        mockGatewaySuccessReply();
+
+        await agentCliCommand({ message: "hi", sessionKey: "global" }, runtime);
+
+        expect(callGateway).toHaveBeenCalledTimes(1);
+        const request = requireRecord(
+          requireFirstCallArg(callGateway, "gateway"),
+          "gateway request",
+        );
+        const params = requireRecord(request.params, "gateway request params");
+        expect(params.agentId).toBeUndefined();
+        expect(params.sessionKey).toBe("global");
+      },
+      { agents: { list: [{ id: "ops", default: true }, { id: "main" }] } },
+    );
+  });
+
+  it("preserves unscoped unknown session keys when no agent is requested", async () => {
+    await withTempStore(
+      async () => {
+        mockGatewaySuccessReply();
+
+        await agentCliCommand({ message: "hi", sessionKey: "unknown" }, runtime);
+
+        expect(callGateway).toHaveBeenCalledTimes(1);
+        const request = requireRecord(
+          requireFirstCallArg(callGateway, "gateway"),
+          "gateway request",
+        );
+        const params = requireRecord(request.params, "gateway request params");
+        expect(params.agentId).toBeUndefined();
+        expect(params.sessionKey).toBe("unknown");
+      },
+      { agents: { list: [{ id: "ops", default: true }, { id: "main" }] } },
+    );
+  });
+
   it("stays silent when the gateway returns an intentional empty reply", async () => {
     await withTempStore(async () => {
       callGateway.mockResolvedValue({
@@ -323,6 +496,27 @@ describe("agentCliCommand", () => {
     });
   });
 
+  it("preserves explicit session keys for embedded fallback when the gateway closes", async () => {
+    await withTempStore(async () => {
+      callGateway.mockRejectedValue(createGatewayClosedError());
+      mockLocalAgentReply();
+
+      await agentCliCommand({ message: "hi", sessionKey: "agent:main:incident-42" }, runtime);
+
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      expect(agentCommand).toHaveBeenCalledTimes(1);
+      const fallbackOpts = requireRecord(
+        requireFirstCallArg(agentCommand, "embedded agent"),
+        "embedded agent options",
+      );
+      expect(fallbackOpts.sessionKey).toBe("agent:main:incident-42");
+      expect(fallbackOpts.resultMetaOverrides).toMatchObject({
+        transport: "embedded",
+        fallbackFrom: "gateway",
+      });
+    });
+  });
+
   it("does not fall back to embedded agent for gateway request errors", async () => {
     await withTempStore(async () => {
       callGateway.mockRejectedValue(
@@ -386,6 +580,63 @@ describe("agentCliCommand", () => {
       ).toBe(true);
       expect(runtime.log).toHaveBeenCalledWith("local");
     });
+  });
+
+  it("uses the explicit session key agent for timeout fallback sessions", async () => {
+    await withTempStore(async () => {
+      callGateway.mockRejectedValue(createGatewayTimeoutError());
+      mockLocalAgentReply();
+
+      await agentCliCommand({ message: "hi", sessionKey: "agent:ops:incident-42" }, runtime);
+
+      expect(agentCommand).toHaveBeenCalledTimes(1);
+      const fallbackOpts = requireFirstCallArg(agentCommand, "embedded agent") as {
+        sessionId?: string;
+        sessionKey?: string;
+      };
+      expect(fallbackOpts.sessionId).toMatch(/^gateway-fallback-/);
+      expect(fallbackOpts.sessionKey).toBe(`agent:ops:explicit:${fallbackOpts.sessionId}`);
+    });
+  });
+
+  it("uses the default-scoped legacy session key agent for timeout fallback sessions", async () => {
+    await withTempStore(
+      async () => {
+        callGateway.mockRejectedValue(createGatewayTimeoutError());
+        mockLocalAgentReply();
+
+        await agentCliCommand({ message: "hi", sessionKey: "incident-42" }, runtime);
+
+        expect(agentCommand).toHaveBeenCalledTimes(1);
+        const fallbackOpts = requireFirstCallArg(agentCommand, "embedded agent") as {
+          sessionId?: string;
+          sessionKey?: string;
+        };
+        expect(fallbackOpts.sessionId).toMatch(/^gateway-fallback-/);
+        expect(fallbackOpts.sessionKey).toBe(`agent:ops:explicit:${fallbackOpts.sessionId}`);
+      },
+      { agents: { list: [{ id: "ops", default: true }, { id: "main" }] } },
+    );
+  });
+
+  it("uses the default agent for timeout fallback with unscoped global session keys", async () => {
+    await withTempStore(
+      async () => {
+        callGateway.mockRejectedValue(createGatewayTimeoutError());
+        mockLocalAgentReply();
+
+        await agentCliCommand({ message: "hi", sessionKey: "global" }, runtime);
+
+        expect(agentCommand).toHaveBeenCalledTimes(1);
+        const fallbackOpts = requireFirstCallArg(agentCommand, "embedded agent") as {
+          sessionId?: string;
+          sessionKey?: string;
+        };
+        expect(fallbackOpts.sessionId).toMatch(/^gateway-fallback-/);
+        expect(fallbackOpts.sessionKey).toBe(`agent:ops:explicit:${fallbackOpts.sessionId}`);
+      },
+      { agents: { list: [{ id: "ops", default: true }, { id: "main" }] } },
+    );
   });
 
   it("keeps timeout fallback from replacing the routed conversation session key", async () => {
@@ -502,6 +753,81 @@ describe("agentCliCommand", () => {
       expect(localOpts.cleanupCliLiveSessionOnRunEnd).toBe(true);
       expect(localOpts).not.toHaveProperty("resultMetaOverrides");
       expect(runtime.log).toHaveBeenCalledWith("local");
+    });
+  });
+
+  it("passes explicit session keys to local embedded runs", async () => {
+    await withTempStore(async () => {
+      mockLocalAgentReply();
+
+      await agentCliCommand(
+        {
+          message: "hi",
+          sessionKey: "agent:main:incident-42",
+          local: true,
+        },
+        runtime,
+      );
+
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(agentCommand).toHaveBeenCalledTimes(1);
+      const localOpts = requireRecord(
+        requireFirstCallArg(agentCommand, "embedded agent"),
+        "embedded agent options",
+      );
+      expect(localOpts.sessionKey).toBe("agent:main:incident-42");
+    });
+  });
+
+  it("scopes legacy explicit session keys before local embedded runs", async () => {
+    await withTempStore(async () => {
+      mockLocalAgentReply();
+
+      await agentCliCommand(
+        {
+          message: "hi",
+          agent: "ops",
+          sessionKey: "incident-42",
+          local: true,
+        },
+        runtime,
+      );
+
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(agentCommand).toHaveBeenCalledTimes(1);
+      const localOpts = requireRecord(
+        requireFirstCallArg(agentCommand, "embedded agent"),
+        "embedded agent options",
+      );
+      expect(localOpts.agentId).toBe("ops");
+      expect(localOpts.sessionKey).toBe("agent:ops:incident-42");
+    });
+  });
+
+  it("rejects malformed agent-prefixed session keys before gateway or local fallback", async () => {
+    await withTempStore(async () => {
+      await expect(
+        agentCliCommand({ message: "hi", sessionKey: "agent:main" }, runtime),
+      ).rejects.toThrow(
+        'Invalid --session-key "agent:main". Agent-prefixed session keys must use agent:<agent-id>:<session-key>.',
+      );
+
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(agentCommand).not.toHaveBeenCalled();
+    });
+  });
+
+  it("rejects explicit session keys whose agent does not match --agent", async () => {
+    await withTempStore(async () => {
+      await expect(
+        agentCliCommand(
+          { message: "hi", agent: "ops", sessionKey: "agent:main:incident-42" },
+          runtime,
+        ),
+      ).rejects.toThrow('Agent id "ops" does not match session key agent "main".');
+
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(agentCommand).not.toHaveBeenCalled();
     });
   });
 

@@ -30,6 +30,7 @@ import {
 import { resolveDiscordVoiceEnabled } from "./config.js";
 import {
   type DiscordVoiceIngressContext,
+  resolveDiscordVoiceRealtimeBootstrapContext,
   resolveDiscordVoiceIngressContext,
   runDiscordVoiceAgentTurn,
 } from "./ingress.js";
@@ -649,7 +650,13 @@ export class DiscordVoiceManager {
     };
 
     if (voiceMode !== "stt-tts") {
+      const bootstrapContextInstructions = await resolveDiscordVoiceRealtimeBootstrapContext({
+        entry,
+        cfg: this.params.cfg,
+        discordConfig: this.params.discordConfig,
+      });
       entry.realtime = new DiscordRealtimeVoiceSession({
+        bootstrapContextInstructions,
         cfg: this.params.cfg,
         discordConfig: this.params.discordConfig,
         entry,

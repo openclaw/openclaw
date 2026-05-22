@@ -705,7 +705,6 @@ export async function createChatSession(state: AppViewState): Promise<boolean> {
       includeGlobal: true,
       includeUnknown: true,
       showArchived: state.sessionsShowArchived,
-      agentId: resolveAgentIdFromSessionKey(previousSessionKey),
     },
   );
   if (
@@ -738,7 +737,6 @@ async function refreshSessionOptions(state: AppViewState) {
     includeGlobal: true,
     includeUnknown: true,
     showArchived: state.sessionsShowArchived,
-    agentId: parseAgentSessionKey(state.sessionKey)?.agentId,
   });
 }
 
@@ -793,14 +791,16 @@ export function renderTopbarThemeModeToggle(state: AppViewState) {
     <div class="topbar-theme-mode" role="group" aria-label=${t("common.colorMode")}>
       ${THEME_MODE_OPTIONS.map((opt) => {
         const label = t(opt.labelKey);
+        const tooltip = t("common.colorModeOption", { mode: label });
         return html`
           <button
             type="button"
             class="topbar-theme-mode__btn ${opt.id === state.themeMode
               ? "topbar-theme-mode__btn--active"
               : ""}"
-            title=${label}
-            aria-label=${t("common.colorModeOption", { mode: label })}
+            title=${tooltip}
+            aria-label=${tooltip}
+            data-tooltip=${tooltip}
             aria-pressed=${opt.id === state.themeMode}
             @click=${(e: Event) => applyMode(opt.id, e)}
           >

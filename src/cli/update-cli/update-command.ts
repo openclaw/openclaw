@@ -69,6 +69,7 @@ import {
   createGlobalInstallEnv,
   cleanupGlobalRenameDirs,
   globalInstallArgs,
+  isOpenClawSourcePackageInstallSpec,
   resolveGlobalInstallTarget,
   resolveGlobalInstallSpec,
   resolvePnpmGlobalDirFromGlobalRoot,
@@ -95,6 +96,7 @@ import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { stylePromptMessage } from "../../terminal/prompt-style.js";
 import { theme } from "../../terminal/theme.js";
 import { resolveUserPath } from "../../utils.js";
+import { VERSION } from "../../version.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { formatCliCommand } from "../command-format.js";
 import { installCompletion } from "../completion-runtime.js";
@@ -972,6 +974,14 @@ async function resolvePackageRuntimePreflightError(params: {
       : "Upgrade Node to 22.19+ or Node 24, then rerun `openclaw update`.",
     "Bare `npm i -g openclaw` can silently install an older compatible release.",
     "After upgrading Node, use `npm i -g openclaw@latest`.",
+  ].join("\n");
+}
+
+function formatUnsupportedOpenClawSourcePackageTargetMessage(target: string): string {
+  return [
+    `Unsupported package update target: ${target}.`,
+    "OpenClaw package updates use published npm artifacts or built tarballs; npm GitHub source installs for openclaw/openclaw do not reliably produce an installable package.",
+    "Use `openclaw update --channel dev` for the moving main checkout, or target `latest`, `beta`, an exact version, or a built `.tgz` package spec.",
   ].join("\n");
 }
 
@@ -2678,6 +2688,7 @@ async function continuePostCoreUpdateInFreshProcess(params: {
   const resultPath = path.join(resultDir, "plugins.json");
   const installRecordsPath = path.join(resultDir, "plugin-install-records.json");
   const sourceConfigPath = path.join(resultDir, "source-config.json");
+  const postCoreHostVersion = await readPackageVersion(params.root);
 
   try {
     await writePostCorePluginInstallRecordsFile(installRecordsPath, params.pluginInstallRecords);
@@ -2695,6 +2706,9 @@ async function continuePostCoreUpdateInFreshProcess(params: {
         [POST_CORE_UPDATE_RESULT_PATH_ENV]: resultPath,
         [POST_CORE_UPDATE_INSTALL_RECORDS_PATH_ENV]: installRecordsPath,
         [POST_CORE_UPDATE_STARTED_AT_ENV]: String(params.updateStartedAtMs),
+        ...(postCoreHostVersion === null
+          ? {}
+          : { OPENCLAW_COMPATIBILITY_HOST_VERSION: postCoreHostVersion }),
         ...(params.preUpdateConfig
           ? { [POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV]: sourceConfigPath }
           : {}),
@@ -2881,6 +2895,8 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       defaultRuntime.exit(1);
       return;
     }
+
+    process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = (await readPackageVersion(root)) ?? VERSION;
 
     let postCoreConfigSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
     const preUpdateSourceConfig = await readPostCorePreUpdateSourceConfig({
@@ -3073,6 +3089,11 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       tag,
       env: process.env,
     });
+    if (isOpenClawSourcePackageInstallSpec(packageInstallSpec)) {
+      defaultRuntime.error(formatUnsupportedOpenClawSourcePackageTargetMessage(packageInstallSpec));
+      defaultRuntime.exit(1);
+      return;
+    }
   }
 
   if (opts.dryRun) {
