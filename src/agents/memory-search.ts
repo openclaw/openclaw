@@ -44,7 +44,6 @@ export type ResolvedMemorySearchConfig = {
   local: {
     modelPath?: string;
     modelCacheDir?: string;
-    gpu?: "auto" | "metal" | "cpu";
     contextSize?: number | "auto";
   };
   store: {
@@ -237,7 +236,6 @@ function mergeConfig(
   const local = {
     modelPath: overrides?.local?.modelPath ?? defaults?.local?.modelPath,
     modelCacheDir: overrides?.local?.modelCacheDir ?? defaults?.local?.modelCacheDir,
-    gpu: overrides?.local?.gpu ?? defaults?.local?.gpu,
     contextSize: overrides?.local?.contextSize ?? defaults?.local?.contextSize,
   };
   const sources = normalizeSources(overrides?.sources ?? defaults?.sources, sessionMemory);

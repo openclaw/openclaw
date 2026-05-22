@@ -12,7 +12,6 @@ import {
   isPathInside,
   root,
   resolveAgentContextLimits,
-  resolveMemorySearchConfig,
   resolveMemorySearchSyncConfig,
   resolveAgentWorkspaceDir,
   resolveGlobalSingleton,
@@ -229,7 +228,6 @@ type QmdManagerRuntimeConfig = {
   workspaceDir: string;
   syncSettings: ReturnType<typeof resolveMemorySearchSyncConfig>;
   contextLimits: ReturnType<typeof resolveAgentContextLimits>;
-  localGpuPolicy?: "auto" | "metal" | "cpu";
 };
 type BuiltinQmdMcpTool = "query" | "search" | "vector_search" | "deep_search";
 type QmdMcporterSearchParams =
@@ -382,7 +380,6 @@ export class QmdMemoryManager implements MemorySearchManager {
       QMD_CONFIG_DIR: path.join(this.xdgConfigHome, "qmd"),
       XDG_CACHE_HOME: this.xdgCacheHome,
       NO_COLOR: "1",
-      ...(params.runtimeConfig.localGpuPolicy === "cpu" ? { QMD_FORCE_CPU: "1" } : {}),
     };
     this.closeSignal = new Promise<void>((resolve) => {
       this.resolveCloseSignal = resolve;
@@ -1406,7 +1403,6 @@ export class QmdMemoryManager implements MemorySearchManager {
           lastUpdateAt: this.lastUpdateAt,
           embedFailures: this.embedFailureCount,
           embedBackoffUntil: this.embedBackoffUntil,
-          localGpuPolicy: paramsLocalGpuPolicy(this.env),
         },
       },
     };
@@ -3154,12 +3150,7 @@ function resolveQmdManagerRuntimeConfig(
     workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
     syncSettings: resolveMemorySearchSyncConfig(cfg, agentId),
     contextLimits: resolveAgentContextLimits(cfg, agentId),
-    localGpuPolicy: resolveMemorySearchConfig(cfg, agentId)?.local.gpu,
   };
-}
-
-function paramsLocalGpuPolicy(env: NodeJS.ProcessEnv): "cpu" | undefined {
-  return env.QMD_FORCE_CPU === "1" ? "cpu" : undefined;
 }
 
 function normalizeQmdSemanticQuery(query: string): string {

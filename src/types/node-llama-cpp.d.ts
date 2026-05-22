@@ -23,21 +23,12 @@ declare module "node-llama-cpp" {
     signal?: AbortSignal;
   };
 
-  export type LlamaGpuPolicy = "auto" | "metal" | false;
-
   export type Llama = {
-    loadModel: (params: {
-      modelPath: string;
-      loadSignal?: AbortSignal;
-      gpuLayers?: number;
-    }) => Promise<LlamaModel>;
+    loadModel: (params: { modelPath: string; loadSignal?: AbortSignal }) => Promise<LlamaModel>;
     dispose?: () => Promise<void> | void;
   };
 
-  export function getLlama(params: {
-    logLevel: LlamaLogLevel;
-    gpu?: LlamaGpuPolicy;
-  }): Promise<Llama>;
+  export function getLlama(params: { logLevel: LlamaLogLevel }): Promise<Llama>;
   export function resolveModelFile(
     modelPath: string,
     optionsOrDirectory?: string | ResolveModelFileOptions,

@@ -15,19 +15,13 @@ export type LlamaModel = {
   dispose?: () => Promise<void> | void;
 };
 
-export type LlamaGpuPolicy = "auto" | "metal" | false;
-
 export type ResolveModelFileOptions = {
   directory?: string;
   signal?: AbortSignal;
 };
 
 export type Llama = {
-  loadModel: (params: {
-    modelPath: string;
-    loadSignal?: AbortSignal;
-    gpuLayers?: number;
-  }) => Promise<LlamaModel>;
+  loadModel: (params: { modelPath: string; loadSignal?: AbortSignal }) => Promise<LlamaModel>;
   dispose?: () => Promise<void> | void;
 };
 
@@ -35,7 +29,7 @@ export type NodeLlamaCppModule = {
   LlamaLogLevel: {
     error: number;
   };
-  getLlama: (params: { logLevel: number; gpu?: LlamaGpuPolicy }) => Promise<Llama>;
+  getLlama: (params: { logLevel: number }) => Promise<Llama>;
   resolveModelFile: (
     modelPath: string,
     optionsOrDirectory?: string | ResolveModelFileOptions,

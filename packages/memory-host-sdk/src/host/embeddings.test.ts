@@ -151,46 +151,6 @@ describe("local embedding provider", () => {
     );
   });
 
-  it("passes the configured GPU policy to node-llama-cpp", async () => {
-    const runtime = mockLocalEmbeddingRuntime();
-
-    const provider = await createLocalEmbeddingProviderInProcess({
-      config: {} as never,
-      provider: "local",
-      model: "",
-      fallback: "none",
-      local: { gpu: "metal" },
-    });
-
-    await provider.embedQuery("gpu policy test");
-
-    const imported = await nodeLlamaMock.importNodeLlamaCpp.mock.results[0]?.value;
-    expect(imported.getLlama).toHaveBeenCalledWith(
-      expect.objectContaining({ gpu: "metal", logLevel: 0 }),
-    );
-    expect(runtime.loadModel).toHaveBeenCalledWith(expect.not.objectContaining({ gpuLayers: 0 }));
-  });
-
-  it("disables GPU offload for CPU policy", async () => {
-    const runtime = mockLocalEmbeddingRuntime();
-
-    const provider = await createLocalEmbeddingProviderInProcess({
-      config: {} as never,
-      provider: "local",
-      model: "",
-      fallback: "none",
-      local: { gpu: "cpu" },
-    });
-
-    await provider.embedQuery("cpu policy test");
-
-    const imported = await nodeLlamaMock.importNodeLlamaCpp.mock.results[0]?.value;
-    expect(imported.getLlama).toHaveBeenCalledWith(
-      expect.objectContaining({ gpu: false, logLevel: 0 }),
-    );
-    expect(runtime.loadModel).toHaveBeenCalledWith(expect.objectContaining({ gpuLayers: 0 }));
-  });
-
   it("runs local batch embeddings sequentially", async () => {
     const calls: string[] = [];
     const firstGate = createDeferred<{ vector: Float32Array }>();

@@ -56,7 +56,7 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
-  it("accepts local memorySearch GPU policy", () => {
+  it("rejects local memorySearch GPU policy", () => {
     const res = validateConfigObject({
       agents: {
         defaults: {
@@ -70,7 +70,7 @@ describe("config schema regressions", () => {
       },
     });
 
-    expect(res.ok).toBe(true);
+    expect(res.ok).toBe(false);
   });
 
   it("accepts memorySearch.qmd.extraCollections", () => {
