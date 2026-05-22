@@ -110,13 +110,13 @@ function buildResolvedText(params: {
   if (params.view.approvalKind === "plugin") {
     return buildPluginApprovalResolvedMessage(params.resolved as PluginApprovalResolved);
   }
+  const resolvedByText = params.resolved.resolvedBy
+    ? ` Resolved by ${params.resolved.resolvedBy}.`
+    : "";
   const payload = buildApprovalResolvedReplyPayload({
     approvalId: params.request.id,
     approvalSlug: params.request.id.slice(0, 8),
-    text:
-      `✅ Exec approval ${params.resolved.decision}.` +
-      `${params.resolved.resolvedBy ? ` Resolved by ${params.resolved.resolvedBy}.` : ""}` +
-      ` ID: ${params.request.id}`,
+    text: `✅ Exec approval ${params.resolved.decision}.${resolvedByText} ID: ${params.request.id}`,
   });
   return payload.text ?? "";
 }
