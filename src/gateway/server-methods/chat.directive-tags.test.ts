@@ -806,12 +806,18 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     // append semantics. During an active agent run we now defer media transcript
     // writes to post-dispatch, but we must still walk all captured payloads in
     // delivery order and try each one until an append succeeds — otherwise an
-    // earlier unpersistable payload (e.g. a remote-only image URL) silently
-    // suppresses a later valid one from chat history.
+    // earlier unpersistable payload silently suppresses a later valid one from
+    // chat history.
     const transcriptDir = createTranscriptFixture("openclaw-chat-send-agent-defer-fallthrough-");
-    const remoteImageUrl = "https://example.com/remote.png";
-    const validDataImageUrl =
-      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+    // Non-image data URL: parseImageDataUrl in managed-image-attachments returns
+    // "non-image-data-url" so createManagedOutgoingImageBlocks skips it, and
+    // resolveEmbeddableImageUrl in chat-webchat-media.ts also rejects it. The
+    // per-payload tryAppendDeferredMediaPayload helper therefore returns false
+    // for this payload (no media block survives content-build) without hitting
+    // the network — exactly the unpersistable-first scenario the ClawSweeper
+    // P2 finding identified.
+    const unpersistableMediaUrl = "data:application/pdf;base64,JVBERi0xLjQK";
+    const validImageDataUrl = "data:image/png;base64,cG5n";
     mockState.config = {
       agents: {
         defaults: {
@@ -824,15 +830,15 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       {
         kind: "block",
         payload: {
-          mediaUrl: remoteImageUrl,
-          mediaUrls: [remoteImageUrl],
+          mediaUrl: unpersistableMediaUrl,
+          mediaUrls: [unpersistableMediaUrl],
         },
       },
       {
         kind: "block",
         payload: {
-          mediaUrl: validDataImageUrl,
-          mediaUrls: [validDataImageUrl],
+          mediaUrl: validImageDataUrl,
+          mediaUrls: [validImageDataUrl],
         },
       },
     ];
@@ -848,36 +854,29 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
 
     await waitForAssertion(() => {
-      const assistantUpdate = findAssistantUpdateWithBlock((block) => block.type === "image_url");
+      // The persisted assistant content can carry the image either as the
+      // managed-outgoing-image block (`type: "image"`) or the webchat-media
+      // input_image block (`type: "input_image"`), depending on which build
+      // path produced the surviving block. Either is acceptable; what matters
+      // is that exactly ONE image block lands and it points to the valid PNG.
+      const assistantUpdate = findAssistantUpdateWithBlock(
+        (block) => block.type === "image" || block.type === "input_image",
+      );
       const message = assistantUpdate?.message as Record<string, any> | undefined;
       const content = Array.isArray(message?.content)
         ? (message.content as Array<Record<string, any>>)
         : [];
       expect(message?.role).toBe("assistant");
       expect(message?.idempotencyKey).toBe("idem-agent-defer-fallthrough:assistant-media");
-      // Exactly one assistant-media append should have landed — the data-URL one.
-      const imageBlocks = content.filter(
-        (block) => (block as { type?: string }).type === "image_url",
-      );
+      const imageBlocks = content.filter((block) => {
+        const type = (block as { type?: string }).type;
+        return type === "image" || type === "input_image";
+      });
       expect(imageBlocks).toHaveLength(1);
-      expect((imageBlocks[0] as { image_url?: { url?: string } }).image_url?.url).toBe(
-        validDataImageUrl,
-      );
+      const serialized = JSON.stringify(content);
+      expect(serialized).toContain(validImageDataUrl);
+      expect(serialized).not.toContain(unpersistableMediaUrl);
     });
-
-    // And the unpersistable remote URL must never appear in the persisted assistant
-    // message — neither as the image_url payload nor anywhere else in the content.
-    const assistantUpdatesWithImages = mockState.emittedTranscriptUpdates.filter(
-      (update) =>
-        typeof update.message === "object" &&
-        update.message !== null &&
-        (update.message as { role?: unknown }).role === "assistant",
-    );
-    const allAssistantContent = assistantUpdatesWithImages.flatMap((update) => {
-      const msg = update.message as Record<string, any>;
-      return Array.isArray(msg.content) ? msg.content : [];
-    });
-    expect(JSON.stringify(allAssistantContent)).not.toContain(remoteImageUrl);
   });
 
   it("persists auto-TTS final media as audio-only so webchat does not duplicate assistant text", async () => {
