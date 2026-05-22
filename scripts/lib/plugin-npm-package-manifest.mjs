@@ -135,6 +135,187 @@ function listConfiguredBundledDependencyNames(packageJson) {
   return [];
 }
 
+function npmInvocation() {
+  if (process.platform !== "win32") {
+    return { args: [], command: "npm" };
+  }
+  const npmCliPath = path.join(
+    path.dirname(process.execPath),
+    "node_modules",
+    "npm",
+    "bin",
+    "npm-cli.js",
+  );
+  if (fs.existsSync(npmCliPath)) {
+    return { args: [npmCliPath], command: process.execPath };
+  }
+  return { args: [], command: "npm.cmd", shell: true };
+}
+
+function spawnNpmSync(args, options) {
+  const invocation = npmInvocation();
+  return spawnSync(invocation.command, [...invocation.args, ...args], {
+    ...options,
+    ...(invocation.shell ? { shell: invocation.shell } : {}),
+  });
+}
+
+function spawnCommandSync(command, args, options) {
+  if (command === "npm") {
+    return spawnNpmSync(args, options);
+  }
+  return spawnSync(command, args, options);
+}
+
+function resolveInstalledPackageDir(packageDir, packageName) {
+  return path.join(packageDir, "node_modules", ...packageName.split("/"));
+}
+
+function readInstalledPackageJson(packageDir, packageName) {
+  const packageJsonPath = path.join(
+    resolveInstalledPackageDir(packageDir, packageName),
+    "package.json",
+  );
+  if (!fs.existsSync(packageJsonPath)) {
+    return undefined;
+  }
+  try {
+    return {
+      packageDir: path.dirname(packageJsonPath),
+      packageJson: readJsonFile(packageJsonPath),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function hasInstalledPackage(packageDir, packageName) {
+  return fs.existsSync(
+    path.join(resolveInstalledPackageDir(packageDir, packageName), "package.json"),
+  );
+}
+
+function normalizeOptionalDependencySpec(packageDir, dependencyPackageDir, spec) {
+  if (typeof spec !== "string" || !spec.trim()) {
+    return undefined;
+  }
+  const trimmed = spec.trim();
+  if (!trimmed.startsWith("file:")) {
+    return trimmed;
+  }
+  const fileTarget = trimmed.slice("file:".length);
+  if (!fileTarget || path.isAbsolute(fileTarget)) {
+    return trimmed;
+  }
+  const absoluteTarget = path.resolve(dependencyPackageDir, fileTarget);
+  const packageRelativeTarget = path.relative(packageDir, absoluteTarget).replaceAll(path.sep, "/");
+  return `file:${packageRelativeTarget.startsWith(".") ? packageRelativeTarget : `./${packageRelativeTarget}`}`;
+}
+
+function collectMissingOptionalBundledDependencySpecs(packageDir, packageJson) {
+  const queue = listConfiguredBundledDependencyNames(packageJson);
+  const visited = new Set();
+  const missing = new Map();
+
+  while (queue.length > 0) {
+    const packageName = queue.shift();
+    if (!packageName || visited.has(packageName)) {
+      continue;
+    }
+    visited.add(packageName);
+
+    const installed = readInstalledPackageJson(packageDir, packageName);
+    if (!installed) {
+      continue;
+    }
+    const dependencyNames = [
+      ...Object.keys(installed.packageJson.dependencies ?? {}),
+      ...Object.keys(installed.packageJson.optionalDependencies ?? {}),
+    ].toSorted((left, right) => left.localeCompare(right));
+    queue.push(...dependencyNames);
+
+    for (const [optionalName, optionalSpec] of Object.entries(
+      installed.packageJson.optionalDependencies ?? {},
+    ).toSorted(([left], [right]) => left.localeCompare(right))) {
+      if (hasInstalledPackage(packageDir, optionalName)) {
+        continue;
+      }
+      const normalizedSpec = normalizeOptionalDependencySpec(
+        packageDir,
+        installed.packageDir,
+        optionalSpec,
+      );
+      if (normalizedSpec) {
+        missing.set(optionalName, normalizedSpec);
+      }
+    }
+  }
+
+  return [...missing.entries()].map(([name, spec]) => `${name}@${spec}`);
+}
+
+function installMissingOptionalBundledDependencies(params) {
+  const portableOptionalInstallSpecs = new Map();
+  for (let pass = 0; pass < 3; pass += 1) {
+    const installSpecs = collectMissingOptionalBundledDependencySpecs(
+      params.packageDir,
+      params.packageJson,
+    );
+    if (installSpecs.length === 0) {
+      return;
+    }
+    for (const installSpec of installSpecs) {
+      const at = installSpec.indexOf("@", installSpec.startsWith("@") ? 1 : 0);
+      const packageName = at > 0 ? installSpec.slice(0, at) : installSpec;
+      portableOptionalInstallSpecs.set(packageName, installSpec);
+    }
+    const cumulativeInstallSpecs = [...portableOptionalInstallSpecs.values()].toSorted(
+      (left, right) => left.localeCompare(right),
+    );
+    console.error(
+      `[plugin-npm-publish] installing portable optional bundled dependencies for ${params.pluginDir}: ${cumulativeInstallSpecs.join(", ")}`,
+    );
+    const result = spawnNpmSync(
+      [
+        "install",
+        "--force",
+        "--omit=dev",
+        "--omit=peer",
+        "--legacy-peer-deps",
+        "--ignore-scripts",
+        "--no-audit",
+        "--no-fund",
+        "--package-lock=false",
+        "--save=false",
+        "--loglevel=error",
+        ...cumulativeInstallSpecs,
+      ],
+      {
+        cwd: params.packageDir,
+        env: process.env,
+        stdio: ["ignore", "ignore", "inherit"],
+      },
+    );
+    if (result.error) {
+      throw result.error;
+    }
+    if ((result.status ?? 1) !== 0) {
+      throw new Error(
+        `package-local portable optional dependency install failed for ${params.pluginDir} with exit ${result.status ?? 1}`,
+      );
+    }
+  }
+  const remainingSpecs = collectMissingOptionalBundledDependencySpecs(
+    params.packageDir,
+    params.packageJson,
+  );
+  if (remainingSpecs.length > 0) {
+    throw new Error(
+      `package-local portable optional dependency install did not settle for ${params.pluginDir}: ${remainingSpecs.join(", ")}`,
+    );
+  }
+}
+
 function shouldBundleDependencies(value) {
   return value === true || value === "1" || value === "true";
 }
@@ -163,8 +344,7 @@ function installPackageLocalBundledDependencies(params) {
   }
 
   console.error(`[plugin-npm-publish] installing bundled dependencies for ${params.pluginDir}`);
-  const result = spawnSync(
-    "npm",
+  const result = spawnNpmSync(
     [
       "install",
       "--omit=dev",
@@ -190,6 +370,7 @@ function installPackageLocalBundledDependencies(params) {
       `package-local bundled dependency install failed for ${params.pluginDir} with exit ${result.status ?? 1}`,
     );
   }
+  installMissingOptionalBundledDependencies(params);
   return () => {
     fs.rmSync(nodeModulesPath, { recursive: true, force: true });
   };
@@ -482,7 +663,7 @@ function main(argv = process.argv.slice(2)) {
       bundleDependencies: process.env.OPENCLAW_PLUGIN_NPM_BUNDLE_DEPENDENCIES,
     },
     ({ packageDir: cwd }) => {
-      const result = spawnSync(command, args, {
+      const result = spawnCommandSync(command, args, {
         cwd,
         env: process.env,
         stdio: "inherit",
