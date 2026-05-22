@@ -287,8 +287,6 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     });
     const isControlCommand =
       allowTextCommands && core.channel.commands.isControlCommandMessage(text, cfg);
-    const shouldComputeCommandAuthorized =
-      allowTextCommands && core.channel.commands.shouldComputeCommandAuthorized(text, cfg);
     const {
       dmPolicy,
       senderId,
@@ -303,7 +301,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     } = await resolveMSTeamsSenderAccess({
       cfg,
       activity,
-      hasControlCommand: shouldComputeCommandAuthorized,
+      hasControlCommand: isControlCommand,
     });
     const commandAuthorized = commandAccess.requested ? commandAccess.authorized : undefined;
     const effectiveDmAllowFrom = senderAccess.effectiveAllowFrom;

@@ -617,6 +617,39 @@ describe("msteams monitor handler authz", () => {
     expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).not.toHaveBeenCalled();
   });
 
+  it("does not drop inline command-looking group text from non-command-authorized senders", async () => {
+    resetThreadMocks();
+    const isControlCommandMessage = vi.fn(() => false);
+    const shouldComputeCommandAuthorized = vi.fn(() => true);
+    const { deps } = createDeps(
+      {
+        commands: { useAccessGroups: true },
+        channels: {
+          msteams: {
+            groupPolicy: "open",
+            requireMention: false,
+          },
+        },
+      } as OpenClawConfig,
+      {
+        isControlCommandMessage,
+        shouldComputeCommandAuthorized,
+      },
+    );
+
+    const handler = createMSTeamsMessageHandler(deps);
+    await handler(createAttackerGroupActivity({ text: "hello /status" }));
+
+    expect(isControlCommandMessage).toHaveBeenCalledWith("hello /status", deps.cfg);
+    expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).toHaveBeenCalledTimes(
+      1,
+    );
+    const dispatched = firstSettledDispatch();
+    const ctxPayload = recordFromMockCall(dispatched.ctxPayload);
+    expect(ctxPayload.BodyForAgent).toBe("hello /status");
+    expect(ctxPayload.CommandAuthorized).toBe(false);
+  });
+
   it("flushes pending group text before authorizing a bare abort without a mention", async () => {
     resetThreadMocks();
     const isBareAbort = vi.fn((text?: string) =>

@@ -1320,8 +1320,6 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         });
         const isControlCommand =
           allowTextCommands && core.channel.commands.isControlCommandMessage(rawText, cfg);
-        const shouldComputeCommandAuthorized =
-          allowTextCommands && core.channel.commands.shouldComputeCommandAuthorized(rawText, cfg);
         const accessDecision = await resolveMattermostMonitorInboundAccess({
           account,
           cfg,
@@ -1332,7 +1330,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           groupPolicy,
           readStoreAllowFrom: pairing.readAllowFromStore,
           allowTextCommands,
-          hasControlCommand: shouldComputeCommandAuthorized,
+          hasControlCommand: isControlCommand,
           eventKind: "message",
           mayPair: true,
         });

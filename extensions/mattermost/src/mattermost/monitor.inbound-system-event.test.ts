@@ -444,6 +444,73 @@ describe("mattermost inbound user posts", () => {
     expect(ctx?.Provider).toBe("mattermost");
   });
 
+  it("does not drop inline command-looking group text from non-command-authorized senders", async () => {
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+    const inlineCommandConfig: OpenClawConfig = {
+      commands: { useAccessGroups: true },
+      channels: {
+        mattermost: {
+          enabled: true,
+          baseUrl: "https://mattermost.example.com",
+          botToken: "bot-token",
+          chatmode: "onmessage",
+          dmPolicy: "open",
+          groupPolicy: "open",
+        },
+      },
+    };
+    const isControlCommandMessage = vi.fn(() => false);
+    const shouldComputeCommandAuthorized = vi.fn(() => true);
+    mockState.runtimeCore = createRuntimeCore(inlineCommandConfig, undefined, {
+      isControlCommandMessage,
+      shouldComputeCommandAuthorized,
+      shouldHandleTextCommands: () => true,
+    });
+
+    const monitor = monitorMattermostProvider({
+      config: inlineCommandConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+
+    await socket.emitMessage({
+      event: "posted",
+      data: {
+        channel_id: "chan-1",
+        channel_name: "town-square",
+        channel_display_name: "Town Square",
+        sender_name: "alice",
+        post: JSON.stringify({
+          id: "post-inline-command",
+          channel_id: "chan-1",
+          user_id: "user-1",
+          message: "hello /status",
+          create_at: 1_714_000_000_000,
+        }),
+      },
+      broadcast: {
+        channel_id: "chan-1",
+        user_id: "user-1",
+      },
+    });
+    socket.emitClose(1000);
+    await monitor;
+
+    expect(isControlCommandMessage).toHaveBeenCalledWith("hello /status", inlineCommandConfig);
+    expect(mockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    const ctx = mockState.dispatchReplyFromConfig.mock.calls.at(0)?.[0].ctx;
+    expect(ctx?.BodyForAgent).toBe("hello /status");
+    expect(ctx?.CommandAuthorized).toBe(false);
+  });
+
   it("uses websocket channel type when REST channel lookup fails", async () => {
     const socket = new FakeWebSocket();
     const abortController = new AbortController();
