@@ -1552,6 +1552,49 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
+  test("exports skill usage counter and span without raw identifiers", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
+    await service.start(ctx);
+
+    emitTrustedDiagnosticEvent({
+      type: "skill.used",
+      agentId: "main",
+      runId: "run-should-not-export",
+      sessionKey: "session-should-not-export",
+      skillName: "tiny-llm-brainstorm",
+      skillSource: "workspace",
+      activation: "read",
+      toolName: "read",
+      trace: {
+        traceId: TRACE_ID,
+        spanId: TOOL_SPAN_ID,
+        parentSpanId: CHILD_SPAN_ID,
+        traceFlags: "01",
+      },
+    });
+    await flushDiagnosticEvents();
+
+    const expectedAttrs = {
+      "openclaw.agent": "main",
+      "openclaw.skill.activation": "read",
+      "openclaw.skill.name": "tiny-llm-brainstorm",
+      "openclaw.skill.source": "workspace",
+      "openclaw.toolName": "read",
+    };
+    expect(telemetryState.counters.get("openclaw.skill.used")?.add).toHaveBeenCalledWith(
+      1,
+      expectedAttrs,
+    );
+    const skillSpanCall = telemetryState.tracer.startSpan.mock.calls.find(
+      (call) => call[0] === "openclaw.skill.used",
+    );
+    expect(skillSpanCall?.[1]).toMatchObject({ attributes: expectedAttrs });
+    expect(JSON.stringify(skillSpanCall)).not.toContain("run-should-not-export");
+    expect(JSON.stringify(skillSpanCall)).not.toContain("session-should-not-export");
+    await service.stop?.(ctx);
+  });
+
   test("exports run, model call, and tool execution lifecycle spans", async () => {
     const service = createDiagnosticsOtelService();
     const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
@@ -1686,6 +1729,7 @@ describe("diagnostics-otel service", () => {
     const toolCall = startedSpanCall("openclaw.tool.execution");
     const toolOptions = toolCall?.[1];
     expect(toolOptions?.attributes?.["openclaw.toolName"]).toBe("read");
+    expect(toolOptions?.attributes?.["openclaw.tool.source"]).toBe("core");
     expect(toolOptions?.attributes?.["openclaw.errorCategory"]).toBe("TypeError");
     expect(toolOptions?.attributes?.["openclaw.errorCode"]).toBe("429");
     expect(toolOptions?.attributes?.["openclaw.tool.params.kind"]).toBe("object");
@@ -1728,6 +1772,7 @@ describe("diagnostics-otel service", () => {
     expect(Object.hasOwn(harnessDuration?.[1] ?? {}, "openclaw.sessionKey")).toBe(false);
     const toolDuration = lastHistogramRecord("openclaw.tool.execution.duration_ms");
     expect(toolDuration?.[0]).toBe(20);
+    expect(toolDuration?.[1]?.["openclaw.tool.source"]).toBe("core");
     expect(Object.hasOwn(toolDuration?.[1] ?? {}, "openclaw.errorCode")).toBe(false);
     expect(Object.hasOwn(toolDuration?.[1] ?? {}, "openclaw.runId")).toBe(false);
 
