@@ -154,6 +154,53 @@ describe("install.ps1 failure handling", () => {
     expect(resolveNodeBody).toContain("node-$($release.version)-win-$architecture.zip");
   });
 
+  it("persists user-local portable Git for future git-backed updates", () => {
+    const portableGitRootBody = extractFunctionBody(source, "Get-PortableGitRoot");
+    const portableGitBody = extractFunctionBody(source, "Install-PortableGit");
+    const portableGitPathEntriesBody = extractFunctionBody(source, "Get-PortableGitPathEntries");
+    const portableGitPathBody = extractFunctionBody(source, "Ensure-PortableGitOnUserPath");
+    const usePortableGitBody = extractFunctionBody(source, "Use-PortableGitIfPresent");
+    const ensureGitBody = extractFunctionBody(source, "Ensure-Git");
+
+    expect(portableGitRootBody).toContain("Get-OpenClawDepsRoot");
+    expect(portableGitPathEntriesBody).toContain("mingw64\\bin");
+    expect(portableGitPathEntriesBody).toContain("usr\\bin");
+    expect(portableGitPathEntriesBody).toContain("Split-Path -Parent $gitExe");
+    expect(usePortableGitBody).toContain("foreach ($pathEntry in (Get-PortableGitPathEntries))");
+    expect(portableGitBody).toContain("Ensure-PortableGitOnUserPath");
+    expect(ensureGitBody).toContain("Ensure-PortableGitOnUserPath");
+    expect(portableGitPathBody).toContain("Add-ToUserPath $pathEntry");
+    expect(portableGitPathBody).toContain("git-backed updates");
+  });
+
+  it("activates the repo-pinned pnpm version for git installs", () => {
+    const pnpmVersionBody = extractFunctionBody(source, "Get-RepoPnpmVersion");
+    const pnpmVersionMatchBody = extractFunctionBody(source, "Test-PnpmCommandMatchesVersion");
+    const ensurePnpmBody = extractFunctionBody(source, "Ensure-Pnpm");
+    const gitInstallBody = extractFunctionBody(source, "Install-OpenClawFromGit");
+
+    expect(pnpmVersionBody).toContain("package.json");
+    expect(pnpmVersionBody).toContain("$packageJson.packageManager -match '^pnpm@(?<version>[^+]+)'");
+    expect(pnpmVersionMatchBody).toContain("Push-Location -LiteralPath $RepoDir");
+    expect(pnpmVersionMatchBody).toContain("$currentVersion.Trim() -eq $PnpmVersion");
+    expect(ensurePnpmBody).toContain("Get-RepoPnpmVersion -RepoDir $RepoDir");
+    expect(ensurePnpmBody).toContain("$pnpmSpec");
+    expect(ensurePnpmBody).toContain(
+      "Test-PnpmCommandMatchesVersion -PnpmVersion $pnpmVersion -RepoDir $RepoDir",
+    );
+    expect(ensurePnpmBody).toContain("& $corepackCommand prepare $pnpmSpec --activate");
+    expect(ensurePnpmBody).toContain("& (Get-NpmCommandPath) install -g $pnpmSpec");
+    expect(gitInstallBody.indexOf("git clone $repoUrl $RepoDir")).toBeLessThan(
+      gitInstallBody.indexOf("Ensure-Pnpm -RepoDir $RepoDir"),
+    );
+    expect(gitInstallBody.indexOf("git -C $RepoDir pull --rebase")).toBeLessThan(
+      gitInstallBody.indexOf("Ensure-Pnpm -RepoDir $RepoDir"),
+    );
+    expect(gitInstallBody).toContain("Push-Location -LiteralPath $RepoDir");
+    expect(gitInstallBody).toContain("& $pnpmCommand install");
+    expect(gitInstallBody).not.toContain("& $pnpmCommand -C $RepoDir install");
+  });
+
   it("cleans legacy git submodules only from the selected git checkout", () => {
     const gitInstallBody = extractFunctionBody(source, "Install-OpenClawFromGit");
     const mainBody = extractFunctionBody(source, "Main");
