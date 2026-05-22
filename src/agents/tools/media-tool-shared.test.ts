@@ -104,6 +104,28 @@ describe("resolveModelFromRegistry", () => {
 });
 
 describe("hasGenerationToolAvailability", () => {
+  it("accepts config-backed custom provider auth for generation providers", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "custom-image": {
+            baseUrl: "https://example.com/v1",
+            apiKey: "sk-configured", // pragma: allowlist secret
+            models: [],
+          },
+        },
+      },
+    };
+
+    expect(
+      hasGenerationToolAvailability({
+        providerKey: "imageGenerationProviders",
+        cfg,
+        providers: [{ id: "custom-image", defaultModel: "workflow" }],
+      }),
+    ).toBe(true);
+  });
+
   it("allows generation tools for runtime providers configured without auth", () => {
     expect(
       hasGenerationToolAvailability({

@@ -121,6 +121,41 @@ vi.mock("../auth-profiles.js", () => ({
 }));
 
 vi.mock("../model-auth.js", () => ({
+  resolveModelAuthMode: (
+    provider: string,
+    cfg?: OpenClawConfig,
+    authStore?: { profiles?: Record<string, { provider?: string; type?: string }> },
+  ) => {
+    const providerConfig = cfg?.models?.providers?.[provider];
+    if (providerConfig?.auth === "aws-sdk") {
+      return "aws-sdk";
+    }
+    if (provider === "amazon-bedrock" && providerConfig?.auth === undefined) {
+      return "aws-sdk";
+    }
+    const apiKey = providerConfig?.apiKey;
+    if (typeof apiKey === "string" && apiKey.trim().length > 0) {
+      return "api-key";
+    }
+    const profile = Object.values(authStore?.profiles ?? {}).find(
+      (entry) => entry?.provider === provider,
+    );
+    return profile?.type === "oauth" || profile?.type === "token" ? profile.type : undefined;
+  },
+  hasRuntimeAvailableProviderAuth: ({
+    provider,
+    cfg,
+  }: {
+    provider: string;
+    cfg?: OpenClawConfig;
+  }) => {
+    const providerConfig = cfg?.models?.providers?.[provider];
+    const apiKey = providerConfig?.apiKey;
+    if (typeof apiKey === "string" && apiKey.trim().length > 0) {
+      return true;
+    }
+    return false;
+  },
   resolveEnvApiKey: (provider: string) => {
     const envVarByProvider: Record<string, string[]> = {
       anthropic: ["ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"],
@@ -1060,6 +1095,30 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
+  it("pairs a custom provider when config declares its api key", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "hatchery-qwen3.6-plus/text-1" } } },
+        models: {
+          providers: {
+            "hatchery-qwen3.6-plus": {
+              baseUrl: "https://example.com",
+              apiKey: "sk-configured", // pragma: allowlist secret
+              models: [
+                makeModelDefinition("text-1", ["text"]),
+                makeModelDefinition("qwen3.6-plus", ["text", "image"]),
+              ],
+            },
+          },
+        },
+      };
+      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
+        primary: "hatchery-qwen3.6-plus/qwen3.6-plus",
+      });
+      expect(typeof createImageTool({ config: cfg, agentDir })?.execute).toBe("function");
+    });
+  });
+
   it("does not double-prefix custom provider model IDs that already include the provider", async () => {
     await withTempAgentDir(async (agentDir) => {
       await writeAuthProfiles(agentDir, {
@@ -1107,6 +1166,8 @@ describe("image tool implicit imageModel config", () => {
           providers: {
             "amazon-bedrock": {
               baseUrl: "https://example.com",
+              auth: "api-key",
+              apiKey: "sk-configured", // pragma: allowlist secret
               models: [
                 makeModelDefinition("text-1", ["text"]),
                 makeModelDefinition("vision-1", ["text", "image"]),

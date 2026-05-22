@@ -57,7 +57,7 @@ function summarizeMusicGenerationCapabilities(
 
 export function createMusicGenerateListActionResult(
   config?: OpenClawConfig,
-  options?: { agentDir?: string; authStore?: AuthProfileStore },
+  options?: { workspaceDir?: string; agentDir?: string; authStore?: AuthProfileStore },
 ): MusicGenerateActionResult {
   const providers = listRuntimeMusicGenerationProviders({ config });
   return createMediaGenerateProviderListActionResult({
@@ -65,6 +65,7 @@ export function createMusicGenerateListActionResult(
     providers,
     emptyText: "No music-generation providers are registered.",
     cfg: config,
+    workspaceDir: options?.workspaceDir,
     agentDir: options?.agentDir,
     authStore: options?.authStore,
     listModes: listSupportedMusicGenerationModes,

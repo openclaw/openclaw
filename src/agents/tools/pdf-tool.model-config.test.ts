@@ -33,6 +33,26 @@ vi.mock("./model-config.helpers.js", () => ({
     }
     return false;
   },
+  hasProviderAuthForTool: ({ provider, cfg }: { provider: string; cfg?: OpenClawConfig }) => {
+    const providerConfig = cfg?.models?.providers?.[provider];
+    const apiKey = providerConfig?.apiKey;
+    if (typeof apiKey === "string" && apiKey.trim().length > 0) {
+      return true;
+    }
+    if (provider === "anthropic") {
+      return Boolean(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_OAUTH_TOKEN);
+    }
+    if (provider === "openai") {
+      return Boolean(process.env.OPENAI_API_KEY);
+    }
+    if (provider === "google") {
+      return Boolean(process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY);
+    }
+    if (provider === "minimax" || provider === "minimax-cn") {
+      return Boolean(process.env.MINIMAX_API_KEY);
+    }
+    return false;
+  },
   resolveDefaultModelRef: (cfg?: OpenClawConfig) => {
     const modelCfg = cfg?.agents?.defaults?.model;
     const primary =
@@ -107,6 +127,35 @@ describe("resolvePdfModelConfigForTool", () => {
     expect(resolvePdfModelConfigForTool({ cfg, agentDir: TEST_AGENT_DIR })?.primary).toBe(
       ANTHROPIC_PDF_MODEL,
     );
+  });
+
+  it("uses a config-authenticated custom provider image model as a PDF fallback", () => {
+    const cfg = {
+      ...withDefaultModel("hatchery/text-1"),
+      models: {
+        providers: {
+          hatchery: {
+            baseUrl: "https://example.com/v1",
+            apiKey: "sk-configured", // pragma: allowlist secret
+            models: [
+              {
+                id: "vision-1",
+                name: "Vision 1",
+                reasoning: false,
+                input: ["text", "image"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 32_000,
+                maxTokens: 4_096,
+              },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolvePdfModelConfigForTool({ cfg, agentDir: TEST_AGENT_DIR })).toEqual({
+      primary: "hatchery/vision-1",
+    });
   });
 
   it("does not add configured MiniMax chat models as automatic PDF image fallbacks", () => {

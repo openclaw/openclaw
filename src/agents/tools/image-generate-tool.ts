@@ -202,11 +202,13 @@ const ImageGenerateToolSchema = Type.Object({
 
 export function resolveImageGenerationModelConfigForTool(params: {
   cfg?: OpenClawConfig;
+  workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
 }): ToolModelConfig | null {
   return resolveCapabilityModelConfigForTool({
     cfg: params.cfg,
+    workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     authStore: params.authStore,
     modelConfig: params.cfg?.agents?.defaults?.imageGenerationModel,
@@ -799,6 +801,7 @@ export function createImageGenerateTool(options?: {
       if (action === "list") {
         return createImageGenerateListActionResult({
           cfg,
+          workspaceDir: options?.workspaceDir,
           agentDir: options?.agentDir,
           authStore: options?.authProfileStore,
         });
@@ -809,6 +812,7 @@ export function createImageGenerateTool(options?: {
 
       const imageGenerationModelConfig = resolveImageGenerationModelConfigForTool({
         cfg,
+        workspaceDir: options?.workspaceDir,
         agentDir: options?.agentDir,
         authStore: options?.authProfileStore,
       });
