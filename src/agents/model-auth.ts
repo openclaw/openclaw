@@ -389,6 +389,7 @@ type SyntheticProviderAuthResolution = {
 function resolveProviderSyntheticRuntimeAuth(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
+  modelApi?: string;
 }): SyntheticProviderAuthResolution {
   const resolveFromConfig = (
     config: OpenClawConfig | undefined,
@@ -403,6 +404,7 @@ function resolveProviderSyntheticRuntimeAuth(params: {
           provider: params.provider,
           providerConfig,
         },
+        modelApi: params.modelApi,
       }) ?? undefined
     );
   };
@@ -433,6 +435,7 @@ function resolveProviderSyntheticRuntimeAuth(params: {
 function resolveSyntheticLocalProviderAuth(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
+  modelApi?: string;
 }): ResolvedProviderAuth | null {
   const syntheticProviderAuth = resolveProviderSyntheticRuntimeAuth(params);
   if (syntheticProviderAuth.auth) {
@@ -510,12 +513,14 @@ function shouldDeferSyntheticProfileAuth(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
   resolvedApiKey: string | undefined;
+  modelApi?: string;
 }): boolean {
   const providerConfig = resolveProviderConfig(params.cfg, params.provider);
   return (
     shouldDeferProviderSyntheticProfileAuthWithPlugin({
       provider: params.provider,
       config: params.cfg,
+      modelApi: params.modelApi,
       context: {
         config: params.cfg,
         provider: params.provider,
@@ -551,6 +556,7 @@ export async function resolveApiKeyForProvider(params: {
   lockedProfile?: boolean;
   forceRefresh?: boolean;
   credentialPrecedence?: ProviderCredentialPrecedence;
+  modelApi?: string;
 }): Promise<ResolvedProviderAuth> {
   const { provider, cfg, profileId, preferredProfile } = params;
   const agentDir = params.agentDir?.trim() || (cfg ? resolveDefaultAgentDir(cfg) : undefined);
@@ -599,6 +605,7 @@ export async function resolveApiKeyForProvider(params: {
         cfg,
         provider,
         resolvedApiKey: resolved.apiKey,
+        modelApi: params.modelApi,
       })
     ) {
       return resolveApiKeyForProvider({ ...params, profileId: undefined, lockedProfile: true }) //
@@ -731,6 +738,7 @@ export async function resolveApiKeyForProvider(params: {
             cfg,
             provider,
             resolvedApiKey: resolved.apiKey,
+            modelApi: params.modelApi,
           })
         ) {
           deferredAuthProfileResult ??= result;
@@ -766,7 +774,7 @@ export async function resolveApiKeyForProvider(params: {
     return deferredAuthProfileResult;
   }
 
-  const syntheticLocalAuth = resolveSyntheticLocalProviderAuth({ cfg, provider });
+  const syntheticLocalAuth = resolveSyntheticLocalProviderAuth({ cfg, provider, modelApi: params.modelApi });
   if (syntheticLocalAuth) {
     return syntheticLocalAuth;
   }
@@ -964,6 +972,7 @@ export async function getApiKeyForModel(params: {
     workspaceDir: params.workspaceDir,
     lockedProfile: params.lockedProfile,
     credentialPrecedence: params.credentialPrecedence,
+    modelApi: params.model.api,
   });
 }
 
