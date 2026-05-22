@@ -370,7 +370,7 @@ describe("loadEnabledBundlePiSettingsSnapshot", () => {
   it("loads sanitized settings and MCP defaults from enabled bundle plugins", async () => {
     const workspaceDir = await tempDirs.make("openclaw-workspace-");
     const pluginRoot = await createWorkspaceBundle({ workspaceDir });
-    const _resolvedPluginRoot = await fs.realpath(pluginRoot);
+    const resolvedPluginRoot = await fs.realpath(pluginRoot);
     await fs.mkdir(path.join(pluginRoot, "servers"), { recursive: true });
     const resolvedServerPath = await fs.realpath(path.join(pluginRoot, "servers"));
     await fs.writeFile(
@@ -417,12 +417,12 @@ describe("loadEnabledBundlePiSettingsSnapshot", () => {
       bundleProbe: {
         command: "node",
         args: [path.join(resolvedServerPath, "probe.mjs")],
-        cwd: _resolvedPluginRoot,
+        cwd: resolvedPluginRoot,
       },
       sharedServer: {
         command: "node",
         args: [path.join(resolvedServerPath, "bundle.mjs")],
-        cwd: _resolvedPluginRoot,
+        cwd: resolvedPluginRoot,
       },
     });
 
@@ -448,7 +448,7 @@ describe("loadEnabledBundlePiSettingsSnapshot", () => {
       bundleProbe: {
         command: "node",
         args: [path.join(resolvedServerPath, "probe.mjs")],
-        cwd: _resolvedPluginRoot,
+        cwd: resolvedPluginRoot,
       },
       sharedServer: {
         url: "https://example.com/mcp",

@@ -485,7 +485,7 @@ export function readCodexCliSessionMessages(params: {
   return messages;
 }
 
-export const __testing = {
+export const codexCliHistoryTesting = {
   get codexCliSessionPathCacheSize(): number {
     return codexCliSessionPathCache.size;
   },

@@ -723,6 +723,7 @@ export async function performGatewaySessionReset(params: {
       storePath,
       agentId: sessionAgentId,
     });
+    const suppressedCliHistoryImportProviders = resolveBoundCliSessionProviders(currentEntry);
     const nextEntry: SessionEntry = {
       sessionId: nextSessionId,
       sessionFile,
@@ -773,13 +774,11 @@ export async function performGatewaySessionReset(params: {
       space: currentEntry?.space,
       origin: snapshotSessionOrigin(currentEntry),
       deliveryContext: currentEntry?.deliveryContext,
-      suppressCliHistoryImport:
-        currentEntry?.cliSessionBindings ||
-        currentEntry?.cliSessionIds ||
-        currentEntry?.claudeCliSessionId
-          ? true
+      suppressCliHistoryImport: suppressedCliHistoryImportProviders.length > 0 ? true : undefined,
+      suppressCliHistoryImportProviders:
+        suppressedCliHistoryImportProviders.length > 0
+          ? suppressedCliHistoryImportProviders
           : undefined,
-      suppressCliHistoryImportProviders: resolveBoundCliSessionProviders(currentEntry),
       cliSessionBindings: currentEntry?.cliSessionBindings,
       cliSessionIds: currentEntry?.cliSessionIds,
       claudeCliSessionId: currentEntry?.claudeCliSessionId,
