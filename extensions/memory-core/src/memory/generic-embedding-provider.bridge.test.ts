@@ -7,20 +7,18 @@ import {
   createPluginRegistryFixture,
   registerVirtualTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   clearEmbeddingProviders,
   getRegisteredEmbeddingProvider,
   listRegisteredEmbeddingProviders,
   type RegisteredEmbeddingProvider,
   restoreRegisteredEmbeddingProviders,
-} from "../../../../src/plugins/embedding-providers.js";
-import {
   clearMemoryEmbeddingProviders,
   listRegisteredMemoryEmbeddingProviders,
   type RegisteredMemoryEmbeddingProvider,
   restoreRegisteredMemoryEmbeddingProviders,
-} from "../../../../src/plugins/memory-embedding-providers.js";
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createEmbeddingProvider } from "./embeddings.js";
 
 type CapturedCall = {

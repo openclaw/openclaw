@@ -2,19 +2,17 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { AddressInfo } from "node:net";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { getActivePluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   clearEmbeddingProviders,
+  clearMemoryEmbeddingProviders,
+  getActivePluginRegistry,
   listRegisteredEmbeddingProviders,
+  listRegisteredMemoryEmbeddingProviders,
   registerEmbeddingProvider,
   restoreRegisteredEmbeddingProviders,
-} from "../../../../src/plugins/embedding-providers.js";
-import {
-  clearMemoryEmbeddingProviders,
-  listRegisteredMemoryEmbeddingProviders,
   restoreRegisteredMemoryEmbeddingProviders,
-} from "../../../../src/plugins/memory-embedding-providers.js";
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import openAIPlugin from "../../../openai/index.js";
 import { createEmbeddingProvider } from "./embeddings.js";
 
