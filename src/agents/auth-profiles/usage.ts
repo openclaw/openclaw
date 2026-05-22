@@ -1,7 +1,10 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeProviderId } from "../provider-id.js";
 import { resolveProviderRequestHeaders } from "../provider-request-config.js";
 import { logAuthProfileFailureStateChange } from "./state-observation.js";
+
+const authProfileUsageLog = createSubsystemLogger("agent/embedded");
 import { saveAuthProfileStore, updateAuthProfileStoreWithLock } from "./store.js";
 import type {
   AuthProfileBlockedSource,
@@ -728,8 +731,13 @@ export async function markAuthProfileFailure(params: {
     }
     try {
       onAuthProfileFailureHook?.();
-    } catch {
-      // hook errors must not break failure recording
+    } catch (err) {
+      // Hook errors must not break failure recording; log and continue.
+      authProfileUsageLog.warn("auth profile failure hook threw", {
+        event: "auth_profile_failure_hook_error",
+        tags: ["error_handling", "auth_profiles"],
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
     return;
   }
@@ -774,8 +782,13 @@ export async function markAuthProfileFailure(params: {
   });
   try {
     onAuthProfileFailureHook?.();
-  } catch {
-    // hook errors must not break failure recording
+  } catch (err) {
+    // Hook errors must not break failure recording; log and continue.
+    authProfileUsageLog.warn("auth profile failure hook threw", {
+      event: "auth_profile_failure_hook_error",
+      tags: ["error_handling", "auth_profiles"],
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 }
 
