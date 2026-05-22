@@ -35,6 +35,8 @@ type OtlpResourceSpans = {
   scopeSpans?: OtlpScopeSpans[];
 };
 
+type OtlpSignal = "logs" | "metrics" | "traces";
+
 type CliOptions = {
   outputDir: string;
   providerMode: string;
@@ -46,6 +48,7 @@ type CliOptions = {
 
 type CapturedRequest = {
   path: string;
+  signal: OtlpSignal;
   bytes: number;
   status: number;
   spanCount: number;
@@ -58,6 +61,11 @@ type CapturedSpan = {
 };
 
 const DEFAULT_SCENARIO_ID = "otel-trace-smoke";
+const OTLP_SIGNAL_PATHS = new Map<string, OtlpSignal>([
+  ["/v1/traces", "traces"],
+  ["/v1/metrics", "metrics"],
+  ["/v1/logs", "logs"],
+]);
 const REQUIRED_SPAN_NAMES = [
   "openclaw.run",
   "openclaw.harness.run",
@@ -73,13 +81,25 @@ const DISALLOWED_ATTRIBUTE_KEYS = new Set([
   "openclaw.sessionId",
   "openclaw.callId",
   "openclaw.toolCallId",
+  "openclaw.run_id",
+  "openclaw.chat_id",
+  "openclaw.message_id",
+  "openclaw.session_key",
+  "openclaw.session_id",
+  "openclaw.call_id",
+  "openclaw.tool_call_id",
 ]);
+const DISALLOWED_BODY_NEEDLES = [
+  "OTEL-QA-SECRET",
+  "OTEL-QA-OK",
+  "agent:qa:otel-trace-smoke",
+];
 
 function usage(): string {
   return `Usage: pnpm qa:otel:smoke [--output-dir <path>] [--provider-mode <mode>] [--scenario <id>] [--model <ref>] [--alt-model <ref>]
 
 Runs a QA-lab scenario with diagnostics-otel enabled against a local OTLP/HTTP
-trace receiver, then asserts the emitted span shape and privacy contract.
+receiver, then asserts the emitted signal shape and privacy contract.
 `;
 }
 
@@ -388,21 +408,34 @@ function decodeTraceRequest(body: Buffer): CapturedSpan[] {
   return spans;
 }
 
-function startLocalOtlpTraceReceiver() {
+function startLocalOtlpReceiver() {
   const capturedRequests: CapturedRequest[] = [];
   const capturedSpans: CapturedSpan[] = [];
+  const capturedBodyText: Partial<Record<OtlpSignal, string[]>> = {};
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
-    if (req.method !== "POST" || req.url !== "/v1/traces") {
+    if (req.method !== "POST" || !req.url) {
+      res.writeHead(404, { "content-type": "text/plain" });
+      res.end("not found");
+      return;
+    }
+    const requestPath = req.url;
+    const signal = OTLP_SIGNAL_PATHS.get(requestPath);
+    if (!signal) {
       res.writeHead(404, { "content-type": "text/plain" });
       res.end("not found");
       return;
     }
 
     const body = await readRequestBody(req);
-    const spans = decodeTraceRequest(body);
-    capturedSpans.push(...spans);
+    const spans = signal === "traces" ? decodeTraceRequest(body) : [];
+    if (spans.length > 0) {
+      capturedSpans.push(...spans);
+    }
+    capturedBodyText[signal] ??= [];
+    capturedBodyText[signal]?.push(body.toString("utf8"));
     capturedRequests.push({
-      path: req.url,
+      path: requestPath,
+      signal,
       bytes: body.length,
       status: 200,
       spanCount: spans.length,
@@ -414,6 +447,7 @@ function startLocalOtlpTraceReceiver() {
   return {
     capturedRequests,
     capturedSpans,
+    capturedBodyText,
     async listen(): Promise<number> {
       await new Promise<void>((resolve) => {
         server.listen(0, "127.0.0.1", resolve);
@@ -457,9 +491,9 @@ function buildQaEnv(port: number): NodeJS.ProcessEnv {
   delete env.OTEL_SDK_DISABLED;
   delete env.OTEL_TRACES_EXPORTER;
   delete env.OTEL_EXPORTER_OTLP_ENDPOINT;
-  delete env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT;
-  delete env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT;
   env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = `http://127.0.0.1:${port}/v1/traces`;
+  env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT = `http://127.0.0.1:${port}/v1/metrics`;
+  env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT = `http://127.0.0.1:${port}/v1/logs`;
   env.OTEL_SERVICE_NAME = "openclaw-qa-lab-otel-smoke";
   env.OTEL_SEMCONV_STABILITY_OPT_IN = "gen_ai_latest_experimental";
   env.OPENCLAW_QA_SUITE_PROGRESS = env.OPENCLAW_QA_SUITE_PROGRESS ?? "1";
@@ -503,13 +537,21 @@ function assertSmoke(params: {
   childExitCode: number;
   spans: CapturedSpan[];
   requests: CapturedRequest[];
+  bodyText: Partial<Record<OtlpSignal, string[]>>;
 }) {
   const failures: string[] = [];
   if (params.childExitCode !== 0) {
     failures.push(`qa suite exited with ${params.childExitCode}`);
   }
-  if (params.requests.length === 0) {
-    failures.push("no OTLP trace requests were received");
+  for (const signal of ["traces", "metrics", "logs"] as const) {
+    const requests = params.requests.filter((request) => request.signal === signal);
+    if (requests.length === 0) {
+      failures.push(`no OTLP ${signal} requests were received`);
+    }
+    const emptyRequests = requests.filter((request) => request.bytes === 0);
+    if (emptyRequests.length > 0) {
+      failures.push(`empty OTLP ${signal} request received`);
+    }
   }
   if (params.spans.length === 0) {
     failures.push("no OTLP trace spans were decoded");
@@ -553,6 +595,16 @@ function assertSmoke(params: {
     failures.push("StreamAbandoned leaked into OTEL attributes");
   }
 
+  for (const signal of ["traces", "metrics", "logs"] as const) {
+    const signalBodies = (params.bodyText[signal] ?? []).join("\n");
+    const leakedNeedles = DISALLOWED_BODY_NEEDLES.filter((needle) =>
+      signalBodies.includes(needle),
+    );
+    if (leakedNeedles.length > 0) {
+      failures.push(`OTLP ${signal} payload leaked content: ${leakedNeedles.join(", ")}`);
+    }
+  }
+
   return {
     passed: failures.length === 0,
     failures,
@@ -561,6 +613,11 @@ function assertSmoke(params: {
     modelErrorSpanCount: modelErrorSpans.length,
     disallowedAttributeKeys: disallowed,
     contentAttributeKeys: contentKeys,
+    signalRequestCounts: {
+      traces: params.requests.filter((request) => request.signal === "traces").length,
+      metrics: params.requests.filter((request) => request.signal === "metrics").length,
+      logs: params.requests.filter((request) => request.signal === "logs").length,
+    },
   };
 }
 
@@ -572,10 +629,10 @@ async function main() {
   }
 
   await mkdir(options.outputDir, { recursive: true });
-  const receiver = startLocalOtlpTraceReceiver();
+  const receiver = startLocalOtlpReceiver();
   const port = await receiver.listen();
   process.stdout.write(
-    `qa-otel-smoke: local OTLP trace receiver listening on http://127.0.0.1:${port}/v1/traces\n`,
+    `qa-otel-smoke: local OTLP receiver listening on http://127.0.0.1:${port}\n`,
   );
 
   let childExitCode = 1;
@@ -593,6 +650,7 @@ async function main() {
     childExitCode,
     spans: receiver.capturedSpans,
     requests: receiver.capturedRequests,
+    bodyText: receiver.capturedBodyText,
   });
   const summary = {
     passed: assertion.passed,
@@ -603,6 +661,7 @@ async function main() {
     requests: receiver.capturedRequests,
     spanCount: receiver.capturedSpans.length,
     spanNames: assertion.spanNames,
+    signalRequestCounts: assertion.signalRequestCounts,
     modelSpanCount: assertion.modelSpanCount,
     modelErrorSpanCount: assertion.modelErrorSpanCount,
     disallowedAttributeKeys: assertion.disallowedAttributeKeys,
@@ -625,7 +684,7 @@ async function main() {
     return;
   }
   process.stdout.write(
-    `qa-otel-smoke: passed spans=${receiver.capturedSpans.length} requests=${receiver.capturedRequests.length}\n`,
+    `qa-otel-smoke: passed spans=${receiver.capturedSpans.length} traces=${assertion.signalRequestCounts.traces} metrics=${assertion.signalRequestCounts.metrics} logs=${assertion.signalRequestCounts.logs}\n`,
   );
 }
 
