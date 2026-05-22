@@ -832,8 +832,9 @@ async function sendSubagentAnnounceDirectly(params: {
       completionRouteRequiresMessageToolDelivery ||
       (agentMediatedCompletion && expectedMediaUrls.length > 0);
     const requesterActivity = resolveRequesterSessionActivity(canonicalRequesterSessionKey);
+    let activeRequesterWakeFailed = false;
     const tryGeneratedMediaDirectDelivery = async (announceResponse?: unknown) => {
-      if (requesterActivity.isActive) {
+      if (requesterActivity.isActive && !activeRequesterWakeFailed) {
         return undefined;
       }
       const missingMediaUrls = resolveGeneratedMediaDirectFallbackUrls({
@@ -902,6 +903,7 @@ async function sendSubagentAnnounceDirectly(params: {
           path: "steered",
         };
       }
+      activeRequesterWakeFailed = true;
       defaultRuntime.log(
         `[warn] Active requester session could not be woken for subagent completion; falling back to requester-agent handoff: ${formatQueueWakeFailureError(
           "active requester session could not be woken",
