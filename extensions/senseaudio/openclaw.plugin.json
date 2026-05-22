@@ -10,6 +10,17 @@
   "contracts": {
     "mediaUnderstandingProviders": ["senseaudio"]
   },
+  "mediaUnderstandingProviderMetadata": {
+    "senseaudio": {
+      "capabilities": ["audio"],
+      "defaultModels": {
+        "audio": "senseaudio-asr-pro-1.5-260319"
+      },
+      "autoPriority": {
+        "audio": 40
+      }
+    }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

@@ -11,6 +11,9 @@ export function buildMediaUnderstandingManifestMetadataRegistry(
   workspaceDir?: string,
 ): Map<string, MediaUnderstandingProvider> {
   const registry = new Map<string, MediaUnderstandingProvider>();
+  if (cfg?.plugins?.enabled === false) {
+    return registry;
+  }
   const snapshot = loadManifestMetadataSnapshot({
     config: cfg,
     env: process.env,
