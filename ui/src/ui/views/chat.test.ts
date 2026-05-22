@@ -339,6 +339,9 @@ function createChatHeaderState(
     sessionKey: "main",
     connected: true,
     sessionsHideCron: true,
+    sessionsIncludeGlobal: true,
+    sessionsIncludeUnknown: false,
+    sessionsShowArchived: false,
     sessionsResult: createSessionsListResult({
       model: currentModel,
       modelProvider: currentModelProvider,
@@ -1246,6 +1249,8 @@ describe("chat session controls", () => {
 
   it("searches chat sessions inside the picker without replacing recent sessions", async () => {
     const { state, request } = createChatHeaderState();
+    state.sessionsIncludeGlobal = false;
+    state.sessionsIncludeUnknown = false;
     const originalSessionsResult = state.sessionsResult;
     const container = document.createElement("div");
     render(renderChatSessionSelect(state), container);
@@ -1285,6 +1290,8 @@ describe("chat session controls", () => {
 
   it("loads another chat session picker page using the server next offset", async () => {
     const { state, request } = createChatHeaderState();
+    state.sessionsIncludeGlobal = false;
+    state.sessionsIncludeUnknown = false;
     state.chatSessionPickerOpen = true;
     state.chatSessionPickerSurface = "desktop";
     state.chatSessionPickerQuery = "telegram";

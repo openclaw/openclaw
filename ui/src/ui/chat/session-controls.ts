@@ -1,7 +1,7 @@
 import { html } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { t } from "../../i18n/index.ts";
-import { CHAT_SESSIONS_REFRESH_LIMIT, createChatSessionsLoadOverrides } from "../app-chat.ts";
+import { createChatSessionsLoadOverrides } from "../app-chat.ts";
 import type { AppViewState } from "../app-view-state.ts";
 import { createChatModelOverride } from "../chat-model-ref.ts";
 import {
@@ -139,22 +139,27 @@ function toggleChatSessionPicker(state: AppViewState, surface: ChatSessionSelect
 }
 
 function createChatSessionPickerRequestParams(
+  state: AppViewState,
   options: { query?: string; offset?: number } = {},
 ): Record<string, unknown> {
+  const overrides = createChatSessionsLoadOverrides(state, {
+    search: options.query,
+    offset: options.offset,
+  });
   const params: Record<string, unknown> = {
-    includeGlobal: true,
-    includeUnknown: true,
-    configuredAgentsOnly: true,
-    limit: CHAT_SESSIONS_REFRESH_LIMIT,
+    includeGlobal: overrides.includeGlobal,
+    includeUnknown: overrides.includeUnknown,
+    configuredAgentsOnly: overrides.configuredAgentsOnly,
+    limit: overrides.limit,
   };
   const offset =
-    typeof options.offset === "number" && Number.isFinite(options.offset)
-      ? Math.max(0, Math.floor(options.offset))
+    typeof overrides.offset === "number" && Number.isFinite(overrides.offset)
+      ? Math.max(0, Math.floor(overrides.offset))
       : 0;
   if (offset > 0) {
     params.offset = offset;
   }
-  const search = normalizeOptionalString(options.query ?? undefined);
+  const search = normalizeOptionalString(overrides.search ?? undefined);
   if (search) {
     params.search = search;
   }
@@ -213,7 +218,7 @@ async function loadChatSessionPickerPage(
       state,
       await state.client.request<SessionsListResult>(
         "sessions.list",
-        createChatSessionPickerRequestParams({ query, offset: options.offset }),
+        createChatSessionPickerRequestParams(state, { query, offset: options.offset }),
       ),
     );
     const previous = state.chatSessionPickerResult ?? state.sessionsResult;
