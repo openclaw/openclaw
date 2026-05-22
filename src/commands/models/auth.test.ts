@@ -291,7 +291,6 @@ function withPipedStdin(input: string) {
   const restoreInteractive = withInteractiveStdin();
   const stdin = process.stdin as NodeJS.ReadStream & { isTTY?: boolean };
   Object.defineProperty(stdin, "isTTY", { configurable: true, get: () => false });
-  const setEncoding = vi.spyOn(stdin, "setEncoding").mockReturnValue(stdin);
   Object.defineProperty(stdin, Symbol.asyncIterator, {
     configurable: true,
     value: async function* () {
@@ -299,7 +298,6 @@ function withPipedStdin(input: string) {
     },
   });
   return () => {
-    setEncoding.mockRestore();
     Reflect.deleteProperty(stdin, Symbol.asyncIterator);
     restoreInteractive();
   };
