@@ -150,6 +150,19 @@ describe("google provider policy public artifact", () => {
     });
   });
 
+  it("preserves Gemini 3 Pro thinking levels when catalog reasoning metadata is stale", () => {
+    expect(
+      resolveThinkingProfile({
+        provider: "google",
+        modelId: "gemini-3.1-pro-preview",
+        reasoning: false,
+      }),
+    ).toEqual({
+      levels: [{ id: "off" }, { id: "low" }, { id: "adaptive" }, { id: "high" }],
+      preserveWhenCatalogReasoningFalse: true,
+    });
+  });
+
   it("honors catalog reasoning=false for non-Gemini 3 Google models", () => {
     expect(
       resolveThinkingProfile({
