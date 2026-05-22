@@ -1,0 +1,12 @@
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+export { normalizeLegacyTalkConfig } from "./legacy-talk-config-normalizer.js";
+export declare function normalizeLegacyCommandsConfig(cfg: OpenClawConfig, changes: string[]): OpenClawConfig;
+export declare function normalizeLegacyBrowserConfig(cfg: OpenClawConfig, changes: string[]): OpenClawConfig;
+export declare function seedMissingDefaultAccountsFromSingleAccountBase(cfg: OpenClawConfig, changes: string[]): OpenClawConfig;
+export declare function normalizeLegacyRuntimeModelRefs(cfg: OpenClawConfig, changes: string[]): OpenClawConfig;
+export declare function normalizeLegacyOpenAICodexModelsAddMetadata(cfg: OpenClawConfig, changes: string[]): OpenClawConfig;
+export declare function normalizeLegacyOpenAIModelProviderApi(cfg: OpenClawConfig, changes: string[]): OpenClawConfig;
+export declare function normalizeLegacyNanoBananaSkill(cfg: OpenClawConfig, changes: string[]): OpenClawConfig;
+export declare function normalizeLegacyCrossContextMessageConfig(cfg: OpenClawConfig, changes: string[]): OpenClawConfig;
+export declare function normalizeLegacyMediaProviderOptions(cfg: OpenClawConfig, changes: string[]): OpenClawConfig;
+export declare function normalizeLegacyMistralModelMaxTokens(cfg: OpenClawConfig, changes: string[]): OpenClawConfig;

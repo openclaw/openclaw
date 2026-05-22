@@ -1,0 +1,1 @@
+../../../dist/extensions/zalo/api.d.ts

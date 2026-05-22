@@ -1,0 +1,1 @@
+../../../dist/extensions/openai/memory-embedding-adapter.d.ts

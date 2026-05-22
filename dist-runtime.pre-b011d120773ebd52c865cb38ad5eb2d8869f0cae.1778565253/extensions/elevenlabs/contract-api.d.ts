@@ -1,0 +1,1 @@
+../../../dist/extensions/elevenlabs/contract-api.d.ts

@@ -1,0 +1,1 @@
+../../../dist/extensions/irc/api.d.ts

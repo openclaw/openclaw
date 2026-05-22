@@ -1,0 +1,1 @@
+../../../dist/extensions/whatsapp/targets.d.ts

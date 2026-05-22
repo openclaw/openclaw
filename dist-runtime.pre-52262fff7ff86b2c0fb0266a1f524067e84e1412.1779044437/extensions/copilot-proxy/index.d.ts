@@ -1,0 +1,1 @@
+../../../dist/extensions/copilot-proxy/index.d.ts

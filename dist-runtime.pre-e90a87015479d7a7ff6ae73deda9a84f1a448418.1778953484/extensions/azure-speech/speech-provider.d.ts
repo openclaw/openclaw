@@ -1,0 +1,1 @@
+../../../dist/extensions/azure-speech/speech-provider.d.ts

@@ -12,6 +12,7 @@ import {
   stripSilentToken,
 } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
+import { hasCotFramePrefix } from "./cot-frame.js";
 import {
   resolveResponsePrefixTemplate,
   type ResponsePrefixContext,
@@ -76,6 +77,16 @@ export function normalizeReplyPayload(
         return null;
       }
     }
+  }
+  // Treat bracketed internal narration frames as silent so they never reach
+  // end users. This mirrors NO_REPLY semantics for fully silent payloads.
+  if (text && hasCotFramePrefix(text)) {
+    if (!hasContent("")) {
+      opts.onSkip?.("silent");
+      return null;
+    }
+    // Media-only fallback: drop the leaked text but let media still send.
+    text = "";
   }
   if (text && !trimmed) {
     // Keep empty text when media exists so media-only replies still send.

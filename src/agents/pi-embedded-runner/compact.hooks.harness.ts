@@ -359,6 +359,7 @@ export async function loadCompactHooksHarness(): Promise<{
     })),
     clearCurrentPluginMetadataSnapshot: vi.fn(),
     getCurrentPluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
+    isReusableCurrentPluginMetadataSnapshot: vi.fn(() => true),
     resolvePluginMetadataControlPlaneFingerprint: vi.fn(() => "test-plugin-fingerprint"),
     restoreCurrentPluginMetadataSnapshotState: vi.fn(),
     setCurrentPluginMetadataSnapshot: vi.fn(),

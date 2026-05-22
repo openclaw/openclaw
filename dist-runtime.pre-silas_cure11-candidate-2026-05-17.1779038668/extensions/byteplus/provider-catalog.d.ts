@@ -1,0 +1,1 @@
+../../../dist/extensions/byteplus/provider-catalog.d.ts

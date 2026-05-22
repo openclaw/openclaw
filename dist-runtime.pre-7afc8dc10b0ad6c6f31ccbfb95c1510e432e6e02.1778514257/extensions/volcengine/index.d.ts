@@ -1,0 +1,1 @@
+../../../dist/extensions/volcengine/index.d.ts

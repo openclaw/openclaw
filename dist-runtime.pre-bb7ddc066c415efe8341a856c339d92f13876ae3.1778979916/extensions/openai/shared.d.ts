@@ -1,0 +1,1 @@
+../../../dist/extensions/openai/shared.d.ts

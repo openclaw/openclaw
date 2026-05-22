@@ -1,0 +1,5 @@
+import { zn as RealtimeVoiceProviderPlugin } from "./types-CyE3PKKi.js";
+//#region extensions/openai/realtime-voice-provider.d.ts
+declare function buildOpenAIRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin;
+//#endregion
+export { buildOpenAIRealtimeVoiceProvider as t };

@@ -1,0 +1,2 @@
+import { n as buildVercelAiGatewayProvider, t as buildStaticVercelAiGatewayProvider } from "../../provider-catalog-DK74cEle.js";
+export { buildStaticVercelAiGatewayProvider, buildVercelAiGatewayProvider };

@@ -1,0 +1,1 @@
+../../../dist/extensions/mattermost/secret-contract-api.d.ts

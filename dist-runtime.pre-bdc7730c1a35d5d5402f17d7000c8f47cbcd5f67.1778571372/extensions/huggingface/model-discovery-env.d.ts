@@ -1,0 +1,1 @@
+../../../dist/extensions/huggingface/model-discovery-env.d.ts

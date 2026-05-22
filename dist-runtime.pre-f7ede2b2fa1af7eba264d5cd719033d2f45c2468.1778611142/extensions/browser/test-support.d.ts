@@ -1,0 +1,1 @@
+../../../dist/extensions/browser/test-support.d.ts

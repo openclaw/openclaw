@@ -1,0 +1,1 @@
+../../../dist/extensions/microsoft/index.d.ts

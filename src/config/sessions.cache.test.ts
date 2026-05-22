@@ -592,4 +592,20 @@ describe("Session Store Cache", () => {
     const loaded2 = loadSessionStore(storePath);
     expect(loaded2["session:2"]?.displayName).toBe("Added");
   });
+
+  it("expires serialized write-through cache on the same TTL as the object cache", async () => {
+    process.env.OPENCLAW_SESSION_CACHE_TTL_MS = "10";
+    clearSessionStoreCacheForTest();
+
+    let fakeNow = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => fakeNow);
+
+    const testStore = createSingleSessionStore();
+    await saveSessionStore(storePath, testStore);
+    expect(getSerializedSessionStore(storePath)).toBeDefined();
+
+    fakeNow += 11;
+    expect(getSerializedSessionStore(storePath)).toBeUndefined();
+    vi.restoreAllMocks();
+  });
 });

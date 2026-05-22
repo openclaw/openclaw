@@ -1,0 +1,52 @@
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import type { SubagentRunOutcome } from "./subagent-announce-output.js";
+import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
+import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
+export type SubagentRunRecord = {
+    runId: string;
+    childSessionKey: string;
+    controllerSessionKey?: string;
+    requesterSessionKey: string;
+    requesterOrigin?: DeliveryContext;
+    requesterDisplayKey: string;
+    task: string;
+    cleanup: "delete" | "keep";
+    label?: string;
+    model?: string;
+    agentDir?: string;
+    workspaceDir?: string;
+    runTimeoutSeconds?: number;
+    spawnMode?: SpawnSubagentMode;
+    createdAt: number;
+    startedAt?: number;
+    sessionStartedAt?: number;
+    accumulatedRuntimeMs?: number;
+    endedAt?: number;
+    outcome?: SubagentRunOutcome;
+    archiveAtMs?: number;
+    cleanupCompletedAt?: number;
+    cleanupHandled?: boolean;
+    suppressAnnounceReason?: "steer-restart" | "killed";
+    expectsCompletionMessage?: boolean;
+    announceRetryCount?: number;
+    lastAnnounceRetryAt?: number;
+    lastAnnounceDeliveryError?: string;
+    endedReason?: SubagentLifecycleEndedReason;
+    pauseReason?: "sessions_yield";
+    wakeOnDescendantSettle?: boolean;
+    frozenResultText?: string | null;
+    frozenResultCapturedAt?: number;
+    fallbackFrozenResultText?: string | null;
+    fallbackFrozenResultCapturedAt?: number;
+    endedHookEmittedAt?: number;
+    completionAnnouncedAt?: number;
+    attachmentsDir?: string;
+    attachmentsRootDir?: string;
+    retainAttachmentsOnKeep?: boolean;
+    /** Continuation: suppress channel echo for silent delegate returns. */
+    silentAnnounce?: boolean;
+    /** When true (with silentAnnounce), trigger a generation cycle after enrichment delivery. */
+    wakeOnReturn?: boolean;
+    /** Continuation: marks this run as a chain-hop that can consume pending delegates. */
+    drainsContinuationDelegateQueue?: boolean;
+};

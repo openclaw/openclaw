@@ -1,0 +1,1 @@
+../../../dist/extensions/feishu/security-contract-api.d.ts

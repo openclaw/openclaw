@@ -1,0 +1,2 @@
+import { i as resolveCopilotForwardCompatModel, n as PROVIDER_ID, r as fetchCopilotModelCatalog, t as FetchCopilotModelCatalogParams } from "../../models-DQfr47bC.js";
+export { FetchCopilotModelCatalogParams, PROVIDER_ID, fetchCopilotModelCatalog, resolveCopilotForwardCompatModel };

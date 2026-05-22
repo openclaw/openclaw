@@ -1,0 +1,1 @@
+../../../dist/extensions/nvidia/api.d.ts

@@ -1,0 +1,1 @@
+../../../dist/extensions/fireworks/stream.d.ts

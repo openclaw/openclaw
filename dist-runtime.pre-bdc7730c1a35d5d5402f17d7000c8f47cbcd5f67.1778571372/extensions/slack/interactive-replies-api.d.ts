@@ -1,0 +1,1 @@
+../../../dist/extensions/slack/interactive-replies-api.d.ts

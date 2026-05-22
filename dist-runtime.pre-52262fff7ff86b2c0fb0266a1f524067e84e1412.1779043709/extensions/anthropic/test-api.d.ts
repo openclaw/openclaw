@@ -1,0 +1,1 @@
+../../../dist/extensions/anthropic/test-api.d.ts

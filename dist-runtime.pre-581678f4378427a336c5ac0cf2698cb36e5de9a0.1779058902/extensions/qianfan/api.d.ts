@@ -1,0 +1,1 @@
+../../../dist/extensions/qianfan/api.d.ts

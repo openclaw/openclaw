@@ -224,9 +224,7 @@ export const mockedEnsureAuthProfileStore = vi.fn(() => ({}));
 export const mockedEnsureAuthProfileStoreWithoutExternalProfiles = vi.fn(
   (_agentDir?: string, _options?: { allowKeychainPrompt?: boolean }) => ({}),
 );
-export const mockedResolveAuthProfileOrder = vi.fn<(_params?: unknown) => string[]>(
-  (_params?: unknown) => [],
-);
+export const mockedResolveAuthProfileOrder = vi.fn(() => [] as string[]);
 export const mockedMarkAuthProfileSuccess = vi.fn(async () => {});
 export const mockedShouldPreferExplicitConfigApiKeyAuth = vi.fn(() => false);
 
@@ -460,6 +458,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   }));
 
   vi.doMock("../auth-profiles.js", () => ({
+    clearRuntimeAuthProfileStoreSnapshots: vi.fn(),
     isProfileInCooldown: vi.fn(() => false),
     markAuthProfileFailure: vi.fn(async () => {}),
     markAuthProfileSuccess: mockedMarkAuthProfileSuccess,

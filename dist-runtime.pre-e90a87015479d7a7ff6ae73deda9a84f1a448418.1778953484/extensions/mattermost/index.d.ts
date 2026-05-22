@@ -1,0 +1,1 @@
+../../../dist/extensions/mattermost/index.d.ts

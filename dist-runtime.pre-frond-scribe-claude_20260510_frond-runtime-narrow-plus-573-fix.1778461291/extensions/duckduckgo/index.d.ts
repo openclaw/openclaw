@@ -1,0 +1,1 @@
+../../../dist/extensions/duckduckgo/index.d.ts

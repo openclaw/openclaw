@@ -1,0 +1,1 @@
+../../../dist/extensions/acpx/register.runtime.d.ts

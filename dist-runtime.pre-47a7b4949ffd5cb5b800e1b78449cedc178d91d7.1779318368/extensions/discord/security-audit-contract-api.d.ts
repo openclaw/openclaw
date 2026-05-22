@@ -1,0 +1,1 @@
+../../../dist/extensions/discord/security-audit-contract-api.d.ts

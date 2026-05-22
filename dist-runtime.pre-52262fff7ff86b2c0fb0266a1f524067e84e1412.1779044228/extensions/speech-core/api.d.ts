@@ -1,0 +1,1 @@
+../../../dist/extensions/speech-core/api.d.ts

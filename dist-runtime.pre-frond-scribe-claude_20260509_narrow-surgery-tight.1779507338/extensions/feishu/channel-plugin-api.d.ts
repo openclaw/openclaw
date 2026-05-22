@@ -1,0 +1,1 @@
+../../../dist/extensions/feishu/channel-plugin-api.d.ts

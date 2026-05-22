@@ -1,0 +1,2 @@
+import { n as buildMinimaxVideoGenerationProvider, t as buildMinimaxPortalVideoGenerationProvider } from "../../video-generation-provider-CMA-pW7r.js";
+export { buildMinimaxPortalVideoGenerationProvider, buildMinimaxVideoGenerationProvider };

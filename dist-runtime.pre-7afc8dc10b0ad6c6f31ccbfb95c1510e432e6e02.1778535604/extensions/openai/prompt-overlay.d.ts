@@ -1,0 +1,1 @@
+../../../dist/extensions/openai/prompt-overlay.d.ts

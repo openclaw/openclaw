@@ -1,0 +1,1 @@
+../../../dist/extensions/elevenlabs/setup-api.d.ts

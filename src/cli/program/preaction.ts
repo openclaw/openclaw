@@ -133,7 +133,6 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       commandPath,
       startupPolicy,
       allowInvalid: shouldAllowInvalidConfigForAction(actionCommand, commandPath),
-      skipConfigGuard: shouldBypassConfigGuardForCommandPath(commandPath),
     });
   });
 }

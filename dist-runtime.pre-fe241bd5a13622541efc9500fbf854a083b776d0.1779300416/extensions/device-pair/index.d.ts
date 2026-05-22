@@ -1,0 +1,1 @@
+../../../dist/extensions/device-pair/index.d.ts

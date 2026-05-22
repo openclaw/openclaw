@@ -1,0 +1,1 @@
+../../../dist/extensions/together/index.d.ts

@@ -1,0 +1,40 @@
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { TtsAutoMode } from "../../config/types.tts.js";
+import type { FinalizedMsgContext } from "../templating.js";
+import type { ReplyPayload } from "../types.js";
+import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
+export type AcpDispatchDeliveryMeta = {
+    toolCallId?: string;
+    allowEdit?: boolean;
+    skipTts?: boolean;
+};
+export type AcpDispatchDeliveryCoordinator = {
+    startReplyLifecycle: () => Promise<void>;
+    deliver: (kind: ReplyDispatchKind, payload: ReplyPayload, meta?: AcpDispatchDeliveryMeta) => Promise<boolean>;
+    getBlockCount: () => number;
+    getAccumulatedBlockText: () => string;
+    getAccumulatedVisibleBlockText: () => string;
+    getAccumulatedBlockTtsText: () => string;
+    settleVisibleText: () => Promise<void>;
+    hasDeliveredFinalReply: () => boolean;
+    hasDeliveredVisibleText: () => boolean;
+    hasFailedVisibleTextDelivery: () => boolean;
+    getRoutedCounts: () => Record<ReplyDispatchKind, number>;
+    applyRoutedCounts: (counts: Record<ReplyDispatchKind, number>) => void;
+};
+export declare function createAcpDispatchDeliveryCoordinator(params: {
+    cfg: OpenClawConfig;
+    agentId?: string;
+    ctx: FinalizedMsgContext;
+    dispatcher: ReplyDispatcher;
+    inboundAudio: boolean;
+    sessionKey?: string;
+    sessionTtsAuto?: TtsAutoMode;
+    ttsChannel?: string;
+    suppressUserDelivery?: boolean;
+    suppressReplyLifecycle?: boolean;
+    shouldRouteToOriginating: boolean;
+    originatingChannel?: string;
+    originatingTo?: string;
+    onReplyStart?: () => Promise<void> | void;
+}): AcpDispatchDeliveryCoordinator;

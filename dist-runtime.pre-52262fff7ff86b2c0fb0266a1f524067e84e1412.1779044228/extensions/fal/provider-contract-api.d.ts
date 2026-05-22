@@ -1,0 +1,1 @@
+../../../dist/extensions/fal/provider-contract-api.d.ts

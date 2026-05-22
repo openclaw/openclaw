@@ -1,0 +1,1 @@
+../../../dist/extensions/discord/subagent-hooks-api.d.ts

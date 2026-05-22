@@ -1,0 +1,1 @@
+../../../dist/extensions/duckduckgo/web-search-provider.d.ts

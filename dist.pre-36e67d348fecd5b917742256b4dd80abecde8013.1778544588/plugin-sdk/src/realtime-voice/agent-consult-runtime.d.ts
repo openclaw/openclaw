@@ -1,0 +1,43 @@
+import { randomUUID } from "node:crypto";
+import type { RunEmbeddedPiAgentParams } from "../agents/pi-embedded-runner/run/params.js";
+import { forkSessionFromParent, resolveParentForkDecision } from "../auto-reply/reply/session-fork.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { RuntimeLogger, PluginRuntimeCore } from "../plugins/runtime/types-core.js";
+import { type RealtimeVoiceAgentConsultTranscriptEntry } from "./agent-consult-tool.js";
+export type RealtimeVoiceAgentConsultRuntime = PluginRuntimeCore["agent"];
+export type RealtimeVoiceAgentConsultResult = {
+    text: string;
+};
+export type RealtimeVoiceAgentConsultContextMode = "isolated" | "fork";
+export { resolveRealtimeVoiceAgentConsultTools, resolveRealtimeVoiceAgentConsultToolsAllow, } from "./agent-consult-tool.js";
+type RealtimeVoiceAgentConsultDeps = {
+    randomUUID: typeof randomUUID;
+    resolveParentForkDecision: typeof resolveParentForkDecision;
+    forkSessionFromParent: typeof forkSessionFromParent;
+};
+export declare function __setRealtimeVoiceAgentConsultDepsForTest(deps: Partial<RealtimeVoiceAgentConsultDeps> | null): void;
+export declare function consultRealtimeVoiceAgent(params: {
+    cfg: OpenClawConfig;
+    agentRuntime: RealtimeVoiceAgentConsultRuntime;
+    logger: Pick<RuntimeLogger, "warn">;
+    sessionKey: string;
+    messageProvider: string;
+    lane: string;
+    runIdPrefix: string;
+    args: unknown;
+    transcript: RealtimeVoiceAgentConsultTranscriptEntry[];
+    surface: string;
+    userLabel: string;
+    assistantLabel?: string;
+    questionSourceLabel?: string;
+    agentId?: string;
+    spawnedBy?: string | null;
+    contextMode?: RealtimeVoiceAgentConsultContextMode;
+    provider?: RunEmbeddedPiAgentParams["provider"];
+    model?: RunEmbeddedPiAgentParams["model"];
+    thinkLevel?: RunEmbeddedPiAgentParams["thinkLevel"];
+    timeoutMs?: number;
+    toolsAllow?: string[];
+    extraSystemPrompt?: string;
+    fallbackText?: string;
+}): Promise<RealtimeVoiceAgentConsultResult>;

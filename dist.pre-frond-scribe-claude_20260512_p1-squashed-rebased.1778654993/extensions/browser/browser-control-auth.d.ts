@@ -1,0 +1,2 @@
+import { i as shouldAutoGenerateBrowserAuth, n as ensureBrowserControlAuth, r as resolveBrowserControlAuth, t as BrowserControlAuth } from "../../control-auth-XP8Fqdp1.js";
+export { BrowserControlAuth, ensureBrowserControlAuth, resolveBrowserControlAuth, shouldAutoGenerateBrowserAuth };

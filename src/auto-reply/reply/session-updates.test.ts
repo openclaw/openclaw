@@ -70,6 +70,11 @@ vi.mock("../../config/sessions.js", () => ({
   updateSessionStore: vi.fn(),
   resolveSessionFilePath: vi.fn(),
   resolveSessionFilePathOptions: vi.fn(),
+  resolveSessionStoreEntry: vi.fn((params: { sessionKey: string }) => ({
+    normalizedKey: params.sessionKey,
+    existing: undefined,
+    legacyKeys: [],
+  })),
 }));
 
 vi.mock("../../infra/skills-remote.js", () => ({

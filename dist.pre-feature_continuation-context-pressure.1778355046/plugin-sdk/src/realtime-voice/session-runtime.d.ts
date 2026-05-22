@@ -1,0 +1,40 @@
+import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
+import type { RealtimeVoiceBridge, RealtimeVoiceAudioFormat, RealtimeVoiceBargeInOptions, RealtimeVoiceCloseReason, RealtimeVoiceBridgeEvent, RealtimeVoiceProviderConfig, RealtimeVoiceRole, RealtimeVoiceTool, RealtimeVoiceToolCallEvent, RealtimeVoiceToolResultOptions } from "./provider-types.js";
+export type RealtimeVoiceAudioSink = {
+    isOpen?: () => boolean;
+    sendAudio: (audio: Buffer) => void;
+    clearAudio?: () => void;
+    sendMark?: (markName: string) => void;
+};
+export type RealtimeVoiceMarkStrategy = "transport" | "ack-immediately" | "ignore";
+export type RealtimeVoiceBridgeSession = {
+    bridge: RealtimeVoiceBridge;
+    acknowledgeMark(): void;
+    close(): void;
+    connect(): Promise<void>;
+    sendAudio(audio: Buffer): void;
+    sendUserMessage(text: string): void;
+    handleBargeIn(options?: RealtimeVoiceBargeInOptions): void;
+    setMediaTimestamp(ts: number): void;
+    submitToolResult(callId: string, result: unknown, options?: RealtimeVoiceToolResultOptions): void;
+    triggerGreeting(instructions?: string): void;
+};
+export type RealtimeVoiceBridgeSessionParams = {
+    provider: RealtimeVoiceProviderPlugin;
+    providerConfig: RealtimeVoiceProviderConfig;
+    audioFormat?: RealtimeVoiceAudioFormat;
+    audioSink: RealtimeVoiceAudioSink;
+    instructions?: string;
+    initialGreetingInstructions?: string;
+    autoRespondToAudio?: boolean;
+    markStrategy?: RealtimeVoiceMarkStrategy;
+    triggerGreetingOnReady?: boolean;
+    tools?: RealtimeVoiceTool[];
+    onTranscript?: (role: RealtimeVoiceRole, text: string, isFinal: boolean) => void;
+    onEvent?: (event: RealtimeVoiceBridgeEvent) => void;
+    onToolCall?: (event: RealtimeVoiceToolCallEvent, session: RealtimeVoiceBridgeSession) => void;
+    onReady?: (session: RealtimeVoiceBridgeSession) => void;
+    onError?: (error: Error) => void;
+    onClose?: (reason: RealtimeVoiceCloseReason) => void;
+};
+export declare function createRealtimeVoiceBridgeSession(params: RealtimeVoiceBridgeSessionParams): RealtimeVoiceBridgeSession;

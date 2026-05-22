@@ -1,0 +1,1 @@
+../../../dist/extensions/zai/runtime-api.d.ts

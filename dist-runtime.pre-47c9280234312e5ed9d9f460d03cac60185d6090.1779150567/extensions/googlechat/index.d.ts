@@ -1,0 +1,1 @@
+../../../dist/extensions/googlechat/index.d.ts

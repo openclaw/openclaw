@@ -1,0 +1,1 @@
+../../../dist/extensions/moonshot/web-search-contract-api.d.ts

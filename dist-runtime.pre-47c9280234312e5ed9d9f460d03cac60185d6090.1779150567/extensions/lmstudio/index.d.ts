@@ -1,0 +1,1 @@
+../../../dist/extensions/lmstudio/index.d.ts

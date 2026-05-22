@@ -1,0 +1,10 @@
+export declare const loadDiscordDirectoryConfigModule: () => Promise<typeof import("./directory-config.js")>;
+export declare const loadDiscordResolveChannelsModule: () => Promise<typeof import("./resolve-channels.js")>;
+export declare const loadDiscordResolveUsersModule: () => Promise<typeof import("./resolve-users.js")>;
+export declare const loadDiscordThreadBindingsManagerModule: () => Promise<typeof import("./monitor/thread-bindings.manager.js")>;
+export declare const loadDiscordTargetResolverModule: () => Promise<typeof import("./target-resolver.js")>;
+export declare function loadDiscordProviderRuntime(): Promise<typeof import("./monitor/provider.runtime.js")>;
+export declare function loadDiscordProbeRuntime(): Promise<typeof import("./probe.runtime.js")>;
+export declare function loadDiscordAuditModule(): Promise<typeof import("./audit.js")>;
+export declare function loadDiscordSendModule(): Promise<typeof import("./send.js")>;
+export declare function loadDiscordDirectoryLiveModule(): Promise<typeof import("./directory-live.js")>;

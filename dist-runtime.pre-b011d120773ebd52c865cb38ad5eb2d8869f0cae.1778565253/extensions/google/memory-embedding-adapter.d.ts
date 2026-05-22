@@ -1,0 +1,1 @@
+../../../dist/extensions/google/memory-embedding-adapter.d.ts

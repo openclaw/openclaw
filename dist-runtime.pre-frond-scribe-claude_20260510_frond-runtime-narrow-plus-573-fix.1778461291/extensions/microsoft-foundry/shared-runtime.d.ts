@@ -1,0 +1,1 @@
+../../../dist/extensions/microsoft-foundry/shared-runtime.d.ts

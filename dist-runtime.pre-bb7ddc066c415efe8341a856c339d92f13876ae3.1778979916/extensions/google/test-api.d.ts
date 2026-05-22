@@ -1,0 +1,1 @@
+../../../dist/extensions/google/test-api.d.ts

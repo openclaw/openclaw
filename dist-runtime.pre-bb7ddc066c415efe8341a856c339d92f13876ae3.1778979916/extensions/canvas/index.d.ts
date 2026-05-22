@@ -1,0 +1,1 @@
+../../../dist/extensions/canvas/index.d.ts

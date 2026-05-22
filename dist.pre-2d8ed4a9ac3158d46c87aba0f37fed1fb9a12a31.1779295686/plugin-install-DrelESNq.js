@@ -1,0 +1,2 @@
+import { i as reloadChannelSetupPluginRegistryForChannel, n as loadChannelSetupPluginRegistrySnapshotForChannel, r as reloadChannelSetupPluginRegistry, t as ensureChannelSetupPluginInstalled } from "./plugin-install-B4Rt06Ge.js";
+export { ensureChannelSetupPluginInstalled, loadChannelSetupPluginRegistrySnapshotForChannel, reloadChannelSetupPluginRegistry, reloadChannelSetupPluginRegistryForChannel };

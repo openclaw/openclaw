@@ -1,0 +1,1 @@
+../../../dist/extensions/matrix/subagent-hooks-api.d.ts

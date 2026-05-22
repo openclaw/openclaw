@@ -1,0 +1,1 @@
+../../../dist/extensions/xai/test-api.d.ts

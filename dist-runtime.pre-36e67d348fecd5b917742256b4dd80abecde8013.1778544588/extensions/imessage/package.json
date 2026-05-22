@@ -1,0 +1,43 @@
+{
+  "name": "@openclaw/imessage",
+  "version": "2026.5.7",
+  "private": true,
+  "description": "OpenClaw iMessage channel plugin",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.js"
+    ],
+    "setupEntry": "./setup-entry.js",
+    "channel": {
+      "id": "imessage",
+      "label": "iMessage",
+      "selectionLabel": "iMessage (imsg)",
+      "detailLabel": "iMessage",
+      "docsPath": "/channels/imessage",
+      "docsLabel": "imessage",
+      "blurb": "this is still a work in progress.",
+      "aliases": [
+        "imsg"
+      ],
+      "systemImage": "message.fill",
+      "cliAddOptions": [
+        {
+          "flags": "--db-path <path>",
+          "description": "iMessage database path"
+        },
+        {
+          "flags": "--service <service>",
+          "description": "iMessage service (imessage|sms|auto)"
+        },
+        {
+          "flags": "--region <region>",
+          "description": "iMessage region (for SMS)"
+        }
+      ]
+    }
+  }
+}

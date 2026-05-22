@@ -1,0 +1,1 @@
+../../../dist/extensions/telegram/account-inspect-api.d.ts

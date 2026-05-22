@@ -1,0 +1,1 @@
+../../../dist/extensions/mattermost/setup-entry.d.ts

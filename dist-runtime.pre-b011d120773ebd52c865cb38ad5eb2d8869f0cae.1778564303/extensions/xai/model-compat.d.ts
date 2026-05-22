@@ -1,0 +1,1 @@
+../../../dist/extensions/xai/model-compat.d.ts

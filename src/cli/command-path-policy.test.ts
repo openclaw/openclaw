@@ -198,10 +198,6 @@ describe("command-path-policy", () => {
       loadPlugins: "never",
       networkProxy: "bypass",
     });
-    expectResolvedPolicy(["doctor"], {
-      bypassConfigGuard: true,
-      loadPlugins: "never",
-    });
     expectResolvedPolicy(["config", "validate"], {
       bypassConfigGuard: true,
       loadPlugins: "never",

@@ -1,0 +1,1 @@
+../../../dist/extensions/amazon-bedrock/setup-api.d.ts

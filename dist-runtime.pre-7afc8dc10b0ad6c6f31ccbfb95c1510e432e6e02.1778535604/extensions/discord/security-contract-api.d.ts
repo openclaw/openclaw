@@ -1,0 +1,1 @@
+../../../dist/extensions/discord/security-contract-api.d.ts

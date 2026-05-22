@@ -1,0 +1,2 @@
+import { n as listTelegramDirectoryPeersFromConfig, t as listTelegramDirectoryGroupsFromConfig } from "../../directory-config-ByKmjJN2.js";
+export { listTelegramDirectoryGroupsFromConfig, listTelegramDirectoryPeersFromConfig };

@@ -1,0 +1,1 @@
+../../../dist/extensions/matrix/setup-entry.d.ts

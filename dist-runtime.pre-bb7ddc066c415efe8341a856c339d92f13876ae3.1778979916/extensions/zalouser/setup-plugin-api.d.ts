@@ -1,0 +1,1 @@
+../../../dist/extensions/zalouser/setup-plugin-api.d.ts

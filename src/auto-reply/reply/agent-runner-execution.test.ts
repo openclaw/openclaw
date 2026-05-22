@@ -22,6 +22,7 @@ const state = vi.hoisted(() => ({
   runEmbeddedPiAgentMock: vi.fn(),
   runCliAgentMock: vi.fn(),
   runWithModelFallbackMock: vi.fn(),
+  compactEmbeddedPiSessionMock: vi.fn(),
   isCliProviderMock: vi.fn((_: unknown) => false),
   isInternalMessageChannelMock: vi.fn((_: unknown) => false),
   createBlockReplyDeliveryHandlerMock: vi.fn(),
@@ -29,10 +30,14 @@ const state = vi.hoisted(() => ({
   isContextOverflowErrorMock: vi.fn((_: string | undefined) => false),
   isLikelyContextOverflowErrorMock: vi.fn((_: string | undefined) => false),
   updateSessionStoreMock: vi.fn(),
+  dispatchPostCompactionDelegatesMock: vi.fn(),
+  emitContinuationCompactionReleasedSpanMock: vi.fn(),
+  incrementRunCompactionCountMock: vi.fn(),
 }));
 
 const GENERIC_RUN_FAILURE_TEXT =
   "⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.";
+const VALID_TRACEPARENT = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
 
 function makeTestModel(id: string, contextTokens: number): ModelDefinitionConfig {
   return {
@@ -53,6 +58,10 @@ vi.mock("../../agents/pi-embedded.js", () => ({
 
 vi.mock("../../agents/cli-runner.js", () => ({
   runCliAgent: (params: unknown) => state.runCliAgentMock(params),
+}));
+
+vi.mock("../../agents/pi-embedded-runner/compact.queued.js", () => ({
+  compactEmbeddedPiSession: (params: unknown) => state.compactEmbeddedPiSessionMock(params),
 }));
 
 vi.mock("../../agents/model-fallback.js", () => ({
@@ -105,6 +114,17 @@ vi.mock("../../agents/pi-embedded-helpers.js", () => ({
 
 vi.mock("../../config/sessions.js", () => ({
   resolveGroupSessionKey: vi.fn(() => null),
+  resolveSessionStoreEntry: ({
+    store,
+    sessionKey,
+  }: {
+    store: Record<string, SessionEntry>;
+    sessionKey: string;
+  }) => ({
+    existing: store[sessionKey],
+    legacyKeys: [],
+    normalizedKey: sessionKey,
+  }),
   resolveSessionTranscriptPath: vi.fn(),
   updateSessionStore: state.updateSessionStoreMock,
 }));
@@ -174,6 +194,20 @@ vi.mock("./agent-runner-utils.js", () => ({
 vi.mock("./reply-delivery.js", () => ({
   createBlockReplyDeliveryHandler: (params: unknown) =>
     state.createBlockReplyDeliveryHandlerMock(params),
+}));
+
+vi.mock("./post-compaction-delegate-dispatch.js", () => ({
+  dispatchPostCompactionDelegates: (params: unknown) =>
+    state.dispatchPostCompactionDelegatesMock(params),
+}));
+
+vi.mock("./session-run-accounting.js", () => ({
+  incrementRunCompactionCount: (params: unknown) => state.incrementRunCompactionCountMock(params),
+}));
+
+vi.mock("../../infra/continuation-tracer.js", () => ({
+  emitContinuationCompactionReleasedSpan: (params: unknown) =>
+    state.emitContinuationCompactionReleasedSpanMock(params),
 }));
 
 vi.mock("./reply-media-paths.runtime.js", () => ({
@@ -397,6 +431,8 @@ function createMinimalRunAgentTurnParams(overrides?: {
     shouldEmitToolResult: () => true,
     shouldEmitToolOutput: () => false,
     pendingToolTasks: new Set<Promise<void>>(),
+    resetSessionAfterCompactionFailure: async () => false,
+
     resetSessionAfterRoleOrderingConflict: async () => false,
     isHeartbeat: false,
     sessionKey: "main",
@@ -607,6 +643,7 @@ describe("runAgentTurnWithFallback", () => {
     state.runEmbeddedPiAgentMock.mockReset();
     state.runCliAgentMock.mockReset();
     state.runWithModelFallbackMock.mockReset();
+    state.compactEmbeddedPiSessionMock.mockReset();
     state.isCliProviderMock.mockReset();
     state.isCliProviderMock.mockReturnValue(false);
     state.isInternalMessageChannelMock.mockReset();
@@ -620,6 +657,14 @@ describe("runAgentTurnWithFallback", () => {
     state.isLikelyContextOverflowErrorMock.mockReset();
     state.isLikelyContextOverflowErrorMock.mockReturnValue(false);
     state.updateSessionStoreMock.mockReset();
+    state.dispatchPostCompactionDelegatesMock.mockReset();
+    state.dispatchPostCompactionDelegatesMock.mockResolvedValue({
+      queuedDelegates: 0,
+      droppedDelegates: 0,
+    });
+    state.emitContinuationCompactionReleasedSpanMock.mockReset();
+    state.incrementRunCompactionCountMock.mockReset();
+    state.incrementRunCompactionCountMock.mockResolvedValue(1);
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => ({
       result: await params.run("anthropic", "claude"),
       provider: "anthropic",
@@ -1277,6 +1322,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -1393,6 +1440,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -1468,6 +1517,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -1532,6 +1583,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -1592,6 +1645,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -1650,6 +1705,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -1702,6 +1759,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -1758,6 +1817,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -1804,6 +1865,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -1970,6 +2033,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks,
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -2021,6 +2086,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -2033,6 +2100,150 @@ describe("runAgentTurnWithFallback", () => {
       expect(result.runResult.payloads).toEqual([
         {
           text: "⚠️ Selected model is at capacity. Try a different model, or wait and retry.",
+          isError: true,
+        },
+      ]);
+    }
+  });
+
+  it("prefixes outbound error payloads with a blocked-session marker when livenessState is blocked", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [
+        {
+          text: "Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.",
+          isError: true,
+        },
+      ],
+      meta: {
+        livenessState: "blocked",
+        error: {
+          kind: "compaction_failure",
+          message: "compaction failed: too many attempts",
+        },
+      },
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+    expect(result.kind).toBe("success");
+    if (result.kind === "success") {
+      expect(result.runResult.payloads).toEqual([
+        {
+          text: "⛔ Session blocked: Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.",
+          isError: true,
+        },
+      ]);
+    }
+  });
+
+  it("does not double-prefix the blocked-session marker on subsequent passes", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [
+        {
+          text: "⛔ Session blocked: already-prefixed payload",
+          isError: true,
+        },
+      ],
+      meta: {
+        livenessState: "blocked",
+      },
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+    expect(result.kind).toBe("success");
+    if (result.kind === "success") {
+      expect(result.runResult.payloads).toEqual([
+        {
+          text: "⛔ Session blocked: already-prefixed payload",
+          isError: true,
+        },
+      ]);
+    }
+  });
+
+  it("leaves non-error payloads unchanged when livenessState is blocked", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "normal assistant text" }, { text: "some error", isError: true }],
+      meta: {
+        livenessState: "blocked",
+      },
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+    expect(result.kind).toBe("success");
+    if (result.kind === "success") {
+      expect(result.runResult.payloads).toEqual([
+        { text: "normal assistant text" },
+        { text: "⛔ Session blocked: some error", isError: true },
+      ]);
+    }
+  });
+
+  it("does not prefix payloads when livenessState is working", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "a normal error", isError: true }],
+      meta: {
+        livenessState: "working",
+      },
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+    expect(result.kind).toBe("success");
+    if (result.kind === "success") {
+      expect(result.runResult.payloads).toEqual([{ text: "a normal error", isError: true }]);
+    }
+  });
+
+  it("surfaces a standalone blocked-liveness notice when livenessState is blocked and no error payload is present", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {
+        livenessState: "blocked",
+      },
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+    expect(result.kind).toBe("success");
+    if (result.kind === "success") {
+      expect(result.runResult.payloads).toEqual([
+        {
+          text: "⚠️ Agent liveness: blocked. The run cannot make progress; try again or start a fresh conversation if this repeats.",
+          isError: true,
+        },
+      ]);
+    }
+  });
+
+  it("does not prepend the standalone blocked-liveness notice when an error payload is already present", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [
+        {
+          text: "some upstream error",
+          isError: true,
+        },
+      ],
+      meta: {
+        livenessState: "blocked",
+      },
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+    expect(result.kind).toBe("success");
+    if (result.kind === "success") {
+      expect(result.runResult.payloads).toEqual([
+        {
+          text: "⛔ Session blocked: some upstream error",
           isError: true,
         },
       ]);
@@ -2065,6 +2276,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -2249,6 +2462,62 @@ describe("runAgentTurnWithFallback", () => {
     expect(result.kind).toBe("success");
   });
 
+  it("surfaces blocked lifecycle liveness through the channel block surface", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onAgentEvent?.({
+        stream: "lifecycle",
+        data: {
+          phase: "error",
+          livenessState: "blocked",
+          error: "compaction failed",
+        },
+      });
+      return {
+        payloads: [{ text: "terminal compaction failure" }],
+        meta: { livenessState: "blocked" },
+      };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({
+        opts: { onBlockReply } satisfies GetReplyOptions,
+      }),
+    );
+
+    expect(result.kind).toBe("success");
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.stringContaining("Agent liveness: blocked"),
+        isError: true,
+        replyToCurrent: true,
+      }),
+    );
+    if (result.kind === "success") {
+      expect(result.runResult.payloads?.[0]?.text).toBe("terminal compaction failure");
+    }
+  });
+
+  it("injects blocked liveness into final payloads when no block surface is available", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "terminal compaction failure" }],
+      meta: { livenessState: "blocked" },
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+    expect(result.kind).toBe("success");
+    if (result.kind === "success") {
+      expect(result.runResult.payloads?.[0]).toMatchObject({
+        text: expect.stringContaining("Agent liveness: blocked"),
+        isError: true,
+      });
+      expect(result.runResult.payloads?.[1]?.text).toBe("terminal compaction failure");
+    }
+  });
+
   it("classifies final GPT-5 terminal-empty results instead of silently succeeding", async () => {
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
       const result = { payloads: [], meta: {} };
@@ -2353,6 +2622,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks,
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -2399,6 +2670,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks,
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -2444,6 +2717,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks,
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -2496,6 +2771,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks,
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -2726,6 +3003,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -2771,6 +3050,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -2835,6 +3116,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -2891,6 +3174,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -2951,6 +3236,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -3038,6 +3325,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks,
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -3172,6 +3461,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -3255,6 +3546,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -3301,6 +3594,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -3346,6 +3641,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -3394,6 +3691,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -3450,6 +3749,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -3514,6 +3815,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -3577,6 +3880,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -3634,6 +3939,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -3686,6 +3993,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -3737,6 +4046,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -3776,6 +4087,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -3836,6 +4149,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -3884,6 +4199,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -3937,6 +4254,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -3983,6 +4302,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -4021,6 +4342,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -4154,6 +4477,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -4383,6 +4708,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -4420,6 +4747,7 @@ describe("runAgentTurnWithFallback", () => {
           MessageSid: "msg",
         } as unknown as TemplateContext,
       }),
+      resetSessionAfterCompactionFailure: async () => true,
       replyOperation,
       sessionKey: "agent:main:main",
       getActiveSessionEntry: () => activeSessionEntry,
@@ -4429,7 +4757,7 @@ describe("runAgentTurnWithFallback", () => {
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
-      expect(result.payload.text).toContain("kept this conversation mapped to the current session");
+      expect(result.payload.text).toContain("I've reset our conversation to start fresh");
       expect(result.payload.text).toContain("reserveTokensFloor");
       expectRecordFields(requireRecord(getReplyPayloadMetadata(result.payload), "reply metadata"), {
         deliverDespiteSourceReplySuppression: true,
@@ -4463,6 +4791,7 @@ describe("runAgentTurnWithFallback", () => {
           MessageSid: "msg",
         } as unknown as TemplateContext,
       }),
+      resetSessionAfterCompactionFailure: async () => true,
       replyOperation,
       sessionKey: "agent:main:main",
       getActiveSessionEntry: () => activeSessionEntry,
@@ -4472,7 +4801,7 @@ describe("runAgentTurnWithFallback", () => {
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
-      expect(result.payload.text).toContain("kept this conversation mapped to the current session");
+      expect(result.payload.text).toContain("I've reset our conversation to start fresh");
       expect(result.payload.text).toContain("reserveTokensFloor");
       expectRecordFields(requireRecord(getReplyPayloadMetadata(result.payload), "reply metadata"), {
         deliverDespiteSourceReplySuppression: true,
@@ -4511,6 +4840,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -4550,6 +4881,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -4587,6 +4920,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -4626,6 +4961,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -4665,6 +5002,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -4700,6 +5039,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -4734,6 +5075,7 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
       resetSessionAfterRoleOrderingConflict,
       isHeartbeat: false,
       sessionKey: "main",
@@ -4772,6 +5114,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -4838,6 +5182,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -4892,6 +5238,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -4976,6 +5324,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -5033,6 +5383,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -5095,6 +5447,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -5163,6 +5517,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -5233,6 +5589,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -5296,6 +5654,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -5362,6 +5722,8 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -5375,6 +5737,310 @@ describe("runAgentTurnWithFallback", () => {
     expect(sessionEntry.providerOverride).toBe("anthropic");
     expect(sessionEntry.modelOverride).toBe("claude-opus-4-6");
     expect(sessionEntry.modelOverrideSource).toBe("user");
+  });
+
+  it("threads fallback-selected provider/model into request_compaction and drops primary auth profile on provider change", async () => {
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("openai", "gpt-5.4"),
+      provider: "openai",
+      model: "gpt-5.4",
+      attempts: [],
+    }));
+    state.compactEmbeddedPiSessionMock.mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      result: { summary: "done", firstKeptEntryId: "entry-1", tokensBefore: 10 },
+    });
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      const triggerCompaction = (
+        params as EmbeddedAgentParams & {
+          requestCompactionOpts?: {
+            triggerCompaction?: (request: {
+              runId?: string;
+              trigger: string;
+              diagId?: string;
+            }) => Promise<unknown>;
+          };
+        }
+      ).requestCompactionOpts?.triggerCompaction;
+      expect(triggerCompaction).toBeTypeOf("function");
+      await triggerCompaction?.({
+        runId: "tool-run-1",
+        trigger: "context_pressure",
+        diagId: "diag-1",
+      });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "anthropic";
+    followupRun.run.model = "claude-opus-4-7";
+    followupRun.run.authProfileId = "anthropic:openclaw";
+    followupRun.run.config = {
+      agents: {
+        defaults: {
+          continuation: {
+            enabled: true,
+          },
+        },
+      },
+    };
+
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun,
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(["final", "success"]).toContain(result.kind);
+    expect(state.compactEmbeddedPiSessionMock).toHaveBeenCalledOnce();
+    expect(state.compactEmbeddedPiSessionMock.mock.calls[0]?.[0]).toMatchObject({
+      sessionId: "session",
+      sessionKey: "main",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      messageProvider: "whatsapp",
+      provider: "openai",
+      model: "gpt-5.4",
+      config: followupRun.run.config,
+      authProfileId: undefined,
+      trigger: "context_pressure",
+      diagId: "diag-1",
+      runId: "tool-run-1",
+    });
+  });
+
+  it("releases queued post-compaction delegates with request_compaction traceparent after volitional compaction completes", async () => {
+    state.compactEmbeddedPiSessionMock.mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      result: {
+        summary: "done",
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 10,
+        tokensAfter: 4,
+        sessionId: "session-after",
+        sessionFile: "/tmp/session-after.jsonl",
+      },
+    });
+    state.incrementRunCompactionCountMock.mockResolvedValueOnce(6);
+    state.dispatchPostCompactionDelegatesMock.mockResolvedValueOnce({
+      queuedDelegates: 2,
+      droppedDelegates: 0,
+    });
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      const triggerCompaction = (
+        params as EmbeddedAgentParams & {
+          requestCompactionOpts?: {
+            triggerCompaction?: (request: {
+              runId?: string;
+              trigger: string;
+              diagId?: string;
+              traceparent?: string;
+            }) => Promise<unknown>;
+          };
+        }
+      ).requestCompactionOpts?.triggerCompaction;
+      expect(triggerCompaction).toBeTypeOf("function");
+      await triggerCompaction?.({
+        runId: "tool-run-trace",
+        trigger: "volitional",
+        diagId: "diag-trace",
+        traceparent: VALID_TRACEPARENT,
+      });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const followupRun = createFollowupRun();
+    followupRun.run.config = {
+      agents: {
+        defaults: {
+          continuation: {
+            enabled: true,
+          },
+        },
+      },
+    };
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: 1,
+      sessionFile: "/tmp/session.jsonl",
+    };
+    const sessionStore = { main: sessionEntry };
+
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun,
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => sessionEntry,
+      activeSessionStore: sessionStore,
+      storePath: "/tmp/sessions.json",
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("success");
+    expect(state.compactEmbeddedPiSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        diagId: "diag-trace",
+        runId: "tool-run-trace",
+        sessionKey: "main",
+        traceparent: VALID_TRACEPARENT,
+        trigger: "volitional",
+      }),
+    );
+    expect(state.incrementRunCompactionCountMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        amount: 1,
+        compactionTokensAfter: 4,
+        newSessionFile: "/tmp/session-after.jsonl",
+        newSessionId: "session-after",
+        sessionEntry,
+        sessionKey: "main",
+        sessionStore,
+        storePath: "/tmp/sessions.json",
+      }),
+    );
+    expect(state.dispatchPostCompactionDelegatesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        compactionCount: 6,
+        followupRun,
+        releaseTraceparent: VALID_TRACEPARENT,
+        sessionEntry,
+        sessionKey: "main",
+        sessionStore,
+        storePath: "/tmp/sessions.json",
+      }),
+    );
+    expect(state.emitContinuationCompactionReleasedSpanMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        compactionId: 6,
+        releasedCount: 2,
+        traceparent: VALID_TRACEPARENT,
+      }),
+    );
+  });
+
+  it("preserves the primary auth profile for request_compaction when fallback stays on the same provider", async () => {
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("anthropic", "claude-sonnet-4-5"),
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      attempts: [],
+    }));
+    state.compactEmbeddedPiSessionMock.mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      result: { summary: "done", firstKeptEntryId: "entry-1", tokensBefore: 10 },
+    });
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      const triggerCompaction = (
+        params as EmbeddedAgentParams & {
+          requestCompactionOpts?: {
+            triggerCompaction?: (request: {
+              runId?: string;
+              trigger: string;
+              diagId?: string;
+            }) => Promise<unknown>;
+          };
+        }
+      ).requestCompactionOpts?.triggerCompaction;
+      expect(triggerCompaction).toBeTypeOf("function");
+      await triggerCompaction?.({
+        runId: "tool-run-2",
+        trigger: "manual",
+        diagId: "diag-2",
+      });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "anthropic";
+    followupRun.run.model = "claude-opus-4-7";
+    followupRun.run.authProfileId = "anthropic:openclaw";
+    followupRun.run.config = {
+      agents: {
+        defaults: {
+          continuation: {
+            enabled: true,
+          },
+        },
+      },
+    };
+
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun,
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(["final", "success"]).toContain(result.kind);
+    expect(state.compactEmbeddedPiSessionMock).toHaveBeenCalledOnce();
+    expect(state.compactEmbeddedPiSessionMock.mock.calls[0]?.[0]).toMatchObject({
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      authProfileId: "anthropic:openclaw",
+      trigger: "manual",
+      diagId: "diag-2",
+      runId: "tool-run-2",
+    });
   });
 
   it("keeps same-provider auth profile when fallback only changes model", async () => {

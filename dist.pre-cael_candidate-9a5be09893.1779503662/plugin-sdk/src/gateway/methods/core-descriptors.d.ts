@@ -1,0 +1,20 @@
+import type { OperatorScope } from "../operator-scopes.js";
+import { type GatewayMethodDescriptorInput, type GatewayMethodHandler, type GatewayMethodScope } from "./descriptor.js";
+type CoreGatewayMethodSpec = {
+    name: string;
+    scope: GatewayMethodScope;
+    advertise?: false;
+    startup?: true;
+    controlPlaneWrite?: true;
+};
+export declare const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[];
+export declare const STARTUP_UNAVAILABLE_GATEWAY_METHODS: string[];
+export declare function listCoreAdvertisedGatewayMethodNames(): string[];
+export declare function listCoreGatewayMethodNames(): string[];
+export declare function resolveCoreGatewayMethodScope(method: string): GatewayMethodScope | undefined;
+export declare function resolveCoreOperatorGatewayMethodScope(method: string): OperatorScope | undefined;
+export declare function isCoreNodeGatewayMethod(method: string): boolean;
+export declare function isDynamicOperatorGatewayMethod(method: string): boolean;
+export declare function isCoreGatewayMethodClassified(method: string): boolean;
+export declare function createCoreGatewayMethodDescriptors(handlers: Record<string, GatewayMethodHandler>): GatewayMethodDescriptorInput[];
+export {};

@@ -1,0 +1,1 @@
+../../../dist/extensions/browser/browser-host-inspection.d.ts

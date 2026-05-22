@@ -1,0 +1,1 @@
+../../../dist/extensions/canvas/setup-api.d.ts

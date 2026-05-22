@@ -1,0 +1,1 @@
+../../../dist/extensions/openrouter/provider-contract-api.d.ts

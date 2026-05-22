@@ -1,0 +1,32 @@
+import type { RunEmbeddedPiAgentParams } from "../agents/pi-embedded-runner/run/params.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { RuntimeLogger, PluginRuntimeCore } from "../plugins/runtime/types-core.js";
+import { type RealtimeVoiceAgentConsultTranscriptEntry } from "./agent-consult-tool.js";
+export type RealtimeVoiceAgentConsultRuntime = PluginRuntimeCore["agent"];
+export type RealtimeVoiceAgentConsultResult = {
+    text: string;
+};
+export { resolveRealtimeVoiceAgentConsultTools, resolveRealtimeVoiceAgentConsultToolsAllow, } from "./agent-consult-tool.js";
+export declare function consultRealtimeVoiceAgent(params: {
+    cfg: OpenClawConfig;
+    agentRuntime: RealtimeVoiceAgentConsultRuntime;
+    logger: Pick<RuntimeLogger, "warn">;
+    sessionKey: string;
+    messageProvider: string;
+    lane: string;
+    runIdPrefix: string;
+    args: unknown;
+    transcript: RealtimeVoiceAgentConsultTranscriptEntry[];
+    surface: string;
+    userLabel: string;
+    assistantLabel?: string;
+    questionSourceLabel?: string;
+    agentId?: string;
+    provider?: RunEmbeddedPiAgentParams["provider"];
+    model?: RunEmbeddedPiAgentParams["model"];
+    thinkLevel?: RunEmbeddedPiAgentParams["thinkLevel"];
+    timeoutMs?: number;
+    toolsAllow?: string[];
+    extraSystemPrompt?: string;
+    fallbackText?: string;
+}): Promise<RealtimeVoiceAgentConsultResult>;

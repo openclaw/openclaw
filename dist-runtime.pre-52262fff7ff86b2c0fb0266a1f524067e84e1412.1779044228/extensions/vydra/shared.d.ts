@@ -1,0 +1,1 @@
+../../../dist/extensions/vydra/shared.d.ts

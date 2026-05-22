@@ -1833,6 +1833,7 @@
     "typebox": "1.1.38",
     "typescript": "6.0.3",
     "undici": "8.3.0",
+    "uuid": "14.0.0",
     "web-push": "3.6.7",
     "web-tree-sitter": "0.26.9",
     "ws": "8.20.1",

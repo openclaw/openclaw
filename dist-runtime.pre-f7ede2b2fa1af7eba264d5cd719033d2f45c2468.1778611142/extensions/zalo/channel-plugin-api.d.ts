@@ -1,0 +1,1 @@
+../../../dist/extensions/zalo/channel-plugin-api.d.ts

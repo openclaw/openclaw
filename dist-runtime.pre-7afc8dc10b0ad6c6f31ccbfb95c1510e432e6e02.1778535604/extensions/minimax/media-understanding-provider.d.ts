@@ -1,0 +1,1 @@
+../../../dist/extensions/minimax/media-understanding-provider.d.ts

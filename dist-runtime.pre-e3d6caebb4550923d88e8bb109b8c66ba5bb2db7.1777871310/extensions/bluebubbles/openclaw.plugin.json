@@ -1,0 +1,742 @@
+{
+  "id": "bluebubbles",
+  "activation": {
+    "onStartup": false
+  },
+  "channels": [
+    "bluebubbles"
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "channelConfigs": {
+    "bluebubbles": {
+      "schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "markdown": {
+            "type": "object",
+            "properties": {
+              "tables": {
+                "type": "string",
+                "enum": [
+                  "off",
+                  "bullets",
+                  "code",
+                  "block"
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          "actions": {
+            "type": "object",
+            "properties": {
+              "reactions": {
+                "default": true,
+                "type": "boolean"
+              },
+              "edit": {
+                "default": true,
+                "type": "boolean"
+              },
+              "unsend": {
+                "default": true,
+                "type": "boolean"
+              },
+              "reply": {
+                "default": true,
+                "type": "boolean"
+              },
+              "sendWithEffect": {
+                "default": true,
+                "type": "boolean"
+              },
+              "renameGroup": {
+                "default": true,
+                "type": "boolean"
+              },
+              "setGroupIcon": {
+                "default": true,
+                "type": "boolean"
+              },
+              "addParticipant": {
+                "default": true,
+                "type": "boolean"
+              },
+              "removeParticipant": {
+                "default": true,
+                "type": "boolean"
+              },
+              "leaveGroup": {
+                "default": true,
+                "type": "boolean"
+              },
+              "sendAttachment": {
+                "default": true,
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "reactions",
+              "edit",
+              "unsend",
+              "reply",
+              "sendWithEffect",
+              "renameGroup",
+              "setGroupIcon",
+              "addParticipant",
+              "removeParticipant",
+              "leaveGroup",
+              "sendAttachment"
+            ],
+            "additionalProperties": false
+          },
+          "serverUrl": {
+            "type": "string"
+          },
+          "password": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "source": {
+                        "type": "string",
+                        "const": "env"
+                      },
+                      "provider": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+                      },
+                      "id": {
+                        "type": "string",
+                        "pattern": "^[A-Z][A-Z0-9_]{0,127}$"
+                      }
+                    },
+                    "required": [
+                      "source",
+                      "provider",
+                      "id"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "source": {
+                        "type": "string",
+                        "const": "file"
+                      },
+                      "provider": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+                      },
+                      "id": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "source",
+                      "provider",
+                      "id"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "source": {
+                        "type": "string",
+                        "const": "exec"
+                      },
+                      "provider": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+                      },
+                      "id": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "source",
+                      "provider",
+                      "id"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            ]
+          },
+          "webhookPath": {
+            "type": "string"
+          },
+          "dmPolicy": {
+            "type": "string",
+            "enum": [
+              "pairing",
+              "allowlist",
+              "open",
+              "disabled"
+            ]
+          },
+          "allowFrom": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                }
+              ]
+            }
+          },
+          "groupAllowFrom": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                }
+              ]
+            }
+          },
+          "groupPolicy": {
+            "type": "string",
+            "enum": [
+              "open",
+              "disabled",
+              "allowlist"
+            ]
+          },
+          "enrichGroupParticipantsFromContacts": {
+            "default": true,
+            "type": "boolean"
+          },
+          "historyLimit": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "dmHistoryLimit": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "textChunkLimit": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "sendTimeoutMs": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "chunkMode": {
+            "type": "string",
+            "enum": [
+              "length",
+              "newline"
+            ]
+          },
+          "mediaMaxMb": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "mediaLocalRoots": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "sendReadReceipts": {
+            "type": "boolean"
+          },
+          "network": {
+            "type": "object",
+            "properties": {
+              "dangerouslyAllowPrivateNetwork": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          },
+          "catchup": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "maxAgeMinutes": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "perRunLimit": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "firstRunLookbackMinutes": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "maxFailureRetries": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "additionalProperties": false
+          },
+          "blockStreaming": {
+            "type": "boolean"
+          },
+          "replyContextApiFallback": {
+            "type": "boolean"
+          },
+          "groups": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "requireMention": {
+                  "type": "boolean"
+                },
+                "tools": {
+                  "type": "object",
+                  "properties": {
+                    "allow": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "alsoAllow": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "deny": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "systemPrompt": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "coalesceSameSenderDms": {
+            "type": "boolean"
+          },
+          "accounts": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "enabled": {
+                  "type": "boolean"
+                },
+                "markdown": {
+                  "type": "object",
+                  "properties": {
+                    "tables": {
+                      "type": "string",
+                      "enum": [
+                        "off",
+                        "bullets",
+                        "code",
+                        "block"
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "actions": {
+                  "type": "object",
+                  "properties": {
+                    "reactions": {
+                      "default": true,
+                      "type": "boolean"
+                    },
+                    "edit": {
+                      "default": true,
+                      "type": "boolean"
+                    },
+                    "unsend": {
+                      "default": true,
+                      "type": "boolean"
+                    },
+                    "reply": {
+                      "default": true,
+                      "type": "boolean"
+                    },
+                    "sendWithEffect": {
+                      "default": true,
+                      "type": "boolean"
+                    },
+                    "renameGroup": {
+                      "default": true,
+                      "type": "boolean"
+                    },
+                    "setGroupIcon": {
+                      "default": true,
+                      "type": "boolean"
+                    },
+                    "addParticipant": {
+                      "default": true,
+                      "type": "boolean"
+                    },
+                    "removeParticipant": {
+                      "default": true,
+                      "type": "boolean"
+                    },
+                    "leaveGroup": {
+                      "default": true,
+                      "type": "boolean"
+                    },
+                    "sendAttachment": {
+                      "default": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "reactions",
+                    "edit",
+                    "unsend",
+                    "reply",
+                    "sendWithEffect",
+                    "renameGroup",
+                    "setGroupIcon",
+                    "addParticipant",
+                    "removeParticipant",
+                    "leaveGroup",
+                    "sendAttachment"
+                  ],
+                  "additionalProperties": false
+                },
+                "serverUrl": {
+                  "type": "string"
+                },
+                "password": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "source": {
+                              "type": "string",
+                              "const": "env"
+                            },
+                            "provider": {
+                              "type": "string",
+                              "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+                            },
+                            "id": {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{0,127}$"
+                            }
+                          },
+                          "required": [
+                            "source",
+                            "provider",
+                            "id"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "source": {
+                              "type": "string",
+                              "const": "file"
+                            },
+                            "provider": {
+                              "type": "string",
+                              "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+                            },
+                            "id": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "source",
+                            "provider",
+                            "id"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "source": {
+                              "type": "string",
+                              "const": "exec"
+                            },
+                            "provider": {
+                              "type": "string",
+                              "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+                            },
+                            "id": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "source",
+                            "provider",
+                            "id"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "webhookPath": {
+                  "type": "string"
+                },
+                "dmPolicy": {
+                  "type": "string",
+                  "enum": [
+                    "pairing",
+                    "allowlist",
+                    "open",
+                    "disabled"
+                  ]
+                },
+                "allowFrom": {
+                  "type": "array",
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ]
+                  }
+                },
+                "groupAllowFrom": {
+                  "type": "array",
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ]
+                  }
+                },
+                "groupPolicy": {
+                  "type": "string",
+                  "enum": [
+                    "open",
+                    "disabled",
+                    "allowlist"
+                  ]
+                },
+                "enrichGroupParticipantsFromContacts": {
+                  "default": true,
+                  "type": "boolean"
+                },
+                "historyLimit": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "dmHistoryLimit": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "textChunkLimit": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "sendTimeoutMs": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "chunkMode": {
+                  "type": "string",
+                  "enum": [
+                    "length",
+                    "newline"
+                  ]
+                },
+                "mediaMaxMb": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "mediaLocalRoots": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "sendReadReceipts": {
+                  "type": "boolean"
+                },
+                "network": {
+                  "type": "object",
+                  "properties": {
+                    "dangerouslyAllowPrivateNetwork": {
+                      "type": "boolean"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "catchup": {
+                  "type": "object",
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "maxAgeMinutes": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "perRunLimit": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "firstRunLookbackMinutes": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "maxFailureRetries": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "blockStreaming": {
+                  "type": "boolean"
+                },
+                "replyContextApiFallback": {
+                  "type": "boolean"
+                },
+                "groups": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": {
+                    "type": "object",
+                    "properties": {
+                      "requireMention": {
+                        "type": "boolean"
+                      },
+                      "tools": {
+                        "type": "object",
+                        "properties": {
+                          "allow": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "alsoAllow": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "deny": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "additionalProperties": false
+                      },
+                      "systemPrompt": {
+                        "type": "string"
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                },
+                "coalesceSameSenderDms": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "enrichGroupParticipantsFromContacts"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "defaultAccount": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "enrichGroupParticipantsFromContacts"
+        ],
+        "additionalProperties": false
+      },
+      "label": "BlueBubbles",
+      "description": "iMessage via the BlueBubbles mac app + REST API.",
+      "uiHints": {
+        "": {
+          "label": "BlueBubbles",
+          "help": "BlueBubbles channel provider configuration used for Apple messaging bridge integrations. Keep DM policy aligned with your trusted sender model in shared deployments."
+        },
+        "dmPolicy": {
+          "label": "BlueBubbles DM Policy",
+          "help": "Direct message access control (\"pairing\" recommended). \"open\" requires channels.bluebubbles.allowFrom=[\"*\"]."
+        }
+      }
+    }
+  }
+}

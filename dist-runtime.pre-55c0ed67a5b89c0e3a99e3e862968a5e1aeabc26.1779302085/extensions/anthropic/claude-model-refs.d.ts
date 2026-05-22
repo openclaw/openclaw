@@ -1,0 +1,1 @@
+../../../dist/extensions/anthropic/claude-model-refs.d.ts

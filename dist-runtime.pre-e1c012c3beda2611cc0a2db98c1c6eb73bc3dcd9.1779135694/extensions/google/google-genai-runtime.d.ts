@@ -1,0 +1,1 @@
+../../../dist/extensions/google/google-genai-runtime.d.ts

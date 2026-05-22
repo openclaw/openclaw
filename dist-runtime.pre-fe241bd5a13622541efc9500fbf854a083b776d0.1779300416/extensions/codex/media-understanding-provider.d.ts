@@ -1,0 +1,1 @@
+../../../dist/extensions/codex/media-understanding-provider.d.ts

@@ -1,0 +1,1 @@
+../../../dist/extensions/deepseek/provider-discovery.d.ts

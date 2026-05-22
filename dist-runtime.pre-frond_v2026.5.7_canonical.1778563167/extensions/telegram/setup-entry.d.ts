@@ -1,0 +1,1 @@
+../../../dist/extensions/telegram/setup-entry.d.ts

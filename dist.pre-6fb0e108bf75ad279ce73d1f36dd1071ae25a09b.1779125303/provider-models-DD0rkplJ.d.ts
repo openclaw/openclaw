@@ -1,0 +1,14 @@
+import { Dn as ProviderResolveDynamicModelContext } from "./types-CPAF_tyr.js";
+import * as _$_earendil_works_pi_ai0 from "@earendil-works/pi-ai";
+
+//#region extensions/xai/provider-models.d.ts
+declare function isModernXaiModel(modelId: string): boolean;
+declare function resolveXaiForwardCompatModel(params: {
+  providerId: string;
+  ctx: ProviderResolveDynamicModelContext;
+}): (_$_earendil_works_pi_ai0.Model<_$_earendil_works_pi_ai0.Api> & {
+  compat: Record<string, unknown>;
+  thinkingLevelMap: Partial<Record<"off" | "minimal" | "high" | "low" | "medium" | "xhigh", string | null>>;
+}) | undefined;
+//#endregion
+export { resolveXaiForwardCompatModel as n, isModernXaiModel as t };

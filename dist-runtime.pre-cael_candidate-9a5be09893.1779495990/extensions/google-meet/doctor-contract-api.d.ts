@@ -1,0 +1,1 @@
+../../../dist/extensions/google-meet/doctor-contract-api.d.ts

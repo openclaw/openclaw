@@ -1,0 +1,46 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+type DiagnosticsTimelineEventType = "span.start" | "span.end" | "span.error" | "mark" | "eventLoop.sample" | "provider.request" | "childProcess.exit";
+type DiagnosticsTimelineAttributes = Record<string, string | number | boolean | null>;
+type DiagnosticsTimelineEvent = {
+    type: DiagnosticsTimelineEventType;
+    name: string;
+    timestamp?: string;
+    runId?: string;
+    envName?: string;
+    pid?: number;
+    phase?: string;
+    spanId?: string;
+    parentSpanId?: string;
+    durationMs?: number;
+    attributes?: DiagnosticsTimelineAttributes;
+    errorName?: string;
+    errorMessage?: string;
+    p50Ms?: number;
+    p95Ms?: number;
+    p99Ms?: number;
+    maxMs?: number;
+    activeSpanName?: string;
+    provider?: string;
+    operation?: string;
+    ok?: boolean;
+    command?: string;
+    exitCode?: number | null;
+    signal?: string | null;
+};
+type DiagnosticsTimelineSpanOptions = {
+    phase?: string;
+    parentSpanId?: string;
+    attributes?: DiagnosticsTimelineAttributes;
+    config?: OpenClawConfig;
+    env?: NodeJS.ProcessEnv;
+};
+type DiagnosticsTimelineOptions = {
+    config?: OpenClawConfig;
+    env?: NodeJS.ProcessEnv;
+};
+export declare function isDiagnosticsTimelineEnabled(options?: DiagnosticsTimelineOptions): boolean;
+export declare function emitDiagnosticsTimelineEvent(event: DiagnosticsTimelineEvent, options?: DiagnosticsTimelineOptions): void;
+export declare function measureDiagnosticsTimelineSpan<T>(name: string, run: () => Promise<T> | T, options?: DiagnosticsTimelineSpanOptions): Promise<T>;
+export declare function measureDiagnosticsTimelineSpanSync<T>(name: string, run: () => T, options?: DiagnosticsTimelineSpanOptions): T;
+export declare function flushDiagnosticsTimelineForTest(): Promise<void>;
+export {};

@@ -1,0 +1,1 @@
+../../../dist/extensions/matrix/auth-presence.d.ts

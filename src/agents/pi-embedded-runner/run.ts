@@ -12,6 +12,8 @@ import { emitAgentPlanEvent } from "../../infra/agent-events.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { freezeDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { requireSessionKeyOrSkip } from "../../infra/session-keys.js";
+import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveProviderAuthProfileId } from "../../plugins/provider-runtime.js";
@@ -702,17 +704,15 @@ export async function runEmbeddedPiAgent(
         pluginHarnessOwnsTransport &&
         provider === OPENAI_CODEX_PROVIDER_ID &&
         effectiveModel.api === "openai-codex-responses";
-      const authStore =
-        pluginHarnessOwnsTransport && !pluginHarnessNeedsOpenClawAuthBootstrap
+      const authStore = pluginHarnessNeedsOpenClawAuthBootstrap
+        ? ensureAuthProfileStore(agentDir, {
+            allowKeychainPrompt: false,
+          })
+        : pluginHarnessOwnsTransport
           ? createEmptyAuthProfileStore()
-          : pluginHarnessNeedsOpenClawAuthBootstrap
-            ? ensureAuthProfileStore(agentDir, {
-                externalCliProviderIds: [OPENAI_CODEX_PROVIDER_ID],
-                allowKeychainPrompt: false,
-              })
-            : ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
-                allowKeychainPrompt: false,
-              });
+          : ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+              allowKeychainPrompt: false,
+            });
       const attemptAuthProfileStore =
         pluginHarnessOwnsTransport && !pluginHarnessNeedsOpenClawAuthBootstrap
           ? ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
@@ -1519,6 +1519,8 @@ export async function runEmbeddedPiAgent(
             forceHeartbeatTool: params.forceHeartbeatTool,
             requireExplicitMessageTarget: params.requireExplicitMessageTarget,
             internalEvents: params.internalEvents,
+            drainsContinuationDelegateQueue: params.drainsContinuationDelegateQueue,
+            continueWorkOpts: params.continueWorkOpts,
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature:
               bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],
@@ -1528,6 +1530,7 @@ export async function runEmbeddedPiAgent(
             suppressAssistantErrorPersistence: params.suppressAssistantErrorPersistence,
             onUserMessagePersisted,
             onAssistantErrorMessagePersisted: params.onAssistantErrorMessagePersisted,
+            requestCompactionOpts: params.requestCompactionOpts,
           })
             .catch((err: unknown): never => {
               throw postCompactionAbortError ?? err;
@@ -1558,6 +1561,7 @@ export async function runEmbeddedPiAgent(
             currentAttemptAssistant,
           } = attempt;
           const timedOutDuringToolExecution = attempt.timedOutDuringToolExecution ?? false;
+          let compactionFailureContext = false;
           if (sessionIdUsed && sessionIdUsed !== activeSessionId) {
             activeSessionId = sessionIdUsed;
           }
@@ -1724,7 +1728,7 @@ export async function runEmbeddedPiAgent(
                 : 0;
             if (timeoutCompactionAttempts >= MAX_TIMEOUT_COMPACTION_ATTEMPTS) {
               log.warn(
-                `[timeout-compaction] already attempted timeout compaction ${timeoutCompactionAttempts} time(s); falling through to failover rotation`,
+                `[timeout-compaction] already attempted timeout compaction ${timeoutCompactionAttempts} time(s); falling through to timeout handling`,
               );
             } else if (tokenUsedRatio > 0.65) {
               const timeoutDiagId = createCompactionDiagId();
@@ -1733,6 +1737,30 @@ export async function runEmbeddedPiAgent(
                 `[timeout-compaction] LLM timed out with high prompt token usage (${Math.round(tokenUsedRatio * 100)}%); ` +
                   `attempting compaction before retry (attempt ${timeoutCompactionAttempts}/${MAX_TIMEOUT_COMPACTION_ATTEMPTS}) diagId=${timeoutDiagId}`,
               );
+              // Emit a pressure-fire anchor so operators grepping for context-pressure
+              // find mid-turn triggers that bypassed the pre-run checkContextPressure()
+              // in agent-runner.ts. Enqueue a post-compaction advisory so the
+              // successor session knows why compaction fired and can evacuate earlier
+              // via continue_delegate(post-compaction) next turn.
+              log.warn(
+                `[context-pressure:fire] mid-turn trigger=timeout ratio=${Math.round(tokenUsedRatio * 100)}% ` +
+                  `tokens=${Math.round((lastTurnPromptTokens ?? 0) / 1000)}k/${Math.round(ctxInfo.tokens / 1000)}k ` +
+                  `sessionKey=${params.sessionKey ?? params.sessionId}`,
+              );
+              const timeoutSessionKey = requireSessionKeyOrSkip(
+                params,
+                log,
+                "pi-runner.timeout-compaction",
+              );
+              if (timeoutSessionKey) {
+                enqueueSystemEvent(
+                  `[system:context-pressure] Mid-turn compaction triggered at ${Math.round(tokenUsedRatio * 100)}% ` +
+                    `context (${Math.round((lastTurnPromptTokens ?? 0) / 1000)}k/${Math.round(ctxInfo.tokens / 1000)}k tokens). ` +
+                    `Your last reply hit the provider timeout ceiling. Consider evacuating working state earlier via ` +
+                    `continue_delegate(post-compaction) or memory files so the next turn starts with room to grow.`,
+                  { sessionKey: timeoutSessionKey },
+                );
+              }
               let timeoutCompactResult: Awaited<ReturnType<typeof contextEngine.compact>>;
               await runOwnsCompactionBeforeHook("timeout recovery");
               try {
@@ -1838,6 +1866,7 @@ export async function runEmbeddedPiAgent(
                 postCompactionGuard.armPostCompaction();
                 continue;
               } else {
+                compactionFailureContext = true;
                 log.warn(
                   `[timeout-compaction] compaction did not reduce context for ${provider}/${modelId}; falling through to normal handling`,
                 );
@@ -1915,6 +1944,30 @@ export async function runEmbeddedPiAgent(
               log.warn(
                 `context overflow detected (attempt ${overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); attempting auto-compaction for ${provider}/${modelId}`,
               );
+              // Emit pressure-fire anchor + system event so operators and successor
+              // sessions see the mid-turn overflow compaction in the same format as
+              // pre-run band fires. Matches [context-pressure:fire] grep from §6.1 of
+              // docs/design/continue-work-signal-v2.md (trigger F — overflow recovery).
+              log.warn(
+                `[context-pressure:fire] mid-turn trigger=overflow attempt=${overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS} ` +
+                  `tokens=${observedOverflowTokens !== undefined ? Math.round(observedOverflowTokens / 1000) : "?"}k/${Math.round(ctxInfo.tokens / 1000)}k ` +
+                  `sessionKey=${params.sessionKey ?? params.sessionId}`,
+              );
+              const overflowSessionKey = requireSessionKeyOrSkip(
+                params,
+                log,
+                "pi-runner.overflow-compaction",
+              );
+              if (overflowSessionKey) {
+                enqueueSystemEvent(
+                  `[system:context-pressure] Context-overflow compaction triggered mid-turn ` +
+                    `(attempt ${overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}). ` +
+                    `Your last reply grew the context past the model's window. Consider evacuating ` +
+                    `working state earlier via continue_delegate(post-compaction) or memory files; the ` +
+                    `pre-run context-pressure band did not catch this growth pattern.`,
+                  { sessionKey: overflowSessionKey },
+                );
+              }
               let compactResult: Awaited<ReturnType<typeof contextEngine.compact>>;
               await runOwnsCompactionBeforeHook("overflow recovery");
               try {
@@ -2564,6 +2617,7 @@ export async function runEmbeddedPiAgent(
             idleTimedOut,
             timedOutDuringCompaction,
             timedOutDuringToolExecution,
+            compactionFailureContext,
             profileRotated: false,
           });
           const assistantFailoverOutcome = await handleAssistantFailover({
@@ -2577,6 +2631,7 @@ export async function runEmbeddedPiAgent(
             idleTimedOut,
             timedOutDuringCompaction,
             timedOutDuringToolExecution,
+            compactionFailureContext,
             allowSameModelIdleTimeoutRetry:
               timedOut &&
               idleTimedOut &&

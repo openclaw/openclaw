@@ -1,0 +1,1 @@
+../../../dist/extensions/web-readability/web-content-extractor.d.ts

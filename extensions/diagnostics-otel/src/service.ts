@@ -5,6 +5,7 @@ import {
   SpanStatusCode,
   TraceFlags,
 } from "@opentelemetry/api";
+import type { SpanContext } from "@opentelemetry/api";
 import type { LogRecord, SeverityNumber } from "@opentelemetry/api-logs";
 import { OTLPLogExporter } from "@opentelemetry/exporter-logs-otlp-proto";
 import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-proto";
@@ -26,8 +27,12 @@ import {
   isValidDiagnosticSpanId,
   isValidDiagnosticTraceFlags,
   isValidDiagnosticTraceId,
+  noopTracer,
   redactSensitiveText,
+  resetContinuationTracer,
+  setContinuationTracer,
 } from "../api.js";
+import { createContinuationOtelTracerAdapter } from "./continuation-tracer-adapter.js";
 
 const DEFAULT_SERVICE_NAME = "openclaw";
 const DROPPED_OTEL_ATTRIBUTE_KEYS = new Set([
@@ -511,11 +516,19 @@ function normalizeTraceContext(value: unknown): DiagnosticTraceContext | undefin
   if (candidate.traceFlags !== undefined && !isValidDiagnosticTraceFlags(candidate.traceFlags)) {
     return undefined;
   }
+  if (candidate.spanIdSource !== undefined && candidate.spanIdSource !== "remote") {
+    return undefined;
+  }
+  if (candidate.parentSpanIdSource !== undefined && candidate.parentSpanIdSource !== "remote") {
+    return undefined;
+  }
   return {
     traceId: candidate.traceId,
     ...(candidate.spanId ? { spanId: candidate.spanId } : {}),
     ...(candidate.parentSpanId ? { parentSpanId: candidate.parentSpanId } : {}),
     ...(candidate.traceFlags ? { traceFlags: candidate.traceFlags } : {}),
+    ...(candidate.spanIdSource ? { spanIdSource: candidate.spanIdSource } : {}),
+    ...(candidate.parentSpanIdSource ? { parentSpanIdSource: candidate.parentSpanIdSource } : {}),
   };
 }
 
@@ -565,6 +578,10 @@ function contextForTraceContext(traceContext: DiagnosticTraceContext | undefined
   });
 }
 
+function contextForSpanContext(spanContext: SpanContext | undefined) {
+  return spanContext ? trace.setSpanContext(otelContextApi.active(), spanContext) : undefined;
+}
+
 function contextForTrustedTraceContext(
   evt: DiagnosticEventPayload,
   metadata: DiagnosticEventMetadata,
@@ -612,8 +629,15 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
     stopActiveTrustedSpans = null;
     unregisterUnhandledRejectionHandler = null;
 
-    currentUnregisterUnhandledRejectionHandler?.();
+    // Always reset the continuation tracer to noop on shutdown so a stopped or
+    // restarted plugin returns to the additive no-op contract. Safe to call
+    // even if `setContinuationTracer` was never called this lifetime.
+    resetContinuationTracer();
+    // retain import for tsgo no-unused-symbol; reinstated as activeTracer on reset()
+    void noopTracer;
+
     currentUnsubscribe?.();
+    currentUnregisterUnhandledRejectionHandler?.();
     currentStopActiveTrustedSpans?.();
     if (currentLogProvider) {
       await currentLogProvider.shutdown().catch(() => undefined);
@@ -782,7 +806,59 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       const tracer = trace.getTracer("openclaw");
       const activeTrustedSpans = new Map<string, ReturnType<typeof tracer.startSpan>>();
       const activeTrustedSpanAliases = new Map<string, ReturnType<typeof tracer.startSpan>>();
+      const trustedSpanContextsByLogicalId = new Map<string, SpanContext>();
+      const trustedRunSpanContextsByLogicalTraceId = new Map<string, SpanContext>();
       const pendingTrustedRunFinalizers = new Map<string, ReturnType<typeof setImmediate>>();
+      const rememberTrustedSpanContext = (
+        spanId: string | undefined,
+        span: ReturnType<typeof tracer.startSpan>,
+      ) => {
+        if (!spanId) {
+          return;
+        }
+        trustedSpanContextsByLogicalId.delete(spanId);
+        trustedSpanContextsByLogicalId.set(spanId, span.spanContext());
+        while (trustedSpanContextsByLogicalId.size > 8192) {
+          const oldestSpanId = trustedSpanContextsByLogicalId.keys().next().value;
+          if (!oldestSpanId) {
+            break;
+          }
+          trustedSpanContextsByLogicalId.delete(oldestSpanId);
+        }
+      };
+      const rememberTrustedRunSpanContext = (
+        traceId: string | undefined,
+        span: ReturnType<typeof tracer.startSpan>,
+      ) => {
+        if (!traceId) {
+          return;
+        }
+        trustedRunSpanContextsByLogicalTraceId.delete(traceId);
+        trustedRunSpanContextsByLogicalTraceId.set(traceId, span.spanContext());
+        while (trustedRunSpanContextsByLogicalTraceId.size > 8192) {
+          const oldestTraceId = trustedRunSpanContextsByLogicalTraceId.keys().next().value;
+          if (!oldestTraceId) {
+            break;
+          }
+          trustedRunSpanContextsByLogicalTraceId.delete(oldestTraceId);
+        }
+      };
+      const trustedRunSpanContextForLogicalTraceId = (traceId: string | undefined) =>
+        traceId ? trustedRunSpanContextsByLogicalTraceId.get(traceId) : undefined;
+      const trustedSpanContextForLogicalId = (spanId: string | undefined) => {
+        if (!spanId) {
+          return undefined;
+        }
+        return (
+          activeTrustedSpans.get(spanId)?.spanContext() ??
+          activeTrustedSpanAliases.get(spanId)?.spanContext() ??
+          trustedSpanContextsByLogicalId.get(spanId)
+        );
+      };
+      const otelContextForTrustedSpanId = (spanId: string | undefined) => {
+        const spanContext = trustedSpanContextForLogicalId(spanId);
+        return spanContext ? trace.setSpanContext(otelContextApi.active(), spanContext) : undefined;
+      };
       stopActiveTrustedSpans = () => {
         const stopAt = Date.now();
         for (const handle of pendingTrustedRunFinalizers.values()) {
@@ -797,7 +873,27 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         }
         activeTrustedSpans.clear();
         activeTrustedSpanAliases.clear();
+        trustedSpanContextsByLogicalId.clear();
+        trustedRunSpanContextsByLogicalTraceId.clear();
       };
+
+      // Install the OTEL adapter after `sdk.start()` or after detecting a
+      // preloaded SDK so continuation span helpers emit through the OTEL SDK
+      // instead of into `noopTracer`. The adapter resolves OpenClaw's logical
+      // DiagnosticTraceContext span IDs through the trusted event registry so
+      // direct continuation spans parent to the real exported OTel span.
+      if (tracesEnabled) {
+        setContinuationTracer(
+          createContinuationOtelTracerAdapter({
+            resolveParentContext: (traceContext) =>
+              otelContextForTrustedSpanId(traceContext.spanId),
+            resolveSpanContext: (traceContext) =>
+              trustedSpanContextForLogicalId(traceContext.spanId) ??
+              trustedSpanContextForLogicalId(traceContext.parentSpanId) ??
+              trustedRunSpanContextForLogicalTraceId(traceContext.traceId),
+          }),
+        );
+      }
 
       const tokensCounter = meter.createCounter("openclaw.tokens", {
         unit: "1",
@@ -1198,16 +1294,19 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         evt: DiagnosticEventPayload,
         metadata: DiagnosticEventMetadata,
       ) => {
-        const parentSpanId = trustedTraceContext(evt, metadata)?.parentSpanId;
-        if (!parentSpanId) {
-          return undefined;
+        const traceContext = trustedTraceContext(evt, metadata);
+        const parentSpanId = traceContext?.parentSpanId;
+        if (traceContext && parentSpanId && traceContext.parentSpanIdSource === "remote") {
+          return contextForTraceContext({
+            traceId: traceContext.traceId,
+            spanId: parentSpanId,
+            traceFlags: traceContext.traceFlags,
+          });
         }
-        const activeParentSpan =
-          activeTrustedSpans.get(parentSpanId) ?? activeTrustedSpanAliases.get(parentSpanId);
-        if (!activeParentSpan) {
-          return undefined;
-        }
-        return trace.setSpanContext(otelContextApi.active(), activeParentSpan.spanContext());
+        return (
+          otelContextForTrustedSpanId(parentSpanId) ??
+          contextForSpanContext(trustedRunSpanContextForLogicalTraceId(traceContext?.traceId))
+        );
       };
       const trackTrustedSpan = (
         evt: DiagnosticEventPayload,
@@ -1217,6 +1316,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         const spanId = trustedTraceContext(evt, metadata)?.spanId;
         if (spanId) {
           activeTrustedSpans.set(spanId, span);
+          rememberTrustedSpanContext(spanId, span);
         }
         return span;
       };
@@ -1230,6 +1330,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         }
         const span = activeTrustedSpans.get(spanId);
         if (span) {
+          rememberTrustedSpanContext(spanId, span);
           activeTrustedSpans.delete(spanId);
         }
         return span;
@@ -1253,6 +1354,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         const handle = setImmediate(() => {
           pendingTrustedRunFinalizers.delete(spanId);
           if (activeTrustedSpans.get(spanId) === span) {
+            rememberTrustedSpanContext(spanId, span);
             activeTrustedSpans.delete(spanId);
           }
           if (parentSpanId && activeTrustedSpanAliases.get(parentSpanId) === span) {
@@ -1273,6 +1375,8 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           model?: string;
           channel?: string;
           trigger?: string;
+          fireReason?: string;
+          parentRunId?: string;
         },
       ) => {
         if (evt.provider) {
@@ -1286,6 +1390,12 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         }
         if (evt.trigger) {
           spanAttrs["openclaw.trigger"] = evt.trigger;
+        }
+        if (evt.fireReason) {
+          spanAttrs["openclaw.run.fire_reason"] = evt.fireReason;
+        }
+        if (evt.parentRunId) {
+          spanAttrs["openclaw.parent_run_id"] = evt.parentRunId;
         }
       };
 
@@ -1597,8 +1707,10 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             startTimeMs: evt.ts,
           }),
         );
-        const parentSpanId = trustedTraceContext(evt, metadata)?.parentSpanId;
-        if (parentSpanId && !activeTrustedSpans.has(parentSpanId)) {
+        const trustedTrace = trustedTraceContext(evt, metadata);
+        rememberTrustedRunSpanContext(trustedTrace?.traceId, span);
+        const parentSpanId = trustedTrace?.parentSpanId;
+        if (parentSpanId && !trustedSpanContextForLogicalId(parentSpanId)) {
           activeTrustedSpanAliases.set(parentSpanId, span);
         }
       };
@@ -2395,6 +2507,14 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         queueDepthHistogram.record(evt.queued, { "openclaw.channel": "heartbeat" });
       };
 
+      const recordContinuationQueueSample = (
+        evt: Extract<DiagnosticEventPayload, { type: "diagnostic.continuation_queue.sample" }>,
+      ) => {
+        queueDepthHistogram.record(evt.continuationQueue.totalQueued, {
+          "openclaw.channel": "continuation",
+        });
+      };
+
       const recordLivenessWarning = (
         evt: Extract<DiagnosticEventPayload, { type: "diagnostic.liveness.warning" }>,
       ) => {
@@ -2445,6 +2565,18 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             : {}),
           ...(evt.cpuCoreRatio !== undefined
             ? { "openclaw.liveness.cpu_core_ratio": evt.cpuCoreRatio }
+            : {}),
+          ...(evt.continuationQueue
+            ? {
+                "openclaw.continuation_queue.total": evt.continuationQueue.totalQueued,
+                "openclaw.continuation_queue.runnable": evt.continuationQueue.pendingRunnable,
+                "openclaw.continuation_queue.scheduled": evt.continuationQueue.pendingScheduled,
+                "openclaw.continuation_queue.staged_post_compaction":
+                  evt.continuationQueue.stagedPostCompaction,
+                "openclaw.continuation_queue.invalid": evt.continuationQueue.invalidQueued,
+                "openclaw.continuation_queue.drained_since_last_sample":
+                  evt.continuationQueue.drainedSinceLastSample,
+              }
             : {}),
         };
         const span = spanWithDuration("openclaw.liveness.warning", spanAttrs, 0, {
@@ -2583,6 +2715,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               return;
             case "diagnostic.heartbeat":
               recordHeartbeat(evt);
+              return;
+            case "diagnostic.continuation_queue.sample":
+              recordContinuationQueueSample(evt);
               return;
             case "diagnostic.liveness.warning":
               recordLivenessWarning(evt);

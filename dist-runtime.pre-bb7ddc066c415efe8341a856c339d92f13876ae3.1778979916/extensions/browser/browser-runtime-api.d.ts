@@ -1,0 +1,1 @@
+../../../dist/extensions/browser/browser-runtime-api.d.ts

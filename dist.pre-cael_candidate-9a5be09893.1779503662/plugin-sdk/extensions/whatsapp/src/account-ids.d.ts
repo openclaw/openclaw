@@ -1,0 +1,2 @@
+declare const listConfiguredAccountIds: (cfg: import("openclaw/plugin-sdk/account-core").OpenClawConfig) => string[], listAccountIds: (cfg: import("openclaw/plugin-sdk/account-core").OpenClawConfig) => string[], resolveDefaultWhatsAppAccountId: (cfg: import("openclaw/plugin-sdk/account-core").OpenClawConfig) => string;
+export { listConfiguredAccountIds, listAccountIds as listWhatsAppAccountIds, resolveDefaultWhatsAppAccountId, };

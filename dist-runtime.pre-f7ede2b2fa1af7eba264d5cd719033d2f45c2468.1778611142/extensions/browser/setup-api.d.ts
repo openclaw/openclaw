@@ -1,0 +1,1 @@
+../../../dist/extensions/browser/setup-api.d.ts

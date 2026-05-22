@@ -1,0 +1,1 @@
+../../../dist/extensions/nvidia/onboard.d.ts

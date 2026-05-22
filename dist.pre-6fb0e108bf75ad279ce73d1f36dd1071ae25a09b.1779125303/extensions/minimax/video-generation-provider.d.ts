@@ -1,0 +1,2 @@
+import { n as buildMinimaxVideoGenerationProvider, t as buildMinimaxPortalVideoGenerationProvider } from "../../video-generation-provider-paI2CN-G.js";
+export { buildMinimaxPortalVideoGenerationProvider, buildMinimaxVideoGenerationProvider };

@@ -1,0 +1,1 @@
+../../../dist/extensions/qwen/video-generation-provider.d.ts

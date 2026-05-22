@@ -1,0 +1,1 @@
+../../../dist/extensions/mistral/provider-compat.d.ts

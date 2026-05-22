@@ -1,0 +1,2 @@
+import{o as e}from"./string-coerce-LMp5Q49X.js";function t(e,t){if(!e)return null;let n=(e.channels??{})[t];if(n&&typeof n==`object`)return n;let r=e[t];return r&&typeof r==`object`?r:null}function n(t){if(t==null)return e(`common.na`);if(typeof t==`string`||typeof t==`number`||typeof t==`boolean`)return String(t);try{return JSON.stringify(t)}catch{return e(`common.na`)}}function r(e){let r=t(e.configForm,e.channelId);return r?e.fields.flatMap(e=>e in r?[{label:e,value:n(r[e])}]:[]):[]}export{t as n,r,n as t};
+//# sourceMappingURL=channel-config-extras-Dx8XbvjG.js.map

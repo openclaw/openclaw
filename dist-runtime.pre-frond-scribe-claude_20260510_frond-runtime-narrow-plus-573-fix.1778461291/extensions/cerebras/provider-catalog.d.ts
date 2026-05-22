@@ -1,0 +1,1 @@
+../../../dist/extensions/cerebras/provider-catalog.d.ts

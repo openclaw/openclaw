@@ -1,0 +1,1 @@
+../../../dist/extensions/deepinfra/media-models.d.ts

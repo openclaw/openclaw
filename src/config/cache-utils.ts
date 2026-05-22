@@ -64,7 +64,7 @@ export function createExpiringMapCache<TKey, TValue>(options: {
   clock?: () => number;
 }): ExpiringMapCache<TKey, TValue> {
   const cache = new Map<TKey, ExpiringMapCacheEntry<TValue>>();
-  const now = options.clock ?? Date.now;
+  const now = options.clock ?? (() => Date.now());
   let lastPruneAt = 0;
 
   function getTtlMs(): number {

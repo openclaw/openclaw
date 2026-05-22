@@ -1,0 +1,1 @@
+../../../dist/extensions/whatsapp/login-qr-runtime.d.ts

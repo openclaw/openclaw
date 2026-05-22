@@ -1,0 +1,1 @@
+../../../dist/extensions/telegram/channel-config-api.d.ts

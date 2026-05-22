@@ -1,0 +1,1 @@
+../../../dist/extensions/zalouser/secret-contract-api.d.ts

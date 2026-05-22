@@ -1,0 +1,1 @@
+../../../dist/extensions/xiaomi/provider-catalog.d.ts

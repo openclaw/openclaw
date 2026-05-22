@@ -1,0 +1,16 @@
+export declare const AVATAR_MAX_BYTES: number;
+export declare const AVATAR_DATA_RE: RegExp;
+export declare const AVATAR_IMAGE_DATA_RE: RegExp;
+export declare const AVATAR_HTTP_RE: RegExp;
+export declare const AVATAR_SCHEME_RE: RegExp;
+export declare const WINDOWS_ABS_RE: RegExp;
+export declare function resolveAvatarMime(filePath: string): string;
+export declare function isAvatarDataUrl(value: string): boolean;
+export declare function isAvatarImageDataUrl(value: string): boolean;
+export declare function isAvatarHttpUrl(value: string): boolean;
+export declare function hasAvatarUriScheme(value: string): boolean;
+export declare function isWindowsAbsolutePath(value: string): boolean;
+export declare function isWorkspaceRelativeAvatarPath(value: string): boolean;
+export declare function isPathWithinRoot(rootDir: string, targetPath: string): boolean;
+export declare function looksLikeAvatarPath(value: string): boolean;
+export declare function isSupportedLocalAvatarExtension(filePath: string): boolean;

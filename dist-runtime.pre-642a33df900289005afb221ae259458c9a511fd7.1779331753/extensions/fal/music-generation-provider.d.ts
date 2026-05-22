@@ -1,0 +1,1 @@
+../../../dist/extensions/fal/music-generation-provider.d.ts

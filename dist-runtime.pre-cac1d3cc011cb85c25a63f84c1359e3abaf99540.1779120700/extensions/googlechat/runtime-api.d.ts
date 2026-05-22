@@ -1,0 +1,1 @@
+../../../dist/extensions/googlechat/runtime-api.d.ts

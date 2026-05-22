@@ -1,0 +1,31 @@
+import type { ContextVisibilityMode } from "openclaw/plugin-sdk/config-contracts";
+import type { ResolvedSlackAccount } from "../../accounts.js";
+import type { SlackMessageEvent } from "../../types.js";
+import type { SlackMonitorContext } from "../context.js";
+import type { SlackMediaResult } from "../media-types.js";
+import { type SlackThreadStarter } from "../thread.js";
+type SlackThreadContextData = {
+    threadStarterBody: string | undefined;
+    threadHistoryBody: string | undefined;
+    threadSessionPreviousTimestamp: number | undefined;
+    threadLabel: string | undefined;
+    threadStarterMedia: SlackMediaResult[] | null;
+};
+export declare function resolveSlackThreadContextData(params: {
+    ctx: SlackMonitorContext;
+    account: ResolvedSlackAccount;
+    message: SlackMessageEvent;
+    isThreadReply: boolean;
+    threadTs: string | undefined;
+    threadStarter: SlackThreadStarter | null;
+    roomLabel: string;
+    storePath: string;
+    sessionKey: string;
+    forceInitialHistory?: boolean;
+    allowFromLower: string[];
+    allowNameMatching: boolean;
+    contextVisibilityMode: ContextVisibilityMode;
+    envelopeOptions: ReturnType<typeof import("openclaw/plugin-sdk/channel-inbound").resolveEnvelopeFormatOptions>;
+    effectiveDirectMedia: SlackMediaResult[] | null;
+}): Promise<SlackThreadContextData>;
+export {};

@@ -1,0 +1,1 @@
+../../../dist/extensions/mistral/embedding-provider.d.ts

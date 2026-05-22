@@ -1,0 +1,1 @@
+../../../dist/extensions/irc/runtime-api.d.ts

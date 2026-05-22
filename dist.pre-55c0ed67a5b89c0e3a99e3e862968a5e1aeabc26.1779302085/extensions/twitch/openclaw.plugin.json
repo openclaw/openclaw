@@ -1,0 +1,232 @@
+{
+  "id": "twitch",
+  "activation": {
+    "onStartup": false
+  },
+  "channels": [
+    "twitch"
+  ],
+  "channelEnvVars": {
+    "twitch": [
+      "OPENCLAW_TWITCH_ACCESS_TOKEN"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "channelConfigs": {
+    "twitch": {
+      "schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "enabled": {
+                "type": "boolean"
+              },
+              "markdown": {
+                "type": "object",
+                "properties": {
+                  "tables": {
+                    "type": "string",
+                    "enum": [
+                      "off",
+                      "bullets",
+                      "code",
+                      "block"
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              },
+              "defaultAccount": {
+                "type": "string"
+              },
+              "username": {
+                "type": "string"
+              },
+              "accessToken": {
+                "type": "string"
+              },
+              "clientId": {
+                "type": "string"
+              },
+              "channel": {
+                "type": "string",
+                "minLength": 1
+              },
+              "allowFrom": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "allowedRoles": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "moderator",
+                    "owner",
+                    "vip",
+                    "subscriber",
+                    "all"
+                  ]
+                }
+              },
+              "requireMention": {
+                "type": "boolean"
+              },
+              "responsePrefix": {
+                "type": "string"
+              },
+              "clientSecret": {
+                "type": "string"
+              },
+              "refreshToken": {
+                "type": "string"
+              },
+              "expiresIn": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "obtainmentTimestamp": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "username",
+              "accessToken",
+              "channel"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "enabled": {
+                "type": "boolean"
+              },
+              "markdown": {
+                "type": "object",
+                "properties": {
+                  "tables": {
+                    "type": "string",
+                    "enum": [
+                      "off",
+                      "bullets",
+                      "code",
+                      "block"
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              },
+              "defaultAccount": {
+                "type": "string"
+              },
+              "accounts": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {
+                  "type": "object",
+                  "properties": {
+                    "username": {
+                      "type": "string"
+                    },
+                    "accessToken": {
+                      "type": "string"
+                    },
+                    "clientId": {
+                      "type": "string"
+                    },
+                    "channel": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "allowFrom": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "allowedRoles": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "moderator",
+                          "owner",
+                          "vip",
+                          "subscriber",
+                          "all"
+                        ]
+                      }
+                    },
+                    "requireMention": {
+                      "type": "boolean"
+                    },
+                    "responsePrefix": {
+                      "type": "string"
+                    },
+                    "clientSecret": {
+                      "type": "string"
+                    },
+                    "refreshToken": {
+                      "type": "string"
+                    },
+                    "expiresIn": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "obtainmentTimestamp": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "username",
+                    "accessToken",
+                    "channel"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "accounts"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "label": "Twitch",
+      "description": "Twitch chat integration"
+    }
+  }
+}

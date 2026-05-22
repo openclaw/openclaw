@@ -171,14 +171,12 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     await flushBuffer(key, buffer);
   };
 
-  const cancelKey = (key: string): boolean => {
+  const cancelKey = (key: string) => {
     const buffer = buffers.get(key);
     if (!buffer) {
       return false;
     }
-    if (buffers.get(key) === buffer) {
-      buffers.delete(key);
-    }
+    buffers.delete(key);
     if (buffer.timeout) {
       clearTimeout(buffer.timeout);
       buffer.timeout = null;

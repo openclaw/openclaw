@@ -1,0 +1,1 @@
+../../../dist/extensions/feishu/setup-api.d.ts

@@ -148,3 +148,20 @@ export async function writeFileWithinRoot(params: {
     mkdir: params.mkdir,
   });
 }
+
+/** @deprecated Use root(rootDir).append(relativePath, data, options). */
+export async function appendFileWithinRoot(params: {
+  rootDir: string;
+  relativePath: string;
+  data: string | Buffer;
+  encoding?: BufferEncoding;
+  mkdir?: boolean;
+  prependNewlineIfNeeded?: boolean;
+}): Promise<void> {
+  const root = await fsSafeRoot(params.rootDir);
+  await root.append(params.relativePath, params.data, {
+    encoding: params.encoding,
+    mkdir: params.mkdir,
+    prependNewlineIfNeeded: params.prependNewlineIfNeeded,
+  });
+}

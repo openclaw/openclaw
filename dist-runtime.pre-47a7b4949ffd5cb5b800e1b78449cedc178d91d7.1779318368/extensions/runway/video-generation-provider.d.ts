@@ -1,0 +1,1 @@
+../../../dist/extensions/runway/video-generation-provider.d.ts

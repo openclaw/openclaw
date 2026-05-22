@@ -1,0 +1,1 @@
+../../../dist/extensions/discord/thread-binding-api.d.ts

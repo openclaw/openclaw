@@ -1,0 +1,2 @@
+import { n as buildMinimaxVideoGenerationProvider, t as buildMinimaxPortalVideoGenerationProvider } from "../../video-generation-provider-RTC_lkJs.js";
+export { buildMinimaxPortalVideoGenerationProvider, buildMinimaxVideoGenerationProvider };

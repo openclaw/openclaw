@@ -1,0 +1,1 @@
+../../../dist/extensions/google/web-search-provider.d.ts

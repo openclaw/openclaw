@@ -1,0 +1,1 @@
+../../../dist/extensions/minimax/api.d.ts

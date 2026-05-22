@@ -1,0 +1,1 @@
+../../../dist/extensions/openai/embedding-provider.d.ts

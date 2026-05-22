@@ -1,0 +1,1 @@
+../../../dist/extensions/amazon-bedrock/thinking-policy.d.ts

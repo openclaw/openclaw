@@ -1,0 +1,1 @@
+../../../dist/extensions/telegram/security-audit-contract-api.d.ts

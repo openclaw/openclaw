@@ -1,0 +1,1 @@
+../../../dist/extensions/slack/contract-api.d.ts

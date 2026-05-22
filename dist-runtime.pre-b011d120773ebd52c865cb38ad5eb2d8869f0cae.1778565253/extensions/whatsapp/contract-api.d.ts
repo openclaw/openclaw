@@ -1,0 +1,1 @@
+../../../dist/extensions/whatsapp/contract-api.d.ts

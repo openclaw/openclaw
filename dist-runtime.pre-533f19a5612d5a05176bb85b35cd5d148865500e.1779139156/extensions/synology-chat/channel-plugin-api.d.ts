@@ -1,0 +1,1 @@
+../../../dist/extensions/synology-chat/channel-plugin-api.d.ts

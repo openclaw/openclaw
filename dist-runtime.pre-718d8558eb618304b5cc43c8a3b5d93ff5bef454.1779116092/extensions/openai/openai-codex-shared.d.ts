@@ -1,0 +1,1 @@
+../../../dist/extensions/openai/openai-codex-shared.d.ts

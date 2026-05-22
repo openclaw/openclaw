@@ -1,0 +1,299 @@
+import { i as formatErrorMessage } from "./errors-QN8rySzW.js";
+import { o as generateSecureUuid } from "./secure-random-DJVw9xqK.js";
+import "./core-DJOjUZtD.js";
+import "./error-runtime-D_Qslcoe.js";
+import http from "node:http";
+import https from "node:https";
+import { Buffer } from "node:buffer";
+//#region extensions/signal/src/client.ts
+const DEFAULT_TIMEOUT_MS = 1e4;
+const DEFAULT_SIGNAL_HTTP_RESPONSE_MAX_BYTES = 1048576;
+const MAX_SIGNAL_SSE_BUFFER_BYTES = 1048576;
+const MAX_SIGNAL_SSE_EVENT_DATA_BYTES = 1048576;
+function createSignalSseAbortError() {
+	const error = /* @__PURE__ */ new Error("Signal SSE aborted");
+	error.name = "AbortError";
+	return error;
+}
+function normalizeBaseUrl(url) {
+	const trimmed = url.trim();
+	if (!trimmed) throw new Error("Signal base URL is required");
+	if (/^https?:\/\//i.test(trimmed)) return trimmed.replace(/\/+$/, "");
+	return `http://${trimmed}`.replace(/\/+$/, "");
+}
+function parseSignalBaseUrl(url) {
+	const parsed = new URL(normalizeBaseUrl(url));
+	if (parsed.username || parsed.password) throw new Error("Signal base URL must not include credentials");
+	return parsed;
+}
+function resolveSignalEndpointUrl(baseUrl, pathname) {
+	return new URL(pathname, parseSignalBaseUrl(baseUrl));
+}
+function parseSignalRpcResponse(text, status) {
+	let parsed;
+	try {
+		parsed = JSON.parse(text);
+	} catch (err) {
+		throw new Error(`Signal RPC returned malformed JSON (status ${status})`, { cause: err });
+	}
+	if (!parsed || typeof parsed !== "object") throw new Error(`Signal RPC returned invalid response envelope (status ${status})`);
+	const rpc = parsed;
+	const hasResult = Object.hasOwn(rpc, "result");
+	if (!rpc.error && !hasResult) throw new Error(`Signal RPC returned invalid response envelope (status ${status})`);
+	return rpc;
+}
+function assertSignalHttpProtocol(url, label) {
+	if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error(`Signal ${label} unsupported protocol: ${url.protocol}`);
+}
+function normalizeSignalHttpResponseMaxBytes(value) {
+	if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return DEFAULT_SIGNAL_HTTP_RESPONSE_MAX_BYTES;
+	return Math.floor(value);
+}
+function normalizeSignalSseTimeoutMs(timeoutMs) {
+	if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return null;
+	return timeoutMs;
+}
+function requestSignalHttpText(url, options) {
+	assertSignalHttpProtocol(url, "HTTP");
+	const client = url.protocol === "https:" ? https : http;
+	return new Promise((resolve, reject) => {
+		let settled = false;
+		let request;
+		const deadline = setTimeout(() => {
+			request?.destroy(/* @__PURE__ */ new Error(`Signal HTTP exceeded deadline after ${options.timeoutMs}ms`));
+		}, options.timeoutMs);
+		deadline.unref?.();
+		const cleanup = () => {
+			clearTimeout(deadline);
+			request?.setTimeout(0);
+		};
+		const rejectOnce = (error) => {
+			if (settled) return;
+			settled = true;
+			cleanup();
+			reject(error);
+		};
+		const resolveOnce = (response) => {
+			if (settled) return;
+			settled = true;
+			cleanup();
+			resolve(response);
+		};
+		const maxResponseBytes = normalizeSignalHttpResponseMaxBytes(options.maxResponseBytes);
+		request = client.request(url, {
+			method: options.method,
+			headers: options.headers
+		}, (res) => {
+			const chunks = [];
+			let totalBytes = 0;
+			res.on("data", (chunk) => {
+				const next = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+				totalBytes += next.byteLength;
+				if (totalBytes > maxResponseBytes) {
+					const error = /* @__PURE__ */ new Error("Signal HTTP response exceeded size limit");
+					request?.destroy(error);
+					res.destroy(error);
+					rejectOnce(error);
+					return;
+				}
+				chunks.push(next);
+			});
+			res.on("error", rejectOnce);
+			res.on("end", () => {
+				resolveOnce({
+					status: res.statusCode ?? 0,
+					statusText: res.statusMessage || "error",
+					text: Buffer.concat(chunks).toString("utf8")
+				});
+			});
+		});
+		request.setTimeout(options.timeoutMs, () => {
+			request?.destroy(/* @__PURE__ */ new Error(`Signal HTTP timed out after ${options.timeoutMs}ms`));
+		});
+		request.on("error", rejectOnce);
+		if (options.body !== void 0) request.write(options.body);
+		request.end();
+	});
+}
+async function signalRpcRequest(method, params, opts) {
+	const id = generateSecureUuid();
+	const body = JSON.stringify({
+		jsonrpc: "2.0",
+		method,
+		params,
+		id
+	});
+	const res = await requestSignalHttpText(resolveSignalEndpointUrl(opts.baseUrl, "/api/v1/rpc"), {
+		method: "POST",
+		headers: {
+			"Content-Type": "application/json",
+			"Content-Length": String(Buffer.byteLength(body))
+		},
+		body,
+		timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+		maxResponseBytes: opts.maxResponseBytes
+	});
+	if (res.status === 201) return;
+	if (!res.text) throw new Error(`Signal RPC empty response (status ${res.status})`);
+	const parsed = parseSignalRpcResponse(res.text, res.status);
+	if (parsed.error) {
+		const code = parsed.error.code ?? "unknown";
+		const msg = parsed.error.message ?? "Signal RPC error";
+		throw new Error(`Signal RPC ${code}: ${msg}`);
+	}
+	return parsed.result;
+}
+async function signalCheck(baseUrl, timeoutMs = DEFAULT_TIMEOUT_MS) {
+	try {
+		const res = await requestSignalHttpText(resolveSignalEndpointUrl(baseUrl, "/api/v1/check"), {
+			method: "GET",
+			timeoutMs
+		});
+		if (res.status < 200 || res.status >= 300) return {
+			ok: false,
+			status: res.status,
+			error: `HTTP ${res.status}`
+		};
+		return {
+			ok: true,
+			status: res.status,
+			error: null
+		};
+	} catch (err) {
+		return {
+			ok: false,
+			status: null,
+			error: formatErrorMessage(err)
+		};
+	}
+}
+function openSignalEventStream(url, abortSignal, timeoutMs = DEFAULT_TIMEOUT_MS) {
+	assertSignalHttpProtocol(url, "SSE");
+	if (abortSignal?.aborted) throw createSignalSseAbortError();
+	const client = url.protocol === "https:" ? https : http;
+	return new Promise((resolve, reject) => {
+		let settled = false;
+		let response;
+		let onAbort = () => {};
+		let request;
+		const effectiveTimeoutMs = normalizeSignalSseTimeoutMs(timeoutMs);
+		const headerDeadline = effectiveTimeoutMs === null ? void 0 : setTimeout(() => {
+			const error = /* @__PURE__ */ new Error(`Signal SSE connection timed out after ${effectiveTimeoutMs}ms`);
+			response?.destroy(error);
+			request.destroy(error);
+			rejectOnce(error);
+		}, effectiveTimeoutMs);
+		headerDeadline?.unref?.();
+		const cleanup = () => {
+			if (headerDeadline) clearTimeout(headerDeadline);
+			abortSignal?.removeEventListener("abort", onAbort);
+		};
+		const rejectOnce = (error) => {
+			if (settled) return;
+			settled = true;
+			cleanup();
+			reject(error);
+		};
+		request = client.request(url, {
+			method: "GET",
+			headers: { Accept: "text/event-stream" }
+		}, (res) => {
+			const status = res.statusCode ?? 0;
+			if (status < 200 || status >= 300) {
+				res.resume();
+				rejectOnce(/* @__PURE__ */ new Error(`Signal SSE failed (${status} ${res.statusMessage || "error"})`));
+				return;
+			}
+			if (settled) {
+				res.destroy();
+				return;
+			}
+			if (headerDeadline) clearTimeout(headerDeadline);
+			settled = true;
+			response = res;
+			resolve({
+				response: res,
+				cleanup
+			});
+		});
+		onAbort = () => {
+			const error = createSignalSseAbortError();
+			response?.destroy(error);
+			request.destroy(error);
+			rejectOnce(error);
+		};
+		abortSignal?.addEventListener("abort", onAbort, { once: true });
+		request.on("error", rejectOnce);
+		request.end();
+	});
+}
+async function streamSignalEvents(params) {
+	const url = resolveSignalEndpointUrl(params.baseUrl, "/api/v1/events");
+	if (params.account) url.searchParams.set("account", params.account);
+	const { response, cleanup } = await openSignalEventStream(url, params.abortSignal, params.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+	const decoder = new TextDecoder();
+	let buffer = "";
+	let bufferedBytes = 0;
+	let currentEvent = {};
+	let currentEventDataBytes = 0;
+	const flushEvent = () => {
+		if (!currentEvent.data && !currentEvent.event && !currentEvent.id) return;
+		params.onEvent({
+			event: currentEvent.event,
+			data: currentEvent.data,
+			id: currentEvent.id
+		});
+		currentEvent = {};
+		currentEventDataBytes = 0;
+	};
+	const processLine = (line) => {
+		if (line === "") {
+			flushEvent();
+			return;
+		}
+		if (line.startsWith(":")) return;
+		const [rawField, ...rest] = line.split(":");
+		const field = rawField.trim();
+		const rawValue = rest.join(":");
+		const value = rawValue.startsWith(" ") ? rawValue.slice(1) : rawValue;
+		if (field === "event") currentEvent.event = value;
+		else if (field === "data") {
+			const segment = currentEvent.data ? `\n${value}` : value;
+			currentEventDataBytes += Buffer.byteLength(segment, "utf8");
+			if (currentEventDataBytes > MAX_SIGNAL_SSE_EVENT_DATA_BYTES) throw new Error("Signal SSE event data exceeded size limit");
+			currentEvent.data = currentEvent.data ? `${currentEvent.data}${segment}` : segment;
+		} else if (field === "id") currentEvent.id = value;
+	};
+	const drainCompleteLines = () => {
+		let lineEnd = buffer.indexOf("\n");
+		while (lineEnd !== -1) {
+			let line = buffer.slice(0, lineEnd);
+			buffer = buffer.slice(lineEnd + 1);
+			if (line.endsWith("\r")) line = line.slice(0, -1);
+			processLine(line);
+			lineEnd = buffer.indexOf("\n");
+		}
+		bufferedBytes = Buffer.byteLength(buffer, "utf8");
+	};
+	try {
+		for await (const chunk of response) {
+			const value = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+			bufferedBytes += value.byteLength;
+			if (bufferedBytes > MAX_SIGNAL_SSE_BUFFER_BYTES) throw new Error("Signal SSE buffer exceeded size limit");
+			buffer += decoder.decode(value, { stream: true });
+			drainCompleteLines();
+		}
+		const tail = decoder.decode();
+		if (tail) {
+			buffer += tail;
+			bufferedBytes = Buffer.byteLength(buffer, "utf8");
+		}
+		if (bufferedBytes > MAX_SIGNAL_SSE_BUFFER_BYTES) throw new Error("Signal SSE buffer exceeded size limit");
+		drainCompleteLines();
+	} finally {
+		cleanup();
+	}
+	flushEvent();
+}
+//#endregion
+export { signalRpcRequest as n, streamSignalEvents as r, signalCheck as t };

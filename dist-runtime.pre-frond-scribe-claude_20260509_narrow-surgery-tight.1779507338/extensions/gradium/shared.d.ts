@@ -1,0 +1,1 @@
+../../../dist/extensions/gradium/shared.d.ts

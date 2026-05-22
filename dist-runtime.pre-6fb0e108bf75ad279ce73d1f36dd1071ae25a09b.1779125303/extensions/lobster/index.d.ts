@@ -1,0 +1,1 @@
+../../../dist/extensions/lobster/index.d.ts

@@ -1,0 +1,2 @@
+import { n as isCjkDominant, r as listMicrosoftVoices, t as buildMicrosoftSpeechProvider } from "../../speech-provider-BLVlyWlF.js";
+export { buildMicrosoftSpeechProvider, isCjkDominant, listMicrosoftVoices };

@@ -1,0 +1,1 @@
+../../../dist/extensions/vydra/index.d.ts

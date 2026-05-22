@@ -1,0 +1,1 @@
+../../../dist/extensions/openrouter/speech-provider.d.ts

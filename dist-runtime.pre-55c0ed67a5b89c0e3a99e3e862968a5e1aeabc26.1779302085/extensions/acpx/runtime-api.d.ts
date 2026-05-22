@@ -1,0 +1,1 @@
+../../../dist/extensions/acpx/runtime-api.d.ts

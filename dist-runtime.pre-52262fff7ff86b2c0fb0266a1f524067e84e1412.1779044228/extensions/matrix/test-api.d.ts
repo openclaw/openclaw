@@ -1,0 +1,1 @@
+../../../dist/extensions/matrix/test-api.d.ts

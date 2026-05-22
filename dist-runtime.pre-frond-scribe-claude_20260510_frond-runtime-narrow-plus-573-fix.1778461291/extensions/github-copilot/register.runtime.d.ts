@@ -1,0 +1,1 @@
+../../../dist/extensions/github-copilot/register.runtime.d.ts

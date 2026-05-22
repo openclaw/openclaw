@@ -1,0 +1,1 @@
+../../../dist/extensions/mattermost/policy-api.d.ts

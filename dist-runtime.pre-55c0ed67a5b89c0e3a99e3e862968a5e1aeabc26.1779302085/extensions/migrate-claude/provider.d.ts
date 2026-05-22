@@ -1,0 +1,1 @@
+../../../dist/extensions/migrate-claude/provider.d.ts

@@ -148,6 +148,7 @@ export function resolveSkillDispatchTools(params: {
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
     config: params.cfg,
+    liveSessionToolConfig: true,
     allowGatewaySubagentBinding: true,
     sandboxed: sandboxRuntime.sandboxed,
     requesterAgentIdOverride: params.agentId,

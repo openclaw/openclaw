@@ -1,0 +1,1 @@
+../../../dist/extensions/comfy/music-generation-provider.d.ts

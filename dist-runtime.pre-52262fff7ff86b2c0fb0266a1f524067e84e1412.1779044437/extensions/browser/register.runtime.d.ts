@@ -1,0 +1,1 @@
+../../../dist/extensions/browser/register.runtime.d.ts

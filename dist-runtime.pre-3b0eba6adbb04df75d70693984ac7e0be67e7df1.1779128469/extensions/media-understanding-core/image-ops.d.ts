@@ -1,0 +1,1 @@
+../../../dist/extensions/media-understanding-core/image-ops.d.ts

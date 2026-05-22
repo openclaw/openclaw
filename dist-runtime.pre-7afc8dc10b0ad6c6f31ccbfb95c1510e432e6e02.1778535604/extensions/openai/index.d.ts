@@ -1,0 +1,1 @@
+../../../dist/extensions/openai/index.d.ts

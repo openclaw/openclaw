@@ -1,0 +1,1 @@
+../../../dist/extensions/moonshot/test-api.d.ts

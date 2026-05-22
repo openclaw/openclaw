@@ -1,0 +1,1 @@
+../../../dist/extensions/synology-chat/setup-entry.d.ts

@@ -1,0 +1,1 @@
+../../../dist/extensions/xai/onboard.d.ts

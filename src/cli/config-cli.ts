@@ -27,6 +27,7 @@ import {
   validateConfigObjectRawWithPlugins,
 } from "../config/validation.js";
 import { SecretProviderSchema } from "../config/zod-schema.core.js";
+import { buildGatewayReloadPlan, type GatewayReloadPlan } from "../gateway/config-reload-plan.js";
 import { danger, info, success } from "../globals.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -513,9 +514,7 @@ function schemaAlternatives(
 
 function schemaLooksArray(schema: JsonSchemaRecord): boolean {
   return (
-    schemaTypes(schema).has("array") ||
-    isSchemaRecord(schema.items) ||
-    Array.isArray(schema.items)
+    schemaTypes(schema).has("array") || isSchemaRecord(schema.items) || Array.isArray(schema.items)
   );
 }
 
@@ -936,6 +935,23 @@ function pruneInactiveGatewayAuthCredentials(params: {
 
 function toDotPath(path: PathSegment[]): string {
   return path.join(".");
+}
+
+function formatConfigReloadHint(plan: GatewayReloadPlan): string {
+  if (plan.restartGateway) {
+    return "Restart the gateway to apply.";
+  }
+  if (plan.hotReasons.length > 0) {
+    return plan.noopPaths.length > 0
+      ? "Gateway hot reload and dynamic reads will apply."
+      : "Gateway hot reload will apply.";
+  }
+  return "No gateway restart required.";
+}
+
+function resolveConfigReloadHintForPaths(paths: Iterable<PathSegment[]>): string {
+  const changedPaths = [...paths].map(toDotPath).filter(Boolean);
+  return formatConfigReloadHint(buildGatewayReloadPlan(changedPaths));
 }
 
 function parseSecretRefSource(raw: string, label: string): SecretRefSource {
@@ -2056,16 +2072,18 @@ async function runConfigOperations(params: {
   if (params.successMode === "set" && operations.length === 1) {
     const operation = operations[0];
     const action = operation?.mutation === "delete" ? "Removed" : "Updated";
-    runtime.log(
-      info(`${action} ${toDotPath(operation?.requestedPath ?? [])}. Restart the gateway to apply.`),
-    );
+    const reloadHint = resolveConfigReloadHintForPaths([operation?.setPath ?? []]);
+    runtime.log(info(`${action} ${toDotPath(operation?.requestedPath ?? [])}. ${reloadHint}`));
     return;
   }
+  const reloadHint = resolveConfigReloadHintForPaths(
+    operations.map((operation) => operation.setPath),
+  );
   if (params.successMode === "set") {
-    runtime.log(info(`Updated ${operations.length} config paths. Restart the gateway to apply.`));
+    runtime.log(info(`Updated ${operations.length} config paths. ${reloadHint}`));
     return;
   }
-  runtime.log(info(`Applied ${operations.length} config update(s). Restart the gateway to apply.`));
+  runtime.log(info(`Applied ${operations.length} config update(s). ${reloadHint}`));
 }
 
 function handleConfigMutationError(params: {
@@ -2273,7 +2291,8 @@ export async function runConfigUnset(opts: {
         ? {}
         : { writeOptions: { unsetPaths: [parsedPath] } }),
     });
-    runtime.log(info(`Removed ${opts.path}. Restart the gateway to apply.`));
+    const reloadHint = resolveConfigReloadHintForPaths([parsedPath]);
+    runtime.log(info(`Removed ${opts.path}. ${reloadHint}`));
   } catch (err) {
     handleConfigMutationError({ err, runtime, options: cliOptions });
   }

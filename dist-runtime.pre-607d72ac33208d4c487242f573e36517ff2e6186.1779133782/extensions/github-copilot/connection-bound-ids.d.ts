@@ -1,0 +1,1 @@
+../../../dist/extensions/github-copilot/connection-bound-ids.d.ts

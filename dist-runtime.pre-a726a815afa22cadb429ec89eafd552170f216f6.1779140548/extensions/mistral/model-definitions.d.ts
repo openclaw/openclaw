@@ -1,0 +1,1 @@
+../../../dist/extensions/mistral/model-definitions.d.ts

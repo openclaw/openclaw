@@ -1,0 +1,1 @@
+../../../dist/extensions/googlechat/test-api.d.ts

@@ -1,0 +1,1 @@
+../../../dist/extensions/xai/realtime-transcription-provider.d.ts

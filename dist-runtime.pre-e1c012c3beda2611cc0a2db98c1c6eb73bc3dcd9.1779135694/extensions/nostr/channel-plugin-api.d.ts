@@ -1,0 +1,1 @@
+../../../dist/extensions/nostr/channel-plugin-api.d.ts

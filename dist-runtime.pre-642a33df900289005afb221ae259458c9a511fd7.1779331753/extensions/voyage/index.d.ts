@@ -1,0 +1,1 @@
+../../../dist/extensions/voyage/index.d.ts

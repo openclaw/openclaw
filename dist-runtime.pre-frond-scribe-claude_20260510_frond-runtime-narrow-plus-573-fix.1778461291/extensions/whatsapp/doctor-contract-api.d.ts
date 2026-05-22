@@ -1,0 +1,1 @@
+../../../dist/extensions/whatsapp/doctor-contract-api.d.ts

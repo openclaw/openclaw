@@ -1,0 +1,2 @@
+import { n as applyMistralConfig, r as applyMistralProviderConfig, t as MISTRAL_DEFAULT_MODEL_REF } from "../../onboard-CFIpO-tO.js";
+export { MISTRAL_DEFAULT_MODEL_REF, applyMistralConfig, applyMistralProviderConfig };

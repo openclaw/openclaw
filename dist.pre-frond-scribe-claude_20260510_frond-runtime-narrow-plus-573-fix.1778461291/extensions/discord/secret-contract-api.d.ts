@@ -1,0 +1,2 @@
+import { n as secretTargetRegistryEntries, t as collectRuntimeConfigAssignments } from "../../secret-config-contract-Dpibhu2R.js";
+export { collectRuntimeConfigAssignments, secretTargetRegistryEntries };

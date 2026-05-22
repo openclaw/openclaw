@@ -1,0 +1,1 @@
+../../../dist/extensions/google/realtime-voice-provider.d.ts

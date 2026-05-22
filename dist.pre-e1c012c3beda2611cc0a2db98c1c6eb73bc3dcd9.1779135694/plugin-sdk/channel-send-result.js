@@ -1,0 +1,2 @@
+import { a as createEmptyChannelResult, i as createAttachedChannelResultAdapter, n as attachChannelToResults, o as createRawChannelSendResultAdapter, r as buildChannelSendResult, t as attachChannelToResult } from "../channel-send-result-7VV_VR10.js";
+export { attachChannelToResult, attachChannelToResults, buildChannelSendResult, createAttachedChannelResultAdapter, createEmptyChannelResult, createRawChannelSendResultAdapter };

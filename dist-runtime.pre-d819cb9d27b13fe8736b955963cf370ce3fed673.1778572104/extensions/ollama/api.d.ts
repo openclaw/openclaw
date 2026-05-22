@@ -1,0 +1,1 @@
+../../../dist/extensions/ollama/api.d.ts

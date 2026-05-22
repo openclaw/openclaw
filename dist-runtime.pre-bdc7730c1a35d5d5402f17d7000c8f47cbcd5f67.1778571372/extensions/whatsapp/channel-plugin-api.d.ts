@@ -1,0 +1,1 @@
+../../../dist/extensions/whatsapp/channel-plugin-api.d.ts

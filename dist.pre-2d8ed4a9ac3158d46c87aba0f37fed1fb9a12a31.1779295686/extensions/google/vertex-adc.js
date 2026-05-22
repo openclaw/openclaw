@@ -1,0 +1,2 @@
+import { i as resolveGoogleVertexAuthorizedUserHeaders, n as isGoogleVertexCredentialsMarker, r as resetGoogleVertexAuthorizedUserTokenCacheForTest, t as hasGoogleVertexAuthorizedUserAdcSync } from "../../vertex-adc-D7nLKNp8.js";
+export { hasGoogleVertexAuthorizedUserAdcSync, isGoogleVertexCredentialsMarker, resetGoogleVertexAuthorizedUserTokenCacheForTest, resolveGoogleVertexAuthorizedUserHeaders };

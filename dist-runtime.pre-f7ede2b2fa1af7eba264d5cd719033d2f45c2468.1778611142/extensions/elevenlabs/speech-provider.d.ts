@@ -1,0 +1,1 @@
+../../../dist/extensions/elevenlabs/speech-provider.d.ts

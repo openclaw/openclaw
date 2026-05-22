@@ -1,0 +1,1 @@
+../../../dist/extensions/nextcloud-talk/doctor-contract-api.d.ts

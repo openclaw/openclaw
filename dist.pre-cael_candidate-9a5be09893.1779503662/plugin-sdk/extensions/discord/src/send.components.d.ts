@@ -1,0 +1,34 @@
+import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OutboundMediaAccess } from "openclaw/plugin-sdk/media-runtime";
+import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
+import { type DiscordComponentBuildResult, type DiscordComponentMessageSpec } from "./components.js";
+import { type RequestClient } from "./internal/discord.js";
+import type { DiscordSendResult } from "./send.types.js";
+type DiscordComponentSendOpts = {
+    cfg: OpenClawConfig;
+    accountId?: string;
+    token?: string;
+    rest?: RequestClient;
+    silent?: boolean;
+    replyTo?: string;
+    sessionKey?: string;
+    agentId?: string;
+    mediaUrl?: string;
+    mediaAccess?: OutboundMediaAccess;
+    mediaLocalRoots?: readonly string[];
+    mediaReadFile?: (filePath: string) => Promise<Buffer>;
+    filename?: string;
+    textLimit?: number;
+    maxLinesPerMessage?: number;
+    tableMode?: MarkdownTableMode;
+    chunkMode?: ChunkMode;
+    suppressEmbeds?: boolean;
+};
+export declare function registerBuiltDiscordComponentMessage(params: {
+    buildResult: DiscordComponentBuildResult;
+    messageId: string;
+    ttlMs?: number;
+}): void;
+export declare function sendDiscordComponentMessage(to: string, spec: DiscordComponentMessageSpec, opts: DiscordComponentSendOpts): Promise<DiscordSendResult>;
+export declare function editDiscordComponentMessage(to: string, messageId: string, spec: DiscordComponentMessageSpec, opts: DiscordComponentSendOpts): Promise<DiscordSendResult>;
+export {};

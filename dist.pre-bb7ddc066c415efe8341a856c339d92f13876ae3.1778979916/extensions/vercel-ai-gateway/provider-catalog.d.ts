@@ -1,0 +1,2 @@
+import { n as buildVercelAiGatewayProvider, t as buildStaticVercelAiGatewayProvider } from "../../provider-catalog-Dezc5PFq.js";
+export { buildStaticVercelAiGatewayProvider, buildVercelAiGatewayProvider };

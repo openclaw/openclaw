@@ -1,0 +1,1 @@
+../../../dist/extensions/xai/image-generation-provider.d.ts

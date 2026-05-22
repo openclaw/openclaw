@@ -1,0 +1,1 @@
+../../../dist/extensions/openai/media-understanding-provider.d.ts

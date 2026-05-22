@@ -1,0 +1,1 @@
+../../../dist/extensions/webhooks/index.d.ts

@@ -1,0 +1,1 @@
+../../../dist/extensions/discord/setup-plugin-api.d.ts

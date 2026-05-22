@@ -1,0 +1,1 @@
+../../../dist/extensions/twitch/runtime-api.d.ts

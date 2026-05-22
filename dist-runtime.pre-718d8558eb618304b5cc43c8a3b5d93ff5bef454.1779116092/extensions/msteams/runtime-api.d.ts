@@ -1,0 +1,1 @@
+../../../dist/extensions/msteams/runtime-api.d.ts

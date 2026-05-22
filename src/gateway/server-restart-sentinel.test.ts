@@ -5,6 +5,9 @@ type LoadedSessionEntry = ReturnType<typeof import("./session-utils.js").loadSes
 type RecordInboundSessionAndDispatchReplyParams = Parameters<
   typeof import("../plugin-sdk/channel-message.js").recordChannelMessageReplyDispatch
 >[0];
+type RecoverPendingSessionDeliveriesParams = Parameters<
+  typeof import("../infra/session-delivery-queue-recovery.js").recoverPendingSessionDeliveries
+>[0];
 
 const mocks = vi.hoisted(() => {
   const state = {
@@ -13,6 +16,10 @@ const mocks = vi.hoisted(() => {
 
   return {
     resolveSessionAgentId: vi.fn(() => "agent-from-key"),
+    resolveAgentConfig: vi.fn(() => undefined),
+    resolveAgentWorkspaceDir: vi.fn(() => "/tmp/agent-workspace"),
+    resolveDefaultAgentId: vi.fn(() => "main"),
+    normalizeSessionDeliveryFields: vi.fn((fields?: Record<string, unknown>) => fields),
     get queuedSessionDelivery() {
       return state.queuedSessionDelivery;
     },
@@ -124,22 +131,15 @@ const mocks = vi.hoisted(() => {
         }
       },
     ),
-    recoverPendingSessionDeliveries: vi.fn(async () => ({
-      recovered: 0,
-      failed: 0,
-      skippedMaxRetries: 0,
-      deferredBackoff: 0,
-    })),
-    resolveAgentConfig: vi.fn(() => undefined),
-    resolveAgentWorkspaceDir: vi.fn(() => "/tmp/openclaw-test-workspace"),
-    resolveDefaultAgentId: vi.fn(() => "main"),
-    normalizeSessionDeliveryFields: vi.fn((source?: Record<string, unknown>) => ({
-      deliveryContext: source?.deliveryContext,
-      lastChannel: source?.lastChannel ?? source?.channel,
-      lastTo: source?.lastTo,
-      lastAccountId: source?.lastAccountId,
-      lastThreadId: source?.lastThreadId,
-    })),
+    recoverPendingSessionDeliveries: vi.fn(
+      async (_opts?: RecoverPendingSessionDeliveriesParams) => ({
+        recovered: 0,
+        failed: 0,
+        skippedMaxRetries: 0,
+        deferredBackoff: 0,
+      }),
+    ),
+    deliverQueuedPostCompactionDelegate: vi.fn(async () => undefined),
     injectTimestamp: vi.fn((message: string) => `stamped:${message}`),
     timestampOptsFromConfig: vi.fn(() => ({})),
     recordInboundSessionAndDispatchReply: vi.fn(
@@ -180,6 +180,10 @@ vi.mock("../infra/session-delivery-queue.js", () => ({
   loadPendingSessionDelivery: mocks.loadPendingSessionDelivery,
   drainPendingSessionDeliveries: mocks.drainPendingSessionDeliveries,
   recoverPendingSessionDeliveries: mocks.recoverPendingSessionDeliveries,
+}));
+
+vi.mock("../auto-reply/reply/post-compaction-delegate-dispatch.js", () => ({
+  deliverQueuedPostCompactionDelegate: mocks.deliverQueuedPostCompactionDelegate,
 }));
 
 vi.mock("../config/sessions.js", () => ({
@@ -291,7 +295,8 @@ vi.mock("./server-methods/agent-timestamp.js", () => ({
   timestampOptsFromConfig: mocks.timestampOptsFromConfig,
 }));
 
-const { scheduleRestartSentinelWake } = await import("./server-restart-sentinel.js");
+const { recoverPendingRestartContinuationDeliveries, scheduleRestartSentinelWake } =
+  await import("./server-restart-sentinel.js");
 
 function expectRecordFields(
   record: unknown,
@@ -407,6 +412,7 @@ describe("scheduleRestartSentinelWake", () => {
     mocks.loadPendingSessionDelivery.mockClear();
     mocks.drainPendingSessionDeliveries.mockClear();
     mocks.recoverPendingSessionDeliveries.mockClear();
+    mocks.deliverQueuedPostCompactionDelegate.mockClear();
     mocks.removeRestartSentinelFile.mockClear();
     mocks.injectTimestamp.mockClear();
     mocks.timestampOptsFromConfig.mockClear();
@@ -415,6 +421,44 @@ describe("scheduleRestartSentinelWake", () => {
     mocks.logInfo.mockClear();
     mocks.logWarn.mockClear();
     mocks.logError.mockClear();
+  });
+
+  it("recovers queued post-compaction delegates through session delivery recovery", async () => {
+    const traceparent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
+    mocks.recoverPendingSessionDeliveries.mockImplementationOnce(
+      async (params?: RecoverPendingSessionDeliveriesParams) => {
+        await params!.deliver({
+          id: "post-compaction-1",
+          kind: "postCompactionDelegate",
+          sessionKey: "agent:main:main",
+          task: "carry state forward",
+          traceparent,
+          createdAt: 123,
+          enqueuedAt: 1,
+          retryCount: 0,
+        } as never);
+        return {
+          recovered: 1,
+          failed: 0,
+          skippedMaxRetries: 0,
+          deferredBackoff: 0,
+        };
+      },
+    );
+
+    await recoverPendingRestartContinuationDeliveries({
+      deps: {} as never,
+      maxEnqueuedAt: 123,
+    });
+
+    expect(mocks.deliverQueuedPostCompactionDelegate).toHaveBeenCalledWith({
+      entry: expect.objectContaining({
+        kind: "postCompactionDelegate",
+        sessionKey: "agent:main:main",
+        task: "carry state forward",
+        traceparent,
+      }),
+    });
   });
 
   it("enqueues the sentinel note and wakes the session even when outbound delivery succeeds", async () => {
@@ -897,6 +941,7 @@ describe("scheduleRestartSentinelWake", () => {
   });
 
   it("requests another wake after enqueueing a systemEvent continuation", async () => {
+    const traceparent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
     mocks.readRestartSentinel.mockResolvedValue({
       payload: {
         sessionKey: "agent:main:main",
@@ -910,21 +955,27 @@ describe("scheduleRestartSentinelWake", () => {
         continuation: {
           kind: "systemEvent",
           text: "continue after restart",
+          traceparent,
         },
       },
     } as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
-    expect(mocks.enqueueSystemEvent).toHaveBeenNthCalledWith(2, "continue after restart", {
-      sessionKey: "agent:main:main",
-      deliveryContext: {
-        channel: "whatsapp",
-        to: "+15550002",
-        accountId: "acct-2",
-        threadId: "thread-42",
-      },
-    });
+    expect(mocks.enqueueSystemEvent).toHaveBeenNthCalledWith(
+      2,
+      "continue after restart",
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        deliveryContext: expect.objectContaining({
+          channel: "whatsapp",
+          to: "+15550002",
+          accountId: "acct-2",
+          threadId: "thread-42",
+        }),
+        traceparent,
+      }),
+    );
     expect(mocks.requestHeartbeat).toHaveBeenNthCalledWith(1, {
       source: "restart-sentinel",
       intent: "immediate",
@@ -937,6 +988,32 @@ describe("scheduleRestartSentinelWake", () => {
       reason: "wake",
       sessionKey: "agent:main:main",
     });
+  });
+
+  it("preserves traceparent on queued agentTurn continuations before replay", async () => {
+    const traceparent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
+    mocks.readRestartSentinel.mockResolvedValue({
+      payload: {
+        sessionKey: "agent:main:main",
+        deliveryContext: {
+          channel: "whatsapp",
+          to: "+15550002",
+          accountId: "acct-2",
+        },
+        ts: 123,
+        continuation: {
+          kind: "agentTurn",
+          message: "continue after restart",
+          traceparent,
+        },
+      },
+    } as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.enqueueSessionDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({ traceparent }),
+    );
   });
 
   it("enqueues systemEvent continuation without stale partial delivery context", async () => {

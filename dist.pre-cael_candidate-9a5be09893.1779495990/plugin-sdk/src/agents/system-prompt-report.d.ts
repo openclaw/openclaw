@@ -1,0 +1,23 @@
+import type { AgentTool } from "@earendil-works/pi-agent-core";
+import type { SessionSystemPromptReport } from "../config/sessions/types.js";
+import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
+import type { WorkspaceBootstrapFile } from "./workspace.js";
+export declare function buildSystemPromptReport(params: {
+    source: SessionSystemPromptReport["source"];
+    generatedAt: number;
+    sessionId?: string;
+    sessionKey?: string;
+    provider?: string;
+    model?: string;
+    workspaceDir?: string;
+    bootstrapMaxChars: number;
+    bootstrapTotalMaxChars?: number;
+    bootstrapTruncation?: SessionSystemPromptReport["bootstrapTruncation"];
+    sandbox?: SessionSystemPromptReport["sandbox"];
+    systemPrompt: string;
+    bootstrapFiles: WorkspaceBootstrapFile[];
+    injectedFiles: EmbeddedContextFile[];
+    skillsPrompt: string;
+    tools: AgentTool[];
+    currentTurn?: SessionSystemPromptReport["currentTurn"];
+}): SessionSystemPromptReport;

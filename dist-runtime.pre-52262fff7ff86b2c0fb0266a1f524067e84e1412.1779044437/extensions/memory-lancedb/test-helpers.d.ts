@@ -1,0 +1,1 @@
+../../../dist/extensions/memory-lancedb/test-helpers.d.ts

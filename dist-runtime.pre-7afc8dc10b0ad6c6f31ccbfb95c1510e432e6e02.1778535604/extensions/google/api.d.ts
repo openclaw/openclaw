@@ -1,0 +1,1 @@
+../../../dist/extensions/google/api.d.ts

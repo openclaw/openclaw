@@ -1,0 +1,1 @@
+../../../dist/extensions/fireworks/provider-policy-api.d.ts

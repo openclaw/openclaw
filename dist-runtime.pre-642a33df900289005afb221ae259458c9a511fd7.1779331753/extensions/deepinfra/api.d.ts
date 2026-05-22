@@ -1,0 +1,1 @@
+../../../dist/extensions/deepinfra/api.d.ts

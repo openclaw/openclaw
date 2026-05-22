@@ -1,0 +1,1 @@
+../../../dist/extensions/fal/provider-registration.d.ts

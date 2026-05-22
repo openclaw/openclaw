@@ -1,0 +1,1 @@
+../../../dist/extensions/clickclack/channel-plugin-api.d.ts

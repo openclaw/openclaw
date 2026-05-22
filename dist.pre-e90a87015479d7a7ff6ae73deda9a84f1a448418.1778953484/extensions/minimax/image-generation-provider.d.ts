@@ -1,0 +1,2 @@
+import { n as buildMinimaxPortalImageGenerationProvider, t as buildMinimaxImageGenerationProvider } from "../../image-generation-provider-CguRtgWI.js";
+export { buildMinimaxImageGenerationProvider, buildMinimaxPortalImageGenerationProvider };

@@ -1,0 +1,1 @@
+../../../dist/extensions/nostr/setup-entry.d.ts

@@ -1,0 +1,1 @@
+../../../dist/extensions/migrate-hermes/model.d.ts

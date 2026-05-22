@@ -1,0 +1,2 @@
+import { i as reloadChannelSetupPluginRegistryForChannel, n as loadChannelSetupPluginRegistrySnapshotForChannel, r as reloadChannelSetupPluginRegistry, t as ensureChannelSetupPluginInstalled } from "./plugin-install-CfLJ9j5U.js";
+export { ensureChannelSetupPluginInstalled, loadChannelSetupPluginRegistrySnapshotForChannel, reloadChannelSetupPluginRegistry, reloadChannelSetupPluginRegistryForChannel };

@@ -1,0 +1,1 @@
+../../../dist/extensions/discord/account-inspect-api.d.ts

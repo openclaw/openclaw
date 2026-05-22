@@ -80,6 +80,13 @@ const mocks = vi.hoisted(() => ({
   resolveAgentIdFromSessionKey: vi.fn((sessionKey: string) => {
     return sessionKey.match(/^agent:([^:]+)/)?.[1] ?? "main";
   }),
+  resolveSessionStoreEntry: vi.fn(
+    ({ store, sessionKey }: { store: Record<string, unknown>; sessionKey: string }) => ({
+      normalizedKey: sessionKey,
+      existing: store[sessionKey],
+      legacyKeys: [],
+    }),
+  ),
   resolveStorePath: vi.fn(() => "/tmp/test-session-store.json"),
   updateSessionStore: vi.fn(),
   emitSessionLifecycleEvent: vi.fn(),
@@ -120,6 +127,7 @@ vi.mock("../config/config.js", () => {
 vi.mock("../config/sessions.js", () => ({
   loadSessionStore: mocks.loadSessionStore,
   resolveAgentIdFromSessionKey: mocks.resolveAgentIdFromSessionKey,
+  resolveSessionStoreEntry: mocks.resolveSessionStoreEntry,
   resolveStorePath: mocks.resolveStorePath,
   updateSessionStore: mocks.updateSessionStore,
 }));
@@ -917,13 +925,13 @@ describe("subagent registry seam flow", () => {
     expect(run?.outcome?.status).toBe("error");
   });
 
-  it("preserves run-mode keep entries past SESSION_RUN_TTL_MS sweep", async () => {
+  it("sweeps run-mode keep entries past SESSION_RUN_TTL_MS after cleanup completes", async () => {
     mod.registerSubagentRun({
-      runId: "run-keep-survives-ttl",
+      runId: "run-keep-swept-after-ttl",
       childSessionKey: "agent:main:subagent:child",
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
-      task: "keep me past the session ttl",
+      task: "keep me until ttl elapses past cleanup",
       cleanup: "keep",
       spawnMode: "run",
     });
@@ -931,7 +939,7 @@ describe("subagent registry seam flow", () => {
     await waitForFast(() => {
       const run = mod
         .listSubagentRunsForRequester("agent:main:main")
-        .find((entry) => entry.runId === "run-keep-survives-ttl");
+        .find((entry) => entry.runId === "run-keep-swept-after-ttl");
       expect(run?.cleanupCompletedAt).toBeTypeOf("number");
     });
 
@@ -940,8 +948,8 @@ describe("subagent registry seam flow", () => {
 
     const run = mod
       .listSubagentRunsForRequester("agent:main:main")
-      .find((entry) => entry.runId === "run-keep-survives-ttl");
-    expect(run?.runId).toBe("run-keep-survives-ttl");
+      .find((entry) => entry.runId === "run-keep-swept-after-ttl");
+    expect(run).toBeUndefined();
   });
 
   it("retries completion hooks before resuming ended cleanup", async () => {

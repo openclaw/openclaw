@@ -1,0 +1,1 @@
+../../../dist/extensions/byteplus/models.d.ts

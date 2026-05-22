@@ -1,0 +1,1 @@
+../../../dist/extensions/anthropic/contract-api.d.ts

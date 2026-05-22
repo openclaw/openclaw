@@ -1,0 +1,18 @@
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { type DeliverableMessageChannel } from "../../utils/message-channel.js";
+export type MessageChannelId = DeliverableMessageChannel;
+export type MessageChannelSelectionSource = "explicit" | "tool-context-fallback" | "single-configured";
+export declare function listConfiguredMessageChannels(cfg: OpenClawConfig): Promise<MessageChannelId[]>;
+export declare function resolveMessageChannelSelection(params: {
+    cfg: OpenClawConfig;
+    channel?: string | null;
+    fallbackChannel?: string | null;
+}): Promise<{
+    channel: MessageChannelId;
+    configured: MessageChannelId[];
+    source: MessageChannelSelectionSource;
+}>;
+export declare const testing: {
+    resetLoggedChannelSelectionErrors(): void;
+};
+export { testing as __testing };

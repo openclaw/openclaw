@@ -1,0 +1,1 @@
+../../../dist/extensions/senseaudio/media-understanding-provider.d.ts

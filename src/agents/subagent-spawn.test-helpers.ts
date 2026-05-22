@@ -264,11 +264,10 @@ export async function loadSubagentSpawnModuleForTest(params: {
     getSubagentDepthFromSessionStore: params.getSubagentDepthFromSessionStore ?? (() => 0),
   }));
 
-  vi.doMock("./subagent-registry.js", () => ({
+  vi.doMock("./subagent-registry-spawn-runtime.js", () => ({
     countActiveRunsForSession: params.countActiveRunsForSession ?? (() => 0),
     registerSubagentRun:
       params.registerSubagentRunMock ?? vi.fn((_record: Record<string, unknown>) => undefined),
-    resetSubagentRegistryForTests,
   }));
 
   const subagentSpawnModule = await import("./subagent-spawn.js");

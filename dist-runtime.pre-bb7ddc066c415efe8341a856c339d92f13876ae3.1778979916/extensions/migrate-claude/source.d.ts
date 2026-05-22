@@ -1,0 +1,1 @@
+../../../dist/extensions/migrate-claude/source.d.ts

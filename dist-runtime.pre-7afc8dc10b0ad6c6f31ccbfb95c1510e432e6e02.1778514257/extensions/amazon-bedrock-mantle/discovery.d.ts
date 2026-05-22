@@ -1,0 +1,1 @@
+../../../dist/extensions/amazon-bedrock-mantle/discovery.d.ts

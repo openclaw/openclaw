@@ -1,0 +1,2 @@
+import { n as createAnthropicVertexStreamFn, r as createAnthropicVertexStreamFnForModel, t as AnthropicVertexStreamDeps } from "../../stream-runtime-Cbau-TRR.js";
+export { AnthropicVertexStreamDeps, createAnthropicVertexStreamFn, createAnthropicVertexStreamFnForModel };

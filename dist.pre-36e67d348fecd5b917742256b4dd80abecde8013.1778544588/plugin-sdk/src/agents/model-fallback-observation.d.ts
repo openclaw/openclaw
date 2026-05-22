@@ -1,0 +1,36 @@
+import type { FallbackAttempt, ModelCandidate } from "./model-fallback.types.js";
+import type { FailoverReason } from "./pi-embedded-helpers.js";
+type FallbackStepOutcome = "next_fallback" | "succeeded" | "chain_exhausted";
+export type ModelFallbackStepFields = {
+    fallbackStepType: "fallback_step";
+    fallbackStepFromModel: string;
+    fallbackStepToModel?: string;
+    fallbackStepFromFailureReason?: FailoverReason;
+    fallbackStepFromFailureDetail?: string;
+    fallbackStepChainPosition?: number;
+    fallbackStepFinalOutcome: FallbackStepOutcome;
+};
+export type ModelFallbackDecisionParams = {
+    decision: "skip_candidate" | "probe_cooldown_candidate" | "candidate_failed" | "candidate_succeeded";
+    runId?: string;
+    sessionId?: string;
+    lane?: string;
+    requestedProvider: string;
+    requestedModel: string;
+    candidate: ModelCandidate;
+    attempt?: number;
+    total?: number;
+    reason?: FailoverReason | null;
+    status?: number;
+    code?: string;
+    error?: string;
+    nextCandidate?: ModelCandidate;
+    isPrimary?: boolean;
+    requestedModelMatched?: boolean;
+    fallbackConfigured?: boolean;
+    allowTransientCooldownProbe?: boolean;
+    profileCount?: number;
+    previousAttempts?: FallbackAttempt[];
+};
+export declare function logModelFallbackDecision(params: ModelFallbackDecisionParams): ModelFallbackStepFields | undefined;
+export {};

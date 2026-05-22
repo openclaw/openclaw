@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/together-provider",
+  "version": "2026.5.7",
+  "private": true,
+  "description": "OpenClaw Together provider plugin",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.js"
+    ]
+  }
+}

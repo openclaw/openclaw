@@ -1,0 +1,1 @@
+../../../dist/extensions/xiaomi/api.d.ts

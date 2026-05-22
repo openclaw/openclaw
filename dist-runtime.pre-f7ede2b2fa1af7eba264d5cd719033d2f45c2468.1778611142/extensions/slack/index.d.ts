@@ -1,0 +1,1 @@
+../../../dist/extensions/slack/index.d.ts

@@ -1,0 +1,1 @@
+../../../dist/extensions/xai/x-search.d.ts

@@ -1,0 +1,1 @@
+../../../dist/extensions/mistral/provider-catalog.d.ts

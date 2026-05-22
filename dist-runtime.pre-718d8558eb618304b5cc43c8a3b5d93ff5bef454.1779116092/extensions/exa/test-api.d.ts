@@ -1,0 +1,1 @@
+../../../dist/extensions/exa/test-api.d.ts

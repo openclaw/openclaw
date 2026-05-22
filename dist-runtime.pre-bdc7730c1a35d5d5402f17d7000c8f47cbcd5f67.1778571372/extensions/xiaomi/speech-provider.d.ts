@@ -1,0 +1,1 @@
+../../../dist/extensions/xiaomi/speech-provider.d.ts

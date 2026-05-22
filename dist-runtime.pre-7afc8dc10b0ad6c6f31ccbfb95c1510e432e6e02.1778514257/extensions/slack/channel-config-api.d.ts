@@ -1,0 +1,1 @@
+../../../dist/extensions/slack/channel-config-api.d.ts

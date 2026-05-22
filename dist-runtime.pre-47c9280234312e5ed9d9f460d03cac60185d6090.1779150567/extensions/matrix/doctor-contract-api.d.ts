@@ -1,0 +1,1 @@
+../../../dist/extensions/matrix/doctor-contract-api.d.ts

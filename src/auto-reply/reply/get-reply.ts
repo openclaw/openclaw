@@ -15,6 +15,7 @@ import { type OpenClawConfig, getRuntimeConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { removeSystemEvents } from "../../infra/system-events.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -27,6 +28,7 @@ import type { ReplyPayload } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import { normalizeVerboseLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
+import { cancelContinuationTimer } from "./agent-runner.js";
 import { resolveDefaultModel } from "./directive-handling.defaults.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
@@ -719,6 +721,12 @@ export async function getReplyFromConfig(
     }),
   );
   if (directiveResult.kind === "reply") {
+    // Directive-handled replies bypass runReplyAgent — cancel pending timers,
+    // reset chain metadata, and drain stale wake events.
+    if (sessionKey && !opts?.isHeartbeat) {
+      cancelContinuationTimer(sessionKey, { sessionEntry, sessionStore, storePath });
+      removeSystemEvents(sessionKey, (e) => e.text?.startsWith("[continuation:wake]") ?? false);
+    }
     return directiveResult.reply;
   }
 
@@ -818,6 +826,13 @@ export async function getReplyFromConfig(
     }),
   );
   if (inlineActionResult.kind === "reply") {
+    // Inline actions (slash commands, status, etc.) bypass runReplyAgent but
+    // represent real user input — cancel timers, reset chain metadata, drain
+    // stale wake events.
+    if (sessionKey && !opts?.isHeartbeat) {
+      cancelContinuationTimer(sessionKey, { sessionEntry, sessionStore, storePath });
+      removeSystemEvents(sessionKey, (e) => e.text?.startsWith("[continuation:wake]") ?? false);
+    }
     await maybeEmitMissingResetHooks();
     return inlineActionResult.reply;
   }

@@ -1,0 +1,1 @@
+../../../dist/extensions/diffs/api.d.ts

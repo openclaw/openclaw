@@ -1,0 +1,1 @@
+../../../dist/extensions/deepinfra/onboard.d.ts

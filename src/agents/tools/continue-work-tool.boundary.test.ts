@@ -1,0 +1,218 @@
+// continue_work tool — delaySeconds boundary validation
+//
+// SEAM GUARDED: contract between model and continuation runtime around
+// delay scheduling. continue_work lets a model say "wake me in N seconds";
+// the runtime enforces bounds from continuation config (min/maxDelayMs)
+// and rejects nonsensical inputs (negatives) outright.
+//
+// CANON (continue-work-tool.ts):
+//   1. NEGATIVE delaySeconds → REJECTION (ToolInputError). Not clamped.
+//   2. NON-NEGATIVE → CLAMPED into [minDelayMs, maxDelayMs] symmetrically.
+//   3. Clamp result is surfaced to the model via the details `note` field.
+//
+// SPIDER-WEB ROLE: four tests guard four cardinal points of the contract.
+// If any flips — clamp-where-reject, accept-where-clamp, silent-coerce —
+// reviewer should look at continue-work-tool.ts:60–110 (validate-then-clamp).
+
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { resetContinuationTracer } from "../../infra/continuation-tracer.js";
+import { resetDiagnosticTraceContextForTest } from "../../infra/diagnostic-trace-context.js";
+import { createContinueWorkTool, type ContinueWorkRequest } from "./continue-work-tool.js";
+
+// Mock continuation config — same shape as the sibling test file. The
+// numeric bounds here ARE the canon the tool is being held to: any drift
+// between this mock and resolveContinuationRuntimeConfig's production
+// defaults means the test is no longer guarding production behavior.
+vi.mock("../../auto-reply/continuation/config.js", () => ({
+  resolveContinuationRuntimeConfig: () => ({
+    defaultDelayMs: 15_000,
+    minDelayMs: 5_000,
+    maxDelayMs: 300_000,
+    maxChainLength: 10,
+    costCapTokens: 500_000,
+    maxDelegatesPerTurn: 5,
+  }),
+  // Mirror the real clampDelayMs semantics: default-fill, then symmetric clamp.
+  clampDelayMs: (
+    rawMs: number | undefined,
+    config: { defaultDelayMs: number; minDelayMs: number; maxDelayMs: number },
+  ) => {
+    const requested = rawMs ?? config.defaultDelayMs;
+    return Math.max(config.minDelayMs, Math.min(config.maxDelayMs, requested));
+  },
+}));
+
+describe("continue_work tool — delaySeconds boundary validation", () => {
+  // BOUNDARY AXIS — one test per point on the delaySeconds number line:
+  //   negative         → REJECT branch (ToolInputError, no schedule)
+  //   over-max         → CLAMP-DOWN branch (schedule at maxDelayMs)
+  //   far-over-max     → same CLAMP-DOWN, sanity check on extremes
+  //   zero / under-min → CLAMP-UP branch (schedule at minDelayMs)
+  // Collapsing any two branches (e.g. "negatives now clamp to 0") fires here.
+
+  afterEach(() => {
+    resetContinuationTracer();
+    resetDiagnosticTraceContextForTest();
+  });
+
+  function makeTool(
+    overrides?: Partial<{
+      agentSessionKey: string | undefined;
+      requestContinuation: (request: ContinueWorkRequest) => void;
+    }>,
+  ) {
+    return createContinueWorkTool({
+      agentSessionKey: "test-session-boundary",
+      requestContinuation: vi.fn(),
+      ...overrides,
+    });
+  }
+
+  // ───────────────────────────────────────────────────────────────────────
+  // REJECT branch: negative delaySeconds.
+  //
+  // CANON GUARDED: continue-work-tool.ts:70–71 explicitly throws
+  // ToolInputError for negative values BEFORE reaching the clamping logic.
+  // This is the asymmetric corner of the contract — every other invalid
+  // shape gets coerced, but negatives are surfaced as errors.
+  //
+  // SPIDER-WEB TRIPWIRE: if this test starts asserting "clamps to 0" or
+  // "clamps to minDelayMs", the tool semantic has shifted from
+  // reject-on-negative to coerce-on-negative; reviewer should look at
+  // continue-work-tool.ts:60–80 for whether the validate gate was removed
+  // or relocated below the clamp.
+  // ───────────────────────────────────────────────────────────────────────
+  it("rejects negative delaySeconds with ToolInputError", async () => {
+    const requestContinuation = vi.fn();
+    const tool = makeTool({ requestContinuation });
+
+    // The tool surface for continue-work-tool throws ToolInputError directly
+    // (see continue-work-tool.ts:70–71) rather than returning {isError:true};
+    // wrap the call so we can assert both (a) the throw shape and (b) the
+    // non-scheduling invariant.
+    await expect(
+      tool.execute("call-negative", {
+        reason: "Negative delay boundary test.",
+        delaySeconds: -5,
+      }),
+    ).rejects.toThrow(/non-negative/);
+
+    // The tool should NOT have scheduled a continuation — negatives are
+    // refused at the boundary, not silently coerced into a valid schedule.
+    expect(requestContinuation).not.toHaveBeenCalled();
+  });
+
+  // ───────────────────────────────────────────────────────────────────────
+  // CLAMP-DOWN branch: delaySeconds > maxDelayMs/1000.
+  //
+  // CANON GUARDED: requests above maxDelayMs are accepted-with-clamp, not
+  // rejected. The `note` field surfaces the clamp so the model knows it
+  // got a shorter delay than requested.
+  //
+  // SPIDER-WEB TRIPWIRE: if this starts rejecting instead of clamping, the
+  // tool became stricter and the model will start getting errors on
+  // perfectly reasonable "wake me in 10 minutes" asks; reviewer should
+  // check whether the upper bound semantics flipped.
+  // ───────────────────────────────────────────────────────────────────────
+  it("clamps delaySeconds exceeding maxDelayMs to 300s", async () => {
+    const requestContinuation = vi.fn();
+    const tool = makeTool({ requestContinuation });
+
+    // 600s = 600_000ms exceeds maxDelayMs (300_000ms); the runtime should
+    // pull this down to 300s and report the clamp.
+    const result = (
+      await tool.execute("call-over-max", {
+        reason: "Over-max delay boundary test.",
+        delaySeconds: 600,
+      })
+    )?.details as Record<string, unknown>;
+
+    // requestContinuation receives the RAW value (600) — clamping happens
+    // downstream in the scheduler / details payload, not in the request.
+    expect(requestContinuation).toHaveBeenCalledWith({
+      reason: "Over-max delay boundary test.",
+      delaySeconds: 600,
+    });
+    // The tool's details payload reports the CLAMPED value (300s) plus a
+    // `note` so the model can see what actually got scheduled.
+    expect(result).toMatchObject({
+      status: "scheduled",
+      delaySeconds: 300,
+      note: expect.stringContaining("clamped"),
+    });
+  });
+
+  // ───────────────────────────────────────────────────────────────────────
+  // CLAMP-DOWN branch (extreme): very-large delaySeconds.
+  //
+  // CANON GUARDED: same clamp behavior holds at the extreme tail; there
+  // is no separate "absurd value" rejection path. 999_999s and 300s both
+  // land at the same clamped result.
+  //
+  // SPIDER-WEB TRIPWIRE: if someone adds an upper-upper-bound rejection
+  // (e.g. "values > 1 hour are errors"), this test fires; reviewer should
+  // decide whether that new gate is intentional or accidental.
+  // ───────────────────────────────────────────────────────────────────────
+  it("clamps very large delaySeconds (999999) to maxDelayMs (300s)", async () => {
+    const requestContinuation = vi.fn();
+    const tool = makeTool({ requestContinuation });
+
+    const result = (
+      await tool.execute("call-very-large", {
+        reason: "Very large delay boundary test.",
+        delaySeconds: 999_999,
+      })
+    )?.details as Record<string, unknown>;
+
+    expect(requestContinuation).toHaveBeenCalledWith({
+      reason: "Very large delay boundary test.",
+      delaySeconds: 999_999,
+    });
+    // Identical clamp result as the over-max case above — proves the clamp
+    // is saturating, not scaling.
+    expect(result).toMatchObject({
+      status: "scheduled",
+      delaySeconds: 300,
+      note: expect.stringContaining("clamped"),
+    });
+  });
+
+  // ───────────────────────────────────────────────────────────────────────
+  // CLAMP-UP branch: delaySeconds === 0 (under minDelayMs).
+  //
+  // CANON GUARDED: zero is VALID (non-negative) but UNDER min, so it gets
+  // lifted up to minDelayMs (5s). This is the asymmetric pair to the
+  // negative-rejection case: 0 is the smallest accepted input, and it
+  // doesn't pass through unchanged.
+  //
+  // SPIDER-WEB TRIPWIRE: if zero starts rejecting (collapse with -1) OR
+  // starts passing through as a literal 0s schedule (collapse with the
+  // pass-through case), the boundary has shifted; reviewer should check
+  // whether minDelayMs is still being applied to the lower bound.
+  // ───────────────────────────────────────────────────────────────────────
+  it("clamps delaySeconds = 0 to minDelayMs (5s)", async () => {
+    const requestContinuation = vi.fn();
+    const tool = makeTool({ requestContinuation });
+
+    const result = (
+      await tool.execute("call-zero", {
+        reason: "Zero delay boundary test.",
+        delaySeconds: 0,
+      })
+    )?.details as Record<string, unknown>;
+
+    expect(requestContinuation).toHaveBeenCalledWith({
+      reason: "Zero delay boundary test.",
+      delaySeconds: 0,
+    });
+    // Compute: 0s → 0ms → clamp = Math.max(5000, Math.min(300000, 0)) = 5000ms = 5s.
+    // The note string is asserted exactly (not via stringContaining) here
+    // because the user-visible note format itself is part of the contract —
+    // the model parses it to decide whether to re-ask.
+    expect(result).toEqual({
+      status: "scheduled",
+      delaySeconds: 5,
+      note: "Requested 0s, clamped to 5s by continuation config.",
+    });
+  });
+});

@@ -1,0 +1,1 @@
+../../../dist/extensions/microsoft-foundry/shared.d.ts

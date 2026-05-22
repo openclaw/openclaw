@@ -1,0 +1,1 @@
+../../../dist/extensions/msteams/api.d.ts

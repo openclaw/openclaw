@@ -1,0 +1,6 @@
+import { C as OpenClawPluginApi, sn as ProviderPlugin } from "./types-Bb8qdnX4.js";
+//#region extensions/anthropic/register.runtime.d.ts
+declare function buildAnthropicProvider(): ProviderPlugin;
+declare function registerAnthropicPlugin(api: OpenClawPluginApi): void;
+//#endregion
+export { registerAnthropicPlugin as n, buildAnthropicProvider as t };

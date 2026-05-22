@@ -1,0 +1,45 @@
+import { s as normalizeOptionalLowercaseString } from "./string-coerce-Bje8XVt9.js";
+import { r as normalizeChatChannelId } from "./ids-DXlRcgBI.js";
+import { t as getActivePluginChannelRegistryFromState } from "./runtime-channel-state-dFh-L_bI.js";
+//#region src/utils/message-channel-constants.ts
+const INTERNAL_MESSAGE_CHANNEL = "webchat";
+const INTERNAL_NON_DELIVERY_CHANNELS = [
+	"heartbeat",
+	"cron",
+	"webhook"
+];
+function isInternalNonDeliveryChannel(value) {
+	return INTERNAL_NON_DELIVERY_CHANNELS.includes(value);
+}
+//#endregion
+//#region src/channels/registry-normalize.ts
+function listRegisteredChannelPluginEntries() {
+	const channelRegistry = getActivePluginChannelRegistryFromState();
+	if (channelRegistry?.channels && channelRegistry.channels.length > 0) return channelRegistry.channels;
+	return [];
+}
+function normalizeAnyChannelId(raw) {
+	const key = normalizeOptionalLowercaseString(raw);
+	if (!key) return null;
+	return listRegisteredChannelPluginEntries().find((entry) => {
+		const id = normalizeOptionalLowercaseString(entry.plugin.id ?? "") ?? "";
+		if (id && id === key) return true;
+		return (entry.plugin.meta?.aliases ?? []).some((alias) => normalizeOptionalLowercaseString(alias) === key);
+	})?.plugin.id ?? null;
+}
+//#endregion
+//#region src/utils/message-channel-core.ts
+function normalizeMessageChannel(raw) {
+	const normalized = normalizeOptionalLowercaseString(raw);
+	if (!normalized) return;
+	if (normalized === "webchat") return INTERNAL_MESSAGE_CHANNEL;
+	const builtIn = normalizeChatChannelId(normalized);
+	if (builtIn) return builtIn;
+	return normalizeAnyChannelId(normalized) ?? normalized;
+}
+function isDeliverableMessageChannel(value) {
+	const normalized = normalizeMessageChannel(value);
+	return normalized !== void 0 && normalized !== "webchat" && normalized === value;
+}
+//#endregion
+export { isInternalNonDeliveryChannel as i, normalizeMessageChannel as n, INTERNAL_MESSAGE_CHANNEL as r, isDeliverableMessageChannel as t };

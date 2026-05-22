@@ -1,0 +1,1 @@
+../../../dist/extensions/openshell/index.d.ts

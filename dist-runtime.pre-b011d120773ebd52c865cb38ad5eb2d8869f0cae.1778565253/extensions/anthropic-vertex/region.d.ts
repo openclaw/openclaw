@@ -1,0 +1,1 @@
+../../../dist/extensions/anthropic-vertex/region.d.ts

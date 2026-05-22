@@ -1,0 +1,1 @@
+../../../dist/extensions/mistral/test-api.d.ts

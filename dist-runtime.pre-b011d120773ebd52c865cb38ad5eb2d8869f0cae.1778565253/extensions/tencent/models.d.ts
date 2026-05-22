@@ -1,0 +1,1 @@
+../../../dist/extensions/tencent/models.d.ts

@@ -1,0 +1,1 @@
+../../../dist/extensions/huggingface/index.d.ts

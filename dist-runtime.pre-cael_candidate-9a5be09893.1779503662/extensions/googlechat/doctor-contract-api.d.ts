@@ -1,0 +1,1 @@
+../../../dist/extensions/googlechat/doctor-contract-api.d.ts

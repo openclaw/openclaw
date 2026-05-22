@@ -1,0 +1,1 @@
+../../../dist/extensions/xai/web-search-contract-api.d.ts

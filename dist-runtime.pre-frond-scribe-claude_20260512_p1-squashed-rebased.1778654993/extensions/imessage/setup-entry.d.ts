@@ -1,0 +1,1 @@
+../../../dist/extensions/imessage/setup-entry.d.ts

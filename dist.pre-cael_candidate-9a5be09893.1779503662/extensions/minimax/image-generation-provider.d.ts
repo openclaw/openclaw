@@ -1,0 +1,2 @@
+import { n as buildMinimaxPortalImageGenerationProvider, t as buildMinimaxImageGenerationProvider } from "../../image-generation-provider-Wrc5483Z.js";
+export { buildMinimaxImageGenerationProvider, buildMinimaxPortalImageGenerationProvider };

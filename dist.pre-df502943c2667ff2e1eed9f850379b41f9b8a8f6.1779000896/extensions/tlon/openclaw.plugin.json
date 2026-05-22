@@ -1,0 +1,216 @@
+{
+  "id": "tlon",
+  "activation": {
+    "onStartup": false
+  },
+  "channels": [
+    "tlon"
+  ],
+  "contracts": {
+    "tools": [
+      "tlon"
+    ]
+  },
+  "skills": [
+    "./bundled-skills/@tloncorp/tlon-skill"
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "channelConfigs": {
+    "tlon": {
+      "schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "ship": {
+            "type": "string",
+            "minLength": 1
+          },
+          "url": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "network": {
+            "type": "object",
+            "properties": {
+              "dangerouslyAllowPrivateNetwork": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          },
+          "groupChannels": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "dmAllowlist": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "groupInviteAllowlist": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "autoDiscoverChannels": {
+            "type": "boolean"
+          },
+          "showModelSignature": {
+            "type": "boolean"
+          },
+          "responsePrefix": {
+            "type": "string"
+          },
+          "autoAcceptDmInvites": {
+            "type": "boolean"
+          },
+          "autoAcceptGroupInvites": {
+            "type": "boolean"
+          },
+          "ownerShip": {
+            "type": "string",
+            "minLength": 1
+          },
+          "authorization": {
+            "type": "object",
+            "properties": {
+              "channelRules": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {
+                  "type": "object",
+                  "properties": {
+                    "mode": {
+                      "type": "string",
+                      "enum": [
+                        "restricted",
+                        "open"
+                      ]
+                    },
+                    "allowedShips": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            },
+            "additionalProperties": false
+          },
+          "defaultAuthorizedShips": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "accounts": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "enabled": {
+                  "type": "boolean"
+                },
+                "ship": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "url": {
+                  "type": "string"
+                },
+                "code": {
+                  "type": "string"
+                },
+                "network": {
+                  "type": "object",
+                  "properties": {
+                    "dangerouslyAllowPrivateNetwork": {
+                      "type": "boolean"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "groupChannels": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "dmAllowlist": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "groupInviteAllowlist": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "autoDiscoverChannels": {
+                  "type": "boolean"
+                },
+                "showModelSignature": {
+                  "type": "boolean"
+                },
+                "responsePrefix": {
+                  "type": "string"
+                },
+                "autoAcceptDmInvites": {
+                  "type": "boolean"
+                },
+                "autoAcceptGroupInvites": {
+                  "type": "boolean"
+                },
+                "ownerShip": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "label": "Tlon",
+      "description": "decentralized messaging on Urbit; install the plugin to enable."
+    }
+  }
+}

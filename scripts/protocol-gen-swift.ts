@@ -7,6 +7,7 @@ import {
   PROTOCOL_VERSION,
   ProtocolSchemas,
 } from "../src/gateway/protocol/schema.js";
+import { createInternalProtocolSchemaStripper } from "./protocol-public-schema.ts";
 
 type JsonSchema = {
   type?: string | string[];
@@ -543,7 +544,10 @@ function emitGatewayFrame(): string {
 }
 
 async function generate() {
-  const definitions = Object.entries(ProtocolSchemas) as Array<[string, JsonSchema]>;
+  const stripInternalFields = createInternalProtocolSchemaStripper();
+  const definitions = Object.entries(ProtocolSchemas).map(
+    ([name, schema]) => [name, stripInternalFields(schema)] as [string, JsonSchema],
+  );
 
   for (const [name, schema] of definitions) {
     registerNamedSchema(name, schema);

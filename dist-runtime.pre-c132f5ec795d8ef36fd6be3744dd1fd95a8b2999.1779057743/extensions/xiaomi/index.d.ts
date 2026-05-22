@@ -1,0 +1,1 @@
+../../../dist/extensions/xiaomi/index.d.ts

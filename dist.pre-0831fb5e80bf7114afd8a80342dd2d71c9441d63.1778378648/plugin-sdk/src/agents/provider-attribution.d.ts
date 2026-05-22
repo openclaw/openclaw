@@ -1,0 +1,71 @@
+import type { RuntimeVersionEnv } from "../version.js";
+type ProviderAttributionVerification = "vendor-documented" | "vendor-hidden-api-spec" | "vendor-sdk-hook-only" | "internal-runtime";
+type ProviderAttributionHook = "request-headers" | "default-headers" | "user-agent-extra" | "custom-user-agent";
+export type ProviderAttributionPolicy = {
+    provider: string;
+    enabledByDefault: boolean;
+    verification: ProviderAttributionVerification;
+    hook?: ProviderAttributionHook;
+    docsUrl?: string;
+    reviewNote?: string;
+    product: string;
+    version: string;
+    headers?: Record<string, string>;
+};
+type ProviderAttributionIdentity = Pick<ProviderAttributionPolicy, "product" | "version">;
+export type ProviderRequestTransport = "stream" | "websocket" | "http" | "media-understanding";
+export type ProviderRequestCapability = "llm" | "audio" | "image" | "video" | "other";
+export type ProviderEndpointClass = "default" | "anthropic-public" | "cerebras-native" | "chutes-native" | "deepseek-native" | "github-copilot-native" | "groq-native" | "mistral-public" | "moonshot-native" | "modelstudio-native" | "openai-public" | "openai-codex" | "opencode-native" | "azure-openai" | "openrouter" | "xai-native" | "zai-native" | "google-generative-ai" | "google-vertex" | "local" | "custom" | "invalid";
+export type ProviderEndpointResolution = {
+    endpointClass: ProviderEndpointClass;
+    hostname?: string;
+    googleVertexRegion?: string;
+};
+export type ProviderRequestPolicyInput = {
+    provider?: string | null;
+    api?: string | null;
+    baseUrl?: string | null;
+    transport?: ProviderRequestTransport;
+    capability?: ProviderRequestCapability;
+};
+export type ProviderRequestPolicyResolution = {
+    provider?: string;
+    policy?: ProviderAttributionPolicy;
+    endpointClass: ProviderEndpointClass;
+    usesConfiguredBaseUrl: boolean;
+    knownProviderFamily: string;
+    attributionProvider?: string;
+    attributionHeaders?: Record<string, string>;
+    allowsHiddenAttribution: boolean;
+    usesKnownNativeOpenAIEndpoint: boolean;
+    usesKnownNativeOpenAIRoute: boolean;
+    usesVerifiedOpenAIAttributionHost: boolean;
+    usesExplicitProxyLikeEndpoint: boolean;
+};
+export type ProviderRequestCapabilitiesInput = ProviderRequestPolicyInput & {
+    modelId?: string | null;
+    compat?: unknown;
+};
+export type ProviderRequestCompatibilityFamily = "moonshot";
+export type ProviderRequestCapabilities = ProviderRequestPolicyResolution & {
+    isKnownNativeEndpoint: boolean;
+    allowsOpenAIServiceTier: boolean;
+    supportsOpenAIReasoningCompatPayload: boolean;
+    allowsAnthropicServiceTier: boolean;
+    supportsResponsesStoreField: boolean;
+    allowsResponsesStore: boolean;
+    shouldStripResponsesPromptCache: boolean;
+    supportsNativeStreamingUsageCompat: boolean;
+    supportsOpenAICompletionsStreamingUsageCompat: boolean;
+    compatibilityFamily?: ProviderRequestCompatibilityFamily;
+};
+export declare function resolveProviderEndpoint(baseUrl: string | null | undefined): ProviderEndpointResolution;
+export declare function resolveProviderAttributionIdentity(env?: RuntimeVersionEnv): ProviderAttributionIdentity;
+export declare function listProviderAttributionPolicies(env?: RuntimeVersionEnv): ProviderAttributionPolicy[];
+export declare function resolveProviderAttributionPolicy(provider?: string | null, env?: RuntimeVersionEnv): ProviderAttributionPolicy | undefined;
+export declare function resolveProviderAttributionHeaders(provider?: string | null, env?: RuntimeVersionEnv): Record<string, string> | undefined;
+export declare function resolveProviderRequestPolicy(input: ProviderRequestPolicyInput, env?: RuntimeVersionEnv): ProviderRequestPolicyResolution;
+export declare function resolveProviderRequestAttributionHeaders(input: ProviderRequestPolicyInput, env?: RuntimeVersionEnv): Record<string, string> | undefined;
+export declare function resolveProviderRequestCapabilities(input: ProviderRequestCapabilitiesInput, env?: RuntimeVersionEnv): ProviderRequestCapabilities;
+export declare function describeProviderRequestRoutingSummary(input: ProviderRequestPolicyInput, env?: RuntimeVersionEnv): string;
+export {};

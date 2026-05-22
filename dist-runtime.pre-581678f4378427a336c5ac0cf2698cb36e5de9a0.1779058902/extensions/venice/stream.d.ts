@@ -1,0 +1,1 @@
+../../../dist/extensions/venice/stream.d.ts

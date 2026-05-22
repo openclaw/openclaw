@@ -1,0 +1,1 @@
+../../../dist/extensions/imessage/secret-contract-api.d.ts

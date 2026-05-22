@@ -1,0 +1,1 @@
+../../../dist/extensions/elevenlabs/realtime-transcription-provider.d.ts

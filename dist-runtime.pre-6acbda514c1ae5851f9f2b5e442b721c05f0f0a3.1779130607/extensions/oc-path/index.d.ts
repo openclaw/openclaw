@@ -1,0 +1,1 @@
+../../../dist/extensions/oc-path/index.d.ts

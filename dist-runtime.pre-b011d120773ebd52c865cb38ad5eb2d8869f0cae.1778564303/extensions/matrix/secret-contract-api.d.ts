@@ -1,0 +1,1 @@
+../../../dist/extensions/matrix/secret-contract-api.d.ts

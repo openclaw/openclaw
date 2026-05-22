@@ -1,0 +1,1 @@
+../../../dist/extensions/elevenlabs/media-understanding-provider.d.ts

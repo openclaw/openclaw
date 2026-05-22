@@ -1,0 +1,1 @@
+../../../dist/extensions/whatsapp/legacy-state-migrations-api.d.ts

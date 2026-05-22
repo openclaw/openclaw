@@ -1,0 +1,1 @@
+../../../dist/extensions/groq/media-understanding-provider.d.ts

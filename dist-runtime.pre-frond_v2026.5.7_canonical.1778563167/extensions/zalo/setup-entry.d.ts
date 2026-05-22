@@ -1,0 +1,1 @@
+../../../dist/extensions/zalo/setup-entry.d.ts

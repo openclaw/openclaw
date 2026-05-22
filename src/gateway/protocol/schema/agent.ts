@@ -4,6 +4,7 @@ import {
   AGENT_INTERNAL_EVENT_STATUSES,
   AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION,
 } from "../../../agents/internal-event-contract.js";
+import { DIAGNOSTIC_TRACEPARENT_PATTERN } from "../../../infra/diagnostic-trace-context-pure.js";
 import { InputProvenanceSchema, NonEmptyString, SessionLabelString } from "./primitives.js";
 
 export const AgentGeneratedAttachmentSchema = Type.Object(
@@ -18,6 +19,17 @@ export const AgentGeneratedAttachmentSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+const CONTINUATION_TRIGGER_VALUES = ["work-wake", "delegate-return"] as const;
+const INTERNAL_PROTOCOL_FIELD = "x-openclaw-internal";
+
+function internalProtocolField<T extends object>(schema: T): T {
+  Object.defineProperty(schema, INTERNAL_PROTOCOL_FIELD, {
+    value: true,
+    enumerable: false,
+  });
+  return schema;
+}
 
 export const AgentInternalEventSchema = Type.Object(
   {
@@ -183,6 +195,7 @@ export const AgentParamsSchema = Type.Object(
     promptMode: Type.Optional(
       Type.Union([Type.Literal("full"), Type.Literal("minimal"), Type.Literal("none")]),
     ),
+    continuationTrigger: Type.Optional(Type.String({ enum: [...CONTINUATION_TRIGGER_VALUES] })),
     extraSystemPrompt: Type.Optional(Type.String()),
     bootstrapContextMode: Type.Optional(
       Type.Union([Type.Literal("full"), Type.Literal("lightweight")]),
@@ -200,6 +213,23 @@ export const AgentParamsSchema = Type.Object(
     voiceWakeTrigger: Type.Optional(Type.String()),
     idempotencyKey: NonEmptyString,
     label: Type.Optional(SessionLabelString),
+    drainsContinuationDelegateQueue: internalProtocolField(
+      Type.Optional(
+        Type.Boolean({
+          description:
+            "Internal continuation runner knob; omitted from public generated protocol artifacts.",
+        }),
+      ),
+    ),
+    traceparent: internalProtocolField(
+      Type.Optional(
+        Type.String({
+          description:
+            "Internal continuation trace context for inherited child agent runs; omitted from public generated protocol artifacts.",
+          pattern: DIAGNOSTIC_TRACEPARENT_PATTERN,
+        }),
+      ),
+    ),
   },
   { additionalProperties: false },
 );

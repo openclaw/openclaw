@@ -1,0 +1,1 @@
+../../../dist/extensions/google/thinking-api.d.ts

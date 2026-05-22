@@ -1,0 +1,1 @@
+../../../dist/extensions/openai/realtime-voice-provider.d.ts

@@ -1,0 +1,1 @@
+../../../dist/extensions/arcee/provider-catalog.d.ts

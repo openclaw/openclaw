@@ -450,7 +450,6 @@ export function loadSessionStore(
       store,
       mtimeMs,
       sizeBytes: fileStat?.sizeBytes,
-      serialized: serializedFromDisk,
     });
   }
 

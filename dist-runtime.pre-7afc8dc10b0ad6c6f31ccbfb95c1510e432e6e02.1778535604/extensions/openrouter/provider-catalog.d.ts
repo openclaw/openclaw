@@ -1,0 +1,1 @@
+../../../dist/extensions/openrouter/provider-catalog.d.ts

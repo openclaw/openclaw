@@ -1,0 +1,1 @@
+../../../dist/extensions/xai/video-generation-provider.d.ts

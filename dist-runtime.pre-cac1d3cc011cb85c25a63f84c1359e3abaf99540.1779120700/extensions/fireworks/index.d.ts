@@ -1,0 +1,1 @@
+../../../dist/extensions/fireworks/index.d.ts

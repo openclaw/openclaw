@@ -1,0 +1,1 @@
+../../../dist/extensions/mistral/memory-embedding-adapter.d.ts

@@ -1,0 +1,2 @@
+import { a as resolvePluginSetupRegistry, i as resolvePluginSetupProvider, n as resolvePluginSetupAutoEnableReasons, o as runPluginSetupConfigMigrations, r as resolvePluginSetupCliBackend, t as clearPluginSetupRegistryCache } from "./setup-registry-Ba99mplF.js";
+export { clearPluginSetupRegistryCache, resolvePluginSetupAutoEnableReasons, resolvePluginSetupCliBackend, resolvePluginSetupProvider, resolvePluginSetupRegistry, runPluginSetupConfigMigrations };

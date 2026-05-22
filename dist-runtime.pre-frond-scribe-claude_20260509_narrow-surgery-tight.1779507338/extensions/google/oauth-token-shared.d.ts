@@ -1,0 +1,1 @@
+../../../dist/extensions/google/oauth-token-shared.d.ts

@@ -1,0 +1,1 @@
+../../../dist/extensions/nostr/test-api.d.ts

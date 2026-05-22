@@ -1,0 +1,1 @@
+../../../dist/extensions/whatsapp/outbound-payload-test-api.d.ts

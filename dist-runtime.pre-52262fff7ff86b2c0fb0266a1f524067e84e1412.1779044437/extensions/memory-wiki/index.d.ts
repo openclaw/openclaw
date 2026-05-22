@@ -1,0 +1,1 @@
+../../../dist/extensions/memory-wiki/index.d.ts

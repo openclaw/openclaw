@@ -1,0 +1,1 @@
+../../../dist/extensions/minimax/model-definitions.d.ts

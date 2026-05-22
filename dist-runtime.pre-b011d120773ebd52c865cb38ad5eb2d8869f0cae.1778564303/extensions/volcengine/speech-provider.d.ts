@@ -1,0 +1,1 @@
+../../../dist/extensions/volcengine/speech-provider.d.ts

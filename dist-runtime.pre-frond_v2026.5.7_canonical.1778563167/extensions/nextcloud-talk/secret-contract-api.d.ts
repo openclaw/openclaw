@@ -1,0 +1,1 @@
+../../../dist/extensions/nextcloud-talk/secret-contract-api.d.ts

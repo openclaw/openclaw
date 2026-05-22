@@ -1,0 +1,1 @@
+../../../dist/extensions/byteplus/api.d.ts

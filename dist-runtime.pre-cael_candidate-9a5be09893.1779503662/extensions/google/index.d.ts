@@ -1,0 +1,1 @@
+../../../dist/extensions/google/index.d.ts

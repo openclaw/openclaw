@@ -1,0 +1,1 @@
+../../../dist/extensions/kimi-coding/api.d.ts

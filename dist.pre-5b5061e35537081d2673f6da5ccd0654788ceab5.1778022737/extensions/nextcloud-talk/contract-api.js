@@ -1,0 +1,2 @@
+import { n as collectRuntimeConfigAssignments, r as secretTargetRegistryEntries } from "../../secret-contract-B0TAPBDo.js";
+export { collectRuntimeConfigAssignments, secretTargetRegistryEntries };

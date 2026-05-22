@@ -1,0 +1,1 @@
+../../../dist/extensions/anthropic/stream-wrappers.d.ts

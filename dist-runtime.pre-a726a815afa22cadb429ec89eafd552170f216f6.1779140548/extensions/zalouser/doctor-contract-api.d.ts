@@ -1,0 +1,1 @@
+../../../dist/extensions/zalouser/doctor-contract-api.d.ts

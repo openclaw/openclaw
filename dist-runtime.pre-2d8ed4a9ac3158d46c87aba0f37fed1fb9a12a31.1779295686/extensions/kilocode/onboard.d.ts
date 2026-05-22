@@ -1,0 +1,1 @@
+../../../dist/extensions/kilocode/onboard.d.ts

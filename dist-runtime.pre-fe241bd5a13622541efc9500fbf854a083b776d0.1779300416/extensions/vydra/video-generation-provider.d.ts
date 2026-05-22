@@ -1,0 +1,1 @@
+../../../dist/extensions/vydra/video-generation-provider.d.ts

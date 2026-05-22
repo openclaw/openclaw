@@ -1,0 +1,2 @@
+import { n as listSlackDirectoryPeersFromConfig, t as listSlackDirectoryGroupsFromConfig } from "../../directory-config-DJ6RQ0vZ.js";
+export { listSlackDirectoryGroupsFromConfig, listSlackDirectoryPeersFromConfig };

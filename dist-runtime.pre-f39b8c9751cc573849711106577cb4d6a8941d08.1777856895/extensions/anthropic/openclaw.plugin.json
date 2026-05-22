@@ -1,0 +1,132 @@
+{
+  "id": "anthropic",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": [
+    "anthropic"
+  ],
+  "providerDiscoveryEntry": "./provider-discovery.ts",
+  "modelSupport": {
+    "modelPrefixes": [
+      "claude-"
+    ]
+  },
+  "modelIdNormalization": {
+    "providers": {
+      "anthropic": {
+        "aliases": {
+          "opus-4.6": "claude-opus-4-6",
+          "opus-4.5": "claude-opus-4-5",
+          "sonnet-4.6": "claude-sonnet-4-6",
+          "sonnet-4.5": "claude-sonnet-4-5"
+        }
+      }
+    }
+  },
+  "modelPricing": {
+    "providers": {
+      "anthropic": {
+        "openRouter": {
+          "modelIdTransforms": [
+            "version-dots"
+          ]
+        }
+      }
+    }
+  },
+  "providerEndpoints": [
+    {
+      "endpointClass": "anthropic-public",
+      "hosts": [
+        "api.anthropic.com"
+      ]
+    }
+  ],
+  "providerRequest": {
+    "providers": {
+      "anthropic": {
+        "family": "anthropic"
+      }
+    }
+  },
+  "cliBackends": [
+    "claude-cli"
+  ],
+  "syntheticAuthRefs": [
+    "claude-cli"
+  ],
+  "providerAuthEnvVars": {
+    "anthropic": [
+      "ANTHROPIC_OAUTH_TOKEN",
+      "ANTHROPIC_API_KEY"
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "anthropic",
+      "method": "cli",
+      "choiceId": "anthropic-cli",
+      "deprecatedChoiceIds": [
+        "claude-cli"
+      ],
+      "choiceLabel": "Anthropic Claude CLI",
+      "choiceHint": "Reuse a local Claude CLI login on this host",
+      "assistantPriority": -20,
+      "groupId": "anthropic",
+      "groupLabel": "Anthropic",
+      "groupHint": "Claude CLI + API key"
+    },
+    {
+      "provider": "anthropic",
+      "method": "setup-token",
+      "choiceId": "setup-token",
+      "choiceLabel": "Anthropic setup-token",
+      "choiceHint": "Manual token path",
+      "assistantPriority": 40,
+      "groupId": "anthropic",
+      "groupLabel": "Anthropic",
+      "groupHint": "Claude CLI + API key + token"
+    },
+    {
+      "provider": "anthropic",
+      "method": "api-key",
+      "choiceId": "apiKey",
+      "choiceLabel": "Anthropic API key",
+      "groupId": "anthropic",
+      "groupLabel": "Anthropic",
+      "groupHint": "Claude CLI + API key",
+      "optionKey": "anthropicApiKey",
+      "cliFlag": "--anthropic-api-key",
+      "cliOption": "--anthropic-api-key <key>",
+      "cliDescription": "Anthropic API key"
+    }
+  ],
+  "contracts": {
+    "mediaUnderstandingProviders": [
+      "anthropic"
+    ]
+  },
+  "mediaUnderstandingProviderMetadata": {
+    "anthropic": {
+      "capabilities": [
+        "image"
+      ],
+      "defaultModels": {
+        "image": "claude-opus-4-7"
+      },
+      "autoPriority": {
+        "image": 20
+      },
+      "nativeDocumentInputs": [
+        "pdf"
+      ]
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

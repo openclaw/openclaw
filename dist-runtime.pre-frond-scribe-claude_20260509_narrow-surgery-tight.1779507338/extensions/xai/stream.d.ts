@@ -1,0 +1,1 @@
+../../../dist/extensions/xai/stream.d.ts

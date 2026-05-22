@@ -1,0 +1,1 @@
+../../../dist/extensions/googlechat/setup-plugin-api.d.ts

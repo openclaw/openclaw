@@ -958,6 +958,12 @@ export function createSubagentRegistryLifecycleController(params: {
             params.persist();
           }
         },
+        silentAnnounce: entry.silentAnnounce,
+        wakeOnReturn: entry.wakeOnReturn,
+        continuationTargetSessionKey: entry.continuationTargetSessionKey,
+        continuationTargetSessionKeys: entry.continuationTargetSessionKeys,
+        continuationFanoutMode: entry.continuationFanoutMode,
+        ...(entry.traceparent ? { traceparent: entry.traceparent } : {}),
       })
       .then((didAnnounce) => {
         void finalizeAnnounceCleanup(didAnnounce);
@@ -966,7 +972,15 @@ export function createSubagentRegistryLifecycleController(params: {
         defaultRuntime.log(
           `[warn] Subagent announce flow failed during cleanup for run ${runId}: ${String(error)}`,
         );
-        void finalizeAnnounceCleanup(false);
+        void finalizeSubagentCleanup(runId, entry.cleanup, false).catch((err) => {
+          defaultRuntime.log(`[warn] subagent cleanup finalize failed (${runId}): ${String(err)}`);
+          const current = params.runs.get(runId);
+          if (!current || current.cleanupCompletedAt) {
+            return;
+          }
+          current.cleanupHandled = false;
+          params.persist();
+        });
       });
     return true;
   };

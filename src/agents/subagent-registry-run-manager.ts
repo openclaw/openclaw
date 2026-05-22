@@ -102,6 +102,13 @@ export type RegisterSubagentRunParams = {
   attachmentsDir?: string;
   attachmentsRootDir?: string;
   retainAttachmentsOnKeep?: boolean;
+  silentAnnounce?: boolean;
+  wakeOnReturn?: boolean;
+  drainsContinuationDelegateQueue?: boolean;
+  continuationTargetSessionKey?: string;
+  continuationTargetSessionKeys?: string[];
+  continuationFanoutMode?: "tree" | "all";
+  traceparent?: string;
 };
 
 export function createSubagentRunManager(params: {
@@ -457,7 +464,7 @@ export function createSubagentRunManager(params: {
 
     params.runs.set(nextRunId, next);
     params.ensureListener();
-    params.persist();
+    params.persistOrThrow();
     // Always start sweeper — session-mode runs (no archiveAtMs) also need TTL cleanup.
     params.startSweeper();
     void waitForSubagentCompletion(nextRunId, waitTimeoutMs, next);
@@ -513,15 +520,17 @@ export function createSubagentRunManager(params: {
       attachmentsDir: registerParams.attachmentsDir,
       attachmentsRootDir: registerParams.attachmentsRootDir,
       retainAttachmentsOnKeep: registerParams.retainAttachmentsOnKeep,
+      silentAnnounce: registerParams.silentAnnounce,
+      wakeOnReturn: registerParams.wakeOnReturn,
+      drainsContinuationDelegateQueue: registerParams.drainsContinuationDelegateQueue,
+      continuationTargetSessionKey: registerParams.continuationTargetSessionKey,
+      continuationTargetSessionKeys: registerParams.continuationTargetSessionKeys,
+      continuationFanoutMode: registerParams.continuationFanoutMode,
+      ...(registerParams.traceparent ? { traceparent: registerParams.traceparent } : {}),
     };
     params.runs.set(runId, entry);
     try {
       params.persistOrThrow();
-    } catch (error) {
-      params.runs.delete(runId);
-      throw error;
-    }
-    try {
       createRunningTaskRun({
         runtime: "subagent",
         sourceId: runId,
@@ -538,10 +547,16 @@ export function createSubagentRunManager(params: {
         lastEventAt: now,
       });
     } catch (error) {
-      log.warn("Failed to create background task for subagent run", {
-        runId: registerParams.runId,
-        error,
-      });
+      params.runs.delete(runId);
+      try {
+        params.persistOrThrow();
+      } catch (rollbackError) {
+        log.warn("Failed to persist subagent registration rollback", {
+          runId: registerParams.runId,
+          error: rollbackError,
+        });
+      }
+      throw error;
     }
     params.ensureListener();
     params.persist();

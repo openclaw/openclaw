@@ -1,0 +1,1 @@
+../../../dist/extensions/amazon-bedrock/provider-policy-api.d.ts

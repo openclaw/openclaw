@@ -1,0 +1,1 @@
+../../../dist/extensions/irc/setup-entry.d.ts

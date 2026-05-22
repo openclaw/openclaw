@@ -1,0 +1,1 @@
+../../../dist/extensions/zalouser/test-api.d.ts

@@ -1,0 +1,1 @@
+../../../dist/extensions/signal/api.d.ts

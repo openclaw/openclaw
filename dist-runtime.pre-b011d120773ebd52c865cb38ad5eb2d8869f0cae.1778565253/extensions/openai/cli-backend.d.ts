@@ -1,0 +1,1 @@
+../../../dist/extensions/openai/cli-backend.d.ts

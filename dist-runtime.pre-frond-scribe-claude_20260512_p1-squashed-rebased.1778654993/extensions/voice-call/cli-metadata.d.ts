@@ -1,0 +1,1 @@
+../../../dist/extensions/voice-call/cli-metadata.d.ts

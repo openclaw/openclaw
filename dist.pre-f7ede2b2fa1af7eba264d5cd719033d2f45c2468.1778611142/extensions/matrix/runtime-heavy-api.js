@@ -1,0 +1,3 @@
+import { a as detectLegacyMatrixCrypto, i as autoPrepareLegacyMatrixCrypto, n as hasPendingMatrixMigration, o as autoMigrateLegacyMatrixState, r as resolveMatrixMigrationStatus, s as detectLegacyMatrixState, t as hasActionableMatrixMigration } from "../../matrix-migration.runtime-BMrU0CFD.js";
+import { t as maybeCreateMatrixMigrationSnapshot } from "../../migration-snapshot-backup-CETDv8VD.js";
+export { autoMigrateLegacyMatrixState, autoPrepareLegacyMatrixCrypto, detectLegacyMatrixCrypto, detectLegacyMatrixState, hasActionableMatrixMigration, hasPendingMatrixMigration, maybeCreateMatrixMigrationSnapshot, resolveMatrixMigrationStatus };

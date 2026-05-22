@@ -1,0 +1,1 @@
+../../../dist/extensions/firecrawl/web-fetch-contract-api.d.ts

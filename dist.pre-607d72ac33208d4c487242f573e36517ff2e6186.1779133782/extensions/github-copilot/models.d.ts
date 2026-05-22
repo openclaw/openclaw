@@ -1,0 +1,2 @@
+import { i as resolveCopilotForwardCompatModel, n as PROVIDER_ID, r as fetchCopilotModelCatalog, t as FetchCopilotModelCatalogParams } from "../../models-C0Y4J0Lu.js";
+export { FetchCopilotModelCatalogParams, PROVIDER_ID, fetchCopilotModelCatalog, resolveCopilotForwardCompatModel };

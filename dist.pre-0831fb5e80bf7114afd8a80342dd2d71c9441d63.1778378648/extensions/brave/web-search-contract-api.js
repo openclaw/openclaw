@@ -1,0 +1,26 @@
+import { t as createBaseWebSearchProviderContractFields } from "../../provider-web-search-contract-fields-gvwGJ94C.js";
+//#region extensions/brave/web-search-contract-api.ts
+function createBraveWebSearchProvider() {
+	const credentialPath = "plugins.entries.brave.config.webSearch.apiKey";
+	return {
+		id: "brave",
+		label: "Brave Search",
+		hint: "Structured results · country/language/time filters",
+		onboardingScopes: ["text-inference"],
+		credentialLabel: "Brave Search API key",
+		envVars: ["BRAVE_API_KEY"],
+		placeholder: "BSA...",
+		signupUrl: "https://brave.com/search/api/",
+		docsUrl: "https://docs.openclaw.ai/tools/brave-search",
+		autoDetectOrder: 10,
+		credentialPath,
+		...createBaseWebSearchProviderContractFields({
+			credentialPath,
+			searchCredential: { type: "top-level" },
+			configuredCredential: { pluginId: "brave" }
+		}),
+		createTool: () => null
+	};
+}
+//#endregion
+export { createBraveWebSearchProvider };

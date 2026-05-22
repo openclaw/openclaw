@@ -1,0 +1,1 @@
+../../../dist/extensions/firecrawl/web-search-provider.d.ts

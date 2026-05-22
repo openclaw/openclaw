@@ -1,0 +1,1 @@
+../../../dist/extensions/litellm/image-generation-provider.d.ts

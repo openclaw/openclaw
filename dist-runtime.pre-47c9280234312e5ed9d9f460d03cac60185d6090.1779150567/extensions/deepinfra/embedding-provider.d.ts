@@ -1,0 +1,1 @@
+../../../dist/extensions/deepinfra/embedding-provider.d.ts

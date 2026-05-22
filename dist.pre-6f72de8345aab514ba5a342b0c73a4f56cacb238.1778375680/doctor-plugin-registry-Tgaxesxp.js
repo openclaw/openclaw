@@ -1,0 +1,161 @@
+import { t as formatCliCommand } from "./command-format-OwPqnbXG.js";
+import { d as resolveDefaultPluginNpmDir } from "./channel-catalog-registry-DX2_zOGO.js";
+import { g as shortenHomePath } from "./utils-DG9b7Tlg.js";
+import { f as loadInstalledPluginIndex } from "./installed-plugin-index-store-D5NkGXPv.js";
+import { u as tryReadJsonSync } from "./json-files-lSEaru9V.js";
+import { h as refreshPluginRegistry } from "./plugin-registry-j0xRdcNq.js";
+import { n as saveJsonFile } from "./json-file-CsCuMXoI.js";
+import { i as preflightPluginRegistryInstallMigration, r as migratePluginRegistryForInstall, t as DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV } from "./plugin-registry-migration-BptGQf5q.js";
+import { t as note } from "./note-DEtapHvS.js";
+import fs from "node:fs";
+import path from "node:path";
+//#region src/commands/doctor-plugin-registry.ts
+function isRecord(value) {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function readJsonObject(filePath) {
+	const parsed = tryReadJsonSync(filePath);
+	return isRecord(parsed) ? parsed : null;
+}
+function readStringMap(value) {
+	if (!isRecord(value)) return {};
+	const result = {};
+	for (const [key, raw] of Object.entries(value)) if (typeof raw === "string" && raw.trim()) result[key] = raw.trim();
+	return result;
+}
+function deleteObjectKey(record, key) {
+	if (!Object.prototype.hasOwnProperty.call(record, key)) return false;
+	delete record[key];
+	return true;
+}
+function readPackageVersion(packageDir) {
+	const version = readJsonObject(path.join(packageDir, "package.json"))?.version;
+	return typeof version === "string" && version.trim() ? version.trim() : void 0;
+}
+function readPluginManifestId(packageDir) {
+	const id = readJsonObject(path.join(packageDir, "openclaw.plugin.json"))?.id;
+	return typeof id === "string" && id.trim() ? id.trim() : void 0;
+}
+function listStaleManagedNpmBundledPlugins(params) {
+	const currentBundled = loadInstalledPluginIndex({
+		...params,
+		installRecords: {}
+	}).plugins.filter((plugin) => plugin.origin === "bundled" && plugin.packageName);
+	const bundledByPackage = new Map(currentBundled.map((plugin) => [plugin.packageName, plugin]));
+	const npmRoot = params.stateDir ? path.join(params.stateDir, "npm") : resolveDefaultPluginNpmDir(params.env);
+	const dependencies = readStringMap(readJsonObject(path.join(npmRoot, "package.json"))?.dependencies);
+	const stale = [];
+	for (const packageName of Object.keys(dependencies).toSorted()) {
+		if (!packageName.startsWith("@openclaw/")) continue;
+		const bundled = bundledByPackage.get(packageName);
+		if (!bundled) continue;
+		const packageDir = path.join(npmRoot, "node_modules", packageName);
+		const pluginId = readPluginManifestId(packageDir);
+		if (!pluginId || pluginId !== bundled.pluginId) continue;
+		stale.push({
+			pluginId,
+			packageName,
+			packageDir,
+			npmRoot,
+			...readPackageVersion(packageDir) ? { version: readPackageVersion(packageDir) } : {}
+		});
+	}
+	return stale;
+}
+function removeManagedNpmDependency(params) {
+	const npmPackageJsonPath = path.join(params.npmRoot, "package.json");
+	const packageJson = readJsonObject(npmPackageJsonPath) ?? {};
+	const dependencies = readStringMap(packageJson.dependencies);
+	delete dependencies[params.packageName];
+	saveJsonFile(npmPackageJsonPath, Object.keys(dependencies).length === 0 ? (() => {
+		const { dependencies: _dependencies, ...rest } = packageJson;
+		return rest;
+	})() : {
+		...packageJson,
+		dependencies
+	});
+	removeManagedNpmPackageLockDependency(params);
+	fs.rmSync(params.packageDir, {
+		recursive: true,
+		force: true
+	});
+	const scopeDir = path.dirname(params.packageDir);
+	if (path.basename(path.dirname(scopeDir)) === "node_modules") try {
+		fs.rmdirSync(scopeDir);
+	} catch {}
+}
+function removeManagedNpmPackageLockDependency(params) {
+	const packageLockPath = path.join(params.npmRoot, "package-lock.json");
+	const packageLock = readJsonObject(packageLockPath);
+	if (!packageLock) return;
+	let changed = false;
+	const packages = packageLock.packages;
+	if (isRecord(packages)) {
+		const rootPackage = packages[""];
+		if (isRecord(rootPackage)) {
+			const rootDependencies = readStringMap(rootPackage.dependencies);
+			if (deleteObjectKey(rootDependencies, params.packageName)) {
+				changed = true;
+				if (Object.keys(rootDependencies).length === 0) delete rootPackage.dependencies;
+				else rootPackage.dependencies = rootDependencies;
+			}
+		}
+		changed = deleteObjectKey(packages, `node_modules/${params.packageName}`) || changed;
+	}
+	const dependencies = packageLock.dependencies;
+	if (isRecord(dependencies)) changed = deleteObjectKey(dependencies, params.packageName) || changed;
+	if (changed) saveJsonFile(packageLockPath, packageLock);
+}
+function maybeRepairStaleManagedNpmBundledPlugins(params) {
+	const stale = listStaleManagedNpmBundledPlugins(params);
+	if (stale.length === 0) return false;
+	if (!params.prompter.shouldRepair) {
+		note([
+			"Managed npm plugin packages shadow bundled plugins:",
+			...stale.map((plugin) => `- ${plugin.pluginId}: ${plugin.packageName}${plugin.version ? `@${plugin.version}` : ""}`),
+			`Repair with ${formatCliCommand("openclaw doctor --fix")} to remove stale managed npm packages and rebuild the plugin registry.`
+		].join("\n"), "Plugin registry");
+		return false;
+	}
+	for (const plugin of stale) removeManagedNpmDependency(plugin);
+	note(["Removed stale managed npm plugin package(s) shadowing bundled plugins:", ...stale.map((plugin) => `- ${plugin.pluginId}: ${plugin.packageName}${plugin.version ? `@${plugin.version}` : ""}`)].join("\n"), "Plugin registry");
+	return true;
+}
+async function maybeRepairPluginRegistryState(params) {
+	const preflight = preflightPluginRegistryInstallMigration(params);
+	for (const warning of preflight.deprecationWarnings) note(warning, "Plugin registry");
+	if (preflight.action === "disabled") {
+		note(`${DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV} is set; skipping plugin registry repair.`, "Plugin registry");
+		return params.config;
+	}
+	const migrationParams = {
+		...params,
+		config: params.config
+	};
+	const removedStaleManagedNpmBundledPlugins = maybeRepairStaleManagedNpmBundledPlugins(params);
+	if (!params.prompter.shouldRepair) {
+		if (preflight.action === "migrate") note(["Persisted plugin registry is missing or stale.", `Repair with ${formatCliCommand("openclaw doctor --fix")} to rebuild ${shortenHomePath(preflight.filePath)} from enabled plugins.`].join("\n"), "Plugin registry");
+		return params.config;
+	}
+	if (preflight.action === "migrate") {
+		const result = await migratePluginRegistryForInstall(migrationParams);
+		if (result.migrated) {
+			const total = result.current.plugins.length;
+			const enabled = result.current.plugins.filter((plugin) => plugin.enabled).length;
+			note(`Plugin registry rebuilt: ${enabled}/${total} enabled plugins indexed.`, "Plugin registry");
+		}
+		return params.config;
+	}
+	if (preflight.action === "skip-existing" || removedStaleManagedNpmBundledPlugins) {
+		const index = await refreshPluginRegistry({
+			...migrationParams,
+			reason: "migration"
+		});
+		const total = index.plugins.length;
+		const enabled = index.plugins.filter((plugin) => plugin.enabled).length;
+		note(`Plugin registry refreshed: ${enabled}/${total} enabled plugins indexed.`, "Plugin registry");
+	}
+	return params.config;
+}
+//#endregion
+export { maybeRepairStaleManagedNpmBundledPlugins as n, maybeRepairPluginRegistryState as t };

@@ -1,0 +1,1 @@
+../../../dist/extensions/browser/browser-doctor.d.ts

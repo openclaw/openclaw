@@ -1,0 +1,1 @@
+../../../dist/extensions/openai/test-api.d.ts

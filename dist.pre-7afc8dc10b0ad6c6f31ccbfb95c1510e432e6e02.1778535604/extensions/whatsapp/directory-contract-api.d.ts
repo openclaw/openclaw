@@ -1,0 +1,2 @@
+import { n as listWhatsAppDirectoryPeersFromConfig, t as listWhatsAppDirectoryGroupsFromConfig } from "../../directory-config-CXv-xXW2.js";
+export { listWhatsAppDirectoryGroupsFromConfig, listWhatsAppDirectoryPeersFromConfig };

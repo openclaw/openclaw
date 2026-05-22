@@ -1,0 +1,1 @@
+../../../dist/extensions/deepinfra/image-generation-provider.d.ts

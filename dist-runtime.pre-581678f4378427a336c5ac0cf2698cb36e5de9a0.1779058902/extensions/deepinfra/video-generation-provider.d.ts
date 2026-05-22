@@ -1,0 +1,1 @@
+../../../dist/extensions/deepinfra/video-generation-provider.d.ts

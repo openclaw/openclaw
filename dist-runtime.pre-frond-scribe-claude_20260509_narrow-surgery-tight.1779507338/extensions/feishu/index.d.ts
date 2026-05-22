@@ -1,0 +1,1 @@
+../../../dist/extensions/feishu/index.d.ts

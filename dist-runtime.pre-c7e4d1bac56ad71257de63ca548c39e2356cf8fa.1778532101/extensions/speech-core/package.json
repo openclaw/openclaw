@@ -1,0 +1,10 @@
+{
+  "name": "@openclaw/speech-core",
+  "version": "2026.5.7",
+  "private": true,
+  "description": "OpenClaw speech runtime package",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  }
+}

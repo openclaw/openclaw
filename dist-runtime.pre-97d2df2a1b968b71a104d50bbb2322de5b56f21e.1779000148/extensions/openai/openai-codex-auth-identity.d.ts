@@ -1,0 +1,1 @@
+../../../dist/extensions/openai/openai-codex-auth-identity.d.ts

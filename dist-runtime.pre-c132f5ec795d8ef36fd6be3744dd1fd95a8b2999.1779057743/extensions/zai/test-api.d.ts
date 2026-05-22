@@ -1,0 +1,1 @@
+../../../dist/extensions/zai/test-api.d.ts

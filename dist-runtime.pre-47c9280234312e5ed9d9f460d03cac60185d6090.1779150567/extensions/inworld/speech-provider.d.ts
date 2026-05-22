@@ -1,0 +1,1 @@
+../../../dist/extensions/inworld/speech-provider.d.ts

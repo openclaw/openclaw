@@ -1,0 +1,1 @@
+../../../dist/extensions/vllm/defaults.d.ts

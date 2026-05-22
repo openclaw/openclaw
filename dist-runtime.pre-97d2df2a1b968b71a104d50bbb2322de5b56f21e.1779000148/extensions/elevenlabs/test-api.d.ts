@@ -1,0 +1,1 @@
+../../../dist/extensions/elevenlabs/test-api.d.ts

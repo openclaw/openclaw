@@ -1,0 +1,333 @@
+import { n as createDebugProxyWebSocketAgent, r as resolveDebugProxySettings } from "./env-9OGxKNw1.js";
+import { n as captureWsEvent } from "./runtime-D_N5-b_7.js";
+import { r as resolvePluginCapabilityProviders } from "./capability-provider-runtime-BecgpIaj.js";
+import { n as normalizeCapabilityProviderId, t as buildCapabilityProviderMaps } from "./provider-registry-shared-HSm5HKYJ.js";
+import { randomUUID } from "node:crypto";
+import WebSocket from "ws";
+//#region src/realtime-transcription/provider-registry.ts
+function normalizeRealtimeTranscriptionProviderId(providerId) {
+	return normalizeCapabilityProviderId(providerId);
+}
+function resolveRealtimeTranscriptionProviderEntries(cfg) {
+	return resolvePluginCapabilityProviders({
+		key: "realtimeTranscriptionProviders",
+		cfg
+	});
+}
+function buildProviderMaps(cfg) {
+	return buildCapabilityProviderMaps(resolveRealtimeTranscriptionProviderEntries(cfg));
+}
+function listRealtimeTranscriptionProviders(cfg) {
+	return [...buildProviderMaps(cfg).canonical.values()];
+}
+function getRealtimeTranscriptionProvider(providerId, cfg) {
+	const normalized = normalizeRealtimeTranscriptionProviderId(providerId);
+	if (!normalized) return;
+	return buildProviderMaps(cfg).aliases.get(normalized);
+}
+function canonicalizeRealtimeTranscriptionProviderId(providerId, cfg) {
+	const normalized = normalizeRealtimeTranscriptionProviderId(providerId);
+	if (!normalized) return;
+	return getRealtimeTranscriptionProvider(normalized, cfg)?.id ?? normalized;
+}
+//#endregion
+//#region src/realtime-transcription/websocket-session.ts
+const DEFAULT_CONNECT_TIMEOUT_MS = 1e4;
+const DEFAULT_CLOSE_TIMEOUT_MS = 5e3;
+const DEFAULT_MAX_RECONNECT_ATTEMPTS = 5;
+const DEFAULT_RECONNECT_DELAY_MS = 1e3;
+const DEFAULT_MAX_QUEUED_BYTES = 2 * 1024 * 1024;
+function rawWsDataToBuffer(data) {
+	if (Buffer.isBuffer(data)) return data;
+	if (Array.isArray(data)) return Buffer.concat(data);
+	return Buffer.from(data);
+}
+function defaultParseMessage(payload) {
+	return JSON.parse(payload.toString());
+}
+var WebSocketRealtimeTranscriptionSession = class {
+	constructor(options) {
+		this.closed = false;
+		this.connected = false;
+		this.currentUrl = "";
+		this.queuedAudio = [];
+		this.queuedBytes = 0;
+		this.ready = false;
+		this.reconnectAttempts = 0;
+		this.reconnecting = false;
+		this.suppressReconnect = false;
+		this.ws = null;
+		this.flowId = randomUUID();
+		this.options = options;
+		this.transport = {
+			callbacks: options.callbacks,
+			closeNow: () => {
+				this.closed = true;
+				this.forceClose();
+			},
+			failConnect: (error) => this.failConnect?.(error),
+			isOpen: () => this.ws?.readyState === WebSocket.OPEN,
+			isReady: () => this.ready,
+			markReady: () => this.markReady?.(),
+			sendBinary: (payload) => this.sendBinary(payload),
+			sendJson: (payload) => this.sendJson(payload)
+		};
+	}
+	async connect() {
+		this.closed = false;
+		this.suppressReconnect = false;
+		this.reconnectAttempts = 0;
+		await this.doConnect();
+	}
+	sendAudio(audio) {
+		if (this.closed || audio.byteLength === 0) return;
+		if (this.ws?.readyState === WebSocket.OPEN && this.ready) {
+			this.options.sendAudio(audio, this.transport);
+			return;
+		}
+		this.queueAudio(audio);
+	}
+	close() {
+		this.closed = true;
+		this.connected = false;
+		this.ready = false;
+		this.queuedAudio = [];
+		this.queuedBytes = 0;
+		if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+			this.forceClose();
+			return;
+		}
+		try {
+			this.options.onClose?.(this.transport);
+		} catch (error) {
+			this.emitError(error);
+		}
+		this.closeTimer = setTimeout(() => this.forceClose(), this.closeTimeoutMs);
+	}
+	isConnected() {
+		return this.connected && this.ready;
+	}
+	get closeTimeoutMs() {
+		return this.options.closeTimeoutMs ?? DEFAULT_CLOSE_TIMEOUT_MS;
+	}
+	get connectTimeoutMs() {
+		return this.options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
+	}
+	get maxQueuedBytes() {
+		return this.options.maxQueuedBytes ?? DEFAULT_MAX_QUEUED_BYTES;
+	}
+	get maxReconnectAttempts() {
+		return this.options.maxReconnectAttempts ?? DEFAULT_MAX_RECONNECT_ATTEMPTS;
+	}
+	get reconnectDelayMs() {
+		return this.options.reconnectDelayMs ?? DEFAULT_RECONNECT_DELAY_MS;
+	}
+	async doConnect() {
+		await new Promise((resolve, reject) => {
+			this.ready = false;
+			this.currentUrl = typeof this.options.url === "function" ? this.options.url() : this.options.url;
+			const proxyAgent = createDebugProxyWebSocketAgent(resolveDebugProxySettings());
+			let settled = false;
+			let opened = false;
+			let connectTimeout;
+			const finishConnect = () => {
+				if (settled) return;
+				settled = true;
+				if (connectTimeout) clearTimeout(connectTimeout);
+				this.ready = true;
+				this.flushQueuedAudio();
+				resolve();
+			};
+			const failConnect = (error) => {
+				if (settled) return;
+				settled = true;
+				if (connectTimeout) clearTimeout(connectTimeout);
+				this.emitError(error);
+				this.suppressReconnect = true;
+				this.forceClose();
+				reject(error);
+			};
+			this.markReady = finishConnect;
+			this.failConnect = failConnect;
+			this.ws = new WebSocket(this.currentUrl, {
+				headers: this.options.headers,
+				...proxyAgent ? { agent: proxyAgent } : {}
+			});
+			connectTimeout = setTimeout(() => {
+				failConnect(new Error(this.options.connectTimeoutMessage ?? `${this.options.providerId} realtime transcription connection timeout`));
+			}, this.connectTimeoutMs);
+			this.ws.on("open", () => {
+				opened = true;
+				this.connected = true;
+				this.reconnectAttempts = 0;
+				this.captureLocalOpen();
+				try {
+					this.options.onOpen?.(this.transport);
+					if (this.options.readyOnOpen) finishConnect();
+				} catch (error) {
+					failConnect(error instanceof Error ? error : new Error(String(error)));
+				}
+			});
+			this.ws.on("message", (data) => {
+				const payload = rawWsDataToBuffer(data);
+				this.captureFrame("inbound", payload);
+				try {
+					if (!this.options.onMessage) return;
+					const parseMessage = this.options.parseMessage ?? defaultParseMessage;
+					this.options.onMessage(parseMessage(payload), this.transport);
+				} catch (error) {
+					this.emitError(error);
+				}
+			});
+			this.ws.on("error", (error) => {
+				const normalized = error instanceof Error ? error : new Error(String(error));
+				this.captureError(normalized);
+				if (!opened || !settled) {
+					failConnect(normalized);
+					return;
+				}
+				this.emitError(normalized);
+			});
+			this.ws.on("close", (code, reasonBuffer) => {
+				if (connectTimeout) clearTimeout(connectTimeout);
+				this.captureClose(code, reasonBuffer);
+				this.connected = false;
+				this.ready = false;
+				if (this.closeTimer) {
+					clearTimeout(this.closeTimer);
+					this.closeTimer = void 0;
+				}
+				if (this.closed) return;
+				if (this.suppressReconnect) {
+					this.suppressReconnect = false;
+					return;
+				}
+				if (!opened || !settled) {
+					failConnect(new Error(this.options.connectTimeoutMessage ?? `${this.options.providerId} realtime transcription connection closed before ready`));
+					return;
+				}
+				this.attemptReconnect();
+			});
+		});
+	}
+	async attemptReconnect() {
+		if (this.closed || this.reconnecting) return;
+		if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+			this.emitError(new Error(this.options.reconnectLimitMessage ?? `${this.options.providerId} realtime transcription reconnect limit reached`));
+			return;
+		}
+		this.reconnectAttempts += 1;
+		const delay = this.reconnectDelayMs * 2 ** (this.reconnectAttempts - 1);
+		this.reconnecting = true;
+		try {
+			await new Promise((resolve) => setTimeout(resolve, delay));
+			if (!this.closed) await this.doConnect();
+		} catch {
+			if (!this.closed) {
+				this.reconnecting = false;
+				await this.attemptReconnect();
+				return;
+			}
+		} finally {
+			this.reconnecting = false;
+		}
+	}
+	queueAudio(audio) {
+		this.queuedAudio.push(Buffer.from(audio));
+		this.queuedBytes += audio.byteLength;
+		while (this.queuedBytes > this.maxQueuedBytes && this.queuedAudio.length > 0) {
+			const dropped = this.queuedAudio.shift();
+			this.queuedBytes -= dropped?.byteLength ?? 0;
+		}
+	}
+	flushQueuedAudio() {
+		for (const audio of this.queuedAudio) this.options.sendAudio(audio, this.transport);
+		this.queuedAudio = [];
+		this.queuedBytes = 0;
+	}
+	sendBinary(payload) {
+		if (this.ws?.readyState !== WebSocket.OPEN) return false;
+		this.captureFrame("outbound", payload);
+		this.ws.send(payload);
+		return true;
+	}
+	sendJson(payload) {
+		if (this.ws?.readyState !== WebSocket.OPEN) return false;
+		const serialized = JSON.stringify(payload);
+		this.captureFrame("outbound", serialized);
+		this.ws.send(serialized);
+		return true;
+	}
+	forceClose() {
+		if (this.closeTimer) {
+			clearTimeout(this.closeTimer);
+			this.closeTimer = void 0;
+		}
+		this.connected = false;
+		this.ready = false;
+		if (this.ws) {
+			this.ws.close(1e3, "Transcription session closed");
+			this.ws = null;
+		}
+	}
+	emitError(error) {
+		this.options.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
+	}
+	captureFrame(direction, payload) {
+		captureWsEvent({
+			url: this.currentUrl,
+			direction,
+			kind: "ws-frame",
+			flowId: this.flowId,
+			payload,
+			meta: {
+				provider: this.options.providerId,
+				capability: "realtime-transcription"
+			}
+		});
+	}
+	captureLocalOpen() {
+		captureWsEvent({
+			url: this.currentUrl,
+			direction: "local",
+			kind: "ws-open",
+			flowId: this.flowId,
+			meta: {
+				provider: this.options.providerId,
+				capability: "realtime-transcription"
+			}
+		});
+	}
+	captureError(error) {
+		captureWsEvent({
+			url: this.currentUrl,
+			direction: "local",
+			kind: "error",
+			flowId: this.flowId,
+			errorText: error.message,
+			meta: {
+				provider: this.options.providerId,
+				capability: "realtime-transcription"
+			}
+		});
+	}
+	captureClose(code, reasonBuffer) {
+		captureWsEvent({
+			url: this.currentUrl,
+			direction: "local",
+			kind: "ws-close",
+			flowId: this.flowId,
+			closeCode: code,
+			meta: {
+				provider: this.options.providerId,
+				capability: "realtime-transcription",
+				reason: reasonBuffer.length > 0 ? reasonBuffer.toString("utf8") : void 0
+			}
+		});
+	}
+};
+function createRealtimeTranscriptionWebSocketSession(options) {
+	return new WebSocketRealtimeTranscriptionSession(options);
+}
+//#endregion
+export { normalizeRealtimeTranscriptionProviderId as a, listRealtimeTranscriptionProviders as i, canonicalizeRealtimeTranscriptionProviderId as n, getRealtimeTranscriptionProvider as r, createRealtimeTranscriptionWebSocketSession as t };

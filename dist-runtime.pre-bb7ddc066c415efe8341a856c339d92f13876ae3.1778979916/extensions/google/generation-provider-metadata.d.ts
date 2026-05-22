@@ -1,0 +1,1 @@
+../../../dist/extensions/google/generation-provider-metadata.d.ts

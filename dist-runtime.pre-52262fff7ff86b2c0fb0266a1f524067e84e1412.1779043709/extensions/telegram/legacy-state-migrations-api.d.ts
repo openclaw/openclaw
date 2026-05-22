@@ -1,0 +1,1 @@
+../../../dist/extensions/telegram/legacy-state-migrations-api.d.ts

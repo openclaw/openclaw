@@ -1,0 +1,1 @@
+../../../dist/extensions/duckduckgo/web-search-contract-api.d.ts

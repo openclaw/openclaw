@@ -1,0 +1,1 @@
+../../../dist/extensions/slack/configured-state.d.ts

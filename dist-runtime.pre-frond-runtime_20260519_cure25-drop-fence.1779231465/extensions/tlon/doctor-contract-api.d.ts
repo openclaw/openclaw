@@ -1,0 +1,1 @@
+../../../dist/extensions/tlon/doctor-contract-api.d.ts

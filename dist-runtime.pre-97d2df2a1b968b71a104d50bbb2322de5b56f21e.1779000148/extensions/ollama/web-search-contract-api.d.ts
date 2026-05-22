@@ -1,0 +1,1 @@
+../../../dist/extensions/ollama/web-search-contract-api.d.ts

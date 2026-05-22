@@ -1,0 +1,1 @@
+../../../dist/extensions/whatsapp/setup-entry.d.ts

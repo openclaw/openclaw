@@ -1,0 +1,1 @@
+../../../dist/extensions/imessage/media-contract-api.d.ts

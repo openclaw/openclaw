@@ -1,0 +1,1 @@
+../../../dist/extensions/voyage/embedding-provider.d.ts

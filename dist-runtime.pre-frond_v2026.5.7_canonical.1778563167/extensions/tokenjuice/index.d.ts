@@ -1,0 +1,1 @@
+../../../dist/extensions/tokenjuice/index.d.ts

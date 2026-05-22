@@ -1,0 +1,2 @@
+import { n as listSlackDirectoryPeersFromConfig, t as listSlackDirectoryGroupsFromConfig } from "../../directory-config-BCNBPncm.js";
+export { listSlackDirectoryGroupsFromConfig, listSlackDirectoryPeersFromConfig };

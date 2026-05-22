@@ -1,0 +1,1 @@
+../../../dist/extensions/voyage/embedding-batch.d.ts

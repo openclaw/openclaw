@@ -1,0 +1,1 @@
+../../../dist/extensions/opencode-go/media-understanding-provider.d.ts

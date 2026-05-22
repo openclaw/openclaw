@@ -1,0 +1,1 @@
+../../../dist/extensions/minimax/web-search-provider.d.ts

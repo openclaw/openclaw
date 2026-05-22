@@ -370,11 +370,15 @@ describe("scoped vitest configs", () => {
   });
 
   it("splits auto-reply into narrower scoped buckets", () => {
-    const coreTestConfig = requireTestConfig(defaultAutoReplyCoreConfig);
-    expect(coreTestConfig.include).toEqual(["*.test.ts"]);
-    expect(coreTestConfig.exclude).toContain("reply*.test.ts");
-    expect(requireTestConfig(defaultAutoReplyTopLevelConfig).include).toEqual(["reply*.test.ts"]);
-    expect(requireTestConfig(defaultAutoReplyReplyConfig).include).toEqual(["reply/**/*.test.ts"]);
+    expect(defaultAutoReplyCoreConfig.test?.include).toEqual([
+      "*.test.ts",
+      "continuation/**/*.test.ts",
+    ]);
+    expect(defaultAutoReplyCoreConfig.test?.exclude).toEqual(
+      expect.arrayContaining(["reply*.test.ts"]),
+    );
+    expect(defaultAutoReplyTopLevelConfig.test?.include).toEqual(["reply*.test.ts"]);
+    expect(defaultAutoReplyReplyConfig.test?.include).toEqual(["reply/**/*.test.ts"]);
   });
 
   it("keeps the broad agents lane on shared file parallelism", () => {

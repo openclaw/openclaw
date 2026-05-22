@@ -1,0 +1,1 @@
+../../../dist/extensions/microsoft/test-api.d.ts

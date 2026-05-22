@@ -1,0 +1,1 @@
+../../../dist/extensions/tencent/provider-catalog.d.ts

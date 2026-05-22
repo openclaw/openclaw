@@ -59,9 +59,18 @@ vi.mock("./subagent-announce.runtime.js", () => ({
   ) => callGatewayMock({ method, params, timeoutMs: options?.timeoutMs }),
   isEmbeddedPiRunActive: (sessionId: string) => isEmbeddedPiRunActiveMock(sessionId),
   getRuntimeConfig: () => mockConfig,
+  loadConfig: () => mockConfig,
   loadSessionStore: (storePath: string) => loadSessionStoreMock(storePath),
-  readSessionEntry: (storePath: string, sessionKey: string) =>
-    (loadSessionStoreMock(storePath) as Record<string, unknown>)[sessionKey],
+  readSessionEntry: (storePath: string, sessionKey: string) => {
+    const store = loadSessionStoreMock(storePath) as Record<string, unknown> | undefined;
+    return store?.[sessionKey];
+  },
+  resolveContinuationRuntimeConfig: () => ({
+    maxChainLength: 10,
+    costCapTokens: 500_000,
+    minDelayMs: 5_000,
+    maxDelayMs: 300_000,
+  }),
   resolveAgentIdFromSessionKey: (sessionKey: string) =>
     resolveAgentIdFromSessionKeyMock(sessionKey),
   resolveMainSessionKey: (cfg: unknown) => resolveMainSessionKeyMock(cfg),

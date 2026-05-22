@@ -1,0 +1,1 @@
+../../../dist/extensions/qianfan/index.d.ts

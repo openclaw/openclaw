@@ -1,0 +1,1 @@
+../../../dist/extensions/diffs/index.d.ts

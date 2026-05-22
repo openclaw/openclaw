@@ -1,0 +1,31 @@
+import type { ChannelMessageReceiveAckPolicy } from "./types.js";
+export type MessageAckPolicy = ChannelMessageReceiveAckPolicy;
+export type MessageAckStage = "receive_record" | "agent_dispatch" | "durable_send" | "manual";
+export type MessageAckState = "pending" | "acked" | "nacked";
+export type MessageReceiveContext<TMessage = unknown> = {
+    id: string;
+    channel: string;
+    accountId?: string;
+    message: TMessage;
+    ackPolicy: MessageAckPolicy;
+    ackState: MessageAckState;
+    ackedAt?: number;
+    nackErrorMessage?: string;
+    receivedAt: number;
+    signal: AbortSignal;
+    shouldAckAfter(stage: MessageAckStage): boolean;
+    ack(): Promise<void>;
+    nack(error: unknown): Promise<void>;
+};
+export declare function shouldAckMessageAfterStage(policy: MessageAckPolicy, stage: MessageAckStage): boolean;
+export declare function createMessageReceiveContext<TMessage>(params: {
+    id: string;
+    channel: string;
+    accountId?: string;
+    message: TMessage;
+    ackPolicy?: MessageAckPolicy;
+    receivedAt?: number;
+    signal?: AbortSignal;
+    onAck?: () => Promise<void> | void;
+    onNack?: (error: unknown) => Promise<void> | void;
+}): MessageReceiveContext<TMessage>;

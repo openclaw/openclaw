@@ -1,0 +1,1 @@
+../../../dist/extensions/mattermost/contract-api.d.ts

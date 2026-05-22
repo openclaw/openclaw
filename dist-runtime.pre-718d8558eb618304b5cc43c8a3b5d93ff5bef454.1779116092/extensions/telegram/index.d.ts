@@ -1,0 +1,1 @@
+../../../dist/extensions/telegram/index.d.ts

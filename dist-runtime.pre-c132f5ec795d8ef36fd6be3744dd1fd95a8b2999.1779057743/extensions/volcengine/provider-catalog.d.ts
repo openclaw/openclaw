@@ -1,0 +1,1 @@
+../../../dist/extensions/volcengine/provider-catalog.d.ts

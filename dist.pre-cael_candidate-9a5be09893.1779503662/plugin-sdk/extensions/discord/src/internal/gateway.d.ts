@@ -1,0 +1,90 @@
+import { EventEmitter } from "node:events";
+import { GatewayCloseCodes, GatewayIntentBits, type APIGatewayBotInfo, type GatewayPresenceUpdateData, type GatewayReceivePayload, type GatewaySendPayload, type GatewayVoiceStateUpdateData } from "discord-api-types/v10";
+import * as ws from "ws";
+import { Plugin, type Client } from "./client.js";
+export { GatewayCloseCodes };
+export declare const GatewayIntents: typeof GatewayIntentBits;
+export type Activity = NonNullable<GatewayPresenceUpdateData["activities"]>[number];
+export type UpdatePresenceData = Omit<GatewayPresenceUpdateData, "status"> & {
+    status: "online" | "idle" | "dnd" | "invisible" | "offline";
+};
+type UpdateVoiceStateData = GatewayVoiceStateUpdateData;
+type RequestGuildMembersData = {
+    guild_id: string;
+    query?: string;
+    limit: number;
+    presences?: boolean;
+    user_ids?: string | string[];
+    nonce?: string;
+};
+type GatewayPluginOptions = {
+    reconnect?: {
+        maxAttempts?: number;
+    };
+    intents?: number;
+    autoInteractions?: boolean;
+    shard?: [number, number];
+    url?: string;
+};
+export declare class GatewayPlugin extends Plugin {
+    readonly id = "gateway";
+    protected client?: Client;
+    readonly options: Required<Pick<GatewayPluginOptions, "autoInteractions">> & GatewayPluginOptions;
+    ws: ws.WebSocket | null;
+    sequence: number | null;
+    lastHeartbeatAck: boolean;
+    emitter: EventEmitter<any>;
+    shardId?: number;
+    totalShards?: number;
+    protected gatewayInfo?: APIGatewayBotInfo;
+    isConnected: boolean;
+    private sessionId;
+    private resumeGatewayUrl;
+    private reconnectAttempts;
+    private shouldReconnect;
+    private isConnecting;
+    private readonly heartbeatTimers;
+    private readonly reconnectTimer;
+    private outboundLimiter;
+    constructor(options: GatewayPluginOptions, gatewayInfo?: APIGatewayBotInfo);
+    get ping(): number | null;
+    get heartbeatInterval(): NodeJS.Timeout | undefined;
+    set heartbeatInterval(timer: NodeJS.Timeout | undefined);
+    get firstHeartbeatTimeout(): NodeJS.Timeout | undefined;
+    set firstHeartbeatTimeout(timer: NodeJS.Timeout | undefined);
+    registerClient(client: Client): Promise<void>;
+    connect(resume?: boolean): void;
+    disconnect(): void;
+    protected createWebSocket(url: string): ws.WebSocket;
+    private setupWebSocket;
+    private handlePayload;
+    private startHeartbeat;
+    private stopHeartbeat;
+    private stopReconnectTimer;
+    private sendHeartbeat;
+    private identify;
+    private identifyWithConcurrency;
+    send(payload: GatewaySendPayload | GatewayReceivePayload, skipRateLimit?: boolean): void;
+    private sendSerializedGatewayEvent;
+    private handleDispatch;
+    private resetSessionState;
+    private scheduleReconnect;
+    updatePresence(data: UpdatePresenceData): void;
+    updateVoiceState(data: UpdateVoiceStateData): void;
+    requestGuildMembers(data: RequestGuildMembersData): void;
+    getRateLimitStatus(): {
+        remainingEvents: number;
+        resetTime: number;
+        currentEventCount: number;
+        queuedEvents: number;
+    };
+    getIntentsInfo(): {
+        intents: number;
+        hasGuilds: boolean;
+        hasGuildMembers: boolean;
+        hasGuildPresences: boolean;
+        hasGuildMessages: boolean;
+        hasMessageContent: boolean;
+    };
+    hasIntent(intent: number): boolean;
+}

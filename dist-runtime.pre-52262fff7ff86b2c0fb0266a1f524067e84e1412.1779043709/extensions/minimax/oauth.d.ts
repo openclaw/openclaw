@@ -1,0 +1,1 @@
+../../../dist/extensions/minimax/oauth.d.ts

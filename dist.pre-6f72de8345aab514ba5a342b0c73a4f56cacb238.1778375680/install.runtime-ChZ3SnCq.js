@@ -1,0 +1,14 @@
+import { i as isPathInside } from "./path-n_dSWDuU.js";
+import { T as pathExists } from "./fs-safe-Cwlcdma7.js";
+import { o as root } from "./secure-temp-dir-JZ25IoOE.js";
+import { N as validateRegistryNpmSpec, S as resolvePackageExtensionEntries, b as getPackageManifestMetadata, h as loadBundleManifest, m as detectBundleManifestFormat, x as loadPluginManifest } from "./discovery-C_DZWe8p.js";
+import { o as resolveCompatibilityHostVersion, s as resolveRuntimeServiceVersion } from "./version-BHBlW4Qb.js";
+import { r as readJson } from "./json-files-lSEaru9V.js";
+import { t as checkMinHostVersion } from "./min-host-version-BD5hu2fu.js";
+import { s as resolveArchiveKind } from "./archive-DlGuLPCX.js";
+import "./archive-DnlmgrfE.js";
+import { r as resolveArchiveSourcePath } from "./install-source-utils-B0QHEqaT.js";
+import { i as scanPackageInstallSource, n as scanFileInstallSource, r as scanInstalledPackageDependencyTree, t as scanBundleInstallSource } from "./install-security-scan-DI5WXak-.js";
+import { i as withExtractedArchiveRoot, r as resolveExistingInstallPath, t as installPackageDir } from "./install-package-dir-DA3JO5fb.js";
+import { a as finalizeNpmSpecArchiveInstall, i as resolveTimedInstallModeOptions, n as resolveCanonicalInstallTarget, o as installFromNpmSpecArchiveWithInstaller, r as resolveInstallModeOptions, t as ensureInstallTargetAvailable } from "./install-target-Ds3Is-3X.js";
+export { checkMinHostVersion, detectBundleManifestFormat, ensureInstallTargetAvailable, pathExists as fileExists, finalizeNpmSpecArchiveInstall, getPackageManifestMetadata, installFromNpmSpecArchiveWithInstaller, installPackageDir, isPathInside, loadBundleManifest, loadPluginManifest, readJson as readJsonFile, resolveArchiveKind, resolveArchiveSourcePath, resolveCanonicalInstallTarget, resolveCompatibilityHostVersion, resolveExistingInstallPath, resolveInstallModeOptions, resolvePackageExtensionEntries, resolveRuntimeServiceVersion, resolveTimedInstallModeOptions, root, scanBundleInstallSource, scanFileInstallSource, scanInstalledPackageDependencyTree, scanPackageInstallSource, validateRegistryNpmSpec, withExtractedArchiveRoot };

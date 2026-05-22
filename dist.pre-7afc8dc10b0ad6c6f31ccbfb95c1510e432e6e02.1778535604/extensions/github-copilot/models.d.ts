@@ -1,0 +1,2 @@
+import { a as resolveCopilotForwardCompatModel, i as normalizeCopilotResolvedModelHeaders, n as PROVIDER_ID, r as fetchCopilotModelCatalog, t as FetchCopilotModelCatalogParams } from "../../models-Ck-lMNlM.js";
+export { FetchCopilotModelCatalogParams, PROVIDER_ID, fetchCopilotModelCatalog, normalizeCopilotResolvedModelHeaders, resolveCopilotForwardCompatModel };

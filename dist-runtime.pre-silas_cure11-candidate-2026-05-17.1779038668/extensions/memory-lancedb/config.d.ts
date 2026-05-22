@@ -1,0 +1,1 @@
+../../../dist/extensions/memory-lancedb/config.d.ts

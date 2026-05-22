@@ -1,0 +1,1 @@
+{"version":3,"file":"preview-Bpt_pTk6.js","names":[],"sources":["../../../ui/__vite-optional-peer-dep:@create-markdown/core:@create-markdown/preview"],"sourcesContent":["export default {};\nthrow new Error(`Could not resolve \"@create-markdown/core\" imported by \"@create-markdown/preview\". Is it installed?`)"],"mappings":"AAAA,IAAA,EAAe,EAAE,CACjB,MAAU,MAAM,qGAAA"}

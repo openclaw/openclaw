@@ -1,0 +1,12 @@
+export type AgentIdentityFile = {
+    name?: string;
+    emoji?: string;
+    theme?: string;
+    creature?: string;
+    vibe?: string;
+    avatar?: string;
+};
+export declare function parseIdentityMarkdown(content: string): AgentIdentityFile;
+export declare function identityHasValues(identity: AgentIdentityFile): boolean;
+export declare function mergeIdentityMarkdownContent(content: string | undefined, identity: Pick<AgentIdentityFile, "name" | "theme" | "emoji" | "avatar">): string;
+export declare function loadAgentIdentityFromWorkspace(workspace: string): AgentIdentityFile | null;

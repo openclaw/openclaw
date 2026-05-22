@@ -1,0 +1,1 @@
+../../../dist/extensions/irc/configured-state.d.ts

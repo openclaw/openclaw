@@ -1,0 +1,1 @@
+../../../dist/extensions/memory-lancedb/index.d.ts

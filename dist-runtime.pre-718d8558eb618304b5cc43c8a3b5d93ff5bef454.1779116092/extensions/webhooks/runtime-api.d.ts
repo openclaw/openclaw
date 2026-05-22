@@ -1,0 +1,1 @@
+../../../dist/extensions/webhooks/runtime-api.d.ts

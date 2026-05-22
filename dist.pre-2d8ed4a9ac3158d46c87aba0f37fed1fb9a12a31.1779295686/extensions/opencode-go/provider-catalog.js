@@ -1,0 +1,2 @@
+import { a as resolveOpencodeGoSupplementalModel, i as normalizeOpencodeGoResolvedModel, n as listOpencodeGoSupplementalModelCatalogEntries, r as normalizeOpencodeGoBaseUrl, t as isOpencodeGoKimiNoReasoningModelId } from "../../provider-catalog-AKVvCO1h.js";
+export { isOpencodeGoKimiNoReasoningModelId, listOpencodeGoSupplementalModelCatalogEntries, normalizeOpencodeGoBaseUrl, normalizeOpencodeGoResolvedModel, resolveOpencodeGoSupplementalModel };

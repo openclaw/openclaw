@@ -17,9 +17,6 @@ export const pluginSdkDocMetadata = {
   core: {
     category: "core",
   },
-  health: {
-    category: "core",
-  },
   "approval-runtime": {
     category: "runtime",
   },

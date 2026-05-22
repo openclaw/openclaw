@@ -1,0 +1,1 @@
+../../../dist/extensions/openai/auth-choice-copy.d.ts

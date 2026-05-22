@@ -1,0 +1,1 @@
+../../../dist/extensions/google/image-generation-provider.d.ts

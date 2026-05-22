@@ -1,0 +1,1 @@
+../../../dist/extensions/searxng/web-search-provider.d.ts

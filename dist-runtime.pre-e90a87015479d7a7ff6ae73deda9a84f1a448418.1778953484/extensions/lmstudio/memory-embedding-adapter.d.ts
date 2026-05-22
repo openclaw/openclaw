@@ -1,0 +1,1 @@
+../../../dist/extensions/lmstudio/memory-embedding-adapter.d.ts

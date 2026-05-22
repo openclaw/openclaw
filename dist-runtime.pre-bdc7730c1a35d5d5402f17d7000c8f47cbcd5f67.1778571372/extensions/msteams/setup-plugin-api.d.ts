@@ -1,0 +1,1 @@
+../../../dist/extensions/msteams/setup-plugin-api.d.ts

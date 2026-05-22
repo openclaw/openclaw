@@ -1,0 +1,85 @@
+import type { CommandArgs } from "openclaw/plugin-sdk/command-auth-native";
+import { type DiscordChannelConfigResolved, type DiscordGuildEntryResolved } from "./allow-list.js";
+type BuildDiscordNativeCommandContextParams = {
+    prompt: string;
+    commandArgs: CommandArgs;
+    sessionKey: string;
+    commandTargetSessionKey: string;
+    accountId?: string | null;
+    interactionId: string;
+    channelId: string;
+    threadParentId?: string;
+    memberRoleIds?: string[];
+    guildId?: string;
+    guildName?: string;
+    channelTopic?: string;
+    channelConfig?: DiscordChannelConfigResolved | null;
+    guildInfo?: DiscordGuildEntryResolved | null;
+    allowNameMatching?: boolean;
+    commandAuthorized: boolean;
+    isDirectMessage: boolean;
+    isGroupDm: boolean;
+    isGuild: boolean;
+    isThreadChannel: boolean;
+    user: {
+        id: string;
+        username: string;
+        globalName?: string | null;
+    };
+    sender: {
+        id: string;
+        name?: string;
+        tag?: string;
+    };
+    timestampMs?: number;
+};
+export declare function buildDiscordNativeCommandContext(params: BuildDiscordNativeCommandContextParams): {
+    Body: string;
+    BodyForAgent: string;
+    RawBody: string;
+    CommandBody: string;
+    CommandArgs: CommandArgs;
+    From: string;
+    To: string;
+    SessionKey: string;
+    CommandTargetSessionKey: string;
+    AccountId: string | undefined;
+    ChatType: string;
+    ConversationLabel: string;
+    GroupSubject: string | undefined;
+    GroupSpace: string | undefined;
+    MemberRoleIds: string[] | undefined;
+    GroupSystemPrompt: string | undefined;
+    UntrustedStructuredContext: {
+        label: string;
+        source?: string;
+        type?: string;
+        payload: unknown;
+    }[] | undefined;
+    OwnerAllowFrom: string[] | undefined;
+    SenderName: string;
+    SenderId: string;
+    SenderUsername: string;
+    SenderTag: string | undefined;
+    Provider: "discord";
+    Surface: "discord";
+    WasMentioned: boolean;
+    MessageSid: string;
+    MessageThreadId: string | undefined;
+    Timestamp: number;
+    CommandAuthorized: boolean;
+    CommandTurn: {
+        kind: "native";
+        source: "native";
+        authorized: boolean;
+        body: string;
+    };
+    CommandSource: "native";
+    OriginatingChannel: "discord";
+    OriginatingTo: string;
+    ThreadParentId: string | undefined;
+} & Omit<import("openclaw/plugin-sdk/reply-runtime").MsgContext, "CommandAuthorized"> & {
+    CommandAuthorized: boolean;
+    CommandTurn?: import("openclaw/plugin-sdk/reply-dispatch-runtime").CommandTurnContext;
+};
+export {};

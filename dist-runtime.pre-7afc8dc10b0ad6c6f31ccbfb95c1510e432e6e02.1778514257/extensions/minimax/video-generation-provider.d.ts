@@ -1,0 +1,1 @@
+../../../dist/extensions/minimax/video-generation-provider.d.ts

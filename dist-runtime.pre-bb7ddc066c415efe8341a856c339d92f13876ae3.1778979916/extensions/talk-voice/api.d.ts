@@ -1,0 +1,1 @@
+../../../dist/extensions/talk-voice/api.d.ts

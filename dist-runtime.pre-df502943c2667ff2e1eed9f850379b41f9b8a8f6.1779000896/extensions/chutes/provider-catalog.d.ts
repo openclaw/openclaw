@@ -1,0 +1,1 @@
+../../../dist/extensions/chutes/provider-catalog.d.ts

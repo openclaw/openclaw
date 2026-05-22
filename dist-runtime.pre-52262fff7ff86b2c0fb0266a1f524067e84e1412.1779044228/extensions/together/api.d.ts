@@ -1,0 +1,1 @@
+../../../dist/extensions/together/api.d.ts

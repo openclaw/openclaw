@@ -1,0 +1,1 @@
+../../../dist/extensions/amazon-bedrock/memory-embedding-adapter.d.ts

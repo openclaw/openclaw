@@ -1,0 +1,1 @@
+../../../dist/extensions/google/gemini-cli-provider.d.ts

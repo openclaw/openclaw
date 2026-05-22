@@ -1,0 +1,32 @@
+import type { RealtimeTranscriptionSession, RealtimeTranscriptionSessionCallbacks } from "./provider-types.js";
+export type RealtimeTranscriptionWebSocketTransport = {
+    readonly callbacks: RealtimeTranscriptionSessionCallbacks;
+    closeNow(): void;
+    failConnect(error: Error): void;
+    isOpen(): boolean;
+    isReady(): boolean;
+    markReady(): void;
+    sendBinary(payload: Buffer): boolean;
+    sendJson(payload: unknown): boolean;
+};
+export type RealtimeTranscriptionWebSocketSessionOptions<Event = unknown> = {
+    callbacks: RealtimeTranscriptionSessionCallbacks;
+    connectClosedBeforeReadyMessage?: string;
+    connectTimeoutMessage?: string;
+    connectTimeoutMs?: number;
+    closeTimeoutMs?: number;
+    headers?: Record<string, string>;
+    maxQueuedBytes?: number;
+    maxReconnectAttempts?: number;
+    onClose?: (transport: RealtimeTranscriptionWebSocketTransport) => void;
+    onMessage?: (event: Event, transport: RealtimeTranscriptionWebSocketTransport) => void;
+    onOpen?: (transport: RealtimeTranscriptionWebSocketTransport) => void;
+    parseMessage?: (payload: Buffer) => Event;
+    providerId: string;
+    readyOnOpen?: boolean;
+    reconnectDelayMs?: number;
+    reconnectLimitMessage?: string;
+    sendAudio: (audio: Buffer, transport: RealtimeTranscriptionWebSocketTransport) => void;
+    url: string | (() => string);
+};
+export declare function createRealtimeTranscriptionWebSocketSession<Event = unknown>(options: RealtimeTranscriptionWebSocketSessionOptions<Event>): RealtimeTranscriptionSession;

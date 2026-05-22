@@ -1,0 +1,1 @@
+../../../dist/extensions/memory-lancedb/cli-metadata.d.ts

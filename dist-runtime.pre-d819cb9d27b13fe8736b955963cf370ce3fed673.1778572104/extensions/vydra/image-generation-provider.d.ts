@@ -1,0 +1,1 @@
+../../../dist/extensions/vydra/image-generation-provider.d.ts

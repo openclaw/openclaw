@@ -1,0 +1,1 @@
+../../../dist/extensions/matrix/contract-api.d.ts

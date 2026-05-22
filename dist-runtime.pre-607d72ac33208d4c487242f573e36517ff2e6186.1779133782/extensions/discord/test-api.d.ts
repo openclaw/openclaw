@@ -1,0 +1,1 @@
+../../../dist/extensions/discord/test-api.d.ts

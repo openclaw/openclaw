@@ -1,0 +1,1 @@
+../../../dist/extensions/google/provider-policy-api.d.ts

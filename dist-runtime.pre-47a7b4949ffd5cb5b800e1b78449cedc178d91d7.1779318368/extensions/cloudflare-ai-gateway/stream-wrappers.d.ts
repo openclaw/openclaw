@@ -1,0 +1,1 @@
+../../../dist/extensions/cloudflare-ai-gateway/stream-wrappers.d.ts

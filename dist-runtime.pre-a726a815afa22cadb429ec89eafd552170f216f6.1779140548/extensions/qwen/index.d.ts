@@ -1,0 +1,1 @@
+../../../dist/extensions/qwen/index.d.ts

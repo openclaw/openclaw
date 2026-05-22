@@ -1,0 +1,110 @@
+import type { EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
+import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
+import type { ExecAsk, ExecHost, ExecSecurity, ExecTarget } from "../infra/exec-approvals.js";
+import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
+import type { BashSandboxConfig } from "./bash-tools.shared.js";
+import type { EmbeddedFullAccessBlockedReason } from "./pi-embedded-runner/types.js";
+export type ExecToolDefaults = {
+    hasCronTool?: boolean;
+    host?: ExecTarget;
+    security?: ExecSecurity;
+    ask?: ExecAsk;
+    trigger?: string;
+    node?: string;
+    pathPrepend?: string[];
+    safeBins?: string[];
+    strictInlineEval?: boolean;
+    commandHighlighting?: boolean;
+    safeBinTrustedDirs?: string[];
+    safeBinProfiles?: Record<string, SafeBinProfileFixture>;
+    agentId?: string;
+    backgroundMs?: number;
+    timeoutSec?: number;
+    approvalWarningText?: string;
+    approvalFollowupText?: string;
+    approvalFollowup?: ExecApprovalFollowupFactory;
+    approvalFollowupMode?: "agent" | "direct";
+    approvalRunningNoticeMs?: number;
+    sandbox?: BashSandboxConfig;
+    elevated?: ExecElevatedDefaults;
+    allowBackground?: boolean;
+    scopeKey?: string;
+    sessionKey?: string;
+    /** `session.mainKey` from the runtime config; passed through into
+     *  runExecProcess so background-exit notifications can remap cron-run
+     *  session keys to the agent's main queue without an ambient config load. */
+    mainKey?: string;
+    /** `session.scope` from the runtime config; passed alongside `mainKey`
+     *  so the cron-run remap can route global-scope agents to the "global"
+     *  queue instead of agent-main. */
+    sessionScope?: "per-sender" | "global";
+    /** Start-time routing policy for detached exec system events. */
+    eventRouting?: EventSessionRoutingPolicy;
+    messageProvider?: string;
+    currentChannelId?: string;
+    currentThreadTs?: string;
+    accountId?: string;
+    notifyOnExit?: boolean;
+    notifyOnExitEmptySuccess?: boolean;
+    cwd?: string;
+};
+export type ExecApprovalFollowupOutcome = {
+    status: "completed" | "failed";
+    exitCode: number | null;
+    timedOut: boolean;
+    aggregated: string;
+    reason?: string;
+};
+type ExecApprovalFollowupContext = {
+    approvalId: string;
+    sessionId: string;
+    trigger?: string;
+    outcome: ExecApprovalFollowupOutcome;
+};
+export type ExecApprovalFollowupFactory = (context: ExecApprovalFollowupContext) => string | undefined | Promise<string | undefined>;
+export type ExecElevatedDefaults = {
+    enabled: boolean;
+    allowed: boolean;
+    defaultLevel: "on" | "off" | "ask" | "full";
+    fullAccessAvailable?: boolean;
+    fullAccessBlockedReason?: EmbeddedFullAccessBlockedReason;
+};
+export type ExecToolDetails = {
+    status: "running";
+    sessionId: string;
+    pid?: number;
+    startedAt: number;
+    cwd?: string;
+    tail?: string;
+} | {
+    status: "completed" | "failed";
+    exitCode: number | null;
+    durationMs: number;
+    aggregated: string;
+    timedOut?: boolean;
+    cwd?: string;
+} | {
+    status: "approval-pending";
+    approvalId: string;
+    approvalSlug: string;
+    expiresAtMs: number;
+    allowedDecisions?: readonly ExecApprovalDecision[];
+    host: ExecHost;
+    command: string;
+    cwd?: string;
+    nodeId?: string;
+    warningText?: string;
+} | {
+    status: "approval-unavailable";
+    reason: "initiating-platform-disabled" | "initiating-platform-unsupported" | "no-approval-route";
+    channel?: string;
+    channelLabel?: string;
+    accountId?: string;
+    sentApproverDms?: boolean;
+    host: ExecHost;
+    command: string;
+    cwd?: string;
+    nodeId?: string;
+    warningText?: string;
+};
+export {};

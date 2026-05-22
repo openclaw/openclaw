@@ -43,6 +43,14 @@ function createInMemoryBridge(root: string, files: Map<string, string>): Sandbox
       const absolutePath = resolveAbsolute(filePath, cwd);
       files.set(absolutePath, typeof data === "string" ? data : Buffer.from(data).toString("utf8"));
     },
+    appendFile: async ({ filePath, cwd, data }) => {
+      const absolutePath = resolveAbsolute(filePath, cwd);
+      const current = files.get(absolutePath) ?? "";
+      files.set(
+        absolutePath,
+        `${current}${typeof data === "string" ? data : Buffer.from(data).toString("utf8")}`,
+      );
+    },
     mkdirp: async () => {},
     remove: async ({ filePath, cwd }) => {
       files.delete(resolveAbsolute(filePath, cwd));

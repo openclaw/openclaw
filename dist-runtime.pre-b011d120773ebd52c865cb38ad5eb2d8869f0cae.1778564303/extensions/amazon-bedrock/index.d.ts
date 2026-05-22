@@ -1,0 +1,1 @@
+../../../dist/extensions/amazon-bedrock/index.d.ts

@@ -1,0 +1,1 @@
+{"version":3,"file":"preview-BBw3vauN.js","names":[],"sources":["../../../ui/__vite-optional-peer-dep:@create-markdown/core:@create-markdown/preview"],"sourcesContent":["export default {};\nthrow new Error(`Could not resolve \"@create-markdown/core\" imported by \"@create-markdown/preview\". Is it installed?`)"],"mappings":"AAAA,IAAA,EAAe,CAAC,EAChB,MAAU,MAAM,oGAAoG"}

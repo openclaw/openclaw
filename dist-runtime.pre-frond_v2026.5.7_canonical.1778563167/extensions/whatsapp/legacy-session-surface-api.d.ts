@@ -1,0 +1,1 @@
+../../../dist/extensions/whatsapp/legacy-session-surface-api.d.ts

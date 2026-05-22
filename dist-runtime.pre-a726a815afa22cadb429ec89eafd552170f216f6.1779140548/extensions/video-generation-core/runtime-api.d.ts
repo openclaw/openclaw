@@ -1,0 +1,1 @@
+../../../dist/extensions/video-generation-core/runtime-api.d.ts

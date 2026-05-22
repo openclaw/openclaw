@@ -1,0 +1,1 @@
+../../../dist/extensions/acpx/index.d.ts

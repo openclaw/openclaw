@@ -1,0 +1,4 @@
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+export declare function createAnthropicVertexStreamFnForModel(model: {
+    baseUrl?: string;
+}, env?: NodeJS.ProcessEnv): StreamFn;

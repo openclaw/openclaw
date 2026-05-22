@@ -1,0 +1,1 @@
+../../../dist/extensions/codex/provider-catalog.d.ts

@@ -1,0 +1,1 @@
+../../../dist/extensions/admin-http-rpc/index.d.ts

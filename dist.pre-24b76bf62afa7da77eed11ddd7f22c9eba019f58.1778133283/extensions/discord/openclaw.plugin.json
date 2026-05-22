@@ -1,0 +1,3462 @@
+{
+  "id": "discord",
+  "activation": {
+    "onStartup": false
+  },
+  "channels": [
+    "discord"
+  ],
+  "channelEnvVars": {
+    "discord": [
+      "DISCORD_BOT_TOKEN"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "channelConfigs": {
+    "discord": {
+      "schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "markdown": {
+            "type": "object",
+            "properties": {
+              "tables": {
+                "type": "string",
+                "enum": [
+                  "off",
+                  "bullets",
+                  "code",
+                  "block"
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "commands": {
+            "type": "object",
+            "properties": {
+              "native": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "string",
+                    "const": "auto"
+                  }
+                ]
+              },
+              "nativeSkills": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "string",
+                    "const": "auto"
+                  }
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          "configWrites": {
+            "type": "boolean"
+          },
+          "token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "source": {
+                        "type": "string",
+                        "const": "env"
+                      },
+                      "provider": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+                      },
+                      "id": {
+                        "type": "string",
+                        "pattern": "^[A-Z][A-Z0-9_]{0,127}$"
+                      }
+                    },
+                    "required": [
+                      "source",
+                      "provider",
+                      "id"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "source": {
+                        "type": "string",
+                        "const": "file"
+                      },
+                      "provider": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+                      },
+                      "id": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "source",
+                      "provider",
+                      "id"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "source": {
+                        "type": "string",
+                        "const": "exec"
+                      },
+                      "provider": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+                      },
+                      "id": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "source",
+                      "provider",
+                      "id"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            ]
+          },
+          "applicationId": {
+            "type": "string"
+          },
+          "proxy": {
+            "type": "string"
+          },
+          "gatewayInfoTimeoutMs": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 120000
+          },
+          "gatewayReadyTimeoutMs": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 120000
+          },
+          "gatewayRuntimeReadyTimeoutMs": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 120000
+          },
+          "allowBots": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "string",
+                "const": "mentions"
+              }
+            ]
+          },
+          "dangerouslyAllowNameMatching": {
+            "type": "boolean"
+          },
+          "mentionAliases": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "string",
+              "pattern": "^\\d+$"
+            }
+          },
+          "groupPolicy": {
+            "default": "allowlist",
+            "type": "string",
+            "enum": [
+              "open",
+              "disabled",
+              "allowlist"
+            ]
+          },
+          "contextVisibility": {
+            "type": "string",
+            "enum": [
+              "all",
+              "allowlist",
+              "allowlist_quote"
+            ]
+          },
+          "historyLimit": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "dmHistoryLimit": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "dms": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "historyLimit": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "textChunkLimit": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "streaming": {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "off",
+                  "partial",
+                  "block",
+                  "progress"
+                ]
+              },
+              "chunkMode": {
+                "type": "string",
+                "enum": [
+                  "length",
+                  "newline"
+                ]
+              },
+              "preview": {
+                "type": "object",
+                "properties": {
+                  "chunk": {
+                    "type": "object",
+                    "properties": {
+                      "minChars": {
+                        "type": "integer",
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "maxChars": {
+                        "type": "integer",
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "breakPreference": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "const": "paragraph"
+                          },
+                          {
+                            "type": "string",
+                            "const": "newline"
+                          },
+                          {
+                            "type": "string",
+                            "const": "sentence"
+                          }
+                        ]
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "toolProgress": {
+                    "type": "boolean"
+                  },
+                  "commandText": {
+                    "type": "string",
+                    "enum": [
+                      "raw",
+                      "status"
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              },
+              "progress": {
+                "type": "object",
+                "properties": {
+                  "label": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "boolean",
+                        "const": false
+                      }
+                    ]
+                  },
+                  "labels": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "maxLines": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "render": {
+                    "type": "string",
+                    "enum": [
+                      "text",
+                      "rich"
+                    ]
+                  },
+                  "toolProgress": {
+                    "type": "boolean"
+                  },
+                  "commandText": {
+                    "type": "string",
+                    "enum": [
+                      "raw",
+                      "status"
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              },
+              "block": {
+                "type": "object",
+                "properties": {
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "coalesce": {
+                    "type": "object",
+                    "properties": {
+                      "minChars": {
+                        "type": "integer",
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "maxChars": {
+                        "type": "integer",
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "idleMs": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false
+          },
+          "maxLinesPerMessage": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "mediaMaxMb": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "retry": {
+            "type": "object",
+            "properties": {
+              "attempts": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              "minDelayMs": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "maxDelayMs": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "jitter": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              }
+            },
+            "additionalProperties": false
+          },
+          "actions": {
+            "type": "object",
+            "properties": {
+              "reactions": {
+                "type": "boolean"
+              },
+              "stickers": {
+                "type": "boolean"
+              },
+              "emojiUploads": {
+                "type": "boolean"
+              },
+              "stickerUploads": {
+                "type": "boolean"
+              },
+              "polls": {
+                "type": "boolean"
+              },
+              "permissions": {
+                "type": "boolean"
+              },
+              "messages": {
+                "type": "boolean"
+              },
+              "threads": {
+                "type": "boolean"
+              },
+              "pins": {
+                "type": "boolean"
+              },
+              "search": {
+                "type": "boolean"
+              },
+              "memberInfo": {
+                "type": "boolean"
+              },
+              "roleInfo": {
+                "type": "boolean"
+              },
+              "roles": {
+                "type": "boolean"
+              },
+              "channelInfo": {
+                "type": "boolean"
+              },
+              "voiceStatus": {
+                "type": "boolean"
+              },
+              "events": {
+                "type": "boolean"
+              },
+              "moderation": {
+                "type": "boolean"
+              },
+              "channels": {
+                "type": "boolean"
+              },
+              "presence": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          },
+          "replyToMode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": "off"
+              },
+              {
+                "type": "string",
+                "const": "first"
+              },
+              {
+                "type": "string",
+                "const": "all"
+              },
+              {
+                "type": "string",
+                "const": "batched"
+              }
+            ]
+          },
+          "thread": {
+            "type": "object",
+            "properties": {
+              "inheritParent": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          },
+          "dmPolicy": {
+            "type": "string",
+            "enum": [
+              "pairing",
+              "allowlist",
+              "open",
+              "disabled"
+            ]
+          },
+          "allowFrom": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "defaultTo": {
+            "type": "string"
+          },
+          "dm": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "policy": {
+                "type": "string",
+                "enum": [
+                  "pairing",
+                  "allowlist",
+                  "open",
+                  "disabled"
+                ]
+              },
+              "allowFrom": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "groupEnabled": {
+                "type": "boolean"
+              },
+              "groupChannels": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "additionalProperties": false
+          },
+          "guilds": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "slug": {
+                  "type": "string"
+                },
+                "requireMention": {
+                  "type": "boolean"
+                },
+                "ignoreOtherMentions": {
+                  "type": "boolean"
+                },
+                "tools": {
+                  "type": "object",
+                  "properties": {
+                    "allow": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "alsoAllow": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "deny": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "toolsBySender": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {
+                    "type": "object",
+                    "properties": {
+                      "allow": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "alsoAllow": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "deny": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                },
+                "reactionNotifications": {
+                  "type": "string",
+                  "enum": [
+                    "off",
+                    "own",
+                    "all",
+                    "allowlist"
+                  ]
+                },
+                "users": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "roles": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "channels": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {
+                    "type": "object",
+                    "properties": {
+                      "requireMention": {
+                        "type": "boolean"
+                      },
+                      "ignoreOtherMentions": {
+                        "type": "boolean"
+                      },
+                      "tools": {
+                        "type": "object",
+                        "properties": {
+                          "allow": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "alsoAllow": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "deny": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "additionalProperties": false
+                      },
+                      "toolsBySender": {
+                        "type": "object",
+                        "propertyNames": {
+                          "type": "string"
+                        },
+                        "additionalProperties": {
+                          "type": "object",
+                          "properties": {
+                            "allow": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "alsoAllow": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "deny": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "additionalProperties": false
+                        }
+                      },
+                      "skills": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "enabled": {
+                        "type": "boolean"
+                      },
+                      "users": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "roles": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "systemPrompt": {
+                        "type": "string"
+                      },
+                      "includeThreadStarter": {
+                        "type": "boolean"
+                      },
+                      "autoThread": {
+                        "type": "boolean"
+                      },
+                      "autoThreadName": {
+                        "type": "string",
+                        "enum": [
+                          "message",
+                          "generated"
+                        ]
+                      },
+                      "autoArchiveDuration": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "enum": [
+                              "60",
+                              "1440",
+                              "4320",
+                              "10080"
+                            ]
+                          },
+                          {
+                            "type": "number",
+                            "const": 60
+                          },
+                          {
+                            "type": "number",
+                            "const": 1440
+                          },
+                          {
+                            "type": "number",
+                            "const": 4320
+                          },
+                          {
+                            "type": "number",
+                            "const": 10080
+                          }
+                        ]
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "heartbeat": {
+            "type": "object",
+            "properties": {
+              "showOk": {
+                "type": "boolean"
+              },
+              "showAlerts": {
+                "type": "boolean"
+              },
+              "useIndicator": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          },
+          "healthMonitor": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          },
+          "execApprovals": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "approvers": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "agentFilter": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "sessionFilter": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "cleanupAfterResolve": {
+                "type": "boolean"
+              },
+              "target": {
+                "type": "string",
+                "enum": [
+                  "dm",
+                  "channel",
+                  "both"
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          "agentComponents": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          },
+          "ui": {
+            "type": "object",
+            "properties": {
+              "components": {
+                "type": "object",
+                "properties": {
+                  "accentColor": {
+                    "type": "string",
+                    "pattern": "^#?[0-9a-fA-F]{6}$"
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false
+          },
+          "slashCommand": {
+            "type": "object",
+            "properties": {
+              "ephemeral": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          },
+          "threadBindings": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "idleHours": {
+                "type": "number",
+                "minimum": 0
+              },
+              "maxAgeHours": {
+                "type": "number",
+                "minimum": 0
+              },
+              "spawnSessions": {
+                "type": "boolean"
+              },
+              "defaultSpawnContext": {
+                "type": "string",
+                "enum": [
+                  "isolated",
+                  "fork"
+                ]
+              },
+              "spawnSubagentSessions": {
+                "type": "boolean"
+              },
+              "spawnAcpSessions": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          },
+          "intents": {
+            "type": "object",
+            "properties": {
+              "presence": {
+                "type": "boolean"
+              },
+              "guildMembers": {
+                "type": "boolean"
+              },
+              "voiceStates": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          },
+          "voice": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "model": {
+                "type": "string",
+                "minLength": 1
+              },
+              "autoJoin": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "guildId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "channelId": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "guildId",
+                    "channelId"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "daveEncryption": {
+                "type": "boolean"
+              },
+              "decryptionFailureTolerance": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "connectTimeoutMs": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 120000
+              },
+              "reconnectGraceMs": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 120000
+              },
+              "tts": {
+                "type": "object",
+                "properties": {
+                  "auto": {
+                    "type": "string",
+                    "enum": [
+                      "off",
+                      "always",
+                      "inbound",
+                      "tagged"
+                    ]
+                  },
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "final",
+                      "all"
+                    ]
+                  },
+                  "provider": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "persona": {
+                    "type": "string"
+                  },
+                  "personas": {
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "additionalProperties": {
+                      "type": "object",
+                      "properties": {
+                        "label": {
+                          "type": "string"
+                        },
+                        "description": {
+                          "type": "string"
+                        },
+                        "provider": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "fallbackPolicy": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "const": "preserve-persona"
+                            },
+                            {
+                              "type": "string",
+                              "const": "provider-defaults"
+                            },
+                            {
+                              "type": "string",
+                              "const": "fail"
+                            }
+                          ]
+                        },
+                        "prompt": {
+                          "type": "object",
+                          "properties": {
+                            "profile": {
+                              "type": "string"
+                            },
+                            "scene": {
+                              "type": "string"
+                            },
+                            "sampleContext": {
+                              "type": "string"
+                            },
+                            "style": {
+                              "type": "string"
+                            },
+                            "accent": {
+                              "type": "string"
+                            },
+                            "pacing": {
+                              "type": "string"
+                            },
+                            "constraints": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        "providers": {
+                          "type": "object",
+                          "propertyNames": {
+                            "type": "string"
+                          },
+                          "additionalProperties": {
+                            "type": "object",
+                            "properties": {
+                              "apiKey": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "oneOf": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "source": {
+                                            "type": "string",
+                                            "const": "env"
+                                          },
+                                          "provider": {
+                                            "type": "string",
+                                            "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+                                          },
+                                          "id": {
+                                            "type": "string",
+                                            "pattern": "^[A-Z][A-Z0-9_]{0,127}$"
+                                          }
+                                        },
+                                        "required": [
+                                          "source",
+                                          "provider",
+                                          "id"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "source": {
+                                            "type": "string",
+                                            "const": "file"
+                                          },
+                                          "provider": {
+                                            "type": "string",
+                                            "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+                                          },
+                                          "id": {
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "source",
+                                          "provider",
+                                          "id"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "source": {
+                                            "type": "string",
+                                            "const": "exec"
+                                          },
+                                          "provider": {
+                                            "type": "string",
+                                            "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+                                          },
+                                          "id": {
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "source",
+                                          "provider",
+                                          "id"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    ]
+                                  }
+                                ]
+                              }
+                            },
+                            "additionalProperties": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "boolean"
+                                },
+                                {
+                                  "type": "null"
+                                },
+                                {
+                                  "type": "array",
+                                  "items": {}
+                                },
+                                {
+                                  "type": "object",
+                                  "propertyNames": {
+                                    "type": "string"
+                                  },
+                                  "additionalProperties": {}
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  },
+                  "summaryModel": {
+                    "type": "string"
+                  },
+                  "modelOverrides": {
+                    "type": "object",
+                    "properties": {
+                      "enabled": {
+                        "type": "boolean"
+                      },
+                      "allowText": {
+                        "type": "boolean"
+                      },
+                      "allowProvider": {
+                        "type": "boolean"
+                      },
+                      "allowVoice": {
+                        "type": "boolean"
+                      },
+                      "allowModelId": {
+                        "type": "boolean"
+                      },
+                      "allowVoiceSettings": {
+                        "type": "boolean"
+                      },
+                      "allowNormalization": {
+                        "type": "boolean"
+                      },
+                      "allowSeed": {
+                        "type": "boolean"
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "providers": {
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "additionalProperties": {
+                      "type": "object",
+                      "properties": {
+                        "apiKey": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "oneOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "source": {
+                                      "type": "string",
+                                      "const": "env"
+                                    },
+                                    "provider": {
+                                      "type": "string",
+                                      "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+                                    },
+                                    "id": {
+                                      "type": "string",
+                                      "pattern": "^[A-Z][A-Z0-9_]{0,127}$"
+                                    }
+                                  },
+                                  "required": [
+                                    "source",
+                                    "provider",
+                                    "id"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "source": {
+                                      "type": "string",
+                                      "const": "file"
+                                    },
+                                    "provider": {
+                                      "type": "string",
+                                      "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+                                    },
+                                    "id": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "source",
+                                    "provider",
+                                    "id"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "source": {
+                                      "type": "string",
+                                      "const": "exec"
+                                    },
+                                    "provider": {
+                                      "type": "string",
+                                      "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+                                    },
+                                    "id": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "source",
+                                    "provider",
+                                    "id"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      },
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "type": "array",
+                            "items": {}
+                          },
+                          {
+                            "type": "object",
+                            "propertyNames": {
+                              "type": "string"
+                            },
+                            "additionalProperties": {}
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "prefsPath": {
+                    "type": "string"
+                  },
+                  "maxTextLength": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991
+                  },
+                  "timeoutMs": {
+                    "type": "integer",
+                    "minimum": 1000,
+                    "maximum": 120000
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false
+          },
+          "pluralkit": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "token": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "source": {
+                            "type": "string",
+                            "const": "env"
+                          },
+                          "provider": {
+                            "type": "string",
+                            "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+                          },
+                          "id": {
+                            "type": "string",
+                            "pattern": "^[A-Z][A-Z0-9_]{0,127}$"
+                          }
+                        },
+                        "required": [
+                          "source",
+                          "provider",
+                          "id"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "source": {
+                            "type": "string",
+                            "const": "file"
+                          },
+                          "provider": {
+                            "type": "string",
+                            "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+                          },
+                          "id": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "source",
+                          "provider",
+                          "id"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "source": {
+                            "type": "string",
+                            "const": "exec"
+                          },
+                          "provider": {
+                            "type": "string",
+                            "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+                          },
+                          "id": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "source",
+                          "provider",
+                          "id"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          "responsePrefix": {
+            "type": "string"
+          },
+          "ackReaction": {
+            "type": "string"
+          },
+          "ackReactionScope": {
+            "type": "string",
+            "enum": [
+              "group-mentions",
+              "group-all",
+              "direct",
+              "all",
+              "off",
+              "none"
+            ]
+          },
+          "activity": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "online",
+              "dnd",
+              "idle",
+              "invisible"
+            ]
+          },
+          "autoPresence": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "intervalMs": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "minUpdateIntervalMs": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "healthyText": {
+                "type": "string"
+              },
+              "degradedText": {
+                "type": "string"
+              },
+              "exhaustedText": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          "activityType": {
+            "anyOf": [
+              {
+                "type": "number",
+                "const": 0
+              },
+              {
+                "type": "number",
+                "const": 1
+              },
+              {
+                "type": "number",
+                "const": 2
+              },
+              {
+                "type": "number",
+                "const": 3
+              },
+              {
+                "type": "number",
+                "const": 4
+              },
+              {
+                "type": "number",
+                "const": 5
+              }
+            ]
+          },
+          "activityUrl": {
+            "type": "string",
+            "format": "uri"
+          },
+          "inboundWorker": {
+            "type": "object",
+            "properties": {
+              "runTimeoutMs": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "additionalProperties": false
+          },
+          "eventQueue": {
+            "type": "object",
+            "properties": {
+              "listenerTimeout": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "maxQueueSize": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "maxConcurrency": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "additionalProperties": false
+          },
+          "accounts": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "capabilities": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "markdown": {
+                  "type": "object",
+                  "properties": {
+                    "tables": {
+                      "type": "string",
+                      "enum": [
+                        "off",
+                        "bullets",
+                        "code",
+                        "block"
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "enabled": {
+                  "type": "boolean"
+                },
+                "commands": {
+                  "type": "object",
+                  "properties": {
+                    "native": {
+                      "anyOf": [
+                        {
+                          "type": "boolean"
+                        },
+                        {
+                          "type": "string",
+                          "const": "auto"
+                        }
+                      ]
+                    },
+                    "nativeSkills": {
+                      "anyOf": [
+                        {
+                          "type": "boolean"
+                        },
+                        {
+                          "type": "string",
+                          "const": "auto"
+                        }
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "configWrites": {
+                  "type": "boolean"
+                },
+                "token": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "source": {
+                              "type": "string",
+                              "const": "env"
+                            },
+                            "provider": {
+                              "type": "string",
+                              "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+                            },
+                            "id": {
+                              "type": "string",
+                              "pattern": "^[A-Z][A-Z0-9_]{0,127}$"
+                            }
+                          },
+                          "required": [
+                            "source",
+                            "provider",
+                            "id"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "source": {
+                              "type": "string",
+                              "const": "file"
+                            },
+                            "provider": {
+                              "type": "string",
+                              "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+                            },
+                            "id": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "source",
+                            "provider",
+                            "id"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "source": {
+                              "type": "string",
+                              "const": "exec"
+                            },
+                            "provider": {
+                              "type": "string",
+                              "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+                            },
+                            "id": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "source",
+                            "provider",
+                            "id"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "applicationId": {
+                  "type": "string"
+                },
+                "proxy": {
+                  "type": "string"
+                },
+                "gatewayInfoTimeoutMs": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 120000
+                },
+                "gatewayReadyTimeoutMs": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 120000
+                },
+                "gatewayRuntimeReadyTimeoutMs": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 120000
+                },
+                "allowBots": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "string",
+                      "const": "mentions"
+                    }
+                  ]
+                },
+                "dangerouslyAllowNameMatching": {
+                  "type": "boolean"
+                },
+                "mentionAliases": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {
+                    "type": "string",
+                    "pattern": "^\\d+$"
+                  }
+                },
+                "groupPolicy": {
+                  "default": "allowlist",
+                  "type": "string",
+                  "enum": [
+                    "open",
+                    "disabled",
+                    "allowlist"
+                  ]
+                },
+                "contextVisibility": {
+                  "type": "string",
+                  "enum": [
+                    "all",
+                    "allowlist",
+                    "allowlist_quote"
+                  ]
+                },
+                "historyLimit": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "dmHistoryLimit": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "dms": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {
+                    "type": "object",
+                    "properties": {
+                      "historyLimit": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                },
+                "textChunkLimit": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "streaming": {
+                  "type": "object",
+                  "properties": {
+                    "mode": {
+                      "type": "string",
+                      "enum": [
+                        "off",
+                        "partial",
+                        "block",
+                        "progress"
+                      ]
+                    },
+                    "chunkMode": {
+                      "type": "string",
+                      "enum": [
+                        "length",
+                        "newline"
+                      ]
+                    },
+                    "preview": {
+                      "type": "object",
+                      "properties": {
+                        "chunk": {
+                          "type": "object",
+                          "properties": {
+                            "minChars": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "maxChars": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "breakPreference": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "const": "paragraph"
+                                },
+                                {
+                                  "type": "string",
+                                  "const": "newline"
+                                },
+                                {
+                                  "type": "string",
+                                  "const": "sentence"
+                                }
+                              ]
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        "toolProgress": {
+                          "type": "boolean"
+                        },
+                        "commandText": {
+                          "type": "string",
+                          "enum": [
+                            "raw",
+                            "status"
+                          ]
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "progress": {
+                      "type": "object",
+                      "properties": {
+                        "label": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "boolean",
+                              "const": false
+                            }
+                          ]
+                        },
+                        "labels": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "maxLines": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "render": {
+                          "type": "string",
+                          "enum": [
+                            "text",
+                            "rich"
+                          ]
+                        },
+                        "toolProgress": {
+                          "type": "boolean"
+                        },
+                        "commandText": {
+                          "type": "string",
+                          "enum": [
+                            "raw",
+                            "status"
+                          ]
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "block": {
+                      "type": "object",
+                      "properties": {
+                        "enabled": {
+                          "type": "boolean"
+                        },
+                        "coalesce": {
+                          "type": "object",
+                          "properties": {
+                            "minChars": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "maxChars": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "idleMs": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "additionalProperties": false
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "maxLinesPerMessage": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "mediaMaxMb": {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                "retry": {
+                  "type": "object",
+                  "properties": {
+                    "attempts": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 9007199254740991
+                    },
+                    "minDelayMs": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "maxDelayMs": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "jitter": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "actions": {
+                  "type": "object",
+                  "properties": {
+                    "reactions": {
+                      "type": "boolean"
+                    },
+                    "stickers": {
+                      "type": "boolean"
+                    },
+                    "emojiUploads": {
+                      "type": "boolean"
+                    },
+                    "stickerUploads": {
+                      "type": "boolean"
+                    },
+                    "polls": {
+                      "type": "boolean"
+                    },
+                    "permissions": {
+                      "type": "boolean"
+                    },
+                    "messages": {
+                      "type": "boolean"
+                    },
+                    "threads": {
+                      "type": "boolean"
+                    },
+                    "pins": {
+                      "type": "boolean"
+                    },
+                    "search": {
+                      "type": "boolean"
+                    },
+                    "memberInfo": {
+                      "type": "boolean"
+                    },
+                    "roleInfo": {
+                      "type": "boolean"
+                    },
+                    "roles": {
+                      "type": "boolean"
+                    },
+                    "channelInfo": {
+                      "type": "boolean"
+                    },
+                    "voiceStatus": {
+                      "type": "boolean"
+                    },
+                    "events": {
+                      "type": "boolean"
+                    },
+                    "moderation": {
+                      "type": "boolean"
+                    },
+                    "channels": {
+                      "type": "boolean"
+                    },
+                    "presence": {
+                      "type": "boolean"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "replyToMode": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "const": "off"
+                    },
+                    {
+                      "type": "string",
+                      "const": "first"
+                    },
+                    {
+                      "type": "string",
+                      "const": "all"
+                    },
+                    {
+                      "type": "string",
+                      "const": "batched"
+                    }
+                  ]
+                },
+                "thread": {
+                  "type": "object",
+                  "properties": {
+                    "inheritParent": {
+                      "type": "boolean"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "dmPolicy": {
+                  "type": "string",
+                  "enum": [
+                    "pairing",
+                    "allowlist",
+                    "open",
+                    "disabled"
+                  ]
+                },
+                "allowFrom": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "defaultTo": {
+                  "type": "string"
+                },
+                "dm": {
+                  "type": "object",
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "policy": {
+                      "type": "string",
+                      "enum": [
+                        "pairing",
+                        "allowlist",
+                        "open",
+                        "disabled"
+                      ]
+                    },
+                    "allowFrom": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "groupEnabled": {
+                      "type": "boolean"
+                    },
+                    "groupChannels": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "guilds": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {
+                    "type": "object",
+                    "properties": {
+                      "slug": {
+                        "type": "string"
+                      },
+                      "requireMention": {
+                        "type": "boolean"
+                      },
+                      "ignoreOtherMentions": {
+                        "type": "boolean"
+                      },
+                      "tools": {
+                        "type": "object",
+                        "properties": {
+                          "allow": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "alsoAllow": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "deny": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "additionalProperties": false
+                      },
+                      "toolsBySender": {
+                        "type": "object",
+                        "propertyNames": {
+                          "type": "string"
+                        },
+                        "additionalProperties": {
+                          "type": "object",
+                          "properties": {
+                            "allow": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "alsoAllow": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "deny": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "additionalProperties": false
+                        }
+                      },
+                      "reactionNotifications": {
+                        "type": "string",
+                        "enum": [
+                          "off",
+                          "own",
+                          "all",
+                          "allowlist"
+                        ]
+                      },
+                      "users": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "roles": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "channels": {
+                        "type": "object",
+                        "propertyNames": {
+                          "type": "string"
+                        },
+                        "additionalProperties": {
+                          "type": "object",
+                          "properties": {
+                            "requireMention": {
+                              "type": "boolean"
+                            },
+                            "ignoreOtherMentions": {
+                              "type": "boolean"
+                            },
+                            "tools": {
+                              "type": "object",
+                              "properties": {
+                                "allow": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
+                                },
+                                "alsoAllow": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
+                                },
+                                "deny": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
+                                }
+                              },
+                              "additionalProperties": false
+                            },
+                            "toolsBySender": {
+                              "type": "object",
+                              "propertyNames": {
+                                "type": "string"
+                              },
+                              "additionalProperties": {
+                                "type": "object",
+                                "properties": {
+                                  "allow": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "alsoAllow": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "deny": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  }
+                                },
+                                "additionalProperties": false
+                              }
+                            },
+                            "skills": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "enabled": {
+                              "type": "boolean"
+                            },
+                            "users": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "roles": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "systemPrompt": {
+                              "type": "string"
+                            },
+                            "includeThreadStarter": {
+                              "type": "boolean"
+                            },
+                            "autoThread": {
+                              "type": "boolean"
+                            },
+                            "autoThreadName": {
+                              "type": "string",
+                              "enum": [
+                                "message",
+                                "generated"
+                              ]
+                            },
+                            "autoArchiveDuration": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "60",
+                                    "1440",
+                                    "4320",
+                                    "10080"
+                                  ]
+                                },
+                                {
+                                  "type": "number",
+                                  "const": 60
+                                },
+                                {
+                                  "type": "number",
+                                  "const": 1440
+                                },
+                                {
+                                  "type": "number",
+                                  "const": 4320
+                                },
+                                {
+                                  "type": "number",
+                                  "const": 10080
+                                }
+                              ]
+                            }
+                          },
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                },
+                "heartbeat": {
+                  "type": "object",
+                  "properties": {
+                    "showOk": {
+                      "type": "boolean"
+                    },
+                    "showAlerts": {
+                      "type": "boolean"
+                    },
+                    "useIndicator": {
+                      "type": "boolean"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "healthMonitor": {
+                  "type": "object",
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "execApprovals": {
+                  "type": "object",
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "approvers": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "agentFilter": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "sessionFilter": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "cleanupAfterResolve": {
+                      "type": "boolean"
+                    },
+                    "target": {
+                      "type": "string",
+                      "enum": [
+                        "dm",
+                        "channel",
+                        "both"
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "agentComponents": {
+                  "type": "object",
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "ui": {
+                  "type": "object",
+                  "properties": {
+                    "components": {
+                      "type": "object",
+                      "properties": {
+                        "accentColor": {
+                          "type": "string",
+                          "pattern": "^#?[0-9a-fA-F]{6}$"
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "slashCommand": {
+                  "type": "object",
+                  "properties": {
+                    "ephemeral": {
+                      "type": "boolean"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "threadBindings": {
+                  "type": "object",
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "idleHours": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "maxAgeHours": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "spawnSessions": {
+                      "type": "boolean"
+                    },
+                    "defaultSpawnContext": {
+                      "type": "string",
+                      "enum": [
+                        "isolated",
+                        "fork"
+                      ]
+                    },
+                    "spawnSubagentSessions": {
+                      "type": "boolean"
+                    },
+                    "spawnAcpSessions": {
+                      "type": "boolean"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "intents": {
+                  "type": "object",
+                  "properties": {
+                    "presence": {
+                      "type": "boolean"
+                    },
+                    "guildMembers": {
+                      "type": "boolean"
+                    },
+                    "voiceStates": {
+                      "type": "boolean"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "voice": {
+                  "type": "object",
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "model": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "autoJoin": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "guildId": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "channelId": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "required": [
+                          "guildId",
+                          "channelId"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "daveEncryption": {
+                      "type": "boolean"
+                    },
+                    "decryptionFailureTolerance": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "connectTimeoutMs": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 120000
+                    },
+                    "reconnectGraceMs": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 120000
+                    },
+                    "tts": {
+                      "type": "object",
+                      "properties": {
+                        "auto": {
+                          "type": "string",
+                          "enum": [
+                            "off",
+                            "always",
+                            "inbound",
+                            "tagged"
+                          ]
+                        },
+                        "enabled": {
+                          "type": "boolean"
+                        },
+                        "mode": {
+                          "type": "string",
+                          "enum": [
+                            "final",
+                            "all"
+                          ]
+                        },
+                        "provider": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "persona": {
+                          "type": "string"
+                        },
+                        "personas": {
+                          "type": "object",
+                          "propertyNames": {
+                            "type": "string"
+                          },
+                          "additionalProperties": {
+                            "type": "object",
+                            "properties": {
+                              "label": {
+                                "type": "string"
+                              },
+                              "description": {
+                                "type": "string"
+                              },
+                              "provider": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "fallbackPolicy": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "const": "preserve-persona"
+                                  },
+                                  {
+                                    "type": "string",
+                                    "const": "provider-defaults"
+                                  },
+                                  {
+                                    "type": "string",
+                                    "const": "fail"
+                                  }
+                                ]
+                              },
+                              "prompt": {
+                                "type": "object",
+                                "properties": {
+                                  "profile": {
+                                    "type": "string"
+                                  },
+                                  "scene": {
+                                    "type": "string"
+                                  },
+                                  "sampleContext": {
+                                    "type": "string"
+                                  },
+                                  "style": {
+                                    "type": "string"
+                                  },
+                                  "accent": {
+                                    "type": "string"
+                                  },
+                                  "pacing": {
+                                    "type": "string"
+                                  },
+                                  "constraints": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  }
+                                },
+                                "additionalProperties": false
+                              },
+                              "providers": {
+                                "type": "object",
+                                "propertyNames": {
+                                  "type": "string"
+                                },
+                                "additionalProperties": {
+                                  "type": "object",
+                                  "properties": {
+                                    "apiKey": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "oneOf": [
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "source": {
+                                                  "type": "string",
+                                                  "const": "env"
+                                                },
+                                                "provider": {
+                                                  "type": "string",
+                                                  "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+                                                },
+                                                "id": {
+                                                  "type": "string",
+                                                  "pattern": "^[A-Z][A-Z0-9_]{0,127}$"
+                                                }
+                                              },
+                                              "required": [
+                                                "source",
+                                                "provider",
+                                                "id"
+                                              ],
+                                              "additionalProperties": false
+                                            },
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "source": {
+                                                  "type": "string",
+                                                  "const": "file"
+                                                },
+                                                "provider": {
+                                                  "type": "string",
+                                                  "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+                                                },
+                                                "id": {
+                                                  "type": "string"
+                                                }
+                                              },
+                                              "required": [
+                                                "source",
+                                                "provider",
+                                                "id"
+                                              ],
+                                              "additionalProperties": false
+                                            },
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "source": {
+                                                  "type": "string",
+                                                  "const": "exec"
+                                                },
+                                                "provider": {
+                                                  "type": "string",
+                                                  "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+                                                },
+                                                "id": {
+                                                  "type": "string"
+                                                }
+                                              },
+                                              "required": [
+                                                "source",
+                                                "provider",
+                                                "id"
+                                              ],
+                                              "additionalProperties": false
+                                            }
+                                          ]
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "additionalProperties": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "number"
+                                      },
+                                      {
+                                        "type": "boolean"
+                                      },
+                                      {
+                                        "type": "null"
+                                      },
+                                      {
+                                        "type": "array",
+                                        "items": {}
+                                      },
+                                      {
+                                        "type": "object",
+                                        "propertyNames": {
+                                          "type": "string"
+                                        },
+                                        "additionalProperties": {}
+                                      }
+                                    ]
+                                  }
+                                }
+                              }
+                            },
+                            "additionalProperties": false
+                          }
+                        },
+                        "summaryModel": {
+                          "type": "string"
+                        },
+                        "modelOverrides": {
+                          "type": "object",
+                          "properties": {
+                            "enabled": {
+                              "type": "boolean"
+                            },
+                            "allowText": {
+                              "type": "boolean"
+                            },
+                            "allowProvider": {
+                              "type": "boolean"
+                            },
+                            "allowVoice": {
+                              "type": "boolean"
+                            },
+                            "allowModelId": {
+                              "type": "boolean"
+                            },
+                            "allowVoiceSettings": {
+                              "type": "boolean"
+                            },
+                            "allowNormalization": {
+                              "type": "boolean"
+                            },
+                            "allowSeed": {
+                              "type": "boolean"
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        "providers": {
+                          "type": "object",
+                          "propertyNames": {
+                            "type": "string"
+                          },
+                          "additionalProperties": {
+                            "type": "object",
+                            "properties": {
+                              "apiKey": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "oneOf": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "source": {
+                                            "type": "string",
+                                            "const": "env"
+                                          },
+                                          "provider": {
+                                            "type": "string",
+                                            "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+                                          },
+                                          "id": {
+                                            "type": "string",
+                                            "pattern": "^[A-Z][A-Z0-9_]{0,127}$"
+                                          }
+                                        },
+                                        "required": [
+                                          "source",
+                                          "provider",
+                                          "id"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "source": {
+                                            "type": "string",
+                                            "const": "file"
+                                          },
+                                          "provider": {
+                                            "type": "string",
+                                            "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+                                          },
+                                          "id": {
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "source",
+                                          "provider",
+                                          "id"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "source": {
+                                            "type": "string",
+                                            "const": "exec"
+                                          },
+                                          "provider": {
+                                            "type": "string",
+                                            "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+                                          },
+                                          "id": {
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "source",
+                                          "provider",
+                                          "id"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    ]
+                                  }
+                                ]
+                              }
+                            },
+                            "additionalProperties": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "boolean"
+                                },
+                                {
+                                  "type": "null"
+                                },
+                                {
+                                  "type": "array",
+                                  "items": {}
+                                },
+                                {
+                                  "type": "object",
+                                  "propertyNames": {
+                                    "type": "string"
+                                  },
+                                  "additionalProperties": {}
+                                }
+                              ]
+                            }
+                          }
+                        },
+                        "prefsPath": {
+                          "type": "string"
+                        },
+                        "maxTextLength": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 9007199254740991
+                        },
+                        "timeoutMs": {
+                          "type": "integer",
+                          "minimum": 1000,
+                          "maximum": 120000
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "pluralkit": {
+                  "type": "object",
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "token": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "source": {
+                                  "type": "string",
+                                  "const": "env"
+                                },
+                                "provider": {
+                                  "type": "string",
+                                  "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+                                },
+                                "id": {
+                                  "type": "string",
+                                  "pattern": "^[A-Z][A-Z0-9_]{0,127}$"
+                                }
+                              },
+                              "required": [
+                                "source",
+                                "provider",
+                                "id"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "source": {
+                                  "type": "string",
+                                  "const": "file"
+                                },
+                                "provider": {
+                                  "type": "string",
+                                  "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+                                },
+                                "id": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "source",
+                                "provider",
+                                "id"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "source": {
+                                  "type": "string",
+                                  "const": "exec"
+                                },
+                                "provider": {
+                                  "type": "string",
+                                  "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+                                },
+                                "id": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "source",
+                                "provider",
+                                "id"
+                              ],
+                              "additionalProperties": false
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "responsePrefix": {
+                  "type": "string"
+                },
+                "ackReaction": {
+                  "type": "string"
+                },
+                "ackReactionScope": {
+                  "type": "string",
+                  "enum": [
+                    "group-mentions",
+                    "group-all",
+                    "direct",
+                    "all",
+                    "off",
+                    "none"
+                  ]
+                },
+                "activity": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "online",
+                    "dnd",
+                    "idle",
+                    "invisible"
+                  ]
+                },
+                "autoPresence": {
+                  "type": "object",
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "intervalMs": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "minUpdateIntervalMs": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "healthyText": {
+                      "type": "string"
+                    },
+                    "degradedText": {
+                      "type": "string"
+                    },
+                    "exhaustedText": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "activityType": {
+                  "anyOf": [
+                    {
+                      "type": "number",
+                      "const": 0
+                    },
+                    {
+                      "type": "number",
+                      "const": 1
+                    },
+                    {
+                      "type": "number",
+                      "const": 2
+                    },
+                    {
+                      "type": "number",
+                      "const": 3
+                    },
+                    {
+                      "type": "number",
+                      "const": 4
+                    },
+                    {
+                      "type": "number",
+                      "const": 5
+                    }
+                  ]
+                },
+                "activityUrl": {
+                  "type": "string",
+                  "format": "uri"
+                },
+                "inboundWorker": {
+                  "type": "object",
+                  "properties": {
+                    "runTimeoutMs": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "eventQueue": {
+                  "type": "object",
+                  "properties": {
+                    "listenerTimeout": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "maxQueueSize": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "maxConcurrency": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "groupPolicy"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "defaultAccount": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "groupPolicy"
+        ],
+        "additionalProperties": false
+      },
+      "label": "Discord",
+      "description": "very well supported right now.",
+      "uiHints": {
+        "": {
+          "label": "Discord",
+          "help": "Discord channel provider configuration for bot auth, retry policy, streaming, thread bindings, and optional voice capabilities. Keep privileged intents and advanced features disabled unless needed."
+        },
+        "dmPolicy": {
+          "label": "Discord DM Policy",
+          "help": "Direct message access control (\"pairing\" recommended). \"open\" requires channels.discord.allowFrom=[\"*\"]."
+        },
+        "dm.policy": {
+          "label": "Discord DM Policy",
+          "help": "Direct message access control (\"pairing\" recommended). \"open\" requires channels.discord.allowFrom=[\"*\"] (legacy: channels.discord.dm.allowFrom)."
+        },
+        "configWrites": {
+          "label": "Discord Config Writes",
+          "help": "Allow Discord to write config in response to channel events/commands (default: true)."
+        },
+        "proxy": {
+          "label": "Discord Proxy URL",
+          "help": "Proxy URL for Discord gateway + API requests (app-id lookup and allowlist resolution). Set per account via channels.discord.accounts.<id>.proxy."
+        },
+        "commands.native": {
+          "label": "Discord Native Commands",
+          "help": "Override native commands for Discord (bool or \"auto\")."
+        },
+        "commands.nativeSkills": {
+          "label": "Discord Native Skill Commands",
+          "help": "Override native skill commands for Discord (bool or \"auto\")."
+        },
+        "streaming": {
+          "label": "Discord Streaming Mode",
+          "help": "Unified Discord stream preview mode: \"off\" | \"partial\" | \"block\" | \"progress\". \"progress\" keeps a single editable progress draft until final delivery. Legacy boolean/streamMode keys are auto-mapped."
+        },
+        "streaming.mode": {
+          "label": "Discord Streaming Mode",
+          "help": "Canonical Discord preview mode: \"off\" | \"partial\" | \"block\" | \"progress\"."
+        },
+        "streaming.chunkMode": {
+          "label": "Discord Chunk Mode",
+          "help": "Chunking mode for outbound Discord text delivery: \"length\" (default) or \"newline\"."
+        },
+        "streaming.block.enabled": {
+          "label": "Discord Block Streaming Enabled",
+          "help": "Enable chunked block-style Discord preview delivery when channels.discord.streaming.mode=\"block\"."
+        },
+        "streaming.block.coalesce": {
+          "label": "Discord Block Streaming Coalesce",
+          "help": "Merge streamed Discord block replies before final delivery."
+        },
+        "streaming.preview.chunk.minChars": {
+          "label": "Discord Draft Chunk Min Chars",
+          "help": "Minimum chars before emitting a Discord stream preview update when channels.discord.streaming.mode=\"block\" (default: 200)."
+        },
+        "streaming.preview.chunk.maxChars": {
+          "label": "Discord Draft Chunk Max Chars",
+          "help": "Target max size for a Discord stream preview chunk when channels.discord.streaming.mode=\"block\" (default: 800; clamped to channels.discord.textChunkLimit)."
+        },
+        "streaming.preview.chunk.breakPreference": {
+          "label": "Discord Draft Chunk Break Preference",
+          "help": "Preferred breakpoints for Discord draft chunks (paragraph | newline | sentence). Default: paragraph."
+        },
+        "streaming.preview.toolProgress": {
+          "label": "Discord Draft Tool Progress",
+          "help": "Show tool/progress activity in the live draft preview message (default: true). Set false to hide interim tool updates while the draft preview stays active."
+        },
+        "streaming.preview.commandText": {
+          "label": "Discord Draft Command Text",
+          "help": "Command/exec detail in preview tool-progress lines: \"raw\" preserves released behavior; \"status\" shows only the tool label."
+        },
+        "streaming.progress.label": {
+          "label": "Discord Progress Label",
+          "help": "Initial progress draft title. Use \"auto\" for built-in single-word labels, a custom string, or false to hide the title."
+        },
+        "streaming.progress.labels": {
+          "label": "Discord Progress Label Pool",
+          "help": "Candidate labels for streaming.progress.label=\"auto\". Leave unset to use OpenClaw built-in progress labels."
+        },
+        "streaming.progress.maxLines": {
+          "label": "Discord Progress Max Lines",
+          "help": "Maximum number of compact progress lines to keep below the draft label (default: 8)."
+        },
+        "streaming.progress.toolProgress": {
+          "label": "Discord Progress Tool Lines",
+          "help": "Show compact tool/progress lines in progress draft mode (default: true). Set false to keep only the label until final delivery."
+        },
+        "streaming.progress.commandText": {
+          "label": "Discord Progress Command Text",
+          "help": "Command/exec detail in progress draft lines: \"raw\" preserves released behavior; \"status\" shows only the tool label."
+        },
+        "retry.attempts": {
+          "label": "Discord Retry Attempts",
+          "help": "Max retry attempts for outbound Discord API calls (default: 3)."
+        },
+        "retry.minDelayMs": {
+          "label": "Discord Retry Min Delay (ms)",
+          "help": "Minimum retry delay in ms for Discord outbound calls."
+        },
+        "retry.maxDelayMs": {
+          "label": "Discord Retry Max Delay (ms)",
+          "help": "Maximum retry delay cap in ms for Discord outbound calls."
+        },
+        "retry.jitter": {
+          "label": "Discord Retry Jitter",
+          "help": "Jitter factor (0-1) applied to Discord retry delays."
+        },
+        "maxLinesPerMessage": {
+          "label": "Discord Max Lines Per Message",
+          "help": "Soft max line count per Discord message (default: 17)."
+        },
+        "thread.inheritParent": {
+          "label": "Discord Thread Parent Inheritance",
+          "help": "If true, Discord thread sessions inherit the parent channel transcript (default: false)."
+        },
+        "eventQueue.listenerTimeout": {
+          "label": "Discord EventQueue Listener Timeout (ms)",
+          "help": "Canonical Discord listener timeout control in ms for gateway normalization/enqueue handlers. Default is 120000 in OpenClaw; set per account via channels.discord.accounts.<id>.eventQueue.listenerTimeout."
+        },
+        "eventQueue.maxQueueSize": {
+          "label": "Discord EventQueue Max Queue Size",
+          "help": "Optional Discord EventQueue capacity override (max queued events before backpressure). Set per account via channels.discord.accounts.<id>.eventQueue.maxQueueSize."
+        },
+        "eventQueue.maxConcurrency": {
+          "label": "Discord EventQueue Max Concurrency",
+          "help": "Optional Discord EventQueue concurrency override (max concurrent handler executions). Set per account via channels.discord.accounts.<id>.eventQueue.maxConcurrency."
+        },
+        "threadBindings.enabled": {
+          "label": "Discord Thread Binding Enabled",
+          "help": "Enable Discord thread binding features (/focus, bound-thread routing/delivery, and thread-bound subagent sessions). Overrides session.threadBindings.enabled when set."
+        },
+        "threadBindings.idleHours": {
+          "label": "Discord Thread Binding Idle Timeout (hours)",
+          "help": "Inactivity window in hours for Discord thread-bound sessions (/focus and spawned thread sessions). Set 0 to disable idle auto-unfocus (default: 24). Overrides session.threadBindings.idleHours when set."
+        },
+        "threadBindings.maxAgeHours": {
+          "label": "Discord Thread Binding Max Age (hours)",
+          "help": "Optional hard max age in hours for Discord thread-bound sessions. Set 0 to disable hard cap (default: 0). Overrides session.threadBindings.maxAgeHours when set."
+        },
+        "threadBindings.spawnSessions": {
+          "label": "Discord Thread-Bound Session Spawn",
+          "help": "Allow sessions_spawn(thread=true) and ACP thread spawns to auto-create and bind Discord threads (default: true). Set false to disable for this account/channel."
+        },
+        "threadBindings.defaultSpawnContext": {
+          "label": "Discord Thread Spawn Context",
+          "help": "Default native subagent context for thread-bound spawns. \"fork\" starts from the requester transcript; \"isolated\" starts clean. Default: \"fork\"."
+        },
+        "ui.components.accentColor": {
+          "label": "Discord Component Accent Color",
+          "help": "Accent color for Discord component containers (hex). Set per account via channels.discord.accounts.<id>.ui.components.accentColor."
+        },
+        "intents.presence": {
+          "label": "Discord Presence Intent",
+          "help": "Enable the Guild Presences privileged intent. Must also be enabled in the Discord Developer Portal. Allows tracking user activities (e.g. Spotify). Default: false."
+        },
+        "intents.guildMembers": {
+          "label": "Discord Guild Members Intent",
+          "help": "Enable the Guild Members privileged intent. Must also be enabled in the Discord Developer Portal. Default: false."
+        },
+        "intents.voiceStates": {
+          "label": "Discord Voice States Intent",
+          "help": "Enable the Guild Voice States intent. Defaults to the effective Discord voice setting; set true only for Discord voice channel conversations."
+        },
+        "gatewayInfoTimeoutMs": {
+          "label": "Discord Gateway Metadata Timeout (ms)",
+          "help": "Timeout for Discord /gateway/bot metadata lookup before falling back to the default gateway URL. Default is 30000; OPENCLAW_DISCORD_GATEWAY_INFO_TIMEOUT_MS can override when config is unset."
+        },
+        "gatewayReadyTimeoutMs": {
+          "label": "Discord Gateway READY Timeout (ms)",
+          "help": "Startup wait for the Discord gateway READY event before restarting the socket. Default is 15000; OPENCLAW_DISCORD_READY_TIMEOUT_MS can override when config is unset."
+        },
+        "gatewayRuntimeReadyTimeoutMs": {
+          "label": "Discord Gateway Runtime READY Timeout (ms)",
+          "help": "Runtime reconnect wait for the Discord gateway READY event before force-stopping the lifecycle. Default is 30000; OPENCLAW_DISCORD_RUNTIME_READY_TIMEOUT_MS can override when config is unset."
+        },
+        "voice.enabled": {
+          "label": "Discord Voice Enabled",
+          "help": "Enable Discord voice channel conversations. Text-only Discord configs leave voice off by default; set true to enable /vc commands and the Guild Voice States intent."
+        },
+        "voice.model": {
+          "label": "Discord Voice Model",
+          "help": "Optional LLM model override for Discord voice channel responses (for example openai/gpt-5.4-mini). Leave unset to inherit the routed agent model."
+        },
+        "voice.autoJoin": {
+          "label": "Discord Voice Auto-Join",
+          "help": "Voice channels to auto-join on startup (list of guildId/channelId entries)."
+        },
+        "voice.daveEncryption": {
+          "label": "Discord Voice DAVE Encryption",
+          "help": "Toggle DAVE end-to-end encryption for Discord voice joins (default: true in @discordjs/voice; Discord may require this)."
+        },
+        "voice.decryptionFailureTolerance": {
+          "label": "Discord Voice Decrypt Failure Tolerance",
+          "help": "Consecutive decrypt failures before DAVE attempts session recovery (passed to @discordjs/voice; default: 24)."
+        },
+        "voice.connectTimeoutMs": {
+          "label": "Discord Voice Connect Timeout (ms)",
+          "help": "Initial @discordjs/voice Ready wait before a join is treated as failed. Default: 30000."
+        },
+        "voice.reconnectGraceMs": {
+          "label": "Discord Voice Reconnect Grace (ms)",
+          "help": "Grace period for a disconnected Discord voice session to enter Signalling or Connecting before OpenClaw destroys it. Default: 15000."
+        },
+        "voice.tts": {
+          "label": "Discord Voice Text-to-Speech",
+          "help": "Optional TTS overrides for Discord voice playback (merged with messages.tts)."
+        },
+        "pluralkit.enabled": {
+          "label": "Discord PluralKit Enabled",
+          "help": "Resolve PluralKit proxied messages and treat system members as distinct senders."
+        },
+        "pluralkit.token": {
+          "label": "Discord PluralKit Token",
+          "help": "Optional PluralKit token for resolving private systems or members."
+        },
+        "activity": {
+          "label": "Discord Presence Activity",
+          "help": "Discord presence activity text (defaults to custom status)."
+        },
+        "status": {
+          "label": "Discord Presence Status",
+          "help": "Discord presence status (online, dnd, idle, invisible)."
+        },
+        "autoPresence.enabled": {
+          "label": "Discord Auto Presence Enabled",
+          "help": "Enable automatic Discord bot presence updates based on runtime/model availability signals. When enabled: healthy=>online, degraded/unknown=>idle, exhausted/unavailable=>dnd."
+        },
+        "autoPresence.intervalMs": {
+          "label": "Discord Auto Presence Check Interval (ms)",
+          "help": "How often to evaluate Discord auto-presence state in milliseconds (default: 30000)."
+        },
+        "autoPresence.minUpdateIntervalMs": {
+          "label": "Discord Auto Presence Min Update Interval (ms)",
+          "help": "Minimum time between actual Discord presence update calls in milliseconds (default: 15000). Prevents status spam on noisy state changes."
+        },
+        "autoPresence.healthyText": {
+          "label": "Discord Auto Presence Healthy Text",
+          "help": "Optional custom status text while runtime is healthy (online). If omitted, falls back to static channels.discord.activity when set."
+        },
+        "autoPresence.degradedText": {
+          "label": "Discord Auto Presence Degraded Text",
+          "help": "Optional custom status text while runtime/model availability is degraded or unknown (idle)."
+        },
+        "autoPresence.exhaustedText": {
+          "label": "Discord Auto Presence Exhausted Text",
+          "help": "Optional custom status text while runtime detects exhausted/unavailable model quota (dnd). Supports {reason} template placeholder."
+        },
+        "activityType": {
+          "label": "Discord Presence Activity Type",
+          "help": "Discord presence activity type (0=Playing,1=Streaming,2=Listening,3=Watching,4=Custom,5=Competing)."
+        },
+        "activityUrl": {
+          "label": "Discord Presence Activity URL",
+          "help": "Discord presence streaming URL (required for activityType=1)."
+        },
+        "allowBots": {
+          "label": "Discord Allow Bot Messages",
+          "help": "Allow bot-authored messages to trigger Discord replies (default: false). Set \"mentions\" to only accept bot messages that mention the bot."
+        },
+        "mentionAliases": {
+          "label": "Discord Mention Aliases",
+          "help": "Map outbound @handle text to stable Discord user IDs before sending. Set per account via channels.discord.accounts.<id>.mentionAliases."
+        },
+        "token": {
+          "label": "Discord Bot Token",
+          "help": "Discord bot token used for gateway and REST API authentication for this provider account. Keep this secret out of committed config and rotate immediately after any leak.",
+          "sensitive": true
+        },
+        "applicationId": {
+          "label": "Discord Application ID",
+          "help": "Optional Discord application/client ID. Set this when hosted environments cannot reach Discord's application lookup endpoint during startup."
+        }
+      }
+    }
+  }
+}

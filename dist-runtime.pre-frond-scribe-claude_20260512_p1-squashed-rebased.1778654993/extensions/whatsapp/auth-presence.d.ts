@@ -1,0 +1,1 @@
+../../../dist/extensions/whatsapp/auth-presence.d.ts

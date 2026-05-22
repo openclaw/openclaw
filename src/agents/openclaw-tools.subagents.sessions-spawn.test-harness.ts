@@ -221,9 +221,6 @@ export async function getSessionsSpawnTool(opts: CreateOpenClawToolsOpts) {
     persistSubagentRunsToDisk: () => {
       hoisted.notifyEventWaiters();
     },
-    persistSubagentRunsToDiskOrThrow: () => {
-      hoisted.notifyEventWaiters();
-    },
     restoreSubagentRunsFromDisk: () => 0,
     resolveContextEngine: async () => ({
       info: { id: "test", name: "Test" },

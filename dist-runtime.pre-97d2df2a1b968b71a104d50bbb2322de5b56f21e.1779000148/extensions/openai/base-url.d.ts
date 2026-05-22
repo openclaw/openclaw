@@ -1,0 +1,1 @@
+../../../dist/extensions/openai/base-url.d.ts

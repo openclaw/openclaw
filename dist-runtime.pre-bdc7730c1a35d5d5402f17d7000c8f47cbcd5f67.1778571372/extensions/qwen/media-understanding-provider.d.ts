@@ -1,0 +1,1 @@
+../../../dist/extensions/qwen/media-understanding-provider.d.ts

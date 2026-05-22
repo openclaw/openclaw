@@ -1624,9 +1624,9 @@ export const registerTelegramHandlers = ({
     isForum: boolean;
     resolvedThreadId?: number;
     dmThreadId?: number;
-    dmPolicy: DmPolicy;
     storeAllowFrom: string[];
     senderId: string;
+    dmPolicy: DmPolicy;
     effectiveGroupAllow: NormalizedAllowFrom;
     effectiveDmAllow: NormalizedAllowFrom;
     groupConfig?: TelegramGroupConfig;
@@ -1644,9 +1644,9 @@ export const registerTelegramHandlers = ({
       isForum,
       resolvedThreadId,
       dmThreadId,
-      dmPolicy,
       storeAllowFrom,
       senderId,
+      dmPolicy,
       effectiveGroupAllow,
       effectiveDmAllow,
       groupConfig,
@@ -2860,9 +2860,9 @@ export const registerTelegramHandlers = ({
         isForum: event.isForum,
         resolvedThreadId,
         dmThreadId,
-        dmPolicy,
         storeAllowFrom,
         senderId: event.senderId,
+        dmPolicy,
         effectiveGroupAllow,
         effectiveDmAllow,
         groupConfig: event.isGroup ? (groupConfig as TelegramGroupConfig | undefined) : undefined,

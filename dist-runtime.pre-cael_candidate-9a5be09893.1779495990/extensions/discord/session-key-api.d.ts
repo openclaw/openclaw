@@ -1,0 +1,1 @@
+../../../dist/extensions/discord/session-key-api.d.ts

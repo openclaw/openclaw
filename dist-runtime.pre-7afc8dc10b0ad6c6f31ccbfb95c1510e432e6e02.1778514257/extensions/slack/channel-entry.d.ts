@@ -1,0 +1,1 @@
+../../../dist/extensions/slack/channel-entry.d.ts

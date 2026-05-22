@@ -1,0 +1,80 @@
+export { createAgentToAgentPolicy, createSessionVisibilityGuard, resolveEffectiveSessionToolsVisibility, resolveSandboxedSessionToolContext, } from "./sessions-access.js";
+export { resolveCurrentSessionClientAlias, resolveDisplaySessionKey, resolveInternalSessionKey, resolveMainSessionAlias, resolveSessionReference, resolveVisibleSessionReference, shouldResolveSessionIdInput, } from "./sessions-resolution.js";
+export { extractAssistantText, sanitizeTextContent, stripToolMessages, } from "./chat-history-text.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+export type SessionKind = "main" | "group" | "cron" | "hook" | "node" | "other";
+export type SessionListDeliveryContext = {
+    channel?: string;
+    to?: string;
+    accountId?: string;
+    threadId?: string | number;
+};
+export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";
+export type SessionListRow = {
+    key: string;
+    agentId?: string;
+    kind: SessionKind;
+    channel: string;
+    origin?: {
+        provider?: string;
+        accountId?: string;
+    };
+    spawnedBy?: string;
+    label?: string;
+    displayName?: string;
+    derivedTitle?: string;
+    lastMessagePreview?: string;
+    parentSessionKey?: string;
+    deliveryContext?: SessionListDeliveryContext;
+    updatedAt?: number | null;
+    sessionId?: string;
+    model?: string;
+    contextTokens?: number | null;
+    totalTokens?: number | null;
+    estimatedCostUsd?: number;
+    status?: SessionRunStatus;
+    startedAt?: number;
+    endedAt?: number;
+    runtimeMs?: number;
+    childSessions?: string[];
+    thinkingLevel?: string;
+    fastMode?: boolean;
+    verboseLevel?: string;
+    reasoningLevel?: string;
+    elevatedLevel?: string;
+    responseUsage?: string;
+    systemSent?: boolean;
+    abortedLastRun?: boolean;
+    sendPolicy?: string;
+    lastChannel?: string;
+    lastTo?: string;
+    lastAccountId?: string;
+    lastThreadId?: string | number;
+    transcriptPath?: string;
+    messages?: unknown[];
+};
+export declare function resolveSessionToolContext(opts?: {
+    agentSessionKey?: string;
+    sandboxed?: boolean;
+    config?: OpenClawConfig;
+}): {
+    mainKey: string;
+    alias: string;
+    visibility: "spawned" | "all";
+    requesterInternalKey: string | undefined;
+    effectiveRequesterKey: string;
+    restrictToSpawned: boolean;
+    cfg: OpenClawConfig;
+};
+export declare function classifySessionKind(params: {
+    key: string;
+    gatewayKind?: string | null;
+    alias: string;
+    mainKey: string;
+}): SessionKind;
+export declare function deriveChannel(params: {
+    key: string;
+    kind: SessionKind;
+    channel?: string | null;
+    lastChannel?: string | null;
+}): string;

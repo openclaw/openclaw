@@ -1,0 +1,1 @@
+../../../dist/extensions/zalo/secret-contract-api.d.ts

@@ -1,0 +1,1 @@
+../../../dist/extensions/memory-wiki/setup-api.d.ts

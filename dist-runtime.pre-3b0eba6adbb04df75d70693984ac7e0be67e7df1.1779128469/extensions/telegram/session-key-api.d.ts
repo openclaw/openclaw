@@ -1,0 +1,1 @@
+../../../dist/extensions/telegram/session-key-api.d.ts

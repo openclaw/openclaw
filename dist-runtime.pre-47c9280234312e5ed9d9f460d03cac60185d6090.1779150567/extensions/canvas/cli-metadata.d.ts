@@ -1,0 +1,1 @@
+../../../dist/extensions/canvas/cli-metadata.d.ts

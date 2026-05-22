@@ -43,7 +43,7 @@ export async function runDoctorLintCli(
   if (sevMin === null) {
     throw new Error("Invalid --severity-min value. Expected one of: info, warning, error.");
   }
-  const snapshot = await readConfigFileSnapshot({ observe: false });
+  const snapshot = await readConfigFileSnapshot();
   if (snapshot.exists && !snapshot.valid) {
     const findings = configValidationIssuesToHealthFindings(snapshot.issues);
     const visible = findings.filter((finding) => healthFindingMeetsSeverity(finding, sevMin));

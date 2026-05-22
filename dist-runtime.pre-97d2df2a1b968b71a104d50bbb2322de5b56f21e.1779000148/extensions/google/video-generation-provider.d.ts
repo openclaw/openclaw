@@ -1,0 +1,1 @@
+../../../dist/extensions/google/video-generation-provider.d.ts

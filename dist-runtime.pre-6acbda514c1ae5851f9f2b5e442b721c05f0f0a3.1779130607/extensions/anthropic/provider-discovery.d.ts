@@ -1,0 +1,1 @@
+../../../dist/extensions/anthropic/provider-discovery.d.ts

@@ -1,0 +1,1 @@
+../../../dist/extensions/webhooks/api.d.ts

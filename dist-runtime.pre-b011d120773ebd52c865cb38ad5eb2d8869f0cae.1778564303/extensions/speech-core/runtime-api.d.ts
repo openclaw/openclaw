@@ -1,0 +1,1 @@
+../../../dist/extensions/speech-core/runtime-api.d.ts

@@ -1,0 +1,1 @@
+../../../dist/extensions/moonshot/media-understanding-provider.d.ts

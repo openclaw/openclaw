@@ -163,7 +163,6 @@ beforeEach(() => {
     ensureRuntimePluginsLoaded: () => {},
     getSubagentRunsSnapshotForRead: (runs) => new Map(runs),
     persistSubagentRunsToDisk: () => {},
-    persistSubagentRunsToDiskOrThrow: () => {},
     restoreSubagentRunsFromDisk: () => 0,
     resolveContextEngine: async () => ({
       info: { id: "test", name: "Test" },

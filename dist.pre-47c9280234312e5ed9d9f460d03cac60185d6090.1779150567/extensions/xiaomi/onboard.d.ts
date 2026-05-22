@@ -1,0 +1,2 @@
+import { n as applyXiaomiConfig, r as applyXiaomiProviderConfig, t as XIAOMI_DEFAULT_MODEL_REF } from "../../onboard-D2-pWT9y.js";
+export { XIAOMI_DEFAULT_MODEL_REF, applyXiaomiConfig, applyXiaomiProviderConfig };

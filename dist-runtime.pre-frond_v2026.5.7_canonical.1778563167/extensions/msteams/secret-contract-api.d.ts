@@ -1,0 +1,1 @@
+../../../dist/extensions/msteams/secret-contract-api.d.ts

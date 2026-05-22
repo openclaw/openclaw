@@ -1,0 +1,6 @@
+import { o as createChannelPluginBase$1 } from "./core-6bgQ0GK5.js";
+
+//#region src/plugin-sdk/channel-core.d.ts
+declare const createChannelPluginBase: typeof createChannelPluginBase$1;
+//#endregion
+export { createChannelPluginBase as t };

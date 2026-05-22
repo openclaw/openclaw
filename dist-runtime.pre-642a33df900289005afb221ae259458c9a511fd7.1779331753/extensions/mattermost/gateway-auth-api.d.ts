@@ -1,0 +1,1 @@
+../../../dist/extensions/mattermost/gateway-auth-api.d.ts

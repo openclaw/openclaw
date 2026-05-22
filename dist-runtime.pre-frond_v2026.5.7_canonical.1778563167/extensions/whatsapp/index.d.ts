@@ -1,0 +1,1 @@
+../../../dist/extensions/whatsapp/index.d.ts

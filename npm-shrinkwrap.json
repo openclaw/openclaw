@@ -55,6 +55,7 @@
         "typebox": "1.1.38",
         "typescript": "6.0.3",
         "undici": "8.3.0",
+        "uuid": "14.0.0",
         "web-push": "3.6.7",
         "web-tree-sitter": "0.26.9",
         "ws": "8.20.1",
@@ -5082,6 +5083,19 @@
       "resolved": "https://registry.npmjs.org/util-deprecate/-/util-deprecate-1.0.2.tgz",
       "integrity": "sha512-EPD5q1uXyFxJpCrLnCc1nHnq3gOa6DZBocAIiI2TaSCA7VCJ1UJDMagCzIkXNsUYfD1daK//LTEQ8xiIbrHtcw==",
       "license": "MIT"
+    },
+    "node_modules/uuid": {
+      "version": "14.0.0",
+      "resolved": "https://registry.npmjs.org/uuid/-/uuid-14.0.0.tgz",
+      "integrity": "sha512-Qo+uWgilfSmAhXCMav1uYFynlQO7fMFiMVZsQqZRMIXp0O7rR7qjkj+cPvBHLgBqi960QCoo/PH2/6ZtVqKvrg==",
+      "funding": [
+        "https://github.com/sponsors/broofa",
+        "https://github.com/sponsors/ctavan"
+      ],
+      "license": "MIT",
+      "bin": {
+        "uuid": "dist-node/bin/uuid"
+      }
     },
     "node_modules/vary": {
       "version": "1.1.2",

@@ -1,0 +1,1 @@
+../../../dist/extensions/line/secret-contract-api.d.ts

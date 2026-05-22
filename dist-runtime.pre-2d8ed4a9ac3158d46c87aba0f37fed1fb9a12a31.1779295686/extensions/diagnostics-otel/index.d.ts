@@ -1,0 +1,1 @@
+../../../dist/extensions/diagnostics-otel/index.d.ts

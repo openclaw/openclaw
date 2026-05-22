@@ -1,0 +1,1 @@
+../../../dist/extensions/vercel-ai-gateway/models.d.ts

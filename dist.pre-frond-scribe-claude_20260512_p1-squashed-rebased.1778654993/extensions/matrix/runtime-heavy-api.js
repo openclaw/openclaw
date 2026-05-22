@@ -1,0 +1,3 @@
+import { a as detectLegacyMatrixCrypto, i as autoPrepareLegacyMatrixCrypto, n as hasPendingMatrixMigration, o as autoMigrateLegacyMatrixState, r as resolveMatrixMigrationStatus, s as detectLegacyMatrixState, t as hasActionableMatrixMigration } from "../../matrix-migration.runtime-CMuDkCL5.js";
+import { t as maybeCreateMatrixMigrationSnapshot } from "../../migration-snapshot-backup-CQ-uuTQB.js";
+export { autoMigrateLegacyMatrixState, autoPrepareLegacyMatrixCrypto, detectLegacyMatrixCrypto, detectLegacyMatrixState, hasActionableMatrixMigration, hasPendingMatrixMigration, maybeCreateMatrixMigrationSnapshot, resolveMatrixMigrationStatus };

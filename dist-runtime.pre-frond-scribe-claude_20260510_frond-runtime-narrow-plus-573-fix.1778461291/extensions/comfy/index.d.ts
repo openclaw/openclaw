@@ -1,0 +1,1 @@
+../../../dist/extensions/comfy/index.d.ts

@@ -1,0 +1,1 @@
+../../../dist/extensions/tlon/index.d.ts

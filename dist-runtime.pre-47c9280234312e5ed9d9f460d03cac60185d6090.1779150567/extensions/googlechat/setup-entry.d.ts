@@ -1,0 +1,1 @@
+../../../dist/extensions/googlechat/setup-entry.d.ts

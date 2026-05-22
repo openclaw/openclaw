@@ -131,6 +131,27 @@ vi.mock("../../config/sessions.js", async () => {
     resolveSessionFilePathOptions: (params: unknown) => params,
     resolveSessionFilePath: (sessionId: string, entry?: SessionEntry) =>
       entry?.sessionFile ?? path.join("/tmp", `${sessionId}.jsonl`),
+    resolveSessionStoreEntry: ({
+      store,
+      sessionKey,
+    }: {
+      store: Record<string, SessionEntry>;
+      sessionKey: string;
+    }) => {
+      const trimmedKey = sessionKey.trim();
+      const normalizedKey = trimmedKey.toLowerCase();
+      const legacyKeys = Object.keys(store).filter(
+        (key) => key !== normalizedKey && key.trim().toLowerCase() === normalizedKey,
+      );
+      let existing = store[normalizedKey] ?? store[trimmedKey];
+      for (const key of legacyKeys) {
+        const candidate = store[key];
+        if (!existing || (candidate?.updatedAt ?? 0) > (existing.updatedAt ?? 0)) {
+          existing = candidate;
+        }
+      }
+      return { normalizedKey, existing, legacyKeys };
+    },
   };
 });
 

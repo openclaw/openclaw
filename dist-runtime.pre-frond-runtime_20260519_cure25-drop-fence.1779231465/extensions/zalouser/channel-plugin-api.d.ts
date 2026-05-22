@@ -1,0 +1,1 @@
+../../../dist/extensions/zalouser/channel-plugin-api.d.ts

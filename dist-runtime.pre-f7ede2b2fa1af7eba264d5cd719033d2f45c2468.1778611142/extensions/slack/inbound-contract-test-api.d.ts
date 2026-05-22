@@ -1,0 +1,1 @@
+../../../dist/extensions/slack/inbound-contract-test-api.d.ts

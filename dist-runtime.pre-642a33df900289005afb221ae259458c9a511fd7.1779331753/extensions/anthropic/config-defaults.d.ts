@@ -1,0 +1,1 @@
+../../../dist/extensions/anthropic/config-defaults.d.ts

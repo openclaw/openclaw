@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { rmSync } from "node:fs";
+import { readdirSync, rmSync } from "node:fs";
 import { readdir, readFile, stat, unlink } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
@@ -235,5 +235,15 @@ export async function tryHandleHostedZaloMediaRequest(
 }
 
 export function clearHostedZaloMediaForTest(): void {
-  rmSync(ZALO_OUTBOUND_MEDIA_DIR, { recursive: true, force: true });
+  let fileNames: string[];
+  try {
+    fileNames = readdirSync(ZALO_OUTBOUND_MEDIA_DIR);
+  } catch {
+    return;
+  }
+  for (const fileName of fileNames) {
+    if (fileName === ".ready" || fileName.endsWith(".json") || fileName.endsWith(".bin")) {
+      rmSync(join(ZALO_OUTBOUND_MEDIA_DIR, fileName), { force: true });
+    }
+  }
 }

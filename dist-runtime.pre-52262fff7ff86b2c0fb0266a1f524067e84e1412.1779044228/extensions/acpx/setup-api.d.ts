@@ -1,0 +1,1 @@
+../../../dist/extensions/acpx/setup-api.d.ts

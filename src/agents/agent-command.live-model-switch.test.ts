@@ -242,9 +242,28 @@ vi.mock("../logging/subsystem.js", () => ({
 }));
 
 vi.mock("../routing/session-key.js", () => ({
+  classifySessionKeyShape: (key?: string | null) => {
+    const raw = (key ?? "").trim();
+    if (!raw) {
+      return "missing";
+    }
+    if (/^agent:[^:]+:.+$/.test(raw)) {
+      return "agent";
+    }
+    if (raw.toLowerCase().startsWith("agent:")) {
+      return "agent";
+    }
+    return "legacy_or_alias";
+  },
   isSubagentSessionKey: () => false,
+  isUnscopedSessionKeySentinel: () => false,
   normalizeAgentId: (id: string) => id,
   normalizeMainKey: (key?: string | null) => key?.trim() || "main",
+  resolveAgentIdFromSessionKey: (key?: string | null) => {
+    const match = (key ?? "").match(/^agent:([^:]+)/);
+    return match?.[1] ?? "main";
+  },
+  scopeLegacySessionKeyToAgent: ({ sessionKey }: { sessionKey?: string }) => sessionKey,
 }));
 
 vi.mock("../runtime.js", () => ({
@@ -302,10 +321,12 @@ vi.mock("./agent-scope.js", () => ({
 }));
 
 vi.mock("./auth-profiles.js", () => ({
+  clearRuntimeAuthProfileStoreSnapshots: vi.fn(),
   ensureAuthProfileStore: () => ({ profiles: {} }),
 }));
 
 vi.mock("./auth-profiles/store.js", () => ({
+  clearRuntimeAuthProfileStoreSnapshots: vi.fn(),
   ensureAuthProfileStore: () => state.authProfileStoreMock,
 }));
 

@@ -1,0 +1,1 @@
+../../../dist/extensions/exa/web-search-provider.d.ts

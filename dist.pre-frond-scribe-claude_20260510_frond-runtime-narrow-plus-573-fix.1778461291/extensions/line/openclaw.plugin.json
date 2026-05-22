@@ -1,0 +1,342 @@
+{
+  "id": "line",
+  "activation": {
+    "onStartup": false
+  },
+  "channels": [
+    "line"
+  ],
+  "channelEnvVars": {
+    "line": [
+      "LINE_CHANNEL_ACCESS_TOKEN",
+      "LINE_CHANNEL_SECRET"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "channelConfigs": {
+    "line": {
+      "schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "channelAccessToken": {
+            "type": "string"
+          },
+          "channelSecret": {
+            "type": "string"
+          },
+          "tokenFile": {
+            "type": "string"
+          },
+          "secretFile": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "allowFrom": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                }
+              ]
+            }
+          },
+          "groupAllowFrom": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                }
+              ]
+            }
+          },
+          "dmPolicy": {
+            "default": "pairing",
+            "type": "string",
+            "enum": [
+              "open",
+              "allowlist",
+              "pairing",
+              "disabled"
+            ]
+          },
+          "groupPolicy": {
+            "default": "allowlist",
+            "type": "string",
+            "enum": [
+              "open",
+              "allowlist",
+              "disabled"
+            ]
+          },
+          "responsePrefix": {
+            "type": "string"
+          },
+          "mediaMaxMb": {
+            "type": "number"
+          },
+          "webhookPath": {
+            "type": "string"
+          },
+          "threadBindings": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "idleHours": {
+                "type": "number"
+              },
+              "maxAgeHours": {
+                "type": "number"
+              },
+              "spawnSessions": {
+                "type": "boolean"
+              },
+              "defaultSpawnContext": {
+                "type": "string",
+                "enum": [
+                  "isolated",
+                  "fork"
+                ]
+              },
+              "spawnSubagentSessions": {
+                "type": "boolean"
+              },
+              "spawnAcpSessions": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          },
+          "accounts": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                },
+                "channelAccessToken": {
+                  "type": "string"
+                },
+                "channelSecret": {
+                  "type": "string"
+                },
+                "tokenFile": {
+                  "type": "string"
+                },
+                "secretFile": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "allowFrom": {
+                  "type": "array",
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ]
+                  }
+                },
+                "groupAllowFrom": {
+                  "type": "array",
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ]
+                  }
+                },
+                "dmPolicy": {
+                  "default": "pairing",
+                  "type": "string",
+                  "enum": [
+                    "open",
+                    "allowlist",
+                    "pairing",
+                    "disabled"
+                  ]
+                },
+                "groupPolicy": {
+                  "default": "allowlist",
+                  "type": "string",
+                  "enum": [
+                    "open",
+                    "allowlist",
+                    "disabled"
+                  ]
+                },
+                "responsePrefix": {
+                  "type": "string"
+                },
+                "mediaMaxMb": {
+                  "type": "number"
+                },
+                "webhookPath": {
+                  "type": "string"
+                },
+                "threadBindings": {
+                  "type": "object",
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "idleHours": {
+                      "type": "number"
+                    },
+                    "maxAgeHours": {
+                      "type": "number"
+                    },
+                    "spawnSessions": {
+                      "type": "boolean"
+                    },
+                    "defaultSpawnContext": {
+                      "type": "string",
+                      "enum": [
+                        "isolated",
+                        "fork"
+                      ]
+                    },
+                    "spawnSubagentSessions": {
+                      "type": "boolean"
+                    },
+                    "spawnAcpSessions": {
+                      "type": "boolean"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "groups": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {
+                    "type": "object",
+                    "properties": {
+                      "enabled": {
+                        "type": "boolean"
+                      },
+                      "allowFrom": {
+                        "type": "array",
+                        "items": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "number"
+                            }
+                          ]
+                        }
+                      },
+                      "requireMention": {
+                        "type": "boolean"
+                      },
+                      "systemPrompt": {
+                        "type": "string"
+                      },
+                      "skills": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "dmPolicy",
+                "groupPolicy"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "defaultAccount": {
+            "type": "string"
+          },
+          "groups": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                },
+                "allowFrom": {
+                  "type": "array",
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ]
+                  }
+                },
+                "requireMention": {
+                  "type": "boolean"
+                },
+                "systemPrompt": {
+                  "type": "string"
+                },
+                "skills": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "dmPolicy",
+          "groupPolicy"
+        ],
+        "additionalProperties": false
+      },
+      "label": "LINE",
+      "description": "LINE Messaging API webhook bot."
+    }
+  }
+}

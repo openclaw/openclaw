@@ -1,0 +1,1 @@
+../../../dist/extensions/openrouter/test-api.d.ts

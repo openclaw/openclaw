@@ -1,0 +1,1 @@
+../../../dist/extensions/google/model-id.d.ts

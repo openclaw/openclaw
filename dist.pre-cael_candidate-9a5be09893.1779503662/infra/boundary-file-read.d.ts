@@ -1,0 +1,2 @@
+import { a as RootFileOpenResult, c as openRootFile, i as RootFileOpenFailureReason, l as openRootFileSync, n as OpenRootFileSyncParams, o as canUseRootFileOpen, r as RootFileOpenFailure, s as matchRootFileOpenFailure, t as OpenRootFileParams } from "../root-file-DhFzjJm7.js";
+export { type OpenRootFileParams, type OpenRootFileSyncParams, type RootFileOpenFailure, type RootFileOpenFailureReason, type RootFileOpenResult, canUseRootFileOpen, matchRootFileOpenFailure, openRootFile, openRootFileSync };

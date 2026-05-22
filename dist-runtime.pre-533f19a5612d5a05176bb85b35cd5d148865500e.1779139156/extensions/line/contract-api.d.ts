@@ -1,0 +1,1 @@
+../../../dist/extensions/line/contract-api.d.ts

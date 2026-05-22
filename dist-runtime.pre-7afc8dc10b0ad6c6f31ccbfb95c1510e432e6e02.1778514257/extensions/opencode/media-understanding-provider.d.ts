@@ -1,0 +1,1 @@
+../../../dist/extensions/opencode/media-understanding-provider.d.ts

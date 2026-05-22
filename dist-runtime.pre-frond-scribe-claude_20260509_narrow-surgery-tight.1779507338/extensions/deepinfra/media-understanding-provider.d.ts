@@ -1,0 +1,1 @@
+../../../dist/extensions/deepinfra/media-understanding-provider.d.ts

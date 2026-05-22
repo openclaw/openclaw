@@ -1,0 +1,1 @@
+../../../dist/extensions/ollama/provider-discovery.d.ts

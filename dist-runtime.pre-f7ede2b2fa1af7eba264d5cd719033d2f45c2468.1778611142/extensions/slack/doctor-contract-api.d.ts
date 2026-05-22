@@ -1,0 +1,1 @@
+../../../dist/extensions/slack/doctor-contract-api.d.ts

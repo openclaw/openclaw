@@ -744,12 +744,25 @@ export async function acquireSessionWriteLock(params: {
   const sessionDir = path.dirname(sessionFile);
   const normalizedSessionFile = await resolveNormalizedSessionFile(sessionFile);
   const lockPath = `${normalizedSessionFile}.lock`;
+  const startedAtMs = Date.now();
+  const throwTimeout = async (): Promise<never> => {
+    const payload = await readLockPayload(lockPath);
+    const owner = typeof payload?.pid === "number" ? `pid=${payload.pid}` : "unknown";
+    throw new SessionWriteLockTimeoutError({ timeoutMs, owner, lockPath });
+  };
   await fs.mkdir(sessionDir, { recursive: true });
   while (true) {
+    const remainingTimeoutMs =
+      timeoutMs === Number.POSITIVE_INFINITY
+        ? Number.POSITIVE_INFINITY
+        : Math.max(0, timeoutMs - (Date.now() - startedAtMs));
+    if (remainingTimeoutMs <= 0) {
+      await throwTimeout();
+    }
     try {
       const lock = await SESSION_LOCKS.acquire(sessionFile, {
         staleMs,
-        timeoutMs,
+        timeoutMs: remainingTimeoutMs,
         retry: { minTimeout: 50, maxTimeout: 1000, factor: 1 },
         allowReentrant,
         metadata: { maxHoldMs },
@@ -787,6 +800,19 @@ export async function acquireSessionWriteLock(params: {
         ) {
           continue;
         }
+        // The lower-level lock manager can make a stale decision from a snapshot
+        // that races with this wrapper's process-aware recheck. If the recheck no
+        // longer agrees the lock is stale, keep waiting instead of breaking a live
+        // critical section.
+        const retryDelayMs =
+          timeoutMs === Number.POSITIVE_INFINITY
+            ? 50
+            : Math.min(50, Math.max(0, timeoutMs - (Date.now() - startedAtMs)));
+        if (retryDelayMs <= 0) {
+          await throwTimeout();
+        }
+        await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+        continue;
       }
       if (!isFileLockError(err, "file_lock_timeout")) {
         throw err;

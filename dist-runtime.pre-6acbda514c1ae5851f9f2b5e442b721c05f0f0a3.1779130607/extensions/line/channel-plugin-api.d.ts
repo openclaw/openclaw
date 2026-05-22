@@ -1,0 +1,1 @@
+../../../dist/extensions/line/channel-plugin-api.d.ts

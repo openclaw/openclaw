@@ -1,0 +1,1 @@
+../../../dist/extensions/feishu/channel-entry.d.ts

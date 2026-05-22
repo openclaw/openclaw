@@ -1,0 +1,1 @@
+../../../dist/extensions/together/video-generation-provider.d.ts

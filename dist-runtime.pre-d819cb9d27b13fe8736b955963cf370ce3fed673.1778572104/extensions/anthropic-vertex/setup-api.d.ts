@@ -1,0 +1,1 @@
+../../../dist/extensions/anthropic-vertex/setup-api.d.ts

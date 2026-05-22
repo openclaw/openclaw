@@ -1,0 +1,1 @@
+../../../dist/extensions/memory-wiki/cli-metadata.d.ts

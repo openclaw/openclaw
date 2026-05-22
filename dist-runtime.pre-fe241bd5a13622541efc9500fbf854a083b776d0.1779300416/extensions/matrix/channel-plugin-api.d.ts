@@ -1,0 +1,1 @@
+../../../dist/extensions/matrix/channel-plugin-api.d.ts

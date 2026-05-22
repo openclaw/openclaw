@@ -1,0 +1,1 @@
+../../../dist/extensions/openai/thinking-policy.d.ts

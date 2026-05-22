@@ -1,0 +1,1 @@
+../../../dist/extensions/telegram/secret-contract-api.d.ts

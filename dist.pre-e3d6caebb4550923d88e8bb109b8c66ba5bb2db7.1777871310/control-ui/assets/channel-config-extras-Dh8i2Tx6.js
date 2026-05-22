@@ -1,0 +1,2 @@
+import{t as l}from"./index-B38_p15v.js";function u(n,t){if(!n)return null;const r=(n.channels??{})[t];if(r&&typeof r=="object")return r;const o=n[t];return o&&typeof o=="object"?o:null}function f(n){if(n==null)return l("common.na");if(typeof n=="string"||typeof n=="number"||typeof n=="boolean")return String(n);try{return JSON.stringify(n)}catch{return l("common.na")}}function c(n){const t=u(n.configForm,n.channelId);return t?n.fields.flatMap(e=>e in t?[{label:e,value:f(t[e])}]:[]):[]}export{u as a,f,c as r};
+//# sourceMappingURL=channel-config-extras-Dh8i2Tx6.js.map

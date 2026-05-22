@@ -1,0 +1,1 @@
+../../../dist/extensions/openrouter/index.d.ts

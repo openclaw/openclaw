@@ -1,0 +1,1 @@
+../../../dist/extensions/memory-lancedb/lancedb-runtime.d.ts

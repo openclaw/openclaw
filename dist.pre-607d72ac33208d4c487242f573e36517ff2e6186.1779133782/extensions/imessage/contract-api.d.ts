@@ -1,0 +1,3 @@
+import { n as testing, t as createIMessageConversationBindingManager } from "../../conversation-bindings-C_lXQq7l.js";
+import { n as resolveIMessageAttachmentRoots, r as resolveIMessageRemoteAttachmentRoots, t as DEFAULT_IMESSAGE_ATTACHMENT_ROOTS } from "../../media-contract-api-CgdCuHAA.js";
+export { DEFAULT_IMESSAGE_ATTACHMENT_ROOTS, createIMessageConversationBindingManager, testing as imessageConversationBindingTesting, resolveIMessageAttachmentRoots, resolveIMessageAttachmentRoots as resolveInboundAttachmentRoots, resolveIMessageRemoteAttachmentRoots, resolveIMessageRemoteAttachmentRoots as resolveRemoteInboundAttachmentRoots };

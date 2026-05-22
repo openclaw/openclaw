@@ -1,0 +1,7 @@
+import { n as ChannelPlugin } from "../../types.public-Bp4rl8_W.js";
+import { t as BundledChannelEntryContract } from "../../channel-entry-contract-BLEZZD7K.js";
+
+//#region extensions/nextcloud-talk/index.d.ts
+declare const _default: BundledChannelEntryContract<ChannelPlugin>;
+//#endregion
+export { _default as default };

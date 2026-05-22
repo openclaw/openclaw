@@ -1,0 +1,1 @@
+../../../dist/extensions/device-pair/pair-command-approve.d.ts

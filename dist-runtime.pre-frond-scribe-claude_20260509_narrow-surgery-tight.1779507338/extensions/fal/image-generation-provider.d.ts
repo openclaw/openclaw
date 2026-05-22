@@ -1,0 +1,1 @@
+../../../dist/extensions/fal/image-generation-provider.d.ts

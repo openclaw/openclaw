@@ -1,0 +1,2 @@
+import { l as deriveCopilotApiBaseUrlFromToken, o as CachedCopilotToken, p as resolveCopilotApiToken, s as DEFAULT_COPILOT_API_BASE_URL } from "../../provider-auth-DC3IUpIH.js";
+export { CachedCopilotToken, DEFAULT_COPILOT_API_BASE_URL, deriveCopilotApiBaseUrlFromToken, resolveCopilotApiToken };

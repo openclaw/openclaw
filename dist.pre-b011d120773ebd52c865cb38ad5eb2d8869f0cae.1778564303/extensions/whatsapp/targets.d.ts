@@ -1,0 +1,2 @@
+import { n as isWhatsAppUserTarget, o as normalizeWhatsAppTarget, t as isWhatsAppGroupJid } from "../../normalize-target-D4tYJF7K.js";
+export { isWhatsAppGroupJid, isWhatsAppUserTarget, normalizeWhatsAppTarget };

@@ -1,0 +1,1 @@
+../../../dist/extensions/telegram/doctor-contract-api.d.ts

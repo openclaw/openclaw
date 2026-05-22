@@ -1,0 +1,1 @@
+../../../dist/extensions/deepinfra/memory-embedding-adapter.d.ts

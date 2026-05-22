@@ -1,0 +1,1 @@
+../../../dist/extensions/msteams/setup-entry.d.ts

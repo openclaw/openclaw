@@ -1,0 +1,17 @@
+type ResolveChunkMode = typeof import("openclaw/plugin-sdk/reply-runtime").resolveChunkMode;
+type FinalizeInboundContext = typeof import("openclaw/plugin-sdk/reply-runtime").finalizeInboundContext;
+type DispatchReplyWithDispatcher = typeof import("openclaw/plugin-sdk/reply-runtime").dispatchReplyWithDispatcher;
+type ResolveConversationLabel = typeof import("openclaw/plugin-sdk/conversation-runtime").resolveConversationLabel;
+type RecordInboundSessionMetaSafe = typeof import("openclaw/plugin-sdk/conversation-runtime").recordInboundSessionMetaSafe;
+type ResolveMarkdownTableMode = typeof import("openclaw/plugin-sdk/markdown-table-runtime").resolveMarkdownTableMode;
+type ResolveAgentRoute = typeof import("openclaw/plugin-sdk/routing").resolveAgentRoute;
+type DeliverSlackSlashReplies = typeof import("./replies.js").deliverSlackSlashReplies;
+export declare function resolveChunkMode(...args: Parameters<ResolveChunkMode>): ReturnType<ResolveChunkMode>;
+export declare function finalizeInboundContext(...args: Parameters<FinalizeInboundContext>): ReturnType<FinalizeInboundContext>;
+export declare function dispatchReplyWithDispatcher(...args: Parameters<DispatchReplyWithDispatcher>): ReturnType<DispatchReplyWithDispatcher>;
+export declare function resolveConversationLabel(...args: Parameters<ResolveConversationLabel>): ReturnType<ResolveConversationLabel>;
+export declare function recordInboundSessionMetaSafe(...args: Parameters<RecordInboundSessionMetaSafe>): ReturnType<RecordInboundSessionMetaSafe>;
+export declare function resolveMarkdownTableMode(...args: Parameters<ResolveMarkdownTableMode>): ReturnType<ResolveMarkdownTableMode>;
+export declare function resolveAgentRoute(...args: Parameters<ResolveAgentRoute>): ReturnType<ResolveAgentRoute>;
+export declare function deliverSlackSlashReplies(...args: Parameters<DeliverSlackSlashReplies>): ReturnType<DeliverSlackSlashReplies>;
+export {};

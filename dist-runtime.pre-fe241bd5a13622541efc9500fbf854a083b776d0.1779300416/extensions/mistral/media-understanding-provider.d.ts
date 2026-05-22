@@ -1,0 +1,1 @@
+../../../dist/extensions/mistral/media-understanding-provider.d.ts

@@ -1,0 +1,1 @@
+../../../dist/extensions/cloudflare-ai-gateway/onboard.d.ts

@@ -1,0 +1,1 @@
+../../../dist/extensions/fal/index.d.ts

@@ -1,0 +1,1 @@
+../../../dist/extensions/whatsapp/login-qr-api.d.ts

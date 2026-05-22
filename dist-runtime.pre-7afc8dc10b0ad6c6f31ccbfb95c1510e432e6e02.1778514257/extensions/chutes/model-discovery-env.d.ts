@@ -1,0 +1,1 @@
+../../../dist/extensions/chutes/model-discovery-env.d.ts

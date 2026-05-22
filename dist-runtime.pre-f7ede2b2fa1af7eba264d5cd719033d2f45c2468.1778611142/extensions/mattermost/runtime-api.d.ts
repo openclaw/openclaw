@@ -1,0 +1,1 @@
+../../../dist/extensions/mattermost/runtime-api.d.ts

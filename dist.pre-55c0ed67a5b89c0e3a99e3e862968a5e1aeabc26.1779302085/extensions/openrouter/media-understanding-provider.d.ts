@@ -1,0 +1,2 @@
+import { n as transcribeOpenRouterAudio, t as openrouterMediaUnderstandingProvider } from "../../media-understanding-provider-BwVMlenl.js";
+export { openrouterMediaUnderstandingProvider, transcribeOpenRouterAudio };

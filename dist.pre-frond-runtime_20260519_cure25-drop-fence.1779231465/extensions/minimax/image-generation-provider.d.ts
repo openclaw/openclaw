@@ -1,0 +1,2 @@
+import { n as buildMinimaxPortalImageGenerationProvider, t as buildMinimaxImageGenerationProvider } from "../../image-generation-provider-C0xuCep-.js";
+export { buildMinimaxImageGenerationProvider, buildMinimaxPortalImageGenerationProvider };

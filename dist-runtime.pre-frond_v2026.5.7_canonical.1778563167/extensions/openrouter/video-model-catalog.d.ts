@@ -1,0 +1,1 @@
+../../../dist/extensions/openrouter/video-model-catalog.d.ts

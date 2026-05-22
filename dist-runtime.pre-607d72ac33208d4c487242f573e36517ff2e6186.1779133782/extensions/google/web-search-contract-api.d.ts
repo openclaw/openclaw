@@ -1,0 +1,1 @@
+../../../dist/extensions/google/web-search-contract-api.d.ts

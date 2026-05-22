@@ -1,0 +1,1 @@
+../../../dist/extensions/zai/model-definitions.d.ts

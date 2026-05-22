@@ -1,0 +1,1 @@
+../../../dist/extensions/moonshot/onboard.d.ts

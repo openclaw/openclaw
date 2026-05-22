@@ -1,0 +1,1 @@
+../../../dist/extensions/mattermost/slash-route-api.d.ts

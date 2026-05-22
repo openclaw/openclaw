@@ -1,0 +1,1 @@
+../../../dist/extensions/browser/browser-config.d.ts

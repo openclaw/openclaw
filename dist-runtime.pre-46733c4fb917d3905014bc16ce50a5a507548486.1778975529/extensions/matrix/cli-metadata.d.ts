@@ -1,0 +1,1 @@
+../../../dist/extensions/matrix/cli-metadata.d.ts

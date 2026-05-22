@@ -1,0 +1,1 @@
+../../../dist/extensions/deepgram/test-api.d.ts

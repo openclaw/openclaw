@@ -1,0 +1,1 @@
+../../../dist/extensions/clickclack/api.d.ts

@@ -1,0 +1,1 @@
+../../../dist/extensions/amazon-bedrock-mantle/register.sync.runtime.d.ts

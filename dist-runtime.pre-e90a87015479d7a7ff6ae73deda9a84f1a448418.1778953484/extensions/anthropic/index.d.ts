@@ -1,0 +1,1 @@
+../../../dist/extensions/anthropic/index.d.ts

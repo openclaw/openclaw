@@ -1,0 +1,1 @@
+../../../dist/extensions/discord/channel-plugin-api.d.ts

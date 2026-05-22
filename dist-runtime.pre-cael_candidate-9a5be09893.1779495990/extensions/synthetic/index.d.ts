@@ -1,0 +1,1 @@
+../../../dist/extensions/synthetic/index.d.ts

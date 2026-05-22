@@ -1,0 +1,56 @@
+{
+  "name": "@openclaw/telegram",
+  "version": "2026.5.7",
+  "private": true,
+  "description": "OpenClaw Telegram channel plugin",
+  "type": "module",
+  "dependencies": {
+    "@grammyjs/runner": "^2.0.3",
+    "@grammyjs/transformer-throttler": "^1.2.1",
+    "grammy": "^1.42.0",
+    "typebox": "1.1.37",
+    "undici": "8.2.0"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.js"
+    ],
+    "setupEntry": "./setup-entry.js",
+    "setupFeatures": {
+      "configPromotion": true,
+      "legacyStateMigrations": true
+    },
+    "channel": {
+      "id": "telegram",
+      "label": "Telegram",
+      "selectionLabel": "Telegram (Bot API)",
+      "detailLabel": "Telegram Bot",
+      "docsPath": "/channels/telegram",
+      "docsLabel": "telegram",
+      "blurb": "simplest way to get started — register a bot with @BotFather and get going.",
+      "systemImage": "paperplane",
+      "selectionDocsPrefix": "",
+      "selectionDocsOmitLabel": true,
+      "selectionExtras": [
+        "https://openclaw.ai"
+      ],
+      "markdownCapable": true,
+      "commands": {
+        "nativeCommandsAutoEnabled": true,
+        "nativeSkillsAutoEnabled": true
+      },
+      "configuredState": {
+        "env": {
+          "allOf": [
+            "TELEGRAM_BOT_TOKEN"
+          ]
+        },
+        "specifier": "./configured-state",
+        "exportName": "hasTelegramConfiguredState"
+      }
+    }
+  }
+}

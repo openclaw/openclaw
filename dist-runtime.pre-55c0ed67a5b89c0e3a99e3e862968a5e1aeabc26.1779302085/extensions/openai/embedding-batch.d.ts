@@ -1,0 +1,1 @@
+../../../dist/extensions/openai/embedding-batch.d.ts

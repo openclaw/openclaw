@@ -1,0 +1,1 @@
+../../../dist/extensions/twitch/setup-entry.d.ts

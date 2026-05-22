@@ -1,0 +1,1 @@
+../../../dist/extensions/xai/api.d.ts

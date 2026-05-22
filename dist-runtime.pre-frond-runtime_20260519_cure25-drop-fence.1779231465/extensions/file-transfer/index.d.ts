@@ -1,0 +1,1 @@
+../../../dist/extensions/file-transfer/index.d.ts

@@ -1,0 +1,2 @@
+import { n as createAnthropicVertexStreamFn, r as createAnthropicVertexStreamFnForModel, t as AnthropicVertexStreamDeps } from "../../stream-runtime-Dco2WisI.js";
+export { AnthropicVertexStreamDeps, createAnthropicVertexStreamFn, createAnthropicVertexStreamFnForModel };

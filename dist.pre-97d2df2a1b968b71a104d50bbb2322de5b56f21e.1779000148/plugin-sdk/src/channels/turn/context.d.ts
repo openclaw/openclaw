@@ -1,0 +1,44 @@
+import { type CommandTurnContext } from "../../auto-reply/command-turn-context.js";
+import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
+import type { ContextVisibilityMode } from "../../config/types.base.js";
+import type { AccessFacts, CommandFacts, ConversationFacts, InboundMediaFacts, InboundTurnKind, MessageFacts, ReplyPlanFacts, RouteFacts, SenderFacts, SupplementalContextFacts } from "./types.js";
+export type BuildChannelTurnContextParams = {
+    channel: string;
+    accountId?: string;
+    provider?: string;
+    surface?: string;
+    messageId?: string;
+    messageIdFull?: string;
+    timestamp?: number;
+    from: string;
+    sender: SenderFacts;
+    conversation: ConversationFacts;
+    route: RouteFacts;
+    reply: ReplyPlanFacts;
+    message: MessageFacts;
+    access?: AccessFacts;
+    command?: CommandFacts;
+    commandTurn?: CommandTurnContext;
+    media?: InboundMediaFacts[];
+    supplemental?: SupplementalContextFacts;
+    contextVisibility?: ContextVisibilityMode;
+    extra?: Record<string, unknown>;
+};
+export type BuiltChannelTurnContext = FinalizedMsgContext & {
+    Body: string;
+    BodyForAgent: string;
+    BodyForCommands: string;
+    ChatType: ConversationFacts["kind"];
+    CommandAuthorized: boolean;
+    CommandBody: string;
+    From: string;
+    RawBody: string;
+    SessionKey: string;
+    To: string;
+    InboundTurnKind: InboundTurnKind;
+};
+export declare function filterChannelTurnSupplementalContext(params: {
+    supplemental?: SupplementalContextFacts;
+    contextVisibility?: ContextVisibilityMode;
+}): SupplementalContextFacts | undefined;
+export declare function buildChannelTurnContext(params: BuildChannelTurnContextParams): BuiltChannelTurnContext;

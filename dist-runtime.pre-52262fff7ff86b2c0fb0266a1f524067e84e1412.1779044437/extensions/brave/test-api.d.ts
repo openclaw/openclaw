@@ -1,0 +1,1 @@
+../../../dist/extensions/brave/test-api.d.ts

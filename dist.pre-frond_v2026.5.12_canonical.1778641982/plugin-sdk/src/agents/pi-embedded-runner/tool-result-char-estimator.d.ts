@@ -1,0 +1,10 @@
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
+export declare const CHARS_PER_TOKEN_ESTIMATE = 4;
+export declare const TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE = 2;
+export type MessageCharEstimateCache = WeakMap<AgentMessage, number>;
+export declare function isToolResultMessage(msg: AgentMessage): boolean;
+export declare function getToolResultText(msg: AgentMessage): string;
+export declare function createMessageCharEstimateCache(): MessageCharEstimateCache;
+export declare function estimateMessageCharsCached(msg: AgentMessage, cache: MessageCharEstimateCache): number;
+export declare function estimateContextChars(messages: AgentMessage[], cache: MessageCharEstimateCache): number;
+export declare function invalidateMessageCharsCacheEntry(cache: MessageCharEstimateCache, msg: AgentMessage): void;

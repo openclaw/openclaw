@@ -1,0 +1,1 @@
+../../../dist/extensions/deepseek/provider-catalog.d.ts

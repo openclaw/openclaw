@@ -1,0 +1,2 @@
+import { a as resolvePluginSetupRegistry, i as resolvePluginSetupProvider, n as resolvePluginSetupAutoEnableReasons, o as runPluginSetupConfigMigrations, r as resolvePluginSetupCliBackend, t as clearPluginSetupRegistryCache } from "./setup-registry-DSA33nXk.js";
+export { clearPluginSetupRegistryCache, resolvePluginSetupAutoEnableReasons, resolvePluginSetupCliBackend, resolvePluginSetupProvider, resolvePluginSetupRegistry, runPluginSetupConfigMigrations };

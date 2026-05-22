@@ -1,0 +1,1 @@
+../../../dist/extensions/device-pair/notify.d.ts

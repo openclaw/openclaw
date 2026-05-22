@@ -1,0 +1,1 @@
+../../../dist/extensions/firecrawl/index.d.ts

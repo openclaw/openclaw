@@ -1,0 +1,1 @@
+../../../dist/extensions/twitch/channel-plugin-api.d.ts

@@ -1,0 +1,1 @@
+../../../dist/extensions/feishu/subagent-hooks-api.d.ts

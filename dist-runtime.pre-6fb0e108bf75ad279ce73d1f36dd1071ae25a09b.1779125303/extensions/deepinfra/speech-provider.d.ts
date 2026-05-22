@@ -1,0 +1,1 @@
+../../../dist/extensions/deepinfra/speech-provider.d.ts

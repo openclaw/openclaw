@@ -1,0 +1,1 @@
+../../../dist/extensions/xai/model-definitions.d.ts

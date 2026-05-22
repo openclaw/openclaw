@@ -1,0 +1,1 @@
+../../../dist/extensions/google/embedding-batch.d.ts

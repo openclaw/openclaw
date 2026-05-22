@@ -1,0 +1,2 @@
+import { a as formatUninstallSlotResetPreview, c as resolveUninstallChannelConfigKeys, i as formatUninstallActionLabels, n as applyPluginUninstallDirectoryRemoval, o as planPluginUninstall, t as UNINSTALL_ACTION_LABELS } from "./uninstall-5cGG1G5V.js";
+export { UNINSTALL_ACTION_LABELS, applyPluginUninstallDirectoryRemoval, formatUninstallActionLabels, formatUninstallSlotResetPreview, planPluginUninstall, resolveUninstallChannelConfigKeys };

@@ -1,0 +1,1 @@
+../../../dist/extensions/chutes/onboard.d.ts

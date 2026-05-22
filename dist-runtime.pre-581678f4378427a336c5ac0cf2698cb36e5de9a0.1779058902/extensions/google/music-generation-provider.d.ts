@@ -1,0 +1,1 @@
+../../../dist/extensions/google/music-generation-provider.d.ts

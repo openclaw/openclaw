@@ -1,0 +1,1 @@
+../../../dist/extensions/brave/web-search-contract-api.d.ts

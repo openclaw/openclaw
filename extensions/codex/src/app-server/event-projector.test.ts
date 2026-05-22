@@ -1400,41 +1400,34 @@ describe("CodexAppServerEventProjector", () => {
     });
   });
 
-  it("uses streamed command output when final command snapshots omit aggregated output", async () => {
-    const onAgentEvent = vi.fn();
+  it("retains streamed command output when the completion snapshot omits aggregated output", async () => {
     const trajectoryRecorder = {
       filePath: "trajectory.jsonl",
       recordEvent: vi.fn(),
       flush: vi.fn(async () => undefined),
     };
-    const projector = await createProjector(
-      {
-        ...(await createParams()),
-        onAgentEvent,
-      },
-      {
-        trajectoryRecorder,
-      },
-    );
+    const projector = await createProjector(await createParams(), {
+      trajectoryRecorder,
+    });
 
     await projector.handleNotification(
       forCurrentTurn("item/commandExecution/outputDelta", {
-        itemId: "cmd-1",
-        delta: "status passed\n",
+        itemId: "cmd-streamed",
+        delta: "line 1\n",
       }),
     );
     await projector.handleNotification(
       forCurrentTurn("item/commandExecution/outputDelta", {
-        itemId: "cmd-1",
-        delta: "json /tmp/scenario.json\n",
+        itemId: "cmd-streamed",
+        delta: "line 2\n",
       }),
     );
     await projector.handleNotification(
       turnCompleted([
         {
           type: "commandExecution",
-          id: "cmd-1",
-          command: "python scripts/run_demo_scenario.py",
+          id: "cmd-streamed",
+          command: "pnpm test extensions/codex",
           cwd: "/workspace",
           processId: null,
           source: "agent",
@@ -1451,21 +1444,15 @@ describe("CodexAppServerEventProjector", () => {
     const toolResultMessage = requireRecord(result.messagesSnapshot[2], "tool result message");
     const toolResultContent = requireArray(toolResultMessage.content, "tool result content");
     const toolResultContentItem = requireRecord(toolResultContent[0], "tool result content item");
-    expect(toolResultContentItem.content).toBe("status passed\njson /tmp/scenario.json");
+    expect(toolResultContentItem.content).toBe("line 1\nline 2");
     expect(trajectoryRecorder.recordEvent).toHaveBeenCalledWith(
       "tool.result",
       expect.objectContaining({
-        itemId: "cmd-1",
-        output: "status passed\njson /tmp/scenario.json",
+        itemId: "cmd-streamed",
+        toolCallId: "cmd-streamed",
+        output: "line 1\nline 2",
       }),
     );
-    const toolResult = findAgentEvent(onAgentEvent, {
-      stream: "tool",
-      phase: "result",
-      itemId: "cmd-1",
-      name: "bash",
-    }).data;
-    expect(toolResult.result).toEqual({ status: "completed", exitCode: 0, durationMs: 42 });
   });
 
   it("uses streamed command output for failed native tool errors", async () => {

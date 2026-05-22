@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/cloudflare-ai-gateway-provider",
+  "version": "2026.5.7",
+  "private": true,
+  "description": "OpenClaw Cloudflare AI Gateway provider plugin",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.js"
+    ]
+  }
+}

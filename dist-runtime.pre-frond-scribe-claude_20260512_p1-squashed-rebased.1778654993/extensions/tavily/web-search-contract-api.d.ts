@@ -1,0 +1,1 @@
+../../../dist/extensions/tavily/web-search-contract-api.d.ts

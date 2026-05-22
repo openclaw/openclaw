@@ -1,0 +1,4 @@
+import { a as buildSyntheticModelDefinition, i as SYNTHETIC_MODEL_CATALOG, n as SYNTHETIC_DEFAULT_MODEL_ID, r as SYNTHETIC_DEFAULT_MODEL_REF, t as SYNTHETIC_BASE_URL } from "../../models-G2GJcVFi.js";
+import { n as applySyntheticProviderConfig, t as applySyntheticConfig } from "../../onboard-CTeVFgJj.js";
+import { t as buildSyntheticProvider } from "../../provider-catalog-bmH-3x1O.js";
+export { SYNTHETIC_BASE_URL, SYNTHETIC_DEFAULT_MODEL_ID, SYNTHETIC_DEFAULT_MODEL_REF, SYNTHETIC_MODEL_CATALOG, applySyntheticConfig, applySyntheticProviderConfig, buildSyntheticModelDefinition, buildSyntheticProvider };

@@ -1,0 +1,1 @@
+../../../dist/extensions/elevenlabs/doctor-contract.d.ts

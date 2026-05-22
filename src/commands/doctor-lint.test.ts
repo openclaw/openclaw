@@ -42,7 +42,7 @@ describe("runDoctorLintCli", () => {
       });
 
       expect(exitCode).toBe(0);
-      expect(mocks.readConfigFileSnapshot).toHaveBeenCalledWith({ observe: false });
+      expect(mocks.readConfigFileSnapshot).toHaveBeenCalledWith();
       expect(String(stdout.mock.calls.at(-1)?.[0])).toContain('"findings":[]');
     } finally {
       stdout.mockRestore();

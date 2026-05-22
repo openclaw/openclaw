@@ -6,6 +6,7 @@ import type { EmbeddedPiQueueMessageOutcome } from "./pi-embedded-runner/runs.js
 
 type DeliveryRuntimeMockOptions = {
   callGateway: (request: unknown) => Promise<unknown>;
+  dispatchGatewayMethodInProcess?: (...args: unknown[]) => unknown;
   getRuntimeConfig: () => OpenClawConfig;
   loadSessionStore: (storePath: string) => unknown;
   resolveAgentIdFromSessionKey: (sessionKey: string) => string;

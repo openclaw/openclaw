@@ -1,0 +1,1 @@
+../../../dist/extensions/signal/channel-config-api.d.ts

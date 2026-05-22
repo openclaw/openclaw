@@ -1,0 +1,1 @@
+../../../dist/extensions/mistral/onboard.d.ts

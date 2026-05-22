@@ -1,0 +1,1 @@
+../../../dist/extensions/discord/doctor-contract-api.d.ts

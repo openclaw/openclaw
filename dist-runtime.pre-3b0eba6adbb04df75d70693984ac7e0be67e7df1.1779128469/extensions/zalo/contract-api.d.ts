@@ -1,0 +1,1 @@
+../../../dist/extensions/zalo/contract-api.d.ts

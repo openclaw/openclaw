@@ -1,0 +1,1 @@
+../../../dist/extensions/googlechat/channel-config-api.d.ts

@@ -1,0 +1,2 @@
+import { n as createAnthropicVertexStreamFn, r as createAnthropicVertexStreamFnForModel, t as AnthropicVertexStreamDeps } from "../../stream-runtime-Mq2tk5YE.js";
+export { AnthropicVertexStreamDeps, createAnthropicVertexStreamFn, createAnthropicVertexStreamFnForModel };

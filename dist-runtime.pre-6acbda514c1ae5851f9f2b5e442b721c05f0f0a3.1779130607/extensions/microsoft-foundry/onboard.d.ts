@@ -1,0 +1,1 @@
+../../../dist/extensions/microsoft-foundry/onboard.d.ts

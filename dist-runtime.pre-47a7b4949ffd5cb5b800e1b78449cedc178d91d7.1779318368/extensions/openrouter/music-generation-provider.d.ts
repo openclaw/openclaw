@@ -1,0 +1,1 @@
+../../../dist/extensions/openrouter/music-generation-provider.d.ts

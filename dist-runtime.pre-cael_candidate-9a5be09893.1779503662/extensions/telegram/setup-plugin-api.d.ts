@@ -1,0 +1,1 @@
+../../../dist/extensions/telegram/setup-plugin-api.d.ts

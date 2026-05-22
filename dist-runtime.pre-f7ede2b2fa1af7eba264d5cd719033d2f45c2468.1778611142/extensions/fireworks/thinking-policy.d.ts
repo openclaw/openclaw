@@ -1,0 +1,1 @@
+../../../dist/extensions/fireworks/thinking-policy.d.ts

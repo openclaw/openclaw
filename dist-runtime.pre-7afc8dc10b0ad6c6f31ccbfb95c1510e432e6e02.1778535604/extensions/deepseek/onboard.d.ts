@@ -1,0 +1,1 @@
+../../../dist/extensions/deepseek/onboard.d.ts

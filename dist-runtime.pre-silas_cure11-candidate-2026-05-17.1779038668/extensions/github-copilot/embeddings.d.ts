@@ -1,0 +1,1 @@
+../../../dist/extensions/github-copilot/embeddings.d.ts

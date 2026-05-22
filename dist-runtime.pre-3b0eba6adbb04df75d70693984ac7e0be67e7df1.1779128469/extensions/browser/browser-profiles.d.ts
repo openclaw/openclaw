@@ -1,0 +1,1 @@
+../../../dist/extensions/browser/browser-profiles.d.ts

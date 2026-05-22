@@ -1,0 +1,1 @@
+../../../dist/extensions/amazon-bedrock/discovery-shared.d.ts

@@ -1,0 +1,1 @@
+../../../dist/extensions/discord/runtime-api.actions.d.ts

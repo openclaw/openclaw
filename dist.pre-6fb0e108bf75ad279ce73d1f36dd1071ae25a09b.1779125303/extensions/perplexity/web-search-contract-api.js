@@ -1,0 +1,11 @@
+import { o as resolvePerplexityWebSearchRuntimeMetadata, r as createPerplexityWebSearchProviderBase } from "../../perplexity-web-search-provider.shared-C1xc4s_Q.js";
+//#region extensions/perplexity/web-search-contract-api.ts
+function createPerplexityWebSearchProvider() {
+	return {
+		...createPerplexityWebSearchProviderBase(),
+		resolveRuntimeMetadata: resolvePerplexityWebSearchRuntimeMetadata,
+		createTool: () => null
+	};
+}
+//#endregion
+export { createPerplexityWebSearchProvider };

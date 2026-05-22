@@ -1,0 +1,37 @@
+import type { MigrationItem, MigrationPlan } from "../../plugins/types.js";
+export declare const MIGRATION_SKILL_NOT_SELECTED_REASON = "not selected for migration";
+export declare const MIGRATION_PLUGIN_NOT_SELECTED_REASON = "not selected for migration";
+export declare const MIGRATION_SELECTION_ACCEPT = "__openclaw_migrate_accept_recommended__";
+export declare const MIGRATION_SELECTION_TOGGLE_ALL_ON = "__openclaw_migrate_toggle_all_on__";
+export declare const MIGRATION_SELECTION_TOGGLE_ALL_OFF = "__openclaw_migrate_toggle_all_off__";
+export declare const MIGRATION_SKILL_SELECTION_ACCEPT = "__openclaw_migrate_accept_recommended__";
+export declare const MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON = "__openclaw_migrate_toggle_all_on__";
+export declare const MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF = "__openclaw_migrate_toggle_all_off__";
+type InteractiveMigrationSelection = {
+    action: "select";
+    selectedItemIds: Set<string>;
+};
+export type InteractiveMigrationSkillSelection = InteractiveMigrationSelection;
+export type InteractiveMigrationPluginSelection = InteractiveMigrationSelection;
+export declare function getSelectableMigrationSkillItems(plan: MigrationPlan): MigrationItem[];
+export declare function getSelectableMigrationPluginItems(plan: MigrationPlan): MigrationItem[];
+export declare function getMigrationSkillSelectionValue(item: MigrationItem): string;
+export declare function getMigrationPluginSelectionValue(item: MigrationItem): string;
+export declare function formatMigrationPluginSelectionLabel(item: MigrationItem): string;
+export declare function getDefaultMigrationSkillSelectionValues(items: readonly MigrationItem[]): string[];
+export declare function getDefaultMigrationPluginSelectionValues(items: readonly MigrationItem[]): string[];
+export declare function formatMigrationSkillSelectionLabel(item: MigrationItem): string;
+export declare function formatMigrationSkillSelectionHint(item: MigrationItem): string | undefined;
+export declare function formatMigrationPluginSelectionHint(item: MigrationItem): string | undefined;
+export declare function applyMigrationSelectedSkillItemIds(plan: MigrationPlan, selectedItemIds: ReadonlySet<string>): MigrationPlan;
+export declare function applyMigrationSkillSelection(plan: MigrationPlan, selectedSkillRefs: readonly string[] | undefined): MigrationPlan;
+export declare function applyMigrationPluginSelection(plan: MigrationPlan, selectedPluginRefs: readonly string[] | undefined): MigrationPlan;
+export declare function applyMigrationSelectedPluginItemIds(plan: MigrationPlan, selectedItemIds: ReadonlySet<string>): MigrationPlan;
+export declare function resolveInteractiveMigrationSkillSelection(items: readonly MigrationItem[], selectedValues: readonly string[]): InteractiveMigrationSkillSelection;
+export declare function resolveInteractiveMigrationPluginSelection(items: readonly MigrationItem[], selectedValues: readonly string[]): InteractiveMigrationPluginSelection;
+export declare function reconcileInteractiveMigrationSkillToggleValues(selectedValues: readonly string[], activatedValue: string | undefined, selectableValues: readonly string[]): string[];
+export declare function reconcileInteractiveMigrationEnterValues(selectedValues: readonly string[], activatedValue: string | undefined, selectableValues: readonly string[], opts?: {
+    preserveDeselectedActivatedValue?: boolean;
+}): string[];
+export declare function reconcileInteractiveMigrationShortcutValues(previousValues: readonly string[], selectedValues: readonly string[], selectableValues: readonly string[], key: "a" | "i"): string[];
+export {};

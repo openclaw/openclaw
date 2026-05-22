@@ -1,0 +1,1 @@
+../../../dist/extensions/openrouter/video-generation-provider.d.ts

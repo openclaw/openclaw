@@ -1,0 +1,1 @@
+../../../dist/extensions/nextcloud-talk/channel-plugin-api.d.ts

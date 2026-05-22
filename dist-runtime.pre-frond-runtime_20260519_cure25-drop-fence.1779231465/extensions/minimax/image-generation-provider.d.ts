@@ -1,0 +1,1 @@
+../../../dist/extensions/minimax/image-generation-provider.d.ts

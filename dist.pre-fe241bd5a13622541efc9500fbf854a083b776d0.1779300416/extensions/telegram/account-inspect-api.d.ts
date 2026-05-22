@@ -1,0 +1,6 @@
+import { i as OpenClawConfig } from "../../types.openclaw-Cy0U3Gwh.js";
+import { t as InspectedTelegramAccount } from "../../account-inspect-CSCRjM1D.js";
+//#region extensions/telegram/account-inspect-api.d.ts
+declare function inspectTelegramReadOnlyAccount(cfg: OpenClawConfig, accountId?: string | null): InspectedTelegramAccount;
+//#endregion
+export { inspectTelegramReadOnlyAccount };

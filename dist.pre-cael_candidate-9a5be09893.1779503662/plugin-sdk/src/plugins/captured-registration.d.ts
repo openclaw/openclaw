@@ -1,0 +1,56 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
+import type { EmbeddingProviderAdapter } from "./embedding-providers.js";
+import type { PluginAgentEventSubscriptionRegistration, PluginControlUiDescriptor, PluginRuntimeLifecycleRegistration, PluginSessionActionRegistration, PluginSessionSchedulerJobRegistration, PluginSessionExtensionRegistration, PluginToolMetadataRegistration, PluginTrustedToolPolicyRegistration } from "./host-hooks.js";
+import type { MemoryEmbeddingProviderAdapter } from "./memory-embedding-providers.js";
+import type { PluginAgentToolResultMiddlewareRegistration } from "./registry-types.js";
+import type { AnyAgentTool, AgentHarness, CliBackendPlugin, OpenClawPluginApi, ImageGenerationProviderPlugin, MediaUnderstandingProviderPlugin, MigrationProviderPlugin, MusicGenerationProviderPlugin, OpenClawPluginCliCommandDescriptor, OpenClawPluginCliRegistrar, PluginTextTransformRegistration, ProviderPlugin, RealtimeTranscriptionProviderPlugin, RealtimeVoiceProviderPlugin, SpeechProviderPlugin, UnifiedModelCatalogProviderPlugin, VideoGenerationProviderPlugin, WebFetchProviderPlugin, WebSearchProviderPlugin } from "./types.js";
+type CapturedPluginCliRegistration = {
+    register: OpenClawPluginCliRegistrar;
+    parentPath: string[];
+    commands: string[];
+    descriptors: OpenClawPluginCliCommandDescriptor[];
+};
+export type CapturedPluginRegistration = {
+    api: OpenClawPluginApi;
+    providers: ProviderPlugin[];
+    agentHarnesses: AgentHarness[];
+    cliRegistrars: CapturedPluginCliRegistration[];
+    cliBackends: CliBackendPlugin[];
+    textTransforms: PluginTextTransformRegistration[];
+    codexAppServerExtensionFactories: CodexAppServerExtensionFactory[];
+    agentToolResultMiddlewares: PluginAgentToolResultMiddlewareRegistration[];
+    embeddingProviders: EmbeddingProviderAdapter[];
+    speechProviders: SpeechProviderPlugin[];
+    realtimeTranscriptionProviders: RealtimeTranscriptionProviderPlugin[];
+    realtimeVoiceProviders: RealtimeVoiceProviderPlugin[];
+    mediaUnderstandingProviders: MediaUnderstandingProviderPlugin[];
+    imageGenerationProviders: ImageGenerationProviderPlugin[];
+    videoGenerationProviders: VideoGenerationProviderPlugin[];
+    musicGenerationProviders: MusicGenerationProviderPlugin[];
+    webFetchProviders: WebFetchProviderPlugin[];
+    webSearchProviders: WebSearchProviderPlugin[];
+    migrationProviders: MigrationProviderPlugin[];
+    memoryEmbeddingProviders: MemoryEmbeddingProviderAdapter[];
+    sessionExtensions: PluginSessionExtensionRegistration[];
+    trustedToolPolicies: PluginTrustedToolPolicyRegistration[];
+    toolMetadata: PluginToolMetadataRegistration[];
+    controlUiDescriptors: PluginControlUiDescriptor[];
+    runtimeLifecycles: PluginRuntimeLifecycleRegistration[];
+    agentEventSubscriptions: PluginAgentEventSubscriptionRegistration[];
+    sessionSchedulerJobs: PluginSessionSchedulerJobRegistration[];
+    sessionActions: PluginSessionActionRegistration[];
+    tools: AnyAgentTool[];
+    modelCatalogProviders: UnifiedModelCatalogProviderPlugin[];
+};
+export declare function createCapturedPluginRegistration(params?: {
+    config?: OpenClawConfig;
+    id?: string;
+    name?: string;
+    registrationMode?: OpenClawPluginApi["registrationMode"];
+    source?: string;
+}): CapturedPluginRegistration;
+export declare function capturePluginRegistration(params: NonNullable<Parameters<typeof createCapturedPluginRegistration>[0]> & {
+    register(api: OpenClawPluginApi): void;
+}): CapturedPluginRegistration;
+export {};

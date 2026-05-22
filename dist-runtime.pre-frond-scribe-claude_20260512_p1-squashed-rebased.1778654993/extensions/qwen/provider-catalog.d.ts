@@ -1,0 +1,1 @@
+../../../dist/extensions/qwen/provider-catalog.d.ts

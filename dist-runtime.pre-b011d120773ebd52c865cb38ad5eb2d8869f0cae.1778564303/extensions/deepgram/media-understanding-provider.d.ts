@@ -1,0 +1,1 @@
+../../../dist/extensions/deepgram/media-understanding-provider.d.ts

@@ -1,0 +1,1 @@
+../../../dist/extensions/xai/xai-oauth.d.ts

@@ -1,0 +1,1 @@
+../../../dist/extensions/twitch/api.d.ts

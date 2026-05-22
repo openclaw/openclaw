@@ -1,0 +1,18 @@
+import { type APIChannel, type APIMessage } from "discord-api-types/v10";
+import type { RequestQuery } from "./rest-scheduler.js";
+import type { RequestClient, RequestData } from "./rest.js";
+export declare function getChannel(rest: RequestClient, channelId: string): Promise<APIChannel>;
+export declare function editChannel(rest: RequestClient, channelId: string, data: RequestData): Promise<APIChannel>;
+export declare function deleteChannel(rest: RequestClient, channelId: string): Promise<void>;
+export declare function listChannelMessages(rest: RequestClient, channelId: string, query?: RequestQuery): Promise<APIMessage[]>;
+export declare function getChannelMessage(rest: RequestClient, channelId: string, messageId: string): Promise<APIMessage>;
+export declare function createChannelMessage<T extends object = APIMessage>(rest: RequestClient, channelId: string, data: RequestData): Promise<T>;
+export declare function editChannelMessage(rest: RequestClient, channelId: string, messageId: string, data: RequestData): Promise<APIMessage>;
+export declare function deleteChannelMessage(rest: RequestClient, channelId: string, messageId: string): Promise<void>;
+export declare function pinChannelMessage(rest: RequestClient, channelId: string, messageId: string): Promise<void>;
+export declare function unpinChannelMessage(rest: RequestClient, channelId: string, messageId: string): Promise<void>;
+export declare function listChannelPins(rest: RequestClient, channelId: string): Promise<APIMessage[]>;
+export declare function sendChannelTyping(rest: RequestClient, channelId: string): Promise<void>;
+export declare function createThread<T extends object = APIChannel>(rest: RequestClient, channelId: string, data: RequestData, messageId?: string): Promise<T>;
+export declare function listChannelArchivedThreads(rest: RequestClient, channelId: string, query?: RequestQuery): Promise<unknown>;
+export declare function searchGuildMessages(rest: RequestClient, guildId: string, params: URLSearchParams): Promise<unknown>;

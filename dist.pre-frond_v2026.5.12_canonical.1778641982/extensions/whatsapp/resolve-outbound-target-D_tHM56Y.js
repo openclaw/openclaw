@@ -1,0 +1,40 @@
+import { n as missingTargetError } from "../../target-errors-G587VVhz.js";
+import "../../channel-feedback-CJVY1O_2.js";
+import { c as normalizeWhatsAppTarget, n as isWhatsAppNewsletterJid, t as isWhatsAppGroupJid } from "./normalize-target-eT8uZ8S-.js";
+//#region extensions/whatsapp/src/resolve-outbound-target.ts
+function whatsappAllowFromPolicyError(target) {
+	return /* @__PURE__ */ new Error(`Target "${target}" is not listed in the configured WhatsApp allowFrom policy.`);
+}
+function resolveWhatsAppOutboundTarget(params) {
+	const trimmed = params.to?.trim() ?? "";
+	if (!trimmed) return {
+		ok: false,
+		error: missingTargetError("WhatsApp", "<E.164|group JID|newsletter JID>")
+	};
+	const normalizedTo = normalizeWhatsAppTarget(trimmed);
+	if (!normalizedTo) return {
+		ok: false,
+		error: missingTargetError("WhatsApp", "<E.164|group JID|newsletter JID>")
+	};
+	if (isWhatsAppGroupJid(normalizedTo) || isWhatsAppNewsletterJid(normalizedTo)) return {
+		ok: true,
+		to: normalizedTo
+	};
+	const allowListRaw = (params.allowFrom ?? []).map((entry) => String(entry).trim()).filter(Boolean);
+	const hasWildcard = allowListRaw.includes("*");
+	const allowList = allowListRaw.filter((entry) => entry !== "*").map((entry) => normalizeWhatsAppTarget(entry)).filter((entry) => Boolean(entry));
+	if (hasWildcard || allowList.length === 0) return {
+		ok: true,
+		to: normalizedTo
+	};
+	if (allowList.includes(normalizedTo)) return {
+		ok: true,
+		to: normalizedTo
+	};
+	return {
+		ok: false,
+		error: whatsappAllowFromPolicyError(normalizedTo)
+	};
+}
+//#endregion
+export { resolveWhatsAppOutboundTarget as t };

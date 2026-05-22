@@ -1,0 +1,21 @@
+import { type MediaKind } from "./constants.js";
+/** @internal */
+export declare const FILE_TYPE_SNIFF_MAX_BYTES: number;
+export declare function normalizeMimeType(mime?: string | null): string | undefined;
+/** @internal */
+export declare function sliceMimeSniffBuffer(buffer: Buffer): Buffer;
+export declare function getFileExtension(filePath?: string | null): string | undefined;
+export declare function mimeTypeFromFilePath(filePath?: string | null): string | undefined;
+export declare function isAudioFileName(fileName?: string | null): boolean;
+export declare function detectMime(opts: {
+    buffer?: Buffer;
+    headerMime?: string | null;
+    filePath?: string;
+}): Promise<string | undefined>;
+export declare function extensionForMime(mime?: string | null): string | undefined;
+export declare function isGifMedia(opts: {
+    contentType?: string | null;
+    fileName?: string | null;
+}): boolean;
+export declare function imageMimeFromFormat(format?: string | null): string | undefined;
+export declare function kindFromMime(mime?: string | null): MediaKind | undefined;

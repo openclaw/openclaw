@@ -1,0 +1,1 @@
+../../../dist/extensions/comfy/workflow-runtime.d.ts

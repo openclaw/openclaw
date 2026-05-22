@@ -1,0 +1,1 @@
+../../../dist/extensions/comfy/video-generation-provider.d.ts

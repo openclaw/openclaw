@@ -1,0 +1,1 @@
+../../../dist/extensions/qianfan/provider-catalog.d.ts

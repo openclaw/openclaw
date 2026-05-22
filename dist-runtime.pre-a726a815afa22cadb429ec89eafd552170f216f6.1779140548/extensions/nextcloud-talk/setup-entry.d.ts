@@ -1,0 +1,1 @@
+../../../dist/extensions/nextcloud-talk/setup-entry.d.ts

@@ -1,0 +1,1 @@
+../../../dist/extensions/kilocode/api.d.ts

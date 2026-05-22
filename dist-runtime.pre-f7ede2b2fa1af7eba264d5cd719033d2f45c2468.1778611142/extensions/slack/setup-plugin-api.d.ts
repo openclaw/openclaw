@@ -1,0 +1,1 @@
+../../../dist/extensions/slack/setup-plugin-api.d.ts

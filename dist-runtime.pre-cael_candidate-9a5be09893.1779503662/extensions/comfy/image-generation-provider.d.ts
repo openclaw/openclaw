@@ -1,0 +1,1 @@
+../../../dist/extensions/comfy/image-generation-provider.d.ts

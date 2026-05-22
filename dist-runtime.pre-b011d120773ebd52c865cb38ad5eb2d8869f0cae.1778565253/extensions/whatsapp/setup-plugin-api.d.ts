@@ -1,0 +1,1 @@
+../../../dist/extensions/whatsapp/setup-plugin-api.d.ts

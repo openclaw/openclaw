@@ -1,0 +1,1 @@
+../../../dist/extensions/synthetic/api.d.ts

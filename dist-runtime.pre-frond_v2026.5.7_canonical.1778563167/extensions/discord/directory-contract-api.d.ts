@@ -1,0 +1,1 @@
+../../../dist/extensions/discord/directory-contract-api.d.ts

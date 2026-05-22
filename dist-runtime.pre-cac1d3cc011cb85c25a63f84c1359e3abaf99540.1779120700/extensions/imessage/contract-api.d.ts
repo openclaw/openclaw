@@ -1,0 +1,1 @@
+../../../dist/extensions/imessage/contract-api.d.ts

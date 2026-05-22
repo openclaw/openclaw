@@ -1,0 +1,1 @@
+../../../dist/extensions/azure-speech/tts.d.ts

@@ -1,0 +1,1 @@
+../../../dist/extensions/amazon-bedrock/register.sync.runtime.d.ts

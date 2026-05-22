@@ -1,0 +1,1 @@
+../../../dist/extensions/deepgram/realtime-transcription-provider.d.ts

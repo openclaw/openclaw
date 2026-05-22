@@ -1,0 +1,1 @@
+../../../dist/extensions/openai/realtime-provider-shared.d.ts

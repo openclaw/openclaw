@@ -1,0 +1,14 @@
+import { Modal, type BaseMessageInteractiveComponent } from "../internal/discord.js";
+import type { AgentComponentContext } from "./agent-components-helpers.js";
+import { createAgentComponentButton, createAgentSelectMenu } from "./agent-components.system-controls.js";
+export { resolveDiscordComponentOriginatingTo } from "./agent-components.dispatch.js";
+export { AgentComponentButton, AgentSelectMenu, createAgentComponentButton, createAgentSelectMenu, } from "./agent-components.system-controls.js";
+export declare const createDiscordComponentButton: (ctx: AgentComponentContext) => import("../internal/components.message.ts").Button;
+export declare const createDiscordComponentStringSelect: (ctx: AgentComponentContext) => BaseMessageInteractiveComponent;
+export declare const createDiscordComponentUserSelect: (ctx: AgentComponentContext) => BaseMessageInteractiveComponent;
+export declare const createDiscordComponentRoleSelect: (ctx: AgentComponentContext) => BaseMessageInteractiveComponent;
+export declare const createDiscordComponentMentionableSelect: (ctx: AgentComponentContext) => BaseMessageInteractiveComponent;
+export declare const createDiscordComponentChannelSelect: (ctx: AgentComponentContext) => BaseMessageInteractiveComponent;
+export declare const createAgentComponentControls: (typeof createAgentComponentButton | typeof createAgentSelectMenu)[];
+export declare const createDiscordComponentControls: ((ctx: AgentComponentContext) => BaseMessageInteractiveComponent)[];
+export declare function createDiscordComponentModal(ctx: AgentComponentContext): Modal;

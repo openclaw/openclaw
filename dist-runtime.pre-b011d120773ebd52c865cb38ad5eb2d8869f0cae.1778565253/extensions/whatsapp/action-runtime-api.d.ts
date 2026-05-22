@@ -1,0 +1,1 @@
+../../../dist/extensions/whatsapp/action-runtime-api.d.ts

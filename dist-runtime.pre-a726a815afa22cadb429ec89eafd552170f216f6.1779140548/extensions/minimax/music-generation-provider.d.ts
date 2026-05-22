@@ -1,0 +1,1 @@
+../../../dist/extensions/minimax/music-generation-provider.d.ts

@@ -1,0 +1,1 @@
+../../../dist/extensions/clickclack/runtime-api.d.ts

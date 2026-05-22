@@ -1,0 +1,2 @@
+import { a as resolveWebFetchEnabled, i as resolveWebFetchDefinition, n as listConfiguredWebFetchProviders, o as resolveWebFetchProviderId, r as listWebFetchProviders, t as isWebFetchProviderConfigured } from "./runtime-Bv21jXFI.js";
+export { isWebFetchProviderConfigured, listConfiguredWebFetchProviders, listWebFetchProviders, resolveWebFetchDefinition, resolveWebFetchEnabled, resolveWebFetchProviderId };

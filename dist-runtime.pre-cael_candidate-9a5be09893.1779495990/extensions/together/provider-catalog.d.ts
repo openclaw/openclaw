@@ -1,0 +1,1 @@
+../../../dist/extensions/together/provider-catalog.d.ts

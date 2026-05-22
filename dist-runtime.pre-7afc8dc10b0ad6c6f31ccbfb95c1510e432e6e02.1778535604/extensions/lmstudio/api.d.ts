@@ -1,0 +1,1 @@
+../../../dist/extensions/lmstudio/api.d.ts

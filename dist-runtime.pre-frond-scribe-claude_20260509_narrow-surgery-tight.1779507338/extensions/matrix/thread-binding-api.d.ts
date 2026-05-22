@@ -1,0 +1,1 @@
+../../../dist/extensions/matrix/thread-binding-api.d.ts

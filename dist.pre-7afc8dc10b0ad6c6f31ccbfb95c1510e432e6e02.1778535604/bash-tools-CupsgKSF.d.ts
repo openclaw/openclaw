@@ -1,0 +1,1 @@
+import { AgentToolResult } from "@mariozechner/pi-agent-core";

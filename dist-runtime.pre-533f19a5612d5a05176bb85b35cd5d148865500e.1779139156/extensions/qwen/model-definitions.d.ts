@@ -1,0 +1,1 @@
+../../../dist/extensions/qwen/model-definitions.d.ts

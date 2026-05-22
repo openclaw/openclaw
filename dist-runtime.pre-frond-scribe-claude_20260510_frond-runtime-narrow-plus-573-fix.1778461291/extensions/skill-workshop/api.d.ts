@@ -1,0 +1,1 @@
+../../../dist/extensions/skill-workshop/api.d.ts

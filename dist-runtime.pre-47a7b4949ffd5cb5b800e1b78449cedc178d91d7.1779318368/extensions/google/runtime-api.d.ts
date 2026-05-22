@@ -1,0 +1,1 @@
+../../../dist/extensions/google/runtime-api.d.ts

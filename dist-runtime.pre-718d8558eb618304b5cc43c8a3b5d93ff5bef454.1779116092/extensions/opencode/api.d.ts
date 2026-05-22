@@ -1,0 +1,1 @@
+../../../dist/extensions/opencode/api.d.ts

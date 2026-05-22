@@ -1,0 +1,1 @@
+../../../dist/extensions/ollama/web-search-provider.d.ts

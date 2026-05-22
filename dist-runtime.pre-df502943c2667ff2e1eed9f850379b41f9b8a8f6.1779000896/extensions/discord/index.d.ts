@@ -1,0 +1,1 @@
+../../../dist/extensions/discord/index.d.ts

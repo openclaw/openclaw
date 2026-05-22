@@ -1,0 +1,1 @@
+../../../dist/extensions/minimax/provider-models.d.ts

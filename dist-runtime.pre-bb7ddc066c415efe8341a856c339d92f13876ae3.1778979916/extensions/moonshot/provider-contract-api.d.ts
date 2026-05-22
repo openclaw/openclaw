@@ -1,0 +1,1 @@
+../../../dist/extensions/moonshot/provider-contract-api.d.ts

@@ -1,0 +1,1 @@
+../../../dist/extensions/telegram/test-api.d.ts

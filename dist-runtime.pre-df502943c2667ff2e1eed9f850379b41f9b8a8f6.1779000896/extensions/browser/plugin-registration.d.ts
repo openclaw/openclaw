@@ -1,0 +1,1 @@
+../../../dist/extensions/browser/plugin-registration.d.ts

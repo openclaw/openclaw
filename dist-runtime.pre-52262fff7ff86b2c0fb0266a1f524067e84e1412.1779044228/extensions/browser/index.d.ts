@@ -1,0 +1,1 @@
+../../../dist/extensions/browser/index.d.ts

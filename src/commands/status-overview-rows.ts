@@ -92,6 +92,8 @@ export function buildStatusCommandOverviewRows(
     formatKTokens: (value: number) => string;
     updateValue?: string;
     updateRestartValue?: string | null;
+    /** Continuation telemetry value (RFC §6.3). */
+    continuationValue?: string;
   } & StatusMemoryStateResolvers,
 ) {
   const agentsValue = buildStatusAgentsValue({
@@ -167,6 +169,9 @@ export function buildStatusCommandOverviewRows(
       { Item: "Tasks", Value: tasksValue },
       { Item: "Heartbeat", Value: heartbeatValue },
       ...(lastHeartbeatValue ? [{ Item: "Last heartbeat", Value: lastHeartbeatValue }] : []),
+      ...(params.continuationValue
+        ? [{ Item: "Continuation", Value: params.continuationValue }]
+        : []),
       {
         Item: "Sessions",
         Value: buildStatusSessionsOverviewValue({

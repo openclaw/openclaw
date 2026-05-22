@@ -1,0 +1,1 @@
+../../../dist/extensions/imessage/api.d.ts

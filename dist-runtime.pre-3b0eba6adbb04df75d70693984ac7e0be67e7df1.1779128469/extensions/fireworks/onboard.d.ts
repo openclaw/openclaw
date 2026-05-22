@@ -1,0 +1,1 @@
+../../../dist/extensions/fireworks/onboard.d.ts

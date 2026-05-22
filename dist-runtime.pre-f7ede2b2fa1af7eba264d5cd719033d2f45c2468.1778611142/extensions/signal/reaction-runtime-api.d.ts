@@ -1,0 +1,1 @@
+../../../dist/extensions/signal/reaction-runtime-api.d.ts

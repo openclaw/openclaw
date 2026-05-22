@@ -1,0 +1,1 @@
+../../../dist/extensions/zai/media-understanding-provider.d.ts

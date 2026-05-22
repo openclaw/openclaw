@@ -1,0 +1,1 @@
+../../../dist/extensions/discord/timeouts.d.ts

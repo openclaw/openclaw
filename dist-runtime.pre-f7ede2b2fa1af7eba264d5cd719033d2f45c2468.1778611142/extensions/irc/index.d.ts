@@ -1,0 +1,1 @@
+../../../dist/extensions/irc/index.d.ts

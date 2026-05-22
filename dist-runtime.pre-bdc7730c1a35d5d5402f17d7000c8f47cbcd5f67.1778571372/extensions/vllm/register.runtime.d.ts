@@ -1,0 +1,1 @@
+../../../dist/extensions/vllm/register.runtime.d.ts

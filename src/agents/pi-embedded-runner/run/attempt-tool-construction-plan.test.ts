@@ -269,6 +269,20 @@ describe("resolveEmbeddedAttemptToolConstructionPlan", () => {
         },
       },
     );
+    for (const toolName of ["continue_work", "continue_delegate", "request_compaction"]) {
+      expectConstructionPlan(
+        resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: [toolName] }),
+        {
+          coding: {
+            includeBaseCodingTools: false,
+            includeShellTools: false,
+            includeChannelTools: false,
+            includeOpenClawTools: true,
+            includePluginTools: false,
+          },
+        },
+      );
+    }
   });
 
   it("keeps plugin-owned catalog tools on the plugin construction path", () => {

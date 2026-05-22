@@ -1,0 +1,1 @@
+../../../dist/extensions/telegram/directory-contract-api.d.ts

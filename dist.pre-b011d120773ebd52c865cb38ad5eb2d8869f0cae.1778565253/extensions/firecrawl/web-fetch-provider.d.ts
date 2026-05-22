@@ -1,0 +1,5 @@
+import { N as WebFetchProviderPlugin } from "../../types-core-0qSk-WYG.js";
+//#region extensions/firecrawl/src/firecrawl-fetch-provider.d.ts
+declare function createFirecrawlWebFetchProvider(): WebFetchProviderPlugin;
+//#endregion
+export { createFirecrawlWebFetchProvider };

@@ -1,0 +1,1 @@
+../../../dist/extensions/openai/tts.d.ts

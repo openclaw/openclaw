@@ -1,0 +1,1 @@
+../../../dist/extensions/senseaudio/index.d.ts

@@ -1,0 +1,1 @@
+../../../dist/extensions/telegram/runtime-api.d.ts

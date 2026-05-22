@@ -1,0 +1,1 @@
+../../../dist/extensions/anthropic/cli-catalog.d.ts

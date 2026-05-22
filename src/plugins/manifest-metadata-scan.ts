@@ -99,13 +99,93 @@ function listChildPluginDirs(
   return dirs;
 }
 
+// mtime+size-keyed cache for parsed JSON objects. Entries are invalidated whenever
+// the underlying file's mtime or size changes; otherwise the parsed object is reused
+// across calls.
+//
+// Rationale: `listOpenClawPluginManifestMetadata` and its peers are invoked many
+// times per second on busy gateways (per-tool-call, per-model-request, per snapshot
+// resolution from `provider-attribution`, `model-auth-markers`, and other
+// `getCurrentPluginMetadataSnapshot` consumers). Each call previously walked every
+// candidate plugin directory and re-read every `openclaw.plugin.json` from disk via
+// `fs.readFileSync` even when no manifest had changed. Empirical strace from a long-
+// running gateway (`elliott` seat, PID 1103840) recorded ~5,699 `O_RDONLY` opens of
+// `openclaw.plugin.json` files in a 60-second window (~95/s) on an idle gateway,
+// driving the high-cadence FSReqPromise allocation that compounds with retention
+// elsewhere to produce the observed RSS growth (see karmaterminal/openclaw#740).
+//
+// The cache keys on (mtimeNs, size) which detect both content changes and
+// touch-based replacements. Eviction is bounded by entry-count so that this scales
+// to repos with thousands of plugin manifests without unbounded memory.
+type ParsedJsonCacheEntry = {
+  mtimeNs: bigint;
+  size: bigint;
+  parsed: Record<string, unknown> | undefined;
+};
+
+const PARSED_JSON_CACHE_MAX_ENTRIES = 10_000;
+const parsedJsonCache = new Map<string, ParsedJsonCacheEntry>();
+
+function cacheParsedJson(
+  filePath: string,
+  mtimeNs: bigint,
+  size: bigint,
+  parsed: Record<string, unknown> | undefined,
+): void {
+  if (parsedJsonCache.size >= PARSED_JSON_CACHE_MAX_ENTRIES) {
+    // Map iteration preserves insertion order; drop the oldest entry to keep the
+    // cache bounded. This is an O(1) eviction without a separate LRU list.
+    const oldestKey = parsedJsonCache.keys().next().value;
+    if (oldestKey !== undefined) {
+      parsedJsonCache.delete(oldestKey);
+    }
+  }
+  parsedJsonCache.set(filePath, { mtimeNs, size, parsed });
+}
+
+/**
+ * Internal helper: clears the parsed-JSON cache. Exposed for tests; not part of
+ * the public module API.
+ */
+export function clearParsedJsonCacheForTesting(): void {
+  parsedJsonCache.clear();
+}
+
 function readJsonObject(filePath: string): Record<string, unknown> | undefined {
+  let stat: ReturnType<typeof fs.statSync> | undefined;
   try {
-    const parsed = parseJsonWithJson5Fallback(fs.readFileSync(filePath, "utf8"));
-    return isRecord(parsed) ? parsed : undefined;
+    stat = fs.statSync(filePath, { bigint: true });
   } catch {
+    // File does not exist or is unreadable. Cache the negative result keyed on
+    // "missing" sentinel so repeat lookups don't keep retrying the stat syscall
+    // in tight loops. Use unique sentinel values so we can still detect the file
+    // re-appearing via subsequent successful stats invalidating the entry.
+    const cached = parsedJsonCache.get(filePath);
+    if (cached && cached.mtimeNs === -1n && cached.size === -1n) {
+      return cached.parsed;
+    }
+    cacheParsedJson(filePath, -1n, -1n, undefined);
     return undefined;
   }
+  const mtimeNs = stat.mtimeNs;
+  const size = stat.size;
+  const cached = parsedJsonCache.get(filePath);
+  if (cached && cached.mtimeNs === mtimeNs && cached.size === size) {
+    // Hit: same mtime + same size means content unchanged since last parse.
+    // Refresh insertion-order position for LRU semantics.
+    parsedJsonCache.delete(filePath);
+    parsedJsonCache.set(filePath, cached);
+    return cached.parsed;
+  }
+  let parsed: Record<string, unknown> | undefined;
+  try {
+    const raw = parseJsonWithJson5Fallback(fs.readFileSync(filePath, "utf8"));
+    parsed = isRecord(raw) ? raw : undefined;
+  } catch {
+    parsed = undefined;
+  }
+  cacheParsedJson(filePath, mtimeNs, size, parsed);
+  return parsed;
 }
 
 function readManifestObject(pluginDir: string): Record<string, unknown> | undefined {

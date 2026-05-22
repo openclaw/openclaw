@@ -309,6 +309,31 @@ export function resolveRequesterForChildSessionFromRuns(
   };
 }
 
+export function listAncestorSessionKeysFromRuns(
+  runs: Map<string, SubagentRunRecord>,
+  sessionKey: string,
+): string[] {
+  const first = sessionKey.trim();
+  if (!first) {
+    return [];
+  }
+
+  const ancestors: string[] = [];
+  const visited = new Set<string>();
+  let current = first;
+  while (current && !visited.has(current)) {
+    ancestors.push(current);
+    visited.add(current);
+    const latest = findLatestRunForChildSession(runs, current);
+    const parent = latest?.requesterSessionKey.trim();
+    if (!parent || parent === current) {
+      break;
+    }
+    current = parent;
+  }
+  return ancestors;
+}
+
 export function shouldIgnorePostCompletionAnnounceForSessionFromRuns(
   runs: Map<string, SubagentRunRecord>,
   childSessionKey: string,

@@ -1,0 +1,1 @@
+../../../dist/extensions/slack/http-routes-api.d.ts

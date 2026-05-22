@@ -1,0 +1,1 @@
+../../../dist/extensions/voyage/memory-embedding-adapter.d.ts

@@ -1,0 +1,1 @@
+../../../dist/extensions/googlechat/secret-contract-api.d.ts

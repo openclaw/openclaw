@@ -1,0 +1,1 @@
+../../../dist/extensions/arcee/index.d.ts

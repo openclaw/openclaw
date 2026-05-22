@@ -1,0 +1,1 @@
+../../../dist/extensions/diagnostics-otel/api.d.ts

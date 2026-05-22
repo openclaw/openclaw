@@ -1,0 +1,1 @@
+../../../dist/extensions/perplexity/test-api.d.ts

@@ -1,0 +1,1 @@
+../../../dist/extensions/msteams/channel-plugin-api.d.ts

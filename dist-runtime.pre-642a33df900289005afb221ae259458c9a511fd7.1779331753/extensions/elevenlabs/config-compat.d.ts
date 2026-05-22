@@ -1,0 +1,1 @@
+../../../dist/extensions/elevenlabs/config-compat.d.ts

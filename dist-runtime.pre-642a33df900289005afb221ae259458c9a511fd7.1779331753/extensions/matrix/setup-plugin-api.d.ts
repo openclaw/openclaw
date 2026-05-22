@@ -1,0 +1,1 @@
+../../../dist/extensions/matrix/setup-plugin-api.d.ts

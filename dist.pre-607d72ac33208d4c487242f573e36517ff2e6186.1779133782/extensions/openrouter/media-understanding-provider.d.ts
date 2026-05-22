@@ -1,0 +1,2 @@
+import { n as transcribeOpenRouterAudio, t as openrouterMediaUnderstandingProvider } from "../../media-understanding-provider-DybhmFw8.js";
+export { openrouterMediaUnderstandingProvider, transcribeOpenRouterAudio };

@@ -1,0 +1,1 @@
+../../../dist/extensions/irc/contract-api.d.ts

@@ -1,0 +1,1 @@
+../../../dist/extensions/web-readability/index.d.ts

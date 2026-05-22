@@ -1,0 +1,1 @@
+../../../dist/extensions/discord/setup-entry.d.ts

@@ -1,0 +1,1 @@
+../../../dist/extensions/canvas/runtime-api.d.ts

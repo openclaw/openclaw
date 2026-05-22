@@ -1,0 +1,1 @@
+../../../dist/extensions/minimax/onboard.d.ts

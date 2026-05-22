@@ -1,0 +1,53 @@
+import { t as applyModelCompatPatch } from "../../provider-model-compat-BXBDPKKe.js";
+import { a as buildProviderReplayFamilyHooks } from "../../provider-model-shared-Crxhbshl.js";
+import { t as defineSingleProviderPluginEntry } from "../../provider-entry-Dd64q5CG.js";
+import { n as PROVIDER_LABELS } from "../../provider-usage.shared-B9LY2Kbq.js";
+import "../../provider-usage-DgyF_UMC.js";
+import { n as buildXiaomiProvider } from "../../provider-catalog-DFuEJpJY.js";
+import { n as applyXiaomiConfig, t as XIAOMI_DEFAULT_MODEL_REF } from "../../onboard-CfVIIXIG.js";
+import { t as buildXiaomiSpeechProvider } from "../../speech-provider-CwCWOGQg.js";
+import { r as resolveMiMoThinkingProfile } from "../../thinking-DaFsqdy3.js";
+import { t as createMiMoThinkingWrapper } from "../../stream-ByYwIemO.js";
+var xiaomi_default = defineSingleProviderPluginEntry({
+	id: "xiaomi",
+	name: "Xiaomi Provider",
+	description: "Bundled Xiaomi provider plugin",
+	provider: {
+		label: "Xiaomi",
+		docsPath: "/providers/xiaomi",
+		auth: [{
+			methodId: "api-key",
+			label: "Xiaomi API key",
+			hint: "API key",
+			optionKey: "xiaomiApiKey",
+			flagName: "--xiaomi-api-key",
+			envVar: "XIAOMI_API_KEY",
+			promptMessage: "Enter Xiaomi API key",
+			defaultModel: XIAOMI_DEFAULT_MODEL_REF,
+			applyConfig: (cfg) => applyXiaomiConfig(cfg)
+		}],
+		catalog: { buildProvider: buildXiaomiProvider },
+		...buildProviderReplayFamilyHooks({
+			family: "openai-compatible",
+			dropReasoningFromHistory: false
+		}),
+		normalizeResolvedModel: ({ model }) => applyModelCompatPatch(model, { omitEmptyArrayItems: true }),
+		wrapStreamFn: (ctx) => createMiMoThinkingWrapper(ctx.streamFn, ctx.thinkingLevel),
+		resolveThinkingProfile: ({ modelId }) => resolveMiMoThinkingProfile(modelId),
+		isModernModelRef: ({ modelId }) => Boolean(resolveMiMoThinkingProfile(modelId)),
+		resolveUsageAuth: async (ctx) => {
+			const apiKey = ctx.resolveApiKeyFromConfigAndStore({ envDirect: [ctx.env.XIAOMI_API_KEY] });
+			return apiKey ? { token: apiKey } : null;
+		},
+		fetchUsageSnapshot: async () => ({
+			provider: "xiaomi",
+			displayName: PROVIDER_LABELS.xiaomi,
+			windows: []
+		})
+	},
+	register(api) {
+		api.registerSpeechProvider(buildXiaomiSpeechProvider());
+	}
+});
+//#endregion
+export { xiaomi_default as default };

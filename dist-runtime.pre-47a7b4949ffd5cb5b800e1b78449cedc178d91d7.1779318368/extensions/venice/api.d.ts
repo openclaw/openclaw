@@ -1,0 +1,1 @@
+../../../dist/extensions/venice/api.d.ts

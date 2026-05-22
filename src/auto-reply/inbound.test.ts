@@ -458,6 +458,32 @@ describe("createInboundDebouncer", () => {
     vi.useRealTimers();
   });
 
+  it("cancels buffered items without flushing them", async () => {
+    vi.useFakeTimers();
+    const calls: Array<string[]> = [];
+
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 50,
+      buildKey: (item) => item.key,
+      onFlush: async (items) => {
+        calls.push(items.map((entry) => entry.id));
+      },
+    });
+
+    await debouncer.enqueue({ key: "a", id: "1" });
+    expect(debouncer.cancelKey("a")).toBe(true);
+    expect(debouncer.cancelKey("a")).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(50);
+    expect(calls).toEqual([]);
+
+    await debouncer.enqueue({ key: "a", id: "2" });
+    await vi.advanceTimersByTimeAsync(50);
+    expect(calls).toEqual([["2"]]);
+
+    vi.useRealTimers();
+  });
+
   it("keeps later same-key work behind a timer-backed flush that already started", async () => {
     const started: string[] = [];
     const finished: string[] = [];

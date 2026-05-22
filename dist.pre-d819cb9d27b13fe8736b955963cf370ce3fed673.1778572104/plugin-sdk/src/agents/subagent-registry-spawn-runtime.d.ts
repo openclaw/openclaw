@@ -1,0 +1,44 @@
+type RegisterSubagentRunParams = {
+    runId: string;
+    childSessionKey: string;
+    controllerSessionKey?: string;
+    requesterSessionKey: string;
+    requesterOrigin?: {
+        channel?: string;
+        accountId?: string;
+        to?: string;
+        threadId?: string | number;
+        groupId?: string | null;
+        groupChannel?: string | null;
+        groupSpace?: string | null;
+    };
+    requesterDisplayKey: string;
+    task: string;
+    taskName?: string;
+    cleanup: "delete" | "keep";
+    label?: string;
+    model?: string;
+    agentDir?: string;
+    workspaceDir?: string;
+    runTimeoutSeconds?: number;
+    expectsCompletionMessage?: boolean;
+    spawnMode?: "run" | "session";
+    silentAnnounce?: boolean;
+    wakeOnReturn?: boolean;
+    attachmentsDir?: string;
+    attachmentsRootDir?: string;
+    retainAttachmentsOnKeep?: boolean;
+    continuationTargetSessionKey?: string;
+    continuationTargetSessionKeys?: string[];
+    continuationFanoutMode?: "tree" | "all";
+    traceparent?: string;
+};
+type CountActiveRunsForSessionFn = (requesterSessionKey: string) => number;
+type RegisterSubagentRunFn = (params: RegisterSubagentRunParams) => void;
+export declare function configureSubagentRegistrySpawnRuntime(params: {
+    countActiveRunsForSession: CountActiveRunsForSessionFn;
+    registerSubagentRun: RegisterSubagentRunFn;
+}): void;
+export declare function countActiveRunsForSession(requesterSessionKey: string): number;
+export declare function registerSubagentRun(params: RegisterSubagentRunParams): void;
+export {};

@@ -1,0 +1,32 @@
+import { resolveDirectStatusReplyForSession } from "openclaw/plugin-sdk/command-status-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
+import type { ButtonInteraction, CommandInteraction, StringSelectMenuInteraction } from "../internal/discord.js";
+import type { DispatchDiscordCommandInteractionResult } from "./native-command-dispatch.js";
+import type { DiscordConfig } from "./native-command.types.js";
+type ResolveDirectStatusReplyForSession = typeof resolveDirectStatusReplyForSession;
+export declare function maybeDeliverDiscordDirectStatus(params: {
+    commandName: string;
+    suppressReplies?: boolean;
+    resolveDirectStatusReplyForSession: ResolveDirectStatusReplyForSession;
+    cfg: OpenClawConfig;
+    discordConfig: DiscordConfig;
+    accountId: string;
+    sessionKey: string;
+    commandTargetSessionKey?: string | null;
+    channel: "discord";
+    senderId: string;
+    senderIsOwner: boolean;
+    isAuthorizedSender: boolean;
+    isGroup: boolean;
+    defaultGroupActivation: () => "always" | "mention";
+    interaction: CommandInteraction | ButtonInteraction | StringSelectMenuInteraction;
+    mediaLocalRoots: readonly string[];
+    preferFollowUp: boolean;
+    responseEphemeral?: boolean;
+    effectiveRoute: ResolvedAgentRoute;
+    respond: (content: string, options?: {
+        ephemeral?: boolean;
+    }) => Promise<void>;
+}): Promise<DispatchDiscordCommandInteractionResult | null>;
+export {};

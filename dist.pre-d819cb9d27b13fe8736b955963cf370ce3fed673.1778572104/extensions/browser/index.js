@@ -1,0 +1,14 @@
+import { t as definePluginEntry } from "../../plugin-entry-DeObqXcQ.js";
+import { i as registerBrowserPlugin, n as browserPluginReload, r as browserSecurityAuditCollectors, t as browserPluginNodeHostCommands } from "../../plugin-registration-OSc0d-vq.js";
+//#region extensions/browser/index.ts
+var browser_default = definePluginEntry({
+	id: "browser",
+	name: "Browser",
+	description: "Default browser tool plugin",
+	reload: browserPluginReload,
+	nodeHostCommands: browserPluginNodeHostCommands,
+	securityAuditCollectors: [...browserSecurityAuditCollectors],
+	register: registerBrowserPlugin
+});
+//#endregion
+export { browser_default as default };

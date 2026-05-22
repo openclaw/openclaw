@@ -1,0 +1,1 @@
+../../../dist/extensions/zalouser/contract-api.d.ts

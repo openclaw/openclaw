@@ -1,0 +1,1 @@
+../../../dist/extensions/amazon-bedrock-mantle/api.d.ts

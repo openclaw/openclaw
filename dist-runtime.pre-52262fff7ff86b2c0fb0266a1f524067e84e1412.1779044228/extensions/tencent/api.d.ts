@@ -1,0 +1,1 @@
+../../../dist/extensions/tencent/api.d.ts

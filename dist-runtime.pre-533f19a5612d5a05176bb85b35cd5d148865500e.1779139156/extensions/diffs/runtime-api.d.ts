@@ -1,0 +1,1 @@
+../../../dist/extensions/diffs/runtime-api.d.ts

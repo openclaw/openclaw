@@ -1,0 +1,1 @@
+../../../dist/extensions/groq/test-api.d.ts

@@ -27,6 +27,7 @@ import {
   normalizeSpawnedRunMetadata,
   resolveIngressWorkspaceOverrideForSpawnedRun,
 } from "../../agents/spawned-context.js";
+import { consumeSubagentTraceparentHandoff } from "../../agents/subagent-traceparent-handoff.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import {
   resolveBareResetBootstrapFileAccess,
@@ -776,7 +777,11 @@ export const agentHandlers: GatewayRequestHandlers = {
       inputProvenance?: InputProvenance;
       workspaceDir?: string;
       voiceWakeTrigger?: string;
+      continuationTrigger?: "work-wake" | "delegate-return";
+      drainsContinuationDelegateQueue?: boolean;
+      traceparent?: string;
     };
+    const senderIsOwner = clientHasAdminScope(client);
     const allowModelOverride = resolveAllowModelOverrideFromClient(client);
     const canResetSession = resolveCanResetSessionFromClient(client);
     const canUseInternalRuntimeHandoff = resolveCanUseInternalRuntimeHandoff(client);
@@ -1128,6 +1133,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       }
       let resolvedSessionId = requestedSessionId;
       let sessionEntry: SessionEntry | undefined;
+      let sessionContinuationTraceparent: string | undefined;
       let bestEffortDeliver = requestedBestEffortDeliver ?? false;
       let cfgForAgent: OpenClawConfig | undefined;
       let resolvedSessionKey = requestedSessionKey;
@@ -1223,6 +1229,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       if (requestedSessionKey) {
         const { cfg, storePath, entry, canonicalKey } = loadSessionEntry(requestedSessionKey);
         cfgForAgent = cfg;
+        sessionContinuationTraceparent = entry?.continuationTraceparent;
         const now = Date.now();
         const resetPolicy = resolveSessionResetPolicy({
           sessionCfg: cfg.session,
@@ -1455,12 +1462,14 @@ export const agentHandlers: GatewayRequestHandlers = {
             });
             const freshEntry = store[primaryKey];
             patchBuild = buildSessionPatch(freshEntry);
-            const effectivePatch =
+            const basePatch =
               recoveredSessionStartedAt !== undefined &&
               freshEntry?.sessionStartedAt === undefined &&
               freshEntry?.sessionId === entry?.sessionId
                 ? { ...patchBuild.patch, sessionStartedAt: recoveredSessionStartedAt }
                 : patchBuild.patch;
+            // Clear continuationTraceparent after consumption (one-shot handoff).
+            const effectivePatch = { ...basePatch, continuationTraceparent: undefined };
             const merged = mergeSessionEntry(freshEntry, effectivePatch);
             const sendPolicy =
               request.deliver === true
@@ -1869,6 +1878,13 @@ export const agentHandlers: GatewayRequestHandlers = {
           }
           const execApprovalFollowupElevatedDefaults =
             execApprovalFollowupRuntimeHandoff?.bashElevated;
+          const inheritedTraceparent =
+            request.traceparent ??
+            consumeSubagentTraceparentHandoff({
+              idempotencyKey: idem,
+              sessionKey: resolvedSessionKey,
+            })?.traceparent ??
+            sessionContinuationTraceparent;
 
           dispatchAgentRunFromGateway({
             ingressOpts: {
@@ -1907,6 +1923,9 @@ export const agentHandlers: GatewayRequestHandlers = {
               messageChannel: originMessageChannel,
               runId,
               lane: request.lane,
+              continuationTrigger: request.continuationTrigger,
+              drainsContinuationDelegateQueue: request.drainsContinuationDelegateQueue,
+              traceparent: inheritedTraceparent,
               modelRun: request.modelRun === true,
               promptMode: request.promptMode,
               extraSystemPrompt: request.extraSystemPrompt,
@@ -1937,6 +1956,7 @@ export const agentHandlers: GatewayRequestHandlers = {
                 workspaceDir: sessionEntry?.spawnedWorkspaceDir,
               }),
               allowModelOverride,
+              senderIsOwner,
             },
             runId,
             dedupeKeys: agentDedupeKeys,

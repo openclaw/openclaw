@@ -1,0 +1,1 @@
+../../../dist/extensions/huggingface/models.d.ts

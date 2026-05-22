@@ -1,0 +1,1 @@
+../../../dist/extensions/signal/runtime-api.d.ts

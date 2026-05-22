@@ -1,0 +1,1 @@
+../../../dist/extensions/xai/tts.d.ts

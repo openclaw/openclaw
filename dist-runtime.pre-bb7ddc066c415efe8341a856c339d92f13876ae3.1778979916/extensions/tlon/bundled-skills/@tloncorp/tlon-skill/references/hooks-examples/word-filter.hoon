@@ -1,0 +1,1 @@
+../../../../../../../../dist/extensions/tlon/bundled-skills/@tloncorp/tlon-skill/references/hooks-examples/word-filter.hoon

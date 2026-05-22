@@ -1,0 +1,1 @@
+../../../dist/extensions/whatsapp/light-runtime-api.d.ts

@@ -1,0 +1,1 @@
+../../../dist/extensions/slack/setup-entry.d.ts

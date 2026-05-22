@@ -1,0 +1,1 @@
+../../../dist/extensions/zalo/index.d.ts

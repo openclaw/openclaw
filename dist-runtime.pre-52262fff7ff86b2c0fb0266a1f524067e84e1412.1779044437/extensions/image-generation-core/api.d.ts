@@ -1,0 +1,1 @@
+../../../dist/extensions/image-generation-core/api.d.ts

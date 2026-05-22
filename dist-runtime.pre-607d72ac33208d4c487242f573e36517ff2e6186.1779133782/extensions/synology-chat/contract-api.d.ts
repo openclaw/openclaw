@@ -1,0 +1,1 @@
+../../../dist/extensions/synology-chat/contract-api.d.ts

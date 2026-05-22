@@ -1,0 +1,7 @@
+import "./path-safety-CIfnqU73.js";
+//#region src/security/scan-paths.ts
+function extensionUsesSkippedScannerPath(entry) {
+	return entry.split(/[\\/]+/).filter(Boolean).some((segment) => segment === "node_modules" || segment.startsWith(".") && segment !== "." && segment !== "..");
+}
+//#endregion
+export { extensionUsesSkippedScannerPath as t };

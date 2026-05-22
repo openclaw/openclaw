@@ -1,0 +1,1 @@
+../../../dist/extensions/firecrawl/web-fetch-provider.d.ts

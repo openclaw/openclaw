@@ -1,0 +1,1 @@
+../../../dist/extensions/vllm/models.d.ts

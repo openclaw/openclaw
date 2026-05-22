@@ -1,0 +1,7 @@
+import { o as VideoGenerationProvider } from "../../video-generation-D_s5CnWs.js";
+import { n as _setComfyFetchGuardForTesting } from "../../workflow-runtime-5EZTKQzk.js";
+
+//#region extensions/comfy/video-generation-provider.d.ts
+declare function buildComfyVideoGenerationProvider(): VideoGenerationProvider;
+//#endregion
+export { _setComfyFetchGuardForTesting, buildComfyVideoGenerationProvider };

@@ -1,0 +1,1 @@
+../../../dist/extensions/slack/message-tool-api.d.ts

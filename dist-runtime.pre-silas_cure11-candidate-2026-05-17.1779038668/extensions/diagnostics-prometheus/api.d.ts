@@ -1,0 +1,1 @@
+../../../dist/extensions/diagnostics-prometheus/api.d.ts

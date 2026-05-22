@@ -1,0 +1,1 @@
+../../../dist/extensions/mattermost/channel-plugin-runtime.d.ts

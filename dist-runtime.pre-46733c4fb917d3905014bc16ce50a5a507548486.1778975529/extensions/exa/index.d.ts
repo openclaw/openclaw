@@ -1,0 +1,1 @@
+../../../dist/extensions/exa/index.d.ts

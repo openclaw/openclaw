@@ -1,0 +1,1 @@
+../../../dist/extensions/twitch/setup-plugin-api.d.ts

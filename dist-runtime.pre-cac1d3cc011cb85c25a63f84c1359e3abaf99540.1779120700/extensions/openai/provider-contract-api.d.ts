@@ -1,0 +1,1 @@
+../../../dist/extensions/openai/provider-contract-api.d.ts

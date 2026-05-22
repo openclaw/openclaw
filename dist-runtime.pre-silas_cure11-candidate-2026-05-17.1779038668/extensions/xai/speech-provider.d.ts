@@ -1,0 +1,1 @@
+../../../dist/extensions/xai/speech-provider.d.ts

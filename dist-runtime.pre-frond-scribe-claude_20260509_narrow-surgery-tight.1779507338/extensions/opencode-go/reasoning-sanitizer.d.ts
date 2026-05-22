@@ -1,0 +1,1 @@
+../../../dist/extensions/opencode-go/reasoning-sanitizer.d.ts

@@ -1,0 +1,1 @@
+../../../dist/extensions/open-prose/runtime-api.d.ts

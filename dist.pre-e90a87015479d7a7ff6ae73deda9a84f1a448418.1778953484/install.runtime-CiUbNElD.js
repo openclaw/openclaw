@@ -1,0 +1,16 @@
+import { i as isPathInside } from "./path-B5B-_oAT.js";
+import { E as pathExists } from "./fs-safe-D4r8mUJk.js";
+import { o as root } from "./secure-temp-dir-GC3bO7Qi.js";
+import { o as resolveCompatibilityHostVersion, s as resolveRuntimeServiceVersion } from "./version-B2G3zXnp.js";
+import { a as loadBundleManifest, i as detectBundleManifestFormat } from "./bundle-manifest-CAEcFq_q.js";
+import { r as readJson } from "./json-files-CahFuwKs.js";
+import { a as resolvePackageExtensionEntries, i as loadPluginManifest, r as getPackageManifestMetadata } from "./manifest-jaYnJ93U.js";
+import { s as validateRegistryNpmSpec } from "./npm-registry-spec-Dv9IookY.js";
+import { t as checkMinHostVersion } from "./min-host-version-BNWBqQo7.js";
+import { s as resolveArchiveKind } from "./archive-D7ogj2la.js";
+import "./archive-CO-mY9FR.js";
+import { r as resolveArchiveSourcePath } from "./install-source-utils-Dl-cJDsM.js";
+import { i as scanPackageInstallSource, n as scanFileInstallSource, r as scanInstalledPackageDependencyTree, t as scanBundleInstallSource } from "./install-security-scan-DJZIh9fA.js";
+import { i as withExtractedArchiveRoot, r as resolveExistingInstallPath, t as installPackageDir } from "./install-package-dir-Cv8fpZgv.js";
+import { a as finalizeNpmSpecArchiveInstall, i as resolveTimedInstallModeOptions, n as resolveCanonicalInstallTarget, o as installFromNpmSpecArchiveWithInstaller, r as resolveInstallModeOptions, t as ensureInstallTargetAvailable } from "./install-target-h9Bfz_aG.js";
+export { checkMinHostVersion, detectBundleManifestFormat, ensureInstallTargetAvailable, pathExists as fileExists, finalizeNpmSpecArchiveInstall, getPackageManifestMetadata, installFromNpmSpecArchiveWithInstaller, installPackageDir, isPathInside, loadBundleManifest, loadPluginManifest, readJson as readJsonFile, resolveArchiveKind, resolveArchiveSourcePath, resolveCanonicalInstallTarget, resolveCompatibilityHostVersion, resolveExistingInstallPath, resolveInstallModeOptions, resolvePackageExtensionEntries, resolveRuntimeServiceVersion, resolveTimedInstallModeOptions, root, scanBundleInstallSource, scanFileInstallSource, scanInstalledPackageDependencyTree, scanPackageInstallSource, validateRegistryNpmSpec, withExtractedArchiveRoot };

@@ -1,0 +1,1 @@
+../../../dist/extensions/document-extract/document-extractor.d.ts

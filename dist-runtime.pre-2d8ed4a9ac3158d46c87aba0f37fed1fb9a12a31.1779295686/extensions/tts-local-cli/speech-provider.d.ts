@@ -1,0 +1,1 @@
+../../../dist/extensions/tts-local-cli/speech-provider.d.ts

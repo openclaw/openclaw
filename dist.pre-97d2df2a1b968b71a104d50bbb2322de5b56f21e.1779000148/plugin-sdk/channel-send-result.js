@@ -1,0 +1,2 @@
+import { a as createEmptyChannelResult, i as createAttachedChannelResultAdapter, n as attachChannelToResults, o as createRawChannelSendResultAdapter, r as buildChannelSendResult, t as attachChannelToResult } from "../channel-send-result-J_l_zi1d.js";
+export { attachChannelToResult, attachChannelToResults, buildChannelSendResult, createAttachedChannelResultAdapter, createEmptyChannelResult, createRawChannelSendResultAdapter };

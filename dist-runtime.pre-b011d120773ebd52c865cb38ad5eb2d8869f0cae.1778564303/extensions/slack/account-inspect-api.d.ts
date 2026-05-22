@@ -1,0 +1,1 @@
+../../../dist/extensions/slack/account-inspect-api.d.ts

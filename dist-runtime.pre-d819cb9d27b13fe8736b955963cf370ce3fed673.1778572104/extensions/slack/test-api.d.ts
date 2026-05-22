@@ -1,0 +1,1 @@
+../../../dist/extensions/slack/test-api.d.ts

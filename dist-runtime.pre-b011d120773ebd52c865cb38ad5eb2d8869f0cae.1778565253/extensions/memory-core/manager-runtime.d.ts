@@ -1,0 +1,1 @@
+../../../dist/extensions/memory-core/manager-runtime.d.ts

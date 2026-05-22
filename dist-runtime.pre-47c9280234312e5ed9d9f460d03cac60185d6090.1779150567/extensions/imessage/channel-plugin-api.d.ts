@@ -1,0 +1,1 @@
+../../../dist/extensions/imessage/channel-plugin-api.d.ts

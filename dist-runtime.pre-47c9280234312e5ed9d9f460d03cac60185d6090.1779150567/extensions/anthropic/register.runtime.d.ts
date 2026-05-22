@@ -1,0 +1,1 @@
+../../../dist/extensions/anthropic/register.runtime.d.ts

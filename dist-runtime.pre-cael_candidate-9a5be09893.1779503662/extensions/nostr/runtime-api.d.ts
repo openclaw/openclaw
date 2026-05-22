@@ -1,0 +1,1 @@
+../../../dist/extensions/nostr/runtime-api.d.ts

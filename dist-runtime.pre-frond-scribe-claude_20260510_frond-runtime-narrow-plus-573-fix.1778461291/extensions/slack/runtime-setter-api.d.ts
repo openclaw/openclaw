@@ -1,0 +1,1 @@
+../../../dist/extensions/slack/runtime-setter-api.d.ts

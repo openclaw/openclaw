@@ -1,0 +1,1 @@
+../../../dist/extensions/feishu/runtime-api.d.ts

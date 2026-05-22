@@ -1,0 +1,1 @@
+../../../dist/extensions/llm-task/index.d.ts

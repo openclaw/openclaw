@@ -1,0 +1,1 @@
+../../../dist/extensions/minimax/provider-http.test-helpers.d.ts

@@ -1,0 +1,1 @@
+../../../dist/extensions/amazon-bedrock/embedding-provider.d.ts

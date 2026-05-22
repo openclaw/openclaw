@@ -1,0 +1,48 @@
+{
+  "name": "@openclaw/slack",
+  "version": "2026.5.7",
+  "private": true,
+  "description": "OpenClaw Slack channel plugin",
+  "type": "module",
+  "dependencies": {
+    "@slack/bolt": "^4.7.2",
+    "@slack/types": "^2.21.0",
+    "@slack/web-api": "^7.15.2",
+    "https-proxy-agent": "^9.0.0"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.js"
+    ],
+    "setupEntry": "./setup-entry.js",
+    "channel": {
+      "id": "slack",
+      "label": "Slack",
+      "selectionLabel": "Slack (Socket Mode)",
+      "detailLabel": "Slack Bot",
+      "docsPath": "/channels/slack",
+      "docsLabel": "slack",
+      "blurb": "supported (Socket Mode).",
+      "systemImage": "number",
+      "markdownCapable": true,
+      "commands": {
+        "nativeCommandsAutoEnabled": false,
+        "nativeSkillsAutoEnabled": false
+      },
+      "configuredState": {
+        "env": {
+          "anyOf": [
+            "SLACK_APP_TOKEN",
+            "SLACK_BOT_TOKEN",
+            "SLACK_USER_TOKEN"
+          ]
+        },
+        "specifier": "./configured-state",
+        "exportName": "hasSlackConfiguredState"
+      }
+    }
+  }
+}

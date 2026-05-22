@@ -1,0 +1,1 @@
+../../../dist/extensions/irc/channel-config-api.d.ts

@@ -1,0 +1,1 @@
+../../../dist/extensions/runway/index.d.ts

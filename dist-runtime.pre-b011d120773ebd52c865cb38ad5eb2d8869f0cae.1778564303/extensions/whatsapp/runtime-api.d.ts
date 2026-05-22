@@ -1,0 +1,1 @@
+../../../dist/extensions/whatsapp/runtime-api.d.ts

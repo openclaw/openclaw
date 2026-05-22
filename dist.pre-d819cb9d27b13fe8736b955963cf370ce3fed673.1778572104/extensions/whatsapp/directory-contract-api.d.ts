@@ -1,0 +1,2 @@
+import { n as listWhatsAppDirectoryPeersFromConfig, t as listWhatsAppDirectoryGroupsFromConfig } from "../../directory-config-UMSb_vrj.js";
+export { listWhatsAppDirectoryGroupsFromConfig, listWhatsAppDirectoryPeersFromConfig };

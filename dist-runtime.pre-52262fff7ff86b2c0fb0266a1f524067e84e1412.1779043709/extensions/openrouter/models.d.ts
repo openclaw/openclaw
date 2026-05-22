@@ -1,0 +1,1 @@
+../../../dist/extensions/openrouter/models.d.ts

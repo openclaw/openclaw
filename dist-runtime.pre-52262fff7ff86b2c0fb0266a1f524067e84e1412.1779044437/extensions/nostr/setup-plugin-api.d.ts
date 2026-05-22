@@ -1,0 +1,1 @@
+../../../dist/extensions/nostr/setup-plugin-api.d.ts

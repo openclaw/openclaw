@@ -1,0 +1,1 @@
+../../../dist/extensions/kimi-coding/stream.d.ts

@@ -1,0 +1,1 @@
+../../../dist/extensions/google/vertex-adc.d.ts

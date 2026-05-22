@@ -1,0 +1,1 @@
+../../../dist/extensions/line/setup-api.d.ts

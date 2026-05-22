@@ -1,0 +1,1 @@
+../../../dist/extensions/moonshot/web-search-provider.d.ts

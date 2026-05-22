@@ -1,0 +1,2 @@
+import { n as isCjkDominant, r as listMicrosoftVoices, t as buildMicrosoftSpeechProvider } from "../../speech-provider-4EtOq5lY.js";
+export { buildMicrosoftSpeechProvider, isCjkDominant, listMicrosoftVoices };

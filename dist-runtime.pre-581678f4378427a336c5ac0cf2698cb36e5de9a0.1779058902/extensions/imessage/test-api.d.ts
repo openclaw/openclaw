@@ -1,0 +1,1 @@
+../../../dist/extensions/imessage/test-api.d.ts

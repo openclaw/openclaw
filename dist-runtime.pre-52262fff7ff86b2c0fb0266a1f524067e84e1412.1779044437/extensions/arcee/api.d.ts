@@ -1,0 +1,1 @@
+../../../dist/extensions/arcee/api.d.ts

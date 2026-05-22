@@ -1,0 +1,1 @@
+../../../dist/extensions/anthropic/setup-api.d.ts

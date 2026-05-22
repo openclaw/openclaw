@@ -1,0 +1,1 @@
+../../../dist/extensions/tavily/index.d.ts

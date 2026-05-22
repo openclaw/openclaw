@@ -1,0 +1,1 @@
+../../../dist/extensions/deepinfra/provider-catalog.d.ts

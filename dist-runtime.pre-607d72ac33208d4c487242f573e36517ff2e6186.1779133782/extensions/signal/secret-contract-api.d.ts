@@ -1,0 +1,1 @@
+../../../dist/extensions/signal/secret-contract-api.d.ts

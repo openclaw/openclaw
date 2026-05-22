@@ -1,0 +1,8 @@
+import { _ as EmbeddedPiRunResult, r as RunEmbeddedPiAgentParams } from "./params-Bpv9dosH.js";
+import { SettingsManager, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { AgentTool, StreamFn } from "@earendil-works/pi-agent-core";
+
+//#region src/agents/pi-embedded-runner/run.d.ts
+declare function runEmbeddedPiAgent(params: RunEmbeddedPiAgentParams): Promise<EmbeddedPiRunResult>;
+//#endregion
+export { runEmbeddedPiAgent as t };

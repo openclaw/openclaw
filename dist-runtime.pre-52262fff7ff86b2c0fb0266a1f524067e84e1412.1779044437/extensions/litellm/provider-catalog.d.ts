@@ -1,0 +1,1 @@
+../../../dist/extensions/litellm/provider-catalog.d.ts

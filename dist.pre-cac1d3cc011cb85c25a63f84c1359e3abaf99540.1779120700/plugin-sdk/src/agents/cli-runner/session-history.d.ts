@@ -1,0 +1,41 @@
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+export declare const MAX_CLI_SESSION_HISTORY_FILE_BYTES: number;
+export declare const MAX_CLI_SESSION_HISTORY_MESSAGES = 100;
+export declare const MAX_CLI_SESSION_RESEED_HISTORY_CHARS: number;
+type RawTranscriptReseedReason = "auth-profile" | "auth-epoch" | "system-prompt" | "mcp" | "missing-transcript" | "session-expired";
+export declare function buildCliSessionHistoryPrompt(params: {
+    messages: unknown[];
+    prompt: string;
+    maxHistoryChars?: number;
+}): string | undefined;
+export declare function hasCliSessionTranscript(params: {
+    sessionId: string;
+    sessionFile: string;
+    sessionKey?: string;
+    agentId?: string;
+    config?: OpenClawConfig;
+}): Promise<boolean>;
+export declare function loadCliSessionHistoryMessages(params: {
+    sessionId: string;
+    sessionFile: string;
+    sessionKey?: string;
+    agentId?: string;
+    config?: OpenClawConfig;
+}): Promise<unknown[]>;
+export declare function loadCliSessionContextEngineMessages(params: {
+    sessionId: string;
+    sessionFile: string;
+    sessionKey?: string;
+    agentId?: string;
+    config?: OpenClawConfig;
+}): Promise<unknown[]>;
+export declare function loadCliSessionReseedMessages(params: {
+    sessionId: string;
+    sessionFile: string;
+    sessionKey?: string;
+    agentId?: string;
+    config?: OpenClawConfig;
+    allowRawTranscriptReseed?: boolean;
+    rawTranscriptReseedReason?: RawTranscriptReseedReason;
+}): Promise<unknown[]>;
+export {};

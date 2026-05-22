@@ -1,0 +1,1 @@
+../../../dist/extensions/xai/runtime-model-compat.d.ts

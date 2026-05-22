@@ -1,0 +1,1 @@
+../../../dist/extensions/qianfan/onboard.d.ts

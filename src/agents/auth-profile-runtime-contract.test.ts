@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type * as ManifestRegistryModule from "../plugins/manifest-registry.js";
+import { __testing as externalAuthTesting } from "./auth-profiles/external-auth.js";
 import { runAgentAttempt } from "./command/attempt-execution.js";
 import type { RunEmbeddedPiAgentParams } from "./pi-embedded-runner/run/params.js";
 import type { EmbeddedPiRunResult } from "./pi-embedded.js";
@@ -224,6 +225,15 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
   let storePath: string;
 
   beforeEach(async () => {
+    // Defensive: reset module-level singleton in external-auth.ts before each test.
+    // The vitest config sets `isolate: false` (test/vitest/vitest.shared.config.ts),
+    // so module state is reused across files within a worker thread. Sibling test
+    // files (external-oauth.test.ts, oauth.mirror-refresh.test.ts, oauth-manager.test.ts)
+    // mutate `resolveExternalAuthProfilesForRuntime` via `__testing.set...` and clean
+    // up afterEach, but pool=threads + file-ordering can interleave in ways that leave
+    // state polluted between files. Tracked in karmaterminal/openclaw#624 — defensive
+    // reset here makes this contract test resilient to any sibling-file pollution.
+    externalAuthTesting.resetResolveExternalAuthProfilesForTest();
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-contract-"));
     storePath = path.join(tmpDir, "sessions.json");
     loadPluginManifestRegistry.mockReset().mockReturnValue(createAuthAliasManifestRegistry());
@@ -234,6 +244,7 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
   });
 
   afterEach(async () => {
+    externalAuthTesting.resetResolveExternalAuthProfilesForTest();
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 

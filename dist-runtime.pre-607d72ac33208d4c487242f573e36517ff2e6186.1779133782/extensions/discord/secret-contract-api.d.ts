@@ -1,0 +1,1 @@
+../../../dist/extensions/discord/secret-contract-api.d.ts

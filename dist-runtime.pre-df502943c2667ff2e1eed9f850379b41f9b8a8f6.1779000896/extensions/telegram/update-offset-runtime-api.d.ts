@@ -1,0 +1,1 @@
+../../../dist/extensions/telegram/update-offset-runtime-api.d.ts

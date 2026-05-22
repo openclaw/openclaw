@@ -151,6 +151,7 @@ export function resolveGatewayScopedTools(params: {
     disablePluginTools: params.disablePluginTools,
     wrapBeforeToolCallHook: false,
     config: params.cfg,
+    liveSessionToolConfig: true,
     workspaceDir,
     pluginToolAllowlist: collectExplicitAllowlist([
       profilePolicy,

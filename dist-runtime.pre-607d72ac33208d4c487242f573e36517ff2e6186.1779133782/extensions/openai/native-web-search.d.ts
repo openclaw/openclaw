@@ -1,0 +1,1 @@
+../../../dist/extensions/openai/native-web-search.d.ts

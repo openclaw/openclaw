@@ -1,0 +1,1 @@
+../../../dist/extensions/stepfun/provider-catalog.d.ts
