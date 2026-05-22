@@ -1383,14 +1383,13 @@
 }
 
 .chat-session-picker__search-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 36px auto;
+  display: flex;
   gap: 6px;
   align-items: center;
 }
 
 .chat-session-picker__search {
-  position: relative;
+  flex: 1 1 auto;
   min-width: 0;
 }
 
@@ -1398,25 +1397,22 @@
   box-sizing: border-box;
   width: 100%;
   min-height: 36px;
-  padding: 0 12px 0 34px;
+  padding: 0 12px;
   font-size: 13px;
 }
 
-.chat-session-picker__search-icon {
-  position: absolute;
-  left: 11px;
-  top: 50%;
-  display: inline-flex;
-  width: 15px;
-  height: 15px;
-  color: var(--muted);
-  transform: translateY(-50%);
-  pointer-events: none;
+.chat-session-picker .chat-session-picker__icon-button.btn--icon {
+  flex: 0 0 36px;
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: var(--radius-md);
 }
 
-.chat-session-picker__search-icon svg {
-  width: 15px;
-  height: 15px;
+.chat-session-picker .chat-session-picker__icon-button.btn--icon svg {
+  width: 16px;
+  height: 16px;
 }
 
 .chat-session-picker__list {

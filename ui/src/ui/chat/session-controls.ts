@@ -9,7 +9,7 @@ import {
   resolveChatModelSelectState,
 } from "../chat-model-select-state.ts";
 import { refreshVisibleToolsEffectiveForCurrentSession } from "../controllers/agents.ts";
-import { isArchivedSessionRow, loadSessions } from "../controllers/sessions.ts";
+import { loadSessions } from "../controllers/sessions.ts";
 import { icons } from "../icons.ts";
 import { isMonitoredAuthProvider } from "../model-auth-helpers.ts";
 import { pathForTab } from "../navigation.ts";
@@ -168,7 +168,7 @@ function projectChatSessionPickerResult(
   if (state.sessionsShowArchived) {
     return result;
   }
-  const sessions = result.sessions.filter((row) => row.key && !isArchivedSessionRow(row));
+  const sessions = result.sessions.filter((row) => row.key && row.archived !== true);
   return {
     ...result,
     count: sessions.length,
@@ -378,7 +378,6 @@ function renderChatSessionPickerPopover(
     >
       <div class="chat-session-picker__search-row">
         <label class="field chat-session-picker__search">
-          <span class="chat-session-picker__search-icon" aria-hidden="true">${icons.search}</span>
           <input
             data-chat-session-picker-search="true"
             type="search"
@@ -398,7 +397,7 @@ function renderChatSessionPickerPopover(
           />
         </label>
         <button
-          class="btn btn--ghost btn--icon"
+          class="btn btn--ghost btn--icon chat-session-picker__icon-button"
           data-chat-session-search-submit="true"
           type="button"
           title=${t("common.search")}
@@ -410,7 +409,7 @@ function renderChatSessionPickerPopover(
         </button>
         ${hasQuery
           ? html`<button
-              class="btn btn--ghost btn--icon"
+              class="btn btn--ghost btn--icon chat-session-picker__icon-button"
               data-chat-session-search-clear="true"
               type="button"
               title=${t("chat.selectors.clearSessionSearch")}

@@ -1261,12 +1261,13 @@ describe("chat session controls", () => {
 
     input!.value = " telegram ";
     input!.dispatchEvent(new Event("input", { bubbles: true }));
-    submit!.click();
-    await flushTasks();
+    expect(state.chatSessionPickerQuery).toBe(" telegram ");
+    expect(submit?.disabled).toBe(false);
+    submit!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    await vi.waitFor(() => expect(state.chatSessionPickerAppliedQuery).toBe("telegram"));
     render(renderChatSessionSelect(state), container);
 
     expect(state.chatSessionPickerQuery).toBe(" telegram ");
-    expect(state.chatSessionPickerAppliedQuery).toBe("telegram");
     expect(state.sessionsResult).toBe(originalSessionsResult);
     expect(state.chatSessionPickerResult?.sessions.map((row) => row.key)).toEqual([
       "agent:main:telegram-one",
@@ -1306,8 +1307,9 @@ describe("chat session controls", () => {
     const loadMore = container.querySelector<HTMLButtonElement>(
       'button[data-chat-session-load-more="true"]',
     );
-    loadMore!.click();
-    await flushTasks();
+    expect(loadMore?.disabled).toBe(false);
+    loadMore!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    await vi.waitFor(() => expect(state.chatSessionPickerResult?.sessions).toHaveLength(4));
 
     expect(state.sessionsResult).toBe(originalSessionsResult);
     expect(state.chatSessionPickerResult?.sessions.map((row) => row.key)).toEqual([
