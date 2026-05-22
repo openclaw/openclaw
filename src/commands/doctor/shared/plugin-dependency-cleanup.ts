@@ -59,28 +59,31 @@ async function collectDirectChildren(root: string): Promise<string[]> {
 
 async function collectLegacyExtensionDebris(extensionsRoot: string): Promise<string[]> {
   const pluginDirs = await fs.readdir(extensionsRoot, { withFileTypes: true }).catch(() => []);
-  const targets: string[] = [];
-  for (const entry of pluginDirs) {
-    if (!entry.isDirectory() && !entry.isSymbolicLink()) {
-      continue;
-    }
-    const pluginRoot = path.join(extensionsRoot, entry.name);
-    const children = await collectDirectChildren(pluginRoot);
-    const hasRuntimeDepsMarker = children.some((childPath) =>
-      isRuntimeDependencyMarkerName(path.basename(childPath)),
-    );
-    for (const childPath of children) {
-      const basename = path.basename(childPath);
-      if (basename === "node_modules" && hasRuntimeDepsMarker) {
-        targets.push(childPath);
-        continue;
+  const pluginResults = await Promise.all(
+    pluginDirs.map(async (entry) => {
+      if (!entry.isDirectory() && !entry.isSymbolicLink()) {
+        return [];
       }
-      if (isLegacyDependencyDebrisName(basename)) {
-        targets.push(childPath);
+      const pluginRoot = path.join(extensionsRoot, entry.name);
+      const children = await collectDirectChildren(pluginRoot);
+      const hasRuntimeDepsMarker = children.some((childPath) =>
+        isRuntimeDependencyMarkerName(path.basename(childPath)),
+      );
+      const pluginTargets: string[] = [];
+      for (const childPath of children) {
+        const basename = path.basename(childPath);
+        if (basename === "node_modules" && hasRuntimeDepsMarker) {
+          pluginTargets.push(childPath);
+          continue;
+        }
+        if (isLegacyDependencyDebrisName(basename)) {
+          pluginTargets.push(childPath);
+        }
       }
-    }
-  }
-  return targets;
+      return pluginTargets;
+    }),
+  );
+  return pluginResults.flat();
 }
 
 async function collectLegacyPluginDependencyTargets(
@@ -109,9 +112,16 @@ async function collectLegacyPluginDependencyTargets(
       path.join(root, ".local", "bundled-plugin-runtime-deps"),
     ]),
   ];
-  for (const root of roots) {
-    targets.push(...(await collectLegacyExtensionDebris(path.join(root, "extensions"))));
-    targets.push(...(await collectLegacyExtensionDebris(path.join(root, "dist", "extensions"))));
+  // Parallel per-root scans: each root has 2 sub-paths (extensions + dist/extensions).
+  // Running all 3 roots × 2 paths = 6 calls concurrently instead of serially.
+  const debrisResults = await Promise.all(
+    roots.flatMap((root) => [
+      collectLegacyExtensionDebris(path.join(root, "extensions")),
+      collectLegacyExtensionDebris(path.join(root, "dist", "extensions")),
+    ]),
+  );
+  for (const debris of debrisResults) {
+    targets.push(...debris);
   }
   return uniqueSorted(targets);
 }
