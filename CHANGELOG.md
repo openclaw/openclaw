@@ -54,6 +54,7 @@ Docs: https://docs.openclaw.ai
 - PDF tool: time out idle remote PDF body reads after 120 seconds so stalled remote documents return an error instead of wedging the session. Fixes #68649. (#84768) Thanks @luoyanglang.
 - Diagnostics/OpenTelemetry plugin: suppress handled OTLP exporter promise rejections so collector shutdowns no longer crash the Gateway. (#81085) Thanks @luoyanglang.
 - Media/audio: skip empty structured sherpa-onnx transcripts instead of treating the raw JSON payload as spoken text. (#84667) Thanks @TurboTheTurtle.
+- Agents/exec: preserve inherited XDG base-directory environment values for subprocesses while still rejecting agent-supplied XDG overrides. Fixes #84854. (#85139) Thanks @joshavant.
 - Node/Linux: keep `OPENCLAW_GATEWAY_TOKEN` out of generated systemd unit files by writing node service token values to a node-specific env file. (#84408)
 - Memory-core/dreaming: reuse stable narrative subagent session keys per workspace and phase while keeping per-run idempotency and bounded cleanup, so stale `dreaming-narrative-*` sessions do not accumulate. Fixes #68252, #69187, and #70402. (#70464) Thanks @chiyouYCH.
 - Trajectory/support: tolerate partial skill snapshot entries when building support metadata so rejected skill path scans no longer abort trajectory capture. (#71185) Thanks @lukeboyett.
