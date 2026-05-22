@@ -1348,7 +1348,7 @@ describe("chat session controls", () => {
     }
   });
 
-  it("focuses the inline search for the active picker surface", async () => {
+  it("keeps session trigger focus separate from inline search focus", async () => {
     const { state } = createChatHeaderState();
     const mobileContainer = document.createElement("div");
     const desktopContainer = document.createElement("div");
@@ -1369,7 +1369,13 @@ describe("chat session controls", () => {
       expect(
         mobileContainer.querySelector('input[data-chat-session-picker-search="true"]'),
       ).toBeTruthy();
+      expect(state.chatSessionPickerOpen).toBe(true);
+      expect(document.activeElement).not.toBe(desktopInput);
+
+      desktopInput!.focus();
       await vi.waitFor(() => expect(document.activeElement).toBe(desktopInput));
+      expect(state.chatSessionPickerOpen).toBe(true);
+      expect(state.chatSessionPickerSurface).toBe("desktop");
     } finally {
       render(html``, mobileContainer);
       render(html``, desktopContainer);

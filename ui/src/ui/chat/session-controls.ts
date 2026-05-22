@@ -105,29 +105,11 @@ function requestHostUpdate(state: AppViewState) {
   (state as AppViewState & { requestUpdate?: () => void }).requestUpdate?.();
 }
 
-function focusChatSessionPickerSearch(state: AppViewState, surface: ChatSessionSelectSurface) {
-  const updateComplete = (state as AppViewState & { updateComplete?: Promise<unknown> })
-    .updateComplete;
-  const focus = () => {
-    document
-      .querySelector<HTMLInputElement>(
-        `[data-chat-session-picker-search="true"][data-chat-session-picker-search-surface="${surface}"]`,
-      )
-      ?.focus();
-  };
-  if (updateComplete) {
-    void updateComplete.then(focus);
-    return;
-  }
-  setTimeout(focus, 0);
-}
-
 function openChatSessionPicker(state: AppViewState, surface: ChatSessionSelectSurface) {
   state.chatSessionPickerOpen = true;
   state.chatSessionPickerSurface = surface;
   state.chatSessionPickerError = null;
   requestHostUpdate(state);
-  focusChatSessionPickerSearch(state, surface);
 }
 
 function closeChatSessionPicker(state: AppViewState) {
