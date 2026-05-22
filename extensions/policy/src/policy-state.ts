@@ -357,7 +357,7 @@ export function scanPolicyGatewayExposure(
       bind === undefined
         ? !tailscaleForcesLoopback
         : bind === "custom"
-          ? !hasCustomBindHost
+          ? false
           : isGatewayNonLoopbackBind(bind),
     explicit: bind !== undefined,
   });
@@ -1018,7 +1018,7 @@ function isGatewayNonLoopbackBind(value: string): boolean {
 
 function isRuntimeNonLoopbackCustomBindHost(value: string): boolean {
   const normalized = value.trim().toLowerCase();
-  return !isCanonicalDottedDecimalIPv4(normalized) || !normalized.startsWith("127.");
+  return isCanonicalDottedDecimalIPv4(normalized) && !normalized.startsWith("127.");
 }
 
 function isCanonicalDottedDecimalIPv4(value: string): boolean {

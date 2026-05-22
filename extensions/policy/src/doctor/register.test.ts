@@ -2339,7 +2339,7 @@ describe("registerPolicyDoctorChecks", () => {
     ]);
   });
 
-  it("reports blank custom bind config as non-loopback exposure", async () => {
+  it("does not report blank custom bind config as active non-loopback exposure", async () => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
       ...cfgWithPolicy(),
@@ -2364,18 +2364,11 @@ describe("registerPolicyDoctorChecks", () => {
     registerPolicyDoctorChecks();
     const result = await runDoctorLintChecks(ctx(configPath, cfg));
 
-    expect(result.findings).toEqual([
-      expect.objectContaining({
-        checkId: "policy/gateway-non-loopback-bind",
-        severity: "error",
-        ocPath: "oc://openclaw.config/gateway/bind",
-        requirement: "oc://policy.jsonc/gateway/exposure/allowNonLoopbackBind",
-      }),
-    ]);
+    expect(result.findings).toEqual([]);
   });
 
   it.each(["localhost", "::1", "192.168.001.20"])(
-    "reports invalid custom bind host %s as non-loopback exposure",
+    "does not report invalid custom bind host %s as active non-loopback exposure",
     async (customBindHost) => {
       const configPath = join(workspaceDir, "openclaw.jsonc");
       const cfg = {
@@ -2401,14 +2394,7 @@ describe("registerPolicyDoctorChecks", () => {
       registerPolicyDoctorChecks();
       const result = await runDoctorLintChecks(ctx(configPath, cfg));
 
-      expect(result.findings).toEqual([
-        expect.objectContaining({
-          checkId: "policy/gateway-non-loopback-bind",
-          severity: "error",
-          ocPath: "oc://openclaw.config/gateway/customBindHost",
-          requirement: "oc://policy.jsonc/gateway/exposure/allowNonLoopbackBind",
-        }),
-      ]);
+      expect(result.findings).toEqual([]);
     },
   );
 
