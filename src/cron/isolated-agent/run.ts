@@ -1,5 +1,4 @@
 import { hasAnyAuthProfileStoreSource } from "../../agents/auth-profiles/source-check.js";
-import { clearAgentRunContext } from "../../infra/agent-events.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-codex-routing.js";
 import { retireSessionMcpRuntime } from "../../agents/pi-bundle-mcp-tools.js";
@@ -8,6 +7,7 @@ import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { clearAgentRunContext } from "../../infra/agent-events.js";
 import {
   createSourceDeliveryPlan,
   resolveSourceDeliveryOutcome,
@@ -1095,8 +1095,11 @@ async function finalizeCronRun(params: {
 function disposeCronRunContext(params: {
   sessionId: string;
   cronSession: MutableCronSession;
+  ownsRunContext: boolean;
 }): void {
-  clearAgentRunContext(params.sessionId);
+  if (params.ownsRunContext) {
+    clearAgentRunContext(params.sessionId);
+  }
   // Drop the in-memory store reference so GC can collect the session registry.
   // The on-disk sessions.json is unaffected.
   (params.cronSession as { store?: unknown }).store = undefined;
@@ -1225,6 +1228,7 @@ export async function runCronIsolatedAgentTurn(params: {
     disposeCronRunContext({
       sessionId: initialSessionId,
       cronSession: prepared.context.cronSession,
+      ownsRunContext: params.job.sessionTarget === "isolated",
     });
   }
 }
