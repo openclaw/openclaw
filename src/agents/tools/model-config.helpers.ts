@@ -15,6 +15,7 @@ import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import {
   hasRuntimeAvailableProviderAuth,
+  hasUsableCustomProviderApiKey,
   resolveEnvApiKey,
   resolveModelAuthMode,
 } from "../model-auth.js";
@@ -78,6 +79,9 @@ export function hasProviderAuthForTool(params: {
       authStore: params.authStore,
     })
   ) {
+    return true;
+  }
+  if (hasUsableCustomProviderApiKey(params.cfg, params.provider)) {
     return true;
   }
   if (

@@ -139,6 +139,24 @@ describe("hasProviderAuthForTool", () => {
     });
   });
 
+  it("keeps config env API keys even when amazon-bedrock config defaults to aws-sdk", () => {
+    vi.stubEnv("BEDROCK_API_KEY", "sk-env-profile"); // pragma: allowlist secret
+    const cfg = {
+      models: {
+        providers: {
+          "amazon-bedrock": {
+            baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+            auth: "aws-sdk",
+            apiKey: { source: "env", provider: "default", id: "BEDROCK_API_KEY" },
+            models: [],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(hasProviderAuthForTool({ provider: "amazon-bedrock", cfg })).toBe(true);
+  });
+
   it("rejects providers without config, env, or profile auth", () => {
     expect(hasProviderAuthForTool({ provider: "unconfigured-provider" })).toBe(false);
   });
