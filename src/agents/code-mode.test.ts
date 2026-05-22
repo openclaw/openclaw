@@ -835,7 +835,7 @@ describe("Code Mode", () => {
     const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
     const missingWorkerUrl = new URL("./missing-code-mode.worker.js", import.meta.url);
 
-    const result = await __testing.runCodeModeWorker(
+    const result = await testing.runCodeModeWorker(
       {
         kind: "exec",
         source: "return 1;",
@@ -856,7 +856,7 @@ describe("Code Mode", () => {
     const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
     const exitingWorkerUrl = new URL("data:text/javascript,process.exit(1)");
 
-    const result = await __testing.runCodeModeWorker(
+    const result = await testing.runCodeModeWorker(
       {
         kind: "exec",
         source: "return 1;",
@@ -876,7 +876,7 @@ describe("Code Mode", () => {
   it("does not classify guest interrupted errors as timeouts", async () => {
     const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
 
-    const result = await __testing.runCodeModeWorker(
+    const result = await testing.runCodeModeWorker(
       {
         kind: "exec",
         source: 'throw new Error("interrupted");',
