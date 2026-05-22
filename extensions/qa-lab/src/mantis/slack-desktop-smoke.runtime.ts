@@ -901,6 +901,22 @@ cat >"$out/remote-metadata.json" <<MANTIS_REMOTE_METADATA
   "capturedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 MANTIS_REMOTE_METADATA
+if [ "$qa_status" -ne 0 ]; then
+  echo "MANTIS_REMOTE_FAILURE_DIAGNOSTICS_BEGIN"
+  find "$out" -maxdepth 3 -type f -printf "%p %s bytes\\n" | sort || true
+  for diagnostic_file in \
+    "$out/slack-desktop-command.log" \
+    "$out/approval-checkpoint-watcher.log" \
+    "$out/chrome.log" \
+    "$out/ffmpeg.log" \
+    "$out/remote-metadata.json"; do
+    if [ -f "$diagnostic_file" ]; then
+      echo "===== tail: $diagnostic_file ====="
+      tail -n 200 "$diagnostic_file" || true
+    fi
+  done
+  echo "MANTIS_REMOTE_FAILURE_DIAGNOSTICS_END"
+fi
 test -s "$out/slack-desktop-smoke.png"
 exit "$qa_status"
 `;
