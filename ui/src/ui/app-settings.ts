@@ -795,6 +795,19 @@ export function hasOperatorReadAccess(
   });
 }
 
+export function hasOperatorWriteAccess(
+  auth: { role?: string; scopes?: readonly string[] } | null,
+): boolean {
+  if (!auth?.scopes) {
+    return true;
+  }
+  return roleScopesAllow({
+    role: auth.role ?? "operator",
+    requestedScopes: ["operator.write"],
+    allowedScopes: auth.scopes,
+  });
+}
+
 export function hasMissingSkillDependencies(
   missing: Record<string, unknown> | null | undefined,
 ): boolean {

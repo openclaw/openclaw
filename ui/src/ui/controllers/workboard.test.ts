@@ -458,6 +458,26 @@ describe("workboard controller", () => {
     expect(state.cards.find((card) => card.id === "card-review")?.status).toBe("review");
   });
 
+  it("skips lifecycle writeback for read-only workboard clients", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [{ ...sampleCard, sessionKey: sampleSession.key }];
+    const client = createClient(() => {
+      throw new Error("write denied");
+    });
+
+    await syncWorkboardLifecycle({
+      host,
+      client: client as never,
+      sessions: [sampleSession],
+      canWrite: false,
+    });
+
+    expect(client.request).not.toHaveBeenCalled();
+    expect(state.error).toBeNull();
+  });
+
   it("resyncs cards manually moved back to an active lifecycle column", async () => {
     const host = {};
     const state = getWorkboardState(host);

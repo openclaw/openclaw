@@ -536,10 +536,11 @@ export async function syncWorkboardLifecycle(params: {
   host: WorkboardHost;
   client: GatewayBrowserClient | null;
   sessions: readonly GatewaySessionRow[];
+  canWrite?: boolean;
   requestUpdate?: () => void;
 }) {
   const state = getWorkboardState(params.host);
-  if (!params.client || !state.loaded) {
+  if (!params.client || !state.loaded || params.canWrite === false) {
     return;
   }
   const syncKeys = getLifecycleSyncKeys(params.host);

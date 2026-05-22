@@ -26,6 +26,7 @@ type WorkboardProps = {
   host: object;
   client: GatewayBrowserClient | null;
   connected: boolean;
+  canWrite?: boolean;
   pluginEnabled: boolean;
   agentsList: AgentsListResult | null;
   sessions: GatewaySessionRow[];
@@ -729,6 +730,7 @@ export function renderWorkboard(props: WorkboardProps) {
       host: props.host,
       client: props.client,
       sessions: props.sessions,
+      canWrite: props.canWrite,
       requestUpdate: props.onRequestUpdate,
     });
   }

@@ -22,7 +22,7 @@ import {
   dismissChatError,
   switchChatSession,
 } from "./app-render.helpers.ts";
-import { warnQueryToken } from "./app-settings.ts";
+import { hasOperatorWriteAccess, warnQueryToken } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
 import {
@@ -2203,6 +2203,10 @@ export function renderApp(state: AppViewState) {
                 host: state,
                 client: state.client,
                 connected: state.connected,
+                canWrite: hasOperatorWriteAccess(
+                  (state.hello as { auth?: { role?: string; scopes?: string[] } } | null)?.auth ??
+                    null,
+                ),
                 pluginEnabled: isPluginEnabledInConfigSnapshot(state.configSnapshot, "workboard", {
                   enabledByDefault: false,
                 }),
