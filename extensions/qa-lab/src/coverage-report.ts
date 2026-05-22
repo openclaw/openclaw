@@ -1,3 +1,7 @@
+import {
+  buildLiveTransportCoverageLaneSummaries,
+  type LiveTransportCoverageLaneSummary,
+} from "./live-transports/shared/live-transport-scenarios.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 
 type QaCoverageScenarioSummary = {
@@ -30,6 +34,7 @@ type QaCoverageInventory = {
   missingCoverage: QaCoverageScenarioSummary[];
   byTheme: Record<string, QaCoverageFeatureSummary[]>;
   bySurface: Record<string, QaCoverageFeatureSummary[]>;
+  liveTransportLanes: LiveTransportCoverageLaneSummary[];
 };
 
 function scenarioTheme(sourcePath: string) {
@@ -132,6 +137,7 @@ export function buildQaCoverageInventory(
     missingCoverage,
     byTheme,
     bySurface,
+    liveTransportLanes: buildLiveTransportCoverageLaneSummaries(),
   };
 }
 
@@ -141,6 +147,28 @@ function pushFeatureLines(lines: string[], features: readonly QaCoverageFeatureS
       .map((scenario) => `${scenario.intent}: ${scenario.id} (${scenario.sourcePath})`)
       .join(", ");
     lines.push(`- ${feature.id}: ${scenarios}`);
+  }
+}
+
+function pushLiveTransportLines(
+  lines: string[],
+  lanes: readonly LiveTransportCoverageLaneSummary[],
+) {
+  for (const lane of lanes) {
+    const members = lane.members
+      .map((member) =>
+        member.scenarioId
+          ? `${member.standardId}: ${member.scenarioId}`
+          : `${member.standardId}: always-on`,
+      )
+      .join(", ");
+    const missing =
+      lane.baselineMissingStandardScenarioIds.length > 0
+        ? lane.baselineMissingStandardScenarioIds.join(", ")
+        : "none";
+    lines.push(
+      `- ${lane.transportId} (${lane.commandName}): ${members}; missing baseline: ${missing}`,
+    );
   }
 }
 
@@ -169,6 +197,12 @@ export function renderQaCoverageMarkdownReport(inventory: QaCoverageInventory): 
   for (const surface of Object.keys(inventory.bySurface).toSorted()) {
     lines.push(`### ${surface}`, "");
     pushFeatureLines(lines, inventory.bySurface[surface] ?? []);
+    lines.push("");
+  }
+
+  if (inventory.liveTransportLanes.length > 0) {
+    lines.push("## Live Transport Lanes", "");
+    pushLiveTransportLines(lines, inventory.liveTransportLanes);
     lines.push("");
   }
 
