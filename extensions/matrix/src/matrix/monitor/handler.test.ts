@@ -1235,6 +1235,71 @@ describe("matrix monitor handler pairing account scope", () => {
     expect(recordInboundSession).not.toHaveBeenCalled();
   });
 
+  it("still drops m.thread-relation replies when threadReplies is off and only a room-level binding/session exists", async () => {
+    // Regression for the discriminator bug ClawSweeper flagged on #85112: with
+    // threadReplies "off", resolveMatrixThreadRouting returns threadId undefined
+    // even when the event carries an m.thread relation, so any binding or session
+    // resolved against the room ID is room-scoped, not thread-scoped. The bypass
+    // must not fire in that case.
+    registerSessionBindingAdapter({
+      channel: "matrix",
+      accountId: "ops",
+      listBySession: () => [],
+      resolveByConversation: (ref) =>
+        ref.conversationId === "!room:example.org"
+          ? {
+              bindingId: "ops:room:!room:example.org",
+              targetSessionKey: "agent:ops:main",
+              targetKind: "session",
+              conversation: {
+                channel: "matrix",
+                accountId: "ops",
+                conversationId: "!room:example.org",
+              },
+              status: "active",
+              boundAt: Date.now(),
+              metadata: { boundBy: "focus-cmd" },
+            }
+          : null,
+      touch: vi.fn(),
+    });
+
+    const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
+      isDirectMessage: false,
+      threadReplies: "off",
+      bypassMentionInBoundThreads: true,
+      roomsConfig: {
+        "!room:example.org": { requireMention: true },
+      },
+      mentionRegexes: [/@bot/i],
+      readSessionUpdatedAt: () => Date.now() - 5_000,
+      client: {
+        getEvent: async () =>
+          createMatrixTextMessageEvent({
+            eventId: "$root",
+            sender: "@alice:example.org",
+            body: "@bot please help",
+          }),
+      },
+      getMemberDisplayName: async () => "sender",
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$thread-reply-room-scoped",
+        body: "follow up without mention",
+        relatesTo: {
+          rel_type: "m.thread",
+          event_id: "$root",
+          "m.in_reply_to": { event_id: "$root" },
+        },
+      }),
+    );
+
+    expect(recordInboundSession).not.toHaveBeenCalled();
+  });
+
   it("keeps threaded DMs flat when dm threadReplies is off", async () => {
     const { handler, finalizeInboundContext, recordInboundSession } =
       createMatrixHandlerTestHarness({

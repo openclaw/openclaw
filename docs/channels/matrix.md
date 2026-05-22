@@ -582,8 +582,12 @@ channels:
 
 When enabled, the inbound mention gate is skipped for events that satisfy ALL of:
 
-- The message is a reply inside an existing thread (it carries an `m.thread` relation to a root that is not the message itself — top-level messages that become new thread roots under `threadReplies: "always"` do **not** qualify).
-- The bot already has a runtime session binding for that thread (created automatically by `threadBindings.enabled` when the bot first replied in the thread).
+- The event is routed thread-scoped — i.e. a thread route was produced for it. That requires `threadReplies` to be `"inbound"` or `"always"` (`"off"` produces no thread route even when the event carries an `m.thread` relation) AND the message to be a reply inside an existing thread (the `m.thread` root is not the message itself — top-level messages that become new thread roots under `threadReplies: "always"` do **not** qualify).
+- EITHER of these thread-scoped signals exists:
+  - A persisted session record exists for the thread's session key — written by `recordInboundSession` the first time the bot processes a message in the thread. This is the natural-continuation path: it is set automatically once the bot has replied in the thread at least once.
+  - An explicit thread-scoped runtime binding exists — created by user-driven flows like `/focus` or `/acp bind` that bind the thread root to a session.
+
+Room-level bindings, room-level flat sessions, and account-level sessions do **not** satisfy the bypass — both signals are evaluated against the thread-suffixed session key resolved by `resolveMatrixThreadRouting`, so a binding or session that exists only for the room (or only for the account) will not bypass the mention gate on a thread reply.
 
 Top-level mention enforcement is unchanged: a new conversation still requires an `@bot` to engage. Inside an already-engaged thread, follow-ups flow naturally. The legacy contract — "thread-binding existence alone does not bypass mention" — is preserved when this flag is absent or `false`.
 
