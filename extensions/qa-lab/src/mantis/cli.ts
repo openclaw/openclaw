@@ -111,6 +111,7 @@ type MantisSlackDesktopSmokeCommanderOptions = {
   credentialRole?: string;
   credentialSource?: string;
   fast?: boolean;
+  freshPr?: string;
   gatewaySetup?: boolean;
   hydrateMode?: MantisSlackDesktopHydrateMode;
   idleTimeout?: string;
@@ -320,6 +321,7 @@ export function registerMantisCli(qa: Command) {
     .option("--class <class>", "Alias for --machine-class")
     .option("--market <market>", "Crabbox capacity market: spot or on-demand")
     .option("--lease-id <id>", "Reuse an existing Crabbox lease")
+    .option("--fresh-pr <spec>", "Use Crabbox fresh PR checkout instead of syncing the local tree")
     .option("--idle-timeout <duration>", "Crabbox idle timeout")
     .option("--ttl <duration>", "Crabbox maximum lease lifetime")
     .option("--keep-lease", "Keep a lease created by this run after a passing smoke")
@@ -355,6 +357,7 @@ export function registerMantisCli(qa: Command) {
         credentialRole: opts.credentialRole,
         credentialSource: opts.credentialSource,
         fastMode: opts.fast,
+        freshPr: opts.freshPr,
         gatewaySetup: opts.gatewaySetup,
         hydrateMode: opts.hydrateMode,
         idleTimeout: opts.idleTimeout,

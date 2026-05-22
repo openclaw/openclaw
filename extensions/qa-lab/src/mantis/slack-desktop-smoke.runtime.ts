@@ -29,6 +29,7 @@ export type MantisSlackDesktopSmokeOptions = {
   credentialSource?: string;
   env?: NodeJS.ProcessEnv;
   fastMode?: boolean;
+  freshPr?: string;
   gatewaySetup?: boolean;
   hydrateMode?: MantisSlackDesktopHydrateMode;
   idleTimeout?: string;
@@ -1018,6 +1019,7 @@ export async function runMantisSlackDesktopSmoke(
   const primaryModel = trimToValue(opts.primaryModel) ?? DEFAULT_MODEL;
   const alternateModel = trimToValue(opts.alternateModel) ?? primaryModel;
   const fastMode = opts.fastMode ?? true;
+  const freshPr = trimToValue(opts.freshPr);
   const hydrateMode =
     normalizeHydrateMode(opts.hydrateMode) ??
     normalizeHydrateMode(env[HYDRATE_MODE_ENV]) ??
@@ -1096,6 +1098,7 @@ export async function runMantisSlackDesktopSmoke(
     leaseHeartbeat = preparedCredentialEnv.leaseHeartbeat;
     let remoteRunError: unknown;
     const remoteRunStartedAt = new Date();
+    const freshPrArgs = freshPr ? ["--fresh-pr", freshPr] : [];
     await runCommand({
       command: crabboxBin,
       args: [
@@ -1107,6 +1110,7 @@ export async function runMantisSlackDesktopSmoke(
         "--desktop",
         "--browser",
         "--no-hydrate",
+        ...freshPrArgs,
         "--shell",
         "--",
         renderRemoteScript({

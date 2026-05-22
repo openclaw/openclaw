@@ -223,6 +223,7 @@ jobs:
           CRABBOX_MARKET: ${{ inputs.crabbox_market }}
           KEEP_VM: ${{ inputs.keep_vm }}
           HYDRATE_MODE: ${{ inputs.hydrate_mode }}
+          PR_NUMBER: ${{ inputs.pr_number }}
           SCENARIO_ID: ${{ inputs.scenario_id }}
           APPROVAL_CHECKPOINTS: ${{ inputs.approval_checkpoints }}
         shell: bash
@@ -263,6 +264,10 @@ jobs:
           if [[ -n "${CRABBOX_LEASE_ID:-}" ]]; then
             lease_args=(--lease-id "$CRABBOX_LEASE_ID")
           fi
+          fresh_pr_args=()
+          if [[ -n "${PR_NUMBER:-}" ]]; then
+            fresh_pr_args=(--fresh-pr "${GITHUB_REPOSITORY}#${PR_NUMBER}")
+          fi
           keep_args=()
           if [[ "$KEEP_VM" == "true" ]]; then
             keep_args=(--keep-lease)
@@ -298,6 +303,7 @@ jobs:
             --fast \
             "${mode_args[@]}" \
             "${keep_args[@]}" \
+            "${fresh_pr_args[@]}" \
             "${lease_args[@]}"
           mantis_exit=$?
           set -e
