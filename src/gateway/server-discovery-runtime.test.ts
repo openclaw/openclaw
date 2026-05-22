@@ -245,6 +245,44 @@ describe("startGatewayDiscovery", () => {
     expect(result.bonjourStop).toBeNull();
   });
 
+  it("logs a warning and skips zone writes when wide-area config is invalid", async () => {
+    process.env.NODE_ENV = "development";
+    delete process.env.VITEST;
+
+    // Drive the gateway through the REAL resolver so an invalid configured
+    // domain flows through normalizeWideAreaDomain → caught → null, exactly
+    // as it does at runtime when an operator boots the gateway with
+    // discovery.wideArea.domain set to a non-DNS string.
+    const widearea = await vi.importActual<typeof import("../infra/widearea-dns.js")>(
+      "../infra/widearea-dns.js",
+    );
+    mocks.resolveWideAreaDiscoveryDomain.mockImplementationOnce(
+      widearea.resolveWideAreaDiscoveryDomain,
+    );
+
+    const logs = makeLogs();
+
+    const result = await startGatewayDiscovery({
+      machineDisplayName: "Lab Mac",
+      port: 18789,
+      gatewayTls: { enabled: false },
+      wideAreaDiscoveryEnabled: true,
+      wideAreaDiscoveryDomain: "foo/bar",
+      tailscaleMode: "serve",
+      mdnsMode: "off",
+      gatewayDiscoveryServices: [],
+      logDiscovery: logs,
+    });
+
+    expect(mocks.writeWideAreaGatewayZone).not.toHaveBeenCalled();
+    expect(logs.warn.mock.calls).toEqual([
+      [
+        "discovery.wideArea.enabled is true, but no domain was configured; set discovery.wideArea.domain to enable unicast DNS-SD",
+      ],
+    ]);
+    expect(result.bonjourStop).toBeNull();
+  });
+
   it("omits the CLI path from wide-area DNS-SD in minimal mode", async () => {
     process.env.NODE_ENV = "development";
     delete process.env.VITEST;
