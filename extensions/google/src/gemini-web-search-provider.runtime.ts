@@ -19,6 +19,7 @@ import {
   resolveSearchCount,
   resolveSearchTimeoutSeconds,
   type SearchConfigRecord,
+  withSelfHostedWebSearchEndpoint,
   withTrustedWebSearchEndpoint,
   wrapWebContent,
   writeCachedSearchPayload,
@@ -182,7 +183,18 @@ async function runGeminiSearch(params: {
   const googleSearch =
     params.timeRangeFilter === undefined ? {} : { timeRangeFilter: params.timeRangeFilter };
 
-  return withTrustedWebSearchEndpoint(
+  let isGoogleDomain = false;
+  try {
+    const parsed = new URL(params.baseUrl);
+    isGoogleDomain = parsed.hostname.endsWith("googleapis.com");
+  } catch {
+    // ignore
+  }
+  const withEndpoint = isGoogleDomain
+    ? withTrustedWebSearchEndpoint
+    : withSelfHostedWebSearchEndpoint;
+
+  return withEndpoint(
     {
       url: endpoint,
       timeoutSeconds: params.timeoutSeconds,

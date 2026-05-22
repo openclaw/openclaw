@@ -166,6 +166,34 @@ describe("google web search provider", () => {
     );
   });
 
+  it("routes Gemini web search through self-hosted endpoint wrapper for private/local IP baseUrl", async () => {
+    const mockFetch = installGeminiFetch();
+    const provider = createGeminiWebSearchProvider();
+    const tool = provider.createTool({
+      config: {
+        plugins: {
+          entries: {
+            google: {
+              config: {
+                webSearch: {
+                  apiKey: "AIza-plugin-test",
+                  baseUrl: "http://192.168.249.129:4000/v1beta",
+                },
+              },
+            },
+          },
+        },
+      },
+      searchConfig: { provider: "gemini" },
+    });
+
+    await tool?.execute({ query: "OpenClaw docs" });
+
+    expect(getGeminiFetchUrl(mockFetch)).toBe(
+      "http://192.168.249.129:4000/v1beta/models/gemini-2.5-flash:generateContent",
+    );
+  });
+
   it("reports malformed Gemini API JSON with a stable provider error", async () => {
     vi.stubGlobal(
       "fetch",
