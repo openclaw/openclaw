@@ -19,6 +19,9 @@ import { defaultRuntime } from "../runtime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
+import { renderTable } from "../terminal/table.js";
+import { getSkillUsage } from "../agents/skills/usage-tracker.js";
+import type { SkillUsageEntry } from "../agents/skills/usage-tracker.js";
 import { CONFIG_DIR } from "../utils.js";
 import { resolveOptionFromCommand } from "./cli-utils.js";
 import { formatSkillInfo, formatSkillsCheck, formatSkillsList } from "./skills-cli.format.js";
@@ -29,6 +32,85 @@ export type {
   SkillsListOptions,
 } from "./skills-cli.format.js";
 export { formatSkillInfo, formatSkillsCheck, formatSkillsList } from "./skills-cli.format.js";
+
+export type SkillsUsageOptions = {
+  json?: boolean;
+  since?: string; // e.g., "7d", "24h"
+  agent?: string;
+};
+
+function parseSinceMs(since: string): number {
+  const trimmed = since.trim().toLowerCase();
+  const match = trimmed.match(/^(\d+)\s*(d|h|min|m|w)$/);
+  if (!match) return 7 * 24 * 60 * 60 * 1000;
+  const value = Number.parseInt(match[1], 10);
+  const unit = match[2];
+  switch (unit) {
+    case "w": return value * 7 * 24 * 60 * 60 * 1000;
+    case "d": return value * 24 * 60 * 60 * 1000;
+    case "h": return value * 60 * 60 * 1000;
+    case "min": case "m": return value * 60 * 1000;
+    default: return 7 * 24 * 60 * 60 * 1000;
+  }
+}
+
+export function formatSkillsUsage(agentId: string, opts: SkillsUsageOptions): string {
+  const data = getSkillUsage(agentId);
+  const { skills } = data;
+  const skillNames = Object.keys(skills);
+
+  if (opts.json) return JSON.stringify(data, null, 2);
+  if (skillNames.length === 0) return `No skill usage recorded for agent "${agentId}".`;
+
+  const sinceMs = opts.since ? parseSinceMs(opts.since) : undefined;
+  const cutoff = sinceMs !== undefined ? Date.now() - sinceMs : 0;
+
+  const rows: Array<{ Skill: string; Calls: string; Time: string; Last: string }> = [];
+
+  for (const name of skillNames) {
+    const entry = skills[name] as SkillUsageEntry | undefined;
+    if (!entry) continue;
+    const filtered = sinceMs !== undefined
+      ? entry.invocations.filter((inv) => new Date(inv.timestamp).getTime() >= cutoff)
+      : entry.invocations;
+    const count = filtered.length;
+    if (count === 0) continue;
+
+    const totalMs = filtered.reduce((sum, inv) => sum + (inv.durationMs || 0), 0);
+    const time = totalMs >= 60_000 ? `${(totalMs / 60_000).toFixed(1)}min`
+      : totalMs >= 1_000 ? `${(totalMs / 1_000).toFixed(1)}s` : `${totalMs}ms`;
+    const ageMs = Date.now() - new Date(entry.lastUsed).getTime();
+    const last = ageMs < 60_000 ? "just now"
+      : ageMs < 3_600_000 ? `${Math.round(ageMs / 60_000)}m ago`
+      : ageMs < 86_400_000 ? `${Math.round(ageMs / 3_600_000)}h ago`
+      : `${Math.round(ageMs / 86_400_000)}d ago`;
+
+    rows.push({ Skill: name, Calls: String(count), Time: time, Last: last });
+  }
+
+  if (rows.length === 0) {
+    const label = opts.since ? ` (since ${opts.since})` : "";
+    return `No skill usage recorded for agent "${agentId}"${label}.`;
+  }
+
+  rows.sort((a, b) => Number.parseInt(b.Calls, 10) - Number.parseInt(a.Calls, 10));
+
+  const label = opts.since ? ` (since ${opts.since})` : "";
+  const lines: string[] = [];
+  lines.push(`${theme.heading("Skill Usage")} ${theme.muted(`\u2013 agent "${agentId}"${label}`)}`);
+  lines.push("");
+  lines.push(renderTable({
+    width: 80,
+    columns: [
+      { key: "Skill", header: "Skill", minWidth: 20, flex: true },
+      { key: "Calls", header: "Calls", minWidth: 8 },
+      { key: "Time", header: "Total time", minWidth: 12 },
+      { key: "Last", header: "Last used", minWidth: 14 },
+    ],
+    rows,
+  }).trimEnd());
+  return lines.join("\n");
+}
 
 type SkillStatusReport = Awaited<
   ReturnType<(typeof import("../agents/skills-status.js"))["buildWorkspaceSkillStatus"]>
@@ -331,6 +413,24 @@ export function registerSkillsCli(program: Command) {
       await runSkillsAction((report) => formatSkillsCheck(report, opts), {
         agentId: resolveAgentOption(command, opts),
       });
+    });
+
+  // Usage subcommand
+  skills
+    .command("usage")
+    .description("Show skill usage telemetry")
+    .option("--since <duration>", "Filter by time (e.g., 7d, 24h, 30min)", "7d")
+    .option("--agent <id>", "Agent ID to query (default: default agent)")
+    .option("--json", "Output as JSON", false)
+    .action(async (opts: { json?: boolean; since?: string; agent?: string }) => {
+      try {
+        const config = getRuntimeConfig();
+        const agentId = opts.agent ?? resolveDefaultAgentId(config);
+        defaultRuntime.log(formatSkillsUsage(agentId, opts as SkillsUsageOptions));
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
     });
 
   // Default action (no subcommand) - show list
