@@ -469,6 +469,8 @@ export function createMSTeamsReplyDispatcher(params: {
               title?: string;
               name?: string;
               status?: string;
+              outcomeClassification?: "success" | "benign_no_result" | "failure";
+              statusLabel?: string;
               exitCode?: number | null;
             }) => {
               if (payload.phase !== "end") {
@@ -481,6 +483,8 @@ export function createMSTeamsReplyDispatcher(params: {
                   title: payload.title,
                   name: payload.name,
                   status: payload.status,
+                  outcomeClassification: payload.outcomeClassification,
+                  statusLabel: payload.statusLabel,
                   exitCode: payload.exitCode,
                 }),
               );

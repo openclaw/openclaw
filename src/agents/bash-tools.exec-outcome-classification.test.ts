@@ -178,6 +178,17 @@ describe("classifyExecOutcome", () => {
     ).toBe("failure");
   });
 
+  it("does not downgrade downstream pipeline failures after xargs rg", () => {
+    expect(
+      classifyExecOutcome({
+        command: "find docs -type f | xargs rg 'missing phrase' | xargs false",
+        status: "completed",
+        exitCode: 123,
+        aggregated: "\n\n(Command exited with code 123)",
+      }),
+    ).toBe("failure");
+  });
+
   it("does not downgrade xargs commands that receive rg text but launch another command", () => {
     expect(
       classifyExecOutcome({

@@ -136,7 +136,7 @@ function isXargsRgNoMatch(params: { command: string; exitCode: number }): boolea
     return false;
   }
 
-  return segments.some((segment) => xargsCommandLaunchesRg(segment));
+  return xargsCommandLaunchesRg(segments.at(-1) ?? "");
 }
 
 function xargsCommandLaunchesRg(segment: string): boolean {
