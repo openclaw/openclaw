@@ -275,8 +275,9 @@ Generic model:
 - host exec policy still decides whether exec approval is required
 - `approvals.exec` controls forwarding approval prompts to other chat destinations
 - `channels.<channel>.execApprovals` controls whether that channel acts as a native approval client
-- Slack plugin approvals can use the native Slack approval client through `approvals.plugin`
-  session or target routing even when Slack exec approvals are disabled
+- Slack plugin approvals can use Slack's native approval client when the request comes from Slack
+  and Slack plugin approvers resolve; `approvals.plugin` can also route plugin approvals to Slack
+  sessions or targets even when Slack exec approvals are disabled
 
 Native approval clients auto-enable DM-first delivery when all of these are true:
 

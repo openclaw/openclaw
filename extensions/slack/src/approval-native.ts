@@ -23,7 +23,6 @@ import { getSlackApprovalApprovers, isSlackApprovalAuthorizedSender } from "./ap
 import {
   isSlackAnyNativeApprovalClientEnabled,
   resolveSlackApprovalKind,
-  shouldDeliverSlackNativeApprovalRequest,
   shouldHandleSlackNativeApprovalRequest,
   type SlackApprovalKind,
   type SlackNativeApprovalRequest,
@@ -42,13 +41,13 @@ type SlackOriginTarget = { to: string; threadId?: string };
 type SlackDeliverySuppressionInput = {
   cfg: Parameters<typeof shouldHandleSlackNativeApprovalRequest>[0]["cfg"];
   approvalKind: ApprovalKind;
-  target: { channel: string; accountId?: string | null };
-  request: {
-    request: {
-      turnSourceChannel?: string | null;
-      turnSourceAccountId?: string | null;
-    };
+  target: {
+    channel: string;
+    to?: string | null;
+    accountId?: string | null;
+    threadId?: string | number | null;
   };
+  request: ApprovalRequest;
 };
 
 const SLACK_DM_CHANNEL_ID_RE = /^D[A-Z0-9]{8,}$/i;
@@ -69,15 +68,6 @@ function normalizeComparableTarget(value: string): string {
 }
 
 function normalizeSlackThreadMatchKey(threadId?: string): string {
-  const trimmed = threadId?.trim();
-  if (!trimmed) {
-    return "";
-  }
-  const leadingEpoch = trimmed.match(/^\d+/)?.[0];
-  return leadingEpoch ?? trimmed;
-}
-
-function normalizeSlackExactThreadMatchKey(threadId?: string): string {
   return threadId?.trim() ?? "";
 }
 
@@ -187,12 +177,7 @@ function slackTargetsMatch(a: SlackOriginTarget, b: SlackOriginTarget): boolean 
   ) {
     return true;
   }
-  const exactThreadKey = normalizeSlackExactThreadMatchKey(a.threadId);
-  return Boolean(
-    exactThreadKey &&
-    exactThreadKey === normalizeSlackExactThreadMatchKey(b.threadId) &&
-    isSlackDmChannelToUserRoutePair(a, b),
-  );
+  return Boolean(threadKey && isSlackDmChannelToUserRoutePair(a, b));
 }
 
 function resolveSlackNativeSuppressionAccountId({
@@ -217,6 +202,44 @@ function shouldConsiderSlackNativeForwardingSuppression(
   }
   const turnSourceChannel = normalizeMessageChannel(input.request.request.turnSourceChannel);
   return turnSourceChannel === "slack";
+}
+
+function resolveForwardingFallbackSlackTarget(
+  target: SlackDeliverySuppressionInput["target"],
+): SlackOriginTarget | null {
+  const to = normalizeOptionalString(target.to);
+  if (!to) {
+    return null;
+  }
+  const parsed = parseSlackTarget(to, { defaultKind: "channel" });
+  if (!parsed) {
+    return null;
+  }
+  return {
+    to: `${parsed.kind}:${parsed.id}`,
+    threadId: stringifyRouteThreadId(target.threadId),
+  };
+}
+
+function isSlackPluginForwardingFallbackHandledNatively(
+  input: SlackDeliverySuppressionInput,
+): boolean {
+  const forwardingTarget = resolveForwardingFallbackSlackTarget(input.target);
+  if (!forwardingTarget) {
+    return false;
+  }
+  const request = input.request;
+  const originTarget =
+    resolveTurnSourceSlackOriginTarget(request) ?? resolveSlackFallbackOriginTarget(request);
+  if (originTarget && slackTargetsMatch(forwardingTarget, originTarget)) {
+    return true;
+  }
+  return resolveSlackApproverDmTargets({
+    cfg: input.cfg,
+    accountId: resolveSlackNativeSuppressionAccountId(input),
+    approvalKind: input.approvalKind,
+    request,
+  }).some((target) => slackTargetsMatch(forwardingTarget, target));
 }
 
 const resolveSlackOriginTarget = createChannelNativeOriginTargetResolver({
@@ -244,6 +267,7 @@ function resolveSlackApproverDmTargets(params: {
     !shouldHandleSlackNativeApprovalRequest({
       cfg: params.cfg,
       accountId: params.accountId,
+      approvalKind: params.approvalKind,
       request: params.request,
     })
   ) {
@@ -292,7 +316,7 @@ const baseSlackApprovalCapability = createApproverRestrictedNativeApprovalCapabi
         accountId,
       }),
     shouldHandle: ({ cfg, accountId, request }) =>
-      shouldDeliverSlackNativeApprovalRequest({
+      shouldHandleSlackNativeApprovalRequest({
         cfg,
         accountId,
         approvalKind: resolveSlackApprovalKind(request),
@@ -315,12 +339,16 @@ export const slackApprovalCapability: ChannelApprovalCapability = {
       if (!shouldConsiderSlackNativeForwardingSuppression(slackInput)) {
         return false;
       }
-      return shouldDeliverSlackNativeApprovalRequest({
+      const canHandleNative = shouldHandleSlackNativeApprovalRequest({
         cfg: slackInput.cfg,
         accountId: resolveSlackNativeSuppressionAccountId(slackInput),
         approvalKind: slackInput.approvalKind,
-        request: slackInput.request as ApprovalRequest,
+        request: slackInput.request,
       });
+      if (!canHandleNative || slackInput.approvalKind !== "plugin") {
+        return canHandleNative;
+      }
+      return isSlackPluginForwardingFallbackHandledNatively(slackInput);
     },
   },
   native: baseSlackNativeAdapter
