@@ -1,6 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { statSync } from "node:fs";
 import fs from "node:fs/promises";
+import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
+import { withOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
 import { isSessionWriteLockTimeoutError } from "../../session-write-lock-error.js";
 import type { acquireSessionWriteLock } from "../../session-write-lock.js";
 
@@ -15,6 +18,10 @@ type LockOptions = {
   timeoutMs: number;
   staleMs: number;
   maxHoldMs: number;
+};
+
+type SessionWriteLockRunOptions = {
+  publishOwnedWrite?: boolean;
 };
 
 type SessionEventProcessor = {
@@ -123,6 +130,18 @@ type SessionFileFingerprint =
       ctimeNs: bigint;
     };
 
+const TRANSCRIPT_ONLY_OPENCLAW_ASSISTANT_MODELS = new Set(["delivery-mirror", "gateway-injected"]);
+const MAX_BENIGN_SESSION_FENCE_ADVANCE_BYTES = 1024 * 1024;
+const MAX_BENIGN_SESSION_FENCE_REWRITE_BYTES = 8 * 1024 * 1024;
+const MAX_BENIGN_SESSION_FENCE_REWRITE_RESULT_BYTES =
+  MAX_BENIGN_SESSION_FENCE_REWRITE_BYTES + MAX_BENIGN_SESSION_FENCE_ADVANCE_BYTES;
+const MAX_SAFE_FILE_OFFSET = BigInt(Number.MAX_SAFE_INTEGER);
+
+type SessionFileFenceSnapshot = {
+  fingerprint: SessionFileFingerprint;
+  text?: string;
+};
+
 function sameSessionFileFingerprint(
   left: SessionFileFingerprint | undefined,
   right: SessionFileFingerprint,
@@ -140,6 +159,296 @@ function sameSessionFileFingerprint(
     left.mtimeNs === right.mtimeNs &&
     left.ctimeNs === right.ctimeNs
   );
+}
+
+function sameSessionFileIdentity(
+  left: SessionFileFingerprint | undefined,
+  right: SessionFileFingerprint,
+): boolean {
+  return Boolean(left?.exists && right.exists && left.dev === right.dev && left.ino === right.ino);
+}
+
+function splitSessionFileLines(text: string): string[] {
+  return text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function isJsonRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isTranscriptOnlyOpenClawAssistantLine(line: string): boolean {
+  try {
+    const parsed = JSON.parse(line) as unknown;
+    if (!isJsonRecord(parsed)) {
+      return false;
+    }
+    const message = parsed.message;
+    if (!isJsonRecord(message)) {
+      return false;
+    }
+    return (
+      message.role === "assistant" &&
+      message.provider === "openclaw" &&
+      typeof message.model === "string" &&
+      TRANSCRIPT_ONLY_OPENCLAW_ASSISTANT_MODELS.has(message.model)
+    );
+  } catch {
+    return false;
+  }
+}
+
+function normalizeTranscriptEntryId(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}
+
+function omitRecordKeys(
+  record: Record<string, unknown>,
+  keys: Set<string>,
+): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(record)) {
+    if (!keys.has(key)) {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+
+function lineMatchesLinearTranscriptMigration(params: {
+  previousLine: string;
+  currentLine: string;
+  expectedParentId: string | null;
+}): { ok: true; nextPreviousId?: string } | { ok: false } {
+  let previousParsed: unknown;
+  let currentParsed: unknown;
+  try {
+    previousParsed = JSON.parse(params.previousLine);
+    currentParsed = JSON.parse(params.currentLine);
+  } catch {
+    return params.previousLine === params.currentLine ? { ok: true } : { ok: false };
+  }
+  if (!isJsonRecord(previousParsed)) {
+    return params.previousLine === params.currentLine ? { ok: true } : { ok: false };
+  }
+  if (!isJsonRecord(currentParsed)) {
+    return { ok: false };
+  }
+  if (previousParsed.type === "session") {
+    return isDeepStrictEqual(
+      omitRecordKeys(previousParsed, new Set(["version"])),
+      omitRecordKeys(currentParsed, new Set(["version"])),
+    )
+      ? { ok: true }
+      : { ok: false };
+  }
+
+  const previousId = normalizeTranscriptEntryId(previousParsed.id);
+  const currentId = normalizeTranscriptEntryId(currentParsed.id);
+  if (previousId ? currentId !== previousId : !currentId) {
+    return { ok: false };
+  }
+  if (Object.hasOwn(previousParsed, "parentId")) {
+    if (!isDeepStrictEqual(previousParsed.parentId, currentParsed.parentId)) {
+      return { ok: false };
+    }
+  } else if (!isDeepStrictEqual(currentParsed.parentId, params.expectedParentId)) {
+    return { ok: false };
+  }
+
+  return isDeepStrictEqual(
+    omitRecordKeys(previousParsed, new Set(["id", "parentId"])),
+    omitRecordKeys(currentParsed, new Set(["id", "parentId"])),
+  )
+    ? { ok: true, nextPreviousId: currentId }
+    : { ok: false };
+}
+
+async function readAppendedSessionFileText(params: {
+  sessionFile: string;
+  previous: Extract<SessionFileFingerprint, { exists: true }>;
+  current: Extract<SessionFileFingerprint, { exists: true }>;
+}): Promise<string | undefined> {
+  if (params.current.size <= params.previous.size || params.previous.size > MAX_SAFE_FILE_OFFSET) {
+    return undefined;
+  }
+  const appendedBytes = params.current.size - params.previous.size;
+  if (
+    appendedBytes > BigInt(MAX_BENIGN_SESSION_FENCE_ADVANCE_BYTES) ||
+    appendedBytes > MAX_SAFE_FILE_OFFSET
+  ) {
+    return undefined;
+  }
+  const length = Number(appendedBytes);
+  const buffer = Buffer.alloc(length);
+  const file = await fs.open(params.sessionFile, "r");
+  try {
+    const { bytesRead } = await file.read(buffer, 0, length, Number(params.previous.size));
+    if (bytesRead !== length) {
+      return undefined;
+    }
+  } finally {
+    await file.close();
+  }
+  return buffer.toString("utf8");
+}
+
+async function readSessionFileFenceSnapshot(
+  sessionFile: string,
+): Promise<SessionFileFenceSnapshot> {
+  const fingerprint = await readSessionFileFingerprint(sessionFile);
+  if (
+    !fingerprint.exists ||
+    fingerprint.size > BigInt(MAX_BENIGN_SESSION_FENCE_REWRITE_BYTES) ||
+    fingerprint.size > MAX_SAFE_FILE_OFFSET
+  ) {
+    return { fingerprint };
+  }
+  try {
+    return {
+      fingerprint,
+      text: await fs.readFile(sessionFile, "utf8"),
+    };
+  } catch {
+    return { fingerprint };
+  }
+}
+
+async function sessionFenceAdvanceIsBenign(params: {
+  sessionFile: string;
+  previous: SessionFileFenceSnapshot | undefined;
+  current: SessionFileFingerprint;
+}): Promise<boolean> {
+  if (
+    !params.previous?.fingerprint.exists ||
+    !params.current.exists ||
+    !sameSessionFileIdentity(params.previous.fingerprint, params.current)
+  ) {
+    return false;
+  }
+  const text = await readAppendedSessionFileText({
+    sessionFile: params.sessionFile,
+    previous: params.previous.fingerprint,
+    current: params.current,
+  });
+  if (!text?.endsWith("\n")) {
+    return false;
+  }
+  const lines = text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  return lines.length > 0 && lines.every(isTranscriptOnlyOpenClawAssistantLine);
+}
+
+async function sessionFenceRewriteIsBenign(params: {
+  sessionFile: string;
+  previous: SessionFileFenceSnapshot | undefined;
+  current: SessionFileFingerprint;
+}): Promise<boolean> {
+  if (
+    !params.previous?.fingerprint.exists ||
+    !params.current.exists ||
+    !params.previous.text ||
+    !sameSessionFileIdentity(params.previous.fingerprint, params.current) ||
+    params.current.size > BigInt(MAX_BENIGN_SESSION_FENCE_REWRITE_RESULT_BYTES) ||
+    params.current.size > MAX_SAFE_FILE_OFFSET
+  ) {
+    return false;
+  }
+  let currentText: string;
+  try {
+    currentText = await fs.readFile(params.sessionFile, "utf8");
+  } catch {
+    return false;
+  }
+  if (!currentText.endsWith("\n")) {
+    return false;
+  }
+  const previousLines = splitSessionFileLines(params.previous.text);
+  const currentLines = splitSessionFileLines(currentText);
+  if (currentLines.length <= previousLines.length) {
+    return false;
+  }
+  let expectedParentId: string | null = null;
+  for (let index = 0; index < previousLines.length; index += 1) {
+    const lineMatch = lineMatchesLinearTranscriptMigration({
+      previousLine: previousLines[index] ?? "",
+      currentLine: currentLines[index] ?? "",
+      expectedParentId,
+    });
+    if (!lineMatch.ok) {
+      return false;
+    }
+    expectedParentId = lineMatch.nextPreviousId ?? expectedParentId;
+  }
+  const appendedLines = currentLines.slice(previousLines.length);
+  return appendedLines.every(isTranscriptOnlyOpenClawAssistantLine);
+}
+
+type OwnedSessionFileWrite = {
+  generation: number;
+  fingerprint: SessionFileFingerprint;
+};
+
+type TrustedSessionFileState = {
+  generation: number;
+  fingerprint: SessionFileFingerprint;
+};
+
+// Controllers in the same OpenClaw process can legitimately take turns writing
+// the same session file while another attempt is released for model I/O. Track
+// only fingerprints that changed while OpenClaw held the write lock so the
+// takeover fence can distinguish those locked in-process writes from unowned
+// external file changes.
+const ownedSessionFileWrites = new Map<string, OwnedSessionFileWrite>();
+const trustedSessionFileStates = new Map<string, TrustedSessionFileState>();
+let ownedSessionFileWriteGeneration = 0;
+
+function resolveSessionFileFenceKey(sessionFile: string): string {
+  return path.resolve(sessionFile);
+}
+
+function recordOwnedSessionFileWrite(
+  sessionFileKey: string,
+  fingerprint: SessionFileFingerprint,
+): number {
+  ownedSessionFileWriteGeneration += 1;
+  const state = {
+    generation: ownedSessionFileWriteGeneration,
+    fingerprint,
+  };
+  ownedSessionFileWrites.set(sessionFileKey, state);
+  trustedSessionFileStates.set(sessionFileKey, state);
+  return ownedSessionFileWriteGeneration;
+}
+
+function trustSessionFileState(
+  sessionFileKey: string,
+  fingerprint: SessionFileFingerprint,
+): number | undefined {
+  const trusted = trustedSessionFileStates.get(sessionFileKey);
+  if (trusted) {
+    return sameSessionFileFingerprint(trusted.fingerprint, fingerprint)
+      ? trusted.generation
+      : undefined;
+  }
+  ownedSessionFileWriteGeneration += 1;
+  trustedSessionFileStates.set(sessionFileKey, {
+    generation: ownedSessionFileWriteGeneration,
+    fingerprint,
+  });
+  return ownedSessionFileWriteGeneration;
+}
+
+function isTrustedSessionFileState(
+  sessionFileKey: string,
+  fingerprint: SessionFileFingerprint,
+): boolean {
+  const trusted = trustedSessionFileStates.get(sessionFileKey);
+  return !!trusted && sameSessionFileFingerprint(trusted.fingerprint, fingerprint);
 }
 
 async function readSessionFileFingerprint(sessionFile: string): Promise<SessionFileFingerprint> {
@@ -313,8 +622,12 @@ export function installSessionExternalHookWriteLock(params: {
 export type EmbeddedAttemptSessionLockController = {
   releaseForPrompt(): Promise<void>;
   refreshAfterOwnedSessionWrite(): void;
+  reacquireAfterPrompt(): Promise<void>;
   waitForSessionEvents(session: unknown): Promise<void>;
-  withSessionWriteLock<T>(run: () => Promise<T> | T): Promise<T>;
+  withSessionWriteLock<T>(
+    run: () => Promise<T> | T,
+    options?: SessionWriteLockRunOptions,
+  ): Promise<T>;
   acquireForCleanup(params?: { session?: unknown }): Promise<SessionLock>;
   hasSessionTakeover(): boolean;
 };
@@ -334,8 +647,11 @@ export async function createEmbeddedAttemptSessionLockController(params: {
   let heldLock: SessionLock | undefined = await acquireLock();
   const activeWriteLock = new AsyncLocalStorage<ActiveWriteLockState>();
   let fenceFingerprint: SessionFileFingerprint | undefined;
+  let fenceSnapshot: SessionFileFenceSnapshot | undefined;
+  let fenceGeneration = 0;
   let fenceActive = false;
   let takeoverDetected = false;
+  const sessionFileFenceKey = resolveSessionFileFenceKey(params.lockOptions.sessionFile);
 
   async function acquireWriteLock(): Promise<{ lock: SessionLock; owned: boolean }> {
     if (heldLock) {
@@ -356,15 +672,81 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       return;
     }
     const current = await readSessionFileFingerprint(params.lockOptions.sessionFile);
-    if (!sameSessionFileFingerprint(fenceFingerprint, current)) {
-      takeoverDetected = true;
-      throw new EmbeddedAttemptSessionTakeoverError(params.lockOptions.sessionFile);
+    if (sameSessionFileFingerprint(fenceFingerprint, current)) {
+      return;
+    }
+
+    const ownedWrite = ownedSessionFileWrites.get(sessionFileFenceKey);
+    if (
+      ownedWrite &&
+      ownedWrite.generation > fenceGeneration &&
+      sameSessionFileFingerprint(ownedWrite.fingerprint, current)
+    ) {
+      fenceFingerprint = current;
+      fenceSnapshot = { fingerprint: current };
+      fenceGeneration = ownedWrite.generation;
+      return;
+    }
+
+    if (
+      (await sessionFenceAdvanceIsBenign({
+        sessionFile: params.lockOptions.sessionFile,
+        previous: fenceSnapshot,
+        current,
+      })) ||
+      (await sessionFenceRewriteIsBenign({
+        sessionFile: params.lockOptions.sessionFile,
+        previous: fenceSnapshot,
+        current,
+      }))
+    ) {
+      fenceSnapshot = await readSessionFileFenceSnapshot(params.lockOptions.sessionFile);
+      fenceFingerprint = fenceSnapshot.fingerprint;
+      fenceGeneration = trustSessionFileState(sessionFileFenceKey, current) ?? fenceGeneration;
+      return;
+    }
+
+    takeoverDetected = true;
+    throw new EmbeddedAttemptSessionTakeoverError(params.lockOptions.sessionFile);
+  }
+
+  async function publishOwnedSessionFileWriteIfChanged(
+    beforeWrite: SessionFileFingerprint,
+  ): Promise<{
+    fingerprint: SessionFileFingerprint;
+    generation: number;
+  } | null> {
+    const fingerprint = await readSessionFileFingerprint(params.lockOptions.sessionFile);
+    if (sameSessionFileFingerprint(beforeWrite, fingerprint)) {
+      return null;
+    }
+    if (!isTrustedSessionFileState(sessionFileFenceKey, beforeWrite)) {
+      return null;
+    }
+    const generation = recordOwnedSessionFileWrite(sessionFileFenceKey, fingerprint);
+    return { fingerprint, generation };
+  }
+
+  async function refreshSessionFileFence(beforeWrite: SessionFileFingerprint): Promise<void> {
+    if (takeoverDetected) {
+      return;
+    }
+    const snapshot = await readSessionFileFenceSnapshot(params.lockOptions.sessionFile);
+    if (!sameSessionFileFingerprint(beforeWrite, snapshot.fingerprint) && fenceActive) {
+      fenceFingerprint = snapshot.fingerprint;
+      fenceSnapshot = snapshot;
     }
   }
 
-  async function refreshSessionFileFence(): Promise<void> {
-    if (fenceActive && !takeoverDetected) {
-      fenceFingerprint = await readSessionFileFingerprint(params.lockOptions.sessionFile);
+  async function publishOwnedSessionFileFence(beforeWrite: SessionFileFingerprint): Promise<void> {
+    if (takeoverDetected) {
+      return;
+    }
+    const ownedWrite = await publishOwnedSessionFileWriteIfChanged(beforeWrite);
+    if (ownedWrite && fenceActive) {
+      fenceFingerprint = ownedWrite.fingerprint;
+      fenceSnapshot = await readSessionFileFenceSnapshot(params.lockOptions.sessionFile);
+      fenceGeneration = ownedWrite.generation;
     }
   }
 
@@ -377,31 +759,70 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       }
       const lock = heldLock;
       heldLock = undefined;
-      fenceFingerprint = await readSessionFileFingerprint(params.lockOptions.sessionFile);
+      const fingerprint = await readSessionFileFingerprint(params.lockOptions.sessionFile);
+      const ownedWrite = ownedSessionFileWrites.get(sessionFileFenceKey);
+      const trustedGeneration = trustSessionFileState(sessionFileFenceKey, fingerprint);
+      fenceFingerprint = fingerprint;
+      fenceSnapshot = await readSessionFileFenceSnapshot(params.lockOptions.sessionFile);
+      fenceGeneration =
+        ownedWrite && sameSessionFileFingerprint(ownedWrite.fingerprint, fingerprint)
+          ? ownedWrite.generation
+          : (trustedGeneration ?? fenceGeneration);
       fenceActive = true;
       await lock.release();
     },
     refreshAfterOwnedSessionWrite(): void {
       if (fenceActive && !takeoverDetected) {
         fenceFingerprint = readSessionFileFingerprintSync(params.lockOptions.sessionFile);
+        fenceSnapshot = { fingerprint: fenceFingerprint };
+      }
+    },
+    async reacquireAfterPrompt(): Promise<void> {
+      if (takeoverDetected || heldLock) {
+        return;
+      }
+      const lock = await acquireLock();
+      try {
+        heldLock = lock;
+        await assertSessionFileFence();
+      } catch (err) {
+        heldLock = undefined;
+        await lock.release();
+        throw err;
       }
     },
     waitForSessionEvents: waitForSessionEventQueue,
-    async withSessionWriteLock<T>(run: () => Promise<T> | T): Promise<T> {
+    async withSessionWriteLock<T>(
+      run: () => Promise<T> | T,
+      options?: SessionWriteLockRunOptions,
+    ): Promise<T> {
       if (takeoverDetected) {
         throw new EmbeddedAttemptSessionTakeoverError(params.lockOptions.sessionFile);
       }
       if (activeWriteLock.getStore()?.active === true) {
-        return await run();
+        if (options?.publishOwnedWrite !== true) {
+          return await run();
+        }
+        const beforeWrite = await readSessionFileFingerprint(params.lockOptions.sessionFile);
+        try {
+          return await run();
+        } finally {
+          await publishOwnedSessionFileFence(beforeWrite);
+        }
       }
       const { lock, owned } = await acquireWriteLock();
       try {
         await assertSessionFileFence();
+        const beforeWrite = await readSessionFileFingerprint(params.lockOptions.sessionFile);
         const runWithLock = async () => {
           try {
             return await run();
           } finally {
-            await refreshSessionFileFence();
+            if (options?.publishOwnedWrite === true) {
+              await publishOwnedSessionFileFence(beforeWrite);
+            } else {
+              await refreshSessionFileFence(beforeWrite);
+            }
           }
         };
         if (owned) {
@@ -458,6 +879,13 @@ export function installPromptSubmissionLockRelease(params: {
   session: unknown;
   waitForSessionEvents: (session: unknown) => Promise<void>;
   releaseForPrompt: () => Promise<void>;
+  reacquireAfterPrompt: () => Promise<void>;
+  sessionFile?: string;
+  sessionKey?: string;
+  withSessionWriteLock?: <T>(
+    run: () => Promise<T> | T,
+    options?: SessionWriteLockRunOptions,
+  ) => Promise<T>;
 }): void {
   const agent = (params.session as SessionWithAgentPrompt).agent;
   if (typeof agent?.streamFn !== "function") {
@@ -471,7 +899,21 @@ export function installPromptSubmissionLockRelease(params: {
   const wrappedStreamFn: PromptReleaseStreamFn = async (...args: unknown[]) => {
     await params.waitForSessionEvents(params.session);
     await params.releaseForPrompt();
-    return await originalStreamFn(...args);
+    try {
+      if (params.sessionFile && params.withSessionWriteLock) {
+        return await withOwnedSessionTranscriptWrites(
+          {
+            sessionFile: params.sessionFile,
+            sessionKey: params.sessionKey,
+            withSessionWriteLock: params.withSessionWriteLock,
+          },
+          async () => await originalStreamFn(...args),
+        );
+      }
+      return await originalStreamFn(...args);
+    } finally {
+      await params.reacquireAfterPrompt();
+    }
   };
   wrappedStreamFn["__openclawSessionLockPromptReleaseInstalled"] = true;
   agent.streamFn = wrappedStreamFn;

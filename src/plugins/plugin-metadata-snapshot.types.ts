@@ -3,6 +3,8 @@ import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 
+export type PluginRegistrySnapshotSource = "provided" | "persisted" | "derived";
+
 export type PluginMetadataSnapshotOwnerMaps = {
   channels: ReadonlyMap<string, readonly string[]>;
   channelConfigs: ReadonlyMap<string, readonly string[]>;
@@ -36,6 +38,7 @@ export type PluginMetadataSnapshotRegistryDiagnostic = {
 export type PluginMetadataSnapshot = {
   policyHash: string;
   configFingerprint?: string;
+  registrySource?: PluginRegistrySnapshotSource;
   workspaceDir?: string;
   index: InstalledPluginIndex;
   registryDiagnostics: readonly PluginMetadataSnapshotRegistryDiagnostic[];

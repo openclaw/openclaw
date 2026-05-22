@@ -23,7 +23,10 @@ type OllamaDiscoveryContext = {
     };
   };
   env: NodeJS.ProcessEnv;
-  resolveProviderApiKey: (providerId: string) => { apiKey?: unknown };
+  resolveProviderApiKey: (providerId: string) => {
+    apiKey?: unknown;
+    discoveryApiKey?: unknown;
+  };
 };
 
 function normalizeOptionalString(value: unknown): string | undefined {
@@ -40,27 +43,34 @@ function readStringValue(value: unknown): string | undefined {
   return undefined;
 }
 
+function isOllamaApiKeyMarker(value: string): boolean {
+  return value === "OLLAMA_API_KEY" || value === OLLAMA_DEFAULT_API_KEY;
+}
+
 function resolveOllamaDiscoveryApiKey(params: {
   env: NodeJS.ProcessEnv;
   baseUrl?: string;
   explicitApiKey?: string;
-  hasDeclaredApiKey?: boolean;
   resolvedApiKey?: unknown;
+  resolvedDiscoveryApiKey?: unknown;
 }): string | undefined {
   const envValue = normalizeOptionalString(params.env.OLLAMA_API_KEY);
-  const envApiKey = envValue ? "OLLAMA_API_KEY" : undefined;
   const resolvedApiKey = normalizeOptionalString(params.resolvedApiKey);
+  const resolvedDiscoveryApiKey = normalizeOptionalString(params.resolvedDiscoveryApiKey);
   const explicitApiKey = normalizeOptionalString(params.explicitApiKey);
-  if (explicitApiKey) {
+  if (explicitApiKey && !isOllamaApiKeyMarker(explicitApiKey)) {
     return explicitApiKey;
   }
-  if (params.hasDeclaredApiKey && resolvedApiKey) {
-    return resolvedApiKey;
-  }
   if (!isLocalOllamaBaseUrl(params.baseUrl)) {
-    return envApiKey ?? (resolvedApiKey !== OLLAMA_DEFAULT_API_KEY ? resolvedApiKey : undefined);
+    if (resolvedDiscoveryApiKey) {
+      return resolvedDiscoveryApiKey;
+    }
+    if (resolvedApiKey && !isOllamaApiKeyMarker(resolvedApiKey)) {
+      return resolvedApiKey;
+    }
+    return envValue && envValue !== OLLAMA_DEFAULT_API_KEY ? envValue : undefined;
   }
-  if (resolvedApiKey && resolvedApiKey !== envValue && resolvedApiKey !== OLLAMA_DEFAULT_API_KEY) {
+  if (resolvedApiKey && resolvedApiKey !== envValue && !isOllamaApiKeyMarker(resolvedApiKey)) {
     return resolvedApiKey;
   }
   return OLLAMA_DEFAULT_API_KEY;
@@ -237,22 +247,23 @@ export async function resolveOllamaDiscoveryResult(params: {
   if (!hasExplicitModels && discoveryEnabled === false) {
     return null;
   }
-  const ollamaKey = params.ctx.resolveProviderApiKey(OLLAMA_PROVIDER_ID).apiKey;
+  const resolvedOllamaAuth = params.ctx.resolveProviderApiKey(OLLAMA_PROVIDER_ID);
+  const ollamaKey = resolvedOllamaAuth.apiKey;
+  const ollamaDiscoveryKey = resolvedOllamaAuth.discoveryApiKey;
   const hasOllamaDiscoveryOptIn = typeof ollamaKey === "string" && ollamaKey.trim().length > 0;
   const hasRealOllamaKey =
     typeof ollamaKey === "string" &&
     ollamaKey.trim().length > 0 &&
     ollamaKey.trim() !== OLLAMA_DEFAULT_API_KEY;
   const explicitApiKey = readStringValue(explicit?.apiKey);
-  const hasDeclaredApiKey = explicit?.apiKey !== undefined;
   if (hasExplicitModels && explicit) {
     const baseUrl = resolveOllamaApiBase(readProviderBaseUrl(explicit) ?? OLLAMA_DEFAULT_BASE_URL);
     const apiKey = resolveOllamaDiscoveryApiKey({
       env: params.ctx.env,
       baseUrl,
       explicitApiKey,
-      hasDeclaredApiKey,
       resolvedApiKey: ollamaKey,
+      resolvedDiscoveryApiKey: ollamaDiscoveryKey,
     });
     return {
       provider: {
@@ -299,8 +310,8 @@ export async function resolveOllamaDiscoveryResult(params: {
     env: params.ctx.env,
     baseUrl: provider.baseUrl ?? configuredBaseUrl,
     explicitApiKey,
-    hasDeclaredApiKey,
     resolvedApiKey: ollamaKey,
+    resolvedDiscoveryApiKey: ollamaDiscoveryKey,
   });
   return {
     provider: {
