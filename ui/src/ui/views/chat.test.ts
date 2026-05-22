@@ -1343,6 +1343,36 @@ describe("chat session controls", () => {
     expect(loadSessionsMock).not.toHaveBeenCalled();
   });
 
+  it("clears applied chat session picker search when the input is cleared", async () => {
+    const { state } = createChatHeaderState();
+    state.sessionsIncludeGlobal = false;
+    state.sessionsIncludeUnknown = false;
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    container.querySelector<HTMLButtonElement>('button[data-chat-session-select="true"]')!.click();
+    render(renderChatSessionSelect(state), container);
+    const input = container.querySelector<HTMLInputElement>(
+      'input[data-chat-session-picker-search="true"]',
+    );
+    const submit = container.querySelector<HTMLButtonElement>(
+      'button[data-chat-session-search-submit="true"]',
+    );
+
+    input!.value = "telegram";
+    input!.dispatchEvent(new Event("input", { bubbles: true }));
+    submit!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    await vi.waitFor(() => expect(state.chatSessionPickerAppliedQuery).toBe("telegram"));
+    expect(state.chatSessionPickerResult?.sessions).toHaveLength(2);
+
+    input!.value = "";
+    input!.dispatchEvent(new Event("input", { bubbles: true }));
+
+    expect(state.chatSessionPickerQuery).toBe("");
+    expect(state.chatSessionPickerAppliedQuery).toBe("");
+    expect(state.chatSessionPickerResult).toBeNull();
+  });
+
   it("loads another chat session picker page using the server next offset", async () => {
     const { state, request } = createChatHeaderState();
     state.sessionsIncludeGlobal = false;

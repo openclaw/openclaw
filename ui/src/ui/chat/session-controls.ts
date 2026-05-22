@@ -252,6 +252,20 @@ function clearChatSessionPickerSearch(state: AppViewState) {
   focusChatSessionPickerSearch(state);
 }
 
+function updateChatSessionPickerSearchQuery(state: AppViewState, nextQuery: string) {
+  state.chatSessionPickerQuery = nextQuery;
+  if (normalizeOptionalString(nextQuery)) {
+    return;
+  }
+  if (!state.chatSessionPickerAppliedQuery && !state.chatSessionPickerResult) {
+    return;
+  }
+  state.chatSessionPickerAppliedQuery = "";
+  state.chatSessionPickerError = null;
+  state.chatSessionPickerResult = null;
+  requestHostUpdate(state);
+}
+
 async function loadMoreChatSessionPickerResults(state: AppViewState) {
   const result = resolveChatSessionPickerResult(state);
   const offset = resolveNextChatSessionOffset(result);
@@ -392,7 +406,7 @@ function renderChatSessionPickerPopover(
             .value=${state.chatSessionPickerQuery}
             ?disabled=${disabled}
             @input=${(event: Event) => {
-              state.chatSessionPickerQuery = (event.target as HTMLInputElement).value;
+              updateChatSessionPickerSearchQuery(state, (event.target as HTMLInputElement).value);
             }}
             @keydown=${(event: KeyboardEvent) => {
               if (event.key === "Enter") {
