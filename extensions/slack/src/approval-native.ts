@@ -54,6 +54,7 @@ type SlackForwardingSuppressionInput = Parameters<
 >[0];
 
 const SLACK_DM_CHANNEL_ID_RE = /^D[A-Z0-9]{8,}$/i;
+const SLACK_USER_ID_RE = /^[UW][A-Z0-9]{8,}$/i;
 
 function extractSlackSessionKind(
   sessionKey?: string | null,
@@ -214,7 +215,9 @@ function resolveForwardingFallbackSlackTarget(
   if (!to) {
     return null;
   }
-  const parsed = parseSlackTarget(to, { defaultKind: "channel" });
+  const parsed = parseSlackTarget(to, {
+    defaultKind: SLACK_USER_ID_RE.test(to) ? "user" : "channel",
+  });
   if (!parsed) {
     return null;
   }

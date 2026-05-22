@@ -926,6 +926,52 @@ describe("slack native approval adapter", () => {
     ).toBe(true);
   });
 
+  it("suppresses bare Slack user plugin forwarding targets handled by native DM delivery", () => {
+    const shouldSuppress = slackNativeApprovalAdapter.delivery?.shouldSuppressForwardingFallback;
+    if (!shouldSuppress) {
+      throw new Error("slack native delivery suppression unavailable");
+    }
+
+    const cfg = {
+      ...buildConfig({
+        allowFrom: ["U123OWNER"],
+        execApprovals: {
+          enabled: false,
+          approvers: ["U999EXEC"],
+          target: "both",
+        },
+      }),
+      approvals: {
+        plugin: {
+          enabled: true,
+          mode: "targets",
+          targets: [{ channel: "slack", to: "U123OWNER" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      shouldSuppress({
+        cfg,
+        approvalKind: "plugin",
+        target: { channel: "slack", to: "U123OWNER", accountId: "default" },
+        request: {
+          id: "plugin:approval-1",
+          request: {
+            title: "Plugin approval",
+            description: "Allow access",
+            turnSourceChannel: "slack",
+            turnSourceTo: "user:U123OWNER",
+            turnSourceAccountId: "default",
+            sessionKey: "agent:main:slack:direct:U123OWNER",
+          },
+          createdAtMs: 0,
+          expiresAtMs: 1_000,
+        },
+      }),
+    ).toBe(true);
+  });
+
   it("keeps explicit plugin forwarding channel targets outside native Slack delivery", () => {
     const shouldSuppress = slackNativeApprovalAdapter.delivery?.shouldSuppressForwardingFallback;
     if (!shouldSuppress) {
