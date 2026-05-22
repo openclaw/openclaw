@@ -12,7 +12,7 @@ inputs:
   node-version:
     description: Expected Node.js version already installed by actions/setup-node.
     required: false
-    default: "24.x"
+    default: ""
   use-actions-cache:
     description: Whether pnpm/action-setup should cache the pnpm store.
     required: false

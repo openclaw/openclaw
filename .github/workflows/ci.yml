@@ -1515,6 +1515,8 @@ jobs:
 
       - name: Setup pnpm
         uses: ./.github/actions/setup-pnpm-store-cache
+        with:
+          node-version: 24.x
 
       - name: Runtime versions
         run: |

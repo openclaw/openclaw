@@ -359,6 +359,7 @@ jobs:
       - name: Setup pnpm
         uses: ./workflow/.github/actions/setup-pnpm-store-cache
         with:
+          node-version: ${{ env.NODE_VERSION }}
           package-manager-file: ${{ inputs.candidate_artifact_name == '' && 'source/package.json' || 'workflow/package.json' }}
           lockfile-path: ${{ inputs.candidate_artifact_name == '' && 'source/pnpm-lock.yaml' || 'workflow/pnpm-lock.yaml' }}
           use-actions-cache: ${{ inputs.candidate_artifact_name == '' && 'true' || 'false' }}
@@ -546,6 +547,7 @@ jobs:
       - name: Setup pnpm
         uses: ./workflow/.github/actions/setup-pnpm-store-cache
         with:
+          node-version: ${{ env.NODE_VERSION }}
           package-manager-file: workflow/package.json
           lockfile-path: workflow/pnpm-lock.yaml
           use-actions-cache: "false"
