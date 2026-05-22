@@ -241,6 +241,26 @@ function optionValue(commandArgs, name) {
   return "";
 }
 
+function hasOption(commandArgs, name) {
+  commandArgs = crabboxOptionArgs(commandArgs);
+  const shortName = name.replace(/^--/u, "-");
+  for (const arg of commandArgs) {
+    if (
+      arg === name ||
+      arg === shortName ||
+      arg.startsWith(`${name}=`) ||
+      arg.startsWith(`${shortName}=`)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isLocalContainerProvider(providerName) {
+  return ["local-container", "docker", "container", "local-docker"].includes(providerName);
+}
+
 function runCommandArgs(commandArgs) {
   const { start } = runCommandBounds(commandArgs);
   return start >= 0 ? commandArgs.slice(start) : [];
@@ -410,9 +430,33 @@ if (args[0] === "run" && provider === "aws" && runtimeEntrypoint) {
   );
 }
 
+const childEnv = { ...process.env };
+if (
+  isLocalContainerProvider(provider) &&
+  !childEnv.CRABBOX_LOCAL_CONTAINER_DOCKER_SOCKET &&
+  !hasOption(args, "--local-container-docker-socket")
+) {
+  childEnv.CRABBOX_LOCAL_CONTAINER_DOCKER_SOCKET = "1";
+  console.error(
+    "[crabbox] provider=docker enabling host Docker socket pass-through for OpenClaw Docker tests",
+  );
+}
+if (
+  isLocalContainerProvider(provider) &&
+  process.platform !== "win32" &&
+  !childEnv.CRABBOX_LOCAL_CONTAINER_WORK_ROOT &&
+  !hasOption(args, "--local-container-work-root")
+) {
+  childEnv.CRABBOX_LOCAL_CONTAINER_WORK_ROOT = "/tmp/openclaw-crabbox-docker-work";
+  console.error(
+    "[crabbox] provider=docker using short host-visible work root for OpenClaw Docker tests",
+  );
+}
+
 const child = spawn(binary, args, {
   cwd: repoRoot,
   stdio: "inherit",
+  env: childEnv,
 });
 
 child.on("exit", (code, signal) => {
