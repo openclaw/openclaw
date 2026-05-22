@@ -5,10 +5,13 @@ import { activateSecretsRuntimeSnapshot, clearSecretsRuntimeSnapshot } from "../
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
 
 const hoisted = vi.hoisted(() => ({
+  ensureStandalonePluginToolRegistryLoaded: vi.fn(),
   resolvePluginTools: vi.fn(),
 }));
 
 vi.mock("../plugins/tools.js", () => ({
+  ensureStandalonePluginToolRegistryLoaded: (...args: unknown[]) =>
+    hoisted.ensureStandalonePluginToolRegistryLoaded(...args),
   resolvePluginTools: (...args: unknown[]) => hoisted.resolvePluginTools(...args),
 }));
 
@@ -22,9 +25,21 @@ function firstResolvePluginToolsParams(): Record<string, unknown> {
 
 describe("createOpenClawTools browser plugin integration", () => {
   afterEach(() => {
+    hoisted.ensureStandalonePluginToolRegistryLoaded.mockReset();
     hoisted.resolvePluginTools.mockReset();
     clearSecretsRuntimeSnapshot();
     resetConfigRuntimeState();
+  });
+
+  it("calls ensureStandalonePluginToolRegistryLoaded before resolvePluginTools", () => {
+    hoisted.resolvePluginTools.mockReturnValue([]);
+    resolveOpenClawPluginToolsForOptions({
+      options: { config: {} as OpenClawConfig },
+    });
+    expect(hoisted.ensureStandalonePluginToolRegistryLoaded).toHaveBeenCalledTimes(1);
+    expect(
+      hoisted.ensureStandalonePluginToolRegistryLoaded.mock.invocationCallOrder[0],
+    ).toBeLessThan(hoisted.resolvePluginTools.mock.invocationCallOrder[0] ?? 0);
   });
 
   it("keeps the browser tool returned by plugin resolution", () => {
