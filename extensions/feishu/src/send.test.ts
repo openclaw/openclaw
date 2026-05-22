@@ -62,7 +62,9 @@ let editMessageFeishu: typeof import("./send.js").editMessageFeishu;
 let getMessageFeishu: typeof import("./send.js").getMessageFeishu;
 let listFeishuThreadMessages: typeof import("./send.js").listFeishuThreadMessages;
 let resolveFeishuCardTemplate: typeof import("./send.js").resolveFeishuCardTemplate;
+let sendMarkdownCardFeishu: typeof import("./send.js").sendMarkdownCardFeishu;
 let sendMessageFeishu: typeof import("./send.js").sendMessageFeishu;
+let sendStructuredCardFeishu: typeof import("./send.js").sendStructuredCardFeishu;
 
 describe("getMessageFeishu", () => {
   beforeAll(async () => {
@@ -72,7 +74,9 @@ describe("getMessageFeishu", () => {
       getMessageFeishu,
       listFeishuThreadMessages,
       resolveFeishuCardTemplate,
+      sendMarkdownCardFeishu,
       sendMessageFeishu,
+      sendStructuredCardFeishu,
     } = await import("./send.js"));
   });
 
@@ -105,6 +109,72 @@ describe("getMessageFeishu", () => {
         },
       },
     });
+  });
+
+  it("converts markdown tables before sending markdown cards", async () => {
+    const create = vi.fn().mockResolvedValue({ code: 0, data: { message_id: "om_card" } });
+    mockCreateFeishuClient.mockReturnValue({
+      im: {
+        message: {
+          create,
+          get: mockClientGet,
+          list: mockClientList,
+          patch: mockClientPatch,
+        },
+      },
+    });
+    mockResolveMarkdownTableMode.mockReturnValue("code");
+    mockConvertMarkdownTables.mockReturnValue("converted table");
+
+    await sendMarkdownCardFeishu({
+      cfg: {} as ClawdbotConfig,
+      to: "oc_card",
+      text: "| A | B |\n|---|---|\n| 1 | 2 |",
+      accountId: "main",
+    });
+
+    const content = JSON.parse(create.mock.calls[0][0].data.content);
+    expect(mockResolveMarkdownTableMode).toHaveBeenCalledWith({
+      cfg: {},
+      channel: "feishu",
+      accountId: "main",
+    });
+    expect(mockConvertMarkdownTables).toHaveBeenCalledWith(
+      "| A | B |\n|---|---|\n| 1 | 2 |",
+      "code",
+    );
+    expect(content.body.elements[0].content).toBe("converted table");
+  });
+
+  it("converts markdown tables before sending structured cards", async () => {
+    const create = vi.fn().mockResolvedValue({ code: 0, data: { message_id: "om_structured" } });
+    mockCreateFeishuClient.mockReturnValue({
+      im: {
+        message: {
+          create,
+          get: mockClientGet,
+          list: mockClientList,
+          patch: mockClientPatch,
+        },
+      },
+    });
+    mockResolveMarkdownTableMode.mockReturnValue("code");
+    mockConvertMarkdownTables.mockReturnValue("converted table");
+
+    await sendStructuredCardFeishu({
+      cfg: {} as ClawdbotConfig,
+      to: "oc_card",
+      text: "| A | B |\n|---|---|\n| 1 | 2 |",
+      header: { title: "agent" },
+    });
+
+    const content = JSON.parse(create.mock.calls[0][0].data.content);
+    expect(mockConvertMarkdownTables).toHaveBeenCalledWith(
+      "| A | B |\n|---|---|\n| 1 | 2 |",
+      "code",
+    );
+    expect(content.body.elements[0].content).toBe("converted table");
+    expect(content.header.title.content).toBe("agent");
   });
 
   it("sends text without requiring Feishu runtime text helpers", async () => {

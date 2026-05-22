@@ -268,6 +268,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     return `> 💭 **Thinking**\n${lines.join("\n")}`;
   };
 
+  const convertTablesForFeishuCard = (text: string): string =>
+    core.channel.text.convertMarkdownTables(text, tableMode);
+  const hasMarkdownTable = (text: string): boolean =>
+    /\|.+\|[\r\n]+\|[-:| ]+\|/.test(text);
+
   const buildCombinedStreamText = (thinking: string, answer: string): string => {
     const parts: string[] = [];
     if (thinking) {
@@ -290,7 +295,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       if (streamingStartPromise) {
         await streamingStartPromise;
       }
-      if (streaming?.isActive()) {
+      if (streaming?.isActive() && !hasMarkdownTable(combined)) {
         await streaming.update(combined);
       }
     });
@@ -409,7 +414,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         statusLine = "";
         const text = buildCombinedStreamText(reasoningText, streamText);
         const finalNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
-        const contentVisible = await streaming.close(text, { note: finalNote });
+        const contentVisible = await streaming.close(convertTablesForFeishuCard(text), {
+          note: finalNote,
+        });
         // Track the raw streamed text so the duplicate-final check in deliver()
         // can skip the redundant text delivery that arrives after onIdle closes
         // the streaming card.
@@ -461,9 +468,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     infoKind?: string;
     sendChunk: (params: { chunk: string; isFirst: boolean }) => Promise<void>;
   }) => {
-    const chunkSource = paramsLocal.useCard
-      ? paramsLocal.text
-      : core.channel.text.convertMarkdownTables(paramsLocal.text, tableMode);
+    const chunkSource = core.channel.text.convertMarkdownTables(paramsLocal.text, tableMode);
     const chunkText = paramsLocal.useCard
       ? core.channel.text.chunkMarkdownTextWithMode
       : core.channel.text.chunkTextWithMode;

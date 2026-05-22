@@ -688,6 +688,79 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
   });
+  it("skips streaming updates for markdown tables and converts them on close", async () => {
+    const convertMarkdownTables = vi.fn((text: string) => `converted:${text}`);
+    getFeishuRuntimeMock.mockReturnValue({
+      channel: {
+        text: {
+          resolveTextChunkLimit: vi.fn(() => 4000),
+          resolveChunkMode: vi.fn(() => "line"),
+          resolveMarkdownTableMode: vi.fn(() => "code"),
+          convertMarkdownTables,
+          chunkTextWithMode: vi.fn((text) => [text]),
+        },
+        reply: {
+          createReplyDispatcherWithTyping: createReplyDispatcherWithTypingMock,
+          resolveHumanDelayConfig: vi.fn(() => undefined),
+        },
+      },
+    });
+    const table = "| A | B |\n|---|---|\n| 1 | 2 |";
+    const { options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+
+    await options.deliver({ text: table }, { kind: "final" });
+    await options.onIdle?.();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(convertMarkdownTables).toHaveBeenCalledWith(table, "code");
+    expect(streamingInstances[0].update).not.toHaveBeenCalled();
+    expect(streamingInstances[0].close).toHaveBeenCalledWith(`converted:${table}`, {
+      note: "Agent: agent",
+    });
+  });
+
+  it("converts markdown tables before non-streaming card fallback", async () => {
+    const convertMarkdownTables = vi.fn((text: string) => `converted:${text}`);
+    getFeishuRuntimeMock.mockReturnValue({
+      channel: {
+        text: {
+          resolveTextChunkLimit: vi.fn(() => 4000),
+          resolveChunkMode: vi.fn(() => "line"),
+          resolveMarkdownTableMode: vi.fn(() => "code"),
+          convertMarkdownTables,
+          chunkTextWithMode: vi.fn((text) => [text]),
+        },
+        reply: {
+          createReplyDispatcherWithTyping: createReplyDispatcherWithTypingMock,
+          resolveHumanDelayConfig: vi.fn(() => undefined),
+        },
+      },
+    });
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "auto",
+        streaming: false,
+      },
+    });
+    const table = "| A | B |\n|---|---|\n| 1 | 2 |";
+    const { options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+
+    await options.deliver({ text: table }, { kind: "final" });
+
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({ text: `converted:${table}` }),
+    );
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
 
   it("closes streaming with block text when final reply is missing", async () => {
     const { options } = createDispatcherHarness({
