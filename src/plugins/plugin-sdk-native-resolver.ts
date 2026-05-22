@@ -25,6 +25,7 @@ export type InstallOpenClawPluginSdkNativeResolverOptions = {
 };
 
 const moduleWithResolver = Module as ModuleWithResolver;
+const nodeResolveFilenameProperty = "_resolveFilename" as const;
 const PLUGIN_SDK_PACKAGE_PREFIXES = ["openclaw/plugin-sdk", "@openclaw/plugin-sdk"] as const;
 const pluginSdkNativeAliases = new Map<string, string>();
 const allowedParentRoots = new Set<string>();
@@ -117,11 +118,11 @@ function listPluginSdkNativeAliases(
 }
 
 function installResolver(): void {
-  if (installed || !moduleWithResolver._resolveFilename) {
+  if (installed || !moduleWithResolver[nodeResolveFilenameProperty]) {
     return;
   }
-  previousResolveFilename = moduleWithResolver._resolveFilename;
-  moduleWithResolver._resolveFilename = ((request, parent, isMain, options) => {
+  previousResolveFilename = moduleWithResolver[nodeResolveFilenameProperty];
+  moduleWithResolver[nodeResolveFilenameProperty] = ((request, parent, isMain, options) => {
     const aliasTarget = pluginSdkNativeAliases.get(request);
     if (aliasTarget && canResolveForParent(parent)) {
       return aliasTarget;
@@ -146,7 +147,7 @@ export function resetOpenClawPluginSdkNativeResolverForTest(): void {
   pluginSdkNativeAliases.clear();
   allowedParentRoots.clear();
   if (installed && previousResolveFilename) {
-    moduleWithResolver._resolveFilename = previousResolveFilename;
+    moduleWithResolver[nodeResolveFilenameProperty] = previousResolveFilename;
   }
   previousResolveFilename = undefined;
   installed = false;
