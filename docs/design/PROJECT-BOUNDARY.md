@@ -35,11 +35,13 @@
 
 ## 下一步实现（REPO-STRUCTURE 规划）
 
+**已实现（2026-05）**：EventKernel / DataPlane / OrchPlane 位于 `packages/claworks-runtime/src/`，见 [DIRECTORY-LAYOUT.md](./DIRECTORY-LAYOUT.md)。
+
+仍待本仓 `src/` 侧完善的部分：
+
 ```
-src/kernel/          ← EventKernel（待建）
-src/planes/data/     ← ObjectStore
-src/planes/orch/     ← PlaybookEngine
-src/interfaces/a2a/  ← A2A Server
+src/cli/product/     ← claworks 子命令、bootstrap、doctor
+src/config/claworks-* ← 产品配置 guard / gateway 默认
 ```
 
 Python 概念与 YAML 见 `docs/design/MIGRATION-GUIDE.md`。

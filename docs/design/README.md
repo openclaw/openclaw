@@ -39,6 +39,8 @@
 | [REBRAND-TO-CLAWORKS.md](./REBRAND-TO-CLAWORKS.md)         | 品牌迁移                |
 | [SYSTEM-AUDIT.md](./SYSTEM-AUDIT.md)                       | 系统审计                |
 | [PROJECT-BOUNDARY.md](./PROJECT-BOUNDARY.md)               | 三仓边界（运维）        |
+| [DIRECTORY-LAYOUT.md](./DIRECTORY-LAYOUT.md)               | **本仓当前目录真源**    |
+| [ECOSYSTEM-LAYOUT.md](./ECOSYSTEM-LAYOUT.md)               | 五仓 Projects 布局      |
 
 ## 远景叙事（只读参考，非代码真源）
 

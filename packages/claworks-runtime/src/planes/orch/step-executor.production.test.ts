@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ObjectStore } from "../data/object-store.js";
 import { executeFunction } from "./function-executor.js";
 import type { PlaybookRun, PlaybookStepContext } from "./playbook-types.js";
-import { HitlSuspendedError, StepFailedError, executePlaybookStep } from "./step-executor.js";
+import { StepFailedError, executePlaybookStep } from "./step-executor.js";
 import type { StepExecutorDeps } from "./step-executor.js";
 
 function makeCtx(): PlaybookStepContext {

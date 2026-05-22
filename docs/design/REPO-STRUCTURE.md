@@ -1,5 +1,8 @@
 # ClaWorks 仓库结构说明
 
+> **实现真源（2026-05-22）**：运行时内核与三平面在 `packages/claworks-runtime/src/`，不在 `src/kernel/`。  
+> 当前磁盘布局见 [DIRECTORY-LAYOUT.md](./DIRECTORY-LAYOUT.md)。
+
 ---
 
 ## 三个独立仓库，三条关注点
@@ -237,17 +240,17 @@ pnpm install && pnpm build && pnpm test:changed
 
 **内部代码不改名原则（确保低冲突）**：
 
-| 保留原名（不改） | 原因 |
-|-----------------|------|
-| `OpenClawConfig` | 改名 = 每次 merge 都冲突 |
-| `definePluginEntry` | 同上 |
-| `src/gateway/` | 同上 |
-| `openclaw.plugin.json` | 插件合约，不改 |
-| `api.runtime.*` | Plugin SDK，不改 |
+| 保留原名（不改）       | 原因                     |
+| ---------------------- | ------------------------ |
+| `OpenClawConfig`       | 改名 = 每次 merge 都冲突 |
+| `definePluginEntry`    | 同上                     |
+| `src/gateway/`         | 同上                     |
+| `openclaw.plugin.json` | 插件合约，不改           |
+| `api.runtime.*`        | Plugin SDK，不改         |
 
 | 改成 ClaWorks 品牌（只改表层） |
-|-------------------------------|
-| `claworks` CLI 命令名 |
-| `claworks.json` 配置文件名 |
-| `~/.claworks/` 状态目录 |
-| 产品文档/README |
+| ------------------------------ |
+| `claworks` CLI 命令名          |
+| `claworks.json` 配置文件名     |
+| `~/.claworks/` 状态目录        |
+| 产品文档/README                |

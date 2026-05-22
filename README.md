@@ -64,6 +64,21 @@ curl http://127.0.0.1:18800/v1/health
 
 ---
 
+## Repository layout
+
+| 路径                         | 说明                               |
+| ---------------------------- | ---------------------------------- |
+| `packages/claworks-runtime/` | EventKernel、三平面、REST/MCP/A2A  |
+| `extensions/claworks-robot/` | Gateway 插件与 `cw_*` 工具         |
+| `connectors/`                | OT 连接器子进程                    |
+| `contrib/`                   | 配置片段与示例（**非** Pack 源码） |
+| `packs/`                     | 运行时安装目录（git 空）           |
+| sibling `claworks-packs/`    | Pack YAML/TS **唯一真源**          |
+
+详见 [`docs/design/DIRECTORY-LAYOUT.md`](docs/design/DIRECTORY-LAYOUT.md) 与 [`docs/design/ECOSYSTEM-LAYOUT.md`](docs/design/ECOSYSTEM-LAYOUT.md)。
+
+---
+
 ## Core Concepts
 
 | Concept            | What it is                                                                         |
