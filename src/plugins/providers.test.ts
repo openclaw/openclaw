@@ -16,6 +16,8 @@ type LoadOpenClawPlugins = typeof import("./loader.js").loadOpenClawPlugins;
 type IsPluginRegistryLoadInFlight = typeof import("./loader.js").isPluginRegistryLoadInFlight;
 type LoadPluginManifestRegistry =
   typeof import("./manifest-registry.js").loadPluginManifestRegistry;
+type LoadPluginMetadataSnapshot =
+  typeof import("./plugin-metadata-snapshot.js").loadPluginMetadataSnapshot;
 type ApplyPluginAutoEnable = typeof import("../config/plugin-auto-enable.js").applyPluginAutoEnable;
 type SetActivePluginRegistry = typeof import("./runtime.js").setActivePluginRegistry;
 
@@ -25,6 +27,7 @@ const resolveCompatibleRuntimePluginRegistryMock = vi.fn<ResolveCompatibleRuntim
 const loadOpenClawPluginsMock = vi.fn<LoadOpenClawPlugins>();
 const isPluginRegistryLoadInFlightMock = vi.fn<IsPluginRegistryLoadInFlight>((_) => false);
 const loadPluginManifestRegistryMock = vi.fn<LoadPluginManifestRegistry>();
+const loadPluginMetadataSnapshotMock = vi.fn<LoadPluginMetadataSnapshot>();
 const applyPluginAutoEnableMock = vi.fn<ApplyPluginAutoEnable>();
 
 let resolveOwningPluginIdsForProvider: typeof import("./providers.js").resolveOwningPluginIdsForProvider;
@@ -483,10 +486,13 @@ describe("resolvePluginProviders", () => {
         loadPluginManifestRegistryMock(...args),
     }));
     vi.doMock("./plugin-metadata-snapshot.js", () => ({
-      loadPluginMetadataSnapshot: () => ({
-        manifestRegistry: loadPluginManifestRegistryMock(),
-        index: createProviderRegistrySnapshotFixture(),
-      }),
+      loadPluginMetadataSnapshot: (params: Parameters<LoadPluginMetadataSnapshot>[0]) => {
+        loadPluginMetadataSnapshotMock(params);
+        return {
+          manifestRegistry: loadPluginManifestRegistryMock(),
+          index: createProviderRegistrySnapshotFixture(),
+        };
+      },
     }));
     vi.doMock("./plugin-registry.js", async () => {
       const actual =
@@ -566,6 +572,7 @@ describe("resolvePluginProviders", () => {
     loadOpenClawPluginsMock.mockReset();
     isPluginRegistryLoadInFlightMock.mockReset();
     isPluginRegistryLoadInFlightMock.mockReturnValue(false);
+    loadPluginMetadataSnapshotMock.mockReset();
     const provider: ProviderPlugin = {
       id: "demo-provider",
       label: "Demo Provider",
@@ -1171,6 +1178,28 @@ describe("resolvePluginProviders", () => {
       cache: true,
       activate: false,
     });
+  });
+
+  it("inherits workspaceDir from the active registry when loading the metadata snapshot", () => {
+    setActivePluginRegistry(
+      createEmptyPluginRegistry(),
+      undefined,
+      "default",
+      "/workspace/runtime",
+    );
+
+    resolvePluginProviders({
+      config: {
+        plugins: {
+          allow: ["google"],
+        },
+      },
+      onlyPluginIds: ["google"],
+    });
+
+    expect(loadPluginMetadataSnapshotMock).toHaveBeenCalled();
+    const snapshotCall = loadPluginMetadataSnapshotMock.mock.calls.at(-1)?.[0];
+    expect(snapshotCall?.workspaceDir).toBe("/workspace/runtime");
   });
   it("activates owning plugins for explicit provider refs", () => {
     setOwningProviderManifestPlugins();
