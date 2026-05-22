@@ -4,8 +4,14 @@ import os from "node:os";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+type ResolveUsageAuthPluginParams = {
+  context: {
+    resolveOAuthToken(params: { provider: string }): Promise<unknown>;
+  };
+};
+
 const resolveProviderUsageAuthWithPluginMock = vi.fn(
-  async (..._args: unknown[]): Promise<unknown> => null,
+  async (_params: ResolveUsageAuthPluginParams): Promise<unknown> => null,
 );
 const hasAnyAuthProfileStoreSourceMock = vi.fn(() => false);
 const ensureAuthProfileStoreMock = vi.fn(() => ({
@@ -15,7 +21,7 @@ const ensureAuthProfileStoreWithoutExternalProfilesMock = vi.fn(() => ({
   profiles: {},
 }));
 const resolveAuthProfileOrderMock = vi.fn((_params: unknown): string[] => []);
-const resolveApiKeyForProfileMock = vi.fn(async () => null);
+const resolveApiKeyForProfileMock = vi.fn(async (_params: unknown) => null);
 
 vi.mock("../agents/auth-profiles.js", () => ({
   dedupeProfileIds: (profileIds: string[]) => [...new Set(profileIds)],
@@ -304,8 +310,9 @@ describe("resolveProviderAuths plugin boundary", () => {
           : undefined;
       return provider === "google-gemini-cli" ? ["google-gemini-cli:default"] : [];
     });
-    resolveProviderUsageAuthWithPluginMock.mockImplementationOnce(async (params) =>
-      params.context.resolveOAuthToken({ provider: "google-gemini-cli" }),
+    resolveProviderUsageAuthWithPluginMock.mockImplementationOnce(
+      async (params: ResolveUsageAuthPluginParams) =>
+        params.context.resolveOAuthToken({ provider: "google-gemini-cli" }),
     );
 
     await expect(
@@ -341,8 +348,9 @@ describe("resolveProviderAuths plugin boundary", () => {
     ensureAuthProfileStoreWithoutExternalProfilesMock.mockReturnValue(store);
     ensureAuthProfileStoreMock.mockReturnValue(store);
     resolveAuthProfileOrderMock.mockReturnValue(["google-gemini-cli:default"]);
-    resolveProviderUsageAuthWithPluginMock.mockImplementationOnce(async (params) =>
-      params.context.resolveOAuthToken({ provider: "google-gemini-cli" }),
+    resolveProviderUsageAuthWithPluginMock.mockImplementationOnce(
+      async (params: ResolveUsageAuthPluginParams) =>
+        params.context.resolveOAuthToken({ provider: "google-gemini-cli" }),
     );
 
     await expect(
