@@ -36,6 +36,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway: defer provider auth-state prewarm until after startup readiness so early gateway tool/session requests are not blocked by provider auth discovery. (#85272) Thanks @dutifulbob.
 - Gateway/LaunchAgent: wait for launchd reload bootout to finish and fall back to kickstart when bootstrap races, so reload handoff does not leave the service deregistered. Fixes #84630. (#84641) Thanks @NianJiuZst.
 - Gateway/LaunchAgent: treat a concurrent launchd bootstrap as a successful restart when the service is already loaded, avoiding false macOS Gateway restart failures. Fixes #84721. (#84722) Thanks @googlerest.
 - CLI/update: preserve managed Gateway service environment during package cutovers so macOS LaunchAgent repair/restart reads the pre-update service state instead of caller shell state. (#83026)
