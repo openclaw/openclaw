@@ -189,17 +189,19 @@ export function resolveGoogleThinkingProfile({
     return undefined;
   }
 
+  const levels: ProviderThinkingProfile["levels"] = isGoogleGemini3ProModel(modelId)
+    ? [{ id: "off" }, { id: "low" }, { id: "adaptive" }, { id: "high" }]
+    : [
+        { id: "off" },
+        { id: "minimal" },
+        { id: "low" },
+        { id: "medium" },
+        { id: "adaptive" },
+        { id: "high" },
+      ];
+
   return {
-    levels: isGoogleGemini3ProModel(modelId)
-      ? [{ id: "off" }, { id: "low" }, { id: "adaptive" }, { id: "high" }]
-      : [
-          { id: "off" },
-          { id: "minimal" },
-          { id: "low" },
-          { id: "medium" },
-          { id: "adaptive" },
-          { id: "high" },
-        ],
-    preserveWhenCatalogReasoningFalse: isGemini3ThinkingModel || undefined,
+    levels,
+    ...(isGemini3ThinkingModel ? { preserveWhenCatalogReasoningFalse: true } : {}),
   };
 }
