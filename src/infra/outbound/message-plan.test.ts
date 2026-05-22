@@ -103,4 +103,29 @@ describe("outbound message planning", () => {
       },
     ]);
   });
+
+  it("passes config and account context to channel chunkers", () => {
+    const contexts: unknown[] = [];
+
+    planOutboundTextMessageUnits({
+      text: "abcd",
+      textLimit: 2,
+      chunker: (_text, _limit, ctx) => {
+        contexts.push(ctx);
+        return ["ab", "cd"];
+      },
+      overrides: {},
+      formatting: { parseMode: "HTML" },
+      cfg: { channels: { telegram: { markdown: { tables: "bullets" } } } } as never,
+      accountId: "ops",
+    });
+
+    expect(contexts).toEqual([
+      {
+        formatting: { parseMode: "HTML" },
+        cfg: { channels: { telegram: { markdown: { tables: "bullets" } } } },
+        accountId: "ops",
+      },
+    ]);
+  });
 });

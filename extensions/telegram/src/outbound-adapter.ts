@@ -7,6 +7,7 @@ import {
   normalizeMessagePresentation,
   renderMessagePresentationFallbackText,
 } from "openclaw/plugin-sdk/interactive-runtime";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import type { OutboundDeliveryFormattingOptions } from "openclaw/plugin-sdk/outbound-runtime";
 import {
   resolveOutboundSendDep,
@@ -49,11 +50,20 @@ async function resolveDefaultTelegramSend(deps?: OutboundSendDeps): Promise<Tele
 function chunkTelegramOutboundText(
   text: string,
   limit: number,
-  ctx?: { formatting?: OutboundDeliveryFormattingOptions },
+  ctx?: {
+    formatting?: OutboundDeliveryFormattingOptions;
+    cfg?: NonNullable<TelegramSendOpts>["cfg"];
+    accountId?: string | null;
+  },
 ): string[] {
+  const tableMode = resolveMarkdownTableMode({
+    cfg: ctx?.cfg,
+    channel: "telegram",
+    accountId: ctx?.accountId,
+  });
   return ctx?.formatting?.parseMode === "HTML"
     ? splitTelegramHtmlChunks(text, limit)
-    : markdownToTelegramHtmlChunks(text, limit);
+    : markdownToTelegramHtmlChunks(text, limit, { tableMode });
 }
 
 async function resolveTelegramSendContext(params: {
