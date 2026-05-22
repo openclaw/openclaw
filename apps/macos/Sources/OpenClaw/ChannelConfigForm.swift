@@ -332,29 +332,16 @@ struct ConfigSchemaForm: View {
         }
     }
 
-<<<<<<< HEAD
     private func renderAdditionalProperties(
         _ schema: ConfigSchemaNode,
         path: ConfigPath,
-        value: Any?) -> some View
-    {
+        value: Any?,
+    ) -> some View {
         Group {
             if let additionalSchema = schema.additionalProperties {
                 let dict = value as? [String: Any] ?? [:]
                 let reserved = Set(schema.properties.keys)
                 let extras = dict.keys.filter { !reserved.contains($0) }.sorted()
-=======
-	    private func renderAdditionalProperties(
-	        _ schema: ConfigSchemaNode,
-	        path: ConfigPath,
-	        value: Any?,
-	    ) -> some View {
-	        Group {
-	            if let additionalSchema = schema.additionalProperties {
-	                let dict = value as? [String: Any] ?? [:]
-	                let reserved = Set(schema.properties.keys)
-	                let extras = dict.keys.filter { !reserved.contains($0) }.sorted()
->>>>>>> 066b0f733f (fix: unblock PR 79068 CI)
 
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Extra entries")
