@@ -250,13 +250,18 @@ describe("json file helpers", () => {
     }
 
     function runRetryDelaysImmediately(): void {
-      vi.spyOn(globalThis, "setTimeout").mockImplementation(((callback, _delay, ...args) => {
+      type SetTimeoutArgs = Parameters<typeof setTimeout>;
+      vi.spyOn(globalThis, "setTimeout").mockImplementation(((
+        callback: SetTimeoutArgs[0],
+        _delay?: SetTimeoutArgs[1],
+        ...args: unknown[]
+      ) => {
         queueMicrotask(() => {
           if (typeof callback === "function") {
             callback(...args);
           }
         });
-        return 0 as ReturnType<typeof setTimeout>;
+        return undefined as unknown as ReturnType<typeof setTimeout>;
       }) as typeof setTimeout);
     }
 
