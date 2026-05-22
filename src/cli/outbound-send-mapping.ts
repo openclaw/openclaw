@@ -18,6 +18,8 @@ export type CliOutboundSendSource = {
   [CLI_OUTBOUND_SEND_FACTORY]?: CliOutboundSendFactory;
 };
 
+const NON_CHANNEL_OUTBOUND_KEYS = new Set(["discordVoice", "discordvoice", "sendDiscordVoice"]);
+
 function normalizeLegacyChannelStem(raw: string): string {
   const normalized = normalizeLowercaseStringOrEmpty(
     raw
@@ -82,9 +84,15 @@ export function createOutboundSendDepsFromCliSource(deps: CliOutboundSendSource)
   }
 
   const resolveFactoryValue = (key: string): unknown => {
+    if (NON_CHANNEL_OUTBOUND_KEYS.has(key)) {
+      return undefined;
+    }
     const channelId =
       outbound[key] === undefined ? (resolveChannelIdFromLegacyOutboundKey(key) ?? key) : key;
     if (!channelId || channelId === "then" || channelId === "toJSON") {
+      return undefined;
+    }
+    if (NON_CHANNEL_OUTBOUND_KEYS.has(channelId)) {
       return undefined;
     }
     const value = sendFactory(channelId);
