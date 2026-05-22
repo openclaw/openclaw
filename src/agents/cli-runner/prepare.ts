@@ -446,8 +446,15 @@ export async function prepareCliRunContext(
     prompt: preparedPrompt,
   });
   preparedPrompt = annotateInterSessionPromptText(preparedPrompt, params.inputProvenance);
+  // A CLI session invalidated for auth/system-prompt/mcp/transcript reasons has
+  // no reusable sessionId; without a raw-transcript reseed the fresh run starts
+  // with zero history. Force reseed in that case regardless of the opt-in flag —
+  // silently losing the whole conversation must never be the default outcome of
+  // an auth-profile / auth-epoch rotation.
+  const cliSessionInvalidated =
+    !reusableCliSession.sessionId && reusableCliSession.invalidatedReason !== undefined;
   const allowRawTranscriptReseed =
-    backendResolved.config.reseedFromRawTranscriptWhenUncompacted === true;
+    backendResolved.config.reseedFromRawTranscriptWhenUncompacted === true || cliSessionInvalidated;
   const rawTranscriptReseedReason = reusableCliSession.sessionId
     ? "session-expired"
     : reusableCliSession.invalidatedReason;

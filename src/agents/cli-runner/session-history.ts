@@ -16,7 +16,7 @@ import {
 
 export const MAX_CLI_SESSION_HISTORY_FILE_BYTES = 5 * 1024 * 1024;
 export const MAX_CLI_SESSION_HISTORY_MESSAGES = MAX_AGENT_HOOK_HISTORY_MESSAGES;
-export const MAX_CLI_SESSION_RESEED_HISTORY_CHARS = 12 * 1024;
+export const MAX_CLI_SESSION_RESEED_HISTORY_CHARS = 64 * 1024;
 
 type HistoryMessage = {
   role?: unknown;
@@ -47,6 +47,8 @@ type RawTranscriptReseedReason =
   | "session-expired";
 
 const RAW_TRANSCRIPT_RESEED_ALLOWED_REASONS = new Set<RawTranscriptReseedReason>([
+  "auth-profile",
+  "auth-epoch",
   "missing-transcript",
   "system-prompt",
   "mcp",
@@ -145,9 +147,14 @@ export function buildCliSessionHistoryPrompt(params: {
     })
     .join("\n\n")
     .trim();
+  // Keep the most recent turns when truncating: continuity needs the tail of
+  // the conversation, not its opening. Slicing from the start would drop the
+  // freshest context and preserve only stale history.
   const renderedHistory =
     renderedHistoryRaw.length > maxHistoryChars
-      ? `${renderedHistoryRaw.slice(0, maxHistoryChars).trimEnd()}\n[OpenClaw reseed history truncated]`
+      ? `[OpenClaw reseed history truncated — oldest turns dropped]\n${renderedHistoryRaw
+          .slice(renderedHistoryRaw.length - maxHistoryChars)
+          .trimStart()}`
       : renderedHistoryRaw;
 
   if (!renderedHistory) {

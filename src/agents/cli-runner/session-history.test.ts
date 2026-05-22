@@ -460,7 +460,7 @@ describe("loadCliSessionReseedMessages", () => {
     }
   });
 
-  it("does not raw-reseed auth-boundary invalidations even when opted in", async () => {
+  it("raw-reseeds auth-boundary invalidations so context survives an auth rotation", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-state-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const sessionFile = createSessionTranscript({
@@ -470,26 +470,18 @@ describe("loadCliSessionReseedMessages", () => {
     });
 
     try {
-      await expect(
-        loadCliSessionReseedMessages({
+      for (const reason of ["auth-profile", "auth-epoch"] as const) {
+        const reseed = await loadCliSessionReseedMessages({
           sessionId: "session-auth-boundary",
           sessionFile,
           sessionKey: "agent:main:main",
           agentId: "main",
           allowRawTranscriptReseed: true,
-          rawTranscriptReseedReason: "auth-profile",
-        }),
-      ).resolves.toStrictEqual([]);
-      await expect(
-        loadCliSessionReseedMessages({
-          sessionId: "session-auth-boundary",
-          sessionFile,
-          sessionKey: "agent:main:main",
-          agentId: "main",
-          allowRawTranscriptReseed: true,
-          rawTranscriptReseedReason: "auth-epoch",
-        }),
-      ).resolves.toStrictEqual([]);
+          rawTranscriptReseedReason: reason,
+        });
+        expect(reseed).toHaveLength(1);
+        expectMessageFields(reseed[0], { role: "user", content: "previous account context" });
+      }
     } finally {
       fs.rmSync(stateDir, { recursive: true, force: true });
     }
@@ -575,15 +567,19 @@ describe("buildCliSessionHistoryPrompt", () => {
     ).toBeUndefined();
   });
 
-  it("caps rendered reseed history before adding the next user message", () => {
+  it("caps rendered reseed history and keeps the most recent turns", () => {
     const prompt = buildCliSessionHistoryPrompt({
-      messages: [{ role: "compactionSummary", summary: "x".repeat(100) }],
+      messages: [
+        { role: "user", content: `stale opening ${"x".repeat(200)}` },
+        { role: "assistant", content: [{ type: "text", text: "RECENT_ANSWER_MARKER" }] },
+      ],
       prompt: "current ask must survive",
-      maxHistoryChars: 20,
+      maxHistoryChars: 60,
     });
 
-    expect(prompt).toContain("[OpenClaw reseed history truncated]");
+    expect(prompt).toContain("[OpenClaw reseed history truncated");
+    expect(prompt).toContain("RECENT_ANSWER_MARKER");
     expect(prompt).toContain("<next_user_message>\ncurrent ask must survive\n</next_user_message>");
-    expect(prompt).not.toContain("x".repeat(80));
+    expect(prompt).not.toContain("stale opening");
   });
 });
