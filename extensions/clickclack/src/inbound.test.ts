@@ -83,7 +83,6 @@ function createAgentAccount(
     token: "ccb_default",
     workspace: "wsp_1",
     replyMode: "agent",
-    senderIsOwner: false,
     toolsAllow: [],
     defaultTo: "channel:general",
     allowFrom: ["*"],
