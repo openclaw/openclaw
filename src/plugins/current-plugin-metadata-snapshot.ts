@@ -25,8 +25,9 @@ export function resolvePluginMetadataControlPlaneFingerprint(
 
 export function isReusableCurrentPluginMetadataSnapshot(
   snapshot: PluginMetadataSnapshot,
+  options: { allowGatewayDerivedSnapshot?: boolean } = {},
 ): boolean {
-  return snapshot.registrySource !== "derived";
+  return snapshot.registrySource !== "derived" || options.allowGatewayDerivedSnapshot === true;
 }
 
 // Single-slot Gateway-owned handoff. Replace or clear it at lifecycle boundaries;
@@ -38,9 +39,10 @@ export function setCurrentPluginMetadataSnapshot(
     compatibleConfigs?: readonly OpenClawConfig[];
     env?: NodeJS.ProcessEnv;
     workspaceDir?: string;
+    allowGatewayDerivedSnapshot?: boolean;
   } = {},
 ): void {
-  if (snapshot && !isReusableCurrentPluginMetadataSnapshot(snapshot)) {
+  if (snapshot && !isReusableCurrentPluginMetadataSnapshot(snapshot, options)) {
     clearCurrentPluginMetadataSnapshotState();
     return;
   }

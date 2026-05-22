@@ -97,12 +97,15 @@ function loadCurrentPluginRegistrySnapshotResult(
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     ...(params.workspaceDir === undefined ? { allowWorkspaceScopedSnapshot: true } : {}),
   });
-  if (!current || current.registryDiagnostics.length > 0) {
+  if (!current) {
+    return undefined;
+  }
+  if (current.registryDiagnostics.length > 0 && current.registrySource !== "derived") {
     return undefined;
   }
   return {
     snapshot: current.index,
-    source: "provided",
+    source: current.registrySource === "derived" ? "derived" : "provided",
     diagnostics: current.registryDiagnostics,
   };
 }

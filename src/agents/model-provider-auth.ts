@@ -1,5 +1,6 @@
 import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import {
   listAgentIds,
   resolveAgentDir,
@@ -181,12 +182,18 @@ export function createProviderAuthChecker(params: {
   };
 }
 
-export async function warmCurrentProviderAuthState(cfg: OpenClawConfig): Promise<void> {
+export async function warmCurrentProviderAuthState(
+  cfg: OpenClawConfig,
+  options: { metadataSnapshot?: PluginMetadataSnapshot } = {},
+): Promise<void> {
   // Claim a fresh generation; any concurrent warm or clear bumps this and
   // turns our published state stale.
   currentProviderAuthStateGeneration += 1;
   const ownGeneration = currentProviderAuthStateGeneration;
-  const catalog = await loadModelCatalog({ config: cfg });
+  const catalog = await loadModelCatalog({
+    config: cfg,
+    ...(options.metadataSnapshot ? { metadataSnapshot: options.metadataSnapshot } : {}),
+  });
   const providers = new Set<string>();
   for (const entry of catalog) {
     providers.add(normalizeProviderId(entry.provider));

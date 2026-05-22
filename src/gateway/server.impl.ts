@@ -682,6 +682,7 @@ export async function startGatewayServer(
     compatibleConfigs: [startupRuntimeConfig, cfgAtStart, gatewayPluginConfigAtStart],
     env: process.env,
     workspaceDir: defaultWorkspaceDir,
+    allowGatewayDerivedSnapshot: true,
   });
   if (pluginLookUpTable) {
     const metrics = pluginLookUpTable.metrics;
@@ -1270,6 +1271,7 @@ export async function startGatewayServer(
         config: params.nextConfig,
         env: process.env,
         workspaceDir: defaultWorkspaceDir,
+        allowGatewayDerivedSnapshot: true,
       });
       const loaded = prepareGatewayPluginLoad({
         cfg: params.nextConfig,
@@ -1505,6 +1507,7 @@ export async function startGatewayServer(
             controlUiBasePath,
             logTailscale,
             gatewayPluginConfigAtStart,
+            pluginMetadataSnapshot: pluginLookUpTable,
             pluginRegistry,
             defaultWorkspaceDir,
             deps,

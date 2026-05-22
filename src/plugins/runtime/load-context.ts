@@ -68,13 +68,16 @@ export function resolvePluginRuntimeLoadContext(
   const rawConfig = options?.config ?? getRuntimeConfig();
   const rawWorkspaceDir =
     options?.workspaceDir ?? resolveAgentWorkspaceDir(rawConfig, resolveDefaultAgentId(rawConfig));
-  const metadataSnapshot = options?.manifestRegistry
+  const currentMetadataSnapshot = options?.manifestRegistry
     ? undefined
-    : (getCurrentPluginMetadataSnapshot({
+    : getCurrentPluginMetadataSnapshot({
         config: rawConfig,
         env,
         workspaceDir: rawWorkspaceDir,
-      }) ??
+      });
+  const metadataSnapshot = options?.manifestRegistry
+    ? undefined
+    : (currentMetadataSnapshot ??
       loadPluginMetadataSnapshot({
         config: rawConfig,
         env,
@@ -97,12 +100,19 @@ export function resolvePluginRuntimeLoadContext(
   const workspaceDir =
     options?.workspaceDir ?? resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
   if (metadataSnapshot) {
-    if (isReusableCurrentPluginMetadataSnapshot(metadataSnapshot)) {
+    const allowGatewayDerivedSnapshot =
+      currentMetadataSnapshot === metadataSnapshot && metadataSnapshot.registrySource === "derived";
+    if (
+      isReusableCurrentPluginMetadataSnapshot(metadataSnapshot, {
+        allowGatewayDerivedSnapshot,
+      })
+    ) {
       setCurrentPluginMetadataSnapshot(metadataSnapshot, {
         config: rawConfig,
         compatibleConfigs: [config, activationSourceConfig],
         env,
         workspaceDir,
+        ...(allowGatewayDerivedSnapshot ? { allowGatewayDerivedSnapshot } : {}),
       });
     } else {
       clearCurrentPluginMetadataSnapshot();

@@ -52,6 +52,7 @@ Docs: https://docs.openclaw.ai
 - Gateway CLI: surface local post-challenge connect assembly failures immediately instead of waiting for the wrapper timeout. Fixes #68944. (#85253) Thanks @samzong.
 - Messages: strip unsupported web-search citation control markers from outbound replies before they reach WebChat or external channels. Fixes #85193. (#85204) Thanks @neeravmakwana.
 - Agents/exec: treat denied exec approvals as terminal instead of feeding them back into agent follow-up work, and recognize Chinese stop phrases in abort handling. Fixes #69386. (#85194) Thanks @samzong.
+- Gateway/plugins: reuse Gateway-owned derived plugin metadata during startup auth prewarm so stale release registries do not trigger repeated source-tree scans on `main`. Thanks @amknight.
 - CLI/agents: abort accepted Gateway-backed `openclaw agent` runs on SIGINT/SIGTERM so cron and supervisor timeouts do not leave remote agent work alive. Fixes #71710. (#84381) Thanks @Kaspre.
 - Codex app-server: retry replay-safe stdio client-close turns once using structured failure metadata, while surfacing idle `turn/completed` timeouts instead of blindly replaying active shared-server turns. Thanks @VACInc.
 - Codex app-server: reject command overrides that embed Node or package-manager arguments and point users to `appServer.args`, so Windows startup avoids shell parsing failures. (#84417) Thanks @TurboTheTurtle.

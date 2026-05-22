@@ -226,6 +226,25 @@ describe("current plugin metadata snapshot", () => {
     expect(getCurrentPluginMetadataSnapshot()).toBeUndefined();
   });
 
+  it("can explicitly keep gateway-owned derived registry snapshots", () => {
+    const config = { plugins: { allow: ["demo"] } };
+    const workspaceDir = "/workspace";
+    const snapshot = createSnapshot({ config, registrySource: "derived", workspaceDir });
+    setCurrentPluginMetadataSnapshot(snapshot, {
+      config,
+      workspaceDir,
+      allowGatewayDerivedSnapshot: true,
+    });
+
+    expect(getCurrentPluginMetadataSnapshot({ config, workspaceDir })).toBe(snapshot);
+    expect(
+      getCurrentPluginMetadataSnapshot({
+        config: { plugins: { allow: ["other"] } },
+        workspaceDir,
+      }),
+    ).toBeUndefined();
+  });
+
   it("restores a captured current snapshot state", () => {
     const firstConfig = { plugins: { allow: ["first"] } };
     const secondConfig = { plugins: { allow: ["second"] } };

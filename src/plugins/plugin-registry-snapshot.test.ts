@@ -271,6 +271,73 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     expect(result.source).not.toBe("provided");
   });
 
+  it("reuses a gateway-owned derived current metadata snapshot with registry diagnostics", () => {
+    const env = createHermeticEnv(makeTempDir());
+    const config = {};
+    const workspaceDir = path.join(makeTempDir(), "workspace");
+    const policyHash = resolveInstalledPluginIndexPolicyHash(config);
+    const index: InstalledPluginIndex = {
+      version: 1,
+      hostContractVersion: "test",
+      compatRegistryVersion: "test",
+      migrationVersion: 1,
+      policyHash,
+      generatedAtMs: 0,
+      installRecords: {},
+      plugins: [],
+      diagnostics: [],
+    };
+    const registryDiagnostics = [
+      {
+        level: "warn",
+        code: "persisted-registry-stale-source",
+        message: "stale",
+      },
+    ] as const;
+    setCurrentPluginMetadataSnapshot(
+      {
+        policyHash,
+        configFingerprint: "",
+        registrySource: "derived",
+        workspaceDir,
+        index,
+        registryDiagnostics,
+        manifestRegistry: { plugins: [], diagnostics: [] },
+        plugins: [],
+        diagnostics: [],
+        byPluginId: new Map(),
+        normalizePluginId: (pluginId: string) => pluginId,
+        owners: {
+          channels: new Map(),
+          channelConfigs: new Map(),
+          providers: new Map(),
+          modelCatalogProviders: new Map(),
+          cliBackends: new Map(),
+          setupProviders: new Map(),
+          commandAliases: new Map(),
+          contracts: new Map(),
+        },
+        metrics: {
+          registrySnapshotMs: 0,
+          manifestRegistryMs: 0,
+          ownerMapsMs: 0,
+          totalMs: 0,
+          indexPluginCount: 0,
+          manifestPluginCount: 0,
+        },
+      },
+      { config, env, workspaceDir, allowGatewayDerivedSnapshot: true },
+    );
+
+    const result = loadPluginRegistrySnapshotWithMetadata({ config, env, workspaceDir });
+
+    expect(result).toEqual({
+      snapshot: index,
+      source: "derived",
+      diagnostics: registryDiagnostics,
+    });
+  });
+
   it("does not reuse current metadata when explicit derivation inputs are supplied", () => {
     const tempRoot = makeTempDir();
     const env = {

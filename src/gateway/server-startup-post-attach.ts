@@ -11,6 +11,7 @@ import type { scheduleGatewayUpdateCheck } from "../infra/update-startup.js";
 import type { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-types.js";
 import type { loadOpenClawPlugins } from "../plugins/loader.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { getPluginModuleLoaderStats } from "../plugins/plugin-module-loader-cache.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
@@ -831,6 +832,7 @@ export async function startGatewayPostAttachRuntime(
       debug?: (msg: string) => void;
     };
     gatewayPluginConfigAtStart: OpenClawConfig;
+    pluginMetadataSnapshot?: PluginMetadataSnapshot;
     pluginRegistry: ReturnType<typeof loadOpenClawPlugins>;
     defaultWorkspaceDir: string;
     deps: CliDeps;
@@ -1043,7 +1045,10 @@ export async function startGatewayPostAttachRuntime(
         scheduleAuthMapRewarm("auth-profile-failure");
       });
       const startMs = Date.now();
-      await warmCurrentProviderAuthState(params.cfgAtStart);
+      await warmCurrentProviderAuthState(
+        params.cfgAtStart,
+        params.pluginMetadataSnapshot ? { metadataSnapshot: params.pluginMetadataSnapshot } : {},
+      );
       params.log.info(`provider auth state pre-warmed in ${Date.now() - startMs}ms`);
     })
     .catch((err) => {

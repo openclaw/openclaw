@@ -1,9 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 
 const modelCatalogMocks = vi.hoisted(() => ({
-  loadModelCatalog: vi.fn<() => Promise<ModelCatalogEntry[]>>(),
+  loadModelCatalog:
+    vi.fn<
+      (params: {
+        config: OpenClawConfig;
+        metadataSnapshot?: PluginMetadataSnapshot;
+      }) => Promise<ModelCatalogEntry[]>
+    >(),
 }));
 
 const modelAuthMocks = vi.hoisted(() => ({
@@ -81,6 +88,19 @@ describe("prepared provider auth state", () => {
     clearCurrentProviderAuthState();
     await expect(hasAuthForModelProvider({ provider: "anthropic", cfg })).resolves.toBe(true);
     expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(3);
+  });
+
+  it("passes a prepared metadata snapshot to model catalog warming", async () => {
+    const cfg = {} as OpenClawConfig;
+    const metadataSnapshot = {} as PluginMetadataSnapshot;
+    modelCatalogMocks.loadModelCatalog.mockResolvedValue([]);
+
+    await warmCurrentProviderAuthState(cfg, { metadataSnapshot });
+
+    expect(modelCatalogMocks.loadModelCatalog).toHaveBeenCalledWith({
+      config: cfg,
+      metadataSnapshot,
+    });
   });
 
   it("hasAuthForModelProvider falls through to compute when the caller narrows the auth-discovery scope", async () => {
