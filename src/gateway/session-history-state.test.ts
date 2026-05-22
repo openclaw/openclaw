@@ -286,9 +286,10 @@ describe("SessionHistorySseState", () => {
     expect(
       state
         .snapshot()
-        .messages.map(
+        .messages.flatMap(
           (message) => (message as { content?: Array<{ text?: string }> }).content?.[0]?.text,
-        ),
+        )
+        .filter((text): text is string => typeof text === "string"),
     ).toEqual(["send both here", "First visible reply.", "Second visible reply."]);
   });
 
