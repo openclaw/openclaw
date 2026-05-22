@@ -2880,11 +2880,26 @@ export const chatHandlers: GatewayRequestHandlers = {
                   });
                 }
               } else if (!hasBeforeAgentRunGate) {
-                await emitUserTranscriptUpdate().catch((transcriptErr) => {
-                  context.logGateway.warn(
-                    `webchat user transcript update failed after agent run: ${formatForLog(transcriptErr)}`,
-                  );
-                });
+                const errorPayloads = deliveredReplies
+                  .filter((entry) => entry.payload.isError);
+                if (errorPayloads.length > 0) {
+                  const errorMsg = errorPayloads
+                    .map((entry) => entry.payload.text)
+                    .filter(Boolean)
+                    .join(" | ");
+                  broadcastChatError({
+                    context,
+                    runId: clientRunId,
+                    sessionKey,
+                    errorMessage: errorMsg,
+                  });
+                } else {
+                  await emitUserTranscriptUpdate().catch((transcriptErr) => {
+                    context.logGateway.warn(
+                      `webchat user transcript update failed after agent run: ${formatForLog(transcriptErr)}`,
+                    );
+                  });
+                }
               }
               if (!context.chatAbortedRuns.has(clientRunId)) {
                 setGatewayDedupeEntry({
