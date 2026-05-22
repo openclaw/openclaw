@@ -1515,6 +1515,59 @@ describe("CodexAppServerEventProjector", () => {
     );
   });
 
+  it("keeps streamed native tool transcript truncation size accurate after later chunks", async () => {
+    const projector = await createProjector({
+      ...(await createParams()),
+      config: {
+        agents: {
+          defaults: {
+            contextLimits: {
+              toolResultMaxChars: 16,
+            },
+          },
+        },
+      },
+    } as EmbeddedRunAttemptParams);
+
+    await projector.handleNotification(
+      forCurrentTurn("item/commandExecution/outputDelta", {
+        itemId: "cmd-1",
+        delta: "abcdefghijklmnopqrst",
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/commandExecution/outputDelta", {
+        itemId: "cmd-1",
+        delta: "uvwxyz",
+      }),
+    );
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "commandExecution",
+          id: "cmd-1",
+          command: "python scripts/run_demo_scenario.py",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "completed",
+          commandActions: [],
+          aggregatedOutput: null,
+          exitCode: 0,
+          durationMs: 42,
+        },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    const toolResultMessage = requireRecord(result.messagesSnapshot[2], "tool result message");
+    const toolResultContent = requireArray(toolResultMessage.content, "tool result content");
+    const toolResultContentItem = requireRecord(toolResultContent[0], "tool result content item");
+    expect(toolResultContentItem.content).toBe(
+      "abcdefghijklmnop\n...(truncated: original 26 chars, limit 16; rerun with narrower tool arguments for omitted output)...",
+    );
+  });
+
   it("uses per-agent toolResultMaxChars for native tool transcript snapshots", async () => {
     const projector = await createProjector({
       ...(await createParams()),

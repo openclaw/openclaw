@@ -1960,6 +1960,12 @@ function appendToolOutputDeltaText(
 ): void {
   const current = outputTextByItem.get(itemId) ?? "";
   if (current.length >= maxChars) {
+    const originalChars =
+      readCompleteToolTranscriptTruncationOriginalChars(current, maxChars) ?? current.length;
+    outputTextByItem.set(
+      itemId,
+      `${current.slice(0, maxChars)}${formatToolTranscriptTruncationNotice(originalChars + delta.length, maxChars)}`,
+    );
     return;
   }
   const remaining = maxChars - current.length;
@@ -2009,14 +2015,24 @@ function truncateToolTranscriptText(
 }
 
 function hasCompleteToolTranscriptTruncationNotice(text: string, maxChars: number): boolean {
+  return readCompleteToolTranscriptTruncationOriginalChars(text, maxChars) !== undefined;
+}
+
+function readCompleteToolTranscriptTruncationOriginalChars(
+  text: string,
+  maxChars: number,
+): number | undefined {
   if (!text.startsWith(TOOL_TRANSCRIPT_TRUNCATION_NOTICE_PREFIX, maxChars)) {
-    return false;
+    return undefined;
   }
   const notice = text.slice(maxChars);
   const match = notice.match(
     /^\n\.\.\.\(truncated: original ([0-9]+) chars, limit ([0-9]+); rerun with narrower tool arguments for omitted output\)\.\.\.$/,
   );
-  return Boolean(match && Number(match[2]) === maxChars);
+  if (!match || Number(match[2]) !== maxChars) {
+    return undefined;
+  }
+  return Number(match[1]);
 }
 
 function toolResultStatusText(params: ToolTranscriptResultInput): string {
