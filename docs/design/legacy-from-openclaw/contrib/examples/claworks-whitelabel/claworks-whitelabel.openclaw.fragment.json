@@ -1,0 +1,100 @@
+{
+  "gateway": {
+    "port": 18789,
+    "mode": "local",
+    "bind": "loopback",
+    "auth": {
+      "mode": "token",
+      "rateLimit": {
+        "maxAttempts": 10,
+        "windowMs": 60000,
+        "lockoutMs": 300000,
+        "exemptLoopback": true
+      }
+    },
+    "tailscale": {
+      "mode": "off",
+      "resetOnExit": false
+    },
+    "controlUi": {
+      "enabled": true,
+      "basePath": "/cw-admin",
+      "allowedOrigins": ["https://REPLACE_PUBLIC_HOST"],
+      "allowInsecureAuth": false
+    },
+    "trustedProxies": ["127.0.0.1", "::1"]
+  },
+  "channels": {
+    "feishu": {
+      "enabled": true,
+      "connectionMode": "websocket",
+      "domain": "feishu",
+      "groupPolicy": "allowlist",
+      "requireMention": true,
+      "webhookPath": "/hooks/im/events"
+    }
+  },
+  "plugins": {
+    "allow": ["feishu", "claworks"],
+    "entries": {
+      "feishu": {
+        "enabled": true
+      },
+      "claworks": {
+        "enabled": true,
+        "config": {
+          "url": "http://127.0.0.1:8000",
+          "apiKey": "REPLACE_CLAWORKS_API_KEY_OR_REMOVE"
+        }
+      },
+      "bonjour": {
+        "enabled": false
+      }
+    }
+  },
+  "models": {
+    "providers": {
+      "openrouter": {
+        "headers": {
+          "HTTP-Referer": "https://REPLACE_PUBLIC_HOST",
+          "X-OpenRouter-Title": "ClaWorks"
+        }
+      }
+    }
+  },
+  "diagnostics": {
+    "otel": {
+      "serviceName": "claworks-agent-runtime"
+    }
+  },
+  "agents": {
+    "defaults": {
+      "compaction": {
+        "mode": "safeguard"
+      }
+    },
+    "list": [
+      {
+        "id": "main",
+        "name": "ClaWorks Assistant",
+        "default": true,
+        "tools": {
+          "profile": "coding",
+          "allow": ["*"]
+        }
+      }
+    ]
+  },
+  "bindings": [
+    {
+      "agentId": "main",
+      "match": {
+        "channel": "feishu",
+        "accountId": "default"
+      }
+    }
+  ],
+  "session": {
+    "dmScope": "per-account-channel-peer"
+  }
+}

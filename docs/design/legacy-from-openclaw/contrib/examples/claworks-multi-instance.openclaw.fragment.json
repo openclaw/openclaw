@@ -1,0 +1,32 @@
+{
+  "plugins": {
+    "allow": ["claworks"],
+    "entries": {
+      "claworks": {
+        "enabled": true,
+        "config": {
+          "instances": {
+            "main": {
+              "role": "monolith",
+              "url": "http://localhost:8000",
+              "label": "Main department (monolith)"
+            },
+            "supply-twin": {
+              "role": "twin",
+              "url": "http://localhost:8100",
+              "ops": "supply-ops",
+              "label": "Supply chain — data plane"
+            },
+            "supply-ops": {
+              "role": "ops",
+              "url": "http://localhost:8101",
+              "twin": "supply-twin",
+              "label": "Supply chain — orchestration"
+            }
+          },
+          "default": "main"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,152 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid meet" xml:lang="zh-Hans" role="img">
+  <title>ClawTwin CLI 作为 LLM 控制接口 + 自驱动运维（图 9/9）</title>
+  <desc>CLI 优先设计：在 AI 时代让 LLM 通过 CLI 驱动整个系统；自诊断-自建议-自修复循环。</desc>
+  <defs>
+    <style type="text/css">
+      text, tspan { font-family: 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Microsoft YaHei UI',
+                    'WenQuanYi Micro Hei', 'Noto Sans CJK SC', sans-serif;
+                    text-rendering: geometricPrecision; }
+    </style>
+    <marker id="a9d" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#475569"/></marker>
+    <marker id="a9p" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#6D28D9"/></marker>
+    <marker id="a9g" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#059669"/></marker>
+    <marker id="a9b" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#1E40AF"/></marker>
+  </defs>
+  <rect width="1920" height="1080" fill="#F8FAFD"/>
+  <g transform="translate(60,0) scale(1.5)">
+
+  <rect x="0" y="0" width="1200" height="52" fill="#0D2340"/>
+  <text x="600" y="30" font-size="18" font-weight="700" fill="#FFFFFF" text-anchor="middle">ClawTwin · CLI 优先设计 + LLM 驱动自运维</text>
+  <text x="600" y="45" font-size="9.5" fill="#94A3B8" text-anchor="middle">AI 时代：CLI 是 LLM 与系统交互的最优接口 · 对照 OpenClaw 40+ 命令体系</text>
+
+  <!-- ======= 左半：CLI 设计原则与命令体系 ======= -->
+  <rect x="20" y="58" width="560" height="380" rx="10" fill="#F8FAFC" stroke="#CBD5E1"/>
+  <rect x="20" y="58" width="560" height="28" rx="10" fill="#1E3A8A"/>
+  <rect x="20" y="74" width="560" height="12" fill="#1E3A8A"/>
+  <text x="300" y="74" font-size="12" font-weight="700" fill="#FFFFFF" text-anchor="middle">ClawTwin CLI 体系（对照 OpenClaw 设计）</text>
+
+  <!-- CLI 命令分组 -->
+  <!-- 运维管理 -->
+  <rect x="36" y="96" width="236" height="108" rx="6" fill="#EFF6FF" stroke="#2563EB"/>
+  <text x="154" y="112" font-size="9" font-weight="700" fill="#1E40AF" text-anchor="middle">运维与自检（= openclaw doctor/health）</text>
+  <text x="52" y="128" font-size="8.5" fill="#374151">clawtwin doctor [--fix] --json</text>
+  <text x="52" y="142" font-size="8.5" fill="#374151">clawtwin health --json</text>
+  <text x="52" y="156" font-size="8.5" fill="#374151">clawtwin reload-plan apply</text>
+  <text x="52" y="170" font-size="8.5" fill="#374151">clawtwin pack list / enable / disable</text>
+  <text x="52" y="184" font-size="8" fill="#64748B">全部支持 --json 机器可读输出</text>
+  <text x="52" y="196" font-size="8" fill="#64748B">类 openclaw plugins / system</text>
+
+  <!-- 管道控制 -->
+  <rect x="284" y="96" width="280" height="108" rx="6" fill="#FFFBEB" stroke="#D97706"/>
+  <text x="424" y="112" font-size="9" font-weight="700" fill="#92400E" text-anchor="middle">管道与流程（= openclaw infer/agent）</text>
+  <text x="300" y="128" font-size="8.5" fill="#374151">clawtwin pipeline run &lt;id&gt; --json</text>
+  <text x="300" y="142" font-size="8.5" fill="#374151">clawtwin playbook trigger &lt;id&gt;</text>
+  <text x="300" y="156" font-size="8.5" fill="#374151">clawtwin alarm list --json</text>
+  <text x="300" y="170" font-size="8.5" fill="#374151">clawtwin workorder create</text>
+  <text x="300" y="184" font-size="8" fill="#64748B">类 openclaw message / sessions</text>
+  <text x="300" y="196" font-size="8" fill="#64748B">可串联：pipe | jq | clawtwin …</text>
+
+  <!-- 配置与诊断 -->
+  <rect x="36" y="216" width="236" height="100" rx="6" fill="#F5F3FF" stroke="#7C3AED"/>
+  <text x="154" y="232" font-size="9" font-weight="700" fill="#5B21B6" text-anchor="middle">配置与诊断（= openclaw config）</text>
+  <text x="52" y="248" font-size="8.5" fill="#374151">clawtwin config get/set --json</text>
+  <text x="52" y="262" font-size="8.5" fill="#374151">clawtwin connector test &lt;id&gt;</text>
+  <text x="52" y="276" font-size="8.5" fill="#374151">clawtwin diagnose &lt;equip-id&gt; --json</text>
+  <text x="52" y="290" font-size="8" fill="#64748B">配置变更实时热重载</text>
+  <text x="52" y="304" font-size="8" fill="#64748B">类 openclaw configure / migrate</text>
+
+  <!-- 审计与输出 -->
+  <rect x="284" y="216" width="280" height="100" rx="6" fill="#ECFDF5" stroke="#059669"/>
+  <text x="424" y="232" font-size="9" font-weight="700" fill="#065F46" text-anchor="middle">审计与导出（= openclaw logs/status）</text>
+  <text x="300" y="248" font-size="8.5" fill="#374151">clawtwin audit export --since 1h --json</text>
+  <text x="300" y="262" font-size="8.5" fill="#374151">clawtwin object get &lt;id&gt; --json</text>
+  <text x="300" y="276" font-size="8.5" fill="#374151">clawtwin cron list --json</text>
+  <text x="300" y="290" font-size="8" fill="#64748B">结构化 JSON 输出 · LLM 可直接解析</text>
+  <text x="300" y="304" font-size="8" fill="#64748B">类 openclaw logs / commitments</text>
+
+  <!-- CLI 关键设计原则 -->
+  <rect x="36" y="326" width="528" height="96" rx="6" fill="#FEF3C7" stroke="#FBBF24"/>
+  <text x="300" y="342" font-size="9.5" font-weight="700" fill="#92400E" text-anchor="middle">CLI 优先设计原则（AI 时代为何 CLI 是最佳接口）</text>
+  <text x="52" y="360" font-size="8.5" fill="#78350F">① LLM 工具调用天然映射 shell 命令：定义清晰 · 参数有 schema · 退出码 0/1 即结果</text>
+  <text x="52" y="376" font-size="8.5" fill="#78350F">② --json 输出让 LLM 直接解析系统状态，无需理解 UI 或 API 文档</text>
+  <text x="52" y="392" font-size="8.5" fill="#78350F">③ 命令可组合（管道 | jq | 下一条命令），形成 LLM 可编写的脚本闭环</text>
+  <text x="52" y="408" font-size="8.5" fill="#78350F">④ OpenClaw 的 40+ 核心命令验证了这种模式：agent、infer、message、models 均为 LLM 可调</text>
+
+  <!-- ======= 右半：LLM 自驱动运维循环 ======= -->
+  <rect x="600" y="58" width="580" height="380" rx="10" fill="#F8FAFC" stroke="#CBD5E1"/>
+  <rect x="600" y="58" width="580" height="28" rx="10" fill="#6D28D9"/>
+  <rect x="600" y="74" width="580" height="12" fill="#6D28D9"/>
+  <text x="890" y="74" font-size="12" font-weight="700" fill="#FFFFFF" text-anchor="middle">LLM 驱动的自诊断 · 自建议 · 自修复循环</text>
+
+  <!-- 循环圈 -->
+  <!-- 步骤1: 诊断 -->
+  <rect x="618" y="96" width="256" height="80" rx="8" fill="#DBEAFE" stroke="#2563EB"/>
+  <text x="746" y="112" font-size="10" font-weight="700" fill="#1E40AF" text-anchor="middle">① 诊断（观测）</text>
+  <text x="634" y="128" font-size="8.5" fill="#1E3A8A">clawtwin doctor --json</text>
+  <text x="634" y="142" font-size="8.5" fill="#1E3A8A">clawtwin health --json</text>
+  <text x="634" y="156" font-size="8.5" fill="#1E3A8A">clawtwin alarm list --json</text>
+  <text x="634" y="168" font-size="8" fill="#64748B">LLM 读取 JSON 状态快照</text>
+
+  <!-- 步骤2: 分析 -->
+  <rect x="898" y="96" width="260" height="80" rx="8" fill="#F5F3FF" stroke="#7C3AED"/>
+  <text x="1028" y="112" font-size="10" font-weight="700" fill="#5B21B6" text-anchor="middle">② 分析（推理）</text>
+  <text x="914" y="128" font-size="8.5" fill="#4C1D95">LLM 分析健康状态</text>
+  <text x="914" y="142" font-size="8.5" fill="#4C1D95">识别异常管道/配置</text>
+  <text x="914" y="156" font-size="8.5" fill="#4C1D95">提出修复建议（JSON）</text>
+  <text x="914" y="168" font-size="8" fill="#64748B">知识来自 clawtwin.pack.json</text>
+
+  <!-- 箭头 1→2 -->
+  <line x1="874" y1="136" x2="896" y2="136" stroke="#475569" stroke-width="1.5" marker-end="url(#a9d)"/>
+
+  <!-- 步骤3: 建议 -->
+  <rect x="898" y="196" width="260" height="80" rx="8" fill="#FFFBEB" stroke="#D97706"/>
+  <text x="1028" y="212" font-size="10" font-weight="700" fill="#92400E" text-anchor="middle">③ 建议（生成方案）</text>
+  <text x="914" y="228" font-size="8.5" fill="#78350F">生成配置变更命令</text>
+  <text x="914" y="242" font-size="8.5" fill="#78350F">生成 Playbook 模板</text>
+  <text x="914" y="256" font-size="8.5" fill="#78350F">生成 Connector 配置</text>
+  <text x="914" y="268" font-size="8" fill="#64748B">输出 clawtwin config set …</text>
+
+  <!-- 箭头 2→3 -->
+  <line x1="1028" y1="176" x2="1028" y2="196" stroke="#475569" stroke-width="1.5" marker-end="url(#a9d)"/>
+
+  <!-- 步骤4: 执行 -->
+  <rect x="618" y="196" width="256" height="80" rx="8" fill="#ECFDF5" stroke="#059669"/>
+  <text x="746" y="212" font-size="10" font-weight="700" fill="#065F46" text-anchor="middle">④ 执行（应用）</text>
+  <text x="634" y="228" font-size="8.5" fill="#047857">人工审核批准后</text>
+  <text x="634" y="242" font-size="8.5" fill="#047857">clawtwin config set …</text>
+  <text x="634" y="256" font-size="8.5" fill="#047857">clawtwin reload-plan apply</text>
+  <text x="634" y="268" font-size="8" fill="#64748B">热重载 · 无需重启</text>
+
+  <!-- 箭头 3→4 -->
+  <line x1="898" y1="236" x2="876" y2="236" stroke="#475569" stroke-width="1.5" marker-end="url(#a9d)"/>
+
+  <!-- 箭头 4→1 (回路) -->
+  <line x1="746" y1="276" x2="746" y2="292" stroke="#059669" stroke-width="1.5"/>
+  <line x1="746" y1="292" x2="618" y2="292" stroke="#059669" stroke-width="1.5"/>
+  <line x1="618" y1="292" x2="618" y2="96" stroke="#059669" stroke-width="1.5"/>
+  <line x1="618" y1="96" x2="620" y2="96" stroke="#059669" stroke-width="1.5" marker-end="url(#a9g)"/>
+
+  <text x="616" y="290" font-size="8" fill="#059669">验证后继续监控</text>
+
+  <!-- 边界说明 -->
+  <rect x="618" y="304" width="540" height="120" rx="6" fill="#FFF0F3" stroke="#FDA4AF"/>
+  <text x="888" y="320" font-size="9.5" font-weight="700" fill="#9F1239" text-anchor="middle">LLM 自驱动的边界与安全约束</text>
+  <text x="634" y="338" font-size="8.5" fill="#BE123C">● 配置变更（config set / pack enable）：LLM 可生成命令，人工或策略审批后执行</text>
+  <text x="634" y="354" font-size="8.5" fill="#BE123C">● Playbook 模板生成：LLM 草拟 YAML，运维工程师审核激活 → 类 openclaw skills 生成</text>
+  <text x="634" y="370" font-size="8.5" fill="#BE123C">● 代码自修改：不推荐直接；推荐「配置驱动行为」的架构 → 改配置等价于改行为</text>
+  <text x="634" y="386" font-size="8.5" fill="#BE123C">● 工控层写回：永远需要人工闸门，不论 LLM 置信度多高</text>
+  <text x="634" y="404" font-size="8.5" fill="#9F1239">关键洞察：IndustryPack 的管道、连接器、处置模板均为配置驱动 → LLM 通过修改配置即可改变行为，无需改代码</text>
+
+  <!-- ======= 底部：对照 OpenClaw ======= -->
+  <rect x="20" y="450" width="1140" height="56" rx="8" fill="#F1F5F9" stroke="#CBD5E1"/>
+  <text x="580" y="468" font-size="10" font-weight="700" fill="#0F172A" text-anchor="middle">对照 OpenClaw：ClawTwin 可直接复用的架构决策</text>
+  <text x="36" y="486" font-size="8.8" fill="#475569">• manifest-first 加载（clawtwin.pack.json ↔ openclaw.plugin.json）· 控制面与运行面分离 · 懒加载避免启动膨胀</text>
+  <text x="36" y="500" font-size="8.8" fill="#475569">• --json 全覆盖 CLI 输出 · registerCli() 让 IndustryPack 贡献子命令 · doctor --fix 自修复（≈ openclaw doctor）</text>
+
+  </g>
+  <line x1="0" y1="1028" x2="1920" y2="1028" stroke="#2C5282" stroke-width="1"/>
+  <rect x="0" y="1028" width="1920" height="52" fill="#0D2340"/>
+  <text x="44" y="1058" font-size="13" fill="#94A3B8">ClawTwin</text>
+  <text x="1876" y="1058" font-size="13" fill="#94A3B8" text-anchor="end">图 9/9</text>
+</svg>

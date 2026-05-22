@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
+  <defs>
+    <marker id="arrowHead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L9,3 z" fill="#334155"/>
+    </marker>
+    <linearGradient id="platformGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#eff6ff;stop-opacity:1"/>
+      <stop offset="100%" style="stop-color:#dbeafe;stop-opacity:1"/>
+    </linearGradient>
+  </defs>
+
+  <!-- background -->
+  <rect width="1280" height="720" fill="#f8fafc"/>
+
+  <text x="640" y="38" text-anchor="middle" font-family="system-ui,sans-serif" font-size="22" font-weight="600" fill="#0f172a">ClawTwin ÐLöÓQ</text>
+
+  <!-- Feishu -->
+  <rect x="72" y="88" width="200" height="72" rx="8" fill="#fff" stroke="#0ea5e9" stroke-width="2"/>
+  <text x="172" y="122" text-anchor="middle" font-family="system-ui,sans-serif" font-size="15" fill="#0369a1">Þf</text>
+  <text x="172" y="144" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" fill="#64748b">IM / aG</text>
+
+  <!-- OpenClaw -->
+  <rect x="72" y="200" width="200" height="72" rx="8" fill="#fff" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="172" y="234" text-anchor="middle" font-family="system-ui,sans-serif" font-size="15" fill="#5b21b6">OpenClaw</text>
+  <text x="172" y="256" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" fill="#64748b">Qs · Feishu Channel</text>
+
+  <!-- Studio -->
+  <rect x="72" y="312" width="200" height="72" rx="8" fill="#fff" stroke="#059669" stroke-width="2"/>
+  <text x="172" y="346" text-anchor="middle" font-family="system-ui,sans-serif" font-size="15" fill="#047857">%-Ã Web</text>
+  <text x="172" y="368" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" fill="#64748b">JWT · REST · SSE</text>
+
+  <!-- Arrows to gateway -->
+  <line x1="172" y1="160" x2="172" y2="198" stroke="#334155" stroke-width="2" marker-end="url(#arrowHead)"/>
+  <!-- Feishuwss to OC implied -->
+
+  <!-- platform-api big box -->
+  <rect x="360" y="80" width="560" height="420" rx="12" fill="url(#platformGrad)" stroke="#3b82f6" stroke-width="2"/>
+  <text x="640" y="108" text-anchor="middle" font-family="system-ui,sans-serif" font-size="16" font-weight="600" fill="#1e3a8a">platform-apiNexus	</text>
+
+  <!-- internal layers -->
+  <rect x="388" y="128" width="504" height="48" rx="6" fill="#fff" stroke="#94a3b8"/>
+  <text x="640" y="158" text-anchor="middle" font-family="system-ui,sans-serif" font-size="13" fill="#334155">apps &nbsp;&nbsp; http · feishu M · SSE</text>
+
+  <rect x="388" y="186" width="504" height="48" rx="6" fill="#fff" stroke="#94a3b8"/>
+  <text x="640" y="216" text-anchor="middle" font-family="system-ui,sans-serif" font-size="13" fill="#334155">aip &nbsp;&nbsp; /mcp · AgentRuntime · OpenAPI</text>
+
+  <rect x="388" y="244" width="504" height="48" rx="6" fill="#fff" stroke="#94a3b8"/>
+  <text x="640" y="274" text-anchor="middle" font-family="system-ui,sans-serif" font-size="13" fill="#334155">core &nbsp;&nbsp; ActionExecutor · ObjectStore · FSM</text>
+
+  <rect x="388" y="302" width="504" height="48" rx="6" fill="#fff" stroke="#94a3b8"/>
+  <text x="640" y="332" text-anchor="middle" font-family="system-ui,sans-serif" font-size="13" fill="#334155">ontology &nbsp;&nbsp; object / action / function YAML</text>
+
+  <rect x="388" y="360" width="244" height="48" rx="6" fill="#fff" stroke="#94a3b8"/>
+  <text x="510" y="390" text-anchor="middle" font-family="system-ui,sans-serif" font-size="12" fill="#334155">connectors · IMS · OT · KB</text>
+
+  <rect x="648" y="360" width="244" height="48" rx="6" fill="#fff" stroke="#94a3b8"/>
+  <text x="770" y="384" text-anchor="middle" font-family="system-ui,sans-serif" font-size="12" fill="#334155">infra · JWT · Marking · audit</text>
+
+  <rect x="388" y="418" width="504" height="44" rx="6" fill="#fff" stroke="#94a3b8"/>
+  <text x="640" y="446" text-anchor="middle" font-family="system-ui,sans-serif" font-size="13" fill="#334155">workers &nbsp;&nbsp; scheduler · Kafka ˆ9 · pipeline</text>
+
+  <!-- OpenClaw to MCP -->
+  <path d="M 272 236 L 320 236 L 320 204 L 384 204" fill="none" stroke="#6366f1" stroke-width="2.5" marker-end="url(#arrowHead)"/>
+  <text x="298" y="228" font-family="system-ui,sans-serif" font-size="10" fill="#4f46e5">HTTPS MCP</text>
+
+  <!-- Studio to HTTP -->
+  <path d="M 272 348 L 330 348 L 330 152 L 384 152" fill="none" stroke="#059669" stroke-width="2.5" marker-end="url(#arrowHead)"/>
+  <text x="284" y="340" font-family="system-ui,sans-serif" font-size="10" fill="#047857">/v1/*</text>
+
+  <!-- Feishu to feishu events branch -->
+  <path d="M 272 124 L 320 124 L 320 174 L 384 174" fill="none" stroke="#0284c7" stroke-width="2.5" marker-end="url(#arrowHead)"/>
+  <text x="300" y="116" font-family="system-ui,sans-serif" font-size="10" fill="#0369a1">aG POST</text>
+
+  <!-- Kafka -->
+  <rect x="400" y="540" width="140" height="56" rx="8" fill="#fef3c7" stroke="#d97706" stroke-width="2"/>
+  <text x="470" y="574" text-anchor="middle" font-family="system-ui,sans-serif" font-size="14" fill="#92400e">Kafka</text>
+  <text x="470" y="590" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#b45309">ot.* · platform.*</text>
+
+  <line x1="640" y1="468" x2="470" y2="538" stroke="#334155" stroke-width="2" marker-end="url(#arrowHead)"/>
+
+  <!-- opcua-bridge -->
+  <rect x="572" y="532" width="160" height="72" rx="8" fill="#fff7ed" stroke="#ea580c" stroke-width="2"/>
+  <text x="652" y="564" text-anchor="middle" font-family="system-ui,sans-serif" font-size="13" fill="#c2410c">opcua-bridge</text>
+  <text x="652" y="586" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#9a3412">DMZ · êÑ§</text>
+
+  <line x1="652" y1="532" x2="530" y2="568" stroke="#ea580c" stroke-width="2" marker-end="url(#arrowHead)"/>
+
+  <!-- OT -->
+  <rect x="560" y="636" width="100" height="44" rx="6" fill="#fef2f2" stroke="#dc2626" stroke-width="1.5"/>
+  <text x="610" y="663" text-anchor="middle" font-family="system-ui,sans-serif" font-size="12" fill="#991b1b">OT · OPC</text>
+
+  <line x1="610" y1="634" x2="652" y2="596" stroke="#dc2626" stroke-width="1.8" marker-end="url(#arrowHead)"/>
+
+  <!-- IMS -->
+  <rect x="980" y="200" width="200" height="88" rx="8" fill="#fff" stroke="#64748b" stroke-width="2"/>
+  <text x="1080" y="240" text-anchor="middle" font-family="system-ui,sans-serif" font-size="15" fill="#334155">IMS</text>
+  <text x="1080" y="262" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" fill="#64748b">ERP · CMMS · Historian</text>
+
+  <!-- DB -->
+  <rect x="980" y="340" width="200" height="72" rx="8" fill="#ecfdf5" stroke="#059669" stroke-width="2"/>
+  <text x="1080" y="382" text-anchor="middle" font-family="system-ui,sans-serif" font-size="14" fill="#065f46">PostgreSQL · Redis</text>
+
+  <line x1="920" y1="372" x2="978" y2="376" stroke="#334155" stroke-width="2" marker-end="url(#arrowHead)"/>
+  <line x1="920" y1="336" x2="978" y2="244" stroke="#334155" stroke-width="2" marker-end="url(#arrowHead)"/>
+
+  <!-- legend -->
+  <rect x="980" y="480" width="260" height="120" rx="6" fill="#fff" stroke="#e2e8f0"/>
+  <text x="1000" y="506" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#475569">ô</text>
+  <text x="1000" y="528" font-family="system-ui,sans-serif" font-size="10" fill="#64748b">· ÝÏ OpenClawÏ /v1/feishu/events</text>
+  <text x="1000" y="546" font-family="system-ui,sans-serif" font-size="10" fill="#64748b">· aG¨\ ’ POST /v1/feishu/events</text>
+  <text x="1000" y="564" font-family="system-ui,sans-serif" font-size="10" fill="#64748b">· Bridge ™ Nexus APIê™ Kafka</text>
+</svg>

@@ -1,0 +1,95 @@
+# ClaWorks reverse proxy — public HTTPS only.
+# Agent runtime stays on loopback; no internal runtime paths leak to public.
+
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+upstream claworks_platform {
+    server ${CLAWORKS_UPSTREAM};
+    keepalive 8;
+}
+
+upstream agent_runtime {
+    server ${OPENCLAW_UPSTREAM};
+    keepalive 4;
+}
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${PUBLIC_HOST};
+
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name ${PUBLIC_HOST};
+
+    ssl_certificate     ${TLS_CERT_PATH};
+    ssl_certificate_key ${TLS_KEY_PATH};
+
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
+    ssl_prefer_server_ciphers off;
+
+    add_header X-Frame-Options DENY always;
+    add_header X-Content-Type-Options nosniff always;
+    add_header Referrer-Policy strict-origin-when-cross-origin always;
+    add_header X-Powered-By "ClaWorks" always;
+    server_tokens off;
+
+    client_max_body_size 32m;
+
+    # ClaWorks Studio (static SPA)
+    root ${STUDIO_STATIC_ROOT};
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # ClaWorks Platform API (KB / ObjectStore / Playbooks / HITL)
+    location /v1/ {
+        proxy_pass         http://claworks_platform;
+        proxy_http_version 1.1;
+        proxy_set_header   Host $host;
+        proxy_set_header   X-Real-IP $remote_addr;
+        proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+        proxy_read_timeout 120s;
+        proxy_request_buffering off;
+    }
+
+    # Feishu webhook inbound (only needed when connectionMode=webhook; default WebSocket mode needs nothing here).
+    location /hooks/im/ {
+        proxy_pass         http://agent_runtime/hooks/im/;
+        proxy_http_version 1.1;
+        proxy_set_header   Host $host;
+        proxy_set_header   X-Real-IP $remote_addr;
+        proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+        proxy_read_timeout 120s;
+        proxy_request_buffering off;
+    }
+
+    # Explicitly block any path that would reveal the agent runtime namespace.
+    # Operator console: access via SSH tunnel only (see claworks-whitelabel.zh.md §五).
+    location ~ ^/(cw-admin|__openclaw__|openclaw)(/|$) {
+        return 404;
+    }
+
+    location ~* \.(js|css|woff2|png|jpg|svg|ico)$ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+    }
+
+    location = /healthz {
+        access_log off;
+        return 200 "ok\n";
+        add_header Content-Type text/plain;
+    }
+}

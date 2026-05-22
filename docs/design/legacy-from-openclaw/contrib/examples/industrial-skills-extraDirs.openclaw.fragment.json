@@ -1,0 +1,7 @@
+{
+  "skills": {
+    "load": {
+      "extraDirs": ["~/Projects/openclaw/contrib/industrial-oilgas-skills"]
+    }
+  }
+}

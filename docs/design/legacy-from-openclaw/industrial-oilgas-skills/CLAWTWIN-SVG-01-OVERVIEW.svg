@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid meet" xml:lang="zh-Hans" role="img">
+  <title>ClawTwin 产品体系（图 1/5）</title>
+  <desc>以统一运营平台为核心，可选工作台与 MCP 对话智能体；分层集成工业与企业信息系统。</desc>
+  <defs>
+    <style type="text/css">
+      text, tspan { font-family: 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Microsoft YaHei UI',
+                    'WenQuanYi Micro Hei', 'Noto Sans CJK SC', sans-serif;
+                    text-rendering: geometricPrecision; }
+    </style>
+    <marker id="aGreen" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#059669"/></marker>
+    <marker id="aPurple" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#6D28D9"/></marker>
+    <marker id="aBlue" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#1E40AF"/></marker>
+    <marker id="aGray" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#64748B"/></marker>
+  </defs>
+  <rect width="1920" height="1080" fill="#F8FAFD"/>
+  <g transform="translate(63.4884,0.0000) scale(1.494186)">
+
+  <rect x="0" y="0" width="1200" height="52" fill="#0D2340"/>
+  <text x="36" y="26" font-size="18" font-weight="700" fill="#FFFFFF">ClawTwin 企业运营 AI 体系</text>
+  <text x="36" y="42" font-size="9.5" fill="#94A3B8">感知 — 语义 — 决策 — 执行 — 学习闭环｜尊重现有 IT/OT 投资｜以下为产品与集成关系</text>
+
+  <!-- 核心 vs 扩展 -->
+  <rect x="680" y="8" width="500" height="36" rx="6" fill="#1E3A5F"/>
+  <text x="930" y="23" font-size="9" fill="#93C5FD" text-anchor="middle" font-weight="600">核心：统一运营平台</text>
+  <text x="930" y="36" font-size="8.5" fill="#CBD5E1" text-anchor="middle">扩展：运营工作台 · MCP 对话智能体（可按项目分期）</text>
+
+  <rect x="20" y="58" width="500" height="108" rx="10" fill="#ECFDF5" stroke="#059669" stroke-width="2"/>
+  <rect x="20" y="58" width="500" height="28" rx="10" fill="#047857"/>
+  <rect x="20" y="74" width="500" height="12" fill="#047857"/>
+  <text x="270" y="76" font-size="11.5" font-weight="700" fill="#FFFFFF" text-anchor="middle">运营工作台（可选）</text>
+  <text x="46" y="98" font-size="10" fill="#065F46">告警 · 工单 · 对象与时间线 · 协同审批 · 自动化与指标视图 · 扩展与自检入口</text>
+  <text x="46" y="116" font-size="9.5" fill="#047857">Web / API 接入平台｜业务规则与持久状态在平台侧</text>
+  <text x="46" y="134" font-size="9" fill="#6B7280">面向班长与工程师的一天工作流程</text>
+
+  <rect x="540" y="58" width="640" height="108" rx="10" fill="#F5F3FF" stroke="#6D28D9" stroke-width="2"/>
+  <rect x="540" y="58" width="640" height="28" rx="10" fill="#6D28D9"/>
+  <rect x="540" y="74" width="640" height="12" fill="#6D28D9"/>
+  <text x="860" y="76" font-size="11.5" font-weight="700" fill="#FFFFFF" text-anchor="middle">MCP 对话智能体（可选）</text>
+  <text x="566" y="98" font-size="10" fill="#4C1D95">自然语言 · 多轮任务 · 常见协作入口（IM 等）｜兼容 MCP 生态或客户自研</text>
+  <text x="566" y="116" font-size="9.5" fill="#6D28D9">经 MCP 接入｜能力边界由平台授权</text>
+  <text x="566" y="134" font-size="9" fill="#6B7280">侧重交互与推理入口｜业务动作与审计后果由平台统一执行与留痕</text>
+
+  <text x="600" y="188" font-size="9.5" fill="#475569" text-anchor="middle">设备 · 告警 · 工单 · 站点等在平台统一建模｜工作台 / 智能体 → 运营平台</text>
+
+  <line x1="270" y1="166" x2="270" y2="204" stroke="#059669" stroke-width="1.5" marker-end="url(#aGreen)"/>
+  <text x="196" y="188" font-size="8.5" fill="#059669">REST/SSE</text>
+  <line x1="860" y1="166" x2="860" y2="204" stroke="#6D28D9" stroke-width="1.5" marker-end="url(#aPurple)"/>
+  <text x="786" y="188" font-size="8.5" fill="#6D28D9">MCP</text>
+
+  <!-- Platform 压缩为三横条 + Ops -->
+  <rect x="20" y="214" width="1160" height="298" rx="10" fill="#EFF6FF" stroke="#1E40AF" stroke-width="2.5"/>
+  <rect x="20" y="214" width="1160" height="32" rx="10" fill="#0D2340"/>
+  <rect x="20" y="234" width="1160" height="12" fill="#0D2340"/>
+  <text x="600" y="232" font-size="13.5" font-weight="700" fill="#FFFFFF" text-anchor="middle">ClawTwin 运营平台（核心）</text>
+  <text x="600" y="244" font-size="9" fill="#94A3B8" text-anchor="middle">开放接入：API · 实时推送 · MCP · Webhook 等</text>
+
+  <rect x="34" y="250" width="1132" height="34" rx="6" fill="#F0FDF4" stroke="#22C55E" stroke-width="1.5" stroke-dasharray="6,3"/>
+  <text x="600" y="266" font-size="9.5" font-weight="700" fill="#166534" text-anchor="middle">统一运维与治理</text>
+  <text x="600" y="278" font-size="8.5" fill="#15803D" text-anchor="middle">自检 · 观测 · 可靠投递 · 防重复与风暴 · 限流 · 配置热更新 · 钩子扩展 · AI 用量计量</text>
+
+  <rect x="34" y="290" width="1132" height="62" rx="8" fill="#DBEAFE" stroke="#2563EB"/>
+  <text x="48" y="308" font-size="10.5" font-weight="700" fill="#1E40AF">数据与语义：建模 · 接入 · 处理 · 事件</text>
+  <text x="48" y="324" font-size="9" fill="#1E3A8A">语义模型 · 对象与时序 · 数据接入 · 规整流水线 · 事件分发 · 行业扩展 · 案例闭环学习</text>
+  <text x="48" y="340" font-size="8.5" fill="#475569">工业场景默认现场侧只读采集；业务信号进入统一事件与对象模型</text>
+
+  <rect x="34" y="358" width="1132" height="62" rx="8" fill="#FFFBEB" stroke="#D97706"/>
+  <text x="48" y="376" font-size="10.5" font-weight="700" fill="#92400E">编排与执行：自动化流程与受控 AI</text>
+  <text x="48" y="392" font-size="9" fill="#78350F">编排引擎 · 人工协同节点 · 动作执行 · 内置单次推理 · MCP 服务 · 外接智能体回调 · 模型路由</text>
+  <text x="48" y="408" font-size="8.5" fill="#57534E">内置推理优先低时延闭环｜外接智能体走授权通道｜写库与外联统一走平台动作</text>
+
+  <rect x="34" y="426" width="1132" height="74" rx="8" fill="#FFFFFF" stroke="#93C5FD" stroke-dasharray="5,3"/>
+  <text x="48" y="444" font-size="10" font-weight="700" fill="#334155">产品与边界</text>
+  <text x="48" y="462" font-size="9" fill="#475569">• 运营平台承载统一业务对象与流程编排；工作台与智能体是上层入口。</text>
+  <text x="48" y="478" font-size="9" fill="#475569">• 自动化能力与对话增强分期上线；部署环境与数据边界按合同约定。</text>
+  <text x="48" y="494" font-size="9" fill="#475569">• 同一平台支撑自动化闭环与人机协同升级，可按阶段交付。</text>
+
+  <rect x="34" y="508" width="1132" height="26" rx="5" fill="#DBEAFE" stroke="#93C5FD"/>
+  <text x="600" y="520" font-size="8.5" fill="#1E3A8A" text-anchor="middle">后台服务：数据采集 · 调度 · 可靠外发 · 结果回收（示意）</text>
+
+  <line x1="340" y1="534" x2="340" y2="552" stroke="#2563EB" stroke-width="2" marker-end="url(#aBlue)"/>
+  <text x="208" y="548" font-size="8.5" fill="#2563EB">现场接入（读）</text>
+  <line x1="860" y1="552" x2="860" y2="534" stroke="#64748B" stroke-width="1.5" stroke-dasharray="4,2" marker-end="url(#aGray)"/>
+  <text x="872" y="548" font-size="8.5" fill="#64748B">管理协同（写）</text>
+
+  <rect x="20" y="558" width="1160" height="76" rx="8" fill="#F8FAFC" stroke="#94A3B8"/>
+  <rect x="20" y="558" width="1160" height="18" rx="8" fill="#334155"/>
+  <rect x="20" y="568" width="1160" height="8" fill="#334155"/>
+  <text x="600" y="572" font-size="11" font-weight="700" fill="#FFFFFF" text-anchor="middle">企业 IT / OT（分层集成）</text>
+
+  <rect x="28" y="578" width="384" height="44" rx="6" fill="#FEF2F2" stroke="#FCA5A5"/>
+  <text x="220" y="596" font-size="9.5" font-weight="700" fill="#B91C1C" text-anchor="middle">L1–L2 · 只读红线</text>
+  <text x="220" y="612" font-size="8.5" fill="#64748B" text-anchor="middle">PLC · DCS · SCADA｜不写回控制层</text>
+
+  <rect x="424" y="578" width="352" height="44" rx="6" fill="#F1F5F9" stroke="#CBD5E1"/>
+  <text x="600" y="596" font-size="9.5" font-weight="600" fill="#475569" text-anchor="middle">L3 · 运营系统</text>
+  <text x="600" y="612" font-size="8.5" fill="#64748B" text-anchor="middle">MES · CMMS · WMS · Historian</text>
+
+  <rect x="788" y="578" width="384" height="44" rx="6" fill="#F1F5F9" stroke="#CBD5E1"/>
+  <text x="980" y="596" font-size="9.5" font-weight="600" fill="#475569" text-anchor="middle">L4–L5 · 管理与战略</text>
+  <text x="980" y="612" font-size="8.5" fill="#64748B" text-anchor="middle">ERP · OA · BI · 财务</text>
+
+  </g>
+  <line x1="0" y1="1028" x2="1920" y2="1028" stroke="#2C5282" stroke-width="1"/>
+  <rect x="0" y="1028" width="1920" height="52" fill="#0D2340"/>
+  <text x="44" y="1058" font-size="13" fill="#94A3B8">ClawTwin</text>
+  <text x="1876" y="1058" font-size="13" fill="#94A3B8" text-anchor="end">图 1/5</text>
+</svg>

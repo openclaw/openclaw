@@ -1,0 +1,15 @@
+{
+  "channels": {
+    "feishu": {
+      "defaultAccount": "main",
+      "accounts": {
+        "main": {
+          "appId": "cli_REPLACE_ME",
+          "appSecret": "REPLACE_ME",
+          "name": "ClaWorks Bot",
+          "enabled": true
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,157 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid meet" xml:lang="zh-Hans" role="img">
+  <title>ClawTwin 核心内核与六管道架构（图 8/9）</title>
+  <desc>极小化核心内核 + 六条命名管道 + IndustryPack 扩展注册表；对照 OpenClaw 插件系统设计。</desc>
+  <defs>
+    <style type="text/css">
+      text, tspan { font-family: 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Microsoft YaHei UI',
+                    'WenQuanYi Micro Hei', 'Noto Sans CJK SC', sans-serif;
+                    text-rendering: geometricPrecision; }
+    </style>
+    <marker id="a8d" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#475569"/></marker>
+    <marker id="a8u" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#7C3AED"/></marker>
+  </defs>
+  <rect width="1920" height="1080" fill="#F8FAFD"/>
+  <g transform="translate(0,0) scale(1.6)">
+
+  <rect x="0" y="0" width="1200" height="52" fill="#0D2340"/>
+  <text x="600" y="30" font-size="18" font-weight="700" fill="#FFFFFF" text-anchor="middle">ClawTwin · 六管道架构 + IndustryPack 扩展注册表</text>
+  <text x="600" y="45" font-size="9.5" fill="#94A3B8" text-anchor="middle">极小化核心内核 · 所有业务行为注册为命名管道 · 对照 OpenClaw 扩展设计模式</text>
+
+  <!-- 核心内核 label -->
+  <text x="600" y="66" font-size="8.5" fill="#0369A1" font-weight="700" text-anchor="middle">▼ 核心内核（极小 · 稳定 · 不含任何行业逻辑）</text>
+
+  <!-- Core Kernel 三个框 -->
+  <rect x="20" y="70" width="356" height="46" rx="7" fill="#1E3A8A" stroke="#1E40AF" stroke-width="1.5"/>
+  <text x="198" y="89" font-size="10" font-weight="700" fill="#FFFFFF" text-anchor="middle">事件总线（EventBus）</text>
+  <text x="198" y="103" font-size="8" fill="#BFDBFE" text-anchor="middle">统一发布 · 订阅分发 · 解耦触发</text>
+  <text x="198" y="112" font-size="7.5" fill="#93C5FD" text-anchor="middle">所有管道均订阅此总线</text>
+
+  <rect x="392" y="70" width="356" height="46" rx="7" fill="#1E3A8A" stroke="#1E40AF" stroke-width="1.5"/>
+  <text x="570" y="89" font-size="10" font-weight="700" fill="#FFFFFF" text-anchor="middle">对象存储（ObjectStore）</text>
+  <text x="570" y="103" font-size="8" fill="#BFDBFE" text-anchor="middle">实体持久化 · 唯一真相源</text>
+  <text x="570" y="112" font-size="7.5" fill="#93C5FD" text-anchor="middle">读写共享 · 版本追踪</text>
+
+  <rect x="764" y="70" width="396" height="46" rx="7" fill="#1E3A8A" stroke="#1E40AF" stroke-width="1.5"/>
+  <text x="962" y="89" font-size="10" font-weight="700" fill="#FFFFFF" text-anchor="middle">扩展注册表（PackRegistry）</text>
+  <text x="962" y="103" font-size="8" fill="#BFDBFE" text-anchor="middle">Manifest 优先 · 懒加载 · 控制面/运行面分离</text>
+  <text x="962" y="112" font-size="7.5" fill="#93C5FD" text-anchor="middle">类 OpenClaw Plugin Loader</text>
+
+  <!-- 向下箭头 -->
+  <line x1="600" y1="116" x2="600" y2="130" stroke="#475569" stroke-width="1.5" marker-end="url(#a8d)"/>
+  <text x="600" y="128" font-size="8" fill="#64748B" text-anchor="middle">六条命名管道（全部注册而非硬编码）</text>
+
+  <!-- ======= 管道行一 ======= -->
+  <!-- 管道 1：数据采集 -->
+  <rect x="20" y="132" width="356" height="108" rx="8" fill="#EFF6FF" stroke="#2563EB" stroke-width="1.5"/>
+  <rect x="20" y="132" width="356" height="24" rx="8" fill="#1E40AF"/>
+  <rect x="20" y="148" width="356" height="8" fill="#1E40AF"/>
+  <text x="198" y="147" font-size="9.5" font-weight="700" fill="#FFFFFF" text-anchor="middle">管道 ① 数据采集</text>
+  <text x="36" y="168" font-size="8.5" font-weight="600" fill="#1E40AF">触发</text>
+  <text x="36" y="182" font-size="8" fill="#374151">Connector 推送 / 定时采集（Worker）</text>
+  <text x="36" y="196" font-size="8.5" font-weight="600" fill="#1E40AF">步骤</text>
+  <text x="36" y="210" font-size="8" fill="#374151">原始数据规整 → Pipeline 转换 → ObjectStore 写入</text>
+  <text x="36" y="224" font-size="8" fill="#64748B">合约：发布 object.updated 事件至 EventBus</text>
+
+  <!-- 管道 2：事件检测 -->
+  <rect x="392" y="132" width="356" height="108" rx="8" fill="#FFFBEB" stroke="#D97706" stroke-width="1.5"/>
+  <rect x="392" y="132" width="356" height="24" rx="8" fill="#B45309"/>
+  <rect x="392" y="148" width="356" height="8" fill="#B45309"/>
+  <text x="570" y="147" font-size="9.5" font-weight="700" fill="#FFFFFF" text-anchor="middle">管道 ② 事件检测</text>
+  <text x="408" y="168" font-size="8.5" font-weight="600" fill="#B45309">触发</text>
+  <text x="408" y="182" font-size="8" fill="#374151">object.updated 事件 / 阈值规则订阅</text>
+  <text x="408" y="196" font-size="8.5" font-weight="600" fill="#B45309">步骤</text>
+  <text x="408" y="210" font-size="8" fill="#374151">规则匹配 → 告警去重 → 优先级计算</text>
+  <text x="408" y="224" font-size="8" fill="#64748B">合约：发布 alarm.created 事件至 EventBus</text>
+
+  <!-- 管道 3：工单流转 -->
+  <rect x="764" y="132" width="396" height="108" rx="8" fill="#FFF7ED" stroke="#EA580C" stroke-width="1.5"/>
+  <rect x="764" y="132" width="396" height="24" rx="8" fill="#C2410C"/>
+  <rect x="764" y="148" width="396" height="8" fill="#C2410C"/>
+  <text x="962" y="147" font-size="9.5" font-weight="700" fill="#FFFFFF" text-anchor="middle">管道 ③ 工单流转</text>
+  <text x="780" y="168" font-size="8.5" font-weight="600" fill="#C2410C">触发</text>
+  <text x="780" y="182" font-size="8" fill="#374151">alarm.created 事件 / PlaybookEngine 调度</text>
+  <text x="780" y="196" font-size="8.5" font-weight="600" fill="#C2410C">步骤</text>
+  <text x="780" y="210" font-size="8" fill="#374151">AI诊断 → 人工确认 → 派单 → 结案</text>
+  <text x="780" y="224" font-size="8" fill="#64748B">合约：发布 workorder.closed → 触发学习管道</text>
+
+  <!-- ======= 管道行二 ======= -->
+  <!-- 管道 4：AI推理 -->
+  <rect x="20" y="252" width="356" height="108" rx="8" fill="#F5F3FF" stroke="#7C3AED" stroke-width="1.5"/>
+  <rect x="20" y="252" width="356" height="24" rx="8" fill="#6D28D9"/>
+  <rect x="20" y="268" width="356" height="8" fill="#6D28D9"/>
+  <text x="198" y="267" font-size="9.5" font-weight="700" fill="#FFFFFF" text-anchor="middle">管道 ④ AI 推理</text>
+  <text x="36" y="288" font-size="8.5" font-weight="600" fill="#6D28D9">触发</text>
+  <text x="36" y="302" font-size="8" fill="#374151">Playbook 步骤调用 / REST API 直调</text>
+  <text x="36" y="316" font-size="8.5" font-weight="600" fill="#6D28D9">步骤</text>
+  <text x="36" y="330" font-size="8" fill="#374151">上下文构建 → LLM 推理 → 结构化输出</text>
+  <text x="36" y="344" font-size="8" fill="#64748B">合约：返回结构化结论 / 置信度 / 推荐动作</text>
+
+  <!-- 管道 5：学习反馈 -->
+  <rect x="392" y="252" width="356" height="108" rx="8" fill="#ECFDF5" stroke="#059669" stroke-width="1.5"/>
+  <rect x="392" y="252" width="356" height="24" rx="8" fill="#065F46"/>
+  <rect x="392" y="268" width="356" height="8" fill="#065F46"/>
+  <text x="570" y="267" font-size="9.5" font-weight="700" fill="#FFFFFF" text-anchor="middle">管道 ⑤ 学习反馈</text>
+  <text x="408" y="288" font-size="8.5" font-weight="600" fill="#065F46">触发</text>
+  <text x="408" y="302" font-size="8" fill="#374151">workorder.closed 事件 / 定时批量</text>
+  <text x="408" y="316" font-size="8.5" font-weight="600" fill="#065F46">步骤</text>
+  <text x="408" y="330" font-size="8" fill="#374151">案例提取 → 向量化 → CBR 库更新</text>
+  <text x="408" y="344" font-size="8" fill="#64748B">合约：下次同类场景命中率提升（可量化）</text>
+
+  <!-- 管道 6：可靠投递 -->
+  <rect x="764" y="252" width="396" height="108" rx="8" fill="#F0FDF4" stroke="#22C55E" stroke-width="1.5"/>
+  <rect x="764" y="252" width="396" height="24" rx="8" fill="#166534"/>
+  <rect x="764" y="268" width="396" height="8" fill="#166534"/>
+  <text x="962" y="267" font-size="9.5" font-weight="700" fill="#FFFFFF" text-anchor="middle">管道 ⑥ 可靠投递</text>
+  <text x="780" y="288" font-size="8.5" font-weight="600" fill="#166534">触发</text>
+  <text x="780" y="302" font-size="8" fill="#374151">ActionExecutor 执行结果 / 任意需外发事件</text>
+  <text x="780" y="316" font-size="8.5" font-weight="600" fill="#166534">步骤</text>
+  <text x="780" y="330" font-size="8" fill="#374151">Outbox 入队 → 退避重试 → 去重确认</text>
+  <text x="780" y="344" font-size="8" fill="#64748B">合约：写库 / ERP·MES / IM·OA 通知可追溯</text>
+
+  <!-- ======= IndustryPack 扩展注册表 ======= -->
+  <rect x="20" y="370" width="1140" height="72" rx="8" fill="#EDE9FE" stroke="#7C3AED" stroke-width="1.5"/>
+  <text x="580" y="388" font-size="10" font-weight="700" fill="#4C1D95" text-anchor="middle">IndustryPack 扩展注册（对照 OpenClaw 插件 API）</text>
+
+  <rect x="36" y="396" width="168" height="36" rx="5" fill="#FFFFFF" stroke="#C4B5FD"/>
+  <text x="120" y="410" font-size="8.5" font-weight="600" fill="#5B21B6" text-anchor="middle">registerConnector()</text>
+  <text x="120" y="424" font-size="7.5" fill="#6D28D9" text-anchor="middle">≈ registerChannel</text>
+
+  <rect x="212" y="396" width="168" height="36" rx="5" fill="#FFFFFF" stroke="#C4B5FD"/>
+  <text x="296" y="410" font-size="8.5" font-weight="600" fill="#5B21B6" text-anchor="middle">registerPipeline()</text>
+  <text x="296" y="424" font-size="7.5" fill="#6D28D9" text-anchor="middle">新增管道</text>
+
+  <rect x="388" y="396" width="168" height="36" rx="5" fill="#FFFFFF" stroke="#C4B5FD"/>
+  <text x="472" y="410" font-size="8.5" font-weight="600" fill="#5B21B6" text-anchor="middle">registerActionType()</text>
+  <text x="472" y="424" font-size="7.5" fill="#6D28D9" text-anchor="middle">≈ registerTool</text>
+
+  <rect x="564" y="396" width="168" height="36" rx="5" fill="#FFFFFF" stroke="#C4B5FD"/>
+  <text x="648" y="410" font-size="8.5" font-weight="600" fill="#5B21B6" text-anchor="middle">registerFunctionType()</text>
+  <text x="648" y="424" font-size="7.5" fill="#6D28D9" text-anchor="middle">≈ registerProvider</text>
+
+  <rect x="740" y="396" width="148" height="36" rx="5" fill="#FFFFFF" stroke="#C4B5FD"/>
+  <text x="814" y="410" font-size="8.5" font-weight="600" fill="#5B21B6" text-anchor="middle">registerHook()</text>
+  <text x="814" y="424" font-size="7.5" fill="#6D28D9" text-anchor="middle">≈ registerHook</text>
+
+  <rect x="896" y="396" width="148" height="36" rx="5" fill="#FFFFFF" stroke="#C4B5FD"/>
+  <text x="970" y="410" font-size="8.5" font-weight="600" fill="#5B21B6" text-anchor="middle">registerCli()</text>
+  <text x="970" y="424" font-size="7.5" fill="#6D28D9" text-anchor="middle">≈ registerCli</text>
+
+  <!-- 清单声明 -->
+  <rect x="1052" y="396" width="92" height="36" rx="5" fill="#FEF3C7" stroke="#FBBF24"/>
+  <text x="1098" y="410" font-size="8" font-weight="600" fill="#92400E" text-anchor="middle">clawtwin</text>
+  <text x="1098" y="424" font-size="7.5" fill="#B45309" text-anchor="middle">.pack.json</text>
+
+  <!-- ======= 价值观察 ======= -->
+  <rect x="20" y="452" width="1140" height="72" rx="8" fill="#FFFFFF" stroke="#E2E8F0"/>
+  <text x="580" y="470" font-size="10" font-weight="700" fill="#0F172A" text-anchor="middle">架构价值结论</text>
+  <text x="36" y="488" font-size="8.8" fill="#475569">● 内核极小（3 个模块）永远稳定；所有行业/场景逻辑住在 IndustryPack 的注册管道里，零侵入内核。</text>
+  <text x="36" y="504" font-size="8.8" fill="#475569">● 六条管道有明确的触发条件和输出合约，既可独立验证，也可被 CLI/LLM 单独触发调试。</text>
+  <text x="36" y="520" font-size="8.8" fill="#475569">● 新行业（炼化/电力/港口）只需交付一个 IndustryPack，注册自己的 Connector + 管道变体，无需修改内核分支。</text>
+
+  </g>
+  <line x1="0" y1="1028" x2="1920" y2="1028" stroke="#2C5282" stroke-width="1"/>
+  <rect x="0" y="1028" width="1920" height="52" fill="#0D2340"/>
+  <text x="44" y="1058" font-size="13" fill="#94A3B8">ClawTwin</text>
+  <text x="1876" y="1058" font-size="13" fill="#94A3B8" text-anchor="end">图 8/9</text>
+</svg>

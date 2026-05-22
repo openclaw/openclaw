@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
+  <defs>
+    <marker id="z" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L9,3 z" fill="#334155"/>
+    </marker>
+  </defs>
+  <rect width="1280" height="720" fill="#f8fafc"/>
+  <text x="640" y="40" text-anchor="middle" font-family="system-ui,sans-serif" font-size="22" font-weight="600" fill="#0f172a">QÜ:pn:	</text>
+
+  <!-- Cloud -->
+  <rect x="80" y="80" width="320" height="200" rx="10" fill="#e0f2fe" stroke="#0284c7" stroke-width="2" stroke-dasharray="8 4"/>
+  <text x="240" y="112" text-anchor="middle" font-family="system-ui,sans-serif" font-size="15" fill="#0369a1">lQ / Þf‘</text>
+  <rect x="120" y="130" width="240" height="60" rx="6" fill="#fff" stroke="#0ea5e9" stroke-width="1.5"/>
+  <text x="240" y="168" text-anchor="middle" font-family="system-ui,sans-serif" font-size="13" fill="#0c4a6e">Feishu</text>
+
+  <!-- DMZ -->
+  <rect x="440" y="80" width="360" height="280" rx="10" fill="#fef3c7" stroke="#d97706" stroke-width="2"/>
+  <text x="620" y="112" text-anchor="middle" font-family="system-ui,sans-serif" font-size="15" fill="#92400e">DMZ</text>
+  <rect x="480" y="130" width="280" height="64" rx="6" fill="#fff" stroke="#ea580c" stroke-width="1.5"/>
+  <text x="620" y="172" text-anchor="middle" font-family="system-ui,sans-serif" font-size="13" fill="#9a3412">opcua-bridge</text>
+
+  <!-- IT -->
+  <rect x="440" y="400" width="760" height="260" rx="10" fill="#eef2ff" stroke="#4338ca" stroke-width="2"/>
+  <text x="820" y="432" text-anchor="middle" font-family="system-ui,sans-serif" font-size="15" fill="#3730a3">IT : · platform-api + OpenClaw + Kafka</text>
+  <rect x="520" y="458" width="200" height="72" rx="6" fill="#fff" stroke="#6366f1" stroke-width="1.5"/>
+  <text x="620" y="492" text-anchor="middle" font-family="system-ui,sans-serif" font-size="13" fill="#4338ca">OpenClaw</text>
+  <text x="620" y="512" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#64748b">Qs</text>
+  <rect x="760" y="458" width="200" height="72" rx="6" fill="#fff" stroke="#2563eb" stroke-width="1.5"/>
+  <text x="860" y="492" text-anchor="middle" font-family="system-ui,sans-serif" font-size="13" fill="#1d4ed8">Nexus</text>
+  <text x="860" y="512" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#64748b">platform-api</text>
+  <rect x="520" y="552" width="440" height="56" rx="6" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
+  <text x="740" y="586" text-anchor="middle" font-family="system-ui,sans-serif" font-size="13" fill="#1e40af">Kafka · PostgreSQL · Redis</text>
+
+  <!-- OT -->
+  <rect x="830" y="80" width="370" height="280" rx="10" fill="#fef2f2" stroke="#dc2626" stroke-width="2"/>
+  <text x="1015" y="112" text-anchor="middle" font-family="system-ui,sans-serif" font-size="15" fill="#991b1b">OT · åz§</text>
+  <rect x="880" y="140" width="270" height="80" rx="6" fill="#fff" stroke="#dc2626" stroke-width="1.5"/>
+  <text x="1015" y="180" text-anchor="middle" font-family="system-ui,sans-serif" font-size="13" fill="#991b1b">OPC-UA / SCADA êû¥e</text>
+  <text x="1015" y="204" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#64748b">žlQÞ§</text>
+
+  <!-- Arrows OT to Bridge -->
+  <line x1="1015" y1="226" x2="1015" y2="250" stroke="#dc2626" stroke-width="2"/>
+  <line x1="1015" y1="250" x2="680" y2="250" stroke="#dc2626" stroke-width="2"/>
+  <line x1="680" y1="250" x2="680" y2="193" stroke="#dc2626" stroke-width="2" marker-end="url(#z)"/>
+  <text x="820" y="242" font-family="system-ui,sans-serif" font-size="10" fill="#991b1b">WÇÆ</text>
+
+  <!-- Bridge to Kafka -->
+  <line x1="620" y1="196" x2="620" y2="368" stroke="#d97706" stroke-width="2" marker-end="url(#z)"/>
+  <text x="630" y="300" font-family="system-ui,sans-serif" font-size="10" fill="#92400e">Kafka publish</text>
+
+  <!-- Cloud to OC -->
+  <line x1="240" y1="278" x2="240" y2="392" stroke="#0284c7" stroke-width="2"/>
+  <path d="M 240 392 L 620 392 L 620 458" stroke="#0284c7" stroke-width="2" fill="none" marker-end="url(#z)"/>
+  <text x="400" y="382" font-family="system-ui,sans-serif" font-size="10" fill="#0369a1">úÙ wss/oapi~	</text>
+
+  <!-- IMS side box inside IT-ish -->
+  <rect x="1000" y="458" width="180" height="72" rx="6" fill="#fff" stroke="#64748b" stroke-width="1.5"/>
+  <text x="1090" y="492" text-anchor="middle" font-family="system-ui,sans-serif" font-size="13" fill="#334155">IMS</text>
+  <text x="1090" y="512" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#64748b">Þ¥h</text>
+</svg>

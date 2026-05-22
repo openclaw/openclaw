@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ClaWorks</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #0f172a;
+        --card: #1e293b;
+        --text: #f8fafc;
+        --muted: #94a3b8;
+        --accent: #38bdf8;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+        background: linear-gradient(160deg, #0f172a 0%, #1e3a5f 100%);
+        color: var(--text);
+        display: grid;
+        place-items: center;
+        padding: 2rem;
+      }
+      main {
+        max-width: 42rem;
+        background: rgba(30, 41, 59, 0.85);
+        border: 1px solid rgba(148, 163, 184, 0.2);
+        border-radius: 1rem;
+        padding: 2rem 2.5rem;
+        backdrop-filter: blur(8px);
+      }
+      h1 { margin: 0 0 0.5rem; font-size: 1.75rem; letter-spacing: 0.02em; }
+      p { line-height: 1.6; color: var(--muted); margin: 0.75rem 0; }
+      code { color: var(--accent); font-size: 0.9em; }
+      ul { color: var(--muted); padding-left: 1.25rem; }
+      .badge {
+        display: inline-block;
+        font-size: 0.75rem;
+        padding: 0.2rem 0.55rem;
+        border-radius: 999px;
+        background: rgba(56, 189, 248, 0.15);
+        color: var(--accent);
+        margin-bottom: 1rem;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="badge">ClaWorks Platform</div>
+      <h1>企业运营 AI 已就绪</h1>
+      <p>
+        这是白标部署占位页。生产环境请将 <code>STUDIO_STATIC_ROOT</code> 指向 ClaWorks Studio 构建产物
+        （<code>pnpm build</code> 输出的 <code>dist/</code>）。
+      </p>
+      <ul>
+        <li>Platform API：<code>/v1/</code></li>
+        <li>飞书 Bot：WebSocket 长连接</li>
+        <li>运维控制台：<code>/console/</code>（建议 IP 限制）</li>
+      </ul>
+    </main>
+  </body>
+</html>

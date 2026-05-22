@@ -1,0 +1,150 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1580" height="1080" viewBox="0 0 1580 1080">
+<defs>
+<marker id="mbk" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><path d="M0,0 L0,7 L10,3.5 z" fill="#334155"/></marker>
+<marker id="mbl" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><path d="M0,0 L0,7 L10,3.5 z" fill="#1d4ed8"/></marker>
+<marker id="mgr" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><path d="M0,0 L0,7 L10,3.5 z" fill="#059669"/></marker>
+<marker id="mvl" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><path d="M0,0 L0,7 L10,3.5 z" fill="#7c3aed"/></marker>
+<marker id="mam" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><path d="M0,0 L0,7 L10,3.5 z" fill="#b45309"/></marker>
+<marker id="mrd" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><path d="M0,0 L0,7 L10,3.5 z" fill="#dc2626"/></marker>
+<marker id="mpk" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><path d="M0,0 L0,7 L10,3.5 z" fill="#be185d"/></marker>
+</defs>
+<rect width="1580" height="1080" fill="#f8fafc"/>
+<text x="790" y="36" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="22" font-weight="700" fill="#0f172a">产品模块交互架构</text>
+<text x="790" y="56" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="12" fill="#64748b">模块边界 · 协议与调用方向 · 自用户入口至数据存储</text>
+<rect x="42" y="72" width="1522" height="133" rx="10" fill="#e0f2fe" stroke="#0284c7" stroke-width="1.5" stroke-dasharray="8 4"/>
+<text x="57" y="142" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="700" fill="#0284c7" transform="rotate(-90 57 138)">客户侧 · 入口</text>
+<rect x="42" y="218" width="1522" height="90" rx="10" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.5" stroke-dasharray="6 3"/>
+<text x="57" y="267" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="700" fill="#7c3aed" transform="rotate(-90 57 263)">Agent 网关</text>
+<rect x="42" y="320" width="1522" height="438" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+<text x="57" y="543" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="700" fill="#2563eb" transform="rotate(-90 57 539)">platform-api / Nexus</text>
+<rect x="42" y="772" width="1522" height="100" rx="10" fill="#f1f5f9" stroke="#475569" stroke-width="1.5"/>
+<text x="57" y="826" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="700" fill="#475569" transform="rotate(-90 57 822)">数据层</text>
+<rect x="42" y="884" width="1522" height="94" rx="10" fill="#fff7ed" stroke="#d97706" stroke-width="1.5" stroke-dasharray="8 4"/>
+<text x="57" y="935" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="700" fill="#d97706" transform="rotate(-90 57 931)">外部系统</text>
+<rect x="58" y="350" width="1502" height="78" rx="6" fill="#dbeafe" stroke="#93c5fd" stroke-width="1"/>
+<text x="74" y="365" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" font-weight="600" fill="#93c5fd">接入层   apps/   aip/</text>
+<rect x="58" y="445" width="1502" height="85" rx="6" fill="#d1fae5" stroke="#6ee7b7" stroke-width="1"/>
+<text x="74" y="460" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" font-weight="600" fill="#6ee7b7">业务核心   core/</text>
+<rect x="58" y="545" width="1502" height="80" rx="6" fill="#fce7f3" stroke="#f9a8d4" stroke-width="1"/>
+<text x="74" y="560" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" font-weight="600" fill="#f9a8d4">横切支撑   infra/   connectors/   workers/</text>
+<rect x="124" y="111" width="172" height="54" rx="7" fill="#fff" stroke="#0ea5e9" stroke-width="2"/>
+<text x="210" y="133" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="12" font-weight="700" fill="#0ea5e9">飞书 Feishu</text>
+<text x="210" y="148" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" fill="#475569">IM · 卡片 · 表单</text>
+<rect x="750" y="111" width="180" height="54" rx="7" fill="#fff" stroke="#059669" stroke-width="2"/>
+<text x="840" y="133" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="12" font-weight="700" fill="#059669">指挥中心 Web</text>
+<text x="840" y="148" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" fill="#475569">Browser SPA</text>
+<rect x="1290" y="111" width="180" height="54" rx="7" fill="#fff7ed" stroke="#ea580c" stroke-width="2"/>
+<text x="1380" y="133" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="12" font-weight="700" fill="#ea580c">opcua-bridge</text>
+<text x="1380" y="148" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" fill="#475569">DMZ · 独立服务</text>
+<rect x="215" y="235" width="270" height="56" rx="7" fill="#faf5ff" stroke="#7c3aed" stroke-width="2"/>
+<text x="350" y="258" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="12" font-weight="700" fill="#7c3aed">OpenClaw</text>
+<text x="350" y="273" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" fill="#475569">网关 + Feishu Channel</text>
+<rect x="119" y="361" width="182" height="56" rx="7" fill="#eff6ff" stroke="#2563eb" stroke-width="2"/>
+<text x="210" y="384" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="12" font-weight="700" fill="#2563eb">apps/feishu</text>
+<text x="210" y="399" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" fill="#475569">POST /v1/feishu/events</text>
+<rect x="423" y="361" width="195" height="56" rx="7" fill="#eef2ff" stroke="#4338ca" stroke-width="2"/>
+<text x="520" y="384" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="12" font-weight="700" fill="#4338ca">aip/mcp_server</text>
+<text x="520" y="399" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" fill="#475569">/mcp StreamableHTTP</text>
+<rect x="742" y="361" width="196" height="56" rx="7" fill="#eff6ff" stroke="#2563eb" stroke-width="2"/>
+<text x="840" y="384" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="12" font-weight="700" fill="#2563eb">apps/http</text>
+<text x="840" y="399" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" fill="#475569">/v1/* REST + SSE</text>
+<rect x="1078" y="361" width="165" height="56" rx="7" fill="#f8fafc" stroke="#94a3b8" stroke-width="2"/>
+<text x="1160" y="384" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="12" font-weight="700" fill="#94a3b8">/v1/admin/*</text>
+<text x="1160" y="399" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" fill="#475569">sys_admin only</text>
+<rect x="136" y="460" width="208" height="56" rx="7" fill="#f0fdf4" stroke="#059669" stroke-width="2"/>
+<text x="240" y="483" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="12" font-weight="700" fill="#059669">core/action_executor</text>
+<text x="240" y="498" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" fill="#475569">Action执行·副作用</text>
+<rect x="441" y="460" width="198" height="56" rx="7" fill="#f0fdf4" stroke="#059669" stroke-width="2"/>
+<text x="540" y="483" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="12" font-weight="700" fill="#059669">core/domain_logic</text>
+<text x="540" y="498" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" fill="#475569">WorkOrder/Alarm FSM</text>
+<rect x="746" y="460" width="188" height="56" rx="7" fill="#f0fdf4" stroke="#059669" stroke-width="2"/>
+<text x="840" y="483" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="12" font-weight="700" fill="#059669">core/object_store</text>
+<text x="840" y="498" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" fill="#475569">持久化·读写抽象</text>
+<rect x="1030" y="460" width="200" height="56" rx="7" fill="#f0fdf4" stroke="#059669" stroke-width="2"/>
+<text x="1130" y="483" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="12" font-weight="700" fill="#059669">core/function_executor</text>
+<text x="1130" y="498" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" fill="#475569">RAG·诊断·推理</text>
+<rect x="112" y="557" width="196" height="56" rx="7" fill="#fdf2f8" stroke="#db2777" stroke-width="2"/>
+<text x="210" y="580" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="12" font-weight="700" fill="#db2777">infra/auth</text>
+<text x="210" y="595" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" fill="#475569">JWT · Marking · Audit</text>
+<rect x="420" y="557" width="180" height="56" rx="7" fill="#fffbeb" stroke="#d97706" stroke-width="2"/>
+<text x="510" y="580" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="12" font-weight="700" fill="#d97706">connectors/</text>
+<text x="510" y="595" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" fill="#475569">ERP · CMMS · OPC-UA</text>
+<rect x="745" y="557" width="190" height="56" rx="7" fill="#fff7ed" stroke="#ea580c" stroke-width="2"/>
+<text x="840" y="580" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="12" font-weight="700" fill="#ea580c">workers/streams</text>
+<text x="840" y="595" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" fill="#475569">Kafka 消费者</text>
+<rect x="1028" y="557" width="185" height="56" rx="7" fill="#fff7ed" stroke="#ea580c" stroke-width="2"/>
+<text x="1120" y="580" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="12" font-weight="700" fill="#ea580c">workers/scheduler</text>
+<text x="1120" y="595" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" fill="#475569">定时任务·晨报</text>
+<rect x="116" y="796" width="208" height="52" rx="7" fill="#fff" stroke="#334155" stroke-width="2"/>
+<text x="220" y="817" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="12" font-weight="700" fill="#334155">PostgreSQL</text>
+<text x="220" y="832" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" fill="#475569">+ TimescaleDB · pgvector</text>
+<rect x="426" y="796" width="148" height="52" rx="7" fill="#fff" stroke="#334155" stroke-width="2"/>
+<text x="500" y="817" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="12" font-weight="700" fill="#334155">Redis</text>
+<text x="500" y="832" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" fill="#475569">缓存 · 队列</text>
+<rect x="735" y="796" width="210" height="52" rx="7" fill="#fffbeb" stroke="#92400e" stroke-width="2"/>
+<text x="840" y="817" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="12" font-weight="700" fill="#92400e">Kafka</text>
+<text x="840" y="832" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" fill="#475569">ot.telemetry · ot.events</text>
+<rect x="1033" y="796" width="175" height="52" rx="7" fill="#fff" stroke="#334155" stroke-width="2"/>
+<text x="1120" y="817" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="12" font-weight="700" fill="#334155">KB Store</text>
+<text x="1120" y="832" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" fill="#475569">向量 · 知识库</text>
+<rect x="313" y="905" width="175" height="52" rx="7" fill="#fff" stroke="#78716c" stroke-width="2"/>
+<text x="400" y="926" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="12" font-weight="700" fill="#78716c">IMS</text>
+<text x="400" y="941" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" fill="#475569">ERP · CMMS · Historian</text>
+<rect x="973" y="905" width="175" height="52" rx="7" fill="#fff" stroke="#dc2626" stroke-width="2"/>
+<text x="1060" y="926" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="12" font-weight="700" fill="#dc2626">OT / OPC-UA</text>
+<text x="1060" y="941" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" fill="#475569">现场设备数据源</text>
+<path d="M210,165 L210,190 L290,190 L290,235" fill="none" stroke="#7c3aed" stroke-width="1.8" marker-end="url(#mvl)"/>
+<text x="294" y="207" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" fill="#7c3aed">wss 对话</text>
+<path d="M175,165 L175,210 L152,210 L152,361" fill="none" stroke="#2563eb" stroke-width="1.8" marker-end="url(#mbl)"/>
+<text x="156" y="280" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" fill="#2563eb">POST /v1/feishu/events</text>
+<path d="M840,165 L840,361" fill="none" stroke="#2563eb" stroke-width="1.8" marker-end="url(#mbl)"/>
+<text x="844" y="258" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" fill="#2563eb">/v1/* + JWT</text>
+<path d="M420,270 L520,270 L520,361" fill="none" stroke="#7c3aed" stroke-width="1.8" marker-end="url(#mvl)"/>
+<text x="524" y="310" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" fill="#7c3aed">/mcp HTTPS + Bearer</text>
+<path d="M210,417 L210,460" fill="none" stroke="#059669" stroke-width="1.8" marker-end="url(#mgr)"/>
+<text x="214" y="433" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" fill="#059669">触发 Action</text>
+<path d="M610,417 L610,440 L1130,440 L1130,460" fill="none" stroke="#059669" stroke-width="1.8" marker-end="url(#mgr)"/>
+<text x="1134" y="445" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" fill="#059669">Function 调用</text>
+<path d="M520,417 L520,445 L780,445 L780,460" fill="none" stroke="#059669" stroke-width="1.8" marker-end="url(#mgr)"/>
+<text x="784" y="447" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" fill="#059669">读 Object</text>
+<path d="M840,417 L840,460" fill="none" stroke="#059669" stroke-width="1.8" marker-end="url(#mgr)"/>
+<text x="844" y="433" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" fill="#059669">读 / 写</text>
+<path d="M750,417 L750,445 L360,445 L360,460" fill="none" stroke="#059669" stroke-width="1.8" marker-end="url(#mgr)"/>
+<text x="364" y="447" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" fill="#059669">触发 Action</text>
+<path d="M346,488 L442,488" fill="none" stroke="#059669" stroke-width="1.8" marker-end="url(#mgr)"/>
+<text x="398" y="483" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" fill="#059669">FSM.transition</text>
+<path d="M642,488 L746,488" fill="none" stroke="#059669" stroke-width="1.8" marker-end="url(#mgr)"/>
+<text x="698" y="483" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" fill="#059669">write Object</text>
+<path d="M1030,488 L936,488" fill="none" stroke="#059669" stroke-width="1.8" marker-end="url(#mgr)"/>
+<text x="987" y="483" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" fill="#059669">读上下文</text>
+<path d="M840,516 L840,550 L220,550 L220,796" fill="none" stroke="#334155" stroke-width="1.8" marker-end="url(#mbk)"/>
+<text x="224" y="668" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" fill="#334155">SQL read/write</text>
+<path d="M1130,516 L1120,796" fill="none" stroke="#334155" stroke-width="1.8" marker-end="url(#mbk)"/>
+<text x="1129" y="651" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" fill="#334155">向量搜索</text>
+<path d="M210,613 L210,650 L500,650 L500,796" fill="none" stroke="#be185d" stroke-width="1.8" marker-end="url(#mpk)"/>
+<text x="504" y="718" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" fill="#be185d">token cache</text>
+<path d="M840,796 L840,613" fill="none" stroke="#b45309" stroke-width="1.8" marker-end="url(#mam)"/>
+<text x="844" y="699" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" fill="#b45309">consume</text>
+<path d="M1380,165 L1380,750 L920,750 L920,796" fill="none" stroke="#b45309" stroke-width="1.8" marker-end="url(#mam)"/>
+<text x="924" y="768" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" fill="#b45309">produce ot.*</text>
+<path d="M1060,905 L1220,905 L1380,905 L1380,165" fill="none" stroke="#dc2626" stroke-width="1.8" marker-end="url(#mrd)"/>
+<text x="1384" y="530" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" fill="#dc2626">OPC-UA 订阅</text>
+<path d="M510,613 L510,680 L400,680 L400,905" fill="none" stroke="#b45309" stroke-width="1.8" marker-end="url(#mam)"/>
+<text x="404" y="787" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" fill="#b45309">pull / sync</text>
+<path d="M590,585 L840,585 L840,516" fill="none" stroke="#b45309" stroke-width="1.8" marker-end="url(#mam)" stroke-dasharray="5 3"/>
+<text x="844" y="545" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" fill="#b45309">写 Object</text>
+<rect x="42" y="1042" width="1522" height="26" rx="5" fill="#fff" stroke="#e2e8f0"/>
+<circle cx="60" cy="1055" r="5" fill="#7c3aed"/>
+<text x="70" y="1059" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" fill="#7c3aed">① IM wss 会话→OpenClaw→/mcp</text>
+<circle cx="310" cy="1055" r="5" fill="#2563eb"/>
+<text x="320" y="1059" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" fill="#2563eb">② 飞书卡片→/v1/feishu/events</text>
+<circle cx="560" cy="1055" r="5" fill="#2563eb"/>
+<text x="570" y="1059" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" fill="#2563eb">③ Web→/v1/* JWT</text>
+<circle cx="810" cy="1055" r="5" fill="#059669"/>
+<text x="820" y="1059" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" fill="#059669">⑤–⑫ 模块内部调用</text>
+<circle cx="1060" cy="1055" r="5" fill="#b45309"/>
+<text x="1070" y="1059" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" fill="#b45309">⑰–⑲ OT采集→Kafka→消费</text>
+<circle cx="1310" cy="1055" r="5" fill="#334155"/>
+<text x="1320" y="1059" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" fill="#334155">⑬–⑭ 存储读写</text>
+</svg>

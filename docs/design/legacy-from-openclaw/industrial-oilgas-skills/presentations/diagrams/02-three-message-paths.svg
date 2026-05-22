@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
+  <defs>
+    <marker id="a" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L9,3 z" fill="#334155"/>
+    </marker>
+  </defs>
+  <rect width="1280" height="720" fill="#fafafa"/>
+  <text x="640" y="42" text-anchor="middle" font-family="system-ui,sans-serif" font-size="22" font-weight="600" fill="#0f172a">	a???P DESIGN-FINAL-LOCK	</text>
+
+  <!-- Swimlane backgrounds -->
+  <rect x="40" y="80" width="1200" height="160" rx="4" fill="#eff6ff" stroke="#bfdbfe"/>
+  <rect x="40" y="268" width="1200" height="160" rx="4" fill="#f0fdf4" stroke="#bbf7d0"/>
+  <rect x="40" y="456" width="1200" height="160" rx="4" fill="#eef2ff" stroke="#c7d2fe"/>
+
+  <text x="56" y="104" font-family="system-ui,sans-serif" font-size="12" font-weight="700" fill="#1d4ed8">A ? IM ??</text>
+  <text x="56" y="292" font-family="system-ui,sans-serif" font-size="12" font-weight="700" fill="#15803d">B ? aG / hU</text>
+  <text x="56" y="480" font-family="system-ui,sans-serif" font-size="12" font-weight="700" fill="#4338ca">C ? % Web</text>
+
+  <!-- Row A -->
+  <rect x="100" y="130" width="120" height="56" rx="6" fill="#fff" stroke="#0ea5e9" stroke-width="2"/>
+  <text x="160" y="164" text-anchor="middle" font-family="system-ui,sans-serif" font-size="13" fill="#0369a1">(7</text>
+  <line x1="220" y1="158" x2="280" y2="158" stroke="#334155" stroke-width="2" marker-end="url(#a)"/>
+  <rect x="280" y="130" width="140" height="56" rx="6" fill="#fff" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="350" y="158" text-anchor="middle" font-family="system-ui,sans-serif" font-size="13" fill="#5b21b6">OpenClaw</text>
+  <line x1="420" y1="158" x2="500" y2="158" stroke="#334155" stroke-width="2" marker-end="url(#a)"/>
+  <text x="440" y="148" font-family="system-ui,sans-serif" font-size="9" fill="#6366f1">MCP</text>
+  <rect x="500" y="118" width="180" height="76" rx="6" fill="#dbeafe" stroke="#2563eb" stroke-width="2"/>
+  <text x="590" y="152" text-anchor="middle" font-family="system-ui,sans-serif" font-size="13" fill="#1e40af">aip /mcp</text>
+  <text x="590" y="172" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#1e40af">? core</text>
+  <line x1="680" y1="158" x2="760" y2="158" stroke="#334155" stroke-width="2" marker-end="url(#a)"/>
+  <rect x="760" y="118" width="160" height="76" rx="6" fill="#fff" stroke="#64748b" stroke-width="2"/>
+  <text x="840" y="152" text-anchor="middle" font-family="system-ui,sans-serif" font-size="13" fill="#334155">core</text>
+  <text x="840" y="172" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#64748b">?/? Action</text>
+  <line x1="920" y1="158" x2="1000" y2="158" stroke="#334155" stroke-width="2" marker-end="url(#a)"/>
+  <rect x="1000" y="130" width="120" height="56" rx="6" fill="#fff" stroke="#0ea5e9" stroke-width="2"/>
+  <text x="1060" y="164" text-anchor="middle" font-family="system-ui,sans-serif" font-size="13" fill="#0369a1">?f?
+</text>
+
+  <!-- Row B -->
+  <rect x="100" y="318" width="120" height="56" rx="6" fill="#fff" stroke="#0ea5e9" stroke-width="2"/>
+  <text x="160" y="352" text-anchor="middle" font-family="system-ui,sans-serif" font-size="13" fill="#0369a1">(7</text>
+  <line x1="220" y1="346" x2="320" y2="346" stroke="#334155" stroke-width="2" marker-end="url(#a)"/>
+  <rect x="320" y="310" width="180" height="72" rx="6" fill="#fff" stroke="#0284c7" stroke-width="2"/>
+  <text x="410" y="338" text-anchor="middle" font-family="system-ui,sans-serif" font-size="12" fill="#0369a1">?f??</text>
+  <text x="410" y="358" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#64748b">card.action&</text>
+  <line x1="500" y1="346" x2="580" y2="346" stroke="#334155" stroke-width="2" marker-end="url(#a)"/>
+  <text x="520" y="336" font-family="system-ui,sans-serif" font-size="9" fill="#0369a1">HTTPS</text>
+  <rect x="580" y="310" width="260" height="72" rx="6" fill="#dbeafe" stroke="#2563eb" stroke-width="2"/>
+  <text x="710" y="338" text-anchor="middle" font-family="system-ui,sans-serif" font-size="13" fill="#1e40af">POST /v1/feishu/events</text>
+  <text x="710" y="358" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#1e40af">apps/feishu ? apps/http</text>
+  <line x1="840" y1="346" x2="920" y2="346" stroke="#334155" stroke-width="2" marker-end="url(#a)"/>
+  <rect x="920" y="318" width="140" height="56" rx="6" fill="#fff" stroke="#059669" stroke-width="2"/>
+  <text x="990" y="352" text-anchor="middle" font-family="system-ui,sans-serif" font-size="13" fill="#047857">core FSM</text>
+  <line x1="1060" y1="346" x2="1140" y2="346" stroke="#334155" stroke-width="2" marker-end="url(#a)"/>
+
+  <!-- Row C -->
+  <rect x="100" y="506" width="120" height="56" rx="6" fill="#fff" stroke="#059669" stroke-width="2"/>
+  <text x="160" y="540" text-anchor="middle" font-family="system-ui,sans-serif" font-size="13" fill="#047857">O?h</text>
+  <line x1="220" y1="534" x2="300" y2="534" stroke="#334155" stroke-width="2" marker-end="url(#a)"/>
+  <text x="240" y="524" font-family="system-ui,sans-serif" font-size="9" fill="#047857">JWT</text>
+  <rect x="300" y="498" width="200" height="72" rx="6" fill="#d1fae5" stroke="#059669" stroke-width="2"/>
+  <text x="400" y="526" text-anchor="middle" font-family="system-ui,sans-serif" font-size="13" fill="#065f46">GET/PATCH /v1/*</text>
+  <text x="400" y="548" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#065f46">apps/http ? SSE</text>
+  <line x1="500" y1="534" x2="600" y2="534" stroke="#334155" stroke-width="2" marker-end="url(#a)"/>
+  <rect x="600" y="498" width="260" height="72" rx="6" fill="#fff" stroke="#64748b" stroke-width="2"/>
+  <text x="730" y="526" text-anchor="middle" font-family="system-ui,sans-serif" font-size="13" fill="#334155">core + ObjectStore</text>
+  <text x="730" y="548" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="#64748b">j ? Jf ? ?U</text>
+
+  <!-- bottom note -->
+  <text x="640" y="668" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" fill="#64748b">?b? A ?;? /v1/feishu/events</text>
+</svg>

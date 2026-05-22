@@ -1,0 +1,155 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid meet" xml:lang="zh-Hans" role="img">
+  <title>ClawTwin 平台运转（图 2/5）</title>
+  <desc>自接入到执行的链路示意；典型集成方式、进程分工与行业扩展。</desc>
+  <defs>
+    <style type="text/css">
+      text, tspan { font-family: 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Microsoft YaHei UI',
+                    'WenQuanYi Micro Hei', 'Noto Sans CJK SC', sans-serif;
+                    text-rendering: geometricPrecision; }
+    </style>
+    <marker id="arr" markerWidth="9" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0,9 3,0 6" fill="#334155"/></marker>
+    <marker id="arr-branch" markerWidth="7" markerHeight="5" refX="6" refY="2.5" orient="auto"><polygon points="0 0,7 2.5,0 5" fill="#64748B"/></marker>
+  </defs>
+  <rect width="1920" height="1080" fill="#F8FAFD"/>
+  <g transform="translate(135.4011,0.0000) scale(1.374332)">
+
+  <rect x="0" y="0" width="1200" height="48" fill="#0D2340"/>
+  <text x="36" y="26" font-size="17" font-weight="700" fill="#FFFFFF">ClawTwin · 数据主链路与运行形态</text>
+  <text x="36" y="40" font-size="9.5" fill="#94A3B8">数据主链路 · 集成方式 · 运行形态</text>
+
+  <!-- 主数据流 横向 -->
+  <text x="600" y="68" font-size="10.5" font-weight="700" fill="#334155" text-anchor="middle">端到端数据流</text>
+
+  <rect x="28" y="76" width="118" height="46" rx="8" fill="#BFDBFE" stroke="#2563EB"/>
+  <text x="87" y="94" font-size="9" font-weight="700" fill="#1E40AF" text-anchor="middle">数据接入</text>
+  <text x="87" y="108" font-size="7.8" fill="#1E40AF" text-anchor="middle">接入 OT/IT</text>
+
+  <line x1="146" y1="99" x2="168" y2="99" stroke="#475569" stroke-width="2" marker-end="url(#arr)"/>
+
+  <rect x="168" y="76" width="118" height="46" rx="8" fill="#BFDBFE" stroke="#2563EB"/>
+  <text x="227" y="94" font-size="9" font-weight="700" fill="#1E40AF" text-anchor="middle">对象存储</text>
+  <text x="227" y="108" font-size="7.8" fill="#1E40AF" text-anchor="middle">孪生与状态</text>
+
+  <line x1="286" y1="99" x2="308" y2="99" stroke="#475569" stroke-width="2" marker-end="url(#arr)"/>
+
+  <rect x="308" y="76" width="124" height="46" rx="8" fill="#BFDBFE" stroke="#2563EB"/>
+  <text x="370" y="94" font-size="9" font-weight="700" fill="#1E40AF" text-anchor="middle">数据处理</text>
+  <text x="370" y="108" font-size="7.8" fill="#1E40AF" text-anchor="middle">规整 · 特征</text>
+
+  <line x1="432" y1="99" x2="454" y2="99" stroke="#475569" stroke-width="2" marker-end="url(#arr)"/>
+
+  <rect x="454" y="76" width="132" height="46" rx="8" fill="#1E40AF" stroke="#1E3A8A"/>
+  <text x="520" y="94" font-size="9" font-weight="700" fill="#FFFFFF" text-anchor="middle">事件分发</text>
+  <text x="520" y="108" font-size="7.8" fill="#BFDBFE" text-anchor="middle">统一事件总线</text>
+
+  <line x1="586" y1="99" x2="608" y2="99" stroke="#475569" stroke-width="2" marker-end="url(#arr)"/>
+
+  <rect x="608" y="76" width="152" height="46" rx="8" fill="#B45309" stroke="#92400E"/>
+  <text x="684" y="94" font-size="9" font-weight="700" fill="#FFFFFF" text-anchor="middle">流程触发</text>
+  <text x="684" y="108" font-size="7.8" fill="#FDE68A" text-anchor="middle">订阅 · 匹配</text>
+
+  <line x1="760" y1="99" x2="782" y2="99" stroke="#475569" stroke-width="2" marker-end="url(#arr)"/>
+
+  <rect x="782" y="76" width="156" height="46" rx="8" fill="#B45309" stroke="#92400E"/>
+  <text x="860" y="94" font-size="9" font-weight="700" fill="#FFFFFF" text-anchor="middle">流程编排</text>
+  <text x="860" y="108" font-size="7.8" fill="#FDE68A" text-anchor="middle">运行 · 步骤 · 人工确认</text>
+
+  <line x1="938" y1="99" x2="958" y2="99" stroke="#475569" stroke-width="2" marker-end="url(#arr)"/>
+
+  <rect x="958" y="76" width="214" height="46" rx="8" fill="#FEF3C7" stroke="#D97706"/>
+  <text x="1065" y="94" font-size="9" font-weight="700" fill="#92400E" text-anchor="middle">执行分流</text>
+  <text x="1065" y="108" font-size="7.8" fill="#78350F" text-anchor="middle">推理 · 外联 · 通知</text>
+
+  <line x1="1065" y1="122" x2="368" y2="142" stroke="#94A3B8" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arr-branch)"/>
+  <line x1="1065" y1="122" x2="600" y2="142" stroke="#94A3B8" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arr-branch)"/>
+  <line x1="1065" y1="122" x2="842" y2="142" stroke="#94A3B8" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arr-branch)"/>
+
+  <!-- 岔口向下三支 -->
+  <rect x="268" y="142" width="200" height="44" rx="8" fill="#FFF7ED" stroke="#EA580C"/>
+  <text x="368" y="160" font-size="9" font-weight="700" fill="#9A3412" text-anchor="middle">内置推理</text>
+  <text x="368" y="174" font-size="7.8" fill="#78350F" text-anchor="middle">内置单次推理 · 回写编排</text>
+
+  <rect x="500" y="142" width="200" height="44" rx="8" fill="#F5F3FF" stroke="#7C3AED"/>
+  <text x="600" y="160" font-size="9" font-weight="700" fill="#5B21B6" text-anchor="middle">MCP · 智能体运行时</text>
+  <text x="600" y="174" font-size="7.8" fill="#6D28D9" text-anchor="middle">外接对话智能体 · 回调继续流程</text>
+
+  <rect x="732" y="142" width="220" height="44" rx="8" fill="#ECFDF5" stroke="#059669"/>
+  <text x="842" y="160" font-size="9" font-weight="700" fill="#065F46" text-anchor="middle">动作执行 · 可靠投递</text>
+  <text x="842" y="174" font-size="7.8" fill="#047857" text-anchor="middle">写对象 · 对接 ERP/MES · 协作通知</text>
+
+  <text x="600" y="206" font-size="8.5" fill="#64748B" text-anchor="middle">工单结案回流案例库，持续改进诊断与处置</text>
+
+  <!-- 契约矩阵 -->
+  <rect x="20" y="218" width="760" height="168" rx="10" fill="#FFFFFF" stroke="#CBD5E1"/>
+  <text x="400" y="236" font-size="10.5" font-weight="700" fill="#334155" text-anchor="middle">集成方式一览</text>
+
+  <text x="48" y="258" font-size="8.5" font-weight="700" fill="#475569">角色</text>
+  <text x="200" y="258" font-size="8.5" fill="#475569" text-anchor="middle">REST</text>
+  <text x="290" y="258" font-size="8.5" fill="#475569" text-anchor="middle">SSE</text>
+  <text x="380" y="258" font-size="8.5" fill="#475569" text-anchor="middle">MCP</text>
+  <text x="470" y="258" font-size="8.5" fill="#475569" text-anchor="middle">Webhook</text>
+  <text x="580" y="258" font-size="8.5" fill="#475569" text-anchor="middle">CLI</text>
+
+  <text x="48" y="284" font-size="8.8" fill="#374151">工作台</text>
+  <text x="200" y="284" font-size="9" fill="#059669" text-anchor="middle">●</text>
+  <text x="290" y="284" font-size="9" fill="#059669" text-anchor="middle">●</text>
+  <text x="380" y="284" font-size="8" fill="#94A3B8" text-anchor="middle">—</text>
+  <text x="470" y="284" font-size="8" fill="#94A3B8" text-anchor="middle">—</text>
+  <text x="580" y="284" font-size="8" fill="#94A3B8" text-anchor="middle">—</text>
+
+  <text x="48" y="308" font-size="8.8" fill="#374151">对话智能体</text>
+  <text x="200" y="308" font-size="8" fill="#94A3B8" text-anchor="middle">△</text>
+  <text x="290" y="308" font-size="8" fill="#94A3B8" text-anchor="middle">—</text>
+  <text x="380" y="308" font-size="9" fill="#059669" text-anchor="middle">●</text>
+  <text x="470" y="308" font-size="8" fill="#94A3B8" text-anchor="middle">—</text>
+  <text x="580" y="308" font-size="8" fill="#94A3B8" text-anchor="middle">—</text>
+
+  <text x="48" y="332" font-size="8.8" fill="#374151">企业 IT/OT</text>
+  <text x="200" y="332" font-size="8" fill="#94A3B8" text-anchor="middle">△</text>
+  <text x="290" y="332" font-size="8" fill="#94A3B8" text-anchor="middle">—</text>
+  <text x="380" y="332" font-size="8" fill="#94A3B8" text-anchor="middle">—</text>
+  <text x="470" y="332" font-size="9" fill="#059669" text-anchor="middle">●</text>
+  <text x="580" y="332" font-size="8" fill="#94A3B8" text-anchor="middle">—</text>
+
+  <text x="48" y="356" font-size="8.8" fill="#374151">运维 / 自动化</text>
+  <text x="200" y="356" font-size="8" fill="#94A3B8" text-anchor="middle">△</text>
+  <text x="290" y="356" font-size="8" fill="#94A3B8" text-anchor="middle">—</text>
+  <text x="380" y="356" font-size="8" fill="#94A3B8" text-anchor="middle">—</text>
+  <text x="470" y="356" font-size="8" fill="#94A3B8" text-anchor="middle">—</text>
+  <text x="580" y="356" font-size="9" fill="#059669" text-anchor="middle">●</text>
+
+  <text x="48" y="376" font-size="7.8" fill="#64748B">图例：● 常用　△ 次要　— 不经此通道</text>
+
+  <!-- apps workers -->
+  <rect x="796" y="218" width="384" height="168" rx="10" fill="#F8FAFC" stroke="#94A3B8"/>
+  <text x="988" y="238" font-size="10.5" font-weight="700" fill="#334155" text-anchor="middle">运行分工</text>
+  <rect x="812" y="248" width="352" height="52" rx="8" fill="#EFF6FF" stroke="#2563EB"/>
+  <text x="988" y="266" font-size="9" font-weight="700" fill="#1E40AF" text-anchor="middle">在线业务进程</text>
+  <text x="988" y="282" font-size="8.5" fill="#475569" text-anchor="middle">API · 推送 · MCP · Webhook · 管理端</text>
+  <rect x="812" y="306" width="352" height="72" rx="8" fill="#F0FDF4" stroke="#22C55E"/>
+  <text x="988" y="324" font-size="9" font-weight="700" fill="#166534" text-anchor="middle">后台任务进程</text>
+  <text x="988" y="340" font-size="8.5" fill="#374151" text-anchor="middle">采集 · 定时调度 · 可靠外发 · 结果回收（示意）</text>
+
+  <!-- IndustryPack -->
+  <rect x="20" y="396" width="1160" height="52" rx="10" fill="#F5F3FF" stroke="#C4B5FD"/>
+  <text x="600" y="416" font-size="10.5" font-weight="700" fill="#5B21B6" text-anchor="middle">④ 行业与场景扩展（插件化交付）</text>
+  <text x="600" y="434" font-size="8.8" fill="#4C1D95" text-anchor="middle">注册连接器、流水线与处置模板；支持扩展清单与健康自检，避免内核分叉。</text>
+
+  <!-- Ops strip -->
+  <rect x="20" y="456" width="1160" height="44" rx="8" fill="#F0FDF4" stroke="#22C55E" stroke-dasharray="7,3"/>
+  <text x="600" y="474" font-size="10" font-weight="700" fill="#166534" text-anchor="middle">⑤ 运行保障</text>
+  <text x="600" y="490" font-size="8.5" fill="#15803D" text-anchor="middle">健康自检 · 运维诊断 · 可靠外发 · 限流去重 · 配置热更新 · AI 用量可控</text>
+
+  <!-- A/B 工程含义 -->
+  <rect x="20" y="508" width="1160" height="56" rx="10" fill="#FFFBEB" stroke="#FBBF24"/>
+  <text x="600" y="528" font-size="10" font-weight="700" fill="#92400E" text-anchor="middle">两种推理形态（可组合）</text>
+  <text x="80" y="548" font-size="9" fill="#78350F">内置：结构化单次推理 · 低时延 · 多数场景默认够用</text>
+  <text x="620" y="548" font-size="9" fill="#5B21B6">外接：对话智能体走 MCP · 工具白名单 · 回调续跑 · 按需启用</text>
+
+  </g>
+  <line x1="0" y1="1028" x2="1920" y2="1028" stroke="#2C5282" stroke-width="1"/>
+  <rect x="0" y="1028" width="1920" height="52" fill="#0D2340"/>
+  <text x="44" y="1058" font-size="13" fill="#94A3B8">ClawTwin</text>
+  <text x="1876" y="1058" font-size="13" fill="#94A3B8" text-anchor="end">图 2/5</text>
+</svg>

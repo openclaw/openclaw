@@ -1,0 +1,11 @@
+{
+  "mcp": {
+    "sessionIdleTtlMs": 600000,
+    "servers": {
+      "gen-mcp-fetch": {
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-fetch"]
+      }
+    }
+  }
+}

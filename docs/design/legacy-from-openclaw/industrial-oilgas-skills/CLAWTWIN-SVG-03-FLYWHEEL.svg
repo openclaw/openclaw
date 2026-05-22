@@ -1,0 +1,147 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid meet" xml:lang="zh-Hans" role="img">
+  <title>ClawTwin 运营闭环与价值（图 3/5）</title>
+  <desc>感知—决策—行动—学习闭环与成效指标示意；从数据基础到可选对话智能体的渐进路径。</desc>
+  <defs>
+    <style type="text/css">
+      text, tspan { font-family: 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Microsoft YaHei UI',
+                    'WenQuanYi Micro Hei', 'Noto Sans CJK SC', sans-serif;
+                    text-rendering: geometricPrecision; }
+    </style>
+    <marker id="aCycle" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto"><polygon points="0 0,9 3.5,0 7" fill="#0D2340"/></marker>
+    <marker id="aStep" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#94A3B8"/></marker>
+  </defs>
+  <rect width="1920" height="1080" fill="#F8FAFD"/>
+  <g transform="translate(36.6467,0.0000) scale(1.538922)">
+
+  <rect x="0" y="0" width="1200" height="46" fill="#0D2340"/>
+  <text x="36" y="26" font-size="17" font-weight="700" fill="#FFFFFF">ClawTwin · 运营闭环与价值</text>
+  <text x="36" y="40" font-size="9.5" fill="#94A3B8">闭环 · 成效指标 · 能力逐级叠加</text>
+
+  <rect x="20" y="54" width="268" height="296" rx="10" fill="#EFF6FF" stroke="#2563EB" stroke-width="2"/>
+  <rect x="20" y="54" width="268" height="42" rx="10" fill="#1E40AF"/>
+  <rect x="20" y="78" width="268" height="18" fill="#1E40AF"/>
+  <text x="154" y="77" font-size="22" font-weight="800" fill="#BFDBFE" text-anchor="middle" opacity="0.4">01</text>
+  <text x="154" y="94" font-size="13" font-weight="700" fill="#FFFFFF" text-anchor="middle">感知</text>
+  <text x="154" y="108" font-size="9" fill="#BFDBFE" text-anchor="middle">信号入网 · 孪生更新</text>
+  <text x="38" y="130" font-size="10" font-weight="600" fill="#1E40AF">接入</text>
+  <text x="38" y="146" font-size="9" fill="#374151">OPC-UA / MQTT · Webhook</text>
+  <text x="38" y="162" font-size="9" fill="#374151">调度 · 工作台 / API</text>
+  <text x="38" y="186" font-size="10" font-weight="600" fill="#1E40AF">处理</text>
+  <text x="38" y="202" font-size="9" fill="#374151">接入标准化写入对象与时序</text>
+  <text x="38" y="218" font-size="9" fill="#374151">流水线规整 · 事件分发</text>
+  <text x="38" y="242" font-size="10" font-weight="600" fill="#1E40AF">产出</text>
+  <text x="38" y="258" font-size="9" fill="#374151">统一对象视图 · 可订阅事件</text>
+
+  <line x1="292" y1="200" x2="306" y2="200" stroke="#94A3B8" stroke-width="2" marker-end="url(#aStep)"/>
+
+  <rect x="314" y="54" width="268" height="296" rx="10" fill="#FFFBEB" stroke="#D97706" stroke-width="2"/>
+  <rect x="314" y="54" width="268" height="42" rx="10" fill="#B45309"/>
+  <rect x="314" y="78" width="268" height="18" fill="#B45309"/>
+  <text x="448" y="77" font-size="22" font-weight="800" fill="#FDE68A" text-anchor="middle" opacity="0.4">02</text>
+  <text x="448" y="94" font-size="13" font-weight="700" fill="#FFFFFF" text-anchor="middle">决策</text>
+  <text x="448" y="108" font-size="9" fill="#FDE68A" text-anchor="middle">流程编排 · AI 辅助</text>
+  <text x="330" y="130" font-size="10" font-weight="600" fill="#B45309">编排</text>
+  <text x="330" y="146" font-size="9" fill="#374151">规则匹配 · 人工确认</text>
+  <text x="330" y="170" font-size="10" font-weight="600" fill="#B45309">AI</text>
+  <text x="330" y="186" font-size="9" fill="#374151">内置：单次结构化推理</text>
+  <text x="330" y="202" font-size="9" fill="#374151">外接：对话智能体（按需）</text>
+  <text x="330" y="226" font-size="10" font-weight="600" fill="#B45309">产出</text>
+  <text x="330" y="242" font-size="9" fill="#374151">结构化结论 · 推荐动作</text>
+
+  <line x1="586" y1="200" x2="600" y2="200" stroke="#94A3B8" stroke-width="2" marker-end="url(#aStep)"/>
+
+  <rect x="608" y="54" width="268" height="296" rx="10" fill="#ECFDF5" stroke="#059669" stroke-width="2"/>
+  <rect x="608" y="54" width="268" height="42" rx="10" fill="#047857"/>
+  <rect x="608" y="78" width="268" height="18" fill="#047857"/>
+  <text x="742" y="77" font-size="22" font-weight="800" fill="#A7F3D0" text-anchor="middle" opacity="0.4">03</text>
+  <text x="742" y="94" font-size="13" font-weight="700" fill="#FFFFFF" text-anchor="middle">行动</text>
+  <text x="742" y="108" font-size="9" fill="#A7F3D0" text-anchor="middle">执行 · 外发</text>
+  <text x="624" y="130" font-size="10" font-weight="600" fill="#047857">自动化</text>
+  <text x="624" y="146" font-size="9" fill="#374151">工单 · 业务系统回写</text>
+  <text x="624" y="170" font-size="10" font-weight="600" fill="#047857">协同</text>
+  <text x="624" y="186" font-size="9" fill="#374151">飞书 · 钉钉 · 企微审批</text>
+  <text x="624" y="210" font-size="10" font-weight="600" fill="#047857">可靠</text>
+  <text x="624" y="226" font-size="9" fill="#374151">可靠队列 · 退避重试 · 去重防风暴</text>
+  <text x="624" y="250" font-size="10" font-weight="600" fill="#047857">产出</text>
+  <text x="624" y="266" font-size="9" fill="#374151">业务结果回写（结案信号）</text>
+
+  <line x1="880" y1="200" x2="894" y2="200" stroke="#94A3B8" stroke-width="2" marker-end="url(#aStep)"/>
+
+  <rect x="902" y="54" width="278" height="296" rx="10" fill="#F5F3FF" stroke="#6D28D9" stroke-width="2"/>
+  <rect x="902" y="54" width="278" height="42" rx="10" fill="#6D28D9"/>
+  <rect x="902" y="78" width="278" height="18" fill="#6D28D9"/>
+  <text x="1041" y="77" font-size="22" font-weight="800" fill="#DDD6FE" text-anchor="middle" opacity="0.4">04</text>
+  <text x="1041" y="94" font-size="13" font-weight="700" fill="#FFFFFF" text-anchor="middle">学习</text>
+  <text x="1041" y="108" font-size="9" fill="#DDD6FE" text-anchor="middle">案例库 · 经验复用</text>
+  <text x="918" y="130" font-size="10" font-weight="600" fill="#5B21B6">沉淀</text>
+  <text x="918" y="146" font-size="9" fill="#374151">上下文 · 决策 · 结果</text>
+  <text x="918" y="170" font-size="10" font-weight="600" fill="#5B21B6">增强</text>
+  <text x="918" y="186" font-size="9" fill="#374151">下次推理引用相似案例</text>
+  <text x="918" y="210" font-size="10" font-weight="600" fill="#5B21B6">效果</text>
+  <text x="918" y="226" font-size="9" fill="#374151">误报下降 · 自动化覆盖上升</text>
+  <text x="918" y="250" font-size="10" font-weight="600" fill="#5B21B6">合规</text>
+  <text x="918" y="266" font-size="9" fill="#374151">不突破 OT 只读红线</text>
+
+  <path d="M 1041 350 Q 1041 382 600 382 Q 154 382 154 350" fill="none" stroke="#0D2340" stroke-width="2" stroke-dasharray="6,3" marker-end="url(#aCycle)"/>
+  <text x="600" y="398" font-size="9.5" fill="#0D2340" text-anchor="middle" font-weight="600">闭环回到感知 · 持续优化</text>
+
+  <rect x="20" y="412" width="1160" height="92" rx="8" fill="#FFFFFF" stroke="#E2E8F0"/>
+  <text x="600" y="432" font-size="12" font-weight="700" fill="#0D2340" text-anchor="middle">价值指标（示例）</text>
+
+  <rect x="36" y="440" width="210" height="54" rx="6" fill="#EFF6FF" stroke="#BFDBFE"/>
+  <text x="141" y="460" font-size="18" font-weight="800" fill="#1E40AF" text-anchor="middle">↑</text>
+  <text x="141" y="476" font-size="9" fill="#374151" text-anchor="middle">告警自动处置占比</text>
+  <text x="141" y="488" font-size="8" fill="#6B7280" text-anchor="middle">随处置模板成熟</text>
+
+  <rect x="262" y="440" width="210" height="54" rx="6" fill="#FFFBEB" stroke="#FDE68A"/>
+  <text x="367" y="460" font-size="18" font-weight="800" fill="#D97706" text-anchor="middle">↓</text>
+  <text x="367" y="476" font-size="9" fill="#374151" text-anchor="middle">告警到工单耗时</text>
+  <text x="367" y="488" font-size="8" fill="#6B7280" text-anchor="middle">端到端缩短</text>
+
+  <rect x="488" y="440" width="224" height="54" rx="6" fill="#ECFDF5" stroke="#A7F3D0"/>
+  <text x="600" y="460" font-size="14" font-weight="800" fill="#059669" text-anchor="middle">↑</text>
+  <text x="600" y="476" font-size="9" fill="#374151" text-anchor="middle">诊断 / 案例命中</text>
+  <text x="600" y="488" font-size="8" fill="#6B7280" text-anchor="middle">案例库加厚</text>
+
+  <rect x="728" y="440" width="210" height="54" rx="6" fill="#F5F3FF" stroke="#DDD6FE"/>
+  <text x="833" y="460" font-size="18" font-weight="800" fill="#6D28D9" text-anchor="middle">↓</text>
+  <text x="833" y="476" font-size="9" fill="#374151" text-anchor="middle">重复审批工作量</text>
+  <text x="833" y="488" font-size="8" fill="#6B7280" text-anchor="middle">信任后可收窄</text>
+
+  <rect x="954" y="440" width="210" height="54" rx="6" fill="#FFF0F3" stroke="#FDA4AF"/>
+  <text x="1059" y="460" font-size="18" font-weight="800" fill="#BE123C" text-anchor="middle">—</text>
+  <text x="1059" y="476" font-size="9" fill="#374151" text-anchor="middle">工控层非破坏性</text>
+  <text x="1059" y="488" font-size="8" fill="#6B7280" text-anchor="middle">L1–L2 只读</text>
+
+  <rect x="20" y="514" width="1160" height="76" rx="8" fill="#F1F5F9" stroke="#E2E8F0"/>
+  <text x="600" y="534" font-size="11" font-weight="700" fill="#0D2340" text-anchor="middle">能力演进</text>
+
+  <rect x="40" y="542" width="260" height="38" rx="6" fill="#DBEAFE" stroke="#93C5FD"/>
+  <text x="170" y="558" font-size="9.5" font-weight="700" fill="#1E40AF" text-anchor="middle">数据基础</text>
+  <text x="170" y="572" font-size="8.5" fill="#374151" text-anchor="middle">孪生模型 · 存储 · 接入</text>
+
+  <text x="318" y="568" font-size="14" fill="#94A3B8" text-anchor="middle">→</text>
+
+  <rect x="334" y="542" width="260" height="38" rx="6" fill="#FEF3C7" stroke="#FCD34D"/>
+  <text x="464" y="558" font-size="9.5" font-weight="700" fill="#B45309" text-anchor="middle">智能编排</text>
+  <text x="464" y="572" font-size="8.5" fill="#374151" text-anchor="middle">流程模板 · 内置推理</text>
+
+  <text x="612" y="568" font-size="14" fill="#94A3B8" text-anchor="middle">→</text>
+
+  <rect x="628" y="542" width="260" height="38" rx="6" fill="#D1FAE5" stroke="#6EE7B7"/>
+  <text x="758" y="558" font-size="9.5" font-weight="700" fill="#047857" text-anchor="middle">自动化与工作台</text>
+  <text x="758" y="572" font-size="8.5" fill="#374151" text-anchor="middle">飞轮 · 工作台</text>
+
+  <text x="906" y="568" font-size="14" fill="#94A3B8" text-anchor="middle">→</text>
+
+  <rect x="922" y="542" width="238" height="38" rx="6" fill="#EDE9FE" stroke="#C4B5FD"/>
+  <text x="1041" y="558" font-size="9.5" font-weight="700" fill="#5B21B6" text-anchor="middle">可选对话智能体</text>
+  <text x="1041" y="572" font-size="8.5" fill="#374151" text-anchor="middle">协作入口 · 受控工具</text>
+
+  </g>
+  <line x1="0" y1="1028" x2="1920" y2="1028" stroke="#2C5282" stroke-width="1"/>
+  <rect x="0" y="1028" width="1920" height="52" fill="#0D2340"/>
+  <text x="44" y="1058" font-size="13" fill="#94A3B8">ClawTwin</text>
+  <text x="1876" y="1058" font-size="13" fill="#94A3B8" text-anchor="end">图 3/5</text>
+</svg>

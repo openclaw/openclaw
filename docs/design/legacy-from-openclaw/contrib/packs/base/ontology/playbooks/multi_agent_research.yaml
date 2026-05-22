@@ -1,0 +1,86 @@
+id: multi_agent_research
+name: 多智能体并行研究
+pack: base
+description: |
+  用户提问时，并行启动多个研究 agent 从不同来源搜集信息，
+  合并结果后综合分析，回复高质量答案。
+  
+  流程：
+  1. [并行] KB 知识库搜索 + 互联网搜索 + 历史事件搜索
+  2. 综合研究分析（LLM 合并）
+  3. 回复用户
+
+trigger:
+  kind: event
+  pattern: "im.message_received"
+  condition: "{{ event.payload.text | length > 20 }}"
+
+priority: 350
+
+steps:
+  # ── Step 1: 并行从三个来源搜集信息 ────────────────────────────────────────────
+  - kind: parallel
+    id: parallel_research
+    timeout_seconds: 15
+    merge_strategy: all
+    store_result_as: research_results
+    on_branch_failure: continue
+    branches:
+      # Branch 0: 知识库搜索
+      - - kind: action
+          id: kb_search
+          action: kb.search
+          params:
+            query: "{{ event.payload.text }}"
+            limit: 5
+          store_result_as: kb_findings
+
+      # Branch 1: 网络搜索（通过 environment.web_search 能力）
+      - - kind: action
+          id: web_search
+          action: environment.web_search
+          params:
+            query: "{{ event.payload.text }}"
+            limit: 3
+          store_result_as: web_findings
+
+      # Branch 2: 历史事件 + CBR 搜索
+      - - kind: action
+          id: event_search
+          action: kb.search
+          params:
+            query: "{{ event.payload.text }}"
+            limit: 3
+            filter: "source:event_log"
+          store_result_as: event_findings
+
+  # ── Step 2: 综合研究分析 ───────────────────────────────────────────────────────
+  - kind: action
+    id: synthesize
+    action: research.query
+    params:
+      query: "{{ event.payload.text }}"
+      sources:
+        - kb
+      depth: quick
+      save_to_kb: false
+    store_result_as: synthesis
+
+  # ── Step 3: 回复用户 ───────────────────────────────────────────────────────────
+  - kind: action
+    id: reply
+    action: comms.send
+    params:
+      channel: "{{ event.source }}"
+      card:
+        template: report
+        title: "🔍 研究结果"
+        period: "实时分析"
+        metrics:
+          - label: "知识库来源"
+            value: "{{ (research_results[0].kb_findings | default([])) | length }} 条"
+          - label: "网络来源"
+            value: "{{ (research_results[1].web_findings | default([])) | length }} 条"
+          - label: "置信度"
+            value: "{{ synthesis.confidence | default(0) }}"
+        message: "{{ synthesis.synthesis | default('暂无相关信息，请尝试换一种表达方式。') }}"

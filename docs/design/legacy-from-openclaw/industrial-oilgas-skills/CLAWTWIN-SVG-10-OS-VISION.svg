@@ -1,0 +1,191 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid meet" xml:lang="zh-Hans" role="img">
+  <title>ClawTwin Platform 企业智能运营 OS 全景架构（图 10/11）</title>
+  <desc>三色标注：绿=已实现 · 黄=骨架待填 · 红虚=缺失待建。Provider 适配层是最关键缺口。</desc>
+  <defs>
+    <style type="text/css">
+      text, tspan { font-family: 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Microsoft YaHei UI',
+                    'WenQuanYi Micro Hei', 'Noto Sans CJK SC', sans-serif;
+                    text-rendering: geometricPrecision; }
+    </style>
+  </defs>
+  <rect width="1920" height="1080" fill="#F8FAFD"/>
+  <g transform="translate(0,0) scale(1.6)">
+
+  <rect x="0" y="0" width="1200" height="52" fill="#0D2340"/>
+  <text x="600" y="30" font-size="18" font-weight="700" fill="#FFFFFF" text-anchor="middle">ClawTwin Platform · 企业智能运营 OS 全景架构</text>
+  <text x="600" y="45" font-size="9.5" fill="#94A3B8" text-anchor="middle">从 OpenClaw 架构师视角的三色诊断：绿=已实现 · 黄=骨架待填充 · 红虚=缺失/未连线</text>
+
+  <!-- 图例 -->
+  <rect x="20" y="56" width="1160" height="20" rx="4" fill="#F1F5F9" stroke="#E2E8F0"/>
+  <rect x="28" y="60" width="14" height="12" rx="2" fill="#DCFCE7" stroke="#16A34A"/>
+  <text x="46" y="70" font-size="8" fill="#166534">已实现（代码可用）</text>
+  <rect x="168" y="60" width="14" height="12" rx="2" fill="#FFFBEB" stroke="#D97706"/>
+  <text x="186" y="70" font-size="8" fill="#92400E">骨架/占位（文件存在但未填充逻辑）</text>
+  <rect x="390" y="60" width="14" height="12" rx="2" fill="#FEE2E2" stroke="#DC2626" stroke-dasharray="3,2"/>
+  <text x="408" y="70" font-size="8" fill="#991B1B">缺失/待建（docker-compose有但代码未连线）</text>
+  <rect x="660" y="60" width="14" height="12" rx="2" fill="#EFF6FF" stroke="#1E40AF"/>
+  <text x="678" y="70" font-size="8" fill="#1E40AF">核心内核（稳定）</text>
+  <text x="790" y="70" font-size="8" fill="#64748B">Eclipse Ditto / TimescaleDB / Kafka / Milvus / Redis 均在 docker-compose 但 Python 代码未连线</text>
+
+  <!-- ① 外部调用层 -->
+  <text x="20" y="88" font-size="8.5" fill="#64748B" font-weight="700">① 外部调用层</text>
+  <rect x="20" y="92" width="220" height="44" rx="6" fill="#ECFDF5" stroke="#059669"/>
+  <text x="130" y="108" font-size="9" font-weight="700" fill="#065F46" text-anchor="middle">Studio / REST · SSE</text>
+  <text x="130" y="122" font-size="7.5" fill="#047857" text-anchor="middle">已实现 · 40+ 端点</text>
+  <rect x="248" y="92" width="220" height="44" rx="6" fill="#ECFDF5" stroke="#059669"/>
+  <text x="358" y="108" font-size="9" font-weight="700" fill="#065F46" text-anchor="middle">Agent / MCP Server</text>
+  <text x="358" y="122" font-size="7.5" fill="#047857" text-anchor="middle">已实现 · GET /mcp</text>
+  <rect x="476" y="92" width="220" height="44" rx="6" fill="#ECFDF5" stroke="#059669"/>
+  <text x="586" y="108" font-size="9" font-weight="700" fill="#065F46" text-anchor="middle">CLI（typer）</text>
+  <text x="586" y="122" font-size="7.5" fill="#047857" text-anchor="middle">已实现 · apps/cli</text>
+  <rect x="704" y="92" width="220" height="44" rx="6" fill="#FFFBEB" stroke="#D97706"/>
+  <text x="814" y="108" font-size="9" font-weight="700" fill="#92400E" text-anchor="middle">Feishu / Webhook 接收</text>
+  <text x="814" y="122" font-size="7.5" fill="#B45309" text-anchor="middle">骨架 · 事件路由待完善</text>
+  <rect x="932" y="92" width="248" height="44" rx="6" fill="#FEE2E2" stroke="#DC2626" stroke-dasharray="4,3"/>
+  <text x="1056" y="108" font-size="9" font-weight="700" fill="#991B1B" text-anchor="middle">Gateway WebSocket</text>
+  <text x="1056" y="122" font-size="7.5" fill="#DC2626" text-anchor="middle">缺失 · REST-only 实时性不足</text>
+
+  <!-- ② 平台服务层 -->
+  <text x="20" y="150" font-size="8.5" fill="#64748B" font-weight="700">② 平台服务层（核心价值 — 多项待补齐）</text>
+  <!-- Row 2a -->
+  <rect x="20" y="154" width="272" height="72" rx="6" fill="#ECFDF5" stroke="#059669"/>
+  <text x="156" y="170" font-size="9" font-weight="700" fill="#065F46" text-anchor="middle">HITL 工单流转引擎</text>
+  <text x="156" y="184" font-size="7.5" fill="#374151" text-anchor="middle">FSM · 审批 · 飞书 / OA 回调</text>
+  <text x="156" y="196" font-size="7" fill="#047857" text-anchor="middle">✅ 已实现（test 覆盖）</text>
+  <text x="156" y="208" font-size="7" fill="#64748B" text-anchor="middle">PlaybookEngine 骨架可扩展</text>
+  <rect x="300" y="154" width="272" height="72" rx="6" fill="#ECFDF5" stroke="#059669"/>
+  <text x="436" y="170" font-size="9" font-weight="700" fill="#065F46" text-anchor="middle">KB + pgvector 知识库</text>
+  <text x="436" y="184" font-size="7.5" fill="#374151" text-anchor="middle">文档入库 · 语义检索</text>
+  <text x="436" y="196" font-size="7" fill="#047857" text-anchor="middle">✅ 已实现（test 覆盖）</text>
+  <text x="436" y="208" font-size="7" fill="#64748B" text-anchor="middle">Milvus 版本待 provider 化</text>
+  <rect x="580" y="154" width="272" height="72" rx="6" fill="#ECFDF5" stroke="#059669"/>
+  <text x="716" y="170" font-size="9" font-weight="700" fill="#065F46" text-anchor="middle">Doctor · Health · Outbox</text>
+  <text x="716" y="184" font-size="7.5" fill="#374151" text-anchor="middle">自检 · 健康维度 · 可靠投递</text>
+  <text x="716" y="196" font-size="7" fill="#047857" text-anchor="middle">✅ 已实现（参考 OpenClaw）</text>
+  <text x="716" y="208" font-size="7" fill="#64748B" text-anchor="middle">强项，对标 openclaw doctor</text>
+  <rect x="860" y="154" width="320" height="72" rx="6" fill="#FFFBEB" stroke="#D97706"/>
+  <text x="1020" y="170" font-size="9" font-weight="700" fill="#92400E" text-anchor="middle">Context Engine（AI 上下文组装）</text>
+  <text x="1020" y="184" font-size="7.5" fill="#374151" text-anchor="middle">LLM 调用前的上下文构建</text>
+  <text x="1020" y="196" font-size="7" fill="#D97706" text-anchor="middle">⚡ 无独立模块·ad-hoc 拼接</text>
+  <text x="1020" y="208" font-size="7" fill="#64748B" text-anchor="middle">应对照 openclaw context-engine</text>
+  <!-- Row 2b -->
+  <rect x="20" y="232" width="272" height="72" rx="6" fill="#FFFBEB" stroke="#D97706"/>
+  <text x="156" y="248" font-size="9" font-weight="700" fill="#92400E" text-anchor="middle">AI Job / FunctionExecutor</text>
+  <text x="156" y="262" font-size="7.5" fill="#374151" text-anchor="middle">AI 推理任务编排</text>
+  <text x="156" y="276" font-size="7" fill="#D97706" text-anchor="middle">⚡ 骨架·FunctionTypes 目录为空</text>
+  <text x="156" y="288" font-size="7" fill="#64748B" text-anchor="middle">需注册具体 FunctionType</text>
+  <rect x="300" y="232" width="272" height="72" rx="6" fill="#FFFBEB" stroke="#D97706"/>
+  <text x="436" y="248" font-size="9" font-weight="700" fill="#92400E" text-anchor="middle">LLM Trace · Eval Runner</text>
+  <text x="436" y="262" font-size="7.5" fill="#374151" text-anchor="middle">推理可观测 · 质量评估</text>
+  <text x="436" y="276" font-size="7" fill="#D97706" text-anchor="middle">⚡ aip/ 骨架·未实现</text>
+  <text x="436" y="288" font-size="7" fill="#64748B" text-anchor="middle">对标 openclaw eval_runner</text>
+  <rect x="580" y="232" width="272" height="72" rx="6" fill="#FEE2E2" stroke="#DC2626" stroke-dasharray="4,3"/>
+  <text x="716" y="248" font-size="9" font-weight="700" fill="#991B1B" text-anchor="middle">Memory SDK（CBR 案例库）</text>
+  <text x="716" y="262" font-size="7.5" fill="#374151" text-anchor="middle">经验沉淀 · 可插拔后端</text>
+  <text x="716" y="276" font-size="7" fill="#DC2626" text-anchor="middle">❌ 无独立模块·需建</text>
+  <text x="716" y="288" font-size="7" fill="#64748B" text-anchor="middle">参考 openclaw memory-host-sdk</text>
+  <rect x="860" y="232" width="320" height="72" rx="6" fill="#FEE2E2" stroke="#DC2626" stroke-dasharray="4,3"/>
+  <text x="1020" y="248" font-size="9" font-weight="700" fill="#991B1B" text-anchor="middle">Skill 系统 · Config Migration</text>
+  <text x="1020" y="262" font-size="7.5" fill="#374151" text-anchor="middle">可重用业务单元 · Schema 版本迁移</text>
+  <text x="1020" y="276" font-size="7" fill="#DC2626" text-anchor="middle">❌ 两项均缺失</text>
+  <text x="1020" y="288" font-size="7" fill="#64748B" text-anchor="middle">参考 openclaw skill / registerConfigMigration</text>
+
+  <!-- ③ 提供者适配层（关键缺口） -->
+  <rect x="20" y="312" width="1160" height="58" rx="8" fill="#FEE2E2" stroke="#DC2626" stroke-width="2" stroke-dasharray="6,3"/>
+  <text x="180" y="330" font-size="9" font-weight="700" fill="#991B1B">③ 提供者适配层（Provider HAL）— 最关键缺口：文件存在但均为空占位</text>
+  <rect x="36" y="336" width="184" height="26" rx="5" fill="#FECACA"/>
+  <text x="128" y="347" font-size="8" font-weight="600" fill="#991B1B" text-anchor="middle">LLM Provider</text>
+  <text x="128" y="357" font-size="7" fill="#B91C1C" text-anchor="middle">providers/llm.py 仅1行注释</text>
+  <rect x="228" y="336" width="184" height="26" rx="5" fill="#FECACA"/>
+  <text x="320" y="347" font-size="8" font-weight="600" fill="#991B1B" text-anchor="middle">Vector Provider</text>
+  <text x="320" y="357" font-size="7" fill="#B91C1C" text-anchor="middle">Milvus/pgvector 未连线</text>
+  <rect x="420" y="336" width="184" height="26" rx="5" fill="#FECACA"/>
+  <text x="512" y="347" font-size="8" font-weight="600" fill="#991B1B" text-anchor="middle">TimeSeries Provider</text>
+  <text x="512" y="357" font-size="7" fill="#B91C1C" text-anchor="middle">TimescaleDB 未连线</text>
+  <rect x="612" y="336" width="184" height="26" rx="5" fill="#FECACA"/>
+  <text x="704" y="347" font-size="8" font-weight="600" fill="#991B1B" text-anchor="middle">Cache Provider</text>
+  <text x="704" y="357" font-size="7" fill="#B91C1C" text-anchor="middle">Redis 未连线</text>
+  <rect x="804" y="336" width="184" height="26" rx="5" fill="#FECACA"/>
+  <text x="896" y="347" font-size="8" font-weight="600" fill="#991B1B" text-anchor="middle">Notifier Provider</text>
+  <text x="896" y="357" font-size="7" fill="#B91C1C" text-anchor="middle">providers/notifier.py 仅1行</text>
+  <rect x="996" y="336" width="168" height="26" rx="5" fill="#FECACA"/>
+  <text x="1080" y="347" font-size="8" font-weight="600" fill="#991B1B" text-anchor="middle">Kafka Event Stream</text>
+  <text x="1080" y="357" font-size="7" fill="#B91C1C" text-anchor="middle">kafka-python 未在依赖中</text>
+
+  <!-- ④ 六条命名管道 -->
+  <text x="20" y="382" font-size="8.5" fill="#64748B" font-weight="700">④ 六条命名管道（核心流转）</text>
+  <rect x="20" y="386" width="182" height="40" rx="6" fill="#ECFDF5" stroke="#059669"/>
+  <text x="111" y="402" font-size="8.5" font-weight="700" fill="#065F46" text-anchor="middle">① 数据采集</text>
+  <text x="111" y="415" font-size="7.5" fill="#047857" text-anchor="middle">opcua/modbus worker ✅</text>
+  <rect x="210" y="386" width="182" height="40" rx="6" fill="#ECFDF5" stroke="#059669"/>
+  <text x="301" y="402" font-size="8.5" font-weight="700" fill="#065F46" text-anchor="middle">② 事件检测</text>
+  <text x="301" y="415" font-size="7.5" fill="#047857" text-anchor="middle">alarm_rules ✅</text>
+  <rect x="400" y="386" width="182" height="40" rx="6" fill="#ECFDF5" stroke="#059669"/>
+  <text x="491" y="402" font-size="8.5" font-weight="700" fill="#065F46" text-anchor="middle">③ 工单流转</text>
+  <text x="491" y="415" font-size="7.5" fill="#047857" text-anchor="middle">HITL + PlaybookEngine ✅</text>
+  <rect x="590" y="386" width="182" height="40" rx="6" fill="#FFFBEB" stroke="#D97706"/>
+  <text x="681" y="402" font-size="8.5" font-weight="700" fill="#92400E" text-anchor="middle">④ AI 推理</text>
+  <text x="681" y="415" font-size="7.5" fill="#B45309" text-anchor="middle">FunctionTypes 为空 ⚡</text>
+  <rect x="780" y="386" width="182" height="40" rx="6" fill="#FEE2E2" stroke="#DC2626" stroke-dasharray="4,3"/>
+  <text x="871" y="402" font-size="8.5" font-weight="700" fill="#991B1B" text-anchor="middle">⑤ 学习反馈</text>
+  <text x="871" y="415" font-size="7.5" fill="#DC2626" text-anchor="middle">CBR 机制待建 ❌</text>
+  <rect x="970" y="386" width="210" height="40" rx="6" fill="#ECFDF5" stroke="#059669"/>
+  <text x="1075" y="402" font-size="8.5" font-weight="700" fill="#065F46" text-anchor="middle">⑥ 可靠投递</text>
+  <text x="1075" y="415" font-size="7.5" fill="#047857" text-anchor="middle">Outbox ✅</text>
+
+  <!-- ⑤ 核心内核 -->
+  <text x="20" y="440" font-size="8.5" fill="#1E40AF" font-weight="700">⑤ 核心内核（稳定）</text>
+  <rect x="20" y="444" width="366" height="40" rx="7" fill="#EFF6FF" stroke="#1E40AF" stroke-width="2"/>
+  <text x="203" y="460" font-size="9" font-weight="700" fill="#1E40AF" text-anchor="middle">EventBus（EventDispatcher）</text>
+  <text x="203" y="473" font-size="7.5" fill="#1E3A8A" text-anchor="middle">已实现 · infra/event_dispatcher ✅</text>
+  <rect x="398" y="444" width="366" height="40" rx="7" fill="#EFF6FF" stroke="#1E40AF" stroke-width="2"/>
+  <text x="581" y="460" font-size="9" font-weight="700" fill="#1E40AF" text-anchor="middle">ObjectStore（PostgreSQL）</text>
+  <text x="581" y="473" font-size="7.5" fill="#1E3A8A" text-anchor="middle">已实现 · core/object_store ✅</text>
+  <rect x="776" y="444" width="404" height="40" rx="7" fill="#EFF6FF" stroke="#1E40AF" stroke-width="2"/>
+  <text x="978" y="460" font-size="9" font-weight="700" fill="#1E40AF" text-anchor="middle">PackRegistry + Loader</text>
+  <text x="978" y="473" font-size="7.5" fill="#1E3A8A" text-anchor="middle">设计完成 · OpenClaw对照映射 ✅ · 已知接口待实现</text>
+
+  <!-- ⑥ IndustryPack -->
+  <text x="20" y="498" font-size="8.5" fill="#5B21B6" font-weight="700">⑥ IndustryPack 扩展注册（4 核心 ObjectType + 1 Pack，待扩充）</text>
+  <rect x="20" y="502" width="272" height="36" rx="6" fill="#ECFDF5" stroke="#059669"/>
+  <text x="156" y="516" font-size="8.5" font-weight="600" fill="#065F46" text-anchor="middle">oilgas（已有）</text>
+  <text x="156" y="528" font-size="7.5" fill="#047857" text-anchor="middle">manifest.yaml + DiagnoseEquipment</text>
+  <rect x="300" y="502" width="200" height="36" rx="6" fill="#FEE2E2" stroke="#DC2626" stroke-dasharray="4,3"/>
+  <text x="400" y="516" font-size="8.5" font-weight="600" fill="#991B1B" text-anchor="middle">电力（待建）</text>
+  <rect x="508" y="502" width="200" height="36" rx="6" fill="#FEE2E2" stroke="#DC2626" stroke-dasharray="4,3"/>
+  <text x="608" y="516" font-size="8.5" font-weight="600" fill="#991B1B" text-anchor="middle">港口（待建）</text>
+  <rect x="716" y="502" width="200" height="36" rx="6" fill="#FEE2E2" stroke="#DC2626" stroke-dasharray="4,3"/>
+  <text x="816" y="516" font-size="8.5" font-weight="600" fill="#991B1B" text-anchor="middle">医疗/工厂/自定义</text>
+  <text x="600" y="528" font-size="7.5" fill="#DC2626" text-anchor="middle">ObjectType 仅 4 个（Station/Equipment/Alarm/WorkOrder），行业子类型均待扩展</text>
+
+  <!-- ⑦ 基础设施 -->
+  <text x="20" y="552" font-size="8.5" fill="#475569" font-weight="700">⑦ 基础设施（docker-compose 已声明但多项未接入 Python 代码）</text>
+  <rect x="20" y="556" width="148" height="32" rx="5" fill="#ECFDF5" stroke="#059669"/>
+  <text x="94" y="567" font-size="8" font-weight="600" fill="#065F46" text-anchor="middle">PostgreSQL ✅</text>
+  <text x="94" y="578" font-size="7" fill="#047857" text-anchor="middle">SQLAlchemy 已连线</text>
+  <rect x="176" y="556" width="148" height="32" rx="5" fill="#FEE2E2" stroke="#DC2626" stroke-dasharray="3,2"/>
+  <text x="250" y="567" font-size="8" font-weight="600" fill="#991B1B" text-anchor="middle">TimescaleDB ❌</text>
+  <text x="250" y="578" font-size="7" fill="#DC2626" text-anchor="middle">时序数据未连线</text>
+  <rect x="332" y="556" width="148" height="32" rx="5" fill="#FEE2E2" stroke="#DC2626" stroke-dasharray="3,2"/>
+  <text x="406" y="567" font-size="8" font-weight="600" fill="#991B1B" text-anchor="middle">Kafka ❌</text>
+  <text x="406" y="578" font-size="7" fill="#DC2626" text-anchor="middle">事件流未接入代码</text>
+  <rect x="488" y="556" width="148" height="32" rx="5" fill="#FEE2E2" stroke="#DC2626" stroke-dasharray="3,2"/>
+  <text x="562" y="567" font-size="8" font-weight="600" fill="#991B1B" text-anchor="middle">Milvus ❌</text>
+  <text x="562" y="578" font-size="7" fill="#DC2626" text-anchor="middle">向量库未接入代码</text>
+  <rect x="644" y="556" width="148" height="32" rx="5" fill="#FEE2E2" stroke="#DC2626" stroke-dasharray="3,2"/>
+  <text x="718" y="567" font-size="8" font-weight="600" fill="#991B1B" text-anchor="middle">Redis ❌</text>
+  <text x="718" y="578" font-size="7" fill="#DC2626" text-anchor="middle">缓存层未接入</text>
+  <rect x="800" y="556" width="148" height="32" rx="5" fill="#FFFBEB" stroke="#D97706"/>
+  <text x="874" y="567" font-size="8" font-weight="600" fill="#92400E" text-anchor="middle">Eclipse Ditto ⚡</text>
+  <text x="874" y="578" font-size="7" fill="#B45309" text-anchor="middle">数字孪生框架·竞或互补</text>
+  <rect x="956" y="556" width="148" height="32" rx="5" fill="#FFFBEB" stroke="#D97706"/>
+  <text x="1030" y="567" font-size="8" font-weight="600" fill="#92400E" text-anchor="middle">MinIO ⚡</text>
+  <text x="1030" y="578" font-size="7" fill="#B45309" text-anchor="middle">文件存储·未封装</text>
+
+  </g>
+  <line x1="0" y1="1028" x2="1920" y2="1028" stroke="#2C5282" stroke-width="1"/>
+  <rect x="0" y="1028" width="1920" height="52" fill="#0D2340"/>
+  <text x="44" y="1058" font-size="13" fill="#94A3B8">ClawTwin</text>
+  <text x="1876" y="1058" font-size="13" fill="#94A3B8" text-anchor="end">图 10/11</text>
+</svg>

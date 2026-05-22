@@ -1,0 +1,229 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1480" height="920" viewBox="0 0 1480 920">
+<defs>
+<filter id="sh"><feDropShadow dx="0" dy="3" stdDeviation="5" flood-color="#0f172a" flood-opacity="0.11"/></filter>
+<marker id="mbk" markerWidth="11" markerHeight="8" refX="10" refY="4" orient="auto"><path d="M0,0 L0,8 L11,4 z" fill="#334155"/></marker>
+<marker id="mbl" markerWidth="11" markerHeight="8" refX="10" refY="4" orient="auto"><path d="M0,0 L0,8 L11,4 z" fill="#1d4ed8"/></marker>
+<marker id="mgr" markerWidth="11" markerHeight="8" refX="10" refY="4" orient="auto"><path d="M0,0 L0,8 L11,4 z" fill="#059669"/></marker>
+<marker id="mvl" markerWidth="11" markerHeight="8" refX="10" refY="4" orient="auto"><path d="M0,0 L0,8 L11,4 z" fill="#6d28d9"/></marker>
+<marker id="mam" markerWidth="11" markerHeight="8" refX="10" refY="4" orient="auto"><path d="M0,0 L0,8 L11,4 z" fill="#b45309"/></marker>
+<marker id="mrd" markerWidth="11" markerHeight="8" refX="10" refY="4" orient="auto"><path d="M0,0 L0,8 L11,4 z" fill="#dc2626"/></marker>
+<marker id="mcy" markerWidth="11" markerHeight="8" refX="10" refY="4" orient="auto"><path d="M0,0 L0,8 L11,4 z" fill="#0369a1"/></marker>
+<marker id="mor" markerWidth="11" markerHeight="8" refX="10" refY="4" orient="auto"><path d="M0,0 L0,8 L11,4 z" fill="#c2410c"/></marker>
+<marker id="msl" markerWidth="11" markerHeight="8" refX="10" refY="4" orient="auto"><path d="M0,0 L0,8 L11,4 z" fill="#475569"/></marker>
+</defs>
+<rect width="1480" height="920" fill="#e8edf5"/>
+<text x="740" y="32" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="20" font-weight="800" fill="#0f172a">ClawTwin 产品架构  ·  接口与模块关系</text>
+<rect x="28" y="48" width="278" height="228" rx="12" fill="#f0f9ff" stroke="#0ea5e9" stroke-width="1.8" filter="url(#sh)"/>
+<clipPath id="cp2848"><rect x="28" y="48" width="278" height="36" rx="12"/></clipPath>
+<rect x="28" y="48" width="278" height="36" fill="#0ea5e9" clip-path="url(#cp2848)"/>
+<text x="40" y="71" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="13" font-weight="700" fill="white">飞书 Feishu</text>
+<text x="298" y="71" text-anchor="end" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" fill="rgba(255,255,255,.75)">企业 IM · 客户已有</text>
+<rect x="57" y="94" width="220" height="28" rx="6" fill="#fff" stroke="#0369a1" stroke-width="1.3"/>
+<text x="167" y="112" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="500" fill="#0369a1">IM 对话 & 消息</text>
+<rect x="57" y="134" width="220" height="28" rx="6" fill="#fff" stroke="#0369a1" stroke-width="1.3"/>
+<text x="167" y="152" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="500" fill="#0369a1">飞书卡片 (Card)</text>
+<rect x="57" y="174" width="220" height="28" rx="6" fill="#fff" stroke="#0369a1" stroke-width="1.3"/>
+<text x="167" y="192" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="500" fill="#0369a1">飞书审批 (OA)</text>
+<rect x="57" y="230" width="220" height="26" rx="6" fill="#e0f2fe" stroke="#0369a1" stroke-width="1.3"/>
+<text x="167" y="247" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="500" fill="#0369a1">企业账号 / SSO</text>
+<rect x="28" y="292" width="278" height="272" rx="12" fill="#f0fdf4" stroke="#059669" stroke-width="1.8" filter="url(#sh)"/>
+<clipPath id="cp28292"><rect x="28" y="292" width="278" height="36" rx="12"/></clipPath>
+<rect x="28" y="292" width="278" height="36" fill="#059669" clip-path="url(#cp28292)"/>
+<text x="40" y="315" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="13" font-weight="700" fill="white">ClawTwin Studio</text>
+<text x="298" y="315" text-anchor="end" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" fill="rgba(255,255,255,.75)">工业操作工作台 · 本期建设</text>
+<rect x="38" y="336" width="258" height="18" rx="3" fill="#059669" opacity="0.10"/>
+<text x="46" y="349" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" font-weight="700" fill="#059669">视图与交互</text>
+<rect x="28" y="350" width="130" height="28" rx="6" fill="#fff" stroke="#047857" stroke-width="1.3"/>
+<text x="93" y="368" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="500" fill="#047857">P&ID 工艺图</text>
+<rect x="176" y="350" width="130" height="28" rx="6" fill="#fff" stroke="#047857" stroke-width="1.3"/>
+<text x="241" y="368" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="500" fill="#047857">设备/孪生看板</text>
+<rect x="28" y="388" width="130" height="28" rx="6" fill="#fff" stroke="#047857" stroke-width="1.3"/>
+<text x="93" y="406" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="500" fill="#047857">告警管理</text>
+<rect x="176" y="388" width="130" height="28" rx="6" fill="#fff" stroke="#047857" stroke-width="1.3"/>
+<text x="241" y="406" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="500" fill="#047857">工单看板</text>
+<rect x="38" y="450" width="258" height="18" rx="3" fill="#059669" opacity="0.10"/>
+<text x="46" y="463" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" font-weight="700" fill="#059669">数据与分析</text>
+<rect x="28" y="462" width="130" height="28" rx="6" fill="#fff" stroke="#047857" stroke-width="1.3"/>
+<text x="93" y="480" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="500" fill="#047857">知识库搜索</text>
+<rect x="176" y="462" width="130" height="28" rx="6" fill="#fff" stroke="#047857" stroke-width="1.3"/>
+<text x="241" y="480" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="500" fill="#047857">KPI / 报表</text>
+<rect x="28" y="500" width="130" height="28" rx="6" fill="#fff" stroke="#047857" stroke-width="1.3"/>
+<text x="93" y="518" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="500" fill="#047857">班次交接</text>
+<rect x="176" y="500" width="130" height="28" rx="6" fill="#fff" stroke="#047857" stroke-width="1.3"/>
+<text x="241" y="518" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="500" fill="#047857">Admin 后台</text>
+<rect x="28" y="582" width="278" height="290" rx="12" fill="#faf5ff" stroke="#7c3aed" stroke-width="1.8" filter="url(#sh)"/>
+<clipPath id="cp28582"><rect x="28" y="582" width="278" height="36" rx="12"/></clipPath>
+<rect x="28" y="582" width="278" height="36" fill="#7c3aed" clip-path="url(#cp28582)"/>
+<text x="40" y="605" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="13" font-weight="700" fill="white">OpenClaw + Sage</text>
+<text x="298" y="605" text-anchor="end" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" fill="rgba(255,255,255,.75)">AI 网关 + 工业技能包</text>
+<rect x="38" y="626" width="258" height="18" rx="3" fill="#7c3aed" opacity="0.10"/>
+<text x="46" y="639" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" font-weight="700" fill="#7c3aed">OpenClaw 网关</text>
+<rect x="57" y="636" width="220" height="28" rx="6" fill="#fff" stroke="#5b21b6" stroke-width="1.3"/>
+<text x="167" y="654" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="500" fill="#5b21b6">Feishu Channel</text>
+<rect x="57" y="672" width="220" height="28" rx="6" fill="#fff" stroke="#5b21b6" stroke-width="1.3"/>
+<text x="167" y="690" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="500" fill="#5b21b6">Agent Runner</text>
+<rect x="57" y="708" width="220" height="28" rx="6" fill="#fff" stroke="#5b21b6" stroke-width="1.3"/>
+<text x="167" y="726" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="500" fill="#5b21b6">多 Provider (LLM)</text>
+<rect x="38" y="740" width="258" height="18" rx="3" fill="#7c3aed" opacity="0.10"/>
+<text x="46" y="753" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" font-weight="700" fill="#7c3aed">Sage 技能包 (Skills)</text>
+<rect x="28" y="751" width="130" height="28" rx="6" fill="#ede9fe" stroke="#6d28d9" stroke-width="1.3"/>
+<text x="93" y="769" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="500" fill="#6d28d9">equipment-twin</text>
+<rect x="176" y="751" width="130" height="28" rx="6" fill="#ede9fe" stroke="#6d28d9" stroke-width="1.3"/>
+<text x="241" y="769" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="500" fill="#6d28d9">knowledge-base</text>
+<rect x="28" y="789" width="130" height="28" rx="6" fill="#ede9fe" stroke="#6d28d9" stroke-width="1.3"/>
+<text x="93" y="807" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="500" fill="#6d28d9">workorder-hitl</text>
+<rect x="176" y="789" width="130" height="28" rx="6" fill="#ede9fe" stroke="#6d28d9" stroke-width="1.3"/>
+<text x="241" y="807" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="500" fill="#6d28d9">analytics-query</text>
+<rect x="57" y="833" width="220" height="24" rx="6" fill="#faf5ff" stroke="#7c3aed" stroke-width="1.3"/>
+<text x="167" y="849" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="500" fill="#7c3aed">GPU: vLLM · bge-m3 · MOIRAI</text>
+<rect x="1174" y="48" width="278" height="198" rx="12" fill="#fef2f2" stroke="#dc2626" stroke-width="1.8" filter="url(#sh)"/>
+<clipPath id="cp117448"><rect x="1174" y="48" width="278" height="36" rx="12"/></clipPath>
+<rect x="1174" y="48" width="278" height="36" fill="#dc2626" clip-path="url(#cp117448)"/>
+<text x="1186" y="71" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="13" font-weight="700" fill="white">OT / 现场设备</text>
+<text x="1444" y="71" text-anchor="end" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" fill="rgba(255,255,255,.75)">客户已有</text>
+<rect x="1203" y="97" width="220" height="30" rx="6" fill="#fff" stroke="#b91c1c" stroke-width="1.3"/>
+<text x="1313" y="116" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="500" fill="#b91c1c">OPC-UA Server</text>
+<rect x="1203" y="139" width="220" height="30" rx="6" fill="#fff" stroke="#b91c1c" stroke-width="1.3"/>
+<text x="1313" y="158" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="500" fill="#b91c1c">SCADA / DCS</text>
+<rect x="1203" y="181" width="220" height="30" rx="6" fill="#fff" stroke="#b91c1c" stroke-width="1.3"/>
+<text x="1313" y="200" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="500" fill="#b91c1c">传感器 / PLC</text>
+<rect x="1174" y="264" width="278" height="222" rx="12" fill="#fff7ed" stroke="#ea580c" stroke-width="1.8" filter="url(#sh)"/>
+<clipPath id="cp1174264"><rect x="1174" y="264" width="278" height="36" rx="12"/></clipPath>
+<rect x="1174" y="264" width="278" height="36" fill="#ea580c" clip-path="url(#cp1174264)"/>
+<text x="1186" y="287" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="13" font-weight="700" fill="white">ClawTwin Bridge</text>
+<text x="1444" y="287" text-anchor="end" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" fill="rgba(255,255,255,.75)">OT 采集桥 · DMZ 部署</text>
+<rect x="1184" y="308" width="258" height="18" rx="3" fill="#ea580c" opacity="0.10"/>
+<text x="1192" y="321" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" font-weight="700" fill="#ea580c">采集</text>
+<rect x="1203" y="320" width="220" height="28" rx="6" fill="#fff" stroke="#c2410c" stroke-width="1.3"/>
+<text x="1313" y="338" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="500" fill="#c2410c">OPC-UA Client</text>
+<rect x="1203" y="358" width="220" height="28" rx="6" fill="#fff" stroke="#c2410c" stroke-width="1.3"/>
+<text x="1313" y="376" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="500" fill="#c2410c">Node 订阅管理</text>
+<rect x="1184" y="396" width="258" height="18" rx="3" fill="#ea580c" opacity="0.10"/>
+<text x="1192" y="409" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" font-weight="700" fill="#ea580c">推送到 Nexus</text>
+<rect x="1203" y="408" width="220" height="28" rx="6" fill="#ffedd5" stroke="#ea580c" stroke-width="1.3"/>
+<text x="1313" y="426" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="500" fill="#ea580c">Kafka Producer</text>
+<rect x="1203" y="444" width="220" height="28" rx="6" fill="#ffedd5" stroke="#ea580c" stroke-width="1.3"/>
+<text x="1313" y="462" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="500" fill="#ea580c">ot.telemetry</text>
+<rect x="1203" y="480" width="220" height="28" rx="6" fill="#ffedd5" stroke="#ea580c" stroke-width="1.3"/>
+<text x="1313" y="498" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="500" fill="#ea580c">ot.events</text>
+<rect x="1174" y="506" width="278" height="368" rx="12" fill="#fafaf9" stroke="#78716c" stroke-width="1.8" filter="url(#sh)"/>
+<clipPath id="cp1174506"><rect x="1174" y="506" width="278" height="36" rx="12"/></clipPath>
+<rect x="1174" y="506" width="278" height="36" fill="#78716c" clip-path="url(#cp1174506)"/>
+<text x="1186" y="529" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="13" font-weight="700" fill="white">IMS / IT 系统</text>
+<text x="1444" y="529" text-anchor="end" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" fill="rgba(255,255,255,.75)">客户已有系统</text>
+<rect x="1195" y="551" width="236" height="30" rx="6" fill="#fff" stroke="#57534e" stroke-width="1.3"/>
+<text x="1313" y="570" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="500" fill="#57534e">ERP  (SAP / Oracle / 用友)</text>
+<rect x="1195" y="595" width="236" height="30" rx="6" fill="#fff" stroke="#57534e" stroke-width="1.3"/>
+<text x="1313" y="614" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="500" fill="#57534e">CMMS  (Maximo / SAP-PM)</text>
+<rect x="1195" y="639" width="236" height="30" rx="6" fill="#fff" stroke="#57534e" stroke-width="1.3"/>
+<text x="1313" y="658" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="500" fill="#57534e">Historian  (OSIsoft PI)</text>
+<rect x="1195" y="683" width="236" height="30" rx="6" fill="#fff" stroke="#57534e" stroke-width="1.3"/>
+<text x="1313" y="702" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="500" fill="#57534e">MES / OA 审批</text>
+<rect x="1195" y="727" width="236" height="30" rx="6" fill="#fff" stroke="#57534e" stroke-width="1.3"/>
+<text x="1313" y="746" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="500" fill="#57534e">BI / 报表系统</text>
+<rect x="330" y="48" width="820" height="828" rx="12" fill="#eff6ff" stroke="#1d4ed8" stroke-width="1.8" filter="url(#sh)"/>
+<clipPath id="cp33048"><rect x="330" y="48" width="820" height="36" rx="12"/></clipPath>
+<rect x="330" y="48" width="820" height="36" fill="#1d4ed8" clip-path="url(#cp33048)"/>
+<text x="342" y="71" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="13" font-weight="700" fill="white">ClawTwin Nexus</text>
+<text x="1142" y="71" text-anchor="end" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" fill="rgba(255,255,255,.75)">工业 AI 中枢 · 本期建设核心</text>
+<rect x="342" y="98" width="796" height="18" rx="3" fill="#1d4ed8" opacity="0.10"/>
+<text x="350" y="111" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" font-weight="700" fill="#1d4ed8">接口层  (API Surface)</text>
+<rect x="350" y="114" width="240" height="28" rx="6" fill="#dbeafe" stroke="#1d4ed8" stroke-width="1.3"/>
+<text x="470" y="132" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="700" fill="#1d4ed8">POST /v1/feishu/events  卡片接入</text>
+<rect x="615" y="114" width="240" height="28" rx="6" fill="#dbeafe" stroke="#2563eb" stroke-width="1.3"/>
+<text x="735" y="132" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="700" fill="#2563eb">GET/PATCH /v1/*  REST + SSE</text>
+<rect x="880" y="114" width="240" height="28" rx="6" fill="#e0e7ff" stroke="#4338ca" stroke-width="1.3"/>
+<text x="1000" y="132" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="700" fill="#4338ca">POST /mcp  MCP Server · Bearer</text>
+<rect x="342" y="172" width="796" height="18" rx="3" fill="#1d4ed8" opacity="0.10"/>
+<text x="350" y="185" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" font-weight="700" fill="#1d4ed8">引擎层  (Business Engines)</text>
+<rect x="348" y="194" width="240" height="32" rx="6" fill="#dbeafe" stroke="#1d4ed8" stroke-width="1.3"/>
+<text x="468" y="214" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="700" fill="#1d4ed8">Ontology Engine</text>
+<text x="468" y="228" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="8.5" fill="#3b82f6">对象类型/关系定义</text>
+<rect x="613" y="194" width="240" height="32" rx="6" fill="#dbeafe" stroke="#1d4ed8" stroke-width="1.3"/>
+<text x="733" y="214" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="700" fill="#1d4ed8">Digital Twin Runtime</text>
+<text x="733" y="228" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="8.5" fill="#3b82f6">实时孪生状态·SSE</text>
+<rect x="878" y="194" width="240" height="32" rx="6" fill="#dbeafe" stroke="#1d4ed8" stroke-width="1.3"/>
+<text x="998" y="214" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="700" fill="#1d4ed8">Knowledge Manager</text>
+<text x="998" y="228" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="8.5" fill="#3b82f6">知识库·向量检索</text>
+<rect x="348" y="256" width="240" height="32" rx="6" fill="#dbeafe" stroke="#1d4ed8" stroke-width="1.3"/>
+<text x="468" y="276" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="700" fill="#1d4ed8">Action Engine + FSM</text>
+<text x="468" y="290" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="8.5" fill="#3b82f6">工单/告警状态机</text>
+<rect x="613" y="256" width="240" height="32" rx="6" fill="#dbeafe" stroke="#1d4ed8" stroke-width="1.3"/>
+<text x="733" y="276" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="700" fill="#1d4ed8">AI Job Dispatcher</text>
+<text x="733" y="290" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="8.5" fill="#3b82f6">任务调度·结果回写</text>
+<rect x="878" y="256" width="240" height="32" rx="6" fill="#e0e7ff" stroke="#1d4ed8" stroke-width="1.3"/>
+<text x="998" y="276" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="700" fill="#1d4ed8">Security & Audit</text>
+<text x="998" y="290" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="8.5" fill="#3b82f6">JWT·ABAC·审计日志</text>
+<rect x="342" y="368" width="796" height="18" rx="3" fill="#b45309" opacity="0.10"/>
+<text x="350" y="381" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" font-weight="700" fill="#b45309">ClawTwin Connect  (连接器层)</text>
+<rect x="348" y="385" width="240" height="28" rx="6" fill="#fef9c3" stroke="#b45309" stroke-width="1.3"/>
+<text x="468" y="403" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="500" fill="#b45309">OT Connect (Kafka 消费者)</text>
+<rect x="613" y="385" width="240" height="28" rx="6" fill="#fef9c3" stroke="#b45309" stroke-width="1.3"/>
+<text x="733" y="403" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="500" fill="#b45309">IT Connect (ERP · CMMS)</text>
+<rect x="878" y="385" width="240" height="28" rx="6" fill="#fef9c3" stroke="#b45309" stroke-width="1.3"/>
+<text x="998" y="403" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="500" fill="#b45309">飞书 OA Connect</text>
+<rect x="342" y="448" width="796" height="18" rx="3" fill="#475569" opacity="0.10"/>
+<text x="350" y="461" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" font-weight="700" fill="#475569">存储层  (Storage  ·  Nexus 私有)</text>
+<rect x="378" y="468" width="370" height="30" rx="6" fill="#f8fafc" stroke="#334155" stroke-width="1.3"/>
+<text x="563" y="487" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="700" fill="#334155">PostgreSQL + TimescaleDB</text>
+<text x="563" y="501" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="8.5" fill="#64748b">时序数据 · 关系表</text>
+<rect x="778" y="468" width="370" height="30" rx="6" fill="#f8fafc" stroke="#334155" stroke-width="1.3"/>
+<text x="963" y="487" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="700" fill="#334155">Redis</text>
+<text x="963" y="501" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="8.5" fill="#64748b">缓存 · 会话 · 队列</text>
+<rect x="378" y="518" width="370" height="30" rx="6" fill="#fffbeb" stroke="#92400e" stroke-width="1.3"/>
+<text x="563" y="537" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="700" fill="#92400e">Kafka  (内部事件总线)</text>
+<text x="563" y="551" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="8.5" fill="#64748b">ot.* · platform.*</text>
+<rect x="778" y="518" width="370" height="30" rx="6" fill="#f8fafc" stroke="#334155" stroke-width="1.3"/>
+<text x="963" y="537" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="700" fill="#334155">pgvector / KB</text>
+<text x="963" y="551" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="8.5" fill="#64748b">向量检索 · 知识库</text>
+<rect x="342" y="604" width="796" height="18" rx="3" fill="#475569" opacity="0.10"/>
+<text x="350" y="617" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" font-weight="700" fill="#475569">内部事件流</text>
+<rect x="348" y="619" width="140" height="24" rx="6" fill="#fffbeb" stroke="#92400e" stroke-width="1.3"/>
+<text x="418" y="635" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="500" fill="#92400e">ot.telemetry</text>
+<rect x="505" y="619" width="140" height="24" rx="6" fill="#fffbeb" stroke="#92400e" stroke-width="1.3"/>
+<text x="575" y="635" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="500" fill="#92400e">ot.events</text>
+<rect x="662" y="619" width="140" height="24" rx="6" fill="#dbeafe" stroke="#1d4ed8" stroke-width="1.3"/>
+<text x="732" y="635" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="500" fill="#1d4ed8">platform.alarms</text>
+<rect x="819" y="619" width="140" height="24" rx="6" fill="#dbeafe" stroke="#1d4ed8" stroke-width="1.3"/>
+<text x="889" y="635" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="500" fill="#1d4ed8">platform.workorder</text>
+<rect x="976" y="619" width="140" height="24" rx="6" fill="#dbeafe" stroke="#1d4ed8" stroke-width="1.3"/>
+<text x="1046" y="635" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="10" font-weight="500" fill="#1d4ed8">platform.ai-jobs</text>
+<text x="740" y="868" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" fill="#94a3b8">存储数据不出厂 · 私有化部署 · 每个场站独立隔离</text>
+<path d="M306,128 L330,128" fill="none" stroke="#1d4ed8" stroke-width="2.8" marker-end="url(#mbl)"/>
+<rect x="232" y="113" width="170" height="17" rx="4" fill="white" opacity="0.95"/>
+<text x="318" y="126" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" font-weight="700" fill="#1d4ed8">POST /v1/feishu/events  卡片动作</text>
+<path d="M167,276 L167,582" fill="none" stroke="#6d28d9" stroke-width="2.8" marker-end="url(#mvl)"/>
+<rect x="118" y="414" width="98" height="17" rx="4" fill="white" opacity="0.95"/>
+<text x="167" y="427" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" font-weight="700" fill="#6d28d9">Feishu Bot  wss</text>
+<path d="M306,428 L330,428" fill="none" stroke="#059669" stroke-width="2.8" marker-end="url(#mgr)"/>
+<rect x="238" y="413" width="159" height="17" rx="4" fill="white" opacity="0.95"/>
+<text x="318" y="426" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" font-weight="700" fill="#059669">REST /v1/*  +  SSE  +  JWT</text>
+<path d="M306,730 L330,730" fill="none" stroke="#6d28d9" stroke-width="2.8" marker-end="url(#mvl)"/>
+<rect x="238" y="715" width="159" height="17" rx="4" fill="white" opacity="0.95"/>
+<text x="318" y="728" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" font-weight="700" fill="#6d28d9">POST /mcp  · Service Token</text>
+<path d="M1313,246 L1313,264" fill="none" stroke="#dc2626" stroke-width="2.8" marker-end="url(#mrd)"/>
+<rect x="1280" y="240" width="64" height="17" rx="4" fill="white" opacity="0.95"/>
+<text x="1313" y="253" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" font-weight="700" fill="#dc2626">OPC-UA 订阅</text>
+<path d="M1174,424 L1150,424" fill="none" stroke="#ea580c" stroke-width="2.8" marker-end="url(#mbk)"/>
+<rect x="1101" y="409" width="120" height="17" rx="4" fill="white" opacity="0.95"/>
+<text x="1162" y="422" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" font-weight="700" fill="#ea580c">Kafka produce  ot.*</text>
+<path d="M1150,399 L1174,399" fill="none" stroke="#78716c" stroke-width="2.8" marker-end="url(#msl)" stroke-dasharray="6 3"/>
+<rect x="1090" y="384" width="142" height="17" rx="4" fill="white" opacity="0.95"/>
+<text x="1162" y="397" text-anchor="middle" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="9" font-weight="700" fill="#78716c">Connectors  pull / sync</text>
+<rect x="28" y="892" width="1424" height="20" rx="5" fill="white" stroke="#e2e8f0" opacity="0.9"/>
+<circle cx="50" cy="902" r="4" fill="#1d4ed8"/>
+<text x="58" y="906" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="8.5" fill="#1d4ed8">① 飞书卡片→Nexus /v1/feishu/events</text>
+<circle cx="250" cy="902" r="4" fill="#6d28d9"/>
+<text x="258" y="906" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="8.5" fill="#6d28d9">② 飞书 Bot wss→OpenClaw</text>
+<circle cx="450" cy="902" r="4" fill="#059669"/>
+<text x="458" y="906" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="8.5" fill="#059669">③ Studio→Nexus /v1/* REST+SSE</text>
+<circle cx="650" cy="902" r="4" fill="#6d28d9"/>
+<text x="658" y="906" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="8.5" fill="#6d28d9">④ OpenClaw→Nexus /mcp</text>
+<circle cx="850" cy="902" r="4" fill="#dc2626"/>
+<text x="858" y="906" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="8.5" fill="#dc2626">⑤ OT→Bridge OPC-UA</text>
+<circle cx="1050" cy="902" r="4" fill="#ea580c"/>
+<text x="1058" y="906" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="8.5" fill="#ea580c">⑥ Bridge→Nexus Kafka</text>
+<circle cx="1250" cy="902" r="4" fill="#78716c"/>
+<text x="1258" y="906" font-family="system-ui,'PingFang SC','Microsoft YaHei',sans-serif" font-size="8.5" fill="#78716c">⑦ Nexus→IMS 连接器</text>
+</svg>

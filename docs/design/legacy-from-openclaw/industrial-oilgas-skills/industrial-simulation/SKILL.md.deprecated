@@ -1,0 +1,47 @@
+---
+name: industrial-sim
+description: >
+  [Phase 2 — Not yet available] Use when running pipeline What-If simulations
+  or predicting equipment behavior under changed operating conditions.
+  Covers pandapipes 1D network flow simulation and FNO neural surrogate models.
+---
+
+# Industrial Simulation (Phase 2 Placeholder)
+
+> **Status**: Not yet implemented. Phase B target (after core monitoring and knowledge base are stable).
+
+## Planned capability
+
+Run What-If simulations on the pipeline network to predict how changes in operating conditions
+affect flow rates, pressures, and equipment loading across the station.
+
+## Planned tools (Phase B)
+
+```
+sim_whatif(station_id, changes: { equipment_id, parameter, new_value }[]) → SimResult
+
+  Example changes:
+    [{ equipment_id: "C-001", parameter: "outlet_pressure", new_value: 6.8 }]
+
+  Returns:
+    affected_equipment[]: { id, parameter, delta, new_value }
+    network_flows: { pipe_id, flow_rate, pressure }[]
+    warnings[]: safety constraint violations
+    simulation_time_ms: number
+    citation: "pandapipes:station-S001:{timestamp}"
+
+  Platform API: POST /v1/tools/sim/whatif  (Phase B)
+```
+
+## Implementation plan
+
+- **pandapipes** (Python): 1D incompressible/compressible gas network simulation
+- **FNO surrogate** (PyTorch): Neural operator trained on pandapipes results for real-time response
+- **sim-service**: Independent Docker service (see FINAL_ARCHITECTURE.md)
+- Data: Requires calibrated pipeline network model (length, diameter, roughness per segment)
+
+## Dependencies (Phase B)
+
+- Calibrated station network topology (from P&ID parsing or manual entry)
+- Historical operating data for FNO training dataset
+- `sim-service` Docker container deployed and running

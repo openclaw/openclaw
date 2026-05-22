@@ -1,0 +1,104 @@
+# ClaWorks white-label stack — only nginx publishes 443/80 to the host.
+# Agent runtime and ClaWorks Platform stay on an internal Docker network.
+# No host ports 18789/8000 are exposed.
+#
+# Prereqs:
+#   1. Copy .env.example → .env and set PUBLIC_HOST, TLS paths, STUDIO_STATIC_ROOT
+#   2. ./scripts/render-nginx.sh
+#   3. Merge claworks-whitelabel.openclaw.fragment.json into mounted config file
+#   4. Build agent runtime image: docker build -t claworks-agent:local .
+#   5. Run ClaWorks Platform separately OR add your claworks image under claworks service
+#
+# From repo root:
+#   docker compose -f contrib/examples/claworks-whitelabel/docker-compose.yml up -d
+
+services:
+  agent-runtime:
+    image: ${AGENT_RUNTIME_IMAGE:-claworks-agent:local}
+    container_name: claworks-agent-runtime
+    build:
+      context: ../../../
+      dockerfile: Dockerfile
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      HOME: /home/node
+      OPENCLAW_HOME: /home/node
+      # State and config under .claworks — hides internal runtime namespace from process listings
+      OPENCLAW_STATE_DIR: /home/node/.claworks
+      OPENCLAW_CONFIG_PATH: /home/node/.claworks/claworks.json
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
+      OPENCLAW_DISABLE_BONJOUR: ${OPENCLAW_DISABLE_BONJOUR:-1}
+      # Brand the process title visible in `ps`/`top` inside the container
+      NODE_OPTIONS: ${NODE_OPTIONS:---title=claworks-agent}
+      # OTEL service name (also set in openclaw.json diagnostics.otel.serviceName, but
+      # this env var covers SDK-level auto-instrumentation before config is loaded)
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-ClaWorks}
+      OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-service.name=ClaWorks,service.namespace=claworks}
+      # ── LLM outbound attribution white-label ──────────────────────────────
+      # Product name injected into LLM provider attribution headers
+      OPENCLAW_ATTRIBUTION_PRODUCT_OVERRIDE: ${OPENCLAW_ATTRIBUTION_PRODUCT_OVERRIDE:-ClaWorks}
+      # Originator slug in User-Agent / originator headers to OpenAI-family endpoints
+      OPENCLAW_ATTRIBUTION_ORIGINATOR_OVERRIDE: ${OPENCLAW_ATTRIBUTION_ORIGINATOR_OVERRIDE:-claworks}
+      # HTTP-Referer sent to OpenRouter for app attribution
+      OPENCLAW_OPENROUTER_REFERER: ${OPENCLAW_OPENROUTER_REFERER:-https://REPLACE_PUBLIC_HOST}
+      # X-OpenRouter-Title sent to OpenRouter (defaults to attribution product name if unset)
+      OPENCLAW_OPENROUTER_TITLE: ${OPENCLAW_OPENROUTER_TITLE:-ClaWorks}
+      # User-Agent for gateway outbound media/URL fetch requests
+      OPENCLAW_GATEWAY_USER_AGENT: ${OPENCLAW_GATEWAY_USER_AGENT:-ClaWorks-Gateway/1.0}
+      # Docs / source URLs injected into agent system prompt
+      OPENCLAW_DOCS_URL_OVERRIDE: ${OPENCLAW_DOCS_URL_OVERRIDE:-}
+      OPENCLAW_SOURCE_URL_OVERRIDE: ${OPENCLAW_SOURCE_URL_OVERRIDE:-}
+    volumes:
+      - ${CLAWORKS_CONFIG_DIR:-${HOME:-/tmp}/.claworks}:/home/node/.claworks
+      - ${CLAWORKS_WORKSPACE_DIR:-${HOME:-/tmp}/.claworks/workspace}:/home/node/.claworks/workspace
+    networks:
+      - claworks-internal
+    # LAN bind inside the bridge network so nginx can reach it; NOT published to host.
+    command:
+      [
+        "node",
+        "dist/index.js",
+        "gateway",
+        "--bind",
+        "lan",
+        "--port",
+        "18789",
+      ]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:18789/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:1.27-alpine
+    depends_on:
+      agent-runtime:
+        condition: service_healthy
+    ports:
+      - "${NGINX_HTTP_PORT:-80}:80"
+      - "${NGINX_HTTPS_PORT:-443}:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ${STUDIO_STATIC_ROOT:-./studio-dist}:/var/www/claworks-studio:ro
+      - ${TLS_CERT_HOST_PATH:-./certs/fullchain.pem}:/etc/nginx/ssl/fullchain.pem:ro
+      - ${TLS_KEY_HOST_PATH:-./certs/privkey.pem}:/etc/nginx/ssl/privkey.pem:ro
+    networks:
+      - claworks-internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+networks:
+  claworks-internal:
+    driver: bridge

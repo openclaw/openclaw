@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="980" viewBox="0 0 1400 980">
+  <defs>
+    <filter id="sh" x="-8%" y="-8%" width="116%" height="116%">
+      <feDropShadow dx="0" dy="6" stdDeviation="5" flood-opacity="0.2"/>
+    </filter>
+    <linearGradient id="gL3" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#2563eb"/>
+      <stop offset="100%" stop-color="#1e40af"/>
+    </linearGradient>
+  </defs>
+  <rect width="1400" height="980" fill="#f1f5f9"/>
+  <text x="700" y="46" text-anchor="middle" font-family="system-ui,PingFang SC,Microsoft YaHei,sans-serif" font-size="27" font-weight="700" fill="#0f172a">项目建设框架（五层）</text>
+  <text x="700" y="76" text-anchor="middle" font-family="system-ui,PingFang SC,sans-serif" font-size="14" fill="#64748b">自下而上 L1 至 L5：底部最宽承接现场与数据；L3 为本期交付的核心承载层</text>
+  <g font-family="system-ui,PingFang SC,sans-serif" font-size="13">
+    <rect x="88" y="98" width="20" height="20" rx="3" fill="#94a3b8"/>
+    <text x="118" y="114" fill="#334155">客户既有资产</text>
+    <rect x="248" y="98" width="20" height="20" rx="3" fill="#2563eb"/>
+    <text x="278" y="114" fill="#1e40af">本期建设</text>
+    <rect x="388" y="98" width="20" height="20" rx="3" fill="#c4b5fd"/>
+    <text x="418" y="114" fill="#5b21b6">既有与本包协同</text>
+  </g>
+  <g filter="url(#sh)" font-family="system-ui,PingFang SC,Microsoft YaHei,sans-serif">
+    <polygon points="60,920 1340,920 1280,820 120,820" fill="#94a3b8" stroke="#475569" stroke-width="2"/>
+    <text x="72" y="872" font-size="16" font-weight="800" fill="#1e293b">L1</text>
+    <text x="700" y="858" text-anchor="middle" font-size="19" font-weight="700" fill="#0f172a">数据与现场基座（客户既有）</text>
+    <text x="700" y="886" text-anchor="middle" font-size="14" fill="#1e293b">现场 OT · IMS 台账 · 规程与知识资产（标准、工单史等）</text>
+    <text x="700" y="908" text-anchor="middle" font-size="12" fill="#334155">不替换 SCADA / IMS / IM；以接入与汇聚为前提</text>
+    <polygon points="120,820 1280,820 1220,700 180,700" fill="#cbd5e1" stroke="#64748b" stroke-width="2"/>
+    <text x="72" y="764" font-size="16" font-weight="800" fill="#1e293b">L2</text>
+    <text x="700" y="736" text-anchor="middle" font-size="18" font-weight="700" fill="#0f172a">接入与中台（既有补强 + 本期实施）</text>
+    <text x="700" y="764" text-anchor="middle" font-size="14" fill="#334155">DMZ OPC-UA Bridge · Kafka · 连接器 IMS/OT/KB · JWT · Marking · 审计</text>
+    <text x="700" y="788" text-anchor="middle" font-size="12" fill="#475569">南向入平台：Bridge → Kafka → 平台消费（不按设计直连业务 API）</text>
+    <polygon points="180,700 1220,700 1160,560 240,560" fill="url(#gL3)" stroke="#1e3a8a" stroke-width="2.5"/>
+    <text x="64" y="628" font-size="17" font-weight="800" fill="#ffffff">L3</text>
+    <text x="700" y="598" text-anchor="middle" font-size="21" font-weight="800" fill="#ffffff">本期核心：工业语义与协同中枢（Foundry / Nexus）</text>
+    <text x="700" y="630" text-anchor="middle" font-size="15" fill="#dbeafe">对象一体 · 告警—规程—工单 · HITL · HTTP 资源面 · MCP 工具面</text>
+    <text x="700" y="656" text-anchor="middle" font-size="13" fill="#bfdbfe">Ontology · Action · ObjectStore · 会话（MCP）与飞书回调分流</text>
+    <text x="700" y="680" text-anchor="middle" font-size="12" fill="#e0e7ff">按契约分层交付 · 可追溯 · 可扩展</text>
+    <polygon points="240,560 1160,560 1100,440 300,440" fill="#ddd6fe" stroke="#6d28d9" stroke-width="2"/>
+    <text x="72" y="504" font-size="16" font-weight="800" fill="#5b21b6">L4</text>
+    <text x="700" y="478" text-anchor="middle" font-size="18" font-weight="700" fill="#4c1d95">协同入口（IM 既有 + Web 本期）</text>
+    <text x="700" y="506" text-anchor="middle" font-size="14" fill="#5b21b6">企业 IM · 飞书卡片 · 指挥中心 Web · Agent（OpenClaw / HiAgent）</text>
+    <text x="700" y="530" text-anchor="middle" font-size="12" fill="#6d28d9">问询走 MCP · 表单与卡片走 POST /v1/feishu/events</text>
+    <polygon points="300,440 1100,440 1040,320 360,320" fill="#fce7f3" stroke="#db2777" stroke-width="2"/>
+    <text x="72" y="382" font-size="16" font-weight="800" fill="#9d174d">L5</text>
+    <text x="700" y="358" text-anchor="middle" font-size="18" font-weight="700" fill="#831843">价值与角色</text>
+    <text x="700" y="386" text-anchor="middle" font-size="14" fill="#9d174d">同源口径 · 规程可查 · 处置可审 · IM 与 Web 一致呈现</text>
+    <text x="700" y="410" text-anchor="middle" font-size="12" fill="#be185d">班组 · 设备 · 调度 · 主管 · 管理机关</text>
+  </g>
+  <text x="1320" y="520" text-anchor="middle" font-family="system-ui,PingFang SC,sans-serif" font-size="13" fill="#64748b" transform="rotate(90 1320 520)">层次向上收敛</text>
+</svg>

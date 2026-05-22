@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid meet" xml:lang="zh-Hans" role="img">
+  <title>ClawTwin 对话智能体的可控执行（图 5/5）</title>
+  <desc>外接对话智能体经 MCP 接入平台：工具白名单、统一执行与审计一致；内置与外接两条路径可组合。</desc>
+  <defs>
+    <style type="text/css">
+      text, tspan { font-family: 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Microsoft YaHei UI',
+                    'WenQuanYi Micro Hei', 'Noto Sans CJK SC', sans-serif;
+                    text-rendering: geometricPrecision; }
+    </style>
+    <marker id="mIn" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#6D28D9"/></marker>
+    <marker id="mCtl" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#1E40AF"/></marker>
+  </defs>
+  <rect width="1920" height="1080" fill="#F8FAFD"/>
+  <g transform="translate(103.3333,0.0000) scale(1.427778)">
+
+  <rect x="0" y="0" width="1200" height="48" fill="#0D2340"/>
+  <text x="600" y="30" font-size="18" font-weight="700" fill="#FFFFFF" text-anchor="middle">ClawTwin · 对话智能体的可控执行</text>
+  <text x="600" y="44" font-size="9.5" fill="#94A3B8" text-anchor="middle">便利 · 边界 · 可审计</text>
+
+  <!-- 外围 Agent -->
+  <rect x="40" y="64" width="320" height="200" rx="12" fill="#F5F3FF" stroke="#7C3AED" stroke-width="2" stroke-dasharray="8,4"/>
+  <text x="200" y="92" font-size="12" font-weight="700" fill="#5B21B6" text-anchor="middle">外部对话智能体（可选）</text>
+  <text x="56" y="114" font-size="9" fill="#4C1D95">多轮推理 · 工具循环 · IM｜不托管真相 · 不替代编排</text>
+  <text x="56" y="140" font-size="8.8" fill="#57534E">缺少统一边界时：易直连核心数据 · 动作失控 · 难以复盘</text>
+  <text x="56" y="174" font-size="8.8" fill="#059669" font-weight="600">平台侧：工具白名单 · 副作用走统一执行 · 审计口径一致</text>
+
+  <!-- MCP 边界 -->
+  <rect x="400" y="118" width="140" height="92" rx="10" fill="#FFF7ED" stroke="#EA580C"/>
+  <text x="470" y="148" font-size="10" font-weight="700" fill="#9A3412" text-anchor="middle">MCP</text>
+  <text x="470" y="166" font-size="8.8" fill="#57534E" text-anchor="middle">注册工具</text>
+  <text x="470" y="182" font-size="8.8" fill="#57534E" text-anchor="middle">鉴权与上下文</text>
+  <text x="470" y="198" font-size="8.8" fill="#57534E" text-anchor="middle">结构化返回</text>
+
+  <line x1="360" y1="164" x2="398" y2="164" stroke="#7C3AED" stroke-width="2" marker-end="url(#mIn)"/>
+
+  <!-- Platform 内核 -->
+  <rect x="580" y="64" width="580" height="268" rx="12" fill="#EFF6FF" stroke="#1E40AF" stroke-width="2.5"/>
+  <rect x="580" y="64" width="580" height="34" rx="12" fill="#1E3A8A"/>
+  <rect x="580" y="82" width="580" height="16" fill="#1E3A8A"/>
+  <text x="870" y="84" font-size="13" font-weight="700" fill="#FFFFFF" text-anchor="middle">ClawTwin · 执行与信任内核</text>
+  <text x="870" y="98" font-size="8.8" fill="#BFDBFE" text-anchor="middle">真相源 · 编排 · 受控执行 · 审计</text>
+
+  <rect x="596" y="108" width="268" height="96" rx="8" fill="#FFFFFF" stroke="#93C5FD"/>
+  <text x="608" y="128" font-size="10" font-weight="700" fill="#1E40AF">内置单次推理</text>
+  <text x="608" y="146" font-size="8.8" fill="#374151">约束输入输出结构 · 可缓存 · 低时延</text>
+  <text x="608" y="164" font-size="8.8" fill="#374151">适用：诊断 · 分类 · 推荐（确定性优先）</text>
+  <text x="608" y="186" font-size="8.5" fill="#059669">多数场景告警闭环可不依赖外接对话智能体</text>
+
+  <rect x="876" y="108" width="268" height="96" rx="8" fill="#FFFFFF" stroke="#93C5FD"/>
+  <text x="888" y="128" font-size="10" font-weight="700" fill="#1E40AF">外接对话智能体</text>
+  <text x="888" y="146" font-size="8.8" fill="#374151">流程挂起 → 外接推理 → 回调续跑</text>
+  <text x="888" y="164" font-size="8.8" fill="#374151">适用：多步规划 · 复杂问询（按需启用）</text>
+  <text x="888" y="186" font-size="8.5" fill="#6D28D9">推理自由度限于已登记工具集合</text>
+
+  <rect x="596" y="212" width="548" height="44" rx="8" fill="#FEF3C7" stroke="#FBBF24"/>
+  <text x="870" y="232" font-size="9.5" font-weight="700" fill="#92400E" text-anchor="middle">统一闸门（两条路径共用）</text>
+  <text x="870" y="248" font-size="8.5" fill="#78350F" text-anchor="middle">流程编排 · 人工确认 · 统一动作执行 · 对象真源 · 可选置信策略</text>
+
+  <rect x="596" y="264" width="268" height="56" rx="8" fill="#FFFFFF" stroke="#CBD5E1"/>
+  <text x="730" y="284" font-size="9.5" font-weight="700" fill="#334155" text-anchor="middle">可观测</text>
+  <text x="730" y="302" font-size="8.5" fill="#64748B" text-anchor="middle">健康检查 · 自检诊断 · 后台心跳（可选）</text>
+
+  <rect x="876" y="264" width="268" height="56" rx="8" fill="#FFFFFF" stroke="#CBD5E1"/>
+  <text x="1010" y="284" font-size="9.5" font-weight="700" fill="#334155" text-anchor="middle">可靠外发</text>
+  <text x="1010" y="302" font-size="8.5" fill="#64748B" text-anchor="middle">可靠外发队列 · 退避重试 · 去重防风暴</text>
+
+  <!-- 交付保障与审计 -->
+  <rect x="40" y="352" width="1120" height="68" rx="10" fill="#F0FDF4" stroke="#22C55E" stroke-dasharray="6,3"/>
+  <text x="600" y="372" font-size="10.5" font-weight="700" fill="#166534" text-anchor="middle">交付保障 · 审计导出</text>
+  <text x="600" y="392" font-size="8.6" fill="#15803D" text-anchor="middle">自检 · 健康 · 可靠队列 · 限流去重 · 运维编排 · AI 用量计量</text>
+  <text x="600" y="410" font-size="8.5" fill="#166534" text-anchor="middle">按时间窗口导出 JSON / CSV 等 · 开放标准审计接口（按部署开启）</text>
+
+  <!-- 要点 -->
+  <rect x="40" y="428" width="1120" height="84" rx="10" fill="#FFFFFF" stroke="#E2E8F0"/>
+  <text x="600" y="452" font-size="11" font-weight="700" fill="#0F172A" text-anchor="middle">要点</text>
+  <text x="72" y="474" font-size="9" fill="#475569">• 能力与自动化落在企业认可的流程与工具清单内。</text>
+  <text x="72" y="492" font-size="9" fill="#475569">• 智能体是协作入口，不得绕过审批与制度。</text>
+  <text x="72" y="510" font-size="9" fill="#475569">• 审批与对象变更留痕，便于事后复盘。</text>
+
+  <line x1="542" y1="164" x2="578" y2="164" stroke="#1E40AF" stroke-width="2" marker-end="url(#mCtl)"/>
+
+  </g>
+  <line x1="0" y1="1028" x2="1920" y2="1028" stroke="#2C5282" stroke-width="1"/>
+  <rect x="0" y="1028" width="1920" height="52" fill="#0D2340"/>
+  <text x="44" y="1058" font-size="13" fill="#94A3B8">ClawTwin</text>
+  <text x="1876" y="1058" font-size="13" fill="#94A3B8" text-anchor="end">图 5/5</text>
+</svg>

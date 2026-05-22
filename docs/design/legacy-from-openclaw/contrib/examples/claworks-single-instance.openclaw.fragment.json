@@ -1,0 +1,14 @@
+{
+  "plugins": {
+    "allow": ["claworks"],
+    "entries": {
+      "claworks": {
+        "enabled": true,
+        "config": {
+          "url": "http://localhost:8000",
+          "apiKey": "optional-bearer-token"
+        }
+      }
+    }
+  }
+}

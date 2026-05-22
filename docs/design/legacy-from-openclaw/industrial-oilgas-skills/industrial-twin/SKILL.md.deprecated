@@ -1,0 +1,36 @@
+# DEPRECATED: 此 Skill 已并入 industrial-station-agent（ADR-3.0，2026-05-08）
+# 请使用 industrial-station-agent/SKILL.md 替代
+
+---
+name: industrial-twin
+description: 3D digital twin viewer links and Eclipse Ditto twin state — spatial context only; control truth is SCADA/procedures.
+---
+
+## 架构概述
+
+数字孪生运行时：**Eclipse Ditto 3.7**（`http://ditto:8080`）  
+3D 渲染：**Babylon.js 8 WebGPU**（Studio / Command / 飞书卡片三端统一）  
+设备 ID 主线：`equipment_id`（同一 ID 贯穿 Ditto Thing / Milvus chunk / 3D mesh / 工单记录）
+
+## Ditto API（只读）
+
+```
+GET  /api/2/things/{thingId}                  ← 完整 Thing 快照
+GET  /api/2/things/{thingId}/features/{feat}  ← 单测点当前值
+thingId 格式：{namespace}:{equipment_id}，如 station-szp-a:SDV-001
+```
+
+## 3D 深链格式
+
+```
+https://<studio>/#<equipment_id>          ← 飞行到设备 + 选中
+https://<studio>/#<equipment_id>/assembly ← 爆炸视图（螺栓级 LOD 3）
+https://<studio>/#<equipment_id>/ai       ← AI 分析侧边栏
+```
+
+## Agent 行为规则
+
+- 提供 **深链 URL + equipment_id**；不依赖几何推断阀位或工况。
+- 设备实时状态：调用 `twin_read(thingId)` 工具获取 Ditto 状态，勿从 3D 外观推断。
+- citations 强制：所有 AI 输出必须附带 L0-L3 知识层来源（无 citations 不推送）。
+- 生产只读查询：使用 `industrial-readonly-live` skill。

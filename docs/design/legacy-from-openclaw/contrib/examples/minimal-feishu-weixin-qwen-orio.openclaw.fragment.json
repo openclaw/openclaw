@@ -1,0 +1,170 @@
+{
+  "meta": {},
+  "models": {
+    "mode": "replace",
+    "providers": {
+      "custom-qwen-local": {
+        "api": "openai-completions",
+        "baseUrl": "http://127.0.0.1:63000/v1",
+        "apiKey": "REPLACE_WITH_YOUR_QWEN_GATEWAY_KEY_OR_USE_ENV_VAR",
+        "models": [
+          {
+            "id": "Qwen3.6-35B-A3B",
+            "name": "Qwen3.6-35B-A3B",
+            "api": "openai-completions",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 262144,
+            "maxTokens": 8192
+          }
+        ]
+      }
+    }
+  },
+  "agents": {
+    "list": [
+      {
+        "id": "main",
+        "name": "Main (Feishu)",
+        "workspace": "~/.openclaw/workspace",
+        "agentDir": "~/.openclaw/agents/main/agent",
+        "default": true,
+        "tools": {
+          "profile": "coding",
+          "allow": ["*"],
+          "deny": [
+            "system.power",
+            "system.shutdown",
+            "system.reboot",
+            "sms.send",
+            "contacts.add"
+          ]
+        }
+      },
+      {
+        "id": "personal-life",
+        "name": "Personal (WeChat)",
+        "workspace": "~/.openclaw/workspace-personal",
+        "agentDir": "~/.openclaw/agents/personal-life/agent",
+        "tools": {
+          "profile": "messaging",
+          "allow": ["*"],
+          "deny": [
+            "system.power",
+            "system.shutdown",
+            "system.reboot",
+            "sms.send",
+            "contacts.add"
+          ]
+        }
+      }
+    ],
+    "defaults": {
+      "compaction": {
+        "mode": "safeguard"
+      },
+      "model": {
+        "primary": "custom-qwen-local/Qwen3.6-35B-A3B"
+      },
+      "models": {
+        "custom-qwen-local/Qwen3.6-35B-A3B": {
+          "alias": "Qwen3.6-35B-A3B"
+        }
+      }
+    }
+  },
+  "bindings": [
+    {
+      "agentId": "main",
+      "match": {
+        "channel": "feishu",
+        "accountId": "default"
+      }
+    },
+    {
+      "agentId": "personal-life",
+      "match": {
+        "channel": "openclaw-weixin",
+        "accountId": "default"
+      }
+    }
+  ],
+  "tools": {
+    "profile": "coding",
+    "web": {
+      "search": {
+        "enabled": true,
+        "provider": "tavily"
+      }
+    }
+  },
+  "commands": {
+    "native": "auto",
+    "nativeSkills": "auto",
+    "restart": true,
+    "ownerDisplay": "raw"
+  },
+  "session": {
+    "dmScope": "per-account-channel-peer"
+  },
+  "channels": {
+    "feishu": {
+      "enabled": true,
+      "connectionMode": "websocket",
+      "domain": "feishu",
+      "groupPolicy": "allowlist"
+    },
+    "openclaw-weixin": {
+      "enabled": true
+    }
+  },
+  "gateway": {
+    "port": 18789,
+    "mode": "local",
+    "bind": "lan",
+    "controlUi": {
+      "root": "~/.nvm/versions/node/v22.16.0/lib/node_modules/openclaw/dist/control-ui",
+      "allowedOrigins": ["http://localhost:18789", "http://127.0.0.1:18789"],
+      "allowInsecureAuth": false
+    },
+    "auth": {
+      "mode": "token",
+      "rateLimit": {
+        "maxAttempts": 10,
+        "windowMs": 60000,
+        "lockoutMs": 300000,
+        "exemptLoopback": true
+      }
+    },
+    "tailscale": {
+      "mode": "off",
+      "resetOnExit": false
+    }
+  },
+  "plugins": {
+    "allow": ["feishu", "openclaw-weixin", "tavily"],
+    "entries": {
+      "feishu": {
+        "enabled": true
+      },
+      "openclaw-weixin": {
+        "enabled": true
+      },
+      "tavily": {
+        "enabled": true,
+        "config": {
+          "webSearch": {
+            "baseUrl": "http://127.0.0.1:8000",
+            "apiKey": "orio-local"
+          }
+        }
+      }
+    }
+  }
+}

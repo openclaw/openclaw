@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="920" viewBox="0 0 960 920">
+  <rect width="960" height="920" fill="#fafafa"/>
+  <text x="480" y="42" text-anchor="middle" font-family="system-ui,sans-serif" font-size="21" font-weight="600" fill="#0f172a">platform-api ??????? Foundry §??</text>
+  <defs>
+    <marker id="d" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L9,3 z" fill="#475569"/>
+    </marker>
+  </defs>
+  <rect x="200" y="64" width="560" height="820" rx="14" fill="#f1f5f9" stroke="#334155" stroke-width="2"/>
+  <text x="480" y="88" text-anchor="middle" font-family="system-ui,sans-serif" font-size="12" fill="#64748b">platform-api/</text>
+  <g font-family="system-ui,sans-serif">
+    <rect x="240" y="102" width="480" height="68" rx="8" fill="#fff7ed" stroke="#ea580c" stroke-width="1.8"/>
+    <text x="480" y="134" text-anchor="middle" font-size="13" font-weight="600" fill="#c2410c">ontology/</text>
+    <text x="480" y="156" text-anchor="middle" font-size="11" fill="#9a3412">object_types · action_types · function_types · markings · loader</text>
+    <line x1="480" y1="170" x2="480" y2="188" stroke="#475569" stroke-width="2" marker-end="url(#d)"/>
+    <rect x="240" y="188" width="480" height="88" rx="8" fill="#ecfdf5" stroke="#059669" stroke-width="2"/>
+    <text x="480" y="220" text-anchor="middle" font-size="13" font-weight="600" fill="#047857">core/</text>
+    <text x="480" y="242" text-anchor="middle" font-size="11" fill="#065f46">object_store · action_executor · function_executor</text>
+    <text x="480" y="260" text-anchor="middle" font-size="11" fill="#065f46">pipeline_runner · domain_logic</text>
+    <line x1="480" y1="276" x2="480" y2="294" stroke="#475569" stroke-width="2" marker-end="url(#d)"/>
+    <rect x="240" y="294" width="480" height="68" rx="8" fill="#dbeafe" stroke="#2563eb" stroke-width="1.8"/>
+    <text x="480" y="328" text-anchor="middle" font-size="13" font-weight="600" fill="#1e40af">apps/</text>
+    <text x="480" y="348" text-anchor="middle" font-size="11" fill="#1e40af">http · feishu · CLI</text>
+    <line x1="480" y1="362" x2="480" y2="380" stroke="#475569" stroke-width="2" marker-end="url(#d)"/>
+    <rect x="240" y="380" width="480" height="68" rx="8" fill="#eef2ff" stroke="#4338ca" stroke-width="1.8"/>
+    <text x="480" y="412" text-anchor="middle" font-size="13" font-weight="600" fill="#3730a3">aip/</text>
+    <text x="480" y="434" text-anchor="middle" font-size="11" fill="#4338ca">mcp_server · openapi_exporter · agent_runtimes</text>
+    <line x1="480" y1="448" x2="480" y2="466" stroke="#475569" stroke-width="2" marker-end="url(#d)"/>
+    <rect x="240" y="466" width="480" height="62" rx="8" fill="#fefce8" stroke="#ca8a04" stroke-width="1.8"/>
+    <text x="480" y="498" text-anchor="middle" font-size="13" font-weight="600" fill="#854d0e">connectors/</text>
+    <text x="480" y="518" text-anchor="middle" font-size="11" fill="#854d0e">ERP · CMMS · historian · scada_dcs · generic</text>
+    <line x1="480" y1="528" x2="480" y2="546" stroke="#475569" stroke-width="2" marker-end="url(#d)"/>
+    <rect x="240" y="546" width="480" height="54" rx="8" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.8"/>
+    <text x="480" y="572" text-anchor="middle" font-size="13" font-weight="600" fill="#6d28d9">providers/</text>
+    <text x="480" y="592" text-anchor="middle" font-size="11" fill="#6d28d9">llm · embedder · notifier</text>
+    <line x1="480" y1="600" x2="480" y2="618" stroke="#475569" stroke-width="2" marker-end="url(#d)"/>
+    <rect x="240" y="618" width="480" height="62" rx="8" fill="#fce7f3" stroke="#db2777" stroke-width="1.8"/>
+    <text x="480" y="648" text-anchor="middle" font-size="13" font-weight="600" fill="#be185d">infra/</text>
+    <text x="480" y="668" text-anchor="middle" font-size="11" fill="#be185d">auth · marking · audit · lineage · settings</text>
+    <line x1="480" y1="680" x2="480" y2="698" stroke="#475569" stroke-width="2" marker-end="url(#d)"/>
+    <rect x="240" y="698" width="480" height="58" rx="8" fill="#e2e8f0" stroke="#475569" stroke-width="1.8"/>
+    <text x="480" y="726" text-anchor="middle" font-size="13" font-weight="600" fill="#334155">workers/</text>
+    <text x="480" y="746" text-anchor="middle" font-size="11" fill="#475569">scheduler · pipeline_worker · streams</text>
+  </g>
+  <text x="480" y="892" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" fill="#64748b">???????????????????? 01 · 02 ??</text>
+</svg>

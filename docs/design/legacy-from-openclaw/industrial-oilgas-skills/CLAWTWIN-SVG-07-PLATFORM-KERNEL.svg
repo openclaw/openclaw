@@ -1,0 +1,170 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid meet" xml:lang="zh-Hans" role="img">
+  <title>ClawTwin Platform 技术内核架构（图 7/7）</title>
+  <desc>技术架构师视角：统一调度架构——接口入口 → 事件总线 → 编排中枢 → 四条执行通道 → 可靠投递</desc>
+  <defs>
+    <style type="text/css">
+      text, tspan { font-family: 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Microsoft YaHei UI',
+                    'WenQuanYi Micro Hei', 'Noto Sans CJK SC', sans-serif;
+                    text-rendering: geometricPrecision; }
+    </style>
+    <marker id="a7d" markerWidth="9" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0,9 3,0 6" fill="#475569"/></marker>
+    <marker id="a7b" markerWidth="9" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0,9 3,0 6" fill="#0369A1"/></marker>
+    <marker id="a7o" markerWidth="9" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0,9 3,0 6" fill="#B45309"/></marker>
+    <marker id="a7g" markerWidth="9" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0,9 3,0 6" fill="#059669"/></marker>
+  </defs>
+  <rect width="1920" height="1080" fill="#F8FAFD"/>
+  <g transform="translate(53,0) scale(1.512)">
+
+  <rect x="0" y="0" width="1200" height="52" fill="#0D2340"/>
+  <text x="600" y="30" font-size="18" font-weight="700" fill="#FFFFFF" text-anchor="middle">ClawTwin Platform · 技术内核架构</text>
+  <text x="600" y="45" font-size="9.5" fill="#94A3B8" text-anchor="middle">统一调度架构：接口入口 → 事件总线 → 编排中枢 → 四条执行通道 → 可靠投递</text>
+
+  <!-- 运维横切外框 -->
+  <rect x="16" y="57" width="1168" height="534" rx="10" fill="none" stroke="#22C55E" stroke-width="1.5" stroke-dasharray="8,5"/>
+  <rect x="16" y="57" width="160" height="18" rx="4" fill="#DCFCE7"/>
+  <text x="96" y="69" font-size="8" font-weight="600" fill="#166534" text-anchor="middle">运维横切层（横切包裹全局）</text>
+
+  <!-- 接口层标签 -->
+  <text x="460" y="78" font-size="8.5" fill="#64748B" font-weight="600">接口入口层（Platform 对外 5 种面）</text>
+
+  <!-- REST -->
+  <rect x="28" y="82" width="198" height="48" rx="7" fill="#DBEAFE" stroke="#2563EB"/>
+  <text x="127" y="101" font-size="9.5" font-weight="700" fill="#1E40AF" text-anchor="middle">REST API</text>
+  <text x="127" y="116" font-size="8" fill="#1E3A8A" text-anchor="middle">业务读写 · 查询 · 管理</text>
+  <text x="127" y="128" font-size="7.5" fill="#3B82F6" text-anchor="middle">Studio 主通道 · 外部集成</text>
+
+  <!-- SSE -->
+  <rect x="234" y="82" width="192" height="48" rx="7" fill="#DBEAFE" stroke="#2563EB"/>
+  <text x="330" y="101" font-size="9.5" font-weight="700" fill="#1E40AF" text-anchor="middle">SSE 推送</text>
+  <text x="330" y="116" font-size="8" fill="#1E3A8A" text-anchor="middle">实时事件推送</text>
+  <text x="330" y="128" font-size="7.5" fill="#3B82F6" text-anchor="middle">Studio 订阅状态变更</text>
+
+  <!-- MCP Server -->
+  <rect x="434" y="82" width="204" height="48" rx="7" fill="#F5F3FF" stroke="#7C3AED"/>
+  <text x="536" y="101" font-size="9.5" font-weight="700" fill="#5B21B6" text-anchor="middle">MCP Server</text>
+  <text x="536" y="116" font-size="8" fill="#4C1D95" text-anchor="middle">工具暴露 · 上下文提供</text>
+  <text x="536" y="128" font-size="7.5" fill="#6D28D9" text-anchor="middle">对话智能体专用通道</text>
+
+  <!-- Webhook -->
+  <rect x="646" y="82" width="192" height="48" rx="7" fill="#FEF3C7" stroke="#D97706"/>
+  <text x="742" y="101" font-size="9.5" font-weight="700" fill="#92400E" text-anchor="middle">Webhook</text>
+  <text x="742" y="116" font-size="8" fill="#78350F" text-anchor="middle">接收外部推送事件</text>
+  <text x="742" y="128" font-size="7.5" fill="#B45309" text-anchor="middle">企业系统 · IM 回调</text>
+
+  <!-- CLI -->
+  <rect x="846" y="82" width="274" height="48" rx="7" fill="#F0FDF4" stroke="#22C55E"/>
+  <text x="983" y="101" font-size="9.5" font-weight="700" fill="#166534" text-anchor="middle">CLI（运维专用）</text>
+  <text x="983" y="116" font-size="8" fill="#15803D" text-anchor="middle">Doctor · ReloadPlan · Health</text>
+  <text x="983" y="128" font-size="7.5" fill="#166534" text-anchor="middle">运维管理入口 · 非业务通信</text>
+
+  <!-- 入口层→接触层 箭头 -->
+  <line x1="380" y1="130" x2="380" y2="148" stroke="#475569" stroke-width="1.5" marker-end="url(#a7d)"/>
+
+  <!-- 接触层 -->
+  <text x="380" y="146" font-size="8.5" fill="#64748B" text-anchor="middle" font-weight="600">接触层（apps/）— 薄路由</text>
+  <rect x="28" y="150" width="716" height="28" rx="6" fill="#F8FAFC" stroke="#CBD5E1"/>
+  <text x="386" y="168" font-size="8.5" fill="#475569" text-anchor="middle">HTTP 路由挂载 · MCP 工具注册 · Webhook 接收 · CLI 挂载 · 请求鉴权（薄层，不堆积业务规则）</text>
+
+  <!-- 接触层→EventDispatcher 箭头 -->
+  <line x1="386" y1="178" x2="386" y2="196" stroke="#475569" stroke-width="1.5" marker-end="url(#a7d)"/>
+
+  <!-- 核心中枢① EventDispatcher -->
+  <rect x="28" y="198" width="716" height="76" rx="8" fill="#1E3A8A" stroke="#1E40AF" stroke-width="2"/>
+  <rect x="28" y="198" width="716" height="26" rx="8" fill="#1E40AF"/>
+  <rect x="28" y="214" width="716" height="10" fill="#1E40AF"/>
+  <text x="170" y="213" font-size="10.5" font-weight="700" fill="#FFFFFF">核心中枢①  事件总线</text>
+  <text x="720" y="213" font-size="8.5" fill="#BFDBFE" text-anchor="end">EventDispatcher</text>
+  <text x="44" y="236" font-size="9.5" font-weight="600" fill="#93C5FD">语义层 → 行动层的唯一衔接出口</text>
+  <text x="44" y="252" font-size="9" fill="#BFDBFE">统一发布状态变更事件 · 订阅分发给下游 Sink · 解耦数据写入与行为触发</text>
+  <text x="44" y="266" font-size="8.5" fill="#93C5FD">所有自动化均从此处触发；不得绕过此出口直接调用行动层</text>
+
+  <!-- EventDispatcher→PlaybookEngine 箭头 -->
+  <text x="386" y="291" font-size="8" fill="#B45309" text-anchor="middle" font-weight="600">事件触发</text>
+  <line x1="386" y1="282" x2="386" y2="298" stroke="#B45309" stroke-width="2" marker-end="url(#a7o)"/>
+
+  <!-- 核心中枢② PlaybookEngine -->
+  <rect x="28" y="300" width="716" height="120" rx="8" fill="#B45309" stroke="#92400E" stroke-width="2"/>
+  <rect x="28" y="300" width="716" height="26" rx="8" fill="#92400E"/>
+  <rect x="28" y="316" width="716" height="10" fill="#92400E"/>
+  <text x="170" y="315" font-size="10.5" font-weight="700" fill="#FFFFFF">核心中枢②  编排中枢</text>
+  <text x="720" y="315" font-size="8.5" fill="#FDE68A" text-anchor="end">PlaybookEngine</text>
+  <text x="44" y="338" font-size="9" fill="#FEF3C7">步骤序列 · 条件分支 · 并行执行 · 人工确认（暂停/恢复）· 超时重试</text>
+  <text x="44" y="354" font-size="8.5" fill="#FDE68A">Action / Function / AI / MCP — 四条执行通道由此中枢统一调度</text>
+
+  <!-- 四条通道子标签 -->
+  <rect x="44" y="362" width="156" height="32" rx="5" fill="#FEF3C7" stroke="#FBBF24"/>
+  <text x="122" y="376" font-size="8.5" font-weight="600" fill="#92400E" text-anchor="middle">动作执行</text>
+  <text x="122" y="389" font-size="7.5" fill="#78350F" text-anchor="middle">ActionExecutor</text>
+
+  <rect x="208" y="362" width="156" height="32" rx="5" fill="#FEF3C7" stroke="#FBBF24"/>
+  <text x="286" y="376" font-size="8.5" font-weight="600" fill="#92400E" text-anchor="middle">内置 AI 推理</text>
+  <text x="286" y="389" font-size="7.5" fill="#78350F" text-anchor="middle">FunctionExecutor</text>
+
+  <rect x="372" y="362" width="168" height="32" rx="5" fill="#F5F3FF" stroke="#C4B5FD"/>
+  <text x="456" y="376" font-size="8.5" font-weight="600" fill="#5B21B6" text-anchor="middle">智能体委托</text>
+  <text x="456" y="389" font-size="7.5" fill="#6D28D9" text-anchor="middle">AgentRuntime（按需）</text>
+
+  <rect x="548" y="362" width="182" height="32" rx="5" fill="#ECFDF5" stroke="#6EE7B7"/>
+  <text x="639" y="376" font-size="8.5" font-weight="600" fill="#065F46" text-anchor="middle">直接 API 响应</text>
+  <text x="639" y="389" font-size="7.5" fill="#047857" text-anchor="middle">同步回调 · 查询响应</text>
+
+  <!-- PlaybookEngine→Outbox 箭头 -->
+  <line x1="386" y1="422" x2="386" y2="438" stroke="#059669" stroke-width="1.5" marker-end="url(#a7g)"/>
+
+  <!-- Outbox 统一投递层 -->
+  <rect x="28" y="440" width="716" height="50" rx="8" fill="#ECFDF5" stroke="#059669" stroke-width="2"/>
+  <text x="386" y="460" font-size="10" font-weight="700" fill="#065F46" text-anchor="middle">统一投递层  Outbox</text>
+  <text x="386" y="477" font-size="8.5" fill="#047857" text-anchor="middle">事务队列 · 退避重试 · 去重防风暴 · 可靠外发 → 写库 / 对接 ERP/MES / IM 通知</text>
+
+  <!-- 语义层右侧面板 -->
+  <rect x="756" y="198" width="416" height="292" rx="8" fill="#F0F9FF" stroke="#0EA5E9" stroke-width="1.5"/>
+  <rect x="756" y="198" width="416" height="28" rx="8" fill="#0369A1"/>
+  <rect x="756" y="216" width="416" height="10" fill="#0369A1"/>
+  <text x="964" y="216" font-size="10" font-weight="700" fill="#FFFFFF" text-anchor="middle">语义层（各层共享状态存储）</text>
+  <text x="964" y="228" font-size="8" fill="#BAE6FD" text-anchor="middle">语义 → 事件 → 行动 各层均读写此层</text>
+
+  <rect x="772" y="238" width="384" height="36" rx="6" fill="#E0F2FE" stroke="#7DD3FC"/>
+  <text x="964" y="253" font-size="9" font-weight="600" fill="#0C4A6E" text-anchor="middle">Ontology（语义模型）</text>
+  <text x="964" y="267" font-size="8" fill="#0369A1" text-anchor="middle">定义实体类型、字段规则与关联关系</text>
+
+  <rect x="772" y="282" width="384" height="36" rx="6" fill="#E0F2FE" stroke="#7DD3FC"/>
+  <text x="964" y="297" font-size="9" font-weight="600" fill="#0C4A6E" text-anchor="middle">ObjectStore（对象持久化 / 真相源）</text>
+  <text x="964" y="311" font-size="8" fill="#0369A1" text-anchor="middle">存储企业运营实体的当前状态与历史</text>
+
+  <rect x="772" y="326" width="384" height="36" rx="6" fill="#E0F2FE" stroke="#7DD3FC"/>
+  <text x="964" y="341" font-size="9" font-weight="600" fill="#0C4A6E" text-anchor="middle">Connector（外部数据接入）</text>
+  <text x="964" y="355" font-size="8" fill="#0369A1" text-anchor="middle">OPC-UA · MQTT · REST · SQL · Webhook</text>
+
+  <rect x="772" y="370" width="384" height="36" rx="6" fill="#E0F2FE" stroke="#7DD3FC"/>
+  <text x="964" y="385" font-size="9" font-weight="600" fill="#0C4A6E" text-anchor="middle">Pipeline（数据规整与特征提取）</text>
+  <text x="964" y="399" font-size="8" fill="#0369A1" text-anchor="middle">清洗 · 聚合 · 阈值检测 · 模式识别</text>
+
+  <text x="964" y="422" font-size="8" fill="#0369A1" text-anchor="middle">ActionExecutor 写回 ObjectStore</text>
+  <text x="964" y="436" font-size="8" fill="#0369A1" text-anchor="middle">FunctionExecutor 从此读取 AI 上下文</text>
+  <text x="964" y="450" font-size="8" fill="#0369A1" text-anchor="middle">状态变更经 EventDispatcher 统一发布</text>
+  <text x="964" y="464" font-size="8" fill="#0369A1" text-anchor="middle">结案信号回流 CBR 经验库（闭环学习）</text>
+
+  <!-- 读写标注 -->
+  <line x1="744" y1="344" x2="758" y2="344" stroke="#0369A1" stroke-width="1.5" stroke-dasharray="3,2" marker-end="url(#a7b)"/>
+  <line x1="758" y1="360" x2="744" y2="360" stroke="#0369A1" stroke-width="1.5" stroke-dasharray="3,2" marker-end="url(#a7b)"/>
+  <text x="749" y="354" font-size="7" fill="#0369A1" text-anchor="middle">读/写</text>
+
+  <!-- 运维横切内容 -->
+  <rect x="28" y="502" width="1144" height="44" rx="8" fill="#F0FDF4" stroke="#22C55E" stroke-dasharray="6,3"/>
+  <text x="48" y="521" font-size="9.5" font-weight="700" fill="#166534">运维横切层内容（Doctor · Health · Outbox · RateLimit · Hooks · ReloadPlan · Audit · AI TokenBudget）</text>
+  <text x="48" y="537" font-size="8.5" fill="#15803D">不参与业务逻辑；Doctor/CLI 是运维管理专用入口；Outbox 同时承担运维可靠性保障与业务投递职责</text>
+
+  <!-- 关键架构结论 -->
+  <rect x="28" y="556" width="1144" height="70" rx="8" fill="#FFFFFF" stroke="#E2E8F0"/>
+  <text x="600" y="573" font-size="10" font-weight="700" fill="#0F172A" text-anchor="middle">关键架构结论（三条设计公理）</text>
+  <text x="44" y="591" font-size="8.8" fill="#475569">● EventDispatcher 是语义层和行动层的唯一衔接出口，所有自动化触发从此开始，不得绕过。</text>
+  <text x="44" y="607" font-size="8.8" fill="#475569">● PlaybookEngine 是 Action / Function(AI) / AgentRuntime / 直响 四条执行通道的统一调度入口，不存在散状调用。</text>
+  <text x="44" y="623" font-size="8.8" fill="#475569">● Outbox 是所有对外副作用（写库/通知/回写 ERP）的唯一可靠出口；CLI 是运维专用通道，不承担业务协议。</text>
+
+  </g>
+  <line x1="0" y1="1028" x2="1920" y2="1028" stroke="#2C5282" stroke-width="1"/>
+  <rect x="0" y="1028" width="1920" height="52" fill="#0D2340"/>
+  <text x="44" y="1058" font-size="13" fill="#94A3B8">ClawTwin</text>
+  <text x="1876" y="1058" font-size="13" fill="#94A3B8" text-anchor="end">图 7/7</text>
+</svg>

@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid meet" xml:lang="zh-Hans" role="img">
+  <title>ClawTwin 业务关切与可信运营（图 4/5）</title>
+  <desc>面向管理者的五条关切与平台回应：授权与确认、审计追溯、AI 边界、现场红线与可持续运行。</desc>
+  <defs>
+    <style type="text/css">
+      text, tspan { font-family: 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Microsoft YaHei UI',
+                    'WenQuanYi Micro Hei', 'Noto Sans CJK SC', sans-serif;
+                    text-rendering: geometricPrecision; }
+    </style>
+  </defs>
+  <rect width="1920" height="1080" fill="#F8FAFD"/>
+  <g transform="translate(78.8571,0.0000) scale(1.468571)">
+
+  <rect x="0" y="0" width="1200" height="48" fill="#0D2340"/>
+  <text x="600" y="30" font-size="18" font-weight="700" fill="#FFFFFF" text-anchor="middle">ClawTwin · 业务关切与可信运营</text>
+  <text x="600" y="44" font-size="9.5" fill="#94A3B8" text-anchor="middle">关切与平台回应</text>
+
+  <!-- 五个关切 -->
+  <text x="600" y="72" font-size="11" font-weight="600" fill="#334155" text-anchor="middle">您的关切</text>
+
+  <rect x="20" y="78" width="216" height="44" rx="8" fill="#EEF2FF" stroke="#818CF8"/>
+  <text x="128" y="98" font-size="10.5" font-weight="700" fill="#3730A3" text-anchor="middle">责任与授权</text>
+  <text x="128" y="112" font-size="8.5" fill="#4F46E5" text-anchor="middle">谁审批 · 谁兜底</text>
+
+  <rect x="248" y="78" width="216" height="44" rx="8" fill="#ECFEFF" stroke="#22D3EE"/>
+  <text x="356" y="98" font-size="10.5" font-weight="700" fill="#155E75" text-anchor="middle">全过程可追溯</text>
+  <text x="356" y="112" font-size="8.5" fill="#0891B2" text-anchor="middle">事后能说清</text>
+
+  <rect x="476" y="78" width="216" height="44" rx="8" fill="#FEF3C7" stroke="#F59E0B"/>
+  <text x="584" y="98" font-size="10.5" font-weight="700" fill="#92400E" text-anchor="middle">AI 不越权</text>
+  <text x="584" y="112" font-size="8.5" fill="#B45309" text-anchor="middle">不乱改 · 不直连核心库</text>
+
+  <rect x="704" y="78" width="216" height="44" rx="8" fill="#FEE2E2" stroke="#F87171"/>
+  <text x="812" y="98" font-size="10.5" font-weight="700" fill="#991B1B" text-anchor="middle">现场与安全红线</text>
+  <text x="812" y="112" font-size="8.5" fill="#B91C1C" text-anchor="middle">工控层保护</text>
+
+  <rect x="932" y="78" width="248" height="44" rx="8" fill="#ECFDF5" stroke="#34D399"/>
+  <text x="1056" y="98" font-size="10.5" font-weight="700" fill="#065F46" text-anchor="middle">可持续运行</text>
+  <text x="1056" y="112" font-size="8.5" fill="#059669" text-anchor="middle">不瘫 · 成本可控</text>
+
+  <!-- 回应区 -->
+  <text x="600" y="146" font-size="11" font-weight="600" fill="#334155" text-anchor="middle">平台回应</text>
+
+  <rect x="20" y="158" width="1160" height="88" rx="10" fill="#FFFFFF" stroke="#E2E8F0"/>
+  <text x="48" y="178" font-size="10.5" font-weight="700" fill="#3730A3">责任与授权</text>
+  <text x="48" y="198" font-size="9" fill="#475569">关键动作默认人机协同；审批走即时通讯 / OA；批准权在企业角色与策略。</text>
+  <text x="48" y="218" font-size="8.5" fill="#64748B">编排引擎 · 人工确认点 · 可靠外发 · 流程运行留痕</text>
+
+  <rect x="20" y="254" width="1160" height="88" rx="10" fill="#FFFFFF" stroke="#E2E8F0"/>
+  <text x="48" y="274" font-size="10.5" font-weight="700" fill="#155E75">全过程可追溯</text>
+  <text x="48" y="294" font-size="9" fill="#475569">事件—告警—编排—审批—动作—结果全链路对象与时间线；可按时间段导出审计报表。</text>
+  <text x="48" y="314" font-size="8.5" fill="#64748B">开放导出 JSON / CSV 等格式 · 历史版本可按配置保留置信度与上下文</text>
+
+  <rect x="20" y="350" width="1160" height="88" rx="10" fill="#FFFFFF" stroke="#E2E8F0"/>
+  <text x="48" y="370" font-size="10.5" font-weight="700" fill="#92400E">AI 不越权</text>
+  <text x="48" y="390" font-size="9" fill="#475569">业务真源与副作用由平台托管；外接智能体仅能调用已登记工具；写库与外联走统一执行层。</text>
+  <text x="48" y="410" font-size="8.5" fill="#64748B">工具网关 · 统一动作执行 · 业务语义校验（按配置）</text>
+
+  <rect x="20" y="446" width="1160" height="88" rx="10" fill="#FFFFFF" stroke="#E2E8F0"/>
+  <text x="48" y="466" font-size="10.5" font-weight="700" fill="#991B1B">现场与安全红线</text>
+  <text x="48" y="486" font-size="9" fill="#475569">OT 默认只读；不向 L1–L2 控制层直连写回；高风险走人工闸门。</text>
+  <text x="48" y="506" font-size="8.5" fill="#64748B">接入策略 · 流程分支 · 高风险人工闸门</text>
+
+  <rect x="20" y="542" width="1160" height="88" rx="10" fill="#FFFFFF" stroke="#E2E8F0"/>
+  <text x="48" y="562" font-size="10.5" font-weight="700" fill="#065F46">可持续运行</text>
+  <text x="48" y="582" font-size="9" fill="#475569">投递可预期；风暴可治理；运行可自检；模型用量可计量。</text>
+  <text x="48" y="602" font-size="8.5" fill="#64748B">可靠队列 · 去重限流 · 自检与健康 · 模型用量可计量 · 配置可控热更新</text>
+
+  </g>
+  <line x1="0" y1="1028" x2="1920" y2="1028" stroke="#2C5282" stroke-width="1"/>
+  <rect x="0" y="1028" width="1920" height="52" fill="#0D2340"/>
+  <text x="44" y="1058" font-size="13" fill="#94A3B8">ClawTwin</text>
+  <text x="1876" y="1058" font-size="13" fill="#94A3B8" text-anchor="end">图 4/5</text>
+</svg>

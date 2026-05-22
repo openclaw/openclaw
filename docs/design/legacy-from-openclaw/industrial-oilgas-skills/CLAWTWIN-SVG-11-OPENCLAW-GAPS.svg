@@ -1,0 +1,163 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid meet" xml:lang="zh-Hans" role="img">
+  <title>ClawTwin vs OpenClaw 架构借鉴路线图（图 11/11）</title>
+  <desc>OpenClaw 到 ClawTwin 的架构模式对照：缺口优先级分析 + 三阶段补齐路线</desc>
+  <defs>
+    <style type="text/css">
+      text, tspan { font-family: 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Microsoft YaHei UI',
+                    'WenQuanYi Micro Hei', 'Noto Sans CJK SC', sans-serif;
+                    text-rendering: geometricPrecision; }
+    </style>
+  </defs>
+  <rect width="1920" height="1080" fill="#F8FAFD"/>
+  <g transform="translate(0,0) scale(1.6)">
+
+  <rect x="0" y="0" width="1200" height="52" fill="#0D2340"/>
+  <text x="600" y="30" font-size="18" font-weight="700" fill="#FFFFFF" text-anchor="middle">ClawTwin vs OpenClaw · 架构借鉴路线图</text>
+  <text x="600" y="45" font-size="9.5" fill="#94A3B8" text-anchor="middle">OpenClaw register* 模式对照 · 现状诊断 · 三阶段补齐路线 · 一句话核心判断</text>
+
+  <!-- 三栏表头 -->
+  <rect x="20" y="56" width="380" height="22" rx="4" fill="#1E3A8A"/>
+  <text x="210" y="71" font-size="9.5" font-weight="700" fill="#FFFFFF" text-anchor="middle">OpenClaw 能力（来自 register* API）</text>
+  <rect x="410" y="56" width="380" height="22" rx="4" fill="#065F46"/>
+  <text x="600" y="71" font-size="9.5" font-weight="700" fill="#FFFFFF" text-anchor="middle">ClawTwin 当前状态</text>
+  <rect x="800" y="56" width="380" height="22" rx="4" fill="#92400E"/>
+  <text x="990" y="71" font-size="9.5" font-weight="700" fill="#FFFFFF" text-anchor="middle">建议（对照 OpenClaw 补齐路径）</text>
+
+  <!-- === 第1行：Provider 抽象 === -->
+  <rect x="20" y="82" width="380" height="64" rx="5" fill="#EFF6FF" stroke="#2563EB"/>
+  <text x="30" y="96" font-size="9" font-weight="700" fill="#1E40AF">registerProvider()</text>
+  <text x="30" y="110" font-size="8" fill="#374151">LLM · 图像 · 语音 · 向量搜索</text>
+  <text x="30" y="123" font-size="8" fill="#374151">注册后 core 不感知具体厂商</text>
+  <text x="30" y="136" font-size="8" fill="#64748B">registerLLMProvider 等 20+ 种</text>
+  <rect x="410" y="82" width="380" height="64" rx="5" fill="#FEE2E2" stroke="#DC2626" stroke-dasharray="4,3"/>
+  <text x="420" y="96" font-size="9" font-weight="700" fill="#991B1B">❌ 最关键缺口</text>
+  <text x="420" y="110" font-size="8" fill="#374151">providers/llm.py · embedder.py · notifier.py</text>
+  <text x="420" y="123" font-size="8" fill="#B91C1C">三个文件均为一行注释（"milestone"）</text>
+  <text x="420" y="136" font-size="8" fill="#DC2626">代码通过什么调 LLM？未发现运行路径</text>
+  <rect x="800" y="82" width="380" height="64" rx="5" fill="#FFF7ED" stroke="#EA580C"/>
+  <text x="810" y="96" font-size="9" font-weight="700" fill="#C2410C">P0 · 阶段一必须完成</text>
+  <text x="810" y="110" font-size="8" fill="#374151">实现 BaseLLMProvider ABC + OpenAI 默认实现</text>
+  <text x="810" y="123" font-size="8" fill="#374151">BaseVectorProvider ABC + pgvector 默认实现</text>
+  <text x="810" y="136" font-size="8" fill="#64748B">PackRegistry.register_provider() 注册点</text>
+
+  <!-- === 第2行：Context Engine === -->
+  <rect x="20" y="152" width="380" height="64" rx="5" fill="#EFF6FF" stroke="#2563EB"/>
+  <text x="30" y="166" font-size="9" font-weight="700" fill="#1E40AF">registerContextEngine()</text>
+  <text x="30" y="180" font-size="8" fill="#374151">调用 LLM 前的上下文组装</text>
+  <text x="30" y="193" font-size="8" fill="#374151">assemble / compact / ingest</text>
+  <text x="30" y="206" font-size="8" fill="#64748B">有默认引擎·插件可覆盖</text>
+  <rect x="410" y="152" width="380" height="64" rx="5" fill="#FFFBEB" stroke="#D97706"/>
+  <text x="420" y="166" font-size="9" font-weight="700" fill="#92400E">⚡ 临时拼接</text>
+  <text x="420" y="180" font-size="8" fill="#374151">decision-package 端点提供部分上下文</text>
+  <text x="420" y="193" font-size="8" fill="#B45309">各 AI 调用点各自 ad-hoc 组装上下文</text>
+  <text x="420" y="206" font-size="8" fill="#64748B">结果：同一设备数据在不同 AI 入口重复加载</text>
+  <rect x="800" y="152" width="380" height="64" rx="5" fill="#FFF7ED" stroke="#EA580C"/>
+  <text x="810" y="166" font-size="9" font-weight="700" fill="#C2410C">P0 · 阶段一</text>
+  <text x="810" y="180" font-size="8" fill="#374151">core/context_engine/ 模块：assemble(equip_id)</text>
+  <text x="810" y="193" font-size="8" fill="#374151">输入：ObjectStore + KB + 告警队列</text>
+  <text x="810" y="206" font-size="8" fill="#64748B">输出：标准 ContextPackage 传给所有 LLM 调用</text>
+
+  <!-- === 第3行：Memory SDK === -->
+  <rect x="20" y="222" width="380" height="64" rx="5" fill="#EFF6FF" stroke="#2563EB"/>
+  <text x="30" y="236" font-size="9" font-weight="700" fill="#1E40AF">registerMemoryCapability()</text>
+  <text x="30" y="250" font-size="8" fill="#374151">可插拔记忆后端（SQLite/Milvus/PG）</text>
+  <text x="30" y="263" font-size="8" fill="#374151">embedding · QMD 查询 · 多模态</text>
+  <text x="30" y="276" font-size="8" fill="#64748B">memory-host-sdk 独立分包</text>
+  <rect x="410" y="222" width="380" height="64" rx="5" fill="#FEE2E2" stroke="#DC2626" stroke-dasharray="4,3"/>
+  <text x="420" y="236" font-size="9" font-weight="700" fill="#991B1B">❌ CBR 无专用模块</text>
+  <text x="420" y="250" font-size="8" fill="#374151">KB 用 pgvector 做语义搜索（已实现）</text>
+  <text x="420" y="263" font-size="8" fill="#B91C1C">但案例库（CBR）独立存储/检索 缺失</text>
+  <text x="420" y="276" font-size="8" fill="#64748B">闭环学习管道（管道 ⑤）因此无法运行</text>
+  <rect x="800" y="222" width="380" height="64" rx="5" fill="#ECFDF5" stroke="#059669"/>
+  <text x="810" y="236" font-size="9" font-weight="700" fill="#065F46">P1 · 阶段二</text>
+  <text x="810" y="250" font-size="8" fill="#374151">复用 KB 的 pgvector 后端，加 CBR 向量索引</text>
+  <text x="810" y="263" font-size="8" fill="#374151">BaseMemoryProvider + Milvus 可插拔变体</text>
+  <text x="810" y="276" font-size="8" fill="#64748B">workorder.closed → memory.ingest() 自动触发</text>
+
+  <!-- === 第4行：Hook System === -->
+  <rect x="20" y="292" width="380" height="64" rx="5" fill="#EFF6FF" stroke="#2563EB"/>
+  <text x="30" y="306" font-size="9" font-weight="700" fill="#1E40AF">registerHook()（33 个具名钩子）</text>
+  <text x="30" y="320" font-size="8" fill="#374151">before_model_call · after_tool_call</text>
+  <text x="30" y="333" font-size="8" fill="#374151">before_dispatch · message_received 等</text>
+  <text x="30" y="346" font-size="8" fill="#64748B">全链路可观测·策略注入</text>
+  <rect x="410" y="292" width="380" height="64" rx="5" fill="#FFFBEB" stroke="#D97706"/>
+  <text x="420" y="306" font-size="9" font-weight="700" fill="#92400E">⚡ 部分实现</text>
+  <text x="420" y="320" font-size="8" fill="#374151">infra/ 有 hooks 目录（LLM token/审计）</text>
+  <text x="420" y="333" font-size="8" fill="#B45309">管道步骤 before/after 钩子缺失</text>
+  <text x="420" y="346" font-size="8" fill="#64748B">IndustryPack 无法注册自定义 Hook</text>
+  <rect x="800" y="292" width="380" height="64" rx="5" fill="#ECFDF5" stroke="#059669"/>
+  <text x="810" y="306" font-size="9" font-weight="700" fill="#065F46">P1 · 阶段二</text>
+  <text x="810" y="320" font-size="8" fill="#374151">定义 PipelineHookPoint 枚举（8 个关键点）</text>
+  <text x="810" y="333" font-size="8" fill="#374151">PackRegistry.register_hook(point, handler)</text>
+  <text x="810" y="346" font-size="8" fill="#64748B">oilgas pack 注册 token_budget/audit hooks</text>
+
+  <!-- === 第5行：CLI-as-MCP === -->
+  <rect x="20" y="362" width="380" height="64" rx="5" fill="#EFF6FF" stroke="#2563EB"/>
+  <text x="30" y="376" font-size="9" font-weight="700" fill="#1E40AF">registerCli() + --json 全覆盖</text>
+  <text x="30" y="390" font-size="8" fill="#374151">子命令可扩展·IndustryPack 注入</text>
+  <text x="30" y="403" font-size="8" fill="#374151">机器可读·LLM 可直接解析</text>
+  <text x="30" y="416" font-size="8" fill="#64748B">openclaw 40+ 核心命令全部有 --json</text>
+  <rect x="410" y="362" width="380" height="64" rx="5" fill="#FFFBEB" stroke="#D97706"/>
+  <text x="420" y="376" font-size="9" font-weight="700" fill="#92400E">⚡ CLI 存在但未 --json 化</text>
+  <text x="420" y="390" font-size="8" fill="#374151">clawtwin doctor / health 已有 CLI 命令</text>
+  <text x="420" y="403" font-size="8" fill="#B45309">多数命令无 --json 输出·LLM 难以解析</text>
+  <text x="420" y="416" font-size="8" fill="#64748B">Pack 无法贡献子命令（registerCli 接口缺失）</text>
+  <rect x="800" y="362" width="380" height="64" rx="5" fill="#ECFDF5" stroke="#059669"/>
+  <text x="810" y="376" font-size="9" font-weight="700" fill="#065F46">P1 · 阶段二</text>
+  <text x="810" y="390" font-size="8" fill="#374151">所有 clawtwin 命令加 --json / --format json</text>
+  <text x="810" y="403" font-size="8" fill="#374151">PackRegistry.register_cli_group() 扩展点</text>
+  <text x="810" y="416" font-size="8" fill="#64748B">MCP → CLI bridge：工具调用映射到 CLI 命令</text>
+
+  <!-- === 第6行：Config Migration === -->
+  <rect x="20" y="432" width="380" height="64" rx="5" fill="#EFF6FF" stroke="#2563EB"/>
+  <text x="30" y="446" font-size="9" font-weight="700" fill="#1E40AF">registerConfigMigration()</text>
+  <text x="30" y="460" font-size="8" fill="#374151">Plugin 自带 Schema 版本迁移脚本</text>
+  <text x="30" y="473" font-size="8" fill="#374151">安装/升级时自动执行·回滚安全</text>
+  <text x="30" y="486" font-size="8" fill="#64748B">registerMigrationProvider 同类模式</text>
+  <rect x="410" y="432" width="380" height="64" rx="5" fill="#FEE2E2" stroke="#DC2626" stroke-dasharray="4,3"/>
+  <text x="420" y="446" font-size="9" font-weight="700" fill="#991B1B">❌ Pack 不能携带迁移</text>
+  <text x="420" y="460" font-size="8" fill="#374151">Alembic 迁移在 platform-api/alembic/</text>
+  <text x="420" y="473" font-size="8" fill="#B91C1C">新 IndustryPack 安装无法自动建表/加字段</text>
+  <text x="420" y="486" font-size="8" fill="#64748B">运维人员需手动执行 alembic upgrade</text>
+  <rect x="800" y="432" width="380" height="64" rx="5" fill="#F1F5F9" stroke="#94A3B8"/>
+  <text x="810" y="446" font-size="9" font-weight="700" fill="#475569">P2 · 阶段三</text>
+  <text x="810" y="460" font-size="8" fill="#374151">packs/{id}/migrations/*.sql 约定</text>
+  <text x="810" y="473" font-size="8" fill="#374151">PackLoader 安装时自动执行 Pack 迁移</text>
+  <text x="810" y="486" font-size="8" fill="#64748B">参考 alembic 版本链 + PackManifest schema_version</text>
+
+  <!-- === 三阶段路线 === -->
+  <rect x="20" y="510" width="1160" height="108" rx="8" fill="#FFFFFF" stroke="#E2E8F0"/>
+  <text x="600" y="528" font-size="11" font-weight="700" fill="#0F172A" text-anchor="middle">三阶段补齐路线（OpenClaw 架构师推荐优先级）</text>
+  <!-- 阶段1 -->
+  <rect x="36" y="536" width="352" height="72" rx="7" fill="#FFF7ED" stroke="#EA580C" stroke-width="1.5"/>
+  <text x="212" y="552" font-size="9.5" font-weight="700" fill="#C2410C" text-anchor="middle">阶段一 · 让 Platform 真正跑起来（P0）</text>
+  <text x="52" y="566" font-size="8.5" fill="#374151">1. 实现 LLMProvider + 连线 OpenAI/Claude</text>
+  <text x="52" y="579" font-size="8.5" fill="#374151">2. 实现 VectorProvider + 连线 pgvector（已有）</text>
+  <text x="52" y="592" font-size="8.5" fill="#374151">3. 建 ContextEngine 模块，统一 AI 上下文组装</text>
+  <text x="52" y="605" font-size="8.5" fill="#374151">4. 填充 FunctionTypes（最少 DiagnoseEquipment）</text>
+  <!-- 阶段2 -->
+  <rect x="404" y="536" width="352" height="72" rx="7" fill="#ECFDF5" stroke="#059669" stroke-width="1.5"/>
+  <text x="580" y="552" font-size="9.5" font-weight="700" fill="#065F46" text-anchor="middle">阶段二 · 可扩展 OS 框架（P1）</text>
+  <text x="420" y="566" font-size="8.5" fill="#374151">1. PackRegistry 完整实现 + Hook 系统</text>
+  <text x="420" y="579" font-size="8.5" fill="#374151">2. CLI 全面 --json 化 + registerCli 扩展点</text>
+  <text x="420" y="592" font-size="8.5" fill="#374151">3. Memory SDK + CBR 学习管道（管道 ⑤）</text>
+  <text x="420" y="605" font-size="8.5" fill="#374151">4. 第 2 个 IndustryPack（电力/化工/港口）</text>
+  <!-- 阶段3 -->
+  <rect x="772" y="536" width="392" height="72" rx="7" fill="#EFF6FF" stroke="#1E40AF" stroke-width="1.5"/>
+  <text x="968" y="552" font-size="9.5" font-weight="700" fill="#1E40AF" text-anchor="middle">阶段三 · 完整 Enterprise OS（P2）</text>
+  <text x="788" y="566" font-size="8.5" fill="#374151">1. Pack 自带迁移机制（PackMigration）</text>
+  <text x="788" y="579" font-size="8.5" fill="#374151">2. TimescaleDB / Kafka 接入（可选替换）</text>
+  <text x="788" y="592" font-size="8.5" fill="#374151">3. Gateway WebSocket + 双向实时推送</text>
+  <text x="788" y="605" font-size="8.5" fill="#374151">4. LLM Trace + Eval Runner 可观测</text>
+
+  <!-- 核心判断 -->
+  <rect x="20" y="628" width="1160" height="32" rx="6" fill="#0D2340"/>
+  <text x="600" y="648" font-size="10" font-weight="700" fill="#FFFFFF" text-anchor="middle">核心判断：Platform 架构方向正确 · 骨架完整 · 但 Provider 实现为空导致 AI 功能无法运行 · 补齐 Provider + ContextEngine 是第一优先级</text>
+
+  </g>
+  <line x1="0" y1="1028" x2="1920" y2="1028" stroke="#2C5282" stroke-width="1"/>
+  <rect x="0" y="1028" width="1920" height="52" fill="#0D2340"/>
+  <text x="44" y="1058" font-size="13" fill="#94A3B8">ClawTwin</text>
+  <text x="1876" y="1058" font-size="13" fill="#94A3B8" text-anchor="end">图 11/11</text>
+</svg>

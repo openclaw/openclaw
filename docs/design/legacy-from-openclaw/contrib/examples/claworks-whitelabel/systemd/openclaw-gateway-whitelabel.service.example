@@ -1,0 +1,45 @@
+[Unit]
+Description=ClaWorks Agent Runtime (loopback only)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# ── identity / state hiding ───────────────────────────────────────────────
+# State dir under .claworks — hides runtime namespace from lsof/proc
+Environment=OPENCLAW_STATE_DIR=%h/.claworks
+Environment=OPENCLAW_CONFIG_PATH=%h/.claworks/claworks.json
+# Process title visible in ps/top/htop
+Environment=NODE_OPTIONS=--title=claworks-agent
+# OTEL service name for telemetry backends
+Environment=OTEL_SERVICE_NAME=ClaWorks
+Environment=OTEL_RESOURCE_ATTRIBUTES=service.name=ClaWorks,service.namespace=claworks
+# ── LLM outbound attribution white-label ──────────────────────────────────
+# Product name injected into LLM provider attribution headers
+Environment=OPENCLAW_ATTRIBUTION_PRODUCT_OVERRIDE=ClaWorks
+# Originator slug in User-Agent / originator headers to OpenAI-family endpoints
+Environment=OPENCLAW_ATTRIBUTION_ORIGINATOR_OVERRIDE=claworks
+# HTTP-Referer sent to OpenRouter for app attribution
+Environment=OPENCLAW_OPENROUTER_REFERER=https://your-public-host.example.com
+# X-OpenRouter-Title sent to OpenRouter
+Environment=OPENCLAW_OPENROUTER_TITLE=ClaWorks
+# User-Agent for gateway outbound media/URL fetch requests
+Environment=OPENCLAW_GATEWAY_USER_AGENT=ClaWorks-Gateway/1.0
+# ── runtime ───────────────────────────────────────────────────────────────
+Environment=OPENCLAW_DISABLE_BONJOUR=1
+Environment=HOME=%h
+ExecStart=/usr/local/bin/openclaw gateway --bind loopback --port 18789
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+
+# Install (adjust openclaw binary path as needed):
+#   Copy to ~/.config/systemd/user/claworks-agent.service and run:
+#     systemctl --user enable --now claworks-agent
+#
+# IMPORTANT: Pre-create the state dir and config before starting:
+#   mkdir -p ~/.claworks
+#   node scripts/merge-openclaw-config.mjs  (or copy claworks.json manually)
+#   openclaw gateway token --state-dir ~/.claworks  # generate token
