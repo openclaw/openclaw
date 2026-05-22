@@ -196,6 +196,40 @@ describe("normalizeZalouserOutboundText", () => {
     });
   });
 
+  describe("CRLF / CR line endings (P2 review fix)", () => {
+    it("collapses blank lines between bullets with CRLF endings", () => {
+      const input = "- a\r\n\r\n- b";
+      expect(normalizeZalouserOutboundText(input)).toBe("- a\n- b");
+    });
+
+    it("strips an HR line with a trailing CR", () => {
+      const input = "before\r\n---\r\nafter";
+      expect(normalizeZalouserOutboundText(input)).toBe("before\n\nafter");
+    });
+
+    it("handles lone CR (old-mac) line endings", () => {
+      const input = "- a\r\r- b";
+      expect(normalizeZalouserOutboundText(input)).toBe("- a\n- b");
+    });
+  });
+
+  describe("plus-sign list markers (P3 review fix)", () => {
+    it("collapses blank lines between + bullets", () => {
+      const input = "+ first\n\n+ second\n\n+ third";
+      expect(normalizeZalouserOutboundText(input)).toBe("+ first\n+ second\n+ third");
+    });
+
+    it("collapses a mixed -, *, +, numbered list", () => {
+      const input = "- dash\n\n* star\n\n+ plus\n\n1. one";
+      expect(normalizeZalouserOutboundText(input)).toBe("- dash\n* star\n+ plus\n1. one");
+    });
+
+    it("collapses blank line between prose and a + list", () => {
+      const input = "Intro.\n\n\n+ alpha\n+ beta";
+      expect(normalizeZalouserOutboundText(input)).toBe("Intro.\n+ alpha\n+ beta");
+    });
+  });
+
   describe("idempotency", () => {
     it("is stable: f(f(x)) === f(x) on a representative agent reply", () => {
       const input = [

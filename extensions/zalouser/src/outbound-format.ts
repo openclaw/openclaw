@@ -61,12 +61,19 @@ export function normalizeZalouserOutboundText(text: string): string {
     return text;
   }
 
+  // Normalize CRLF / CR to LF first, mirroring the markdown style parser
+  // (text-styles.ts). Otherwise Windows-style agent output (`---\r\n`,
+  // `- a\r\n\r\n- b`) keeps a trailing \r on each line, which prevents the
+  // HR / list / fence matchers below ($-anchored, [ \t]-only) from firing
+  // and the broken spacing reaches Zalo unchanged.
+  const normalizedEols = text.replace(/\r\n?/g, "\n");
+
   // Split the text into alternating prose / fenced-code segments. Each
   // prose run is normalized independently; fenced runs pass through
   // verbatim including their opening + closing fence lines. We rejoin
   // with a single newline because the splitter consumed them as line
   // separators.
-  const lines = text.split("\n");
+  const lines = normalizedEols.split("\n");
   const out: string[] = [];
   let proseBuf: string[] = [];
   // null when outside a fence; otherwise the opener's char + length so we
@@ -139,10 +146,17 @@ function normalizeProseSegment(text: string): string {
   // expose another match (e.g. three list items separated by blank lines
   // need two passes). Convergence is guaranteed because every transform
   // strictly reduces the number of newline characters; it never adds.
+  // List item markers: ordered (`1.`) or unordered (`-`, `*`, `+`). The
+  // `+` bullet is valid CommonMark and the zalouser markdown parser treats
+  // it as a list, so it must share the collapse rules or a `+` list with
+  // blank lines still renders fragmented on Zalo.
   const between =
-    /([ \t]*(?:\d+\.|[-*])[ \t]+[^\n]*)(?:\n[ \t]*)+\n(?=[ \t]*(?:\d+\.|[-*])[ \t]+[^\n]*)/g;
-  const before = /([^\n])(?:\n[ \t]*)+\n(?=[ \t]*(?:\d+\.|[-*])[ \t]+[^\n]*)/g;
-  const after = /([ \t]*(?:\d+\.|[-*])[ \t]+[^\n]*)(?:\n[ \t]*)+\n(?=[^\n -])/g;
+    /([ \t]*(?:\d+\.|[-*+])[ \t]+[^\n]*)(?:\n[ \t]*)+\n(?=[ \t]*(?:\d+\.|[-*+])[ \t]+[^\n]*)/g;
+  const before = /([^\n])(?:\n[ \t]*)+\n(?=[ \t]*(?:\d+\.|[-*+])[ \t]+[^\n]*)/g;
+  // `after` collapses a blank gap between the last list item and following
+  // PROSE; the lookahead excludes another list marker (-, *, +, space,
+  // newline) so list-to-list gaps are left to `between`.
+  const after = /([ \t]*(?:\d+\.|[-*+])[ \t]+[^\n]*)(?:\n[ \t]*)+\n(?=[^\n *+-])/g;
 
   let prev: string;
   do {
